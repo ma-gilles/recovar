@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [dev, "claude/**"]
+  pull_request:
+    branches: [dev]
+
+jobs:
+  lint:
+    name: Lint (changed files only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install ruff
+
+      - name: Ruff format check (changed .py files only)
+        run: |
+          BASE=${{ github.event.pull_request.base.sha || 'HEAD~1' }}
+          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- '*.py' || true)
+          if [ -n "$FILES" ]; then
+            echo "Checking: $FILES"
+            echo "$FILES" | xargs ruff format --check --diff
+          else
+            echo "No Python files changed"
+          fi
+
+      - name: Ruff lint (changed .py files only)
+        if: always()
+        run: |
+          BASE=${{ github.event.pull_request.base.sha || 'HEAD~1' }}
+          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- '*.py' || true)
+          if [ -n "$FILES" ]; then
+            echo "$FILES" | xargs ruff check
+          fi
+
+  fast-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip setuptools wheel
+          pip install "numpy<2.3.0" scipy matplotlib pandas scikit-learn pytest pytest-cov
+
+      - name: Install recovar (no deps, editable)
+        run: pip install -e . --no-deps --no-build-isolation --ignore-installed
+
+      - name: Run unit tests
+        run: python -m pytest tests/unit/ -x --ignore=tests/unit/test_gui_app.py -q --tb=short 2>&1 | tail -30
