@@ -147,12 +147,14 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
     particle_usage = {}
     reconstructions = {}
 
-    # Split zs by halfset.  PipelineOutput.load_embedding() returns zs in
-    # halfset-concatenated order: first len(halfsets[0]) entries for half 0,
-    # then len(halfsets[1]) entries for half 1.  Split by sizes.
+    # Split zs by halfset.  Embeddings are in dataset-local order (sorted
+    # original indices).  Map halfset original indices to local positions.
     particles_halfsets = pipeline_output.get('particles_halfsets')
-    n_half0 = len(particles_halfsets[0])
-    zs_subsets = [zs[:n_half0], zs[n_half0:]]
+    sorted_orig = np.sort(np.concatenate(particles_halfsets))
+    orig_to_local = np.full(int(sorted_orig.max()) + 1, -1, dtype=np.int32)
+    orig_to_local[sorted_orig] = np.arange(len(sorted_orig), dtype=np.int32)
+    local_halfsets = [orig_to_local[h] for h in particles_halfsets]
+    zs_subsets = [zs[local_halfsets[0]], zs[local_halfsets[1]]]
 
     # For tilt-series, embeddings are indexed by particle / group. Preserve
     # that grouped domain for reconstruction to match the halfset dataset
@@ -188,8 +190,6 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
         halfmaps = [None, None]
         used_particles = [[], []]  # Track which particles are used for each halfmap
 
-        # Offset to convert local halfset index → dense zs index
-        half_offsets = [0, n_half0]
         for i, zs_subset in enumerate(zs_subsets):
             distances = np.linalg.norm(zs_subset - cluster_center, axis=1)
             closest_local = np.argsort(distances)[:n_particles_per_cluster]
@@ -204,9 +204,8 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
                 selected_subset = cryos.local_group_indices_from_original(canonical_indices)
             else:
                 selected_subset = cryos.halfset_local_image_indices(i)[closest_local]
-            # Store dense zs indices for downstream use (plotting, usage counts).
-            # These index into the halfset-concatenated zs array.
-            used_particles[i] = half_offsets[i] + closest_local
+            # Store dataset-local zs indices for downstream use (plotting, usage counts).
+            used_particles[i] = local_halfsets[i][closest_local]
 
             logger.info("Cluster %s: Using %s closest particles for half-map %s (min distance: %.3f, max distance: %.3f). Average distance over all particles: %.3f", cluster_idx, len(closest_local), i, distances[closest_local[0]], distances[closest_local[-1]], np.mean(distances))
 
@@ -1991,8 +1990,8 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
         zs, cluster_indices, junk_particles, good_particles, 
         particle_stats, output_folder, zdim_key, junk_detection_method
     )
-    # Get original particle indices for mapping
-    original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
+    # Get original particle indices for mapping (sorted = dataset-local order)
+    original_particle_indices = np.sort(np.concatenate(pipeline_output.get('particles_halfsets')))
     # Save particle classifications
     save_particle_classifications(
         junk_particles, good_particles, particle_stats, 

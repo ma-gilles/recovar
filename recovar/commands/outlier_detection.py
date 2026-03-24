@@ -407,6 +407,10 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     n_high_contrast = np.sum(high_contrast_outliers)
     n_individual_outliers = np.sum(individual_outliers)
 
+    # Embeddings are in dataset-local order (sorted original indices).
+    # These arrays map local position → original file index.
+    original_image_indices = np.sort(original_image_indices)
+    original_particle_indices = np.sort(original_particle_indices)
     n_images = len(contrast_array)
 
     logger.info("Final contrast array shape: %s", contrast_array.shape)
@@ -938,7 +942,8 @@ def main():
     anomaly_output_dir = os.path.join(args.output_dir, 'anomaly_detection')
     os.makedirs(anomaly_output_dir, exist_ok=True)
     
-    plot_anomaly_detection_results(zs, original_particle_indices, anomaly_output_dir)
+    # Pass sorted original indices — embeddings are in dataset-local order
+    plot_anomaly_detection_results(zs, np.sort(original_particle_indices), anomaly_output_dir)
     
     # Load consensus results
     consensus_inliers_file = os.path.join(anomaly_output_dir, 'inliers_consensus.pkl')
@@ -1095,11 +1100,17 @@ def main():
         all_particle_outliers.append(junk_outliers)
         particle_method_names.append("Junk Detection")
     
+    # Ensure indices are in sorted dataset-local order
+    original_particle_indices = np.sort(np.concatenate(
+        pipeline_output.get('particles_halfsets')
+    ).astype(np.int32, copy=False))
     if original_image_indices is None:
-        original_image_indices = np.concatenate(
+        original_image_indices = np.sort(np.concatenate(
             pipeline_output.get('halfsets')
-        ).astype(np.int32, copy=False)
-    
+        ).astype(np.int32, copy=False))
+    else:
+        original_image_indices = np.sort(original_image_indices)
+
     # Handle particle outlier combination safely
     if len(all_particle_outliers) > 0:
         combined_particle_outliers = all_particle_outliers[0]
@@ -1333,10 +1344,11 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
         'scatter': 'cornflowerblue'
     }
 
+    # Get zs embeddings and original particle indices (sorted = dataset-local order)
     zs = pipeline_output.get_embedding_component(coords_entry, zdim_key)
-    original_particle_indices = np.concatenate(
+    original_particle_indices = np.sort(np.concatenate(
         pipeline_output.get('particles_halfsets')
-    ).astype(np.int32, copy=False)
+    ).astype(np.int32, copy=False))
 
     # Get contrast values if available
     input_args = pipeline_output.get('input_args')
@@ -1348,9 +1360,9 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
     elif is_tilt_series and is_shared_contrast:
         original_image_indices = original_particle_indices
     else:
-        original_image_indices = np.concatenate(
+        original_image_indices = np.sort(np.concatenate(
             pipeline_output.get('halfsets')
-        ).astype(np.int32, copy=False)
+        ).astype(np.int32, copy=False))
     umapper = output.umap_latent_space(zs)
     umap_coords = umapper.embedding_
     has_umap = True

@@ -716,19 +716,19 @@ class CryoEMDataset:
         return [self.halfset_original_group_indices(halfset_id) for halfset_id in range(2)]
 
     def split_halfset_array(self, arr, per_particle=False):
-        """Split a concatenated halfset-ordered array into [half0, half1].
+        """Split a dataset-local-ordered array by halfset membership.
 
         Parameters
         ----------
         per_particle : bool
-            If True **and** this is a tilt-series dataset, split at the
-            particle boundary instead of the image boundary.
+            If True **and** this is a tilt-series dataset, split by
+            particle/group indices instead of image indices.
         """
         if per_particle and self.tilt_series_flag:
-            n0 = len(self.halfset_original_group_indices(0))
+            indices = [self.halfset_local_group_indices(k) for k in range(2)]
         else:
-            n0 = self.n_halfset_images(0)
-        return [arr[:n0], arr[n0:]]
+            indices = [self.halfset_local_image_indices(k) for k in range(2)]
+        return [arr[indices[0]], arr[indices[1]]]
 
     def _resolve_iteration_subset(self, *, halfset_id=None, indices=None, by_image=True):
         """Resolve halfset or subset selection for iteration."""

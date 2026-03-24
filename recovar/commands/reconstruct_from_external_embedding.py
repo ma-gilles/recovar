@@ -178,9 +178,8 @@ def generate(args):
     dataset_spec = halfsets.HalfsetDatasetSpec.from_args(args)
     ds = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split)
 
+    # External embeddings are expected in dataset-local (original) order.
     zs = utils.pickle_load(args.embedding)
-    zs_split = [zs[ds.halfset_local_image_indices(0)], zs[ds.halfset_local_image_indices(1)]]
-    zs = np.concatenate(zs_split)
 
     target = np.loadtxt(args.target)
 

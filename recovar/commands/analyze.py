@@ -176,9 +176,16 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         latent_space_bounds = None
 
     particles_halfsets = po.get("particles_halfsets")
+    # Embeddings are in dataset-local order (sorted original indices).
+    # To expand back to original-file space for saving, scatter into
+    # a full-size array at the computed positions.
+    sorted_original_indices = np.sort(np.concatenate(particles_halfsets))
 
     def reorder(array):
-        return cryoem_dataset.reorder_to_original_indexing_from_halfsets(array, particles_halfsets)
+        n_total = int(np.max(sorted_original_indices)) + 1
+        out = np.full((n_total, *array.shape[1:]), np.nan, dtype=array.dtype)
+        out[sorted_original_indices] = array
+        return out
 
     o.mkdir_safe(output_folder)
     utils.basic_config_logger(output_folder)

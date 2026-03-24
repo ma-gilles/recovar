@@ -131,7 +131,7 @@ def test_analyze_reads_particles_halfsets_once(monkeypatch, tmp_path):
                 "latent_precision": {2: cov2},
                 "dataset": ["cryo0"],
                 "contrasts": {2: np.ones(n_images, dtype=np.float32)},
-                "particles_halfsets": np.array([0, 1, 0, 1, 0, 1, 0, 1], dtype=np.int32),
+                "particles_halfsets": [np.array([0, 2, 4, 6], dtype=np.int32), np.array([1, 3, 5, 7], dtype=np.int32)],
             }
 
         def get(self, key):
@@ -202,7 +202,7 @@ def test_analyze_runs_centers_and_trajectories_with_density(monkeypatch, tmp_pat
         "dataset": ["cryo0"],
         "lazy_dataset": ["lazy_cryo0"],
         "contrasts": {3: np.ones(n_images, dtype=np.float32)},
-        "particles_halfsets": np.zeros(n_images, dtype=np.int32),
+        "particles_halfsets": [np.array([0, 2, 4], dtype=np.int32), np.array([1, 3, 5], dtype=np.int32)],
         "noise_var_used": np.ones(8, dtype=np.float32),
         "volume_mask": np.ones((8, 8, 8), dtype=np.float32),
     }

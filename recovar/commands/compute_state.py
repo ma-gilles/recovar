@@ -219,13 +219,9 @@ def compute_state(args):
 
     cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
 
-    # Embeddings are loaded in halfset order (half-0 images first, half-1 second),
-    # but the dataset stores CTF parameters in original image order. Scatter
-    # contrasts from halfset order to original order before applying them.
-    halfset_order = _get_halfset_order(cryos, contrasts_key.shape[0])
-    contrasts_original_order = np.empty_like(contrasts_key)
-    contrasts_original_order[halfset_order] = contrasts_key
-    embedding.set_contrasts_in_cryos(cryos, contrasts_original_order)
+    # Embeddings are now returned in dataset-local order (sorted original
+    # indices), matching the unified dataset's CTF_params ordering.
+    embedding.set_contrasts_in_cryos(cryos, contrasts_key)
     reweighted_halfset_datasets = _build_reweighted_halfset_datasets(cryos, lazy=lazy)
     zs = zs_key
     cov_zs = cov_zs_key

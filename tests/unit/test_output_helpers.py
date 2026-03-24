@@ -64,8 +64,9 @@ def test_pipeline_output_get_embedding_component_uses_particle_halfsets(tmp_path
     po = output.PipelineOutput(str(result_path))
     zs_sel = po.get_embedding_component("latent_coords", 2)
     contrasts_sel = po.get_embedding_component("contrasts", 2)
-    np.testing.assert_array_equal(zs_sel, np.array([[2, 12], [0, 10], [3, 13], [1, 11]], dtype=np.float32))
-    np.testing.assert_array_equal(contrasts_sel, np.array([2.0, 0.0, 3.0, 1.0], dtype=np.float32))
+    # Embeddings are returned in sorted-original order (dataset-local)
+    np.testing.assert_array_equal(zs_sel, np.array([[0, 10], [1, 11], [2, 12], [3, 13]], dtype=np.float32))
+    np.testing.assert_array_equal(contrasts_sel, np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32))
 
 
 def test_pipeline_output_get_embedding_component_uses_image_halfsets_for_unshared_tilt_contrast(tmp_path):
@@ -94,8 +95,8 @@ def test_pipeline_output_get_embedding_component_uses_image_halfsets_for_unshare
 
     po = output.PipelineOutput(str(result_path))
     contrasts_sel = po.get_embedding_component("contrasts", 2)
-    # For tilt_series with unshared contrast, halfsets should be image halfsets.
-    np.testing.assert_array_equal(contrasts_sel, np.array([1.0, 3.0, 0.0, 2.0], dtype=np.float32))
+    # Sorted-original order regardless of tilt/shared settings
+    np.testing.assert_array_equal(contrasts_sel, np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32))
 
 
 def test_pipeline_output_get_embedding_component_missing_shared_flag_defaults_to_particle_halfsets(tmp_path):
@@ -122,7 +123,7 @@ def test_pipeline_output_get_embedding_component_missing_shared_flag_defaults_to
 
     po = output.PipelineOutput(str(result_path))
     contrasts_sel = po.get_embedding_component("contrasts", 2)
-    np.testing.assert_array_equal(contrasts_sel, np.array([2.0, 0.0, 3.0, 1.0], dtype=np.float32))
+    np.testing.assert_array_equal(contrasts_sel, np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32))
 
 
 def test_pipeline_output_get_embedding_component_dict_input_args_unshared_tilt_uses_image_halfsets(tmp_path):
@@ -151,7 +152,7 @@ def test_pipeline_output_get_embedding_component_dict_input_args_unshared_tilt_u
 
     po = output.PipelineOutput(str(result_path))
     contrasts_sel = po.get_embedding_component("contrasts", 2)
-    np.testing.assert_array_equal(contrasts_sel, np.array([1.0, 3.0, 0.0, 2.0], dtype=np.float32))
+    np.testing.assert_array_equal(contrasts_sel, np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32))
 
 
 def test_pipeline_output_get_unsorted_embedding_component_returns_raw_component(tmp_path):

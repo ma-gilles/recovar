@@ -783,6 +783,13 @@ class PipelineOutput:
         return key in self.get_embedding_keys(entry)
 
     def get_embedding_component(self, entry, key):
+        """Return one embedding array in **dataset-local order**.
+
+        The stored embeddings are NaN-padded in original-file space.
+        This method selects only computed entries (identified by
+        ``particles_halfsets``) and returns them in sorted original-index
+        order, which matches the unified dataset's local ordering.
+        """
         if self.embedding_loaded:
             return self.embedding[entry][key]
         cache_key = (entry, key)
@@ -797,9 +804,9 @@ class PipelineOutput:
         if self.version != '0':
             particle_halfsets, image_halfsets = self._get_embedding_halfsets()
             if entry.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
-                values = values[image_halfsets]
+                values = values[np.sort(image_halfsets)]
             else:
-                values = values[particle_halfsets]
+                values = values[np.sort(particle_halfsets)]
         self._embedding_key_cache[cache_key] = values
         return values
 
@@ -811,20 +818,27 @@ class PipelineOutput:
         return np.asarray(self.embedding[entry][key])
 
     def load_embedding(self):
+        """Load all embedding arrays into dataset-local order.
+
+        Selects only computed entries (no NaN) and sorts by original
+        index, matching the unified dataset's local ordering.
+        """
         self._ensure_embedding_raw_loaded()
 
         if self.version != '0':
             halfsets, image_halfsets = self._get_embedding_halfsets()
+            sorted_halfsets = np.sort(halfsets)
+            sorted_image_halfsets = np.sort(image_halfsets)
 
             for entry in self.embedding:
                 for key in self.embedding[entry]:
                     if entry.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
-                        self.embedding[entry][key] = self.embedding[entry][key][image_halfsets]
+                        self.embedding[entry][key] = self.embedding[entry][key][sorted_image_halfsets]
                     else:
-                        self.embedding[entry][key] = self.embedding[entry][key][halfsets]
+                        self.embedding[entry][key] = self.embedding[entry][key][sorted_halfsets]
         self.embedding_loaded = True
         self._embedding_key_cache = {}
-        return 
+        return
 
     def _list_saved_eigenvector_indices(self):
         vols_dir = self.paths.volumes_dir
