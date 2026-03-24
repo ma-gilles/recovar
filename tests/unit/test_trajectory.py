@@ -1,8 +1,6 @@
 import numpy as np
 import pytest
 
-pytest.importorskip("skfmm")
-
 from recovar.heterogeneity import trajectory
 
 pytestmark = pytest.mark.unit

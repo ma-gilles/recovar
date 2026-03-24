@@ -1312,27 +1312,18 @@ def detect_junk_clusters(fsc_scores, fsc_auc_scores, output_folder, zdim_key,
     # Method 1: Adaptive threshold based on score distribution
     def adaptive_threshold_detection(scores):
         """Detect junk using adaptive threshold based on score distribution."""
-        # Sort scores
         sorted_scores = np.sort(scores)
-        
-        # Find the elbow point (where the slope changes significantly)
-        # Use the second derivative to find the elbow
+
         if len(sorted_scores) > 3:
-            # Calculate second derivative
             diff1 = np.diff(sorted_scores)
             diff2 = np.diff(diff1)
-            
-            # Find the point with maximum second derivative (elbow)
             elbow_idx = np.argmax(np.abs(diff2)) + 1
-            
-            # Use the score at the elbow as threshold
             threshold = sorted_scores[elbow_idx]
         else:
-            # Fallback to percentile method
             threshold = np.percentile(scores, percentile_threshold)
-        
+
         return scores < threshold
-    
+
     # Method 2: Percentile-based detection
     def percentile_detection(scores):
         """Detect junk using percentile threshold."""

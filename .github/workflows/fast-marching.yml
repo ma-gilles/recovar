@@ -1,0 +1,53 @@
+name: Fast Marching
+
+on:
+  push:
+    branches:
+      - main
+      - "codex/**"
+    paths:
+      - ".github/workflows/fast-marching.yml"
+      - "README.md"
+      - "pyproject.toml"
+      - "setup.py"
+      - "MANIFEST.in"
+      - "recovar/_fast_marching_native.cpp"
+      - "recovar/heterogeneity/fast_marching.py"
+      - "tests/unit/test_fast_marching.py"
+      - "tests/unit/test_fast_marching_native.py"
+      - "tests/benchmarks/bench_fast_marching.py"
+  pull_request:
+    paths:
+      - ".github/workflows/fast-marching.yml"
+      - "README.md"
+      - "pyproject.toml"
+      - "setup.py"
+      - "MANIFEST.in"
+      - "recovar/_fast_marching_native.cpp"
+      - "recovar/heterogeneity/fast_marching.py"
+      - "tests/unit/test_fast_marching.py"
+      - "tests/unit/test_fast_marching_native.py"
+      - "tests/benchmarks/bench_fast_marching.py"
+  workflow_dispatch:
+
+jobs:
+  fast-marching:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip setuptools wheel "numpy<2.3.0" pytest
+
+      - name: Install recovar editable
+        run: python -m pip install -e . --no-deps --no-build-isolation --ignore-installed
+
+      - name: Run fast marching tests
+        run: python -m pytest tests/unit/test_fast_marching.py tests/unit/test_fast_marching_native.py -q
+
+      - name: Run benchmark harness
+        run: python tests/benchmarks/bench_fast_marching.py --json

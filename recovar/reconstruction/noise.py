@@ -27,14 +27,9 @@ NVTX_DOMAIN_NOISE = "noise"
 # Neither solution implemented here are very satisfying. Guessing noise in presence of heterogeneity is not trivial, since the residual doesn't seem like the correct way to do it.
 # It makes me think we should have "noise pickers".
 
-## TODO: I think there are a lot of old/unusred noise estimators in here that should be deleted.
-## See whats used by pipelien (only place where noise is estiamted)
-
-## TODO: I would like a new noise estimator, which is going to regress
-## (pixel - CTF * mean)^2 against CTF_^2
-## The idea is that Expected value of that is going to be somethign like noise_var^2 + CTF^2 signal_variance (over frequency shells)
-## I probably need to be involved in this one, rather than just AI, so remind me to do it.
-## Or write some initial implementation and ask me to look at it/results.
+# Dead code audit (2026-03-21): 3 v1 functions removed
+# (estimate_noise_from_heterogeneity_residuals_inside_mask,
+# get_average_residual_square, get_average_residual_square_inner).
 
 
 def _default_image_shape_from_radial(radial_noise):
@@ -939,89 +934,6 @@ def batch_make_radial_noise_half(average_image_PS, image_shape):
 
 
 # Assume noise constant across images and within frequency bands. Estimate the noise by the outside of the mask, and report some statistics
-def estimate_noise_from_heterogeneity_residuals_inside_mask(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices= None):
-    masked_image_PS =  get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type, subset_indices=subset_indices  )
-    return mean_fn(masked_image_PS, axis =0), np.std(masked_image_PS, axis =0)
-
-def get_average_residual_square(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices = None):
-    
-    n_images = experiment_dataset.n_images if subset_indices is None else subset_indices.size
-
-    residual_squared = jnp.zeros(experiment_dataset.grid_size, dtype = basis.dtype)
-    all_averaged_residual_squared = np.empty((n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
-    basis = jnp.asarray(basis.T)
-    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in experiment_dataset.iter_batches(
-        batch_size,
-        indices=subset_indices,
-    ):
-        batch_image_ind = image_indices
-        averaged_residual_squared = get_average_residual_square_inner(batch, mean_estimate, volume_mask,
-                                                                        basis,
-                                                                        ctf_params,
-                                                                        rotation_matrices,
-                                                                        translations,
-                                                                        experiment_dataset.image_mask,
-                                                                        experiment_dataset.volume_mask_threshold,
-                                                                        experiment_dataset.image_shape,
-                                                                        experiment_dataset.volume_shape,
-                                                                        experiment_dataset.grid_size,
-                                                                        experiment_dataset.voxel_size,
-                                                                        experiment_dataset.padding,
-                                                                        disc_type,
-                                                                        experiment_dataset.process_images,
-                                                                        experiment_dataset.ctf_evaluator,
-                                                                        contrasts[batch_image_ind], basis_coordinates[batch_image_ind])
-        all_averaged_residual_squared[batch_image_ind] = np.array(averaged_residual_squared)
-
-    return all_averaged_residual_squared
-
-
-def get_average_residual_square_inner(batch, mean_estimate, volume_mask, basis, CTF_params, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, voxel_size, padding, disc_type, process_fn, ctf, contrasts,basis_coordinates):
-    
-    # Memory to do this is ~ size(volume_mask) * batch_size
-    image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                          rotation_matrices,
-                                          image_mask, 
-                                          volume_mask_threshold,
-                                          image_shape, 
-                                          volume_shape, grid_size, 
-                                          padding, 
-                                          disc_type, soften = 5 )
-    
-    batch = process_fn(batch)
-    batch = core.translate_images(batch, translations , image_shape)
-    batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
-
-    config = ForwardModelConfig(
-        image_shape=image_shape, volume_shape=volume_shape,
-        grid_size=grid_size, voxel_size=voxel_size,
-        padding=padding, disc_type=disc_type, ctf=core.as_ctf_evaluator(ctf),
-        premultiplied_ctf=False, volume_mask_threshold=volume_mask_threshold,
-    )
-
-    projected_mean = core_forward.forward_model(
-        config, mean_estimate, CTF_params, rotation_matrices,
-    )
-
-    projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, image_shape)
-
-    ## DO MASK BUSINESS HERE.
-    batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
-    AUs = covariance_core.batch_vol_forward_from_map(
-        config, basis, CTF_params, rotation_matrices,
-    ) 
-    # Apply mask on operator
-    AUs = covariance_core.apply_image_masks_to_eigen(AUs, image_mask, image_shape )
-    AUs = AUs.transpose(1,2,0)
-    image_mask_sums = jnp.sum(image_mask, axis =(-2, -1)) / batch.shape[-1]
-
-    predicted_images = contrasts[...,None] * (jax.lax.batch_matmul(AUs, basis_coordinates[...,None])[...,0] + projected_mean)
-    residual_squared = jnp.abs(batch - predicted_images)**2    / image_mask_sums[...,None]
-    averaged_residual_squared = regularization.batch_average_over_shells(residual_squared, image_shape,0) 
-
-    return averaged_residual_squared
-
-
 def get_average_residual_square_just_mean(experiment_dataset, volume_mask, mean_estimate, batch_size, disc_type = 'linear_interp', subset_indices = None, subset_fn = None):
     contrasts = np.ones(experiment_dataset.n_images, dtype = experiment_dataset.dtype_real)
     basis = np.zeros((experiment_dataset.volume_size, 0))
@@ -1115,10 +1027,6 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     return pred_noise, predicted_pixel_variances, None
 
 
-def basis_times_coords(basis, coords):
-    if basis.shape[-1] != coords.shape[-1]:
-        raise ValueError(f"basis last dim ({basis.shape[-1]}) != coords last dim ({coords.shape[-1]})")
-    return jnp.sum(basis * coords, axis=-1)
 def batch_basis_times_coords2(basis, coords):
     """Compute basis @ coords.T reshaped for batched images, memory-efficiently."""
     if basis.shape[-1] != coords.shape[-1]:

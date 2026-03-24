@@ -89,28 +89,6 @@ def _load_latent_points(latent_points_path):
     return target_zs
 
 
-def _get_embedding_keys(pipeline_output, coords_entry):
-    """Return available z dimensions for the requested embedding entry."""
-    if hasattr(pipeline_output, "get_embedding_keys"):
-        return pipeline_output.get_embedding_keys(coords_entry)
-    return list(pipeline_output.get(coords_entry).keys())
-
-
-def _get_embedding_components(pipeline_output, zdim, coords_entry, precision_entry, contrast_entry):
-    """Fetch embedding arrays for a specific zdim with API fallback support."""
-    if hasattr(pipeline_output, "get_embedding_component"):
-        return (
-            pipeline_output.get_embedding_component(contrast_entry, zdim),
-            pipeline_output.get_embedding_component(coords_entry, zdim),
-            pipeline_output.get_embedding_component(precision_entry, zdim),
-        )
-    return (
-        pipeline_output.get(contrast_entry)[zdim],
-        pipeline_output.get(coords_entry)[zdim],
-        pipeline_output.get(precision_entry)[zdim],
-    )
-
-
 def _build_reweighted_halfset_datasets(dataset, *, lazy):
     """Build direct halfset datasets for the reweighted-volume hot path."""
     if not hasattr(dataset, "materialize_halfset_datasets"):
@@ -121,6 +99,32 @@ def _build_reweighted_halfset_datasets(dataset, *, lazy):
     if can_reload is None or not can_reload():
         return None
     return dataset.materialize_halfset_datasets(independent=True, lazy=lazy)
+
+
+def _get_halfset_order(dataset, n_embeddings):
+    """Return the embedding halfset concatenation order for a dataset."""
+    if hasattr(dataset, "halfset_local_image_indices"):
+        halfset_order = np.concatenate(
+            [
+                np.asarray(dataset.halfset_local_image_indices(0), dtype=np.int32),
+                np.asarray(dataset.halfset_local_image_indices(1), dtype=np.int32),
+            ]
+        )
+    elif getattr(dataset, "halfset_indices", None) is not None:
+        halfset_order = np.concatenate(
+            [np.asarray(dataset.halfset_indices[0]), np.asarray(dataset.halfset_indices[1])]
+        ).astype(np.int32, copy=False)
+    else:
+        return np.arange(n_embeddings, dtype=np.int32)
+
+    if halfset_order.shape[0] != n_embeddings:
+        logger.warning(
+            "Halfset order length %s does not match embedding length %s; using identity order.",
+            halfset_order.shape[0],
+            n_embeddings,
+        )
+        return np.arange(n_embeddings, dtype=np.int32)
+    return halfset_order
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -198,15 +202,15 @@ def compute_state(args):
     precision_entry = 'latent_precision_noreg' if no_z_regularization else 'latent_precision'
     contrast_entry = 'contrasts_noreg' if no_z_regularization else 'contrasts'
 
-    zs_keys = _get_embedding_keys(po, coords_entry)
+    zs_keys = po.get_embedding_keys(coords_entry)
 
     if zdim not in zs_keys:
         options = ','.join(str(e) for e in zs_keys)
         raise ValueError(f"zdim {zdim} from provided latent points is not found in embedding results. Options are: {options}")
 
-    contrasts_key, zs_key, cov_zs_key = _get_embedding_components(
-        po, zdim, coords_entry, precision_entry, contrast_entry
-    )
+    contrasts_key = po.get_embedding_component(contrast_entry, zdim)
+    zs_key = po.get_embedding_component(coords_entry, zdim)
+    cov_zs_key = po.get_embedding_component(precision_entry, zdim)
 
     # Keep memory footprint low for downstream JAX kernels.
     contrasts_key = np.asarray(contrasts_key, dtype=np.float32)
@@ -215,21 +219,13 @@ def compute_state(args):
 
     cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
 
-    # Embeddings are loaded in halfset order (half-0 images first, half-1
-    # second).  The unified dataset stores CTF_params in original file order,
-    # so we scatter contrasts from halfset → original order before applying.
-    # Legacy list-of-two-datasets callers already have per-halfset ordering
-    # and set_contrasts_in_cryos handles the split internally.
-    if hasattr(cryos, 'halfset_local_image_indices'):
-        halfset_order = np.concatenate([
-            cryos.halfset_local_image_indices(0),
-            cryos.halfset_local_image_indices(1),
-        ])
-        contrasts_original_order = np.empty_like(contrasts_key)
-        contrasts_original_order[halfset_order] = contrasts_key
-        embedding.set_contrasts_in_cryos(cryos, contrasts_original_order)
-    else:
-        embedding.set_contrasts_in_cryos(cryos, contrasts_key)
+    # Embeddings are loaded in halfset order (half-0 images first, half-1 second),
+    # but the dataset stores CTF parameters in original image order. Scatter
+    # contrasts from halfset order to original order before applying them.
+    halfset_order = _get_halfset_order(cryos, contrasts_key.shape[0])
+    contrasts_original_order = np.empty_like(contrasts_key)
+    contrasts_original_order[halfset_order] = contrasts_key
+    embedding.set_contrasts_in_cryos(cryos, contrasts_original_order)
     reweighted_halfset_datasets = _build_reweighted_halfset_datasets(cryos, lazy=lazy)
     zs = zs_key
     cov_zs = cov_zs_key

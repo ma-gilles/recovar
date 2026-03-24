@@ -3,7 +3,6 @@ Unit tests for recovar.commands.run_test_all_metrics.
 
 Covers:
   LOWER_IS_BETTER_TOKENS / HIGHER_IS_BETTER_TOKENS – metric direction
-  _resolve_canonical_key()     – key aliasing (static and dynamic locres)
   validate_storage_args_for_generated_volumes() – CLI safety check
   load_u_real_for_metrics()    – eigenvector loading dispatch
   load_unsorted_embedding_component() – component API dispatch
@@ -35,6 +34,10 @@ def test_lower_is_better_contains_contrast():
     assert "contrast" in rtam.LOWER_IS_BETTER_TOKENS
 
 
+def test_lower_is_better_does_not_keep_old_contrast_typo():
+    assert "constrast" not in rtam.LOWER_IS_BETTER_TOKENS
+
+
 def test_higher_is_better_contains_fsc():
     assert "fsc" in rtam.HIGHER_IS_BETTER_TOKENS
 
@@ -48,59 +51,6 @@ def test_direction_tokens_are_disjoint():
     lower = set(rtam.LOWER_IS_BETTER_TOKENS)
     higher = set(rtam.HIGHER_IS_BETTER_TOKENS)
     assert lower.isdisjoint(higher)
-
-
-# ---------------------------------------------------------------------------
-# _resolve_canonical_key – static aliases
-# ---------------------------------------------------------------------------
-
-def test_resolve_canonical_key_static_alias():
-    assert rtam._resolve_canonical_key("pcs_relative_variance_4") == "svd_relative_variance_4"
-    assert rtam._resolve_canonical_key("pcs_relative_variance_10") == "svd_relative_variance_10"
-
-
-def test_resolve_canonical_key_contrast_typo():
-    """The misspelled 'constrasts' key should map to canonical name."""
-    assert rtam._resolve_canonical_key("constrasts_4") == "contrast_abs_error_4"
-
-
-def test_resolve_canonical_key_contrast_noreg():
-    assert rtam._resolve_canonical_key("contrasts_4_noreg") == "contrast_abs_error_4_noreg"
-    assert rtam._resolve_canonical_key("contrasts_10_noreg") == "contrast_abs_error_10_noreg"
-
-
-def test_resolve_canonical_key_passthrough():
-    """Unknown keys should pass through unchanged."""
-    assert rtam._resolve_canonical_key("mean_fsc") == "mean_fsc"
-    assert rtam._resolve_canonical_key("variance_fsc") == "variance_fsc"
-
-
-# ---------------------------------------------------------------------------
-# _resolve_canonical_key – dynamic locres patterns
-# ---------------------------------------------------------------------------
-
-def test_resolve_canonical_key_ninety_pc_locres():
-    assert rtam._resolve_canonical_key("state_0_ninety_pc_locres") == "state_0_locres_90pct"
-    assert rtam._resolve_canonical_key("state_12_ninety_pc_locres") == "state_12_locres_90pct"
-
-
-def test_resolve_canonical_key_median_locres():
-    assert rtam._resolve_canonical_key("state_3_median_locres") == "state_3_locres_median"
-
-
-def test_resolve_canonical_key_locres_no_match():
-    """Patterns that don't match locres regex should pass through."""
-    assert rtam._resolve_canonical_key("state_bad_ninety_pc_locres") == "state_bad_ninety_pc_locres"
-
-
-# ---------------------------------------------------------------------------
-# CANONICAL_KEY_ALIASES – completeness
-# ---------------------------------------------------------------------------
-
-def test_canonical_aliases_all_have_canonical_values():
-    """Every alias value should differ from its key."""
-    for old, new in rtam.CANONICAL_KEY_ALIASES.items():
-        assert old != new, f"Alias {old} maps to itself"
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +85,17 @@ def test_validate_storage_args_passes_with_equals_syntax():
     )
 
 
+def test_default_output_dir_prefers_tmp_recovar_dir(monkeypatch):
+    monkeypatch.setenv("TMP_RECOVAR_DIR", "/scratch/tmp_recovar")
+    assert rtam.default_output_dir() == "/scratch/tmp_recovar/recovar_test_all_metrics"
+
+
+def test_validate_storage_args_allows_tmp_recovar_dir_env(monkeypatch):
+    monkeypatch.setenv("TMP_RECOVAR_DIR", "/scratch/tmp_recovar")
+    args = SimpleNamespace(volume_input=None)
+    rtam.validate_storage_args_for_generated_volumes(args, ["--generate-pdb-volumes"])
+
+
 def test_validate_storage_args_raises_without_outdir():
     """When generating volumes without explicit --output-dir, should raise."""
     args = SimpleNamespace(volume_input=None)
@@ -159,21 +120,6 @@ def test_load_u_real_for_metrics_uses_get_u_real_when_available():
     result = rtam.load_u_real_for_metrics(FakePO(), 3)
     np.testing.assert_array_equal(result, expected[:3])
 
-
-def test_load_u_real_for_metrics_falls_back_to_get():
-    """Should fall back to get('u_real')[:n_pcs] when get_u_real is absent."""
-    full = np.random.randn(10, 64).astype(np.float32)
-
-    class FakePO:
-        def get(self, key):
-            if key == 'u_real':
-                return full
-            raise KeyError(key)
-
-    result = rtam.load_u_real_for_metrics(FakePO(), 4)
-    np.testing.assert_array_equal(result, full[:4])
-
-
 def test_load_u_real_for_metrics_rejects_zero():
     with pytest.raises(ValueError, match="positive"):
         rtam.load_u_real_for_metrics(None, 0)
@@ -189,14 +135,14 @@ def test_load_u_real_for_metrics_rejects_negative():
 # ---------------------------------------------------------------------------
 
 def test_load_unsorted_embedding_component_uses_get_unsorted():
-    """Should use get('unsorted_embedding') to retrieve data in original order."""
+    """Should use the PipelineOutput component helper."""
     expected = np.arange(10, dtype=np.float32)
 
     class FakePO:
-        def get(self, key):
-            if key == 'unsorted_embedding':
-                return {"latent_coords": {4: expected}}
-            raise KeyError(key)
+        def get_unsorted_embedding_component(self, entry, key):
+            assert entry == "latent_coords"
+            assert key == 4
+            return expected
 
     result = rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4)
     np.testing.assert_array_equal(result, expected)
@@ -208,15 +154,29 @@ def test_load_unsorted_embedding_component_caches():
     expected = np.ones(5, dtype=np.float32)
 
     class FakePO:
-        def get(self, key):
+        def get_unsorted_embedding_component(self, entry, key):
             call_count["n"] += 1
-            return {"latent_coords": {4: expected}}
+            assert entry == "latent_coords"
+            assert key == 4
+            return expected
 
     cache = {}
-    rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, legacy_cache=cache)
-    rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, legacy_cache=cache)
-    # get() called once for __root__, then cached
+    rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, cache=cache)
+    rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, cache=cache)
     assert call_count["n"] == 1
+
+
+def test_load_unsorted_embedding_component_prefers_pipeline_output_method():
+    expected = np.array([1.0, 2.0], dtype=np.float32)
+
+    class FakePO:
+        def get_unsorted_embedding_component(self, entry, key):
+            assert entry == "latent_coords"
+            assert key == 4
+            return expected
+
+    result = rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4)
+    np.testing.assert_array_equal(result, expected)
 
 
 # ---------------------------------------------------------------------------

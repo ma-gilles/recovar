@@ -64,7 +64,7 @@ def downsample_to_disk(
     (mrcs_path, star_path) : tuple of str
         Paths to the output ``.mrcs`` stack and ``.star`` metadata file.
     """
-    from recovar.data_io.downsample import downsample_images
+    from recovar.data_io.downsample import downsample_images, get_downsample_batch_size, _gpu_available
     from recovar.data_io.image_loader import load_images
 
     if target_D % 2 != 0:
@@ -72,12 +72,13 @@ def downsample_to_disk(
 
     os.makedirs(outdir, exist_ok=True)
 
-    # ── Load image source ────────────────────────────────────────────────
+    # ── Load image source (skip staging — images are read once for downsampling) ──
     loader = load_images(
         particles_file,
         datadir=datadir,
         lazy=True,
         strip_prefix=strip_prefix,
+        skip_staging=True,
     )
 
     n_images = loader.num_images
@@ -102,6 +103,16 @@ def downsample_to_disk(
     new_apix = orig_apix * orig_D / target_D
     logger.info("Pixel size: %.4f \u00c5 \u2192 %.4f \u00c5", orig_apix, new_apix)
 
+    # ── Adaptive batch size for GPU FFT ──────────────────────────────────
+    use_gpu = _gpu_available()
+    if use_gpu:
+        from recovar.utils import helpers
+        gpu_memory = helpers.get_gpu_memory_total()
+        batch_size = get_downsample_batch_size(orig_D, gpu_memory)
+        logger.info("GPU downsampling: batch_size=%d (%.1f GB GPU)", batch_size, gpu_memory)
+    else:
+        logger.info("CPU downsampling: batch_size=%d", batch_size)
+
     # ── Fourier-crop and write ───────────────────────────────────────────
     out_mrcs = os.path.join(outdir, f"particles.{target_D}.mrcs")
 
@@ -122,7 +133,7 @@ def downsample_to_disk(
             indices = np.arange(start, end)
 
             images = loader.get(indices)
-            images_ds = downsample_images(images, target_D)
+            images_ds = downsample_images(images, target_D, use_gpu=use_gpu)
             mrc.data[start:end] = images_ds.astype(np.float32)
 
             elapsed = time.time() - t0

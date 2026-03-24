@@ -14,7 +14,6 @@ SKIP_IMPORT_MODULES = {
 
 # Optional dependency packages used by some modules.
 OPTIONAL_IMPORT_ERROR_TOKENS = (
-    "skfmm",
     "matplotlib_scalebar",
     "dataframe_image",
 )

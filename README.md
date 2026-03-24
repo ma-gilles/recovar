@@ -69,6 +69,14 @@ PY
 
 Run commands only via `"$PIXI_PY" -m ...` or `pixi run ...` in this checkout.
 
+### Fast marching backend
+
+The editable install above also builds RECOVAR's optional native fast marching extension. Trajectory computations use this in-tree implementation, while a pure-Python fallback remains available for editable installs and unsupported platforms.
+
+- `RECOVAR_FORCE_PYTHON_FMM=1` forces the fallback implementation.
+- `RECOVAR_REQUIRE_NATIVE_FMM=1` makes import fail fast if the native extension is unavailable.
+- Released wheels can bundle the native extension for `pip install recovar`, but `heterogeneity_dev` development remains pixi-only as described above.
+
 ## Quick start
 
 ```bash

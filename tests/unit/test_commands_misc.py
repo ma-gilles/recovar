@@ -495,7 +495,7 @@ def test_run_test_dataset_all_tests_emits_extended_commands(monkeypatch, tmp_pat
     embeddings_path = tmp_path / "test_dataset" / "pipeline_output" / "model" / "embeddings.pkl"
     embeddings_path.parent.mkdir(parents=True, exist_ok=True)
     with open(embeddings_path, "wb") as f:
-        pickle.dump({"zs": {2: np.zeros((4, 2), dtype=np.float32)}}, f)
+        pickle.dump({"latent_coords": {2: np.zeros((4, 2), dtype=np.float32)}}, f)
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(
@@ -561,8 +561,8 @@ def test_run_test_dataset_all_tests_bad_embeddings_payload_skips_reconstruct(mon
     embeddings_path = tmp_path / "test_dataset" / "pipeline_output" / "model" / "embeddings.pkl"
     embeddings_path.parent.mkdir(parents=True, exist_ok=True)
     with open(embeddings_path, "wb") as f:
-        # Missing "zs" key -> preparation should fail gracefully.
-        pickle.dump({"not_zs": {}}, f)
+        # Missing "latent_coords" key should cause reconstruction prep to fail gracefully.
+        pickle.dump({"not_latent_coords": {}}, f)
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(
@@ -736,7 +736,7 @@ def test_run_test_dataset_all_tests_quotes_reconstruct_paths_with_spaces(monkeyp
     embeddings_path = outdir / "test_dataset" / "pipeline_output" / "model" / "embeddings.pkl"
     embeddings_path.parent.mkdir(parents=True, exist_ok=True)
     with open(embeddings_path, "wb") as f:
-        pickle.dump({"zs": {2: np.zeros((4, 2), dtype=np.float32)}}, f)
+        pickle.dump({"latent_coords": {2: np.zeros((4, 2), dtype=np.float32)}}, f)
 
     def fake_run(command, shell):
         assert shell is True

@@ -63,9 +63,11 @@ def gpu_subprocess_env():
     env["JAX_PLATFORMS"] = "cuda,cpu"
     env["JAX_PLATFORM_NAME"] = "gpu"
     env["PYTHONNOUSERSITE"] = "1"
-    gpu_idx = _pick_most_free_gpu_index()
-    if gpu_idx is not None:
-        env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
+    assigned_visible_devices = env.get("CUDA_VISIBLE_DEVICES")
+    if not assigned_visible_devices:
+        gpu_idx = _pick_most_free_gpu_index()
+        if gpu_idx is not None:
+            env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
     return env
 
 

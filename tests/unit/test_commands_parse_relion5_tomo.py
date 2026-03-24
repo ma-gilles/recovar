@@ -4,12 +4,14 @@ Unit tests for recovar.commands.parse_relion5_tomo.
 Covers:
   add_args()               – CLI argument registration
   _parse_visible_frames()  – frame selection parsing
-  Tomogram geometry        – translation/rotation matrices, projection, local defocus
+  Tomogram geometry        – rotation matrices, local defocus
 """
 import argparse
 
 import numpy as np
+import pandas as pd
 import pytest
+from scipy.spatial.transform import Rotation as R
 
 from recovar.commands import parse_relion5_tomo as tomo_cmd
 
@@ -46,21 +48,6 @@ def test_output_default_is_particles_2d_star():
     assert action.default == "particles_2d.star"
 
 
-def test_registers_tilt_dim():
-    actions = _parser()._option_string_actions
-    assert "--tilt-dim" in actions
-
-
-def test_tilt_dim_accepts_two_ints():
-    parser = _parser()
-    args = parser.parse_args([
-        "-t", "tomo.star",
-        "-p", "particles.star",
-        "--tilt-dim", "3710", "3838",
-    ])
-    assert args.tilt_dim == [3710, 3838]
-
-
 def test_registers_verbose_flag():
     actions = _parser()._option_string_actions
     assert "-v" in actions or "--verbose" in actions
@@ -91,50 +78,12 @@ def test_parse_visible_frames_single():
 
 
 # ---------------------------------------------------------------------------
-# Tomogram – geometry helpers
-# ---------------------------------------------------------------------------
-
-def test_translation_matrix_identity_at_zero():
-    mat = tomo_cmd.Tomogram._translation_matrix(np.array([0.0, 0.0, 0.0]))
-    np.testing.assert_allclose(mat, np.eye(4))
-
-
-def test_translation_matrix_shifts_correctly():
-    shift = np.array([10.0, -5.0, 3.0])
-    mat = tomo_cmd.Tomogram._translation_matrix(shift)
-    assert mat.shape == (4, 4)
-    np.testing.assert_allclose(mat[:3, :3], np.eye(3))
-    np.testing.assert_allclose(mat[:3, 3], shift)
-    np.testing.assert_allclose(mat[3, :], [0, 0, 0, 1])
-
-
-def test_rotation_matrix_identity_at_zero_angle():
-    mat = tomo_cmd.Tomogram._rotation_matrix([1, 0, 0], 0.0)
-    np.testing.assert_allclose(mat, np.eye(4), atol=1e-10)
-
-
-def test_rotation_matrix_90_degrees_around_z():
-    mat = tomo_cmd.Tomogram._rotation_matrix([0, 0, 1], 90.0)
-    assert mat.shape == (4, 4)
-    # After 90° around z: x -> y, y -> -x
-    point = mat[:3, :3] @ np.array([1.0, 0.0, 0.0])
-    np.testing.assert_allclose(point, [0.0, 1.0, 0.0], atol=1e-10)
-
-
-def test_rotation_matrix_preserves_homogeneous_structure():
-    mat = tomo_cmd.Tomogram._rotation_matrix([1, 0, 0], 45.0)
-    np.testing.assert_allclose(mat[3, :], [0, 0, 0, 1])
-    np.testing.assert_allclose(mat[:3, 3], [0, 0, 0])
-
-
-# ---------------------------------------------------------------------------
-# Tomogram – projection and defocus
+# Tomogram – defocus and rotation
 # ---------------------------------------------------------------------------
 
 def _make_simple_tomogram(n_tilts=3):
     """Create a Tomogram with simple geometry for testing."""
     return tomo_cmd.Tomogram(
-        tilt_image_dims=(100, 100),
         pixel_size=1.0,
         defocus_u=np.array([10000.0] * n_tilts),
         defocus_v=np.array([10000.0] * n_tilts),
@@ -148,39 +97,11 @@ def _make_simple_tomogram(n_tilts=3):
     )
 
 
-def test_tomogram_init_creates_projection_matrices():
+def test_tomogram_init_creates_rotation_matrices():
     tomo = _make_simple_tomogram(n_tilts=5)
     assert tomo.n_tilts == 5
-    assert len(tomo.projection_matrices) == 5
-    for i in range(5):
-        assert tomo.projection_matrices[i].shape == (4, 4)
-
-
-def test_project_point_at_origin_maps_to_image_center():
-    """With zero tilts/shifts, the origin should project to the image center."""
-    tomo = _make_simple_tomogram(n_tilts=1)
-    pt_2d = tomo.project_point(np.array([0.0, 0.0, 0.0]), 0)
-    # Image center = tilt_image_dims / 2 = (50, 50)
-    np.testing.assert_allclose(pt_2d, [50.0, 50.0], atol=1e-6)
-
-
-def test_project_point_with_shift():
-    """X/Y shifts should offset the projected position."""
-    tomo = tomo_cmd.Tomogram(
-        tilt_image_dims=(200, 200),
-        pixel_size=1.0,
-        defocus_u=np.array([10000.0]),
-        defocus_v=np.array([10000.0]),
-        defocus_angle=np.zeros(1),
-        x_tilts=np.zeros(1),
-        y_tilts=np.zeros(1),
-        z_rots=np.zeros(1),
-        x_shifts=np.array([10.0]),
-        y_shifts=np.array([-5.0]),
-        hand=1,
-    )
-    pt_2d = tomo.project_point(np.array([0.0, 0.0, 0.0]), 0)
-    np.testing.assert_allclose(pt_2d, [110.0, 95.0], atol=1e-6)
+    assert tomo._rzyx_matrices.shape == (5, 3, 3)
+    assert tomo._tilt_rots.shape == (5, 3, 3)
 
 
 def test_local_defocus_at_origin_returns_nominal():
@@ -195,7 +116,6 @@ def test_local_defocus_at_origin_returns_nominal():
 def test_local_defocus_varies_with_depth():
     """A tilted specimen should produce depth-dependent defocus changes."""
     tomo = tomo_cmd.Tomogram(
-        tilt_image_dims=(100, 100),
         pixel_size=1.0,
         defocus_u=np.array([20000.0]),
         defocus_v=np.array([20000.0]),
@@ -215,13 +135,11 @@ def test_local_defocus_varies_with_depth():
 
 
 # ---------------------------------------------------------------------------
-# Tomogram.expand_particle – basic structure
+# Tomogram.expand_particles_batch – basic structure
 # ---------------------------------------------------------------------------
 
-def test_expand_particle_returns_correct_number_of_rows():
-    """expand_particle should produce one row per tilt."""
-    import pandas as pd
-
+def test_expand_particles_batch_returns_correct_number_of_rows():
+    """expand_particles_batch should produce M * n_tilts rows."""
     n_tilts = 3
     tomo = _make_simple_tomogram(n_tilts=n_tilts)
 
@@ -232,12 +150,13 @@ def test_expand_particle_returns_correct_number_of_rows():
         '_rlnTomoNominalStageTiltAngle': np.zeros(n_tilts),
     })
 
-    df_2d = tomo.expand_particle(
-        point_3d=np.array([0.0, 0.0, 0.0]),
-        image_name="particles.mrcs",
+    df_2d = tomo.expand_particles_batch(
+        points_3d=np.array([[0.0, 0.0, 0.0]]),
+        image_names=["particles.mrcs"],
         tilt_df=tilt_df,
-        group_name="particle_001",
-        base_orientation=None,
+        group_names=["particle_001"],
+        base_orientations=None,
+        random_subsets=np.array([1]),
     )
 
     assert len(df_2d) == n_tilts
@@ -245,3 +164,37 @@ def test_expand_particle_returns_correct_number_of_rows():
     assert '_rlnImageName' in df_2d.columns
     assert '_rlnGroupName' in df_2d.columns
     assert all(df_2d['_rlnGroupName'] == "particle_001")
+
+
+def test_expand_particles_batch_multiple_particles():
+    """Batch of 3 particles should produce 3 * n_tilts rows."""
+    n_tilts = 4
+    tomo = _make_simple_tomogram(n_tilts=n_tilts)
+
+    tilt_df = pd.DataFrame({
+        '_rlnMicrographName': [f'mic_{i}.mrc' for i in range(n_tilts)],
+        '_rlnMicrographPreExposure': np.arange(n_tilts, dtype=float),
+        '_rlnCtfScalefactor': np.ones(n_tilts),
+        '_rlnTomoNominalStageTiltAngle': np.zeros(n_tilts),
+    })
+
+    M = 3
+    R_batch = R.from_matrix(np.broadcast_to(np.eye(3), (M, 3, 3)).copy())
+
+    df_2d = tomo.expand_particles_batch(
+        points_3d=np.zeros((M, 3)),
+        image_names=[f"p{i}.mrcs" for i in range(M)],
+        tilt_df=tilt_df,
+        group_names=[f"group_{i}" for i in range(M)],
+        base_orientations=R_batch,
+        random_subsets=np.array([1, 2, 1]),
+    )
+
+    assert len(df_2d) == M * n_tilts
+    # Check each group appears n_tilts times
+    for i in range(M):
+        assert (df_2d['_rlnGroupName'] == f"group_{i}").sum() == n_tilts
+    # Check random subsets preserved
+    for i in range(M):
+        subset_vals = df_2d[df_2d['_rlnGroupName'] == f"group_{i}"]['_rlnRandomSubset']
+        assert all(subset_vals == [1, 2, 1][i])

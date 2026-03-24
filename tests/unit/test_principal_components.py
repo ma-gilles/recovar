@@ -134,7 +134,7 @@ def test_get_cov_svds_delegates_to_randomized_svd(monkeypatch):
     monkeypatch.setattr(pc, "randomized_real_svd_of_columns", fake_randomized_real_svd_of_columns)
 
     cov_cols = {"est_mask": np.ones((3, 2), dtype=np.complex64)}
-    u, s = pc.get_cov_svds(
+    u_real, s_real = pc.get_cov_svds(
         covariance_cols=cov_cols,
         picked_frequencies=np.array([0, 1]),
         volume_mask=np.ones(3, dtype=np.float32),
@@ -144,10 +144,98 @@ def test_get_cov_svds_delegates_to_randomized_svd(monkeypatch):
         ignore_zero_frequency=False,
         randomized_sketch_size=5,
     )
-    assert "real" in u and "real" in s
-    np.testing.assert_array_equal(u["real"], np.eye(3, dtype=np.float32))
-    np.testing.assert_array_equal(s["real"], np.array([3.0, 2.0, 1.0], dtype=np.float32))
+    np.testing.assert_array_equal(u_real, np.eye(3, dtype=np.float32))
+    np.testing.assert_array_equal(s_real, np.array([3.0, 2.0, 1.0], dtype=np.float32))
     assert called["kwargs"]["test_size"] == 5
+
+
+def test_get_cov_svds_passes_random_seed(monkeypatch):
+    called = {}
+
+    def fake_randomized_real_svd_of_columns(*args, **kwargs):
+        called["kwargs"] = kwargs
+        return np.eye(3, dtype=np.float32), np.array([3.0, 2.0, 1.0], dtype=np.float32), np.eye(3, dtype=np.float32)
+
+    monkeypatch.setattr(pc, "randomized_real_svd_of_columns", fake_randomized_real_svd_of_columns)
+
+    pc.get_cov_svds(
+        covariance_cols={"est_mask": np.ones((3, 2), dtype=np.complex64)},
+        picked_frequencies=np.array([0, 1]),
+        volume_mask=np.ones(3, dtype=np.float32),
+        volume_shape=(1, 1, 3),
+        vol_batch_size=2,
+        gpu_memory_to_use=8,
+        ignore_zero_frequency=False,
+        randomized_sketch_size=5,
+        random_seed=19,
+    )
+
+    assert called["kwargs"]["random_seed"] == 19
+
+
+def test_projected_covariance_batch_size_uses_requested_gpu_budget(monkeypatch):
+    calls = {}
+
+    def fake_get_embedding_batch_size(basis, image_size, contrast_grid, zdim, gpu_memory):
+        calls["gpu_memory"] = gpu_memory
+        calls["basis_shape"] = basis.shape
+        calls["image_size"] = image_size
+        calls["zdim"] = zdim
+        return 7
+
+    monkeypatch.setattr(pc.utils, "get_embedding_batch_size", fake_get_embedding_batch_size)
+    monkeypatch.setattr(pc.utils, "get_gpu_memory_total", lambda: 100.0)
+
+    basis = np.ones((8, 3), dtype=np.float32)
+    out = pc._projected_covariance_batch_size(
+        basis=basis,
+        image_size=16,
+        basis_size=3,
+        gpu_memory_to_use=8.0,
+    )
+
+    assert out == 7
+    assert calls["basis_shape"] == basis.shape
+    assert calls["image_size"] == 16
+    assert calls["zdim"] == 3
+    expected_budget = 8.0 - 2 * 3**4 * 8 / 1e9
+    assert calls["gpu_memory"] == pytest.approx(expected_budget)
+
+
+def test_randomized_real_svd_of_columns_is_deterministic_for_fixed_seed(monkeypatch):
+    monkeypatch.setattr(pc.utils, "report_memory_device", lambda logger=None: None)
+    monkeypatch.setattr(pc.jax, "device_put", lambda x, device=None: x)
+    monkeypatch.setattr(
+        pc,
+        "right_matvec_with_spatial_Sigma",
+        lambda test_mat, *args, **kwargs: np.asarray(test_mat[:, :2], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        pc,
+        "left_matvec_with_spatial_Sigma",
+        lambda q, *args, **kwargs: np.asarray(q.T, dtype=np.float32),
+    )
+    monkeypatch.setattr(pc.linalg, "batch_dft3", lambda q, volume_shape, vol_batch_size: np.asarray(q))
+    monkeypatch.setattr(pc.linalg, "blockwise_A_X", lambda a, x, memory_to_use=None: np.asarray(a) @ np.asarray(x))
+
+    common = dict(
+        columns=np.ones((8, 2), dtype=np.complex64),
+        picked_frequency_indices=np.array([0, 1], dtype=np.int32),
+        volume_mask=np.ones(8, dtype=np.float32),
+        volume_shape=(2, 2, 2),
+        vol_batch_size=1,
+        test_size=4,
+        gpu_memory_to_use=8,
+    )
+
+    q1, s1, v1 = pc.randomized_real_svd_of_columns(**common, random_seed=5)
+    q2, s2, v2 = pc.randomized_real_svd_of_columns(**common, random_seed=5)
+    q3, s3, v3 = pc.randomized_real_svd_of_columns(**common, random_seed=6)
+
+    np.testing.assert_allclose(q1, q2)
+    np.testing.assert_allclose(s1, s2)
+    np.testing.assert_allclose(v1, v2)
+    assert (not np.allclose(q1, q3)) or (not np.allclose(v1, v3)) or (not np.allclose(s1, s3))
 
 
 def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
@@ -179,6 +267,12 @@ def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
     assert s.shape == (3,)
     assert s[0] >= s[1] >= s[2]
     assert s[2] == pytest.approx(pc.jax_config.EPSILON)
+
+
+def test_unused_diagnostic_functions_removed():
+    assert not hasattr(pc, "test_different_embeddings")
+    assert not hasattr(pc, "test_different_embeddings_from_volumes")
+    assert not hasattr(pc, "test_different_embeddings_from_variance")
 
 
 def test_estimate_principal_components_high_snr_from_var_est_requires_variance():
@@ -263,8 +357,8 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
         pc,
         "get_cov_svds",
         lambda *args, **kwargs: (
-            {"real": np.ones((8, 2), dtype=np.float32)},
-            {"real": np.array([2.0, 1.0], dtype=np.float32)},
+            np.ones((8, 2), dtype=np.float32),
+            np.array([2.0, 1.0], dtype=np.float32),
         ),
     )
     monkeypatch.setattr(
@@ -335,8 +429,8 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
         pc,
         "get_cov_svds",
         lambda *args, **kwargs: (
-            {"real": np.ones((cryo.volume_size, 2), dtype=np.float32)},
-            {"real": np.array([2.0, 1.0], dtype=np.float32)},
+            np.ones((cryo.volume_size, 2), dtype=np.float32),
+            np.array([2.0, 1.0], dtype=np.float32),
         ),
     )
     monkeypatch.setattr(
@@ -395,73 +489,6 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     assert np.isfinite(u_np).all()
     gram = u_np.T @ u_np
     np.testing.assert_allclose(gram, np.eye(2), atol=5e-4, rtol=5e-4)
-
-
-def test_right_matvec_with_spatial_sigma_v2_matches_v1_small_problem(monkeypatch):
-    monkeypatch.setattr(pc.utils, "report_memory_device", lambda *args, **kwargs: None)
-
-    volume_shape = (4, 4, 4)
-    vol_size = int(np.prod(volume_shape))
-    rng = np.random.default_rng(0)
-    picked = rng.choice(vol_size, size=8, replace=False).astype(np.int32)
-    columns = (rng.normal(size=(vol_size, picked.size)) + 1j * rng.normal(size=(vol_size, picked.size))).astype(np.complex64)
-
-    picked_freqs = core.vec_indices_to_frequencies(picked, volume_shape)
-    smaller_size = int(2 * (np.max(np.abs(np.asarray(picked_freqs))) + 1))
-    smaller_vol_size = smaller_size ** 3
-    test_mat = rng.normal(size=(smaller_vol_size, 3)).astype(np.float32)
-
-    out_v1 = pc.right_matvec_with_spatial_Sigma(
-        test_mat=test_mat,
-        columns=columns,
-        picked_frequency_indices=picked,
-        volume_shape=volume_shape,
-        vol_batch_size=2,
-        memory_to_use=8,
-    )
-    out_v2 = pc.right_matvec_with_spatial_Sigma_v2(
-        test_mat=test_mat,
-        columns=columns,
-        picked_frequency_indices=picked,
-        volume_shape=volume_shape,
-        vol_batch_size=2,
-        memory_to_use=8,
-    )
-
-    np.testing.assert_allclose(np.asarray(out_v1), np.asarray(out_v2), atol=2e-5, rtol=2e-5)
-
-
-def test_left_matvec_with_spatial_sigma_v2_matches_v1_small_problem(monkeypatch):
-    monkeypatch.setattr(pc.utils, "report_memory_device", lambda *args, **kwargs: None)
-    monkeypatch.setattr(pc, "report_memory", False)
-
-    volume_shape = (4, 4, 4)
-    vol_size = int(np.prod(volume_shape))
-    rng = np.random.default_rng(1)
-    picked = rng.choice(vol_size, size=7, replace=False).astype(np.int32)
-    columns = (rng.normal(size=(vol_size, picked.size)) + 1j * rng.normal(size=(vol_size, picked.size))).astype(np.complex64)
-
-    Q = (rng.normal(size=(vol_size, 3)) + 1j * rng.normal(size=(vol_size, 3))).astype(np.complex64)
-
-    out_v1 = pc.left_matvec_with_spatial_Sigma(
-        Q=Q,
-        columns=columns,
-        picked_frequency_indices=picked,
-        volume_shape=volume_shape,
-        vol_batch_size=2,
-        memory_to_use=8,
-    )
-    out_v2 = pc.left_matvec_with_spatial_Sigma_v2(
-        Q=Q,
-        columns=columns,
-        picked_frequency_indices=picked,
-        volume_shape=volume_shape,
-        vol_batch_size=2,
-        memory_to_use=8,
-    )
-
-    np.testing.assert_allclose(np.asarray(out_v1), np.asarray(out_v2), atol=2e-5, rtol=2e-5)
-
 
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence

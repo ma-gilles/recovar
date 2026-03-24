@@ -154,6 +154,27 @@ def test_pipeline_output_get_embedding_component_dict_input_args_unshared_tilt_u
     np.testing.assert_array_equal(contrasts_sel, np.array([1.0, 3.0, 0.0, 2.0], dtype=np.float32))
 
 
+def test_pipeline_output_get_unsorted_embedding_component_returns_raw_component(tmp_path):
+    result_path = tmp_path / "pipeline_output"
+    model_dir = result_path / "model"
+    model_dir.mkdir(parents=True)
+
+    params = {"version": "0.2", "input_args": SimpleNamespace(tilt_series=False)}
+    utils.pickle_dump(params, str(model_dir / "params.pkl"))
+    utils.pickle_dump(
+        {
+            "latent_coords": {4: np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)},
+            "latent_precision": {4: np.zeros((2, 2, 2), dtype=np.float32)},
+            "contrasts": {4: np.array([0.1, 0.9], dtype=np.float32)},
+        },
+        str(model_dir / "embeddings.pkl"),
+    )
+
+    po = output.PipelineOutput(str(result_path))
+    zs = po.get_unsorted_embedding_component("latent_coords", 4)
+    np.testing.assert_array_equal(zs, np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+
+
 def test_pipeline_output_get_u_real_uses_available_saved_eigenvectors(tmp_path, monkeypatch):
     result_path = tmp_path / "pipeline_output"
     model_dir = result_path / "model"

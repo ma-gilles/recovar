@@ -21,6 +21,7 @@ matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 # Set up logger
 logger = logging.getLogger(__name__)
 
+
 def plot_anomaly_detection_results(zs, original_indices, folder_name):
     """
     Plots anomaly detection results for given data and saves the plots and inlier/outlier indices.
@@ -382,14 +383,21 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     contrast_entry = 'contrasts_noreg' if noreg else 'contrasts'
     input_args = pipeline_output.get('input_args')
     starfile = getattr(input_args, 'particles', None)
-    contrasts = pipeline_output.get(contrast_entry)[zdim_key]
-    contrast_array = np.asarray(contrasts, dtype=np.float32)
-    
+    contrasts = pipeline_output.get_embedding_component(contrast_entry, zdim_key)
+
     # Parse starfile for grouping information
     # Check if this is a tilt-series dataset by looking at pipeline input arguments
     is_tilt_series = getattr(input_args, 'tilt_series', False)
     shared_contrast_across_tilts = getattr(input_args, 'shared_contrast_across_tilts', False)
-    
+
+    contrast_array = np.asarray(contrasts, dtype=np.float32)
+    original_image_indices = np.concatenate(
+        pipeline_output.get('halfsets')
+    ).astype(np.int32, copy=False)
+    original_particle_indices = np.concatenate(
+        pipeline_output.get('particles_halfsets')
+    ).astype(np.int32, copy=False)
+
     # Individual image outlier detection
     low_contrast_outliers = contrast_array < low_contrast_threshold
     high_contrast_outliers = contrast_array > high_contrast_threshold
@@ -398,10 +406,8 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     n_low_contrast = np.sum(low_contrast_outliers)
     n_high_contrast = np.sum(high_contrast_outliers)
     n_individual_outliers = np.sum(individual_outliers)
-    
-    original_image_indices = np.concatenate(pipeline_output.get('halfsets'))
-    original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
-    n_images = len(original_image_indices)
+
+    n_images = len(contrast_array)
 
     logger.info("Final contrast array shape: %s", contrast_array.shape)
     logger.info("Contrast-based outlier detection for %d images", n_images)
@@ -423,12 +429,14 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     inliers_ind = np.where(~individual_outliers)[0]
 
     # Initialize return values
-    image_outliers = original_image_indices[outliers_ind]
-    image_inliers = original_image_indices[inliers_ind]
+    image_outliers = None
+    image_inliers = None
     particle_outliers = None
     particle_inliers = None
 
     if not is_tilt_series:
+        image_outliers = original_image_indices[outliers_ind]
+        image_inliers = original_image_indices[inliers_ind]
         return image_outliers, image_inliers, particle_outliers, particle_inliers
 
     # If the dataset is a tilt-series or the contrast is shared across tilts, skip the grouping based on particle or micrograph
@@ -437,6 +445,9 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
         inliers_ind_mapped_back_to_original_indices = original_particle_indices[inliers_ind]
 
         return outliers_ind_mapped_back_to_original_indices, inliers_ind_mapped_back_to_original_indices, None, None
+
+    image_outliers = original_image_indices[outliers_ind]
+    image_inliers = original_image_indices[inliers_ind]
 
     # Only try to parse starfile if it actually has a .star extension
     particle_to_tilts = None
@@ -885,14 +896,16 @@ def main():
     zdim_key = args.zdim_key
 
     # Check if embeddings exist
-    zs_dict = pipeline_output.get(coords_entry)
-    if zs_dict is None or zdim_key not in zs_dict:
-        available_dims = list(zs_dict.keys()) if zs_dict is not None else []
+    available_dims = list(pipeline_output.get_embedding_keys(coords_entry))
+    if zdim_key not in available_dims:
         logger.error("zdim %s not found. Available dimensions: %s", zdim_key, available_dims)
         sys.exit(1)
 
     # Load embeddings
-    zs = zs_dict[zdim_key]
+    zs = pipeline_output.get_embedding_component(coords_entry, zdim_key)
+    original_particle_indices = np.concatenate(
+        pipeline_output.get('particles_halfsets')
+    ).astype(np.int32, copy=False)
     logger.info("Loaded embeddings with shape: %s", zs.shape)
 
     # Get the actual number of particles from the pipeline output
@@ -925,7 +938,7 @@ def main():
     anomaly_output_dir = os.path.join(args.output_dir, 'anomaly_detection')
     os.makedirs(anomaly_output_dir, exist_ok=True)
     
-    plot_anomaly_detection_results(zs, np.concatenate(particles_halfsets), anomaly_output_dir)
+    plot_anomaly_detection_results(zs, original_particle_indices, anomaly_output_dir)
     
     # Load consensus results
     consensus_inliers_file = os.path.join(anomaly_output_dir, 'inliers_consensus.pkl')
@@ -945,17 +958,15 @@ def main():
     logger.info("Anomaly detection completed. Found %s inliers and %s particle outliers.", len(anomaly_inliers), len(anomaly_outliers))
     
     # --- Method 2: Contrast-based Outlier Detection ---
-    contrasts = pipeline_output.get(contrast_entry)
     contrast_image_inliers = None
     contrast_image_outliers = None
     contrast_particle_inliers = None
     contrast_particle_outliers = None
+    original_image_indices = None
 
-    if contrasts is not None and zdim_key in contrasts:
-        # Extract contrast values for the specific zdim_key
-        contrast_values = contrasts[zdim_key]
+    if zdim_key in pipeline_output.get_embedding_keys(contrast_entry):
+        contrast_values = pipeline_output.get_embedding_component(contrast_entry, zdim_key)
         logger.info("Found contrast values for zdim=%s, shape: %s", zdim_key, contrast_values.shape)
-        
         # Load starfile path and options from pipeline input_args
         contrast_output_dir = os.path.join(args.output_dir, 'contrast_based')
         os.makedirs(contrast_output_dir, exist_ok=True)
@@ -979,8 +990,8 @@ def main():
         contrast_particle_outliers = particle_outliers
 
         logger.info("Contrast-based outlier detection completed. Found %s image inliers and %s image outliers.", len(contrast_image_inliers), len(contrast_image_outliers))
-        
     else:
+        original_image_indices = None
         contrast_image_inliers = None
         contrast_image_outliers = None
         contrast_particle_inliers = None
@@ -1014,7 +1025,7 @@ def main():
             
             # Calculate n_particles_per_cluster as min(100, max(10, n_particles/n_clusters))
             n_clusters = 100
-            n_particles = len(pipeline_output.get(coords_entry)[zdim_key])
+            n_particles = len(zs)
             n_particles_per_cluster = min(100, max(10, n_particles // n_clusters))
             
             # Override with user-provided value if specified
@@ -1084,8 +1095,10 @@ def main():
         all_particle_outliers.append(junk_outliers)
         particle_method_names.append("Junk Detection")
     
-    original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
-    original_image_indices = np.concatenate(pipeline_output.get('halfsets'))
+    if original_image_indices is None:
+        original_image_indices = np.concatenate(
+            pipeline_output.get('halfsets')
+        ).astype(np.int32, copy=False)
     
     # Handle particle outlier combination safely
     if len(all_particle_outliers) > 0:
@@ -1320,14 +1333,24 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
         'scatter': 'cornflowerblue'
     }
 
-    # Get zs embeddings and original particle indices
-    zs = pipeline_output.get(coords_entry)[zdim_key]
-    original_particle_indices = np.concatenate(pipeline_output.get('particles_halfsets'))
-    original_image_indices = np.concatenate(pipeline_output.get('halfsets'))
+    zs = pipeline_output.get_embedding_component(coords_entry, zdim_key)
+    original_particle_indices = np.concatenate(
+        pipeline_output.get('particles_halfsets')
+    ).astype(np.int32, copy=False)
 
     # Get contrast values if available
-    contrast_values = None
-    contrast_values = pipeline_output.get(contrast_entry)[zdim_key]
+    input_args = pipeline_output.get('input_args')
+    is_shared_contrast = bool(getattr(input_args, 'shared_contrast_across_tilts', False))
+    contrast_values = pipeline_output.get_embedding_component(contrast_entry, zdim_key)
+    if contrast_values is None:
+        contrast_values = None
+        original_image_indices = original_particle_indices
+    elif is_tilt_series and is_shared_contrast:
+        original_image_indices = original_particle_indices
+    else:
+        original_image_indices = np.concatenate(
+            pipeline_output.get('halfsets')
+        ).astype(np.int32, copy=False)
     umapper = output.umap_latent_space(zs)
     umap_coords = umapper.embedding_
     has_umap = True

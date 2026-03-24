@@ -75,7 +75,7 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
         
     if soften > 0:
         # Soft mask
-        soft_edge_kernel = mask.create_soft_edged_kernel_pxl(soften, image_shape).astype(volume_mask.dtype)
+        soft_edge_kernel = mask.make_soft_edged_kernel(soften, image_shape).astype(volume_mask.dtype)
         
         # Convolve
         soft_edge_kernel_ft = fourier_transform_utils.get_dft2(soft_edge_kernel)
@@ -120,12 +120,15 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape, half_images
         proj_eigen = fourier_transform_utils.get_dft2(proj_eigen).reshape([*proj_eigen.shape[0:2], -1])
     return proj_eigen
 
-## TODO: This is not ideal. The correct way to pass no mask should be to use mask = None
-## not an all ones mask but it might be happening because I was lazy. Fix this whereever
 def check_mask(mask):
-    no_mask = np.all(np.isclose(mask,1))
-    if no_mask:
+    if mask is None:
         logger.info("no mask used")
+        return True
+
+    mask = np.asarray(mask)
+    no_mask = bool(np.all(np.isclose(mask, 1)))
+    if no_mask:
+        logger.info("mask is all ones; treating it as no mask")
     return no_mask
 
 batch_forward_model = jax.vmap(
@@ -178,10 +181,9 @@ def batch_vol_forward_from_map(
 # Equinox-based API
 # ============================================================================
 
-## TODO: rename this function. centered would be understood as "translated" back to origin by most people, rather than mean subtracted
 @eqx.filter_jit
-@nvtx.annotate("centered_images", color="yellow", domain=NVTX_DOMAIN_COV_CORE)
-def centered_images(
+@nvtx.annotate("subtract_projected_mean", color="yellow", domain=NVTX_DOMAIN_COV_CORE)
+def subtract_projected_mean(
     config: ForwardModelConfig,
     images: jax.Array,
     mean: jax.Array,
@@ -206,22 +208,6 @@ def centered_images(
         )
         centered = translated - projected
     return centered
-
-## TODO: are there multiple implementations of this? if so delete
-@eqx.filter_jit
-@nvtx.annotate("batch_vol_forward", color="blue", domain=NVTX_DOMAIN_COV_CORE)
-def batch_vol_forward(
-    config: ForwardModelConfig,
-    volumes: jax.Array,
-    ctf_params: jax.Array,
-    rotation_matrices: jax.Array,
-) -> jax.Array:
-    """Forward-model a batch of volumes (vmap over volume axis)."""
-    batch_grid_pt_vec_ind = core.batch_get_nearest_gridpoint_indices(
-        rotation_matrices, config.image_shape, config.volume_shape
-    )
-    batch_CTF = config.compute_ctf(ctf_params)
-    return batch_forward_model(volumes, batch_CTF, batch_grid_pt_vec_ind)
 
 
 def triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1):
@@ -251,6 +237,3 @@ def evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = "triangular",
     else:
         raise ValueError("Kernel function not recognized")
     return kernel_vals
-
-
-

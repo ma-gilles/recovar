@@ -670,21 +670,21 @@ def test_load_images_dispatches_to_expected_loader(monkeypatch):
     }
     calls = {}
 
-    def _fake_mrc(filepath, indices, lazy):
+    def _fake_mrc(filepath, indices, lazy, skip_staging=False):
         calls["mrc"] = (filepath, indices, lazy)
         return sentinels["mrc"]
 
-    def _fake_star(filepath, indices, datadir, lazy, max_threads, strip_prefix):
+    def _fake_star(filepath, indices, datadir, lazy, max_threads, strip_prefix, skip_staging=False):
         calls["star"] = (filepath, indices, datadir, lazy, max_threads, strip_prefix)
         return sentinels["star"]
 
-    def _fake_cs(filepath, indices, datadir, lazy, max_threads, strip_prefix=None):
+    def _fake_cs(filepath, indices, datadir, lazy, max_threads, strip_prefix=None, skip_staging=False):
         calls["cs"] = (filepath, indices, datadir, lazy, max_threads, strip_prefix)
         return sentinels["cs"]
 
     class _FakeMulti:
         @staticmethod
-        def from_txt(filepath, indices, lazy, max_threads):
+        def from_txt(filepath, indices, lazy, max_threads, skip_staging=False):
             calls["txt"] = (filepath, indices, lazy, max_threads)
             return sentinels["txt"]
 

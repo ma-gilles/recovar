@@ -66,7 +66,7 @@ def compute_embedding(recovar_result_dir):
     latent_coords = {}
     latent_precision = {}
     est_contrasts = {}
-    coords = results.get('latent_coords', results.get('zs', {}))
+    coords = results['latent_coords']
     zdims = sorted(coords.keys())
     if not zdims:
         input_zdim = getattr(results.get('input_args', None), 'zdim', None)

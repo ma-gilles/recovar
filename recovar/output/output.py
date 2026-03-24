@@ -17,7 +17,7 @@ from recovar import utils
 from recovar.core import linalg
 from recovar.data_io import cryoem_dataset, halfsets
 from recovar.heterogeneity import embedding, trajectory
-from recovar.output.output_paths import ResultPaths
+from recovar.output.output_paths import AnalysisPaths, ResultPaths
 from recovar.reconstruction import regularization
 
 logger = logging.getLogger(__name__)
@@ -596,8 +596,6 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-## TODO this hsould move elsewhere
-
 def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state", halfset_datasets=None):
     # cryos: CryoEMDataset (with halfset_indices)
     """Compute reweighted volume estimates and save with RELION-style organization.
@@ -620,7 +618,6 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
                     ...
             latent_coords.txt                 # all latent coordinates
     """
-    from recovar.output.output_paths import AnalysisPaths
     ds = cryos
 
     if n_min_particles is None:
@@ -662,18 +659,24 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
         heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely', halfset_datasets=halfset_datasets)
 
-        ## TODO: this is really ugly logic and organization. Just have them pass a folder or something so we dont have to move, 
-        ## And come up with better way to organize results for this
-        ## Probably use RELION has a pattern for how to store stuff in subdir
-        # Move primary files from diagnostics to flat output
-        primary_stem = os.path.join(output_folder, vol_stem)
-        os.rename(os.path.join(diag_dir, "filtered.mrc"), primary_stem + ".mrc")
-        os.rename(os.path.join(diag_dir, "half1_unfil.mrc"), primary_stem + "_half1_unfil.mrc")
-        os.rename(os.path.join(diag_dir, "half2_unfil.mrc"), primary_stem + "_half2_unfil.mrc")
-
+        primary_stem = _promote_reweighted_volume_outputs(diag_dir, output_folder, vol_prefix, vol_idx)
         logger.info("Done with volume %d: %s.mrc", vol_idx, primary_stem)
 
     np.savetxt(os.path.join(output_folder, 'latent_coords.txt'), path_subsampled)
+
+
+def _promote_reweighted_volume_outputs(diag_dir, output_folder, vol_prefix, vol_idx):
+    """Move primary reweighted outputs from diagnostics/ into the flat analysis dir."""
+    vol_stem = AnalysisPaths.vol_stem(vol_prefix, vol_idx)
+    primary_stem = os.path.join(output_folder, vol_stem)
+    rename_map = {
+        os.path.join(diag_dir, "filtered.mrc"): primary_stem + ".mrc",
+        os.path.join(diag_dir, "half1_unfil.mrc"): primary_stem + "_half1_unfil.mrc",
+        os.path.join(diag_dir, "half2_unfil.mrc"): primary_stem + "_half2_unfil.mrc",
+    }
+    for src, dst in rename_map.items():
+        os.replace(src, dst)
+    return primary_stem
 
 
 def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path):
@@ -722,10 +725,8 @@ def load_results_new(datadir):
     return results
 
 
-## TODO: I am happy havin this thing have  alot of backward compatibility funcitons, but it should be nowhere else, i.e. functions that call pipelineoutput shouldnt have if statements in front of them checking the verison, it all should be figured out in here
 class PipelineOutput:
     def __init__(self, result_path):
-        # Normalize trailing slash for backward compat
         self.result_path = result_path.rstrip('/') + '/'
         self.paths = ResultPaths(self.result_path.rstrip('/'))
         self.params = utils.pickle_load(self.paths.params)
@@ -738,31 +739,8 @@ class PipelineOutput:
     def _ensure_embedding_raw_loaded(self):
         if self.embedding is None:
             self.embedding = utils.pickle_load(self.paths.embeddings)
-            self._migrate_legacy_embedding()
 
-    def _migrate_legacy_embedding(self):
-        """Convert old-format embedding dict (zs/cov_zs with mixed keys) to new schema."""
-        if 'zs' in self.embedding and 'latent_coords' not in self.embedding:
-            old_to_new = [
-                ('zs', 'latent_coords'),
-                ('cov_zs', 'latent_precision'),
-                ('contrasts', 'contrasts'),
-            ]
-            new_emb = {}
-            for old_name, new_name in old_to_new:
-                if old_name not in self.embedding:
-                    continue
-                reg, noreg = {}, {}
-                for k, v in self.embedding[old_name].items():
-                    if isinstance(k, str) and k.endswith('_noreg'):
-                        noreg[int(k.replace('_noreg', ''))] = v
-                    else:
-                        reg[k] = v
-                new_emb[new_name] = reg
-                new_emb[f'{new_name}_noreg'] = noreg
-            self.embedding = new_emb
-
-    def _get_input_args_compat(self):
+    def _get_input_args(self):
         if not hasattr(self.params, "get") or "input_args" not in self.params:
             return None
         input_args = self.params["input_args"]
@@ -772,7 +750,7 @@ class PipelineOutput:
             return input_args
 
     def _use_image_halfsets_for_unshared_tilt_contrast(self):
-        input_args = self._get_input_args_compat()
+        input_args = self._get_input_args()
         if input_args is None:
             return False
         if isinstance(input_args, dict):
@@ -799,33 +777,38 @@ class PipelineOutput:
 
     def get_embedding_keys(self, entry):
         self._ensure_embedding_raw_loaded()
-        resolved = self._EMBEDDING_ALIASES.get(entry, entry)
-        return list(self.embedding[resolved].keys())
+        return list(self.embedding[entry].keys())
 
     def has_embedding_key(self, entry, key):
         return key in self.get_embedding_keys(entry)
 
     def get_embedding_component(self, entry, key):
-        resolved = self._EMBEDDING_ALIASES.get(entry, entry)
         if self.embedding_loaded:
-            return self.embedding[resolved][key]
-        cache_key = (resolved, key)
+            return self.embedding[entry][key]
+        cache_key = (entry, key)
         if cache_key in self._embedding_key_cache:
             return self._embedding_key_cache[cache_key]
 
         self._ensure_embedding_raw_loaded()
-        if key not in self.embedding[resolved]:
-            raise KeyError(f"Embedding key {key} not found in {resolved}.")
+        if key not in self.embedding[entry]:
+            raise KeyError(f"Embedding key {key} not found in {entry}.")
 
-        values = self.embedding[resolved][key]
+        values = self.embedding[entry][key]
         if self.version != '0':
             particle_halfsets, image_halfsets = self._get_embedding_halfsets()
-            if resolved.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
+            if entry.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
                 values = values[image_halfsets]
             else:
                 values = values[particle_halfsets]
         self._embedding_key_cache[cache_key] = values
         return values
+
+    def get_unsorted_embedding_component(self, entry, key):
+        """Return raw embedding values in original dataset order, without halfset reindexing."""
+        self._ensure_embedding_raw_loaded()
+        if key not in self.embedding[entry]:
+            raise KeyError(f"Embedding key {key} not found in {entry}.")
+        return np.asarray(self.embedding[entry][key])
 
     def load_embedding(self):
         self._ensure_embedding_raw_loaded()
@@ -886,12 +869,6 @@ class PipelineOutput:
             out[i] = np.asarray(fourier_transform_utils.get_dft3(vol), dtype=np.complex64).reshape(-1)
         return out
 
-    # Backward-compat aliases: old name -> new name
-    _EMBEDDING_ALIASES = {
-        'zs': 'latent_coords',
-        'cov_zs': 'latent_precision',
-    }
-
     _EMBEDDING_ENTRIES = (
         'latent_coords', 'latent_coords_noreg',
         'latent_precision', 'latent_precision_noreg',
@@ -899,13 +876,10 @@ class PipelineOutput:
     )
 
     def get(self, key):
-        # Resolve old embedding names
-        resolved = self._EMBEDDING_ALIASES.get(key, key)
-
-        if resolved in self._EMBEDDING_ENTRIES:
+        if key in self._EMBEDDING_ENTRIES:
             if not self.embedding_loaded:
                 self.load_embedding()
-            return self.embedding[resolved]
+            return self.embedding[key]
 
         elif key == 'unsorted_embedding':
             return utils.pickle_load(self.paths.embeddings)
@@ -962,16 +936,8 @@ class PipelineOutput:
                 return utils.pickle_load(self.paths.particles_halfsets)
 
         elif key == 'input_args':
-            try:
-                return self.params['input_args'].item()
-            except (ValueError, AttributeError):
-                return self.params['input_args']
+            return self._get_input_args()
 
-        # Backward compat: fields removed in v0.6 (were always None or redundant)
-        elif key == 's_all':
-            if 's_all' in self.params:
-                return self.params['s_all']
-            return {'rescaled': self.params['s'], 'real': None}
         elif key in ('density', 'latent_space_bounds', 'pc_metric', 'contrasts_for_second'):
             return self.params.get(key, None)
         elif key in ('std_image_PS', 'std_masked_image_PS'):
@@ -995,7 +961,6 @@ def add_noise_to_loaded_dataset(ds, noise_variance):
     else:
         ds.set_variable_radial_noise_model(noise_variance)
 
-## TODO these need to move as well
 def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folder, cryos = None, z_st = None, z_end = None, gt_volumes= None, n_vols_along_path = 6, plot_llh = False,  input_density = None, latent_space_bounds = None):
     """Compute minimum-energy trajectories and generate volume/density plots.
 
@@ -1023,19 +988,40 @@ def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folde
         if latent_space_bounds is None:
             raise ValueError("need latent_space_bounds if providing density")
 
-    latent_space_bounds = ld.compute_latent_space_bounds(pipeline_output.get('latent_coords')[basis_size]) if latent_space_bounds is None else latent_space_bounds
-
-    if cryos is None:
-        ds = pipeline_output.get('dataset')
-        embedding.set_contrasts_in_cryos(ds, pipeline_output.get('contrasts')[basis_size])
-
-    density = input_density if input_density is not None else pipeline_output.get('density')
+    cryos, zs, cov_zs, density, latent_space_bounds = _resolve_trajectory_plot_inputs(
+        pipeline_output,
+        basis_size,
+        cryos,
+        input_density,
+        latent_space_bounds,
+    )
 
     return make_trajectory_plots(
         density,
-        pipeline_output.get('latent_coords')[basis_size], pipeline_output.get('latent_precision')[basis_size],
+        zs,
+        cov_zs,
         z_st, z_end, latent_space_bounds, output_folder,
         gt_volumes= None, n_vols_along_path = n_vols_along_path, plot_llh = plot_llh, use_input_density = input_density is not None)
+
+
+def _resolve_trajectory_plot_inputs(pipeline_output, basis_size, cryos, input_density, latent_space_bounds):
+    """Resolve trajectory plotting inputs from PipelineOutput."""
+    zs = pipeline_output.get_embedding_component("latent_coords", basis_size)
+    cov_zs = pipeline_output.get_embedding_component("latent_precision", basis_size)
+
+    if cryos is None:
+        cryos = pipeline_output.get("dataset")
+        try:
+            contrasts = pipeline_output.get_embedding_component("contrasts", basis_size)
+        except KeyError:
+            contrasts = None
+        if contrasts is not None:
+            embedding.set_contrasts_in_cryos(cryos, contrasts)
+
+    if latent_space_bounds is None:
+        latent_space_bounds = ld.compute_latent_space_bounds(zs)
+    density = input_density if input_density is not None else pipeline_output.get("density")
+    return cryos, zs, cov_zs, density, latent_space_bounds
 
 
 def make_trajectory_plots(density, zs, cov_zs, z_st, z_end, latent_space_bounds, output_folder, gt_volumes= None, n_vols_along_path = 6, plot_llh = False, use_input_density =False):
@@ -1193,7 +1179,11 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
 
     # Contrast histogram
     fig, ax = plt.subplots(figsize=(8, 6))
-    plot_utils.plot_contrast_histogram(po.get('contrasts')[zdim_key], ax=ax, zdim_key=zdim_key)
+    plot_utils.plot_contrast_histogram(
+        po.get_embedding_component('contrasts', zdim_key),
+        ax=ax,
+        zdim_key=zdim_key,
+    )
     plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'), bbox_inches='tight')
     plt.close()
 
@@ -1213,33 +1203,16 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
 
     # Load latent coordinates with robust error handling
     try:
-        zs_data = po.get('latent_coords')
-        if zs_data is None:
+        latent_keys = list(po.get_embedding_keys('latent_coords'))
+        if len(latent_keys) == 0:
             logger.warning("No latent coordinates found in pipeline output. Skipping PC analysis.")
             return
-            
-        # Try to get 4D latent space, fallback to available dimensions
-        if isinstance(zs_data, dict):
-            if 4 in zs_data:
-                z = zs_data[4]
-            elif len(zs_data) > 0:
-                # Use the first available key
-                first_key = list(zs_data.keys())[0]
-                z = zs_data[first_key]
-                logger.info("Using latent space with key %s instead of 4", first_key)
-            else:
-                logger.warning("No valid latent coordinates found. Skipping PC analysis.")
-                return
-        elif isinstance(zs_data, (list, tuple)) and len(zs_data) > 4:
-            z = zs_data[4]
-        elif isinstance(zs_data, (list, tuple)) and len(zs_data) > 0:
-            z = zs_data[0]
-            logger.info("Using first available latent space instead of 4D")
-        else:
-            logger.warning("Unexpected format for latent coordinates. Skipping PC analysis.")
-            return
-            
-        if z is None or not hasattr(z, 'shape'):
+        latent_key = 4 if 4 in latent_keys else latent_keys[0]
+        if latent_key != 4:
+            logger.info("Using latent space with key %s instead of 4", latent_key)
+
+        z = np.asarray(po.get_embedding_component('latent_coords', latent_key))
+        if z.ndim != 2:
             logger.warning("Invalid latent coordinates data. Skipping PC analysis.")
             return
             
@@ -1412,13 +1385,38 @@ def scatter_annotate(
     ax.set_facecolor("white")
     return fig, ax
 
-## TODO implement a better one for this? data could be huge so if query is medium this will be a problem. Not sure, depends where it's called. perhaps hsould use one of those clever 
 def get_nearest_point(
-    data: np.ndarray, query: np.ndarray
+    data: np.ndarray, query: np.ndarray, chunk_size: Optional[int] = None
 ) -> Tuple[npt.NDArray[np.float32], np.ndarray]:
-    """For each row of query, return the closest row of data and its index."""
-    dists = np.linalg.norm(data[np.newaxis, :] - query[:, np.newaxis, :], axis=-1)
-    ind = dists.argmin(axis=1)
+    """For each row of query, return the closest row of data and its index.
+
+    The computation is chunked over query rows to avoid materializing a full
+    ``(n_query, n_data, n_dim)`` distance tensor for larger inputs.
+    """
+    data = np.asarray(data)
+    query = np.asarray(query)
+    if data.ndim != 2 or query.ndim != 2:
+        raise ValueError("data and query must both be 2D arrays")
+    if data.shape[1] != query.shape[1]:
+        raise ValueError("data and query must have the same feature dimension")
+    if data.shape[0] == 0:
+        raise ValueError("data must contain at least one point")
+
+    if chunk_size is None:
+        target_bytes = 256 * 1024 * 1024
+        bytes_per_value = np.dtype(np.result_type(data.dtype, query.dtype, np.float32)).itemsize
+        per_query_bytes = max(1, data.shape[0] * data.shape[1] * bytes_per_value)
+        chunk_size = max(1, target_bytes // per_query_bytes)
+    else:
+        chunk_size = int(chunk_size)
+        if chunk_size <= 0:
+            raise ValueError(f"chunk_size must be positive, got {chunk_size}")
+
+    ind = np.empty(query.shape[0], dtype=np.int64)
+    for start in range(0, query.shape[0], chunk_size):
+        end = min(start + chunk_size, query.shape[0])
+        dists = np.linalg.norm(data[np.newaxis, :] - query[start:end, np.newaxis, :], axis=-1)
+        ind[start:end] = dists.argmin(axis=1)
     return data[ind], ind
 
 

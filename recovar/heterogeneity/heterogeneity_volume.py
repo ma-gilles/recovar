@@ -65,9 +65,8 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
     noise_variance = results['cov_noise']
     latent_points = latent_point[None]
 
-    # Support both new (latent_coords/latent_precision) and legacy (zs/cov_zs) dict formats
-    coords = results.get('latent_coords', results.get('zs', {}))
-    precision = results.get('latent_precision', results.get('cov_zs', {}))
+    coords = results['latent_coords']
+    precision = results['latent_precision']
     log_likelihoods = recovar.heterogeneity.latent_density.compute_latent_quadratic_forms_in_batch(latent_points[:,:ndim], coords[ndim], precision[ndim])[...,0]
     heterogeneity_distances = ds.split_halfset_array(
         log_likelihoods, per_particle=ds.tilt_series_flag)
@@ -89,8 +88,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     Args:
         heterogeneity_distances: Per-half-set log-likelihood distances,
             list of two arrays each of shape ``(n_images,)``.
-        cryos: Half-set datasets (``CryoEMDataset`` with ``halfset_indices``,
-            or ``CryoEMDataset`` for backward compat).
+        cryos: Half-set datasets (``CryoEMDataset`` with ``halfset_indices``).
         output_folder: Directory for output MRC files.
         ndim: Latent dimensionality (``-1`` for automatic).
         bins: Number of bins (int) or explicit bin edges (array).
@@ -107,6 +105,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         kernel_rad: Radius of the heterogeneity kernel.
         save_all_estimates: Save all intermediate estimates.
         heterogeneity_kernel: Kernel shape (``'parabola'`` or ``'flat'``).
+        halfset_datasets: Optional pre-materialized half-set datasets. When
+            provided, avoids rematerializing the split datasets internally.
     """
     ds = cryos
 
@@ -201,7 +201,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         # Local resolution map
         recovar.utils.write_mrc(output_folder + name + prefix + "local_resolution.mrc", best_filtered_res, voxel_size = ds.voxel_size)
 
-        # Half-maps (RELION-compatible naming)
+        # Half-maps with RELION-style filenames
         recovar.utils.write_mrc(output_folder + name + prefix + "half1_unfil.mrc", opt_halfmaps[0], voxel_size = ds.voxel_size)
         recovar.utils.write_mrc(output_folder + name + prefix + "half2_unfil.mrc", opt_halfmaps[1], voxel_size = ds.voxel_size)
         recovar.utils.write_mrc(output_folder + name + prefix + "unfil.mrc", (opt_halfmaps[0] + opt_halfmaps[1])/2, voxel_size = ds.voxel_size)

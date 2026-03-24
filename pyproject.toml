@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61.0", "setuptools_scm>=6.2"]
+requires = ["setuptools>=61.0", "setuptools_scm>=6.2", "numpy<2.3.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -38,7 +38,6 @@ dependencies = [
     "optax==0.2.7",
     "pandas==2.2.3",
     "plotly==6.0.0",
-    "scikit-fmm",
     "scikit-image",
     "scikit-learn==1.6.1",
     "scipy==1.15.2",

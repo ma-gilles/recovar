@@ -499,8 +499,7 @@ def estimate_principal_components_simple(experiment_dataset, mean, mean_signal_v
     vol_batch_size = 50
     gpu_memory_to_use =  50
 
-    basis,s = principal_components.get_cov_svds(cov, picked_frequency_indices, volume_mask, experiment_dataset.volume_shape, vol_batch_size, gpu_memory_to_use, False, covariance_options['randomized_sketch_size'])
-    basis = basis['real']
+    basis, s = principal_components.get_cov_svds(cov, picked_frequency_indices, volume_mask, experiment_dataset.volume_shape, vol_batch_size, gpu_memory_to_use, False, covariance_options['randomized_sketch_size'])
     # basis_size = basis.shape[-1]
     basis_size = 3
     basis = basis[:,:basis_size]
@@ -537,7 +536,7 @@ def estimate_principal_components_halfset(cryos, means, mean_signal_variance, co
         cov_cols[cryo_idx] = relion_functions.post_process_from_filter_v2(Hs[cryo_idx], Bs[cryo_idx], volume_shape, volume_upsampling_factor = 1, tau = covariance_prior, kernel = covariance_options['left_kernel'], use_spherical_mask = covariance_options['use_spherical_mask'], grid_correct = covariance_options['grid_correct'], gridding_correct = "square", kernel_width = 1, volume_mask = volume_mask )
 
         vol_batch_size = utils.get_vol_batch_size(cryo.grid_size, gpu_memory)
-        orthog_cov_cols,_ = principal_components.get_cov_svds(cov_cols[cryo_idx], picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, gpu_memory, False, covariance_options['randomized_sketch_size'])
+        orthog_cov_cols, _ = principal_components.get_cov_svds(cov_cols[cryo_idx], picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, gpu_memory, False, covariance_options['randomized_sketch_size'])
 
         basis_size = cov_cols[cryo_idx].shape[0]
         memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() -  2*basis_size**4*8/1e9

@@ -26,7 +26,6 @@ LOWER_IS_BETTER_TOKENS = (
     "rmse",
     "mse",
     "bias",
-    "constrast",
     "contrast",
 )
 
@@ -37,36 +36,14 @@ HIGHER_IS_BETTER_TOKENS = (
     "relative_variance",
 )
 
-# Canonical key renames: old_key -> new_key.
-# Both old and new keys are emitted for backward compatibility; regression
-# comparison deduplicates so each metric is only checked once.
-CANONICAL_KEY_ALIASES = {
-    "pcs_relative_variance_4": "svd_relative_variance_4",
-    "pcs_relative_variance_10": "svd_relative_variance_10",
-    "contrasts_4": "contrast_abs_error_4",
-    "contrasts_4_noreg": "contrast_abs_error_4_noreg",
-    "contrasts_10": "contrast_abs_error_10",
-    "contrasts_10_noreg": "contrast_abs_error_10_noreg",
-    "constrasts_4": "contrast_abs_error_4",
-    "constrasts_4_noreg": "contrast_abs_error_4_noreg",
-    "constrasts_10": "contrast_abs_error_10",
-    "constrasts_10_noreg": "contrast_abs_error_10_noreg",
-}
+DEFAULT_OUTPUT_DIRNAME = "recovar_test_all_metrics"
 
-def _resolve_canonical_key(key):
-    """Map a key to its canonical name (handles both static aliases and dynamic locres patterns)."""
-    if key in CANONICAL_KEY_ALIASES:
-        return CANONICAL_KEY_ALIASES[key]
-    # Dynamic locres renames: state_N_ninety_pc_locres -> state_N_locres_90pct
-    #                         state_N_median_locres   -> state_N_locres_median
-    import re
-    m = re.match(r"^(state_\d+)_ninety_pc_locres$", key)
-    if m:
-        return f"{m.group(1)}_locres_90pct"
-    m = re.match(r"^(state_\d+)_median_locres$", key)
-    if m:
-        return f"{m.group(1)}_locres_median"
-    return key
+def default_output_dir():
+    """Return the default output directory, preferring TMP_RECOVAR_DIR when set."""
+    tmp_root = os.environ.get("TMP_RECOVAR_DIR")
+    if tmp_root:
+        return str(Path(tmp_root) / DEFAULT_OUTPUT_DIRNAME)
+    return os.path.join("/tmp", DEFAULT_OUTPUT_DIRNAME)
 
 
 # Set up logging configuration
@@ -160,12 +137,13 @@ from recovar.simulation.trajectory_generation import (
     split_atom_group_by_chains as _split_atom_group_by_chains,
     generate_trajectory_volumes as generate_pdb_trajectory_volumes,
 )
-##TODO use TMP_RECOVAR_DIR if set? (see staging.py)
 def validate_storage_args_for_generated_volumes(args, argv):
     """
     Enforce explicit output location when auto-generating volumes.
     """
     if args.volume_input is not None:
+        return
+    if os.environ.get("TMP_RECOVAR_DIR"):
         return
     has_explicit_outdir = False
     for tok in argv:
@@ -178,7 +156,7 @@ def validate_storage_args_for_generated_volumes(args, argv):
     if not has_explicit_outdir:
         raise ValueError(
             "When --volume-input is omitted (auto-generated volumes), you must pass --output-dir/-o "
-            "explicitly to avoid unintended storage locations."
+            "explicitly, or set TMP_RECOVAR_DIR, to avoid unintended storage locations."
         )
 
 
@@ -525,9 +503,6 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac, s
     checked = 0
     failures = []
     details = {}
-    # Track which canonical keys have already been checked so we don't
-    # double-count a metric that appears under both its old and new name.
-    seen_canonical = set()
     for key in sorted(set(current_scores.keys()) & set(baseline_scores.keys())):
         cur = current_scores[key]
         base = baseline_scores[key]
@@ -544,12 +519,6 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac, s
             continue
         if skip_locres and "locres" in key.lower():
             continue
-        # Deduplicate: if this key is a legacy alias for a canonical key
-        # that was already checked, skip it.
-        canonical = _resolve_canonical_key(key)
-        if canonical in seen_canonical:
-            continue
-        seen_canonical.add(canonical)
         checked += 1
         ok, msg = compare_metric(float(cur), float(base), direction, tol_frac=tol_frac, metric_name=key)
         details[key] = {
@@ -566,38 +535,30 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac, s
 
 def load_u_real_for_metrics(pipeline_output, n_pcs):
     """
-    Load only the requested number of real-space eigen volumes when supported.
-    Falls back to legacy `get('u_real')` API.
+    Load the requested number of real-space eigen volumes.
     """
     n_pcs = int(n_pcs)
     if n_pcs <= 0:
         raise ValueError(f"n_pcs must be positive, got {n_pcs}")
-    if hasattr(pipeline_output, "get_u_real"):
-        return np.asarray(pipeline_output.get_u_real(n_pcs))
-    return np.asarray(pipeline_output.get('u_real')[:n_pcs])
+    return np.asarray(pipeline_output.get_u_real(n_pcs))
 
 
-def load_unsorted_embedding_component(pipeline_output, entry, key, legacy_cache=None):
+def load_unsorted_embedding_component(pipeline_output, entry, key, cache=None):
     """
     Load one unsorted embedding component in original (simulation) order.
 
-    Uses ``get('unsorted_embedding')`` which returns the raw reordered embedding
-    indexed by original particle position.  Unlike ``get_embedding_component``,
-    this does NOT apply the halfset re-indexing that produces halfset-concatenated
-    order.
+    Uses ``PipelineOutput.get_unsorted_embedding_component`` so the caller gets
+    original dataset order without halfset re-indexing.
     """
-    if legacy_cache is None:
-        legacy_cache = {}
+    if cache is None:
+        cache = {}
 
     cache_key = ("component", entry, key)
-    if cache_key in legacy_cache:
-        return legacy_cache[cache_key]
+    if cache_key in cache:
+        return cache[cache_key]
 
-    if "__root__" not in legacy_cache:
-        legacy_cache["__root__"] = pipeline_output.get('unsorted_embedding')
-    value = np.asarray(legacy_cache["__root__"][entry][key])
-
-    legacy_cache[cache_key] = value
+    value = np.asarray(pipeline_output.get_unsorted_embedding_component(entry, key))
+    cache[cache_key] = value
     return value
 
 
@@ -605,8 +566,8 @@ def select_state_target_latent_points(unsorted_zs, particle_assignment, preferre
     """
     Pick representative latent points for compute_state without producing NaNs.
 
-    Preferred labels are used when present; otherwise, non-empty labels with the
-    highest particle counts are used as fallback.
+    Preferred labels are used when present; otherwise, use the non-empty labels
+    with the highest particle counts.
     """
     max_points = int(max_points)
     if max_points <= 0:
@@ -685,7 +646,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run tests for recovar")
     parser.add_argument('--volume-input', '-i', required=False, default=None,
                         help='Input volume prefix containing files like <prefix>0000.mrc, <prefix>0001.mrc, ...')
-    parser.add_argument('--output-dir', '-o', default='/tmp/recovar_test_all_metrics')
+    parser.add_argument('--output-dir', '-o', default=default_output_dir())
     parser.add_argument('--no-delete', action='store_true',
                         help='Do not delete the test dataset directory after successful tests')
     parser.add_argument('--cpu', action='store_true', help='Run on CPU only (skip GPU check)')
@@ -907,13 +868,13 @@ def main():
     output.mkdir_safe(plots_dir)
 
     pipeline_output = output.PipelineOutput(pipeline_output_dir)
-    legacy_embedding_cache = {}
+    embedding_cache = {}
     particle_assignment = sim_info['image_assignment'] if not tilt_series else sim_info['tilt_series_assignment']
 
     max_classes = int(np.max(sim_info['image_assignment'])) + 1
     requested_labels = [0, max_classes // 2]
     unsorted_zs = load_unsorted_embedding_component(
-        pipeline_output, 'latent_coords', 10, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'latent_coords', 10, cache=embedding_cache
     )
     zs_assignment, labels_to_plot = select_state_target_latent_points(
         unsorted_zs=unsorted_zs,
@@ -996,7 +957,6 @@ def main():
         fmat=""
     )
     all_scores['variance_spatial_fsc'] = score_spatial
-    # Keep legacy key for backward compatibility
     all_scores['variance_fsc'] = score_spatial
 
     # Fourier variance FSC: GT Fourier variance vs estimated from eigendecomposition
@@ -1049,9 +1009,6 @@ def main():
         rv10 = rel_var[key][10] if rel_var[key].size > 10 else np.nan
         all_scores['svd_relative_variance_4'] = rv4
         all_scores['svd_relative_variance_10'] = rv10
-        # Legacy aliases for backward compatibility with old baselines.
-        all_scores['pcs_relative_variance_4'] = rv4
-        all_scores['pcs_relative_variance_10'] = rv10
 
     angles = {}
     for key in u:
@@ -1087,13 +1044,13 @@ def main():
 
     # Embedding variance errors
     unsorted_zs = load_unsorted_embedding_component(
-        pipeline_output, 'latent_coords', 4, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'latent_coords', 4, cache=embedding_cache
     )
     _, averaged_variance = metrics.variance_of_zs(unsorted_zs, particle_assignment)
     all_scores['embedding_squared_error_4'] = averaged_variance
 
     unsorted_zs = load_unsorted_embedding_component(
-        pipeline_output, 'latent_coords', 10, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'latent_coords', 10, cache=embedding_cache
     )
     _, averaged_variance = metrics.variance_of_zs(unsorted_zs, particle_assignment)
     all_scores['embedding_squared_error_10'] = averaged_variance
@@ -1104,13 +1061,10 @@ def main():
             entry = 'contrasts_noreg' if noreg else 'contrasts'
             label = f'{zdim_val}_noreg' if noreg else str(zdim_val)
             unsorted_contrast = load_unsorted_embedding_component(
-                pipeline_output, entry, zdim_val, legacy_cache=legacy_embedding_cache
+                pipeline_output, entry, zdim_val, cache=embedding_cache
             )
             contrast_abs_error = np.mean(np.abs(gt_contrasts - unsorted_contrast))
             all_scores[f'contrast_abs_error_{label}'] = contrast_abs_error
-            # Legacy aliases for backward compatibility with old baselines.
-            all_scores[f'contrasts_{label}'] = contrast_abs_error
-            all_scores[f'constrasts_{label}'] = contrast_abs_error
 
             # Create contrast comparison plot
             plt.figure(figsize=(10, 6))
@@ -1145,9 +1099,6 @@ def main():
         )
         all_scores[f'state_{l_idx}_locres_90pct'] = errors_metrics.get('ninety_pc_locres')
         all_scores[f'state_{l_idx}_locres_median'] = errors_metrics.get('median_locres')
-        # Legacy aliases for backward compatibility with old baselines.
-        all_scores[f'state_{l_idx}_ninety_pc_locres'] = errors_metrics.get('ninety_pc_locres')
-        all_scores[f'state_{l_idx}_median_locres'] = errors_metrics.get('median_locres')
 
         # write mask to file
         mask = errors_metrics.get('mask')
@@ -1209,7 +1160,7 @@ def main():
     # Plot 5: Contrast comparison for zdim=4
     plt.subplot(3, 3, 5)
     unsorted_contrast_4 = load_unsorted_embedding_component(
-        pipeline_output, 'contrasts', 4, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'contrasts', 4, cache=embedding_cache
     )
     plt.scatter(gt_contrasts, unsorted_contrast_4, alpha=0.5, label='Particle contrasts')
     plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
@@ -1230,7 +1181,7 @@ def main():
     # Plot 7: Contrast comparison for zdim=10
     plt.subplot(3, 3, 7)
     unsorted_contrast_10 = load_unsorted_embedding_component(
-        pipeline_output, 'contrasts', 10, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'contrasts', 10, cache=embedding_cache
     )
     plt.scatter(gt_contrasts, unsorted_contrast_10, alpha=0.5, label='Particle contrasts')
     plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')

@@ -139,7 +139,7 @@ def _search_for_basename(missing_path: str):
 
 def load_images(filepath: str, indices: Optional[np.ndarray] = None,
                 datadir: str = "", lazy: bool = True, max_threads: int = 1,
-                strip_prefix: Optional[str] = None):
+                strip_prefix: Optional[str] = None, skip_staging: bool = False):
     """Load cryo-EM images from file.
 
     Args:
@@ -149,6 +149,8 @@ def load_images(filepath: str, indices: Optional[np.ndarray] = None,
         lazy: If True, defer loading until access
         max_threads: Number of threads for parallel I/O
         strip_prefix: Prefix to strip from paths in metadata
+        skip_staging: If True, skip local staging (useful for one-shot reads
+            like downsampling where staging the full-res data is wasteful)
 
     Returns:
         ImageLoader instance for the specified file
@@ -156,11 +158,11 @@ def load_images(filepath: str, indices: Optional[np.ndarray] = None,
     ext = filepath.rsplit('.', 1)[-1].lower()
 
     loaders = {
-        'mrcs': lambda: MRCLoader(filepath, indices, lazy),
-        'mrc': lambda: MRCLoader(filepath, indices, lazy),
-        'star': lambda: StarLoader(filepath, indices, datadir, lazy, max_threads, strip_prefix),
-        'txt': lambda: MultiMRCLoader.from_txt(filepath, indices, lazy, max_threads),
-        'cs': lambda: CryoSparcLoader(filepath, indices, datadir, lazy, max_threads, strip_prefix),
+        'mrcs': lambda: MRCLoader(filepath, indices, lazy, skip_staging=skip_staging),
+        'mrc': lambda: MRCLoader(filepath, indices, lazy, skip_staging=skip_staging),
+        'star': lambda: StarLoader(filepath, indices, datadir, lazy, max_threads, strip_prefix, skip_staging=skip_staging),
+        'txt': lambda: MultiMRCLoader.from_txt(filepath, indices, lazy, max_threads, skip_staging=skip_staging),
+        'cs': lambda: CryoSparcLoader(filepath, indices, datadir, lazy, max_threads, strip_prefix, skip_staging=skip_staging),
     }
 
     if ext not in loaders:
@@ -360,13 +362,15 @@ class MRCLoader(ImageLoader):
     :mod:`recovar.data_io.staging` for details and performance numbers.
     """
 
-    def __init__(self, filepath: str, indices: Optional[np.ndarray] = None, lazy: bool = True):
+    def __init__(self, filepath: str, indices: Optional[np.ndarray] = None, lazy: bool = True,
+                 skip_staging: bool = False):
         import mrcfile
         from recovar.data_io.staging import get_cache_dir, stage_mrc
 
-        cache_dir = get_cache_dir()
-        if cache_dir:
-            filepath = stage_mrc(filepath, cache_dir)
+        if not skip_staging:
+            cache_dir = get_cache_dir()
+            if cache_dir:
+                filepath = stage_mrc(filepath, cache_dir)
 
         self._filepath = filepath
         self._memmap = None  # lazy-created on first sequential read
@@ -508,10 +512,11 @@ class MultiMRCLoader(ImageLoader):
 
     def __init__(self, file_map: pd.DataFrame, indices: Optional[np.ndarray] = None,
                  lazy: bool = True, max_threads: int = 1,
-                 raw_paths: Optional[list] = None):
+                 raw_paths: Optional[list] = None, skip_staging: bool = False):
         self._file_map = file_map.copy()
         self._max_threads = max_threads
         self._raw_paths = raw_paths  # original paths from metadata (for error hints)
+        self._skip_staging = skip_staging
 
         if indices is not None:
             iloc_idx = _normalize_selection_indices(
@@ -535,12 +540,12 @@ class MultiMRCLoader(ImageLoader):
         ext_swaps: dict[str, str] = {}  # original -> swapped path
         for filepath in self._file_map['mrc_file'].unique():
             try:
-                self._loaders[filepath] = MRCLoader(filepath, lazy=True)
+                self._loaders[filepath] = MRCLoader(filepath, lazy=True, skip_staging=skip_staging)
             except FileNotFoundError:
                 # Try .mrc <-> .mrcs swap (common in cryo-EM workflows)
                 swapped = _swap_mrc_ext(filepath)
                 if swapped and os.path.isfile(swapped):
-                    self._loaders[filepath] = MRCLoader(swapped, lazy=True)
+                    self._loaders[filepath] = MRCLoader(swapped, lazy=True, skip_staging=skip_staging)
                     ext_swaps[filepath] = swapped
                     logger.info("File not found: %s, using %s instead", filepath, swapped)
                 else:
@@ -670,7 +675,8 @@ class MultiMRCLoader(ImageLoader):
 
     @staticmethod
     def from_txt(filepath: str, indices: Optional[np.ndarray] = None,
-                 lazy: bool = True, max_threads: int = 1) -> 'MultiMRCLoader':
+                 lazy: bool = True, max_threads: int = 1,
+                 skip_staging: bool = False) -> 'MultiMRCLoader':
         """Create loader from text file listing MRC paths."""
         base = os.path.dirname(filepath)
 
@@ -684,13 +690,13 @@ class MultiMRCLoader(ImageLoader):
                     continue
                 if not os.path.isabs(path):
                     path = os.path.join(base, path)
-                loader = MRCLoader(path, lazy=True)
+                loader = MRCLoader(path, lazy=True, skip_staging=skip_staging)
                 n = loader.num_images
                 mrc_files.extend([path] * n)
                 mrc_indices.extend(range(n))
 
         df = pd.DataFrame({'mrc_file': mrc_files, 'mrc_index': mrc_indices})
-        return MultiMRCLoader(df, indices, lazy, max_threads)
+        return MultiMRCLoader(df, indices, lazy, max_threads, skip_staging=skip_staging)
 
 
 # ---------------------------------------------------------------------------
@@ -702,7 +708,7 @@ class StarLoader(MultiMRCLoader):
 
     def __init__(self, filepath: str, indices: Optional[np.ndarray] = None,
                  datadir: str = "", lazy: bool = True, max_threads: int = 1,
-                 strip_prefix: Optional[str] = None):
+                 strip_prefix: Optional[str] = None, skip_staging: bool = False):
         from recovar.data_io.starfile import StarFile
 
         star = StarFile.load(filepath)
@@ -759,7 +765,7 @@ class StarLoader(MultiMRCLoader):
         df['mrc_file'] = full_paths.map(unique_map)
 
         super().__init__(df[['mrc_file', 'mrc_index']], indices, lazy, max_threads,
-                         raw_paths=raw_paths)
+                         raw_paths=raw_paths, skip_staging=skip_staging)
 
 
 class CryoSparcLoader(MultiMRCLoader):
@@ -767,7 +773,7 @@ class CryoSparcLoader(MultiMRCLoader):
 
     def __init__(self, filepath: str, indices: Optional[np.ndarray] = None,
                  datadir: str = "", lazy: bool = True, max_threads: int = 1,
-                 strip_prefix: Optional[str] = None):
+                 strip_prefix: Optional[str] = None, skip_staging: bool = False):
         cs_data = np.load(filepath)
 
         if 'blob/idx' not in cs_data.dtype.names or 'blob/path' not in cs_data.dtype.names:
@@ -817,7 +823,8 @@ class CryoSparcLoader(MultiMRCLoader):
 
         df = pd.DataFrame({'mrc_file': full_paths_series.values, 'mrc_index': blob_idx})
 
-        super().__init__(df, indices, lazy, max_threads, raw_paths=raw_paths)
+        super().__init__(df, indices, lazy, max_threads, raw_paths=raw_paths,
+                         skip_staging=skip_staging)
 
 
 # ---------------------------------------------------------------------------

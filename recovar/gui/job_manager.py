@@ -853,21 +853,14 @@ echo "Completed at: $(date)"
 
                 with open(embeddings_path, "rb") as f:
                     emb = pickle.load(f)
-                for key in ["latent_coords", "zs"]:
-                    if key in emb and isinstance(emb[key], dict):
-                        zdims = []
-                        for k in emb[key].keys():
-                            try:
-                                zdims.append(int(k))
-                            except (ValueError, TypeError):
-                                # Keys like '1_noreg' — extract numeric prefix
-                                if isinstance(k, str) and "_" in k:
-                                    try:
-                                        zdims.append(int(k.split("_")[0]))
-                                    except ValueError:
-                                        pass
-                        info["available_zdims"] = sorted(set(zdims))
-                        break
+                if "latent_coords" in emb and isinstance(emb["latent_coords"], dict):
+                    zdims = []
+                    for k in emb["latent_coords"].keys():
+                        try:
+                            zdims.append(int(k))
+                        except (ValueError, TypeError):
+                            pass
+                    info["available_zdims"] = sorted(set(zdims))
             except Exception as e:
                 logger.warning("Failed to read embeddings: %s", e)
 
@@ -1069,13 +1062,8 @@ echo "Completed at: $(date)"
             with open(embeddings_path, "rb") as f:
                 emb = pickle.load(f)
 
-            # Support both old and new embedding formats
-            coords_dict = None
-            for key in ["latent_coords", "zs"]:
-                if key in emb and isinstance(emb[key], dict):
-                    coords_dict = emb[key]
-                    break
-            if coords_dict is None:
+            coords_dict = emb.get("latent_coords")
+            if not isinstance(coords_dict, dict):
                 return None
 
             # Try exact key first, then integer, then string variants

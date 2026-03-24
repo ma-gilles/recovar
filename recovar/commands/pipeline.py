@@ -139,6 +139,12 @@ def add_args(parser: argparse.ArgumentParser):
     # ── Tilt series (cryo-ET) ──────────────────────────────────────────────
     tilt = parser.add_argument_group("Tilt series (cryo-ET)")
     tilt.add_argument(
+        "--tomograms", type=os.path.abspath, default=None,
+        help="RELION5 tomograms.star file. When provided, automatically converts "
+             "RELION5 tomo data to 2D tilt format (via parse_relion5_tomo) before "
+             "running the pipeline. Implies --tilt-series.",
+    )
+    tilt.add_argument(
         "--tilt-series", action="store_true", dest="tilt_series",
         help="Enable tilt-series mode",
     )
@@ -557,6 +563,20 @@ def _compute_embeddings(means, u, s, dataset, volume_mask, options, gpu_memory,
 
 def standard_recovar_pipeline(args):
     st_time = time.time()
+
+    # --- Auto-convert RELION5 tomo data if --tomograms is provided ---
+    if getattr(args, 'tomograms', None) is not None:
+        from recovar.commands import parse_relion5_tomo
+        args.tilt_series = True
+        converted_star = os.path.join(args.outdir, "particles_2d.star")
+        os.makedirs(args.outdir, exist_ok=True)
+        logger.info("Converting RELION5 tomo data: %s + %s -> %s",
+                     args.tomograms, args.particles, converted_star)
+        parse_relion5_tomo.convert(
+            args.tomograms, args.particles, converted_star,
+        )
+        args.particles = converted_star
+        logger.info("Conversion complete. Proceeding with pipeline.")
 
     # --- Validate poses/ctf availability ---
     if args.poses is None or args.ctf is None:

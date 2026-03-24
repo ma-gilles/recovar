@@ -3,17 +3,11 @@
 import logging
 
 import numpy as np
-import skfmm
 import scipy.ndimage
 import matplotlib.pyplot as plt
 
-from recovar.heterogeneity import latent_density
+from recovar.heterogeneity import fast_marching, latent_density
 logger = logging.getLogger(__name__)
-
-##TODO clean this up. Also skfmm is a pain, so I may way jsut a clean efficient implementation of FMM
-## that doesn't require skfmm since it tends to break, is awkward to isntall etc.
-## Or find a better supported/updated implementation. FMM might be very slow in python
-## so might need a C++ implementation which might make it more painful to build recovar
 
 
 def subsample_path(path, n_pts):
@@ -134,10 +128,8 @@ def get_grid_spacing(latent_space_bounds, density):
     return dx
     
 def compute_travel_time(density, g_st, latent_space_bounds):
-    phi = np.ones_like(density)
-    phi[tuple(g_st)] = -1
     dx = get_grid_spacing(latent_space_bounds, density)
-    travel_time = skfmm.travel_time(phi, speed = density, dx = dx )
+    travel_time = fast_marching.point_source_travel_time(density, g_st, dx=dx)
     travel_time[tuple(g_st)] = 0 
     return travel_time
 

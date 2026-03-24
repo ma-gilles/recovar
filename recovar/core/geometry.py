@@ -44,8 +44,8 @@ def get_unrotated_plane_grid_points(image_shape, three_d_upsampling_factor=1):
     unrotated_plane_indices = fourier_transform_utils.get_k_coordinate_of_each_pixel(
         image_shape, voxel_size=1, scaled=False
     )
-    # TODO: What is this padding about? I don't think this was there before. Investigate
-
+    # Pad 2D coords → 3D by appending z=0 (central slice theorem: the
+    # unrotated projection plane sits at z=0 in 3D Fourier space).
     unrotated_plane_indices = jnp.pad(unrotated_plane_indices, ((0, 0), (0, 1)))
     return unrotated_plane_indices * three_d_upsampling_factor
 
@@ -54,7 +54,7 @@ def get_unrotated_plane_coords(image_shape, voxel_size, scaled=True):
     plane_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(
         image_shape, voxel_size=voxel_size, scaled=scaled
     )
-    # TODO: What is this padding about? I don't think this was there before. Investigate
+    # Pad 2D → 3D with z=0 (central slice at z=0 in Fourier space).
     plane_coords = jnp.pad(plane_coords, ((0, 0), (0, 1)))
     return plane_coords
 
