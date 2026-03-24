@@ -86,7 +86,8 @@ def _run(cmd, **kwargs):
     return result
 
 
-def _make_dataset(output_dir: Path, tilt_series: bool = False) -> Path:
+def _make_dataset(output_dir: Path, tilt_series: bool = False,
+                   premultiplied_ctf: bool = False) -> Path:
     cmd = [
         sys.executable, "-m", "recovar.commands.make_test_dataset",
         str(output_dir),
@@ -97,13 +98,18 @@ def _make_dataset(output_dir: Path, tilt_series: bool = False) -> Path:
     ]
     if tilt_series:
         cmd += ["--tilt-series", "--n-tilts", str(_N_TILTS)]
+    if premultiplied_ctf:
+        cmd += ["--premultiplied-ctf"]
     _run(cmd)
     ds = output_dir / "test_dataset"
     assert ds.exists(), f"Dataset not created at {ds}"
     return ds
 
 
-def _run_pipeline(dataset_dir: Path, output_dir: Path) -> Path:
+def _run_pipeline(dataset_dir: Path, output_dir: Path,
+                   premultiplied_ctf: bool = False,
+                   noise_model: str | None = None,
+                   tilt_series: bool = False) -> Path:
     from recovar.simulation import synthetic_dataset
     from recovar.output import metrics
     from recovar import utils
@@ -115,11 +121,14 @@ def _run_pipeline(dataset_dir: Path, output_dir: Path) -> Path:
     mask_path = str(output_dir / "gt_union_mask.mrc")
     utils.write_mrc(mask_path, gt_mask)
 
-    mrcs = dataset_dir / f"particles.{_GRID}.mrcs"
+    if tilt_series:
+        particles = dataset_dir / "particles.star"
+    else:
+        particles = dataset_dir / f"particles.{_GRID}.mrcs"
     pipeline_out = output_dir / "pipeline_output"
     cmd = [
         sys.executable, "-m", "recovar.command_line", "pipeline",
-        str(mrcs),
+        str(particles),
         "--poses", str(dataset_dir / "poses.pkl"),
         "--ctf", str(dataset_dir / "ctf.pkl"),
         "--correct-contrast",
@@ -128,6 +137,12 @@ def _run_pipeline(dataset_dir: Path, output_dir: Path) -> Path:
         "--lazy",
         "--zdim", str(_ZDIM),
     ]
+    if tilt_series:
+        cmd += ["--tilt-series"]
+    if premultiplied_ctf:
+        cmd += ["--premultiplied-ctf"]
+    if noise_model:
+        cmd += ["--noise-model", noise_model]
     _run(cmd)
     assert (pipeline_out / "model" / "params.pkl").exists()
     return pipeline_out
@@ -308,19 +323,35 @@ def _save_baseline(mode: str, data: dict):
         json.dump(data, f, indent=2, default=float)
 
 
-def _run_and_collect_metrics(tmp_path: Path, tilt_series: bool = False) -> dict:
-    """Generate dataset, run pipeline + NEW compute_state, return metrics."""
-    mode = "et" if tilt_series else "spa"
+def _run_and_collect_metrics(tmp_path: Path, tilt_series: bool = False,
+                              premultiplied_ctf: bool = False,
+                              noise_model: str | None = None,
+                              mode_override: str | None = None,
+                              pipeline_tilt_series: bool = False) -> dict:
+    """Generate dataset, run pipeline + NEW compute_state, return metrics.
+
+    ``pipeline_tilt_series`` loads particles.star with ``--tilt-series``
+    (needed for radial_per_tilt which requires dose indices).
+    """
+    mode = mode_override or ("et" if tilt_series else "spa")
     out_base = _output_base(tmp_path, mode)
 
     perf_stages = {}
 
     snap0 = perf_snapshot()
-    dataset_dir = _make_dataset(out_base / "data", tilt_series=tilt_series)
+    dataset_dir = _make_dataset(
+        out_base / "data", tilt_series=tilt_series,
+        premultiplied_ctf=premultiplied_ctf,
+    )
     perf_stages["make_dataset"] = stage_perf(snap0, perf_snapshot())
 
     snap1 = perf_snapshot()
-    pipeline_dir = _run_pipeline(dataset_dir, out_base)
+    pipeline_dir = _run_pipeline(
+        dataset_dir, out_base,
+        premultiplied_ctf=premultiplied_ctf,
+        noise_model=noise_model,
+        tilt_series=pipeline_tilt_series,
+    )
     perf_stages["pipeline"] = stage_perf(snap1, perf_snapshot())
 
     latent_points, labels = _select_latent_points(
@@ -391,7 +422,8 @@ def test_compute_state_regression_spa(tmp_path):
 
 def test_compute_state_regression_et(tmp_path):
     """Check compute_state quality against committed baseline (ET)."""
-    current = _run_and_collect_metrics(tmp_path, tilt_series=True)
+    current = _run_and_collect_metrics(tmp_path, tilt_series=True,
+                                       pipeline_tilt_series=True)
     baseline = _load_baseline("et")
 
     checked, failures = log_comparison_table(
@@ -406,4 +438,42 @@ def test_compute_state_regression_et(tmp_path):
     if checked > 0:
         assert not failures, (
             f"compute_state ET regressed vs baseline:\n" + "\n".join(failures)
+        )
+
+
+def test_compute_state_regression_et_premultiplied_radial_per_tilt(tmp_path):
+    """Check compute_state quality with premultiplied-CTF + radial_per_tilt.
+
+    Tests the most common real cryo-ET configuration (Warp/M output) where
+    images arrive pre-multiplied by their CTF.  This exercises:
+    - ``skip_ctf=True`` path in the heterogeneity kernel
+    - per-tilt noise estimation (``radial_per_tilt``)
+    - contrast estimation under premultiplied-CTF
+
+    Compares against a dedicated baseline; regenerate with
+    ``CS_REGR_REGENERATE_BASELINE=1``.
+    """
+    current = _run_and_collect_metrics(
+        tmp_path,
+        tilt_series=True,
+        premultiplied_ctf=True,
+        noise_model="radial_per_tilt",
+        mode_override="et_premultiplied",
+        pipeline_tilt_series=True,
+    )
+    baseline = _load_baseline("et_premultiplied")
+
+    checked, failures = log_comparison_table(
+        current, baseline, _TOL_FRAC,
+        title="compute_state regression: ET premultiplied + radial_per_tilt",
+    )
+
+    print("\n--- ET Premultiplied Raw Metrics ---")
+    print(f"NEW: {json.dumps(current, indent=2, default=float)}")
+    print(f"BASELINE: {json.dumps(baseline, indent=2, default=float)}")
+
+    if checked > 0:
+        assert not failures, (
+            f"compute_state ET premultiplied regressed vs baseline:\n"
+            + "\n".join(failures)
         )

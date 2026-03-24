@@ -1330,6 +1330,17 @@ def less_naive_heterogeneity_scheme_relion_style(experiment_dataset, noise_varia
 
 def even_less_naive_heterogeneity_scheme_relion_style(experiment_dataset, signal_variance, heterogeneity_distances, heterogeneity_bins, batch_size = None, tau = None, compute_lhs_rhs = False, grid_correct = True, disc_type = 'linear_interp', use_spherical_mask = True, return_lhs_rhs = False, heterogeneity_kernel = "parabola", upsampling_factor=None, return_real_space=False):
     bins = heterogeneity_bins
+
+    # For tilt-series datasets, distances may be per-particle while the kernel
+    # iterates per-image.  Expand to per-image so bin assignments match image indices.
+    if (getattr(experiment_dataset, 'tilt_series_flag', False)
+            and hasattr(experiment_dataset, 'tilt_particles')
+            and heterogeneity_distances.shape[0] != experiment_dataset.n_images):
+        per_image = np.empty(experiment_dataset.n_images, dtype=heterogeneity_distances.dtype)
+        for p_idx, tilt_inds in enumerate(experiment_dataset.tilt_particles):
+            per_image[tilt_inds] = heterogeneity_distances[p_idx]
+        heterogeneity_distances = per_image
+
     inds = np.digitize(heterogeneity_distances, bins, right = True).astype(np.int32)
     n_bins = bins.size
 

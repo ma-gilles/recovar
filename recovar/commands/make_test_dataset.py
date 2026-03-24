@@ -15,7 +15,8 @@ def make_test_dataset(output_dir, image_size=64, noise_level=0.1, n_images=None,
                       create_nested_structure=False, nested_prefix="Extract/job193",
                       tilt_series=False, outlier_file_input=None, percent_outliers=0.0,
                       percent_tilt_series_outliers=0.0, seed=None, *,
-                      grid_size=None, volume_input=None, n_tilts=None):
+                      grid_size=None, volume_input=None, n_tilts=None,
+                      premultiplied_ctf=False):
     """Generate a synthetic test dataset used by integration tests and examples.
 
     Parameters keep backward compatibility with older callers while also
@@ -61,6 +62,7 @@ def make_test_dataset(output_dir, image_size=64, noise_level=0.1, n_images=None,
             create_nested_structure=create_nested_structure, nested_prefix=nested_prefix,
             n_tilts=n_tilts, dose_per_tilt=3, angle_per_tilt=3,
             percent_tilt_series_outliers=percent_tilt_series_outliers,
+            premultiplied_ctf=premultiplied_ctf,
         )
     else:
         image_stack, sim_info = simulator.generate_synthetic_dataset(
@@ -73,6 +75,7 @@ def make_test_dataset(output_dir, image_size=64, noise_level=0.1, n_images=None,
             noise_scale_std=0, contrast_std=0.1, disc_type='linear_interp',
             create_nested_structure=create_nested_structure, nested_prefix=nested_prefix,
             percent_tilt_series_outliers=percent_tilt_series_outliers,
+            premultiplied_ctf=premultiplied_ctf,
         )
 
     logger.info("Finished generating dataset %s", output_folder)
@@ -119,6 +122,8 @@ def main():
                         help="Percentage of tilt outliers in tilt series dataset")
     parser.add_argument("--seed", type=int, default=None,
                         help="Random seed for reproducible dataset generation")
+    parser.add_argument("--premultiplied-ctf", action="store_true",
+                        help="Generate dataset with premultiplied CTF")
 
     args = parser.parse_args()
 
@@ -128,6 +133,7 @@ def main():
         args.outlier_file_input, args.percent_outliers,
         args.percent_tilt_series_outliers, args.seed,
         grid_size=args.grid_size, volume_input=args.volume_input, n_tilts=args.n_tilts,
+        premultiplied_ctf=args.premultiplied_ctf,
     )
 
 
