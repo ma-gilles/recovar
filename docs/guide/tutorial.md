@@ -331,4 +331,4 @@ output/analysis_<zdim>/
     Use `--lazy` for lazy loading and `--downsample 128` for speed.
 
 !!! tip "Interactive setup"
-    Use `recovar quickstart` for a guided wizard, or `recovar gui` for a full web interface.
+    Use `recovar gui` for a full web interface to set up and run jobs interactively.

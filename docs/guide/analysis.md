@@ -14,7 +14,7 @@ This generates:
 - UMAP embedding of the latent space
 - Trajectories between cluster pairs (if requested)
 
-Results are saved to `output/output/analysis_10/`.
+Results are saved to `output/analysis_10/`.
 
 ## Options
 
@@ -48,7 +48,7 @@ The coordinates file is a text file with shape `(n_points, zdim)`, readable by `
 
 ```bash
 recovar compute_state output -o volumes \
-    --latent-points output/output/analysis_10/centers.txt --Bfactor=50
+    --latent-points output/analysis_10/kmeans/centers.txt --Bfactor=50
 ```
 
 ### Options
@@ -106,8 +106,8 @@ Choose one of:
 Open `.mrc` files in ChimeraX, Chimera, or any MRC viewer:
 
 ```
-output/output/analysis_10/
-  centers/
+output/analysis_10/
+  kmeans/
     all_volumes/
       vol0000.mrc     # K-means center 0
       vol0001.mrc     # K-means center 1

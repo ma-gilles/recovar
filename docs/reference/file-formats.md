@@ -54,18 +54,16 @@ output/
 ### Analysis output
 
 ```
-output/output/analysis_10/
-  centers.pkl                   # K-means labels and centers
-  centers.txt                   # Center coordinates (loadable with np.loadtxt)
-  centers/
-    all_volumes/
-      vol0000.mrc               # Volume at cluster center 0
-      vol0001.mrc               # Volume at cluster center 1
-      ...
-    vol0000/                    # Detailed per-volume data
-      ...
-  umap.pkl                      # UMAP embedding
-  kmeans_labels.pkl             # Per-particle cluster assignments
+output/analysis_10/
+  kmeans_result.pkl               # K-means labels and centers
+  kmeans/
+    centers.txt                   # Center coordinates (loadable with np.loadtxt)
+    vol0000.mrc                   # Volume at cluster center 0
+    vol0001.mrc                   # Volume at cluster center 1
+    ...
+  umap/                           # UMAP embeddings and plots
+  PCA/                            # PC scatter plots
+  contrast_histogram.png
 ```
 
 ### Density output

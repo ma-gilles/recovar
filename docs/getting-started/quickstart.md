@@ -47,8 +47,8 @@ This runs k-means clustering, generates representative volumes, computes UMAP em
 Open the generated `.mrc` files in ChimeraX, Chimera, or any MRC viewer:
 
 ```
-output/output/analysis_10/centers/all_volumes/vol0000.mrc
-output/output/analysis_10/centers/all_volumes/vol0001.mrc
+output/analysis_10/kmeans/vol0000.mrc
+output/analysis_10/kmeans/vol0001.mrc
 ...
 ```
 

@@ -75,5 +75,5 @@ recovar analyze output --zdim=10
 # 3. Explore results interactively
 recovar gui --scan-dir output
 # Or view volumes in ChimeraX:
-# chimerax output/output/analysis_10/centers/all_volumes/vol0000.mrc
+# chimerax output/analysis_10/kmeans/vol0000.mrc
 ```

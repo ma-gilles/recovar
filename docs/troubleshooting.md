@@ -149,7 +149,7 @@ pip install git+https://github.com/scikit-fmm/scikit-fmm.git
 
 ### JAX version conflicts
 
-RECOVAR requires JAX 0.4.23+. Pin the version:
+RECOVAR requires JAX 0.9.0.1. Pin the version:
 
 ```bash
 pip install "jax[cuda12]"==0.9.0.1
