@@ -171,7 +171,7 @@ def test_heterogeneity_volume_locres_regression(tmp_path, gpu_device):
     assert np.isfinite(gt_median_error)
 
     # Read the filtered volume and local resolution map
-    filtered = recovar.utils.load_mrc(output_folder + "filtered_noB.mrc")
+    filtered = recovar.utils.load_mrc(vol_paths.filtered)
     locres_map = recovar.utils.load_mrc(output_folder + "local_resolution.mrc")
 
     assert filtered.shape == cryos.volume_shape
@@ -283,7 +283,7 @@ def test_heterogeneity_volume_cv_selects_reasonable_bins(tmp_path, gpu_device):
     assert np.all(np.asarray(ml_choice) < n_bins)
 
     # The filtered volume should exist and be finite
-    filtered = recovar.utils.load_mrc(vol_paths_cv.filtered_noB)
+    filtered = recovar.utils.load_mrc(vol_paths_cv.filtered)
     assert np.all(np.isfinite(filtered))
 
 

@@ -298,11 +298,6 @@ class VolumeOutputPaths:
         return os.path.join(self.output_dir, f"{self._stem}.mrc")
 
     @property
-    def filtered_noB(self):
-        """Filtered volume without B-factor: ``{stem}_noB.mrc``."""
-        return os.path.join(self.output_dir, f"{self._stem}_noB.mrc")
-
-    @property
     def half1_unfil(self):
         """Unfiltered half-map 1: ``{stem}_half1_unfil.mrc``."""
         return os.path.join(self.output_dir, f"{self._stem}_half1_unfil.mrc")

@@ -74,18 +74,18 @@ class TestRecovarProject:
     def test_allocate_job_first(self, tmp_path):
         proj = RecovarProject.init(str(tmp_path / "p"))
         uid, job_dir = proj.allocate_job("compute_state")
-        assert uid == "ComputeState/job_0001"
+        assert uid == "ReconstructState/job_0001"
         assert os.path.isdir(job_dir)
-        assert job_dir.endswith("ComputeState/job_0001")
+        assert job_dir.endswith("ReconstructState/job_0001")
 
     def test_allocate_job_increments(self, tmp_path):
         proj = RecovarProject.init(str(tmp_path / "p"))
         uid1, _ = proj.allocate_job("compute_state")
         uid2, _ = proj.allocate_job("compute_state")
         uid3, _ = proj.allocate_job("compute_state")
-        assert uid1 == "ComputeState/job_0001"
-        assert uid2 == "ComputeState/job_0002"
-        assert uid3 == "ComputeState/job_0003"
+        assert uid1 == "ReconstructState/job_0001"
+        assert uid2 == "ReconstructState/job_0002"
+        assert uid3 == "ReconstructState/job_0003"
 
     def test_allocate_job_per_type(self, tmp_path):
         proj = RecovarProject.init(str(tmp_path / "p"))
@@ -200,13 +200,13 @@ class TestJobContext:
             result_dir=None,
         )
         with job_context(args, "compute_state") as ctx:
-            assert ctx.uid == "ComputeState/job_0001"
+            assert ctx.uid == "ReconstructState/job_0001"
             assert os.path.isdir(ctx.output_dir)
             assert ctx.project is not None
 
         # After context exits, job should be completed
         jobs = proj.list_jobs()
-        assert any(j["uid"] == "ComputeState/job_0001" and j["status"] == "completed"
+        assert any(j["uid"] == "ReconstructState/job_0001" and j["status"] == "completed"
                     for j in jobs)
 
     def test_standalone_mode_with_explicit_outdir(self, tmp_path):
@@ -236,5 +236,5 @@ class TestJobContext:
                 raise RuntimeError("test failure")
 
         jobs = proj.list_jobs()
-        assert any(j["uid"] == "ComputeState/job_0001" and j["status"] == "failed"
+        assert any(j["uid"] == "ReconstructState/job_0001" and j["status"] == "failed"
                     for j in jobs)

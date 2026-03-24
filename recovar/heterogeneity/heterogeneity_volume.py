@@ -190,10 +190,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, dataset, vol_pat
 
         best_filtered, best_filtered_res, best_auc, fscs, _ = locres.local_resolution(opt_halfmaps[0], opt_halfmaps[1], B_factor, ds.voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = False)
 
-        best_filtered_nob, _, _, _, _ = locres.local_resolution(opt_halfmaps[0], opt_halfmaps[1], 0, ds.voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
-
         # Primary outputs
-        recovar.utils.write_mrc(vol_paths.filtered_noB, best_filtered_nob, voxel_size=ds.voxel_size)
         recovar.utils.write_mrc(vol_paths.filtered, best_filtered, voxel_size=ds.voxel_size)
         recovar.utils.write_mrc(vol_paths.half1_unfil, opt_halfmaps[0], voxel_size=ds.voxel_size)
         recovar.utils.write_mrc(vol_paths.half2_unfil, opt_halfmaps[1], voxel_size=ds.voxel_size)

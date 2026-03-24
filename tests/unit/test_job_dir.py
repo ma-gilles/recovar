@@ -23,7 +23,6 @@ class TestVolumeOutputPaths:
         vp = VolumeOutputPaths(str(tmp_path), "center", 0)
         assert vp.stem == "center000"
         assert vp.filtered == os.path.join(str(tmp_path), "center000.mrc")
-        assert vp.filtered_noB == os.path.join(str(tmp_path), "center000_noB.mrc")
         assert vp.half1_unfil == os.path.join(str(tmp_path), "center000_half1_unfil.mrc")
         assert vp.half2_unfil == os.path.join(str(tmp_path), "center000_half2_unfil.mrc")
         assert vp.unfil == os.path.join(str(tmp_path), "center000_unfil.mrc")

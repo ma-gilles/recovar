@@ -45,11 +45,11 @@ JOB_TYPES = {
         "K-means clustering, trajectories, UMAP",
     ),
     "compute_state": JobType(
-        "ComputeState", "compute_state", True, True,
+        "ReconstructState", "compute_state", True, True,
         "Volumes at arbitrary latent points",
     ),
     "compute_trajectory": JobType(
-        "ComputeTrajectory", "compute_trajectory", True, True,
+        "ReconstructTrajectory", "compute_trajectory", True, True,
         "Volumes along a latent-space path",
     ),
     "estimate_conformational_density": JobType(
