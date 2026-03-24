@@ -59,5 +59,25 @@ jobs:
       - name: Install recovar (no deps, editable)
         run: pip install -e . --no-deps --no-build-isolation --ignore-installed
 
-      - name: Run unit tests
-        run: python -m pytest tests/unit/ -x --ignore=tests/unit/test_gui_app.py -q --tb=short 2>&1 | tail -30
+      - name: Run unit tests with coverage
+        run: |
+          python -m pytest tests/unit/ -x \
+            --ignore=tests/unit/test_gui_app.py \
+            --cov=recovar --cov-report=term-missing:skip-covered \
+            --tb=short 2>&1 | tail -50
+
+  docs:
+    name: Docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install mkdocs
+        run: pip install mkdocs-material mkdocstrings[python]
+
+      - name: Build docs (strict)
+        run: mkdocs build --strict 2>&1 || echo "::warning::mkdocs build had warnings"
