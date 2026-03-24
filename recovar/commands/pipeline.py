@@ -1089,7 +1089,16 @@ def standard_recovar_pipeline(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
-    standard_recovar_pipeline(args)
+
+    from recovar.output.job import JobDir
+    job = JobDir(args.outdir, "pipeline")
+    job.start(args)
+    try:
+        standard_recovar_pipeline(args)
+        job.complete()
+    except Exception:
+        job.complete(status="failed")
+        raise
 
 
 if __name__ == "__main__":

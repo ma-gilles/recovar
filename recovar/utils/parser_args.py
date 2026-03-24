@@ -6,24 +6,16 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
     parser.add_argument(
         "result_dir",
         type=os.path.abspath,
-        help="output directory provided to pipeline.py using the --o option. Note that this function has its own --o option!. For analyze, it will be by default result_dir/output/analysis_[zdim]. For other functions, it is a required argument.",
+        help="Pipeline output directory (the --o option of pipeline.py).",
     )
 
-    if analyze:
-        parser.add_argument(
-            "-o",
-            "--outdir",
-            type=os.path.abspath,
-            help="Output directory to save all outputs. For analyze, it will be by default result_dir/output/analysis_[zdim]. For other functions, it is a required argument.",
-        )
-    else:
-        parser.add_argument(
-            "-o",
-            "--outdir",
-            type=os.path.abspath,
-            required=True,
-            help="Output directory to save all outputs. For analyze, it will be by default result_dir/output/analysis_[zdim]. For other functions, it is a required argument.",
-        )
+    parser.add_argument(
+        "-o",
+        "--outdir",
+        type=os.path.abspath,
+        help="Output directory. If omitted, auto-generates a numbered directory "
+             "(e.g. compute_state_001/) inside the pipeline result directory.",
+    )
 
 
 

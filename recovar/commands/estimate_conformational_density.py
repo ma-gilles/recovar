@@ -99,16 +99,31 @@ def estimate_conformational_density(recovar_result_dir, output_dir=None, pca_dim
 
 def main():
     args = parse_args()
-    estimate_conformational_density(
-        recovar_result_dir=args.recovar_result_dir,
-        output_dir=args.output_dir,
-        pca_dim=args.pca_dim,
-        z_dim_used=args.z_dim_used,
-        percentile_reject=args.percentile_reject,
-        num_disc_points=args.num_disc_points,
-        alphas=args.alphas,
-        percentile_bound=args.percentile_bound
+
+    from recovar.output.job import JobDir
+    job = JobDir.create(
+        outdir=args.output_dir,
+        command_name="estimate_conformational_density",
+        parent_result_dir=args.recovar_result_dir,
     )
+    if args.output_dir is not None:
+        args.output_dir = job.root
+    job.start(args)
+    try:
+        estimate_conformational_density(
+            recovar_result_dir=args.recovar_result_dir,
+            output_dir=args.output_dir,
+            pca_dim=args.pca_dim,
+            z_dim_used=args.z_dim_used,
+            percentile_reject=args.percentile_reject,
+            num_disc_points=args.num_disc_points,
+            alphas=args.alphas,
+            percentile_bound=args.percentile_bound
+        )
+        job.complete()
+    except Exception:
+        job.complete(status="failed")
+        raise
 
 if __name__ == "__main__":
     main()

@@ -7,14 +7,16 @@ from recovar.utils import parser_args
 pytestmark = pytest.mark.unit
 
 
-def test_standard_downstream_args_requires_outdir_when_not_analyze():
+def test_standard_downstream_args_outdir_optional():
+    """--outdir is always optional (auto-numbering fills in the default)."""
     parser = parser_args.standard_downstream_args(argparse.ArgumentParser(), analyze=False)
     parsed = parser.parse_args(["/tmp/results", "-o", "/tmp/out"])
     assert parsed.result_dir == "/tmp/results"
     assert parsed.outdir == "/tmp/out"
 
-    with pytest.raises(SystemExit):
-        parser.parse_args(["/tmp/results"])
+    # Without -o, outdir should be None (auto-numbering kicks in at runtime)
+    parsed2 = parser.parse_args(["/tmp/results"])
+    assert parsed2.outdir is None
 
 
 def test_standard_downstream_args_outdir_optional_for_analyze():

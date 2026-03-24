@@ -1585,7 +1585,7 @@ def test_analyze_main_dispatches(monkeypatch, tmp_path):
     assert kwargs["zdim"] == 4
 
 
-def test_compute_state_add_args_requires_outdir_and_latent_points():
+def test_compute_state_add_args_requires_latent_points():
     import argparse
 
     parser = compute_state_cmd.add_args(argparse.ArgumentParser())
@@ -1602,8 +1602,13 @@ def test_compute_state_add_args_requires_outdir_and_latent_points():
     assert parsed.outdir == "/tmp/outdir"
     assert parsed.latent_points == "/tmp/latent.txt"
 
+    # --outdir is optional (auto-numbering fills in the default)
+    parsed2 = parser.parse_args(["/tmp/result_dir", "--latent-points", "/tmp/latent.txt"])
+    assert parsed2.outdir is None
+
+    # --latent-points is still required
     with pytest.raises(SystemExit):
-        parser.parse_args(["/tmp/result_dir", "--latent-points", "/tmp/latent.txt"])
+        parser.parse_args(["/tmp/result_dir"])
 
 
 def test_compute_state_1d_latent_warns_and_reshapes_to_single_point(monkeypatch, tmp_path, caplog):

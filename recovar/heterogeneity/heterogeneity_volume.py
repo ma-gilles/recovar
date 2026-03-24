@@ -1,6 +1,7 @@
 """Kernel-regression volume reconstruction from latent embeddings."""
 
 import logging
+import os
 
 import jax.numpy as jnp
 import jax.scipy
@@ -14,6 +15,7 @@ from recovar.core import mask
 from recovar.data_io import cryoem_dataset, halfsets
 from recovar.heterogeneity import adaptive_kernel_discretization, locres
 from recovar.output import output as output_mod
+from recovar.output.output_paths import VolumeOutputPaths, resolve_volume_diag_path
 from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
@@ -74,11 +76,12 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
         pass
     else:
         logger.warning("Choosing threshold only based on number of images")
-        make_volumes_kernel_estimate_local(heterogeneity_distances, ds, output_folder, -1, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, metric_used = metric_used)
-    
+        vol_paths = VolumeOutputPaths(output_folder, "state", 0)
+        make_volumes_kernel_estimate_local(heterogeneity_distances, ds, vol_paths, -1, n_bins, B_factor, tau = None, n_min_particles = n_min_particles, metric_used = metric_used)
+
 
 @nvtx.annotate("make_volumes_kernel_estimate_local", color="yellow")
-def make_volumes_kernel_estimate_local(heterogeneity_distances, dataset, output_folder, ndim, bins, B_factor, tau = None, n_min_particles = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola"):
+def make_volumes_kernel_estimate_local(heterogeneity_distances, dataset, vol_paths, ndim, bins, B_factor, tau = None, n_min_particles = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola"):
     """Reconstruct volumes along a heterogeneity path using kernel regression.
 
     For each bin along the heterogeneity axis, selects nearby images
@@ -90,7 +93,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, dataset, output_
             list of two arrays each of shape ``(n_images_half,)``.
         dataset: ``CryoEMDataset`` with ``halfset_indices`` set.
             Halfset datasets are obtained via ``dataset.get_halfset(k)``.
-        output_folder: Directory for output MRC files.
+        vol_paths: :class:`VolumeOutputPaths` defining where to write outputs.
         ndim: Latent dimensionality (``-1`` for automatic).
         bins: Number of bins (int) or explicit bin edges (array).
         B_factor: B-factor sharpening in Angstroms squared.
@@ -107,6 +110,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, dataset, output_
         save_all_estimates: Save all intermediate estimates.
         heterogeneity_kernel: Kernel shape (``'parabola'`` or ``'flat'``).
     """
+    vol_paths.ensure_dirs()
     ds = dataset
 
     if isinstance(bins, int):
@@ -172,9 +176,8 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, dataset, output_
         estimates[k] = estimates[k].reshape(-1, *ds.volume_shape).astype(np.float32)
 
 
-    def use_choice_and_filter(choice, name):
-        
-        # Take best then filter 
+    def _save_outputs(choice):
+        """Select best estimates, filter, and write all output files."""
 
         opt_halfmaps = [None, None]
 
@@ -188,84 +191,80 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, dataset, output_
         best_filtered, best_filtered_res, best_auc, fscs, _ = locres.local_resolution(opt_halfmaps[0], opt_halfmaps[1], B_factor, ds.voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = False)
 
         best_filtered_nob, _, _, _, _ = locres.local_resolution(opt_halfmaps[0], opt_halfmaps[1], 0, ds.voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
-        prefix = ''
 
-        recovar.utils.write_mrc(output_folder + name + prefix + "filtered_noB.mrc", best_filtered_nob, voxel_size = ds.voxel_size)
+        # Primary outputs
+        recovar.utils.write_mrc(vol_paths.filtered_noB, best_filtered_nob, voxel_size=ds.voxel_size)
+        recovar.utils.write_mrc(vol_paths.filtered, best_filtered, voxel_size=ds.voxel_size)
+        recovar.utils.write_mrc(vol_paths.half1_unfil, opt_halfmaps[0], voxel_size=ds.voxel_size)
+        recovar.utils.write_mrc(vol_paths.half2_unfil, opt_halfmaps[1], voxel_size=ds.voxel_size)
+        recovar.utils.write_mrc(vol_paths.unfil, (opt_halfmaps[0] + opt_halfmaps[1]) / 2, voxel_size=ds.voxel_size)
 
-        # Best filtered volume
-        recovar.utils.write_mrc(output_folder + name + prefix + "filtered.mrc", best_filtered, voxel_size = ds.voxel_size)
-        # Local resolution map
-        recovar.utils.write_mrc(output_folder + name + prefix + "local_resolution.mrc", best_filtered_res, voxel_size = ds.voxel_size)
-
-        # Half-maps with RELION-style filenames
-        recovar.utils.write_mrc(output_folder + name + prefix + "half1_unfil.mrc", opt_halfmaps[0], voxel_size = ds.voxel_size)
-        recovar.utils.write_mrc(output_folder + name + prefix + "half2_unfil.mrc", opt_halfmaps[1], voxel_size = ds.voxel_size)
-        recovar.utils.write_mrc(output_folder + name + prefix + "unfil.mrc", (opt_halfmaps[0] + opt_halfmaps[1])/2, voxel_size = ds.voxel_size)
-
+        # Diagnostics
+        recovar.utils.write_mrc(vol_paths.locres, best_filtered_res, voxel_size=ds.voxel_size)
 
         volume_sampling = locres.make_sampling_volume(ds.grid_size, locres_sampling, ds.voxel_size, locres_maskrad)
-        recovar.utils.write_mrc(output_folder + name + "volume_sampling.mrc", volume_sampling, voxel_size = ds.voxel_size)
+        recovar.utils.write_mrc(vol_paths.sampling, volume_sampling, voxel_size=ds.voxel_size)
 
         if save_all_estimates:
-            # For debugging
             if metric_used == "locmost_likely":
-                # Take best smoothed then filter 
-                opt_halfmaps = [None, None]
+                # Take best smoothed then filter
+                debug_halfmaps = [None, None]
                 for k in range(2):
-                    opt_halfmaps[k],_ = smoothed_best_choice(estimates[k], choice, kernel_rad=kernel_rad)
+                    debug_halfmaps[k], _ = smoothed_best_choice(estimates[k], choice, kernel_rad=kernel_rad)
 
-                best_filtered, best_filtered_res, best_auc, fscs, _ = locres.local_resolution(opt_halfmaps[0], opt_halfmaps[1], B_factor, ds.voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = False)
+                bf_smooth, bfr_smooth, _, _, _ = locres.local_resolution(debug_halfmaps[0], debug_halfmaps[1], B_factor, ds.voxel_size, locres_sampling=locres_sampling, locres_maskrad=None, locres_edgwidth=None, locres_minres=50, use_filter=True, fsc_threshold=1/7, use_v2=False)
 
-                recovar.utils.write_mrc(output_folder + name + prefix + "filtered_smooth.mrc", best_filtered, voxel_size = ds.voxel_size)
-                recovar.utils.write_mrc(output_folder + name + prefix + "local_resolution_smooth.mrc", best_filtered_res, voxel_size = ds.voxel_size)
-
+                recovar.utils.write_mrc(vol_paths.filtered_smooth, bf_smooth, voxel_size=ds.voxel_size)
+                recovar.utils.write_mrc(vol_paths.locres_smooth, bfr_smooth, voxel_size=ds.voxel_size)
 
             # Filter then take best
             loc_filtered_estimates = np.zeros_like(estimates[0])
             for i in range(estimates[0].shape[0]):
-                loc_filtered_estimates[i], _, _, _, _ = locres.local_resolution(estimates[0][i], estimates[1][i], B_factor, ds.voxel_size, locres_sampling = locres_sampling, locres_maskrad= None, locres_edgwidth= None, locres_minres =50, use_filter = True, fsc_threshold = 1/7, use_v2 = True)
-
+                loc_filtered_estimates[i], _, _, _, _ = locres.local_resolution(estimates[0][i], estimates[1][i], B_factor, ds.voxel_size, locres_sampling=locres_sampling, locres_maskrad=None, locres_edgwidth=None, locres_minres=50, use_filter=True, fsc_threshold=1/7, use_v2=True)
 
             if metric_used == "locmost_likely":
-                opt_filtered_before = jnp.take_along_axis(loc_filtered_estimates , choice[None], axis=0)[0]
+                opt_filtered_before = jnp.take_along_axis(loc_filtered_estimates, choice[None], axis=0)[0]
             elif "locshellmost_likely" in metric_used:
-                opt_filtered_before = locres.recombine_estimates(loc_filtered_estimates , choice, ds.voxel_size, locres_sampling = locres_sampling, locres_maskrad= locres_maskrad, locres_edgwidth= locres_edgwidth)
+                opt_filtered_before = locres.recombine_estimates(loc_filtered_estimates, choice, ds.voxel_size, locres_sampling=locres_sampling, locres_maskrad=locres_maskrad, locres_edgwidth=locres_edgwidth)
 
-            recovar.utils.write_mrc(output_folder + name + prefix + "filtered_before.mrc", opt_filtered_before, voxel_size = ds.voxel_size)
+            recovar.utils.write_mrc(vol_paths.filtered_before, opt_filtered_before, voxel_size=ds.voxel_size)
 
             if metric_used == "locmost_likely":
-                opt_filtered_before, smoothed_choice = smoothed_best_choice(loc_filtered_estimates , choice, kernel_rad=kernel_rad)
-                recovar.utils.write_mrc(output_folder + name + prefix + "filtered_before_smooth.mrc", opt_filtered_before, voxel_size = ds.voxel_size)
+                opt_filtered_before, smoothed_choice = smoothed_best_choice(loc_filtered_estimates, choice, kernel_rad=kernel_rad)
+                recovar.utils.write_mrc(vol_paths.filtered_before_smooth, opt_filtered_before, voxel_size=ds.voxel_size)
 
-            output_mod.save_volumes(loc_filtered_estimates, output_folder + "estimates_filt", ds.volume_shape, voxel_size = ds.voxel_size, from_ft = False)
+            est_filt_dir = vol_paths.estimates_dir(1, filtered=True)
+            os.makedirs(est_filt_dir, exist_ok=True)
+            output_mod.save_volumes(loc_filtered_estimates, os.path.join(est_filt_dir, ""), ds.volume_shape, voxel_size=ds.voxel_size, from_ft=False)
 
         if "locshellmost_likely" in metric_used:
-            recovar.utils.pickle_dump( { "split_choice" : ml_choice, "ml_errors" :ml_errors } ,  output_folder  + "split_choice.pkl")
+            recovar.utils.pickle_dump({"split_choice": ml_choice, "ml_errors": ml_errors}, vol_paths.split_choice)
         else:
-            recovar.utils.write_mrc(output_folder + name + prefix + "choice.mrc", choice, voxel_size = ds.voxel_size)
-            recovar.utils.write_mrc(output_folder + name + prefix +"choice_smooth.mrc", smoothed_choice, voxel_size = ds.voxel_size)
+            recovar.utils.write_mrc(vol_paths.choice, choice, voxel_size=ds.voxel_size)
+            recovar.utils.write_mrc(vol_paths.choice_smooth, smoothed_choice, voxel_size=ds.voxel_size)
 
-        output_dict = { "heterogeneity_bins" : heterogeneity_bins, "n_images_per_bin" :n_images_per_bin, "fscs" : fscs,  'locres_sampling' : locres_sampling, 'locres_maskrad' : locres_maskrad,  'voxel_size' : ds.voxel_size, 'ml_choice' : ml_choice , 'ml_errors' : ml_errors }
-                       
-        recovar.utils.pickle_dump(output_dict ,  output_folder + name + "params.pkl")
+        output_dict = {"heterogeneity_bins": heterogeneity_bins, "n_images_per_bin": n_images_per_bin, "fscs": fscs, 'locres_sampling': locres_sampling, 'locres_maskrad': locres_maskrad, 'voxel_size': ds.voxel_size, 'ml_choice': ml_choice, 'ml_errors': ml_errors}
+
+        recovar.utils.pickle_dump(output_dict, vol_paths.params)
 
 
     distances_reordered = cryoem_dataset.reorder_to_original_indexing(
         heterogeneity_distances, ds, use_tilt_indices=ds.tilt_series_flag)
-    np.savetxt(output_folder + "heterogeneity_distances.txt", distances_reordered)
-    use_choice_and_filter(ml_choice, "")
+    np.savetxt(vol_paths.heterogeneity_distances, distances_reordered)
+    _save_outputs(ml_choice)
 
     if save_all_estimates:
-        # For debugging
-        output_mod.save_volumes(estimates[0], output_folder + "estimates_half1_unfil", ds.volume_shape, voxel_size = ds.voxel_size, from_ft = False)
-        output_mod.save_volumes(estimates[1], output_folder + "estimates_half2_unfil", ds.volume_shape, voxel_size = ds.voxel_size, from_ft = False)
+        for half_idx in (0, 1):
+            est_dir = vol_paths.estimates_dir(half_idx + 1)
+            os.makedirs(est_dir, exist_ok=True)
+            output_mod.save_volumes(estimates[half_idx], os.path.join(est_dir, ""), ds.volume_shape, voxel_size=ds.voxel_size, from_ft=False)
 
-        recovar.utils.write_mrc(output_folder + "CV_estimates_half1_unfil.mrc", cross_validation_estimators[0], voxel_size = ds.voxel_size)
-        recovar.utils.write_mrc(output_folder + "CV_noise_half1.mrc", lhs[0], voxel_size = ds.voxel_size)
-        recovar.utils.write_mrc(output_folder + "CV_noise_half2.mrc", lhs[1], voxel_size = ds.voxel_size)
-        recovar.utils.write_mrc(output_folder + "CV_estimates_half2_unfil.mrc", cross_validation_estimators[1], voxel_size = ds.voxel_size)
+        recovar.utils.write_mrc(vol_paths.cv_half1_unfil, cross_validation_estimators[0], voxel_size=ds.voxel_size)
+        recovar.utils.write_mrc(vol_paths.cv_noise_half1, lhs[0], voxel_size=ds.voxel_size)
+        recovar.utils.write_mrc(vol_paths.cv_noise_half2, lhs[1], voxel_size=ds.voxel_size)
+        recovar.utils.write_mrc(vol_paths.cv_half2_unfil, cross_validation_estimators[1], voxel_size=ds.voxel_size)
 
-    return 
+    return
 
 
 def choice_most_likely(estimates0, estimates1, target0, target1, noise_variances_target0, noise_variances_target1, voxel_size, locres_sampling, locres_maskrad, locres_edgwidth):
@@ -273,7 +272,7 @@ def choice_most_likely(estimates0, estimates1, target0, target1, noise_variances
     n_estimators = estimates0.shape[0]
     errors = np.zeros_like(estimates0)
     use_v2 = True
-    for k in range(n_estimators):  
+    for k in range(n_estimators):
         errors[k] = locres.expensive_local_error_with_cov(target0, estimates1[k], voxel_size, noise_variances_target0.reshape(target0.shape), locres_sampling = locres_sampling, locres_maskrad= locres_maskrad, locres_edgwidth= locres_edgwidth, use_v2 = use_v2)
         errors[k] += locres.expensive_local_error_with_cov(estimates0[k], target1, voxel_size, noise_variances_target1.reshape(target0.shape), locres_sampling = locres_sampling, locres_maskrad= locres_maskrad, locres_edgwidth= locres_edgwidth, use_v2 = use_v2)
 
@@ -304,7 +303,7 @@ def choice_most_likely_split(estimates0, estimates1, target0, target1, noise_var
     n_estimators = estimates0.shape[0]
     errors = n_estimators * [None]
     use_v2 = True
-    for k in range(n_estimators):  
+    for k in range(n_estimators):
         errors[k] = locres.expensive_local_error_with_cov(target0, estimates1[k], voxel_size, noise_variances_target0.reshape(target0.shape), locres_sampling = locres_sampling, locres_maskrad= locres_maskrad, locres_edgwidth= locres_edgwidth, use_v2 = use_v2, split_shell=True)
         errors[k] += locres.expensive_local_error_with_cov(estimates0[k], target1, voxel_size, noise_variances_target1.reshape(target0.shape), locres_sampling = locres_sampling, locres_maskrad= locres_maskrad, locres_edgwidth= locres_edgwidth, use_v2 = use_v2, split_shell=True)
 
@@ -344,27 +343,43 @@ def smoothed_best_choice(estimates, choice, kernel_rad = 4):
     return smoothed_estimate, smoothed_choice
 
 
-def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
+def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx, prefix=None, index=None):
+    """Get image indices contributing to a local subvolume.
 
-    params = recovar.utils.pickle_load(path_to_vol_folder + '/params.pkl')
+    Supports both the new ``diagnostics/{stem}/`` layout and the old
+    flat layout where all files live directly in *path_to_vol_folder*.
 
-    locres_ar = recovar.utils.load_mrc(path_to_vol_folder + "/local_resolution.mrc")
+    Parameters
+    ----------
+    path_to_vol_folder : str
+        Path to the volume output directory.
+    subvolume_idx : int
+        Index of the local subvolume to query.
+    prefix : str, optional
+        Volume name prefix for new layout resolution.
+    index : int, optional
+        Volume index for new layout resolution.
+    """
+    params_path = resolve_volume_diag_path(path_to_vol_folder, "params.pkl", prefix, index)
+    locres_path = resolve_volume_diag_path(path_to_vol_folder, "local_resolution.mrc", prefix, index)
+    het_dist_path = resolve_volume_diag_path(path_to_vol_folder, "heterogeneity_distances.txt", prefix, index)
+
+    params = recovar.utils.pickle_load(params_path)
+    locres_ar = recovar.utils.load_mrc(locres_path)
+
     grid_size = locres_ar.shape[0]
     sampling_points = locres.get_sampling_points(grid_size, params['locres_sampling'], params['locres_maskrad'], params['voxel_size'])
 
     point = sampling_points[subvolume_idx].astype(int) + grid_size // 2
     locres_at_point = locres_ar[point[0], point[1], point[2]]
     logger.info("Local resolution at point is %f \\AA", locres_at_point)
-    # Now need to change into which shell this corresponds to...
 
     locres_maskrad= 0.5 * params['locres_sampling'] if params['locres_maskrad'] is None else params['locres_maskrad']
     subvolume_size = locres.get_local_error_subvolume_size(locres_maskrad, params['voxel_size'])
-    # Find the shell where the locres is...
     frequency_shells = fourier_transform_utils.get_1d_frequency_grid(subvolume_size, params['voxel_size'], scaled = True)
     # Exclude last shell (Nyquist) for consistency with smoothing
     frequency_shells = frequency_shells[frequency_shells>=0][:-1]
 
-    # -1 for good measure...
     shell_idx = np.argmin(np.abs(frequency_shells - 1/locres_at_point)) - 1
 
     if shell_idx < 0:
@@ -378,6 +393,6 @@ def get_inds_for_subvolume(path_to_vol_folder, subvolume_idx):
     logger.info("This was estimated using the %d bin out of %d in the kernel regression", ml_choice_idx_shell, len(params['heterogeneity_bins']))
     logger.info("Which contains %d images", params['n_images_per_bin'][ml_choice_idx_shell])
 
-    heterogeneity_distances = np.loadtxt(path_to_vol_folder + "/heterogeneity_distances.txt")
+    heterogeneity_distances = np.loadtxt(het_dist_path)
     good_indices = np.where(heterogeneity_distances < upper_bound)[0]
     return good_indices

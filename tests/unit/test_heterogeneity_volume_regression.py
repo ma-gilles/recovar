@@ -108,13 +108,13 @@ def test_heterogeneity_volume_locres_regression(tmp_path, gpu_device):
         min_images=10,
     )
 
-    output_folder = str(tmp_path / "hv_regression") + "/"
-    os.makedirs(output_folder, exist_ok=True)
+    from recovar.output.output_paths import VolumeOutputPaths
+    vol_paths = VolumeOutputPaths(str(tmp_path / "hv_regression"), "state", 0)
 
     hv.make_volumes_kernel_estimate_local(
         heterogeneity_distances=het_distances,
-        cryos=cryos,
-        output_folder=output_folder,
+        dataset=cryos,
+        vol_paths=vol_paths,
         ndim=-1,
         bins=bins,
         B_factor=0,
@@ -126,8 +126,8 @@ def test_heterogeneity_volume_locres_regression(tmp_path, gpu_device):
     )
 
     # Read output half-maps
-    half1 = recovar.utils.load_mrc(output_folder + "half1_unfil.mrc")
-    half2 = recovar.utils.load_mrc(output_folder + "half2_unfil.mrc")
+    half1 = recovar.utils.load_mrc(vol_paths.half1_unfil)
+    half2 = recovar.utils.load_mrc(vol_paths.half2_unfil)
 
     assert half1.shape == cryos.volume_shape, f"Expected {cryos.volume_shape}, got {half1.shape}"
     assert half2.shape == cryos.volume_shape
@@ -204,14 +204,14 @@ def test_heterogeneity_volume_deterministic(tmp_path, gpu_device):
         min_images=10,
     )
 
+    from recovar.output.output_paths import VolumeOutputPaths
     outputs = []
     for run_idx in range(2):
-        out_dir = str(tmp_path / f"det_run_{run_idx}") + "/"
-        os.makedirs(out_dir, exist_ok=True)
+        vp = VolumeOutputPaths(str(tmp_path / f"det_run_{run_idx}"), "state", 0)
         hv.make_volumes_kernel_estimate_local(
             heterogeneity_distances=het_distances,
-            cryos=cryos,
-            output_folder=out_dir,
+            dataset=cryos,
+            vol_paths=vp,
             ndim=-1,
             bins=bins,
             B_factor=0,
@@ -221,8 +221,8 @@ def test_heterogeneity_volume_deterministic(tmp_path, gpu_device):
             locres_sampling=15,
             kernel_rad=1,
         )
-        h1 = recovar.utils.load_mrc(out_dir + "half1_unfil.mrc")
-        h2 = recovar.utils.load_mrc(out_dir + "half2_unfil.mrc")
+        h1 = recovar.utils.load_mrc(vp.half1_unfil)
+        h2 = recovar.utils.load_mrc(vp.half2_unfil)
         outputs.append((h1, h2))
 
     # GPU floating-point reductions are not bit-exact across runs,
@@ -250,13 +250,13 @@ def test_heterogeneity_volume_cv_selects_reasonable_bins(tmp_path, gpu_device):
         min_images=10,
     )
 
-    output_folder = str(tmp_path / "cv_test") + "/"
-    os.makedirs(output_folder, exist_ok=True)
+    from recovar.output.output_paths import VolumeOutputPaths
+    vol_paths_cv = VolumeOutputPaths(str(tmp_path / "cv_test"), "state", 0)
 
     hv.make_volumes_kernel_estimate_local(
         heterogeneity_distances=het_distances,
-        cryos=cryos,
-        output_folder=output_folder,
+        dataset=cryos,
+        vol_paths=vol_paths_cv,
         ndim=-1,
         bins=bins,
         B_factor=0,
@@ -269,7 +269,7 @@ def test_heterogeneity_volume_cv_selects_reasonable_bins(tmp_path, gpu_device):
     )
 
     # Read the params to check bin selection
-    params = recovar.utils.pickle_load(output_folder + "params.pkl")
+    params = recovar.utils.pickle_load(vol_paths_cv.params)
 
     assert "ml_choice" in params, "Missing ml_choice in output params"
     assert "heterogeneity_bins" in params
@@ -283,7 +283,7 @@ def test_heterogeneity_volume_cv_selects_reasonable_bins(tmp_path, gpu_device):
     assert np.all(np.asarray(ml_choice) < n_bins)
 
     # The filtered volume should exist and be finite
-    filtered = recovar.utils.load_mrc(output_folder + "filtered_noB.mrc")
+    filtered = recovar.utils.load_mrc(vol_paths_cv.filtered_noB)
     assert np.all(np.isfinite(filtered))
 
 

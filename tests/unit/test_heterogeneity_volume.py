@@ -169,12 +169,13 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
     ]
     bins = hv.pick_heterogeneity_bins2(ndim=2, log_likelihoods=np.concatenate(het_dists), n_bins=3)
 
-    output_folder = str(tmp_path / "hv_output")
+    from recovar.output.output_paths import VolumeOutputPaths
+    vol_paths = VolumeOutputPaths(str(tmp_path / "hv_output"), "state", 0)
 
     hv.make_volumes_kernel_estimate_local(
         heterogeneity_distances=het_dists,
         dataset=cryo,
-        output_folder=output_folder,
+        vol_paths=vol_paths,
         ndim=2,
         bins=bins,
         B_factor=0,
@@ -205,10 +206,12 @@ def test_make_volumes_kernel_estimate_local_uses_get_halfset_cache(tmp_path):
     ]
     bins = hv.pick_heterogeneity_bins2(ndim=2, log_likelihoods=np.concatenate(het_dists), n_bins=3)
 
+    from recovar.output.output_paths import VolumeOutputPaths
+    vol_paths2 = VolumeOutputPaths(str(tmp_path / "hv_output_halfsets"), "state", 0)
     hv.make_volumes_kernel_estimate_local(
         heterogeneity_distances=het_dists,
         dataset=cryo,
-        output_folder=str(tmp_path / "hv_output_halfsets"),
+        vol_paths=vol_paths2,
         ndim=2,
         bins=bins,
         B_factor=0,

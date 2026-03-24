@@ -233,7 +233,22 @@ def compute_state(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
-    compute_state(args)
+
+    from recovar.output.job import JobDir
+    job = JobDir.create(
+        outdir=args.outdir,
+        command_name="compute_state",
+        parent_result_dir=args.result_dir,
+        auto_number=(args.outdir is None),
+    )
+    args.outdir = job.root
+    job.start(args)
+    try:
+        compute_state(args)
+        job.complete()
+    except Exception:
+        job.complete(status="failed")
+        raise
 
 if __name__ == "__main__":
     main()

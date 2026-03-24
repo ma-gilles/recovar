@@ -597,7 +597,11 @@ def plot_umap(output_folder, zs, centers):
 
 
 def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
-    """Compute reweighted volume estimates and save with RELION-style organization.
+    """Compute reweighted volume estimates and save with standardized organization.
+
+    Primary volumes (filtered, half-maps) are placed directly in
+    *output_folder*.  Diagnostics (params, local resolution, etc.) go
+    into ``output_folder/diagnostics/{prefix}{idx:03d}/``.
 
     Parameters
     ----------
@@ -605,7 +609,7 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
         Dataset with ``halfset_indices`` set.  Halfset datasets are
         obtained lazily via ``dataset.get_halfset(k)``.
     """
-    from recovar.output.output_paths import AnalysisPaths
+    from recovar.output.output_paths import VolumeOutputPaths
     ds = dataset
 
     if n_min_particles is None:
@@ -616,16 +620,12 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
     n_vols = path_subsampled.shape[0]
 
     for k in range(n_vols):
-        vol_idx = k  # 0-indexed
-        vol_stem = AnalysisPaths.vol_stem(vol_prefix, vol_idx)
-
-        # Diagnostics go into a per-volume subdirectory
-        diag_dir = os.path.join(output_folder, AnalysisPaths.diagnostics_subdir(vol_prefix, vol_idx)) + "/"
-        mkdir_safe(diag_dir)
+        vol_paths = VolumeOutputPaths(output_folder, vol_prefix, k)
+        vol_paths.ensure_dirs()
 
         ndim = zs.shape[-1]
         latent_points = path_subsampled[k][None]
-        np.savetxt(os.path.join(diag_dir, 'latent_coords.txt'), latent_points)
+        np.savetxt(vol_paths.latent_coords, latent_points)
 
         if embedding_option == 'llh':
             log_likelihoods = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
@@ -643,26 +643,11 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
 
         locres_maskrad = ds.grid_size * ds.voxel_size / maskrad_fraction
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
-        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
+        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, vol_paths, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
 
-        primary_stem = _promote_reweighted_volume_outputs(diag_dir, output_folder, vol_prefix, vol_idx)
-        logger.info("Done with volume %d: %s.mrc", vol_idx, primary_stem)
+        logger.info("Done with volume %d: %s", k, vol_paths.stem)
 
     np.savetxt(os.path.join(output_folder, 'latent_coords.txt'), path_subsampled)
-
-
-def _promote_reweighted_volume_outputs(diag_dir, output_folder, vol_prefix, vol_idx):
-    """Move primary reweighted outputs from diagnostics/ into the flat analysis dir."""
-    vol_stem = AnalysisPaths.vol_stem(vol_prefix, vol_idx)
-    primary_stem = os.path.join(output_folder, vol_stem)
-    rename_map = {
-        os.path.join(diag_dir, "filtered.mrc"): primary_stem + ".mrc",
-        os.path.join(diag_dir, "half1_unfil.mrc"): primary_stem + "_half1_unfil.mrc",
-        os.path.join(diag_dir, "half2_unfil.mrc"): primary_stem + "_half2_unfil.mrc",
-    }
-    for src, dst in rename_map.items():
-        os.replace(src, dst)
-    return primary_stem
 
 
 def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path):

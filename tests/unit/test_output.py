@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pytest
 
@@ -301,24 +303,22 @@ def test_standard_pipeline_plots_uses_embedding_component_api(monkeypatch, tmp_p
     assert ("latent_coords", 4) in calls
 
 
-def test_promote_reweighted_volume_outputs_moves_primary_files(tmp_path):
-    diag_dir = tmp_path / "diagnostics" / "state000"
-    diag_dir.mkdir(parents=True)
-    for name in ("filtered.mrc", "half1_unfil.mrc", "half2_unfil.mrc"):
-        (diag_dir / name).write_text(name)
+def test_volume_output_paths_places_primary_and_diag_correctly(tmp_path):
+    """VolumeOutputPaths should put primary outputs at root and diagnostics in subdir."""
+    from recovar.output.output_paths import VolumeOutputPaths
 
-    primary_stem = output._promote_reweighted_volume_outputs(
-        str(diag_dir),
-        str(tmp_path),
-        "state",
-        0,
-    )
+    vp = VolumeOutputPaths(str(tmp_path), "state", 0)
+    vp.ensure_dirs()
 
-    assert primary_stem.endswith("state000")
-    assert not (diag_dir / "filtered.mrc").exists()
-    assert (tmp_path / "state000.mrc").exists()
-    assert (tmp_path / "state000_half1_unfil.mrc").exists()
-    assert (tmp_path / "state000_half2_unfil.mrc").exists()
+    # Primary outputs should be in tmp_path directly
+    assert vp.filtered == str(tmp_path / "state000.mrc")
+    assert vp.half1_unfil == str(tmp_path / "state000_half1_unfil.mrc")
+    assert vp.half2_unfil == str(tmp_path / "state000_half2_unfil.mrc")
+
+    # Diagnostics should be in diagnostics/state000/
+    assert "diagnostics" in vp.params
+    assert "diagnostics" in vp.split_choice
+    assert os.path.isdir(vp.diag_dir)
 
 
 def test_make_trajectory_plots_from_results_uses_pipeline_output_helpers(monkeypatch, tmp_path):

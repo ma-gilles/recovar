@@ -90,10 +90,12 @@ def _profile_one_volume(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.perf_counter()
+    from recovar.output.output_paths import VolumeOutputPaths
+    vol_paths = VolumeOutputPaths(str(output_dir), "state", 0)
     heterogeneity_volume.make_volumes_kernel_estimate_local(
         heterogeneity_distances,
         dataset,
-        str(output_dir) + "/",
+        vol_paths,
         -1,
         n_bins,
         bfactor,
