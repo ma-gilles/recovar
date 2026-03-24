@@ -7,6 +7,8 @@ on:
       - "docs/**"
       - "mkdocs.yml"
       - "recovar/**"  # API docs pull from source
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
 
 permissions:
   contents: write
