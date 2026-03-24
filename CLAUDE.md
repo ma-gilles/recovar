@@ -58,8 +58,9 @@ See `tests/CLAUDE.md` for full testing rules (critical — read before modifying
 
 ## Branching & Commits
 
-- Never work directly on `main`. Create branches like `claude/<short-task-name>`.
-- Before pushing: rebase on main, run full test suite.
+- `dev` is the active development branch. `main` is the old public release — do not target it.
+- Never commit directly to `dev`. Create feature branches like `claude/<short-task-name>` off `dev`, then push the branch for PR into `dev`.
+- Before pushing: rebase on `dev`, run full test suite.
 - Small targeted diffs. Do not commit large artifacts (checkpoints, datasets, binaries).
 - Never force-push unless explicitly asked.
 
