@@ -63,7 +63,7 @@ recovar pipeline particles.128.mrcs -o output \
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--noise-model` | radial | Noise model: `radial` or `white` |
-| `--mean-fn` | triangular | Mean function: `triangular`, `old`, `triangular_reg` |
+| `--mean-fn` | triangular | Mean function: `triangular` or `triangular_reg` |
 | `--gpu-gb` | All | GPU memory limit in GB |
 | `--n-gpus` | All | Number of GPUs to use |
 | `--keep-intermediate` | False | Save intermediate results |
@@ -71,9 +71,7 @@ recovar pipeline particles.128.mrcs -o output \
 | `--ignore-zero-frequency` | False | Useful if images are normalized to zero mean |
 | `--low-memory-option` | False | Lower memory for covariance estimation |
 | `--very-low-memory-option` | False | Lowest memory for covariance estimation |
-| `--no-cleanup` | False | Keep temporary files (useful for chaining pipeline calls) |
 | `--premultiplied-ctf` | False | Input images have pre-multiplied CTF |
-| `--copy-to-folder` | None | Copy input data to temporary folder before processing |
 
 ## Multi-GPU (experimental)
 

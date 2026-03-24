@@ -15,20 +15,37 @@ This generates a small synthetic dataset and runs the full pipeline. It should c
 If you installed from source, run the test suite:
 
 ```bash
-# Fast unit tests (no GPU required)
+# Fast unit tests (no GPU required, ~30 seconds)
 ./scripts/run_pytests.sh fast
 
-# Integration tests
-./scripts/run_pytests.sh integration
+# Pipeline smoke test (CPU only, ~2 min)
+./scripts/run_pytests.sh smoke
 
 # GPU tests (requires GPU)
 ./scripts/run_pytests.sh gpu
 
-# Full suite
+# Full suite (unit + integration + GPU + slow, ~1-2h)
 ./scripts/run_pytests.sh full
+
+# Quick quality check (small synthetic data, ~30 min, GPU)
+./scripts/run_pytests.sh tiny-metrics
+
+# Full quality regression (synthetic data, 6-12h, GPU)
+./scripts/run_pytests.sh long-test
 ```
 
-See `tests/README.md` for test layout, markers, and guidelines.
+Or via pixi:
+
+```bash
+pixi run test-fast          # unit tests only
+pixi run test-full          # full suite
+pixi run test-parallel      # parallel Slurm submission
+pixi run test-parallel-long # parallel including long regression
+```
+
+All test data is generated synthetically — no external downloads required.
+
+See `tests/README.md` for test layout, markers, baselines, and guidelines.
 
 ## Common issues
 
