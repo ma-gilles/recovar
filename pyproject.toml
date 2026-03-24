@@ -83,6 +83,22 @@ fallback_version = "1.0.0b1"
 [project.scripts]
 recovar = "recovar.command_line:main_commands"
 
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]  # pyflakes, pycodestyle, isort
+ignore = [
+    "E501",   # line too long — handled by formatter, not lint
+    "E741",   # ambiguous variable name (common in math code: l, O, I)
+    "F841",   # local variable assigned but never used — noisy during dev
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
 [tool.pytest.ini_options]
 minversion = "7.4"
 testpaths = ["tests"]
