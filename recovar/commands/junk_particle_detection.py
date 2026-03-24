@@ -2067,10 +2067,13 @@ def add_args(parser):
     parser.add_argument("--max-junk-fraction", type=float, default=0.8, help="Maximum fraction of clusters that can be classified as junk (default: 0.8)")
     parser.add_argument("--save-pipeline-indices", action="store_true", 
                        help="Save particle indices in pipeline-compatible format (for --ind or --particle-ind)")
-    parser.add_argument("--output-format", type=str, default="both", 
-                       choices=["both", "junk_only", "good_only"], 
+    parser.add_argument("--output-format", type=str, default="both",
+                       choices=["both", "junk_only", "good_only"],
                        help="Which indices to save (default: both)")
-    
+
+    from recovar.utils.parser_args import add_project_arg
+    add_project_arg(parser)
+
     return parser
 
 
@@ -2078,55 +2081,63 @@ def main():
     parser = argparse.ArgumentParser(description="Junk Particle Detection")
     parser = add_args(parser)
     args = parser.parse_args()
-    
-    # Automatically calculate batch_size and n_particles_per_cluster if not provided
-    if args.batch_size is None or args.n_particles_per_cluster is None:
-        # Load pipeline output to get necessary information
-        pipeline_output = output.PipelineOutput(args.recovar_result_dir)
-        
-        # Get GPU memory and grid size for batch size calculation
-        from recovar import utils
-        gpu_memory = utils.get_gpu_memory_total()
-        cryos = pipeline_output.get('dataset')
-        grid_size = cryos.grid_size
-        
-        # Calculate automatic batch size like in pipeline
-        auto_batch_size = utils.get_image_batch_size(grid_size, gpu_memory)
-        
-        # Calculate n_particles_per_cluster as min(100, max(10, n_particles/n_clusters))
-        auto_coords_entry = 'latent_coords_noreg' if args.no_z_regularization else 'latent_coords'
-        n_particles = len(pipeline_output.get(auto_coords_entry)[args.zdim])
-        auto_n_particles_per_cluster = min(100, max(10, n_particles // args.n_clusters))
-        
-        # Use provided values or auto-calculated values
-        batch_size = args.batch_size if args.batch_size is not None else auto_batch_size
-        n_particles_per_cluster = args.n_particles_per_cluster if args.n_particles_per_cluster is not None else auto_n_particles_per_cluster
-        
-        logger.info("Auto-calculated: batch_size=%s, n_particles_per_cluster=%s", batch_size, n_particles_per_cluster)
-    else:
-        batch_size = args.batch_size
-        n_particles_per_cluster = args.n_particles_per_cluster
-    
-    # Call the unified function with all arguments
-    junk_particle_detection(
-        args.recovar_result_dir,
-        args.output_folder,
-        args.zdim,
-        args.n_clusters,
-        batch_size,
-        n_particles_per_cluster,
-        args.no_z_regularization,
-        args.save_reconstructions,
-        args.filter_resolution,
-        args.filter_fourier_shells,
-        args.junk_detection_method,
-        args.percentile_threshold,
-        args.std_threshold,
-        args.min_junk_fraction,
-        args.max_junk_fraction,
-        args.save_pipeline_indices,
-        args.output_format
-    )
+    # job_context checks for args.output_dir; this parser uses output_folder
+    args.output_dir = args.output_folder
+
+    from recovar.project.job_context import job_context
+    with job_context(args, "junk_particle_detection") as ctx:
+        args.output_folder = ctx.output_dir
+        if ctx.pipeline_dir:
+            args.recovar_result_dir = ctx.pipeline_dir
+
+        # Automatically calculate batch_size and n_particles_per_cluster if not provided
+        if args.batch_size is None or args.n_particles_per_cluster is None:
+            # Load pipeline output to get necessary information
+            pipeline_output = output.PipelineOutput(args.recovar_result_dir)
+
+            # Get GPU memory and grid size for batch size calculation
+            from recovar import utils
+            gpu_memory = utils.get_gpu_memory_total()
+            cryos = pipeline_output.get('dataset')
+            grid_size = cryos.grid_size
+
+            # Calculate automatic batch size like in pipeline
+            auto_batch_size = utils.get_image_batch_size(grid_size, gpu_memory)
+
+            # Calculate n_particles_per_cluster as min(100, max(10, n_particles/n_clusters))
+            auto_coords_entry = 'latent_coords_noreg' if args.no_z_regularization else 'latent_coords'
+            n_particles = len(pipeline_output.get(auto_coords_entry)[args.zdim])
+            auto_n_particles_per_cluster = min(100, max(10, n_particles // args.n_clusters))
+
+            # Use provided values or auto-calculated values
+            batch_size = args.batch_size if args.batch_size is not None else auto_batch_size
+            n_particles_per_cluster = args.n_particles_per_cluster if args.n_particles_per_cluster is not None else auto_n_particles_per_cluster
+
+            logger.info("Auto-calculated: batch_size=%s, n_particles_per_cluster=%s", batch_size, n_particles_per_cluster)
+        else:
+            batch_size = args.batch_size
+            n_particles_per_cluster = args.n_particles_per_cluster
+
+        # Call the unified function with all arguments
+        junk_particle_detection(
+            args.recovar_result_dir,
+            args.output_folder,
+            args.zdim,
+            args.n_clusters,
+            batch_size,
+            n_particles_per_cluster,
+            args.no_z_regularization,
+            args.save_reconstructions,
+            args.filter_resolution,
+            args.filter_fourier_shells,
+            args.junk_detection_method,
+            args.percentile_threshold,
+            args.std_threshold,
+            args.min_junk_fraction,
+            args.max_junk_fraction,
+            args.save_pipeline_indices,
+            args.output_format
+        )
 
 
 def map_clusters_to_particles(junk_clusters, cluster_indices, output_folder, zdim_key, method):

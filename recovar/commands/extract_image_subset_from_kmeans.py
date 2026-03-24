@@ -44,21 +44,29 @@ def main():
     parser.add_argument('output_path', type=os.path.abspath, help='Path to the output .pkl file containing the indices of subset of images')
     parser.add_argument('kmeans_indices', type=list_of_ints, help='List of kmeans indices to keep. E.g. 20,30,50')
     parser.add_argument('-i', '--inverse', action='store_true', help='If provided, keep the images that correspond to kmeans centers that are not in list of kmeans indices')
+    from recovar.utils.parser_args import add_project_arg
+    add_project_arg(parser)
 
     args = parser.parse_args()
+    # job_context checks for args.output; this parser uses output_path
+    args.output = args.output_path
 
-    log_dir = os.path.dirname(args.output_path)
-    log_file = os.path.join(log_dir, "extract_subset_run.log")
+    from recovar.project.job_context import job_context
+    with job_context(args, "extract_image_subset_from_kmeans") as ctx:
+        args.output_path = ctx.output_dir
 
-    from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
-    logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
-                        level=logging.INFO,
-                        force=True,
-                        handlers=[
-        RobustFileHandler(log_file),
-        RobustStreamHandler()])
+        log_dir = os.path.dirname(args.output_path)
+        log_file = os.path.join(log_dir, "extract_subset_run.log")
 
-    extract_image_subset_from_kmeans(args.path_to_centers, args.kmeans_indices, args.inverse, args.output_path)
+        from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
+        logging.basicConfig(format='%(asctime)s.%(msecs)03d %(levelname)s %(module)s - %(funcName)s: %(message)s',
+                            level=logging.INFO,
+                            force=True,
+                            handlers=[
+            RobustFileHandler(log_file),
+            RobustStreamHandler()])
+
+        extract_image_subset_from_kmeans(args.path_to_centers, args.kmeans_indices, args.inverse, args.output_path)
 
 
 if __name__ == '__main__':

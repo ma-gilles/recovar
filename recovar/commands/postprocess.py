@@ -135,7 +135,10 @@ def add_args(parser: argparse.ArgumentParser):
         action="store_true",
         help="Use v2 algorithm for local resolution calculation (faster but may be less accurate)"
     )
-    
+
+    from recovar.utils.parser_args import add_project_arg
+    add_project_arg(parser)
+
     return parser
 
 
@@ -1150,101 +1153,105 @@ Examples:
     
     parser = add_args(parser)
     args = parser.parse_args()
-    
+
     # Setup logging
     logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-    
-    # Check if batch processing
-    if args.batch:
-        if not os.path.isdir(args.input):
-            logger.error("For batch processing, input must be a directory: %s", args.input)
-            return 1
 
-        try:
-            if args.local:
-                results = batch_process_volumes_local(
-                    args.input, args.output, args.voxel_size if hasattr(args, 'voxel_size') else None,
-                    B_factor=args.B_factor, mask_radius=args.mask_radius, fsc_mask_path=args.fsc_mask,
-                    estimate_B_factor=args.estimate_B_factor, apply_mask_path=args.apply_mask,
-                    locres_sampling=args.locres_sampling, locres_maskrad=args.locres_maskrad,
-                    locres_edgwidth=args.locres_edgwidth, locres_minres=args.locres_minres,
-                    fsc_threshold=args.fsc_threshold, filter_edgewidth=args.filter_edgewidth
-                )
-            else:
-                results = batch_process_volumes(
-                    args.input, args.output, args.voxel_size if hasattr(args, 'voxel_size') else None,
-                    B_factor=args.B_factor, mask_radius=args.mask_radius, fsc_mask_path=args.fsc_mask,
-                    estimate_B_factor=args.estimate_B_factor, apply_mask_path=args.apply_mask
-                )
+    from recovar.project.job_context import job_context
+    with job_context(args, "postprocess") as ctx:
+        args.output = ctx.output_dir
 
-            successful = sum(1 for r in results.values() if r['success'])
-            total = len(results)
-            logger.info("Batch processing completed: %d/%d volumes processed successfully", successful, total)
-            return 0
-
-        except Exception as e:
-            logger.error("Error in batch processing: %s", e)
-            return 1
-
-    else:
-        # Single file processing
-
-        # Find halfmap2 if not provided
-        if args.halfmap2 is None:
-            args.halfmap2 = find_halfmap2(args.input)
-            if args.halfmap2 is None:
-                logger.error("Could not find halfmap2 for %s. Please specify --halfmap2 explicitly.", args.input)
+        # Check if batch processing
+        if args.batch:
+            if not os.path.isdir(args.input):
+                logger.error("For batch processing, input must be a directory: %s", args.input)
                 return 1
 
-        # Check inputs exist
-        if not os.path.exists(args.input):
-            logger.error("Halfmap1 not found: %s", args.input)
-            return 1
-
-        if not os.path.exists(args.halfmap2):
-            logger.error("Halfmap2 not found: %s", args.halfmap2)
-            return 1
-
-        # Check apply mask exists if provided
-        if args.apply_mask is not None and not os.path.exists(args.apply_mask):
-            logger.error("Apply mask not found: %s", args.apply_mask)
-            return 1
-
-        # Create output directory if needed
-        output_dir = os.path.dirname(args.output)
-        if output_dir and not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-        # Run filtering
-        try:
-            if args.local:
-                median_resol = local_filter_halfmaps(
-                    args.input, args.halfmap2, args.voxel_size if hasattr(args, 'voxel_size') else None, args.output,
-                    B_factor=args.B_factor, mask_radius=args.mask_radius, fsc_mask_path=args.fsc_mask,
-                    estimate_B_factor=args.estimate_B_factor, apply_mask_path=args.apply_mask,
-                    locres_sampling=args.locres_sampling, locres_maskrad=args.locres_maskrad,
-                    locres_edgwidth=args.locres_edgwidth, locres_minres=args.locres_minres,
-                    fsc_threshold=args.fsc_threshold, filter_edgewidth=args.filter_edgewidth
-                )
-
-                if not np.isnan(median_resol):
-                    logger.info("Success! Median local resolution: %.2f Angstroms", median_resol)
+            try:
+                if args.local:
+                    results = batch_process_volumes_local(
+                        args.input, args.output, args.voxel_size if hasattr(args, 'voxel_size') else None,
+                        B_factor=args.B_factor, mask_radius=args.mask_radius, fsc_mask_path=args.fsc_mask,
+                        estimate_B_factor=args.estimate_B_factor, apply_mask_path=args.apply_mask,
+                        locres_sampling=args.locres_sampling, locres_maskrad=args.locres_maskrad,
+                        locres_edgwidth=args.locres_edgwidth, locres_minres=args.locres_minres,
+                        fsc_threshold=args.fsc_threshold, filter_edgewidth=args.filter_edgewidth
+                    )
                 else:
-                    logger.info("Success! Local filtering completed (no valid resolution values)")
-                return 0
-            else:
-                global_resol = postprocess_halfmaps(
-                    args.input, args.halfmap2, args.voxel_size if hasattr(args, 'voxel_size') else None, args.output,
-                    B_factor=args.B_factor, mask_radius=args.mask_radius, fsc_mask_path=args.fsc_mask,
-                    estimate_B_factor=args.estimate_B_factor, apply_mask_path=args.apply_mask
-                )
+                    results = batch_process_volumes(
+                        args.input, args.output, args.voxel_size if hasattr(args, 'voxel_size') else None,
+                        B_factor=args.B_factor, mask_radius=args.mask_radius, fsc_mask_path=args.fsc_mask,
+                        estimate_B_factor=args.estimate_B_factor, apply_mask_path=args.apply_mask
+                    )
 
-                logger.info("Success! Global resolution: %.2f Angstroms", global_resol)
+                successful = sum(1 for r in results.values() if r['success'])
+                total = len(results)
+                logger.info("Batch processing completed: %d/%d volumes processed successfully", successful, total)
                 return 0
 
-        except Exception as e:
-            logger.error("Error: %s", e)
-            return 1
+            except Exception as e:
+                logger.error("Error in batch processing: %s", e)
+                return 1
+
+        else:
+            # Single file processing
+
+            # Find halfmap2 if not provided
+            if args.halfmap2 is None:
+                args.halfmap2 = find_halfmap2(args.input)
+                if args.halfmap2 is None:
+                    logger.error("Could not find halfmap2 for %s. Please specify --halfmap2 explicitly.", args.input)
+                    return 1
+
+            # Check inputs exist
+            if not os.path.exists(args.input):
+                logger.error("Halfmap1 not found: %s", args.input)
+                return 1
+
+            if not os.path.exists(args.halfmap2):
+                logger.error("Halfmap2 not found: %s", args.halfmap2)
+                return 1
+
+            # Check apply mask exists if provided
+            if args.apply_mask is not None and not os.path.exists(args.apply_mask):
+                logger.error("Apply mask not found: %s", args.apply_mask)
+                return 1
+
+            # Create output directory if needed
+            output_dir = os.path.dirname(args.output)
+            if output_dir and not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+
+            # Run filtering
+            try:
+                if args.local:
+                    median_resol = local_filter_halfmaps(
+                        args.input, args.halfmap2, args.voxel_size if hasattr(args, 'voxel_size') else None, args.output,
+                        B_factor=args.B_factor, mask_radius=args.mask_radius, fsc_mask_path=args.fsc_mask,
+                        estimate_B_factor=args.estimate_B_factor, apply_mask_path=args.apply_mask,
+                        locres_sampling=args.locres_sampling, locres_maskrad=args.locres_maskrad,
+                        locres_edgwidth=args.locres_edgwidth, locres_minres=args.locres_minres,
+                        fsc_threshold=args.fsc_threshold, filter_edgewidth=args.filter_edgewidth
+                    )
+
+                    if not np.isnan(median_resol):
+                        logger.info("Success! Median local resolution: %.2f Angstroms", median_resol)
+                    else:
+                        logger.info("Success! Local filtering completed (no valid resolution values)")
+                    return 0
+                else:
+                    global_resol = postprocess_halfmaps(
+                        args.input, args.halfmap2, args.voxel_size if hasattr(args, 'voxel_size') else None, args.output,
+                        B_factor=args.B_factor, mask_radius=args.mask_radius, fsc_mask_path=args.fsc_mask,
+                        estimate_B_factor=args.estimate_B_factor, apply_mask_path=args.apply_mask
+                    )
+
+                    logger.info("Success! Global resolution: %.2f Angstroms", global_resol)
+                    return 0
+
+            except Exception as e:
+                logger.error("Error: %s", e)
+                return 1
 
 
 if __name__ == "__main__":

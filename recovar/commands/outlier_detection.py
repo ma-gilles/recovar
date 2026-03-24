@@ -871,12 +871,23 @@ def main():
     parser = argparse.ArgumentParser(description="Outlier Detection from Pipeline Results")
     parser = add_args(parser)
     args = parser.parse_args()
-    
+    # job_context checks for args.recovar_result_dir; this parser uses pipeline_output_dir
+    args.recovar_result_dir = args.pipeline_output_dir
+
+    from recovar.project.job_context import job_context
+    with job_context(args, "outlier_detection") as ctx:
+        args.output_dir = ctx.output_dir
+        if ctx.pipeline_dir:
+            args.pipeline_output_dir = ctx.pipeline_dir
+        _run_outlier_detection(args)
+
+
+def _run_outlier_detection(args):
     # Set up main output directory
     if args.output_dir is None:
         args.output_dir = os.path.join(args.pipeline_output_dir, 'outlier_detection')
     os.makedirs(args.output_dir, exist_ok=True)
-    
+
     # Set up logging
     from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
     logging.basicConfig(
@@ -1300,9 +1311,12 @@ def add_args(parser):
                        help="Run junk particle detection in addition to outlier detection")
     parser.add_argument("--junk-threshold", type=float, default=0.5, 
                        help="Threshold for junk particle detection (default: 0.5)")
-    parser.add_argument("--particles-per-cluster", type=int, 
+    parser.add_argument("--particles-per-cluster", type=int,
                        help="Number of particles per cluster for junk detection (auto: min(100, max(10, n_particles/n_clusters)))")
-    
+
+    from recovar.utils.parser_args import add_project_arg
+    add_project_arg(parser)
+
     return parser
 
 

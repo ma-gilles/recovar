@@ -180,41 +180,47 @@ def main():
     parser.add_argument("--chunk-size", type=int, default=None,
                         help="Split output into chunks of this many images "
                              "(default: single file)")
+    from recovar.utils.parser_args import add_project_arg
+    add_project_arg(parser)
 
     args = parser.parse_args()
 
-    # Set up logging for CLI usage
-    os.makedirs(args.outdir, exist_ok=True)
-    log_path = os.path.join(args.outdir, "downsample.log")
-    from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(message)s",
-        handlers=[
-            RobustStreamHandler(),
-            RobustFileHandler(log_path),
-        ],
-    )
+    from recovar.project.job_context import job_context
+    with job_context(args, "downsample") as ctx:
+        args.outdir = ctx.output_dir
 
-    if args.target_D % 2 != 0:
-        logger.error("Target box size must be even, got %d", args.target_D)
-        sys.exit(1)
+        # Set up logging for CLI usage
+        os.makedirs(args.outdir, exist_ok=True)
+        log_path = os.path.join(args.outdir, "downsample.log")
+        from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s %(levelname)s %(message)s",
+            handlers=[
+                RobustStreamHandler(),
+                RobustFileHandler(log_path),
+            ],
+        )
 
-    logger.info("Downsampling %s \u2192 D=%d", args.particles, args.target_D)
-    logger.info("Output directory: %s", args.outdir)
+        if args.target_D % 2 != 0:
+            logger.error("Target box size must be even, got %d", args.target_D)
+            sys.exit(1)
 
-    mrcs_path, star_path = downsample_to_disk(
-        particles_file=args.particles,
-        target_D=args.target_D,
-        outdir=args.outdir,
-        datadir=args.datadir or "",
-        strip_prefix=args.strip_prefix,
-        batch_size=args.batch_size,
-    )
+        logger.info("Downsampling %s \u2192 D=%d", args.particles, args.target_D)
+        logger.info("Output directory: %s", args.outdir)
 
-    logger.info("")
-    logger.info("To run the pipeline:")
-    logger.info("  recovar pipeline %s -o output --mask mask.mrc", star_path)
+        mrcs_path, star_path = downsample_to_disk(
+            particles_file=args.particles,
+            target_D=args.target_D,
+            outdir=args.outdir,
+            datadir=args.datadir or "",
+            strip_prefix=args.strip_prefix,
+            batch_size=args.batch_size,
+        )
+
+        logger.info("")
+        logger.info("To run the pipeline:")
+        logger.info("  recovar pipeline %s -o output --mask mask.mrc", star_path)
 
 
 # ---------------------------------------------------------------------------

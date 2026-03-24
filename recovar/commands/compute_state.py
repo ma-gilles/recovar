@@ -234,21 +234,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
 
-    from recovar.output.job import JobDir
-    job = JobDir.create(
-        outdir=args.outdir,
-        command_name="compute_state",
-        parent_result_dir=args.result_dir,
-        auto_number=(args.outdir is None),
-    )
-    args.outdir = job.root
-    job.start(args)
-    try:
+    from recovar.project.job_context import job_context
+    with job_context(args, "compute_state") as ctx:
+        args.outdir = ctx.output_dir
+        if ctx.pipeline_dir:
+            args.result_dir = ctx.pipeline_dir
         compute_state(args)
-        job.complete()
-    except Exception:
-        job.complete(status="failed")
-        raise
 
 if __name__ == "__main__":
     main()

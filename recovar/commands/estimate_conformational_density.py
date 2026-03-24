@@ -16,6 +16,8 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Estimate conformational density from recovar results")
     parser.add_argument("recovar_result_dir", type=str, help="Directory containing recovar results provided to pipeline.py")
     parser.add_argument("--output_dir", type=str, default=None, help="Directory to save the density estimation results. Default = recovar_result_dir/density/")
+    from recovar.utils.parser_args import add_project_arg
+    add_project_arg(parser)
     parser.add_argument("--pca_dim", type=int, default=4, help="Dimension of PCA space in which the density is estimated (default 4). The runtime increases exponentially with this number, so <=5 is recommended.")
     parser.add_argument("--z_dim_used", type=int, default=None, help="Dimension of latent variable used (default smallest zdim stored >= pca_dim). Should be at least as big as pca_dim, and should be one of the dims used in analyze.py")
     parser.add_argument("--percentile_reject", type=int, default=10, help="Percentile of data to reject b/c they have large covariance (default 10%%)")
@@ -100,19 +102,13 @@ def estimate_conformational_density(recovar_result_dir, output_dir=None, pca_dim
 def main():
     args = parse_args()
 
-    from recovar.output.job import JobDir
-    job = JobDir.create(
-        outdir=args.output_dir,
-        command_name="estimate_conformational_density",
-        parent_result_dir=args.recovar_result_dir,
-    )
-    if args.output_dir is not None:
-        args.output_dir = job.root
-    job.start(args)
-    try:
+    from recovar.project.job_context import job_context
+    with job_context(args, "estimate_conformational_density") as ctx:
+        result_dir = ctx.pipeline_dir or args.recovar_result_dir
+        output_dir = ctx.output_dir if (args.output_dir is not None or ctx.project is not None) else None
         estimate_conformational_density(
-            recovar_result_dir=args.recovar_result_dir,
-            output_dir=args.output_dir,
+            recovar_result_dir=result_dir,
+            output_dir=output_dir,
             pca_dim=args.pca_dim,
             z_dim_used=args.z_dim_used,
             percentile_reject=args.percentile_reject,
@@ -120,10 +116,6 @@ def main():
             alphas=args.alphas,
             percentile_bound=args.percentile_bound
         )
-        job.complete()
-    except Exception:
-        job.complete(status="failed")
-        raise
 
 if __name__ == "__main__":
     main()

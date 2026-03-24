@@ -326,22 +326,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
 
-    from recovar.output.job import JobDir
-    outdir = args.outdir  # may be None (analyze auto-generates from zdim)
-    job = JobDir.create(
-        outdir=outdir,
-        command_name="analyze",
-        parent_result_dir=args.result_dir,
-    )
-    if outdir is not None:
-        args.outdir = job.root
-    job.start(args)
-    try:
-        analyze(args.result_dir, output_folder=args.outdir, zdim=args.zdim, n_clusters=args.n_clusters, n_paths=args.n_trajectories, skip_umap=args.skip_umap, B_factor=args.Bfactor, n_bins=args.n_bins, n_vols_along_path=args.n_vols_along_path, skip_centers=args.skip_centers, normalize_kmeans=args.normalize_kmeans, density_path=args.density, no_z_reg=args.no_z_regularization, lazy=args.lazy, n_min_particles=args.n_min_particles, maskrad_fraction=args.maskrad_fraction, apply_global_filtering=args.apply_global_filtering, fsc_mask_radius=args.fsc_mask_radius, fsc_mask_edgewidth=args.fsc_mask_edgewidth, args=args)
-        job.complete()
-    except Exception:
-        job.complete(status="failed")
-        raise
+    from recovar.project.job_context import job_context
+    with job_context(args, "analyze") as ctx:
+        result_dir = ctx.pipeline_dir or args.result_dir
+        output_folder = ctx.output_dir if args.outdir is not None or ctx.project is not None else None
+        analyze(result_dir, output_folder=output_folder, zdim=args.zdim, n_clusters=args.n_clusters, n_paths=args.n_trajectories, skip_umap=args.skip_umap, B_factor=args.Bfactor, n_bins=args.n_bins, n_vols_along_path=args.n_vols_along_path, skip_centers=args.skip_centers, normalize_kmeans=args.normalize_kmeans, density_path=args.density, no_z_reg=args.no_z_regularization, lazy=args.lazy, n_min_particles=args.n_min_particles, maskrad_fraction=args.maskrad_fraction, apply_global_filtering=args.apply_global_filtering, fsc_mask_radius=args.fsc_mask_radius, fsc_mask_edgewidth=args.fsc_mask_edgewidth, args=args)
 
 if __name__ == "__main__":
     main()

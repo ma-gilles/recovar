@@ -129,7 +129,7 @@ def test_pipeline_with_outliers_uses_original_image_ids_between_rounds(tmp_path,
     import recovar.commands.outlier_detection as outlier_detection
     monkeypatch.setattr(outlier_detection, "main", fake_outlier_main)
 
-    pipeline_with_outliers.run_pipeline_with_outlier_removal()
+    pipeline_with_outliers._run_pipeline_with_outlier_removal_impl(args)
 
     with open(tmp_path / "pipeline" / "inliers_round_1.pkl", "rb") as f:
         np.testing.assert_array_equal(pickle.load(f), combined_round_1)
@@ -189,7 +189,7 @@ def test_pipeline_with_outliers_uses_original_particle_ids_between_rounds(tmp_pa
     import recovar.commands.outlier_detection as outlier_detection
     monkeypatch.setattr(outlier_detection, "main", fake_outlier_main)
 
-    pipeline_with_outliers.run_pipeline_with_outlier_removal()
+    pipeline_with_outliers._run_pipeline_with_outlier_removal_impl(args)
 
     with open(tmp_path / "pipeline" / "particle_inliers_round_1.pkl", "rb") as f:
         np.testing.assert_array_equal(pickle.load(f), combined_particles_round_1)

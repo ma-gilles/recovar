@@ -32,9 +32,11 @@ def add_args(parser: argparse.ArgumentParser):
     )
     parser.add_argument(
         "-o", "--outdir",
-        type=os.path.abspath, required=True,
-        help="Output directory to save model",
+        type=os.path.abspath,
+        help="Output directory to save model. Required unless --project is used.",
     )
+    from recovar.utils.parser_args import add_project_arg
+    add_project_arg(parser)
     parser.add_argument(
         "--mask", metavar="mrc", required=True,
         help="Solvent mask (.mrc). Special values: from_halfmaps, sphere, none",
@@ -1090,15 +1092,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
 
-    from recovar.output.job import JobDir
-    job = JobDir(args.outdir, "pipeline")
-    job.start(args)
-    try:
+    from recovar.project.job_context import job_context
+    with job_context(args, "pipeline") as ctx:
+        args.outdir = ctx.output_dir
         standard_recovar_pipeline(args)
-        job.complete()
-    except Exception:
-        job.complete(status="failed")
-        raise
 
 
 if __name__ == "__main__":

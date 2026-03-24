@@ -61,6 +61,8 @@ def main():
         return list(map(int, arg.split(',')))
 
     parser.add_argument('--coordinate', default=None, dest='coordinate', type=list_of_ints, help="Coordinate in pixel of the feature for which you want images. E.g. 20,30,50")
+    from recovar.utils.parser_args import add_project_arg
+    add_project_arg(parser)
 
     args = parser.parse_args()
     if args.subvol_idx is None and args.mask is None and args.coordinate is None:
@@ -68,7 +70,10 @@ def main():
     if args.subvol_idx is not None and (args.mask is not None or args.coordinate is not None):
         raise ValueError("You need to provide only one of subvolume index, mask or coordinate")
 
-    extract_image_subset(args.input_dir, args.output, args.subvol_idx, args.mask, args.coordinate)
+    from recovar.project.job_context import job_context
+    with job_context(args, "extract_image_subset") as ctx:
+        args.output = ctx.output_dir
+        extract_image_subset(args.input_dir, args.output, args.subvol_idx, args.mask, args.coordinate)
 
 
 if __name__ == '__main__':

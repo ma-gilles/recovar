@@ -157,6 +157,9 @@ def add_args(parser: argparse.ArgumentParser):
         help="Whether CTF is premultiplied in the data",
     )
 
+    from recovar.utils.parser_args import add_project_arg
+    add_project_arg(parser)
+
     return parser
 
 ##TODO: I would like to make this function much easier to use. There should be a "basic interface"
@@ -205,7 +208,11 @@ def main():
     parser = argparse.ArgumentParser()
     add_args(parser)
     args = parser.parse_args()
-    generate(args)
+
+    from recovar.project.job_context import job_context
+    with job_context(args, "reconstruct_from_external_embedding") as ctx:
+        args.outdir = ctx.output_dir
+        generate(args)
 
 
 if __name__ == "__main__":

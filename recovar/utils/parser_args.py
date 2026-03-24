@@ -1,21 +1,37 @@
 import os, argparse
 
 
+def add_project_arg(parser: argparse.ArgumentParser):
+    """Add the ``--project`` argument to any command parser."""
+    parser.add_argument(
+        "--project",
+        type=os.path.abspath,
+        default=None,
+        help="Path to a recovar project directory (containing project.json). "
+             "If omitted, auto-detects by walking up from the current directory. "
+             "When a project is active, output directories are auto-generated "
+             "(e.g. ComputeState/job_0001/).",
+    )
+    return parser
+
+
 def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
 
     parser.add_argument(
         "result_dir",
         type=os.path.abspath,
-        help="Pipeline output directory (the --o option of pipeline.py).",
+        help="Pipeline job directory (e.g. Pipeline/job_0001 or an absolute path).",
     )
 
     parser.add_argument(
         "-o",
         "--outdir",
         type=os.path.abspath,
-        help="Output directory. If omitted, auto-generates a numbered directory "
-             "(e.g. compute_state_001/) inside the pipeline result directory.",
+        help="Output directory. If omitted and a project is active, "
+             "auto-generates a numbered directory (e.g. ComputeState/job_0001/).",
     )
+
+    add_project_arg(parser)
 
 
 

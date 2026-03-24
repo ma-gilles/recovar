@@ -34,15 +34,23 @@ def parse_args():
     parser.add_argument('-o', '--output', dest="file_path", type=str, required=True, help='Path to save the output files.')
     parser.add_argument('--percent_top', type=float, default=1, help='Percentage of top density points to consider.')
     parser.add_argument('--n_local_maxs', type=int, default=3, help='Number of local maxima to find. If <1, will use whatever HDBSCAN finds.')
+    from recovar.utils.parser_args import add_project_arg
+    add_project_arg(parser)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    dens_pkl = utils.pickle_load(args.density)
-    density = dens_pkl['density']
-    latent_space_bounds = dens_pkl['latent_space_bounds']
-    estimate_stable_states(density, latent_space_bounds, args.percent_top, args.n_local_maxs, args.file_path)
+    # job_context checks for args.output; this parser uses dest="file_path"
+    args.output = args.file_path
+
+    from recovar.project.job_context import job_context
+    with job_context(args, "estimate_stable_states") as ctx:
+        args.file_path = ctx.output_dir
+        dens_pkl = utils.pickle_load(args.density)
+        density = dens_pkl['density']
+        latent_space_bounds = dens_pkl['latent_space_bounds']
+        estimate_stable_states(density, latent_space_bounds, args.percent_top, args.n_local_maxs, args.file_path)
 
 
 if __name__ == "__main__":

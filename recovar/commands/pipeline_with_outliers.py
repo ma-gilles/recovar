@@ -31,42 +31,49 @@ def run_pipeline_with_outlier_removal():
     parser.add_argument("--no-z-regularization", action="store_true", help="Disable z regularization.")
     # Add option to delete round results
     parser.add_argument("--delete-rounds", action="store_true", help="Delete results of all rounds except the inliers/outliers")
-    
+
     # Add comprehensive outlier detection arguments
-    parser.add_argument("--use-contrast-detection", action="store_true", 
+    parser.add_argument("--use-contrast-detection", action="store_true",
                        help="Use contrast-based outlier detection")
-    parser.add_argument("--use-junk-detection", action="store_true", 
+    parser.add_argument("--use-junk-detection", action="store_true",
                        help="Use junk particle detection in addition to outlier detection")
-    parser.add_argument("--no-plots", action="store_true", 
+    parser.add_argument("--no-plots", action="store_true",
                        help="Skip plotting and visualization in outlier detection")
-    
+
     # Contrast-based outlier detection arguments
-    parser.add_argument("--low-contrast-threshold", type=float, default=0.1, 
+    parser.add_argument("--low-contrast-threshold", type=float, default=0.1,
                        help="Low contrast threshold for outlier detection (default: 0.1)")
-    parser.add_argument("--high-contrast-threshold", type=float, default=3.5, 
+    parser.add_argument("--high-contrast-threshold", type=float, default=3.5,
                        help="High contrast threshold for outlier detection (default: 3.5)")
-    parser.add_argument("--max-contrast", type=float, default=4.0, 
+    parser.add_argument("--max-contrast", type=float, default=4.0,
                        help="Maximum contrast value to consider (default: 4.0)")
-    parser.add_argument("--particle-bad-fraction-threshold", type=float, default=0.7, 
+    parser.add_argument("--particle-bad-fraction-threshold", type=float, default=0.7,
                        help="Threshold for bad fraction in particle (default: 0.7)")
     parser.add_argument("--micrograph-bad-fraction-threshold", type=float, default=0.7,
                        help="If this fraction of a micrograph's images are bad, reject entire micrograph (default: 0.7)")
-    
+
     # Junk detection arguments
-    parser.add_argument("--junk-threshold", type=float, default=0.5, 
+    parser.add_argument("--junk-threshold", type=float, default=0.5,
                        help="Threshold for junk particle detection (default: 0.5)")
-    parser.add_argument("--particles-per-cluster", type=int, 
+    parser.add_argument("--particles-per-cluster", type=int,
                        help="Number of particles per cluster for junk detection (auto: min(100, max(10, n_particles/n_clusters)))")
-    
+
     # Output format arguments
-    parser.add_argument("--save-pipeline-indices", action="store_true", 
+    parser.add_argument("--save-pipeline-indices", action="store_true",
                        help="Save indices in pipeline-compatible format (--ind for images, --particle-ind for particles in tilt series)")
-    parser.add_argument("--output-format", type=str, default="both", 
-                       choices=["both", "outliers_only", "inliers_only"], 
+    parser.add_argument("--output-format", type=str, default="both",
+                       choices=["both", "outliers_only", "inliers_only"],
                        help="Which indices to save (default: both)")
 
     args = parser.parse_args()
 
+    from recovar.project.job_context import job_context
+    with job_context(args, "pipeline_with_outliers") as ctx:
+        args.outdir = ctx.output_dir
+        _run_pipeline_with_outlier_removal_impl(args)
+
+
+def _run_pipeline_with_outlier_removal_impl(args):
     # Ensure the output directory exists
     output.mkdir_safe(args.outdir)
 

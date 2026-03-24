@@ -211,21 +211,10 @@ def main():
     else:
         raise Exception("end point format wrong. Either pass end points file or z_st_file and z_end_file")
 
-    from recovar.output.job import JobDir
-    job = JobDir.create(
-        outdir=args.outdir,
-        command_name="compute_trajectory",
-        parent_result_dir=args.result_dir,
-        auto_number=(args.outdir is None),
-    )
-    args.outdir = job.root
-    job.start(args)
-    try:
-        compute_trajectory(args.result_dir, output_folder = args.outdir, zdim= args.zdim, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, density_path = args.density, no_z_reg = not args.override_z_regularization, z_st = z_st, z_end = z_end, args = args)
-        job.complete()
-    except Exception:
-        job.complete(status="failed")
-        raise
+    from recovar.project.job_context import job_context
+    with job_context(args, "compute_trajectory") as ctx:
+        result_dir = ctx.pipeline_dir or args.result_dir
+        compute_trajectory(result_dir, output_folder=ctx.output_dir, zdim=args.zdim, B_factor=args.Bfactor, n_bins=args.n_bins, n_vols_along_path=args.n_vols_along_path, density_path=args.density, no_z_reg=not args.override_z_regularization, z_st=z_st, z_end=z_end, args=args)
 
 
 if __name__ == "__main__":
