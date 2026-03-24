@@ -323,6 +323,9 @@ class JobDir:
         except (IOError, OSError) as e:
             logger.warning("Could not update job.json: %s", e)
 
+        # Write human-readable README
+        self._write_readme(job_data, duration)
+
         logger.info("Job %s: %s (%.1fs)", status, self.command_name,
                      duration if duration else 0)
 
@@ -373,3 +376,39 @@ class JobDir:
                 RobustStreamHandler(),
             ],
         )
+
+    def _write_readme(self, job_data, duration):
+        """Write a human-readable README.txt listing all output files."""
+        readme_path = os.path.join(self.root, "README.txt")
+        try:
+            lines = []
+            lines.append(f"RECOVAR Job: {self.command_name}")
+            cmd = job_data.get("command_line", "")
+            if cmd:
+                lines.append(f"Command: {cmd}")
+            lines.append(f"Status: {job_data.get('status', '?')}")
+            if duration is not None:
+                if duration < 60:
+                    dur_str = f"{duration:.0f}s"
+                elif duration < 3600:
+                    dur_str = f"{duration/60:.0f}m {duration%60:.0f}s"
+                else:
+                    dur_str = f"{duration/3600:.1f}h"
+                lines.append(f"Duration: {dur_str}")
+            lines.append(f"Version: {job_data.get('recovar_version', '?')}")
+            lines.append("")
+
+            # List files by category
+            outputs = job_data.get("outputs", {})
+            for category in ("volumes", "halfmaps", "plots", "diagnostics", "other"):
+                files = outputs.get(category, [])
+                if files:
+                    lines.append(f"{category.upper()}:")
+                    for f in files:
+                        lines.append(f"  {f}")
+                    lines.append("")
+
+            with open(readme_path, "w") as f:
+                f.write("\n".join(lines))
+        except (IOError, OSError) as e:
+            logger.warning("Could not write README.txt: %s", e)

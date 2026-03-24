@@ -439,7 +439,9 @@ def save_pipeline_results(
     utils.pickle_dump(ind_split, paths.halfsets)
     utils.pickle_dump(result, paths.params)
     utils.pickle_dump(covariance_cols, paths.covariance_cols)
-    utils.pickle_dump(embedding_dict, paths.embeddings)
+
+    # Save embeddings as per-zdim directories with individual .npy files
+    _save_embeddings_per_zdim(paths, embedding_dict)
 
     if zs_full is not None:
         utils.pickle_dump(zs_full, paths.zs_with_complement)
@@ -447,6 +449,91 @@ def save_pipeline_results(
     write_metadata_json(paths, result)
 
     logger.info("Saved pipeline results to %s", paths.model_dir)
+
+
+# Embedding field names that are saved as .npy files per zdim
+_EMBEDDING_FIELDS = [
+    'latent_coords', 'latent_coords_noreg',
+    'latent_precision', 'latent_precision_noreg',
+    'contrasts', 'contrasts_noreg',
+]
+
+
+def _save_embeddings_per_zdim(paths, embedding_dict):
+    """Save embeddings as per-zdim directories with individual .npy files.
+
+    Creates ``model/zdim_{N}/`` for each computed zdim, containing::
+
+        latent_coords.npy
+        latent_coords_noreg.npy
+        latent_precision.npy
+        latent_precision_noreg.npy
+        contrasts.npy
+        contrasts_noreg.npy
+
+    Parameters
+    ----------
+    paths : ResultPaths
+    embedding_dict : dict
+        Built by :func:`build_embedding_dict`.
+    """
+    # Collect all zdims from any field
+    all_zdims = set()
+    for field in _EMBEDDING_FIELDS:
+        if field in embedding_dict and isinstance(embedding_dict[field], dict):
+            all_zdims.update(embedding_dict[field].keys())
+
+    for zdim in sorted(all_zdims):
+        zdim_dir = paths.embedding_zdim_dir(zdim)
+        os.makedirs(zdim_dir, exist_ok=True)
+        for field in _EMBEDDING_FIELDS:
+            if field in embedding_dict and zdim in embedding_dict[field]:
+                arr = np.asarray(embedding_dict[field][zdim])
+                np.save(os.path.join(zdim_dir, f"{field}.npy"), arr)
+
+    logger.info("Saved embeddings for zdims %s to per-zdim directories", sorted(all_zdims))
+
+
+def _load_embeddings_per_zdim(paths):
+    """Load embeddings from per-zdim .npy directories.
+
+    Returns the same dict structure as the legacy ``embeddings.pkl``::
+
+        {
+            'latent_coords': {2: array, 4: array, ...},
+            'latent_coords_noreg': {2: array, 4: array, ...},
+            ...
+        }
+
+    Returns None if no zdim directories are found.
+    """
+    import re
+    model_dir = paths.model_dir
+    if not os.path.isdir(model_dir):
+        return None
+
+    # Find zdim_* directories
+    zdim_dirs = {}
+    pattern = re.compile(r"^zdim_(\d+)$")
+    for name in os.listdir(model_dir):
+        m = pattern.match(name)
+        if m and os.path.isdir(os.path.join(model_dir, name)):
+            zdim_dirs[int(m.group(1))] = os.path.join(model_dir, name)
+
+    if not zdim_dirs:
+        return None
+
+    # Build the embedding dict
+    embedding = {field: {} for field in _EMBEDDING_FIELDS}
+    for zdim in sorted(zdim_dirs):
+        zdim_dir = zdim_dirs[zdim]
+        for field in _EMBEDDING_FIELDS:
+            npy_path = os.path.join(zdim_dir, f"{field}.npy")
+            if os.path.isfile(npy_path):
+                embedding[field][zdim] = np.load(npy_path)
+
+    logger.info("Loaded embeddings from per-zdim directories: zdims=%s", sorted(zdim_dirs))
+    return embedding
 
 
 def write_metadata_json(paths, result):
@@ -708,8 +795,14 @@ class PipelineOutput:
         self.version = str(self.params['version']) if 'version' in self.params else '0'
 
     def _ensure_embedding_raw_loaded(self):
-        if self.embedding is None:
-            self.embedding = utils.pickle_load(self.paths.embeddings)
+        if self.embedding is not None:
+            return
+        # Try new per-zdim .npy format first
+        self.embedding = _load_embeddings_per_zdim(self.paths)
+        if self.embedding is not None:
+            return
+        # Fall back to legacy monolithic embeddings.pkl
+        self.embedding = utils.pickle_load(self.paths.embeddings)
 
     def _get_input_args(self):
         if not hasattr(self.params, "get") or "input_args" not in self.params:

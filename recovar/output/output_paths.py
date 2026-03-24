@@ -102,7 +102,12 @@ class ResultPaths:
 
     @property
     def embeddings(self):
+        """Legacy path for monolithic embeddings.pkl (backward compat)."""
         return os.path.join(self.model_dir, EMBEDDINGS_FILE)
+
+    def embedding_zdim_dir(self, zdim):
+        """Per-zdim embedding directory, e.g. ``model/zdim_4/``."""
+        return os.path.join(self.model_dir, f"zdim_{zdim}")
 
     @property
     def covariance_cols(self):
