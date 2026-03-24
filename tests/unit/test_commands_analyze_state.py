@@ -36,31 +36,6 @@ class _PayloadEmbeddingAccessMixin:
         return self._payload[entry][key]
 
 
-def test_get_halfset_order_prefers_local_image_indices():
-    class _Dataset:
-        def halfset_local_image_indices(self, half_id):
-            return np.array([2, 0], dtype=np.int32) if half_id == 0 else np.array([3, 1], dtype=np.int32)
-
-    order = compute_state_cmd._get_halfset_order(_Dataset(), 4)
-    np.testing.assert_array_equal(order, np.array([2, 0, 3, 1], dtype=np.int32))
-
-
-def test_get_halfset_order_falls_back_to_halfset_indices():
-    dataset = SimpleNamespace(
-        halfset_indices=[
-            np.array([1, 3], dtype=np.int32),
-            np.array([0, 2], dtype=np.int32),
-        ]
-    )
-    order = compute_state_cmd._get_halfset_order(dataset, 4)
-    np.testing.assert_array_equal(order, np.array([1, 3, 0, 2], dtype=np.int32))
-
-
-def test_get_halfset_order_falls_back_to_identity_for_minimal_dataset():
-    order = compute_state_cmd._get_halfset_order(["dataset_obj"], 3)
-    np.testing.assert_array_equal(order, np.array([0, 1, 2], dtype=np.int32))
-
-
 def test_pick_pairs_returns_requested_number_and_valid_indices():
     centers = np.array(
         [
@@ -131,7 +106,7 @@ def test_analyze_reads_particles_halfsets_once(monkeypatch, tmp_path):
                 "latent_precision": {2: cov2},
                 "dataset": ["cryo0"],
                 "contrasts": {2: np.ones(n_images, dtype=np.float32)},
-                "particles_halfsets": np.array([0, 1, 0, 1, 0, 1, 0, 1], dtype=np.int32),
+                "particles_halfsets": [np.array([0, 2, 4, 6], dtype=np.int32), np.array([1, 3, 5, 7], dtype=np.int32)],
             }
 
         def get(self, key):
@@ -202,7 +177,7 @@ def test_analyze_runs_centers_and_trajectories_with_density(monkeypatch, tmp_pat
         "dataset": ["cryo0"],
         "lazy_dataset": ["lazy_cryo0"],
         "contrasts": {3: np.ones(n_images, dtype=np.float32)},
-        "particles_halfsets": np.zeros(n_images, dtype=np.int32),
+        "particles_halfsets": [np.array([0, 2, 4], dtype=np.int32), np.array([1, 3, 5], dtype=np.int32)],
         "noise_var_used": np.ones(8, dtype=np.float32),
         "volume_mask": np.ones((8, 8, 8), dtype=np.float32),
     }
@@ -1846,9 +1821,8 @@ def test_compute_state_builds_explicit_halfsets_for_reweighting(monkeypatch, tmp
 
     captured = {}
 
-    def _capture(cryos, *_args, **kwargs):
-        captured["cryos"] = cryos
-        captured["halfset_datasets"] = kwargs.get("halfset_datasets")
+    def _capture(dataset, *_args, **kwargs):
+        captured["dataset"] = dataset
 
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", _capture)
 
@@ -1874,6 +1848,6 @@ def test_compute_state_builds_explicit_halfsets_for_reweighting(monkeypatch, tmp
 
     compute_state_cmd.compute_state(args)
 
-    assert captured["cryos"] is dataset_obj
-    assert captured["halfset_datasets"] == ("half0", "half1")
-    assert dataset_obj.materialize_calls == [(True, False)]
+    # compute_state passes the dataset directly; halfsets are obtained
+    # lazily via dataset.get_halfset(k) downstream.
+    assert captured["dataset"] is dataset_obj

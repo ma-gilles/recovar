@@ -78,7 +78,7 @@ def make_volumes_kernel_estimate_from_results(latent_point, results, ndim, cryos
     
 
 @nvtx.annotate("make_volumes_kernel_estimate_local", color="yellow")
-def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_folder, ndim, bins, B_factor, tau = None, n_min_particles = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola", halfset_datasets = None ):
+def make_volumes_kernel_estimate_local(heterogeneity_distances, dataset, output_folder, ndim, bins, B_factor, tau = None, n_min_particles = 50, metric_used = "locshellmost_likely", upsampling_for_ests = 1, use_mask_ests = False, grid_correct_ests = False, locres_sampling = 25, locres_maskrad = None, locres_edgwidth = None, kernel_rad = 4, save_all_estimates = False, heterogeneity_kernel = "parabola"):
     """Reconstruct volumes along a heterogeneity path using kernel regression.
 
     For each bin along the heterogeneity axis, selects nearby images
@@ -87,8 +87,9 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
     Args:
         heterogeneity_distances: Per-half-set log-likelihood distances,
-            list of two arrays each of shape ``(n_images,)``.
-        cryos: Half-set datasets (``CryoEMDataset`` with ``halfset_indices``).
+            list of two arrays each of shape ``(n_images_half,)``.
+        dataset: ``CryoEMDataset`` with ``halfset_indices`` set.
+            Halfset datasets are obtained via ``dataset.get_halfset(k)``.
         output_folder: Directory for output MRC files.
         ndim: Latent dimensionality (``-1`` for automatic).
         bins: Number of bins (int) or explicit bin edges (array).
@@ -105,13 +106,11 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         kernel_rad: Radius of the heterogeneity kernel.
         save_all_estimates: Save all intermediate estimates.
         heterogeneity_kernel: Kernel shape (``'parabola'`` or ``'flat'``).
-        halfset_datasets: Optional pre-materialized half-set datasets. When
-            provided, avoids rematerializing the split datasets internally.
     """
-    ds = cryos
+    ds = dataset
 
     if isinstance(bins, int):
-        logger.warning("Picking bins based on number of particles only. n_min_particles = %s", n_min_particles) 
+        logger.warning("Picking bins based on number of particles only. n_min_particles = %s", n_min_particles)
         heterogeneity_bins = pick_heterogeneity_bins2(-1, heterogeneity_distances[1], 0.5, n_min_particles, n_bins = bins)
     else:
         heterogeneity_bins = bins
@@ -120,14 +119,11 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     n_images_per_bin = [ int(np.sum(heterogeneity_distances[0] < b) + np.sum(heterogeneity_distances[1] < b)) for b in heterogeneity_bins ]
     logger.info("Particles per bin: %s", n_images_per_bin)
 
-    if halfset_datasets is None:
-        halfset_datasets = ds.materialize_halfset_datasets()
-
     estimates = [None, None]
     lhs, rhs = [None, None], [None, None]
     cross_validation_estimators = [None, None]
     for k in range(2):
-        half_ds = halfset_datasets[k]
+        half_ds = ds.get_halfset(k)
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
             half_ds, None, heterogeneity_distances[k], heterogeneity_bins, tau=tau,
             grid_correct=grid_correct_ests, use_spherical_mask=use_mask_ests,
@@ -167,7 +163,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
 
     for k in range(2):
         logger.info("Computing estimates start")
-        half_ds = halfset_datasets[k]
+        half_ds = ds.get_halfset(k)
         estimates[k] = adaptive_kernel_discretization.even_less_naive_heterogeneity_scheme_relion_style(
             half_ds, None, heterogeneity_distances[k], heterogeneity_bins, tau=None,
             grid_correct=True, use_spherical_mask=True, heterogeneity_kernel=heterogeneity_kernel,

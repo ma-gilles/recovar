@@ -134,6 +134,8 @@ class CryoEMDataset:
         'halfset_indices',
         # Loader paths (for reloading independent half-datasets)
         'particles_file', 'poses_file', 'ctf_file', 'datadir',
+        # Cached halfset datasets (invalidated on mutation)
+        '_halfset_cache',
     )
 
     def __init__(
@@ -254,6 +256,7 @@ class CryoEMDataset:
         self.poses_file = None
         self.ctf_file = None
         self.datadir = None
+        self._halfset_cache = None
 
     # --- Metadata access (public API) ---
 
@@ -716,19 +719,19 @@ class CryoEMDataset:
         return [self.halfset_original_group_indices(halfset_id) for halfset_id in range(2)]
 
     def split_halfset_array(self, arr, per_particle=False):
-        """Split a concatenated halfset-ordered array into [half0, half1].
+        """Split a dataset-local-ordered array by halfset membership.
 
         Parameters
         ----------
         per_particle : bool
-            If True **and** this is a tilt-series dataset, split at the
-            particle boundary instead of the image boundary.
+            If True **and** this is a tilt-series dataset, split by
+            particle/group indices instead of image indices.
         """
         if per_particle and self.tilt_series_flag:
-            n0 = len(self.halfset_original_group_indices(0))
+            indices = [self.halfset_local_group_indices(k) for k in range(2)]
         else:
-            n0 = self.n_halfset_images(0)
-        return [arr[:n0], arr[n0:]]
+            indices = [self.halfset_local_image_indices(k) for k in range(2)]
+        return [arr[indices[0]], arr[indices[1]]]
 
     def _resolve_iteration_subset(self, *, halfset_id=None, indices=None, by_image=True):
         """Resolve halfset or subset selection for iteration."""
@@ -835,6 +838,26 @@ class CryoEMDataset:
             return _prefetch_iter(inner)
         return inner
 
+    # --- Halfset cache ---
+
+    def _invalidate_halfset_cache(self):
+        """Invalidate cached halfset datasets after mutable state changes."""
+        self._halfset_cache = None
+
+    def get_halfset(self, halfset_id: int) -> 'CryoEMDataset':
+        """Return a halfset dataset, lazily materializing and caching.
+
+        The cache is invalidated automatically when mutable state
+        (contrasts, noise, poses, CTF) changes on this dataset.
+        """
+        cache = getattr(self, '_halfset_cache', None)
+        if cache is None:
+            cache = self.materialize_halfset_datasets()
+            self._halfset_cache = cache
+        return cache[halfset_id]
+
+    # --- Mutable state setters (invalidate halfset cache) ---
+
     def set_contrasts(self, contrasts: NDArray):
         """Multiply per-image CTF contrast column by *contrasts*.
 
@@ -844,11 +867,11 @@ class CryoEMDataset:
         each particle's tilt images share a single contrast value.
         """
         if self.tilt_series_flag and contrasts.shape[0] != self.n_images:
-            # Per-particle contrast in tilt series
             for i, p in enumerate(self.tilt_particles):
                 self.CTF_params[p, core.CTFParamIndex.CONTRAST] *= contrasts[i]
         else:
             self.CTF_params[:, core.CTFParamIndex.CONTRAST] *= contrasts
+        self._invalidate_halfset_cache()
 
     def set_noise(self, noise_variance):
         """Set the radial noise model for this dataset.
@@ -861,6 +884,7 @@ class CryoEMDataset:
             self.set_variable_radial_noise_model(noise_variance)
         else:
             self.set_radial_noise_model(noise_variance)
+        self._invalidate_halfset_cache()
 
 
 

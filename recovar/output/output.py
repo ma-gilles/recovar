@@ -596,29 +596,17 @@ def plot_umap(output_folder, zs, centers):
 
 
 
-def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state", halfset_datasets=None):
-    # cryos: CryoEMDataset (with halfset_indices)
+def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
     """Compute reweighted volume estimates and save with RELION-style organization.
 
-    Output structure (flat primary volumes + diagnostics subdirectory)::
-
-        output_folder/
-            {vol_prefix}001.mrc              # primary filtered volume
-            {vol_prefix}001_half1_unfil.mrc   # half-map 1
-            {vol_prefix}001_half2_unfil.mrc   # half-map 2
-            {vol_prefix}002.mrc
-            ...
-            diagnostics/
-                {vol_prefix}001/              # per-volume diagnostics
-                    local_resolution.mrc
-                    filtered_noB.mrc
-                    unfil.mrc
-                    params.pkl
-                    latent_coords.txt
-                    ...
-            latent_coords.txt                 # all latent coordinates
+    Parameters
+    ----------
+    dataset : CryoEMDataset
+        Dataset with ``halfset_indices`` set.  Halfset datasets are
+        obtained lazily via ``dataset.get_halfset(k)``.
     """
-    ds = cryos
+    from recovar.output.output_paths import AnalysisPaths
+    ds = dataset
 
     if n_min_particles is None:
         n_min_particles = 100
@@ -626,8 +614,6 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
     mkdir_safe(output_folder)
     from recovar.heterogeneity import heterogeneity_volume, latent_density
     n_vols = path_subsampled.shape[0]
-    if halfset_datasets is None:
-        halfset_datasets = ds.materialize_halfset_datasets()
 
     for k in range(n_vols):
         vol_idx = k  # 0-indexed
@@ -657,7 +643,7 @@ def compute_and_save_reweighted(cryos, path_subsampled, zs, cov_zs,  output_fold
 
         locres_maskrad = ds.grid_size * ds.voxel_size / maskrad_fraction
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
-        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely', halfset_datasets=halfset_datasets)
+        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
 
         primary_stem = _promote_reweighted_volume_outputs(diag_dir, output_folder, vol_prefix, vol_idx)
         logger.info("Done with volume %d: %s.mrc", vol_idx, primary_stem)
@@ -783,6 +769,13 @@ class PipelineOutput:
         return key in self.get_embedding_keys(entry)
 
     def get_embedding_component(self, entry, key):
+        """Return one embedding array in **dataset-local order**.
+
+        The stored embeddings are NaN-padded in original-file space.
+        This method selects only computed entries (identified by
+        ``particles_halfsets``) and returns them in sorted original-index
+        order, which matches the unified dataset's local ordering.
+        """
         if self.embedding_loaded:
             return self.embedding[entry][key]
         cache_key = (entry, key)
@@ -797,9 +790,9 @@ class PipelineOutput:
         if self.version != '0':
             particle_halfsets, image_halfsets = self._get_embedding_halfsets()
             if entry.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
-                values = values[image_halfsets]
+                values = values[np.sort(image_halfsets)]
             else:
-                values = values[particle_halfsets]
+                values = values[np.sort(particle_halfsets)]
         self._embedding_key_cache[cache_key] = values
         return values
 
@@ -811,20 +804,27 @@ class PipelineOutput:
         return np.asarray(self.embedding[entry][key])
 
     def load_embedding(self):
+        """Load all embedding arrays into dataset-local order.
+
+        Selects only computed entries (no NaN) and sorts by original
+        index, matching the unified dataset's local ordering.
+        """
         self._ensure_embedding_raw_loaded()
 
         if self.version != '0':
             halfsets, image_halfsets = self._get_embedding_halfsets()
+            sorted_halfsets = np.sort(halfsets)
+            sorted_image_halfsets = np.sort(image_halfsets)
 
             for entry in self.embedding:
                 for key in self.embedding[entry]:
                     if entry.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
-                        self.embedding[entry][key] = self.embedding[entry][key][image_halfsets]
+                        self.embedding[entry][key] = self.embedding[entry][key][sorted_image_halfsets]
                     else:
-                        self.embedding[entry][key] = self.embedding[entry][key][halfsets]
+                        self.embedding[entry][key] = self.embedding[entry][key][sorted_halfsets]
         self.embedding_loaded = True
         self._embedding_key_cache = {}
-        return 
+        return
 
     def _list_saved_eigenvector_indices(self):
         vols_dir = self.paths.volumes_dir

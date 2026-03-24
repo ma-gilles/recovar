@@ -89,42 +89,26 @@ def _load_latent_points(latent_points_path):
     return target_zs
 
 
-def _build_reweighted_halfset_datasets(dataset, *, lazy):
-    """Build direct halfset datasets for the reweighted-volume hot path."""
-    if not hasattr(dataset, "materialize_halfset_datasets"):
-        return None
-    if getattr(dataset, "halfset_indices", None) is None:
-        return None
-    can_reload = getattr(dataset, "can_reload_from_original_images", None)
-    if can_reload is None or not can_reload():
-        return None
-    return dataset.materialize_halfset_datasets(independent=True, lazy=lazy)
+def _get_embedding_keys(pipeline_output, coords_entry):
+    """Return available z dimensions for the requested embedding entry."""
+    if hasattr(pipeline_output, "get_embedding_keys"):
+        return pipeline_output.get_embedding_keys(coords_entry)
+    return list(pipeline_output.get(coords_entry).keys())
 
 
-def _get_halfset_order(dataset, n_embeddings):
-    """Return the embedding halfset concatenation order for a dataset."""
-    if hasattr(dataset, "halfset_local_image_indices"):
-        halfset_order = np.concatenate(
-            [
-                np.asarray(dataset.halfset_local_image_indices(0), dtype=np.int32),
-                np.asarray(dataset.halfset_local_image_indices(1), dtype=np.int32),
-            ]
+def _get_embedding_components(pipeline_output, zdim, coords_entry, precision_entry, contrast_entry):
+    """Fetch embedding arrays for a specific zdim with API fallback support."""
+    if hasattr(pipeline_output, "get_embedding_component"):
+        return (
+            pipeline_output.get_embedding_component(contrast_entry, zdim),
+            pipeline_output.get_embedding_component(coords_entry, zdim),
+            pipeline_output.get_embedding_component(precision_entry, zdim),
         )
-    elif getattr(dataset, "halfset_indices", None) is not None:
-        halfset_order = np.concatenate(
-            [np.asarray(dataset.halfset_indices[0]), np.asarray(dataset.halfset_indices[1])]
-        ).astype(np.int32, copy=False)
-    else:
-        return np.arange(n_embeddings, dtype=np.int32)
-
-    if halfset_order.shape[0] != n_embeddings:
-        logger.warning(
-            "Halfset order length %s does not match embedding length %s; using identity order.",
-            halfset_order.shape[0],
-            n_embeddings,
-        )
-        return np.arange(n_embeddings, dtype=np.int32)
-    return halfset_order
+    return (
+        pipeline_output.get(contrast_entry)[zdim],
+        pipeline_output.get(coords_entry)[zdim],
+        pipeline_output.get(precision_entry)[zdim],
+    )
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -217,16 +201,11 @@ def compute_state(args):
     zs_key = np.asarray(zs_key, dtype=np.float32)
     cov_zs_key = np.asarray(cov_zs_key, dtype=np.float32)
 
-    cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
+    dataset = po.get('lazy_dataset') if lazy else po.get('dataset')
 
-    # Embeddings are loaded in halfset order (half-0 images first, half-1 second),
-    # but the dataset stores CTF parameters in original image order. Scatter
-    # contrasts from halfset order to original order before applying them.
-    halfset_order = _get_halfset_order(cryos, contrasts_key.shape[0])
-    contrasts_original_order = np.empty_like(contrasts_key)
-    contrasts_original_order[halfset_order] = contrasts_key
-    embedding.set_contrasts_in_cryos(cryos, contrasts_original_order)
-    reweighted_halfset_datasets = _build_reweighted_halfset_datasets(cryos, lazy=lazy)
+    # Embeddings are in dataset-local order (sorted original indices),
+    # matching the unified dataset's CTF_params ordering.
+    embedding.set_contrasts_in_cryos(dataset, contrasts_key)
     zs = zs_key
     cov_zs = cov_zs_key
     o.mkdir_safe(output_folder)
@@ -242,14 +221,13 @@ def compute_state(args):
             logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
 
     o.compute_and_save_reweighted(
-        cryos, target_zs, zs, cov_zs, output_folder, bfactor,
+        dataset, target_zs, zs, cov_zs, output_folder, bfactor,
         n_bins=n_bins, maskrad_fraction=maskrad_fraction,
         n_min_particles=n_min_particles, save_all_estimates=save_all_estimates,
         apply_global_filtering=apply_global_filtering,
         fsc_mask=fsc_mask,
         fsc_mask_radius=fsc_mask_radius,
         fsc_mask_edgewidth=fsc_mask_edgewidth,
-        halfset_datasets=reweighted_halfset_datasets,
     )
 
 def main():
