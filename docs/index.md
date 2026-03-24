@@ -61,7 +61,7 @@ RECOVAR is a software tool for analyzing conformational heterogeneity in cryo-EM
 
 ## How it works
 
-RECOVAR uses principal component analysis of the 3D covariance to find a low-dimensional latent space describing the heterogeneity. It then uses kernel regression to generate volumes at any point in this space. See the [paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122) and [recorded talk](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s) for details.
+RECOVAR uses principal component analysis of the 3D covariance to find a low-dimensional latent space describing the heterogeneity. It then uses kernel regression to generate volumes at any point in this space. See the [paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122) and [recorded talk](https://www.youtube.com/watch?v=7ycfzGcWOVI) for details.
 
 ## Typical workflow
 

@@ -2,7 +2,7 @@
 
 RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. It reconstructs high-resolution volumes, estimates conformational density and low free-energy motions, and automatically identifies image subsets associated with specific volume features.
 
-**[Full Documentation](https://ma-gilles.github.io/recovar)** | **[Paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122)** | **[Talk](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)**
+**[Full Documentation](https://ma-gilles.github.io/recovar)** | **[Paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122)** | **[Talk](https://www.youtube.com/watch?v=7ycfzGcWOVI)**
 
 ## Key features
 
@@ -91,7 +91,7 @@ recovar pipeline particles.star -o output --mask mask.mrc --downsample 128
 recovar analyze output --zdim=10
 ```
 
-Or use the interactive wizard: `recovar quickstart`
+Or use the web GUI: `recovar gui`
 
 See the [quick start guide](https://ma-gilles.github.io/recovar/getting-started/quickstart/) for more examples.
 
