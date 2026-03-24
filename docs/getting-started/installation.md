@@ -31,22 +31,16 @@ cd recovar
 conda create --name recovar_dev python=3.11 -y
 conda activate recovar_dev
 
-# Isolate installs to this env
-export PYTHONNOUSERSITE=1
-unset PIP_USER
-
 # Install dependencies
-python -m pip install -U pip setuptools wheel
-python -m pip install git+https://github.com/scikit-fmm/scikit-fmm.git
-python -m pip install "jax[cuda12]"==0.9.0.1    # or "jax[cpu]" for CPU-only
-python -m pip install nvtx
+pip install git+https://github.com/scikit-fmm/scikit-fmm.git
+pip install "jax[cuda12]"==0.9.0.1    # or "jax[cpu]" for CPU-only
 
 # Install recovar in editable mode
-python -m pip install -e ".[dev]"
+pip install -e ".[dev]"
 
 # Verify
-python -m pip check
-python -c "import jax, matplotlib, nvtx; print('env ok')"
+python -c "import jax; print(jax.devices())"
+recovar run_test_dataset
 ```
 
 ## CPU-only install
@@ -68,18 +62,27 @@ To use RECOVAR from Jupyter notebooks:
 
 ```bash
 conda activate recovar
+pip install ipykernel
 python -m ipykernel install --user --name=recovar
 ```
 
 ## Pixi (alternative)
 
-If you use [pixi](https://prefix.dev/):
+If you use [pixi](https://prefix.dev/), a `pixi.toml` is included in the repo. This gives you a fully reproducible environment with pinned dependencies:
 
 ```bash
 git clone https://github.com/ma-gilles/recovar.git
 cd recovar
 pixi install
-pixi run test
+pixi run install-recovar
+pixi run smoke-import-recovar
+```
+
+Run tests with pixi:
+
+```bash
+pixi run test-fast        # Unit tests (no GPU)
+pixi run test-full        # Full suite (requires GPU)
 ```
 
 ## Docker

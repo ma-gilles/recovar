@@ -1,13 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=recovar-10180
-#SBATCH --account=amits
-#SBATCH --partition=cryoem
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=500G
 #SBATCH --time=24:00:00
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/benchmark/examples/10180_%j.out
 
 # RECOVAR Example: EMPIAR-10180 — Pre-catalytic Spliceosome (327,490 particles)
 #
@@ -16,25 +13,25 @@
 #   2. Analyze → k-means clustering + UMAP
 #   3. Estimate conformational density
 #   4. Compute trajectory through density landscape
+#
+# Adapt these variables for your system:
+#   PYTHON  — path to python with recovar installed
+#   DATA    — directory containing particles, poses, CTF, and mask files
+#   OUT     — where to write pipeline output
 
 set -euo pipefail
 
-export PYTHONNOUSERSITE=1
-PYTHON=/home/mg6942/.conda/envs/recovar_dev_2/bin/python
-REPO=/scratch/gpfs/GILLES/mg6942/heterogeneity_dev-2
-DATA=/scratch/gpfs/AMITS/mg6942/cryodrgn_empiar/empiar10180/inputs
-OUT=/scratch/gpfs/GILLES/mg6942/benchmark/examples/10180
-
-# Poses/CTF from recovar assets
-POSES=$REPO/recovar/assets/poses_10180.pkl
-CTF=$REPO/recovar/assets/ctf_10180.pkl
+# ── Configure these for your system ──────────────────────────────
+PYTHON=/path/to/your/python          # Python with recovar installed
+DATA=/path/to/particle/data          # Where your input files are
+OUT=/path/to/output/10180            # Where to write results
+# ─────────────────────────────────────────────────────────────────
 
 cd "$DATA"
 
 echo "============================================================"
 echo "  RECOVAR Example: EMPIAR-10180 — Pre-catalytic Spliceosome"
 echo "============================================================"
-echo "Commit: $(cd $REPO && git log --oneline -1)"
 echo "Start:  $(date)"
 echo "Host:   $(hostname)"
 echo "GPU:    $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'unknown')"
@@ -48,9 +45,9 @@ echo
 echo ">>> Step 1: Running pipeline..."
 rm -rf "$OUT"
 $PYTHON -m recovar.command_line pipeline particles.256.mrcs \
-    --poses "$POSES" --ctf "$CTF" \
-    --mask 10180_full_mask.mrc \
-    --focus-mask recovar_masks/mask_10180.mrc \
+    --poses poses.pkl --ctf ctf.pkl \
+    --mask mask.mrc \
+    --focus-mask focus_mask.mrc \
     --correct-contrast \
     --ind filtered.ind.pkl \
     -o "$OUT"
@@ -79,8 +76,6 @@ echo
 # Step 4: Compute trajectory through density landscape
 # ──────────────────────────────────────────────────────────────────
 echo ">>> Step 4: Computing trajectory..."
-# Use the deconvolved density at the "knee" regularization level
-# and endpoints from the two most distant k-means centers (0 and last)
 $PYTHON -m recovar.command_line compute_trajectory "$OUT" \
     -o "$OUT/trajectory_density" \
     --zdim=4 \

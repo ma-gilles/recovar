@@ -10,10 +10,9 @@ step degrades, the test pinpoints exactly which function is responsible,
 rather than only showing an end-to-end metric drop.
 
 Baseline data:
-    Pre-computed by scripts/generate_function_baselines.py using ~/recovar
-    (published recovar at ma-gilles/recovar.git).  Intermediates are stored
-    at FUNCTION_BASELINE_DIR (default: /scratch/gpfs/GILLES/mg6942/
-    pdb_baseline_snr01/function_baselines/) and per-function scores in
+    Pre-computed by scripts/generate_function_baselines.py using the published
+    recovar (ma-gilles/recovar.git).  Intermediates are stored at
+    FUNCTION_BASELINE_DIR and per-function scores in
     tests/baselines/pipeline_functions_isolated/pdb_5nrl/per_function_scores.json.
 
 Environment variables:
@@ -49,16 +48,12 @@ pytestmark = [
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
-_DEFAULT_FUNCTION_BASELINE_DIR = (
-    "/scratch/gpfs/GILLES/mg6942/pdb_baseline_snr01/function_baselines"
-)
+_DEFAULT_FUNCTION_BASELINE_DIR = None  # must be set via FUNCTION_BASELINE_DIR env var
 _DEFAULT_FUNCTION_BASELINE_SCORES = (
     _REPO_ROOT / "tests" / "baselines" / "pipeline_functions_isolated"
     / "pdb_5nrl" / "per_function_scores.json"
 )
-_DEFAULT_DATASET_DIR = (
-    "/scratch/gpfs/GILLES/mg6942/pdb_baseline_snr01/test_dataset"
-)
+_DEFAULT_DATASET_DIR = None  # must be set via FUNCTION_TEST_DATASET_DIR env var
 
 
 # ---------------------------------------------------------------------------

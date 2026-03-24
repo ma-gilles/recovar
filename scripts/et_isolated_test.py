@@ -21,7 +21,7 @@ def main():
 
     if args.old:
         import sys
-        sys.path.insert(0, "/home/mg6942/recovar")
+        sys.path.insert(0, os.path.expanduser("~/recovar"))
 
     import recovar
     logger.info("recovar: %s", recovar.__file__)

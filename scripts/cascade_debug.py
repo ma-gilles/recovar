@@ -12,7 +12,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dataset-dir", default=None,
                     help="Override dataset dir (default: PDB baseline or FUNCTION_TEST_DATASET_DIR)")
-    ap.add_argument("--baseline-dir", default="/scratch/gpfs/GILLES/mg6942/pdb_baseline_snr01/function_baselines_gtmask")
+    ap.add_argument("--baseline-dir", required=True,
+                    help="Directory with baseline intermediates")
     ap.add_argument("--swap-after-step", type=int, default=0,
                     help="Use OLD intermediates for steps 1..N, NEW code for N+1..end. "
                          "0=full cascade (all NEW). 6=all OLD inputs to embedding.")
@@ -29,8 +30,9 @@ def main():
 
     BASELINE_DIR = cli_args.baseline_dir
     INTER_DIR = os.path.join(BASELINE_DIR, "intermediates")
-    DATASET_DIR = cli_args.dataset_dir or os.environ.get("FUNCTION_TEST_DATASET_DIR",
-                                  "/scratch/gpfs/GILLES/mg6942/pdb_baseline_snr01/test_dataset")
+    DATASET_DIR = cli_args.dataset_dir or os.environ.get("FUNCTION_TEST_DATASET_DIR")
+    if not DATASET_DIR:
+        raise ValueError("Must provide --dataset-dir or set FUNCTION_TEST_DATASET_DIR")
     SCORES_PATH = os.path.join(BASELINE_DIR, "per_function_scores.json")
 
     with open(SCORES_PATH) as f:

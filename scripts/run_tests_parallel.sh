@@ -15,7 +15,7 @@ set -euo pipefail
 
 MODE="${1:-full}"
 WORKDIR="$(cd "$(dirname "$0")/.." && pwd)"
-SLURMO_DIR="/scratch/gpfs/GILLES/mg6942/slurmo"
+SLURMO_DIR="${SLURMO_DIR:-${WORKDIR}/logs}"
 RESULTS_DIR="${WORKDIR}/.test_results"
 mkdir -p "$SLURMO_DIR" "$RESULTS_DIR"
 
@@ -139,9 +139,9 @@ cd ${WORKDIR}
 
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/slurm_\${SLURM_JOB_ID}"
-export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/slurm_\${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/slurm_\${SLURM_JOB_ID}"
+export TMPDIR="${WORKDIR}/.tmp/slurm_\${SLURM_JOB_ID}"
+export PIXI_HOME="${WORKDIR}/.tmp/pixi_home_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="${WORKDIR}/.tmp/rattler_cache_\${SLURM_JOB_ID}"
 mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
@@ -189,9 +189,9 @@ set -euo pipefail
 cd ${WORKDIR}
 
 export PYTHONNOUSERSITE=1
-export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/slurm_\${SLURM_JOB_ID}"
-export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/slurm_\${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/slurm_\${SLURM_JOB_ID}"
+export TMPDIR="${WORKDIR}/.tmp/slurm_\${SLURM_JOB_ID}"
+export PIXI_HOME="${WORKDIR}/.tmp/pixi_home_\${SLURM_JOB_ID}"
+export RATTLER_CACHE_DIR="${WORKDIR}/.tmp/rattler_cache_\${SLURM_JOB_ID}"
 mkdir -p "\$TMPDIR" "\$PIXI_HOME" "\$RATTLER_CACHE_DIR"
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 

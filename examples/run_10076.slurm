@@ -1,13 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=recovar-10076
-#SBATCH --account=amits
-#SBATCH --partition=cryoem
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=500G
 #SBATCH --time=24:00:00
-#SBATCH --output=/scratch/gpfs/GILLES/mg6942/benchmark/examples/10076_%j.out
 
 # RECOVAR Example: EMPIAR-10076 — Bacterial 50S Ribosome (131,899 particles)
 #
@@ -17,22 +14,26 @@
 #   3. Extract subset: exclude outlier cluster, keep main assembly states
 #   4. Re-run pipeline on the cleaned subset
 #   5. Re-analyze the subset
+#
+# Adapt these variables for your system:
+#   PYTHON  — path to python with recovar installed
+#   DATA    — directory containing particles, poses, CTF, and mask files
+#   OUT     — where to write pipeline output
 
 set -euo pipefail
 
-export PYTHONNOUSERSITE=1
-PYTHON=/home/mg6942/.conda/envs/recovar_dev_2/bin/python
-REPO=/scratch/gpfs/GILLES/mg6942/heterogeneity_dev-2
-DATA=/scratch/gpfs/AMITS/mg6942/cryodrgn_empiar/empiar10076/inputs
-OUT=/scratch/gpfs/GILLES/mg6942/benchmark/examples/10076
-OUT_SUBSET=/scratch/gpfs/GILLES/mg6942/benchmark/examples/10076_subset
+# ── Configure these for your system ──────────────────────────────
+PYTHON=/path/to/your/python          # Python with recovar installed
+DATA=/path/to/particle/data          # Where your input files are
+OUT=/path/to/output/10076            # Where to write results
+OUT_SUBSET=${OUT}_subset
+# ─────────────────────────────────────────────────────────────────
 
 cd "$DATA"
 
 echo "============================================================"
 echo "  RECOVAR Example: EMPIAR-10076 — 50S Ribosome"
 echo "============================================================"
-echo "Commit: $(cd $REPO && git log --oneline -1)"
 echo "Start:  $(date)"
 echo "Host:   $(hostname)"
 echo "GPU:    $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null || echo 'unknown')"
@@ -47,7 +48,7 @@ echo ">>> Step 1: Running pipeline (no contrast correction)..."
 rm -rf "$OUT"
 $PYTHON -m recovar.command_line pipeline particles.256.mrcs \
     --poses poses.pkl --ctf ctf.pkl \
-    --mask recovar_masks/mask_10076.mrc \
+    --mask mask.mrc \
     -o "$OUT"
 echo ">>> Pipeline finished: $(date)"
 echo
@@ -79,7 +80,7 @@ echo
 echo ">>> Step 4: Re-running pipeline on subset..."
 $PYTHON -m recovar.command_line pipeline particles.256.mrcs \
     --poses poses.pkl --ctf ctf.pkl \
-    --mask recovar_masks/mask_10076.mrc \
+    --mask mask.mrc \
     --ind "$OUT_SUBSET/subset_ind.pkl" \
     -o "$OUT_SUBSET"
 echo ">>> Subset pipeline finished: $(date)"

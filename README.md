@@ -12,82 +12,83 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. I
 - **Conformational density** — estimate free energy landscapes
 - **Focus masks** — targeted heterogeneity analysis
 - **Cryo-ET support** — tilt-series data with focus masks
+- **Transparent volume generation** — kernel regression produces no hallucinations
+- **Web GUI** — browser-based interface for launching jobs, exploring latent spaces, and viewing 3D volumes
 
-## Installation (Only Supported Workflow)
+## Installation
 
-This repository supports exactly one setup flow: isolated clone + isolated pixi env + editable install bound to that clone.
+RECOVAR requires a GPU with CUDA support and Python 3.11.
 
-Direct `conda`/`pip` installs are not supported for `heterogeneity_dev` development and will cause cross-repo import drift.
-
-### Strict setup (copy/paste)
+### Quick install (pip)
 
 ```bash
-set -euo pipefail
-
-# 1) Unique clone per run/agent (prevents one checkout overwriting another)
-AGENT_ID="agent_$(date +%Y%m%d_%H%M%S)_$RANDOM"
-WORKDIR="$HOME/myscratch/heterogeneity_dev_${AGENT_ID}"
-git clone git@github.com:ma-gilles/heterogeneity_dev.git "$WORKDIR"
-cd "$WORKDIR"
-test -z "$(git status --porcelain)"
-
-# 2) Block external python contamination
-unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
-export PYTHONNOUSERSITE=1
-
-# 3) Unique temp/cache roots per run (prevents cross-agent lock/cache collisions)
-export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/${AGENT_ID}"
-export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/${AGENT_ID}"
-export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/${AGENT_ID}"
-mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR"
-
-# 4) Build env, then bind recovar import to THIS checkout
-pixi install
-PIXI_PY="$(pixi run which python)"
-export PATH="$(dirname "$PIXI_PY"):$PATH"
-"$PIXI_PY" -m pip uninstall -y recovar || true
-"$PIXI_PY" -m pip install -e . --no-deps --no-build-isolation --ignore-installed
-
-# 5) Build CUDA extension with the same python used above
-PYTHON="$PIXI_PY" make -C recovar/cuda clean all
-
-# 6) Provenance gate (must pass before any test/run)
-"$PIXI_PY" - <<'PY'
-import pathlib, recovar, jax, sys
-repo = pathlib.Path.cwd().resolve()
-r = pathlib.Path(recovar.__file__).resolve()
-j = pathlib.Path(jax.__file__).resolve()
-print("python:", sys.executable)
-print("repo:", repo)
-print("recovar:", r)
-print("jax:", j)
-assert str(r).startswith(str(repo) + "/"), "WRONG recovar checkout"
-assert ".pixi/envs/default/" in str(j), "WRONG jax environment"
-print("ENV_OK")
-PY
+conda create --name recovar python=3.11 -y
+conda activate recovar
+pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cuda12]"==0.9.0.1 recovar
 ```
 
-Run commands only via `"$PIXI_PY" -m ...` or `pixi run ...` in this checkout.
+Verify:
+```bash
+recovar run_test_dataset
+```
 
-### Fast marching backend
+### Development install
 
-The editable install above also builds RECOVAR's optional native fast marching extension. Trajectory computations use this in-tree implementation, while a pure-Python fallback remains available for editable installs and unsupported platforms.
+For the latest version or contributing:
 
-- `RECOVAR_FORCE_PYTHON_FMM=1` forces the fallback implementation.
-- `RECOVAR_REQUIRE_NATIVE_FMM=1` makes import fail fast if the native extension is unavailable.
-- Released wheels can bundle the native extension for `pip install recovar`, but `heterogeneity_dev` development remains pixi-only as described above.
+```bash
+git clone https://github.com/ma-gilles/recovar.git
+cd recovar
+
+conda create --name recovar_dev python=3.11 -y
+conda activate recovar_dev
+
+pip install git+https://github.com/scikit-fmm/scikit-fmm.git
+pip install "jax[cuda12]"==0.9.0.1
+pip install -e ".[dev]"
+
+# Verify
+python -c "import jax; print(jax.devices())"
+recovar run_test_dataset
+```
+
+### CPU-only install
+
+For testing without a GPU (not practical for real datasets):
+
+```bash
+conda create --name recovar python=3.11 -y
+conda activate recovar
+pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cpu]"==0.9.0.1 recovar
+```
+
+### Pixi (alternative)
+
+If you use [pixi](https://prefix.dev/), a `pixi.toml` is provided:
+
+```bash
+git clone https://github.com/ma-gilles/recovar.git
+cd recovar
+pixi install
+pixi run install-recovar
+pixi run smoke-import-recovar
+```
+
+### Docker
+
+See the [Docker & Containers guide](https://ma-gilles.github.io/recovar/getting-started/docker/) for Docker and Apptainer/Singularity instructions.
 
 ## Quick start
 
 ```bash
 # Run the pipeline
-"$PIXI_PY" -m recovar.command_line pipeline particles.star -o output --mask mask.mrc
+recovar pipeline particles.star -o output --mask mask.mrc
 
 # With downsampling (auto pre-downsamples to disk)
-"$PIXI_PY" -m recovar.command_line pipeline particles.star -o output --mask mask.mrc --downsample 128
+recovar pipeline particles.star -o output --mask mask.mrc --downsample 128
 
 # Analyze results
-"$PIXI_PY" -m recovar.command_line analyze output --zdim=10
+recovar analyze output --zdim=10
 ```
 
 Or use the interactive wizard: `recovar quickstart`
@@ -98,40 +99,13 @@ See the [quick start guide](https://ma-gilles.github.io/recovar/getting-started/
 
 Full documentation is available at **[ma-gilles.github.io/recovar](https://ma-gilles.github.io/recovar)**:
 
+- [Installation](https://ma-gilles.github.io/recovar/getting-started/installation/) — pip, conda, pixi, Docker
 - [Input Data](https://ma-gilles.github.io/recovar/guide/input-data/) — supported formats, path fixing
-- [Downsampling](https://ma-gilles.github.io/recovar/guide/downsampling/) — when and how to downsample
 - [Running the Pipeline](https://ma-gilles.github.io/recovar/guide/pipeline/) — all options explained
 - [Analyzing Results](https://ma-gilles.github.io/recovar/guide/analysis/) — volumes, trajectories, UMAP
+- [Web GUI](https://ma-gilles.github.io/recovar/guide/gui/) — browser-based interface
 - [CLI Reference](https://ma-gilles.github.io/recovar/reference/cli/) — all commands and flags
 - [Troubleshooting](https://ma-gilles.github.io/recovar/troubleshooting/) — common issues and fixes
-
-## SLURM Usage (Strict)
-
-Inside every sbatch script, use the same isolation and provenance checks:
-
-```bash
-export PYTHONNOUSERSITE=1
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/${AGENT_ID}_${SLURM_JOB_ID}"
-export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/${AGENT_ID}_${SLURM_JOB_ID}"
-export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/${AGENT_ID}_${SLURM_JOB_ID}"
-mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR"
-
-cd "$WORKDIR"
-pixi install
-PIXI_PY="$(pixi run which python)"
-"$PIXI_PY" -m pip uninstall -y recovar || true
-"$PIXI_PY" -m pip install -e . --no-deps --no-build-isolation --ignore-installed
-PYTHON="$PIXI_PY" make -C recovar/cuda clean all
-
-"$PIXI_PY" - <<'PY'
-import pathlib, recovar, jax
-repo = pathlib.Path.cwd().resolve()
-assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo) + "/")
-assert ".pixi/envs/default/" in str(pathlib.Path(jax.__file__).resolve())
-print("ENV_OK")
-PY
-```
 
 ## Using the source code
 
@@ -153,6 +127,6 @@ If you use RECOVAR in your research, please cite:
 
 ## Contact
 
-Marc Aurèle Gilles — [gilles@princeton.edu](mailto:gilles@princeton.edu)
+Marc Aurele Gilles — [gilles@princeton.edu](mailto:gilles@princeton.edu)
 
 Issues and feature requests: [GitHub Issues](https://github.com/ma-gilles/recovar/issues)

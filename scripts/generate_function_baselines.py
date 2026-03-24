@@ -5,10 +5,10 @@ This script runs each pipeline function from ~/recovar (published recovar at
 ma-gilles/recovar.git) step-by-step on the shared PDB test dataset, saving
 intermediate results and per-function metrics.
 
-Usage (from ~/recovar conda env):
+Usage (from conda env with recovar installed):
     python scripts/generate_function_baselines.py \
-        --dataset-dir /scratch/gpfs/GILLES/mg6942/pdb_baseline_snr01/test_dataset \
-        --output-dir /scratch/gpfs/GILLES/mg6942/pdb_baseline_snr01/function_baselines
+        --dataset-dir /path/to/test_dataset \
+        --output-dir /path/to/function_baselines
 
 The script must be run with ~/recovar on PYTHONPATH (conda env 'recovar').
 """
@@ -44,10 +44,9 @@ def main():
     intermediates_dir = os.path.join(output_dir, "intermediates")
     os.makedirs(intermediates_dir, exist_ok=True)
 
-    # Verify we're using ~/recovar
+    # Verify recovar is importable
     import recovar
     recovar_path = os.path.abspath(recovar.__file__)
-    assert "/home/mg6942/recovar/" in recovar_path, f"WRONG recovar: {recovar_path}"
     logger.info("Using recovar at: %s", recovar_path)
 
     # Import ~/recovar modules
