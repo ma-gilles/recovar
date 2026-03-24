@@ -1,0 +1,6750 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Tools for cryo-EM heterogeneity analysis">
+      
+      
+        <meta name="author" content="Marc Aurele Gilles">
+      
+      
+        <link rel="canonical" href="https://ma-gilles.github.io/recovar/reference/api/output/">
+      
+      
+        <link rel="prev" href="../simulation/">
+      
+      
+        <link rel="next" href="../em/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>recovar.output - RECOVAR</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#recovaroutput" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="RECOVAR" class="md-header__button md-logo" aria-label="RECOVAR" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            RECOVAR
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              recovar.output
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/ma-gilles/recovar" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ma-gilles/recovar
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../guide/tutorial/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../cli/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../troubleshooting/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Troubleshooting
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="RECOVAR" class="md-nav__button md-logo" aria-label="RECOVAR" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    RECOVAR
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ma-gilles/recovar" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ma-gilles/recovar
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/docker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker & Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Test Your Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/input-data/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Input Data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/masks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Masks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/downsampling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Downsampling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running the Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analyzing Results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web GUI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/conformational-density/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conformational Density
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/extracting-subsets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extracting Subsets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/outlier-detection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Outlier Detection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/cryo-et/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cryo-ET
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/external-embeddings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    External Embeddings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../file-formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    File Formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Python API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.data_io
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../heterogeneity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.heterogeneity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../reconstruction/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.reconstruction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../simulation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.simulation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.output
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.output
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.output.output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        output
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="output">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.PipelineOutput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PipelineOutput
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="PipelineOutput">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.PipelineOutput.get_embedding_component" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_embedding_component
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.PipelineOutput.get_unsorted_embedding_component" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_unsorted_embedding_component
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.PipelineOutput.load_embedding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        load_embedding
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.plot_over_density" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_over_density
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.build_params_dict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build_params_dict
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="build_params_dict">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.build_params_dict--schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.build_embedding_dict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build_embedding_dict
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="build_embedding_dict">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.build_embedding_dict--schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.save_pipeline_results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        save_pipeline_results
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="save_pipeline_results">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.save_pipeline_results--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.write_metadata_json" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        write_metadata_json
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.kmeans_analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        kmeans_analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.plot_umap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_umap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.compute_and_save_reweighted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compute_and_save_reweighted
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="compute_and_save_reweighted">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.compute_and_save_reweighted--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.make_trajectory_plots_from_results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_trajectory_plots_from_results
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.standard_pipeline_plots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        standard_pipeline_plots
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.scatter_annotate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        scatter_annotate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.get_nearest_point" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_nearest_point
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.cluster_kmeans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cluster_kmeans
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output_paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        output_paths
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.output.output_paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        output_paths
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="output_paths">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.ResultPaths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ResultPaths
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ResultPaths">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.ResultPaths.ensure_dirs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ensure_dirs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.ResultPaths.ensure_model_dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ensure_model_dir
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.ResultPaths.ensure_volumes_dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ensure_volumes_dir
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AnalysisPaths
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="AnalysisPaths">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths.traj_dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        traj_dir
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths.vol_stem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vol_stem
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths.vol_filename" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vol_filename
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths.halfmap_filename" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        halfmap_filename
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths.diagnostics_subdir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        diagnostics_subdir
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.eigenvector_filename" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        eigenvector_filename
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.variance_filename" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance_filename
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#plot_utils" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_utils
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_utils
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="plot_utils">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_noise_profile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_noise_profile
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_summary_t" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_summary_t
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_cov_results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_cov_results
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_mean_fsc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_mean_fsc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_fsc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_fsc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_fsc_new" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_fsc_new
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.FSC" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FSC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.fsc_score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fsc_score
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_latent_space_scatter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_latent_space_scatter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_eigenvalues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_eigenvalues
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_contrast_histogram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_contrast_histogram
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_pipeline_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_pipeline_summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.output.metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.captured_variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        captured_variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.subspace_angles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        subspace_angles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.local_fsc_metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        local_fsc_metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.make_union_gt_mask_from_hvd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_union_gt_mask_from_hvd
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.make_moving_gt_mask_from_hvd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_moving_gt_mask_from_hvd
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.variance_of_zs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance_of_zs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="variance_of_zs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.variance_of_zs--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.variance_of_zs--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Returns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.fro_norm_diff_low_rank" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fro_norm_diff_low_rank
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="fro_norm_diff_low_rank">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.fro_norm_diff_low_rank--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.fro_norm_diff_low_rank--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Returns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../em/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.em
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.utils
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        output
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.output.output" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        output
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="output">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.PipelineOutput" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PipelineOutput
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="PipelineOutput">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.PipelineOutput.get_embedding_component" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_embedding_component
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.PipelineOutput.get_unsorted_embedding_component" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_unsorted_embedding_component
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.PipelineOutput.load_embedding" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        load_embedding
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.plot_over_density" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_over_density
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.build_params_dict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build_params_dict
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="build_params_dict">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.build_params_dict--schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.build_embedding_dict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build_embedding_dict
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="build_embedding_dict">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.build_embedding_dict--schema" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Schema
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.save_pipeline_results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        save_pipeline_results
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="save_pipeline_results">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.save_pipeline_results--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.write_metadata_json" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        write_metadata_json
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.kmeans_analysis" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        kmeans_analysis
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.plot_umap" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_umap
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.compute_and_save_reweighted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compute_and_save_reweighted
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="compute_and_save_reweighted">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.compute_and_save_reweighted--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.make_trajectory_plots_from_results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_trajectory_plots_from_results
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.standard_pipeline_plots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        standard_pipeline_plots
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.scatter_annotate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        scatter_annotate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.get_nearest_point" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_nearest_point
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output.cluster_kmeans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cluster_kmeans
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#output_paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        output_paths
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.output.output_paths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        output_paths
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="output_paths">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.ResultPaths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ResultPaths
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ResultPaths">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.ResultPaths.ensure_dirs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ensure_dirs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.ResultPaths.ensure_model_dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ensure_model_dir
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.ResultPaths.ensure_volumes_dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ensure_volumes_dir
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AnalysisPaths
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="AnalysisPaths">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths.traj_dir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        traj_dir
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths.vol_stem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vol_stem
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths.vol_filename" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        vol_filename
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths.halfmap_filename" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        halfmap_filename
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.AnalysisPaths.diagnostics_subdir" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        diagnostics_subdir
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.eigenvector_filename" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        eigenvector_filename
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.output_paths.variance_filename" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance_filename
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#plot_utils" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_utils
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_utils
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="plot_utils">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_noise_profile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_noise_profile
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_summary_t" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_summary_t
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_cov_results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_cov_results
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_mean_fsc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_mean_fsc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_fsc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_fsc
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_fsc_new" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_fsc_new
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.FSC" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        FSC
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.fsc_score" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fsc_score
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_latent_space_scatter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_latent_space_scatter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_eigenvalues" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_eigenvalues
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_contrast_histogram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_contrast_histogram
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.plot_utils.plot_pipeline_summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        plot_pipeline_summary
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metrics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.output.metrics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        metrics
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="metrics">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.captured_variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        captured_variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.subspace_angles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        subspace_angles
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.local_fsc_metric" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        local_fsc_metric
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.make_union_gt_mask_from_hvd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_union_gt_mask_from_hvd
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.make_moving_gt_mask_from_hvd" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_moving_gt_mask_from_hvd
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.variance_of_zs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        variance_of_zs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="variance_of_zs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.variance_of_zs--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.variance_of_zs--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Returns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.fro_norm_diff_low_rank" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fro_norm_diff_low_rank
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="fro_norm_diff_low_rank">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.fro_norm_diff_low_rank--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.output.metrics.fro_norm_diff_low_rank--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Returns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="recovaroutput">recovar.output<a class="headerlink" href="#recovaroutput" title="Permanent link">&para;</a></h1>
+<p>Result I/O, visualization, and reconstruction quality metrics.</p>
+<h2 id="output">output<a class="headerlink" href="#output" title="Permanent link">&para;</a></h2>
+<p>Volume I/O, result saving, and MRC file writing utilities.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h2 id="recovar.output.output" class="doc doc-heading">
+            <code>recovar.output.output</code>
+
+
+<a href="#recovar.output.output" class="headerlink" title="Permanent link">&para;</a></h2>
+
+    <div class="doc doc-contents first">
+
+        <p>Volume I/O, result saving, and MRC file writing utilities.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="recovar.output.output.PipelineOutput" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">PipelineOutput</span><span class="p">(</span><span class="n">result_path</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.PipelineOutput" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output.PipelineOutput.get_embedding_component" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_embedding_component</span><span class="p">(</span><span class="n">entry</span><span class="p">,</span> <span class="n">key</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.PipelineOutput.get_embedding_component" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return one embedding array in <strong>dataset-local order</strong>.</p>
+<p>The stored embeddings are NaN-padded in original-file space.
+This method selects only computed entries (identified by
+<code>particles_halfsets</code>) and returns them in sorted original-index
+order, which matches the unified dataset's local ordering.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output.PipelineOutput.get_unsorted_embedding_component" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_unsorted_embedding_component</span><span class="p">(</span><span class="n">entry</span><span class="p">,</span> <span class="n">key</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.PipelineOutput.get_unsorted_embedding_component" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return raw embedding values in original dataset order, without halfset reindexing.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output.PipelineOutput.load_embedding" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">load_embedding</span><span class="p">()</span></code>
+
+<a href="#recovar.output.output.PipelineOutput.load_embedding" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Load all embedding arrays into dataset-local order.</p>
+<p>Selects only computed entries (no NaN) and sorts by original
+index, matching the unified dataset's local ordering.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.plot_over_density" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_over_density</span><span class="p">(</span><span class="n">density</span><span class="p">,</span> <span class="n">trajectories</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">latent_space_bounds</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">subsampled</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">colors</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">plot_folder</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;inferno&#39;</span><span class="p">,</span> <span class="n">same_st_end</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">zs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">cov_zs</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">points</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">projection_function</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">annotate</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">slice_point</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.plot_over_density" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Plot 2-D density projections with optional trajectories and cluster centers.</p>
+<p>For each pair of latent dimensions, creates a density heatmap and overlays
+trajectory paths, subsampled volume positions, and/or cluster center markers.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>density</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>N-D density array on a regular grid (or None to compute on the fly).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>trajectories</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>List of trajectory arrays, each of shape (n_pts, n_dims).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>latent_space_bounds</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Array of shape (n_dims, 2) giving [min, max] per axis.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>subsampled</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>List of subsampled trajectory arrays for volume markers.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>colors</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Color list for trajectories.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>plot_folder</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Directory to save PNG files. If None, plots are not saved.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>cmap</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Matplotlib colormap name for the density.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;inferno&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>same_st_end</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If True, only draw start/end markers for the first trajectory.</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>zs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Latent coordinates, shape (n_particles, n_dims).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>cov_zs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Per-particle covariance matrices for on-the-fly density computation.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>points</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Extra points (e.g. cluster centers) to scatter on top.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>projection_function</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Callable to project the density onto 2 axes.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>annotate</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Whether to annotate <em>points</em> with integer labels.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>slice_point</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Slice coordinate for the projection function.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.build_params_dict" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">build_params_dict</span><span class="p">(</span><span class="o">*</span><span class="p">,</span> <span class="n">volume_shape</span><span class="p">,</span> <span class="n">voxel_size</span><span class="p">,</span> <span class="n">s_rescaled</span><span class="p">,</span> <span class="n">noise_var_from_hf</span><span class="p">,</span> <span class="n">noise_var_from_het_residual</span><span class="p">,</span> <span class="n">noise_var_used</span><span class="p">,</span> <span class="n">noise_result</span><span class="p">,</span> <span class="n">ub_noise_var_by_var_est</span><span class="p">,</span> <span class="n">variance_est</span><span class="p">,</span> <span class="n">variance_fsc</span><span class="p">,</span> <span class="n">noise_p_variance_est</span><span class="p">,</span> <span class="n">covariance_options</span><span class="p">,</span> <span class="n">column_fscs</span><span class="p">,</span> <span class="n">picked_frequencies</span><span class="p">,</span> <span class="n">input_args</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.build_params_dict" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build the params dict saved as <code>model/params.pkl</code>.</p>
+<p>This is the authoritative schema for the params dict (v0.7).</p>
+<h5 id="recovar.output.output.build_params_dict--schema">Schema<a class="headerlink" href="#recovar.output.output.build_params_dict--schema" title="Permanent link">&para;</a></h5>
+<p>version : str
+    Format version (currently <code>'0.7'</code>).
+volume_shape : tuple of int
+    3-D grid dimensions, e.g. <code>(128, 128, 128)</code>.
+voxel_size : float
+    Angstroms per voxel.
+s : ndarray, shape (n_pcs,)
+    Rescaled eigenvalues from PCA of the covariance.
+noise_var_from_hf : ndarray
+    Noise variance estimated from half-map differences.
+noise_var_from_het_residual : ndarray or None
+    Noise variance estimated from heterogeneity residuals (None for tilt series).
+noise_var_used : ndarray
+    The noise variance actually used during estimation.
+radial_noise_var_outside_mask : ndarray
+    Radial noise profile estimated from outside the solvent mask.
+radial_ub_noise_var : ndarray
+    Upper-bound radial noise variance from inside the mask.
+white_noise_var_outside_mask : float
+    Scalar white noise variance (median of radial profile).
+ub_noise_var_by_var_est : ndarray
+    Upper-bound noise variance from signal+noise variance estimation.
+image_PS : ndarray
+    Radial image power spectrum.
+masked_image_PS : ndarray
+    Radial power spectrum of masked images.
+variance_est : dict
+    Per-halfset variance estimates.
+variance_fsc : ndarray
+    FSC of variance half-maps.
+noise_p_variance_est : ndarray
+    Noise-plus-variance estimate.
+covariance_options : dict
+    Options used for covariance estimation.
+column_fscs : ndarray
+    Per-column FSC values.
+picked_frequencies : ndarray
+    Frequency indices selected for covariance columns.
+input_args : Namespace
+    The full command-line arguments used to run the pipeline.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.build_embedding_dict" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">build_embedding_dict</span><span class="p">(</span><span class="n">latent_coords</span><span class="p">,</span> <span class="n">latent_coords_noreg</span><span class="p">,</span> <span class="n">latent_precision</span><span class="p">,</span> <span class="n">latent_precision_noreg</span><span class="p">,</span> <span class="n">contrasts</span><span class="p">,</span> <span class="n">contrasts_noreg</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.build_embedding_dict" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build the embedding dict saved as <code>model/embeddings.pkl</code>.</p>
+<p>All six sub-dicts are keyed by zdim (int).</p>
+<h5 id="recovar.output.output.build_embedding_dict--schema">Schema<a class="headerlink" href="#recovar.output.output.build_embedding_dict--schema" title="Permanent link">&para;</a></h5>
+<p>latent_coords : dict[int, ndarray]
+    Regularized latent coordinates.
+latent_coords_noreg : dict[int, ndarray]
+    Unregularized latent coordinates.
+latent_precision : dict[int, ndarray]
+    Posterior covariance of regularized latent coordinates.
+latent_precision_noreg : dict[int, ndarray]
+    Posterior covariance of unregularized latent coordinates.
+contrasts : dict[int, ndarray]
+    Per-image contrast estimates (regularized).
+contrasts_noreg : dict[int, ndarray]
+    Per-image contrast estimates (unregularized).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.save_pipeline_results" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">save_pipeline_results</span><span class="p">(</span><span class="n">paths</span><span class="p">,</span> <span class="n">result</span><span class="p">,</span> <span class="n">embedding_dict</span><span class="p">,</span> <span class="n">covariance_cols</span><span class="p">,</span> <span class="n">particles_ind_split</span><span class="p">,</span> <span class="n">ind_split</span><span class="p">,</span> <span class="n">zs_full</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.save_pipeline_results" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Save all pipeline results to disk.</p>
+<h5 id="recovar.output.output.save_pipeline_results--parameters">Parameters<a class="headerlink" href="#recovar.output.output.save_pipeline_results--parameters" title="Permanent link">&para;</a></h5>
+<p>paths : ResultPaths
+    Centralized output paths.
+result : dict
+    The params dict built by :func:<code>build_params_dict</code>.
+embedding_dict : dict
+    The embedding dict built by :func:<code>build_embedding_dict</code>.
+covariance_cols : ndarray or None
+    Covariance columns (None if <code>--keep-intermediate</code> is off).
+particles_ind_split : list of ndarray
+    Per-particle halfset indices.
+ind_split : list of ndarray
+    Per-image halfset indices.
+zs_full : dict or None
+    Full latent coordinates before complement-mask trimming (if applicable).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.write_metadata_json" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">write_metadata_json</span><span class="p">(</span><span class="n">paths</span><span class="p">,</span> <span class="n">result</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.write_metadata_json" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Write a human-readable JSON manifest alongside the pickle files.</p>
+<p>This file is not loaded by the pipeline -- it exists for users to quickly
+inspect run parameters without unpickling.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.kmeans_analysis" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">kmeans_analysis</span><span class="p">(</span><span class="n">output_folder</span><span class="p">,</span> <span class="n">zs</span><span class="p">,</span> <span class="n">n_clusters</span><span class="o">=</span><span class="mi">20</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.kmeans_analysis" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Run k-means clustering on latent coordinates and save scatter plots.</p>
+<p>Generates annotated and unannotated scatter plots for all pairwise
+combinations of the first few latent dimensions.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>output_folder</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Directory to save PCA scatter PNGs and center data.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>zs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Latent coordinates, shape (n_particles, n_dims).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_clusters</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of k-means clusters.</p>
+              </div>
+            </td>
+            <td>
+                  <code>20</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Tuple of (labels, centers) from k-means clustering.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.plot_umap" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_umap</span><span class="p">(</span><span class="n">output_folder</span><span class="p">,</span> <span class="n">zs</span><span class="p">,</span> <span class="n">centers</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.plot_umap" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Generate UMAP embedding plots with cluster center overlay.</p>
+<p>Creates scatter and hexbin UMAP projections saved as PNGs in
+<code>output_folder/umap/</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>output_folder</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Parent directory; a <code>umap/</code> subdirectory is created.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>zs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Latent coordinates, shape (n_particles, n_dims).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>centers</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Cluster centers, shape (n_clusters, n_dims).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.compute_and_save_reweighted" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">compute_and_save_reweighted</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">path_subsampled</span><span class="p">,</span> <span class="n">zs</span><span class="p">,</span> <span class="n">cov_zs</span><span class="p">,</span> <span class="n">output_folder</span><span class="p">,</span> <span class="n">B_factor</span><span class="p">,</span> <span class="n">n_bins</span><span class="o">=</span><span class="mi">30</span><span class="p">,</span> <span class="n">n_min_particles</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">embedding_option</span><span class="o">=</span><span class="s1">&#39;cov_dist&#39;</span><span class="p">,</span> <span class="n">save_all_estimates</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">maskrad_fraction</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span> <span class="n">apply_global_filtering</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">fsc_mask</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fsc_mask_radius</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">fsc_mask_edgewidth</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">vol_prefix</span><span class="o">=</span><span class="s1">&#39;state&#39;</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.compute_and_save_reweighted" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute reweighted volume estimates and save with RELION-style organization.</p>
+<h5 id="recovar.output.output.compute_and_save_reweighted--parameters">Parameters<a class="headerlink" href="#recovar.output.output.compute_and_save_reweighted--parameters" title="Permanent link">&para;</a></h5>
+<p>dataset : CryoEMDataset
+    Dataset with <code>halfset_indices</code> set.  Halfset datasets are
+    obtained lazily via <code>dataset.get_halfset(k)</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.make_trajectory_plots_from_results" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">make_trajectory_plots_from_results</span><span class="p">(</span><span class="n">pipeline_output</span><span class="p">,</span> <span class="n">basis_size</span><span class="p">,</span> <span class="n">output_folder</span><span class="p">,</span> <span class="n">cryos</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">z_st</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">z_end</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">gt_volumes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">n_vols_along_path</span><span class="o">=</span><span class="mi">6</span><span class="p">,</span> <span class="n">plot_llh</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">input_density</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">latent_space_bounds</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.make_trajectory_plots_from_results" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute minimum-energy trajectories and generate volume/density plots.</p>
+<p>Finds optimal paths between start and end latent coordinates (or between
+ground-truth volume endpoints), generates volumes along the path, and
+saves density overlay plots.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>pipeline_output</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pipeline output object with embeddings and covariance.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>basis_size</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of PCA dimensions for trajectory computation.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>output_folder</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Directory to write trajectory volumes and plots.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>cryos</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>CryoEMDataset (optional; loaded from pipeline_output if None).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>z_st</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Start point in latent space, shape (n_dims,).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>z_end</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>End point in latent space, shape (n_dims,).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>gt_volumes</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Ground-truth volumes for automatic endpoint selection.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_vols_along_path</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of volumes to generate along the trajectory.</p>
+              </div>
+            </td>
+            <td>
+                  <code>6</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>plot_llh</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Whether to generate per-volume likelihood scatter plots.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>input_density</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pre-computed density array (or None to compute).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>latent_space_bounds</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Bounds for the latent space grid.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.standard_pipeline_plots" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">standard_pipeline_plots</span><span class="p">(</span><span class="n">po</span><span class="p">,</span> <span class="n">zdim_key</span><span class="p">,</span> <span class="n">output_folder</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.standard_pipeline_plots" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Generate standard pipeline output plots.</p>
+<p>Produces individual plots (eigenvolumes, contrast histogram, eigenvalues,
+FSC, PC scatter) plus a consolidated <code>pipeline_summary.png</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>po</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pipeline output object.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>zdim_key</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Latent dimension key for embeddings/contrasts.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>output_folder</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Directory to save plots into.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.scatter_annotate" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">scatter_annotate</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">centers</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">centers_ind</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">annotate</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.6</span><span class="p">,</span> <span class="n">s</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">colors</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.scatter_annotate" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Scatter plot with optional cluster-center markers and annotations.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.get_nearest_point" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_nearest_point</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">query</span><span class="p">,</span> <span class="n">chunk_size</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.get_nearest_point" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>For each row of query, return the closest row of data and its index.</p>
+<p>The computation is chunked over query rows to avoid materializing a full
+<code>(n_query, n_data, n_dim)</code> distance tensor for larger inputs.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output.cluster_kmeans" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">cluster_kmeans</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">K</span><span class="p">,</span> <span class="n">on_data</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">reorder</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output.cluster_kmeans" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>K-means clustering of z into K clusters.</p>
+<p>Returns (labels, centers). If reorder=True, clusters are sorted by
+agglomerative linkage of their centers.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="output_paths">output_paths<a class="headerlink" href="#output_paths" title="Permanent link">&para;</a></h2>
+<p>Structured path management for pipeline results directories.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h2 id="recovar.output.output_paths" class="doc doc-heading">
+            <code>recovar.output.output_paths</code>
+
+
+<a href="#recovar.output.output_paths" class="headerlink" title="Permanent link">&para;</a></h2>
+
+    <div class="doc doc-contents first">
+
+        <p>Centralized output path definitions for RECOVAR pipeline results.</p>
+<p>All output file paths are defined here as the single source of truth.
+Both the saving side (pipeline.py, analyze.py) and the loading side
+(PipelineOutput) should use these definitions to avoid path mismatches.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="recovar.output.output_paths.ResultPaths" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">ResultPaths</span><span class="p">(</span><span class="n">root_dir</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output_paths.ResultPaths" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Single source of truth for all output file paths.</p>
+<p>Usage::</p>
+<div class="highlight"><pre><span></span><code>paths = ResultPaths(&quot;/path/to/outdir&quot;)
+paths.ensure_dirs()
+utils.pickle_dump(result, paths.params)
+vol = utils.load_mrc(paths.mean_volume)
+</code></pre></div>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output_paths.ResultPaths.ensure_dirs" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">ensure_dirs</span><span class="p">()</span></code>
+
+<a href="#recovar.output.output_paths.ResultPaths.ensure_dirs" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Create all standard output directories.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output_paths.ResultPaths.ensure_model_dir" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">ensure_model_dir</span><span class="p">()</span></code>
+
+<a href="#recovar.output.output_paths.ResultPaths.ensure_model_dir" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Create the model directory only.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output_paths.ResultPaths.ensure_volumes_dir" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">ensure_volumes_dir</span><span class="p">()</span></code>
+
+<a href="#recovar.output.output_paths.ResultPaths.ensure_volumes_dir" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Create the volumes directory only.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="recovar.output.output_paths.AnalysisPaths" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">AnalysisPaths</span><span class="p">(</span><span class="n">analysis_dir</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output_paths.AnalysisPaths" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Path helpers for downstream analysis outputs (kmeans, trajectories).</p>
+<p>Follows RELION-inspired conventions:
+- 1-indexed, zero-padded volume names (center001.mrc, state001.mrc)
+- Primary volumes flat in the output directory
+- Half-maps alongside: center001_half1_unfil.mrc
+- Diagnostics in subdirectories: diagnostics/center001/</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output_paths.AnalysisPaths.traj_dir" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">traj_dir</span><span class="p">(</span><span class="n">index</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output_paths.AnalysisPaths.traj_dir" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return trajectory directory (1-indexed, zero-padded).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output_paths.AnalysisPaths.vol_stem" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">vol_stem</span><span class="p">(</span><span class="n">prefix</span><span class="p">,</span> <span class="n">index</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
+  </span>
+
+<a href="#recovar.output.output_paths.AnalysisPaths.vol_stem" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Volume stem without extension, e.g. 'center000'.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output_paths.AnalysisPaths.vol_filename" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">vol_filename</span><span class="p">(</span><span class="n">prefix</span><span class="p">,</span> <span class="n">index</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
+  </span>
+
+<a href="#recovar.output.output_paths.AnalysisPaths.vol_filename" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Primary volume filename, e.g. 'center000.mrc'.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output_paths.AnalysisPaths.halfmap_filename" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">halfmap_filename</span><span class="p">(</span><span class="n">prefix</span><span class="p">,</span> <span class="n">index</span><span class="p">,</span> <span class="n">half</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
+  </span>
+
+<a href="#recovar.output.output_paths.AnalysisPaths.halfmap_filename" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Half-map filename, e.g. 'center000_half1_unfil.mrc'.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.output.output_paths.AnalysisPaths.diagnostics_subdir" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">diagnostics_subdir</span><span class="p">(</span><span class="n">prefix</span><span class="p">,</span> <span class="n">index</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
+  </span>
+
+<a href="#recovar.output.output_paths.AnalysisPaths.diagnostics_subdir" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Diagnostics subdirectory, e.g. 'diagnostics/center000'.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output_paths.eigenvector_filename" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">eigenvector_filename</span><span class="p">(</span><span class="n">index</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output_paths.eigenvector_filename" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return filename for eigenvector volume at given index.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.output_paths.variance_filename" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">variance_filename</span><span class="p">(</span><span class="n">n_eigs</span><span class="p">)</span></code>
+
+<a href="#recovar.output.output_paths.variance_filename" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return filename for variance volume computed from n_eigs eigenvectors.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="plot_utils">plot_utils<a class="headerlink" href="#plot_utils" title="Permanent link">&para;</a></h2>
+<p>Visualization helpers: FSC plots, volume slices, embedding scatter.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h2 id="recovar.output.plot_utils" class="doc doc-heading">
+            <code>recovar.output.plot_utils</code>
+
+
+<a href="#recovar.output.plot_utils" class="headerlink" title="Permanent link">&para;</a></h2>
+
+    <div class="doc doc-contents first">
+
+        <p>Visualization helpers: FSC plots, volume slices, embedding scatter.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.plot_noise_profile" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_noise_profile</span><span class="p">(</span><span class="n">pipeline_output</span><span class="p">,</span> <span class="n">yscale</span><span class="o">=</span><span class="s1">&#39;linear&#39;</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.plot_noise_profile" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Plot noise power spectrum profiles from pipeline output.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>pipeline_output</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pipeline output object with noise variance data.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>yscale</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Y-axis scale ('linear' or 'log').</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;linear&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>ax</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional matplotlib Axes to draw into. If None, creates a new figure.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Tuple of (fig, ax) matplotlib Figure and Axes objects.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.plot_summary_t" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_summary_t</span><span class="p">(</span><span class="n">pipeline_output</span><span class="p">,</span> <span class="n">n_eigs</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">filename</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.plot_summary_t" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Plot mean, mask, variance, and top principal component volumes.</p>
+<p>Creates a grid of volume projections and central slices: 3 rows for
+mean/mask/variance plus one row per eigenvolume.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>pipeline_output</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pipeline output object with 'mean', 'volume_mask',
+'variance', and eigenvolume data.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_eigs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of eigenvolumes (principal components) to show.</p>
+              </div>
+            </td>
+            <td>
+                  <code>3</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>filename</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Path to save the figure. If None, figure is not saved.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.plot_cov_results" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_cov_results</span><span class="p">(</span><span class="n">u</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">max_eig</span><span class="o">=</span><span class="mi">40</span><span class="p">,</span> <span class="n">savefile</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.plot_cov_results" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Plot eigenvalue spectra and subspace angle comparison.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>u</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Dict of eigenvector arrays keyed by method name.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>s</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Dict of eigenvalue arrays keyed by method name.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_eig</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Maximum number of eigenvalues to display.</p>
+              </div>
+            </td>
+            <td>
+                  <code>40</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>savefile</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If provided, saves eigenvalue plot to <code>{savefile}s.png</code>
+and subspace angle plot to <code>{savefile}u.png</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Dict mapping method names to their subspace angle arrays</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>(empty if no ground truth key <code>'gt'</code> is present in <em>u</em>).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.plot_mean_fsc" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_mean_fsc</span><span class="p">(</span><span class="n">pipeline_output</span><span class="p">,</span> <span class="n">cryos</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.plot_mean_fsc" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Plot FSC curves for the mean reconstruction (masked and unmasked).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>pipeline_output</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pipeline output object with 'mean_halfmaps',
+'volume_shape', 'voxel_size', and 'volume_mask'.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>cryos</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Unused (kept for backward compatibility).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Matplotlib Axes with the FSC curves.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.plot_fsc" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_fsc</span><span class="p">(</span><span class="n">cryo</span><span class="p">,</span> <span class="n">vol1</span><span class="p">,</span> <span class="n">vol2</span><span class="p">,</span> <span class="n">mask</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="mi">1</span> <span class="o">/</span> <span class="mi">7</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">voxel_size</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">volume_shape</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s1">&#39;unmasked&#39;</span><span class="p">,</span> <span class="n">fmat</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">filename</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.plot_fsc" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Plot FSC between two volumes using cryo dataset metadata.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>cryo</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>CryoEMDataset providing voxel_size and volume_shape.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>vol1</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>First half-map (flattened Fourier volume).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>vol2</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Second half-map (flattened Fourier volume).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>mask</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional real-space mask to apply before FSC.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>threshold</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>FSC resolution threshold (default 1/7).</p>
+              </div>
+            </td>
+            <td>
+                  <code>1 / 7</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>ax</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional Axes to draw into.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>voxel_size</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Override voxel size from cryo.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>volume_shape</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Override volume shape from cryo.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>name</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Label for the curve in the legend.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;unmasked&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>fmat</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Matplotlib format string for the line.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>filename</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Path to save the figure.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Matplotlib Axes with the FSC curve.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.plot_fsc_new" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_fsc_new</span><span class="p">(</span><span class="n">image1</span><span class="p">,</span> <span class="n">image2</span><span class="p">,</span> <span class="n">volume_shape</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">voxel_size</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">curve</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="mi">1</span> <span class="o">/</span> <span class="mi">7</span><span class="p">,</span> <span class="n">filename</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">volume_mask</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">name</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">,</span> <span class="n">fmat</span><span class="o">=</span><span class="s1">&#39;&#39;</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.plot_fsc_new" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Plot Fourier Shell Correlation between two half-maps.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>image1</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>First half-map (flattened Fourier or real-space volume).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>image2</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Second half-map.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>volume_shape</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>3-tuple giving the volume dimensions.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>voxel_size</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Voxel size in Angstroms.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>curve</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pre-computed FSC curve. If None, computed from the inputs.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>ax</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional Axes to draw into. If None, creates a new figure.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>threshold</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>FSC threshold for resolution estimation (default 1/7).</p>
+              </div>
+            </td>
+            <td>
+                  <code>1 / 7</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>filename</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Path to save the figure.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>volume_mask</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional real-space mask applied before FSC.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>name</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Label prefix for the resolution annotation.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>fmat</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Matplotlib format string for the line.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;&#39;</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Tuple of (ax, score) where score is the frequency at which FSC</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>crosses the threshold.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.FSC" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">FSC</span><span class="p">(</span><span class="n">image1</span><span class="p">,</span> <span class="n">image2</span><span class="p">,</span> <span class="n">r_dict</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.FSC" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute Fourier Shell Correlation between two 3-D volumes.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>image1</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>First volume as a 3-D numpy array.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>image2</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Second volume as a 3-D numpy array.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>r_dict</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Unused (kept for backward compatibility).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>1-D array of FSC values per frequency shell.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.fsc_score" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">fsc_score</span><span class="p">(</span><span class="n">fsc_curve</span><span class="p">,</span> <span class="n">grid_size</span><span class="p">,</span> <span class="n">voxel_size</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="mf">0.5</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.fsc_score" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Find the frequency at which FSC crosses a threshold.</p>
+<p>Uses linear interpolation between the last shell above threshold
+and the first shell below.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>fsc_curve</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>1-D array of FSC values per shell.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>grid_size</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of voxels along one side of the volume.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>voxel_size</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Voxel size in Angstroms.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>threshold</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>FSC threshold (default 0.5).</p>
+              </div>
+            </td>
+            <td>
+                  <code>0.5</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Frequency value (in 1/Angstrom) at the threshold crossing.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.plot_latent_space_scatter" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_latent_space_scatter</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">axes</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">centers</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">labels</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">title</span><span class="o">=</span><span class="s1">&#39;Latent Space Analysis&#39;</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">18</span><span class="p">,</span> <span class="mi">12</span><span class="p">),</span> <span class="n">save_path</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">show_plot</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.plot_latent_space_scatter" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Create scatter plots for latent space visualization.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>z</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Latent coordinates of shape (n_particles, n_dimensions).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>axes</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>List of (i, j) tuples specifying which dimensions to plot.
+If None, plots all pairwise combinations of first 4 dimensions.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>centers</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Cluster centers to overlay, shape (n_clusters, n_dimensions).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>labels</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Labels for cluster centers.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>title</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Main title for the plot.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;Latent Space Analysis&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>figsize</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Figure size as (width, height).</p>
+              </div>
+            </td>
+            <td>
+                  <code>(18, 12)</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>save_path</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Path to save the plot. If None, figure is not saved.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>show_plot</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Whether to display the plot interactively.</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Tuple of (fig, axes_plt) matplotlib Figure and array of Axes.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.plot_eigenvalues" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_eigenvalues</span><span class="p">(</span><span class="n">eigenvalues</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">n_eigs</span><span class="o">=</span><span class="mi">40</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.plot_eigenvalues" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Plot eigenvalue spectrum on a semilogy scale.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>eigenvalues</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>1-D array of eigenvalues.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>ax</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional Axes to draw into. If None, creates a new figure.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>n_eigs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of eigenvalues to display.</p>
+              </div>
+            </td>
+            <td>
+                  <code>40</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Matplotlib Axes with the eigenvalue plot.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.plot_contrast_histogram" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_contrast_histogram</span><span class="p">(</span><span class="n">contrasts</span><span class="p">,</span> <span class="n">ax</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">zdim_key</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.plot_contrast_histogram" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Plot histogram of per-particle contrast values.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>contrasts</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>1-D array of contrast values.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>ax</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional Axes to draw into. If None, creates a new figure.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>zdim_key</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Latent dimension key for the title annotation.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Matplotlib Axes with the histogram.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.plot_utils.plot_pipeline_summary" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">plot_pipeline_summary</span><span class="p">(</span><span class="n">po</span><span class="p">,</span> <span class="n">zdim_key</span><span class="p">,</span> <span class="n">output_folder</span><span class="p">)</span></code>
+
+<a href="#recovar.output.plot_utils.plot_pipeline_summary" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Create a single consolidated summary figure for the pipeline.</p>
+<p>Generates a 3x3 grid showing mean volume, FSC, eigenvalues,
+variance, PC scatter plots, noise profile, and contrast histogram.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>po</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pipeline output object.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>zdim_key</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Latent dimension key for accessing embeddings/contrasts.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>output_folder</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Directory to save the summary PNG.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="metrics">metrics<a class="headerlink" href="#metrics" title="Permanent link">&para;</a></h2>
+<p>Reconstruction quality metrics: FSC, subspace angles, per-voxel error.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h2 id="recovar.output.metrics" class="doc doc-heading">
+            <code>recovar.output.metrics</code>
+
+
+<a href="#recovar.output.metrics" class="headerlink" title="Permanent link">&para;</a></h2>
+
+    <div class="doc doc-contents first">
+
+        <p>Reconstruction quality metrics: FSC, subspace angles, per-voxel error.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.metrics.captured_variance" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">captured_variance</span><span class="p">(</span><span class="n">test_v</span><span class="p">,</span> <span class="n">U</span><span class="p">,</span> <span class="n">s</span><span class="p">)</span></code>
+
+<a href="#recovar.output.metrics.captured_variance" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute cumulative captured variance of test vectors in a subspace.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>test_v</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Test vectors, shape (n_voxels, n_test).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>U</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Eigenvector matrix, shape (n_voxels, n_pcs).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>s</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Eigenvalue array, shape (n_pcs,).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Cumulative captured variance array, shape (n_test,).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.metrics.subspace_angles" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">subspace_angles</span><span class="p">(</span><span class="n">u</span><span class="p">,</span> <span class="n">v</span><span class="p">,</span> <span class="n">max_rank</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">check_orthogonalize</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
+
+<a href="#recovar.output.metrics.subspace_angles" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute principal angles between two subspaces of increasing rank.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>u</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>First set of basis vectors, shape (n_voxels, n_pcs).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>v</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Second set of basis vectors, shape (n_voxels, n_pcs).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_rank</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Maximum subspace rank to evaluate.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>check_orthogonalize</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If True, QR-orthogonalize u and v first.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Array of sine of principal angles, shape (max_rank,).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.metrics.local_fsc_metric" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">local_fsc_metric</span><span class="p">(</span><span class="n">map1</span><span class="p">,</span> <span class="n">map2</span><span class="p">,</span> <span class="n">voxel_size</span><span class="p">,</span> <span class="n">mask</span><span class="p">,</span> <span class="n">fsc_threshold</span><span class="o">=</span><span class="mi">1</span> <span class="o">/</span> <span class="mi">7</span><span class="p">,</span> <span class="n">locres_sampling</span><span class="o">=</span><span class="mi">25</span><span class="p">)</span></code>
+
+<a href="#recovar.output.metrics.local_fsc_metric" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute local resolution and local AUC metrics within a mask.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>map1</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>First half-map (3-D real-space array).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>map2</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Second half-map (3-D real-space array).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>voxel_size</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Voxel size in Angstroms.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>mask</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Boolean mask selecting voxels to evaluate.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>fsc_threshold</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>FSC threshold for resolution (default 1/7).</p>
+              </div>
+            </td>
+            <td>
+                  <code>1 / 7</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>locres_sampling</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Sampling factor for local resolution windows.</p>
+              </div>
+            </td>
+            <td>
+                  <code>25</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Tuple of (median_locres, ninety_pc_locres, median_auc, ten_pc_auc).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.metrics.make_union_gt_mask_from_hvd" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">make_union_gt_mask_from_hvd</span><span class="p">(</span><span class="n">gt_thing</span><span class="p">,</span> <span class="n">volume_shape</span><span class="p">)</span></code>
+
+<a href="#recovar.output.metrics.make_union_gt_mask_from_hvd" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build a union mask from all GT volumes in a HeterogeneousReconstruction.</p>
+<p>Converts each Fourier-space volume to real space, then delegates to
+<code>mask.make_union_gt_mask</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>gt_thing</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A <code>HeterogeneousReconstruction</code> with <code>.volumes</code> in
+Fourier space, shape <code>(n_vols, n_voxels)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>volume_shape</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>3-D grid dimensions tuple.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Tuple <code>(soft_mask, binary_mask)</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.metrics.make_moving_gt_mask_from_hvd" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">make_moving_gt_mask_from_hvd</span><span class="p">(</span><span class="n">gt_thing</span><span class="p">,</span> <span class="n">volume_shape</span><span class="p">)</span></code>
+
+<a href="#recovar.output.metrics.make_moving_gt_mask_from_hvd" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build a moving-piece mask from GT volumes in a HeterogeneousReconstruction.</p>
+<p>Isolates the region that differs across GT states. Uses
+<code>mask.make_moving_gt_mask</code> on real-space GT volumes.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.metrics.variance_of_zs" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">variance_of_zs</span><span class="p">(</span><span class="n">z</span><span class="p">,</span> <span class="n">gt_image_assignment</span><span class="p">)</span></code>
+
+<a href="#recovar.output.metrics.variance_of_zs" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Estimate per-label variances and overall variance of z.</p>
+<h5 id="recovar.output.metrics.variance_of_zs--parameters">Parameters<a class="headerlink" href="#recovar.output.metrics.variance_of_zs--parameters" title="Permanent link">&para;</a></h5>
+<p>z : np.ndarray
+    Array of shape (n_samples, features).
+gt_image_assignment : np.ndarray
+    Array of shape (n_samples,) with integer labels for each sample.</p>
+<h5 id="recovar.output.metrics.variance_of_zs--returns">Returns<a class="headerlink" href="#recovar.output.metrics.variance_of_zs--returns" title="Permanent link">&para;</a></h5>
+<p>label_variances : np.ndarray
+    Variance computed for each label (flattened across features).
+weighted_avg_variance : float
+    Overall variance computed as the weighted average of per-label variances.
+overall_variance : float
+    Variance computed over the entire z data.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.output.metrics.fro_norm_diff_low_rank" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">fro_norm_diff_low_rank</span><span class="p">(</span><span class="n">U</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">V</span><span class="p">,</span> <span class="n">d</span><span class="p">)</span></code>
+
+<a href="#recovar.output.metrics.fro_norm_diff_low_rank" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute the Frobenius norm of (A - B) where
+A = U * diag(s) * U^T and B = V * diag(d) * V^T,
+using only their low-rank representations.</p>
+<h5 id="recovar.output.metrics.fro_norm_diff_low_rank--parameters">Parameters<a class="headerlink" href="#recovar.output.metrics.fro_norm_diff_low_rank--parameters" title="Permanent link">&para;</a></h5>
+<p>U : jnp.ndarray
+    An n x r matrix (orthonormal columns).
+s : jnp.ndarray
+    A length-r vector for A's eigenvalues.
+V : jnp.ndarray
+    An n x r matrix (orthonormal columns).
+d : jnp.ndarray
+    A length-r vector for B's eigenvalues.</p>
+<h5 id="recovar.output.metrics.fro_norm_diff_low_rank--returns">Returns<a class="headerlink" href="#recovar.output.metrics.fro_norm_diff_low_rank--returns" title="Permanent link">&para;</a></h5>
+<p>jnp.ndarray
+    The Frobenius norm of A - B.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "search.suggest", "search.highlight", "content.code.copy", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>

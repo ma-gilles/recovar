@@ -1,0 +1,4664 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Tools for cryo-EM heterogeneity analysis">
+      
+      
+        <meta name="author" content="Marc Aurele Gilles">
+      
+      
+        <link rel="canonical" href="https://ma-gilles.github.io/recovar/reference/api/reconstruction/">
+      
+      
+        <link rel="prev" href="../heterogeneity/">
+      
+      
+        <link rel="next" href="../simulation/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>recovar.reconstruction - RECOVAR</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#recovarreconstruction" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="RECOVAR" class="md-header__button md-logo" aria-label="RECOVAR" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            RECOVAR
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              recovar.reconstruction
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/ma-gilles/recovar" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ma-gilles/recovar
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../getting-started/installation/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../guide/tutorial/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../../cli/" class="md-tabs__link">
+          
+  
+  
+    
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../../../troubleshooting/" class="md-tabs__link">
+        
+  
+  
+    
+  
+  Troubleshooting
+
+      </a>
+    </li>
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="RECOVAR" class="md-nav__button md-logo" aria-label="RECOVAR" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    RECOVAR
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/ma-gilles/recovar" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+  </div>
+  <div class="md-source__repository">
+    ma-gilles/recovar
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/installation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/docker/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Docker & Containers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../getting-started/testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Test Your Installation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/tutorial/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tutorial
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/input-data/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Input Data
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/masks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Masks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/downsampling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Downsampling
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Running the Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/analysis/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Analyzing Results
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web GUI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/conformational-density/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Conformational Density
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/extracting-subsets/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extracting Subsets
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/outlier-detection/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Outlier Detection
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/cryo-et/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Cryo-ET
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../guide/external-embeddings/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    External Embeddings
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Commands
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../file-formats/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    File Formats
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    
+    
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+        
+      
+    
+    
+    
+      
+      
+        
+          
+          
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python API
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Python API
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../data_io/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.data_io
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../heterogeneity/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.heterogeneity
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.reconstruction
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.reconstruction
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#homogeneous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        homogeneous
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        homogeneous
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="homogeneous">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.MeanEstimate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MeanEstimate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MeanEstimate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.MeanEstimate--attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.MeanEstimate.negate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        negate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.MeanEstimate.corrected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        corrected
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.MeanEstimate.corrected_reg" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        corrected_reg
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.get_mean_conformation_relion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_mean_conformation_relion
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="get_mean_conformation_relion">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.get_mean_conformation_relion--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.get_mean_conformation_relion--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Returns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        noise
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        noise
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="noise">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.RadialNoiseModel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RadialNoiseModel
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="RadialNoiseModel">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.RadialNoiseModel.get_half" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_half
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.VariableRadialNoiseModel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VariableRadialNoiseModel
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VariableRadialNoiseModel">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.VariableRadialNoiseModel.get_half" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_half
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.ConstantNoiseModel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ConstantNoiseModel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.as_noise_model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        as_noise_model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="as_noise_model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.as_noise_model--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.as_noise_model--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Returns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.to_batched_pixel_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        to_batched_pixel_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.to_batched_half_pixel_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        to_batched_half_pixel_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.predict_noise_variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        predict_noise_variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.fit_noise_model_to_images" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fit_noise_model_to_images
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.estimate_noise_variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        estimate_noise_variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.make_radial_noise_half" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_radial_noise_half
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.batch_basis_times_coords2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_basis_times_coords2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.average_residual_square" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        average_residual_square
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#regularization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        regularization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.reconstruction.regularization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        regularization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="regularization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.regularization.compute_relion_prior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compute_relion_prior
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.regularization.get_fsc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_fsc
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#relion_functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_functions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_functions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="relion_functions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.griddingCorrect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        griddingCorrect
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.griddingCorrect_square" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        griddingCorrect_square
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.relion_style_triangular_kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_style_triangular_kernel
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="relion_style_triangular_kernel">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.relion_style_triangular_kernel--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.relion_kernel_batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_kernel_batch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.relion_kernel_batch_from_fft" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_kernel_batch_from_fft
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.residual_relion_kernel_trilinear" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        residual_relion_kernel_trilinear
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="residual_relion_kernel_trilinear">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.residual_relion_kernel_trilinear--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.residual_relion_style_triangular_kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        residual_relion_style_triangular_kernel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.adjust_regularization_relion_style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        adjust_regularization_relion_style
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.post_process_from_filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        post_process_from_filter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.post_process_from_filter_v2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        post_process_from_filter_v2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.relion_reconstruct" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_reconstruct
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ewald" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ewald
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.reconstruction.ewald" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ewald
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ewald">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.ewald.logger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        logger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.ewald.get_good_idx_mask" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_good_idx_mask
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.ewald.volt_to_wavelength" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        volt_to_wavelength
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../simulation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.simulation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../output/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.output
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../em/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.em
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../utils/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    recovar.utils
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#homogeneous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        homogeneous
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        homogeneous
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="homogeneous">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.MeanEstimate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MeanEstimate
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MeanEstimate">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.MeanEstimate--attributes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attributes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.MeanEstimate.negate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        negate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.MeanEstimate.corrected" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        corrected
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.MeanEstimate.corrected_reg" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        corrected_reg
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.get_mean_conformation_relion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_mean_conformation_relion
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="get_mean_conformation_relion">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.get_mean_conformation_relion--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.homogeneous.get_mean_conformation_relion--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Returns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        noise
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        noise
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="noise">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.RadialNoiseModel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        RadialNoiseModel
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="RadialNoiseModel">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.RadialNoiseModel.get_half" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_half
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.VariableRadialNoiseModel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VariableRadialNoiseModel
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VariableRadialNoiseModel">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.VariableRadialNoiseModel.get_half" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_half
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.ConstantNoiseModel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ConstantNoiseModel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.as_noise_model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        as_noise_model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="as_noise_model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.as_noise_model--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.as_noise_model--returns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Returns
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.to_batched_pixel_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        to_batched_pixel_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.to_batched_half_pixel_noise" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        to_batched_half_pixel_noise
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.predict_noise_variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        predict_noise_variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.fit_noise_model_to_images" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        fit_noise_model_to_images
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.estimate_noise_variance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        estimate_noise_variance
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.make_radial_noise_half" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_radial_noise_half
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.batch_basis_times_coords2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_basis_times_coords2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.noise.average_residual_square" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        average_residual_square
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#regularization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        regularization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.reconstruction.regularization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        regularization
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="regularization">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.regularization.compute_relion_prior" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compute_relion_prior
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.regularization.get_fsc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_fsc
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#relion_functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_functions
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_functions
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="relion_functions">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.griddingCorrect" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        griddingCorrect
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.griddingCorrect_square" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        griddingCorrect_square
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.relion_style_triangular_kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_style_triangular_kernel
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="relion_style_triangular_kernel">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.relion_style_triangular_kernel--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.relion_kernel_batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_kernel_batch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.relion_kernel_batch_from_fft" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_kernel_batch_from_fft
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.residual_relion_kernel_trilinear" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        residual_relion_kernel_trilinear
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="residual_relion_kernel_trilinear">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.residual_relion_kernel_trilinear--parameters" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Parameters
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.residual_relion_style_triangular_kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        residual_relion_style_triangular_kernel
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.adjust_regularization_relion_style" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        adjust_regularization_relion_style
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.post_process_from_filter" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        post_process_from_filter
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.post_process_from_filter_v2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        post_process_from_filter_v2
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.relion_functions.relion_reconstruct" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        relion_reconstruct
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ewald" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ewald
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#recovar.reconstruction.ewald" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        ewald
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="ewald">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.ewald.logger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        logger
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.ewald.get_good_idx_mask" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_good_idx_mask
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.reconstruction.ewald.volt_to_wavelength" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        volt_to_wavelength
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="recovarreconstruction">recovar.reconstruction<a class="headerlink" href="#recovarreconstruction" title="Permanent link">&para;</a></h1>
+<p>3-D reconstruction algorithms, noise estimation, and regularization.</p>
+<h2 id="homogeneous">homogeneous<a class="headerlink" href="#homogeneous" title="Permanent link">&para;</a></h2>
+<p>Homogeneous (mean) 3-D reconstruction via direct Fourier inversion.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h2 id="recovar.reconstruction.homogeneous" class="doc doc-heading">
+            <code>recovar.reconstruction.homogeneous</code>
+
+
+<a href="#recovar.reconstruction.homogeneous" class="headerlink" title="Permanent link">&para;</a></h2>
+
+    <div class="doc doc-contents first">
+
+        <p>Homogeneous (mean) 3-D reconstruction via direct Fourier inversion.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="recovar.reconstruction.homogeneous.MeanEstimate" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">MeanEstimate</span><span class="p">(</span><span class="n">combined</span><span class="p">,</span> <span class="n">corrected0</span><span class="p">,</span> <span class="n">corrected1</span><span class="p">,</span> <span class="n">corrected0reg</span><span class="p">,</span> <span class="n">corrected1reg</span><span class="p">,</span> <span class="n">lhs</span><span class="p">,</span> <span class="n">prior</span><span class="p">,</span> <span class="n">cubic_coeffs</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+<a href="#recovar.reconstruction.homogeneous.MeanEstimate" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Result of half-set mean reconstruction.</p>
+<h5 id="recovar.reconstruction.homogeneous.MeanEstimate--attributes">Attributes<a class="headerlink" href="#recovar.reconstruction.homogeneous.MeanEstimate--attributes" title="Permanent link">&para;</a></h5>
+<p>combined : ndarray — average of the two half-set reconstructions.
+corrected0, corrected1 : ndarray — unregularized half-set means.
+corrected0reg, corrected1reg : ndarray — regularized half-set means.
+lhs : ndarray — average Hermitian (CTF²) filter.
+prior : ndarray — FSC-derived regularization prior.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.reconstruction.homogeneous.MeanEstimate.negate" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">negate</span><span class="p">()</span></code>
+
+<a href="#recovar.reconstruction.homogeneous.MeanEstimate.negate" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Flip sign of all mean volumes (for uninverting data).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.reconstruction.homogeneous.MeanEstimate.corrected" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">corrected</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.homogeneous.MeanEstimate.corrected" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Get unregularized half-map by index (0 or 1).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.reconstruction.homogeneous.MeanEstimate.corrected_reg" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">corrected_reg</span><span class="p">(</span><span class="n">idx</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.homogeneous.MeanEstimate.corrected_reg" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Get regularized half-map by index (0 or 1).</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.homogeneous.get_mean_conformation_relion" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_mean_conformation_relion</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">noise_variance</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">use_regularization</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">upsampling_factor</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.homogeneous.get_mean_conformation_relion" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute the mean conformation using RELION-style half-set reconstruction.</p>
+<p>Runs one accumulation pass per half-set, computes the FSC-based prior, then
+optionally re-post-processes with regularization.</p>
+<h5 id="recovar.reconstruction.homogeneous.get_mean_conformation_relion--parameters">Parameters<a class="headerlink" href="#recovar.reconstruction.homogeneous.get_mean_conformation_relion--parameters" title="Permanent link">&para;</a></h5>
+<p>dataset : CryoEMDataset (with <code>halfset_indices</code> set)
+batch_size : int
+noise_variance : array, optional
+use_regularization : bool
+    If True, <code>means["combined"]</code> is the average of the per-half
+    regularized reconstructions; otherwise it is the average of the
+    unregularized reconstructions.
+upsampling_factor : int
+    Volume oversampling factor (default 2).</p>
+<h5 id="recovar.reconstruction.homogeneous.get_mean_conformation_relion--returns">Returns<a class="headerlink" href="#recovar.reconstruction.homogeneous.get_mean_conformation_relion--returns" title="Permanent link">&para;</a></h5>
+<p>means : MeanEstimate
+mean_prior : ndarray  —  FSC-derived regularization prior
+fsc : ndarray</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="noise">noise<a class="headerlink" href="#noise" title="Permanent link">&para;</a></h2>
+<p>Noise variance estimation from cryo-EM image residuals.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h2 id="recovar.reconstruction.noise" class="doc doc-heading">
+            <code>recovar.reconstruction.noise</code>
+
+
+<a href="#recovar.reconstruction.noise" class="headerlink" title="Permanent link">&para;</a></h2>
+
+    <div class="doc doc-contents first">
+
+        <p>Noise variance estimation from cryo-EM image residuals.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="recovar.reconstruction.noise.RadialNoiseModel" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">RadialNoiseModel</span><span class="p">(</span><span class="n">noise_variance_radial</span><span class="p">,</span> <span class="n">image_shape</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.RadialNoiseModel" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Per-dataset radial noise profile with lazy full/half expansions.</p>
+<p>The previous implementation eagerly materialized both full-spectrum and
+half-spectrum arrays during construction. Most call sites consume only one
+layout, so we now build each cached representation on first use to reduce
+peak GPU memory without changing outputs.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.reconstruction.noise.RadialNoiseModel.get_half" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_half</span><span class="p">(</span><span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.RadialNoiseModel.get_half" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return noise in half-spectrum (rfft-packed) layout <code>(1, H*(W//2+1))</code>.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="recovar.reconstruction.noise.VariableRadialNoiseModel" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">VariableRadialNoiseModel</span><span class="p">(</span><span class="n">noise_variance_radials</span><span class="p">,</span> <span class="n">dose_indices</span><span class="p">,</span> <span class="n">image_shape</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.VariableRadialNoiseModel" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Radial noise profile indexed by dose/tilt level with lazy expansions.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h4 id="recovar.reconstruction.noise.VariableRadialNoiseModel.get_half" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_half</span><span class="p">(</span><span class="n">indices</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.VariableRadialNoiseModel.get_half" class="headerlink" title="Permanent link">&para;</a></h4>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return noise in half-spectrum (rfft-packed) layout <code>(B, H*(W//2+1))</code>.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h3 id="recovar.reconstruction.noise.ConstantNoiseModel" class="doc doc-heading">
+              <code class="highlight language-python"><span class="n">ConstantNoiseModel</span><span class="p">(</span><span class="n">noise_array</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.ConstantNoiseModel" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Wraps a pre-expanded noise array that is the same for every image.</p>
+<p>Satisfies the same <code>get</code> / <code>get_half</code> interface as the radial models so
+callers can treat all noise sources uniformly.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.noise.as_noise_model" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">as_noise_model</span><span class="p">(</span><span class="n">cov_noise</span><span class="p">,</span> <span class="n">image_shape</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.as_noise_model" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert a raw noise array into a noise model with a <code>get_half</code> method.</p>
+<h5 id="recovar.reconstruction.noise.as_noise_model--parameters">Parameters<a class="headerlink" href="#recovar.reconstruction.noise.as_noise_model--parameters" title="Permanent link">&para;</a></h5>
+<p>cov_noise : array-like
+    1-D radial shell variances <em>or</em> a pre-expanded (1, pixels) array.
+image_shape : tuple of int</p>
+<h5 id="recovar.reconstruction.noise.as_noise_model--returns">Returns<a class="headerlink" href="#recovar.reconstruction.noise.as_noise_model--returns" title="Permanent link">&para;</a></h5>
+<p>RadialNoiseModel or ConstantNoiseModel</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.noise.to_batched_pixel_noise" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">to_batched_pixel_noise</span><span class="p">(</span><span class="n">noise_variances</span><span class="p">,</span> <span class="n">image_shape</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.to_batched_pixel_noise" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Normalize noise variance into shape broadcastable with (B, D*D).</p>
+<p>Returns (1, D<em>D) for uniform noise (callers rely on XLA broadcasting),
+or (B, D</em>D) when the input is already per-image.
+Accepts common forms used in the codebase:
+- scalar (white noise)
+- (D, D)
+- (1, D, D) or (B, D, D)
+- (D<em>D,)
+- (1, D</em>D) or (B, D*D)</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.noise.to_batched_half_pixel_noise" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">to_batched_half_pixel_noise</span><span class="p">(</span><span class="n">noise_variances</span><span class="p">,</span> <span class="n">image_shape</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.to_batched_half_pixel_noise" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Normalize noise variance into half-spectrum layout broadcastable with (B, H*(W//2+1)).</p>
+<p>Returns (1, N_half) for uniform noise or (B, N_half) for per-image noise.
+Callers should rely on XLA broadcasting rather than expecting exact (B, N_half).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.noise.predict_noise_variance" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">predict_noise_variance</span><span class="p">(</span><span class="n">noise_variance</span><span class="p">,</span> <span class="n">CTF_params</span><span class="p">,</span> <span class="n">voxel_size</span><span class="p">,</span> <span class="n">ctf</span><span class="p">,</span> <span class="n">image_masks</span><span class="p">,</span> <span class="n">image_shape</span><span class="p">,</span> <span class="n">radial</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">premultiplied_ctf</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">upsample_factor</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.predict_noise_variance" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Predict noise variance in images, optionally handling upsampling.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>noise_variance</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Base noise variance (radial or scalar)</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>CTF_params</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>CTF parameters</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>voxel_size</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Voxel size</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>ctf</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Function to compute CTF</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>image_masks</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Image masks</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>image_shape</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Image shape</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>radial</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Whether noise is radial</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>premultiplied_ctf</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Whether CTF is premultiplied</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>upsample_factor</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Factor to upsample by (default 1 for no upsampling)</p>
+              </div>
+            </td>
+            <td>
+                  <code>1</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.noise.fit_noise_model_to_images" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">fit_noise_model_to_images</span><span class="p">(</span><span class="n">experiment_dataset</span><span class="p">,</span> <span class="n">volume_mask</span><span class="p">,</span> <span class="n">mean_estimate</span><span class="p">,</span> <span class="n">image_subset</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">invert_mask</span><span class="p">,</span> <span class="n">disc_type</span><span class="o">=</span><span class="s1">&#39;linear_interp&#39;</span><span class="p">,</span> <span class="n">use_batch_solver</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">tilt_dose_inner</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">image_n_iter</span><span class="o">=</span><span class="mf">10000.0</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.fit_noise_model_to_images" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Fit noise model to images, handling tilt series data specially.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>experiment_dataset</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Dataset containing images and metadata</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>volume_mask</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Mask for the volume</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>mean_estimate</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Estimate of mean volume</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>image_subset</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Subset of images to use, or None for all</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>batch_size</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Batch size for processing</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>invert_mask</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Whether to invert the mask</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>disc_type</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Type of discretization to use</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;linear_interp&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>use_batch_solver</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Whether to use batch solver vs full dataset</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>tilt_dose_inner</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Whether this is an inner call for tilt series</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+<td></td>            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>For tilt series: Array of noise variances per tilt</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+<td><code>Otherwise</code></td>            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Single noise variance and initial estimate</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.noise.estimate_noise_variance" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">estimate_noise_variance</span><span class="p">(</span><span class="n">experiment_dataset</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">max_images</span><span class="o">=</span><span class="mi">10000</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.estimate_noise_variance" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Estimate per-image noise variance from corner pixels.</p>
+<p>Computes the noise power spectrum from image regions outside the
+particle mask, subsampling to at most <em>max_images</em> for efficiency.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>experiment_dataset</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A <code>CryoEMDataset</code> instance.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>batch_size</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of images to process per GPU batch.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_images</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Maximum number of images to use for estimation.</p>
+              </div>
+            </td>
+            <td>
+                  <code>10000</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Tuple <code>(cov_noise, radial_noise_profile)</code> where <em>cov_noise</em></p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>is a scalar noise variance and <em>radial_noise_profile</em> is the</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>averaged radial power spectrum of the noise.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.noise.make_radial_noise_half" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">make_radial_noise_half</span><span class="p">(</span><span class="n">average_image_PS</span><span class="p">,</span> <span class="n">image_shape</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.make_radial_noise_half" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Expand radial noise profile directly to half-image (rfft-packed) layout.</p>
+<p>Output shape: <code>(H * (W//2+1),)</code> instead of <code>(H * W,)</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.noise.batch_basis_times_coords2" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">batch_basis_times_coords2</span><span class="p">(</span><span class="n">basis</span><span class="p">,</span> <span class="n">coords</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.batch_basis_times_coords2" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute basis @ coords.T reshaped for batched images, memory-efficiently.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.noise.average_residual_square" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">average_residual_square</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">images</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">image_mask</span><span class="p">,</span> <span class="n">contrasts</span><span class="p">,</span> <span class="n">basis_coordinates</span><span class="p">,</span> <span class="n">rotation_matrices</span><span class="p">,</span> <span class="n">translations</span><span class="p">,</span> <span class="n">ctf_params</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.noise.average_residual_square" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute average residual squared — Equinox API.</p>
+<p>Replaces the 19-param <code>get_average_residual_square_inner_v2</code>.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="regularization">regularization<a class="headerlink" href="#regularization" title="Permanent link">&para;</a></h2>
+<p>Fourier-shell regularization priors and FSC computation.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h2 id="recovar.reconstruction.regularization" class="doc doc-heading">
+            <code>recovar.reconstruction.regularization</code>
+
+
+<a href="#recovar.reconstruction.regularization" class="headerlink" title="Permanent link">&para;</a></h2>
+
+    <div class="doc doc-contents first">
+
+        <p>Fourier-shell regularization priors and FSC computation.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.regularization.compute_relion_prior" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">compute_relion_prior</span><span class="p">(</span><span class="n">halfset_datasets</span><span class="p">,</span> <span class="n">cov_noise</span><span class="p">,</span> <span class="n">image0</span><span class="p">,</span> <span class="n">image1</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">estimate_merged_SNR</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">noise_level</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.regularization.compute_relion_prior" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute a RELION-style spectral prior from two half-set reconstructions.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>halfset_datasets</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pair of half-set datasets.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>cov_noise</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Scalar noise variance.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>image0</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>First half-map (Fourier coefficients).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>image1</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Second half-map (Fourier coefficients).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>batch_size</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>GPU batch size for noise estimation.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>estimate_merged_SNR</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Estimate SNR from merged map.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>noise_level</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Pre-computed noise level (skips estimation if given).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Tuple <code>(prior, fsc, prior_avg)</code> — the spectral prior, FSC</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>curve, and averaged prior.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.regularization.get_fsc" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_fsc</span><span class="p">(</span><span class="n">vol1</span><span class="p">,</span> <span class="n">vol2</span><span class="p">,</span> <span class="n">volume_shape</span><span class="p">,</span> <span class="n">substract_shell_mean</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">frequency_shift</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.regularization.get_fsc" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compute the Fourier Shell Correlation between two volumes.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>vol1</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>First volume (flattened Fourier coefficients).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>vol2</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Second volume (flattened Fourier coefficients).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>volume_shape</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Tuple <code>(N, N, N)</code> giving the 3-D grid dimensions.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>substract_shell_mean</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Subtract per-shell mean before correlating.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>frequency_shift</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Shift applied to frequency indices.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>1-D array of FSC values, one per radial shell.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="relion_functions">relion_functions<a class="headerlink" href="#relion_functions" title="Permanent link">&para;</a></h2>
+<p>RELION-compatible reconstruction and Wiener filtering routines.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h2 id="recovar.reconstruction.relion_functions" class="doc doc-heading">
+            <code>recovar.reconstruction.relion_functions</code>
+
+
+<a href="#recovar.reconstruction.relion_functions" class="headerlink" title="Permanent link">&para;</a></h2>
+
+    <div class="doc doc-contents first">
+
+        <p>RELION-compatible reconstruction and Wiener filtering routines.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.griddingCorrect" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">griddingCorrect</span><span class="p">(</span><span class="n">vol_in</span><span class="p">,</span> <span class="n">ori_size</span><span class="p">,</span> <span class="n">padding_factor</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.griddingCorrect" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Radial sinc gridding correction.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.griddingCorrect_square" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">griddingCorrect_square</span><span class="p">(</span><span class="n">vol_in</span><span class="p">,</span> <span class="n">ori_size</span><span class="p">,</span> <span class="n">padding_factor</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.griddingCorrect_square" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Per-axis sinc product gridding correction (Fourier transform of trilinear interpolator).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.relion_style_triangular_kernel" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">relion_style_triangular_kernel</span><span class="p">(</span><span class="n">experiment_dataset</span><span class="p">,</span> <span class="n">cov_noise</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">disc_type</span><span class="o">=</span><span class="s1">&#39;linear_interp&#39;</span><span class="p">,</span> <span class="n">index_subset</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">upsampling_factor</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">by_image</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.relion_style_triangular_kernel" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>RELION-style triangular kernel reconstruction.</p>
+<p>Accumulates weighted back-projection (Ft_y) and CTF weight sum (Ft_ctf)
+in half-volume layout, then expands to full volume before returning.</p>
+<h5 id="recovar.reconstruction.relion_functions.relion_style_triangular_kernel--parameters">Parameters<a class="headerlink" href="#recovar.reconstruction.relion_functions.relion_style_triangular_kernel--parameters" title="Permanent link">&para;</a></h5>
+<p>experiment_dataset : CryoEMDataset
+cov_noise : array or None
+    Radial shell variances or pre-expanded noise.  When None, noise is
+    drawn per-batch from <code>experiment_dataset.noise</code>.
+batch_size : int
+disc_type : str
+index_subset : array-like, optional
+    If given, only iterate over this subset in the domain selected by
+    <code>by_image</code>.
+upsampling_factor : int, optional
+    Defaults to <code>1</code>.
+by_image : bool, default True
+    When <code>True</code>, interpret <code>index_subset</code> as image indices.
+    When <code>False</code>, interpret it as group / particle indices and iterate
+    with the grouped dataset iterator. Needed for tilt-series particle
+    subsets such as junk-detection halfmap reconstruction.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.relion_kernel_batch" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">relion_kernel_batch</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">images</span><span class="p">,</span> <span class="n">ctf_params</span><span class="p">,</span> <span class="n">rotation_matrices</span><span class="p">,</span> <span class="n">translations</span><span class="p">,</span> <span class="n">noise_variance</span><span class="p">,</span> <span class="n">Ft_y</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">Ft_ctf</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.relion_kernel_batch" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>RELION-style triangular kernel batch for raw real-space images.</p>
+<p>Applies pad + rfft2 internally, then backprojects with half_image and
+half_volume layouts for maximum memory efficiency.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.relion_kernel_batch_from_fft" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">relion_kernel_batch_from_fft</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">images</span><span class="p">,</span> <span class="n">ctf_params</span><span class="p">,</span> <span class="n">rotation_matrices</span><span class="p">,</span> <span class="n">translations</span><span class="p">,</span> <span class="n">noise_variance</span><span class="p">,</span> <span class="n">Ft_y</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">Ft_ctf</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.relion_kernel_batch_from_fft" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>RELION-style triangular kernel batch for pre-FFTed complex images.</p>
+<p>Extracts the half-spectrum from full-spectrum images, then backprojects
+using half_image and half_volume layouts.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.residual_relion_kernel_trilinear" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">residual_relion_kernel_trilinear</span><span class="p">(</span><span class="n">config</span><span class="p">,</span> <span class="n">mean_estimate</span><span class="p">,</span> <span class="n">images</span><span class="p">,</span> <span class="n">ctf_params</span><span class="p">,</span> <span class="n">rotation_matrices</span><span class="p">,</span> <span class="n">translations</span><span class="p">,</span> <span class="n">cov_noise</span><span class="p">,</span> <span class="n">Ft_y</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">Ft_ctf</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.residual_relion_kernel_trilinear" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Residual RELION-style kernel (trilinear), accumulating into half-volume layout.</p>
+<h5 id="recovar.reconstruction.relion_functions.residual_relion_kernel_trilinear--parameters">Parameters<a class="headerlink" href="#recovar.reconstruction.relion_functions.residual_relion_kernel_trilinear--parameters" title="Permanent link">&para;</a></h5>
+<p>Ft_y, Ft_ctf : optional accumulator volumes (half-volume layout) to add into.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.residual_relion_style_triangular_kernel" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">residual_relion_style_triangular_kernel</span><span class="p">(</span><span class="n">experiment_dataset</span><span class="p">,</span> <span class="n">mean_estimate</span><span class="p">,</span> <span class="n">cov_noise</span><span class="p">,</span> <span class="n">batch_size</span><span class="p">,</span> <span class="n">index_subset</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.residual_relion_style_triangular_kernel" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Residual RELION-style triangular kernel reconstruction.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.adjust_regularization_relion_style" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">adjust_regularization_relion_style</span><span class="p">(</span><span class="nb">filter</span><span class="p">,</span> <span class="n">volume_shape</span><span class="p">,</span> <span class="n">tau</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">padding_factor</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">max_res_shell</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">half_volume</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.adjust_regularization_relion_style" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Adjust the RELION-style regularization filter.</p>
+<p>Adds 1/tau to the filter (Wiener denominator) and floors small values at
+1/1000 of the spherically-averaged filter to avoid division by zero.
+See RELION backprojector.cpp for the original algorithm.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.post_process_from_filter" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">post_process_from_filter</span><span class="p">(</span><span class="n">cryo</span><span class="p">,</span> <span class="n">Ft_ctf</span><span class="p">,</span> <span class="n">F_ty</span><span class="p">,</span> <span class="n">tau</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">disc_type</span><span class="o">=</span><span class="s1">&#39;nearest&#39;</span><span class="p">,</span> <span class="n">use_spherical_mask</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">grid_correct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">gridding_correct</span><span class="o">=</span><span class="s1">&#39;square&#39;</span><span class="p">,</span> <span class="n">kernel_width</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.post_process_from_filter" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Post-process RELION-style reconstruction from filter weights.</p>
+<p>Thin wrapper around <code>post_process_from_filter_v2</code> that extracts the
+necessary geometry from a dataset object (<em>cryo</em>).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.post_process_from_filter_v2" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">post_process_from_filter_v2</span><span class="p">(</span><span class="n">Ft_ctf</span><span class="p">,</span> <span class="n">F_ty</span><span class="p">,</span> <span class="n">og_volume_shape</span><span class="p">,</span> <span class="n">volume_upsampling_factor</span><span class="p">,</span> <span class="n">tau</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">kernel</span><span class="o">=</span><span class="s1">&#39;triangular&#39;</span><span class="p">,</span> <span class="n">use_spherical_mask</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">grid_correct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">gridding_correct</span><span class="o">=</span><span class="s1">&#39;square&#39;</span><span class="p">,</span> <span class="n">kernel_width</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">volume_mask</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">return_real_space</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">return_half_volume</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">input_half_volume</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.post_process_from_filter_v2" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Post-process RELION-style reconstruction from filter weights.</p>
+<p>Steps: regularize -&gt; iDFT -&gt; crop -&gt; spherical mask -&gt; grid correct -&gt; DFT.</p>
+<p>Supports both full Fourier inputs <code>(N0*N1*N2,)</code> and packed half-volume
+inputs <code>(N0*N1*(N2//2+1),)</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.relion_functions.relion_reconstruct" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">relion_reconstruct</span><span class="p">(</span><span class="n">cryo</span><span class="p">,</span> <span class="n">noise_variance</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">disc_type</span><span class="o">=</span><span class="s1">&#39;linear_interp&#39;</span><span class="p">,</span> <span class="n">use_spherical_mask</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">upsampling_factor</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">grid_correct</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">gridding_correct</span><span class="o">=</span><span class="s1">&#39;square&#39;</span><span class="p">,</span> <span class="n">tau</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.relion_functions.relion_reconstruct" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Full mean reconstruction pipeline: accumulate → post-process.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="ewald">ewald<a class="headerlink" href="#ewald" title="Permanent link">&para;</a></h2>
+<p>Ewald sphere curvature correction for high-resolution reconstruction.</p>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<h2 id="recovar.reconstruction.ewald" class="doc doc-heading">
+            <code>recovar.reconstruction.ewald</code>
+
+
+<a href="#recovar.reconstruction.ewald" class="headerlink" title="Permanent link">&para;</a></h2>
+
+    <div class="doc doc-contents first">
+
+        <p>Ewald Sphere Code: models, multipliers, etc.
+This code represents generally the most updated models for forward and backwards
+PART 1: Coordinate/Ewald Sphere Functions
+PART 2: CTF Explicit Functions
+PART 3: FORWARD/BACKWARD IMPLICIT MODELS
+PART 4: ADAPTATIONS FOR CG INPUT (i.e/mask/unmask)</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="recovar.reconstruction.ewald.logger" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">logger</span> <span class="o">=</span> <span class="n">logging</span><span class="o">.</span><span class="n">getLogger</span><span class="p">(</span><span class="vm">__name__</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-module-attribute"><code>module-attribute</code></small>
+  </span>
+
+<a href="#recovar.reconstruction.ewald.logger" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>PART 1: Coordinate/Ewald Sphere Functions</p>
+
+    </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.ewald.get_good_idx_mask" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_good_idx_mask</span><span class="p">(</span><span class="n">volume_shape</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.ewald.get_good_idx_mask" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build real/imag frequency masks. Real part includes DC; imaginary excludes it.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="recovar.reconstruction.ewald.volt_to_wavelength" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">volt_to_wavelength</span><span class="p">(</span><span class="n">volt</span><span class="p">)</span></code>
+
+<a href="#recovar.reconstruction.ewald.volt_to_wavelength" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert accelerating voltage (kV) to electron wavelength (Angstroms).</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+  <script>var tabs=__md_get("__tabs");if(Array.isArray(tabs))e:for(var set of document.querySelectorAll(".tabbed-set")){var labels=set.querySelector(".tabbed-labels");for(var tab of tabs)for(var label of labels.getElementsByTagName("label"))if(label.innerText.trim()===tab){var input=document.getElementById(label.htmlFor);input.checked=!0;continue e}}</script>
+
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "search.suggest", "search.highlight", "content.code.copy", "content.tabs.link"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+        <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+      
+    
+  </body>
+</html>
