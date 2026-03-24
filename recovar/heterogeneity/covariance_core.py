@@ -75,7 +75,7 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
         
     if soften > 0:
         # Soft mask
-        soft_edge_kernel = mask.create_soft_edged_kernel_pxl(soften, image_shape).astype(volume_mask.dtype)
+        soft_edge_kernel = mask.make_soft_edged_kernel(soften, image_shape).astype(volume_mask.dtype)
         
         # Convolve
         soft_edge_kernel_ft = fourier_transform_utils.get_dft2(soft_edge_kernel)

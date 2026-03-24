@@ -88,8 +88,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
     Args:
         heterogeneity_distances: Per-half-set log-likelihood distances,
             list of two arrays each of shape ``(n_images,)``.
-        cryos: Half-set datasets (``CryoEMDataset`` with ``halfset_indices``,
-            or ``CryoEMDataset`` for backward compat).
+        cryos: Half-set datasets (``CryoEMDataset`` with ``halfset_indices``).
         output_folder: Directory for output MRC files.
         ndim: Latent dimensionality (``-1`` for automatic).
         bins: Number of bins (int) or explicit bin edges (array).
@@ -202,7 +201,7 @@ def make_volumes_kernel_estimate_local(heterogeneity_distances, cryos,  output_f
         # Local resolution map
         recovar.utils.write_mrc(output_folder + name + prefix + "local_resolution.mrc", best_filtered_res, voxel_size = ds.voxel_size)
 
-        # Half-maps (RELION-compatible naming)
+        # Half-maps with RELION-style filenames
         recovar.utils.write_mrc(output_folder + name + prefix + "half1_unfil.mrc", opt_halfmaps[0], voxel_size = ds.voxel_size)
         recovar.utils.write_mrc(output_folder + name + prefix + "half2_unfil.mrc", opt_halfmaps[1], voxel_size = ds.voxel_size)
         recovar.utils.write_mrc(output_folder + name + prefix + "unfil.mrc", (opt_halfmaps[0] + opt_halfmaps[1])/2, voxel_size = ds.voxel_size)

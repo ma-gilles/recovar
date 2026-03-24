@@ -1,6 +1,6 @@
 import pytest
 
-from helpers.metrics_regression import compare_metric, metric_direction
+from helpers.metrics_regression import compare_metric, metric_absolute_tolerance, metric_direction
 
 pytestmark = pytest.mark.unit
 
@@ -41,3 +41,53 @@ def test_metric_direction_for_canonical_key_names():
     assert metric_direction("contrast_abs_error_4_noreg") == "lower"
     assert metric_direction("state_0_locres_90pct") == "lower"
     assert metric_direction("state_1_locres_median") == "lower"
+
+
+def test_moving_piece_error_uses_absolute_tolerance_floor():
+    assert metric_absolute_tolerance("state_0_moving_piece_error_median") == pytest.approx(2e-3)
+    assert metric_absolute_tolerance("state_1_moving_piece_error_90pct") == pytest.approx(3.5e-3)
+
+    ok, _ = compare_metric(
+        current=0.019987913494816097,
+        baseline=0.01949449979218878,
+        direction="lower",
+        tol_frac=0.01,
+        metric_name="state_0_moving_piece_error_median",
+    )
+    assert ok
+
+    ok, _ = compare_metric(
+        current=0.0217,
+        baseline=0.01949,
+        direction="lower",
+        tol_frac=0.01,
+        metric_name="state_0_moving_piece_error_median",
+    )
+    assert not ok
+
+    ok, _ = compare_metric(
+        current=0.1377695314573107,
+        baseline=0.13515495160141233,
+        direction="lower",
+        tol_frac=0.01,
+        metric_name="state_1_moving_piece_error_90pct",
+    )
+    assert ok
+
+    ok, _ = compare_metric(
+        current=0.13836238668735856,
+        baseline=0.13515495160141233,
+        direction="lower",
+        tol_frac=0.01,
+        metric_name="state_1_moving_piece_error_90pct",
+    )
+    assert ok
+
+    ok, _ = compare_metric(
+        current=0.1392,
+        baseline=0.13515495160141233,
+        direction="lower",
+        tol_frac=0.01,
+        metric_name="state_1_moving_piece_error_90pct",
+    )
+    assert not ok

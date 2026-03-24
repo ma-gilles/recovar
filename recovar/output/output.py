@@ -938,11 +938,6 @@ class PipelineOutput:
         elif key == 'input_args':
             return self._get_input_args()
 
-        # Backward compat: fields removed in v0.6 (were always None or redundant)
-        elif key == 's_all':
-            if 's_all' in self.params:
-                return self.params['s_all']
-            return {'rescaled': self.params['s'], 'real': None}
         elif key in ('density', 'latent_space_bounds', 'pc_metric', 'contrasts_for_second'):
             return self.params.get(key, None)
         elif key in ('std_image_PS', 'std_masked_image_PS'):
@@ -1010,7 +1005,7 @@ def make_trajectory_plots_from_results(pipeline_output, basis_size, output_folde
 
 
 def _resolve_trajectory_plot_inputs(pipeline_output, basis_size, cryos, input_density, latent_space_bounds):
-    """Resolve trajectory plotting inputs through the PipelineOutput compatibility API."""
+    """Resolve trajectory plotting inputs from PipelineOutput."""
     zs = pipeline_output.get_embedding_component("latent_coords", basis_size)
     cov_zs = pipeline_output.get_embedding_component("latent_precision", basis_size)
 
@@ -1184,7 +1179,11 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
 
     # Contrast histogram
     fig, ax = plt.subplots(figsize=(8, 6))
-    plot_utils.plot_contrast_histogram(po.get('contrasts')[zdim_key], ax=ax, zdim_key=zdim_key)
+    plot_utils.plot_contrast_histogram(
+        po.get_embedding_component('contrasts', zdim_key),
+        ax=ax,
+        zdim_key=zdim_key,
+    )
     plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'), bbox_inches='tight')
     plt.close()
 
@@ -1204,33 +1203,16 @@ def standard_pipeline_plots(po, zdim_key, output_folder):
 
     # Load latent coordinates with robust error handling
     try:
-        zs_data = po.get('latent_coords')
-        if zs_data is None:
+        latent_keys = list(po.get_embedding_keys('latent_coords'))
+        if len(latent_keys) == 0:
             logger.warning("No latent coordinates found in pipeline output. Skipping PC analysis.")
             return
-            
-        # Try to get 4D latent space, fallback to available dimensions
-        if isinstance(zs_data, dict):
-            if 4 in zs_data:
-                z = zs_data[4]
-            elif len(zs_data) > 0:
-                # Use the first available key
-                first_key = list(zs_data.keys())[0]
-                z = zs_data[first_key]
-                logger.info("Using latent space with key %s instead of 4", first_key)
-            else:
-                logger.warning("No valid latent coordinates found. Skipping PC analysis.")
-                return
-        elif isinstance(zs_data, (list, tuple)) and len(zs_data) > 4:
-            z = zs_data[4]
-        elif isinstance(zs_data, (list, tuple)) and len(zs_data) > 0:
-            z = zs_data[0]
-            logger.info("Using first available latent space instead of 4D")
-        else:
-            logger.warning("Unexpected format for latent coordinates. Skipping PC analysis.")
-            return
-            
-        if z is None or not hasattr(z, 'shape'):
+        latent_key = 4 if 4 in latent_keys else latent_keys[0]
+        if latent_key != 4:
+            logger.info("Using latent space with key %s instead of 4", latent_key)
+
+        z = np.asarray(po.get_embedding_component('latent_coords', latent_key))
+        if z.ndim != 2:
             logger.warning("Invalid latent coordinates data. Skipping PC analysis.")
             return
             

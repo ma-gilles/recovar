@@ -5,7 +5,7 @@ Mirrors test_run_test_all_metrics_tiny_regression_baseline.py exactly:
   Run 1:  write baseline from current code
   Run 2:  compare against that baseline → assert no regression
 
-Both runs use identical randomly-generated volumes and the same RNG seed,
+Both runs use identical randomly-generated volumes and the same dataset seed,
 so the comparison is a deterministic self-consistency check: code changes
 that legitimately worsen detection accuracy will fail here.
 
@@ -103,6 +103,7 @@ def _run_and_score(
         "--percent-outliers", str(_PCT),
         "--grid-size", str(_GRID),
         "--volume-input", str(volumes_prefix),
+        "--seed", "42",
     ]
     subprocess.run(make_cmd, check=True)
 

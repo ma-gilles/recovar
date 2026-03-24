@@ -535,33 +535,30 @@ def compare_scores_against_baseline(current_scores, baseline_scores, tol_frac, s
 
 def load_u_real_for_metrics(pipeline_output, n_pcs):
     """
-    Load only the requested number of real-space eigen volumes when supported.
-    Falls back to legacy `get('u_real')` API.
+    Load the requested number of real-space eigen volumes.
     """
     n_pcs = int(n_pcs)
     if n_pcs <= 0:
         raise ValueError(f"n_pcs must be positive, got {n_pcs}")
-    if hasattr(pipeline_output, "get_u_real"):
-        return np.asarray(pipeline_output.get_u_real(n_pcs))
-    return np.asarray(pipeline_output.get('u_real')[:n_pcs])
+    return np.asarray(pipeline_output.get_u_real(n_pcs))
 
 
-def load_unsorted_embedding_component(pipeline_output, entry, key, legacy_cache=None):
+def load_unsorted_embedding_component(pipeline_output, entry, key, cache=None):
     """
     Load one unsorted embedding component in original (simulation) order.
 
     Uses ``PipelineOutput.get_unsorted_embedding_component`` so the caller gets
     original dataset order without halfset re-indexing.
     """
-    if legacy_cache is None:
-        legacy_cache = {}
+    if cache is None:
+        cache = {}
 
     cache_key = ("component", entry, key)
-    if cache_key in legacy_cache:
-        return legacy_cache[cache_key]
+    if cache_key in cache:
+        return cache[cache_key]
 
     value = np.asarray(pipeline_output.get_unsorted_embedding_component(entry, key))
-    legacy_cache[cache_key] = value
+    cache[cache_key] = value
     return value
 
 
@@ -569,8 +566,8 @@ def select_state_target_latent_points(unsorted_zs, particle_assignment, preferre
     """
     Pick representative latent points for compute_state without producing NaNs.
 
-    Preferred labels are used when present; otherwise, non-empty labels with the
-    highest particle counts are used as fallback.
+    Preferred labels are used when present; otherwise, use the non-empty labels
+    with the highest particle counts.
     """
     max_points = int(max_points)
     if max_points <= 0:
@@ -871,13 +868,13 @@ def main():
     output.mkdir_safe(plots_dir)
 
     pipeline_output = output.PipelineOutput(pipeline_output_dir)
-    legacy_embedding_cache = {}
+    embedding_cache = {}
     particle_assignment = sim_info['image_assignment'] if not tilt_series else sim_info['tilt_series_assignment']
 
     max_classes = int(np.max(sim_info['image_assignment'])) + 1
     requested_labels = [0, max_classes // 2]
     unsorted_zs = load_unsorted_embedding_component(
-        pipeline_output, 'latent_coords', 10, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'latent_coords', 10, cache=embedding_cache
     )
     zs_assignment, labels_to_plot = select_state_target_latent_points(
         unsorted_zs=unsorted_zs,
@@ -960,7 +957,6 @@ def main():
         fmat=""
     )
     all_scores['variance_spatial_fsc'] = score_spatial
-    # Keep legacy key for backward compatibility
     all_scores['variance_fsc'] = score_spatial
 
     # Fourier variance FSC: GT Fourier variance vs estimated from eigendecomposition
@@ -1048,13 +1044,13 @@ def main():
 
     # Embedding variance errors
     unsorted_zs = load_unsorted_embedding_component(
-        pipeline_output, 'latent_coords', 4, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'latent_coords', 4, cache=embedding_cache
     )
     _, averaged_variance = metrics.variance_of_zs(unsorted_zs, particle_assignment)
     all_scores['embedding_squared_error_4'] = averaged_variance
 
     unsorted_zs = load_unsorted_embedding_component(
-        pipeline_output, 'latent_coords', 10, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'latent_coords', 10, cache=embedding_cache
     )
     _, averaged_variance = metrics.variance_of_zs(unsorted_zs, particle_assignment)
     all_scores['embedding_squared_error_10'] = averaged_variance
@@ -1065,7 +1061,7 @@ def main():
             entry = 'contrasts_noreg' if noreg else 'contrasts'
             label = f'{zdim_val}_noreg' if noreg else str(zdim_val)
             unsorted_contrast = load_unsorted_embedding_component(
-                pipeline_output, entry, zdim_val, legacy_cache=legacy_embedding_cache
+                pipeline_output, entry, zdim_val, cache=embedding_cache
             )
             contrast_abs_error = np.mean(np.abs(gt_contrasts - unsorted_contrast))
             all_scores[f'contrast_abs_error_{label}'] = contrast_abs_error
@@ -1164,7 +1160,7 @@ def main():
     # Plot 5: Contrast comparison for zdim=4
     plt.subplot(3, 3, 5)
     unsorted_contrast_4 = load_unsorted_embedding_component(
-        pipeline_output, 'contrasts', 4, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'contrasts', 4, cache=embedding_cache
     )
     plt.scatter(gt_contrasts, unsorted_contrast_4, alpha=0.5, label='Particle contrasts')
     plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')
@@ -1185,7 +1181,7 @@ def main():
     # Plot 7: Contrast comparison for zdim=10
     plt.subplot(3, 3, 7)
     unsorted_contrast_10 = load_unsorted_embedding_component(
-        pipeline_output, 'contrasts', 10, legacy_cache=legacy_embedding_cache
+        pipeline_output, 'contrasts', 10, cache=embedding_cache
     )
     plt.scatter(gt_contrasts, unsorted_contrast_10, alpha=0.5, label='Particle contrasts')
     plt.plot([0, 1], [0, 1], 'r--', label='Perfect correlation')

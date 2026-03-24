@@ -2,14 +2,131 @@
 
 import numpy as np
 import pytest
-from scipy.ndimage import binary_dilation
+from scipy.ndimage import binary_dilation, distance_transform_edt
 
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
 import recovar.core.mask as mask
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.utils as utils
 
 pytestmark = pytest.mark.unit
+
+
+def _reference_threshold_map(arr, prob=0.99, dthresh=None):
+    if dthresh is None:
+        x2 = np.sort(arr.flatten())
+        f2 = np.arange(len(x2)) / float(len(x2) - 1)
+        loc = np.where(f2 >= prob)
+        thresh = x2[loc[0][0]]
+    else:
+        thresh = dthresh
+    return arr * (arr > thresh)
+
+
+def _reference_soften_volume_mask(binary_volume_mask, kern_rad=3):
+    distance_to_mask = distance_transform_edt(binary_volume_mask < 0.9)
+    softened = np.zeros_like(binary_volume_mask)
+    softened = np.where(
+        (distance_to_mask >= 0) & (distance_to_mask < kern_rad),
+        0.5 + 0.5 * np.cos(np.pi * distance_to_mask / kern_rad),
+        softened,
+    )
+    return np.asarray(softened.astype(np.float32))
+
+
+def _reference_make_soft_edged_kernel(r1, shape):
+    if r1 < 3:
+        boxsize = 5
+    else:
+        boxsize = 2 * r1 + 1
+
+    volume_coords = np.asarray(
+        fourier_transform_utils.get_k_coordinate_of_each_pixel(
+            shape, voxel_size=1, scaled=False
+        )
+    ).reshape(list(shape) + [len(list(shape))]) + 1
+    distances = np.linalg.norm(volume_coords, axis=-1)
+    half_boxsize = boxsize // 2
+    r1 = half_boxsize
+    r0 = r1 - 2
+
+    kern = np.where(distances < r0, 1.0, 0.0)
+    kern = np.where(
+        (distances <= r1) & (distances >= r0),
+        (1 + np.cos(np.pi * (distances - r0) / (r1 - r0))) / 2.0,
+        kern,
+    )
+    return kern / np.sum(kern)
+
+
+def _reference_local_correlation_3d(half1, half2, kern):
+    import scipy.signal
+
+    loc3_A = scipy.signal.fftconvolve(half1, kern, "same")
+    loc3_A2 = scipy.signal.fftconvolve(half1 * half1, kern, "same")
+    loc3_B = scipy.signal.fftconvolve(half2, kern, "same")
+    loc3_B2 = scipy.signal.fftconvolve(half2 * half2, kern, "same")
+    loc3_AB = scipy.signal.fftconvolve(half1 * half2, kern, "same")
+    cov3_AB = loc3_AB - loc3_A * loc3_B
+    var3_A = loc3_A2 - loc3_A**2
+    var3_B = loc3_B2 - loc3_B**2
+    reg_a = np.max(var3_A) / 1000
+    reg_b = np.max(var3_B) / 1000
+    var3_A = np.where(var3_A < reg_a, reg_a, var3_A)
+    var3_B = np.where(var3_B < reg_b, reg_b, var3_B)
+    return cov3_AB / np.sqrt(var3_A * var3_B)
+
+
+def _reference_make_mask_from_half_maps(halfmap1, halfmap2, smax=3):
+    kern = _reference_make_soft_edged_kernel(smax, halfmap1.shape)
+    h1 = _reference_threshold_map(halfmap1)
+    h2 = _reference_threshold_map(halfmap2)
+    halfcc3d = _reference_local_correlation_3d(h1, h2, kern)
+    halfcc3d *= np.asarray(mask.get_radial_mask(halfmap1.shape))
+    ccmap_binary = (halfcc3d >= 1e-3).astype(int)
+    dilated = binary_dilation(ccmap_binary, iterations=int(6 * halfmap1.shape[0] // 128))
+    softened = _reference_soften_volume_mask(dilated, kern_rad=2)
+    return softened * (softened >= 1e-3)
+
+
+def _reference_make_mask_from_gt(gt_map, smax=3, iter=10, from_ft=True):
+    del smax
+    vol_shape = utils.guess_vol_shape_from_vol_size(gt_map.size) if from_ft else gt_map.shape
+    if from_ft:
+        vol_real = fourier_transform_utils.get_idft3(gt_map.reshape(vol_shape)).real
+    else:
+        vol_real = gt_map.reshape(vol_shape)
+    thresholded = _reference_threshold_map(vol_real) > 0
+    dilated = binary_dilation(thresholded, iterations=iter)
+    return _reference_soften_volume_mask(dilated, kern_rad=2)
+
+
+def _reference_make_moving_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1, dilation_iters=None, kern_rad=3):
+    if dilation_iters is None:
+        dilation_iters = int(np.ceil(6 * volume_shape[0] / 128))
+
+    if isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 2:
+        gt_volumes_real = [gt_volumes_real[i].reshape(volume_shape) for i in range(gt_volumes_real.shape[0])]
+    elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 4:
+        gt_volumes_real = [gt_volumes_real[i] for i in range(gt_volumes_real.shape[0])]
+    elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 3:
+        gt_volumes_real = [gt_volumes_real]
+
+    volumes = np.asarray([np.asarray(vol).reshape(volume_shape) for vol in gt_volumes_real], dtype=np.float32)
+    mean_volume = np.mean(volumes, axis=0)
+    moving_signal = np.sqrt(np.mean((volumes - mean_volume[None]) ** 2, axis=0))
+    moving_mask = _reference_make_mask_from_gt(moving_signal, smax=smax, iter=iter, from_ft=False) > 0.5
+    if dilation_iters > 0 and np.any(moving_mask):
+        moving_mask = binary_dilation(moving_mask, iterations=dilation_iters)
+
+    binary_mask = np.asarray(moving_mask, dtype=bool)
+    if np.any(binary_mask):
+        soft_mask = _reference_soften_volume_mask(binary_mask, kern_rad=kern_rad)
+    else:
+        soft_mask = np.zeros(volume_shape, dtype=np.float32)
+    return np.asarray(soft_mask, dtype=np.float32), binary_mask
 
 
 # ---------------------------------------------------------------------------
@@ -34,6 +151,13 @@ class TestThresholdMap:
         arr = np.ones(10) * 0.5
         result = mask.threshold_map(arr, dthresh=1.0)
         np.testing.assert_allclose(result, 0.0)
+
+    def test_matches_reference_threshold_map(self):
+        arr = np.linspace(-2.0, 3.0, 57, dtype=np.float32).reshape(3, 19)
+        np.testing.assert_allclose(
+            mask.threshold_map(arr, prob=0.93),
+            _reference_threshold_map(arr, prob=0.93),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -111,25 +235,30 @@ class TestGetRadialMask:
 
 
 # ---------------------------------------------------------------------------
-# create_soft_edged_kernel_pxl
+# make_soft_edged_kernel
 # ---------------------------------------------------------------------------
 
 class TestCreateSoftEdgedKernel:
     def test_3d_kernel_shape(self):
-        k = mask.create_soft_edged_kernel_pxl(3, (8, 8, 8))
+        k = mask.make_soft_edged_kernel(3, (8, 8, 8))
         assert k.shape == (8, 8, 8)
 
     def test_sums_to_one(self):
-        k = mask.create_soft_edged_kernel_pxl(3, (8, 8, 8))
+        k = mask.make_soft_edged_kernel(3, (8, 8, 8))
         np.testing.assert_allclose(float(jnp.sum(k)), 1.0, atol=1e-5)
 
     def test_non_negative(self):
-        k = mask.create_soft_edged_kernel_pxl(5, (12, 12, 12))
+        k = mask.make_soft_edged_kernel(5, (12, 12, 12))
         assert float(jnp.min(k)) >= 0.0
 
     def test_small_radius(self):
-        k = mask.create_soft_edged_kernel_pxl(2, (6, 6, 6))
+        k = mask.make_soft_edged_kernel(2, (6, 6, 6))
         np.testing.assert_allclose(float(jnp.sum(k)), 1.0, atol=1e-5)
+
+    def test_matches_reference_kernel(self):
+        got = np.asarray(mask.make_soft_edged_kernel(4, (10, 10, 10)))
+        expected = _reference_make_soft_edged_kernel(4, (10, 10, 10))
+        np.testing.assert_allclose(got, expected, atol=2e-9, rtol=3e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +279,14 @@ class TestSoftenVolumeMask:
         result = mask.soften_volume_mask(binary, kern_rad=2)
         # Deep interior should still be ~1
         np.testing.assert_allclose(result[9, 9, 9], 1.0, atol=0.05)
+
+    def test_matches_reference_softening(self):
+        binary = np.zeros((12, 12, 12), dtype=np.float32)
+        binary[3:9, 4:8, 2:10] = 1.0
+        np.testing.assert_allclose(
+            mask.soften_volume_mask(binary, kern_rad=3),
+            _reference_soften_volume_mask(binary, kern_rad=3),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +331,7 @@ class TestSoftMaskOutsideMap:
 
 
 # ---------------------------------------------------------------------------
-# MaskedMaps
+# Reference equivalence
 # ---------------------------------------------------------------------------
 
 class TestMakeUnionGtMask:
@@ -283,34 +420,42 @@ class TestMakeUnionGtMask:
         assert soft.shape == vol_shape
 
 
-class TestMaskedMaps:
-    def test_init_defaults(self):
-        mm = mask.MaskedMaps()
-        assert mm.mask is None
-        assert mm.iter == 3
-        assert mm.smax == 9
-        assert mm.prob == 0.99
-
-    def test_generate_mask_from_gt(self):
+class TestReferenceEquivalence:
+    def test_make_mask_from_gt_matches_reference_impl(self):
         rng = np.random.RandomState(42)
         vol = rng.randn(16, 16, 16).astype(np.float32)
-        mm = mask.MaskedMaps()
-        mm.smax = 3
-        mm.arr1 = vol
-        mm.iter = 2
-        mm.generate_mask_from_gt()
-        assert mm.mask is not None
-        assert mm.mask.shape == (16, 16, 16)
+        got = mask.make_mask_from_gt(vol, smax=3, iter=2, from_ft=False)
+        expected = _reference_make_mask_from_gt(vol, smax=3, iter=2, from_ft=False)
+        np.testing.assert_allclose(got, expected)
 
-    def test_generate_mask_halfmaps(self):
+    def test_make_mask_from_half_maps_matches_reference_impl(self):
         rng = np.random.RandomState(42)
         h1 = rng.randn(16, 16, 16).astype(np.float32)
         h2 = h1 + rng.randn(16, 16, 16).astype(np.float32) * 0.1
-        mm = mask.MaskedMaps()
-        mm.smax = 3
-        mm.arr1 = h1
-        mm.arr2 = h2
-        mm.iter = 2
-        mm.generate_mask()
-        assert mm.mask is not None
-        assert mm.mask.shape == (16, 16, 16)
+        got = mask.make_mask_from_half_maps(h1, h2, smax=3)
+        expected = _reference_make_mask_from_half_maps(h1, h2, smax=3)
+        np.testing.assert_allclose(got, expected)
+
+    def test_make_moving_gt_mask_matches_reference_impl(self):
+        rng = np.random.default_rng(0)
+        vols = rng.standard_normal((3, 10, 10, 10), dtype=np.float32)
+        vols[:, 3:7, 3:7, 3:7] += np.array([0.0, 1.0, 2.0], dtype=np.float32)[:, None, None, None]
+
+        got_soft, got_binary = mask.make_moving_gt_mask(
+            vols,
+            volume_shape=(10, 10, 10),
+            smax=3,
+            iter=2,
+            dilation_iters=1,
+            kern_rad=3,
+        )
+        exp_soft, exp_binary = _reference_make_moving_gt_mask(
+            vols,
+            volume_shape=(10, 10, 10),
+            smax=3,
+            iter=2,
+            dilation_iters=1,
+            kern_rad=3,
+        )
+        np.testing.assert_array_equal(got_binary, exp_binary)
+        np.testing.assert_allclose(got_soft, exp_soft)

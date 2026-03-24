@@ -15,6 +15,10 @@ from recovar.heterogeneity import covariance_estimation
 
 logger = logging.getLogger(__name__)
 
+
+def _principal_component_random_seed(dataset):
+    return None if getattr(dataset, "tilt_series_flag", False) else 0
+
 # NVTX domain for principal components operations
 NVTX_DOMAIN_PCA = "principal_components"
 
@@ -86,7 +90,14 @@ def estimate_principal_components(dataset, options,  means, mean_prior, volume_m
             lhs = lhs * variance_estimate
 
         if covariance_options['randomize_column_sampling']:
-            picked_frequencies, picked_frequencies_in_frequencies_format = covariance_estimation.randomized_column_choice(lhs, covariance_options['sampling_n_cols'], volume_shape, avoid_in_radius = covariance_options['sampling_avoid_in_radius'])
+            random_seed = _principal_component_random_seed(dataset)
+            picked_frequencies, picked_frequencies_in_frequencies_format = covariance_estimation.randomized_column_choice(
+                lhs,
+                covariance_options['sampling_n_cols'],
+                volume_shape,
+                avoid_in_radius=covariance_options['sampling_avoid_in_radius'],
+                random_seed=random_seed,
+            )
         else:
             picked_frequencies, picked_frequencies_in_frequencies_format = covariance_estimation.greedy_column_choice(lhs, covariance_options['sampling_n_cols'], volume_shape, avoid_in_radius = covariance_options['sampling_avoid_in_radius'])
 
@@ -115,6 +126,7 @@ def estimate_principal_components(dataset, options,  means, mean_prior, volume_m
         gpu_memory_to_use,
         False,
         covariance_options['randomized_sketch_size'],
+        _principal_component_random_seed(dataset),
     )
     u = {"real": u_real}
     s = {"real": s_real}
@@ -176,6 +188,7 @@ def get_cov_svds(
     gpu_memory_to_use,
     ignore_zero_frequency,
     randomized_sketch_size,
+    random_seed=None,
 ):
     u_real, s_real, _ = randomized_real_svd_of_columns(
         covariance_cols["est_mask"],
@@ -186,6 +199,7 @@ def get_cov_svds(
         test_size=randomized_sketch_size,
         gpu_memory_to_use=gpu_memory_to_use,
         ignore_zero_frequency=ignore_zero_frequency,
+        random_seed=random_seed,
     )
     return u_real, s_real
 
@@ -498,7 +512,17 @@ report_memory = True
 
 
 @nvtx.annotate("randomized_real_svd_of_columns", color="red", domain=NVTX_DOMAIN_PCA)
-def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mask, volume_shape, vol_batch_size, test_size = 300, gpu_memory_to_use= 40, ignore_zero_frequency = False):
+def randomized_real_svd_of_columns(
+    columns,
+    picked_frequency_indices,
+    volume_mask,
+    volume_shape,
+    vol_batch_size,
+    test_size=300,
+    gpu_memory_to_use=40,
+    ignore_zero_frequency=False,
+    random_seed=None,
+):
     st_time = time.time()
 
 
@@ -509,7 +533,11 @@ def randomized_real_svd_of_columns(columns, picked_frequency_indices, volume_mas
     smaller_vol_shape = tuple(3*[smaller_size])
 
     smaller_vol_size = np.prod(smaller_vol_shape)
-    test_mat = np.random.randn(smaller_vol_size, test_size).real.astype(np.float32)
+    if random_seed is None:
+        test_mat = np.random.randn(smaller_vol_size, test_size).real.astype(np.float32)
+    else:
+        rng = np.random.default_rng(random_seed)
+        test_mat = rng.standard_normal((smaller_vol_size, test_size)).astype(np.float32, copy=False)
 
     st_time = time.time()
     Q = right_matvec_with_spatial_Sigma(

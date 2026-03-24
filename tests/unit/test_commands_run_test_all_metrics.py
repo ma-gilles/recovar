@@ -34,7 +34,7 @@ def test_lower_is_better_contains_contrast():
     assert "contrast" in rtam.LOWER_IS_BETTER_TOKENS
 
 
-def test_lower_is_better_does_not_keep_legacy_contrast_typo():
+def test_lower_is_better_does_not_keep_old_contrast_typo():
     assert "constrast" not in rtam.LOWER_IS_BETTER_TOKENS
 
 
@@ -120,21 +120,6 @@ def test_load_u_real_for_metrics_uses_get_u_real_when_available():
     result = rtam.load_u_real_for_metrics(FakePO(), 3)
     np.testing.assert_array_equal(result, expected[:3])
 
-
-def test_load_u_real_for_metrics_falls_back_to_get():
-    """Should fall back to get('u_real')[:n_pcs] when get_u_real is absent."""
-    full = np.random.randn(10, 64).astype(np.float32)
-
-    class FakePO:
-        def get(self, key):
-            if key == 'u_real':
-                return full
-            raise KeyError(key)
-
-    result = rtam.load_u_real_for_metrics(FakePO(), 4)
-    np.testing.assert_array_equal(result, full[:4])
-
-
 def test_load_u_real_for_metrics_rejects_zero():
     with pytest.raises(ValueError, match="positive"):
         rtam.load_u_real_for_metrics(None, 0)
@@ -176,8 +161,8 @@ def test_load_unsorted_embedding_component_caches():
             return expected
 
     cache = {}
-    rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, legacy_cache=cache)
-    rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, legacy_cache=cache)
+    rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, cache=cache)
+    rtam.load_unsorted_embedding_component(FakePO(), "latent_coords", 4, cache=cache)
     assert call_count["n"] == 1
 
 

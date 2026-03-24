@@ -94,7 +94,6 @@ def test_greedy_column_choice_basic_properties():
 
 
 def test_randomized_column_choice_basic_properties():
-    np.random.seed(0)
     sampling_vec = np.ones(64, dtype=np.float64)
     volume_shape = (4, 4, 4)
     picked, freqs = cov_est.randomized_column_choice(
@@ -102,10 +101,42 @@ def test_randomized_column_choice_basic_properties():
         n_samples=4,
         volume_shape=volume_shape,
         avoid_in_radius=0,
+        random_seed=7,
     )
     assert picked.shape == (4,)
     assert freqs.shape == (4, 3)
     assert len(np.unique(picked)) == 4
+
+
+def test_randomized_column_choice_is_deterministic_for_fixed_seed():
+    sampling_vec = np.linspace(1.0, 5.0, 64, dtype=np.float64)
+    volume_shape = (4, 4, 4)
+
+    picked1, freqs1 = cov_est.randomized_column_choice(
+        sampling_vec=sampling_vec,
+        n_samples=5,
+        volume_shape=volume_shape,
+        avoid_in_radius=0,
+        random_seed=11,
+    )
+    picked2, freqs2 = cov_est.randomized_column_choice(
+        sampling_vec=sampling_vec,
+        n_samples=5,
+        volume_shape=volume_shape,
+        avoid_in_radius=0,
+        random_seed=11,
+    )
+    picked3, freqs3 = cov_est.randomized_column_choice(
+        sampling_vec=sampling_vec,
+        n_samples=5,
+        volume_shape=volume_shape,
+        avoid_in_radius=0,
+        random_seed=12,
+    )
+
+    np.testing.assert_array_equal(picked1, picked2)
+    np.testing.assert_array_equal(freqs1, freqs2)
+    assert not np.array_equal(picked1, picked3)
 
 
 def test_set_covariance_options_updates_only_present_keys():

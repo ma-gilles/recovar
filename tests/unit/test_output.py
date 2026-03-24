@@ -4,6 +4,7 @@ import pytest
 pytest.importorskip("jax")
 
 from recovar.output import output
+from recovar.output import plot_utils
 
 pytestmark = pytest.mark.unit
 
@@ -264,6 +265,42 @@ def test_get_nearest_point_chunked_matches_dense_path():
     np.testing.assert_allclose(chunked_points, dense_points)
 
 
+def test_standard_pipeline_plots_uses_embedding_component_api(monkeypatch, tmp_path):
+    calls = []
+
+    class _PO:
+        def get(self, key):
+            if key in {"latent_coords", "contrasts"}:
+                raise AssertionError(f"standard_pipeline_plots should not call get('{key}')")
+            if key == "s":
+                return np.ones(4, dtype=np.float32)
+            raise KeyError(key)
+
+        def get_embedding_keys(self, entry):
+            assert entry == "latent_coords"
+            return [4]
+
+        def get_embedding_component(self, entry, key):
+            calls.append((entry, key))
+            if entry == "contrasts":
+                return np.ones(12, dtype=np.float32)
+            if entry == "latent_coords":
+                return np.arange(48, dtype=np.float32).reshape(12, 4)
+            raise KeyError(entry)
+
+    monkeypatch.setattr(output, "mkdir_safe", lambda path: tmp_path.mkdir(exist_ok=True))
+    monkeypatch.setattr(plot_utils, "plot_summary_t", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(plot_utils, "plot_contrast_histogram", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(plot_utils, "plot_eigenvalues", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(plot_utils, "plot_mean_fsc", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(plot_utils, "plot_pipeline_summary", lambda *_args, **_kwargs: None)
+
+    output.standard_pipeline_plots(_PO(), 4, str(tmp_path))
+
+    assert ("contrasts", 4) in calls
+    assert ("latent_coords", 4) in calls
+
+
 def test_promote_reweighted_volume_outputs_moves_primary_files(tmp_path):
     diag_dir = tmp_path / "diagnostics" / "state000"
     diag_dir.mkdir(parents=True)
@@ -395,4 +432,3 @@ def test_scatter_annotate_with_explicit_centers():
     fig, ax = output.scatter_annotate(x, y, centers=centers, annotate=False)
     assert hasattr(fig, "savefig")
     plt.close(fig)
-

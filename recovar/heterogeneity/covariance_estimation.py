@@ -239,7 +239,13 @@ def greedy_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius 
     return np.asarray(picked), np.asarray(picked_frequencies)
 
 @nvtx.annotate("randomized_column_choice", color="orange")
-def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_radius = 1):
+def randomized_column_choice(
+    sampling_vec,
+    n_samples,
+    volume_shape,
+    avoid_in_radius=1,
+    random_seed=None,
+):
     if avoid_in_radius < 0 or avoid_in_radius > 20:
         raise ValueError("avoid_in_radius should be between 0 and 20")
 
@@ -255,12 +261,17 @@ def randomized_column_choice(sampling_vec, n_samples, volume_shape, avoid_in_rad
     running_vec = np.asarray(sampling_vec).astype(np.float64)
     probs = running_vec/np.sum(running_vec)
     draw_size = min(running_vec.size, n_samples * 100)
-    random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
+    if random_seed is None:
+        draw = np.random.choice
+    else:
+        rng = np.random.default_rng(random_seed)
+        draw = rng.choice
+    random_choices = draw(running_vec.size, size=draw_size, p=probs, replace=False)
     test_idx =0
 
     while n_picked < n_samples:
         if test_idx >= random_choices.size:
-            random_choices = np.random.choice(running_vec.size, size=draw_size, p=probs, replace=False)
+            random_choices = draw(running_vec.size, size=draw_size, p=probs, replace=False)
             test_idx =0
 
         idx = random_choices[test_idx]

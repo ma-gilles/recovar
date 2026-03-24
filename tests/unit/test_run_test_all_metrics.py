@@ -741,27 +741,12 @@ def test_load_u_real_for_metrics_prefers_selective_api():
             assert n_pcs == 3
             return np.ones((3, 2, 2, 2), dtype=np.float32)
 
-        def get(self, key):
-            raise AssertionError("legacy get('u_real') should not be called when get_u_real exists")
-
     out = rtam.load_u_real_for_metrics(_PO(), 3)
     assert out.shape == (3, 2, 2, 2)
 
-
-def test_load_u_real_for_metrics_falls_back_to_legacy_get():
-    class _PO:
-        def get(self, key):
-            assert key == "u_real"
-            return np.arange(5 * 2, dtype=np.float32).reshape(5, 2)
-
-    out = rtam.load_u_real_for_metrics(_PO(), 3)
-    assert out.shape == (3, 2)
-    np.testing.assert_array_equal(out, np.arange(6, dtype=np.float32).reshape(3, 2))
-
-
 def test_load_u_real_for_metrics_rejects_nonpositive_request():
     class _PO:
-        def get(self, key):
+        def get_u_real(self, _n_pcs):
             return np.zeros((1, 2), dtype=np.float32)
 
     with pytest.raises(ValueError, match="n_pcs must be positive"):
@@ -924,18 +909,6 @@ def test_select_state_target_latent_points_rejects_all_nonfinite_rows():
             preferred_labels=[0, 1],
             max_points=2,
         )
-
-
-def test_load_u_real_for_metrics_legacy_get_handles_shorter_arrays():
-    class _PO:
-        def get(self, key):
-            assert key == "u_real"
-            return np.arange(2 * 3, dtype=np.float32).reshape(2, 3)
-
-    out = rtam.load_u_real_for_metrics(_PO(), 10)
-    assert out.shape == (2, 3)
-    np.testing.assert_array_equal(out, np.arange(2 * 3, dtype=np.float32).reshape(2, 3))
-
 
 def test_compare_scores_against_baseline_checks_shared_canonical_keys():
     current = {

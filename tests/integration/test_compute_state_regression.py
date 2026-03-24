@@ -146,9 +146,9 @@ def _select_latent_points(pipeline_output_dir: Path, dataset_dir: Path,
         sim_info = pickle.load(f)
 
     po = output.PipelineOutput(str(pipeline_output_dir))
-    legacy_cache = {}
+    embedding_cache = {}
     unsorted_zs = load_unsorted_embedding_component(
-        po, "latent_coords", _ZDIM, legacy_cache=legacy_cache
+        po, "latent_coords", _ZDIM, cache=embedding_cache
     )
 
     n_zs = unsorted_zs.shape[0]

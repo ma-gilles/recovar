@@ -26,10 +26,10 @@ def test_raised_cosine_mask_bounds():
     assert np.max(rc) <= 1.0 + 1e-6
 
 
-def test_soften_volume_mask_new_range():
+def test_soften_volume_mask_range():
     binary = np.zeros((8, 8, 8), dtype=np.float32)
     binary[2:6, 2:6, 2:6] = 1.0
-    out = mask.soften_volume_mask_new(binary, kernel_size=2)
+    out = mask.soften_volume_mask(binary, kern_rad=2)
     assert out.shape == binary.shape
     assert out.dtype == np.float32
     assert np.all((out >= 0) & (out <= 1))
@@ -96,14 +96,14 @@ import jax.numpy as jnp
 
 
 @pytest.mark.gpu
-def test_soften_volume_mask_new_gpu(gpu_device):
+def test_soften_volume_mask_gpu(gpu_device):
     binary = np.zeros((8, 8, 8), dtype=np.float32)
     binary[2:6, 2:6, 2:6] = 1.0
 
-    cpu_out = np.asarray(mask.soften_volume_mask_new(binary, kernel_size=2))
+    cpu_out = np.asarray(mask.soften_volume_mask(binary, kern_rad=2))
 
     with jax.default_device(gpu_device):
         binary_g = jax.device_put(jnp.array(binary), gpu_device)
-        gpu_out = np.asarray(mask.soften_volume_mask_new(binary_g, kernel_size=2))
+        gpu_out = np.asarray(mask.soften_volume_mask(binary_g, kern_rad=2))
 
     np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)

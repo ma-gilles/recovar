@@ -19,7 +19,21 @@ def _fake_pipeline_output(payload):
         def get(self, key):
             return payload[key]
 
+        def get_embedding_keys(self, entry):
+            return list(payload[entry].keys())
+
+        def get_embedding_component(self, entry, key):
+            return payload[entry][key]
+
     return FakePipelineOutput
+
+
+class _PayloadEmbeddingAccessMixin:
+    def get_embedding_keys(self, entry):
+        return list(self._payload[entry].keys())
+
+    def get_embedding_component(self, entry, key):
+        return self._payload[entry][key]
 
 
 def test_get_halfset_order_prefers_local_image_indices():
@@ -65,7 +79,7 @@ def test_pick_pairs_returns_requested_number_and_valid_indices():
         assert i != j
 
 
-def _legacy_pick_pairs(centers, n_pairs):
+def _reference_pick_pairs(centers, n_pairs):
     pairs = []
     xmat = np.linalg.norm(centers[:, None, :] - centers[None, :, :], axis=-1)
 
@@ -94,11 +108,11 @@ def _legacy_pick_pairs(centers, n_pairs):
         ((16, 5), 10),
     ],
 )
-def test_pick_pairs_matches_legacy(shape, n_pairs):
+def test_pick_pairs_matches_reference_selection(shape, n_pairs):
     rng = np.random.default_rng(123)
     centers = rng.standard_normal(shape).astype(np.float32)
 
-    expected = _legacy_pick_pairs(centers.copy(), n_pairs=n_pairs)
+    expected = _reference_pick_pairs(centers.copy(), n_pairs=n_pairs)
     got = analyze_cmd.pick_pairs(centers.copy(), n_pairs=n_pairs)
     assert got == expected
 
@@ -108,7 +122,7 @@ def test_analyze_reads_particles_halfsets_once(monkeypatch, tmp_path):
     zs2 = np.arange(n_images * 2, dtype=np.float32).reshape(n_images, 2)
     cov2 = np.repeat(np.eye(2, dtype=np.float32)[None, :, :], n_images, axis=0)
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {}
             self._halfset_calls = 0
@@ -270,7 +284,7 @@ def test_analyze_uses_embedding_component_api_when_available(monkeypatch, tmp_pa
     component_calls = []
     captured = {}
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {}
 
@@ -618,7 +632,7 @@ def test_compute_state_uses_embedding_component_api_when_available(monkeypatch, 
     latent_path = tmp_path / "latent.txt"
     np.savetxt(latent_path, latent_points)
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {}
             self._forbidden_gets = {"latent_coords", "latent_precision", "contrasts"}
@@ -694,7 +708,7 @@ def test_compute_state_casts_embedding_arrays_to_float32(monkeypatch, tmp_path):
     latent_path = tmp_path / "latent.txt"
     np.savetxt(latent_path, latent_points)
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {}
             self._payload = {
@@ -986,7 +1000,7 @@ def test_compute_state_missing_input_args_ignores_overrides(monkeypatch, tmp_pat
     latent_path = tmp_path / "latent.txt"
     np.savetxt(latent_path, latent_points)
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {}  # missing input_args
             self._payload = {
@@ -1036,7 +1050,7 @@ def test_compute_state_params_none_ignores_overrides(monkeypatch, tmp_path):
     latent_path = tmp_path / "latent.txt"
     np.savetxt(latent_path, latent_points)
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = None
             self._payload = {
@@ -1086,7 +1100,7 @@ def test_compute_state_allows_missing_override_attrs_on_args(monkeypatch, tmp_pa
     latent_path = tmp_path / "latent.txt"
     np.savetxt(latent_path, latent_points)
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = None
             self._payload = {
@@ -1143,7 +1157,7 @@ def test_compute_state_uses_defaults_when_optional_attrs_missing(monkeypatch, tm
         "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
     }
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = None
             self._payload = payload
@@ -1185,7 +1199,7 @@ def test_compute_state_apply_global_filtering_without_volume_mask(monkeypatch, t
     latent_path = tmp_path / "latent.txt"
     np.savetxt(latent_path, latent_points)
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {}
             self._payload = {
@@ -1273,9 +1287,10 @@ def test_compute_state_updates_input_args_from_cli_overrides(monkeypatch, tmp_pa
         "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
         "input_args": base_input_args,
     }
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {"input_args": base_input_args}
+            self._payload = payload
 
         def get(self, key):
             return payload[key]
@@ -1672,7 +1687,7 @@ def test_compute_state_uses_lazy_dataset_when_requested(monkeypatch, tmp_path):
     latent_path = tmp_path / "latent.txt"
     np.savetxt(latent_path, latent_points)
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {
                 "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
@@ -1732,7 +1747,7 @@ def test_compute_state_uses_nonlazy_dataset_when_lazy_false(monkeypatch, tmp_pat
     latent_path = tmp_path / "latent.txt"
     np.savetxt(latent_path, latent_points)
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {
                 "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),
@@ -1806,7 +1821,7 @@ def test_compute_state_builds_explicit_halfsets_for_reweighting(monkeypatch, tmp
 
     dataset_obj = _Dataset()
 
-    class _PO:
+    class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {
                 "input_args": SimpleNamespace(particles="p", datadir=None, strip_prefix=None),

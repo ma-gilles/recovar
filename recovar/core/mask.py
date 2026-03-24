@@ -123,10 +123,10 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax=3):
         Soft mask as a float array in [0, 1].
     """
     dilation_iters = int(6 * halfmap1.shape[0] // 128)
-    kern = _soft_edged_kernel(smax, halfmap1.shape)
+    kern = make_soft_edged_kernel(smax, halfmap1.shape)
 
-    h1 = _threshold_map(halfmap1)
-    h2 = _threshold_map(halfmap2)
+    h1 = threshold_map(halfmap1)
+    h2 = threshold_map(halfmap2)
     halfcc3d = _local_correlation_3d(h1, h2, kern)
     halfcc3d *= get_radial_mask(halfmap1.shape)
 
@@ -154,7 +154,7 @@ def make_mask_from_gt(gt_map, smax=3, iter=10, from_ft=True):
     else:
         vol_real = gt_map.reshape(vol_shape)
 
-    thresholded = _threshold_map(vol_real) > 0
+    thresholded = threshold_map(vol_real) > 0
     dilated = binary_dilation(thresholded, iterations=iter)
     return soften_volume_mask(dilated, kern_rad=2)
 
@@ -189,6 +189,8 @@ def make_union_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
     if isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 2:
         gt_volumes_real = [gt_volumes_real[i].reshape(volume_shape)
                           for i in range(gt_volumes_real.shape[0])]
+    elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 4:
+        gt_volumes_real = [gt_volumes_real[i] for i in range(gt_volumes_real.shape[0])]
     elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 3:
         gt_volumes_real = [gt_volumes_real]
 
@@ -230,11 +232,6 @@ def soften_volume_mask(binary_volume_mask, kern_rad=3):
         mask,
     )
     return np.asarray(mask.astype(np.float32))
-
-
-def soften_volume_mask_new(binary_volume_mask, kernel_size):
-    """Backward-compatible alias for ``soften_volume_mask``."""
-    return soften_volume_mask(binary_volume_mask, kern_rad=kernel_size)
 
 
 # ---------------------------------------------------------------------------
@@ -404,11 +401,7 @@ def _mask_from_halfmaps(means, smax=3):
     return make_mask_from_half_maps(halfmap1, halfmap2, smax=smax)
 
 
-# Keep public alias for backward compatibility
-make_mask_from_half_maps_from_means_dict = _mask_from_halfmaps
-
-
-def _soft_edged_kernel(r1, shape):
+def make_soft_edged_kernel(r1, shape):
     """Create a soft-edged convolution kernel for local correlation.
 
     Adapted from EMDA (https://gitlab.com/ccpem/emda).
@@ -443,11 +436,7 @@ def _soft_edged_kernel(r1, shape):
     return kern / jnp.sum(kern)
 
 
-# Keep public alias for backward compatibility
-create_soft_edged_kernel_pxl = _soft_edged_kernel
-
-
-def _threshold_map(arr, prob=0.99, dthresh=None):
+def threshold_map(arr, prob=0.99, dthresh=None):
     """Zero out voxels below the ``prob`` percentile threshold."""
     if dthresh is None:
         X2 = np.sort(arr.flatten())
@@ -457,10 +446,6 @@ def _threshold_map(arr, prob=0.99, dthresh=None):
     else:
         thresh = dthresh
     return arr * (arr > thresh)
-
-
-# Keep public alias for backward compatibility
-threshold_map = _threshold_map
 
 
 def _local_correlation_3d(half1, half2, kern):
@@ -492,10 +477,12 @@ def make_moving_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
     if isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 2:
         gt_volumes_real = [gt_volumes_real[i].reshape(volume_shape)
                            for i in range(gt_volumes_real.shape[0])]
+    elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 4:
+        gt_volumes_real = [gt_volumes_real[i] for i in range(gt_volumes_real.shape[0])]
     elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 3:
         gt_volumes_real = [gt_volumes_real]
 
-    if not gt_volumes_real:
+    if len(gt_volumes_real) == 0:
         raise ValueError('gt_volumes_real must contain at least one volume')
 
     volumes = np.asarray(
@@ -521,45 +508,3 @@ def make_moving_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
         soft_mask = np.zeros(volume_shape, dtype=np.float32)
 
     return np.asarray(soft_mask, dtype=np.float32), binary_mask
-
-
-# ---------------------------------------------------------------------------
-# Legacy MaskedMaps interface still used by mask tests
-# ---------------------------------------------------------------------------
-
-class MaskedMaps:
-    """Legacy mutable-state interface for mask generation.
-
-    Prefer ``make_mask_from_half_maps`` or ``make_mask_from_gt`` directly.
-    This class is kept for backward compatibility with existing tests.
-    """
-
-    def __init__(self, hfmap_list=None):
-        self.hfmap_list = hfmap_list
-        self.mask = None
-        self.uc = None
-        self.arr1 = None
-        self.arr2 = None
-        self.origin = None
-        self.iter = 3
-        self.smax = 9
-        self.prob = 0.99
-        self.dthresh = None
-
-    def generate_mask(self):
-        kern = _soft_edged_kernel(self.smax, self.arr1.shape)
-        h1 = _threshold_map(self.arr1, prob=self.prob, dthresh=self.dthresh)
-        h2 = _threshold_map(self.arr2, prob=self.prob, dthresh=self.dthresh)
-        halfcc3d = _local_correlation_3d(h1, h2, kern)
-        halfcc3d *= get_radial_mask(self.arr1.shape)
-
-        ccmap_binary = (halfcc3d >= 1e-3).astype(int)
-        dilated = binary_dilation(ccmap_binary, iterations=self.iter)
-        mask = soften_volume_mask(dilated, kern_rad=2)
-        self.mask = mask * (mask >= 1e-3)
-
-    def generate_mask_from_gt(self):
-        h1 = _threshold_map(self.arr1, prob=self.prob, dthresh=self.dthresh)
-        h1 = h1 > 0
-        dilated = binary_dilation(h1, iterations=self.iter)
-        self.mask = soften_volume_mask(dilated, kern_rad=2)

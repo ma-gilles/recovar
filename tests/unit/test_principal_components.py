@@ -149,6 +149,30 @@ def test_get_cov_svds_delegates_to_randomized_svd(monkeypatch):
     assert called["kwargs"]["test_size"] == 5
 
 
+def test_get_cov_svds_passes_random_seed(monkeypatch):
+    called = {}
+
+    def fake_randomized_real_svd_of_columns(*args, **kwargs):
+        called["kwargs"] = kwargs
+        return np.eye(3, dtype=np.float32), np.array([3.0, 2.0, 1.0], dtype=np.float32), np.eye(3, dtype=np.float32)
+
+    monkeypatch.setattr(pc, "randomized_real_svd_of_columns", fake_randomized_real_svd_of_columns)
+
+    pc.get_cov_svds(
+        covariance_cols={"est_mask": np.ones((3, 2), dtype=np.complex64)},
+        picked_frequencies=np.array([0, 1]),
+        volume_mask=np.ones(3, dtype=np.float32),
+        volume_shape=(1, 1, 3),
+        vol_batch_size=2,
+        gpu_memory_to_use=8,
+        ignore_zero_frequency=False,
+        randomized_sketch_size=5,
+        random_seed=19,
+    )
+
+    assert called["kwargs"]["random_seed"] == 19
+
+
 def test_projected_covariance_batch_size_uses_requested_gpu_budget(monkeypatch):
     calls = {}
 
@@ -176,6 +200,42 @@ def test_projected_covariance_batch_size_uses_requested_gpu_budget(monkeypatch):
     assert calls["zdim"] == 3
     expected_budget = 8.0 - 2 * 3**4 * 8 / 1e9
     assert calls["gpu_memory"] == pytest.approx(expected_budget)
+
+
+def test_randomized_real_svd_of_columns_is_deterministic_for_fixed_seed(monkeypatch):
+    monkeypatch.setattr(pc.utils, "report_memory_device", lambda logger=None: None)
+    monkeypatch.setattr(pc.jax, "device_put", lambda x, device=None: x)
+    monkeypatch.setattr(
+        pc,
+        "right_matvec_with_spatial_Sigma",
+        lambda test_mat, *args, **kwargs: np.asarray(test_mat[:, :2], dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        pc,
+        "left_matvec_with_spatial_Sigma",
+        lambda q, *args, **kwargs: np.asarray(q.T, dtype=np.float32),
+    )
+    monkeypatch.setattr(pc.linalg, "batch_dft3", lambda q, volume_shape, vol_batch_size: np.asarray(q))
+    monkeypatch.setattr(pc.linalg, "blockwise_A_X", lambda a, x, memory_to_use=None: np.asarray(a) @ np.asarray(x))
+
+    common = dict(
+        columns=np.ones((8, 2), dtype=np.complex64),
+        picked_frequency_indices=np.array([0, 1], dtype=np.int32),
+        volume_mask=np.ones(8, dtype=np.float32),
+        volume_shape=(2, 2, 2),
+        vol_batch_size=1,
+        test_size=4,
+        gpu_memory_to_use=8,
+    )
+
+    q1, s1, v1 = pc.randomized_real_svd_of_columns(**common, random_seed=5)
+    q2, s2, v2 = pc.randomized_real_svd_of_columns(**common, random_seed=5)
+    q3, s3, v3 = pc.randomized_real_svd_of_columns(**common, random_seed=6)
+
+    np.testing.assert_allclose(q1, q2)
+    np.testing.assert_allclose(s1, s2)
+    np.testing.assert_allclose(v1, v2)
+    assert (not np.allclose(q1, q3)) or (not np.allclose(v1, v3)) or (not np.allclose(s1, s3))
 
 
 def test_pca_by_projected_covariance_sorts_and_clamps_eigs(monkeypatch):
