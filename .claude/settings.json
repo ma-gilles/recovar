@@ -1,0 +1,50 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/protect-baselines.sh",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/block-push-to-dev-main.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Check if this edit widened a test tolerance or made a test easier to pass. Look for: changes to _TOL, tol_frac, TOL_FRAC, HIGH_VARIANCE_TOKENS, ABSOLUTE_TOLERANCE_FLOORS, skip logic for metrics, or any pattern that makes a failing test pass by loosening the acceptance criteria rather than fixing the code. If ANY such change was made, respond {\"ok\": false, \"reason\": \"Tolerance was widened or test was made easier to pass. This is not allowed without explicit user approval.\"}. If the edit is to a non-test file or doesn't touch tolerances, respond {\"ok\": true}. File: $FILE_PATH",
+            "model": "haiku",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'CRITICAL RULES (re-injected after compaction): 1) NEVER modify tests/baselines/ files. 2) NEVER widen test tolerance to make tests pass. 3) NEVER use pytest -q for long tests. 4) Always branch off dev, never push directly to dev or main. 5) Always provide end-of-task summary with git status/diff.'"
+          }
+        ]
+      }
+    ]
+  }
+}
