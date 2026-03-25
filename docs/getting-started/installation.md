@@ -16,16 +16,16 @@ Verify:
 recovar run_test_dataset
 ```
 
-## Reproducible install (pinned versions)
+## Reproducible install (pixi)
 
-For an exact known-working environment with pinned dependency versions:
+For an exact reproducible environment with pinned dependencies:
 
 ```bash
-conda create --name recovar python=3.11 -y
-conda activate recovar
-pip install -r https://raw.githubusercontent.com/ma-gilles/recovar/dev/requirements-lock.txt
-pip install "jax[cuda12]==0.9.0.1"
-pip install --no-deps recovar
+git clone https://github.com/ma-gilles/recovar.git
+cd recovar && git checkout dev
+pixi install
+pixi run install-recovar
+pixi run smoke-import-recovar
 ```
 
 ## Development install
