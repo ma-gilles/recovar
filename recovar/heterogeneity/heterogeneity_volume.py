@@ -123,6 +123,7 @@ def make_volumes_kernel_estimate_local(
     kernel_rad=4,
     save_all_estimates=False,
     heterogeneity_kernel="parabola",
+    use_fast_rfft=False,
 ):
     """Reconstruct volumes along a heterogeneity path using kernel regression.
 
@@ -183,6 +184,7 @@ def make_volumes_kernel_estimate_local(
             heterogeneity_kernel=heterogeneity_kernel,
             upsampling_factor=upsampling_for_ests,
             return_real_space=True,
+            use_fast_rfft=use_fast_rfft,
         )
         estimates[k] = estimates[k].reshape(-1, *ds.volume_shape).astype(np.float32)
         logger.info("Computing estimates done")
@@ -200,6 +202,7 @@ def make_volumes_kernel_estimate_local(
                 heterogeneity_kernel=heterogeneity_kernel,
                 upsampling_factor=1,
                 return_real_space=True,
+                use_fast_rfft=use_fast_rfft,
             )
         )
 
@@ -260,6 +263,7 @@ def make_volumes_kernel_estimate_local(
             heterogeneity_kernel=heterogeneity_kernel,
             upsampling_factor=2,
             return_real_space=True,
+            use_fast_rfft=use_fast_rfft,
         )
         estimates[k] = estimates[k].reshape(-1, *ds.volume_shape).astype(np.float32)
 
