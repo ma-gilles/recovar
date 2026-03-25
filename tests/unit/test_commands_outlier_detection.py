@@ -173,7 +173,7 @@ def test_outlier_detection_main_combines_anomaly_and_contrast_for_spa(monkeypatc
         lambda _p: _FakePipelineOutput(payload, sorted_payload=sorted_payload),
     )
 
-    def fake_plot(_zs, _orig_indices, folder):
+    def fake_plot(_zs, _orig_indices, folder, **_kw):
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, "inliers_consensus.pkl"), "wb") as f:
             pickle.dump(np.array([0, 2, 3], dtype=np.int32), f)
@@ -252,7 +252,7 @@ def test_outlier_detection_main_tilt_maps_particle_outliers_to_images(monkeypatc
         lambda _p: _FakePipelineOutput(payload, sorted_payload=sorted_payload),
     )
 
-    def fake_plot(_zs, _orig_indices, folder):
+    def fake_plot(_zs, _orig_indices, folder, **_kw):
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, "inliers_consensus.pkl"), "wb") as f:
             pickle.dump(np.array([1], dtype=np.int32), f)
@@ -341,7 +341,7 @@ def test_outlier_detection_main_uses_sorted_embedding_component(monkeypatch, tmp
         lambda _p: _FakePipelineOutput(payload, sorted_payload=sorted_payload),
     )
 
-    def fake_plot(zs, original_indices, folder):
+    def fake_plot(zs, original_indices, folder, **_kw):
         assert zs.shape == (3, 2)
         np.testing.assert_array_equal(
             zs,
@@ -438,6 +438,7 @@ def test_create_outlier_visualizations_tilt_series_uses_image_length_contrast_ax
         is_tilt_series=True,
         starfile="particles.star",
         noreg=False,
+        save_all_plots=True,
     )
 
     stats_path = tmp_path / "data" / "outlier_visualizations" / "combined_4_stats.txt"

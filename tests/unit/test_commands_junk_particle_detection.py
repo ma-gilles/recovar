@@ -72,6 +72,7 @@ def test_save_particle_classifications_writes_pipeline_pickles(tmp_path):
         zdim_key=4,
         method="consensus",
         original_indices=original_indices,
+        save_all_plots=True,
     )
 
     with open(tmp_path / "data" / "junk_indices_4.pkl", "rb") as f:

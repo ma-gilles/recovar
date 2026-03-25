@@ -401,8 +401,8 @@ def compute_cluster_fsc_scores(pipeline_output, cluster_centers, cluster_indices
         return fsc_scores, fsc_auc_scores, particle_usage
 
 
-def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores, fsc_auc_scores, 
-                               particle_usage, output_folder, zdim_key):
+def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores, fsc_auc_scores,
+                               particle_usage, output_folder, zdim_key, save_all_plots=False):
     """
     Create plots for junk particle detection results with improved styling and clarity.
     """
@@ -434,154 +434,158 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     all_fsc_curves = [fsc_scores[i]['halfmap_curve'] for i in range(len(cluster_centers))]
     all_vs_mean_curves = [fsc_scores[i]['vs_mean_curve'] for i in range(len(cluster_centers))]
     
-    with open(os.path.join(output_folder, 'data', f'all_fsc_curves_{zdim_key}.pkl'), 'wb') as f:
-        pickle.dump(all_fsc_curves, f)
-    with open(os.path.join(output_folder, 'data', f'all_vs_mean_fsc_curves_{zdim_key}.pkl'), 'wb') as f:
-        pickle.dump(all_vs_mean_curves, f)
+    if save_all_plots:
+        with open(os.path.join(output_folder, 'data', f'all_fsc_curves_{zdim_key}.pkl'), 'wb') as f:
+            pickle.dump(all_fsc_curves, f)
+        with open(os.path.join(output_folder, 'data', f'all_vs_mean_fsc_curves_{zdim_key}.pkl'), 'wb') as f:
+            pickle.dump(all_vs_mean_curves, f)
+
+    # Create frequency axis (needed for downstream plots)
+    x = np.arange(len(all_fsc_curves[0]))
+    freq_axis = x / (2 * len(all_fsc_curves[0]))
 
     # --- Plot all half-map FSC curves with improved styling ---
-    fig, ax = plt.subplots(figsize=(12, 8))
-    x = np.arange(len(all_fsc_curves[0]))
-    
-    # Create frequency axis (assuming Nyquist frequency)
-    freq_axis = x / (2 * len(all_fsc_curves[0]))
-    
-    # Use hexbin density plot for background like in output.py
-    curve_data = np.array(all_fsc_curves)
-    freq_mesh, curve_mesh = np.meshgrid(freq_axis, np.arange(len(curve_data)))
-    hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(),
-                  gridsize=30, cmap='Blues', alpha=0.3, mincnt=1)
-    
-    # Color code curves by FSC score with better transparency
-    colors_curves = cm.viridis(np.array(halfmap_fscs))
-    for i, curve in enumerate(all_fsc_curves):
-        ax.plot(freq_axis, curve, color=colors_curves[i], alpha=0.3, linewidth=0.5)
-    
-    # Mean and IQR with better styling
-    all_fsc_array = np.array(all_fsc_curves)
-    mean_curve = np.mean(all_fsc_array, axis=0)
-    q25 = np.percentile(all_fsc_array, 25, axis=0)
-    q75 = np.percentile(all_fsc_array, 75, axis=0)
-    ax.plot(freq_axis, mean_curve, color='red', linewidth=3, label='Mean FSC', zorder=10)
-    ax.fill_between(freq_axis, q25, q75, color='orange', alpha=0.2, label='IQR (25-75%)')
-    
-    # Add threshold line
-    ax.axhline(y=1/7, color='black', linestyle='--', alpha=0.8, label='FSC=1/7 threshold', linewidth=2)
-    
-    ax.set_xlabel('Spatial Frequency (1/Å)', fontweight='bold')
-    ax.set_ylabel('Fourier Shell Correlation', fontweight='bold')
-    ax.set_title(f'Half-map FSC Curves for All Clusters (n={len(cluster_centers)})', fontweight='bold')
-    ax.set_ylim(0, 1.05)
-    ax.set_xlim(0, freq_axis[-1])
-    ax.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
-    
-    # Add colorbar
-    sm = plt.cm.ScalarMappable(cmap=cm.viridis, norm=mcolors.Normalize(vmin=min(halfmap_fscs), vmax=max(halfmap_fscs)))
-    cbar = plt.colorbar(sm, ax=ax)
-    cbar.set_label('Half-map FSC Score', fontweight='bold')
-    
-    plt.tight_layout()
-    _safe_savefig(os.path.join(output_folder, 'plots', f'all_halfmap_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
-    plt.close()
+    if save_all_plots:
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        # Use hexbin density plot for background like in output.py
+        curve_data = np.array(all_fsc_curves)
+        freq_mesh, curve_mesh = np.meshgrid(freq_axis, np.arange(len(curve_data)))
+        hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(),
+                      gridsize=30, cmap='Blues', alpha=0.3, mincnt=1)
+
+        # Color code curves by FSC score with better transparency
+        colors_curves = cm.viridis(np.array(halfmap_fscs))
+        for i, curve in enumerate(all_fsc_curves):
+            ax.plot(freq_axis, curve, color=colors_curves[i], alpha=0.3, linewidth=0.5)
+
+        # Mean and IQR with better styling
+        all_fsc_array = np.array(all_fsc_curves)
+        mean_curve = np.mean(all_fsc_array, axis=0)
+        q25 = np.percentile(all_fsc_array, 25, axis=0)
+        q75 = np.percentile(all_fsc_array, 75, axis=0)
+        ax.plot(freq_axis, mean_curve, color='red', linewidth=3, label='Mean FSC', zorder=10)
+        ax.fill_between(freq_axis, q25, q75, color='orange', alpha=0.2, label='IQR (25-75%)')
+
+        # Add threshold line
+        ax.axhline(y=1/7, color='black', linestyle='--', alpha=0.8, label='FSC=1/7 threshold', linewidth=2)
+
+        ax.set_xlabel('Spatial Frequency (1/Å)', fontweight='bold')
+        ax.set_ylabel('Fourier Shell Correlation', fontweight='bold')
+        ax.set_title(f'Half-map FSC Curves for All Clusters (n={len(cluster_centers)})', fontweight='bold')
+        ax.set_ylim(0, 1.05)
+        ax.set_xlim(0, freq_axis[-1])
+        ax.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+
+        # Add colorbar
+        sm = plt.cm.ScalarMappable(cmap=cm.viridis, norm=mcolors.Normalize(vmin=min(halfmap_fscs), vmax=max(halfmap_fscs)))
+        cbar = plt.colorbar(sm, ax=ax)
+        cbar.set_label('Half-map FSC Score', fontweight='bold')
+
+        plt.tight_layout()
+        _safe_savefig(os.path.join(output_folder, 'plots', f'all_halfmap_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+        plt.close()
     
     # --- Plot all vs-mean FSC curves with improved styling ---
-    fig, ax = plt.subplots(figsize=(12, 8))
-    
-    curve_data = np.array(all_vs_mean_curves)
-    freq_mesh, curve_mesh = np.meshgrid(freq_axis, np.arange(len(curve_data)))
-    hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(),
-                  gridsize=30, cmap='Blues', alpha=0.3, mincnt=1)
-    
-    # Color code curves by vs-mean FSC score
-    colors_curves = cm.viridis(np.array(vs_mean_fscs))
-    for i, curve in enumerate(all_vs_mean_curves):
-        ax.plot(freq_axis, curve, color=colors_curves[i], alpha=0.3, linewidth=0.5)
-    
-    # Mean and IQR
-    all_vs_mean_array = np.array(all_vs_mean_curves)
-    mean_vs_mean_curve = np.mean(all_vs_mean_array, axis=0)
-    q25_vs_mean = np.percentile(all_vs_mean_array, 25, axis=0)
-    q75_vs_mean = np.percentile(all_vs_mean_array, 75, axis=0)
-    ax.plot(freq_axis, mean_vs_mean_curve, color='red', linewidth=3, label='Mean FSC', zorder=10)
-    ax.fill_between(freq_axis, q25_vs_mean, q75_vs_mean, color='orange', alpha=0.2, label='IQR (25-75%)')
-    
-    # Add threshold line
-    ax.axhline(y=1/7, color='black', linestyle='--', alpha=0.8, label='FSC=1/7 threshold', linewidth=2)
-    
-    ax.set_xlabel('Spatial Frequency (1/Å)', fontweight='bold')
-    ax.set_ylabel('Fourier Shell Correlation', fontweight='bold')
-    ax.set_title(f'vs-Mean FSC Curves for All Clusters (n={len(cluster_centers)})', fontweight='bold')
-    ax.set_ylim(0, 1.05)
-    ax.set_xlim(0, freq_axis[-1])
-    ax.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
-    
-    # Add colorbar
-    sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(vmin=min(vs_mean_fscs), vmax=max(vs_mean_fscs)))
-    cbar = plt.colorbar(sm, ax=ax)
-    cbar.set_label('vs-Mean FSC Score', fontweight='bold')
-    
-    plt.tight_layout()
-    _safe_savefig(os.path.join(output_folder, 'plots', f'all_vs_mean_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
-    plt.close()
+    if save_all_plots:
+        fig, ax = plt.subplots(figsize=(12, 8))
+
+        curve_data = np.array(all_vs_mean_curves)
+        freq_mesh, curve_mesh = np.meshgrid(freq_axis, np.arange(len(curve_data)))
+        hb = ax.hexbin(freq_mesh.flatten(), curve_data.flatten(),
+                      gridsize=30, cmap='Blues', alpha=0.3, mincnt=1)
+
+        # Color code curves by vs-mean FSC score
+        colors_curves = cm.viridis(np.array(vs_mean_fscs))
+        for i, curve in enumerate(all_vs_mean_curves):
+            ax.plot(freq_axis, curve, color=colors_curves[i], alpha=0.3, linewidth=0.5)
+
+        # Mean and IQR
+        all_vs_mean_array = np.array(all_vs_mean_curves)
+        mean_vs_mean_curve = np.mean(all_vs_mean_array, axis=0)
+        q25_vs_mean = np.percentile(all_vs_mean_array, 25, axis=0)
+        q75_vs_mean = np.percentile(all_vs_mean_array, 75, axis=0)
+        ax.plot(freq_axis, mean_vs_mean_curve, color='red', linewidth=3, label='Mean FSC', zorder=10)
+        ax.fill_between(freq_axis, q25_vs_mean, q75_vs_mean, color='orange', alpha=0.2, label='IQR (25-75%)')
+
+        # Add threshold line
+        ax.axhline(y=1/7, color='black', linestyle='--', alpha=0.8, label='FSC=1/7 threshold', linewidth=2)
+
+        ax.set_xlabel('Spatial Frequency (1/Å)', fontweight='bold')
+        ax.set_ylabel('Fourier Shell Correlation', fontweight='bold')
+        ax.set_title(f'vs-Mean FSC Curves for All Clusters (n={len(cluster_centers)})', fontweight='bold')
+        ax.set_ylim(0, 1.05)
+        ax.set_xlim(0, freq_axis[-1])
+        ax.legend(loc='upper right', frameon=True, fancybox=True, shadow=True)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+
+        # Add colorbar
+        sm = plt.cm.ScalarMappable(cmap='viridis', norm=plt.Normalize(vmin=min(vs_mean_fscs), vmax=max(vs_mean_fscs)))
+        cbar = plt.colorbar(sm, ax=ax)
+        cbar.set_label('vs-Mean FSC Score', fontweight='bold')
+
+        plt.tight_layout()
+        _safe_savefig(os.path.join(output_folder, 'plots', f'all_vs_mean_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+        plt.close()
     
     # --- Individual cluster FSC plots (top 10 and bottom 10) with better layout ---
     sorted_indices = np.argsort(halfmap_fscs)
     top_10 = sorted_indices[-10:]
     bottom_10 = sorted_indices[:10]
-    
-    # Plot top 10 clusters with improved layout
-    fig, axes = plt.subplots(2, 5, figsize=(20, 8))
-    fig.suptitle('Top 10 Clusters by Half-map FSC Score', fontsize=16, y=0.98, fontweight='bold')
-    
-    for i, cluster_idx in enumerate(top_10):
-        row, col = i // 5, i % 5
-        ax = axes[row, col]
-        
-        ax.plot(freq_axis, all_fsc_curves[cluster_idx], 'b-', linewidth=2, label=f'FSC={halfmap_fscs[cluster_idx]:.3f}')
-        ax.plot(freq_axis, all_vs_mean_curves[cluster_idx], 'r-', linewidth=2, label=f'vs-Mean={vs_mean_fscs[cluster_idx]:.3f}')
-        ax.axhline(y=1/7, color='black', linestyle='--', alpha=0.7, linewidth=1)
-        ax.set_title(f'Cluster {cluster_idx}\n(Rank {len(sorted_indices)-i})', fontsize=10, fontweight='bold')
-        ax.set_ylabel('FSC' if col == 0 else '')
-        ax.set_xlabel('Freq (1/Å)' if row == 1 else '')
-        ax.set_ylim(0, 1.05)
-        ax.set_xlim(0, freq_axis[-1])
-        ax.grid(True, alpha=0.3, color=colors['grid'])
-        ax.legend(fontsize=8, loc='lower left')
-        ax.tick_params(labelsize=8)
-        ax.set_facecolor('#FAFAFA')
-    
-    plt.tight_layout()
-    _safe_savefig(os.path.join(output_folder, 'plots', f'top_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    # Plot bottom 10 clusters with improved layout
-    fig, axes = plt.subplots(2, 5, figsize=(20, 8))
-    fig.suptitle('Bottom 10 Clusters by Half-map FSC Score', fontsize=16, y=0.98, fontweight='bold')
-    
-    for i, cluster_idx in enumerate(bottom_10):
-        row, col = i // 5, i % 5
-        ax = axes[row, col]
-        
-        ax.plot(freq_axis, all_fsc_curves[cluster_idx], 'b-', linewidth=2, label=f'FSC={halfmap_fscs[cluster_idx]:.3f}')
-        ax.plot(freq_axis, all_vs_mean_curves[cluster_idx], 'r-', linewidth=2, label=f'vs-Mean={vs_mean_fscs[cluster_idx]:.3f}')
-        ax.axhline(y=1/7, color='black', linestyle='--', alpha=0.7, linewidth=1)
-        ax.set_title(f'Cluster {cluster_idx}\n(Rank {i+1})', fontsize=10, fontweight='bold')
-        ax.set_ylabel('FSC' if col == 0 else '')
-        ax.set_xlabel('Freq (1/Å)' if row == 1 else '')
-        ax.set_ylim(0, 1.05)
-        ax.set_xlim(0, freq_axis[-1])
-        ax.grid(True, alpha=0.3, color=colors['grid'])
-        ax.legend(fontsize=8, loc='lower left')
-        ax.tick_params(labelsize=8)
-        ax.set_facecolor('#FAFAFA')
-    
-    plt.tight_layout()
-    _safe_savefig(os.path.join(output_folder, 'plots', f'bottom_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
-    plt.close()
+
+    if save_all_plots:
+        # Plot top 10 clusters with improved layout
+        fig, axes = plt.subplots(2, 5, figsize=(20, 8))
+        fig.suptitle('Top 10 Clusters by Half-map FSC Score', fontsize=16, y=0.98, fontweight='bold')
+
+        for i, cluster_idx in enumerate(top_10):
+            row, col = i // 5, i % 5
+            ax = axes[row, col]
+
+            ax.plot(freq_axis, all_fsc_curves[cluster_idx], 'b-', linewidth=2, label=f'FSC={halfmap_fscs[cluster_idx]:.3f}')
+            ax.plot(freq_axis, all_vs_mean_curves[cluster_idx], 'r-', linewidth=2, label=f'vs-Mean={vs_mean_fscs[cluster_idx]:.3f}')
+            ax.axhline(y=1/7, color='black', linestyle='--', alpha=0.7, linewidth=1)
+            ax.set_title(f'Cluster {cluster_idx}\n(Rank {len(sorted_indices)-i})', fontsize=10, fontweight='bold')
+            ax.set_ylabel('FSC' if col == 0 else '')
+            ax.set_xlabel('Freq (1/Å)' if row == 1 else '')
+            ax.set_ylim(0, 1.05)
+            ax.set_xlim(0, freq_axis[-1])
+            ax.grid(True, alpha=0.3, color=colors['grid'])
+            ax.legend(fontsize=8, loc='lower left')
+            ax.tick_params(labelsize=8)
+            ax.set_facecolor('#FAFAFA')
+
+        plt.tight_layout()
+        _safe_savefig(os.path.join(output_folder, 'plots', f'top_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Plot bottom 10 clusters with improved layout
+        fig, axes = plt.subplots(2, 5, figsize=(20, 8))
+        fig.suptitle('Bottom 10 Clusters by Half-map FSC Score', fontsize=16, y=0.98, fontweight='bold')
+
+        for i, cluster_idx in enumerate(bottom_10):
+            row, col = i // 5, i % 5
+            ax = axes[row, col]
+
+            ax.plot(freq_axis, all_fsc_curves[cluster_idx], 'b-', linewidth=2, label=f'FSC={halfmap_fscs[cluster_idx]:.3f}')
+            ax.plot(freq_axis, all_vs_mean_curves[cluster_idx], 'r-', linewidth=2, label=f'vs-Mean={vs_mean_fscs[cluster_idx]:.3f}')
+            ax.axhline(y=1/7, color='black', linestyle='--', alpha=0.7, linewidth=1)
+            ax.set_title(f'Cluster {cluster_idx}\n(Rank {i+1})', fontsize=10, fontweight='bold')
+            ax.set_ylabel('FSC' if col == 0 else '')
+            ax.set_xlabel('Freq (1/Å)' if row == 1 else '')
+            ax.set_ylim(0, 1.05)
+            ax.set_xlim(0, freq_axis[-1])
+            ax.grid(True, alpha=0.3, color=colors['grid'])
+            ax.legend(fontsize=8, loc='lower left')
+            ax.tick_params(labelsize=8)
+            ax.set_facecolor('#FAFAFA')
+
+        plt.tight_layout()
+        _safe_savefig(os.path.join(output_folder, 'plots', f'bottom_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+        plt.close()
     
     # Pad to at least 2 columns for 2D scatter/hexbin plots
     zs_2d = zs if zs.shape[1] >= 2 else np.column_stack([zs, np.zeros(len(zs))])
@@ -589,80 +593,81 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
                   else np.column_stack([cluster_centers, np.zeros(len(cluster_centers))]))
 
     # --- Create main summary plot with improved hexbin visualizations ---
-    fig, axes = plt.subplots(2, 2, figsize=(16, 16))
-    fig.suptitle(f'Junk Particle Detection Summary (zdim={zdim_key}, n_clusters={len(cluster_centers)})',
-                 fontsize=20, y=0.95, fontweight='bold')
+    if save_all_plots:
+        fig, axes = plt.subplots(2, 2, figsize=(16, 16))
+        fig.suptitle(f'Junk Particle Detection Summary (zdim={zdim_key}, n_clusters={len(cluster_centers)})',
+                     fontsize=20, y=0.95, fontweight='bold')
 
-    # 1. Latent space colored by cluster (hexbin density plot like output.py)
-    ax = axes[0, 0]
+        # 1. Latent space colored by cluster (hexbin density plot like output.py)
+        ax = axes[0, 0]
 
-    # Create hexbin density plot for background
-    hb = ax.hexbin(zs_2d[:, 0], zs_2d[:, 1], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
+        # Create hexbin density plot for background
+        hb = ax.hexbin(zs_2d[:, 0], zs_2d[:, 1], gridsize=30, alpha=0.3, cmap='Blues', mincnt=1)
 
-    # Main scatter plot with improved styling (like output.py)
-    ax.scatter(zs_2d[:, 0], zs_2d[:, 1], s=1, alpha=0.6, c=colors['scatter'], edgecolors='none', rasterized=True)
-    ax.scatter(centers_2d[:, 0], centers_2d[:, 1], c='red', marker='x', s=100,
-               linewidth=2, label='Cluster Centers', zorder=10)
-    ax.set_title('Latent Space by Cluster ID', fontweight='bold')
-    ax.set_xlabel('z₁', fontweight='bold')
-    ax.set_ylabel('z₂', fontweight='bold')
-    ax.legend(frameon=True, fancybox=True, shadow=True)
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
+        # Main scatter plot with improved styling (like output.py)
+        ax.scatter(zs_2d[:, 0], zs_2d[:, 1], s=1, alpha=0.6, c=colors['scatter'], edgecolors='none', rasterized=True)
+        ax.scatter(centers_2d[:, 0], centers_2d[:, 1], c='red', marker='x', s=100,
+                   linewidth=2, label='Cluster Centers', zorder=10)
+        ax.set_title('Latent Space by Cluster ID', fontweight='bold')
+        ax.set_xlabel('z₁', fontweight='bold')
+        ax.set_ylabel('z₂', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
 
-    # 2. Latent space colored by Half-map FSC AUC (hexbin)
-    ax = axes[0, 1]
-    particle_halfmap_aucs = np.array([halfmap_aucs[i] for i in cluster_indices])
-    hb = ax.hexbin(zs_2d[:, 0], zs_2d[:, 1], C=particle_halfmap_aucs, gridsize=30,
-                   cmap='viridis', reduce_C_function=np.mean, mincnt=1)
-    cbar = fig.colorbar(hb, ax=ax)
-    cbar.set_label('Mean Half-map FSC AUC', fontweight='bold')
-    ax.set_title('Latent Space by Half-map FSC AUC', fontweight='bold')
-    ax.set_xlabel('z₁', fontweight='bold')
-    ax.set_ylabel('z₂', fontweight='bold')
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
+        # 2. Latent space colored by Half-map FSC AUC (hexbin)
+        ax = axes[0, 1]
+        particle_halfmap_aucs = np.array([halfmap_aucs[i] for i in cluster_indices])
+        hb = ax.hexbin(zs_2d[:, 0], zs_2d[:, 1], C=particle_halfmap_aucs, gridsize=30,
+                       cmap='viridis', reduce_C_function=np.mean, mincnt=1)
+        cbar = fig.colorbar(hb, ax=ax)
+        cbar.set_label('Mean Half-map FSC AUC', fontweight='bold')
+        ax.set_title('Latent Space by Half-map FSC AUC', fontweight='bold')
+        ax.set_xlabel('z₁', fontweight='bold')
+        ax.set_ylabel('z₂', fontweight='bold')
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
 
-    # 3. Latent space colored by FSC vs Mean AUC (hexbin)
-    ax = axes[1, 0]
-    particle_vs_mean_aucs = np.array([vs_mean_aucs[i] for i in cluster_indices])
-    hb = ax.hexbin(zs_2d[:, 0], zs_2d[:, 1], C=particle_vs_mean_aucs, gridsize=30,
-                   cmap='viridis', reduce_C_function=np.mean, mincnt=1)
-    cbar = fig.colorbar(hb, ax=ax)
-    cbar.set_label('Mean FSC vs Mean AUC', fontweight='bold')
-    ax.set_title('Latent Space by FSC vs Mean AUC', fontweight='bold')
-    ax.set_xlabel('z₁', fontweight='bold')
-    ax.set_ylabel('z₂', fontweight='bold')
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
-    
-    # 4. Histogram of particle counts per cluster with improved styling
-    ax = axes[1, 1]
-    cluster_counts = np.bincount(cluster_indices)
-    
-    # Use adaptive binning for better histogram readability
-    n_clusters = len(cluster_counts)
-    n_bins = min(30, max(15, n_clusters // 3))  # Adaptive bin count
-    bins = np.linspace(cluster_counts.min(), cluster_counts.max(), n_bins + 1)
-    
-    # Plot histogram with better styling
-    ax.hist(cluster_counts, bins=bins, color='skyblue', alpha=0.8, edgecolor='black', 
-            linewidth=0.8, density=True, hatch='///')
-    ax.axvline(np.mean(cluster_counts), color='red', linestyle='--', linewidth=2.5,
-               label=f'Mean: {np.mean(cluster_counts):.1f}')
-    ax.set_title('Particle Counts per Cluster', fontweight='bold')
-    ax.set_xlabel('Number of Particles', fontweight='bold')
-    ax.set_ylabel('Density', fontweight='bold')
-    ax.legend(frameon=True, fancybox=True, shadow=True)
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
+        # 3. Latent space colored by FSC vs Mean AUC (hexbin)
+        ax = axes[1, 0]
+        particle_vs_mean_aucs = np.array([vs_mean_aucs[i] for i in cluster_indices])
+        hb = ax.hexbin(zs_2d[:, 0], zs_2d[:, 1], C=particle_vs_mean_aucs, gridsize=30,
+                       cmap='viridis', reduce_C_function=np.mean, mincnt=1)
+        cbar = fig.colorbar(hb, ax=ax)
+        cbar.set_label('Mean FSC vs Mean AUC', fontweight='bold')
+        ax.set_title('Latent Space by FSC vs Mean AUC', fontweight='bold')
+        ax.set_xlabel('z₁', fontweight='bold')
+        ax.set_ylabel('z₂', fontweight='bold')
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    _safe_savefig(os.path.join(output_folder, 'plots', f'junk_detection_results_{zdim_key}.png'), dpi=300, bbox_inches='tight')
-    plt.close()
+        # 4. Histogram of particle counts per cluster with improved styling
+        ax = axes[1, 1]
+        cluster_counts = np.bincount(cluster_indices)
+
+        # Use adaptive binning for better histogram readability
+        n_clusters = len(cluster_counts)
+        n_bins = min(30, max(15, n_clusters // 3))  # Adaptive bin count
+        bins = np.linspace(cluster_counts.min(), cluster_counts.max(), n_bins + 1)
+
+        # Plot histogram with better styling
+        ax.hist(cluster_counts, bins=bins, color='skyblue', alpha=0.8, edgecolor='black',
+                linewidth=0.8, density=True, hatch='///')
+        ax.axvline(np.mean(cluster_counts), color='red', linestyle='--', linewidth=2.5,
+                   label=f'Mean: {np.mean(cluster_counts):.1f}')
+        ax.set_title('Particle Counts per Cluster', fontweight='bold')
+        ax.set_xlabel('Number of Particles', fontweight='bold')
+        ax.set_ylabel('Density', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.93])
+        _safe_savefig(os.path.join(output_folder, 'plots', f'junk_detection_results_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+        plt.close()
 
     # --- Particle Usage Visualization (simplified and cleaner) ---
-    if zs.shape[1] >= 2:
+    if save_all_plots and zs.shape[1] >= 2:
         fig, axes = plt.subplots(2, 3, figsize=(20, 12))
         fig.suptitle('Particle Usage Analysis', fontsize=18, y=0.95, fontweight='bold')
         
@@ -792,106 +797,107 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         plt.close()
     
     # --- Create comprehensive analysis plots with improved styling ---
-    fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-    fig.suptitle('FSC Score Analysis', fontsize=16, y=0.95, fontweight='bold')
-    
-    # Plot 1: Half-map FSC histogram with improved styling
-    ax = axes[0, 0]
-    n_bins_fsc = min(30, max(15, len(halfmap_fscs) // 3))
-    bins_fsc = np.linspace(min(halfmap_fscs), max(halfmap_fscs), n_bins_fsc + 1)
-    
-    ax.hist(halfmap_fscs, bins=bins_fsc, color='blue', alpha=0.8, edgecolor='black', 
-            linewidth=0.8, density=True, hatch='///')
-    ax.axvline(np.mean(halfmap_fscs), color='red', linestyle='--', linewidth=2.5,
-               label=f'Mean: {np.mean(halfmap_fscs):.3f}')
-    ax.set_xlabel('Half-map FSC Score', fontweight='bold')
-    ax.set_ylabel('Density', fontweight='bold')
-    ax.set_title('Distribution of Half-map FSC Scores', fontweight='bold')
-    ax.legend(frameon=True, fancybox=True, shadow=True)
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
-    
-    # Plot 2: vs-Mean FSC histogram with improved styling
-    ax = axes[0, 1]
-    n_bins_vs_mean = min(30, max(15, len(vs_mean_fscs) // 3))
-    bins_vs_mean = np.linspace(min(vs_mean_fscs), max(vs_mean_fscs), n_bins_vs_mean + 1)
-    
-    ax.hist(vs_mean_fscs, bins=bins_vs_mean, color='green', alpha=0.8, edgecolor='black', 
-            linewidth=0.8, density=True, hatch='///')
-    ax.axvline(np.mean(vs_mean_fscs), color='red', linestyle='--', linewidth=2.5,
-               label=f'Mean: {np.mean(vs_mean_fscs):.3f}')
-    ax.set_xlabel('vs-Mean FSC Score', fontweight='bold')
-    ax.set_ylabel('Density', fontweight='bold')
-    ax.set_title('Distribution of vs-Mean FSC Scores', fontweight='bold')
-    ax.legend(frameon=True, fancybox=True, shadow=True)
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
-    
-    # Plot 3: Half-map FSC AUC histogram with improved styling
-    ax = axes[0, 2]
-    n_bins_auc = min(30, max(15, len(halfmap_aucs) // 3))
-    bins_auc = np.linspace(min(halfmap_aucs), max(halfmap_aucs), n_bins_auc + 1)
-    
-    ax.hist(halfmap_aucs, bins=bins_auc, color='orange', alpha=0.8, edgecolor='black', 
-            linewidth=0.8, density=True, hatch='///')
-    ax.axvline(np.mean(halfmap_aucs), color='red', linestyle='--', linewidth=2.5,
-               label=f'Mean: {np.mean(halfmap_aucs):.3f}')
-    ax.set_xlabel('Half-map FSC AUC', fontweight='bold')
-    ax.set_ylabel('Density', fontweight='bold')
-    ax.set_title('Distribution of Half-map FSC AUC Scores', fontweight='bold')
-    ax.legend(frameon=True, fancybox=True, shadow=True)
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
-    
-    # Plot 4: vs-Mean FSC AUC histogram with improved styling
-    ax = axes[1, 0]
-    n_bins_vs_mean_auc = min(30, max(15, len(vs_mean_aucs) // 3))
-    bins_vs_mean_auc = np.linspace(min(vs_mean_aucs), max(vs_mean_aucs), n_bins_vs_mean_auc + 1)
-    
-    ax.hist(vs_mean_aucs, bins=bins_vs_mean_auc, color='purple', alpha=0.8, edgecolor='black', 
-            linewidth=0.8, density=True, hatch='///')
-    ax.axvline(np.mean(vs_mean_aucs), color='red', linestyle='--', linewidth=2.5,
-               label=f'Mean: {np.mean(vs_mean_aucs):.3f}')
-    ax.set_xlabel('vs-Mean FSC AUC', fontweight='bold')
-    ax.set_ylabel('Density', fontweight='bold')
-    ax.set_title('Distribution of vs-Mean FSC AUC Scores', fontweight='bold')
-    ax.legend(frameon=True, fancybox=True, shadow=True)
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
-    
-    # Plot 5: Half-map FSC vs Half-map FSC AUC scatter with improved styling
-    ax = axes[1, 1]
-    
-    hb = ax.hexbin(halfmap_fscs, halfmap_aucs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
-    
-    scatter = ax.scatter(halfmap_fscs, halfmap_aucs, c=halfmap_fscs, cmap='viridis', 
-                        alpha=0.7, s=50, edgecolors='black', linewidth=0.5)
-    ax.set_xlabel('Half-map FSC Score', fontweight='bold')
-    ax.set_ylabel('Half-map FSC AUC', fontweight='bold')
-    ax.set_title('Half-map FSC Score vs Half-map FSC AUC', fontweight='bold')
-    plt.colorbar(scatter, ax=ax, label='Half-map FSC Score')
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
-    
-    # Plot 6: Half-map FSC vs vs-Mean FSC comparison with improved styling
-    ax = axes[1, 2]
-    
-    hb = ax.hexbin(halfmap_fscs, vs_mean_fscs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
-    
-    scatter = ax.scatter(halfmap_fscs, vs_mean_fscs, c=halfmap_fscs, cmap='viridis', 
-                        alpha=0.7, s=50, edgecolors='black', linewidth=0.5)
-    ax.plot([0, 1], [0, 1], 'r--', alpha=0.5, linewidth=2, label='y=x')
-    ax.set_xlabel('Half-map FSC', fontweight='bold')
-    ax.set_ylabel('vs-Mean FSC', fontweight='bold')
-    ax.set_title('Half-map FSC vs vs-Mean FSC', fontweight='bold')
-    ax.legend(frameon=True, fancybox=True, shadow=True)
-    plt.colorbar(scatter, ax=ax, label='Half-map FSC Score')
-    ax.grid(True, alpha=0.3, color=colors['grid'])
-    ax.set_facecolor('#FAFAFA')
-    
-    plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    _safe_savefig(os.path.join(output_folder, 'plots', f'fsc_analysis_{zdim_key}.png'), dpi=300, bbox_inches='tight')
-    plt.close()
+    if save_all_plots:
+        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        fig.suptitle('FSC Score Analysis', fontsize=16, y=0.95, fontweight='bold')
+
+        # Plot 1: Half-map FSC histogram with improved styling
+        ax = axes[0, 0]
+        n_bins_fsc = min(30, max(15, len(halfmap_fscs) // 3))
+        bins_fsc = np.linspace(min(halfmap_fscs), max(halfmap_fscs), n_bins_fsc + 1)
+
+        ax.hist(halfmap_fscs, bins=bins_fsc, color='blue', alpha=0.8, edgecolor='black',
+                linewidth=0.8, density=True, hatch='///')
+        ax.axvline(np.mean(halfmap_fscs), color='red', linestyle='--', linewidth=2.5,
+                   label=f'Mean: {np.mean(halfmap_fscs):.3f}')
+        ax.set_xlabel('Half-map FSC Score', fontweight='bold')
+        ax.set_ylabel('Density', fontweight='bold')
+        ax.set_title('Distribution of Half-map FSC Scores', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+
+        # Plot 2: vs-Mean FSC histogram with improved styling
+        ax = axes[0, 1]
+        n_bins_vs_mean = min(30, max(15, len(vs_mean_fscs) // 3))
+        bins_vs_mean = np.linspace(min(vs_mean_fscs), max(vs_mean_fscs), n_bins_vs_mean + 1)
+
+        ax.hist(vs_mean_fscs, bins=bins_vs_mean, color='green', alpha=0.8, edgecolor='black',
+                linewidth=0.8, density=True, hatch='///')
+        ax.axvline(np.mean(vs_mean_fscs), color='red', linestyle='--', linewidth=2.5,
+                   label=f'Mean: {np.mean(vs_mean_fscs):.3f}')
+        ax.set_xlabel('vs-Mean FSC Score', fontweight='bold')
+        ax.set_ylabel('Density', fontweight='bold')
+        ax.set_title('Distribution of vs-Mean FSC Scores', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+
+        # Plot 3: Half-map FSC AUC histogram with improved styling
+        ax = axes[0, 2]
+        n_bins_auc = min(30, max(15, len(halfmap_aucs) // 3))
+        bins_auc = np.linspace(min(halfmap_aucs), max(halfmap_aucs), n_bins_auc + 1)
+
+        ax.hist(halfmap_aucs, bins=bins_auc, color='orange', alpha=0.8, edgecolor='black',
+                linewidth=0.8, density=True, hatch='///')
+        ax.axvline(np.mean(halfmap_aucs), color='red', linestyle='--', linewidth=2.5,
+                   label=f'Mean: {np.mean(halfmap_aucs):.3f}')
+        ax.set_xlabel('Half-map FSC AUC', fontweight='bold')
+        ax.set_ylabel('Density', fontweight='bold')
+        ax.set_title('Distribution of Half-map FSC AUC Scores', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+
+        # Plot 4: vs-Mean FSC AUC histogram with improved styling
+        ax = axes[1, 0]
+        n_bins_vs_mean_auc = min(30, max(15, len(vs_mean_aucs) // 3))
+        bins_vs_mean_auc = np.linspace(min(vs_mean_aucs), max(vs_mean_aucs), n_bins_vs_mean_auc + 1)
+
+        ax.hist(vs_mean_aucs, bins=bins_vs_mean_auc, color='purple', alpha=0.8, edgecolor='black',
+                linewidth=0.8, density=True, hatch='///')
+        ax.axvline(np.mean(vs_mean_aucs), color='red', linestyle='--', linewidth=2.5,
+                   label=f'Mean: {np.mean(vs_mean_aucs):.3f}')
+        ax.set_xlabel('vs-Mean FSC AUC', fontweight='bold')
+        ax.set_ylabel('Density', fontweight='bold')
+        ax.set_title('Distribution of vs-Mean FSC AUC Scores', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True)
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+
+        # Plot 5: Half-map FSC vs Half-map FSC AUC scatter with improved styling
+        ax = axes[1, 1]
+
+        hb = ax.hexbin(halfmap_fscs, halfmap_aucs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
+
+        scatter = ax.scatter(halfmap_fscs, halfmap_aucs, c=halfmap_fscs, cmap='viridis',
+                            alpha=0.7, s=50, edgecolors='black', linewidth=0.5)
+        ax.set_xlabel('Half-map FSC Score', fontweight='bold')
+        ax.set_ylabel('Half-map FSC AUC', fontweight='bold')
+        ax.set_title('Half-map FSC Score vs Half-map FSC AUC', fontweight='bold')
+        plt.colorbar(scatter, ax=ax, label='Half-map FSC Score')
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+
+        # Plot 6: Half-map FSC vs vs-Mean FSC comparison with improved styling
+        ax = axes[1, 2]
+
+        hb = ax.hexbin(halfmap_fscs, vs_mean_fscs, gridsize=20, cmap='Blues', alpha=0.3, mincnt=1)
+
+        scatter = ax.scatter(halfmap_fscs, vs_mean_fscs, c=halfmap_fscs, cmap='viridis',
+                            alpha=0.7, s=50, edgecolors='black', linewidth=0.5)
+        ax.plot([0, 1], [0, 1], 'r--', alpha=0.5, linewidth=2, label='y=x')
+        ax.set_xlabel('Half-map FSC', fontweight='bold')
+        ax.set_ylabel('vs-Mean FSC', fontweight='bold')
+        ax.set_title('Half-map FSC vs vs-Mean FSC', fontweight='bold')
+        ax.legend(frameon=True, fancybox=True, shadow=True)
+        plt.colorbar(scatter, ax=ax, label='Half-map FSC Score')
+        ax.grid(True, alpha=0.3, color=colors['grid'])
+        ax.set_facecolor('#FAFAFA')
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.93])
+        _safe_savefig(os.path.join(output_folder, 'plots', f'fsc_analysis_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+        plt.close()
     
     # Calculate cluster sizes
     cluster_sizes = [np.sum(cluster_indices == i) for i in range(len(cluster_centers))]
@@ -910,9 +916,10 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         'vs_mean_aucs': vs_mean_aucs
     }
     
-    with open(os.path.join(output_folder, 'data', f'junk_detection_results_{zdim_key}.pkl'), 'wb') as f:
-        pickle.dump(results, f)
-    
+    if save_all_plots:
+        with open(os.path.join(output_folder, 'data', f'junk_detection_results_{zdim_key}.pkl'), 'wb') as f:
+            pickle.dump(results, f)
+
     # Identify potential junk clusters using both metrics
     # Half-map FSC based outlier detection
     halfmap_fsc_threshold = np.percentile(halfmap_fscs, 25)  # Bottom 25%
@@ -981,8 +988,9 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         'vs_mean_junk_percentage': len(vs_mean_junk_particle_indices) / len(zs) * 100
     }
     
-    with open(os.path.join(output_folder, 'data', f'junk_cluster_info_{zdim_key}.pkl'), 'wb') as f:
-        pickle.dump(junk_info, f)
+    if save_all_plots:
+        with open(os.path.join(output_folder, 'data', f'junk_cluster_info_{zdim_key}.pkl'), 'wb') as f:
+            pickle.dump(junk_info, f)
     
     # Print summary statistics
     logger.info("=== Junk Detection Summary ===")
@@ -1004,10 +1012,11 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     return junk_info
 
 
-def plot_umap_visualization(zs, cluster_centers, cluster_indices, fsc_scores, fsc_auc_scores, output_folder, zdim_key):
+def plot_umap_visualization(zs, cluster_centers, cluster_indices, fsc_scores, fsc_auc_scores, output_folder, zdim_key,
+                           save_all_plots=False):
     """
     Create enhanced UMAP visualization of latent space with cluster analysis including AUC scores.
-    
+
     Parameters:
     - zs: Latent embeddings
     - cluster_centers: K-means cluster centers
@@ -1016,7 +1025,10 @@ def plot_umap_visualization(zs, cluster_centers, cluster_indices, fsc_scores, fs
     - fsc_auc_scores: Dictionary with FSC AUC scores for each cluster
     - output_folder: Output directory for saving plots
     - zdim_key: Dimension key for embeddings
+    - save_all_plots: Whether to save all detailed diagnostic plots (default: False)
     """
+    if not save_all_plots:
+        return
     if zs.shape[1] < 2:
         logger.warning("UMAP visualization requires at least 2 dimensions")
         return
@@ -1280,9 +1292,10 @@ def plot_umap_visualization(zs, cluster_centers, cluster_indices, fsc_scores, fs
     return umap_data
 
 
-def detect_junk_clusters(fsc_scores, fsc_auc_scores, output_folder, zdim_key, 
-                        method='adaptive_threshold', percentile_threshold=25, 
-                        std_threshold=2.0, min_junk_fraction=0.1, max_junk_fraction=0.8):
+def detect_junk_clusters(fsc_scores, fsc_auc_scores, output_folder, zdim_key,
+                        method='adaptive_threshold', percentile_threshold=25,
+                        std_threshold=2.0, min_junk_fraction=0.1, max_junk_fraction=0.8,
+                        save_all_plots=False):
     """
     Detect junk clusters based on FSC and AUC scores using multiple methods.
     
@@ -1457,7 +1470,8 @@ def detect_junk_clusters(fsc_scores, fsc_auc_scores, output_folder, zdim_key,
     create_junk_detection_visualizations(
         halfmap_fscs, vs_mean_fscs, halfmap_aucs, vs_mean_aucs,
         combined_fsc, combined_auc, methods_results, final_junk_mask,
-        junk_clusters, good_clusters, output_folder, zdim_key, method
+        junk_clusters, good_clusters, output_folder, zdim_key, method,
+        save_all_plots=save_all_plots
     )
     
     # Compile results
@@ -1491,10 +1505,13 @@ def detect_junk_clusters(fsc_scores, fsc_auc_scores, output_folder, zdim_key,
 
 def create_junk_detection_visualizations(halfmap_fscs, vs_mean_fscs, halfmap_aucs, vs_mean_aucs,
                                        combined_fsc, combined_auc, methods_results, final_junk_mask,
-                                       junk_clusters, good_clusters, output_folder, zdim_key, method):
+                                       junk_clusters, good_clusters, output_folder, zdim_key, method,
+                                       save_all_plots=False):
     """
     Create comprehensive visualizations for junk detection results.
     """
+    if not save_all_plots:
+        return
     logger.info("Creating junk detection visualizations...")
     os.makedirs(os.path.join(output_folder, 'plots'), exist_ok=True)
     
@@ -1845,12 +1862,13 @@ Score Separation:
     logger.info("Junk detection visualizations completed and saved.")
 
 
-def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_clusters=100, 
+def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_clusters=100,
                            batch_size=100, n_particles_per_cluster=100, no_z_regularization=False,
                            save_reconstructions=False, filter_resolution=None, filter_fourier_shells=10,
                            junk_detection_method="adaptive_threshold", percentile_threshold=25.0,
                            std_threshold=2.0, min_junk_fraction=0.1, max_junk_fraction=0.8,
-                           save_pipeline_indices=False, output_format="both"):
+                           save_pipeline_indices=False, output_format="both",
+                           save_all_plots=False):
     """
     Main function to detect junk particles from latent space using clustering and FSC analysis.
     
@@ -1872,7 +1890,9 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     - max_junk_fraction: Maximum fraction of clusters that can be classified as junk (default: 0.8)
     - save_pipeline_indices: Whether to save particle indices in pipeline-compatible format
     - output_format: Which indices to save ("both", "junk_only", "good_only")
-    
+    - save_all_plots: Whether to save all detailed diagnostic plots and data files (default: False).
+      When False, only essential outputs are saved (summary plot, junk/good indices, pipeline indices).
+
     Algorithm:
     1. Performs k-means clustering on latent embeddings
     2. For each cluster center, finds the n_particles_per_cluster closest particles in latent space
@@ -1965,14 +1985,15 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     # Create plots and identify junk clusters
     logger.info("Creating plots and identifying junk clusters...")
     junk_info = plot_junk_detection_results(
-        zs, cluster_centers, cluster_indices, fsc_scores, fsc_auc_scores, 
-        particle_usage, output_folder, zdim_key
+        zs, cluster_centers, cluster_indices, fsc_scores, fsc_auc_scores,
+        particle_usage, output_folder, zdim_key, save_all_plots=save_all_plots
     )
     
     # Create UMAP visualization
     logger.info("Creating UMAP visualization...")
     umap_data = plot_umap_visualization(
-        zs, cluster_centers, cluster_indices, fsc_scores, fsc_auc_scores, output_folder, zdim_key
+        zs, cluster_centers, cluster_indices, fsc_scores, fsc_auc_scores, output_folder, zdim_key,
+        save_all_plots=save_all_plots
     )
     junk_info['umap_data'] = umap_data
     
@@ -1981,7 +2002,8 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     junk_clusters, junk_detection_info = detect_junk_clusters(
         fsc_scores, fsc_auc_scores, output_folder, zdim_key,
         method=junk_detection_method, percentile_threshold=percentile_threshold,
-        std_threshold=std_threshold, min_junk_fraction=min_junk_fraction, max_junk_fraction=max_junk_fraction
+        std_threshold=std_threshold, min_junk_fraction=min_junk_fraction, max_junk_fraction=max_junk_fraction,
+        save_all_plots=save_all_plots
     )
     junk_info['junk_detection'] = junk_detection_info
     junk_info['junk_clusters'] = junk_clusters.tolist()
@@ -1995,15 +2017,17 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     )
     # Create particle classification visualizations
     create_particle_classification_visualizations(
-        zs, cluster_indices, junk_particles, good_particles, 
-        particle_stats, output_folder, zdim_key, junk_detection_method
+        zs, cluster_indices, junk_particles, good_particles,
+        particle_stats, output_folder, zdim_key, junk_detection_method,
+        save_all_plots=save_all_plots
     )
     # Get original particle indices for mapping (sorted = dataset-local order)
     original_particle_indices = np.sort(np.concatenate(pipeline_output.get('particles_halfsets')))
     # Save particle classifications
     save_particle_classifications(
-        junk_particles, good_particles, particle_stats, 
-        cluster_indices, output_folder, zdim_key, junk_detection_method, original_particle_indices
+        junk_particles, good_particles, particle_stats,
+        cluster_indices, output_folder, zdim_key, junk_detection_method, original_particle_indices,
+        save_all_plots=save_all_plots
     )
     # Save pipeline-compatible indices if requested
     if save_pipeline_indices:
@@ -2043,7 +2067,7 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
                 f.write(f"  python -m recovar.commands.pipeline particles.star --poses poses.pkl --ctf ctf.pkl --ind {os.path.basename(good_pipeline_file)} -o output_dir\n")
         logger.info("Pipeline usage summary saved to: %s", summary_file)
     # Save reconstruction info if reconstructions were saved
-    if save_reconstructions and reconstructions is not None:
+    if save_all_plots and save_reconstructions and reconstructions is not None:
         reconstructions_info_path = os.path.join(output_folder, 'data', f'reconstructions_info_{zdim_key}.pkl')
         with open(reconstructions_info_path, 'wb') as f:
             pickle.dump(reconstructions, f)
@@ -2093,6 +2117,8 @@ def add_args(parser):
     parser.add_argument("--output-format", type=str, default="both",
                        choices=["both", "junk_only", "good_only"],
                        help="Which indices to save (default: both)")
+    parser.add_argument("--save-all-plots", action="store_true",
+                       help="Save all detailed diagnostic plots and data files (default: only summary plot and essential indices)")
 
     from recovar.utils.parser_args import add_project_arg
     add_project_arg(parser)
@@ -2159,7 +2185,8 @@ def main():
             args.min_junk_fraction,
             args.max_junk_fraction,
             args.save_pipeline_indices,
-            args.output_format
+            args.output_format,
+            args.save_all_plots
         )
 
 
@@ -2229,11 +2256,12 @@ def map_clusters_to_particles(junk_clusters, cluster_indices, output_folder, zdi
     return junk_particles, good_particles, particle_stats
 
 
-def create_particle_classification_visualizations(zs, cluster_indices, junk_particles, good_particles, 
-                                                particle_stats, output_folder, zdim_key, method):
+def create_particle_classification_visualizations(zs, cluster_indices, junk_particles, good_particles,
+                                                particle_stats, output_folder, zdim_key, method,
+                                                save_all_plots=False):
     """
     Create comprehensive visualizations for particle-level classifications.
-    
+
     Parameters:
     - zs: Latent embeddings
     - cluster_indices: Cluster assignments for each particle
@@ -2243,7 +2271,10 @@ def create_particle_classification_visualizations(zs, cluster_indices, junk_part
     - output_folder: Output directory for saving plots
     - zdim_key: Dimension key for embeddings
     - method: Junk detection method used
+    - save_all_plots: Whether to save all detailed diagnostic plots (default: False)
     """
+    if not save_all_plots:
+        return
     logger.info("Creating particle classification visualizations...")
     os.makedirs(os.path.join(output_folder, 'plots'), exist_ok=True)
     
@@ -2530,11 +2561,12 @@ Classification Quality:
     logger.info("Particle classification visualizations completed and saved.")
 
 
-def save_particle_classifications(junk_particles, good_particles, particle_stats, 
-                                cluster_indices, output_folder, zdim_key, method, original_indices):
+def save_particle_classifications(junk_particles, good_particles, particle_stats,
+                                cluster_indices, output_folder, zdim_key, method, original_indices,
+                                save_all_plots=False):
     """
     Save particle-level classifications to pickle files with comprehensive metadata.
-    
+
     Parameters:
     - junk_particles: Array of particle indices classified as junk - IN THE INTERNAL ORDERING
     - good_particles: Array of particle indices classified as good - IN THE INTERNAL ORDERING
@@ -2543,6 +2575,7 @@ def save_particle_classifications(junk_particles, good_particles, particle_stats
     - output_folder: Output directory for saving files
     - zdim_key: Dimension key for embeddings
     - method: Junk detection method used
+    - save_all_plots: Whether to save all detailed diagnostic data files (default: False)
     """
     logger.info("Saving particle classifications...")
     os.makedirs(os.path.join(output_folder, 'data'), exist_ok=True)
@@ -2574,11 +2607,12 @@ def save_particle_classifications(junk_particles, good_particles, particle_stats
     }
     
 
-    # Save main results file
-    results_file = os.path.join(output_folder, 'data', f'particle_classifications_{zdim_key}.pkl')
-    with open(results_file, 'wb') as f:
-        pickle.dump(results, f)
-    
+    # Save main results file (detailed classification data)
+    if save_all_plots:
+        results_file = os.path.join(output_folder, 'data', f'particle_classifications_{zdim_key}.pkl')
+        with open(results_file, 'wb') as f:
+            pickle.dump(results, f)
+
     # Save indices in pipeline-compatible format (for --ind or --particle-ind)
     # These are just the raw numpy arrays that can be directly used
     junk_indices_file = os.path.join(output_folder, 'data', f'junk_indices_{zdim_key}.pkl')
@@ -2590,7 +2624,8 @@ def save_particle_classifications(junk_particles, good_particles, particle_stats
         pickle.dump(good_particles, f)
     
     logger.info("Particle classifications saved:")
-    logger.info("  Main results: %s", results_file)
+    if save_all_plots:
+        logger.info("  Main results: %s", results_file)
     logger.info("  Junk indices (pipeline format): %s", junk_indices_file)
     logger.info("  Good indices (pipeline format): %s", good_indices_file)
     

@@ -22,7 +22,7 @@ matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 logger = logging.getLogger(__name__)
 
 
-def plot_anomaly_detection_results(zs, original_indices, folder_name):
+def plot_anomaly_detection_results(zs, original_indices, folder_name, save_all_plots=False):
     """
     Plots anomaly detection results for given data and saves the plots and inlier/outlier indices.
 
@@ -33,6 +33,9 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
         The original indices of the particles, loaded from np.concatenate(pipeline_output.get(particles_halfsets))
     - folder_name: str
         The folder name where all files (plots and indices) will be saved in the original ordering
+    - save_all_plots: bool
+        If True, save all per-method PKLs and diagnostic plots.
+        If False, only compute consensus and return results (no per-method files or plots).
     """
     # Ensure the folder exists
     os.makedirs(folder_name, exist_ok=True)
@@ -94,11 +97,12 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
         # Sanitize algorithm name for filename
         safe_name = name.replace(" ", "_").lower()
 
-        # Save indices to pickle files in the specified folder
-        with open(os.path.join(folder_name, f"inliers_{safe_name}.pkl"), "wb") as f:
-            pickle.dump(inliers_indices, f)
-        with open(os.path.join(folder_name, f"outliers_{safe_name}.pkl"), "wb") as f:
-            pickle.dump(outliers_indices, f)
+        # Save per-method indices to pickle files (diagnostic detail)
+        if save_all_plots:
+            with open(os.path.join(folder_name, f"inliers_{safe_name}.pkl"), "wb") as f:
+                pickle.dump(inliers_indices, f)
+            with open(os.path.join(folder_name, f"outliers_{safe_name}.pkl"), "wb") as f:
+                pickle.dump(outliers_indices, f)
 
     # Calculate average outlier percentage from other algorithms
     avg_contamination = np.mean(outlier_percentages)
@@ -123,11 +127,12 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
         # Sanitize algorithm name for filename
         safe_name = name.replace(" ", "_").lower()
 
-        # Save indices to pickle files in the specified folder
-        with open(os.path.join(folder_name, f"inliers_{safe_name}.pkl"), "wb") as f:
-            pickle.dump(inliers_indices, f)
-        with open(os.path.join(folder_name, f"outliers_{safe_name}.pkl"), "wb") as f:
-            pickle.dump(outliers_indices, f)
+        # Save per-method indices to pickle files (diagnostic detail)
+        if save_all_plots:
+            with open(os.path.join(folder_name, f"inliers_{safe_name}.pkl"), "wb") as f:
+                pickle.dump(inliers_indices, f)
+            with open(os.path.join(folder_name, f"outliers_{safe_name}.pkl"), "wb") as f:
+                pickle.dump(outliers_indices, f)
 
         # Update outlier percentages and total samples
         num_outliers = np.sum(y_pred == -1)
@@ -167,6 +172,9 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
     algorithm_names.append("Consensus")
     predictions.append(np.where(consensus_outliers, -1, 1))
     outlier_percentages.append(np.mean(consensus_outliers))
+
+    if not save_all_plots:
+        return inliers_mapped_back_to_original_indices, outliers_mapped_back_to_original_indices
 
     # Prepare for plotting
     n_algorithms = len(algorithm_names)
@@ -359,7 +367,8 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
                                    particle_bad_fraction_threshold=0.7,
                                    micrograph_bad_fraction_threshold=0.7,
                                    output_dir=None,
-                                   noreg=False):
+                                   noreg=False,
+                                   save_all_plots=False):
     """
     Perform outlier detection based on contrast values.
 
@@ -373,6 +382,7 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
     - micrograph_bad_fraction_threshold: Threshold for micrograph-based outlier detection
     - output_dir: Output directory for saving results
     - noreg: Whether to use unregularized embeddings
+    - save_all_plots: Whether to save all diagnostic plots (default: False)
 
     Returns:
     - image_outliers: Array of image-level outlier indices
@@ -569,10 +579,10 @@ def outlier_detection_from_contrast(pipeline_output, zdim_key=4,
             overlap = np.sum(outliers_image_identified_by_particle & outliers_image_identified_by_micrograph)
             logger.info("  Particle-Micrograph overlap: %s (%.1f%% of micrographs)", overlap, overlap/np.sum(outliers_image_identified_by_micrograph)*100)
     
-    # Create plots if output directory is provided
-    if output_dir is not None:
+    # Create plots if output directory is provided and save_all_plots is enabled
+    if output_dir is not None and save_all_plots:
         os.makedirs(output_dir, exist_ok=True)
-        
+
         # Create basic contrast histogram
         plt.figure(figsize=(10, 6))
         plt.hist(contrast_array, bins=50, alpha=0.7, color='blue', label='All images')
@@ -661,18 +671,20 @@ Individual outliers: {n_individual_outliers} ({n_individual_outliers/n_images*10
     return image_outliers, image_inliers, particle_outliers, particle_inliers
 
 
-def create_particle_outlier_visualization(all_particle_outliers, method_names, output_dir, zdim_key, total_particles):
+def create_particle_outlier_visualization(all_particle_outliers, method_names, output_dir, zdim_key, total_particles,
+                                          save_all_plots=False):
     """
     Create visualization of particle-level outliers from different methods.
-    
+
     Parameters:
     - all_particle_outliers: List of particle outlier arrays from different methods
     - method_names: List of method names
     - output_dir: Output directory for saving plots
     - zdim_key: Dimension key for embeddings
     - total_particles: Total number of particles
+    - save_all_plots: Whether to save all diagnostic plots (default: False)
     """
-    if len(all_particle_outliers) == 0:
+    if len(all_particle_outliers) == 0 or not save_all_plots:
         return
     
     logger.info("Creating particle outlier visualization...")
@@ -780,17 +792,21 @@ def create_particle_outlier_visualization(all_particle_outliers, method_names, o
     
     logger.info("Particle outlier visualization saved to: %s", output_dir)
 
-def create_overlap_matrix_visualization(all_outliers, method_names, output_dir, zdim_key, total_particles):
+def create_overlap_matrix_visualization(all_outliers, method_names, output_dir, zdim_key, total_particles,
+                                        save_all_plots=False):
     """
     Create overlap matrix visualization for different outlier detection methods.
-    
+
     Parameters:
     - all_outliers: List of outlier arrays from different methods
     - method_names: List of method names
     - output_dir: Output directory for saving plots
     - zdim_key: Dimension key for embeddings
     - total_particles: Total number of particles
+    - save_all_plots: Whether to save all diagnostic plots (default: False)
     """
+    if not save_all_plots:
+        return
     n_methods = len(method_names)
     overlap_matrix = np.zeros((n_methods, n_methods), dtype=int)
     
@@ -965,7 +981,9 @@ def _run_outlier_detection(args):
     os.makedirs(anomaly_output_dir, exist_ok=True)
     
     # Pass sorted original indices — embeddings are in dataset-local order
-    plot_anomaly_detection_results(zs, np.sort(original_particle_indices), anomaly_output_dir)
+    save_all_plots = getattr(args, 'save_all_plots', False)
+    plot_anomaly_detection_results(zs, np.sort(original_particle_indices), anomaly_output_dir,
+                                  save_all_plots=save_all_plots)
     
     # Load consensus results
     consensus_inliers_file = os.path.join(anomaly_output_dir, 'inliers_consensus.pkl')
@@ -1008,6 +1026,7 @@ def _run_outlier_detection(args):
             micrograph_bad_fraction_threshold=args.micrograph_bad_fraction_threshold,
             output_dir=contrast_output_dir,
             noreg=args.no_z_regularization,
+            save_all_plots=save_all_plots,
         )
         
         # Store results
@@ -1079,7 +1098,8 @@ def _run_outlier_detection(args):
                 min_junk_fraction=0.1,
                 max_junk_fraction=0.8,
                 save_pipeline_indices=args.save_pipeline_indices,
-                output_format=args.output_format
+                output_format=args.output_format,
+                save_all_plots=save_all_plots
             )
             
             # Load junk detection results
@@ -1149,7 +1169,8 @@ def _run_outlier_detection(args):
 
     # Create particle-level visualization if we have particle outliers
     if len(all_particle_outliers) > 0:
-        create_particle_outlier_visualization(all_particle_outliers, particle_method_names, combined_output_dir, zdim_key, total_particles)
+        create_particle_outlier_visualization(all_particle_outliers, particle_method_names, combined_output_dir, zdim_key, total_particles,
+                                              save_all_plots=save_all_plots)
     
     # Collect all image-level outlier indices (for final combination)
     all_image_outliers = []
@@ -1222,32 +1243,35 @@ def _run_outlier_detection(args):
         with open(particle_inliers_file, 'wb') as f:
             pickle.dump(combined_particle_inliers, f)
     
-    # Save simple breakdown
-    breakdown_file = os.path.join(combined_output_dir, 'detection_breakdown.txt')
-    with open(breakdown_file, 'w') as f:
-        f.write(f"Combined Outlier Detection Results\n")
-        f.write(f"Total particles: {total_particles}\n")
-        f.write(f"Combined image outliers: {len(combined_image_outliers)} ({len(combined_image_outliers)/original_image_indices.size*100:.1f}%)\n")
-        f.write(f"Combined image inliers: {len(combined_image_inliers)} ({len(combined_image_inliers)/original_image_indices.size*100:.1f}%)\n\n")
-        if len(all_image_outliers) > 0:
-            for i, (outliers, method) in enumerate(zip(all_image_outliers, image_method_names)):
-                f.write(f"{method}: {len(outliers)} outliers ({len(outliers)/original_image_indices.size*100:.1f}%)\n")
-        else:
-            f.write("No outlier detection methods produced results.\n")
+    # Save simple breakdown (diagnostic detail)
+    if save_all_plots:
+        breakdown_file = os.path.join(combined_output_dir, 'detection_breakdown.txt')
+        with open(breakdown_file, 'w') as f:
+            f.write(f"Combined Outlier Detection Results\n")
+            f.write(f"Total particles: {total_particles}\n")
+            f.write(f"Combined image outliers: {len(combined_image_outliers)} ({len(combined_image_outliers)/original_image_indices.size*100:.1f}%)\n")
+            f.write(f"Combined image inliers: {len(combined_image_inliers)} ({len(combined_image_inliers)/original_image_indices.size*100:.1f}%)\n\n")
+            if len(all_image_outliers) > 0:
+                for i, (outliers, method) in enumerate(zip(all_image_outliers, image_method_names)):
+                    f.write(f"{method}: {len(outliers)} outliers ({len(outliers)/original_image_indices.size*100:.1f}%)\n")
+            else:
+                f.write("No outlier detection methods produced results.\n")
     
 
 
 
     # Create overlap matrix visualization
     if len(all_image_outliers) > 1:
-        create_overlap_matrix_visualization(all_image_outliers, image_method_names, combined_output_dir, zdim_key, original_image_indices.size)
+        create_overlap_matrix_visualization(all_image_outliers, image_method_names, combined_output_dir, zdim_key, original_image_indices.size,
+                                            save_all_plots=save_all_plots)
     
     # Create outlier visualizations (UMAP, latent space, contrast histograms)
     if len(all_particle_outliers) > 0:
         create_outlier_visualizations(pipeline_output, all_particle_outliers, particle_method_names,
                                     combined_particle_outliers, combined_particle_inliers,
                                     args.output_dir, zdim_key, total_particles, is_tilt_series, starfile,
-                                    noreg=args.no_z_regularization)
+                                    noreg=args.no_z_regularization,
+                                    save_all_plots=save_all_plots)
     
     logger.info("Combined results saved to: %s", combined_output_dir)
     logger.info("Combined image outliers: %s (%.1f%%)", len(combined_image_outliers), len(combined_image_outliers)/original_image_indices.size*100)
@@ -1324,6 +1348,8 @@ def add_args(parser):
                        help="Threshold for junk particle detection (default: 0.5)")
     parser.add_argument("--particles-per-cluster", type=int,
                        help="Number of particles per cluster for junk detection (auto: min(100, max(10, n_particles/n_clusters)))")
+    parser.add_argument("--save-all-plots", action="store_true",
+                       help="Save all detailed diagnostic plots and per-method data files (default: only combined results and summary)")
 
     from recovar.utils.parser_args import add_project_arg
     add_project_arg(parser)
@@ -1333,7 +1359,8 @@ def add_args(parser):
 
 
 def create_outlier_visualizations(pipeline_output, all_particle_outliers, method_names, combined_particle_outliers,
-                                 combined_particle_inliers, output_dir, zdim_key, total_particles, is_tilt_series=False, starfile=None, noreg=False):
+                                 combined_particle_inliers, output_dir, zdim_key, total_particles, is_tilt_series=False, starfile=None, noreg=False,
+                                 save_all_plots=False):
     """
     Create UMAP and latent space visualizations with contrast histograms for each outlier group.
 
@@ -1349,7 +1376,10 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
     - is_tilt_series: Whether this is a tilt series dataset
     - starfile: Star file path for tilt series mapping
     - noreg: Whether to use unregularized embeddings
+    - save_all_plots: Whether to save all diagnostic plots (default: False)
     """
+    if not save_all_plots:
+        return
     logger.info("Creating outlier visualizations...")
 
     coords_entry = 'latent_coords_noreg' if noreg else 'latent_coords'
