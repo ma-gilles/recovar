@@ -1864,7 +1864,7 @@
 <li>UMAP embedding of the latent space</li>
 <li>Trajectories between cluster pairs (if requested)</li>
 </ul>
-<p>Results are saved to <code>output/output/analysis_10/</code>.</p>
+<p>Results are saved to <code>output/analysis_10/</code>.</p>
 <h2 id="options">Options<a class="headerlink" href="#options" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -1943,7 +1943,7 @@
 </code></pre></div>
 <p>The coordinates file is a text file with shape <code>(n_points, zdim)</code>, readable by <code>np.loadtxt</code>. You can use the k-means centers from analyze:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>compute_state<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>volumes<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--latent-points<span class="w"> </span>output/output/analysis_10/centers.txt<span class="w"> </span>--Bfactor<span class="o">=</span><span class="m">50</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--latent-points<span class="w"> </span>output/analysis_10/kmeans/centers.txt<span class="w"> </span>--Bfactor<span class="o">=</span><span class="m">50</span>
 </code></pre></div>
 <h3 id="options_1">Options<a class="headerlink" href="#options_1" title="Permanent link">&para;</a></h3>
 <table>
@@ -2074,8 +2074,8 @@
 </div>
 <h3 id="volume-files">Volume files<a class="headerlink" href="#volume-files" title="Permanent link">&para;</a></h3>
 <p>Open <code>.mrc</code> files in ChimeraX, Chimera, or any MRC viewer:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>output/output/analysis_10/
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  centers/
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>output/analysis_10/
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  kmeans/
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    all_volumes/
 <a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>      vol0000.mrc     # K-means center 0
 <a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>      vol0001.mrc     # K-means center 1
