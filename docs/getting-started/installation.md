@@ -1,15 +1,16 @@
 # Installation
 
-RECOVAR requires CUDA and [JAX](https://jax.readthedocs.io/en/latest/index.html). JAX is installed automatically, but you need CUDA drivers on your system (typically already present on GPU clusters).
+RECOVAR requires Python 3.11+ and [JAX](https://jax.readthedocs.io/en/latest/index.html). A CUDA GPU is required for practical use (CPU-only mode is available for testing). Installation takes less than 5 minutes.
 
-Installation takes less than 5 minutes.
-
-## Quick install (pip)
+## Quick install
 
 ```bash
+git clone https://github.com/ma-gilles/recovar.git
+cd recovar
+
 conda create --name recovar python=3.11 -y
 conda activate recovar
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cuda12]"==0.9.0.1 recovar
+pip install ".[cuda]"
 ```
 
 Verify:
@@ -18,57 +19,11 @@ Verify:
 recovar run_test_dataset
 ```
 
-## Development install
+All dependencies are pinned to exact versions for reliability. You should not encounter version conflicts.
 
-For the latest version or contributing:
+## Pixi (fully reproducible)
 
-```bash
-# Clone
-git clone https://github.com/ma-gilles/recovar.git
-cd recovar
-
-# Create environment
-conda create --name recovar_dev python=3.11 -y
-conda activate recovar_dev
-
-# Install dependencies
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git
-pip install "jax[cuda12]"==0.9.0.1    # or "jax[cpu]" for CPU-only
-
-# Install recovar in editable mode
-pip install -e ".[dev]"
-
-# Verify
-python -c "import jax; print(jax.devices())"
-recovar run_test_dataset
-```
-
-## CPU-only install
-
-For testing without a GPU:
-
-```bash
-conda create --name recovar python=3.11 -y
-conda activate recovar
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cpu]"==0.9.0.1 recovar
-```
-
-!!! warning
-    CPU-only mode is useful for testing but not practical for real datasets. The pipeline requires GPU acceleration for reasonable performance.
-
-## Jupyter kernel
-
-To use RECOVAR from Jupyter notebooks:
-
-```bash
-conda activate recovar
-pip install ipykernel
-python -m ipykernel install --user --name=recovar
-```
-
-## Pixi (alternative)
-
-If you use [pixi](https://prefix.dev/), a `pixi.toml` is included in the repo. This gives you a fully reproducible environment with pinned dependencies:
+[Pixi](https://prefix.dev/) gives you a hermetic environment with every dependency locked via `pixi.lock`. This is the most reproducible option:
 
 ```bash
 git clone https://github.com/ma-gilles/recovar.git
@@ -83,6 +38,44 @@ Run tests with pixi:
 ```bash
 pixi run test-fast        # Unit tests (no GPU)
 pixi run test-full        # Full suite (requires GPU)
+```
+
+## Flexible install (for developers)
+
+If you need to reconcile recovar with other packages in your environment (e.g., you already have a JAX version installed), use the `flexible` extra which uses minimum version bounds instead of exact pins:
+
+```bash
+git clone https://github.com/ma-gilles/recovar.git
+cd recovar
+
+conda create --name recovar_dev python=3.11 -y
+conda activate recovar_dev
+pip install -e ".[flexible,cuda-flexible,dev]"
+
+# Verify
+python -c "import jax; print(jax.devices())"
+recovar run_test_dataset
+```
+
+## CPU-only install
+
+For testing without a GPU:
+
+```bash
+pip install .
+```
+
+!!! warning
+    CPU-only mode is useful for testing but not practical for real datasets. The pipeline requires GPU acceleration for reasonable performance.
+
+## Jupyter kernel
+
+To use RECOVAR from Jupyter notebooks:
+
+```bash
+conda activate recovar
+pip install ipykernel
+python -m ipykernel install --user --name=recovar
 ```
 
 ## Docker
