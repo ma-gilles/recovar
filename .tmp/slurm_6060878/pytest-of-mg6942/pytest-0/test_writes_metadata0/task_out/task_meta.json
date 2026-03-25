@@ -1,8 +1,0 @@
-{
-  "id": "t1",
-  "job_id": "j1",
-  "task_type": "volume",
-  "label": "My Volume",
-  "slurm_job_id": "12345",
-  "created_at": 1000.0
-}

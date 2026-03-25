@@ -1,5 +1,0 @@
-{
-  "status": "baseline_written",
-  "baseline_path": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060879/pytest-of-mg6942/pytest-0/test_run_test_all_metrics_tiny1/baseline/all_scores.json",
-  "tolerance_fraction": 0.05
-}
