@@ -5,9 +5,9 @@ pytest.importorskip("jax")
 
 from recovar.core import linalg
 from recovar.output import output
-from recovar.reconstruction import regularization
 from recovar.ppca import ppca as ppca_module
 from recovar.ppca import sparse_PCA
+from recovar.reconstruction import regularization
 
 pytestmark = pytest.mark.unit
 

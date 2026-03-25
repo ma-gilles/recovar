@@ -1,3 +1,5 @@
+"""Direct PPCA implementation ported onto the current recovar APIs."""
+
 import functools
 import logging
 
@@ -8,7 +10,7 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core, utils
-from recovar.core import cubic_interpolation, linalg
+from recovar.core import linalg
 from recovar.heterogeneity import covariance_estimation
 from recovar.output import metrics
 
@@ -27,13 +29,19 @@ def _normalize_experiment_datasets(experiment_datasets):
             full_dataset = datasets[0]
             datasets = list(full_dataset.materialize_halfset_datasets())
         return full_dataset, datasets
-    raise TypeError(
-        "experiment_datasets must be a CryoEMDataset or a sequence of CryoEMDataset objects"
-    )
+    raise TypeError("experiment_datasets must be a CryoEMDataset or a sequence of CryoEMDataset objects")
 
 
 def _iter_processed_batches(experiment_dataset, batch_size):
-    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in experiment_dataset.iter_batches(
+    for (
+        batch,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        _noise_variance,
+        _particle_indices,
+        image_indices,
+    ) in experiment_dataset.iter_batches(
         batch_size,
         by_image=not getattr(experiment_dataset, "tilt_series_flag", False),
     ):
@@ -73,6 +81,7 @@ def _forward_model_from_map(
 # WHITENING CONSTRAINT IMPLEMENTATION
 # =============================================================================
 
+
 def sqrtm_psd(C):
     """
     Compute the matrix square root of a positive semi-definite matrix.
@@ -93,9 +102,17 @@ def sqrtm_psd(C):
     return (eigvecs * sqrt_eigvals) @ eigvecs.T
 
 
-def compute_sigma_proj_ls(experiment_datasets, mean_estimate_raw, W, volume_mask,
-                          batch_size, disc_type_mean='cubic', disc_type='linear_interp',
-                          do_mask_images=True, parallel_analysis=False):
+def compute_sigma_proj_ls(
+    experiment_datasets,
+    mean_estimate_raw,
+    W,
+    volume_mask,
+    batch_size,
+    disc_type_mean="cubic",
+    disc_type="linear_interp",
+    do_mask_images=True,
+    parallel_analysis=False,
+):
     """
     Compute Sigma(W) by projected-covariance least squares using existing
     covariance_estimation.compute_projected_covariance.
@@ -109,9 +126,7 @@ def compute_sigma_proj_ls(experiment_datasets, mean_estimate_raw, W, volume_mask
         if len(dataset_list) == 1 and getattr(dataset_list[0], "halfset_indices", None) is not None:
             dataset_for_covariance = dataset_list[0]
         else:
-            raise ValueError(
-                "proj_ls whitening requires a CryoEMDataset with halfset_indices set"
-            )
+            raise ValueError("proj_ls whitening requires a CryoEMDataset with halfset_indices set")
     covar = covariance_estimation.compute_projected_covariance(
         dataset_for_covariance,
         mean_estimate_raw,
@@ -129,19 +144,20 @@ def compute_sigma_proj_ls(experiment_datasets, mean_estimate_raw, W, volume_mask
 def compute_Cz_from_second_moments(second_moment_zs):
     """
     Compute the empirical posterior covariance Ĉ_z = (1/N) Σ_n E[z_n z_n^T | y_n].
-    
+
     Args:
         second_moment_zs: Array of shape (N, q, q) containing E[z_n z_n^T | y_n] for each sample
                           where E[z_n z_n^T | y_n] = Σ_n + μ_n μ_n^T
-    
+
     Returns:
         C_z: The empirical posterior covariance of shape (q, q)
     """
     return jnp.mean(second_moment_zs, axis=0)
 
 
-def compute_em_ll_and_whitening_grad(experiment_datasets, mean_estimate, W, batch_size,
-                                     disc_type_mean='cubic', disc_type='linear_interp'):
+def compute_em_ll_and_whitening_grad(
+    experiment_datasets, mean_estimate, W, batch_size, disc_type_mean="cubic", disc_type="linear_interp"
+):
     """
     Compute EM data log-likelihood and whitening penalty/gradient in two passes.
 
@@ -174,7 +190,11 @@ def compute_em_ll_and_whitening_grad(experiment_datasets, mean_estimate, W, batc
         ):
             noise_variance = experiment_dataset.noise.get(batch_image_ind)
             _, _, _, second_moment_zs_batch, ll_sum_batch, _ = E_M_step_batch(
-                batch, lhs_dummy, rhs_dummy, mean_estimate, W,
+                batch,
+                lhs_dummy,
+                rhs_dummy,
+                mean_estimate,
+                W,
                 ctf_params,
                 rotation_matrices,
                 translations,
@@ -234,10 +254,11 @@ def compute_em_ll_and_whitening_grad(experiment_datasets, mean_estimate, W, batc
             ) / jnp.sqrt(noise_variance)
 
             centered_images = images - projected_mean
-            ctf_squared_over_noise_variance = CTF ** 2
+            ctf_squared_over_noise_variance = CTF**2
 
             PW = batch_over_vol_slice_volume(
-                W, rotation_matrices,
+                W,
+                rotation_matrices,
                 experiment_dataset.image_shape,
                 experiment_dataset.volume_shape,
                 disc_type,
@@ -288,8 +309,9 @@ def compute_em_ll_and_whitening_grad(experiment_datasets, mean_estimate, W, batc
     return ll_sum, F, grad_W, C_z
 
 
-def compute_em_ll_and_whitening_grads(experiment_datasets, mean_estimate, W, batch_size,
-                                      W_prior=None, disc_type_mean='cubic', disc_type='linear_interp'):
+def compute_em_ll_and_whitening_grads(
+    experiment_datasets, mean_estimate, W, batch_size, W_prior=None, disc_type_mean="cubic", disc_type="linear_interp"
+):
     """
     Compute EM data log-likelihood, whitening penalty/gradient, and the M-step
     quadratic objective gradient (a proxy for -LL used in EM).
@@ -312,10 +334,8 @@ def compute_em_ll_and_whitening_grads(experiment_datasets, mean_estimate, W, bat
     Cz_sum = jnp.zeros((q, q), dtype=W.dtype)
     n_total = 0
 
-    lhs_summed = jnp.zeros((reference_dataset.volume_size, q * q),
-                           dtype=reference_dataset.dtype_real)
-    rhs_summed = jnp.zeros((reference_dataset.volume_size, q),
-                           dtype=reference_dataset.dtype)
+    lhs_summed = jnp.zeros((reference_dataset.volume_size, q * q), dtype=reference_dataset.dtype_real)
+    rhs_summed = jnp.zeros((reference_dataset.volume_size, q), dtype=reference_dataset.dtype)
 
     for experiment_dataset in dataset_list:
         for batch, ctf_params, rotation_matrices, translations, batch_image_ind in _iter_processed_batches(
@@ -323,7 +343,11 @@ def compute_em_ll_and_whitening_grads(experiment_datasets, mean_estimate, W, bat
         ):
             noise_variance = experiment_dataset.noise.get(batch_image_ind)
             lhs_summed, rhs_summed, _, second_moment_zs_batch, ll_sum_batch, _ = E_M_step_batch(
-                batch, lhs_summed, rhs_summed, mean_estimate, W,
+                batch,
+                lhs_summed,
+                rhs_summed,
+                mean_estimate,
+                W,
                 ctf_params,
                 rotation_matrices,
                 translations,
@@ -350,7 +374,7 @@ def compute_em_ll_and_whitening_grads(experiment_datasets, mean_estimate, W, bat
     F = 0.5 * jnp.sum(G * G)
 
     lhs_summed = lhs_summed.reshape(reference_dataset.volume_size, q, q)
-    grad_neg_ll = jnp.einsum('vij,vj->vi', lhs_summed, W) - rhs_summed
+    grad_neg_ll = jnp.einsum("vij,vj->vi", lhs_summed, W) - rhs_summed
     if W_prior is not None:
         grad_neg_ll = grad_neg_ll + W / (W_prior + 1e-16)
 
@@ -386,10 +410,11 @@ def compute_em_ll_and_whitening_grads(experiment_datasets, mean_estimate, W, bat
             ) / jnp.sqrt(noise_variance)
 
             centered_images = images - projected_mean
-            ctf_squared_over_noise_variance = CTF ** 2
+            ctf_squared_over_noise_variance = CTF**2
 
             PW = batch_over_vol_slice_volume(
-                W, rotation_matrices,
+                W,
+                rotation_matrices,
                 experiment_dataset.image_shape,
                 experiment_dataset.volume_shape,
                 disc_type,
@@ -474,12 +499,12 @@ def whitening_penalty_and_grad_batched(W, B_n, b_n, batch_size=128):
         B = B_n[start:end]
         b = b_n[start:end]
 
-        BW = jnp.einsum('ndd,dq->ndq', B, W)
-        A = jnp.einsum('dq,ndq->nqq', W, BW) + I
+        BW = jnp.einsum("ndd,dq->ndq", B, W)
+        A = jnp.einsum("dq,ndq->nqq", W, BW) + I
         Sigma = jnp.linalg.inv(A)
-        s = jnp.einsum('dq,nd->nq', W, b)
-        mu = jnp.einsum('nqq,nq->nq', Sigma, s)
-        C_z_sum = C_z_sum + jnp.sum(Sigma + jnp.einsum('ni,nj->nij', mu, mu), axis=0)
+        s = jnp.einsum("dq,nd->nq", W, b)
+        mu = jnp.einsum("nqq,nq->nq", Sigma, s)
+        C_z_sum = C_z_sum + jnp.sum(Sigma + jnp.einsum("ni,nj->nij", mu, mu), axis=0)
 
     C_z = C_z_sum / float(N)
     G = C_z - I
@@ -494,19 +519,19 @@ def whitening_penalty_and_grad_batched(W, B_n, b_n, batch_size=128):
         B = B_n[start:end]
         b = b_n[start:end]
 
-        BW = jnp.einsum('ndd,dq->ndq', B, W)
-        A = jnp.einsum('dq,ndq->nqq', W, BW) + I
+        BW = jnp.einsum("ndd,dq->ndq", B, W)
+        A = jnp.einsum("dq,ndq->nqq", W, BW) + I
         Sigma = jnp.linalg.inv(A)
-        s = jnp.einsum('dq,nd->nq', W, b)
-        mu = jnp.einsum('nqq,nq->nq', Sigma, s)
+        s = jnp.einsum("dq,nd->nq", W, b)
+        mu = jnp.einsum("nqq,nq->nq", Sigma, s)
 
-        u = jnp.einsum('qq,nq->nq', G, mu)
+        u = jnp.einsum("qq,nq->nq", G, mu)
         suT = s[:, :, None] * u[:, None, :]
         H = G[None, :, :] + suT + jnp.swapaxes(suT, -1, -2)
         K = jnp.matmul(Sigma, jnp.matmul(H, Sigma))
 
-        term1 = -2.0 * jnp.einsum('ndq,nqk->ndk', BW, K)
-        Sigma_u = jnp.einsum('nqq,nq->nq', Sigma, u)
+        term1 = -2.0 * jnp.einsum("ndq,nqk->ndk", BW, K)
+        Sigma_u = jnp.einsum("nqq,nq->nq", Sigma, u)
         term2 = 2.0 * b[:, :, None] * Sigma_u[:, None, :]
 
         grad_sum = grad_sum + jnp.sum(term1 + term2, axis=0)
@@ -518,19 +543,19 @@ def whitening_penalty_and_grad_batched(W, B_n, b_n, batch_size=128):
 def apply_whitening_constraint(W, C_z, n_whitening_iters=10, tol=1e-8):
     """
     Apply the whitening constraint Ĉ_z = I to the loading matrix W.
-    
-    The key insight is that if we transform W → W @ C_z^{1/2}, then the 
+
+    The key insight is that if we transform W → W @ C_z^{1/2}, then the
     new posterior statistics will have Ĉ_z closer to I.
-    
+
     This is applied iteratively as a fixed-point iteration:
         W^{(k+1)} = W^{(k)} @ C_z(W^{(k)})^{1/2}
-    
+
     Args:
         W: Loading matrix of shape (d, q)
         C_z: Current empirical posterior covariance of shape (q, q)
         n_whitening_iters: Maximum number of whitening iterations
         tol: Tolerance for convergence (||C_z - I||_F < tol)
-    
+
     Returns:
         W_whitened: The whitened loading matrix
         converged: Whether the whitening converged
@@ -538,34 +563,34 @@ def apply_whitening_constraint(W, C_z, n_whitening_iters=10, tol=1e-8):
     """
     q = W.shape[1]
     I = jnp.eye(q)
-    
+
     deviation = jnp.linalg.norm(C_z - I)
     if deviation < tol:
         return W, True, float(deviation)
-    
+
     # Apply whitening: W → W @ C_z^{1/2}
     C_z_sqrt = sqrtm_psd(C_z)
     W_whitened = W @ C_z_sqrt
-    
+
     return W_whitened, deviation < tol, float(deviation)
 
 
 def whiten_W_iterative(W, second_moment_zs, n_iters=20, tol=1e-8, verbose=False):
     """
     Iteratively whiten W using the full posterior second moments.
-    
+
     Note: This function only adjusts W based on the current C_z.
     For full correctness, the E-step should be re-run after each whitening
     to get updated second_moment_zs. However, in practice, applying the
     whitening once or a few times per EM iteration is sufficient.
-    
+
     Args:
         W: Loading matrix of shape (d, q)
         second_moment_zs: Array of shape (N, q, q) with E[z z^T | y] for each sample
         n_iters: Maximum whitening iterations
         tol: Convergence tolerance
         verbose: Print progress
-    
+
     Returns:
         W: Whitened loading matrix
         C_z_final: Final C_z after whitening
@@ -573,51 +598,50 @@ def whiten_W_iterative(W, second_moment_zs, n_iters=20, tol=1e-8, verbose=False)
     """
     q = W.shape[1]
     I = jnp.eye(q)
-    
+
     # Compute initial C_z
     C_z = compute_Cz_from_second_moments(second_moment_zs)
-    
+
     for i in range(n_iters):
         deviation = jnp.linalg.norm(C_z - I)
-        
+
         if verbose:
             logger.info(f"  Whitening iter {i}: ||C_z - I|| = {deviation:.2e}")
-        
+
         if deviation < tol:
             if verbose:
                 logger.info(f"  Whitening converged at iter {i}")
             return W, C_z, True
-        
+
         # Apply whitening transform
         C_z_sqrt = sqrtm_psd(C_z)
         W = W @ C_z_sqrt
-        
+
         # Note: In a single EM step, we don't re-run E-step
         # The C_z would need to be recomputed with updated W
         # For now, we just apply the transformation once per iteration
         # and let subsequent EM iterations handle convergence
-        
+
         # For more accurate whitening, we could estimate how C_z changes:
         # New C_z ≈ C_z_sqrt^{-1} @ C_z @ C_z_sqrt^{-1} = I (in the limit)
         # But this is approximate since we don't re-run E-step
-        
+
         # Simple estimate: assume one iteration is enough
         if n_iters == 1:
             break
-            
+
         # If doing multiple iterations, estimate new C_z
         # This is approximate - true update requires re-running E-step
         C_z_sqrt_inv = jnp.linalg.inv(C_z_sqrt)
         C_z = C_z_sqrt_inv @ C_z @ C_z_sqrt_inv  # Approximate new C_z
-    
+
     return W, C_z, False
 
-## HAVEN'T FINISHED THIS YET
 
 batch_over_vol_slice_volume = jax.vmap(core.slice_volume, in_axes=(1, None, None, None, None), out_axes=1)
 
 
-def check_imaginary_part(x, image_shape, name, skip_ft = False ):
+def check_imaginary_part(x, image_shape, name, skip_ft=False):
     if not skip_ft:
         if len(image_shape) == 2:
             y = ftu.get_idft2(x.reshape(-1, *image_shape))
@@ -625,19 +649,41 @@ def check_imaginary_part(x, image_shape, name, skip_ft = False ):
             y = ftu.get_idft3(x.reshape(-1, *image_shape))
     else:
         y = x
-    z = np.linalg.norm(y.real)/ np.linalg.norm(y.imag)
-    print('imaginary part ratio', name, z)
-    return np.linalg.norm(y.real)/ np.linalg.norm(y.imag)
+    imag_norm = np.linalg.norm(y.imag)
+    ratio = np.inf if imag_norm == 0 else np.linalg.norm(y.real) / imag_norm
+    print("imaginary part ratio", name, ratio)
+    return ratio
 
 
-batch_over_vol_adjoint_slice_volume = jax.vmap(core.adjoint_slice_volume, in_axes=(-1, None, None, None, None), out_axes=-1)
+batch_over_vol_adjoint_slice_volume = jax.vmap(
+    core.adjoint_slice_volume, in_axes=(-1, None, None, None, None), out_axes=-1
+)
 
 
 @functools.partial(jax.jit, static_argnums=[8, 9, 13, 14, 15, 16, 17])
-def E_M_step_batch(images, lhs_summed, rhs_summed, mean, W, CTF_params, rotation_matrices, translations, image_shape, volume_shape, grid_size, voxel_size, noise_variance, ctf_evaluator, compute_ll, disc_type_mean='cubic', disc_type='linear_interp', compute_stats=True):
+def E_M_step_batch(
+    images,
+    lhs_summed,
+    rhs_summed,
+    mean,
+    W,
+    CTF_params,
+    rotation_matrices,
+    translations,
+    image_shape,
+    volume_shape,
+    grid_size,
+    voxel_size,
+    noise_variance,
+    ctf_evaluator,
+    compute_ll,
+    disc_type_mean="cubic",
+    disc_type="linear_interp",
+    compute_stats=True,
+):
     basis_size = W.shape[1]
     volume_size = np.prod(volume_shape)
-    
+
     # Precomp piece
     images = core.translate_images(images, translations, image_shape) / jnp.sqrt(noise_variance)
     # Just "whiten" the images and the projected mean, and include noise in CTF to simplify
@@ -654,18 +700,17 @@ def E_M_step_batch(images, lhs_summed, rhs_summed, mean, W, CTF_params, rotation
         skip_ctf=False,
     ) / jnp.sqrt(noise_variance)
 
-
-    ctf_squared_over_noise_variance = CTF**2 
-    # 
+    ctf_squared_over_noise_variance = CTF**2
+    #
     PW = batch_over_vol_slice_volume(W, rotation_matrices, image_shape, volume_shape, disc_type)
     # n_images x n_basis_functions x image_size
-    PW *= CTF[...,None,:]
-     
+    PW *= CTF[..., None, :]
+
     # P W .T @ P W
-    M_n = (jnp.conj(PW) @ PW.transpose(0,2,1)).real + jnp.eye(basis_size)
-    
+    M_n = (jnp.conj(PW) @ PW.transpose(0, 2, 1)).real + jnp.eye(basis_size)
+
     centered_images = images - projected_mean
-    b_n = (jnp.conj(PW) @ centered_images[...,None]).real
+    b_n = (jnp.conj(PW) @ centered_images[..., None]).real
     # check_imaginary_part(b_n, volume_shape, 'bn', skip_ft = True )
 
     M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
@@ -674,20 +719,31 @@ def E_M_step_batch(images, lhs_summed, rhs_summed, mean, W, CTF_params, rotation
     # check_imaginary_part(M_n_inv, volume_shape, 'Var(z)', skip_ft = True )
     # print('np.mean(expected_zs, axis=0), np.var(expected_zs, axis=0)', np.mean(expected_zs, axis=0), np.var(expected_zs, axis=0))
 
-     
-    second_moment_zs = M_n_inv + linalg.broadcast_outer(expected_zs, jnp.conj(expected_zs)) #expected_zs[...,None] * jnp.conj(expected_zs)[...,None]
+    second_moment_zs = M_n_inv + linalg.broadcast_outer(
+        expected_zs, jnp.conj(expected_zs)
+    )  # expected_zs[...,None] * jnp.conj(expected_zs)[...,None]
 
     if compute_stats:
         # Should be size n_images x image_size x basis_size x basis_size
-        before_backproj_second_moments = ctf_squared_over_noise_variance[...,None,None] * second_moment_zs[:,None,:,:]
-        before_backproj_first_moments = CTF[...,None] * centered_images[...,None] * jnp.conj(expected_zs)[:,None,:]
-         
-        #grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
-        lhs_summed += batch_over_vol_adjoint_slice_volume(before_backproj_second_moments.reshape(*before_backproj_second_moments.shape[:-2], -1), rotation_matrices, image_shape, volume_shape, disc_type)
-        rhs_summed += batch_over_vol_adjoint_slice_volume(before_backproj_first_moments, rotation_matrices, image_shape, volume_shape, disc_type)
+        before_backproj_second_moments = (
+            ctf_squared_over_noise_variance[..., None, None] * second_moment_zs[:, None, :, :]
+        )
+        before_backproj_first_moments = CTF[..., None] * centered_images[..., None] * jnp.conj(expected_zs)[:, None, :]
+
+        # grid_point_vec_indices = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
+        lhs_summed += batch_over_vol_adjoint_slice_volume(
+            before_backproj_second_moments.reshape(*before_backproj_second_moments.shape[:-2], -1),
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            disc_type,
+        )
+        rhs_summed += batch_over_vol_adjoint_slice_volume(
+            before_backproj_first_moments, rotation_matrices, image_shape, volume_shape, disc_type
+        )
     # lhs_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, before_backproj_second_moments.reshape(*before_backproj_second_moments.shape[:-2], -1), grid_point_vec_indices, lhs_summed)
     # rhs_summed = core.batch_over_vol_summed_adjoint_slice_by_nearest(volume_size, before_backproj_first_moments, grid_point_vec_indices, rhs_summed)
-     
+
     # return lhs_summed, rhs_summed, expected_zs, second_moment_zs
     # --- Optional log-likelihood (observed-data) ---
     #   ell_n = -0.5 * [ d_n log(2π) + ||r||^2 - u^T M^{-1} u + logdet M ]
@@ -704,8 +760,8 @@ def E_M_step_batch(images, lhs_summed, rhs_summed, mean, W, CTF_params, rotation
         # logdet M via Cholesky (more stable than slogdet on Hermitian PD)
         L = jnp.linalg.cholesky(M_n)  # (b, q, q)
         logdetM = 2.0 * jnp.sum(jnp.log(jnp.real(jnp.diagonal(L, axis1=1, axis2=2))), axis=-1)  # (b,)
-        
-        d_n         = images.shape[-1]  # image dimensionality (pixels)
+
+        d_n = images.shape[-1]  # image dimensionality (pixels)
         const = d_n * jnp.log(2.0 * jnp.pi)
         ll_per_image = -0.5 * (const + r2 - quad + logdetM)  # (b,)
         ll_sum = jnp.sum(ll_per_image)
@@ -716,17 +772,28 @@ def E_M_step_batch(images, lhs_summed, rhs_summed, mean, W, CTF_params, rotation
     return lhs_summed, rhs_summed, expected_zs, second_moment_zs, ll_sum, ll_per_image
 
 
+batch1_symmetrize_ft_volume = jax.vmap(utils.symmetrize_ft_volume, in_axes=(1, None), out_axes=1)
 
-batch1_symmetrize_ft_volume = jax.vmap(utils.symmetrize_ft_volume, in_axes = (1, None), out_axes = 1)
 
-# @functools.partial(jax.jit, static_argnums = [5])    
-def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior,
-            sparse_PCA=False, use_whitening=False, whitening_mode="cz", l1_sigma=None,
-            disc_type_mean='cubic', disc_type='linear_interp', recompute_ll=False,
-            mean_estimate_raw=None):
+# @functools.partial(jax.jit, static_argnums = [5])
+def EM_step(
+    experiment_datasets,
+    mean_estimate,
+    W_estimate,
+    batch_size,
+    W_prior,
+    sparse_PCA=False,
+    use_whitening=False,
+    whitening_mode="cz",
+    l1_sigma=None,
+    disc_type_mean="cubic",
+    disc_type="linear_interp",
+    recompute_ll=False,
+    mean_estimate_raw=None,
+):
     """
     Perform one EM step for PPCA.
-    
+
     Args:
         experiment_datasets: List of cryo-EM datasets
         mean_estimate: Mean volume estimate (or precomputed spline coefficients if disc_type_mean='cubic')
@@ -742,7 +809,7 @@ def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior,
         disc_type_mean: Interpolation type for mean projection ('cubic' or 'linear_interp')
         disc_type: Interpolation type for W projection ('nearest', 'linear_interp', etc.)
         recompute_ll: If True, recompute data log-likelihood using updated W.
-    
+
     Returns:
         W: Updated loading matrix
         expected_zs: Posterior means E[z|y]
@@ -767,35 +834,39 @@ def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior,
             experiment_dataset, batch_size
         ):
             noise_variance = experiment_dataset.noise.get(batch_image_ind)
-            lhs_summed, rhs_summed, expected_zs_batch, second_moment_zs_batch, ll_sum_batch, _ = E_M_step_batch(batch, lhs_summed, rhs_summed, mean_estimate, W_estimate,
-                                                    ctf_params,
-                                                    rotation_matrices,
-                                                    translations,
-                                                    experiment_dataset.image_shape, 
-                                                    experiment_dataset.volume_shape, 
-                                                    experiment_dataset.grid_size, 
-                                                    experiment_dataset.voxel_size, 
-                                                    noise_variance,
-                                                    experiment_dataset.ctf_evaluator,
-                                                    compute_ll = True,
-                                                    disc_type_mean = disc_type_mean,
-                                                    disc_type = disc_type,
-                                                    compute_stats = True)
+            lhs_summed, rhs_summed, expected_zs_batch, second_moment_zs_batch, ll_sum_batch, _ = E_M_step_batch(
+                batch,
+                lhs_summed,
+                rhs_summed,
+                mean_estimate,
+                W_estimate,
+                ctf_params,
+                rotation_matrices,
+                translations,
+                experiment_dataset.image_shape,
+                experiment_dataset.volume_shape,
+                experiment_dataset.grid_size,
+                experiment_dataset.voxel_size,
+                noise_variance,
+                experiment_dataset.ctf_evaluator,
+                compute_ll=True,
+                disc_type_mean=disc_type_mean,
+                disc_type=disc_type,
+                compute_stats=True,
+            )
             expected_zs.append(np.array(expected_zs_batch))
             second_moment_zs.append(np.array(second_moment_zs_batch))
             ll_sum += ll_sum_batch
 
-
     expected_zs = np.concatenate(expected_zs, axis=0)
     second_moment_zs = np.concatenate(second_moment_zs, axis=0)
-    
+
     # Calculate statistics for reporting
     expected_zs_mean = np.mean(expected_zs, axis=0)
     expected_zs_var = np.var(expected_zs, axis=0)
 
     # Solve least squares
     # V = jax.vmap(jnp.diag)(1 / (W_prior + 1e-16 ))
-     
 
     if sparse_PCA:
         if l1_sigma is None:
@@ -812,16 +883,17 @@ def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior,
         W_estimate = batch1_symmetrize_ft_volume(W_estimate, volume_shape)
 
         from recovar.ppca.admm_test import admm_wavelet
+
         # Use pre-computed sigma for ADMM (fixed across EM iterations)
         W, Z_rec = admm_wavelet(lhs_summed, rhs_summed, l1_sigma, 0.9, 50, volume_shape, normal_size, W_estimate)
 
     else:
         lhs_summed = lhs_summed.reshape(reference_dataset.volume_size, basis_size, basis_size)
 
-        lhs_summed = lhs_summed  + jax.vmap(jnp.diag)(1 / (W_prior + 1e-16 ) )
-         
+        lhs_summed = lhs_summed + jax.vmap(jnp.diag)(1 / (W_prior + 1e-16))
+
         # W = linalg.batch_hermitian_linear_solver(lhs_summed, rhs_summed)
-        W = linalg.batch_linear_solver(lhs_summed, rhs_summed[...,None])[...,0]
+        W = linalg.batch_linear_solver(lhs_summed, rhs_summed[..., None])[..., 0]
 
     # NaN diagnostic: W after M-step (before whitening)
     if jnp.any(jnp.isnan(W)):
@@ -843,9 +915,15 @@ def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior,
             if volume_mask is None:
                 volume_mask = np.ones(reference_dataset.volume_shape)
             Sigma = compute_sigma_proj_ls(
-                experiment_datasets, mean_estimate_raw, W, volume_mask, batch_size,
-                disc_type_mean=disc_type_mean, disc_type=disc_type,
-                do_mask_images=True, parallel_analysis=False,
+                experiment_datasets,
+                mean_estimate_raw,
+                W,
+                volume_mask,
+                batch_size,
+                disc_type_mean=disc_type_mean,
+                disc_type=disc_type,
+                do_mask_images=True,
+                parallel_analysis=False,
             )
             # NaN/Inf fallback: projected covariance solve can be ill-conditioned (e.g. first iter, small W)
             if jnp.any(jnp.isnan(Sigma)) or jnp.any(jnp.isinf(Sigma)):
@@ -861,18 +939,16 @@ def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior,
         else:
             # Compute the empirical posterior covariance
             C_z = compute_Cz_from_second_moments(second_moment_zs)
-            
+
             # Log the constraint violation before whitening
             q = W.shape[1]
             constraint_violation = float(jnp.linalg.norm(C_z - jnp.eye(q)))
             trace_Cz = float(jnp.trace(C_z))
             logger.info(f"  Before whitening: ||Ĉ_z - I|| = {constraint_violation:.4f}, tr(Ĉ_z) = {trace_Cz:.4f}")
-            
+
             # Apply whitening: W → W @ C_z^{1/2}
-            W, C_z_final, converged = whiten_W_iterative(
-                W, second_moment_zs, n_iters=1, tol=1e-8, verbose=False
-            )
-            
+            W, C_z_final, converged = whiten_W_iterative(W, second_moment_zs, n_iters=1, tol=1e-8, verbose=False)
+
             # Log after whitening (approximate since we didn't re-run E-step)
             constraint_violation_after = float(jnp.linalg.norm(C_z_final - jnp.eye(q)))
             logger.info(f"  After whitening: ||Ĉ_z - I|| ≈ {constraint_violation_after:.4f}")
@@ -886,7 +962,11 @@ def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior,
             ):
                 noise_variance = experiment_dataset.noise.get(batch_image_ind)
                 _, _, _, _, ll_sum_batch, _ = E_M_step_batch(
-                    batch, lhs_summed, rhs_summed, mean_estimate, W,
+                    batch,
+                    lhs_summed,
+                    rhs_summed,
+                    mean_estimate,
+                    W,
                     ctf_params,
                     rotation_matrices,
                     translations,
@@ -907,9 +987,10 @@ def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior,
     # Calculate log-likelihood statistics using updated W
     if sparse_PCA:
         from recovar.ppca.admm_test import WaveletL1
-        ll_prior = WaveletL1(W.shape, reference_dataset.volume_shape, 'db1', sigma=l1_sigma)(W)
+
+        ll_prior = WaveletL1(W.shape, reference_dataset.volume_shape, "db1", sigma=l1_sigma)(W)
     else:
-        ll_prior = jnp.linalg.norm(W / jnp.sqrt(W_prior + 1e-16 ))**2
+        ll_prior = jnp.linalg.norm(W / jnp.sqrt(W_prior + 1e-16)) ** 2
 
     neg_ll_total = float(-ll_sum.real + ll_prior.real)
     neg_ll_data = float(-ll_sum.real)
@@ -921,23 +1002,36 @@ def EM_step(experiment_datasets, mean_estimate, W_estimate, batch_size, W_prior,
     return W, expected_zs, second_moment_zs, expected_zs_mean, expected_zs_var, neg_ll_total, neg_ll_data, neg_ll_prior
 
 
-
 def batch_vec(x):
-    return x.swapaxes(-1,-2).reshape(-1, x.shape[-1]**2)
+    return x.swapaxes(-1, -2).reshape(-1, x.shape[-1] ** 2)
+
 
 def batch_unvec(x):
     n = np.sqrt(x.shape[-1]).astype(int)
-    return x.reshape(-1,n,n).swapaxes(-1,-2)
+    return x.reshape(-1, n, n).swapaxes(-1, -2)
 
 
-def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter=20,
-       sparse_PCA=False, U_gt=None, S_gt=None, make_plots=False,
-       use_whitening=False, whitening_mode="cz", l1_sigma=None,
-       disc_type_mean='cubic', disc_type='linear_interp',
-       return_iteration_data=False, recompute_ll=False):
+def EM(
+    experiment_dataset,
+    mean_estimate,
+    W_initial,
+    W_prior,
+    EM_iter=20,
+    sparse_PCA=False,
+    U_gt=None,
+    S_gt=None,
+    make_plots=False,
+    use_whitening=False,
+    whitening_mode="cz",
+    l1_sigma=None,
+    disc_type_mean="cubic",
+    disc_type="linear_interp",
+    return_iteration_data=False,
+    recompute_ll=False,
+):
     """
     Run EM algorithm for PPCA.
-    
+
     Args:
         experiment_dataset: List of cryo-EM datasets
         mean_estimate: Mean volume estimate
@@ -961,11 +1055,11 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter=20,
                         'cubic' requires precomputing spline coefficients (done automatically).
         return_iteration_data: If True, return per-iteration diagnostics.
         recompute_ll: If True, recompute data log-likelihood using updated W each iter.
-    
+
     Regularization summary:
         L2 (sparse_PCA=False): min ||Y - XW||² + ||W||²/W_prior
         L1 (sparse_PCA=True):  min ||Y - XW||² + l1_sigma * ||wavelet(W)||₁
-    
+
     Returns:
         U: Principal components
         S: Singular values squared
@@ -987,18 +1081,18 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter=20,
     contrast_grid = np.ones([1])
     batch_size = 100  # reduced 10x from 1000 to avoid OOM on full runs (grid 128, 50k images)
     W = W_initial
-    
+
     # Precompute spline coefficients for cubic interpolation
     mean_estimate_raw = mean_estimate
-    if disc_type_mean == 'cubic':
+    if disc_type_mean == "cubic":
         mean_estimate = core.precompute_cubic_coefficients(
             mean_estimate,
             reference_dataset.volume_shape,
         )
-    
+
     # =============================================================================
     # L1 REGULARIZATION WEIGHT
-    # 
+    #
     # NOTE: W_prior means different things for L1 vs L2:
     #   - L2 (sparse_PCA=False): W_prior = prior VARIANCE. Larger → less regularization.
     #   - L1 (sparse_PCA=True):  l1_sigma = soft-threshold level. Larger → more sparsity.
@@ -1015,15 +1109,15 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter=20,
             print(f"L1 regularization: sigma={l1_sigma:.6f} (uniform)")
         else:
             print(f"L1 regularization: sigma array, range=[{np.min(l1_sigma):.6f}, {np.max(l1_sigma):.6f}]")
-    
+
     # Initialize table for collecting iteration data
     iteration_data = []
-    
+
     # Print table header
-    print("\n" + "="*130)
+    print("\n" + "=" * 130)
     mode_str = "WITH WHITENING" if use_whitening else "WITHOUT WHITENING"
     print(f"EM ALGORITHM CONVERGENCE TABLE ({mode_str})")
-    print("="*130)
+    print("=" * 130)
     header = f"{'Iter':>4} | {'Neg_LL_Total':>12} | {'Neg_LL_Data':>12} | {'Neg_LL_Prior':>12} | {'Exp_ZS_Mean':>12} | {'Exp_ZS_Var':>12} | {'Rel_Var_Expl':>12}"
     if U_gt is not None:
         header += f" | {'Top_5_Rel_Var':>20}"
@@ -1031,16 +1125,27 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter=20,
         header += f" | {'||W||_F':>10}"
     print(header)
     print("-" * len(header))
-    
+
     for iter_i in range(EM_iter):
-        W, expected_zs, second_moment_zs, expected_zs_mean, expected_zs_var, neg_ll_total, neg_ll_data, neg_ll_prior = EM_step(
-            experiment_dataset, mean_estimate, W, batch_size, W_prior, sparse_PCA,
-            use_whitening=use_whitening, whitening_mode=whitening_mode, l1_sigma=l1_sigma,
-            disc_type_mean=disc_type_mean, disc_type=disc_type, recompute_ll=recompute_ll,
-            mean_estimate_raw=mean_estimate_raw,
+        W, expected_zs, second_moment_zs, expected_zs_mean, expected_zs_var, neg_ll_total, neg_ll_data, neg_ll_prior = (
+            EM_step(
+                experiment_dataset,
+                mean_estimate,
+                W,
+                batch_size,
+                W_prior,
+                sparse_PCA,
+                use_whitening=use_whitening,
+                whitening_mode=whitening_mode,
+                l1_sigma=l1_sigma,
+                disc_type_mean=disc_type_mean,
+                disc_type=disc_type,
+                recompute_ll=recompute_ll,
+                mean_estimate_raw=mean_estimate_raw,
+            )
         )
 
-        #Make real
+        # Make real
         W = W.T.reshape(basis_size, *reference_dataset.volume_shape)
         W = ftu.get_idft3(W).real
         W = W.reshape(W.shape[0], -1).T
@@ -1058,7 +1163,11 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter=20,
         C_z = compute_Cz_from_second_moments(second_moment_zs)
         # E[μ μ^T] = (1/N) Σ_n μ_n μ_n^T from posterior means (expected_zs)
         N_z = expected_zs.shape[0]
-        E_mean_outer = (expected_zs.T @ np.conj(expected_zs)).real / N_z if expected_zs.dtype in (np.complex64, np.complex128) else (expected_zs.T @ expected_zs) / N_z
+        E_mean_outer = (
+            (expected_zs.T @ np.conj(expected_zs)).real / N_z
+            if expected_zs.dtype in (np.complex64, np.complex128)
+            else (expected_zs.T @ expected_zs) / N_z
+        )
         E_mean_outer = np.asarray(E_mean_outer)
         q = W.shape[1]
         I_q = jnp.eye(q, dtype=W.dtype)
@@ -1068,34 +1177,34 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter=20,
         norm_E_mean_outer_minus_I = float(np.linalg.norm(E_mean_outer - np.eye(q)))
         W_norm = float(jnp.linalg.norm(W))
         iter_info = {
-            'Iteration': iter_i,
-            'Neg_LL_Total': float(neg_ll_total),
-            'Neg_LL_Data': float(neg_ll_data),
-            'Neg_LL_Prior': float(neg_ll_prior),
-            'Expected_ZS_Mean': float(np.mean(expected_zs_mean)),
-            'Expected_ZS_Var': float(np.mean(expected_zs_var)),
-            'W_norm': W_norm,
-            'trace_Cz': trace_Cz,
-            'constraint_violation': constraint_violation,
-            'trace_E_mean_outer': trace_E_mean_outer,
-            'norm_E_mean_outer_minus_I': norm_E_mean_outer_minus_I,
+            "Iteration": iter_i,
+            "Neg_LL_Total": float(neg_ll_total),
+            "Neg_LL_Data": float(neg_ll_data),
+            "Neg_LL_Prior": float(neg_ll_prior),
+            "Expected_ZS_Mean": float(np.mean(expected_zs_mean)),
+            "Expected_ZS_Var": float(np.mean(expected_zs_var)),
+            "W_norm": W_norm,
+            "trace_Cz": trace_Cz,
+            "constraint_violation": constraint_violation,
+            "trace_E_mean_outer": trace_E_mean_outer,
+            "norm_E_mean_outer_minus_I": norm_E_mean_outer_minus_I,
         }
 
         if U_gt is not None:
             U, S, _ = jnp.linalg.svd(W, full_matrices=False)
             variance, rel_var, norm_var = metrics.get_all_variance_scores(U, U_gt, S_gt)
-            iter_info['Rel_Var_Explained'] = float(rel_var[-1])
-            iter_info['Top_5_Rel_Var'] = rel_var[:5]
+            iter_info["Rel_Var_Explained"] = float(rel_var[-1])
+            iter_info["Top_5_Rel_Var"] = rel_var[:5]
         else:
-            iter_info['Rel_Var_Explained'] = None
-            iter_info['Top_5_Rel_Var'] = None
+            iter_info["Rel_Var_Explained"] = None
+            iter_info["Top_5_Rel_Var"] = None
 
         iteration_data.append(iter_info)
-        
+
         # Print current iteration row
         row = f"{iter_i:>4} | {neg_ll_total:12.6e} | {neg_ll_data:12.6e} | {neg_ll_prior:12.6e} | {np.mean(expected_zs_mean):12.6e} | {np.mean(expected_zs_var):12.6e}"
         if U_gt is not None:
-            row += f" | {rel_var[-1]:12.6e} | {str(rel_var[:min(5, len(rel_var))]):>20}"
+            row += f" | {rel_var[-1]:12.6e} | {str(rel_var[: min(5, len(rel_var))]):>20}"
         else:
             row += f" | {'N/A':>12}"
         if use_whitening:
@@ -1107,28 +1216,28 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter=20,
             max_size_this = np.min([20, U.shape[-1]])
             plt.figure()
             plt.plot(rel_var)
-            plt.title('relative variance expained at iteration ' + str(iter_i))
+            plt.title("relative variance expained at iteration " + str(iter_i))
             plt.show()
-            u = { 'ppca': U, 'gt': U_gt}
-            ppca_key = 'ppca'
+            u = {"ppca": U, "gt": U_gt}
+            ppca_key = "ppca"
             n_rows = np.max([2, u[ppca_key].shape[-1]])
             n_cols = len(u.keys())
             fig_size = (n_cols * 4, n_rows * 4)
-            fig, axes = plt.subplots(  n_rows, n_cols, figsize=(fig_size))
+            fig, axes = plt.subplots(n_rows, n_cols, figsize=(fig_size))
             for i, u_key in enumerate(u.keys()):
                 # Plot PPCA components
                 for j in range(u[ppca_key].shape[-1]):
-                    axes[j, i].imshow(reference_dataset.get_proj(u[u_key][:,j].reshape(-1)))
-                    axes[j, i].set_title(f'{u_key} PC{j+1}')
+                    axes[j, i].imshow(reference_dataset.get_proj(u[u_key][:, j].reshape(-1)))
+                    axes[j, i].set_title(f"{u_key} PC{j + 1}")
 
             plt.tight_layout()
             plt.show()
 
     # Print final summary
-    print("="*130)
+    print("=" * 130)
     print("EM ALGORITHM COMPLETED")
-    print("="*130)
-    
+    print("=" * 130)
+
     # Report final whitening statistics
     if use_whitening:
         C_z_final = compute_Cz_from_second_moments(second_moment_zs)
@@ -1136,11 +1245,11 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter=20,
         final_constraint_violation = float(jnp.linalg.norm(C_z_final - jnp.eye(q)))
         final_trace_Cz = float(jnp.trace(C_z_final))
         final_W_norm = float(jnp.linalg.norm(W))
-        print(f"Final whitening statistics:")
+        print("Final whitening statistics:")
         print(f"  ||Ĉ_z - I||_F = {final_constraint_violation:.6f}")
         print(f"  tr(Ĉ_z) = {final_trace_Cz:.4f} (target: {q})")
         print(f"  ||W||_F = {final_W_norm:.4f}")
-        print("="*130)
+        print("=" * 130)
 
     # Orthogonalize
     U, S, _ = jnp.linalg.svd(W, full_matrices=False)
@@ -1152,28 +1261,28 @@ def EM(experiment_dataset, mean_estimate, W_initial, W_prior, EM_iter=20,
 def compute_whitening_diagnostics(W, second_moment_zs):
     """
     Compute diagnostic statistics for the whitening constraint.
-    
+
     Args:
         W: Loading matrix of shape (d, q)
         second_moment_zs: Posterior second moments E[zz^T|y] of shape (N, q, q)
-    
+
     Returns:
         dict: Dictionary with diagnostic statistics
     """
     q = W.shape[1]
     I = jnp.eye(q)
-    
+
     # Compute C_z
     C_z = compute_Cz_from_second_moments(second_moment_zs)
-    
+
     # Eigenvalues of C_z
     eigvals = jnp.linalg.eigvalsh(C_z)
-    
+
     return {
-        'C_z': np.array(C_z),
-        'constraint_violation': float(jnp.linalg.norm(C_z - I)),
-        'trace_Cz': float(jnp.trace(C_z)),
-        'W_norm': float(jnp.linalg.norm(W)),
-        'Cz_eigenvalues': np.array(eigvals),
-        'Cz_condition_number': float(eigvals.max() / (eigvals.min() + 1e-10)),
+        "C_z": np.array(C_z),
+        "constraint_violation": float(jnp.linalg.norm(C_z - I)),
+        "trace_Cz": float(jnp.trace(C_z)),
+        "W_norm": float(jnp.linalg.norm(W)),
+        "Cz_eigenvalues": np.array(eigvals),
+        "Cz_condition_number": float(eigvals.max() / (eigvals.min() + 1e-10)),
     }
