@@ -1,0 +1,6 @@
+[current:pipeline]
+imported=/tmp/fake/recovar/__init__.py
+commit=deadbeef
+[other:pipeline]
+imported=/tmp/fake/recovar/__init__.py
+commit=deadbeef

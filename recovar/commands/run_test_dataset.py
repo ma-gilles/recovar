@@ -187,17 +187,18 @@ def main():
                 "create_target",
             )
 
-            embedding_model_path = _p("test_dataset", "pipeline_output", "model", "embeddings.pkl")
+            pipeline_output_path = _p("test_dataset", "pipeline_output")
             embedding_2_path = _p("test_dataset", "embedding_2.pkl")
-            if not os.path.exists(embedding_model_path):
-                logger.error("Failed: prepare embedding for reconstruction (missing %s)", embedding_model_path)
+            if not os.path.exists(pipeline_output_path):
+                logger.error("Failed: prepare embedding for reconstruction (missing %s)", pipeline_output_path)
                 failed_functions.append("prepare_embedding_for_reconstruct")
             else:
                 try:
-                    with open(embedding_model_path, "rb") as f:
-                        embeddings = pickle.load(f)
+                    po_tmp = output.PipelineOutput(pipeline_output_path)
+                    latent_coords_2 = po_tmp.get_embedding_component("latent_coords", 2)
                     with open(embedding_2_path, "wb") as f:
-                        pickle.dump(embeddings["latent_coords"][2], f)
+                        pickle.dump(latent_coords_2, f)
+                    del po_tmp
                 except Exception as e:
                     logger.error("Failed: prepare embedding for reconstruction (%s)", e)
                     failed_functions.append("prepare_embedding_for_reconstruct")

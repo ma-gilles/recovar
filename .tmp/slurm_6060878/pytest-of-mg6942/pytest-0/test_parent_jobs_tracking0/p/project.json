@@ -1,0 +1,34 @@
+{
+  "version": "1.0",
+  "name": "p",
+  "created": "2026-03-25T09:18:28.849891",
+  "recovar_version": "1.0.0b1",
+  "counters": {
+    "Pipeline": 1,
+    "Analyze": 1
+  },
+  "jobs": [
+    {
+      "uid": "Pipeline/job_0001",
+      "type": "Pipeline",
+      "status": "completed",
+      "created": "2026-03-25T09:18:28.851450",
+      "completed": "2026-03-25T09:18:28.852061",
+      "parent_jobs": [],
+      "alias": null,
+      "description": ""
+    },
+    {
+      "uid": "Analyze/job_0001",
+      "type": "Analyze",
+      "status": "running",
+      "created": "2026-03-25T09:18:28.852615",
+      "completed": null,
+      "parent_jobs": [
+        "Pipeline/job_0001"
+      ],
+      "alias": null,
+      "description": ""
+    }
+  ]
+}

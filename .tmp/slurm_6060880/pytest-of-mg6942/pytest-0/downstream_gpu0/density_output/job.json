@@ -1,0 +1,56 @@
+{
+  "recovar_version": "1.0.0b1",
+  "git_commit": "bda9733",
+  "command": "estimate_conformational_density",
+  "command_line": "python /scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/recovar/command_line.py /scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_gpu0/pipeline_output --output_dir /scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_gpu0/density_output --pca_dim 2",
+  "parameters": {
+    "recovar_result_dir": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_gpu0/pipeline_output",
+    "output_dir": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_gpu0/density_output",
+    "project": null,
+    "pca_dim": 2,
+    "z_dim_used": null,
+    "percentile_reject": 10,
+    "num_disc_points": null,
+    "alphas": null,
+    "percentile_bound": 1
+  },
+  "provenance": {
+    "pipeline_result_dir": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_gpu0/pipeline_output"
+  },
+  "timing": {
+    "started_at": "2026-03-25T09:20:15.985251",
+    "completed_at": "2026-03-25T09:20:43.174485",
+    "duration_seconds": 27.2
+  },
+  "environment": {
+    "hostname": "della-h19g3",
+    "python_version": "3.11.13",
+    "jax_version": "0.9.0.1",
+    "slurm_job_id": "6060880",
+    "slurm_job_name": "recovar-downstream",
+    "gpu_devices": [
+      "NVIDIA H100 80GB HBM3"
+    ]
+  },
+  "status": "completed",
+  "outputs": {
+    "plots": [
+      "plots/Lcurve.png",
+      "plots/all_densities.png"
+    ],
+    "other": [
+      "data/deconv_density_knee.pkl",
+      "data/all_densities/deconv_density_0.pkl",
+      "data/all_densities/deconv_density_1.pkl",
+      "data/all_densities/deconv_density_10.pkl",
+      "data/all_densities/deconv_density_2.pkl",
+      "data/all_densities/deconv_density_3.pkl",
+      "data/all_densities/deconv_density_4.pkl",
+      "data/all_densities/deconv_density_5.pkl",
+      "data/all_densities/deconv_density_6.pkl",
+      "data/all_densities/deconv_density_7.pkl",
+      "data/all_densities/deconv_density_8.pkl",
+      "data/all_densities/deconv_density_9.pkl"
+    ]
+  }
+}

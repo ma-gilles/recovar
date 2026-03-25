@@ -1,0 +1,26 @@
+{
+  "status": "checked",
+  "baseline_path": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060878/pytest-of-mg6942/pytest-0/test_main_regression_fail_rais0/baseline.json",
+  "checked_metrics": 2,
+  "failures": [
+    "mean_fsc: current=0.5 baseline=0.99 (drop=0.4949 allowed=0.0100)",
+    "variance_fsc: current=0.4 baseline=0.99 (drop=0.5960 allowed=0.0100)"
+  ],
+  "details": {
+    "mean_fsc": {
+      "current": 0.5,
+      "baseline": 0.99,
+      "direction": "higher",
+      "ok": false,
+      "message": "drop=0.4949 allowed=0.0100"
+    },
+    "variance_fsc": {
+      "current": 0.4,
+      "baseline": 0.99,
+      "direction": "higher",
+      "ok": false,
+      "message": "drop=0.5960 allowed=0.0100"
+    }
+  },
+  "tolerance_fraction": 0.01
+}

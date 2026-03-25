@@ -1,0 +1,76 @@
+{
+  "recovar_version": "1.0.0b1",
+  "git_commit": "bda9733",
+  "command": "compute_state",
+  "command_line": "python /scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/recovar/command_line.py /scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_regression0/pipeline_output -o /scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_regression0/regression_compute_state --latent-points /scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_regression0/regression_latent_points.txt --lazy",
+  "parameters": {
+    "result_dir": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_regression0/pipeline_output",
+    "outdir": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_regression0/regression_compute_state",
+    "project": null,
+    "Bfactor": 0,
+    "n_bins": 50,
+    "maskrad_fraction": 20,
+    "n_min_particles": null,
+    "zdim1": false,
+    "no_z_regularization": false,
+    "lazy": true,
+    "particles": null,
+    "datadir": null,
+    "strip_prefix": null,
+    "apply_global_filtering": false,
+    "fsc_mask_radius": null,
+    "fsc_mask_edgewidth": null,
+    "latent_points": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_regression0/regression_latent_points.txt",
+    "save_all_estimates": false
+  },
+  "provenance": {
+    "pipeline_result_dir": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060880/pytest-of-mg6942/pytest-0/downstream_regression0/pipeline_output"
+  },
+  "timing": {
+    "started_at": "2026-03-25T09:27:04.277605",
+    "completed_at": "2026-03-25T09:28:24.055240",
+    "duration_seconds": 79.8
+  },
+  "environment": {
+    "hostname": "della-h19g3",
+    "python_version": "3.11.13",
+    "jax_version": "0.9.0.1",
+    "slurm_job_id": "6060880",
+    "slurm_job_name": "recovar-downstream",
+    "gpu_devices": [
+      "NVIDIA H100 80GB HBM3"
+    ]
+  },
+  "status": "completed",
+  "outputs": {
+    "volumes": [
+      "state000.mrc",
+      "state000_unfil.mrc",
+      "state001.mrc",
+      "state001_unfil.mrc"
+    ],
+    "halfmaps": [
+      "state000_half1_unfil.mrc",
+      "state000_half2_unfil.mrc",
+      "state001_half1_unfil.mrc",
+      "state001_half2_unfil.mrc"
+    ],
+    "diagnostics": [
+      "diagnostics/state000/heterogeneity_distances.txt",
+      "diagnostics/state000/latent_coords.txt",
+      "diagnostics/state000/local_resolution.mrc",
+      "diagnostics/state000/params.pkl",
+      "diagnostics/state000/sampling.mrc",
+      "diagnostics/state000/split_choice.pkl",
+      "diagnostics/state001/heterogeneity_distances.txt",
+      "diagnostics/state001/latent_coords.txt",
+      "diagnostics/state001/local_resolution.mrc",
+      "diagnostics/state001/params.pkl",
+      "diagnostics/state001/sampling.mrc",
+      "diagnostics/state001/split_choice.pkl"
+    ],
+    "other": [
+      "latent_coords.txt"
+    ]
+  }
+}

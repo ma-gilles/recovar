@@ -1,0 +1,121 @@
+{
+  "status": "checked",
+  "baseline_path": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060879/pytest-of-mg6942/pytest-0/test_run_test_all_metrics_tiny1/baseline/all_scores.json",
+  "checked_metrics": 16,
+  "failures": [],
+  "details": {
+    "contrast_abs_error_10": {
+      "current": 0.17656062435163805,
+      "baseline": 0.17638055961939475,
+      "direction": "lower",
+      "ok": true,
+      "message": "increase=0.0010 allowed=0.0500"
+    },
+    "contrast_abs_error_10_noreg": {
+      "current": 0.1853688310614374,
+      "baseline": 0.18377655309088958,
+      "direction": "lower",
+      "ok": true,
+      "message": "increase=0.0087 allowed=0.0500"
+    },
+    "contrast_abs_error_4": {
+      "current": 0.1701705427196626,
+      "baseline": 0.17029347479967163,
+      "direction": "lower",
+      "ok": true,
+      "message": "increase=-0.0007 allowed=0.0500"
+    },
+    "contrast_abs_error_4_noreg": {
+      "current": 0.18198111223135452,
+      "baseline": 0.18307854056361975,
+      "direction": "lower",
+      "ok": true,
+      "message": "increase=-0.0060 allowed=0.0500"
+    },
+    "embedding_squared_error_10": {
+      "current": 7.142950217127891,
+      "baseline": 7.222449950409124,
+      "direction": "lower",
+      "ok": true,
+      "message": "increase=-0.0110 allowed=0.0500"
+    },
+    "embedding_squared_error_4": {
+      "current": 2.1470348333397564,
+      "baseline": 2.1665901785817425,
+      "direction": "lower",
+      "ok": true,
+      "message": "increase=-0.0090 allowed=0.0500"
+    },
+    "mean_fsc": {
+      "current": 0.008238607303677453,
+      "baseline": 0.008238551985288802,
+      "direction": "higher",
+      "ok": true,
+      "message": "drop=-0.0000 allowed=0.0500"
+    },
+    "noise_correlation": {
+      "current": -0.7296850831949823,
+      "baseline": -0.7280552426287514,
+      "direction": "higher",
+      "ok": true,
+      "message": "drop=0.0022 allowed=0.0500"
+    },
+    "noise_max_relative_error": {
+      "current": 4.405673027038574,
+      "baseline": 4.397518157958984,
+      "direction": "lower",
+      "ok": true,
+      "message": "increase=0.0019 allowed=0.0500"
+    },
+    "noise_mean_relative_error": {
+      "current": 0.4186376929283142,
+      "baseline": 0.4180977940559387,
+      "direction": "lower",
+      "ok": true,
+      "message": "increase=0.0013 allowed=0.0500"
+    },
+    "noise_median_relative_error": {
+      "current": 0.15320831537246704,
+      "baseline": 0.15333041548728943,
+      "direction": "lower",
+      "ok": true,
+      "message": "increase=-0.0008 allowed=0.0500"
+    },
+    "svd_relative_variance_10": {
+      "current": 0.452387498939124,
+      "baseline": 0.4568476654740394,
+      "direction": "higher",
+      "ok": true,
+      "message": "drop=0.0098 allowed=0.0500"
+    },
+    "svd_relative_variance_4": {
+      "current": 0.39795935780101055,
+      "baseline": 0.39470109355262895,
+      "direction": "higher",
+      "ok": true,
+      "message": "drop=-0.0083 allowed=0.0500"
+    },
+    "variance_fourier_fsc": {
+      "current": 0.01890073771031646,
+      "baseline": 0.0188729654263525,
+      "direction": "higher",
+      "ok": true,
+      "message": "drop=-0.0015 allowed=0.0500"
+    },
+    "variance_fsc": {
+      "current": 0.010774103597591385,
+      "baseline": 0.010921446255535459,
+      "direction": "higher",
+      "ok": true,
+      "message": "drop=0.0135 allowed=0.0500"
+    },
+    "variance_spatial_fsc": {
+      "current": 0.010774103597591385,
+      "baseline": 0.010921446255535459,
+      "direction": "higher",
+      "ok": true,
+      "message": "drop=0.0135 allowed=0.0500"
+    }
+  },
+  "tolerance_fraction": 0.05
+}

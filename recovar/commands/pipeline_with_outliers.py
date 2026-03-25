@@ -184,22 +184,16 @@ def _run_pipeline_with_outlier_removal_impl(args):
         output.standard_pipeline_plots(po, zdim, os.path.join(args.outdir, "output", "plots"))
         del po
 
-        # Load the embeddings from the pipeline output
-        pipeline_output_dir = os.path.join(args.outdir, "model")
-        embeddings_file = os.path.join(pipeline_output_dir, "embeddings.pkl")
-        if not os.path.exists(embeddings_file):
-            logger.error("Embeddings file not found: %s", embeddings_file)
-            sys.exit(1)
-        with open(embeddings_file, "rb") as f:
-            embeddings = pickle.load(f)
-
-        # Select the latent coordinates to use for outlier detection.
+        # Load the embeddings from the pipeline output via PipelineOutput
+        # (supports both legacy embeddings.pkl and new per-zdim .npy format)
+        po_for_embed = output.PipelineOutput(args.outdir)
         coords_key = "latent_coords_noreg" if args.no_z_regularization else "latent_coords"
-        if coords_key not in embeddings:
+        coords_dict = po_for_embed.get(coords_key)
+        if coords_dict is None:
             logger.error("No embedding coordinates found")
             sys.exit(1)
-        coords_dict = embeddings[coords_key]
         zdim_key = zdim
+        del po_for_embed
         if zdim_key not in coords_dict:
             logger.error("zdim %s not found in embeddings", zdim_key)
             sys.exit(1)

@@ -854,23 +854,36 @@ echo "Completed at: $(date)"
         if os.path.isfile(os.path.join(model_dir, "params.pkl")):
             info["has_model"] = True
 
-        # Check for embeddings and available zdims
-        embeddings_path = os.path.join(model_dir, "embeddings.pkl")
-        if os.path.isfile(embeddings_path):
+        # Check for embeddings and available zdims (new per-zdim or legacy pkl)
+        import re
+
+        zdim_pattern = re.compile(r"^zdim_(\d+)$")
+        zdim_dirs = [
+            int(zdim_pattern.match(d).group(1))
+            for d in os.listdir(model_dir)
+            if zdim_pattern.match(d) and os.path.isdir(os.path.join(model_dir, d))
+        ] if os.path.isdir(model_dir) else []
+        if zdim_dirs:
             info["has_embeddings"] = True
-            try:
-                with open(embeddings_path, "rb") as f:
-                    emb = pickle.load(f)
-                if "latent_coords" in emb and isinstance(emb["latent_coords"], dict):
-                    zdims = []
-                    for k in emb["latent_coords"].keys():
-                        try:
-                            zdims.append(int(k))
-                        except (ValueError, TypeError):
-                            pass
-                    info["available_zdims"] = sorted(set(zdims))
-            except Exception as e:
-                logger.warning("Failed to read embeddings: %s", e)
+            info["available_zdims"] = sorted(zdim_dirs)
+        else:
+            # Legacy: try embeddings.pkl
+            embeddings_path = os.path.join(model_dir, "embeddings.pkl")
+            if os.path.isfile(embeddings_path):
+                info["has_embeddings"] = True
+                try:
+                    with open(embeddings_path, "rb") as f:
+                        emb = pickle.load(f)
+                    if "latent_coords" in emb and isinstance(emb["latent_coords"], dict):
+                        zdims = []
+                        for k in emb["latent_coords"].keys():
+                            try:
+                                zdims.append(int(k))
+                            except (ValueError, TypeError):
+                                pass
+                        info["available_zdims"] = sorted(set(zdims))
+                except Exception as e:
+                    logger.warning("Failed to read embeddings: %s", e)
 
         # Scan main volumes directory
         for subdir in ["output/volumes", "output"]:
@@ -1069,24 +1082,12 @@ echo "Completed at: $(date)"
         if not job:
             return None
 
-        embeddings_path = os.path.join(job.output_dir, "model", "embeddings.pkl")
-        if not os.path.isfile(embeddings_path):
-            return None
-
+        # Try loading via PipelineOutput (supports both new per-zdim .npy and legacy .pkl)
         try:
-            with open(embeddings_path, "rb") as f:
-                emb = pickle.load(f)
+            from recovar.output.output import PipelineOutput
 
-            coords_dict = emb.get("latent_coords")
-            if not isinstance(coords_dict, dict):
-                return None
-
-            # Try exact key first, then integer, then string variants
-            zs_arr = None
-            for candidate in [zdim, str(zdim)]:
-                if candidate in coords_dict:
-                    zs_arr = coords_dict[candidate]
-                    break
+            po = PipelineOutput(job.output_dir)
+            zs_arr = po.get_embedding_component("latent_coords", zdim)
             if zs_arr is None:
                 return None
 

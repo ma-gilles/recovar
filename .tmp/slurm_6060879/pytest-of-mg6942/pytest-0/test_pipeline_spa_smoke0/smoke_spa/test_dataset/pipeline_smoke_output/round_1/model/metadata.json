@@ -1,0 +1,25 @@
+{
+  "recovar_version": "1.0.0b1",
+  "params_version": "0.7",
+  "saved_at": "2026-03-25T09:09:56.474584",
+  "volume_shape": [
+    16,
+    16,
+    16
+  ],
+  "voxel_size": 34.0,
+  "zdims_computed": [
+    4
+  ],
+  "downsample_applied": null,
+  "original_particles_file": null,
+  "files": {
+    "params": "model/params.pkl",
+    "embeddings": "model/embeddings.pkl",
+    "covariance_cols": "model/covariance_cols.pkl",
+    "halfsets": "model/halfsets.pkl",
+    "particles_halfsets": "model/particles_halfsets.pkl",
+    "mean_volume": "output/volumes/mean.mrc",
+    "mask": "output/volumes/mask.mrc"
+  }
+}

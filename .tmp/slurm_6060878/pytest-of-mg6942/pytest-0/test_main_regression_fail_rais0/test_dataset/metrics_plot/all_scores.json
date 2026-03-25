@@ -1,0 +1,42 @@
+{
+  "mean_fsc": 0.5,
+  "variance_spatial_fsc": 0.4,
+  "variance_fsc": 0.4,
+  "svd_relative_variance_4": 0.21052631735801697,
+  "svd_relative_variance_10": 0.5263158082962036,
+  "embedding_squared_error_4": 0.01,
+  "embedding_squared_error_10": 0.01,
+  "contrast_abs_error_4": 0.050000011920928955,
+  "contrast_abs_error_4_noreg": 0.10000001639127731,
+  "contrast_abs_error_10": 0.0,
+  "contrast_abs_error_10_noreg": 0.04999999701976776,
+  "state_0_locres_90pct": 1.0,
+  "state_0_locres_median": 1.0,
+  "state_1_locres_90pct": 1.0,
+  "state_1_locres_median": 1.0,
+  "noise_mean_relative_error": 0.1,
+  "noise_correlation": 0.9,
+  "perf": {
+    "gpu_name": "NVIDIA H100 80GB HBM3",
+    "dataset_generation": {
+      "wall_seconds": 0.0,
+      "peak_cpu_memory_gb": 10.483,
+      "peak_gpu_memory_gb": 0.0
+    },
+    "pipeline": {
+      "wall_seconds": 0.0,
+      "peak_cpu_memory_gb": 10.483,
+      "peak_gpu_memory_gb": 0.0
+    },
+    "compute_state": {
+      "wall_seconds": 0.0,
+      "peak_cpu_memory_gb": 10.483,
+      "peak_gpu_memory_gb": 0.0
+    },
+    "metrics": {
+      "wall_seconds": 1.84,
+      "peak_cpu_memory_gb": 10.507,
+      "peak_gpu_memory_gb": 0.0
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "recovar_version": "1.0.0b1",
+  "git_commit": "bda9733",
+  "command": "compute_state",
+  "command_line": "python /scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.pixi/envs/default/lib/python3.11/site-packages/pytest/__main__.py tests/ --ignore=tests/unit/test_gui_app.py --ignore=tests/integration --run-gpu -v --junitxml=/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.test_results/parallel_20260325_090706_12307_unit.xml",
+  "parameters": {
+    "outdir": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060878/pytest-of-mg6942/pytest-0/test_start_and_complete0/myoutput",
+    "n_bins": 50
+  },
+  "provenance": {
+    "pipeline_result_dir": "/some/pipeline"
+  },
+  "timing": {
+    "started_at": "2026-03-25T09:17:10.569290",
+    "completed_at": "2026-03-25T09:17:10.590603",
+    "duration_seconds": 0.0
+  },
+  "environment": {
+    "hostname": "della-h19g3",
+    "python_version": "3.11.13",
+    "jax_version": "0.9.0.1",
+    "slurm_job_id": "6060878",
+    "slurm_job_name": "recovar-unit",
+    "gpu_devices": [
+      "NVIDIA H100 80GB HBM3"
+    ]
+  },
+  "status": "completed",
+  "outputs": {
+    "volumes": [
+      "state000.mrc"
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "jobs": [
+    {
+      "id": "discovered_run1",
+      "name": "run1",
+      "output_dir": "/scratch/gpfs/GILLES/mg6942/recovar_wt_output_cleanup/.tmp/slurm_6060878/pytest-of-mg6942/pytest-0/test_does_not_duplicate_existi0/scan/run1",
+      "status": "completed",
+      "created_at": 1774444583.454185,
+      "slurm_job_id": null,
+      "pid": null,
+      "command": "",
+      "particles": "",
+      "mask": "",
+      "grid_size": null,
+      "downsample": null,
+      "n_images": null,
+      "error": null
+    }
+  ]
+}
