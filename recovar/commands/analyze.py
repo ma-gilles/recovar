@@ -345,8 +345,7 @@ def main():
     from recovar.project.job_context import job_context
     with job_context(args, "analyze") as ctx:
         result_dir = ctx.pipeline_dir or args.result_dir
-        output_folder = ctx.output_dir if args.outdir is not None or ctx.project is not None else None
-        analyze(result_dir, output_folder=output_folder, zdim=args.zdim, n_clusters=args.n_clusters, n_paths=args.n_trajectories, skip_umap=args.skip_umap, B_factor=args.Bfactor, n_bins=args.n_bins, n_vols_along_path=args.n_vols_along_path, skip_centers=args.skip_centers, normalize_kmeans=args.normalize_kmeans, density_path=args.density, no_z_reg=args.no_z_regularization, lazy=args.lazy, n_min_particles=args.n_min_particles, maskrad_fraction=args.maskrad_fraction, apply_global_filtering=args.apply_global_filtering, fsc_mask_radius=args.fsc_mask_radius, fsc_mask_edgewidth=args.fsc_mask_edgewidth, args=args)
+        analyze(result_dir, output_folder=ctx.output_dir, zdim=args.zdim, n_clusters=args.n_clusters, n_paths=args.n_trajectories, skip_umap=args.skip_umap, B_factor=args.Bfactor, n_bins=args.n_bins, n_vols_along_path=args.n_vols_along_path, skip_centers=args.skip_centers, normalize_kmeans=args.normalize_kmeans, density_path=args.density, no_z_reg=args.no_z_regularization, lazy=args.lazy, n_min_particles=args.n_min_particles, maskrad_fraction=args.maskrad_fraction, apply_global_filtering=args.apply_global_filtering, fsc_mask_radius=args.fsc_mask_radius, fsc_mask_edgewidth=args.fsc_mask_edgewidth, args=args)
 
 if __name__ == "__main__":
     main()

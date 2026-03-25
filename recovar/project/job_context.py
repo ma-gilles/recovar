@@ -128,6 +128,11 @@ def job_context(args, command_name: str):
             uid, _ = project.allocate_job(command_name)
             ctx.uid = uid
             # But use the user's explicit path
+    elif result_dir is not None:
+        # No project, no explicit outdir — auto-generate inside result_dir
+        ctx.output_dir = os.path.join(os.path.abspath(result_dir),
+                                       jt.dir_name if jt else command_name)
+        os.makedirs(ctx.output_dir, exist_ok=True)
     else:
         raise ValueError(
             "No output directory specified. Use --project to enable auto-numbering, "

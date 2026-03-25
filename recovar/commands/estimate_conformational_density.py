@@ -109,10 +109,9 @@ def main():
     from recovar.project.job_context import job_context
     with job_context(args, "estimate_conformational_density") as ctx:
         result_dir = ctx.pipeline_dir or args.recovar_result_dir
-        output_dir = ctx.output_dir if (args.output_dir is not None or ctx.project is not None) else None
         estimate_conformational_density(
             recovar_result_dir=result_dir,
-            output_dir=output_dir,
+            output_dir=ctx.output_dir,
             pca_dim=args.pca_dim,
             z_dim_used=args.z_dim_used,
             percentile_reject=args.percentile_reject,
