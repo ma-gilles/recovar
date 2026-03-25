@@ -69,7 +69,7 @@ Use `compute_trajectory` to compute high-density (low free-energy) paths through
 
 ```bash
 recovar compute_trajectory output -o trajectory --zdim=10 \
-    --density density/deconv_density_knee.pkl \
+    --density density/data/deconv_density_knee.pkl \
     --endpts centers.txt --ind 0,1
 ```
 

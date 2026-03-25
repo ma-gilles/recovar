@@ -158,25 +158,25 @@ def main():
             )
 
             run_command(
-                f"{BASE_CMD} analyze {_pq('test_dataset', 'pipeline_output')} --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=1 --density {_pq('test_dataset', 'pipeline_output', 'density', 'deconv_density_knee.pkl')} --skip-centers",
+                f"{BASE_CMD} analyze {_pq('test_dataset', 'pipeline_output')} --zdim=2 --no-z-regularization --n-clusters=3 --n-trajectories=1 --density {_pq('test_dataset', 'pipeline_output', 'density', 'data', 'deconv_density_knee.pkl')} --skip-centers",
                 "Run analyze with density",
                 "analyze",
             )
 
             run_command(
-                f"{BASE_CMD} compute_trajectory {_pq('test_dataset', 'pipeline_output')} -o {_pq('test_dataset', 'pipeline_output', 'trajectory1')} --endpts {_pq('test_dataset', 'pipeline_output', 'analysis_2_noreg', 'kmeans', 'centers.txt')} --ind=0,1 --density {_pq('test_dataset', 'pipeline_output', 'density', 'deconv_density_knee.pkl')} --zdim=2 --n-vols-along-path=3",
+                f"{BASE_CMD} compute_trajectory {_pq('test_dataset', 'pipeline_output')} -o {_pq('test_dataset', 'pipeline_output', 'trajectory1')} --endpts {_pq('test_dataset', 'pipeline_output', 'analysis_2_noreg', 'kmeans', 'centers.txt')} --ind=0,1 --density {_pq('test_dataset', 'pipeline_output', 'density', 'data', 'deconv_density_knee.pkl')} --zdim=2 --n-vols-along-path=3",
                 "Compute trajectory (option 1)",
                 "compute_trajectory (option 1)",
             )
 
             run_command(
-                f"{BASE_CMD} compute_trajectory {_pq('test_dataset', 'pipeline_output')} -o {_pq('test_dataset', 'pipeline_output', 'trajectory2')} --z_st {_pq('test_dataset', 'pipeline_output', 'analysis_2_noreg', 'kmeans', 'diagnostics', 'center000', 'latent_coords.txt')} --z_end {_pq('test_dataset', 'pipeline_output', 'analysis_2_noreg', 'kmeans', 'diagnostics', 'center002', 'latent_coords.txt')} --density {_pq('test_dataset', 'pipeline_output', 'density', 'deconv_density_knee.pkl')} --zdim=2 --n-vols-along-path=0",
+                f"{BASE_CMD} compute_trajectory {_pq('test_dataset', 'pipeline_output')} -o {_pq('test_dataset', 'pipeline_output', 'trajectory2')} --z_st {_pq('test_dataset', 'pipeline_output', 'analysis_2_noreg', 'kmeans', 'diagnostics', 'center000', 'latent_coords.txt')} --z_end {_pq('test_dataset', 'pipeline_output', 'analysis_2_noreg', 'kmeans', 'diagnostics', 'center002', 'latent_coords.txt')} --density {_pq('test_dataset', 'pipeline_output', 'density', 'data', 'deconv_density_knee.pkl')} --zdim=2 --n-vols-along-path=0",
                 "Compute trajectory (option 2)",
                 "compute_trajectory (option 2)",
             )
 
             run_command(
-                f"{BASE_CMD} estimate_stable_states {_pq('test_dataset', 'pipeline_output', 'density', 'all_densities', 'deconv_density_1.pkl')} --percent_top=10 --n_local_maxs=-1 -o {_pq('test_dataset', 'pipeline_output', 'stable_states')}",
+                f"{BASE_CMD} estimate_stable_states {_pq('test_dataset', 'pipeline_output', 'density', 'data', 'all_densities', 'deconv_density_1.pkl')} --percent_top=10 --n_local_maxs=-1 -o {_pq('test_dataset', 'pipeline_output', 'stable_states')}",
                 "Estimate stable states",
                 "estimate_stable_states",
             )

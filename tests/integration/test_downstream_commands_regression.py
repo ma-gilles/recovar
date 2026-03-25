@@ -356,7 +356,7 @@ def test_density_estimation_regression(density_output):
     """Check that estimated density has reasonable structure."""
     from recovar import utils
 
-    knee_pkl = density_output / "deconv_density_knee.pkl"
+    knee_pkl = density_output / "data" / "deconv_density_knee.pkl"
     assert knee_pkl.exists()
 
     result = utils.pickle_load(str(knee_pkl))
@@ -371,7 +371,7 @@ def test_stable_states_regression(density_output, shared_dir):
     """Check that stable states are found."""
     snap_before = perf_snapshot()
 
-    knee_pkl = density_output / "deconv_density_knee.pkl"
+    knee_pkl = density_output / "data" / "deconv_density_knee.pkl"
 
     stable_out = shared_dir / "regression_stable_states"
     cmd = [
@@ -411,7 +411,7 @@ def test_extract_kmeans_subset_regression(analyze_output, shared_dir):
     from recovar import utils
 
     kmeans_pkl = analyze_output / "data" / "kmeans_result.pkl"
-    subset_out = shared_dir / "regression_kmeans_subset.pkl"
+    subset_out = shared_dir / "regression_kmeans_subset"
 
     cmd = [
         sys.executable,
@@ -424,7 +424,10 @@ def test_extract_kmeans_subset_regression(analyze_output, shared_dir):
     ]
     _run(cmd)
 
-    indices = utils.pickle_load(str(subset_out))
+    # job_context creates a directory; the actual output is indices.pkl inside
+    subset_pkl = subset_out / "indices.pkl"
+    assert subset_pkl.exists(), f"No indices.pkl found in {subset_out}"
+    indices = utils.pickle_load(str(subset_pkl))
     kmeans_result = utils.pickle_load(str(kmeans_pkl))
     labels = np.asarray(kmeans_result["labels"])
     n_valid = int(np.sum(~np.isnan(labels)))

@@ -80,7 +80,7 @@ def _has_output_volumes(directory: str) -> bool:
 
 def _has_density_output(directory):
     """Return True if *directory* contains density estimation output."""
-    return os.path.isfile(os.path.join(directory, "deconv_density_knee.pkl"))
+    return os.path.isfile(os.path.join(directory, "data", "deconv_density_knee.pkl"))
 
 
 def _has_stable_states_output(directory):
@@ -1008,11 +1008,11 @@ echo "Completed at: $(date)"
         # Discover density estimation results
         # Check CLI-generated output in density/ subdir
         density_info = None
-        cli_density_pkl = os.path.join(job.output_dir, "density", "deconv_density_knee.pkl")
+        cli_density_pkl = os.path.join(job.output_dir, "density", "data", "deconv_density_knee.pkl")
         if os.path.isfile(cli_density_pkl):
             density_info = {
                 "density_pkl": cli_density_pkl,
-                "plots": _list_images(os.path.join(job.output_dir, "density")),
+                "plots": _list_images(os.path.join(job.output_dir, "density", "plots")),
             }
         # Check GUI-generated output in gui_computed/density_*/
         if os.path.isdir(computed_dir):
@@ -1020,11 +1020,11 @@ echo "Completed at: $(date)"
                 if not tdir.startswith("density_"):
                     continue
                 task_dir = os.path.join(computed_dir, tdir)
-                knee_pkl = os.path.join(task_dir, "deconv_density_knee.pkl")
+                knee_pkl = os.path.join(task_dir, "data", "deconv_density_knee.pkl")
                 if os.path.isfile(knee_pkl):
                     density_info = {
                         "density_pkl": knee_pkl,
-                        "plots": _list_images(task_dir),
+                        "plots": _list_images(os.path.join(task_dir, "plots")),
                     }
                     # Try to read pca_dim from task metadata
                     meta_path = os.path.join(task_dir, "task_meta.json")
@@ -1482,7 +1482,7 @@ echo "which python: {python_path}"
 
         if task.status == STATUS_COMPLETED:
             if task.task_type == "density":
-                knee_pkl = os.path.join(task.output_dir, "deconv_density_knee.pkl")
+                knee_pkl = os.path.join(task.output_dir, "data", "deconv_density_knee.pkl")
                 if os.path.isfile(knee_pkl):
                     result["density_pkl"] = knee_pkl
                 # Include pca_dim from stored params or task_meta

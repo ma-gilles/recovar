@@ -232,13 +232,15 @@ Selection (one required):
 Extract particles from k-means clusters.
 
 ```bash
-recovar extract_image_subset_from_kmeans kmeans_result.pkl output.pkl indices [-i]
+recovar extract_image_subset_from_kmeans kmeans_result.pkl output_dir indices [-i]
 ```
+
+Output is written to `output_dir/indices.pkl`.
 
 | Argument | Description |
 |----------|-------------|
 | `kmeans_result.pkl` | Path to `data/kmeans_result.pkl` from analyze |
-| `output.pkl` | Output indices file |
+| `output_dir` | Output directory (indices saved as `indices.pkl` inside) |
 | `indices` | Comma-separated cluster indices |
 | `-i` | Invert selection |
 

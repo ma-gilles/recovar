@@ -68,9 +68,10 @@ def main():
     from recovar.project.job_context import job_context
 
     with job_context(args, "extract_image_subset_from_kmeans") as ctx:
-        args.output_path = ctx.output_dir
+        # output_path is a file, not a directory — put it inside the job dir
+        args.output_path = os.path.join(ctx.output_dir, "indices.pkl")
 
-        log_dir = os.path.dirname(args.output_path)
+        log_dir = ctx.output_dir
         log_file = os.path.join(log_dir, "extract_subset_run.log")
 
         from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler

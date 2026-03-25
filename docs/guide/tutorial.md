@@ -99,9 +99,11 @@ The isolated cluster 0 represents junk or a distinct species. Exclude it and re-
 # Exclude cluster 0, keep clusters 1-19
 recovar extract_image_subset_from_kmeans \
     output/analysis_20/data/kmeans_result.pkl \
-    subset_ind.pkl \
+    subset_ind \
     0 -i
 ```
+
+The indices are written to `subset_ind/indices.pkl`.
 
 ### Step 4: Re-run pipeline on the subset
 
@@ -109,7 +111,7 @@ recovar extract_image_subset_from_kmeans \
 recovar pipeline particles.256.mrcs \
     --poses poses.pkl --ctf ctf.pkl \
     --mask recovar_masks/mask_10076.mrc \
-    --ind subset_ind.pkl \
+    --ind subset_ind/indices.pkl \
     -o output_subset
 ```
 
@@ -213,7 +215,7 @@ recovar estimate_conformational_density output \
 | `--pca_dim=4` | Estimate density in 4D PCA subspace |
 | `--z_dim_used=4` | Use the 4D latent embedding |
 
-This produces density estimates at different regularization levels in `output/density/`. The `deconv_density_knee.pkl` file uses the recommended "knee" regularization.
+This produces density estimates at different regularization levels in `output/density/`. The `data/deconv_density_knee.pkl` file uses the recommended "knee" regularization.
 
 ### Step 4: Compute a trajectory
 
@@ -223,7 +225,7 @@ Using the density landscape, compute a minimum free-energy path between two conf
 recovar compute_trajectory output \
     -o output/trajectory_density \
     --zdim=4 \
-    --density output/density/deconv_density_knee.pkl \
+    --density output/density/data/deconv_density_knee.pkl \
     --endpts output/analysis_4/kmeans/centers.txt \
 
     --ind 0,19
@@ -338,8 +340,8 @@ output/analysis_<zdim>/
 | Init project | `recovar init_project my_project` |
 | Run pipeline | `recovar pipeline <particles> -o out --mask mask.mrc` |
 | Analyze | `recovar analyze out --zdim=10 --n-clusters=20` |
-| Extract subset | `recovar extract_image_subset_from_kmeans data/kmeans_result.pkl out.pkl 0 -i` |
-| Re-run on subset | `recovar pipeline <particles> -o out2 --ind subset.pkl` |
+| Extract subset | `recovar extract_image_subset_from_kmeans data/kmeans_result.pkl subset_dir 0 -i` |
+| Re-run on subset | `recovar pipeline <particles> -o out2 --ind subset_dir/indices.pkl` |
 | Density estimation | `recovar estimate_conformational_density out --pca_dim=4` |
 | Trajectory | `recovar compute_trajectory out -o traj --density density.pkl --endpts centers.txt` |
 | Custom volumes | `recovar compute_state out -o vols --latent-points coords.txt` |

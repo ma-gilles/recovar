@@ -49,22 +49,24 @@ Extract particles belonging to specific k-means clusters:
 # Keep particles in clusters 0 and 3
 recovar extract_image_subset_from_kmeans \
     output/analysis_10/data/kmeans_result.pkl \
-    subset_indices.pkl \
+    subset_indices \
     0,3
 
 # Keep everything EXCEPT clusters 0 and 3
 recovar extract_image_subset_from_kmeans \
     output/analysis_10/data/kmeans_result.pkl \
-    subset_indices.pkl \
+    subset_indices \
     0,3 -i
 ```
+
+The output is written to `subset_indices/indices.pkl`.
 
 ### Arguments
 
 | Argument | Description |
 |----------|-------------|
 | `path_to_centers` | Path to `kmeans_result.pkl` from analyze (in `data/`) |
-| `output_path` | Output `.pkl` file with indices |
+| `output_path` | Output directory (indices saved as `indices.pkl` inside) |
 | `kmeans_indices` | Comma-separated cluster indices to keep |
 | `-i`, `--inverse` | Invert selection (exclude specified clusters) |
 

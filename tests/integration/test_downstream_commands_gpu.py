@@ -272,7 +272,7 @@ def test_compute_trajectory(pipeline_output, analyze_output, shared_dir):
 
 def test_estimate_conformational_density_produces_outputs(density_output):
     """estimate_conformational_density should produce density pkl files."""
-    knee_pkl = density_output / "deconv_density_knee.pkl"
+    knee_pkl = density_output / "data" / "deconv_density_knee.pkl"
     assert knee_pkl.exists(), "No deconv_density_knee.pkl found"
 
     from recovar import utils
@@ -284,7 +284,7 @@ def test_estimate_conformational_density_produces_outputs(density_output):
 
 def test_estimate_stable_states(density_output, shared_dir):
     """estimate_stable_states should find stable states from density."""
-    knee_pkl = density_output / "deconv_density_knee.pkl"
+    knee_pkl = density_output / "data" / "deconv_density_knee.pkl"
     assert knee_pkl.exists()
 
     stable_out = shared_dir / "stable_states_output"
@@ -311,7 +311,7 @@ def test_extract_image_subset_from_kmeans(analyze_output, shared_dir):
     kmeans_pkl = analyze_output / "data" / "kmeans_result.pkl"
     assert kmeans_pkl.exists()
 
-    subset_out = shared_dir / "image_subset.pkl"
+    subset_out = shared_dir / "image_subset"
 
     cmd = [
         sys.executable,
@@ -324,10 +324,12 @@ def test_extract_image_subset_from_kmeans(analyze_output, shared_dir):
     ]
     _run(cmd)
 
-    assert subset_out.exists()
+    # job_context creates a directory; the actual output is indices.pkl inside
+    subset_pkl = subset_out / "indices.pkl"
+    assert subset_pkl.exists(), f"No indices.pkl found in {subset_out}"
     from recovar import utils
 
-    indices = utils.pickle_load(str(subset_out))
+    indices = utils.pickle_load(str(subset_pkl))
     assert len(indices) > 0, "No images selected by kmeans subset extraction"
 
 
@@ -335,8 +337,8 @@ def test_extract_image_subset_from_kmeans_inverse(analyze_output, shared_dir):
     """extract_image_subset_from_kmeans with --inverse should complement the selection."""
     kmeans_pkl = analyze_output / "data" / "kmeans_result.pkl"
 
-    subset_normal = shared_dir / "image_subset_normal.pkl"
-    subset_inverse = shared_dir / "image_subset_inverse.pkl"
+    subset_normal = shared_dir / "image_subset_normal"
+    subset_inverse = shared_dir / "image_subset_inverse"
 
     cmd_normal = [
         sys.executable,
@@ -362,8 +364,8 @@ def test_extract_image_subset_from_kmeans_inverse(analyze_output, shared_dir):
 
     from recovar import utils
 
-    normal = utils.pickle_load(str(subset_normal))
-    inverse = utils.pickle_load(str(subset_inverse))
+    normal = utils.pickle_load(str(subset_normal / "indices.pkl"))
+    inverse = utils.pickle_load(str(subset_inverse / "indices.pkl"))
     # Normal + inverse should cover all non-NaN labels
     combined = np.union1d(normal, inverse)
     kmeans_result = utils.pickle_load(str(kmeans_pkl))

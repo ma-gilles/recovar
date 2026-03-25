@@ -100,10 +100,11 @@ density/
     all_densities.png           # Visualization of all densities
     Lcurve.png                  # L-curve for alpha selection
   data/                         # Density data
-    deconv_density_0.pkl        # Density at alpha[0]
-    deconv_density_1.pkl        # Density at alpha[1]
-    ...
     deconv_density_knee.pkl     # Optimal density (L-curve knee)
+    all_densities/              # All regularization levels
+      deconv_density_0.pkl      # Density at alpha[0]
+      deconv_density_1.pkl      # Density at alpha[1]
+      ...
 ```
 
 ### Volume files (`.mrc`)

@@ -101,8 +101,8 @@ def main():
     from recovar.project.job_context import job_context
 
     with job_context(args, "extract_image_subset") as ctx:
-        args.output = ctx.output_dir
-        extract_image_subset(args.input_dir, args.output, args.subvol_idx, args.mask, args.coordinate)
+        output_file = os.path.join(ctx.output_dir, "indices.pkl")
+        extract_image_subset(args.input_dir, output_file, args.subvol_idx, args.mask, args.coordinate)
 
 
 if __name__ == "__main__":

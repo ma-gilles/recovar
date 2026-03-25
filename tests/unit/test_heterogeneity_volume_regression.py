@@ -167,7 +167,7 @@ def test_heterogeneity_volume_locres_regression(tmp_path, gpu_device):
 
     # Read the filtered volume and local resolution map
     filtered = recovar.utils.load_mrc(vol_paths.filtered)
-    locres_map = recovar.utils.load_mrc(output_folder + "local_resolution.mrc")
+    locres_map = recovar.utils.load_mrc(vol_paths.locres)
 
     assert filtered.shape == cryos.volume_shape
     assert locres_map.shape == cryos.volume_shape

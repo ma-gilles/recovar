@@ -79,7 +79,7 @@ echo ">>> Step 4: Computing trajectory..."
 $PYTHON -m recovar.command_line compute_trajectory "$OUT" \
     -o "$OUT/trajectory_density" \
     --zdim=4 \
-    --density "$OUT/density/deconv_density_knee.pkl" \
+    --density "$OUT/density/data/deconv_density_knee.pkl" \
     --endpts "$OUT/analysis_4/kmeans/centers.txt" \
     --ind 0,19
 echo ">>> Trajectory computation finished: $(date)"
