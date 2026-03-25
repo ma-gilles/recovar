@@ -535,10 +535,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#quick-install-pip" class="md-nav__link">
+  <a href="#quick-install" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quick install (pip)
+        Quick install
       
     </span>
   </a>
@@ -546,10 +546,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#development-install" class="md-nav__link">
+  <a href="#pixi-fully-reproducible" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Development install
+        Pixi (fully reproducible)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flexible-install-for-developers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flexible install (for developers)
       
     </span>
   </a>
@@ -572,17 +583,6 @@
     <span class="md-ellipsis">
       
         Jupyter kernel
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#pixi-alternative" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pixi (alternative)
       
     </span>
   </a>
@@ -1639,10 +1639,10 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#quick-install-pip" class="md-nav__link">
+  <a href="#quick-install" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quick install (pip)
+        Quick install
       
     </span>
   </a>
@@ -1650,10 +1650,21 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#development-install" class="md-nav__link">
+  <a href="#pixi-fully-reproducible" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Development install
+        Pixi (fully reproducible)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#flexible-install-for-developers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Flexible install (for developers)
       
     </span>
   </a>
@@ -1676,17 +1687,6 @@
     <span class="md-ellipsis">
       
         Jupyter kernel
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#pixi-alternative" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pixi (alternative)
       
     </span>
   </a>
@@ -1764,42 +1764,47 @@
 
 
 <h1 id="installation">Installation<a class="headerlink" href="#installation" title="Permanent link">&para;</a></h1>
-<p>RECOVAR requires CUDA and <a href="https://jax.readthedocs.io/en/latest/index.html">JAX</a>. JAX is installed automatically, but you need CUDA drivers on your system (typically already present on GPU clusters).</p>
-<p>Installation takes less than 5 minutes.</p>
-<h2 id="quick-install-pip">Quick install (pip)<a class="headerlink" href="#quick-install-pip" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>conda<span class="w"> </span>create<span class="w"> </span>--name<span class="w"> </span>recovar<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11<span class="w"> </span>-y
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>conda<span class="w"> </span>activate<span class="w"> </span>recovar
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>pip<span class="w"> </span>install<span class="w"> </span>git+https://github.com/scikit-fmm/scikit-fmm.git<span class="w"> </span><span class="s2">&quot;jax[cuda12]&quot;</span><span class="o">==</span><span class="m">0</span>.9.0.1<span class="w"> </span>recovar
+<p>RECOVAR requires Python 3.11+ and <a href="https://jax.readthedocs.io/en/latest/index.html">JAX</a>. A CUDA GPU is required for practical use (CPU-only mode is available for testing). Installation takes less than 5 minutes.</p>
+<h2 id="quick-install">Quick install<a class="headerlink" href="#quick-install" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/ma-gilles/recovar.git
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>recovar
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>conda<span class="w"> </span>create<span class="w"> </span>--name<span class="w"> </span>recovar<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11<span class="w"> </span>-y
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>conda<span class="w"> </span>activate<span class="w"> </span>recovar
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;.[cuda]&quot;</span>
 </code></pre></div>
 <p>Verify:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>run_test_dataset
 </code></pre></div>
-<h2 id="development-install">Development install<a class="headerlink" href="#development-install" title="Permanent link">&para;</a></h2>
-<p>For the latest version or contributing:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Clone</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/ma-gilles/recovar.git
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nb">cd</span><span class="w"> </span>recovar
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Create environment</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>conda<span class="w"> </span>create<span class="w"> </span>--name<span class="w"> </span>recovar_dev<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11<span class="w"> </span>-y
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>conda<span class="w"> </span>activate<span class="w"> </span>recovar_dev
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># Install dependencies</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>pip<span class="w"> </span>install<span class="w"> </span>git+https://github.com/scikit-fmm/scikit-fmm.git
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;jax[cuda12]&quot;</span><span class="o">==</span><span class="m">0</span>.9.0.1<span class="w">    </span><span class="c1"># or &quot;jax[cpu]&quot; for CPU-only</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="c1"># Install recovar in editable mode</span>
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[dev]&quot;</span>
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>
-<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="c1"># Verify</span>
-<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import jax; print(jax.devices())&quot;</span>
-<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>recovar<span class="w"> </span>run_test_dataset
+<p>All dependencies are pinned to exact versions for reliability. You should not encounter version conflicts.</p>
+<h2 id="pixi-fully-reproducible">Pixi (fully reproducible)<a class="headerlink" href="#pixi-fully-reproducible" title="Permanent link">&para;</a></h2>
+<p><a href="https://prefix.dev/">Pixi</a> gives you a hermetic environment with every dependency locked via <code>pixi.lock</code>. This is the most reproducible option:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/ma-gilles/recovar.git
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nb">cd</span><span class="w"> </span>recovar
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>pixi<span class="w"> </span>install
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>pixi<span class="w"> </span>run<span class="w"> </span>install-recovar
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>pixi<span class="w"> </span>run<span class="w"> </span>smoke-import-recovar
+</code></pre></div>
+<p>Run tests with pixi:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pixi<span class="w"> </span>run<span class="w"> </span>test-fast<span class="w">        </span><span class="c1"># Unit tests (no GPU)</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>pixi<span class="w"> </span>run<span class="w"> </span>test-full<span class="w">        </span><span class="c1"># Full suite (requires GPU)</span>
+</code></pre></div>
+<h2 id="flexible-install-for-developers">Flexible install (for developers)<a class="headerlink" href="#flexible-install-for-developers" title="Permanent link">&para;</a></h2>
+<p>If you need to reconcile recovar with other packages in your environment (e.g., you already have a JAX version installed), use the <code>flexible</code> extra which uses minimum version bounds instead of exact pins:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/ma-gilles/recovar.git
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="nb">cd</span><span class="w"> </span>recovar
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>conda<span class="w"> </span>create<span class="w"> </span>--name<span class="w"> </span>recovar_dev<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11<span class="w"> </span>-y
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>conda<span class="w"> </span>activate<span class="w"> </span>recovar_dev
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span><span class="s2">&quot;.[flexible,cuda-flexible,dev]&quot;</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># Verify</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import jax; print(jax.devices())&quot;</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>recovar<span class="w"> </span>run_test_dataset
 </code></pre></div>
 <h2 id="cpu-only-install">CPU-only install<a class="headerlink" href="#cpu-only-install" title="Permanent link">&para;</a></h2>
 <p>For testing without a GPU:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>conda<span class="w"> </span>create<span class="w"> </span>--name<span class="w"> </span>recovar<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.11<span class="w"> </span>-y
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>conda<span class="w"> </span>activate<span class="w"> </span>recovar
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>pip<span class="w"> </span>install<span class="w"> </span>git+https://github.com/scikit-fmm/scikit-fmm.git<span class="w"> </span><span class="s2">&quot;jax[cpu]&quot;</span><span class="o">==</span><span class="m">0</span>.9.0.1<span class="w"> </span>recovar
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>pip<span class="w"> </span>install<span class="w"> </span>.
 </code></pre></div>
 <div class="admonition warning">
 <p class="admonition-title">Warning</p>
@@ -1807,21 +1812,9 @@
 </div>
 <h2 id="jupyter-kernel">Jupyter kernel<a class="headerlink" href="#jupyter-kernel" title="Permanent link">&para;</a></h2>
 <p>To use RECOVAR from Jupyter notebooks:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>conda<span class="w"> </span>activate<span class="w"> </span>recovar
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>pip<span class="w"> </span>install<span class="w"> </span>ipykernel
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>python<span class="w"> </span>-m<span class="w"> </span>ipykernel<span class="w"> </span>install<span class="w"> </span>--user<span class="w"> </span>--name<span class="o">=</span>recovar
-</code></pre></div>
-<h2 id="pixi-alternative">Pixi (alternative)<a class="headerlink" href="#pixi-alternative" title="Permanent link">&para;</a></h2>
-<p>If you use <a href="https://prefix.dev/">pixi</a>, a <code>pixi.toml</code> is included in the repo. This gives you a fully reproducible environment with pinned dependencies:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/ma-gilles/recovar.git
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nb">cd</span><span class="w"> </span>recovar
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>pixi<span class="w"> </span>install
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>pixi<span class="w"> </span>run<span class="w"> </span>install-recovar
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>pixi<span class="w"> </span>run<span class="w"> </span>smoke-import-recovar
-</code></pre></div>
-<p>Run tests with pixi:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>pixi<span class="w"> </span>run<span class="w"> </span>test-fast<span class="w">        </span><span class="c1"># Unit tests (no GPU)</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>pixi<span class="w"> </span>run<span class="w"> </span>test-full<span class="w">        </span><span class="c1"># Full suite (requires GPU)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>conda<span class="w"> </span>activate<span class="w"> </span>recovar
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>pip<span class="w"> </span>install<span class="w"> </span>ipykernel
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>python<span class="w"> </span>-m<span class="w"> </span>ipykernel<span class="w"> </span>install<span class="w"> </span>--user<span class="w"> </span>--name<span class="o">=</span>recovar
 </code></pre></div>
 <h2 id="docker">Docker<a class="headerlink" href="#docker" title="Permanent link">&para;</a></h2>
 <p>Docker gives you a reproducible GPU environment without managing conda/pip
