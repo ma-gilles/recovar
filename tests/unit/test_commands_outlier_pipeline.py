@@ -110,6 +110,7 @@ def test_pipeline_with_outliers_restores_argv_and_uses_previous_round_image_indi
     class _FakePO:
         def get(self, key):
             return {4: np.zeros((6, 4), dtype=np.float32)}
+
         def get_embedding_component(self, entry, zdim):
             return np.zeros((6, 4), dtype=np.float32)
 
@@ -194,6 +195,7 @@ def test_pipeline_with_outliers_restores_argv_when_outlier_detection_raises(monk
     class _FakePO2:
         def get(self, key):
             return {4: np.zeros((4, 4), dtype=np.float32)}
+
         def get_embedding_component(self, entry, zdim):
             return np.zeros((4, 4), dtype=np.float32)
 

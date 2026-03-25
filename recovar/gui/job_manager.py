@@ -858,11 +858,15 @@ echo "Completed at: $(date)"
         import re
 
         zdim_pattern = re.compile(r"^zdim_(\d+)$")
-        zdim_dirs = [
-            int(zdim_pattern.match(d).group(1))
-            for d in os.listdir(model_dir)
-            if zdim_pattern.match(d) and os.path.isdir(os.path.join(model_dir, d))
-        ] if os.path.isdir(model_dir) else []
+        zdim_dirs = (
+            [
+                int(zdim_pattern.match(d).group(1))
+                for d in os.listdir(model_dir)
+                if zdim_pattern.match(d) and os.path.isdir(os.path.join(model_dir, d))
+            ]
+            if os.path.isdir(model_dir)
+            else []
+        )
         if zdim_dirs:
             info["has_embeddings"] = True
             info["available_zdims"] = sorted(zdim_dirs)
