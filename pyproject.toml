@@ -18,10 +18,47 @@ classifiers = [
     "Operating System :: POSIX :: Linux"
 ]
 
-# --- Dependencies use minimum bounds for maximum compatibility ---
-# For exact reproducible environments, use pixi (pixi.lock) or
-# pip install -r requirements-lock.txt
+# --- Default: exact pins for reliable installs (98% of users) ---
+# For developers who need flexible bounds: pip install recovar[flexible]
 dependencies = [
+    "dataframe_image==0.2.7",
+    "equinox==0.13.4",
+    "finufft==2.3.1",
+    "grain==0.2.16",
+    "healpy==1.18.0",
+    "jax==0.9.0.1",
+    "jax_finufft==0.1.0",
+    "jaxopt==0.8.5",
+    "jaxtyping==0.2.38",
+    "kneed==0.8.5",
+    "lineax==0.0.7",
+    "matplotlib==3.10.0",
+    "matplotlib_scalebar==0.9.0",
+    "more_itertools==10.6.0",
+    "mrcfile==1.5.4",
+    "numpy>=2.0.0,<2.3.0",
+    "optax==0.2.7",
+    "pandas==2.2.3",
+    "plotly==6.0.0",
+    "scikit-fmm>=2024.0.0",
+    "scikit-image>=0.22.0",
+    "scikit-learn==1.6.1",
+    "scipy==1.15.2",
+    "seaborn==0.13.2",
+    "starfile==0.5.11",
+    "typing_extensions>=4.10.0",
+    "umap-learn[plot]>=0.5.5",
+]
+
+[project.optional-dependencies]
+# GPU acceleration (most users want this)
+cuda = [
+    "jax[cuda12]==0.9.0.1",
+]
+# Flexible bounds for developers who need to reconcile with other packages.
+# Usage: pip install -e "recovar[flexible]" or pip install "recovar[flexible,cuda-flexible]"
+# These REPLACE the pinned defaults — pip will use the loosest constraint.
+flexible = [
     "dataframe_image>=0.2.7",
     "equinox>=0.13.0",
     "finufft>=2.3.0",
@@ -50,10 +87,7 @@ dependencies = [
     "typing_extensions>=4.10.0",
     "umap-learn[plot]>=0.5.5",
 ]
-
-[project.optional-dependencies]
-# GPU acceleration (most users want this)
-cuda = [
+cuda-flexible = [
     "jax[cuda12]>=0.9.0,<0.10",
 ]
 # Interactive notebooks
@@ -76,7 +110,7 @@ dev = [
     "ruff>=0.8.0",
     "pre-commit>=3.0",
 ]
-# Everything
+# Everything (pinned)
 all = [
     "recovar[cuda,interactive,gui,dev]",
 ]

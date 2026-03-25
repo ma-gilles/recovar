@@ -19,12 +19,15 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. I
 
 RECOVAR requires Python 3.11+ and a CUDA GPU for practical use.
 
-### Quick install (pip)
+### Quick install
 
 ```bash
+git clone https://github.com/ma-gilles/recovar.git
+cd recovar
+
 conda create --name recovar python=3.11 -y
 conda activate recovar
-pip install "recovar[cuda]"
+pip install ".[cuda]"
 ```
 
 Verify:
@@ -32,45 +35,35 @@ Verify:
 recovar run_test_dataset
 ```
 
-### Reproducible install (pixi)
+All dependencies are pinned to exact versions for reliability.
 
-For an exact reproducible environment with pinned dependencies:
+### Pixi (fully reproducible)
+
+For a hermetic environment with every dependency locked:
 
 ```bash
 git clone https://github.com/ma-gilles/recovar.git
-cd recovar && git checkout dev
+cd recovar
 pixi install
 pixi run install-recovar
 ```
 
-### Development install (latest from dev)
+### Flexible install (for developers)
+
+If you need to reconcile recovar with other packages in your environment:
 
 ```bash
-git clone https://github.com/ma-gilles/recovar.git
-cd recovar && git checkout dev
-
-conda create --name recovar_dev python=3.11 -y
-conda activate recovar_dev
-
-pip install -e ".[cuda,dev]"
-
-# Verify
-python -c "import jax; print(jax.devices())"
-recovar run_test_dataset
+pip install -e ".[flexible,cuda-flexible,dev]"
 ```
 
-Or install the dev branch directly without cloning:
-
-```bash
-pip install "recovar[cuda] @ git+https://github.com/ma-gilles/recovar.git@dev"
-```
+This uses minimum version bounds instead of exact pins.
 
 ### CPU-only install
 
 For testing without a GPU (not practical for real datasets):
 
 ```bash
-pip install recovar
+pip install .
 ```
 
 ### Pixi (alternative)

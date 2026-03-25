@@ -2,12 +2,15 @@
 
 RECOVAR requires Python 3.11+ and [JAX](https://jax.readthedocs.io/en/latest/index.html). A CUDA GPU is required for practical use (CPU-only mode is available for testing). Installation takes less than 5 minutes.
 
-## Quick install (pip)
+## Quick install
 
 ```bash
+git clone https://github.com/ma-gilles/recovar.git
+cd recovar
+
 conda create --name recovar python=3.11 -y
 conda activate recovar
-pip install "recovar[cuda]"
+pip install ".[cuda]"
 ```
 
 Verify:
@@ -16,39 +19,42 @@ Verify:
 recovar run_test_dataset
 ```
 
-## Reproducible install (pixi)
+All dependencies are pinned to exact versions for reliability. You should not encounter version conflicts.
 
-For an exact reproducible environment with pinned dependencies:
+## Pixi (fully reproducible)
+
+[Pixi](https://prefix.dev/) gives you a hermetic environment with every dependency locked via `pixi.lock`. This is the most reproducible option:
 
 ```bash
 git clone https://github.com/ma-gilles/recovar.git
-cd recovar && git checkout dev
+cd recovar
 pixi install
 pixi run install-recovar
 pixi run smoke-import-recovar
 ```
 
-## Development install
+Run tests with pixi:
 
-For the latest version or contributing:
+```bash
+pixi run test-fast        # Unit tests (no GPU)
+pixi run test-full        # Full suite (requires GPU)
+```
+
+## Flexible install (for developers)
+
+If you need to reconcile recovar with other packages in your environment (e.g., you already have a JAX version installed), use the `flexible` extra which uses minimum version bounds instead of exact pins:
 
 ```bash
 git clone https://github.com/ma-gilles/recovar.git
-cd recovar && git checkout dev
+cd recovar
 
 conda create --name recovar_dev python=3.11 -y
 conda activate recovar_dev
-pip install -e ".[cuda,dev]"
+pip install -e ".[flexible,cuda-flexible,dev]"
 
 # Verify
 python -c "import jax; print(jax.devices())"
 recovar run_test_dataset
-```
-
-Or install the dev branch directly without cloning:
-
-```bash
-pip install "recovar[cuda] @ git+https://github.com/ma-gilles/recovar.git@dev"
 ```
 
 ## CPU-only install
@@ -56,7 +62,7 @@ pip install "recovar[cuda] @ git+https://github.com/ma-gilles/recovar.git@dev"
 For testing without a GPU:
 
 ```bash
-pip install recovar
+pip install .
 ```
 
 !!! warning
@@ -70,25 +76,6 @@ To use RECOVAR from Jupyter notebooks:
 conda activate recovar
 pip install ipykernel
 python -m ipykernel install --user --name=recovar
-```
-
-## Pixi (fully reproducible)
-
-[Pixi](https://prefix.dev/) gives you a hermetic environment with exact pinned dependencies via a lock file. This is the recommended setup for development:
-
-```bash
-git clone https://github.com/ma-gilles/recovar.git
-cd recovar && git checkout dev
-pixi install
-pixi run install-recovar
-pixi run smoke-import-recovar
-```
-
-Run tests with pixi:
-
-```bash
-pixi run test-fast        # Unit tests (no GPU)
-pixi run test-full        # Full suite (requires GPU)
 ```
 
 ## Docker
