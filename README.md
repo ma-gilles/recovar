@@ -17,14 +17,14 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. I
 
 ## Installation
 
-RECOVAR requires a GPU with CUDA support and Python 3.11.
+RECOVAR requires Python 3.11+ and a CUDA GPU for practical use.
 
 ### Quick install (pip)
 
 ```bash
 conda create --name recovar python=3.11 -y
 conda activate recovar
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cuda12]"==0.9.0.1 recovar
+pip install "recovar[cuda]"
 ```
 
 Verify:
@@ -32,24 +32,38 @@ Verify:
 recovar run_test_dataset
 ```
 
-### Development install
+### Reproducible install (pinned versions)
 
-For the latest version or contributing:
+For an exact known-working environment:
+
+```bash
+conda create --name recovar python=3.11 -y
+conda activate recovar
+pip install -r https://raw.githubusercontent.com/ma-gilles/recovar/dev/requirements-lock.txt
+pip install "jax[cuda12]==0.9.0.1"
+pip install --no-deps recovar
+```
+
+### Development install (latest from dev)
 
 ```bash
 git clone https://github.com/ma-gilles/recovar.git
-cd recovar
+cd recovar && git checkout dev
 
 conda create --name recovar_dev python=3.11 -y
 conda activate recovar_dev
 
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git
-pip install "jax[cuda12]"==0.9.0.1
-pip install -e ".[dev]"
+pip install -e ".[cuda,dev]"
 
 # Verify
 python -c "import jax; print(jax.devices())"
 recovar run_test_dataset
+```
+
+Or install the dev branch directly without cloning:
+
+```bash
+pip install "recovar[cuda] @ git+https://github.com/ma-gilles/recovar.git@dev"
 ```
 
 ### CPU-only install
@@ -57,9 +71,7 @@ recovar run_test_dataset
 For testing without a GPU (not practical for real datasets):
 
 ```bash
-conda create --name recovar python=3.11 -y
-conda activate recovar
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cpu]"==0.9.0.1 recovar
+pip install recovar
 ```
 
 ### Pixi (alternative)
