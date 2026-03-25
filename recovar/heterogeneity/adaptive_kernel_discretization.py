@@ -66,6 +66,8 @@ def _pad_heterogeneity_kernel_batch(
 
     The heterogeneity kernel accumulators are sums, so padded rows can be made
     exactly neutral by assigning them infinite noise variance.
+
+    JAX device arrays stay on device; numpy arrays stay on the host.
     """
     current_batch_size = int(images.shape[0])
     if current_batch_size == target_batch_size:
@@ -74,25 +76,23 @@ def _pad_heterogeneity_kernel_batch(
         raise ValueError(f"batch size {current_batch_size} exceeds target_batch_size {target_batch_size}")
 
     pad = target_batch_size - current_batch_size
-    images = np.concatenate(
-        [
-            np.asarray(images),
-            np.zeros((pad, *images.shape[1:]), dtype=np.asarray(images).dtype),
-        ],
-        axis=0,
-    )
-    rotation_matrices = np.concatenate(
-        [np.asarray(rotation_matrices), np.repeat(np.asarray(rotation_matrices[:1]), pad, axis=0)],
-        axis=0,
-    )
-    translations = np.concatenate(
-        [np.asarray(translations), np.repeat(np.asarray(translations[:1]), pad, axis=0)],
-        axis=0,
-    )
-    ctf_params = np.concatenate(
-        [np.asarray(ctf_params), np.repeat(np.asarray(ctf_params[:1]), pad, axis=0)],
-        axis=0,
-    )
+
+    def _pad_zeros(arr, n):
+        if isinstance(arr, jax.Array):
+            return jnp.concatenate([arr, jnp.zeros((n, *arr.shape[1:]), dtype=arr.dtype)])
+        arr = np.asarray(arr)
+        return np.concatenate([arr, np.zeros((n, *arr.shape[1:]), dtype=arr.dtype)])
+
+    def _pad_repeat_first(arr, n):
+        if isinstance(arr, jax.Array):
+            return jnp.concatenate([arr, jnp.repeat(arr[:1], n, axis=0)])
+        arr = np.asarray(arr)
+        return np.concatenate([arr, np.repeat(arr[:1], n, axis=0)])
+
+    images = _pad_zeros(images, pad)
+    rotation_matrices = _pad_repeat_first(rotation_matrices, pad)
+    translations = _pad_repeat_first(translations, pad)
+    ctf_params = _pad_repeat_first(ctf_params, pad)
     noise_variance = _pad_noise_variance_for_fixed_batch(
         noise_variance,
         current_batch_size,
@@ -136,6 +136,25 @@ def _iter_processed_half_batches(experiment_dataset, raw_batches):
                 return
             future = pool.submit(_prepare_next)
             yield result
+
+
+def _process_images_half_fast(images, dataset):
+    """Convert raw spatial images to half-spectrum using JIT'd rfft2.
+
+    Unlike ``dataset.process_images_half`` which does a full complex FFT
+    then discards half, this uses ``padded_rfft`` (rfft2) directly —
+    half the work, JIT-fused into a single GPU kernel.  The tiny numerical
+    difference vs the full-FFT path is irrelevant for volume reconstruction.
+
+    Falls back to ``process_images_half`` for non-standard image sources
+    (e.g. test fixtures) that lack ``data_multiplier`` / ``padding``.
+    """
+    src = getattr(dataset, 'image_source', None)
+    if src is not None and hasattr(src, 'data_multiplier') and hasattr(src, 'padding'):
+        from recovar.core import padding as pad
+        images = jnp.asarray(images) * src.data_multiplier
+        return pad.padded_rfft(images, dataset.grid_size, src.padding)
+    return dataset.process_images_half(images)
 
 
 def _heterogeneity_kernel_batch_from_fft(
@@ -1739,6 +1758,7 @@ def even_less_naive_heterogeneity_scheme_relion_style(
     heterogeneity_kernel="parabola",
     upsampling_factor=None,
     return_real_space=False,
+    use_fast_rfft=False,
 ):
     bins = heterogeneity_bins
 
@@ -1799,26 +1819,21 @@ def even_less_naive_heterogeneity_scheme_relion_style(
             noise_half=False,
             indices=image_inds,
         )
-        for (
-            images,
-            rotation_matrices,
-            translations,
-            ctf_params,
-            noise_variance,
-            _particle_indices,
-            _image_indices,
-        ) in _iter_processed_half_batches(
-            experiment_dataset,
-            raw_batches,
-        ):
-            images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
-                images,
-                rotation_matrices,
-                translations,
-                ctf_params,
-                noise_variance,
-                target_batch_size=batch_size,
-            )
+        for raw_images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in raw_batches:
+            if use_fast_rfft:
+                # Pad BEFORE rfft so padded_rfft always sees a fixed batch
+                # shape — avoids JIT recompilation for unique tail-batch sizes.
+                raw_images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
+                    raw_images, rotation_matrices, translations, ctf_params, noise_variance,
+                    target_batch_size=batch_size,
+                )
+                images = _process_images_half_fast(raw_images, experiment_dataset)
+            else:
+                images = experiment_dataset.process_images_half(raw_images)
+                images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
+                    images, rotation_matrices, translations, ctf_params, noise_variance,
+                    target_batch_size=batch_size,
+                )
             Ft_y_acc, Ft_ctf_acc = _heterogeneity_kernel_batch_from_fft(
                 config,
                 images,
