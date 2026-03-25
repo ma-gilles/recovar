@@ -2397,15 +2397,16 @@
 <p>The isolated cluster 0 represents junk or a distinct species. Exclude it and re-run:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Exclude cluster 0, keep clusters 1-19</span>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>recovar<span class="w"> </span>extract_image_subset_from_kmeans<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>output/analysis_20/kmeans_result.pkl<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>subset_ind.pkl<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="m">0</span><span class="w"> </span>--inverse
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>output/analysis_20/data/kmeans_result.pkl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span>subset_ind<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="m">0</span><span class="w"> </span>-i
 </code></pre></div>
+<p>The indices are written to <code>subset_ind/indices.pkl</code>.</p>
 <h3 id="step-4-re-run-pipeline-on-the-subset">Step 4: Re-run pipeline on the subset<a class="headerlink" href="#step-4-re-run-pipeline-on-the-subset" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.256.mrcs<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">    </span>--poses<span class="w"> </span>poses.pkl<span class="w"> </span>--ctf<span class="w"> </span>ctf.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">    </span>--mask<span class="w"> </span>recovar_masks/mask_10076.mrc<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span>--ind<span class="w"> </span>subset_ind.pkl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">    </span>--ind<span class="w"> </span>subset_ind/indices.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">    </span>-o<span class="w"> </span>output_subset
 </code></pre></div>
 <p>The <code>--ind</code> flag selects only the particles in <code>subset_ind.pkl</code> (~130k of the original 131k).</p>
@@ -2418,11 +2419,11 @@
 <h4 id="subset-umap">Subset: UMAP<a class="headerlink" href="#subset-umap" title="Permanent link">&para;</a></h4>
 <p><img alt="Subset UMAP" src="../../img/examples/10076_subset/umap_kmeans_centers.png" /></p>
 <h3 id="view-volumes">View volumes<a class="headerlink" href="#view-volumes" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># View k-means cluster center volumes</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>chimerax<span class="w"> </span>output_subset/analysis_20/kmeans/center*.mrc
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># View k-means cluster center volumes (1-indexed, zero-padded)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>chimerax<span class="w"> </span>output_subset/analysis_20/kmeans/center000.mrc<span class="w"> </span>center001.mrc<span class="w"> </span>...
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1"># View a trajectory as a conformational movie</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>chimerax<span class="w"> </span>output_subset/analysis_20/traj000/state*.mrc
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>chimerax<span class="w"> </span>output_subset/analysis_20/traj000/state000.mrc<span class="w"> </span>state001.mrc<span class="w"> </span>...
 </code></pre></div>
 <div class="admonition tip">
 <p class="admonition-title">Interactive exploration with the GUI</p>
@@ -2509,15 +2510,16 @@
 </tr>
 </tbody>
 </table>
-<p>This produces density estimates at different regularization levels in <code>output/density/</code>. The <code>deconv_density_knee.pkl</code> file uses the recommended "knee" regularization.</p>
+<p>This produces density estimates at different regularization levels in <code>output/density/</code>. The <code>data/deconv_density_knee.pkl</code> file uses the recommended "knee" regularization.</p>
 <h3 id="step-4-compute-a-trajectory">Step 4: Compute a trajectory<a class="headerlink" href="#step-4-compute-a-trajectory" title="Permanent link">&para;</a></h3>
 <p>Using the density landscape, compute a minimum free-energy path between two conformational states:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>recovar<span class="w"> </span>compute_trajectory<span class="w"> </span>output<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">    </span>-o<span class="w"> </span>output/trajectory_density<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">    </span>--zdim<span class="o">=</span><span class="m">4</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span>--density<span class="w"> </span>output/density/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">    </span>--density<span class="w"> </span>output/density/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">    </span>--endpts<span class="w"> </span>output/analysis_4/kmeans/centers.txt<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">    </span>--ind<span class="w"> </span><span class="m">0</span>,19
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">    </span>--ind<span class="w"> </span><span class="m">0</span>,19
 </code></pre></div>
 <table>
 <thead>
@@ -2543,9 +2545,10 @@
 </table>
 <p>This generates volumes along the minimum free-energy path:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>output/trajectory_density/
-<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>├── state000.mrc ... state005.mrc  # Volumes along the path
-<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>├── latent_coords.txt              # Latent coordinates of each state
-<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>└── density/                       # Local density at each state
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>├── state000.mrc ... state005.mrc   # Volumes along the path
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>├── state000_half1_unfil.mrc ...    # Half-maps for FSC
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>├── diagnostics/state000/           # Per-volume diagnostics
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>└── latent_coords.txt               # Latent coordinates of each state
 </code></pre></div>
 <p>View the trajectory in ChimeraX:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>chimerax<span class="w"> </span>output/trajectory_density/state*.mrc
@@ -2581,18 +2584,41 @@
 <h2 id="output-directory-reference">Output directory reference<a class="headerlink" href="#output-directory-reference" title="Permanent link">&para;</a></h2>
 <h3 id="pipeline-output">Pipeline output<a class="headerlink" href="#pipeline-output" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>output/
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>├── model/                         # Internal model (mean, eigenvolumes, eigenvalues)
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>└── output/
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>    ├── volumes/                   # mean.mrc, half-maps, eigenvolumes, variance maps
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>    └── plots/                     # Diagnostic plots
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>├── job.json                       # Job metadata (version, timing, parameters)
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>├── command.txt                    # Command that was run
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>├── run.log                        # Full log
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>├── README.txt                     # Human-readable output summary
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>├── model/                         # Internal model
+<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>│   ├── params.pkl
+<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>│   ├── zdim_4/                    # Per-zdim embeddings
+<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>│   │   └── latent_coords.npy
+<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>│   └── zdim_10/
+<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>│       └── latent_coords.npy
+<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>└── output/
+<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>    ├── volumes/                   # mean.mrc, half-maps, eigenvolumes, variance maps
+<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a>    └── plots/                     # Diagnostic plots
 </code></pre></div>
 <h3 id="analyze-output">Analyze output<a class="headerlink" href="#analyze-output" title="Permanent link">&para;</a></h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>output/analysis_&lt;zdim&gt;/
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>├── PCA/                           # PC scatter plots with k-means centers
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>├── umap/                          # UMAP embeddings
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>├── kmeans/                        # Cluster center volumes (.mrc) and assignments
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>├── traj000/, traj001/             # Trajectory volumes along paths
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>└── contrast_histogram.png
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>├── job.json                       # Job metadata
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>├── command.txt, run.log, README.txt
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>├── plots/                         # All visualization outputs
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>│   ├── contrast_histogram.png
+<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>│   ├── PCA/                       # PC scatter plots with k-means centers
+<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>│   ├── umap/                      # UMAP embeddings
+<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>│   ├── density/                   # Density plots (if density provided)
+<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>│   └── density_sliced/            # Sliced density plots
+<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>├── data/                          # Non-volume data files
+<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a>│   ├── kmeans_result.pkl          # K-means labels and centers
+<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>│   └── trajectory_endpoints.pkl
+<a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a>├── kmeans/                        # Cluster center volumes
+<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a>│   ├── center000.mrc, center001.mrc, ...
+<a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a>│   ├── center000_half1_unfil.mrc  # Half-maps
+<a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a>│   ├── centers.txt                # Center coordinates
+<a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a>│   └── diagnostics/center000/     # Per-volume diagnostics
+<a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a>└── traj000/, traj001/             # Trajectory volumes
+<a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a>    ├── state000.mrc, state001.mrc, ...
+<a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a>    └── diagnostics/state000/      # Per-volume diagnostics
 </code></pre></div>
 <h2 id="command-reference">Command reference<a class="headerlink" href="#command-reference" title="Permanent link">&para;</a></h2>
 <table>
@@ -2604,6 +2630,10 @@
 </thead>
 <tbody>
 <tr>
+<td>Init project</td>
+<td><code>recovar init_project my_project</code></td>
+</tr>
+<tr>
 <td>Run pipeline</td>
 <td><code>recovar pipeline &lt;particles&gt; -o out --mask mask.mrc</code></td>
 </tr>
@@ -2613,11 +2643,11 @@
 </tr>
 <tr>
 <td>Extract subset</td>
-<td><code>recovar extract_image_subset_from_kmeans result.pkl out.pkl 0 -i</code></td>
+<td><code>recovar extract_image_subset_from_kmeans data/kmeans_result.pkl subset_dir 0 -i</code></td>
 </tr>
 <tr>
 <td>Re-run on subset</td>
-<td><code>recovar pipeline &lt;particles&gt; -o out2 --ind subset.pkl</code></td>
+<td><code>recovar pipeline &lt;particles&gt; -o out2 --ind subset_dir/indices.pkl</code></td>
 </tr>
 <tr>
 <td>Density estimation</td>
@@ -2630,6 +2660,10 @@
 <tr>
 <td>Custom volumes</td>
 <td><code>recovar compute_state out -o vols --latent-points coords.txt</code></td>
+</tr>
+<tr>
+<td>Project status</td>
+<td><code>recovar project_status</code></td>
 </tr>
 <tr>
 <td>Launch GUI</td>

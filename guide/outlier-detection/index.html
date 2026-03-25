@@ -1650,11 +1650,11 @@
 <h2 id="junk-particle-detection">Junk particle detection<a class="headerlink" href="#junk-particle-detection" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>junk_particle_detection<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>junk_output
 </code></pre></div>
-<p>This analyzes the pipeline output to identify particles that are likely junk (ice, aggregates, etc.) based on their fit to the model.</p>
+<p>This analyzes the pipeline output to identify particles that are likely junk (ice, aggregates, etc.) based on their fit to the model. Output is organized into <code>plots/</code> and <code>data/</code> subdirectories. Use <code>--save-all-plots</code> for a full diagnostic plot dump (default: just indices and summary).</p>
 <h2 id="outlier-detection_1">Outlier detection<a class="headerlink" href="#outlier-detection_1" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>outlier_detection<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>outlier_output
 </code></pre></div>
-<p>Identifies statistical outliers in the dataset.</p>
+<p>Identifies statistical outliers in the dataset. Like junk detection, output uses <code>plots/</code> and <code>data/</code> subdirectories, with <code>--save-all-plots</code> for full diagnostics.</p>
 <h2 id="pipeline-with-outliers">Pipeline with outliers<a class="headerlink" href="#pipeline-with-outliers" title="Permanent link">&para;</a></h2>
 <p>For a combined workflow that runs the pipeline and outlier detection together:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>pipeline_with_outliers<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc

@@ -1995,7 +1995,7 @@
 <h2 id="computing-trajectories">Computing trajectories<a class="headerlink" href="#computing-trajectories" title="Permanent link">&para;</a></h2>
 <p>Use <code>compute_trajectory</code> to compute high-density (low free-energy) paths through latent space:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>recovar<span class="w"> </span>compute_trajectory<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>trajectory<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--density<span class="w"> </span>density/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">    </span>--density<span class="w"> </span>density/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span>--endpts<span class="w"> </span>centers.txt<span class="w"> </span>--ind<span class="w"> </span><span class="m">0</span>,1
 </code></pre></div>
 <h3 id="specifying-endpoints">Specifying endpoints<a class="headerlink" href="#specifying-endpoints" title="Permanent link">&para;</a></h3>
@@ -2076,20 +2076,23 @@
 <p>Open <code>.mrc</code> files in ChimeraX, Chimera, or any MRC viewer:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>output/analysis_10/
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>  kmeans/
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    all_volumes/
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>      vol0000.mrc     # K-means center 0
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>      vol0001.mrc     # K-means center 1
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>      ...
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>  trajectory_0_1/
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    vol0000.mrc       # Start of trajectory
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>    vol0001.mrc       # Along trajectory
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    ...
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>    center000.mrc              # K-means center 0
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    center001.mrc              # K-means center 1
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>    center000_half1_unfil.mrc  # Half-map 1 (for FSC)
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    ...
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>    centers.txt                # Center coordinates
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    diagnostics/center000/     # Per-volume diagnostics
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>  traj000/
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    state000.mrc               # Start of trajectory
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    state001.mrc               # Along trajectory
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    ...
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>    diagnostics/state000/      # Per-volume diagnostics
 </code></pre></div>
 <h3 id="umap-plots">UMAP plots<a class="headerlink" href="#umap-plots" title="Permanent link">&para;</a></h3>
 <p>UMAP embeddings are saved in the analysis directory. Use the Jupyter notebook kernel (<code>recovar</code>) for interactive visualization.</p>
 <h3 id="trajectory-movies">Trajectory movies<a class="headerlink" href="#trajectory-movies" title="Permanent link">&para;</a></h3>
 <p>Load the trajectory volumes as a series in ChimeraX to create conformational movies:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>open vol0000.mrc vol0001.mrc vol0002.mrc ... as_series
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>open state000.mrc state001.mrc state002.mrc ... as_series
 </code></pre></div>
 <h2 id="example-output">Example output<a class="headerlink" href="#example-output" title="Permanent link">&para;</a></h2>
 <p>See the <a href="../tutorial/">Tutorial</a> for a complete worked example with all output plots from <code>recovar analyze</code> on EMPIAR-10076.</p>

@@ -1360,6 +1360,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#init_project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        init_project
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project_status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        project_status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-flag-project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common flag: --project
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common flag: --project">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#project-directory-naming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project directory naming
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1988,6 +2038,56 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#init_project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        init_project
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#project_status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        project_status
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#common-flag-project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Common flag: --project
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Common flag: --project">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#project-directory-naming" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project directory naming
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -2034,6 +2134,14 @@
 <tr>
 <td><code>quickstart</code></td>
 <td>Interactive wizard for pipeline setup</td>
+</tr>
+<tr>
+<td><code>init_project</code></td>
+<td>Initialize a project directory with auto-numbered jobs</td>
+</tr>
+<tr>
+<td><code>project_status</code></td>
+<td>Show status of all jobs in a project</td>
 </tr>
 <tr>
 <td><code>downsample</code></td>
@@ -2552,8 +2660,9 @@
 <hr />
 <h2 id="extract_image_subset_from_kmeans"><code>extract_image_subset_from_kmeans</code><a class="headerlink" href="#extract_image_subset_from_kmeans" title="Permanent link">&para;</a></h2>
 <p>Extract particles from k-means clusters.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>recovar<span class="w"> </span>extract_image_subset_from_kmeans<span class="w"> </span>centers.pkl<span class="w"> </span>output.pkl<span class="w"> </span>indices<span class="w"> </span><span class="o">[</span>-i<span class="o">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>recovar<span class="w"> </span>extract_image_subset_from_kmeans<span class="w"> </span>kmeans_result.pkl<span class="w"> </span>output_dir<span class="w"> </span>indices<span class="w"> </span><span class="o">[</span>-i<span class="o">]</span>
 </code></pre></div>
+<p>Output is written to <code>output_dir/indices.pkl</code>.</p>
 <table>
 <thead>
 <tr>
@@ -2563,12 +2672,12 @@
 </thead>
 <tbody>
 <tr>
-<td><code>centers.pkl</code></td>
-<td>Path to centers.pkl from analyze</td>
+<td><code>kmeans_result.pkl</code></td>
+<td>Path to <code>data/kmeans_result.pkl</code> from analyze</td>
 </tr>
 <tr>
-<td><code>output.pkl</code></td>
-<td>Output indices file</td>
+<td><code>output_dir</code></td>
+<td>Output directory (indices saved as <code>indices.pkl</code> inside)</td>
 </tr>
 <tr>
 <td><code>indices</code></td>
@@ -2667,6 +2776,110 @@
 </tbody>
 </table>
 <p>See the <a href="../../guide/gui/">GUI Guide</a> for full documentation.</p>
+<hr />
+<h2 id="init_project"><code>init_project</code><a class="headerlink" href="#init_project" title="Permanent link">&para;</a></h2>
+<p>Initialize a new project directory with auto-numbered job tracking.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>recovar<span class="w"> </span>init_project<span class="w"> </span><span class="o">[</span>directory<span class="o">]</span><span class="w"> </span><span class="o">[</span>--name<span class="w"> </span><span class="s2">&quot;Project Name&quot;</span><span class="o">]</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>directory</code></td>
+<td><code>.</code></td>
+<td>Directory to initialize (created if needed)</td>
+</tr>
+<tr>
+<td><code>--name</code></td>
+<td>Directory name</td>
+<td>Human-readable project name</td>
+</tr>
+</tbody>
+</table>
+<p>Creates a <code>project.json</code> file in the directory. Subsequent commands using <code>--project</code> will auto-generate numbered job directories (e.g. <code>Pipeline/job_0001/</code>, <code>Analyze/job_0001/</code>).</p>
+<hr />
+<h2 id="project_status"><code>project_status</code><a class="headerlink" href="#project_status" title="Permanent link">&para;</a></h2>
+<p>Show status of all jobs in a project.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>recovar<span class="w"> </span>project_status<span class="w"> </span><span class="o">[</span>directory<span class="o">]</span><span class="w"> </span><span class="o">[</span>--tree<span class="o">]</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>directory</code></td>
+<td><code>.</code></td>
+<td>Project directory</td>
+</tr>
+<tr>
+<td><code>--tree</code></td>
+<td>False</td>
+<td>Show job dependency tree instead of table</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="common-flag-project">Common flag: <code>--project</code><a class="headerlink" href="#common-flag-project" title="Permanent link">&para;</a></h2>
+<p>All commands that produce output accept <code>--project &lt;dir&gt;</code> to enable project mode. When active, output directories are auto-generated. If you run from within a project directory (containing <code>project.json</code>), it is auto-detected without needing the flag.</p>
+<p>Each job creates <code>job.json</code>, <code>command.txt</code>, <code>run.log</code>, and <code>README.txt</code> metadata files.</p>
+<h3 id="project-directory-naming">Project directory naming<a class="headerlink" href="#project-directory-naming" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>CLI command</th>
+<th>Directory name</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pipeline</code></td>
+<td><code>Pipeline/</code></td>
+<td><code>Pipeline/job_0001/</code></td>
+</tr>
+<tr>
+<td><code>analyze</code></td>
+<td><code>Analyze/</code></td>
+<td><code>Analyze/job_0001/</code></td>
+</tr>
+<tr>
+<td><code>compute_state</code></td>
+<td><code>ReconstructState/</code></td>
+<td><code>ReconstructState/job_0001/</code></td>
+</tr>
+<tr>
+<td><code>compute_trajectory</code></td>
+<td><code>ReconstructTrajectory/</code></td>
+<td><code>ReconstructTrajectory/job_0001/</code></td>
+</tr>
+<tr>
+<td><code>estimate_conformational_density</code></td>
+<td><code>Density/</code></td>
+<td><code>Density/job_0001/</code></td>
+</tr>
+<tr>
+<td><code>junk_particle_detection</code></td>
+<td><code>JunkDetection/</code></td>
+<td><code>JunkDetection/job_0001/</code></td>
+</tr>
+<tr>
+<td><code>outlier_detection</code></td>
+<td><code>OutlierDetection/</code></td>
+<td><code>OutlierDetection/job_0001/</code></td>
+</tr>
+</tbody>
+</table>
 
 
 

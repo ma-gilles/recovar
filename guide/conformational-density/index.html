@@ -1665,14 +1665,14 @@
 <p>Runtime scales exponentially with <code>--pca_dim</code>. Keep it at 4 or below.</p>
 </div>
 <h2 id="estimating-stable-states">Estimating stable states<a class="headerlink" href="#estimating-stable-states" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>estimate_stable_states<span class="w"> </span>density_output/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>estimate_stable_states<span class="w"> </span>density_output/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>-o<span class="w"> </span>stable_states
 </code></pre></div>
 <p>Identifies local minima in the free energy landscape. The first argument is the density <code>.pkl</code> file produced by <code>estimate_conformational_density</code>.</p>
 <h2 id="using-density-for-trajectories">Using density for trajectories<a class="headerlink" href="#using-density-for-trajectories" title="Permanent link">&para;</a></h2>
 <p>The density can guide trajectory computation to follow low free-energy paths:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>compute_trajectory<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>trajectory<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--density<span class="w"> </span>density_output/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--density<span class="w"> </span>density_output/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span>--endpts<span class="w"> </span>centers.txt<span class="w"> </span>--ind<span class="w"> </span><span class="m">0</span>,1
 </code></pre></div>
 <p>Without <code>--density</code>, trajectories follow straight lines in latent space. With density, they curve to follow high-density (low free-energy) regions.</p>

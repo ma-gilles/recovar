@@ -646,6 +646,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#project-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project system
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#web-gui" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1722,6 +1733,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#project-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Project system
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#web-gui" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1787,13 +1809,29 @@
 <p>This runs k-means clustering, generates representative volumes, computes UMAP embeddings, and optionally creates trajectory movies.</p>
 <h3 id="view-volumes">View volumes<a class="headerlink" href="#view-volumes" title="Permanent link">&para;</a></h3>
 <p>Open the generated <code>.mrc</code> files in ChimeraX, Chimera, or any MRC viewer:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>output/analysis_10/kmeans/vol0000.mrc
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>output/analysis_10/kmeans/vol0001.mrc
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>output/analysis_10/kmeans/center000.mrc
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>output/analysis_10/kmeans/center001.mrc
 <a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>...
 </code></pre></div>
+<h2 id="project-system">Project system<a class="headerlink" href="#project-system" title="Permanent link">&para;</a></h2>
+<p>For multi-step workflows, use the project system. It auto-numbers job directories (e.g. <code>Pipeline/job_0001/</code>, <code>Analyze/job_0001/</code>) and tracks job metadata (<code>job.json</code>, <code>command.txt</code>, <code>run.log</code>, <code>README.txt</code>).</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Initialize a project directory</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>recovar<span class="w"> </span>init_project<span class="w"> </span>my_project
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nb">cd</span><span class="w"> </span>my_project
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Run pipeline (auto-creates Pipeline/job_0001/)</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1"># Analyze (auto-creates Analyze/job_0001/)</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>Pipeline/job_0001<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="c1"># Check status of all jobs</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>recovar<span class="w"> </span>project_status
+</code></pre></div>
+<p>All commands accept <code>--project &lt;dir&gt;</code> to enable project mode. If you run from within a project directory, it is auto-detected.</p>
 <h2 id="web-gui">Web GUI<a class="headerlink" href="#web-gui" title="Permanent link">&para;</a></h2>
 <p>For a visual interface, launch the RECOVAR web GUI:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>recovar<span class="w"> </span>gui
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>recovar<span class="w"> </span>gui
 </code></pre></div>
 <p>The GUI lets you configure and launch jobs, interactively explore the latent space, and view 3D volumes — all from your browser. See the <a href="../../guide/gui/">GUI Guide</a> for details.</p>
 <h2 id="whats-next">What's next<a class="headerlink" href="#whats-next" title="Permanent link">&para;</a></h2>
