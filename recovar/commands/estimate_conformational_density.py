@@ -57,6 +57,10 @@ def estimate_conformational_density(recovar_result_dir, output_dir=None, pca_dim
 
     output_dir = Path(output_dir).expanduser().resolve() if output_dir is not None else recovar_result_dir / 'density'
     output.mkdir_safe(str(output_dir))
+    plots_dir = output_dir / 'plots'
+    data_dir = output_dir / 'data'
+    output.mkdir_safe(str(plots_dir))
+    output.mkdir_safe(str(data_dir))
 
     alphas = np.flip(np.logspace(-9, 1, 11)) if alphas is None else np.asarray(alphas)
 
@@ -65,7 +69,7 @@ def estimate_conformational_density(recovar_result_dir, output_dir=None, pca_dim
     )
     logger.info("Deconvolution done, size = %s", density.shape)
     deconvolve_density.plot_density(lbfgsb_sols, density, alphas)
-    plt.savefig(str(output_dir / 'all_densities.png'))
+    plt.savefig(str(plots_dir / 'all_densities.png'))
     plt.close()
 
     from kneed import KneeLocator
@@ -73,7 +77,7 @@ def estimate_conformational_density(recovar_result_dir, output_dir=None, pca_dim
     knee_idx = np.argmin(np.abs(np.log10(1/alphas) - kn.knee))
     logger.info("Knee point: alpha = %.2e at idx = %d", alphas[knee_idx], knee_idx)
 
-    all_densities_dir = output_dir / 'all_densities'
+    all_densities_dir = data_dir / 'all_densities'
     output.mkdir_safe(str(all_densities_dir))
     for idx, sol in enumerate(lbfgsb_sols):
         utils.pickle_dump(
@@ -83,7 +87,7 @@ def estimate_conformational_density(recovar_result_dir, output_dir=None, pca_dim
 
     utils.pickle_dump(
         {'density': lbfgsb_sols[knee_idx], 'latent_space_bounds': bounds, 'alpha': alphas[knee_idx]},
-        str(output_dir / 'deconv_density_knee.pkl'),
+        str(data_dir / 'deconv_density_knee.pkl'),
     )
     plt.figure(figsize=(12, 10))
     for i, (alpha, c) in enumerate(zip(alphas, cost)):
@@ -95,7 +99,7 @@ def estimate_conformational_density(recovar_result_dir, output_dir=None, pca_dim
     plt.ylabel('Cost')
     plt.xlabel('Lambda (regularization parameter)')
     plt.gca().invert_xaxis()
-    plt.savefig(str(output_dir / 'Lcurve.png'), transparent=True)
+    plt.savefig(str(plots_dir / 'Lcurve.png'), transparent=True)
     plt.close()
 
 
