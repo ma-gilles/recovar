@@ -98,7 +98,7 @@ The isolated cluster 0 represents junk or a distinct species. Exclude it and re-
 ```bash
 # Exclude cluster 0, keep clusters 1-19
 recovar extract_image_subset_from_kmeans \
-    output/analysis_20/kmeans_result.pkl \
+    output/analysis_20/data/kmeans_result.pkl \
     subset_ind.pkl \
     0 --inverse
 ```
@@ -299,11 +299,17 @@ output/
 
 ```
 output/analysis_<zdim>/
-├── PCA/                           # PC scatter plots with k-means centers
-├── umap/                          # UMAP embeddings
+├── plots/                         # All visualization outputs
+│   ├── contrast_histogram.png
+│   ├── PCA/                       # PC scatter plots with k-means centers
+│   ├── umap/                      # UMAP embeddings
+│   ├── density/                   # Density plots (if density provided)
+│   └── density_sliced/            # Sliced density plots
+├── data/                          # Non-volume data files
+│   ├── kmeans_result.pkl
+│   └── trajectory_endpoints.pkl
 ├── kmeans/                        # Cluster center volumes (.mrc) and assignments
-├── traj000/, traj001/             # Trajectory volumes along paths
-└── contrast_histogram.png
+└── traj000/, traj001/             # Trajectory volumes along paths
 ```
 
 ## Command reference

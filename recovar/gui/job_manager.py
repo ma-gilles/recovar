@@ -898,7 +898,9 @@ echo "Completed at: $(date)"
 
                 # Verify it looks like an analysis dir (has kmeans or umap)
                 has_markers = (
+                    os.path.isfile(os.path.join(analysis_dir, "data", "kmeans_result.pkl")) or
                     os.path.isfile(os.path.join(analysis_dir, "kmeans_result.pkl")) or
+                    os.path.isdir(os.path.join(analysis_dir, "plots", "umap")) or
                     os.path.isdir(os.path.join(analysis_dir, "umap")) or
                     os.path.isdir(os.path.join(analysis_dir, "kmeans"))
                 )
@@ -956,19 +958,29 @@ echo "Completed at: $(date)"
                             "plots": traj_plots,
                         })
 
-                # Plots and images
+                # Plots and images — check both new (plots/) and legacy layout
                 analysis["plots"] = _list_images(analysis_dir)
+                plots_root = os.path.join(analysis_dir, "plots")
+                if os.path.isdir(plots_root):
+                    analysis["plots"].extend(_list_images(plots_root))
+                    for plot_subdir in ["umap", "PCA", "density", "density_sliced"]:
+                        analysis["plots"].extend(_list_images(
+                            os.path.join(plots_root, plot_subdir)
+                        ))
+                # Legacy layout fallback
                 for plot_subdir in ["umap", "PCA"]:
-                    analysis["plots"].extend(_list_images(
-                        os.path.join(analysis_dir, plot_subdir)
-                    ))
+                    legacy_dir = os.path.join(analysis_dir, plot_subdir)
+                    if os.path.isdir(legacy_dir):
+                        analysis["plots"].extend(_list_images(legacy_dir))
 
-                # Check for UMAP and k-means availability
-                umap_embedding = os.path.join(analysis_dir, "umap", "umap_embedding.pkl")
-                analysis["has_umap"] = os.path.isfile(umap_embedding)
+                # Check for UMAP and k-means availability (new + legacy paths)
+                umap_embedding = os.path.join(analysis_dir, "plots", "umap", "umap_embedding.pkl")
+                umap_embedding_legacy = os.path.join(analysis_dir, "umap", "umap_embedding.pkl")
+                analysis["has_umap"] = os.path.isfile(umap_embedding) or os.path.isfile(umap_embedding_legacy)
 
-                kmeans_result = os.path.join(analysis_dir, "kmeans_result.pkl")
-                analysis["has_kmeans"] = os.path.isfile(kmeans_result)
+                kmeans_result = os.path.join(analysis_dir, "data", "kmeans_result.pkl")
+                kmeans_result_legacy = os.path.join(analysis_dir, "kmeans_result.pkl")
+                analysis["has_kmeans"] = os.path.isfile(kmeans_result) or os.path.isfile(kmeans_result_legacy)
 
                 # Use zdim as key, but append suffix for multiple analyses at same zdim
                 key = str(zdim_parsed)
@@ -1123,7 +1135,9 @@ echo "Completed at: $(date)"
         for search_dir in [job.output_dir, os.path.join(job.output_dir, "output")]:
             analyze_dir = os.path.join(search_dir, "analyze")
             if os.path.isdir(analyze_dir) and (
+                os.path.isfile(os.path.join(analyze_dir, "data", "kmeans_result.pkl")) or
                 os.path.isfile(os.path.join(analyze_dir, "kmeans_result.pkl")) or
+                os.path.isdir(os.path.join(analyze_dir, "plots", "umap")) or
                 os.path.isdir(os.path.join(analyze_dir, "umap"))
             ):
                 return analyze_dir
@@ -1141,9 +1155,12 @@ echo "Completed at: $(date)"
         if not analysis_dir:
             return None
 
-        umap_path = os.path.join(analysis_dir, "umap", "umap_embedding.pkl")
+        umap_path = os.path.join(analysis_dir, "plots", "umap", "umap_embedding.pkl")
         if not os.path.isfile(umap_path):
-            return None
+            # Legacy layout fallback
+            umap_path = os.path.join(analysis_dir, "umap", "umap_embedding.pkl")
+            if not os.path.isfile(umap_path):
+                return None
 
         try:
 
@@ -1183,9 +1200,12 @@ echo "Completed at: $(date)"
         if not analysis_dir:
             return None
 
-        kmeans_path = os.path.join(analysis_dir, "kmeans_result.pkl")
+        kmeans_path = os.path.join(analysis_dir, "data", "kmeans_result.pkl")
         if not os.path.isfile(kmeans_path):
-            return None
+            # Legacy layout fallback
+            kmeans_path = os.path.join(analysis_dir, "kmeans_result.pkl")
+            if not os.path.isfile(kmeans_path):
+                return None
 
         try:
 

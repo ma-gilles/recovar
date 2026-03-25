@@ -809,3 +809,458 @@ def _load_latent_coords(po):
         return z
     except (KeyError, IndexError, TypeError, ValueError, AttributeError):
         return None
+
+
+# ---------------------------------------------------------------------------
+# Summary plot functions
+# ---------------------------------------------------------------------------
+
+from recovar.output.plot_style import (
+    apply_style, safe_savefig, COLORS, CATEGORICAL,
+    make_summary_figure, FONTSIZE_TITLE, FONTSIZE_SUBTITLE, FONTSIZE_LABEL,
+)
+
+
+def pipeline_summary(po, save_path):
+    """Create a 2x3 overview figure summarizing key pipeline results.
+
+    Panels:
+        (0,0) Mean volume — central XY slice of the mean reconstruction.
+        (0,1) Eigenvalue spectrum — bar chart of top eigenvalues.
+        (0,2) Mean FSC — FSC curve with 1/7 threshold line.
+        (1,0) Contrast histogram — distribution of per-particle contrasts.
+        (1,1) Variance volume — central XY slice of the variance map.
+        (1,2) Mask — central XY slice of the reconstruction mask.
+
+    Each panel is wrapped in try/except so that a single missing quantity
+    does not prevent the rest of the summary from being generated.
+
+    Parameters
+    ----------
+    po : PipelineOutput
+        Pipeline output object.
+    save_path : str
+        Path where the PNG is written.
+    """
+    apply_style()
+    fig, axes = make_summary_figure(2, 3, title="RECOVAR Pipeline Summary",
+                                    figsize=(16, 10))
+
+    # -- Helper to infer volume shape from the mean volume --
+    def _get_volume_shape():
+        mean_vol = po.get('mean')
+        if mean_vol is None:
+            return None
+        D = int(np.round(np.power(mean_vol.size, 1 / 3)))
+        return (D, D, D)
+
+    volume_shape = _get_volume_shape()
+
+    # -- (0,0) Mean volume central slice --
+    ax = axes[0, 0]
+    try:
+        mean_vol = po.get('mean')
+        if mean_vol is None:
+            raise ValueError("mean volume not available")
+        mean_real = np.real(
+            fourier_transform_utils.get_idft3(mean_vol.reshape(volume_shape))
+        )
+        mid = mean_real.shape[0] // 2
+        ax.imshow(mean_real[mid], cmap='gray', origin='lower')
+        ax.set_title("Mean Volume (XY slice)", fontsize=FONTSIZE_SUBTITLE)
+        ax.axis('off')
+    except Exception as exc:
+        logger.debug("pipeline_summary: mean volume panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+        ax.axis('off')
+
+    # -- (0,1) Eigenvalue spectrum --
+    ax = axes[0, 1]
+    try:
+        eigenvalues = po.get('s')
+        if eigenvalues is None:
+            # Fall back to params dict
+            eigenvalues = po.params.get('s', None)
+        if eigenvalues is None:
+            raise ValueError("eigenvalues not available")
+        eigenvalues = np.asarray(eigenvalues)
+        n_eigs = min(len(eigenvalues), 40)
+        ax.bar(np.arange(n_eigs), eigenvalues[:n_eigs],
+               color=COLORS['primary'], alpha=0.85)
+        ax.set_xlabel("Index", fontsize=FONTSIZE_LABEL)
+        ax.set_ylabel("Eigenvalue", fontsize=FONTSIZE_LABEL)
+        ax.set_title("Eigenvalue Spectrum", fontsize=FONTSIZE_SUBTITLE)
+        ax.set_yscale('log')
+    except Exception as exc:
+        logger.debug("pipeline_summary: eigenvalue panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+
+    # -- (0,2) Mean FSC --
+    ax = axes[0, 2]
+    try:
+        halfmap1, halfmap2 = po.get('mean_halfmaps')
+        voxel_size = po.get('voxel_size')
+        vol_shape = po.get('volume_shape')
+        grid_size = vol_shape[0]
+        # Compute FSC curve
+        fsc_curve = FSC(
+            np.array(halfmap1).reshape(vol_shape),
+            np.array(halfmap2).reshape(vol_shape),
+        )
+        freq = fourier_transform_utils.get_1d_frequency_grid(
+            grid_size, voxel_size=voxel_size, scaled=True
+        )
+        freq = freq[freq >= 0][:grid_size // 2]
+        max_idx = min(fsc_curve.size, freq.size)
+        # Convert frequency to resolution in Angstroms
+        with np.errstate(divide='ignore', invalid='ignore'):
+            resolution = np.where(freq[:max_idx] > 0, 1.0 / freq[:max_idx], 0)
+        ax.plot(resolution, fsc_curve[:max_idx],
+                color=COLORS['primary'], linewidth=2, label='FSC')
+        ax.axhline(y=1 / 7, color=COLORS['secondary'], linestyle='--',
+                   linewidth=1.5, label='1/7 threshold')
+        ax.set_xlabel("Resolution (A)", fontsize=FONTSIZE_LABEL)
+        ax.set_ylabel("FSC", fontsize=FONTSIZE_LABEL)
+        ax.set_title("Mean FSC", fontsize=FONTSIZE_SUBTITLE)
+        ax.set_ylim([0, 1.05])
+        ax.set_xlim(left=0)
+        ax.invert_xaxis()
+        ax.legend(fontsize=FONTSIZE_LABEL - 2)
+    except Exception as exc:
+        logger.debug("pipeline_summary: FSC panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+
+    # -- (1,0) Contrast histogram --
+    ax = axes[1, 0]
+    try:
+        contrasts_dict = po.get('contrasts')
+        if contrasts_dict is None:
+            raise ValueError("contrasts not available")
+        # Pick the first available zdim
+        if isinstance(contrasts_dict, dict):
+            zdim_key = next(iter(contrasts_dict))
+            contrasts = contrasts_dict[zdim_key]
+        else:
+            contrasts = np.asarray(contrasts_dict)
+        contrasts = np.asarray(contrasts).ravel()
+        ax.hist(contrasts, bins=60, color=COLORS['primary'], alpha=0.8,
+                edgecolor='white', linewidth=0.5)
+        ax.set_xlabel("Contrast", fontsize=FONTSIZE_LABEL)
+        ax.set_ylabel("Count", fontsize=FONTSIZE_LABEL)
+        ax.set_title("Contrast Histogram", fontsize=FONTSIZE_SUBTITLE)
+    except Exception as exc:
+        logger.debug("pipeline_summary: contrast panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+
+    # -- (1,1) Variance volume central slice --
+    ax = axes[1, 1]
+    try:
+        variance = po.get('variance')
+        if variance is None:
+            raise ValueError("variance not available")
+        var_vol = np.real(np.asarray(variance)).reshape(volume_shape)
+        mid = var_vol.shape[0] // 2
+        ax.imshow(var_vol[mid], cmap='viridis', origin='lower')
+        ax.set_title("Variance (XY slice)", fontsize=FONTSIZE_SUBTITLE)
+        ax.axis('off')
+    except Exception as exc:
+        logger.debug("pipeline_summary: variance panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+        ax.axis('off')
+
+    # -- (1,2) Mask central slice --
+    ax = axes[1, 2]
+    try:
+        mask = po.get('volume_mask')
+        if mask is None:
+            raise ValueError("mask not available")
+        mask_vol = np.real(np.asarray(mask)).reshape(volume_shape)
+        mid = mask_vol.shape[0] // 2
+        ax.imshow(mask_vol[mid], cmap='gray', origin='lower')
+        ax.set_title("Mask (XY slice)", fontsize=FONTSIZE_SUBTITLE)
+        ax.axis('off')
+    except Exception as exc:
+        logger.debug("pipeline_summary: mask panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+        ax.axis('off')
+
+    fig.tight_layout()
+    safe_savefig(fig, save_path)
+
+
+def analyze_summary(zs, centers, labels, save_path, density=None):
+    """Create a 2x2 overview figure summarizing k-means analysis results.
+
+    Panels:
+        (0,0) Latent space — hexbin density of particles with cluster centers.
+        (0,1) Cluster sizes — bar chart of particles per cluster.
+        (1,0) Cluster distances — heatmap of pairwise center distances.
+        (1,1) Latent variance — histogram of per-particle distances to
+              nearest cluster center.
+
+    Parameters
+    ----------
+    zs : ndarray, shape (n_particles, n_dims)
+        Latent coordinates.
+    centers : ndarray, shape (n_clusters, n_dims)
+        K-means cluster centers.
+    labels : ndarray, shape (n_particles,)
+        Per-particle cluster assignments.
+    save_path : str
+        Path where the PNG is written.
+    density : ndarray, optional
+        Per-particle density values for background coloring (unused if None).
+    """
+    apply_style()
+    fig, axes = make_summary_figure(2, 2, title="RECOVAR Analysis Summary",
+                                    figsize=(14, 10))
+
+    zs = np.asarray(zs)
+    centers = np.asarray(centers)
+    labels = np.asarray(labels)
+    n_clusters = centers.shape[0]
+
+    # -- (0,0) Latent space scatter + cluster centers --
+    ax = axes[0, 0]
+    try:
+        ax.hexbin(zs[:, 0], zs[:, 1], gridsize=50, cmap='Blues', mincnt=1,
+                  alpha=0.8)
+        # Overlay cluster centers
+        for k in range(n_clusters):
+            color = CATEGORICAL[k % len(CATEGORICAL)]
+            ax.scatter(centers[k, 0], centers[k, 1], c=color,
+                       edgecolor='black', s=120, zorder=5, linewidth=1.5)
+            ax.annotate(str(k), (centers[k, 0], centers[k, 1]),
+                        fontsize=FONTSIZE_LABEL - 1, fontweight='bold',
+                        color='white', ha='center', va='center',
+                        path_effects=[pe.withStroke(linewidth=3,
+                                                    foreground='black')])
+        ax.set_xlabel("PC 1", fontsize=FONTSIZE_LABEL)
+        ax.set_ylabel("PC 2", fontsize=FONTSIZE_LABEL)
+        ax.set_title("Latent Space", fontsize=FONTSIZE_SUBTITLE)
+    except Exception as exc:
+        logger.debug("analyze_summary: latent space panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+
+    # -- (0,1) Cluster sizes --
+    ax = axes[0, 1]
+    try:
+        unique_labels, counts = np.unique(labels, return_counts=True)
+        sort_idx = np.argsort(-counts)
+        sorted_labels = unique_labels[sort_idx]
+        sorted_counts = counts[sort_idx]
+        bar_colors = [CATEGORICAL[int(l) % len(CATEGORICAL)]
+                      for l in sorted_labels]
+        ax.bar(np.arange(len(sorted_counts)), sorted_counts, color=bar_colors,
+               alpha=0.85)
+        ax.set_xlabel("Cluster (sorted)", fontsize=FONTSIZE_LABEL)
+        ax.set_ylabel("Particles", fontsize=FONTSIZE_LABEL)
+        ax.set_title("Cluster Sizes", fontsize=FONTSIZE_SUBTITLE)
+        ax.set_xticks(np.arange(len(sorted_labels)))
+        ax.set_xticklabels([str(l) for l in sorted_labels], rotation=45)
+    except Exception as exc:
+        logger.debug("analyze_summary: cluster sizes panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+
+    # -- (1,0) Cluster distances heatmap --
+    ax = axes[1, 0]
+    try:
+        from scipy.spatial.distance import cdist
+        dist_matrix = cdist(centers, centers, metric='euclidean')
+        im = ax.imshow(dist_matrix, cmap='viridis', origin='lower')
+        ax.set_xlabel("Cluster", fontsize=FONTSIZE_LABEL)
+        ax.set_ylabel("Cluster", fontsize=FONTSIZE_LABEL)
+        ax.set_title("Pairwise Center Distances", fontsize=FONTSIZE_SUBTITLE)
+        ax.set_xticks(np.arange(n_clusters))
+        ax.set_yticks(np.arange(n_clusters))
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    except Exception as exc:
+        logger.debug("analyze_summary: distance panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+
+    # -- (1,1) Per-particle distance to nearest center --
+    ax = axes[1, 1]
+    try:
+        from scipy.spatial.distance import cdist as _cdist
+        dists_to_center = _cdist(zs, centers, metric='euclidean')
+        min_dists = dists_to_center[np.arange(len(labels)), labels]
+        ax.hist(min_dists, bins=80, color=COLORS['primary'], alpha=0.8,
+                edgecolor='white', linewidth=0.5)
+        ax.axvline(np.median(min_dists), color=COLORS['secondary'],
+                   linestyle='--', linewidth=1.5,
+                   label=f"Median = {np.median(min_dists):.3f}")
+        ax.set_xlabel("Distance to nearest center", fontsize=FONTSIZE_LABEL)
+        ax.set_ylabel("Count", fontsize=FONTSIZE_LABEL)
+        ax.set_title("Latent Variance", fontsize=FONTSIZE_SUBTITLE)
+        ax.legend(fontsize=FONTSIZE_LABEL - 2)
+    except Exception as exc:
+        logger.debug("analyze_summary: latent variance panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+
+    fig.tight_layout()
+    safe_savefig(fig, save_path)
+
+
+def junk_detection_summary(results_dict, save_path):
+    """Create a 2x2 overview figure summarizing junk particle detection.
+
+    Panels:
+        (0,0) Cluster quality — histogram of per-cluster FSC AUC values.
+        (0,1) Particle distribution — bar chart colored by good/junk status.
+        (1,0) Quality summary — text panel with key detection statistics.
+        (1,1) FSC curves — top-3 and bottom-3 cluster FSC curves if available.
+
+    Parameters
+    ----------
+    results_dict : dict
+        Must contain at minimum:
+            - ``'fsc_aucs'``: per-cluster FSC AUC values (array)
+            - ``'n_particles_per_cluster'``: particles in each cluster (array)
+            - ``'junk_threshold'``: threshold used to classify junk (float)
+            - ``'n_junk'``: number of junk particles (int)
+            - ``'n_good'``: number of good particles (int)
+        Optionally:
+            - ``'fsc_curves'``: dict or list of per-cluster FSC curves
+    save_path : str
+        Path where the PNG is written.
+    """
+    apply_style()
+    fig, axes = make_summary_figure(2, 2, title="RECOVAR Junk Particle Detection Summary",
+                                    figsize=(14, 10))
+
+    fsc_aucs = np.asarray(results_dict.get('fsc_aucs', []))
+    n_particles = np.asarray(results_dict.get('n_particles_per_cluster', []))
+    threshold = results_dict.get('junk_threshold', None)
+    n_junk = results_dict.get('n_junk', None)
+    n_good = results_dict.get('n_good', None)
+
+    # -- (0,0) Cluster quality histogram --
+    ax = axes[0, 0]
+    try:
+        if fsc_aucs.size == 0:
+            raise ValueError("fsc_aucs empty")
+        ax.hist(fsc_aucs, bins=max(10, len(fsc_aucs) // 2),
+                color=COLORS['primary'], alpha=0.8, edgecolor='white',
+                linewidth=0.5)
+        if threshold is not None:
+            ax.axvline(threshold, color=COLORS['secondary'], linestyle='--',
+                       linewidth=2, label=f"Threshold = {threshold:.3f}")
+            ax.legend(fontsize=FONTSIZE_LABEL - 2)
+        ax.set_xlabel("FSC AUC", fontsize=FONTSIZE_LABEL)
+        ax.set_ylabel("Clusters", fontsize=FONTSIZE_LABEL)
+        ax.set_title("Cluster Quality", fontsize=FONTSIZE_SUBTITLE)
+    except Exception as exc:
+        logger.debug("junk_detection_summary: quality panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+
+    # -- (0,1) Particle distribution colored by good/junk --
+    ax = axes[0, 1]
+    try:
+        if n_particles.size == 0:
+            raise ValueError("n_particles_per_cluster empty")
+        if threshold is not None and fsc_aucs.size == n_particles.size:
+            is_good = fsc_aucs >= threshold
+            bar_colors = [COLORS['accent'] if g else COLORS['secondary']
+                          for g in is_good]
+        else:
+            bar_colors = COLORS['primary']
+        ax.bar(np.arange(len(n_particles)), n_particles, color=bar_colors,
+               alpha=0.85)
+        ax.set_xlabel("Cluster", fontsize=FONTSIZE_LABEL)
+        ax.set_ylabel("Particles", fontsize=FONTSIZE_LABEL)
+        ax.set_title("Particle Distribution", fontsize=FONTSIZE_SUBTITLE)
+        # Legend
+        from matplotlib.patches import Patch
+        legend_elements = [
+            Patch(facecolor=COLORS['accent'], alpha=0.85, label='Good'),
+            Patch(facecolor=COLORS['secondary'], alpha=0.85, label='Junk'),
+        ]
+        ax.legend(handles=legend_elements, fontsize=FONTSIZE_LABEL - 2)
+    except Exception as exc:
+        logger.debug("junk_detection_summary: distribution panel failed: %s",
+                     exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+
+    # -- (1,0) Quality summary text panel --
+    ax = axes[1, 0]
+    try:
+        ax.axis('off')
+        lines = []
+        if n_good is not None:
+            lines.append(f"Good particles:  {n_good:,}")
+        if n_junk is not None:
+            lines.append(f"Junk particles:  {n_junk:,}")
+        if n_good is not None and n_junk is not None and (n_good + n_junk) > 0:
+            pct_junk = 100.0 * n_junk / (n_good + n_junk)
+            lines.append(f"Junk fraction:   {pct_junk:.1f}%")
+        if threshold is not None:
+            lines.append(f"Threshold:       {threshold:.4f}")
+        if fsc_aucs.size > 0:
+            lines.append(f"AUC range:       [{fsc_aucs.min():.3f}, {fsc_aucs.max():.3f}]")
+            lines.append(f"AUC median:      {np.median(fsc_aucs):.3f}")
+        summary_text = "\n".join(lines) if lines else "No summary data"
+        ax.text(0.1, 0.5, summary_text, ha='left', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL + 1,
+                fontfamily='monospace',
+                bbox=dict(boxstyle='round,pad=0.5', facecolor=COLORS['light'],
+                          edgecolor=COLORS['muted'], alpha=0.9))
+        ax.set_title("Quality Summary", fontsize=FONTSIZE_SUBTITLE)
+    except Exception as exc:
+        logger.debug("junk_detection_summary: summary panel failed: %s", exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+        ax.axis('off')
+
+    # -- (1,1) FSC curves for top-3 and bottom-3 clusters --
+    ax = axes[1, 1]
+    try:
+        fsc_curves = results_dict.get('fsc_curves', None)
+        if fsc_curves is None or fsc_aucs.size == 0:
+            raise ValueError("fsc_curves not provided")
+        # Determine top-3 and bottom-3 by AUC
+        sorted_idx = np.argsort(fsc_aucs)
+        n_show = min(3, len(sorted_idx))
+        bottom_idx = sorted_idx[:n_show]
+        top_idx = sorted_idx[-n_show:]
+
+        # Access curves (dict or list)
+        def _get_curve(idx):
+            if isinstance(fsc_curves, dict):
+                return np.asarray(fsc_curves[idx])
+            return np.asarray(fsc_curves[idx])
+
+        for i, idx in enumerate(top_idx):
+            curve = _get_curve(idx)
+            ax.plot(curve, color=COLORS['accent'], alpha=0.6 + 0.15 * i,
+                    linewidth=1.5,
+                    label=f"Best #{i+1} (c{idx})" if i == 0 else None)
+        for i, idx in enumerate(bottom_idx):
+            curve = _get_curve(idx)
+            ax.plot(curve, color=COLORS['secondary'], alpha=0.6 + 0.15 * i,
+                    linewidth=1.5, linestyle='--',
+                    label=f"Worst #{i+1} (c{idx})" if i == 0 else None)
+        ax.set_xlabel("Frequency Shell", fontsize=FONTSIZE_LABEL)
+        ax.set_ylabel("FSC", fontsize=FONTSIZE_LABEL)
+        ax.set_title("FSC Curves (Best / Worst)", fontsize=FONTSIZE_SUBTITLE)
+        ax.set_ylim([0, 1.05])
+        ax.legend(fontsize=FONTSIZE_LABEL - 2)
+    except Exception as exc:
+        logger.debug("junk_detection_summary: FSC curves panel failed: %s",
+                     exc)
+        ax.text(0.5, 0.5, "Not available", ha='center', va='center',
+                transform=ax.transAxes, fontsize=FONTSIZE_LABEL)
+
+    fig.tight_layout()
+    safe_savefig(fig, save_path)

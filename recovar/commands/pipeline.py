@@ -1085,6 +1085,14 @@ def standard_recovar_pipeline(args):
     zdim = zdims[zdim_choose]
     output.standard_pipeline_plots(po, zdim, paths.plots_dir)
 
+    # Generate summary plot
+    try:
+        from recovar.output.plot_utils import pipeline_summary
+        pipeline_summary(po, os.path.join(paths.plots_dir, 'summary.png'))
+        logger.info("Saved pipeline summary to output/plots/summary.png")
+    except Exception as e:
+        logger.warning("Could not generate summary plot: %s", e)
+
     return means, u, s, volume_mask, dilated_volume_mask, noise_var_used
 
 

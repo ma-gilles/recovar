@@ -210,7 +210,7 @@ def density_output(pipeline_output, shared_dir):
 def test_analyze_kmeans_regression(analyze_output):
     """Check k-means cluster quality: structural invariants only."""
     from recovar import utils
-    result = utils.pickle_load(str(analyze_output / "kmeans_result.pkl"))
+    result = utils.pickle_load(str(analyze_output / "data" / "kmeans_result.pkl"))
     centers = np.asarray(result["centers"])
     labels = np.asarray(result["labels"])
 
@@ -360,7 +360,7 @@ def test_extract_kmeans_subset_regression(analyze_output, shared_dir):
 
     from recovar import utils
 
-    kmeans_pkl = analyze_output / "kmeans_result.pkl"
+    kmeans_pkl = analyze_output / "data" / "kmeans_result.pkl"
     subset_out = shared_dir / "regression_kmeans_subset.pkl"
 
     cmd = [

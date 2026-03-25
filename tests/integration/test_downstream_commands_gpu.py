@@ -161,15 +161,15 @@ def density_output(pipeline_output, shared_dir):
 # ---------------------------------------------------------------------------
 
 def test_analyze_produces_expected_outputs(analyze_output):
-    """analyze should create kmeans_result.pkl and centers.txt."""
-    assert (analyze_output / "kmeans_result.pkl").exists()
+    """analyze should create data/kmeans_result.pkl and centers.txt."""
+    assert (analyze_output / "data" / "kmeans_result.pkl").exists()
     assert (analyze_output / "kmeans" / "centers.txt").exists()
 
 
 def test_analyze_kmeans_result_structure(analyze_output):
     """kmeans_result.pkl should contain centers and labels."""
     from recovar import utils
-    result = utils.pickle_load(str(analyze_output / "kmeans_result.pkl"))
+    result = utils.pickle_load(str(analyze_output / "data" / "kmeans_result.pkl"))
     assert "centers" in result
     assert "labels" in result
     assert result["centers"].shape[1] == _ZDIM
@@ -260,7 +260,7 @@ def test_estimate_stable_states(density_output, shared_dir):
 
 def test_extract_image_subset_from_kmeans(analyze_output, shared_dir):
     """extract_image_subset_from_kmeans should produce subset indices."""
-    kmeans_pkl = analyze_output / "kmeans_result.pkl"
+    kmeans_pkl = analyze_output / "data" / "kmeans_result.pkl"
     assert kmeans_pkl.exists()
 
     subset_out = shared_dir / "image_subset.pkl"
@@ -282,7 +282,7 @@ def test_extract_image_subset_from_kmeans(analyze_output, shared_dir):
 
 def test_extract_image_subset_from_kmeans_inverse(analyze_output, shared_dir):
     """extract_image_subset_from_kmeans with --inverse should complement the selection."""
-    kmeans_pkl = analyze_output / "kmeans_result.pkl"
+    kmeans_pkl = analyze_output / "data" / "kmeans_result.pkl"
 
     subset_normal = shared_dir / "image_subset_normal.pkl"
     subset_inverse = shared_dir / "image_subset_inverse.pkl"

@@ -110,7 +110,7 @@ def test_pipeline_with_outliers_uses_original_image_ids_between_rounds(tmp_path,
 
     def fake_outlier_main():
         round_outdir = tmp_path / "pipeline" / f"round_{len(outlier_rounds) + 1}"
-        combined_dir = round_outdir / "outlier_detection" / "combined_results"
+        combined_dir = round_outdir / "outlier_detection" / "data" / "combined_results"
         combined_dir.mkdir(parents=True, exist_ok=True)
         current = combined_round_1 if not outlier_rounds else combined_round_2
         with open(combined_dir / "combined_image_inliers_4.pkl", "wb") as f:
@@ -165,7 +165,7 @@ def test_pipeline_with_outliers_uses_original_particle_ids_between_rounds(tmp_pa
 
     def fake_outlier_main():
         round_outdir = tmp_path / "pipeline" / f"round_{len(outlier_rounds) + 1}"
-        combined_dir = round_outdir / "outlier_detection" / "combined_results"
+        combined_dir = round_outdir / "outlier_detection" / "data" / "combined_results"
         combined_dir.mkdir(parents=True, exist_ok=True)
         image_ids = combined_images_round_1 if not outlier_rounds else combined_images_round_2
         particle_ids = combined_particles_round_1 if not outlier_rounds else combined_particles_round_2

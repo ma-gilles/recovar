@@ -407,6 +407,8 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     Create plots for junk particle detection results with improved styling and clarity.
     """
     os.makedirs(output_folder, exist_ok=True)
+    os.makedirs(os.path.join(output_folder, 'plots'), exist_ok=True)
+    os.makedirs(os.path.join(output_folder, 'data'), exist_ok=True)
     
     # Set up improved styling based on output.py patterns
     plt.style.use('default')
@@ -432,9 +434,9 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     all_fsc_curves = [fsc_scores[i]['halfmap_curve'] for i in range(len(cluster_centers))]
     all_vs_mean_curves = [fsc_scores[i]['vs_mean_curve'] for i in range(len(cluster_centers))]
     
-    with open(os.path.join(output_folder, f'all_fsc_curves_{zdim_key}.pkl'), 'wb') as f:
+    with open(os.path.join(output_folder, 'data', f'all_fsc_curves_{zdim_key}.pkl'), 'wb') as f:
         pickle.dump(all_fsc_curves, f)
-    with open(os.path.join(output_folder, f'all_vs_mean_fsc_curves_{zdim_key}.pkl'), 'wb') as f:
+    with open(os.path.join(output_folder, 'data', f'all_vs_mean_fsc_curves_{zdim_key}.pkl'), 'wb') as f:
         pickle.dump(all_vs_mean_curves, f)
 
     # --- Plot all half-map FSC curves with improved styling ---
@@ -481,7 +483,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     cbar.set_label('Half-map FSC Score', fontweight='bold')
     
     plt.tight_layout()
-    _safe_savefig(os.path.join(output_folder, f'all_halfmap_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, 'plots', f'all_halfmap_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # --- Plot all vs-mean FSC curves with improved styling ---
@@ -523,7 +525,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     cbar.set_label('vs-Mean FSC Score', fontweight='bold')
     
     plt.tight_layout()
-    _safe_savefig(os.path.join(output_folder, f'all_vs_mean_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, 'plots', f'all_vs_mean_fsc_curves_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # --- Individual cluster FSC plots (top 10 and bottom 10) with better layout ---
@@ -553,7 +555,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         ax.set_facecolor('#FAFAFA')
     
     plt.tight_layout()
-    _safe_savefig(os.path.join(output_folder, f'top_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, 'plots', f'top_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Plot bottom 10 clusters with improved layout
@@ -578,7 +580,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         ax.set_facecolor('#FAFAFA')
     
     plt.tight_layout()
-    _safe_savefig(os.path.join(output_folder, f'bottom_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, 'plots', f'bottom_10_clusters_fsc_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Pad to at least 2 columns for 2D scatter/hexbin plots
@@ -656,7 +658,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     ax.set_facecolor('#FAFAFA')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    _safe_savefig(os.path.join(output_folder, f'junk_detection_results_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, 'plots', f'junk_detection_results_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
 
     # --- Particle Usage Visualization (simplified and cleaner) ---
@@ -786,7 +788,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         ax.set_facecolor('#FAFAFA')
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-        _safe_savefig(os.path.join(output_folder, f'particle_usage_visualization_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+        _safe_savefig(os.path.join(output_folder, 'plots', f'particle_usage_visualization_{zdim_key}.png'), dpi=300, bbox_inches='tight')
         plt.close()
     
     # --- Create comprehensive analysis plots with improved styling ---
@@ -888,7 +890,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
     ax.set_facecolor('#FAFAFA')
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    _safe_savefig(os.path.join(output_folder, f'fsc_analysis_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, 'plots', f'fsc_analysis_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Calculate cluster sizes
@@ -908,7 +910,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         'vs_mean_aucs': vs_mean_aucs
     }
     
-    with open(os.path.join(output_folder, f'junk_detection_results_{zdim_key}.pkl'), 'wb') as f:
+    with open(os.path.join(output_folder, 'data', f'junk_detection_results_{zdim_key}.pkl'), 'wb') as f:
         pickle.dump(results, f)
     
     # Identify potential junk clusters using both metrics
@@ -979,7 +981,7 @@ def plot_junk_detection_results(zs, cluster_centers, cluster_indices, fsc_scores
         'vs_mean_junk_percentage': len(vs_mean_junk_particle_indices) / len(zs) * 100
     }
     
-    with open(os.path.join(output_folder, f'junk_cluster_info_{zdim_key}.pkl'), 'wb') as f:
+    with open(os.path.join(output_folder, 'data', f'junk_cluster_info_{zdim_key}.pkl'), 'wb') as f:
         pickle.dump(junk_info, f)
     
     # Print summary statistics
@@ -1018,7 +1020,10 @@ def plot_umap_visualization(zs, cluster_centers, cluster_indices, fsc_scores, fs
     if zs.shape[1] < 2:
         logger.warning("UMAP visualization requires at least 2 dimensions")
         return
-    
+
+    os.makedirs(os.path.join(output_folder, 'plots'), exist_ok=True)
+    os.makedirs(os.path.join(output_folder, 'data'), exist_ok=True)
+
     logger.info("Computing UMAP embedding for visualization...")
     
     # Compute UMAP embedding
@@ -1167,7 +1172,7 @@ def plot_umap_visualization(zs, cluster_centers, cluster_indices, fsc_scores, fs
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    _safe_savefig(os.path.join(output_folder, f'umap_visualization_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, 'plots', f'umap_visualization_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Create a second figure focused on AUC scores and comparisons
@@ -1255,7 +1260,7 @@ def plot_umap_visualization(zs, cluster_centers, cluster_indices, fsc_scores, fs
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    _safe_savefig(os.path.join(output_folder, f'auc_analysis_{zdim_key}.png'), dpi=300, bbox_inches='tight')
+    _safe_savefig(os.path.join(output_folder, 'plots', f'auc_analysis_{zdim_key}.png'), dpi=300, bbox_inches='tight')
     plt.close()
     
     # Save UMAP coordinates for potential future use
@@ -1268,7 +1273,7 @@ def plot_umap_visualization(zs, cluster_centers, cluster_indices, fsc_scores, fs
         'halfmap_aucs': halfmap_aucs,
         'vs_mean_aucs': vs_mean_aucs
     }
-    with open(os.path.join(output_folder, f'umap_coordinates_{zdim_key}.pkl'), 'wb') as f:
+    with open(os.path.join(output_folder, 'data', f'umap_coordinates_{zdim_key}.pkl'), 'wb') as f:
         pickle.dump(umap_data, f)
     
     logger.info("Enhanced UMAP visualization with AUC scores completed and saved.")
@@ -1491,6 +1496,7 @@ def create_junk_detection_visualizations(halfmap_fscs, vs_mean_fscs, halfmap_auc
     Create comprehensive visualizations for junk detection results.
     """
     logger.info("Creating junk detection visualizations...")
+    os.makedirs(os.path.join(output_folder, 'plots'), exist_ok=True)
     
     # Set up plotting style with better defaults
     plt.style.use('default')
@@ -1729,7 +1735,7 @@ Score Separation:
                      edgecolor='black', linewidth=1))
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    _safe_savefig(os.path.join(output_folder, f'junk_detection_summary_{zdim_key}.png'), 
+    _safe_savefig(os.path.join(output_folder, 'plots', f'junk_detection_summary_{zdim_key}.png'),
                 dpi=300, bbox_inches='tight', facecolor='white')
     plt.close()
     
@@ -1832,7 +1838,7 @@ Score Separation:
                     f'{value:.3f}', ha='center', va='bottom', fontweight='bold', fontsize=10)
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    _safe_savefig(os.path.join(output_folder, f'junk_detection_methods_{zdim_key}.png'), 
+    _safe_savefig(os.path.join(output_folder, 'plots', f'junk_detection_methods_{zdim_key}.png'),
                 dpi=300, bbox_inches='tight', facecolor='white')
     plt.close()
     
@@ -1884,7 +1890,9 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
         output_folder = os.path.join(recovar_result_dir, f'junk_detection_{zdim}')
     
     os.makedirs(output_folder, exist_ok=True)
-    
+    os.makedirs(os.path.join(output_folder, 'plots'), exist_ok=True)
+    os.makedirs(os.path.join(output_folder, 'data'), exist_ok=True)
+
     # Set up logging
     from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
     logging.basicConfig(
@@ -1895,7 +1903,7 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
             RobustFileHandler(os.path.join(output_folder, 'junk_detection.log'))
         ]
     )
-    
+
     logger.info("Starting junk particle detection with zdim=%s, n_clusters=%s", zdim, n_clusters)
     if save_reconstructions:
         logger.info("Reconstructions will be saved to file")
@@ -2001,17 +2009,17 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
     if save_pipeline_indices:
         logger.info("Saving pipeline-compatible indices...")
         if output_format in ["both", "junk_only"]:
-            junk_pipeline_file = os.path.join(output_folder, f'junk_pipeline_indices_{zdim_key}.pkl')
+            junk_pipeline_file = os.path.join(output_folder, 'data', f'junk_pipeline_indices_{zdim_key}.pkl')
             with open(junk_pipeline_file, 'wb') as f:
                 pickle.dump(junk_particles, f)
             logger.info("Saved junk indices for pipeline: %s", junk_pipeline_file)
         if output_format in ["both", "good_only"]:
-            good_pipeline_file = os.path.join(output_folder, f'good_pipeline_indices_{zdim_key}.pkl')
+            good_pipeline_file = os.path.join(output_folder, 'data', f'good_pipeline_indices_{zdim_key}.pkl')
             with open(good_pipeline_file, 'wb') as f:
                 pickle.dump(good_particles, f)
             logger.info("Saved good indices for pipeline: %s", good_pipeline_file)
         # Create a summary file with usage instructions
-        summary_file = os.path.join(output_folder, f'pipeline_usage_summary_{zdim_key}.txt')
+        summary_file = os.path.join(output_folder, 'data', f'pipeline_usage_summary_{zdim_key}.txt')
         with open(summary_file, 'w') as f:
             f.write("Pipeline-Compatible Indices Usage Summary\n")
             f.write("==========================================\n\n")
@@ -2036,12 +2044,27 @@ def junk_particle_detection(recovar_result_dir, output_folder=None, zdim=10, n_c
         logger.info("Pipeline usage summary saved to: %s", summary_file)
     # Save reconstruction info if reconstructions were saved
     if save_reconstructions and reconstructions is not None:
-        reconstructions_info_path = os.path.join(output_folder, f'reconstructions_info_{zdim_key}.pkl')
+        reconstructions_info_path = os.path.join(output_folder, 'data', f'reconstructions_info_{zdim_key}.pkl')
         with open(reconstructions_info_path, 'wb') as f:
             pickle.dump(reconstructions, f)
         logger.info("Saved reconstruction info to %s", reconstructions_info_path)
     logger.info("Particle mapping completed. Found %s junk particles and %s good particles.", len(junk_particles), len(good_particles))
     
+    # Generate summary plot
+    try:
+        from recovar.output.plot_utils import junk_detection_summary
+        summary_dict = {
+            'fsc_aucs': np.array([info.get('halfmap_fsc_auc', 0) for info in junk_info.values()]) if junk_info else np.array([]),
+            'n_particles_per_cluster': np.array([info.get('n_particles', 0) for info in junk_info.values()]) if junk_info else np.array([]),
+            'junk_threshold': junk_threshold if 'junk_threshold' in dir() else 0.5,
+            'n_junk': len(junk_particles),
+            'n_good': len(good_particles),
+        }
+        junk_detection_summary(summary_dict, os.path.join(output_folder, 'plots', f'summary_{zdim_key}.png'))
+        logger.info("Saved junk detection summary to plots/summary_%s.png", zdim_key)
+    except Exception as e:
+        logger.warning("Could not generate junk detection summary plot: %s", e)
+
     logger.info("Junk particle detection complete. Results saved to %s", output_folder)
     return junk_info
 
@@ -2222,6 +2245,7 @@ def create_particle_classification_visualizations(zs, cluster_indices, junk_part
     - method: Junk detection method used
     """
     logger.info("Creating particle classification visualizations...")
+    os.makedirs(os.path.join(output_folder, 'plots'), exist_ok=True)
     
     # Set up plotting style
     plt.style.use('default')
@@ -2385,7 +2409,7 @@ Classification Quality:
             bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    _safe_savefig(os.path.join(output_folder, f'particle_classification_{zdim_key}.png'), 
+    _safe_savefig(os.path.join(output_folder, 'plots', f'particle_classification_{zdim_key}.png'),
                 dpi=300, bbox_inches='tight')
     plt.close()
     
@@ -2499,7 +2523,7 @@ Classification Quality:
     ax.grid(True, alpha=0.3)
     
     plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-    _safe_savefig(os.path.join(output_folder, f'particle_analysis_detailed_{zdim_key}.png'), 
+    _safe_savefig(os.path.join(output_folder, 'plots', f'particle_analysis_detailed_{zdim_key}.png'),
                 dpi=300, bbox_inches='tight')
     plt.close()
     
@@ -2521,7 +2545,8 @@ def save_particle_classifications(junk_particles, good_particles, particle_stats
     - method: Junk detection method used
     """
     logger.info("Saving particle classifications...")
-    
+    os.makedirs(os.path.join(output_folder, 'data'), exist_ok=True)
+
     # Create comprehensive results dictionary
 
     # Map particles back to original ordering
@@ -2550,17 +2575,17 @@ def save_particle_classifications(junk_particles, good_particles, particle_stats
     
 
     # Save main results file
-    results_file = os.path.join(output_folder, f'particle_classifications_{zdim_key}.pkl')
+    results_file = os.path.join(output_folder, 'data', f'particle_classifications_{zdim_key}.pkl')
     with open(results_file, 'wb') as f:
         pickle.dump(results, f)
     
     # Save indices in pipeline-compatible format (for --ind or --particle-ind)
     # These are just the raw numpy arrays that can be directly used
-    junk_indices_file = os.path.join(output_folder, f'junk_indices_{zdim_key}.pkl')
+    junk_indices_file = os.path.join(output_folder, 'data', f'junk_indices_{zdim_key}.pkl')
     with open(junk_indices_file, 'wb') as f:
         pickle.dump(junk_particles, f)
     
-    good_indices_file = os.path.join(output_folder, f'good_indices_{zdim_key}.pkl')
+    good_indices_file = os.path.join(output_folder, 'data', f'good_indices_{zdim_key}.pkl')
     with open(good_indices_file, 'wb') as f:
         pickle.dump(good_particles, f)
     

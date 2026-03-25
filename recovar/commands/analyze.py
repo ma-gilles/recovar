@@ -190,46 +190,52 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     o.mkdir_safe(output_folder)
     utils.basic_config_logger(output_folder)
 
+    # Create subdirectories for organized output
+    plots_dir = os.path.join(output_folder, 'plots')
+    data_dir = os.path.join(output_folder, 'data')
+    o.mkdir_safe(plots_dir)
+    o.mkdir_safe(data_dir)
+
     import matplotlib.pyplot as plt
     from recovar.output import plot_utils
     fig, ax = plt.subplots(figsize=(8, 6))
     plot_utils.plot_contrast_histogram(contrasts, ax=ax, zdim_key=f"{zdim}{noreg_suffix}")
-    plt.savefig(os.path.join(output_folder, 'contrast_histogram.png'), bbox_inches='tight')
+    plt.savefig(os.path.join(plots_dir, 'contrast_histogram.png'), bbox_inches='tight')
     plt.close()
 
     zs_unsort = zs
     if normalize_kmeans:
         std = np.std(zs_unsort, axis=0)
-        centers, labels = o.kmeans_analysis(os.path.join(output_folder, 'PCA/'), zs_unsort / std, n_clusters=n_clusters)
+        centers, labels = o.kmeans_analysis(os.path.join(plots_dir, 'PCA/'), zs_unsort / std, n_clusters=n_clusters)
         centers = centers * std
     else:
-        centers, labels = o.kmeans_analysis(os.path.join(output_folder, 'PCA/'), zs_unsort, n_clusters=n_clusters)
+        centers, labels = o.kmeans_analysis(os.path.join(plots_dir, 'PCA/'), zs_unsort, n_clusters=n_clusters)
 
     # Kmeans volumes go into kmeans/ subdirectory
     kmeans_dir = os.path.join(output_folder, 'kmeans/')
     o.mkdir_safe(kmeans_dir)
     kmeans_result = {'centers': centers, 'labels': reorder(labels)}
-    utils.pickle_dump(kmeans_result, os.path.join(output_folder, 'kmeans_result.pkl'))
+    utils.pickle_dump(kmeans_result, os.path.join(data_dir, 'kmeans_result.pkl'))
     np.savetxt(os.path.join(kmeans_dir, 'centers.txt'), centers)
 
     if density_path is not None:
         _, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, input_density.shape[0])
         centers_grid = z_to_grid(centers)
 
-        o.mkdir_safe(os.path.join(output_folder, 'density_plots/'))
-        o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(output_folder, 'density_plots/'))
+        o.mkdir_safe(os.path.join(plots_dir, 'density/'))
+        o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(plots_dir, 'density/'))
 
-        o.mkdir_safe(os.path.join(output_folder, 'density_plots_sliced/'))
-        o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(output_folder, 'density_plots_sliced/'), projection_function='slice')
+        o.mkdir_safe(os.path.join(plots_dir, 'density_sliced/'))
+        o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(plots_dir, 'density_sliced/'), projection_function='slice')
 
     if (not skip_umap) and (zdim > 1):
         mapper = o.umap_latent_space(zs_unsort)
-        o.mkdir_safe(os.path.join(output_folder, 'umap/'))
-        utils.pickle_dump(reorder(mapper.embedding_), os.path.join(output_folder, 'umap/umap_embedding.pkl'))
+        o.mkdir_safe(os.path.join(plots_dir, 'umap/'))
+        utils.pickle_dump(reorder(mapper.embedding_), os.path.join(plots_dir, 'umap/umap_embedding.pkl'))
         from recovar.output import output
         _, kmeans_ind = output.get_nearest_point(zs_unsort, centers)
 
-        o.plot_umap(os.path.join(output_folder, 'umap/'), mapper.embedding_, mapper.embedding_[kmeans_ind])
+        o.plot_umap(os.path.join(plots_dir, 'umap/'), mapper.embedding_, mapper.embedding_[kmeans_ind])
 
     if not skip_centers:
         o.compute_and_save_reweighted(
@@ -292,7 +298,17 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         )
 
     kmeans_res = {'centers': centers.tolist(), 'pairs': pairs}
-    utils.pickle_dump(kmeans_res, os.path.join(output_folder, 'trajectory_endpoints.pkl'))
+    utils.pickle_dump(kmeans_res, os.path.join(data_dir, 'trajectory_endpoints.pkl'))
+
+    # Generate summary plot
+    try:
+        plot_utils.analyze_summary(
+            zs_unsort, centers, labels,
+            os.path.join(plots_dir, 'summary.png'),
+        )
+        logger.info("Saved analysis summary to plots/summary.png")
+    except Exception as e:
+        logger.warning("Could not generate summary plot: %s", e)
 
 
 def pick_pairs(centers, n_pairs):

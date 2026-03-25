@@ -342,8 +342,10 @@ def plot_anomaly_detection_results(zs, original_indices, folder_name):
 
     plt.suptitle("Anomaly Detection Results Including Consensus", fontsize=16)
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    # Save the plot to the specified folder
-    plot_filename = os.path.join(folder_name, "anomaly_detection_results.png")
+    # Save the plot to the plots/ folder (folder_name is <root>/data/anomaly_detection)
+    plots_dir = os.path.join(os.path.dirname(os.path.dirname(folder_name)), 'plots')
+    os.makedirs(plots_dir, exist_ok=True)
+    plot_filename = os.path.join(plots_dir, "anomaly_detection_results.png")
     plt.savefig(plot_filename)
     plt.close()
     return inliers_mapped_back_to_original_indices, outliers_mapped_back_to_original_indices
@@ -590,7 +592,9 @@ Individual outliers: {n_individual_outliers} ({n_individual_outliers/n_images*10
         plt.text(0.02, 0.98, stats_text, transform=plt.gca().transAxes, 
                 verticalalignment='top', bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
         plt.tight_layout()
-        plt.savefig(os.path.join(output_dir, 'contrast_outlier_detection.png'), dpi=300, bbox_inches='tight')
+        contrast_plots_dir = os.path.join(os.path.dirname(os.path.dirname(output_dir)), 'plots')
+        os.makedirs(contrast_plots_dir, exist_ok=True)
+        plt.savefig(os.path.join(contrast_plots_dir, 'contrast_outlier_detection.png'), dpi=300, bbox_inches='tight')
         plt.close()
         
         # Create median contrast distributions if grouping data available
@@ -632,7 +636,7 @@ Individual outliers: {n_individual_outliers} ({n_individual_outliers/n_images*10
                 axes[1].set_title('Median Contrast per Micrograph')
             
             plt.tight_layout()
-            plt.savefig(os.path.join(output_dir, 'median_contrast_distributions.png'), dpi=300, bbox_inches='tight')
+            plt.savefig(os.path.join(contrast_plots_dir, 'median_contrast_distributions.png'), dpi=300, bbox_inches='tight')
             plt.close()
         
         logger.info("  Image-level outliers: %s images", len(image_outliers))
@@ -749,9 +753,11 @@ def create_particle_outlier_visualization(all_particle_outliers, method_names, o
     cbar2.set_label('Percentage')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'particle_outlier_method_overlap_matrix.png'), dpi=300, bbox_inches='tight')
+    particle_overlap_plots_dir = os.path.join(os.path.dirname(os.path.dirname(output_dir)), 'plots')
+    os.makedirs(particle_overlap_plots_dir, exist_ok=True)
+    plt.savefig(os.path.join(particle_overlap_plots_dir, 'particle_outlier_method_overlap_matrix.png'), dpi=300, bbox_inches='tight')
     plt.close()
-    
+
     # Create detailed overlap analysis for particles
     overlap_analysis_file = os.path.join(output_dir, 'particle_outlier_method_overlap_analysis.txt')
     with open(overlap_analysis_file, 'w') as f:
@@ -860,10 +866,12 @@ def create_overlap_matrix_visualization(all_outliers, method_names, output_dir, 
     cbar2.set_label('Percentage')
     
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'outlier_method_overlap_matrix.png'), dpi=300, bbox_inches='tight')
+    overlap_plots_dir = os.path.join(os.path.dirname(os.path.dirname(output_dir)), 'plots')
+    os.makedirs(overlap_plots_dir, exist_ok=True)
+    plt.savefig(os.path.join(overlap_plots_dir, 'outlier_method_overlap_matrix.png'), dpi=300, bbox_inches='tight')
     plt.close()
-    
-    logger.info("Method overlap matrix saved to: %s", os.path.join(output_dir, 'outlier_method_overlap_matrix.png'))
+
+    logger.info("Method overlap matrix saved to: %s", os.path.join(overlap_plots_dir, 'outlier_method_overlap_matrix.png'))
 
 
 def main():
@@ -899,6 +907,9 @@ def _run_outlier_detection(args):
         ]
     )
     
+    os.makedirs(os.path.join(args.output_dir, 'plots'), exist_ok=True)
+    os.makedirs(os.path.join(args.output_dir, 'data'), exist_ok=True)
+
     logger.info("Starting outlier detection from pipeline output: %s", args.pipeline_output_dir)
     logger.info("Output directory: %s", args.output_dir)
     
@@ -950,7 +961,7 @@ def _run_outlier_detection(args):
     
     # --- Method 1: Anomaly Detection (UMAP-based) ---
     logger.info("Running anomaly detection...")
-    anomaly_output_dir = os.path.join(args.output_dir, 'anomaly_detection')
+    anomaly_output_dir = os.path.join(args.output_dir, 'data', 'anomaly_detection')
     os.makedirs(anomaly_output_dir, exist_ok=True)
     
     # Pass sorted original indices — embeddings are in dataset-local order
@@ -984,7 +995,7 @@ def _run_outlier_detection(args):
         contrast_values = pipeline_output.get_embedding_component(contrast_entry, zdim_key)
         logger.info("Found contrast values for zdim=%s, shape: %s", zdim_key, contrast_values.shape)
         # Load starfile path and options from pipeline input_args
-        contrast_output_dir = os.path.join(args.output_dir, 'contrast_based')
+        contrast_output_dir = os.path.join(args.output_dir, 'data', 'contrast_based')
         os.makedirs(contrast_output_dir, exist_ok=True)
         
         image_outliers, image_inliers, particle_outliers, particle_inliers = outlier_detection_from_contrast(
@@ -1025,7 +1036,7 @@ def _run_outlier_detection(args):
         from recovar.commands import junk_particle_detection
         
         if args.use_junk_detection:
-            junk_output_dir = os.path.join(args.output_dir, 'junk_detection')
+            junk_output_dir = os.path.join(args.output_dir, 'data', 'junk_detection')
             os.makedirs(junk_output_dir, exist_ok=True)
             
             # Automatically set batch_size and n_particles_per_cluster
@@ -1072,8 +1083,8 @@ def _run_outlier_detection(args):
             )
             
             # Load junk detection results
-            junk_outliers_file = os.path.join(junk_output_dir, f'junk_indices_{zdim_key}.pkl')
-            junk_inliers_file = os.path.join(junk_output_dir, f'good_indices_{zdim_key}.pkl')
+            junk_outliers_file = os.path.join(junk_output_dir, 'data', f'junk_indices_{zdim_key}.pkl')
+            junk_inliers_file = os.path.join(junk_output_dir, 'data', f'good_indices_{zdim_key}.pkl')
             
             if os.path.exists(junk_outliers_file):
                 with open(junk_outliers_file, 'rb') as f:
@@ -1092,7 +1103,7 @@ def _run_outlier_detection(args):
     
     # --- Combine Results from All Methods ---
     logger.info("Combining results from all methods...")
-    combined_output_dir = os.path.join(args.output_dir, 'combined_results')
+    combined_output_dir = os.path.join(args.output_dir, 'data', 'combined_results')
     os.makedirs(combined_output_dir, exist_ok=True)
 
     # Collect all particle-level outlier indices (for visualization)
@@ -1257,7 +1268,7 @@ def _run_outlier_detection(args):
 
 
     # Create summary file
-    summary_file = os.path.join(args.output_dir, 'summary.txt')
+    summary_file = os.path.join(args.output_dir, 'data', 'summary.txt')
     with open(summary_file, 'w') as f:
         f.write("Outlier Detection Summary\n")
         f.write(f"Pipeline output: {args.pipeline_output_dir}\n")
@@ -1387,9 +1398,11 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
     if umap_coords.shape[1] < 2:
         umap_coords = np.column_stack([umap_coords, np.zeros(len(umap_coords))])
 
-    # Create visualization directory
-    viz_dir = os.path.join(output_dir, 'outlier_visualizations')
-    os.makedirs(viz_dir, exist_ok=True)
+    # Create visualization directories (plots for PNGs, data for stats TXTs)
+    viz_plots_dir = os.path.join(output_dir, 'plots', 'outlier_visualizations')
+    viz_data_dir = os.path.join(output_dir, 'data', 'outlier_visualizations')
+    os.makedirs(viz_plots_dir, exist_ok=True)
+    os.makedirs(viz_data_dir, exist_ok=True)
     
     contrast_tilt_index_map = None
     if is_tilt_series and starfile is not None and str(starfile).endswith(".star"):
@@ -1648,11 +1661,11 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
         ax.set_facecolor('#FAFAFA')
         
         plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-        plt.savefig(os.path.join(viz_dir, f'{save_prefix}.png'), dpi=300, bbox_inches='tight', facecolor='white')
+        plt.savefig(os.path.join(viz_plots_dir, f'{save_prefix}.png'), dpi=300, bbox_inches='tight', facecolor='white')
         plt.close()
-        
+
         # Save statistics
-        stats_file = os.path.join(viz_dir, f'{save_prefix}_stats.txt')
+        stats_file = os.path.join(viz_data_dir, f'{save_prefix}_stats.txt')
         with open(stats_file, 'w') as f:
             f.write(f'{method_name} Statistics\n')
             f.write(f'Total particles: {total_particles}\n')
@@ -1684,7 +1697,7 @@ def create_outlier_visualizations(pipeline_output, all_particle_outliers, method
         create_method_plots(combined_particle_outliers, combined_particle_inliers, 
                           'Combined', f'combined_{zdim_key}')
     
-    logger.info("Outlier visualizations saved to: %s", viz_dir)
+    logger.info("Outlier visualizations saved to: %s (plots) and %s (data)", viz_plots_dir, viz_data_dir)
 
 
 

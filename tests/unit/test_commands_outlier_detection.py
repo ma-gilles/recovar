@@ -197,7 +197,7 @@ def test_outlier_detection_main_combines_anomaly_and_contrast_for_spa(monkeypatc
 
     outlier_cmd.main()
 
-    combined_dir = outdir / "combined_results"
+    combined_dir = outdir / "data" / "combined_results"
     with open(combined_dir / "combined_image_outliers_4.pkl", "rb") as f:
         combined_image_outliers = pickle.load(f)
     with open(combined_dir / "combined_particle_outliers_4.pkl", "rb") as f:
@@ -277,7 +277,7 @@ def test_outlier_detection_main_tilt_maps_particle_outliers_to_images(monkeypatc
 
     outlier_cmd.main()
 
-    combined_dir = outdir / "combined_results"
+    combined_dir = outdir / "data" / "combined_results"
     with open(combined_dir / "combined_image_outliers_4.pkl", "rb") as f:
         combined_image_outliers = pickle.load(f)
     with open(combined_dir / "combined_particle_outliers_4.pkl", "rb") as f:
@@ -440,7 +440,7 @@ def test_create_outlier_visualizations_tilt_series_uses_image_length_contrast_ax
         noreg=False,
     )
 
-    stats_path = tmp_path / "outlier_visualizations" / "combined_4_stats.txt"
+    stats_path = tmp_path / "data" / "outlier_visualizations" / "combined_4_stats.txt"
     assert stats_path.exists()
     stats_text = stats_path.read_text()
     assert "Outlier contrast - Mean: 0.250" in stats_text

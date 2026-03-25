@@ -68,7 +68,7 @@ echo
 echo ">>> Step 3: Extracting subset (excluding outlier cluster 0)..."
 mkdir -p "$OUT_SUBSET"
 $PYTHON -m recovar.command_line extract_image_subset_from_kmeans \
-    "$OUT/analysis_20/kmeans_result.pkl" \
+    "$OUT/analysis_20/data/kmeans_result.pkl" \
     "$OUT_SUBSET/subset_ind.pkl" \
     0 --inverse
 echo ">>> Subset extraction finished: $(date)"

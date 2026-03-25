@@ -74,11 +74,11 @@ def test_save_particle_classifications_writes_pipeline_pickles(tmp_path):
         original_indices=original_indices,
     )
 
-    with open(tmp_path / "junk_indices_4.pkl", "rb") as f:
+    with open(tmp_path / "data" / "junk_indices_4.pkl", "rb") as f:
         saved_junk = pickle.load(f)
-    with open(tmp_path / "good_indices_4.pkl", "rb") as f:
+    with open(tmp_path / "data" / "good_indices_4.pkl", "rb") as f:
         saved_good = pickle.load(f)
-    with open(tmp_path / "particle_classifications_4.pkl", "rb") as f:
+    with open(tmp_path / "data" / "particle_classifications_4.pkl", "rb") as f:
         saved_results = pickle.load(f)
 
     np.testing.assert_array_equal(saved_junk, np.array([10, 12], dtype=np.int32))

@@ -232,7 +232,7 @@ def _run_pipeline_with_outlier_removal_impl(args):
         
         # Load the combined inliers indices for the next round
         outlier_output_dir = os.path.join(args.outdir, 'outlier_detection')
-        combined_inliers_file = os.path.join(outlier_output_dir, 'combined_results', f'combined_image_inliers_{zdim_key}.pkl')
+        combined_inliers_file = os.path.join(outlier_output_dir, 'data', 'combined_results', f'combined_image_inliers_{zdim_key}.pkl')
         if not os.path.exists(combined_inliers_file):
             logger.error("Combined inliers file not found: %s", combined_inliers_file)
             sys.exit(1)
@@ -242,7 +242,7 @@ def _run_pipeline_with_outlier_removal_impl(args):
         # For tilt series, also load particle indices
         current_particle_indices = None
         if args.tilt_series:
-            combined_particle_inliers_file = os.path.join(outlier_output_dir, 'combined_results', f'combined_particle_inliers_{zdim_key}.pkl')
+            combined_particle_inliers_file = os.path.join(outlier_output_dir, 'data', 'combined_results', f'combined_particle_inliers_{zdim_key}.pkl')
             if os.path.exists(combined_particle_inliers_file):
                 with open(combined_particle_inliers_file, 'rb') as f:
                     current_particle_indices = pickle.load(f)
@@ -256,7 +256,7 @@ def _run_pipeline_with_outlier_removal_impl(args):
         
         # Copy combined results
         shutil.copy(combined_inliers_file, inliers_save_path)
-        combined_outliers_file = os.path.join(outlier_output_dir, 'combined_results', f'combined_image_outliers_{zdim_key}.pkl')
+        combined_outliers_file = os.path.join(outlier_output_dir, 'data', 'combined_results', f'combined_image_outliers_{zdim_key}.pkl')
         if os.path.exists(combined_outliers_file):
             shutil.copy(combined_outliers_file, outliers_save_path)
         
@@ -266,7 +266,7 @@ def _run_pipeline_with_outlier_removal_impl(args):
             particle_outliers_save_path = os.path.join(original_outdir, f"particle_outliers_round_{round_number}.pkl")
             
             shutil.copy(combined_particle_inliers_file, particle_inliers_save_path)
-            combined_particle_outliers_file = os.path.join(outlier_output_dir, 'combined_results', f'combined_particle_outliers_{zdim_key}.pkl')
+            combined_particle_outliers_file = os.path.join(outlier_output_dir, 'data', 'combined_results', f'combined_particle_outliers_{zdim_key}.pkl')
             if os.path.exists(combined_particle_outliers_file):
                 shutil.copy(combined_particle_outliers_file, particle_outliers_save_path)
             

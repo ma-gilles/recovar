@@ -115,7 +115,7 @@ def test_pipeline_with_outliers_restores_argv_and_uses_previous_round_image_indi
         argv = list(pipeline_with_outliers.sys.argv)
         outdir = argv[argv.index("--output-dir") + 1]
         zdim_key = argv[argv.index("--zdim-key") + 1]
-        combined = os.path.join(outdir, "combined_results")
+        combined = os.path.join(outdir, "data", "combined_results")
         os.makedirs(combined, exist_ok=True)
         with open(os.path.join(combined, f"combined_image_inliers_{zdim_key}.pkl"), "wb") as f:
             pickle.dump(np.array([0, 2, 4], dtype=np.int32), f)
