@@ -37,7 +37,9 @@ class _FakePipelineOutput:
 
 def test_outlier_detection_from_contrast_spa_returns_image_indices():
     payload = {
-        "input_args": SimpleNamespace(tilt_series=False, shared_contrast_across_tilts=False, particles="particles.mrcs"),
+        "input_args": SimpleNamespace(
+            tilt_series=False, shared_contrast_across_tilts=False, particles="particles.mrcs"
+        ),
         "contrasts": {4: np.array([0.05, 0.2, 4.0, 0.5], dtype=np.float32)},
         "halfsets": [np.array([0, 1], dtype=np.int32), np.array([2, 3], dtype=np.int32)],
         "particles_halfsets": [np.array([0, 1], dtype=np.int32), np.array([2, 3], dtype=np.int32)],

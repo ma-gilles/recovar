@@ -101,9 +101,11 @@ def test_compute_H_B_small_rotation_count_avoids_zero_internal_batches(monkeypat
     monkeypatch.setattr(
         rec_utils,
         "index_batch_iter",
-        lambda n_units, batch_size: [np.arange(n_units, dtype=np.int32)]
-        if batch_size >= 1
-        else (_ for _ in ()).throw(AssertionError("batch_size must be >= 1")),
+        lambda n_units, batch_size: (
+            [np.arange(n_units, dtype=np.int32)]
+            if batch_size >= 1
+            else (_ for _ in ()).throw(AssertionError("batch_size must be >= 1"))
+        ),
     )
     monkeypatch.setattr(
         hetero.core,
@@ -212,9 +214,11 @@ def test_compute_projected_covariance_rhs_lhs_small_rotation_count_avoids_zero_b
     monkeypatch.setattr(
         rec_utils,
         "index_batch_iter",
-        lambda n_units, batch_size: [np.arange(n_units, dtype=np.int32)]
-        if batch_size >= 1
-        else (_ for _ in ()).throw(AssertionError("batch_size must be >= 1")),
+        lambda n_units, batch_size: (
+            [np.arange(n_units, dtype=np.int32)]
+            if batch_size >= 1
+            else (_ for _ in ()).throw(AssertionError("batch_size must be >= 1"))
+        ),
     )
     monkeypatch.setattr(
         hetero.core,

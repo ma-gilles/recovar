@@ -1,4 +1,3 @@
-
 import numpy as np
 import pytest
 
@@ -45,9 +44,7 @@ def test_forward_model_skip_ctf():
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    out = np.asarray(
-        core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True)
-    )
+    out = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True))
     assert out.shape == (1, config.image_size)
 
 
@@ -57,9 +54,7 @@ def test_adjoint_forward_model_shape():
     ctf_params = np.zeros((1, 9), dtype=np.float32)
     slices = np.zeros((1, config.image_size), dtype=np.float32)
 
-    out = np.asarray(
-        core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True)
-    )
+    out = np.asarray(core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True))
     assert out.shape == (config.volume_size,)
 
 
@@ -69,12 +64,8 @@ def test_forward_model_applies_ctf_when_enabled():
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    out_skip = np.asarray(
-        core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True)
-    )
-    out_ctf = np.asarray(
-        core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=False)
-    )
+    out_skip = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True))
+    out_ctf = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=False))
     np.testing.assert_allclose(out_ctf, 2.0 * out_skip)
 
 
@@ -85,7 +76,11 @@ def test_forward_model_and_adjoint_contracts():
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
     slices, adj = core_forward.forward_model_and_adjoint(
-        config, volume, ctf_params, rotation_matrices, skip_ctf=True,
+        config,
+        volume,
+        ctf_params,
+        rotation_matrices,
+        skip_ctf=True,
     )
     assert np.asarray(slices).shape == (1, config.image_size)
     pulled = adj(np.ones_like(np.asarray(slices)))[0]
@@ -98,11 +93,7 @@ def test_adjoint_forward_model_linear_interp_shape():
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
     slices = np.ones((1, config.image_size), dtype=np.float32)
-    out = np.asarray(
-        core_forward.adjoint_forward_model(
-            config, slices, ctf_params, rotation_matrices, skip_ctf=True
-        )
-    )
+    out = np.asarray(core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True))
     assert out.shape == (config.volume_size,)
     assert np.all(np.isfinite(out))
 
@@ -116,14 +107,10 @@ def test_adjoint_forward_model_linear_interp_applies_ctf():
     slices = np.ones((1, config_2x.image_size), dtype=np.float32)
 
     out_1x = np.asarray(
-        core_forward.adjoint_forward_model(
-            config_1x, slices, ctf_params, rotation_matrices, skip_ctf=False
-        )
+        core_forward.adjoint_forward_model(config_1x, slices, ctf_params, rotation_matrices, skip_ctf=False)
     )
     out_2x = np.asarray(
-        core_forward.adjoint_forward_model(
-            config_2x, slices, ctf_params, rotation_matrices, skip_ctf=False
-        )
+        core_forward.adjoint_forward_model(config_2x, slices, ctf_params, rotation_matrices, skip_ctf=False)
     )
     np.testing.assert_allclose(out_2x, 2.0 * out_1x)
 
@@ -135,8 +122,12 @@ def test_compute_AtAv_returns_singleton_tuple():
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
     out = core_forward.compute_AtAv(
-        config, volume, ctf_params, rotation_matrices,
-        noise_variance=1.0, skip_ctf=True,
+        config,
+        volume,
+        ctf_params,
+        rotation_matrices,
+        noise_variance=1.0,
+        skip_ctf=True,
     )
     assert isinstance(out, tuple)
     assert len(out) == 1
@@ -156,14 +147,15 @@ def test_forward_model_on_gpu(gpu_device):
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    cpu_out = np.asarray(
-        core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True)
-    )
+    cpu_out = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True))
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_forward.forward_model(
-                config, jax.device_put(volume), jax.device_put(ctf_params),
-                jax.device_put(rotation_matrices), skip_ctf=True,
+                config,
+                jax.device_put(volume),
+                jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices),
+                skip_ctf=True,
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
@@ -183,8 +175,11 @@ def test_adjoint_forward_model_on_gpu(gpu_device):
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_forward.adjoint_forward_model(
-                config, jax.device_put(slices), jax.device_put(ctf_params),
-                jax.device_put(rotation_matrices), skip_ctf=True,
+                config,
+                jax.device_put(slices),
+                jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices),
+                skip_ctf=True,
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
@@ -200,14 +195,20 @@ def test_forward_model_applies_ctf_on_gpu(gpu_device):
     with jax.default_device(gpu_device):
         out_skip = np.asarray(
             core_forward.forward_model(
-                config, jax.device_put(volume), jax.device_put(ctf_params),
-                jax.device_put(rotation_matrices), skip_ctf=True,
+                config,
+                jax.device_put(volume),
+                jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices),
+                skip_ctf=True,
             )
         )
         out_ctf = np.asarray(
             core_forward.forward_model(
-                config, jax.device_put(volume), jax.device_put(ctf_params),
-                jax.device_put(rotation_matrices), skip_ctf=False,
+                config,
+                jax.device_put(volume),
+                jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices),
+                skip_ctf=False,
             )
         )
     np.testing.assert_allclose(out_ctf, 2.0 * out_skip, atol=1e-5, rtol=1e-5)
@@ -226,8 +227,12 @@ def test_compute_AtAv_on_gpu(gpu_device):
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_forward.compute_AtAv(
-                config, jax.device_put(volume), jax.device_put(ctf_params),
-                jax.device_put(rotation_matrices), noise_variance=1.0, skip_ctf=True,
+                config,
+                jax.device_put(volume),
+                jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices),
+                noise_variance=1.0,
+                skip_ctf=True,
             )[0]
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
@@ -241,14 +246,15 @@ def test_new_api_forward_model_on_gpu(gpu_device):
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    cpu_out = np.asarray(
-        core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True)
-    )
+    cpu_out = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True))
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_forward.forward_model(
-                config, jax.device_put(volume), jax.device_put(ctf_params),
-                jax.device_put(rotation_matrices), skip_ctf=True,
+                config,
+                jax.device_put(volume),
+                jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices),
+                skip_ctf=True,
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
@@ -268,8 +274,11 @@ def test_new_api_adjoint_forward_model_on_gpu(gpu_device):
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_forward.adjoint_forward_model(
-                config, jax.device_put(slices), jax.device_put(ctf_params),
-                jax.device_put(rotation_matrices), skip_ctf=True,
+                config,
+                jax.device_put(slices),
+                jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices),
+                skip_ctf=True,
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
@@ -288,8 +297,12 @@ def test_new_api_compute_AtAv_on_gpu(gpu_device):
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_forward.compute_AtAv(
-                config, jax.device_put(volume), jax.device_put(ctf_params),
-                jax.device_put(rotation_matrices), noise_variance=1.0, skip_ctf=True,
+                config,
+                jax.device_put(volume),
+                jax.device_put(ctf_params),
+                jax.device_put(rotation_matrices),
+                noise_variance=1.0,
+                skip_ctf=True,
             )[0]
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
@@ -305,8 +318,11 @@ def test_forward_model_and_adjoint_roundtrip_on_gpu(gpu_device):
 
     with jax.default_device(gpu_device):
         slices, f_adj = core_forward.forward_model_and_adjoint(
-            config, jax.device_put(volume), jax.device_put(ctf_params),
-            jax.device_put(rotation_matrices), skip_ctf=True,
+            config,
+            jax.device_put(volume),
+            jax.device_put(ctf_params),
+            jax.device_put(rotation_matrices),
+            skip_ctf=True,
         )
         assert np.asarray(slices).shape == (1, config.image_size)
         pulled = f_adj(jax.device_put(np.ones_like(np.asarray(slices))))[0]

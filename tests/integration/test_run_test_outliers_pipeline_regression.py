@@ -73,7 +73,9 @@ import pytest
 from conftest import gpu_subprocess_env
 from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
 from helpers.perf_regression import (
-    perf_snapshot, stage_perf, build_perf_record,
+    perf_snapshot,
+    stage_perf,
+    build_perf_record,
     check_perf_regression,
 )
 
@@ -82,11 +84,11 @@ pytestmark = [pytest.mark.integration, pytest.mark.slow]
 # ---------------------------------------------------------------------------
 # Tiny-test thresholds (low noise → deterministic, reproducible)
 # ---------------------------------------------------------------------------
-MIN_RECALL_TINY = 0.40       # at least 40 % of true outliers detected
-MIN_PRECISION_TINY = 0.20    # at least 20 % of detected are real outliers
+MIN_RECALL_TINY = 0.40  # at least 40 % of true outliers detected
+MIN_PRECISION_TINY = 0.20  # at least 20 % of detected are real outliers
 TINY_GRID_SIZE = 32
-TINY_N_IMAGES = 1000         # 500 was too few → stochastic recall swings
-TINY_NOISE_LEVEL = 0.01      # high SNR for deterministic results
+TINY_N_IMAGES = 1000  # 500 was too few → stochastic recall swings
+TINY_NOISE_LEVEL = 0.01  # high SNR for deterministic results
 TINY_PERCENT_OUTLIERS = 0.20
 TINY_K_ROUNDS = 1
 
@@ -95,7 +97,7 @@ TINY_K_ROUNDS = 1
 # ---------------------------------------------------------------------------
 FAST_GRID_SIZE = 32
 FAST_N_IMAGES = 200
-FAST_NOISE_LEVEL = 0.01       # very high SNR
+FAST_NOISE_LEVEL = 0.01  # very high SNR
 FAST_PERCENT_OUTLIERS = 0.25
 FAST_K_ROUNDS = 1
 # With high SNR the pipeline should find outliers easily:
@@ -108,9 +110,7 @@ MIN_PRECISION_FAST = 0.35
 # Baseline path for tiny self-contained test
 # ---------------------------------------------------------------------------
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_TINY_BASELINE_JSON = (
-    _REPO_ROOT / "tests" / "baselines" / "run_test_outliers_pipeline" / "tiny_baseline.json"
-)
+_TINY_BASELINE_JSON = _REPO_ROOT / "tests" / "baselines" / "run_test_outliers_pipeline" / "tiny_baseline.json"
 _TINY_BASELINE_META = _TINY_BASELINE_JSON.with_name("tiny_baseline_metadata.json")
 # Default in-repo baseline paths for the long tests (auto-created on first run).
 _DEFAULT_OUTLIERS_BASELINE_JSON = (
@@ -124,6 +124,7 @@ _DEFAULT_OUTLIERS_ET_BASELINE_JSON = (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _require_env(name: str) -> str:
     val = os.environ.get(name)
@@ -200,14 +201,23 @@ def _run_outliers_pipeline(
 
         # -- generate synthetic dataset ---------------------------------------
         make_cmd = [
-            sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+            sys.executable,
+            "-m",
+            "recovar.command_line",
+            "make_test_dataset",
             str(output_dir),
-            "--n-images", str(n_images),
-            "--outlier-file-input", str(outlier_vol),
-            "--percent-outliers", str(percent_outliers),
-            "--image-size", str(grid_size),
-            "--seed", "42",
-            "--noise-level", str(noise_level),
+            "--n-images",
+            str(n_images),
+            "--outlier-file-input",
+            str(outlier_vol),
+            "--percent-outliers",
+            str(percent_outliers),
+            "--image-size",
+            str(grid_size),
+            "--seed",
+            "42",
+            "--noise-level",
+            str(noise_level),
         ]
         if volumes_prefix is not None:
             make_cmd += ["--volume-input", str(volumes_prefix)]
@@ -235,16 +245,25 @@ def _run_outliers_pipeline(
     ctf = dataset_dir / "ctf.pkl"
 
     pipe_cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(mrcs),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", gt_mask_mrc,
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        gt_mask_mrc,
         "--lazy",
-        "--zdim", "4",
-        "--k-rounds", str(k_rounds),
+        "--zdim",
+        "4",
+        "--k-rounds",
+        str(k_rounds),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
@@ -287,9 +306,7 @@ def _compute_outlier_metrics(
         with open(inliers_file, "rb") as f:
             detected_inliers = np.asarray(pickle.load(f), dtype=np.int64)
 
-        detected_outliers = set(
-            int(i) for i in np.setdiff1d(np.arange(n_total), detected_inliers)
-        )
+        detected_outliers = set(int(i) for i in np.setdiff1d(np.arange(n_total), detected_inliers))
         tp = len(detected_outliers & true_outliers)
         fp = len(detected_outliers - true_outliers)
         fn = len(true_outliers - detected_outliers)
@@ -315,9 +332,7 @@ def _check_output_files_exist(pipeline_out_dir: Path, k_rounds: int) -> None:
     assert (pipeline_out_dir / "all_rounds_inliers.pkl").exists()
 
 
-def _check_partition_consistency(
-    pipeline_out_dir: Path, n_total: int, k_rounds: int
-) -> None:
+def _check_partition_consistency(pipeline_out_dir: Path, n_total: int, k_rounds: int) -> None:
     """inliers + outliers = total_images for every round (after round 1)."""
     for r in range(1, k_rounds + 1):
         inliers_path = pipeline_out_dir / f"inliers_round_{r}.pkl"
@@ -332,8 +347,7 @@ def _check_partition_consistency(
         if r == 1:
             total_detected = int(inliers.size + outliers.size)
             assert total_detected == n_total, (
-                f"round 1: inliers({inliers.size}) + outliers({outliers.size}) "
-                f"≠ total({n_total})"
+                f"round 1: inliers({inliers.size}) + outliers({outliers.size}) ≠ total({n_total})"
             )
 
 
@@ -404,13 +418,9 @@ def test_outliers_pipeline_tiny_regression(tmp_path):
 
     recall = metrics.get(f"outlier_recall_round_{TINY_K_ROUNDS}", 0.0)
     precision = metrics.get(f"outlier_precision_round_{TINY_K_ROUNDS}", 0.0)
-    assert recall >= MIN_RECALL_TINY, (
-        f"recall={recall:.3f} below minimum {MIN_RECALL_TINY}. "
-        f"metrics={metrics}"
-    )
+    assert recall >= MIN_RECALL_TINY, f"recall={recall:.3f} below minimum {MIN_RECALL_TINY}. metrics={metrics}"
     assert precision >= MIN_PRECISION_TINY, (
-        f"precision={precision:.3f} below minimum {MIN_PRECISION_TINY}. "
-        f"metrics={metrics}"
+        f"precision={precision:.3f} below minimum {MIN_PRECISION_TINY}. metrics={metrics}"
     )
 
     # Baseline comparison
@@ -583,9 +593,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
     volumes_prefix = os.environ.get("OUTLIERS_VOLUMES_DIR") or None
     if volumes_prefix and not Path(f"{volumes_prefix}0000.mrc").exists():
         pytest.skip(f"invalid OUTLIERS_VOLUMES_DIR prefix: {volumes_prefix}")
-    baseline_json = Path(
-        os.environ.get("OUTLIERS_ET_BASELINE_JSON", str(_DEFAULT_OUTLIERS_ET_BASELINE_JSON))
-    )
+    baseline_json = Path(os.environ.get("OUTLIERS_ET_BASELINE_JSON", str(_DEFAULT_OUTLIERS_ET_BASELINE_JSON)))
     grid_size = int(os.environ.get("OUTLIERS_GRID_SIZE", "128"))
     n_images = int(os.environ.get("OUTLIERS_N_IMAGES", "10000"))
     pct_out = float(os.environ.get("OUTLIERS_PERCENT_OUTLIERS", "0.15"))
@@ -604,22 +612,34 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
 
         # Create outlier volume
         from recovar.commands.run_test_outliers_pipeline import create_outlier_volume
+
         outlier_vol = output_dir / "outlier_volume.mrc"
         create_outlier_volume(str(outlier_vol), grid_size=grid_size)
 
         # Generate tilt series dataset with both particle and tilt outliers
         make_cmd = [
-            sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+            sys.executable,
+            "-m",
+            "recovar.command_line",
+            "make_test_dataset",
             str(output_dir),
-            "--n-images", str(n_images),
-            "--outlier-file-input", str(outlier_vol),
-            "--percent-outliers", str(pct_out),
-            "--percent-tilt-series-outliers", str(pct_tilt_out),
+            "--n-images",
+            str(n_images),
+            "--outlier-file-input",
+            str(outlier_vol),
+            "--percent-outliers",
+            str(pct_out),
+            "--percent-tilt-series-outliers",
+            str(pct_tilt_out),
             "--tilt-series",
-            "--n-tilts", str(n_tilts),
-            "--image-size", str(grid_size),
-            "--seed", "42",
-            "--noise-level", str(noise_level),
+            "--n-tilts",
+            str(n_tilts),
+            "--image-size",
+            str(grid_size),
+            "--seed",
+            "42",
+            "--noise-level",
+            str(noise_level),
         ]
         if volumes_prefix is not None:
             make_cmd += ["--volume-input", str(volumes_prefix)]
@@ -646,18 +666,28 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
 
     snap_before = perf_snapshot()
     pipe_cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(star),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--tilt-series",
-        "--tilt-series-ctf", "relion5",
+        "--tilt-series-ctf",
+        "relion5",
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", gt_mask_mrc_et,
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        gt_mask_mrc_et,
         "--lazy",
-        "--zdim", "4",
-        "--k-rounds", str(k_rounds),
+        "--zdim",
+        "4",
+        "--k-rounds",
+        str(k_rounds),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
@@ -676,9 +706,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
     image_metrics = _compute_outlier_metrics(pipeline_out, sim_info_path, k_rounds=k_rounds)
 
     # Particle-level metrics (cryo-ET specific)
-    particle_metrics = _compute_particle_outlier_metrics(
-        pipeline_out, sim_info, k_rounds=k_rounds
-    )
+    particle_metrics = _compute_particle_outlier_metrics(pipeline_out, sim_info, k_rounds=k_rounds)
     all_metrics = {**image_metrics, **particle_metrics}
 
     _compare_against_baseline(
@@ -690,7 +718,12 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
     # Perf regression check (warn only)
     perf_record = build_perf_record(perf_stages)
     perf_baseline_path = str(
-        _REPO_ROOT / "tests" / "baselines" / "run_test_outliers_pipeline" / "long_generated" / "perf_baseline_cryo_et.json"
+        _REPO_ROOT
+        / "tests"
+        / "baselines"
+        / "run_test_outliers_pipeline"
+        / "long_generated"
+        / "perf_baseline_cryo_et.json"
     )
     check_perf_regression(perf_record, perf_baseline_path, "ET outlier pipeline")
 
@@ -706,9 +739,7 @@ def _compute_particle_outlier_metrics(
         return {}
 
     n_particles = int(tilt_series_assignment.size)
-    true_particle_outliers = set(
-        int(i) for i in np.where(tilt_series_assignment < 0)[0]
-    )
+    true_particle_outliers = set(int(i) for i in np.where(tilt_series_assignment < 0)[0])
 
     metrics: Dict[str, float] = {
         "total_particles": float(n_particles),
@@ -722,10 +753,7 @@ def _compute_particle_outlier_metrics(
         with open(inliers_file, "rb") as f:
             particle_inliers = np.asarray(pickle.load(f), dtype=np.int64)
 
-        detected_particle_outliers = set(
-            int(i)
-            for i in np.setdiff1d(np.arange(n_particles), particle_inliers)
-        )
+        detected_particle_outliers = set(int(i) for i in np.setdiff1d(np.arange(n_particles), particle_inliers))
         tp = len(detected_particle_outliers & true_particle_outliers)
         fp = len(detected_particle_outliers - true_particle_outliers)
         fn = len(true_particle_outliers - detected_particle_outliers)
@@ -738,8 +766,6 @@ def _compute_particle_outlier_metrics(
         metrics[f"particle_precision_round_{r}"] = precision
         metrics[f"particle_f1_round_{r}"] = f1
         metrics[f"particle_inlier_count_round_{r}"] = float(len(particle_inliers))
-        metrics[f"particle_outlier_count_round_{r}"] = float(
-            len(detected_particle_outliers)
-        )
+        metrics[f"particle_outlier_count_round_{r}"] = float(len(detected_particle_outliers))
 
     return metrics

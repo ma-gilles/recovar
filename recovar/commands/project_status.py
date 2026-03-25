@@ -22,8 +22,8 @@ def _format_duration(seconds):
     if seconds < 60:
         return f"{seconds:.0f}s"
     if seconds < 3600:
-        return f"{seconds/60:.0f}m"
-    return f"{seconds/3600:.1f}h"
+        return f"{seconds / 60:.0f}m"
+    return f"{seconds / 3600:.1f}h"
 
 
 def _format_time(iso_str):
@@ -71,7 +71,7 @@ def show_status(project_dir):
 
     # Table header
     print(f"  {'':1} {'UID':<30} {'Status':<11} {'Created':<18} {'Duration':<8} {'Parent'}")
-    print(f"  {'-':->1} {'-'*30} {'-'*11} {'-'*18} {'-'*8} {'-'*20}")
+    print(f"  {'-':->1} {'-' * 30} {'-' * 11} {'-' * 18} {'-' * 8} {'-' * 20}")
 
     for job in jobs:
         uid = job.get("uid", "?")

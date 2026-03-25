@@ -19,16 +19,11 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Check path resolution for .star/.cs particle files"
-    )
+    parser = argparse.ArgumentParser(description="Check path resolution for .star/.cs particle files")
     parser.add_argument("particles", help="Input particles file (.star or .cs)")
-    parser.add_argument("--datadir", default=None,
-                        help="Base directory for resolving relative paths")
-    parser.add_argument("--strip-prefix", default=None,
-                        help="Prefix to strip from paths in metadata")
-    parser.add_argument("--show", type=int, default=10,
-                        help="Number of sample paths to show (default: 10)")
+    parser.add_argument("--datadir", default=None, help="Base directory for resolving relative paths")
+    parser.add_argument("--strip-prefix", default=None, help="Prefix to strip from paths in metadata")
+    parser.add_argument("--show", type=int, default=10, help="Number of sample paths to show (default: 10)")
 
     args = parser.parse_args()
 
@@ -39,11 +34,11 @@ def main():
         logger.error("File not found: %s", filepath)
         sys.exit(1)
 
-    ext = filepath.rsplit('.', 1)[-1].lower()
+    ext = filepath.rsplit(".", 1)[-1].lower()
 
-    if ext == 'star':
+    if ext == "star":
         _check_star(filepath, args.datadir, args.strip_prefix, args.show)
-    elif ext == 'cs':
+    elif ext == "cs":
         _check_cs(filepath, args.datadir, args.strip_prefix, args.show)
     else:
         logger.error("Unsupported format: .%s (expected .star or .cs)", ext)
@@ -56,12 +51,12 @@ def _check_star(filepath, datadir, strip_prefix, n_show):
     star = StarFile.load(filepath)
     df = star.df.copy()
 
-    if '_rlnImageName' not in df.columns:
+    if "_rlnImageName" not in df.columns:
         logger.error("STAR file missing _rlnImageName column")
         return
 
     image_names = df["_rlnImageName"].astype(str)
-    parts = image_names.str.split('@', n=1, expand=True)
+    parts = image_names.str.split("@", n=1, expand=True)
     if parts.shape[1] < 2:
         logger.error("_rlnImageName entries not in '<index>@<path>' format")
         return
@@ -73,17 +68,17 @@ def _check_star(filepath, datadir, strip_prefix, n_show):
 def _check_cs(filepath, datadir, strip_prefix, n_show):
     cs_data = np.load(filepath)
 
-    if 'blob/path' not in cs_data.dtype.names:
+    if "blob/path" not in cs_data.dtype.names:
         logger.error("CS file missing blob/path field")
         return
 
     raw_paths = []
-    for p in cs_data['blob/path']:
+    for p in cs_data["blob/path"]:
         if isinstance(p, (bytes, np.bytes_)):
             p = p.decode("utf-8", errors="replace")
         else:
             p = str(p)
-        raw_paths.append(p.lstrip('>'))
+        raw_paths.append(p.lstrip(">"))
 
     _check_paths("CS", filepath, raw_paths, datadir, strip_prefix, n_show)
 
@@ -116,7 +111,7 @@ def _check_paths(fmt, filepath, raw_paths, datadir, strip_prefix, n_show):
         matched = 0
         for p in unique_raw:
             if p.startswith(strip_prefix):
-                s = p[len(strip_prefix):].lstrip('/')
+                s = p[len(strip_prefix) :].lstrip("/")
                 stripped.append(s)
                 matched += 1
             else:
@@ -201,7 +196,7 @@ def _check_paths(fmt, filepath, raw_paths, datadir, strip_prefix, n_show):
         logger.info("    - Find where '%s' lives on this system:", sample_basename)
         logger.info("      find /path/to/data -name '%s'", sample_basename)
         logger.info("    - Then re-run with --datadir pointing to that directory")
-        if '/' in missing_paths[0][0]:
-            prefix = missing_paths[0][0].rsplit('/', 1)[0]
+        if "/" in missing_paths[0][0]:
+            prefix = missing_paths[0][0].rsplit("/", 1)[0]
             logger.info("    - You may also need: --strip-prefix %s", prefix)
     logger.info("")

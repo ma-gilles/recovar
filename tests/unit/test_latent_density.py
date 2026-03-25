@@ -55,7 +55,6 @@ def test_compute_latent_space_bounds_percentile():
     assert b[1, 1] <= 4.0
 
 
-
 def test_compute_log_det_cov_identity():
     """log det of identity matrix should be 0."""
     cov = np.eye(3, dtype=np.float32)[None]
@@ -103,6 +102,7 @@ def test_compute_latent_quadratic_forms_away_from_mean():
 def test_compute_residuals_single_matches_manual():
     """Verify compute_residuals_single = 0.5 * (x-mu)^T Sigma (x-mu)."""
     import jax.numpy as jnp
+
     mu = np.array([1.0, 2.0], dtype=np.float32)
     cov = np.array([[2.0, 0.5], [0.5, 3.0]], dtype=np.float32)
     test_pt = np.array([3.0, 1.0], dtype=np.float32)
@@ -151,7 +151,6 @@ def test_grid_mapping_roundtrip_gpu(gpu_device):
 
     np.testing.assert_allclose(cpu_g, gpu_g, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(cpu_rt, gpu_rt, atol=1e-5, rtol=1e-5)
-
 
 
 @pytest.mark.gpu

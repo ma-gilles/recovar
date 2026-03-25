@@ -10,7 +10,12 @@ import time
 
 import numpy as np
 from flask import (
-    Flask, render_template, request, jsonify, redirect, url_for,
+    Flask,
+    render_template,
+    request,
+    jsonify,
+    redirect,
+    url_for,
     send_file,
 )
 
@@ -30,6 +35,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
 
     if python_path is None:
         import sys
+
         python_path = sys.executable
 
     manager = JobManager(state_dir=state_dir)
@@ -61,15 +67,14 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         elif sort == "status":
             status_order = {"running": 0, "queued": 1, "completed": 2, "failed": 3}
             jobs = sorted(jobs, key=lambda j: (status_order.get(j.status, 9), -j.created_at))
-        return render_template("dashboard.html", jobs=jobs, has_slurm=_has_slurm(),
-                               current_sort=sort)
+        return render_template("dashboard.html", jobs=jobs, has_slurm=_has_slurm(), current_sort=sort)
 
     # ── New Job ────────────────────────────────────────────────────────
     @app.route("/jobs/new")
     def new_job():
-        return render_template("new_job.html", has_slurm=_has_slurm(),
-                               python_path=python_path, clone_from=None,
-                               clone_params=None)
+        return render_template(
+            "new_job.html", has_slurm=_has_slurm(), python_path=python_path, clone_from=None, clone_params=None
+        )
 
     @app.route("/jobs", methods=["POST"])
     def create_job():
@@ -80,15 +85,23 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
 
         # Validate required fields
         if not output_dir:
-            return render_template("new_job.html", has_slurm=_has_slurm(),
-                                   python_path=python_path, clone_from=None,
-                                   clone_params=None,
-                                   error="Output directory is required"), 400
+            return render_template(
+                "new_job.html",
+                has_slurm=_has_slurm(),
+                python_path=python_path,
+                clone_from=None,
+                clone_params=None,
+                error="Output directory is required",
+            ), 400
         if job_type == "pipeline" and not form.get("particles", "").strip():
-            return render_template("new_job.html", has_slurm=_has_slurm(),
-                                   python_path=python_path, clone_from=None,
-                                   clone_params=None,
-                                   error="Particles file is required for pipeline jobs"), 400
+            return render_template(
+                "new_job.html",
+                has_slurm=_has_slurm(),
+                python_path=python_path,
+                clone_from=None,
+                clone_params=None,
+                error="Particles file is required for pipeline jobs",
+            ), 400
 
         use_slurm = form.get("execution") == "slurm"
         slurm_partition = form.get("slurm_partition", "cryoem")
@@ -122,8 +135,10 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             cmd_parts = [
                 "recovar.commands.pipeline",
                 particles,
-                "-o", output_dir,
-                "--mask", mask,
+                "-o",
+                output_dir,
+                "--mask",
+                mask,
             ]
             if zdim:
                 cmd_parts.extend(["--zdim", zdim])
@@ -182,10 +197,14 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             cmd_parts = [
                 "recovar.commands.analyze",
                 result_dir,
-                "-o", output_dir,
-                "--zdim", analyze_zdim,
-                "--n-clusters", n_clusters,
-                "--n-vols-along-path", n_traj_vols,
+                "-o",
+                output_dir,
+                "--zdim",
+                analyze_zdim,
+                "--n-clusters",
+                n_clusters,
+                "--n-vols-along-path",
+                n_traj_vols,
             ]
             if form.get("lazy") == "on":
                 cmd_parts.append("--lazy")
@@ -196,7 +215,8 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             cmd_parts = [
                 "recovar.commands.compute_state",
                 result_dir,
-                "--outdir", output_dir,
+                "--outdir",
+                output_dir,
                 "--lazy",
             ]
 
@@ -207,8 +227,10 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             cmd_parts = [
                 "recovar.commands.compute_trajectory",
                 result_dir,
-                "--outdir", output_dir,
-                "--zdim", compute_zdim,
+                "--outdir",
+                output_dir,
+                "--zdim",
+                compute_zdim,
                 "--lazy",
             ]
 
@@ -251,19 +273,19 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         clone_params = _parse_command_params(job.command)
         # Override with stored fields (more reliable than parsed)
         if job.particles:
-            clone_params['particles'] = job.particles
+            clone_params["particles"] = job.particles
         if job.mask:
-            clone_params['mask'] = job.mask
+            clone_params["mask"] = job.mask
         if job.output_dir:
-            clone_params['output_dir'] = job.output_dir
+            clone_params["output_dir"] = job.output_dir
         # Smart name generation
-        clone_params['name'] = _next_clone_name(job.name)
+        clone_params["name"] = _next_clone_name(job.name)
         # Read SLURM settings from sbatch script if available
         slurm_params = _parse_sbatch_params(manager.state_dir, job_id)
         clone_params.update(slurm_params)
-        return render_template("new_job.html", has_slurm=_has_slurm(),
-                               python_path=python_path, clone_from=job,
-                               clone_params=clone_params)
+        return render_template(
+            "new_job.html", has_slurm=_has_slurm(), python_path=python_path, clone_from=job, clone_params=clone_params
+        )
 
     # ── Job Detail ─────────────────────────────────────────────────────
     @app.route("/jobs/<job_id>")
@@ -295,19 +317,19 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     def api_job_logs(job_id):
         content = manager.get_log_content(job_id, n_lines=300)
         # Strip ANSI escape codes
-        content = re.sub(r'\x1b\[[0-9;]*m', '', content)
+        content = re.sub(r"\x1b\[[0-9;]*m", "", content)
         # Highlight log lines by severity
-        lines = content.split('\n')
+        lines = content.split("\n")
         highlighted = []
         for line in lines:
             escaped = _escape(line)
-            if any(kw in line for kw in ('ERROR', 'Traceback', 'Exception', 'FAILED')):
+            if any(kw in line for kw in ("ERROR", "Traceback", "Exception", "FAILED")):
                 highlighted.append(f'<span class="log-error">{escaped}</span>')
-            elif any(kw in line for kw in ('WARNING', 'WARN', 'UserWarning')):
+            elif any(kw in line for kw in ("WARNING", "WARN", "UserWarning")):
                 highlighted.append(f'<span class="log-warning">{escaped}</span>')
             else:
                 highlighted.append(escaped)
-        html_content = '\n'.join(highlighted)
+        html_content = "\n".join(highlighted)
         return f'<pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{html_content}</pre>'
 
     @app.route("/api/jobs/<job_id>/status")
@@ -322,8 +344,10 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
                 job.error = err
                 manager._save()
         color = _status_color(job.status)
-        html = f'<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium {color}">' \
-               f'<span class="w-2 h-2 rounded-full bg-current"></span>{job.status.upper()}</span>'
+        html = (
+            f'<span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium {color}">'
+            f'<span class="w-2 h-2 rounded-full bg-current"></span>{job.status.upper()}</span>'
+        )
         # Include error summary for failed jobs
         if job.status == "failed" and job.error:
             html += f'<div class="mt-2 text-xs text-red-400 bg-red-950/50 border border-red-500/20 rounded-lg px-3 py-2 font-mono">{_escape(job.error)}</div>'
@@ -380,6 +404,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
 
         try:
             import mrcfile
+
             with mrcfile.open(path, mode="r") as mrc:
                 data = mrc.data
                 if idx is None:
@@ -388,6 +413,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
                 slc = np.take(data, idx, axis=axis)
 
             import matplotlib
+
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
 
@@ -412,8 +438,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         path = _safe_path(request.args.get("path", ""))
         if not path or not os.path.isfile(path) or not path.endswith(".mrc"):
             return jsonify({"error": "Volume not found"}), 404
-        return send_file(path, mimetype="application/octet-stream",
-                         download_name=os.path.basename(path))
+        return send_file(path, mimetype="application/octet-stream", download_name=os.path.basename(path))
 
     @app.route("/api/volume/info")
     def api_volume_info():
@@ -423,16 +448,19 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             return jsonify({"error": "Volume not found"}), 404
         try:
             import mrcfile
+
             with mrcfile.open(path, mode="r") as mrc:
                 shape = list(mrc.data.shape)
                 voxel_size = float(mrc.voxel_size.x)
-                return jsonify({
-                    "shape": shape,
-                    "voxel_size": voxel_size,
-                    "min": float(mrc.data.min()),
-                    "max": float(mrc.data.max()),
-                    "mean": float(mrc.data.mean()),
-                })
+                return jsonify(
+                    {
+                        "shape": shape,
+                        "voxel_size": voxel_size,
+                        "min": float(mrc.data.min()),
+                        "max": float(mrc.data.max()),
+                        "mean": float(mrc.data.mean()),
+                    }
+                )
         except Exception as e:
             logger.warning("Volume info error for %s: %s", path, e)
             return jsonify({"error": str(e)}), 500
@@ -444,8 +472,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         if not path or not os.path.isfile(path):
             return jsonify({"error": "Image not found"}), 404
         ext = path.rsplit(".", 1)[-1].lower()
-        mimetypes = {"png": "image/png", "jpg": "image/jpeg",
-                     "jpeg": "image/jpeg", "svg": "image/svg+xml"}
+        mimetypes = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "svg": "image/svg+xml"}
         return send_file(path, mimetype=mimetypes.get(ext, "image/png"))
 
     # ── API: Analysis Info ─────────────────────────────────────────────
@@ -539,12 +566,14 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
                 mrc_out.set_data(mask)
                 mrc_out.voxel_size = voxel_size
 
-            return jsonify({
-                "path": output_path,
-                "threshold": float(threshold),
-                "threshold_sigma": threshold_sigma,
-                "volume_fraction": volume_fraction,
-            })
+            return jsonify(
+                {
+                    "path": output_path,
+                    "threshold": float(threshold),
+                    "threshold_sigma": threshold_sigma,
+                    "volume_fraction": volume_fraction,
+                }
+            )
         except Exception as e:
             logger.error("Mask export failed: %s", e)
             return jsonify({"error": str(e)}), 500
@@ -592,11 +621,13 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
         if task is None:
             return jsonify({"error": "Failed to create task"}), 500
 
-        return jsonify({
-            "task_id": task.id,
-            "status": task.status,
-            "error": task.error,
-        })
+        return jsonify(
+            {
+                "task_id": task.id,
+                "status": task.status,
+                "error": task.error,
+            }
+        )
 
     # ── API: Task Status ──────────────────────────────────────────────
     @app.route("/api/jobs/<job_id>/tasks/<task_id>")
@@ -621,7 +652,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
             with open(log_path) as f:
                 lines = f.readlines()
             content = "".join(lines[-n_lines:])
-            content = re.sub(r'\x1b\[[0-9;]*m', '', content)
+            content = re.sub(r"\x1b\[[0-9;]*m", "", content)
             return f'<pre class="text-xs text-slate-300 font-mono whitespace-pre-wrap">{_escape(content)}</pre>'
         except Exception as e:
             return f"Error reading log: {e}", 500
@@ -636,12 +667,15 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
     @app.route("/api/system")
     def api_system_info():
         import shutil
+
         info = {"hostname": os.uname().nodename}
         # GPU info
         try:
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader"],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             info["gpus"] = [line.strip() for line in result.stdout.strip().split("\n") if line.strip()]
         except Exception:
@@ -682,6 +716,7 @@ def create_app(scan_dirs=None, state_dir=None, python_path=None):
 
 def _has_slurm():
     import shutil
+
     return shutil.which("sbatch") is not None
 
 
@@ -696,11 +731,7 @@ def _status_color(status):
 
 def _escape(text):
     """HTML-escape text for safe embedding."""
-    return (text
-            .replace("&", "&amp;")
-            .replace("<", "&lt;")
-            .replace(">", "&gt;")
-            .replace('"', "&quot;"))
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def _safe_path(path: str):
@@ -708,7 +739,7 @@ def _safe_path(path: str):
     if not path:
         return None
     resolved = os.path.realpath(path)
-    if '..' in os.path.normpath(path).split(os.sep):
+    if ".." in os.path.normpath(path).split(os.sep):
         return None
     return resolved
 
@@ -755,9 +786,9 @@ def _next_clone_name(name: str) -> str:
     'run_retry_retry' -> 'run_v2'
     """
     # Strip trailing _retry suffixes
-    stripped = re.sub(r'(_retry)+$', '', name)
+    stripped = re.sub(r"(_retry)+$", "", name)
     # Check for existing _vN suffix
-    m = re.match(r'^(.+)_v(\d+)$', stripped)
+    m = re.match(r"^(.+)_v(\d+)$", stripped)
     if m:
         return f"{m.group(1)}_v{int(m.group(2)) + 1}"
     return f"{stripped}_v2"
@@ -778,65 +809,65 @@ def _parse_command_params(command: str) -> dict:
 
     # Detect job type from module name
     module = parts[0]
-    if 'pipeline' in module:
-        params['job_type'] = 'pipeline'
-    elif 'analyze' in module:
-        params['job_type'] = 'analyze'
-    elif 'compute_state' in module:
-        params['job_type'] = 'compute_state'
-    elif 'compute_trajectory' in module:
-        params['job_type'] = 'compute_trajectory'
+    if "pipeline" in module:
+        params["job_type"] = "pipeline"
+    elif "analyze" in module:
+        params["job_type"] = "analyze"
+    elif "compute_state" in module:
+        params["job_type"] = "compute_state"
+    elif "compute_trajectory" in module:
+        params["job_type"] = "compute_trajectory"
 
     # Map CLI flags to form field names (these have dedicated form fields)
     value_flags = {
-        '--mask': 'mask',
-        '--zdim': 'zdim',
-        '--downsample': 'downsample',
-        '--gpu-gb': 'gpu_memory',
-        '--gpu-memory': 'gpu_memory',
-        '--focus-mask': 'focus_mask',
-        '--mask-dilate-iter': 'mask_dilate_iter',
-        '--ind': 'ind',
-        '--halfsets': 'halfsets',
-        '--datadir': 'datadir',
-        '--n-images': 'n_images',
-        '--dose-per-tilt': 'dose_per_tilt',
-        '--angle-per-tilt': 'angle_per_tilt',
-        '--ntilts': 'ntilts',
-        '--tilt-series-ctf': 'tilt_series_ctf',
-        '-o': 'output_dir',
-        '--outdir': 'output_dir',
-        '--result-dir': 'result_dir',
-        '--n-clusters': 'n_clusters',
-        '--n-traj-vols': 'n_traj_vols',
+        "--mask": "mask",
+        "--zdim": "zdim",
+        "--downsample": "downsample",
+        "--gpu-gb": "gpu_memory",
+        "--gpu-memory": "gpu_memory",
+        "--focus-mask": "focus_mask",
+        "--mask-dilate-iter": "mask_dilate_iter",
+        "--ind": "ind",
+        "--halfsets": "halfsets",
+        "--datadir": "datadir",
+        "--n-images": "n_images",
+        "--dose-per-tilt": "dose_per_tilt",
+        "--angle-per-tilt": "angle_per_tilt",
+        "--ntilts": "ntilts",
+        "--tilt-series-ctf": "tilt_series_ctf",
+        "-o": "output_dir",
+        "--outdir": "output_dir",
+        "--result-dir": "result_dir",
+        "--n-clusters": "n_clusters",
+        "--n-traj-vols": "n_traj_vols",
         # analyze
-        '--zdim-for-analysis': 'analyze_zdim',
-        '--compute-zdim': 'compute_zdim',
+        "--zdim-for-analysis": "analyze_zdim",
+        "--compute-zdim": "compute_zdim",
     }
     boolean_flags = {
-        '--no-downsample': 'no_downsample',
-        '--correct-contrast': 'correct_contrast',
-        '--tilt-series': 'tilt_series',
-        '--lazy': 'lazy',
-        '--only-mean': 'only_mean',
-        '--accept-cpu': 'accept_cpu',
-        '--multi-gpu': 'multi_gpu',
-        '--low-memory': 'low_memory',
-        '--low-memory-option': 'low_memory',
-        '--keep-intermediate': 'keep_intermediate',
-        '--ignore-zero-freq': 'ignore_zero_freq',
-        '--ignore-zero-frequency': 'ignore_zero_freq',
-        '--keep-input-mask': 'keep_input_mask',
-        '--use-complement-mask': 'use_complement_mask',
+        "--no-downsample": "no_downsample",
+        "--correct-contrast": "correct_contrast",
+        "--tilt-series": "tilt_series",
+        "--lazy": "lazy",
+        "--only-mean": "only_mean",
+        "--accept-cpu": "accept_cpu",
+        "--multi-gpu": "multi_gpu",
+        "--low-memory": "low_memory",
+        "--low-memory-option": "low_memory",
+        "--keep-intermediate": "keep_intermediate",
+        "--ignore-zero-freq": "ignore_zero_freq",
+        "--ignore-zero-frequency": "ignore_zero_freq",
+        "--keep-input-mask": "keep_input_mask",
+        "--use-complement-mask": "use_complement_mask",
     }
 
     extra_parts = []  # CLI args not mapped to dedicated form fields
 
     i = 1  # skip module name
     # First positional arg after module is particles (for pipeline)
-    if i < len(parts) and not parts[i].startswith('-'):
-        if params.get('job_type') == 'pipeline':
-            params['particles'] = parts[i]
+    if i < len(parts) and not parts[i].startswith("-"):
+        if params.get("job_type") == "pipeline":
+            params["particles"] = parts[i]
         i += 1
 
     while i < len(parts):
@@ -847,11 +878,11 @@ def _parse_command_params(command: str) -> dict:
         elif arg in boolean_flags:
             params[boolean_flags[arg]] = True
             i += 1
-        elif arg.startswith('-') and i + 1 < len(parts) and not parts[i + 1].startswith('-'):
+        elif arg.startswith("-") and i + 1 < len(parts) and not parts[i + 1].startswith("-"):
             # Unrecognized flag with a value -> extra args
             extra_parts.append(f"{arg} {shlex.quote(parts[i + 1])}")
             i += 2
-        elif arg.startswith('-'):
+        elif arg.startswith("-"):
             # Unrecognized boolean flag -> extra args
             extra_parts.append(arg)
             i += 1
@@ -859,7 +890,7 @@ def _parse_command_params(command: str) -> dict:
             i += 1
 
     if extra_parts:
-        params['extra_args'] = ' '.join(extra_parts)
+        params["extra_args"] = " ".join(extra_parts)
 
     return params
 
@@ -874,41 +905,45 @@ def _parse_sbatch_params(state_dir: str, job_id: str) -> dict:
         with open(script) as f:
             content = f.read()
         sbatch_map = {
-            '--partition=': 'slurm_partition',
-            '--account=': 'slurm_account',
-            '--mem=': 'slurm_mem',
-            '--time=': 'slurm_time',
-            '--cpus-per-task=': 'slurm_cpus',
+            "--partition=": "slurm_partition",
+            "--account=": "slurm_account",
+            "--mem=": "slurm_mem",
+            "--time=": "slurm_time",
+            "--cpus-per-task=": "slurm_cpus",
         }
-        for line in content.split('\n'):
+        for line in content.split("\n"):
             line = line.strip()
-            if not line.startswith('#SBATCH'):
+            if not line.startswith("#SBATCH"):
                 continue
-            directive = line[len('#SBATCH'):].strip()
+            directive = line[len("#SBATCH") :].strip()
             for prefix, key in sbatch_map.items():
                 if directive.startswith(prefix):
-                    params[key] = directive[len(prefix):]
-            if directive.startswith('--gres=gpu:'):
+                    params[key] = directive[len(prefix) :]
+            if directive.startswith("--gres=gpu:"):
                 try:
-                    params['slurm_gpus'] = directive.split(':')[-1]
+                    params["slurm_gpus"] = directive.split(":")[-1]
                 except (IndexError, ValueError):
                     pass
         # Collect extra sbatch flags we don't explicitly handle
         known_prefixes = list(sbatch_map.keys()) + [
-            '--gres=', '--job-name=', '--output=', '--error=',
-            '--nodes=', '--ntasks=',
+            "--gres=",
+            "--job-name=",
+            "--output=",
+            "--error=",
+            "--nodes=",
+            "--ntasks=",
         ]
         extra = []
-        for line in content.split('\n'):
+        for line in content.split("\n"):
             line = line.strip()
-            if not line.startswith('#SBATCH'):
+            if not line.startswith("#SBATCH"):
                 continue
-            directive = line[len('#SBATCH'):].strip()
+            directive = line[len("#SBATCH") :].strip()
             if not any(directive.startswith(p) for p in known_prefixes):
                 extra.append(directive)
         if extra:
-            params['slurm_extra'] = ' '.join(extra)
-        params['execution'] = 'slurm'
+            params["slurm_extra"] = " ".join(extra)
+        params["execution"] = "slurm"
     except Exception:
         logger.debug("Failed to extract SLURM params from job script", exc_info=True)
     return params
@@ -922,6 +957,7 @@ def _validate_particles_file(path: str) -> dict:
     if ext == "star":
         try:
             import starfile
+
             data = starfile.read(path, always_dict=True)
 
             # Find the particles table
@@ -991,6 +1027,7 @@ def _validate_particles_file(path: str) -> dict:
     elif ext == "cs":
         try:
             import numpy as np
+
             cs = np.load(path)
             n_particles = len(cs)
             result["info"]["n_particles"] = n_particles
@@ -1011,7 +1048,9 @@ def _validate_particles_file(path: str) -> dict:
     elif ext in ("mrcs", "mrc"):
         result["valid"] = True
         result["info"]["format"] = "MRCS stack"
-        result["warnings"].append("MRCS file selected — you'll also need poses and CTF (as PKL files or in a STAR file)")
+        result["warnings"].append(
+            "MRCS file selected — you'll also need poses and CTF (as PKL files or in a STAR file)"
+        )
 
     else:
         result["error"] = f"Unsupported file format: .{ext}"

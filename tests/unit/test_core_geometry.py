@@ -129,9 +129,7 @@ def test_batch_get_gridpoint_coords_on_gpu(gpu_device):
     volume_shape = (4, 4, 4)
     cpu_out = np.asarray(core_geometry.batch_get_gridpoint_coords(rots, image_shape, volume_shape))
     with jax.default_device(gpu_device):
-        gpu_out = np.asarray(
-            core_geometry.batch_get_gridpoint_coords(jax.device_put(rots), image_shape, volume_shape)
-        )
+        gpu_out = np.asarray(core_geometry.batch_get_gridpoint_coords(jax.device_put(rots), image_shape, volume_shape))
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
 
@@ -144,7 +142,9 @@ def test_translate_single_image_on_gpu(gpu_device):
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_geometry.translate_single_image(
-                jax.device_put(image), jax.device_put(translation), jax.device_put(lattice),
+                jax.device_put(image),
+                jax.device_put(translation),
+                jax.device_put(lattice),
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
@@ -170,7 +170,9 @@ def test_batch_trans_translate_images_on_gpu(gpu_device):
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_geometry.batch_trans_translate_images(
-                jax.device_put(images), jax.device_put(translations), (2, 2),
+                jax.device_put(images),
+                jax.device_put(translations),
+                (2, 2),
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)

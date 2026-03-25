@@ -4,6 +4,7 @@ Unit tests for recovar.commands.extract_image_subset_from_kmeans.
 Covers:
   extract_image_subset_from_kmeans – label filtering, inverse flag, output writing
 """
+
 import os
 import pytest
 import numpy as np
@@ -28,6 +29,7 @@ def _touch(path: str) -> str:
 # extract_image_subset_from_kmeans – core logic
 # ---------------------------------------------------------------------------
 
+
 def test_extracts_correct_indices_for_single_cluster(monkeypatch, tmp_path):
     """Selecting cluster 1 must return only the images labelled 1."""
     labels = np.array([0, 1, 2, 1, 0, 2], dtype=float)
@@ -36,8 +38,7 @@ def test_extracts_correct_indices_for_single_cluster(monkeypatch, tmp_path):
 
     saved = {}
     monkeypatch.setattr(ekm_cmd.utils, "pickle_load", lambda _: _fake_centers(labels))
-    monkeypatch.setattr(ekm_cmd.utils, "pickle_dump",
-                        lambda obj, path: saved.update({"obj": obj, "path": path}))
+    monkeypatch.setattr(ekm_cmd.utils, "pickle_dump", lambda obj, path: saved.update({"obj": obj, "path": path}))
 
     ekm_cmd.extract_image_subset_from_kmeans(
         path_to_centers=centers_pkl,
@@ -59,8 +60,7 @@ def test_extracts_correct_indices_for_multiple_clusters(monkeypatch, tmp_path):
 
     saved = {}
     monkeypatch.setattr(ekm_cmd.utils, "pickle_load", lambda _: _fake_centers(labels))
-    monkeypatch.setattr(ekm_cmd.utils, "pickle_dump",
-                        lambda obj, path: saved.update({"obj": obj, "path": path}))
+    monkeypatch.setattr(ekm_cmd.utils, "pickle_dump", lambda obj, path: saved.update({"obj": obj, "path": path}))
 
     ekm_cmd.extract_image_subset_from_kmeans(
         path_to_centers=centers_pkl,
@@ -81,8 +81,7 @@ def test_inverse_flag_returns_complement(monkeypatch, tmp_path):
 
     saved = {}
     monkeypatch.setattr(ekm_cmd.utils, "pickle_load", lambda _: _fake_centers(labels))
-    monkeypatch.setattr(ekm_cmd.utils, "pickle_dump",
-                        lambda obj, path: saved.update({"obj": obj, "path": path}))
+    monkeypatch.setattr(ekm_cmd.utils, "pickle_dump", lambda obj, path: saved.update({"obj": obj, "path": path}))
 
     ekm_cmd.extract_image_subset_from_kmeans(
         path_to_centers=centers_pkl,
@@ -104,8 +103,7 @@ def test_all_images_selected_when_all_clusters_given(monkeypatch, tmp_path):
 
     saved = {}
     monkeypatch.setattr(ekm_cmd.utils, "pickle_load", lambda _: _fake_centers(labels))
-    monkeypatch.setattr(ekm_cmd.utils, "pickle_dump",
-                        lambda obj, path: saved.update({"obj": obj, "path": path}))
+    monkeypatch.setattr(ekm_cmd.utils, "pickle_dump", lambda obj, path: saved.update({"obj": obj, "path": path}))
 
     ekm_cmd.extract_image_subset_from_kmeans(
         path_to_centers=centers_pkl,
@@ -125,12 +123,11 @@ def test_empty_result_when_no_cluster_matches(monkeypatch, tmp_path):
 
     saved = {}
     monkeypatch.setattr(ekm_cmd.utils, "pickle_load", lambda _: _fake_centers(labels))
-    monkeypatch.setattr(ekm_cmd.utils, "pickle_dump",
-                        lambda obj, path: saved.update({"obj": obj, "path": path}))
+    monkeypatch.setattr(ekm_cmd.utils, "pickle_dump", lambda obj, path: saved.update({"obj": obj, "path": path}))
 
     ekm_cmd.extract_image_subset_from_kmeans(
         path_to_centers=centers_pkl,
-        kmeans_indices=[99],   # no image is labelled 99
+        kmeans_indices=[99],  # no image is labelled 99
         inverse=False,
         output_path=output_pkl,
     )
@@ -159,8 +156,7 @@ def test_path_validation_requires_pkl_extension_for_output(monkeypatch, tmp_path
     centers = _touch(str(tmp_path / "centers.pkl"))
     wrong_out = str(tmp_path / "output.csv")
 
-    monkeypatch.setattr(ekm_cmd.utils, "pickle_load",
-                        lambda _: _fake_centers(np.array([0, 1])))
+    monkeypatch.setattr(ekm_cmd.utils, "pickle_load", lambda _: _fake_centers(np.array([0, 1])))
 
     with pytest.raises(ValueError):
         ekm_cmd.extract_image_subset_from_kmeans(centers, [0], False, wrong_out)

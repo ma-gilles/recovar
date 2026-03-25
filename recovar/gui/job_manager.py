@@ -23,10 +23,7 @@ logger = logging.getLogger(__name__)
 def _is_output_volume(filename: str) -> bool:
     """Return True if *filename* is a primary output MRC (not half/unfil/mask)."""
     return (
-        filename.endswith(".mrc")
-        and "_half" not in filename
-        and "_unfil" not in filename
-        and "_mask" not in filename
+        filename.endswith(".mrc") and "_half" not in filename and "_unfil" not in filename and "_mask" not in filename
     )
 
 
@@ -49,11 +46,7 @@ def _list_images(directory: str) -> list[str]:
     """List image files (png/jpg/svg) in *directory* as absolute paths."""
     if not os.path.isdir(directory):
         return []
-    return [
-        os.path.join(directory, f)
-        for f in sorted(os.listdir(directory))
-        if f.endswith((".png", ".jpg", ".svg"))
-    ]
+    return [os.path.join(directory, f) for f in sorted(os.listdir(directory)) if f.endswith((".png", ".jpg", ".svg"))]
 
 
 def _load_json(path: str) -> Optional[dict]:
@@ -80,11 +73,7 @@ def _save_json(path: str, data: dict) -> bool:
 def _has_output_volumes(directory: str) -> bool:
     """Return True if *directory* contains any primary output MRC files."""
     try:
-        return any(
-            _is_output_volume(f)
-            for f in os.listdir(directory)
-            if os.path.isfile(os.path.join(directory, f))
-        )
+        return any(_is_output_volume(f) for f in os.listdir(directory) if os.path.isfile(os.path.join(directory, f)))
     except OSError:
         return False
 
@@ -148,6 +137,7 @@ class Job:
     def created_str(self):
         if self.created_at:
             import datetime
+
             return datetime.datetime.fromtimestamp(self.created_at).strftime("%Y-%m-%d %H:%M")
         return ""
 
@@ -168,9 +158,11 @@ class Job:
 
     @property
     def has_results(self):
-        return (os.path.isfile(os.path.join(self.output_dir, "output", "mean.mrc")) or
-                os.path.isfile(os.path.join(self.output_dir, "output", "volumes", "mean.mrc")) or
-                os.path.isfile(os.path.join(self.output_dir, "model", "params.pkl")))
+        return (
+            os.path.isfile(os.path.join(self.output_dir, "output", "mean.mrc"))
+            or os.path.isfile(os.path.join(self.output_dir, "output", "volumes", "mean.mrc"))
+            or os.path.isfile(os.path.join(self.output_dir, "model", "params.pkl"))
+        )
 
     @property
     def result_images(self):
@@ -217,9 +209,11 @@ class Job:
 # Compute task model (async volume/trajectory computations from GUI)
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ComputeTask:
     """Tracks an async volume or trajectory computation launched from the GUI."""
+
     id: str
     job_id: str
     task_type: str  # "volume" or "trajectory"
@@ -238,6 +232,7 @@ class ComputeTask:
 # ---------------------------------------------------------------------------
 # Volume categorization
 # ---------------------------------------------------------------------------
+
 
 def _categorize_volume(filename):
     """Categorize a volume file by its filename pattern."""
@@ -300,6 +295,7 @@ def _vol_display_name(filename):
 # SLURM helpers
 # ---------------------------------------------------------------------------
 
+
 def _has_slurm():
     return shutil.which("sbatch") is not None
 
@@ -309,11 +305,12 @@ def _slurm_job_status(job_id: str) -> Optional[str]:
     try:
         result = subprocess.run(
             ["sacct", "-j", job_id, "--format=State", "--noheader", "-P"],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
-            logger.warning("sacct failed for job %s (rc=%d): %s",
-                           job_id, result.returncode, result.stderr.strip())
+            logger.warning("sacct failed for job %s (rc=%d): %s", job_id, result.returncode, result.stderr.strip())
             return None
         if result.stdout.strip():
             states = [s.strip() for s in result.stdout.strip().split("\n") if s.strip()]
@@ -337,7 +334,9 @@ def _slurm_submit(script_path: str) -> tuple[Optional[str], str]:
     try:
         result = subprocess.run(
             ["sbatch", script_path],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         if result.returncode == 0:
             # Parse "Submitted batch job 12345"
@@ -358,6 +357,7 @@ def _slurm_submit(script_path: str) -> tuple[Optional[str], str]:
 # ---------------------------------------------------------------------------
 # Job Manager
 # ---------------------------------------------------------------------------
+
 
 class JobManager:
     """Manages pipeline jobs: discovery, creation, monitoring."""
@@ -404,9 +404,9 @@ class JobManager:
                 meta_file = os.path.join(job_dir, "metadata.json")
                 # Check multiple possible locations for params.pkl
                 is_pipeline_output = (
-                    os.path.isfile(meta_file) or
-                    os.path.isfile(os.path.join(job_dir, "params.pkl")) or
-                    os.path.isfile(os.path.join(job_dir, "model", "params.pkl"))
+                    os.path.isfile(meta_file)
+                    or os.path.isfile(os.path.join(job_dir, "params.pkl"))
+                    or os.path.isfile(os.path.join(job_dir, "model", "params.pkl"))
                 )
                 if not is_pipeline_output:
                     continue
@@ -473,8 +473,10 @@ class JobManager:
                     continue
                 # Must have a compute.sbatch or task_meta.json to be a real task
                 # (e.g., "trajectory_*density" dirs are output subdirs, not tasks)
-                if not (os.path.isfile(os.path.join(tdir, "compute.sbatch")) or
-                        os.path.isfile(os.path.join(tdir, "task_meta.json"))):
+                if not (
+                    os.path.isfile(os.path.join(tdir, "compute.sbatch"))
+                    or os.path.isfile(os.path.join(tdir, "task_meta.json"))
+                ):
                     continue
                 has_output = _has_task_output(tdir, task_type)
                 meta = _load_json(os.path.join(tdir, "task_meta.json")) or {}
@@ -518,7 +520,6 @@ class JobManager:
                         lp = os.path.join(tdir, "latent_points.txt")
                         if os.path.isfile(lp):
                             try:
-
                                 pts = np.loadtxt(lp)
                                 coords = pts.flatten()[:3]
                                 label = f"Volume at [{', '.join(f'{c:.2f}' for c in coords)}{'...' if len(pts.flatten()) > 3 else ''}]"
@@ -560,18 +561,24 @@ class JobManager:
             self._refresh_job_status(job)
         return job
 
-    def create_job(self, name: str, output_dir: str, command: str,
-                   particles: str = "", mask: str = "",
-                   downsample: Optional[int] = None,
-                   use_slurm: bool = False,
-                   slurm_partition: str = "cryoem",
-                   slurm_account: str = "amits",
-                   slurm_gpus: int = 1,
-                   slurm_mem: str = "64G",
-                   slurm_time: str = "4:00:00",
-                   slurm_cpus: str = "8",
-                   slurm_extra: str = "",
-                   python_path: str = "python3") -> Job:
+    def create_job(
+        self,
+        name: str,
+        output_dir: str,
+        command: str,
+        particles: str = "",
+        mask: str = "",
+        downsample: Optional[int] = None,
+        use_slurm: bool = False,
+        slurm_partition: str = "cryoem",
+        slurm_account: str = "amits",
+        slurm_gpus: int = 1,
+        slurm_mem: str = "64G",
+        slurm_time: str = "4:00:00",
+        slurm_cpus: str = "8",
+        slurm_extra: str = "",
+        python_path: str = "python3",
+    ) -> Job:
         """Create and launch a new pipeline job."""
         job_id = f"job_{int(time.time())}_{name.replace(' ', '_')}"
         job = Job(
@@ -596,8 +603,7 @@ class JobManager:
 
             extra_sbatch = ""
             if slurm_extra:
-                extra_sbatch = "\n".join(f"#SBATCH {flag.strip()}"
-                                         for flag in slurm_extra.split() if flag.strip())
+                extra_sbatch = "\n".join(f"#SBATCH {flag.strip()}" for flag in slurm_extra.split() if flag.strip())
                 extra_sbatch = "\n" + extra_sbatch
 
             gpu_line = f"\n#SBATCH --gres=gpu:{slurm_gpus}" if slurm_gpus > 0 else ""
@@ -641,9 +647,9 @@ echo "Completed at: $(date)"
                 with open(log_file, "w") as lf:
                     proc = subprocess.Popen(
                         [python_path, "-m"] + shlex.split(command),
-                        stdout=lf, stderr=subprocess.STDOUT,
-                        env={**os.environ,
-                             "XLA_PYTHON_CLIENT_PREALLOCATE": "false"},
+                        stdout=lf,
+                        stderr=subprocess.STDOUT,
+                        env={**os.environ, "XLA_PYTHON_CLIENT_PREALLOCATE": "false"},
                     )
                 job.pid = proc.pid
                 job.status = STATUS_RUNNING
@@ -703,14 +709,18 @@ echo "Completed at: $(date)"
             log_dir = os.path.join(job.output_dir, "logs")
             if os.path.isdir(log_dir):
                 out_files = sorted(
-                    [os.path.join(log_dir, f) for f in os.listdir(log_dir)
-                     if f.endswith(".out")],
-                    key=os.path.getmtime, reverse=True,
+                    [os.path.join(log_dir, f) for f in os.listdir(log_dir) if f.endswith(".out")],
+                    key=os.path.getmtime,
+                    reverse=True,
                 )
                 err_files = sorted(
-                    [os.path.join(log_dir, f) for f in os.listdir(log_dir)
-                     if f.endswith(".err") and os.path.getsize(os.path.join(log_dir, f)) > 0],
-                    key=os.path.getmtime, reverse=True,
+                    [
+                        os.path.join(log_dir, f)
+                        for f in os.listdir(log_dir)
+                        if f.endswith(".err") and os.path.getsize(os.path.join(log_dir, f)) > 0
+                    ],
+                    key=os.path.getmtime,
+                    reverse=True,
                 )
                 if out_files:
                     slurm_logs.append(out_files[0])
@@ -823,7 +833,6 @@ echo "Completed at: $(date)"
                         err = self.get_error_summary(job.id)
                         job.error = err or "Process exited"
 
-
     # ── Analysis discovery ──────────────────────────────────────────
 
     def get_analysis_info(self, job_id: str) -> dict:
@@ -850,7 +859,6 @@ echo "Completed at: $(date)"
         if os.path.isfile(embeddings_path):
             info["has_embeddings"] = True
             try:
-
                 with open(embeddings_path, "rb") as f:
                     emb = pickle.load(f)
                 if "latent_coords" in emb and isinstance(emb["latent_coords"], dict):
@@ -872,12 +880,14 @@ echo "Completed at: $(date)"
             seen_names = {v["name"] for v in info["volumes"]}
             for fname in sorted(os.listdir(vol_dir)):
                 if fname.endswith(".mrc") and fname not in seen_names:
-                    info["volumes"].append({
-                        "path": os.path.join(vol_dir, fname),
-                        "name": fname,
-                        "display_name": _vol_display_name(fname),
-                        "category": _categorize_volume(fname),
-                    })
+                    info["volumes"].append(
+                        {
+                            "path": os.path.join(vol_dir, fname),
+                            "name": fname,
+                            "display_name": _vol_display_name(fname),
+                            "category": _categorize_volume(fname),
+                        }
+                    )
 
         # Scan analysis directories — check both top-level and output/
         # Recognises both "analysis_<zdim>" (standard) and bare "analyze" dirs
@@ -898,11 +908,11 @@ echo "Completed at: $(date)"
 
                 # Verify it looks like an analysis dir (has kmeans or umap)
                 has_markers = (
-                    os.path.isfile(os.path.join(analysis_dir, "data", "kmeans_result.pkl")) or
-                    os.path.isfile(os.path.join(analysis_dir, "kmeans_result.pkl")) or
-                    os.path.isdir(os.path.join(analysis_dir, "plots", "umap")) or
-                    os.path.isdir(os.path.join(analysis_dir, "umap")) or
-                    os.path.isdir(os.path.join(analysis_dir, "kmeans"))
+                    os.path.isfile(os.path.join(analysis_dir, "data", "kmeans_result.pkl"))
+                    or os.path.isfile(os.path.join(analysis_dir, "kmeans_result.pkl"))
+                    or os.path.isdir(os.path.join(analysis_dir, "plots", "umap"))
+                    or os.path.isdir(os.path.join(analysis_dir, "umap"))
+                    or os.path.isdir(os.path.join(analysis_dir, "kmeans"))
                 )
                 if not has_markers:
                     continue
@@ -936,9 +946,7 @@ echo "Completed at: $(date)"
 
                 # K-means volumes in centers/ or kmeans/ subdirs
                 for kmeans_name in ["centers", "kmeans"]:
-                    analysis["kmeans_volumes"].extend(
-                        _list_volumes(os.path.join(analysis_dir, kmeans_name))
-                    )
+                    analysis["kmeans_volumes"].extend(_list_volumes(os.path.join(analysis_dir, kmeans_name)))
 
                 # Trajectories: traj* or path* subdirs
                 for tentry in sorted(os.listdir(analysis_dir)):
@@ -947,16 +955,16 @@ echo "Completed at: $(date)"
                     traj_dir = os.path.join(analysis_dir, tentry)
                     if not os.path.isdir(traj_dir):
                         continue
-                    traj_vols = _list_volumes(traj_dir) + _list_volumes(
-                        os.path.join(traj_dir, "density")
-                    )
+                    traj_vols = _list_volumes(traj_dir) + _list_volumes(os.path.join(traj_dir, "density"))
                     traj_plots = _list_images(traj_dir)
                     if traj_vols or traj_plots:
-                        analysis["trajectories"].append({
-                            "name": tentry,
-                            "volumes": traj_vols,
-                            "plots": traj_plots,
-                        })
+                        analysis["trajectories"].append(
+                            {
+                                "name": tentry,
+                                "volumes": traj_vols,
+                                "plots": traj_plots,
+                            }
+                        )
 
                 # Plots and images — check both new (plots/) and legacy layout
                 analysis["plots"] = _list_images(analysis_dir)
@@ -964,9 +972,7 @@ echo "Completed at: $(date)"
                 if os.path.isdir(plots_root):
                     analysis["plots"].extend(_list_images(plots_root))
                     for plot_subdir in ["umap", "PCA", "density", "density_sliced"]:
-                        analysis["plots"].extend(_list_images(
-                            os.path.join(plots_root, plot_subdir)
-                        ))
+                        analysis["plots"].extend(_list_images(os.path.join(plots_root, plot_subdir)))
                 # Legacy layout fallback
                 for plot_subdir in ["umap", "PCA"]:
                     legacy_dir = os.path.join(analysis_dir, plot_subdir)
@@ -1048,8 +1054,7 @@ echo "Completed at: $(date)"
                             coords = coords.reshape(1, -1)
                         info["stable_states"] = {
                             "coords": coords.tolist(),
-                            "plots": (_list_images(task_dir) +
-                                      _list_images(os.path.join(task_dir, "density"))),
+                            "plots": (_list_images(task_dir) + _list_images(os.path.join(task_dir, "density"))),
                         }
                     except Exception:
                         pass
@@ -1057,8 +1062,7 @@ echo "Completed at: $(date)"
 
         return info
 
-    def get_embedding_data(self, job_id: str, zdim: int,
-                           max_points: int = 15000) -> Optional[dict]:
+    def get_embedding_data(self, job_id: str, zdim: int, max_points: int = 15000) -> Optional[dict]:
         """Load embedding coordinates for scatter plot visualization."""
 
         job = self._jobs.get(job_id)
@@ -1070,7 +1074,6 @@ echo "Completed at: $(date)"
             return None
 
         try:
-
             with open(embeddings_path, "rb") as f:
                 emb = pickle.load(f)
 
@@ -1135,16 +1138,15 @@ echo "Completed at: $(date)"
         for search_dir in [job.output_dir, os.path.join(job.output_dir, "output")]:
             analyze_dir = os.path.join(search_dir, "analyze")
             if os.path.isdir(analyze_dir) and (
-                os.path.isfile(os.path.join(analyze_dir, "data", "kmeans_result.pkl")) or
-                os.path.isfile(os.path.join(analyze_dir, "kmeans_result.pkl")) or
-                os.path.isdir(os.path.join(analyze_dir, "plots", "umap")) or
-                os.path.isdir(os.path.join(analyze_dir, "umap"))
+                os.path.isfile(os.path.join(analyze_dir, "data", "kmeans_result.pkl"))
+                or os.path.isfile(os.path.join(analyze_dir, "kmeans_result.pkl"))
+                or os.path.isdir(os.path.join(analyze_dir, "plots", "umap"))
+                or os.path.isdir(os.path.join(analyze_dir, "umap"))
             ):
                 return analyze_dir
         return None
 
-    def get_umap_data(self, job_id: str, zdim: int,
-                      max_points: int = 15000) -> Optional[dict]:
+    def get_umap_data(self, job_id: str, zdim: int, max_points: int = 15000) -> Optional[dict]:
         """Load UMAP coordinates for scatter plot visualization."""
 
         job = self._jobs.get(job_id)
@@ -1163,7 +1165,6 @@ echo "Completed at: $(date)"
                 return None
 
         try:
-
             with open(umap_path, "rb") as f:
                 umap_raw = pickle.load(f)
 
@@ -1188,8 +1189,7 @@ echo "Completed at: $(date)"
             logger.error("Failed to load UMAP data: %s", e)
             return None
 
-    def get_kmeans_data(self, job_id: str, zdim: int,
-                        max_points: int = 15000) -> Optional[dict]:
+    def get_kmeans_data(self, job_id: str, zdim: int, max_points: int = 15000) -> Optional[dict]:
         """Load k-means cluster labels for coloring the scatter plot."""
 
         job = self._jobs.get(job_id)
@@ -1208,7 +1208,6 @@ echo "Completed at: $(date)"
                 return None
 
         try:
-
             with open(kmeans_path, "rb") as f:
                 kmeans_raw = pickle.load(f)
 
@@ -1240,11 +1239,16 @@ echo "Completed at: $(date)"
 
     # ── Compute task management ──────────────────────────────────
 
-    def submit_compute_task(self, job_id: str, task_type: str,
-                            params: dict, python_path: str,
-                            use_slurm: bool = False,
-                            slurm_opts: Optional[dict] = None,
-                            repo_root: Optional[str] = None) -> Optional[ComputeTask]:
+    def submit_compute_task(
+        self,
+        job_id: str,
+        task_type: str,
+        params: dict,
+        python_path: str,
+        use_slurm: bool = False,
+        slurm_opts: Optional[dict] = None,
+        repo_root: Optional[str] = None,
+    ) -> Optional[ComputeTask]:
         """Submit an async compute task (volume or trajectory)."""
 
         job = self._jobs.get(job_id)
@@ -1262,10 +1266,14 @@ echo "Completed at: $(date)"
             np.savetxt(os.path.join(output_dir, "latent_points.txt"), coords)
 
             cmd = [
-                python_path, "-m", "recovar.commands.compute_state",
+                python_path,
+                "-m",
+                "recovar.commands.compute_state",
                 job.output_dir,
-                "--latent-points", os.path.join(output_dir, "latent_points.txt"),
-                "--outdir", output_dir,
+                "--latent-points",
+                os.path.join(output_dir, "latent_points.txt"),
+                "--outdir",
+                output_dir,
                 "--lazy",
             ]
         elif task_type == "trajectory":
@@ -1277,22 +1285,31 @@ echo "Completed at: $(date)"
             zdim = params.get("zdim", len(z_st))
             n_vols = params.get("n_vols", 6)
             cmd = [
-                python_path, "-m", "recovar.commands.compute_trajectory",
+                python_path,
+                "-m",
+                "recovar.commands.compute_trajectory",
                 job.output_dir,
-                "--outdir", output_dir,
-                "--zdim", str(zdim),
-                "--n-vols-along-path", str(n_vols),
-                "--endpts", os.path.join(output_dir, "endpoints.txt"),
+                "--outdir",
+                output_dir,
+                "--zdim",
+                str(zdim),
+                "--n-vols-along-path",
+                str(n_vols),
+                "--endpts",
+                os.path.join(output_dir, "endpoints.txt"),
                 "--lazy",
             ]
         elif task_type == "density":
             pca_dim = params.get("pca_dim", 4)
             cmd = [
-                python_path, "-m",
+                python_path,
+                "-m",
                 "recovar.commands.estimate_conformational_density",
                 job.output_dir,
-                "--output_dir", output_dir,
-                "--pca_dim", str(pca_dim),
+                "--output_dir",
+                output_dir,
+                "--pca_dim",
+                str(pca_dim),
             ]
             z_dim_used = params.get("z_dim_used")
             if z_dim_used:
@@ -1302,27 +1319,33 @@ echo "Completed at: $(date)"
             percent_top = params.get("percent_top", 1)
             n_local_maxs = params.get("n_local_maxs", 3)
             cmd = [
-                python_path, "-m",
+                python_path,
+                "-m",
                 "recovar.commands.estimate_stable_states",
                 density_pkl,
-                "-o", output_dir,
-                "--percent_top", str(percent_top),
-                "--n_local_maxs", str(n_local_maxs),
+                "-o",
+                output_dir,
+                "--percent_top",
+                str(percent_top),
+                "--n_local_maxs",
+                str(n_local_maxs),
             ]
         else:
             return None
 
         task = ComputeTask(
-            id=task_id, job_id=job_id, task_type=task_type,
-            output_dir=output_dir, created_at=time.time(),
+            id=task_id,
+            job_id=job_id,
+            task_type=task_type,
+            output_dir=output_dir,
+            created_at=time.time(),
             label=params.get("label", task_type),
         )
         # Stash selected params for metadata persistence
         if task_type == "density":
             task._params = {"pca_dim": params.get("pca_dim", 4)}
 
-        env = {**os.environ,
-               "XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
+        env = {**os.environ, "XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
         if repo_root:
             env["PYTHONPATH"] = repo_root + os.pathsep + env.get("PYTHONPATH", "")
 
@@ -1331,8 +1354,8 @@ echo "Completed at: $(date)"
             needs_gpu = task_type not in ("density", "stable_states")
             # Task-specific SLURM defaults: density needs lots of memory & time
             _slurm_defaults = {
-                "density":       {"mem": "128G", "time": "2:00:00"},
-                "stable_states": {"mem": "64G",  "time": "1:00:00"},
+                "density": {"mem": "128G", "time": "2:00:00"},
+                "stable_states": {"mem": "64G", "time": "1:00:00"},
             }
             _td = _slurm_defaults.get(task_type, {"mem": "32G", "time": "1:00:00"})
             script_path = os.path.join(output_dir, "compute.sbatch")
@@ -1344,22 +1367,22 @@ echo "Completed at: $(date)"
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem={opts.get('mem', _td['mem'])}
-#SBATCH --time={opts.get('time', _td['time'])}
-#SBATCH --partition={opts.get('partition', 'cryoem')}
+#SBATCH --mem={opts.get("mem", _td["mem"])}
+#SBATCH --time={opts.get("time", _td["time"])}
+#SBATCH --partition={opts.get("partition", "cryoem")}
 {"#SBATCH --gres=gpu:1" if needs_gpu else "# No GPU needed for " + task_type}
-#SBATCH --account={opts.get('account', 'amits')}
+#SBATCH --account={opts.get("account", "amits")}
 
 set -euo pipefail
 export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-{f'export PYTHONPATH="{repo_root}:${{PYTHONPATH:-}}"' if repo_root else ''}
+{f'export PYTHONPATH="{repo_root}:${{PYTHONPATH:-}}"' if repo_root else ""}
 
 echo "PYTHONPATH=${{PYTHONPATH:-}}"
 echo "which python: {python_path}"
 {python_path} -c "import recovar; print('recovar from:', recovar.__file__); from recovar.cuda_backproject import cuda_available; print('CUDA available:', cuda_available())" || echo "Pre-check failed"
 
-{' '.join(cmd)}
+{" ".join(cmd)}
 """)
             slurm_id, slurm_err = _slurm_submit(script_path)
             if slurm_id:
@@ -1374,7 +1397,10 @@ echo "which python: {python_path}"
                 log_file = os.path.join(output_dir, "compute.log")
                 with open(log_file, "w") as lf:
                     proc = subprocess.Popen(
-                        cmd, stdout=lf, stderr=subprocess.STDOUT, env=env,
+                        cmd,
+                        stdout=lf,
+                        stderr=subprocess.STDOUT,
+                        env=env,
                     )
                 task.pid = proc.pid
             except Exception as e:
@@ -1389,12 +1415,14 @@ echo "which python: {python_path}"
     def _save_task_meta(self, task: ComputeTask):
         """Write task metadata to disk for recovery after restart."""
         meta = {
-            "id": task.id, "job_id": task.job_id,
-            "task_type": task.task_type, "label": task.label,
+            "id": task.id,
+            "job_id": task.job_id,
+            "task_type": task.task_type,
+            "label": task.label,
             "slurm_job_id": task.slurm_job_id,
             "created_at": task.created_at,
         }
-        if hasattr(task, '_params'):
+        if hasattr(task, "_params"):
             meta["params"] = task._params
         _save_json(os.path.join(task.output_dir, "task_meta.json"), meta)
 
@@ -1458,7 +1486,7 @@ echo "which python: {python_path}"
                 if os.path.isfile(knee_pkl):
                     result["density_pkl"] = knee_pkl
                 # Include pca_dim from stored params or task_meta
-                pca_dim = getattr(task, '_params', {}).get("pca_dim")
+                pca_dim = getattr(task, "_params", {}).get("pca_dim")
                 if not pca_dim:
                     meta_path = os.path.join(task.output_dir, "task_meta.json")
                     if os.path.isfile(meta_path):
@@ -1480,8 +1508,7 @@ echo "which python: {python_path}"
                         result["stable_states"] = coords.tolist()
                     except Exception:
                         result["stable_states"] = []
-                result["plots"] = (_list_images(task.output_dir) +
-                                   _list_images(os.path.join(task.output_dir, "density")))
+                result["plots"] = _list_images(task.output_dir) + _list_images(os.path.join(task.output_dir, "density"))
             else:
                 result["volumes"] = _list_volumes(task.output_dir)
 
@@ -1499,6 +1526,7 @@ echo "which python: {python_path}"
 # ---------------------------------------------------------------------------
 # File browser helper
 # ---------------------------------------------------------------------------
+
 
 def browse_directory(path: str) -> dict:
     """List contents of a directory for the file browser."""
@@ -1528,9 +1556,9 @@ def browse_directory(path: str) -> dict:
                     elif size < 1024 * 1024:
                         entry["size"] = f"{size / 1024:.1f} KB"
                     elif size < 1024 * 1024 * 1024:
-                        entry["size"] = f"{size / (1024*1024):.1f} MB"
+                        entry["size"] = f"{size / (1024 * 1024):.1f} MB"
                     else:
-                        entry["size"] = f"{size / (1024*1024*1024):.1f} GB"
+                        entry["size"] = f"{size / (1024 * 1024 * 1024):.1f} GB"
                 except OSError:
                     pass
                 # Mark relevant file types

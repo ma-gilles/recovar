@@ -86,11 +86,13 @@ def get_downsample_batch_size(orig_D: int, gpu_memory_gb: float) -> int:
 # Internal implementations
 # ---------------------------------------------------------------------------
 
+
 def _gpu_available() -> bool:
     """Check if a JAX GPU device is available."""
     try:
         import jax
-        return any(d.platform == 'gpu' for d in jax.devices())
+
+        return any(d.platform == "gpu" for d in jax.devices())
     except (ImportError, RuntimeError):
         return False
 
@@ -111,10 +113,13 @@ def _downsample_gpu(images: np.ndarray, target_D: int) -> np.ndarray:
         axes=(-2, -1),
     )
     ft_cropped = ft[..., crop_start:crop_end, crop_start:crop_end]
-    result = jnp.fft.ifft2(
-        jnp.fft.ifftshift(ft_cropped, axes=(-2, -1)),
-        axes=(-2, -1),
-    ).real * scale
+    result = (
+        jnp.fft.ifft2(
+            jnp.fft.ifftshift(ft_cropped, axes=(-2, -1)),
+            axes=(-2, -1),
+        ).real
+        * scale
+    )
 
     return np.asarray(result).astype(images.dtype)
 
@@ -131,9 +136,12 @@ def _downsample_cpu(images: np.ndarray, target_D: int) -> np.ndarray:
         axes=(-2, -1),
     )
     ft_cropped = ft[..., crop_start:crop_end, crop_start:crop_end]
-    result = np.fft.ifft2(
-        np.fft.ifftshift(ft_cropped, axes=(-2, -1)),
-        axes=(-2, -1),
-    ).real * scale
+    result = (
+        np.fft.ifft2(
+            np.fft.ifftshift(ft_cropped, axes=(-2, -1)),
+            axes=(-2, -1),
+        ).real
+        * scale
+    )
 
     return result.astype(images.dtype)

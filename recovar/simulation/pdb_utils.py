@@ -31,6 +31,7 @@ _RCSB_URL = "https://files.rcsb.org/download/{pdb_id}.pdb"
 # AtomGroup — drop-in replacement for the prody.AtomGroup interface we use
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class AtomGroup:
     """Minimal atom container compatible with recovar's prody usage.
@@ -88,6 +89,7 @@ class AtomGroup:
 # PDB / mmCIF file parser
 # ---------------------------------------------------------------------------
 
+
 def parse_pdb(path_or_id: str) -> AtomGroup:
     """Parse a PDB or mmCIF file, or fetch by 4-character PDB ID from RCSB.
 
@@ -103,7 +105,7 @@ def parse_pdb(path_or_id: str) -> AtomGroup:
         AtomGroup with coordinates and element types.
     """
     if os.path.isfile(path_or_id):
-        if path_or_id.lower().endswith('.cif'):
+        if path_or_id.lower().endswith(".cif"):
             return _parse_cif_file(path_or_id)
         return _parse_pdb_file(path_or_id)
 
@@ -113,9 +115,7 @@ def parse_pdb(path_or_id: str) -> AtomGroup:
         local_path = fetch_pdb(pdb_id)
         return _parse_pdb_file(local_path)
 
-    raise FileNotFoundError(
-        f"'{path_or_id}' is not a file and does not look like a PDB ID"
-    )
+    raise FileNotFoundError(f"'{path_or_id}' is not a file and does not look like a PDB ID")
 
 
 def _parse_pdb_file(filepath: str) -> AtomGroup:
@@ -245,8 +245,7 @@ def _parse_cif_file(filepath: str) -> AtomGroup:
     if not coords_list:
         raise ValueError(f"No model-1 ATOM/HETATM records found in {filepath}")
 
-    logger.info("Parsed mmCIF %s: %d atoms, %d unique chains",
-                filepath, len(coords_list), len(set(chain_ids_list)))
+    logger.info("Parsed mmCIF %s: %d atoms, %d unique chains", filepath, len(coords_list), len(set(chain_ids_list)))
 
     return AtomGroup(
         coords=np.array(coords_list, dtype=np.float64),
@@ -259,6 +258,7 @@ def _parse_cif_file(filepath: str) -> AtomGroup:
 # ---------------------------------------------------------------------------
 # PDB file writer
 # ---------------------------------------------------------------------------
+
 
 def write_pdb(filepath: str, atoms: AtomGroup):
     """Write an AtomGroup to a PDB file.
@@ -298,6 +298,7 @@ def write_pdb(filepath: str, atoms: AtomGroup):
 # ---------------------------------------------------------------------------
 # RCSB PDB fetcher
 # ---------------------------------------------------------------------------
+
 
 def fetch_pdb(
     pdb_id: str,

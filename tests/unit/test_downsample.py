@@ -13,6 +13,7 @@ pytestmark = pytest.mark.unit
 # Basic functionality
 # ---------------------------------------------------------------------------
 
+
 def test_identity_returns_copy():
     """Downsampling D→D returns an identical (but copied) array."""
     images = np.random.randn(5, 32, 32).astype(np.float32)
@@ -52,7 +53,7 @@ def test_gaussian_blob():
     # Create Gaussian directly at D=32
     x32 = np.arange(target) - target / 2
     xx32, yy32 = np.meshgrid(x32, x32)
-    gauss_32 = np.exp(-(xx32**2 + yy32**2) / (2 * (sigma / 2)**2))
+    gauss_32 = np.exp(-(xx32**2 + yy32**2) / (2 * (sigma / 2) ** 2))
 
     # Should be roughly similar (Fourier cropping of a Gaussian is a Gaussian)
     # Normalize both for comparison
@@ -81,15 +82,14 @@ def test_dtype_preserved():
 # Batch processing
 # ---------------------------------------------------------------------------
 
+
 def test_batch_matches_individual():
     """Batched downsampling matches per-image downsampling."""
     images = np.random.randn(10, 64, 64).astype(np.float64)
 
     batch_result = downsample_images(images, 32)
 
-    individual = np.stack([
-        downsample_images(images[i], 32) for i in range(10)
-    ])
+    individual = np.stack([downsample_images(images[i], 32) for i in range(10)])
 
     assert_allclose(batch_result, individual, atol=1e-10)
 
@@ -97,6 +97,7 @@ def test_batch_matches_individual():
 # ---------------------------------------------------------------------------
 # Error cases
 # ---------------------------------------------------------------------------
+
 
 def test_odd_target_raises():
     images = np.random.randn(3, 32, 32)

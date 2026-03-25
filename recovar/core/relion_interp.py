@@ -38,6 +38,7 @@ import recovar.core.fourier_transform_utils as ftu
 # Coordinate generation
 # ---------------------------------------------------------------------------
 
+
 def _pixel_frequencies(image_shape, half_image=False):
     """Generate 2D frequency coordinates for each pixel.
 
@@ -75,6 +76,7 @@ def _rotate_plane_coords(k2d, rotation_matrix):
 # Trilinear interpolation (RELION's no_tex3D style, cascaded lerp)
 # ---------------------------------------------------------------------------
 
+
 def _trilinear_gather_full(vol, g0, g1, g2, N0, N1, N2):
     """Trilinear interpolation from a full (centered) volume.
 
@@ -98,11 +100,7 @@ def _trilinear_gather_full(vol, g0, g1, g2, N0, N1, N2):
 
     # Read 8 neighbors with bounds checking (zero for OOB)
     def _safe_read(vol, i0, i1, i2):
-        in_bounds = (
-            (i0 >= 0) & (i0 < N0) &
-            (i1 >= 0) & (i1 < N1) &
-            (i2 >= 0) & (i2 < N2)
-        )
+        in_bounds = (i0 >= 0) & (i0 < N0) & (i1 >= 0) & (i1 < N1) & (i2 >= 0) & (i2 < N2)
         # Clamp to valid range for indexing, then mask
         ci0 = jnp.clip(i0, 0, N0 - 1)
         ci1 = jnp.clip(i1, 0, N1 - 1)
@@ -111,12 +109,12 @@ def _trilinear_gather_full(vol, g0, g1, g2, N0, N1, N2):
         return jnp.where(in_bounds, val, jnp.zeros_like(val))
 
     # 8 corners
-    d000 = _safe_read(vol, b0,     b1,     b2)
-    d001 = _safe_read(vol, b0,     b1,     b2 + 1)
-    d010 = _safe_read(vol, b0,     b1 + 1, b2)
-    d011 = _safe_read(vol, b0,     b1 + 1, b2 + 1)
-    d100 = _safe_read(vol, b0 + 1, b1,     b2)
-    d101 = _safe_read(vol, b0 + 1, b1,     b2 + 1)
+    d000 = _safe_read(vol, b0, b1, b2)
+    d001 = _safe_read(vol, b0, b1, b2 + 1)
+    d010 = _safe_read(vol, b0, b1 + 1, b2)
+    d011 = _safe_read(vol, b0, b1 + 1, b2 + 1)
+    d100 = _safe_read(vol, b0 + 1, b1, b2)
+    d101 = _safe_read(vol, b0 + 1, b1, b2 + 1)
     d110 = _safe_read(vol, b0 + 1, b1 + 1, b2)
     d111 = _safe_read(vol, b0 + 1, b1 + 1, b2 + 1)
 
@@ -184,10 +182,14 @@ def _trilinear_gather_half(half_vol, g0, g1, g2, N0, N1, N2):
 
         # Bounds check
         in_bounds = (
-            (i0 >= 0) & (i0 < N0) &
-            (i1 >= 0) & (i1 < N1) &
-            (i2_full >= 0) & (i2_full < N2) &
-            (rkz >= 0) & (rkz < N2_half)
+            (i0 >= 0)
+            & (i0 < N0)
+            & (i1 >= 0)
+            & (i1 < N1)
+            & (i2_full >= 0)
+            & (i2_full < N2)
+            & (rkz >= 0)
+            & (rkz < N2_half)
         )
 
         ci0 = jnp.clip(ri0, 0, N0 - 1)
@@ -200,12 +202,12 @@ def _trilinear_gather_half(half_vol, g0, g1, g2, N0, N1, N2):
         return jnp.where(in_bounds, val, jnp.zeros_like(val))
 
     # 8 corners
-    d000 = _safe_read_hermitian(b0,     b1,     b2)
-    d001 = _safe_read_hermitian(b0,     b1,     b2 + 1)
-    d010 = _safe_read_hermitian(b0,     b1 + 1, b2)
-    d011 = _safe_read_hermitian(b0,     b1 + 1, b2 + 1)
-    d100 = _safe_read_hermitian(b0 + 1, b1,     b2)
-    d101 = _safe_read_hermitian(b0 + 1, b1,     b2 + 1)
+    d000 = _safe_read_hermitian(b0, b1, b2)
+    d001 = _safe_read_hermitian(b0, b1, b2 + 1)
+    d010 = _safe_read_hermitian(b0, b1 + 1, b2)
+    d011 = _safe_read_hermitian(b0, b1 + 1, b2 + 1)
+    d100 = _safe_read_hermitian(b0 + 1, b1, b2)
+    d101 = _safe_read_hermitian(b0 + 1, b1, b2 + 1)
     d110 = _safe_read_hermitian(b0 + 1, b1 + 1, b2)
     d111 = _safe_read_hermitian(b0 + 1, b1 + 1, b2 + 1)
 
@@ -225,16 +227,13 @@ def _trilinear_gather_half(half_vol, g0, g1, g2, N0, N1, N2):
 # Nearest-neighbor interpolation
 # ---------------------------------------------------------------------------
 
+
 def _nearest_gather_full(vol, g0, g1, g2, N0, N1, N2):
     """Nearest-neighbor interpolation from a full volume."""
     i0 = jnp.round(g0).astype(jnp.int32)
     i1 = jnp.round(g1).astype(jnp.int32)
     i2 = jnp.round(g2).astype(jnp.int32)
-    in_bounds = (
-        (i0 >= 0) & (i0 < N0) &
-        (i1 >= 0) & (i1 < N1) &
-        (i2 >= 0) & (i2 < N2)
-    )
+    in_bounds = (i0 >= 0) & (i0 < N0) & (i1 >= 0) & (i1 < N1) & (i2 >= 0) & (i2 < N2)
     ci0 = jnp.clip(i0, 0, N0 - 1)
     ci1 = jnp.clip(i1, 0, N1 - 1)
     ci2 = jnp.clip(i2, 0, N2 - 1)
@@ -263,12 +262,7 @@ def _nearest_gather_half(half_vol, g0, g1, g2, N0, N1, N2):
     ri1 = jnp.where(use_neg, (N1 - (N1 & 1) - i1) % N1, i1)
     rkz = jnp.where(use_neg, -kz_mapped, kz_mapped)
 
-    in_bounds = (
-        (i0 >= 0) & (i0 < N0) &
-        (i1 >= 0) & (i1 < N1) &
-        (i2 >= 0) & (i2 < N2) &
-        (rkz >= 0) & (rkz < N2_half)
-    )
+    in_bounds = (i0 >= 0) & (i0 < N0) & (i1 >= 0) & (i1 < N1) & (i2 >= 0) & (i2 < N2) & (rkz >= 0) & (rkz < N2_half)
 
     ci0 = jnp.clip(ri0, 0, N0 - 1)
     ci1 = jnp.clip(ri1, 0, N1 - 1)
@@ -282,8 +276,8 @@ def _nearest_gather_half(half_vol, g0, g1, g2, N0, N1, N2):
 # Forward projection (Fourier slice extraction)
 # ---------------------------------------------------------------------------
 
-def _project_one_image(vol, rotation_matrix, pixel_freqs, center, N0, N1, N2,
-                       order, half_volume, max_r2):
+
+def _project_one_image(vol, rotation_matrix, pixel_freqs, center, N0, N1, N2, order, half_volume, max_r2):
     """Project one image from a volume using one rotation matrix.
 
     Args:
@@ -300,7 +294,7 @@ def _project_one_image(vol, rotation_matrix, pixel_freqs, center, N0, N1, N2,
     # Radius clipping — use pre-rotation 2D norm (exact for integer freqs).
     # Must match backproject's clipping to preserve the adjoint relationship.
     if max_r2 is not None:
-        r2 = jnp.sum(pixel_freqs ** 2, axis=-1)
+        r2 = jnp.sum(pixel_freqs**2, axis=-1)
         in_radius = r2 <= max_r2
     else:
         in_radius = None
@@ -330,8 +324,7 @@ def _project_one_image(vol, rotation_matrix, pixel_freqs, center, N0, N1, N2,
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def project(vol, rotations, image_shape, volume_shape,
-            order=1, half_volume=False, half_image=False, max_r=None):
+def project(vol, rotations, image_shape, volume_shape, order=1, half_volume=False, half_image=False, max_r=None):
     """RELION-style forward projection (Fourier slice extraction).
 
     Projects a 3D Fourier volume onto 2D Fourier images via central-slice
@@ -369,8 +362,16 @@ def project(vol, rotations, image_shape, volume_shape,
     # vmap over images
     def _proj_one(rot):
         return _project_one_image(
-            vol, rot, pixel_freqs, center,
-            N0, N1, N2, order, half_volume, max_r2,
+            vol,
+            rot,
+            pixel_freqs,
+            center,
+            N0,
+            N1,
+            N2,
+            order,
+            half_volume,
+            max_r2,
         )
 
     return jax.vmap(_proj_one)(rotations)
@@ -379,6 +380,7 @@ def project(vol, rotations, image_shape, volume_shape,
 # ---------------------------------------------------------------------------
 # Backprojection (adjoint of forward projection)
 # ---------------------------------------------------------------------------
+
 
 def _scatter_trilinear_full(n_voxels, g0, g1, g2, vals, N0, N1, N2):
     """Trilinear scatter-add to a full volume.
@@ -423,11 +425,7 @@ def _scatter_trilinear_full(n_voxels, g0, g1, g2, vals, N0, N1, N2):
                 j1 = b1 + d1
                 j2 = b2 + d2
 
-                in_bounds = (
-                    (j0 >= 0) & (j0 < N0) &
-                    (j1 >= 0) & (j1 < N1) &
-                    (j2 >= 0) & (j2 < N2)
-                )
+                in_bounds = (j0 >= 0) & (j0 < N0) & (j1 >= 0) & (j1 < N1) & (j2 >= 0) & (j2 < N2)
 
                 flat_idx = j0 * stride0 + j1 * stride1 + j2
                 flat_idx = jnp.where(in_bounds, flat_idx, 0)
@@ -472,11 +470,7 @@ def _scatter_trilinear_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2):
                 j1 = b1 + d1
                 j2 = b2 + d2
 
-                in_bounds = (
-                    (j0 >= 0) & (j0 < N0) &
-                    (j1 >= 0) & (j1 < N1) &
-                    (j2 >= 0) & (j2 < N2)
-                )
+                in_bounds = (j0 >= 0) & (j0 < N0) & (j1 >= 0) & (j1 < N1) & (j2 >= 0) & (j2 < N2)
 
                 kz = j2 - ic2
                 # For even N2, kz=-ic2 is Nyquist (self-conjugate) — map directly.
@@ -509,11 +503,7 @@ def _scatter_nearest_full(n_voxels, g0, g1, g2, vals, N0, N1, N2):
     i0 = jnp.round(g0).astype(jnp.int32)
     i1 = jnp.round(g1).astype(jnp.int32)
     i2 = jnp.round(g2).astype(jnp.int32)
-    in_bounds = (
-        (i0 >= 0) & (i0 < N0) &
-        (i1 >= 0) & (i1 < N1) &
-        (i2 >= 0) & (i2 < N2)
-    )
+    in_bounds = (i0 >= 0) & (i0 < N0) & (i1 >= 0) & (i1 < N1) & (i2 >= 0) & (i2 < N2)
     flat_idx = i0 * (N1 * N2) + i1 * N2 + i2
     flat_idx = jnp.where(in_bounds, flat_idx, 0)
     weighted = jnp.where(in_bounds, vals, jnp.zeros_like(vals))
@@ -541,12 +531,7 @@ def _scatter_nearest_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2):
     sj1 = jnp.where(use_neg, (N1 - (N1 & 1) - i1) % N1, i1)
     hkz = jnp.where(use_neg, -kz_mapped, kz_mapped)
 
-    in_bounds = (
-        (i0 >= 0) & (i0 < N0) &
-        (i1 >= 0) & (i1 < N1) &
-        (i2 >= 0) & (i2 < N2) &
-        (hkz >= 0) & (hkz < N2_half)
-    )
+    in_bounds = (i0 >= 0) & (i0 < N0) & (i1 >= 0) & (i1 < N1) & (i2 >= 0) & (i2 < N2) & (hkz >= 0) & (hkz < N2_half)
     flat_idx = sj0 * (N1 * N2_half) + sj1 * N2_half + hkz
     flat_idx = jnp.where(in_bounds, flat_idx, 0)
     sv = jnp.where(use_neg, jnp.conj(vals), vals)
@@ -554,9 +539,9 @@ def _scatter_nearest_half(n_voxels_half, g0, g1, g2, vals, N0, N1, N2):
     return jnp.zeros(n_voxels_half, dtype=vals.dtype).at[flat_idx].add(weighted)
 
 
-def _backproject_one_image(pixel_freqs, rotation_matrix, img_vals, center,
-                           N0, N1, N2, order, half_volume, max_r2,
-                           n_voxels_out):
+def _backproject_one_image(
+    pixel_freqs, rotation_matrix, img_vals, center, N0, N1, N2, order, half_volume, max_r2, n_voxels_out
+):
     """Backproject one image into a volume.
 
     Matches RELION's ``cuda_kernel_backproject3D``: for each pixel, compute
@@ -571,7 +556,7 @@ def _backproject_one_image(pixel_freqs, rotation_matrix, img_vals, center,
     # by ~1 ULP and cause conjugate pairs to be clipped asymmetrically
     # in the half-image path.
     if max_r2 is not None:
-        r2 = jnp.sum(pixel_freqs ** 2, axis=-1)
+        r2 = jnp.sum(pixel_freqs**2, axis=-1)
         in_radius = r2 <= max_r2
         img_vals = jnp.where(in_radius, img_vals, jnp.zeros_like(img_vals))
 
@@ -592,8 +577,7 @@ def _backproject_one_image(pixel_freqs, rotation_matrix, img_vals, center,
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def backproject(imgs, rotations, image_shape, volume_shape,
-                order=1, half_volume=False, half_image=False, max_r=None):
+def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume=False, half_image=False, max_r=None):
     """RELION-style backprojection (adjoint of forward projection).
 
     Scatters 2D Fourier image values back into a 3D Fourier volume using
@@ -661,8 +645,17 @@ def backproject(imgs, rotations, image_shape, volume_shape,
 
         # Primary scatter
         vol = _backproject_one_image(
-            pixel_freqs, rot, img_vals, center,
-            N0, N1, N2, order, half_volume, max_r2, n_voxels,
+            pixel_freqs,
+            rot,
+            img_vals,
+            center,
+            N0,
+            N1,
+            N2,
+            order,
+            half_volume,
+            max_r2,
+            n_voxels,
         )
 
         if half_image:
@@ -675,7 +668,7 @@ def backproject(imgs, rotations, image_shape, volume_shape,
             if max_r2 is not None:
                 # Use pre-rotation 2D norm to match the primary scatter's
                 # radius check and avoid float32 boundary asymmetry.
-                conj_r2 = jnp.sum(conj_freqs ** 2, axis=-1)
+                conj_r2 = jnp.sum(conj_freqs**2, axis=-1)
                 conj_vals = jnp.where(conj_r2 <= max_r2, conj_vals, jnp.zeros_like(conj_vals))
 
             cg0 = conj_rk[:, 0] + center[0]

@@ -214,13 +214,9 @@ def render_markdown(
     if clean_only:
         out.append(f"- clean-only metrics: **{len(clean_only)}**")
     out.append("")
-    out.append(
-        "## Per-Metric (ranked by significance, then effect size)"
-    )
+    out.append("## Per-Metric (ranked by significance, then effect size)")
     out.append("")
-    out.append(
-        "| metric | better | direction | local | clean | abs diff | directional change | significance |"
-    )
+    out.append("| metric | better | direction | local | clean | abs diff | directional change | significance |")
     out.append("|---|---|---|---:|---:|---:|---:|---|")
     for r in rows:
         out.append(
@@ -248,9 +244,7 @@ def render_markdown(
         for m in clean_only:
             out.append(f"- `{m}`")
     out.append("")
-    out.append(
-        "Note: significance here is practical significance from effect size, not a statistical hypothesis test."
-    )
+    out.append("Note: significance here is practical significance from effect size, not a statistical hypothesis test.")
     return "\n".join(out)
 
 

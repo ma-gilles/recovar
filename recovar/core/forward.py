@@ -42,8 +42,13 @@ def forward_model(
         If True, *volume* is an rfft-packed half-volume ``(N0*N1*(N2//2+1),)``.
     """
     slices = slice_volume(
-        volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
-        half_volume=half_volume, half_image=half_image,
+        volume,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        config.disc_type,
+        half_volume=half_volume,
+        half_image=half_image,
     )
     if not skip_ctf:
         slices = slices * config.compute_ctf(ctf_params, half_image=half_image)
@@ -91,8 +96,14 @@ def adjoint_forward_model(
     if not skip_ctf:
         slices = slices * config.compute_ctf(ctf_params, half_image=half_image)
     return adjoint_slice_volume(
-        slices, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
-        volume=volume, half_image=half_image, half_volume=half_volume,
+        slices,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        config.disc_type,
+        volume=volume,
+        half_image=half_image,
+        half_volume=half_volume,
     )
 
 

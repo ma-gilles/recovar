@@ -48,7 +48,9 @@ class RadialNoiseModel:
 
     def __init__(self, noise_variance_radial, image_shape=None):
         self.noise_variance_radial = noise_variance_radial
-        self.image_shape = image_shape if image_shape is not None else _default_image_shape_from_radial(noise_variance_radial)
+        self.image_shape = (
+            image_shape if image_shape is not None else _default_image_shape_from_radial(noise_variance_radial)
+        )
         self._invalidate_cache()
 
     def _invalidate_cache(self):
@@ -90,7 +92,9 @@ class VariableRadialNoiseModel:
     def __init__(self, noise_variance_radials, dose_indices, image_shape=None):
         self.noise_variance_radials = noise_variance_radials
         self.dose_indices = jnp.asarray(dose_indices)
-        self.image_shape = image_shape if image_shape is not None else _default_image_shape_from_radial(noise_variance_radials[0])
+        self.image_shape = (
+            image_shape if image_shape is not None else _default_image_shape_from_radial(noise_variance_radials[0])
+        )
         self._invalidate_cache()
 
     def _invalidate_cache(self):
@@ -126,7 +130,7 @@ class VariableRadialNoiseModel:
 
     def get_average_radial_noise(self, *args, **kwargs):
         counts = jnp.bincount(self.dose_indices) / self.dose_indices.size
-        return jnp.sum(jnp.asarray(self.noise_variance_radials) * counts[:,None], axis=0)
+        return jnp.sum(jnp.asarray(self.noise_variance_radials) * counts[:, None], axis=0)
 
     def set_variance(self, noise_variance_radials):
         self.noise_variance_radials = noise_variance_radials
@@ -164,6 +168,7 @@ def as_noise_model(cov_noise, image_shape):
     RadialNoiseModel or ConstantNoiseModel
     """
     import numpy as _np
+
     arr = _np.asarray(cov_noise)
     half_pixel_count = image_shape[0] * (image_shape[1] // 2 + 1)
     pixel_count = image_shape[0] * image_shape[1]
@@ -208,8 +213,7 @@ def to_batched_half_pixel_noise(noise_variances, image_shape, batch_size=None):
     Callers should rely on XLA broadcasting rather than expecting exact (B, N_half).
     """
     arr = jnp.asarray(noise_variances)
-    half_pixel_count = int(fourier_transform_utils.image_shape_to_half_image_shape(image_shape)[-1]
-                           * image_shape[0])
+    half_pixel_count = int(fourier_transform_utils.image_shape_to_half_image_shape(image_shape)[-1] * image_shape[0])
 
     # Already in half-pixel format — return as-is (broadcast or per-image)
     if arr.ndim == 2 and arr.shape[-1] == half_pixel_count:
@@ -226,23 +230,27 @@ def to_batched_half_pixel_noise(noise_variances, image_shape, batch_size=None):
     return fourier_transform_utils.full_image_to_half_image(full, image_shape)
 
 
-@functools.partial(jax.jit, static_argnums=(3,4,6))
-def get_image_masks(volume_mask, rotation_matrices, volume_mask_threshold, volume_shape, image_shape, image_mask, invert_mask):
+@functools.partial(jax.jit, static_argnums=(3, 4, 6))
+def get_image_masks(
+    volume_mask, rotation_matrices, volume_mask_threshold, volume_shape, image_shape, image_mask, invert_mask
+):
     if volume_mask is not None:
-        image_masks = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                            rotation_matrices,
-                                            image_mask, 
-                                            volume_mask_threshold,
-                                            image_shape, 
-                                            volume_shape, 
-                                            image_shape[0], 
-                                            0, 
-                                            'linear_interp',
-                                              soften =5)
+        image_masks = covariance_core.get_per_image_tight_mask(
+            volume_mask,
+            rotation_matrices,
+            image_mask,
+            volume_mask_threshold,
+            image_shape,
+            volume_shape,
+            image_shape[0],
+            0,
+            "linear_interp",
+            soften=5,
+        )
     elif image_mask is not None:
         image_masks = image_mask
     else:
-        image_masks = jnp.ones(image_shape, dtype = np.float32)
+        image_masks = jnp.ones(image_shape, dtype=np.float32)
 
     if invert_mask:
         image_masks = 1 - image_masks
@@ -250,7 +258,17 @@ def get_image_masks(volume_mask, rotation_matrices, volume_mask_threshold, volum
 
 
 # From a given noise variance model, predict the observed noise variance in a possibly CTFed + masked image
-def predict_noise_variance(noise_variance, CTF_params, voxel_size, ctf, image_masks, image_shape, radial=True, premultiplied_ctf=False, upsample_factor=1):
+def predict_noise_variance(
+    noise_variance,
+    CTF_params,
+    voxel_size,
+    ctf,
+    image_masks,
+    image_shape,
+    radial=True,
+    premultiplied_ctf=False,
+    upsample_factor=1,
+):
     """Predict noise variance in images, optionally handling upsampling.
 
     Args:
@@ -269,15 +287,15 @@ def predict_noise_variance(noise_variance, CTF_params, voxel_size, ctf, image_ma
         n_orig = len(noise_variance)
         n_new = n_orig * upsample_factor
         new_indices = jnp.linspace(0, n_orig - 1, n_new)
-        
+
         # Get indices for interpolation
         idx_lo = jnp.floor(new_indices).astype(int)
         idx_hi = jnp.minimum(idx_lo + 1, n_orig - 1)
         alpha = new_indices - idx_lo
-        
+
         # Linear interpolation
         noise_variance = (1 - alpha) * noise_variance[idx_lo] + alpha * noise_variance[idx_hi]
-        
+
         # Scale noise by upsample factor squared to maintain variance
         noise_variance = noise_variance * upsample_factor**2
         upsampled_shape = tuple(np.array(image_shape) * upsample_factor)
@@ -298,23 +316,47 @@ def predict_noise_variance(noise_variance, CTF_params, voxel_size, ctf, image_ma
     return predicted_noise_variance
 
 
-def noise_variance_loss(images, noise_variance, translations, CTF_params, voxel_size, ctf, image_masks, image_shape, radial , premultiplied_ctf):
+def noise_variance_loss(
+    images,
+    noise_variance,
+    translations,
+    CTF_params,
+    voxel_size,
+    ctf,
+    image_masks,
+    image_shape,
+    radial,
+    premultiplied_ctf,
+):
     # Compute the predicted noise variance
 
-    images = core.translate_images(images, translations , image_shape)
+    images = core.translate_images(images, translations, image_shape)
 
     masked_images = covariance_core.apply_image_masks(images, image_masks, image_shape).reshape(-1, *image_shape)
-    predicted_noise_variance = predict_noise_variance(noise_variance, CTF_params, voxel_size, ctf, image_masks, image_shape, radial, premultiplied_ctf)
+    predicted_noise_variance = predict_noise_variance(
+        noise_variance, CTF_params, voxel_size, ctf, image_masks, image_shape, radial, premultiplied_ctf
+    )
 
-    loss = jnp.sum( jnp.abs( jnp.abs(masked_images)**2 - predicted_noise_variance )**2  ) / np.prod(image_shape)
+    loss = jnp.sum(jnp.abs(jnp.abs(masked_images) ** 2 - predicted_noise_variance) ** 2) / np.prod(image_shape)
 
     return loss
 
 
 @nvtx.annotate("fit_noise_model_to_images", color="red", domain=NVTX_DOMAIN_NOISE)
-def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, image_subset, batch_size, invert_mask, disc_type='linear_interp', use_batch_solver=True, tilt_dose_inner=False, image_n_iter=1e4):
+def fit_noise_model_to_images(
+    experiment_dataset,
+    volume_mask,
+    mean_estimate,
+    image_subset,
+    batch_size,
+    invert_mask,
+    disc_type="linear_interp",
+    use_batch_solver=True,
+    tilt_dose_inner=False,
+    image_n_iter=1e4,
+):
     """Fit noise model to images, handling tilt series data specially.
-    
+
     Args:
         experiment_dataset: Dataset containing images and metadata
         volume_mask: Mask for the volume
@@ -325,7 +367,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
         disc_type: Type of discretization to use
         use_batch_solver: Whether to use batch solver vs full dataset
         tilt_dose_inner: Whether this is an inner call for tilt series
-        
+
     Returns:
         For tilt series: Array of noise variances per tilt
         Otherwise: Single noise variance and initial estimate
@@ -349,10 +391,9 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             # Get images for this tilt
             tilt_mask = experiment_dataset.noise.dose_indices == tilt_idx
             tilt_images = np.where(tilt_mask)[0]
-            
+
             # Intersect with provided image subset if any
-            images_to_use = (tilt_images if image_subset is None
-                           else np.intersect1d(image_subset, tilt_images))
+            images_to_use = tilt_images if image_subset is None else np.intersect1d(image_subset, tilt_images)
             images_to_use = np.array(images_to_use)
 
             if images_to_use.size == 0:
@@ -362,14 +403,14 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             # Fit noise model for this tilt
             noise_variance, initial_noise_variance_radial = fit_noise_model_to_images(
                 experiment_dataset,
-                volume_mask, 
+                volume_mask,
                 mean_estimate,
                 images_to_use,
                 batch_size,
                 invert_mask,
                 disc_type,
                 use_batch_solver,
-                tilt_dose_inner=True
+                tilt_dose_inner=True,
             )
             noise_variance_radials.append(noise_variance)
             initial_noise_variance_radials.append(initial_noise_variance_radial)
@@ -377,7 +418,7 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
         noise_variance_radials = jnp.stack(noise_variance_radials)
         initial_noise_variance_radials = jnp.stack(initial_noise_variance_radials)
         return noise_variance_radials, initial_noise_variance_radials
-    
+
     if image_subset is not None:
         batch_size = int(np.min([batch_size, image_subset.size]))
 
@@ -390,29 +431,35 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
         disc_type="linear_interp",
     )
 
-
     def infinite_data_iterator():
-            while True:                              # repeat forever (or add a break after N epochs)
-
-                for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
-                    batch_size,
-                    indices=image_subset,
-                    prefetch=False,
-                ):
-                    yield (
-                        batch,
-                        rotation_matrices,
-                        translations,
-                        ctf_params,
-                    )
-
+        while True:  # repeat forever (or add a break after N epochs)
+            for (
+                batch,
+                rotation_matrices,
+                translations,
+                ctf_params,
+                _noise_variance,
+                _particle_indices,
+                _image_indices,
+            ) in experiment_dataset.iter_batches(
+                batch_size,
+                indices=image_subset,
+                prefetch=False,
+            ):
+                yield (
+                    batch,
+                    rotation_matrices,
+                    translations,
+                    ctf_params,
+                )
 
     # ---------- choose optimiser ----------
 
     if use_batch_solver:
         # ---------- mini-batch loss (Optax expects signature: (params, data)) ----------
-        #@jax.jit  # compiles once, regardless of batch size
+        # @jax.jit  # compiles once, regardless of batch size
         logger.info("Fitting noise model to images using batch solver")
+
         @jax.jit  # compiles once, regardless of batch size
         def loss_fn_batch(noise_variance, data):
             batch, rot, trans, ctf_p = data
@@ -443,23 +490,22 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                 True,
                 experiment_dataset.premultiplied_ctf,
             )
-            return loss / batch.shape[0]          # divide by mini-batch size
-        
+            return loss / batch.shape[0]  # divide by mini-batch size
+
         opt = optax.adam(1e-3)
 
         maxiter = int(image_n_iter / batch_size)
 
-        solver = OptaxSolver(opt=opt,
-                            fun=loss_fn_batch,
-                            maxiter=maxiter)
+        solver = OptaxSolver(opt=opt, fun=loss_fn_batch, maxiter=maxiter)
 
         # run the streaming optimiser; run_iterator returns (params, state)
         optimized_noise_variance, state = solver.run_iterator(
             init_params=initial_noise_variance,
-            iterator=infinite_data_iterator(),           # ← infinite iterator
+            iterator=infinite_data_iterator(),  # ← infinite iterator
         )
 
         for k in [15, 10, 5]:
+
             def loss_function_partial(noise_subset, data, k=k):
                 noise_v_updated = optimized_noise_variance.at[:k].set(noise_subset)
                 return loss_fn_batch(noise_v_updated, data)
@@ -468,14 +514,11 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             upper_bounds = jnp.ones(k) * jnp.inf
             bounds = (lower_bounds, upper_bounds)
 
-            solver = OptaxSolver(opt=opt,
-                                fun=loss_function_partial,
-                                maxiter=maxiter, tol = 1e-5)
+            solver = OptaxSolver(opt=opt, fun=loss_function_partial, maxiter=maxiter, tol=1e-5)
 
             # run the streaming optimiser; run_iterator returns (params, state)
             optimized_noise_variance_k, state = solver.run_iterator(
-                init_params=optimized_noise_variance[:k],
-                iterator=infinite_data_iterator()
+                init_params=optimized_noise_variance[:k], iterator=infinite_data_iterator()
             )
             optimized_noise_variance = optimized_noise_variance.at[:k].set(optimized_noise_variance_k)
 
@@ -483,15 +526,24 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             logger.info("Optimizer finished. Final state: %s", state)
 
     else:
-        def loss_function(noise_variance_to_opt, only_up_to_k= None, noise_variance = None):
+
+        def loss_function(noise_variance_to_opt, only_up_to_k=None, noise_variance=None):
             if only_up_to_k is not None:
                 noise_variance = noise_variance.at[:only_up_to_k].set(noise_variance_to_opt)
             else:
                 noise_variance = noise_variance_to_opt
             total_loss = 0.0
             total_grad = 0.0
-            n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
-            for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+            n_images = image_subset.size if image_subset is not None else experiment_dataset.n_images
+            for (
+                batch,
+                rotation_matrices,
+                translations,
+                ctf_params,
+                _noise_variance,
+                _particle_indices,
+                _image_indices,
+            ) in experiment_dataset.iter_batches(
                 batch_size,
                 indices=image_subset,
                 prefetch=False,
@@ -504,11 +556,9 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                     experiment_dataset.volume_shape,
                     experiment_dataset.image_shape,
                     None,
-                    invert_mask
+                    invert_mask,
                 )
-                loss_val, grad_val = jax.value_and_grad(
-                    noise_variance_loss, argnums=1
-                )(
+                loss_val, grad_val = jax.value_and_grad(noise_variance_loss, argnums=1)(
                     batch,
                     noise_variance,
                     translations,
@@ -518,18 +568,17 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
                     image_masks,
                     experiment_dataset.image_shape,
                     True,
-                    experiment_dataset.premultiplied_ctf
+                    experiment_dataset.premultiplied_ctf,
                 )
                 total_loss += loss_val / n_images
                 total_grad += grad_val / n_images
 
             return total_loss, total_grad
 
-
         lbfgsb = ScipyBoundedMinimize(
             fun=loss_function,
             method="L-BFGS-B",
-            maxiter = 50,
+            maxiter=50,
             value_and_grad=True,
             jit=False,
         )
@@ -542,8 +591,8 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
         lbfgsb_sol = lbfgsb.run(init_params=initial_noise_variance, bounds=bounds)
         optimized_noise_variance = lbfgsb_sol.params
 
-
         for k in [15, 10, 5]:
+
             def loss_function_partial(noise_subset, k=k):
                 noise_v_updated = optimized_noise_variance.at[:k].set(noise_subset)
                 return loss_function(noise_v_updated)
@@ -564,9 +613,8 @@ def fit_noise_model_to_images(experiment_dataset, volume_mask, mean_estimate, im
             optimized_noise_variance = optimized_noise_variance.at[:k].set(lbfgsb_sol.params)
             logger.info("Noise optimization complete")
 
-
     return optimized_noise_variance, initial_noise_variance
-    
+
 
 def update_noise_variance(noise_variance, dataset):
     dataset.set_noise(noise_variance)
@@ -582,85 +630,124 @@ def upper_bound_noise_by_signal_p_noise_dispatched(noise_var_used, dataset, mean
         for tilt_idx in range(max_noise_index):
             # noise_var_used may be 2D (per-tilt) or 1D (single radial profile)
             noise_for_tilt = noise_var_used[tilt_idx] if np.ndim(noise_var_used) >= 2 else noise_var_used
-            variance, ub_noise_var_by_var_est = upper_bound_noise_by_signal_p_noise(noise_for_tilt, dataset, means, batch_size, dilated_volume_mask, noise_ind_subset = tilt_idx)
+            variance, ub_noise_var_by_var_est = upper_bound_noise_by_signal_p_noise(
+                noise_for_tilt, dataset, means, batch_size, dilated_volume_mask, noise_ind_subset=tilt_idx
+            )
             ub_noise_var_by_var_ests.append(ub_noise_var_by_var_est)
         return variance, np.stack(ub_noise_var_by_var_ests)
     else:
-        return upper_bound_noise_by_signal_p_noise(noise_var_used, dataset, means, batch_size, dilated_volume_mask, noise_ind_subset = None)
+        return upper_bound_noise_by_signal_p_noise(
+            noise_var_used, dataset, means, batch_size, dilated_volume_mask, noise_ind_subset=None
+        )
 
 
 @nvtx.annotate("upper_bound_noise_by_signal_p_noise", color="green", domain=NVTX_DOMAIN_NOISE)
-def upper_bound_noise_by_signal_p_noise(noise_var_used, dataset, means, batch_size, dilated_volume_mask, noise_ind_subset = None):
-        # Now, estimate the variance of the signal. If the variance estimate ends up negative, we have overestimated the noise variance.
-        for noise_repeat in range(2):
-            # Compute variance estimate (tilt series uses same path currently)
-            variance_time = time.time()
-            from recovar.heterogeneity import covariance_estimation
-            # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
-            variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(dataset, means.combined, utils.safe_batch_size(batch_size//2), dilated_volume_mask, noise_ind_subset = noise_ind_subset, use_regularization = True, disc_type = 'cubic')
-            logger.info("variance estimation time: %s", time.time() - variance_time)
-            utils.report_memory_device(logger=logger)
+def upper_bound_noise_by_signal_p_noise(
+    noise_var_used, dataset, means, batch_size, dilated_volume_mask, noise_ind_subset=None
+):
+    # Now, estimate the variance of the signal. If the variance estimate ends up negative, we have overestimated the noise variance.
+    for noise_repeat in range(2):
+        # Compute variance estimate (tilt series uses same path currently)
+        variance_time = time.time()
+        from recovar.heterogeneity import covariance_estimation
 
-            rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(dataset.volume_shape).reshape(-1))
-            # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
-            n_shell_to_ub = np.min([32, dataset.grid_size//2 -1])
-            ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype = np.float32)
-            variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype = np.float32)
-            variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype = np.float32)
+        # //2: variance computation with cubic disc_type needs ~2x memory per image (spline coefficients)
+        variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(
+            dataset,
+            means.combined,
+            utils.safe_batch_size(batch_size // 2),
+            dilated_volume_mask,
+            noise_ind_subset=noise_ind_subset,
+            use_regularization=True,
+            disc_type="cubic",
+        )
+        logger.info("variance estimation time: %s", time.time() - variance_time)
+        utils.report_memory_device(logger=logger)
 
-            for k in range(n_shell_to_ub):
-                if np.sum(rad_grid==k) >0:
-                    ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid==k], 5)
-                    ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
-                    variance_est_low_res_5_pc[k] = np.percentile(variance_est['combined'][rad_grid==k], 5)
-                    variance_est_low_res_median[k] = np.median(variance_est['combined'][rad_grid==k])
+        rad_grid = np.array(fourier_transform_utils.get_grid_of_radial_distances(dataset.volume_shape).reshape(-1))
+        # Often low frequency noise will be overestiated. This can be bad for the covariance estimation. This is a way to upper bound noise in the low frequencies by noise + variance .
+        n_shell_to_ub = np.min([32, dataset.grid_size // 2 - 1])
+        ub_noise_var_by_var_est = np.zeros(n_shell_to_ub, dtype=np.float32)
+        variance_est_low_res_5_pc = np.zeros(n_shell_to_ub, dtype=np.float32)
+        variance_est_low_res_median = np.zeros(n_shell_to_ub, dtype=np.float32)
 
-            if np.any(ub_noise_var_by_var_est >  noise_var_used[:n_shell_to_ub]):
-                logger.info("Estimated noise greater than upper bound. Bounding noise using estimated upper bound")
+        for k in range(n_shell_to_ub):
+            if np.sum(rad_grid == k) > 0:
+                ub_noise_var_by_var_est[k] = np.percentile(noise_p_variance_est[rad_grid == k], 5)
+                ub_noise_var_by_var_est[k] = np.max([0, ub_noise_var_by_var_est[k]])
+                variance_est_low_res_5_pc[k] = np.percentile(variance_est["combined"][rad_grid == k], 5)
+                variance_est_low_res_median[k] = np.median(variance_est["combined"][rad_grid == k])
 
-            if np.any(variance_est_low_res_5_pc < 0):
-                logger.info("Estimated variance resolution is < 0. Noise was likely incorrectly estimated. Recomputing noise")
-                logger.info("5 percentile: %s", variance_est_low_res_5_pc)
-                with np.errstate(divide='ignore', invalid='ignore'):
-                    logger.info("5 percentile/median over low shells: %s", variance_est_low_res_5_pc/np.where(variance_est_low_res_median != 0, variance_est_low_res_median, 1.0))
+        if np.any(ub_noise_var_by_var_est > noise_var_used[:n_shell_to_ub]):
+            logger.info("Estimated noise greater than upper bound. Bounding noise using estimated upper bound")
 
-                # This is a bit of a hack. We are using the variance estimate to bound the noise variance
-                # This is not correct, but it is better than nothing
-            noise_var_used[:n_shell_to_ub] = np.where( noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est, ub_noise_var_by_var_est, noise_var_used[:n_shell_to_ub])
+        if np.any(variance_est_low_res_5_pc < 0):
+            logger.info(
+                "Estimated variance resolution is < 0. Noise was likely incorrectly estimated. Recomputing noise"
+            )
+            logger.info("5 percentile: %s", variance_est_low_res_5_pc)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                logger.info(
+                    "5 percentile/median over low shells: %s",
+                    variance_est_low_res_5_pc
+                    / np.where(variance_est_low_res_median != 0, variance_est_low_res_median, 1.0),
+                )
 
-            noise_var_used = noise_var_used.astype(dataset.dtype_real)
-            if noise_ind_subset is None:
-                update_noise_variance(noise_var_used, dataset)
-            else:
-                new_noise_variance = dataset.noise.noise_variance_radials.copy()
-                new_noise_variance[noise_ind_subset] = noise_var_used
-                update_noise_variance(new_noise_variance, dataset)
+            # This is a bit of a hack. We are using the variance estimate to bound the noise variance
+            # This is not correct, but it is better than nothing
+        noise_var_used[:n_shell_to_ub] = np.where(
+            noise_var_used[:n_shell_to_ub] > ub_noise_var_by_var_est,
+            ub_noise_var_by_var_est,
+            noise_var_used[:n_shell_to_ub],
+        )
 
-        return variance_est, ub_noise_var_by_var_est
+        noise_var_used = noise_var_used.astype(dataset.dtype_real)
+        if noise_ind_subset is None:
+            update_noise_variance(noise_var_used, dataset)
+        else:
+            new_noise_variance = dataset.noise.noise_variance_radials.copy()
+            new_noise_variance[noise_ind_subset] = noise_var_used
+            update_noise_variance(new_noise_variance, dataset)
+
+    return variance_est, ub_noise_var_by_var_est
 
 
 @nvtx.annotate("estimate_noise_level_no_masks", color="orange", domain=NVTX_DOMAIN_NOISE)
-def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimate, batch_size, disc_type='linear_interp'):
+def estimate_noise_level_no_masks(
+    experiment_dataset, image_subset, mean_estimate, batch_size, disc_type="linear_interp"
+):
     lhs = 0
-    rhs = 0 
-    
+    rhs = 0
+
     # Print debug info about input parameters
-    
+
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
     batch_iter = experiment_dataset.iter_batches(
-        batch_size, indices=image_subset,
+        batch_size,
+        indices=image_subset,
     )
 
-    n_images = (image_subset.size if image_subset is not None else experiment_dataset.n_images)
-    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in batch_iter:
+    n_images = image_subset.size if image_subset is not None else experiment_dataset.n_images
+    for (
+        batch,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        _noise_variance,
+        _particle_indices,
+        _image_indices,
+    ) in batch_iter:
         batch = experiment_dataset.process_images(batch)
         batch = core.translate_images(batch, translations, experiment_dataset.image_shape)
-        CTF = experiment_dataset.ctf_evaluator(ctf_params, experiment_dataset.image_shape, experiment_dataset.voxel_size)
+        CTF = experiment_dataset.ctf_evaluator(
+            ctf_params, experiment_dataset.image_shape, experiment_dataset.voxel_size
+        )
 
         if mean_estimate is not None:
             projected_mean = core_forward.forward_model(
-                config, mean_estimate,
+                config,
+                mean_estimate,
                 ctf_params,
                 rotation_matrices,
             )
@@ -669,15 +756,16 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
             else:
                 batch = batch - projected_mean
 
-        averaged_PS = regularization.batch_average_over_shells(jnp.abs(batch)**2, experiment_dataset.image_shape, 0)
+        averaged_PS = regularization.batch_average_over_shells(jnp.abs(batch) ** 2, experiment_dataset.image_shape, 0)
         lhs += jnp.sum(averaged_PS, axis=0)
 
         if experiment_dataset.premultiplied_ctf:
-            averaged_CTF_square = regularization.batch_average_over_shells(jnp.abs(CTF)**2, experiment_dataset.image_shape, 0) 
+            averaged_CTF_square = regularization.batch_average_over_shells(
+                jnp.abs(CTF) ** 2, experiment_dataset.image_shape, 0
+            )
             rhs += jnp.sum(averaged_CTF_square, axis=0)
         else:
-            rhs += batch.shape[0] 
-
+            rhs += batch.shape[0]
 
     logger.info("Finished processing all batches")
     estimated_noise = lhs / rhs
@@ -697,11 +785,13 @@ def estimate_noise_level_no_masks(experiment_dataset, image_subset, mean_estimat
 def batch_make_radial_noise(average_image_PS, image_shape):
     return jax.vmap(lambda amp: make_radial_noise(amp, image_shape))(average_image_PS)
 
+
 # Perhaps it should be mean at low freq and median at high freq?
 mean_fn = np.mean
 
+
 @nvtx.annotate("estimate_noise_variance", color="yellow", domain=NVTX_DOMAIN_NOISE)
-def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
+def estimate_noise_variance(experiment_dataset, batch_size, max_images=10000):
     """Estimate per-image noise variance from corner pixels.
 
     Computes the noise power spectrum from image regions outside the
@@ -724,111 +814,164 @@ def estimate_noise_variance(experiment_dataset, batch_size, max_images = 10000):
     if experiment_dataset.n_images > max_images:
         # Create subset indices for subsampling
         # Use global RNG state (matching old code — no explicit seed here)
-        subset_indices = np.random.choice(
-            experiment_dataset.n_images,
-            size=max_images,
-            replace=False
-        )
+        subset_indices = np.random.choice(experiment_dataset.n_images, size=max_images, replace=False)
         n_images_used = max_images
     else:
         n_images_used = experiment_dataset.n_images
 
     batch_iter = experiment_dataset.iter_batches(
-        batch_size, indices=subset_indices,
+        batch_size,
+        indices=subset_indices,
     )
 
-    for batch, _rotation_matrices, _translations, _ctf_params, _noise_variance, _particle_indices, _image_indices in batch_iter:
+    for (
+        batch,
+        _rotation_matrices,
+        _translations,
+        _ctf_params,
+        _noise_variance,
+        _particle_indices,
+        _image_indices,
+    ) in batch_iter:
         batch = experiment_dataset.process_images(batch)
-        sum_sq += jnp.sum(jnp.abs(batch)**2, axis =0)
+        sum_sq += jnp.sum(jnp.abs(batch) ** 2, axis=0)
 
-    mean_PS =  sum_sq / n_images_used
+    mean_PS = sum_sq / n_images_used
     cov_noise_mask = jnp.median(mean_PS)
 
     average_image_PS = regularization.average_over_shells(mean_PS, experiment_dataset.image_shape)
 
-    return np.asarray(cov_noise_mask, dtype=experiment_dataset.dtype_real), np.asarray(average_image_PS, dtype=experiment_dataset.dtype_real)
-    
+    return np.asarray(cov_noise_mask, dtype=experiment_dataset.dtype_real), np.asarray(
+        average_image_PS, dtype=experiment_dataset.dtype_real
+    )
 
-def estimate_white_noise_variance_from_mask(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
-    _, predicted_pixel_variances, _ = estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp')
+
+def estimate_white_noise_variance_from_mask(experiment_dataset, volume_mask, batch_size, disc_type="linear_interp"):
+    _, predicted_pixel_variances, _ = estimate_noise_variance_from_outside_mask_v2(
+        experiment_dataset, volume_mask, batch_size, disc_type="linear_interp"
+    )
     return np.median(predicted_pixel_variances)
 
 
-def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
+def estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, batch_size, disc_type="linear_interp"):
 
     batch_iter = experiment_dataset.iter_batches(batch_size)
-    image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
+    image_PSs = np.empty(
+        (experiment_dataset.n_images, experiment_dataset.grid_size // 2 - 1), dtype=experiment_dataset.dtype_real
+    )
 
-    masked_image_PSs = np.empty((experiment_dataset.n_images,experiment_dataset.grid_size//2-1), dtype = experiment_dataset.dtype_real)
+    masked_image_PSs = np.empty(
+        (experiment_dataset.n_images, experiment_dataset.grid_size // 2 - 1), dtype=experiment_dataset.dtype_real
+    )
 
     image_mask = jnp.ones_like(experiment_dataset.image_mask)
-    for batch, rotation_matrices, translations, _ctf_params, _noise_variance, _particle_indices, image_indices in batch_iter:
+    for (
+        batch,
+        rotation_matrices,
+        translations,
+        _ctf_params,
+        _noise_variance,
+        _particle_indices,
+        image_indices,
+    ) in batch_iter:
         batch_ind = image_indices
-        masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask_inner(batch,
-                    volume_mask, rotation_matrices,
-                    translations,
-                    image_mask,
-                    experiment_dataset.volume_mask_threshold,
-                    experiment_dataset.image_shape,
-                    experiment_dataset.volume_shape,
-                    experiment_dataset.grid_size,
-                    experiment_dataset.padding,
-                    disc_type,
-                    experiment_dataset.process_images)
+        masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask_inner(
+            batch,
+            volume_mask,
+            rotation_matrices,
+            translations,
+            image_mask,
+            experiment_dataset.volume_mask_threshold,
+            experiment_dataset.image_shape,
+            experiment_dataset.volume_shape,
+            experiment_dataset.grid_size,
+            experiment_dataset.padding,
+            disc_type,
+            experiment_dataset.process_images,
+        )
         image_PSs[batch_ind] = np.array(image_PS)
         masked_image_PSs[batch_ind] = np.array(masked_image_PS)
 
     return masked_image_PSs, image_PSs
 
 
-def estimate_noise_variance_from_outside_mask_v2(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp'):
+def estimate_noise_variance_from_outside_mask_v2(
+    experiment_dataset, volume_mask, batch_size, disc_type="linear_interp"
+):
 
     batch_iter = experiment_dataset.iter_batches(batch_size)
 
     image_mask = jnp.ones_like(experiment_dataset.image_mask)
     top_fraction = 0
-    kernel_sq_sum =0
+    kernel_sq_sum = 0
     per_image_est = None
-    for batch, rotation_matrices, translations, _ctf_params, _noise_variance, _particle_indices, _image_indices in batch_iter:
-        top_fraction_this, kernel_sq_sum_this, per_image_est = estimate_noise_variance_from_outside_mask_inner_v2(batch,
-                    volume_mask, rotation_matrices,
-                    translations,
-                    image_mask,
-                    experiment_dataset.volume_mask_threshold,
-                    experiment_dataset.image_shape,
-                    experiment_dataset.volume_shape,
-                    experiment_dataset.grid_size,
-                    experiment_dataset.padding,
-                    disc_type,
-                    experiment_dataset.process_images)
+    for (
+        batch,
+        rotation_matrices,
+        translations,
+        _ctf_params,
+        _noise_variance,
+        _particle_indices,
+        _image_indices,
+    ) in batch_iter:
+        top_fraction_this, kernel_sq_sum_this, per_image_est = estimate_noise_variance_from_outside_mask_inner_v2(
+            batch,
+            volume_mask,
+            rotation_matrices,
+            translations,
+            image_mask,
+            experiment_dataset.volume_mask_threshold,
+            experiment_dataset.image_shape,
+            experiment_dataset.volume_shape,
+            experiment_dataset.grid_size,
+            experiment_dataset.padding,
+            disc_type,
+            experiment_dataset.process_images,
+        )
         top_fraction += top_fraction_this
-        kernel_sq_sum+= kernel_sq_sum_this
-    predicted_pixel_variances= top_fraction / kernel_sq_sum
-    predicted_pixel_variances = jnp.fft.ifft2( predicted_pixel_variances).real * experiment_dataset.image_size
+        kernel_sq_sum += kernel_sq_sum_this
+    predicted_pixel_variances = top_fraction / kernel_sq_sum
+    predicted_pixel_variances = jnp.fft.ifft2(predicted_pixel_variances).real * experiment_dataset.image_size
 
-
-    pred_noise = regularization.average_over_shells(predicted_pixel_variances, experiment_dataset.image_shape, 0) 
+    pred_noise = regularization.average_over_shells(predicted_pixel_variances, experiment_dataset.image_shape, 0)
     return pred_noise, predicted_pixel_variances, per_image_est
 
 
-@functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10,11])    
-def estimate_noise_variance_from_outside_mask_inner_v2(batch, volume_mask, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, padding, disc_type, process_fn):
-    
+@functools.partial(jax.jit, static_argnums=[5, 6, 7, 8, 9, 10, 11])
+def estimate_noise_variance_from_outside_mask_inner_v2(
+    batch,
+    volume_mask,
+    rotation_matrices,
+    translations,
+    image_mask,
+    volume_mask_threshold,
+    image_shape,
+    volume_shape,
+    grid_size,
+    padding,
+    disc_type,
+    process_fn,
+):
+
     # Memory to do this is ~ size(volume_mask) * batch_size
-    image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                          rotation_matrices,
-                                          image_mask, 
-                                          volume_mask_threshold,
-                                          image_shape, 
-                                          volume_shape, grid_size, 
-                                          padding, 
-                                          disc_type, soften =5 )
-    
+    image_mask = covariance_core.get_per_image_tight_mask(
+        volume_mask,
+        rotation_matrices,
+        image_mask,
+        volume_mask_threshold,
+        image_shape,
+        volume_shape,
+        grid_size,
+        padding,
+        disc_type,
+        soften=5,
+    )
+
     # Invert mask
     image_mask = 1 - image_mask
 
     batch = process_fn(batch)
-    batch = core.translate_images(batch, translations , image_shape)
+    batch = core.translate_images(batch, translations, image_shape)
 
     return get_masked_image_noise_fractions(batch, image_mask, image_shape)
 
@@ -836,52 +979,70 @@ def estimate_noise_variance_from_outside_mask_inner_v2(batch, volume_mask, rotat
 def get_masked_image_noise_fractions(images, image_masks, image_shape):
     images = covariance_core.apply_image_masks(images, image_masks, image_shape)
 
-    masked_variance = jnp.abs(images.reshape([-1, *image_shape]))**2
+    masked_variance = jnp.abs(images.reshape([-1, *image_shape])) ** 2
     masked_variance_ft = jnp.fft.fft2(masked_variance)
 
     f_mask = jnp.fft.fft2(image_masks)
-    kernels = jnp.fft.ifft2(jnp.abs(f_mask)**2)
-    kernel_sq_sum = jnp.sum(jnp.abs(kernels)**2, axis=0)
-    top_fraction= jnp.sum(masked_variance_ft * jnp.conj(kernels), axis=0) 
+    kernels = jnp.fft.ifft2(jnp.abs(f_mask) ** 2)
+    kernel_sq_sum = jnp.sum(jnp.abs(kernels) ** 2, axis=0)
+    top_fraction = jnp.sum(masked_variance_ft * jnp.conj(kernels), axis=0)
 
     # get a per image one
-    kernels_bad = jnp.abs(kernels)  < jax_config.EPSILON
-    kernels = jnp.where(kernels_bad, jnp.ones_like(kernels_bad) , kernels )
-    per_image_estimate = jnp.where( kernels_bad, jnp.zeros_like(masked_variance_ft),  masked_variance_ft / kernels )
+    kernels_bad = jnp.abs(kernels) < jax_config.EPSILON
+    kernels = jnp.where(kernels_bad, jnp.ones_like(kernels_bad), kernels)
+    per_image_estimate = jnp.where(kernels_bad, jnp.zeros_like(masked_variance_ft), masked_variance_ft / kernels)
 
     return top_fraction, kernel_sq_sum, jnp.fft.ifft2(per_image_estimate).real * np.prod(image_shape)
+
 
 def get_masked_noise_variance_from_noise_variance(image_masks, unmasked_noise_variance, image_shape):
 
     f_mask = jnp.fft.ifft2(image_masks)
-    f_mask = jnp.fft.fft2(jnp.abs(f_mask)**2)
+    f_mask = jnp.fft.fft2(jnp.abs(f_mask) ** 2)
 
     image_cov_noise_ft = jnp.fft.fft2(unmasked_noise_variance.reshape(-1, *image_shape))
-    masked_noise_variance = jnp.fft.ifft2( f_mask * image_cov_noise_ft )
+    masked_noise_variance = jnp.fft.ifft2(f_mask * image_cov_noise_ft)
 
     return masked_noise_variance.real
 
 
-@functools.partial(jax.jit, static_argnums = [5,6,7,8,9,10,11])    
-def estimate_noise_variance_from_outside_mask_inner(batch, volume_mask, rotation_matrices, translations, image_mask, volume_mask_threshold, image_shape, volume_shape, grid_size, padding, disc_type, process_fn):
-    
+@functools.partial(jax.jit, static_argnums=[5, 6, 7, 8, 9, 10, 11])
+def estimate_noise_variance_from_outside_mask_inner(
+    batch,
+    volume_mask,
+    rotation_matrices,
+    translations,
+    image_mask,
+    volume_mask_threshold,
+    image_shape,
+    volume_shape,
+    grid_size,
+    padding,
+    disc_type,
+    process_fn,
+):
+
     # Memory to do this is ~ size(volume_mask) * batch_size
-    image_mask = covariance_core.get_per_image_tight_mask(volume_mask, 
-                                          rotation_matrices,
-                                          image_mask, 
-                                          volume_mask_threshold,
-                                          image_shape, 
-                                          volume_shape, grid_size, 
-                                          padding, 
-                                          disc_type, soften =10)
-    
+    image_mask = covariance_core.get_per_image_tight_mask(
+        volume_mask,
+        rotation_matrices,
+        image_mask,
+        volume_mask_threshold,
+        image_shape,
+        volume_shape,
+        grid_size,
+        padding,
+        disc_type,
+        soften=10,
+    )
+
     # Invert mask
     image_mask = 1 - image_mask
 
     batch = process_fn(batch)
-    batch = core.translate_images(batch, translations , image_shape)
+    batch = core.translate_images(batch, translations, image_shape)
 
-    image_PS = regularization.batch_average_over_shells(jnp.abs(batch)**2, image_shape, 0)
+    image_PS = regularization.batch_average_over_shells(jnp.abs(batch) ** 2, image_shape, 0)
 
     ## DO MASK BUSINESS HERE.
     batch = covariance_core.apply_image_masks(batch, image_mask, image_shape)
@@ -889,25 +1050,35 @@ def estimate_noise_variance_from_outside_mask_inner(batch, volume_mask, rotation
     image_size = batch.shape[-1]
     # Integral of mask:
     image_mask_2 = fourier_transform_utils.get_dft2(image_mask)
-    image_mask_sums = jnp.sum(jnp.abs(image_mask_2)**2, axis =(-2, -1)) / image_size**2
+    image_mask_sums = jnp.sum(jnp.abs(image_mask_2) ** 2, axis=(-2, -1)) / image_size**2
     # Guard against division by zero when the inverted mask is all-zero
     # (volume mask covers the full image, leaving no outside region).
     safe_mask_sums = jnp.where(image_mask_sums > 0, image_mask_sums, jnp.ones_like(image_mask_sums))
-    masked_image_PS = regularization.batch_average_over_shells(jnp.abs(batch)**2, image_shape, 0) / safe_mask_sums[:,None]
-
+    masked_image_PS = (
+        regularization.batch_average_over_shells(jnp.abs(batch) ** 2, image_shape, 0) / safe_mask_sums[:, None]
+    )
 
     return masked_image_PS, image_PS
-    
+
 
 def estimate_radial_noise_upper_bound_from_inside_mask_v2(experiment_dataset, mean_estimate, volume_mask, batch_size):
-    noise_dist, per_pixel, aa = get_average_residual_square_just_mean(experiment_dataset, volume_mask, mean_estimate, batch_size, disc_type = 'linear_interp')
+    noise_dist, per_pixel, aa = get_average_residual_square_just_mean(
+        experiment_dataset, volume_mask, mean_estimate, batch_size, disc_type="linear_interp"
+    )
     return noise_dist, per_pixel, aa
 
 
 # Assume noise constant across images and within frequency bands. Estimate the noise by the outside of the mask, and report some statistics
 def estimate_radial_noise_statistic_from_outside_mask(experiment_dataset, volume_mask, batch_size):
-    masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask(experiment_dataset, volume_mask, batch_size, disc_type = 'linear_interp')
-    return mean_fn(masked_image_PS, axis =0), np.std(masked_image_PS, axis =0), mean_fn(image_PS, axis =0), np.std(image_PS, axis =0)
+    masked_image_PS, image_PS = estimate_noise_variance_from_outside_mask(
+        experiment_dataset, volume_mask, batch_size, disc_type="linear_interp"
+    )
+    return (
+        mean_fn(masked_image_PS, axis=0),
+        np.std(masked_image_PS, axis=0),
+        mean_fn(image_PS, axis=0),
+        np.std(image_PS, axis=0),
+    )
 
 
 def make_radial_noise(average_image_PS, image_shape):
@@ -915,7 +1086,7 @@ def make_radial_noise(average_image_PS, image_shape):
     if average_image_PS.size == 1:
         return jnp.ones(int(np.prod(image_shape)), dtype=average_image_PS.dtype) * average_image_PS
 
-    return utils.make_radial_image(average_image_PS, image_shape, extend_last_frequency = True)
+    return utils.make_radial_image(average_image_PS, image_shape, extend_last_frequency=True)
 
 
 def make_radial_noise_half(average_image_PS, image_shape):
@@ -934,40 +1105,87 @@ def batch_make_radial_noise_half(average_image_PS, image_shape):
 
 
 # Assume noise constant across images and within frequency bands. Estimate the noise by the outside of the mask, and report some statistics
-def get_average_residual_square_just_mean(experiment_dataset, volume_mask, mean_estimate, batch_size, disc_type = 'linear_interp', subset_indices = None, subset_fn = None):
-    contrasts = np.ones(experiment_dataset.n_images, dtype = experiment_dataset.dtype_real)
+def get_average_residual_square_just_mean(
+    experiment_dataset,
+    volume_mask,
+    mean_estimate,
+    batch_size,
+    disc_type="linear_interp",
+    subset_indices=None,
+    subset_fn=None,
+):
+    contrasts = np.ones(experiment_dataset.n_images, dtype=experiment_dataset.dtype_real)
     basis = np.zeros((experiment_dataset.volume_size, 0))
     zs = np.zeros((experiment_dataset.n_images, 0))
 
-    return get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,zs, batch_size, disc_type = disc_type, subset_indices=subset_indices, subset_fn = subset_fn)
+    return get_average_residual_square_v2(
+        experiment_dataset,
+        volume_mask,
+        mean_estimate,
+        basis,
+        contrasts,
+        zs,
+        batch_size,
+        disc_type=disc_type,
+        subset_indices=subset_indices,
+        subset_fn=subset_fn,
+    )
 
 
-def estimate_noise_from_heterogeneity_residuals_inside_mask_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp'):
-    return get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type )
+def estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
+    experiment_dataset,
+    volume_mask,
+    mean_estimate,
+    basis,
+    contrasts,
+    basis_coordinates,
+    batch_size,
+    disc_type="linear_interp",
+):
+    return get_average_residual_square_v2(
+        experiment_dataset, volume_mask, mean_estimate, basis, contrasts, basis_coordinates, batch_size, disc_type
+    )
 
 
-def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimate, basis, contrasts,basis_coordinates, batch_size, disc_type = 'linear_interp', subset_indices = None, subset_fn = None):
-
+def get_average_residual_square_v2(
+    experiment_dataset,
+    volume_mask,
+    mean_estimate,
+    basis,
+    contrasts,
+    basis_coordinates,
+    batch_size,
+    disc_type="linear_interp",
+    subset_indices=None,
+    subset_fn=None,
+):
 
     if basis.shape[0] != experiment_dataset.volume_size:
-        raise ValueError(f"input u should be volume_size x basis_size, got {basis.shape[0]} != {experiment_dataset.volume_size}")
-    st_time = time.time()    
-    basis = np.asarray(basis[:, :basis_coordinates.shape[-1]]).T
+        raise ValueError(
+            f"input u should be volume_size x basis_size, got {basis.shape[0]} != {experiment_dataset.volume_size}"
+        )
+    st_time = time.time()
+    basis = np.asarray(basis[:, : basis_coordinates.shape[-1]]).T
 
-    if disc_type == 'cubic':
+    if disc_type == "cubic":
         st_time = time.time()
         from recovar.core import cubic_interpolation
         from recovar.heterogeneity import covariance_estimation
-        mean_estimate = cubic_interpolation.calculate_spline_coefficients(mean_estimate.reshape(experiment_dataset.volume_shape))
-        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory= None)
-        logger.info("Time to compute spline coefficients: %f", time.time() - st_time)
 
+        mean_estimate = cubic_interpolation.calculate_spline_coefficients(
+            mean_estimate.reshape(experiment_dataset.volume_shape)
+        )
+        basis = covariance_estimation.compute_spline_coeffs_in_batch(
+            basis, experiment_dataset.volume_shape, gpu_memory=None
+        )
+        logger.info("Time to compute spline coefficients: %f", time.time() - st_time)
 
     n_images = experiment_dataset.n_images if subset_indices is None else subset_indices.size
 
     # Construct structured parameters once outside the loop
     config = ForwardModelConfig.from_dataset(
-        experiment_dataset, disc_type=disc_type,
+        experiment_dataset,
+        disc_type=disc_type,
         process_fn=experiment_dataset.process_images,
     )
     # Keep all dynamic inputs on one JAX device (GPU when available) so
@@ -990,7 +1208,15 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     top_fraction = None
     kernel_sq_sum = None
 
-    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, image_indices in experiment_dataset.iter_batches(
+    for (
+        batch,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        _noise_variance,
+        _particle_indices,
+        image_indices,
+    ) in experiment_dataset.iter_batches(
         batch_size,
         indices=subset_indices,
     ):
@@ -1020,10 +1246,10 @@ def get_average_residual_square_v2(experiment_dataset, volume_mask, mean_estimat
     if top_fraction is None or kernel_sq_sum is None:
         raise ValueError("No images were processed in get_average_residual_square_v2")
 
-    predicted_pixel_variances= top_fraction / kernel_sq_sum
-    predicted_pixel_variances = jnp.fft.ifft2( predicted_pixel_variances).real * experiment_dataset.image_size
+    predicted_pixel_variances = top_fraction / kernel_sq_sum
+    predicted_pixel_variances = jnp.fft.ifft2(predicted_pixel_variances).real * experiment_dataset.image_size
 
-    pred_noise = regularization.average_over_shells(predicted_pixel_variances, experiment_dataset.image_shape, 0) 
+    pred_noise = regularization.average_over_shells(predicted_pixel_variances, experiment_dataset.image_shape, 0)
     return pred_noise, predicted_pixel_variances, None
 
 
@@ -1033,7 +1259,7 @@ def batch_basis_times_coords2(basis, coords):
         raise ValueError(f"basis last dim ({basis.shape[-1]}) != coords last dim ({coords.shape[-1]})")
     basis_shape_inp = basis.shape
 
-    basis = basis.transpose(-1, *np.arange(basis.ndim-1) )
+    basis = basis.transpose(-1, *np.arange(basis.ndim - 1))
     basis = basis.reshape((coords.shape[-1], np.prod(basis_shape_inp[:-1])))
 
     summed = basis.T @ coords.T
@@ -1091,27 +1317,33 @@ def _average_residual_square_explicit(
 
     if model.volume_mask is not None:
         image_mask = covariance_core.get_per_image_tight_mask(
-            model.volume_mask, rotation_matrices, image_mask,
-            config.volume_mask_threshold, config.image_shape, config.volume_shape,
-            config.grid_size, config.padding, config.disc_type, soften=5,
+            model.volume_mask,
+            rotation_matrices,
+            image_mask,
+            config.volume_mask_threshold,
+            config.image_shape,
+            config.volume_shape,
+            config.grid_size,
+            config.padding,
+            config.disc_type,
+            soften=5,
         )
     else:
         image_mask = jnp.ones_like(batch).real
 
     if model.basis.shape[-1] == 0:
-        predicted_vols = contrasts.reshape(
-            (contrasts.shape[0], *np.ones(model.mean_estimate.ndim, dtype=int))
-        ) * model.mean_estimate[None]
+        predicted_vols = (
+            contrasts.reshape((contrasts.shape[0], *np.ones(model.mean_estimate.ndim, dtype=int)))
+            * model.mean_estimate[None]
+        )
     else:
-        predicted_vols = contrasts.reshape(
-            (contrasts.shape[0], *np.ones(model.mean_estimate.ndim, dtype=int))
-        ) * (batch_basis_times_coords2(model.basis, basis_coordinates) + model.mean_estimate[None])
+        predicted_vols = contrasts.reshape((contrasts.shape[0], *np.ones(model.mean_estimate.ndim, dtype=int))) * (
+            batch_basis_times_coords2(model.basis, basis_coordinates) + model.mean_estimate[None]
+        )
 
     # Per-image forward model: project volume[i] with CTF[i] and rotation[i]
     projected_vols = jax.vmap(
-        lambda vol, ctf, rot: core_forward.forward_model(
-            config, vol, ctf[None], rot[None]
-        )[0],
+        lambda vol, ctf, rot: core_forward.forward_model(config, vol, ctf[None], rot[None])[0],
     )(predicted_vols, ctf_params, rotation_matrices)
 
     if config.process_fn is not None:

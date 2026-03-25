@@ -5,6 +5,7 @@ Covers:
   main()         – argument parsing, file-not-found handling, format dispatch
   _check_paths() – path resolution summary logic
 """
+
 import argparse
 import os
 import sys
@@ -20,6 +21,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # main – argument parsing
 # ---------------------------------------------------------------------------
+
 
 def test_main_registers_particles_positional():
     parser = argparse.ArgumentParser()
@@ -74,6 +76,7 @@ def test_main_exits_on_unsupported_format(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 # _check_paths – core resolution logic
 # ---------------------------------------------------------------------------
+
 
 def test_check_paths_counts_found_and_missing(monkeypatch, tmp_path, capsys):
     """_check_paths should report found vs missing paths."""

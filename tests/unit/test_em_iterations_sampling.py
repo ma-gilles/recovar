@@ -256,9 +256,17 @@ def test_split_E_M_v2_updates_state_means_noise_and_pose_assignments(monkeypatch
     from recovar.heterogeneity import locres
 
     monkeypatch.setattr(regularization, "get_fsc_gpu", lambda *_args, **_kwargs: np.array([0.9, 0.7], dtype=np.float32))
-    monkeypatch.setattr(regularization, "average_over_shells", lambda *_args, **_kwargs: np.array([1.0, 1.0], dtype=np.float32))
-    monkeypatch.setattr(em_iterations.utils, "make_radial_image", lambda _ps, shape, extend_last_frequency=True: np.ones(int(np.prod(shape)), dtype=np.float32))
-    monkeypatch.setattr(noise, "estimate_noise_level_no_masks", lambda *_args, **_kwargs: np.array([0.2, 0.3], dtype=np.float32))
+    monkeypatch.setattr(
+        regularization, "average_over_shells", lambda *_args, **_kwargs: np.array([1.0, 1.0], dtype=np.float32)
+    )
+    monkeypatch.setattr(
+        em_iterations.utils,
+        "make_radial_image",
+        lambda _ps, shape, extend_last_frequency=True: np.ones(int(np.prod(shape)), dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        noise, "estimate_noise_level_no_masks", lambda *_args, **_kwargs: np.array([0.2, 0.3], dtype=np.float32)
+    )
     monkeypatch.setattr(noise, "make_radial_noise", lambda _n, _shape: np.ones((4,), dtype=np.float32) * 0.5)
     monkeypatch.setattr(locres, "find_fsc_resol", lambda _fsc, threshold=1 / 7: 4.0)
 
@@ -381,7 +389,9 @@ def test_split_E_M_v2_heterogeneous_branch_updates_covariance_prior_and_masks_u(
         "prior_iteration_relion_style_batch",
         lambda *_args, **_kwargs: (None, np.ones((8,), dtype=np.float32) * 9.0, None),
     )
-    monkeypatch.setattr(noise, "estimate_noise_level_no_masks", lambda *_args, **_kwargs: np.array([0.2, 0.3], dtype=np.float32))
+    monkeypatch.setattr(
+        noise, "estimate_noise_level_no_masks", lambda *_args, **_kwargs: np.array([0.2, 0.3], dtype=np.float32)
+    )
     monkeypatch.setattr(noise, "make_radial_noise", lambda _n, _shape: np.ones((4,), dtype=np.float32) * 0.4)
     monkeypatch.setattr(locres, "find_fsc_resol", lambda _fsc, threshold=1 / 7: 3.0)
 

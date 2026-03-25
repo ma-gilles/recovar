@@ -14,6 +14,7 @@ from recovar.data_io.staging import _cache_key, get_cache_dir, stage_mrc
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _write_mrc(path, n: int = 8, D: int = 16, seed: int = 0) -> np.ndarray:
     """Write a minimal MRC stack; return the raw float32 data."""
     rng = np.random.default_rng(seed)
@@ -26,6 +27,7 @@ def _write_mrc(path, n: int = 8, D: int = 16, seed: int = 0) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # get_cache_dir
 # ---------------------------------------------------------------------------
+
 
 class TestGetCacheDir:
     def test_returns_recovar_cache_dir(self, monkeypatch):
@@ -58,6 +60,7 @@ class TestGetCacheDir:
 # _cache_key
 # ---------------------------------------------------------------------------
 
+
 class TestCacheKey:
     def test_different_paths_give_different_keys(self, tmp_path):
         a = tmp_path / "a.mrcs"
@@ -85,12 +88,13 @@ class TestCacheKey:
         _write_mrc(f)
         key = _cache_key(str(f), os.stat(f))
         assert len(key) == 20
-        int(key, 16)   # must be valid hex
+        int(key, 16)  # must be valid hex
 
 
 # ---------------------------------------------------------------------------
 # stage_mrc
 # ---------------------------------------------------------------------------
+
 
 class TestStageMrc:
     def test_copies_file_to_cache_subdir(self, tmp_path):
@@ -137,7 +141,7 @@ class TestStageMrc:
         stage_mrc(str(src), str(cache_dir))
         mtime_after_second = os.path.getmtime(staged)
 
-        assert mtime_after_first == mtime_after_second   # not re-copied
+        assert mtime_after_first == mtime_after_second  # not re-copied
 
     def test_source_update_triggers_new_cache_entry(self, tmp_path):
         src = tmp_path / "particles.mrcs"
@@ -149,7 +153,7 @@ class TestStageMrc:
         # Rewrite source with different data → different mtime
         time.sleep(0.01)
         _write_mrc(src, seed=2)
-        os.utime(src, None)   # ensure mtime changes even on coarse filesystems
+        os.utime(src, None)  # ensure mtime changes even on coarse filesystems
 
         staged2 = stage_mrc(str(src), str(cache_dir))
 
@@ -171,7 +175,7 @@ class TestStageMrc:
 
         result = stage_mrc(src, str(cache_dir))
 
-        assert result == src   # graceful fallback
+        assert result == src  # graceful fallback
 
     def test_preserves_mrc_extension(self, tmp_path):
         src = tmp_path / "map.mrc"
@@ -197,6 +201,7 @@ class TestStageMrc:
 # Integration: MRCLoader reads through staged file
 # ---------------------------------------------------------------------------
 
+
 class TestMRCLoaderWithStaging:
     def test_loader_reads_from_staged_path(self, tmp_path, monkeypatch):
         src = tmp_path / "particles.mrcs"
@@ -205,6 +210,7 @@ class TestMRCLoaderWithStaging:
         monkeypatch.setenv("RECOVAR_CACHE_DIR", str(cache_dir))
 
         from recovar.data_io.image_loader import MRCLoader
+
         loader = MRCLoader(str(src))
 
         assert "recovar_cache" in loader._filepath
@@ -213,10 +219,11 @@ class TestMRCLoaderWithStaging:
     def test_loader_uses_source_when_staging_disabled(self, tmp_path, monkeypatch):
         src = tmp_path / "particles.mrcs"
         _write_mrc(src)
-        monkeypatch.setenv("RECOVAR_CACHE_DIR", "")   # explicitly disabled
+        monkeypatch.setenv("RECOVAR_CACHE_DIR", "")  # explicitly disabled
         monkeypatch.delenv("TMPDIR", raising=False)
 
         from recovar.data_io.image_loader import MRCLoader
+
         loader = MRCLoader(str(src))
 
         assert loader._filepath == str(src)
@@ -228,6 +235,7 @@ class TestMRCLoaderWithStaging:
         monkeypatch.delenv("TMPDIR", raising=False)
 
         from recovar.data_io.image_loader import MRCLoader
+
         loader = MRCLoader(str(src))
 
         assert loader._filepath == str(src)
@@ -239,6 +247,7 @@ class TestMRCLoaderWithStaging:
         monkeypatch.setenv("RECOVAR_CACHE_DIR", str(cache_dir))
 
         from recovar.data_io.image_loader import MRCLoader
+
         indices = np.array([0, 5, 12, 19])
         loader = MRCLoader(str(src), indices=indices)
 
@@ -252,6 +261,7 @@ class TestMRCLoaderWithStaging:
         monkeypatch.setenv("RECOVAR_CACHE_DIR", str(cache_dir))
 
         from recovar.data_io.image_loader import MRCLoader
+
         loader1 = MRCLoader(str(src))
         loader2 = MRCLoader(str(src))
 

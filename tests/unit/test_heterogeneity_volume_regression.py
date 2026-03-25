@@ -55,9 +55,7 @@ def _make_halfsets_and_gt(grid_size=GRID_SIZE, n_images_per_half=N_IMAGES_PER_HA
     noise_var = np.ones(n_shells, dtype=np.float32) * 1e-4
 
     # Create a single dataset with 2*n_images_per_half images split into halves
-    cryo = make_tiny_cryo_dataset_with_images(
-        grid_size=grid_size, n_images=2 * n_images_per_half, seed=seed
-    )
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=grid_size, n_images=2 * n_images_per_half, seed=seed)
     cryo.dataset_indices = np.arange(2 * n_images_per_half, dtype=np.int32)
     cryo.set_radial_noise_model(noise_var)
     cryo.halfset_indices = [
@@ -68,9 +66,7 @@ def _make_halfsets_and_gt(grid_size=GRID_SIZE, n_images_per_half=N_IMAGES_PER_HA
 
     # Build GT volume distribution from the first half's simulation
     vols = make_tiny_fourier_volumes(grid_size=grid_size)
-    _, _, _, _, sim_info, _, _ = make_tiny_simulation(
-        grid_size=grid_size, n_images=n_images_per_half, seed=seed
-    )
+    _, _, _, _, sim_info, _, _ = make_tiny_simulation(grid_size=grid_size, n_images=n_images_per_half, seed=seed)
     volume_size = int(grid_size**3)
     hvd = synthetic_dataset.HeterogeneousVolumeDistribution(
         volumes=vols.copy(),
@@ -109,6 +105,7 @@ def test_heterogeneity_volume_locres_regression(tmp_path, gpu_device):
     )
 
     from recovar.output.output_paths import VolumeOutputPaths
+
     vol_paths = VolumeOutputPaths(str(tmp_path / "hv_regression"), "state", 0)
 
     hv.make_volumes_kernel_estimate_local(
@@ -133,9 +130,7 @@ def test_heterogeneity_volume_locres_regression(tmp_path, gpu_device):
     assert half2.shape == cryos.volume_shape
 
     # Compute halfmap-based metrics
-    halfmap_metrics = metrics_mod.compute_volume_error_metrics_from_halfmaps(
-        half1, half2, cryos.voxel_size, mask=None
-    )
+    halfmap_metrics = metrics_mod.compute_volume_error_metrics_from_halfmaps(half1, half2, cryos.voxel_size, mask=None)
 
     # Check that median locres is finite and positive
     median_locres = halfmap_metrics["median_locres"]
@@ -150,9 +145,9 @@ def test_heterogeneity_volume_locres_regression(tmp_path, gpu_device):
     # Compute GT-based metrics using GT mean volume
     gt_mean_ft = hvd.get_mean()
     # batch_idft3 expects (vol_size, n_vol) layout
-    gt_mean_real = np.real(
-        linalg.batch_idft3(gt_mean_ft[:, None], cryos.volume_shape, batch_size=1)
-    )[:, 0].reshape(cryos.volume_shape)
+    gt_mean_real = np.real(linalg.batch_idft3(gt_mean_ft[:, None], cryos.volume_shape, batch_size=1))[:, 0].reshape(
+        cryos.volume_shape
+    )
     estimate_avg = (half1 + half2) / 2.0
 
     gt_metrics = metrics_mod.compute_volume_error_metrics_from_gt(
@@ -205,6 +200,7 @@ def test_heterogeneity_volume_deterministic(tmp_path, gpu_device):
     )
 
     from recovar.output.output_paths import VolumeOutputPaths
+
     outputs = []
     for run_idx in range(2):
         vp = VolumeOutputPaths(str(tmp_path / f"det_run_{run_idx}"), "state", 0)
@@ -227,12 +223,8 @@ def test_heterogeneity_volume_deterministic(tmp_path, gpu_device):
 
     # GPU floating-point reductions are not bit-exact across runs,
     # but results should be reproducible to near machine precision.
-    np.testing.assert_allclose(outputs[0][0], outputs[1][0],
-                               atol=1e-6, rtol=1e-5,
-                               err_msg="half1 differs between runs")
-    np.testing.assert_allclose(outputs[0][1], outputs[1][1],
-                               atol=1e-6, rtol=1e-5,
-                               err_msg="half2 differs between runs")
+    np.testing.assert_allclose(outputs[0][0], outputs[1][0], atol=1e-6, rtol=1e-5, err_msg="half1 differs between runs")
+    np.testing.assert_allclose(outputs[0][1], outputs[1][1], atol=1e-6, rtol=1e-5, err_msg="half2 differs between runs")
 
 
 @pytest.mark.gpu
@@ -251,6 +243,7 @@ def test_heterogeneity_volume_cv_selects_reasonable_bins(tmp_path, gpu_device):
     )
 
     from recovar.output.output_paths import VolumeOutputPaths
+
     vol_paths_cv = VolumeOutputPaths(str(tmp_path / "cv_test"), "state", 0)
 
     hv.make_volumes_kernel_estimate_local(

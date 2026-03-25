@@ -25,6 +25,7 @@ pytestmark = pytest.mark.unit
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
+
 def _random_rotations(n, seed=42):
     rng = np.random.default_rng(seed)
     z = rng.standard_normal((n, 3, 3))
@@ -55,12 +56,12 @@ def _hermitian_volume_rect(volume_shape, seed=0):
 def _random_slices(n_images, n_pix, seed=99):
     rng = np.random.default_rng(seed)
     return jnp.array(
-        (rng.standard_normal((n_images, n_pix)) +
-         1j * rng.standard_normal((n_images, n_pix))).astype(np.complex64)
+        (rng.standard_normal((n_images, n_pix)) + 1j * rng.standard_normal((n_images, n_pix))).astype(np.complex64)
     )
 
 
 # ── 1. Default max_r value ──────────────────────────────────────────
+
 
 class TestDefaultMaxR:
     """Verify default max_r = image_shape[0]//2 - 1."""
@@ -113,17 +114,13 @@ class TestDefaultMaxR:
         rots = _random_rotations(3)
 
         # Default (auto) — clips at N//2-1 = 7
-        out_default = np.asarray(slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp"))
+        out_default = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp"))
         # Explicit None — no clipping
-        out_none = np.asarray(slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
+        out_none = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
 
         n_zero_default = np.sum(np.abs(out_default) < 1e-30)
         n_zero_none = np.sum(np.abs(out_none) < 1e-30)
-        assert n_zero_default > n_zero_none, (
-            f"Default should clip more: {n_zero_default} zeros vs {n_zero_none}"
-        )
+        assert n_zero_default > n_zero_none, f"Default should clip more: {n_zero_default} zeros vs {n_zero_none}"
 
     def test_explicit_none_matches_old_behavior(self):
         """max_r=None should give same result as the old behavior (no clipping)."""
@@ -134,17 +131,15 @@ class TestDefaultMaxR:
         rots = _random_rotations(3)
 
         # max_r=None should produce no zeros from clipping (only from interpolation)
-        out = np.asarray(slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
+        out = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
         # With a random volume, very few pixels should be exactly zero
         n_nonzero = np.sum(np.abs(out) > 1e-30)
         total = out.size
-        assert n_nonzero > 0.8 * total, (
-            f"max_r=None should leave most pixels nonzero: {n_nonzero}/{total}"
-        )
+        assert n_nonzero > 0.8 * total, f"max_r=None should leave most pixels nonzero: {n_nonzero}/{total}"
 
 
 # ── 2. Half-vol/half-img equivalence under default max_r ────────────
+
 
 class TestHalfFullEquivalence:
     """All 4 combos of half_volume/half_image should produce equivalent results.
@@ -164,20 +159,22 @@ class TestHalfFullEquivalence:
         vol = _hermitian_volume(N)
         rots = _random_rotations(5, seed=10)
 
-        out_full = np.asarray(slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp",
-            half_image=False))
-        out_half = np.asarray(slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp",
-            half_image=True))
+        out_full = np.asarray(
+            slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", half_image=False)
+        )
+        out_half = np.asarray(
+            slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+        )
 
         # Convert full image to half using proper ftu conversion
-        half_from_full = np.asarray(
-            ftu.full_image_to_half_image(jnp.array(out_full), image_shape))
+        half_from_full = np.asarray(ftu.full_image_to_half_image(jnp.array(out_full), image_shape))
 
         np.testing.assert_allclose(
-            out_half, half_from_full, atol=1e-5, rtol=1e-5,
-            err_msg=f"N={N}: half_img should match corresponding full_img pixels"
+            out_half,
+            half_from_full,
+            atol=1e-5,
+            rtol=1e-5,
+            err_msg=f"N={N}: half_img should match corresponding full_img pixels",
         )
 
     def test_project_half_vol_matches_full_vol(self, N):
@@ -188,16 +185,17 @@ class TestHalfFullEquivalence:
         vol_half = ftu.full_volume_to_half_volume(vol_full, volume_shape)
         rots = _random_rotations(5, seed=20)
 
-        out_full = np.asarray(slicing.slice_volume(
-            vol_full, rots, image_shape, volume_shape, "linear_interp",
-            half_image=True))
-        out_half = np.asarray(slicing.slice_volume(
-            vol_half, rots, image_shape, volume_shape, "linear_interp",
-            half_volume=True, half_image=True))
+        out_full = np.asarray(
+            slicing.slice_volume(vol_full, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+        )
+        out_half = np.asarray(
+            slicing.slice_volume(
+                vol_half, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
+            )
+        )
 
         np.testing.assert_allclose(
-            out_half, out_full, atol=1e-5, rtol=1e-5,
-            err_msg=f"N={N}: half_vol should match full_vol projection"
+            out_half, out_full, atol=1e-5, rtol=1e-5, err_msg=f"N={N}: half_vol should match full_vol projection"
         )
 
     def test_project_all_four_combos(self, N):
@@ -211,20 +209,20 @@ class TestHalfFullEquivalence:
         results = {}
         for hv, hi in [(False, False), (False, True), (True, False), (True, True)]:
             vol = vol_half if hv else vol_full
-            out = np.asarray(slicing.slice_volume(
-                vol, rots, image_shape, volume_shape, "linear_interp",
-                half_volume=hv, half_image=hi))
+            out = np.asarray(
+                slicing.slice_volume(
+                    vol, rots, image_shape, volume_shape, "linear_interp", half_volume=hv, half_image=hi
+                )
+            )
             if not hi:
                 # Convert full image to half using proper ftu conversion
-                out = np.asarray(
-                    ftu.full_image_to_half_image(jnp.array(out), image_shape))
+                out = np.asarray(ftu.full_image_to_half_image(jnp.array(out), image_shape))
             results[(hv, hi)] = out
 
         ref = results[(False, True)]
         for key, val in results.items():
             np.testing.assert_allclose(
-                val, ref, atol=1e-4, rtol=1e-4,
-                err_msg=f"N={N}: combo {key} differs from (False,True) reference"
+                val, ref, atol=1e-4, rtol=1e-4, err_msg=f"N={N}: combo {key} differs from (False,True) reference"
             )
 
     def test_backproject_half_img_matches_full_img(self, N):
@@ -244,16 +242,15 @@ class TestHalfFullEquivalence:
         full_imgs = jnp.array(ftu.get_dft2(jnp.array(real_imgs))).reshape(5, -1)
         half_imgs = jnp.array(ftu.get_dft2_real(jnp.array(real_imgs))).reshape(5, -1)
 
-        out_full = np.asarray(slicing.adjoint_slice_volume(
-            full_imgs, rots, image_shape, volume_shape, "linear_interp",
-            half_image=False))
-        out_half = np.asarray(slicing.adjoint_slice_volume(
-            half_imgs, rots, image_shape, volume_shape, "linear_interp",
-            half_image=True))
+        out_full = np.asarray(
+            slicing.adjoint_slice_volume(full_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=False)
+        )
+        out_half = np.asarray(
+            slicing.adjoint_slice_volume(half_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+        )
 
         np.testing.assert_allclose(
-            out_half, out_full, atol=1e-4, rtol=1e-4,
-            err_msg=f"N={N}: backproject half_img should match full_img"
+            out_half, out_full, atol=1e-4, rtol=1e-4, err_msg=f"N={N}: backproject half_img should match full_img"
         )
 
     def test_backproject_all_four_combos_self_consistent(self, N):
@@ -275,20 +272,28 @@ class TestHalfFullEquivalence:
         half_imgs = jnp.array(ftu.get_dft2_real(jnp.array(real_imgs))).reshape(5, -1)
 
         # Full-vol output from full-img vs half-img should match
-        out_ff = np.asarray(slicing.adjoint_slice_volume(
-            full_imgs, rots, image_shape, volume_shape, "linear_interp",
-            half_image=False, half_volume=False))
-        out_hf = np.asarray(slicing.adjoint_slice_volume(
-            half_imgs, rots, image_shape, volume_shape, "linear_interp",
-            half_image=True, half_volume=False))
+        out_ff = np.asarray(
+            slicing.adjoint_slice_volume(
+                full_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=False, half_volume=False
+            )
+        )
+        out_hf = np.asarray(
+            slicing.adjoint_slice_volume(
+                half_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True, half_volume=False
+            )
+        )
 
         np.testing.assert_allclose(
-            out_hf, out_ff, atol=1e-4, rtol=1e-4,
-            err_msg=f"N={N}: full-vol from half-img should match full-vol from full-img"
+            out_hf,
+            out_ff,
+            atol=1e-4,
+            rtol=1e-4,
+            err_msg=f"N={N}: full-vol from half-img should match full-vol from full-img",
         )
 
 
 # ── 3. Upsampling (padding) tests with max_r ────────────────────────
+
 
 class TestUpsamplingMaxR:
     """Tests for volume_shape != image_shape (upsampling/padding).
@@ -297,11 +302,14 @@ class TestUpsamplingMaxR:
     Image frequencies only reach ±N/2, so max_r = N//2-1 clips just inside.
     """
 
-    @pytest.fixture(params=[
-        ((16, 16), (32, 32, 32)),
-        ((16, 16), (64, 64, 64)),
-        ((32, 32), (64, 64, 64)),
-    ], ids=["16to32", "16to64", "32to64"])
+    @pytest.fixture(
+        params=[
+            ((16, 16), (32, 32, 32)),
+            ((16, 16), (64, 64, 64)),
+            ((32, 32), (64, 64, 64)),
+        ],
+        ids=["16to32", "16to64", "32to64"],
+    )
     def shapes(self, request):
         return request.param
 
@@ -311,8 +319,7 @@ class TestUpsamplingMaxR:
         vol = _hermitian_volume_rect(volume_shape)
         rots = _random_rotations(3, seed=60)
 
-        out = np.asarray(slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp"))
+        out = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp"))
 
         assert out.shape == (3, image_shape[0] * image_shape[1])
         # Should have some nonzero pixels
@@ -325,16 +332,17 @@ class TestUpsamplingMaxR:
         vol_half = ftu.full_volume_to_half_volume(vol_full, volume_shape)
         rots = _random_rotations(3, seed=70)
 
-        out_full = np.asarray(slicing.slice_volume(
-            vol_full, rots, image_shape, volume_shape, "linear_interp",
-            half_image=True))
-        out_half = np.asarray(slicing.slice_volume(
-            vol_half, rots, image_shape, volume_shape, "linear_interp",
-            half_volume=True, half_image=True))
+        out_full = np.asarray(
+            slicing.slice_volume(vol_full, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+        )
+        out_half = np.asarray(
+            slicing.slice_volume(
+                vol_half, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
+            )
+        )
 
         np.testing.assert_allclose(
-            out_half, out_full, atol=1e-4, rtol=1e-4,
-            err_msg=f"Upsampled half_vol should match full_vol"
+            out_half, out_full, atol=1e-4, rtol=1e-4, err_msg=f"Upsampled half_vol should match full_vol"
         )
 
     def test_backproject_upsampled_default_max_r(self, shapes):
@@ -344,8 +352,7 @@ class TestUpsamplingMaxR:
         n_pix = image_shape[0] * image_shape[1]
         slices = _random_slices(3, n_pix, seed=80)
 
-        out = np.asarray(slicing.adjoint_slice_volume(
-            slices, rots, image_shape, volume_shape, "linear_interp"))
+        out = np.asarray(slicing.adjoint_slice_volume(slices, rots, image_shape, volume_shape, "linear_interp"))
 
         vol_size = int(np.prod(volume_shape))
         assert out.shape == (vol_size,)
@@ -363,16 +370,19 @@ class TestUpsamplingMaxR:
         full_imgs = jnp.array(ftu.get_dft2(jnp.array(real_imgs))).reshape(3, -1)
         half_imgs = jnp.array(ftu.get_dft2_real(jnp.array(real_imgs))).reshape(3, -1)
 
-        out_full = np.asarray(slicing.adjoint_slice_volume(
-            full_imgs, rots, image_shape, volume_shape, "linear_interp",
-            half_image=False, half_volume=False))
-        out_half = np.asarray(slicing.adjoint_slice_volume(
-            half_imgs, rots, image_shape, volume_shape, "linear_interp",
-            half_image=True, half_volume=False))
+        out_full = np.asarray(
+            slicing.adjoint_slice_volume(
+                full_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=False, half_volume=False
+            )
+        )
+        out_half = np.asarray(
+            slicing.adjoint_slice_volume(
+                half_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True, half_volume=False
+            )
+        )
 
         np.testing.assert_allclose(
-            out_half, out_full, atol=1e-4, rtol=1e-4,
-            err_msg="Upsampled backproject half_img should match full_img"
+            out_half, out_full, atol=1e-4, rtol=1e-4, err_msg="Upsampled backproject half_img should match full_img"
         )
 
     def test_upsampled_default_max_r_preserves_most_pixels(self, shapes):
@@ -386,8 +396,7 @@ class TestUpsamplingMaxR:
         vol = _hermitian_volume_rect(volume_shape)
         rots = _random_rotations(3, seed=105)
 
-        out = np.asarray(slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp"))
+        out = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp"))
         n_nonzero = np.sum(np.abs(out) > 1e-30)
         total = out.size
         # The inscribed circle of an N×N image at radius N//2-1 has area
@@ -396,8 +405,7 @@ class TestUpsamplingMaxR:
         # coords, giving ~15% for N=16 with ups=2.  Threshold at 50% catches it.
         frac = n_nonzero / total
         assert frac > 0.50, (
-            f"Upsampled projection preserved only {frac:.1%} of pixels — "
-            f"max_r likely not scaled to volume coordinates"
+            f"Upsampled projection preserved only {frac:.1%} of pixels — max_r likely not scaled to volume coordinates"
         )
 
     def test_max_r_clips_correctly_with_upsampling(self, shapes):
@@ -407,10 +415,8 @@ class TestUpsamplingMaxR:
         rots = _random_rotations(3, seed=100)
 
         # Small max_r should clip aggressively
-        out_small = np.asarray(slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp", max_r=3.0))
-        out_none = np.asarray(slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
+        out_small = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=3.0))
+        out_none = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
 
         n_zero_small = np.sum(np.abs(out_small) < 1e-30)
         n_zero_none = np.sum(np.abs(out_none) < 1e-30)
@@ -418,6 +424,7 @@ class TestUpsamplingMaxR:
 
 
 # ── 4. Adjointness test with default max_r ───────────────────────────
+
 
 class TestAdjointnessWithMaxR:
     """<Ax, y> should equal <x, A^T y> for project/backproject with max_r."""
@@ -436,15 +443,15 @@ class TestAdjointnessWithMaxR:
         rng = np.random.default_rng(110)
         vol_data = (rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64)
         vol = jnp.array(vol_data)
-        img_data = (rng.standard_normal((n_images, N*N)) + 1j * rng.standard_normal((n_images, N*N))).astype(np.complex64)
+        img_data = (rng.standard_normal((n_images, N * N)) + 1j * rng.standard_normal((n_images, N * N))).astype(
+            np.complex64
+        )
         imgs = jnp.array(img_data)
 
         # Forward: Ax
-        Ax = slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp")
+        Ax = slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
         # Adjoint: A^T y
-        ATy = slicing.adjoint_slice_volume(
-            imgs, rots, image_shape, volume_shape, "linear_interp")
+        ATy = slicing.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp")
 
         # <Ax, y>
         lhs = float(jnp.real(jnp.vdot(Ax, imgs)))
@@ -462,13 +469,15 @@ class TestAdjointnessWithMaxR:
         rots = _random_rotations(n_images, seed=120)
 
         rng = np.random.default_rng(120)
-        vol = jnp.array((rng.standard_normal((2*N)**3) + 1j * rng.standard_normal((2*N)**3)).astype(np.complex64))
-        imgs = jnp.array((rng.standard_normal((n_images, N*N)) + 1j * rng.standard_normal((n_images, N*N))).astype(np.complex64))
+        vol = jnp.array(
+            (rng.standard_normal((2 * N) ** 3) + 1j * rng.standard_normal((2 * N) ** 3)).astype(np.complex64)
+        )
+        imgs = jnp.array(
+            (rng.standard_normal((n_images, N * N)) + 1j * rng.standard_normal((n_images, N * N))).astype(np.complex64)
+        )
 
-        Ax = slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp")
-        ATy = slicing.adjoint_slice_volume(
-            imgs, rots, image_shape, volume_shape, "linear_interp")
+        Ax = slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
+        ATy = slicing.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp")
 
         lhs = float(jnp.real(jnp.vdot(Ax, imgs)))
         rhs = float(jnp.real(jnp.vdot(vol, ATy)))
@@ -486,12 +495,12 @@ class TestAdjointnessWithMaxR:
 
         rng = np.random.default_rng(130)
         vol = jnp.array((rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64))
-        imgs = jnp.array((rng.standard_normal((n_images, N*N)) + 1j * rng.standard_normal((n_images, N*N))).astype(np.complex64))
+        imgs = jnp.array(
+            (rng.standard_normal((n_images, N * N)) + 1j * rng.standard_normal((n_images, N * N))).astype(np.complex64)
+        )
 
-        Ax = slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, "linear_interp", max_r=max_r)
-        ATy = slicing.adjoint_slice_volume(
-            imgs, rots, image_shape, volume_shape, "linear_interp", max_r=max_r)
+        Ax = slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=max_r)
+        ATy = slicing.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp", max_r=max_r)
 
         lhs = float(jnp.real(jnp.vdot(Ax, imgs)))
         rhs = float(jnp.real(jnp.vdot(vol, ATy)))
@@ -501,6 +510,7 @@ class TestAdjointnessWithMaxR:
 
 
 # ── 5. Batch functions respect default max_r ─────────────────────────
+
 
 class TestBatchDefaultMaxR:
     """Batch functions should use the same default max_r as single functions."""
@@ -514,20 +524,17 @@ class TestBatchDefaultMaxR:
 
         rng = np.random.default_rng(140)
         vols = jnp.array(
-            (rng.standard_normal((n_vols, N**3)) +
-             1j * rng.standard_normal((n_vols, N**3))).astype(np.complex64))
+            (rng.standard_normal((n_vols, N**3)) + 1j * rng.standard_normal((n_vols, N**3))).astype(np.complex64)
+        )
 
         # Batch call with default max_r
-        batch_out = np.asarray(slicing.batch_slice_volume(
-            vols, rots, image_shape, volume_shape, "linear_interp"))
+        batch_out = np.asarray(slicing.batch_slice_volume(vols, rots, image_shape, volume_shape, "linear_interp"))
 
         # Single calls with default max_r
         for i in range(n_vols):
-            single_out = np.asarray(slicing.slice_volume(
-                vols[i], rots, image_shape, volume_shape, "linear_interp"))
+            single_out = np.asarray(slicing.slice_volume(vols[i], rots, image_shape, volume_shape, "linear_interp"))
             np.testing.assert_allclose(
-                batch_out[i], single_out, atol=1e-5, rtol=1e-5,
-                err_msg=f"Batch vol {i} differs from single"
+                batch_out[i], single_out, atol=1e-5, rtol=1e-5, err_msg=f"Batch vol {i} differs from single"
             )
 
     def test_batch_adjoint_matches_single(self):
@@ -540,13 +547,14 @@ class TestBatchDefaultMaxR:
         slices_data = _random_slices(n_images, N * N, seed=150)
         batch_slices = jnp.stack([slices_data] * n_vols)
 
-        batch_out = np.asarray(slicing.batch_adjoint_slice_volume(
-            batch_slices, rots, image_shape, volume_shape, "linear_interp"))
+        batch_out = np.asarray(
+            slicing.batch_adjoint_slice_volume(batch_slices, rots, image_shape, volume_shape, "linear_interp")
+        )
 
         for i in range(n_vols):
-            single_out = np.asarray(slicing.adjoint_slice_volume(
-                slices_data, rots, image_shape, volume_shape, "linear_interp"))
+            single_out = np.asarray(
+                slicing.adjoint_slice_volume(slices_data, rots, image_shape, volume_shape, "linear_interp")
+            )
             np.testing.assert_allclose(
-                batch_out[i], single_out, atol=1e-5, rtol=1e-5,
-                err_msg=f"Batch vol {i} differs from single"
+                batch_out[i], single_out, atol=1e-5, rtol=1e-5, err_msg=f"Batch vol {i} differs from single"
             )

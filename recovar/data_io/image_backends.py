@@ -73,6 +73,7 @@ class _ImageView:
 # ParticleImageDataset
 # ---------------------------------------------------------------------------
 
+
 class ParticleImageDataset:
     """Dataset for cryo-EM particle images.
 
@@ -80,20 +81,35 @@ class ParticleImageDataset:
     by both ``grain.RandomAccessDataSource`` and the downstream loaders.
     """
 
-    def __init__(self, image_file: str, lazy: bool = True, ind: Optional[np.ndarray] = None,
-                 invert_data: bool = False, datadir: str = "", padding: int = 0,
-                 max_threads: int = 16, strip_prefix: Optional[str] = None,
-                 downsample_D: Optional[int] = None, device=None, **kwargs):
+    def __init__(
+        self,
+        image_file: str,
+        lazy: bool = True,
+        ind: Optional[np.ndarray] = None,
+        invert_data: bool = False,
+        datadir: str = "",
+        padding: int = 0,
+        max_threads: int = 16,
+        strip_prefix: Optional[str] = None,
+        downsample_D: Optional[int] = None,
+        device=None,
+        **kwargs,
+    ):
         if padding != 0:
             raise NotImplementedError("Padding not yet supported")
 
         self.source = ImageLoader.from_file(
-            image_file, lazy=lazy, datadir=datadir or "",
-            indices=ind, max_threads=max_threads, strip_prefix=strip_prefix
+            image_file,
+            lazy=lazy,
+            datadir=datadir or "",
+            indices=ind,
+            max_threads=max_threads,
+            strip_prefix=strip_prefix,
         )
 
         if downsample_D is not None:
             from recovar.data_io.image_loader import DownsamplingImageLoader
+
             self.source = DownsamplingImageLoader(self.source, downsample_D)
 
         self.image_size = self.source.D
@@ -126,8 +142,7 @@ class ParticleImageDataset:
     def __repr__(self) -> str:
         return f"ParticleImageDataset(N={self.num_images}, D={self.image_size})"
 
-    @nvtx.annotate("ParticleImageDataset.__getitem__", color="yellow",
-                    domain=NVTX_DOMAIN_DATA_IO)
+    @nvtx.annotate("ParticleImageDataset.__getitem__", color="yellow", domain=NVTX_DOMAIN_DATA_IO)
     def __getitem__(self, index):
         images = self.source.images(index)
         if images.ndim == 2:
@@ -138,6 +153,7 @@ class ParticleImageDataset:
         if apply_image_mask:
             images = images * self.image_mask
         import recovar.core.padding as pad
+
         images = pad.padded_dft(images * self.data_multiplier, self.D, self.padding)
         return images.astype(self.dtype, copy=False)
 
@@ -151,33 +167,40 @@ class ParticleImageDataset:
         """
         processed = self.process_images(images, apply_image_mask=apply_image_mask)
         import recovar.core.fourier_transform_utils as fourier_transform_utils
+
         half_images = fourier_transform_utils.full_image_to_half_image(
             processed,
             self.image_shape,
         )
         return half_images.astype(self.dtype, copy=False)
 
-    def get_dataset_generator(self, batch_size: int, num_workers: int = 0,
-                              pad_to_batch_size: bool = False, mode: str = 'tilt_series',
-                              **kwargs):
-        return _GrainBatchLoader(self, batch_size=batch_size, shuffle=False,
-                                 num_workers=num_workers)
+    def get_dataset_generator(
+        self,
+        batch_size: int,
+        num_workers: int = 0,
+        pad_to_batch_size: bool = False,
+        mode: str = "tilt_series",
+        **kwargs,
+    ):
+        return _GrainBatchLoader(self, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    def get_dataset_subset_generator(self, batch_size: int, subset_indices: np.ndarray,
-                                     num_workers: int = 0, pad_to_batch_size: bool = False,
-                                     mode: str = 'tilt_series', **kwargs):
-        subset_indices = normalize_indices(
-            subset_indices, n_total=int(self.num_images), name="subset_indices"
-        )
+    def get_dataset_subset_generator(
+        self,
+        batch_size: int,
+        subset_indices: np.ndarray,
+        num_workers: int = 0,
+        pad_to_batch_size: bool = False,
+        mode: str = "tilt_series",
+        **kwargs,
+    ):
+        subset_indices = normalize_indices(subset_indices, n_total=int(self.num_images), name="subset_indices")
         subset = _SimpleSubset(self, subset_indices)
-        return _GrainBatchLoader(subset, batch_size=batch_size, shuffle=False,
-                                 num_workers=num_workers)
+        return _GrainBatchLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     def get_image_generator(self, batch_size: int, num_workers: int = 0):
         return self.get_dataset_generator(batch_size, num_workers)
 
-    def get_image_subset_generator(self, batch_size: int, subset_indices: np.ndarray,
-                                   num_workers: int = 0):
+    def get_image_subset_generator(self, batch_size: int, subset_indices: np.ndarray, num_workers: int = 0):
         return self.get_dataset_subset_generator(batch_size, subset_indices, num_workers)
 
 
@@ -185,15 +208,24 @@ class ParticleImageDataset:
 # TiltSeriesDataset
 # ---------------------------------------------------------------------------
 
+
 class TiltSeriesDataset(ParticleImageDataset):
     """Dataset for tilt series with automatic particle grouping."""
 
-    def __init__(self, starfile_path: str, lazy: bool = True,
-                 num_tilts: Optional[int] = None, random_tilts: bool = False,
-                 ind: Optional[np.ndarray] = None,
-                 voltage: Optional[float] = None, dose_per_tilt: Optional[float] = None,
-                 angle_per_tilt: Optional[float] = None, expected_res: Optional[float] = None,
-                 tilt_file_option: str = 'relion5', **kwargs):
+    def __init__(
+        self,
+        starfile_path: str,
+        lazy: bool = True,
+        num_tilts: Optional[int] = None,
+        random_tilts: bool = False,
+        ind: Optional[np.ndarray] = None,
+        voltage: Optional[float] = None,
+        dose_per_tilt: Optional[float] = None,
+        angle_per_tilt: Optional[float] = None,
+        expected_res: Optional[float] = None,
+        tilt_file_option: str = "relion5",
+        **kwargs,
+    ):
         start_time = time.time()
 
         if num_tilts is not None:
@@ -201,8 +233,7 @@ class TiltSeriesDataset(ParticleImageDataset):
                 raise TypeError("num_tilts must be an integer or None")
             num_tilts = int(num_tilts)
             if num_tilts < 0:
-                logger.warning("num_tilts=%d < 0; using all available tilts per particle",
-                               num_tilts)
+                logger.warning("num_tilts=%d < 0; using all available tilts per particle", num_tilts)
                 num_tilts = None
 
         super().__init__(starfile_path, lazy=lazy, ind=ind, **kwargs)
@@ -219,20 +250,18 @@ class TiltSeriesDataset(ParticleImageDataset):
         self.particle_groups = self._build_particle_groups(star.df, canonical_groups)
         self._particle_tilts = list(self.particle_groups.values())
         self.num_particles = len(self.particle_groups)
-        self.dataset_tilt_indices = [
-            canonical_groups.index(gn) for gn in self.particle_groups.keys()
-        ]
+        self.dataset_tilt_indices = [canonical_groups.index(gn) for gn in self.particle_groups.keys()]
 
         self.ctfscalefactor = np.asarray(star.df["_rlnCtfScalefactor"], dtype=np.float32)
-        if '_rlnCtfBfactor' in star.df.columns:
+        if "_rlnCtfBfactor" in star.df.columns:
             self.ctfBfactor = np.asarray(star.df["_rlnCtfBfactor"], dtype=np.float32)
-        elif tilt_file_option == 'warp':
+        elif tilt_file_option == "warp":
             raise ValueError(
                 "Warp tilt ordering requires '_rlnCtfBfactor' column in the "
                 "STAR file, but it was not found. Check that your STAR file "
                 "was exported from Warp with B-factor information."
             )
-        if tilt_file_option == 'relion5':
+        if tilt_file_option == "relion5":
             self.dose = np.asarray(star.df["_rlnMicrographPreExposure"], dtype=np.float32)
 
         self._compute_tilt_ordering(tilt_file_option)
@@ -257,9 +286,9 @@ class TiltSeriesDataset(ParticleImageDataset):
 
     @staticmethod
     def _get_canonical_groups(df) -> List[str]:
-        if '_rlnGroupName' not in df.columns:
+        if "_rlnGroupName" not in df.columns:
             raise ValueError("STAR data is missing required column: _rlnGroupName")
-        return sorted(df['_rlnGroupName'].unique())
+        return sorted(df["_rlnGroupName"].unique())
 
     @staticmethod
     def _build_particle_groups(df, canonical_groups: List[str]) -> OrderedDict:
@@ -274,9 +303,9 @@ class TiltSeriesDataset(ParticleImageDataset):
         return ordered
 
     def _compute_tilt_ordering(self, method: str):
-        if method == 'relion5':
+        if method == "relion5":
             logger.info("Ordering tilts by dose (_rlnMicrographPreExposure) - RELION 5")
-        elif method == 'warp':
+        elif method == "warp":
             logger.info("Ordering tilts by B-factor - Warp")
         else:
             raise ValueError(f"Invalid tilt ordering method: {method}")
@@ -284,7 +313,7 @@ class TiltSeriesDataset(ParticleImageDataset):
         self.tilt_order = np.zeros(self.N, dtype=int)
 
         for particle_tilts in self.particle_groups.values():
-            if method == 'relion5':
+            if method == "relion5":
                 sort_indices = np.argsort(-self.dose[particle_tilts])
             else:
                 sort_indices = np.argsort(self.ctfBfactor[particle_tilts])
@@ -315,20 +344,19 @@ class TiltSeriesDataset(ParticleImageDataset):
         return images, particle_index, selected
 
     @classmethod
-    def parse_particle_tilt(cls, starfile_path: str,
-                            indices: Optional[np.ndarray] = None):
+    def parse_particle_tilt(cls, starfile_path: str, indices: Optional[np.ndarray] = None):
         star = starfile.StarFile.load(starfile_path)
         df = star.df
 
-        if '_rlnGroupName' not in df.columns:
+        if "_rlnGroupName" not in df.columns:
             raise ValueError("STAR data is missing required column: _rlnGroupName")
 
         if indices is not None:
             norm_indices = normalize_indices(indices, n_total=len(df), name="indices")
             df = df.loc[norm_indices]
 
-        canonical_groups = sorted(df['_rlnGroupName'].unique())
-        grouped = df.groupby('_rlnGroupName').groups
+        canonical_groups = sorted(df["_rlnGroupName"].unique())
+        grouped = df.groupby("_rlnGroupName").groups
         particles_to_tilts = [np.asarray(grouped[gn], dtype=int) for gn in canonical_groups]
 
         tilts_to_particles = {}
@@ -344,7 +372,7 @@ class TiltSeriesDataset(ParticleImageDataset):
         df = star.df
 
         tilt_col = None
-        for col in ['_rlnTiltName', 'rlnTiltName']:
+        for col in ["_rlnTiltName", "rlnTiltName"]:
             if col in df.columns:
                 tilt_col = col
                 break
@@ -366,34 +394,31 @@ class TiltSeriesDataset(ParticleImageDataset):
         max_tilts = 0
         for tilts in self._particle_tilts:
             n_available = len(tilts)
-            n_actual = (
-                min(self.num_tilts, n_available) if self.num_tilts is not None
-                else n_available
-            )
+            n_actual = min(self.num_tilts, n_available) if self.num_tilts is not None else n_available
             max_tilts = max(max_tilts, n_actual)
         return max_tilts
 
     def get_image_generator(self, batch_size: int, num_workers: int = 0):
         view = _ImageView(self.source, self.source.n)
-        return _GrainBatchLoader(view, batch_size=batch_size, shuffle=False,
-                                 num_workers=num_workers)
+        return _GrainBatchLoader(view, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    def get_image_subset_generator(self, batch_size: int, subset_indices: np.ndarray,
-                                   num_workers: int = 0):
+    def get_image_subset_generator(self, batch_size: int, subset_indices: np.ndarray, num_workers: int = 0):
         if subset_indices is None:
             return self.get_image_generator(batch_size, num_workers)
-        subset_indices = normalize_indices(
-            subset_indices, n_total=int(self.source.n), name="subset_indices"
-        )
+        subset_indices = normalize_indices(subset_indices, n_total=int(self.source.n), name="subset_indices")
         view = _ImageView(self.source, self.source.n)
         subset = _SimpleSubset(view, subset_indices)
-        return _GrainBatchLoader(subset, batch_size=batch_size, shuffle=False,
-                                 num_workers=num_workers)
+        return _GrainBatchLoader(subset, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
-    def get_dataset_generator(self, batch_size: int, num_workers: int = 0,
-                              pad_to_batch_size: bool = False, mode: str = 'tilt_series',
-                              **kwargs):
-        if mode == 'images':
+    def get_dataset_generator(
+        self,
+        batch_size: int,
+        num_workers: int = 0,
+        pad_to_batch_size: bool = False,
+        mode: str = "tilt_series",
+        **kwargs,
+    ):
+        if mode == "images":
             max_tilts = _max_tilts_per_dataset_view(self)
             if batch_size < max_tilts:
                 raise ValueError(
@@ -401,21 +426,25 @@ class TiltSeriesDataset(ParticleImageDataset):
                     f"Use larger batch_size or mode='tilt_series'"
                 )
             return _ImageCountBatchLoader(self, batch_size, num_workers, pad_to_batch_size)
-        elif mode == 'tilt_series':
+        elif mode == "tilt_series":
             return _GrainBatchLoader(self, batch_size=1, shuffle=False, num_workers=num_workers)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 
-    def get_dataset_subset_generator(self, batch_size: int, subset_indices: np.ndarray,
-                                     num_workers: int = 0, pad_to_batch_size: bool = False,
-                                     mode: str = 'tilt_series', **kwargs):
+    def get_dataset_subset_generator(
+        self,
+        batch_size: int,
+        subset_indices: np.ndarray,
+        num_workers: int = 0,
+        pad_to_batch_size: bool = False,
+        mode: str = "tilt_series",
+        **kwargs,
+    ):
         if subset_indices is None:
             return self.get_dataset_generator(batch_size, num_workers, pad_to_batch_size, mode)
-        subset_indices = normalize_indices(
-            subset_indices, n_total=len(self), name="subset_indices"
-        )
+        subset_indices = normalize_indices(subset_indices, n_total=len(self), name="subset_indices")
 
-        if mode == 'images':
+        if mode == "images":
             subset = _SimpleSubset(self, subset_indices)
             max_tilts = _max_tilts_per_dataset_view(subset)
             if batch_size < max_tilts:
@@ -429,6 +458,7 @@ class TiltSeriesDataset(ParticleImageDataset):
 # ---------------------------------------------------------------------------
 # Collation
 # ---------------------------------------------------------------------------
+
 
 @nvtx.annotate("collate_to_jax", color="magenta", domain=NVTX_DOMAIN_DATA_IO)
 def _collate_batch_to_jax(batch):
@@ -504,6 +534,7 @@ class _PrefetchIterator:
 # Grain Batch Loader
 # ---------------------------------------------------------------------------
 
+
 class _GrainBatchLoader:
     """Iterable that batches a dataset and yields JAX arrays with prefetching.
 
@@ -516,8 +547,7 @@ class _GrainBatchLoader:
     # disk I/O with computation for lazy-loaded datasets.
     DEFAULT_NUM_THREADS = 4
 
-    def __init__(self, dataset, batch_size: int = 1, shuffle: bool = False,
-                 num_workers: int = 0, **kwargs):
+    def __init__(self, dataset, batch_size: int = 1, shuffle: bool = False, num_workers: int = 0, **kwargs):
         self.dataset = dataset
         self.batch_size = batch_size
         self.shuffle = shuffle
@@ -582,13 +612,12 @@ def _resolve_particle_tilts(dataset, effective_num_tilts):
         if subset_indices is None or parent is None:
             break
 
-        parent_idx = normalize_indices(
-            np.asarray(subset_indices), n_total=len(parent), name="subset indices"
-        )
+        parent_idx = normalize_indices(np.asarray(subset_indices), n_total=len(parent), name="subset indices")
         mapped_indices = parent_idx[mapped_indices]
         cursor = parent
 
     return None, effective_num_tilts
+
 
 def _max_tilts_per_dataset_view(dataset) -> int:
     """Return the largest per-particle tilt count visible through a dataset/subset view."""
@@ -605,16 +634,12 @@ def _max_tilts_per_dataset_view(dataset) -> int:
                 "dataset must expose _particle_tilts, or provide particle_groups "
                 "(or subset indices with parent _particle_tilts)"
             )
-        particle_tilts_list = list(particle_groups.values())[:len(dataset)]
+        particle_tilts_list = list(particle_groups.values())[: len(dataset)]
 
     max_tilts = 0
     for particle_tilts in particle_tilts_list:
         n_available = len(particle_tilts)
-        n_actual = (
-            min(effective_num_tilts, n_available)
-            if effective_num_tilts is not None
-            else n_available
-        )
+        n_actual = min(effective_num_tilts, n_available) if effective_num_tilts is not None else n_available
         max_tilts = max(max_tilts, n_actual)
     return max_tilts
 
@@ -625,12 +650,9 @@ class _ImageCountBatchLoader:
     Wraps iteration with ``PrefetchIterator`` for background I/O.
     """
 
-    def __init__(self, dataset, batch_size: int, num_workers: int = 0,
-                 pad_to_batch: bool = False):
+    def __init__(self, dataset, batch_size: int, num_workers: int = 0, pad_to_batch: bool = False):
         if not isinstance(batch_size, (int, np.integer)):
-            raise TypeError(
-                f"batch_size must be an integer, got {type(batch_size).__name__}"
-            )
+            raise TypeError(f"batch_size must be an integer, got {type(batch_size).__name__}")
         batch_size = int(batch_size)
         if batch_size <= 0:
             raise ValueError(f"batch_size must be positive, got {batch_size}")
@@ -640,9 +662,7 @@ class _ImageCountBatchLoader:
         self.pad_to_batch = pad_to_batch
 
         effective_num_tilts = getattr(dataset, "num_tilts", None)
-        particle_tilts_list, effective_num_tilts = _resolve_particle_tilts(
-            dataset, effective_num_tilts
-        )
+        particle_tilts_list, effective_num_tilts = _resolve_particle_tilts(dataset, effective_num_tilts)
 
         if particle_tilts_list is None:
             particle_groups = getattr(dataset, "particle_groups", None)
@@ -652,16 +672,12 @@ class _ImageCountBatchLoader:
                     "or provide particle_groups (or subset indices with parent "
                     "_particle_tilts)."
                 )
-            particle_tilts_list = list(particle_groups.values())[:len(dataset)]
+            particle_tilts_list = list(particle_groups.values())[: len(dataset)]
 
         self.tilts_counts = []
         for particle_tilts in particle_tilts_list:
             n_available = len(particle_tilts)
-            n_actual = (
-                min(effective_num_tilts, n_available)
-                if effective_num_tilts is not None
-                else n_available
-            )
+            n_actual = min(effective_num_tilts, n_available) if effective_num_tilts is not None else n_available
             self.tilts_counts.append(n_actual)
 
         self.tilts_counts = np.asarray(self.tilts_counts, dtype=np.int32)
@@ -723,9 +739,7 @@ class _ImageCountBatchLoader:
                 images, p_idx, t_indices = self.dataset[particle_idx]
                 if images.shape[0] > 0:
                     batch_images.append(images)
-                    batch_particle_ids.append(
-                        np.full(images.shape[0], p_idx, dtype=np.int32)
-                    )
+                    batch_particle_ids.append(np.full(images.shape[0], p_idx, dtype=np.int32))
                     batch_tilt_ids.append(t_indices)
                     current_count = images.shape[0]
                 particle_idx += 1
@@ -738,18 +752,24 @@ class _ImageCountBatchLoader:
                 if self.pad_to_batch and current_count < self.batch_size:
                     pad_size = self.batch_size - current_count
                     img_shape = batch_images.shape[1:]
-                    batch_images = np.concatenate([
-                        batch_images,
-                        np.zeros((pad_size,) + img_shape, dtype=batch_images.dtype),
-                    ])
-                    batch_particle_ids = np.concatenate([
-                        batch_particle_ids,
-                        np.full(pad_size, -1, dtype=np.int32),
-                    ])
-                    batch_tilt_ids = np.concatenate([
-                        batch_tilt_ids,
-                        np.full(pad_size, -1, dtype=batch_tilt_ids.dtype),
-                    ])
+                    batch_images = np.concatenate(
+                        [
+                            batch_images,
+                            np.zeros((pad_size,) + img_shape, dtype=batch_images.dtype),
+                        ]
+                    )
+                    batch_particle_ids = np.concatenate(
+                        [
+                            batch_particle_ids,
+                            np.full(pad_size, -1, dtype=np.int32),
+                        ]
+                    )
+                    batch_tilt_ids = np.concatenate(
+                        [
+                            batch_tilt_ids,
+                            np.full(pad_size, -1, dtype=batch_tilt_ids.dtype),
+                        ]
+                    )
 
                 yield batch_images, batch_particle_ids, batch_tilt_ids
 

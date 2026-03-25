@@ -16,6 +16,7 @@ pytestmark = pytest.mark.unit
 # ForwardModelConfig
 # ---------------------------------------------------------------------------
 
+
 def _make_config(**overrides):
     """Create a ForwardModelConfig with reasonable defaults."""
     defaults = dict(
@@ -84,6 +85,7 @@ class TestForwardModelConfig:
         """config.compute_ctf_half should return half-spectrum CTF."""
         cfg = _make_config(ctf=CTFEvaluator(mode=CTFMode.SPA))
         import jax.numpy as jnp
+
         params = jnp.zeros((1, 9), dtype=jnp.float32)
         params = params.at[:, 3].set(300.0)
         params = params.at[:, 4].set(2.7)
@@ -115,6 +117,7 @@ class TestForwardModelConfig:
 # ModelState
 # ---------------------------------------------------------------------------
 
+
 class TestModelState:
     def test_creation(self):
         ms = configs.ModelState(
@@ -139,6 +142,7 @@ class TestModelState:
 # ---------------------------------------------------------------------------
 # CovarianceOpts
 # ---------------------------------------------------------------------------
+
 
 class TestCovColumnOpts:
     def test_defaults(self):
@@ -186,6 +190,7 @@ class TestCovarianceOpts:
 # ---------------------------------------------------------------------------
 # EmbeddingOpts
 # ---------------------------------------------------------------------------
+
 
 class TestEmbeddingOpts:
     def test_defaults(self):

@@ -35,12 +35,18 @@ def test_pipeline_gpu_memory_stress_256_5k(tmp_path):
 
     # 1. Generate synthetic dataset: 256x256, 5000 images
     create_cmd = [
-        sys.executable, "-m", "recovar.commands.make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.commands.make_test_dataset",
         str(dataset_dir),
-        "--image-size", "256",
-        "--n-images", "5000",
-        "--noise-level", "0.5",
-        "--seed", "42",
+        "--image-size",
+        "256",
+        "--n-images",
+        "5000",
+        "--noise-level",
+        "0.5",
+        "--seed",
+        "42",
     ]
     subprocess.run(create_cmd, check=True, env=gpu_subprocess_env())
 
@@ -52,13 +58,21 @@ def test_pipeline_gpu_memory_stress_256_5k(tmp_path):
     # 2. Run full pipeline on GPU
     pipeline_output = test_dataset / "pipeline_stress_output"
     pipeline_cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline",
         str(particles),
-        "--ctf", str(test_dataset / "ctf.pkl"),
-        "--poses", str(test_dataset / "poses.pkl"),
-        "--mask", "from_halfmaps",
-        "-o", str(pipeline_output),
-        "--zdim", "10",
+        "--ctf",
+        str(test_dataset / "ctf.pkl"),
+        "--poses",
+        str(test_dataset / "poses.pkl"),
+        "--mask",
+        "from_halfmaps",
+        "-o",
+        str(pipeline_output),
+        "--zdim",
+        "10",
         "--lazy",
     ]
     subprocess.run(pipeline_cmd, check=True, env=gpu_subprocess_env())

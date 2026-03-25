@@ -23,6 +23,7 @@ def _make_means(vol_size, dtype_real=np.float32, dtype_complex=np.complex64):
         prior=np.ones(vol_size, dtype=dtype_real),
     )
 
+
 pytestmark = pytest.mark.unit
 
 
@@ -83,8 +84,9 @@ def test_flip_columns_structured_matches_batch_flip_vec2(grid_size):
     n_cols = 5
 
     rng = np.random.default_rng(42)
-    columns = (rng.standard_normal((vol_size, n_cols)) +
-               1j * rng.standard_normal((vol_size, n_cols))).astype(np.complex64)
+    columns = (rng.standard_normal((vol_size, n_cols)) + 1j * rng.standard_normal((vol_size, n_cols))).astype(
+        np.complex64
+    )
 
     old_result = pc.batch_flip_vec2(columns, volume_shape).T  # (vol_size, n_cols)
     new_result = pc.flip_columns_structured(columns, volume_shape)  # (vol_size, n_cols)
@@ -289,7 +291,13 @@ def test_estimate_principal_components_high_snr_from_var_est_requires_variance()
     )()
     cryos = mock_cryo
     means = _make_means(8)
-    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[4], contrast="none", ignore_zero_frequency=False, keep_intermediate=True)
+    options = AlgorithmOptions(
+        volume_mask_option="none",
+        zs_dim_to_test=[4],
+        contrast="none",
+        ignore_zero_frequency=False,
+        keep_intermediate=True,
+    )
     cov_options = {
         "column_sampling_scheme": "high_snr_from_var_est",
         "sampling_n_cols": 2,
@@ -332,7 +340,13 @@ def test_estimate_principal_components_low_freqs_pipeline(monkeypatch):
     )()
     cryos = mock_cryo
     means = _make_means(8)
-    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[4], contrast="none", ignore_zero_frequency=False, keep_intermediate=False)
+    options = AlgorithmOptions(
+        volume_mask_option="none",
+        zs_dim_to_test=[4],
+        contrast="none",
+        ignore_zero_frequency=False,
+        keep_intermediate=False,
+    )
     cov_options = {
         "column_sampling_scheme": "low_freqs",
         "column_radius": 1,
@@ -404,7 +418,13 @@ def test_estimate_principal_components_with_real_tiny_dataset(monkeypatch):
     cryos = cryo
 
     means = _make_means(cryo.volume_size)
-    options = AlgorithmOptions(volume_mask_option="none", zs_dim_to_test=[4], contrast="none", ignore_zero_frequency=False, keep_intermediate=False)
+    options = AlgorithmOptions(
+        volume_mask_option="none",
+        zs_dim_to_test=[4],
+        contrast="none",
+        ignore_zero_frequency=False,
+        keep_intermediate=False,
+    )
     cov_options = {
         "column_sampling_scheme": "low_freqs",
         "column_radius": 1,
@@ -489,6 +509,7 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     assert np.isfinite(u_np).all()
     gram = u_np.T @ u_np
     np.testing.assert_allclose(gram, np.eye(2), atol=5e-4, rtol=5e-4)
+
 
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence

@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 # Tomogram geometry
 # ---------------------------------------------------------------------------
 
+
 class Tomogram:
     """Per-tilt-series geometry and defocus data.
 
@@ -41,9 +42,9 @@ class Tomogram:
     per-tilt defocus corrections and orientation angles.
     """
 
-    def __init__(self, pixel_size,
-                 defocus_u, defocus_v, defocus_angle,
-                 x_tilts, y_tilts, z_rots, x_shifts, y_shifts, hand):
+    def __init__(
+        self, pixel_size, defocus_u, defocus_v, defocus_angle, x_tilts, y_tilts, z_rots, x_shifts, y_shifts, hand
+    ):
         self.pixel_size = pixel_size
         self.defocus_u = np.asarray(defocus_u, dtype=np.float64)
         self.defocus_v = np.asarray(defocus_v, dtype=np.float64)
@@ -88,9 +89,7 @@ class Tomogram:
             self.defocus_angle[i_tilt],
         )
 
-    def expand_particles_batch(self, points_3d, image_names, tilt_df,
-                               group_names, base_orientations,
-                               random_subsets):
+    def expand_particles_batch(self, points_3d, image_names, tilt_df, group_names, base_orientations, random_subsets):
         """Expand M particles sharing this Tomogram into 2D rows.
 
         All particles must share the same visible-frame set (same Tomogram).
@@ -123,18 +122,16 @@ class Tomogram:
             if base_mats.ndim == 2:
                 base_mats = base_mats[None, :, :]  # single rotation -> (1, 3, 3)
             # (M, 3, 3) @ (n, 3, 3) -> (M, n, 3, 3)
-            final_mats = np.einsum('mij,njk->mnik', base_mats, self._tilt_rots)
-            euler_all = R.from_matrix(
-                final_mats.reshape(M * n, 3, 3)
-            ).as_euler('ZYZ', degrees=True).reshape(M, n, 3)
+            final_mats = np.einsum("mij,njk->mnik", base_mats, self._tilt_rots)
+            euler_all = R.from_matrix(final_mats.reshape(M * n, 3, 3)).as_euler("ZYZ", degrees=True).reshape(M, n, 3)
         else:
             euler_all = np.zeros((M, n, 3))
 
         # --- Tilt-level metadata (same for all particles sharing this Tomogram) ---
-        mic_names = tilt_df['_rlnMicrographName'].values
-        pre_exposure = tilt_df['_rlnMicrographPreExposure'].values.astype(float)
-        ctf_scale = tilt_df['_rlnCtfScalefactor'].values.astype(float)
-        stage_tilt = tilt_df['_rlnTomoNominalStageTiltAngle'].values.astype(float)
+        mic_names = tilt_df["_rlnMicrographName"].values
+        pre_exposure = tilt_df["_rlnMicrographPreExposure"].values.astype(float)
+        ctf_scale = tilt_df["_rlnCtfScalefactor"].values.astype(float)
+        stage_tilt = tilt_df["_rlnTomoNominalStageTiltAngle"].values.astype(float)
 
         # --- Build flat arrays for the output DataFrame ---
         total = M * n
@@ -151,30 +148,33 @@ class Tomogram:
             start = j * n
             for t in range(n):
                 img_name_flat[start + t] = f"{t + 1:06d}@{image_names[j]}"
-            group_flat[start:start + n] = group_names[j]
+            group_flat[start : start + n] = group_names[j]
 
-        return pd.DataFrame({
-            '_rlnDefocusU': dfu_all.ravel(),
-            '_rlnDefocusV': dfv_all.ravel(),
-            '_rlnDefocusAngle': dfa_all.ravel(),
-            '_rlnImageName': img_name_flat,
-            '_rlnMicrographName': mic_flat,
-            '_rlnCtfScalefactor': ctf_scale_flat,
-            '_rlnGroupName': group_flat,
-            '_rlnAngleRot': euler_all[:, :, 0].ravel(),
-            '_rlnAngleTilt': euler_all[:, :, 1].ravel(),
-            '_rlnAnglePsi': euler_all[:, :, 2].ravel(),
-            '_rlnOriginXAngst': 0.0,
-            '_rlnOriginYAngst': 0.0,
-            '_rlnRandomSubset': subset_flat,
-            '_rlnMicrographPreExposure': pre_exp_flat,
-            '_rlnTomoNominalStageTiltAngle': stage_tilt_flat,
-        })
+        return pd.DataFrame(
+            {
+                "_rlnDefocusU": dfu_all.ravel(),
+                "_rlnDefocusV": dfv_all.ravel(),
+                "_rlnDefocusAngle": dfa_all.ravel(),
+                "_rlnImageName": img_name_flat,
+                "_rlnMicrographName": mic_flat,
+                "_rlnCtfScalefactor": ctf_scale_flat,
+                "_rlnGroupName": group_flat,
+                "_rlnAngleRot": euler_all[:, :, 0].ravel(),
+                "_rlnAngleTilt": euler_all[:, :, 1].ravel(),
+                "_rlnAnglePsi": euler_all[:, :, 2].ravel(),
+                "_rlnOriginXAngst": 0.0,
+                "_rlnOriginYAngst": 0.0,
+                "_rlnRandomSubset": subset_flat,
+                "_rlnMicrographPreExposure": pre_exp_flat,
+                "_rlnTomoNominalStageTiltAngle": stage_tilt_flat,
+            }
+        )
 
 
 # ---------------------------------------------------------------------------
 # Star file reading helpers
 # ---------------------------------------------------------------------------
+
 
 def _read_star_all_blocks(filepath):
     """Read a RELION5 star file returning all named data blocks."""
@@ -190,6 +190,7 @@ def _parse_visible_frames(frames_str):
 # ---------------------------------------------------------------------------
 # Main conversion
 # ---------------------------------------------------------------------------
+
 
 def convert(tomograms_path, particles_path, output_path):
     """Convert RELION5 tomo data to RECOVAR 2D tilt format."""
@@ -212,7 +213,7 @@ def convert(tomograms_path, particles_path, output_path):
         )
 
     # Determine RELION project root from tilt series star paths
-    sample_ts_path = tomo_df['_rlnTomoTiltSeriesStarFile'].values[0]
+    sample_ts_path = tomo_df["_rlnTomoTiltSeriesStarFile"].values[0]
     if os.path.isfile(os.path.join(tomo_dir, sample_ts_path)):
         project_root = tomo_dir
     else:
@@ -239,47 +240,46 @@ def convert(tomograms_path, particles_path, output_path):
         if tomo_name in tilt_series_cache:
             return tilt_series_cache[tomo_name]
 
-        tomo_row_mask = tomo_df['_rlnTomoName'].values == tomo_name
+        tomo_row_mask = tomo_df["_rlnTomoName"].values == tomo_name
         if not np.any(tomo_row_mask):
             raise ValueError(f"Tomogram '{tomo_name}' not found in tomograms.star")
         tomo_idx = np.where(tomo_row_mask)[0][0]
 
-        ts_star_relpath = tomo_df['_rlnTomoTiltSeriesStarFile'].values[tomo_idx]
+        ts_star_relpath = tomo_df["_rlnTomoTiltSeriesStarFile"].values[tomo_idx]
         ts_star_path = os.path.join(project_root, ts_star_relpath)
 
         logger.info("Loading tilt-series: %s -> %s", tomo_name, ts_star_path)
         ts_df, _ = _read_star_all_blocks(ts_star_path)
 
-        hand_val = tomo_df['_rlnTomoHand'].values[tomo_idx]
+        hand_val = tomo_df["_rlnTomoHand"].values[tomo_idx]
         hand = -1 if float(hand_val) == -1 else 1
-        pixel_size = float(tomo_df['_rlnTomoTiltSeriesPixelSize'].values[tomo_idx])
+        pixel_size = float(tomo_df["_rlnTomoTiltSeriesPixelSize"].values[tomo_idx])
 
         tilt_series_cache[tomo_name] = (ts_df, hand, pixel_size)
         return ts_df, hand, pixel_size
 
     # ---- Get optics info ----
-    voltage = float(optics_df['_rlnVoltage'].values[0])
-    cs = float(optics_df['_rlnSphericalAberration'].values[0])
-    amp_contrast = float(optics_df['_rlnAmplitudeContrast'].values[0])
-    angpix = float(optics_df['_rlnImagePixelSize'].values[0])
-    image_size = int(optics_df['_rlnImageSize'].values[0])
+    voltage = float(optics_df["_rlnVoltage"].values[0])
+    cs = float(optics_df["_rlnSphericalAberration"].values[0])
+    amp_contrast = float(optics_df["_rlnAmplitudeContrast"].values[0])
+    angpix = float(optics_df["_rlnImagePixelSize"].values[0])
+    image_size = int(optics_df["_rlnImageSize"].values[0])
 
     # ---- Group particles by (tomo_name, visible_frames) for batching ----
     n_particles = len(particles_df)
-    has_subtomo_rot = '_rlnTomoSubtomogramRot' in particles_df.columns
+    has_subtomo_rot = "_rlnTomoSubtomogramRot" in particles_df.columns
 
     groups = {}  # (tomo_name, visible_frames_tuple) -> list of particle indices
     for idx in range(n_particles):
-        tomo_name = particles_df['_rlnTomoName'].values[idx]
-        frames_str = particles_df['_rlnTomoVisibleFrames'].values[idx]
+        tomo_name = particles_df["_rlnTomoName"].values[idx]
+        frames_str = particles_df["_rlnTomoVisibleFrames"].values[idx]
         visible_indices = tuple(_parse_visible_frames(frames_str))
         key = (tomo_name, visible_indices)
         if key not in groups:
             groups[key] = []
         groups[key].append(idx)
 
-    logger.info("Grouped %d particles into %d unique (tomo, visible_frames) groups",
-                n_particles, len(groups))
+    logger.info("Grouped %d particles into %d unique (tomo, visible_frames) groups", n_particles, len(groups))
 
     # ---- Process each group as a batch ----
     all_rows = []
@@ -292,14 +292,14 @@ def convert(tomograms_path, particles_path, output_path):
         # Build Tomogram once for this group
         tomogram = Tomogram(
             pixel_size,
-            defocus_u=sub_ts_df['_rlnDefocusU'].values.astype(float),
-            defocus_v=sub_ts_df['_rlnDefocusV'].values.astype(float),
-            defocus_angle=sub_ts_df['_rlnDefocusAngle'].values.astype(float),
-            x_tilts=sub_ts_df['_rlnTomoXTilt'].values.astype(float),
-            y_tilts=sub_ts_df['_rlnTomoYTilt'].values.astype(float),
-            z_rots=sub_ts_df['_rlnTomoZRot'].values.astype(float),
-            x_shifts=sub_ts_df['_rlnTomoXShiftAngst'].values.astype(float),
-            y_shifts=sub_ts_df['_rlnTomoYShiftAngst'].values.astype(float),
+            defocus_u=sub_ts_df["_rlnDefocusU"].values.astype(float),
+            defocus_v=sub_ts_df["_rlnDefocusV"].values.astype(float),
+            defocus_angle=sub_ts_df["_rlnDefocusAngle"].values.astype(float),
+            x_tilts=sub_ts_df["_rlnTomoXTilt"].values.astype(float),
+            y_tilts=sub_ts_df["_rlnTomoYTilt"].values.astype(float),
+            z_rots=sub_ts_df["_rlnTomoZRot"].values.astype(float),
+            x_shifts=sub_ts_df["_rlnTomoXShiftAngst"].values.astype(float),
+            y_shifts=sub_ts_df["_rlnTomoYShiftAngst"].values.astype(float),
             hand=hand,
         )
 
@@ -307,71 +307,76 @@ def convert(tomograms_path, particles_path, output_path):
         idxs = np.array(particle_indices)
 
         # Gather per-particle data
-        points_3d = np.column_stack([
-            particles_df['_rlnCenteredCoordinateXAngst'].values[idxs].astype(float),
-            particles_df['_rlnCenteredCoordinateYAngst'].values[idxs].astype(float),
-            particles_df['_rlnCenteredCoordinateZAngst'].values[idxs].astype(float),
-        ])
+        points_3d = np.column_stack(
+            [
+                particles_df["_rlnCenteredCoordinateXAngst"].values[idxs].astype(float),
+                particles_df["_rlnCenteredCoordinateYAngst"].values[idxs].astype(float),
+                particles_df["_rlnCenteredCoordinateZAngst"].values[idxs].astype(float),
+            ]
+        )
 
-        image_names = particles_df['_rlnImageName'].values[idxs].tolist()
-        group_names = particles_df['_rlnTomoParticleName'].values[idxs].tolist()
-        random_subsets = particles_df['_rlnRandomSubset'].values[idxs].astype(int)
+        image_names = particles_df["_rlnImageName"].values[idxs].tolist()
+        group_names = particles_df["_rlnTomoParticleName"].values[idxs].tolist()
+        random_subsets = particles_df["_rlnRandomSubset"].values[idxs].astype(int)
 
         # Build batched Rotation objects
-        rots = particles_df['_rlnAngleRot'].values[idxs].astype(float)
-        tilts = particles_df['_rlnAngleTilt'].values[idxs].astype(float)
-        psis = particles_df['_rlnAnglePsi'].values[idxs].astype(float)
-        R_particles = R.from_euler('ZYZ', np.column_stack([rots, tilts, psis]), degrees=True)
+        rots = particles_df["_rlnAngleRot"].values[idxs].astype(float)
+        tilts = particles_df["_rlnAngleTilt"].values[idxs].astype(float)
+        psis = particles_df["_rlnAnglePsi"].values[idxs].astype(float)
+        R_particles = R.from_euler("ZYZ", np.column_stack([rots, tilts, psis]), degrees=True)
 
         if has_subtomo_rot:
-            srots = particles_df['_rlnTomoSubtomogramRot'].values[idxs].astype(float)
-            stilts = particles_df['_rlnTomoSubtomogramTilt'].values[idxs].astype(float)
-            spsis = particles_df['_rlnTomoSubtomogramPsi'].values[idxs].astype(float)
-            R_subtomo = R.from_euler('ZYZ', np.column_stack([srots, stilts, spsis]), degrees=True)
+            srots = particles_df["_rlnTomoSubtomogramRot"].values[idxs].astype(float)
+            stilts = particles_df["_rlnTomoSubtomogramTilt"].values[idxs].astype(float)
+            spsis = particles_df["_rlnTomoSubtomogramPsi"].values[idxs].astype(float)
+            R_subtomo = R.from_euler("ZYZ", np.column_stack([srots, stilts, spsis]), degrees=True)
         else:
-            R_subtomo = R.identity() if M == 1 else R.from_matrix(
-                np.broadcast_to(np.eye(3), (M, 3, 3)).copy()
-            )
+            R_subtomo = R.identity() if M == 1 else R.from_matrix(np.broadcast_to(np.eye(3), (M, 3, 3)).copy())
 
         R_base = R_particles * R_subtomo
 
         df_2d = tomogram.expand_particles_batch(
-            points_3d, image_names, sub_ts_df,
-            group_names, R_base, random_subsets,
+            points_3d,
+            image_names,
+            sub_ts_df,
+            group_names,
+            R_base,
+            random_subsets,
         )
 
         all_rows.append(df_2d)
 
         particles_processed += M
         if particles_processed % 500 < M or particles_processed == n_particles:
-            logger.info("Processing particle %d / %d",
-                        min(particles_processed, n_particles), n_particles)
+            logger.info("Processing particle %d / %d", min(particles_processed, n_particles), n_particles)
 
     # ---- Concatenate and sort by dose within each group ----
     final_df = pd.concat(all_rows, ignore_index=True)
-    final_df['_rlnMicrographPreExposure'] = final_df['_rlnMicrographPreExposure'].astype(float)
+    final_df["_rlnMicrographPreExposure"] = final_df["_rlnMicrographPreExposure"].astype(float)
     final_df = final_df.sort_values(
-        ['_rlnGroupName', '_rlnMicrographPreExposure'],
-        kind='mergesort',
+        ["_rlnGroupName", "_rlnMicrographPreExposure"],
+        kind="mergesort",
     ).reset_index(drop=True)
 
-    logger.info("Total 2D rows: %d (%d particles x ~%d tilts)",
-                len(final_df), n_particles,
-                len(final_df) // max(n_particles, 1))
+    logger.info(
+        "Total 2D rows: %d (%d particles x ~%d tilts)", len(final_df), n_particles, len(final_df) // max(n_particles, 1)
+    )
 
     # ---- Build output optics table ----
-    out_optics = pd.DataFrame({
-        '_rlnOpticsGroup': ['1'],
-        '_rlnOpticsGroupName': ['opticsGroup1'],
-        '_rlnImagePixelSize': [str(angpix)],
-        '_rlnImageSize': [str(image_size)],
-        '_rlnVoltage': [str(voltage)],
-        '_rlnSphericalAberration': [str(cs)],
-        '_rlnAmplitudeContrast': [str(amp_contrast)],
-        '_rlnImageDimensionality': ['2'],
-    })
+    out_optics = pd.DataFrame(
+        {
+            "_rlnOpticsGroup": ["1"],
+            "_rlnOpticsGroupName": ["opticsGroup1"],
+            "_rlnImagePixelSize": [str(angpix)],
+            "_rlnImageSize": [str(image_size)],
+            "_rlnVoltage": [str(voltage)],
+            "_rlnSphericalAberration": [str(cs)],
+            "_rlnAmplitudeContrast": [str(amp_contrast)],
+            "_rlnImageDimensionality": ["2"],
+        }
+    )
 
-    final_df['_rlnOpticsGroup'] = '1'
+    final_df["_rlnOpticsGroup"] = "1"
 
     # ---- Write output ----
     starfile.write_star(output_path, final_df, data_optics=out_optics)
@@ -384,21 +389,30 @@ def convert(tomograms_path, particles_path, output_path):
 # CLI
 # ---------------------------------------------------------------------------
 
+
 def add_args(parser):
     parser.add_argument(
-        "-t", "--tomograms", required=True,
+        "-t",
+        "--tomograms",
+        required=True,
         help="RELION5 tomograms.star (from Polish or Tomograms job)",
     )
     parser.add_argument(
-        "-p", "--particles", required=True,
+        "-p",
+        "--particles",
+        required=True,
         help="RELION5 particles.star (from Extract or Refine job)",
     )
     parser.add_argument(
-        "-o", "--output", default="particles_2d.star",
+        "-o",
+        "--output",
+        default="particles_2d.star",
         help="Output 2D STAR file (default: particles_2d.star)",
     )
     parser.add_argument(
-        "-v", "--verbose", action="store_true",
+        "-v",
+        "--verbose",
+        action="store_true",
         help="Enable verbose logging",
     )
 

@@ -159,6 +159,7 @@ def _verify_with_old_code(converted_dir, old_recovar_path=None):
 
     # Run verification in subprocess to avoid module conflicts
     import subprocess
+
     script = f"""
 import sys
 sys.path.insert(0, {old_recovar_path!r})
@@ -177,7 +178,8 @@ print("VERIFY_OK")
     python = sys.executable
     result = subprocess.run(
         [python, "-c", script],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
         env={**os.environ, "PYTHONNOUSERSITE": "1"},
     )
     if result.returncode != 0:
@@ -190,14 +192,11 @@ print("VERIFY_OK")
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("src_dir", help="NEW-format pipeline output directory")
     parser.add_argument("dst_dir", help="Output directory for converted (OLD-compatible) output")
-    parser.add_argument("--verify", action="store_true",
-                        help="Verify converted output loads with OLD PipelineOutput")
-    parser.add_argument("--old-recovar-path", default=None,
-                        help="Path to old recovar repo (default: ~/recovar)")
+    parser.add_argument("--verify", action="store_true", help="Verify converted output loads with OLD PipelineOutput")
+    parser.add_argument("--old-recovar-path", default=None, help="Path to old recovar repo (default: ~/recovar)")
     args = parser.parse_args()
     convert_pipeline_output(args.src_dir, args.dst_dir, args.verify, args.old_recovar_path)
 

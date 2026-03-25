@@ -62,7 +62,9 @@ def test_save_covar_output_volumes_clamps_to_available_pcs(monkeypatch, tmp_path
 
     monkeypatch.setattr(output, "save_volumes", lambda vols, *args, **kwargs: calls.setdefault("saved_vols", len(vols)))
     monkeypatch.setattr(output, "save_volume", lambda *args, **kwargs: None)
-    monkeypatch.setattr(output.linalg, "batch_idft3", lambda arr, volume_shape, vol_batch_size: np.asarray(arr, dtype=np.float32))
+    monkeypatch.setattr(
+        output.linalg, "batch_idft3", lambda arr, volume_shape, vol_batch_size: np.asarray(arr, dtype=np.float32)
+    )
     monkeypatch.setattr(output.utils, "estimate_variance", lambda u_t, svals: np.ones(u_t.shape[-1], dtype=np.float32))
 
     output.save_covar_output_volumes(
@@ -72,7 +74,7 @@ def test_save_covar_output_volumes_clamps_to_available_pcs(monkeypatch, tmp_path
         s=s,
         mask=volume_mask,
         volume_shape=(d, d, d),
-        us_to_save=50,          # intentionally larger than available
+        us_to_save=50,  # intentionally larger than available
         us_to_var=[4, 10, 20],  # all <= n_pcs
         voxel_size=1.0,
     )
@@ -397,6 +399,7 @@ def test_cluster_kmeans_reorder_false_skips_sort():
 
 def test_scatter_annotate_returns_figure_axes():
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -411,6 +414,7 @@ def test_scatter_annotate_returns_figure_axes():
 
 def test_scatter_annotate_with_centers_ind():
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -423,6 +427,7 @@ def test_scatter_annotate_with_centers_ind():
 
 def test_scatter_annotate_with_explicit_centers():
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 

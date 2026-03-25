@@ -6,6 +6,7 @@ Covers:
   _find_files()  – glob-based file discovery
   main()         – argument registration (--dry-run)
 """
+
 import argparse
 import os
 
@@ -19,6 +20,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # Formatting helpers – just verify they don't crash
 # ---------------------------------------------------------------------------
+
 
 def test_heading_prints_without_error(capsys):
     qs_cmd._heading("Test heading")
@@ -54,6 +56,7 @@ def test_error_prints_without_error(capsys):
 # _find_files
 # ---------------------------------------------------------------------------
 
+
 def test_find_files_returns_matching_files(tmp_path):
     (tmp_path / "particles.star").write_text("dummy")
     (tmp_path / "particles.cs").write_text("dummy")
@@ -88,6 +91,7 @@ def test_find_files_caps_at_20(tmp_path):
 # ---------------------------------------------------------------------------
 # main – argument registration
 # ---------------------------------------------------------------------------
+
 
 def test_main_registers_dry_run():
     parser = argparse.ArgumentParser()

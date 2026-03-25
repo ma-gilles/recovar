@@ -15,6 +15,7 @@ from recovar.data_io.starfile import StarFile, write_star
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_test_star(n=20, grid_size=64, voxel_size=1.5, seed=42):
     """Create a temporary STAR file with known poses and CTF parameters.
 
@@ -24,6 +25,7 @@ def _make_test_star(n=20, grid_size=64, voxel_size=1.5, seed=42):
 
     # Random rotation matrices
     from scipy.spatial.transform import Rotation as R
+
     rots_scipy = R.random(n, random_state=seed)
     rot_matrices = rots_scipy.as_matrix()  # (N, 3, 3)
 
@@ -44,11 +46,11 @@ def _make_test_star(n=20, grid_size=64, voxel_size=1.5, seed=42):
     phase_shift = rng.uniform(0, 10, n)
 
     # Build CTF params array for write_starfile
-    ctf_params = np.column_stack([dfu, dfv, dfang, voltage, cs, w, phase_shift,
-                                  np.zeros(n), np.ones(n)])
+    ctf_params = np.column_stack([dfu, dfv, dfang, voltage, cs, w, phase_shift, np.zeros(n), np.ones(n)])
 
     # Write star file using existing write_starfile
     import pandas as pd
+
     tmpdir = tempfile.mkdtemp()
     star_path = os.path.join(tmpdir, "test.star")
 
@@ -71,6 +73,7 @@ def _make_test_cs(n=20, grid_size=64, voxel_size=1.5, seed=42):
     rng = np.random.RandomState(seed)
 
     from scipy.spatial.transform import Rotation as R
+
     rots_scipy = R.random(n, random_state=seed)
     rotvecs = rots_scipy.as_rotvec()  # (N, 3)
     rot_matrices = rots_scipy.as_matrix()  # (N, 3, 3)
@@ -88,52 +91,67 @@ def _make_test_cs(n=20, grid_size=64, voxel_size=1.5, seed=42):
     phase_shift_rad = rng.uniform(0, 0.2, n)
 
     # Build structured array
-    dtype = np.dtype([
-        ('blob/idx', np.int32),
-        ('blob/path', 'U200'),
-        ('blob/shape', np.int32, (2,)),
-        ('blob/psize_A', np.float32),
-        ('alignments3D/pose', np.float32, (3,)),
-        ('alignments3D/shift', np.float32, (2,)),
-        ('ctf/df1_A', np.float32),
-        ('ctf/df2_A', np.float32),
-        ('ctf/df_angle_rad', np.float32),
-        ('ctf/accel_kv', np.float32),
-        ('ctf/cs_mm', np.float32),
-        ('ctf/amp_contrast', np.float32),
-        ('ctf/phase_shift_rad', np.float32),
-    ])
+    dtype = np.dtype(
+        [
+            ("blob/idx", np.int32),
+            ("blob/path", "U200"),
+            ("blob/shape", np.int32, (2,)),
+            ("blob/psize_A", np.float32),
+            ("alignments3D/pose", np.float32, (3,)),
+            ("alignments3D/shift", np.float32, (2,)),
+            ("ctf/df1_A", np.float32),
+            ("ctf/df2_A", np.float32),
+            ("ctf/df_angle_rad", np.float32),
+            ("ctf/accel_kv", np.float32),
+            ("ctf/cs_mm", np.float32),
+            ("ctf/amp_contrast", np.float32),
+            ("ctf/phase_shift_rad", np.float32),
+        ]
+    )
 
     cs_data = np.zeros(n, dtype=dtype)
-    cs_data['blob/idx'] = np.arange(n)
-    cs_data['blob/path'] = 'dummy.mrcs'
-    cs_data['blob/shape'] = [grid_size, grid_size]
-    cs_data['blob/psize_A'] = voxel_size
-    cs_data['alignments3D/pose'] = rotvecs.astype(np.float32)
-    cs_data['alignments3D/shift'] = trans_pixels.astype(np.float32)
-    cs_data['ctf/df1_A'] = dfu.astype(np.float32)
-    cs_data['ctf/df2_A'] = dfv.astype(np.float32)
-    cs_data['ctf/df_angle_rad'] = dfang_rad.astype(np.float32)
-    cs_data['ctf/accel_kv'] = voltage.astype(np.float32)
-    cs_data['ctf/cs_mm'] = cs_mm.astype(np.float32)
-    cs_data['ctf/amp_contrast'] = amp_contrast.astype(np.float32)
-    cs_data['ctf/phase_shift_rad'] = phase_shift_rad.astype(np.float32)
+    cs_data["blob/idx"] = np.arange(n)
+    cs_data["blob/path"] = "dummy.mrcs"
+    cs_data["blob/shape"] = [grid_size, grid_size]
+    cs_data["blob/psize_A"] = voxel_size
+    cs_data["alignments3D/pose"] = rotvecs.astype(np.float32)
+    cs_data["alignments3D/shift"] = trans_pixels.astype(np.float32)
+    cs_data["ctf/df1_A"] = dfu.astype(np.float32)
+    cs_data["ctf/df2_A"] = dfv.astype(np.float32)
+    cs_data["ctf/df_angle_rad"] = dfang_rad.astype(np.float32)
+    cs_data["ctf/accel_kv"] = voltage.astype(np.float32)
+    cs_data["ctf/cs_mm"] = cs_mm.astype(np.float32)
+    cs_data["ctf/amp_contrast"] = amp_contrast.astype(np.float32)
+    cs_data["ctf/phase_shift_rad"] = phase_shift_rad.astype(np.float32)
 
     tmpdir = tempfile.mkdtemp()
     cs_path = os.path.join(tmpdir, "test.cs")
     # Use file object to prevent np.save from appending .npy to the path
-    with open(cs_path, 'wb') as f:
+    with open(cs_path, "wb") as f:
         np.save(f, cs_data)
 
-    return cs_path, rot_matrices, trans_pixels, dfu, dfv, dfang_rad, voltage, cs_mm, amp_contrast, phase_shift_rad, voxel_size, grid_size
+    return (
+        cs_path,
+        rot_matrices,
+        trans_pixels,
+        dfu,
+        dfv,
+        dfang_rad,
+        voltage,
+        cs_mm,
+        amp_contrast,
+        phase_shift_rad,
+        voxel_size,
+        grid_size,
+    )
 
 
 # ---------------------------------------------------------------------------
 # STAR file tests
 # ---------------------------------------------------------------------------
 
-class TestParseFromStar:
 
+class TestParseFromStar:
     def test_pose_roundtrip(self):
         """write_starfile → parse_poses_from_star recovers rotation matrices."""
         star_path, rot_expected, trans_ang, _, voxel_size, grid_size = _make_test_star()
@@ -197,24 +215,29 @@ class TestParseFromStar:
 
         import pandas as pd
         import starfile
-        optics = pd.DataFrame({
-            'rlnOpticsGroup': [1],
-            'rlnOpticsGroupName': ['opticsGroup1'],
-            'rlnVoltage': [300.0],
-            'rlnImagePixelSize': [1.5],
-            'rlnImageSize': [64],
-            'rlnImageDimensionality': [2],
-            'rlnAmplitudeContrast': [0.1],
-            'rlnSphericalAberration': [2.7],
-        })
-        particles = pd.DataFrame({
-            'rlnImageName': ['1@dummy.mrcs'],
-            'rlnDefocusU': [10000.0],
-            'rlnDefocusV': [10000.0],
-            'rlnDefocusAngle': [45.0],
-            'rlnOpticsGroup': [1],
-        })
-        starfile.write({'optics': optics, 'particles': particles}, star_path)
+
+        optics = pd.DataFrame(
+            {
+                "rlnOpticsGroup": [1],
+                "rlnOpticsGroupName": ["opticsGroup1"],
+                "rlnVoltage": [300.0],
+                "rlnImagePixelSize": [1.5],
+                "rlnImageSize": [64],
+                "rlnImageDimensionality": [2],
+                "rlnAmplitudeContrast": [0.1],
+                "rlnSphericalAberration": [2.7],
+            }
+        )
+        particles = pd.DataFrame(
+            {
+                "rlnImageName": ["1@dummy.mrcs"],
+                "rlnDefocusU": [10000.0],
+                "rlnDefocusV": [10000.0],
+                "rlnDefocusAngle": [45.0],
+                "rlnOpticsGroup": [1],
+            }
+        )
+        starfile.write({"optics": optics, "particles": particles}, star_path)
 
         with pytest.raises(ValueError, match="rlnAngleRot"):
             metadata_parsing.parse_poses_from_star(star_path, 64)
@@ -224,8 +247,8 @@ class TestParseFromStar:
 # cryoSPARC CS file tests
 # ---------------------------------------------------------------------------
 
-class TestParseFromCS:
 
+class TestParseFromCS:
     def test_pose_extraction(self):
         """CS file pose extraction produces correct shape and dtype."""
         cs_path, rot_expected, trans_pix, *_, voxel_size, grid_size = _make_test_cs()
@@ -276,11 +299,11 @@ class TestParseFromCS:
         tmpdir = tempfile.mkdtemp()
         cs_path = os.path.join(tmpdir, "no_poses.cs")
 
-        dtype = np.dtype([('blob/idx', np.int32), ('blob/path', 'U200')])
+        dtype = np.dtype([("blob/idx", np.int32), ("blob/path", "U200")])
         data = np.zeros(5, dtype=dtype)
-        data['blob/idx'] = np.arange(5)
-        data['blob/path'] = 'dummy.mrcs'
-        with open(cs_path, 'wb') as f:
+        data["blob/idx"] = np.arange(5)
+        data["blob/path"] = "dummy.mrcs"
+        with open(cs_path, "wb") as f:
             np.save(f, data)
 
         with pytest.raises(ValueError, match="alignments3D/pose"):
@@ -291,8 +314,8 @@ class TestParseFromCS:
 # Auto-dispatch tests
 # ---------------------------------------------------------------------------
 
-class TestAutoDispatch:
 
+class TestAutoDispatch:
     def test_can_extract_star(self):
         assert metadata_parsing.can_extract_poses("particles.star")
 

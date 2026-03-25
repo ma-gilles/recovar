@@ -48,6 +48,7 @@ def _run_metrics(output_dir, run_args, volumes_prefix=None, reuse_dataset=False)
     if run_args:
         cmd.extend(shlex.split(run_args))
     from conftest import gpu_subprocess_env
+
     subprocess.run(cmd, check=True, env=gpu_subprocess_env())
     score_path = output_dir / "test_dataset" / "metrics_plot" / "all_scores.json"
     assert score_path.exists(), f"missing score file at {score_path}"
@@ -152,7 +153,9 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     if volumes_prefix and not Path(f"{volumes_prefix}0000.mrc").exists():
         pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
     baseline_json = Path(os.environ.get("LONG_METRICS_BASELINE_JSON", str(_DEFAULT_LONG_METRICS_BASELINE_JSON)))
-    run_args = os.environ.get("LONG_METRICS_RUN_ARGS", "--grid-size 128 --n-images 50000 --noise-level 0.1 --contrast-std 0.1")
+    run_args = os.environ.get(
+        "LONG_METRICS_RUN_ARGS", "--grid-size 128 --n-images 50000 --noise-level 0.1 --contrast-std 0.1"
+    )
     tol_frac = float(os.environ.get("LONG_METRICS_TOL_FRAC", "0.01"))
 
     output_dir = _resolve_output_dir(tmp_path, "current")
@@ -167,7 +170,9 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     if not perf_stages:
         perf_stages = {"run_test_all_metrics_spa": stage_perf(snap_before, snap_after)}
     perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "long_generated" / "perf_baseline_spa.json")
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "long_generated" / "perf_baseline_spa.json"
+    )
     check_perf_regression(perf_record, perf_baseline_path, "test_run_test_all_metrics_spa")
 
     assert baseline_json.exists(), f"baseline not found: {baseline_json}"
@@ -196,13 +201,10 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     volumes_prefix = os.environ.get("LONG_METRICS_VOLUMES_DIR") or None
     if volumes_prefix and not Path(f"{volumes_prefix}0000.mrc").exists():
         pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
-    baseline_json = Path(
-        os.environ.get("LONG_METRICS_ET_BASELINE_JSON", str(_DEFAULT_LONG_METRICS_ET_BASELINE_JSON))
-    )
+    baseline_json = Path(os.environ.get("LONG_METRICS_ET_BASELINE_JSON", str(_DEFAULT_LONG_METRICS_ET_BASELINE_JSON)))
     run_args = os.environ.get(
         "LONG_METRICS_ET_RUN_ARGS",
-        "--grid-size 128 --n-images 50000 --noise-level 0.1 --contrast-std 0.1 "
-        "--tomo-tilts 7 --noise-model radial",
+        "--grid-size 128 --n-images 50000 --noise-level 0.1 --contrast-std 0.1 --tomo-tilts 7 --noise-model radial",
     )
     tol_frac = float(os.environ.get("LONG_METRICS_ET_TOL_FRAC", os.environ.get("LONG_METRICS_TOL_FRAC", "0.01")))
 
@@ -229,5 +231,7 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     if not perf_stages:
         perf_stages = {"run_test_all_metrics_cryo_et": stage_perf(snap_before, snap_after)}
     perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "long_generated" / "perf_baseline_cryo_et.json")
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "long_generated" / "perf_baseline_cryo_et.json"
+    )
     check_perf_regression(perf_record, perf_baseline_path, "test_run_test_all_metrics_cryo_et")

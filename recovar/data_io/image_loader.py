@@ -28,9 +28,9 @@ NVTX_DOMAIN_DATA_IO = "data_io"
 
 def _swap_mrc_ext(filepath: str) -> Optional[str]:
     """Return filepath with .mrc/.mrcs extension swapped, or None if not applicable."""
-    if filepath.endswith('.mrc') and not filepath.endswith('.mrcs'):
-        return filepath + 's'
-    elif filepath.endswith('.mrcs'):
+    if filepath.endswith(".mrc") and not filepath.endswith(".mrcs"):
+        return filepath + "s"
+    elif filepath.endswith(".mrcs"):
         return filepath[:-1]
     return None
 
@@ -38,6 +38,7 @@ def _swap_mrc_ext(filepath: str) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Index helpers
 # ---------------------------------------------------------------------------
+
 
 def _normalize_selection_indices(indices, n_total: int, name: str) -> np.ndarray:
     """Normalize optional subset indices used at loader construction time."""
@@ -49,6 +50,7 @@ def _normalize_selection_indices(indices, n_total: int, name: str) -> np.ndarray
 # ---------------------------------------------------------------------------
 # Path resolution with fallbacks
 # ---------------------------------------------------------------------------
+
 
 def _resolve_mrc_path(candidate: str) -> str:
     """Try to find an MRC file, with extension and basename fallbacks.
@@ -106,6 +108,7 @@ def _search_for_basename(missing_path: str):
     Gives up after ``_SEARCH_TIMEOUT`` seconds.
     """
     import time
+
     basename = os.path.basename(missing_path)
     alt_basename = None
     swapped = _swap_mrc_ext(basename)
@@ -119,11 +122,10 @@ def _search_for_basename(missing_path: str):
     deadline = time.monotonic() + _SEARCH_TIMEOUT
     for dirpath, dirnames, filenames in os.walk(search_root):
         if time.monotonic() > deadline:
-            logger.warning("_search_for_basename timed out after %ds under %s",
-                           _SEARCH_TIMEOUT, search_root)
+            logger.warning("_search_for_basename timed out after %ds under %s", _SEARCH_TIMEOUT, search_root)
             dirnames.clear()
             break
-        depth = dirpath[len(search_root):].count(os.sep)
+        depth = dirpath[len(search_root) :].count(os.sep)
         if depth > 2:
             dirnames.clear()
             continue
@@ -137,9 +139,16 @@ def _search_for_basename(missing_path: str):
 # Factory
 # ---------------------------------------------------------------------------
 
-def load_images(filepath: str, indices: Optional[np.ndarray] = None,
-                datadir: str = "", lazy: bool = True, max_threads: int = 1,
-                strip_prefix: Optional[str] = None, skip_staging: bool = False):
+
+def load_images(
+    filepath: str,
+    indices: Optional[np.ndarray] = None,
+    datadir: str = "",
+    lazy: bool = True,
+    max_threads: int = 1,
+    strip_prefix: Optional[str] = None,
+    skip_staging: bool = False,
+):
     """Load cryo-EM images from file.
 
     Args:
@@ -155,14 +164,18 @@ def load_images(filepath: str, indices: Optional[np.ndarray] = None,
     Returns:
         ImageLoader instance for the specified file
     """
-    ext = filepath.rsplit('.', 1)[-1].lower()
+    ext = filepath.rsplit(".", 1)[-1].lower()
 
     loaders = {
-        'mrcs': lambda: MRCLoader(filepath, indices, lazy, skip_staging=skip_staging),
-        'mrc': lambda: MRCLoader(filepath, indices, lazy, skip_staging=skip_staging),
-        'star': lambda: StarLoader(filepath, indices, datadir, lazy, max_threads, strip_prefix, skip_staging=skip_staging),
-        'txt': lambda: MultiMRCLoader.from_txt(filepath, indices, lazy, max_threads, skip_staging=skip_staging),
-        'cs': lambda: CryoSparcLoader(filepath, indices, datadir, lazy, max_threads, strip_prefix, skip_staging=skip_staging),
+        "mrcs": lambda: MRCLoader(filepath, indices, lazy, skip_staging=skip_staging),
+        "mrc": lambda: MRCLoader(filepath, indices, lazy, skip_staging=skip_staging),
+        "star": lambda: StarLoader(
+            filepath, indices, datadir, lazy, max_threads, strip_prefix, skip_staging=skip_staging
+        ),
+        "txt": lambda: MultiMRCLoader.from_txt(filepath, indices, lazy, max_threads, skip_staging=skip_staging),
+        "cs": lambda: CryoSparcLoader(
+            filepath, indices, datadir, lazy, max_threads, strip_prefix, skip_staging=skip_staging
+        ),
     }
 
     if ext not in loaders:
@@ -175,6 +188,7 @@ def load_images(filepath: str, indices: Optional[np.ndarray] = None,
 # Base loader
 # ---------------------------------------------------------------------------
 
+
 class ImageLoader:
     """Base class for loading particle images.
 
@@ -183,11 +197,18 @@ class ImageLoader:
     """
 
     @staticmethod
-    def from_file(filepath: str, lazy: bool = True, indices: Optional[np.ndarray] = None,
-                  datadir: str = "", max_threads: int = 1, strip_prefix: Optional[str] = None):
+    def from_file(
+        filepath: str,
+        lazy: bool = True,
+        indices: Optional[np.ndarray] = None,
+        datadir: str = "",
+        max_threads: int = 1,
+        strip_prefix: Optional[str] = None,
+    ):
         """Compatibility alias for load_images()."""
-        return load_images(filepath, indices=indices, datadir=datadir, lazy=lazy,
-                           max_threads=max_threads, strip_prefix=strip_prefix)
+        return load_images(
+            filepath, indices=indices, datadir=datadir, lazy=lazy, max_threads=max_threads, strip_prefix=strip_prefix
+        )
 
     @classmethod
     def image_count(cls, filepath, datadir=None, strip_prefix=None):
@@ -197,12 +218,12 @@ class ImageLoader:
         For other formats, falls back to full lazy construction.
         """
         ext = os.path.splitext(filepath)[1].lower()
-        if ext in ('.mrc', '.mrcs'):
+        if ext in (".mrc", ".mrcs"):
             import mrcfile
-            with mrcfile.open(filepath, mode='r', header_only=True, permissive=True) as mrc:
+
+            with mrcfile.open(filepath, mode="r", header_only=True, permissive=True) as mrc:
                 return int(mrc.header.nz)
-        return cls.from_file(filepath, lazy=True, datadir=datadir or "",
-                             strip_prefix=strip_prefix).n
+        return cls.from_file(filepath, lazy=True, datadir=datadir or "", strip_prefix=strip_prefix).n
 
     def __init__(self, num_images: int, image_size: int, dtype=np.float32):
         self._num_images = num_images
@@ -299,8 +320,7 @@ class ImageLoader:
                     raise ValueError("Boolean indices must be a 1D mask")
                 if indices.size != self._num_images:
                     raise ValueError(
-                        f"Boolean index mask length {indices.size} "
-                        f"must match number of images {self._num_images}"
+                        f"Boolean index mask length {indices.size} must match number of images {self._num_images}"
                     )
                 return np.flatnonzero(indices).astype(np.int32, copy=False)
             if indices.ndim == 0:
@@ -349,6 +369,7 @@ class ImageLoader:
 # MRC loader with memory-mapped sequential reads
 # ---------------------------------------------------------------------------
 
+
 class MRCLoader(ImageLoader):
     """Load images from a single MRC/MRCS file.
 
@@ -362,8 +383,9 @@ class MRCLoader(ImageLoader):
     :mod:`recovar.data_io.staging` for details and performance numbers.
     """
 
-    def __init__(self, filepath: str, indices: Optional[np.ndarray] = None, lazy: bool = True,
-                 skip_staging: bool = False):
+    def __init__(
+        self, filepath: str, indices: Optional[np.ndarray] = None, lazy: bool = True, skip_staging: bool = False
+    ):
         import mrcfile
         from recovar.data_io.staging import get_cache_dir, stage_mrc
 
@@ -377,15 +399,22 @@ class MRCLoader(ImageLoader):
 
         # header_only=True reads only the 1 kB header — avoids mapping the entire
         # data array (which can be tens of GB for large particle stacks).
-        with mrcfile.open(filepath, mode='r', header_only=True, permissive=True) as mrc:
+        with mrcfile.open(filepath, mode="r", header_only=True, permissive=True) as mrc:
             nz = int(mrc.header.nz)
             ny = int(mrc.header.ny)
             nx = int(mrc.header.nx)
             mode = int(mrc.header.mode)
             extended_header_size = int(mrc.header.nsymbt)
         # Map MRC mode to numpy dtype (standard MRC mode field)
-        _MRC_MODE_DTYPE = {0: np.int8, 1: np.int16, 2: np.float32,
-                           3: np.complex64, 4: np.complex64, 6: np.uint16, 12: np.float16}
+        _MRC_MODE_DTYPE = {
+            0: np.int8,
+            1: np.int16,
+            2: np.float32,
+            3: np.complex64,
+            4: np.complex64,
+            6: np.uint16,
+            12: np.float16,
+        }
         self._file_dtype = np.dtype(_MRC_MODE_DTYPE.get(mode, np.float32))
 
         if ny != nx:
@@ -405,10 +434,7 @@ class MRCLoader(ImageLoader):
             self.load_all()
 
     def __repr__(self) -> str:
-        return (
-            f"MRCLoader(filepath={self._filepath!r}, "
-            f"n={self._num_images}, D={self._image_size})"
-        )
+        return f"MRCLoader(filepath={self._filepath!r}, n={self._num_images}, D={self._image_size})"
 
     # -- Memory-mapped access ------------------------------------------------
 
@@ -418,7 +444,7 @@ class MRCLoader(ImageLoader):
             self._memmap = np.memmap(
                 self._filepath,
                 dtype=self._file_dtype,
-                mode='r',
+                mode="r",
                 offset=self._data_start,
                 shape=(self._total_file_images, self._image_size, self._image_size),
             )
@@ -454,49 +480,37 @@ class MRCLoader(ImageLoader):
         has_duplicates = unique_idx.size != file_idx.size
         read_idx = unique_idx if has_duplicates else file_idx
 
-        read_output = np.empty(
-            (len(read_idx), self._image_size, self._image_size), dtype=self._file_dtype
-        )
+        read_output = np.empty((len(read_idx), self._image_size, self._image_size), dtype=self._file_dtype)
 
-        with nvtx.annotate(f"disk_read_{len(file_idx)}_images", color="cyan",
-                           domain=NVTX_DOMAIN_DATA_IO):
+        with nvtx.annotate(f"disk_read_{len(file_idx)}_images", color="cyan", domain=NVTX_DOMAIN_DATA_IO):
             sorted_order = np.argsort(read_idx)
             sorted_idx = read_idx[sorted_order]
-            is_sequential = (
-                np.all(np.diff(sorted_idx) == 1) if len(sorted_idx) > 1 else True
-            )
+            is_sequential = np.all(np.diff(sorted_idx) == 1) if len(sorted_idx) > 1 else True
 
             if is_sequential:
-                with nvtx.annotate("sequential_read", color="green",
-                                   domain=NVTX_DOMAIN_DATA_IO):
-                    offset = (
-                        self._data_start
-                        + int(sorted_idx[0]) * self._bytes_per_image
-                    )
-                    with open(self._filepath, 'rb') as f:
+                with nvtx.annotate("sequential_read", color="green", domain=NVTX_DOMAIN_DATA_IO):
+                    offset = self._data_start + int(sorted_idx[0]) * self._bytes_per_image
+                    with open(self._filepath, "rb") as f:
                         f.seek(offset)
                         data = np.fromfile(
-                            f, dtype=self._file_dtype,
+                            f,
+                            dtype=self._file_dtype,
                             count=self._pixels_per_image * len(sorted_idx),
                         )
-                    data = data.reshape(
-                        len(sorted_idx), self._image_size, self._image_size
-                    )
+                    data = data.reshape(len(sorted_idx), self._image_size, self._image_size)
                     read_output[sorted_order] = data
             else:
-                with nvtx.annotate("random_access_read", color="red",
-                                   domain=NVTX_DOMAIN_DATA_IO):
-                    with open(self._filepath, 'rb') as f:
+                with nvtx.annotate("random_access_read", color="red", domain=NVTX_DOMAIN_DATA_IO):
+                    with open(self._filepath, "rb") as f:
                         for i, idx in enumerate(read_idx):
                             offset = self._data_start + int(idx) * self._bytes_per_image
                             f.seek(offset)
                             data = np.fromfile(
-                                f, dtype=self._file_dtype,
+                                f,
+                                dtype=self._file_dtype,
                                 count=self._pixels_per_image,
                             )
-                            read_output[i] = data.reshape(
-                                self._image_size, self._image_size
-                            )
+                            read_output[i] = data.reshape(self._image_size, self._image_size)
 
         if has_duplicates:
             return read_output[inverse]
@@ -507,21 +521,26 @@ class MRCLoader(ImageLoader):
 # Multi-file loader
 # ---------------------------------------------------------------------------
 
+
 class MultiMRCLoader(ImageLoader):
     """Load images distributed across multiple MRC files."""
 
-    def __init__(self, file_map: pd.DataFrame, indices: Optional[np.ndarray] = None,
-                 lazy: bool = True, max_threads: int = 1,
-                 raw_paths: Optional[list] = None, skip_staging: bool = False):
+    def __init__(
+        self,
+        file_map: pd.DataFrame,
+        indices: Optional[np.ndarray] = None,
+        lazy: bool = True,
+        max_threads: int = 1,
+        raw_paths: Optional[list] = None,
+        skip_staging: bool = False,
+    ):
         self._file_map = file_map.copy()
         self._max_threads = max_threads
         self._raw_paths = raw_paths  # original paths from metadata (for error hints)
         self._skip_staging = skip_staging
 
         if indices is not None:
-            iloc_idx = _normalize_selection_indices(
-                indices, len(self._file_map), "MultiMRCLoader indices"
-            )
+            iloc_idx = _normalize_selection_indices(indices, len(self._file_map), "MultiMRCLoader indices")
             self._selection_indices = iloc_idx.astype(np.int32, copy=False)
             self._file_map = self._file_map.iloc[iloc_idx].reset_index(drop=True)
         else:
@@ -538,7 +557,7 @@ class MultiMRCLoader(ImageLoader):
         self._loaders: dict[str, MRCLoader] = {}
         missing_files = []
         ext_swaps: dict[str, str] = {}  # original -> swapped path
-        for filepath in self._file_map['mrc_file'].unique():
+        for filepath in self._file_map["mrc_file"].unique():
             try:
                 self._loaders[filepath] = MRCLoader(filepath, lazy=True, skip_staging=skip_staging)
             except FileNotFoundError:
@@ -553,7 +572,7 @@ class MultiMRCLoader(ImageLoader):
 
         # Update file_map to use the swapped paths so _load() uses correct keys
         if ext_swaps:
-            self._file_map['mrc_file'] = self._file_map['mrc_file'].replace(ext_swaps)
+            self._file_map["mrc_file"] = self._file_map["mrc_file"].replace(ext_swaps)
             # Re-key loaders under the new paths
             for old, new in ext_swaps.items():
                 self._loaders[new] = self._loaders.pop(old)
@@ -588,11 +607,11 @@ class MultiMRCLoader(ImageLoader):
             # Use raw metadata path for strip-prefix hint (before datadir was joined)
             if self._raw_paths:
                 raw_sample = self._raw_paths[0]
-                if '/' in raw_sample:
-                    raw_prefix = raw_sample.rsplit('/', 1)[0]
+                if "/" in raw_sample:
+                    raw_prefix = raw_sample.rsplit("/", 1)[0]
                     lines.append(f"  --strip-prefix {raw_prefix}")
-            elif '/' in samples[0]:
-                prefix = samples[0].rsplit('/', 1)[0]
+            elif "/" in samples[0]:
+                prefix = samples[0].rsplit("/", 1)[0]
                 lines.append(f"  --strip-prefix {prefix}")
 
             lines.append("")
@@ -615,8 +634,7 @@ class MultiMRCLoader(ImageLoader):
             if np.any(bad):
                 bad_values = np.unique(requested[bad]).tolist()
                 raise ValueError(
-                    f"mrc_index values {bad_values} out of range for file {filepath}; "
-                    f"valid range is [0, {max_valid}]"
+                    f"mrc_index values {bad_values} out of range for file {filepath}; valid range is [0, {max_valid}]"
                 )
 
         super().__init__(len(self._file_map), img_size, dtype)
@@ -657,9 +675,7 @@ class MultiMRCLoader(ImageLoader):
                 for pos in grouped_positions:
                     group_id = int(path_group[int(pos[0])])
                     filepath = unique_paths[group_id]
-                    future = executor.submit(
-                        self._loaders[filepath]._load, mrc_indices[pos]
-                    )
+                    future = executor.submit(self._loaders[filepath]._load, mrc_indices[pos])
                     futures[future] = out_pos[pos]
 
                 for future, group_out_pos in futures.items():
@@ -674,9 +690,13 @@ class MultiMRCLoader(ImageLoader):
         return output
 
     @staticmethod
-    def from_txt(filepath: str, indices: Optional[np.ndarray] = None,
-                 lazy: bool = True, max_threads: int = 1,
-                 skip_staging: bool = False) -> 'MultiMRCLoader':
+    def from_txt(
+        filepath: str,
+        indices: Optional[np.ndarray] = None,
+        lazy: bool = True,
+        max_threads: int = 1,
+        skip_staging: bool = False,
+    ) -> "MultiMRCLoader":
         """Create loader from text file listing MRC paths."""
         base = os.path.dirname(filepath)
 
@@ -695,7 +715,7 @@ class MultiMRCLoader(ImageLoader):
                 mrc_files.extend([path] * n)
                 mrc_indices.extend(range(n))
 
-        df = pd.DataFrame({'mrc_file': mrc_files, 'mrc_index': mrc_indices})
+        df = pd.DataFrame({"mrc_file": mrc_files, "mrc_index": mrc_indices})
         return MultiMRCLoader(df, indices, lazy, max_threads, skip_staging=skip_staging)
 
 
@@ -703,42 +723,44 @@ class MultiMRCLoader(ImageLoader):
 # Format-specific loaders
 # ---------------------------------------------------------------------------
 
+
 class StarLoader(MultiMRCLoader):
     """Load images from RELION STAR file."""
 
-    def __init__(self, filepath: str, indices: Optional[np.ndarray] = None,
-                 datadir: str = "", lazy: bool = True, max_threads: int = 1,
-                 strip_prefix: Optional[str] = None, skip_staging: bool = False):
+    def __init__(
+        self,
+        filepath: str,
+        indices: Optional[np.ndarray] = None,
+        datadir: str = "",
+        lazy: bool = True,
+        max_threads: int = 1,
+        strip_prefix: Optional[str] = None,
+        skip_staging: bool = False,
+    ):
         from recovar.data_io.starfile import StarFile
 
         star = StarFile.load(filepath)
         df = star.df.copy()
 
-        if '_rlnImageName' not in df.columns:
+        if "_rlnImageName" not in df.columns:
             raise ValueError("STAR file is missing required column: _rlnImageName")
 
         image_names = df["_rlnImageName"].astype(str)
-        parts = image_names.str.split('@', n=1, expand=True)
+        parts = image_names.str.split("@", n=1, expand=True)
         if parts.shape[1] < 2 or parts[1].isna().any():
-            raise ValueError(
-                "Malformed _rlnImageName entries: expected '<index>@<path>' format"
-            )
+            raise ValueError("Malformed _rlnImageName entries: expected '<index>@<path>' format")
         try:
-            df['mrc_index'] = parts[0].astype(int) - 1
+            df["mrc_index"] = parts[0].astype(int) - 1
         except (ValueError, TypeError) as exc:
-            raise ValueError(
-                "Malformed _rlnImageName entries: index part is not an integer"
-            ) from exc
-        if (df['mrc_index'] < 0).any():
-            raise ValueError(
-                "Malformed _rlnImageName entries: image indices must be >= 1"
-            )
-        df['mrc_file'] = parts[1]
+            raise ValueError("Malformed _rlnImageName entries: index part is not an integer") from exc
+        if (df["mrc_index"] < 0).any():
+            raise ValueError("Malformed _rlnImageName entries: image indices must be >= 1")
+        df["mrc_file"] = parts[1]
 
         if strip_prefix:
-            if not df['mrc_file'].str.startswith(strip_prefix).any():
+            if not df["mrc_file"].str.startswith(strip_prefix).any():
                 raise ValueError(f"No paths match strip_prefix: {strip_prefix}")
-            df['mrc_file'] = df['mrc_file'].str.removeprefix(strip_prefix).str.lstrip('/')
+            df["mrc_file"] = df["mrc_file"].str.removeprefix(strip_prefix).str.lstrip("/")
 
         if not datadir:
             datadir = os.path.abspath(os.path.dirname(filepath))
@@ -748,39 +770,47 @@ class StarLoader(MultiMRCLoader):
             datadir = os.path.abspath(datadir)
 
         # Save raw paths (after strip but before datadir join) for error hints
-        raw_paths = df['mrc_file'].unique().tolist()
+        raw_paths = df["mrc_file"].unique().tolist()
 
         # Vectorised path join: avoids a 300K-iteration Python loop.
         # Only join when the path is NOT already absolute (the common case for
         # cryo-EM star files where paths are always relative).
-        rel_mask = ~df['mrc_file'].str.startswith('/')
+        rel_mask = ~df["mrc_file"].str.startswith("/")
         if rel_mask.all():
-            full_paths = datadir + os.sep + df['mrc_file']
+            full_paths = datadir + os.sep + df["mrc_file"]
         elif rel_mask.any():
-            full_paths = df['mrc_file'].copy()
+            full_paths = df["mrc_file"].copy()
             full_paths[rel_mask] = datadir + os.sep + full_paths[rel_mask]
         else:
-            full_paths = df['mrc_file']
+            full_paths = df["mrc_file"]
         unique_map = {p: _resolve_mrc_path(p) for p in full_paths.unique()}
-        df['mrc_file'] = full_paths.map(unique_map)
+        df["mrc_file"] = full_paths.map(unique_map)
 
-        super().__init__(df[['mrc_file', 'mrc_index']], indices, lazy, max_threads,
-                         raw_paths=raw_paths, skip_staging=skip_staging)
+        super().__init__(
+            df[["mrc_file", "mrc_index"]], indices, lazy, max_threads, raw_paths=raw_paths, skip_staging=skip_staging
+        )
 
 
 class CryoSparcLoader(MultiMRCLoader):
     """Load images from cryoSPARC CS file."""
 
-    def __init__(self, filepath: str, indices: Optional[np.ndarray] = None,
-                 datadir: str = "", lazy: bool = True, max_threads: int = 1,
-                 strip_prefix: Optional[str] = None, skip_staging: bool = False):
+    def __init__(
+        self,
+        filepath: str,
+        indices: Optional[np.ndarray] = None,
+        datadir: str = "",
+        lazy: bool = True,
+        max_threads: int = 1,
+        strip_prefix: Optional[str] = None,
+        skip_staging: bool = False,
+    ):
         cs_data = np.load(filepath)
 
-        if 'blob/idx' not in cs_data.dtype.names or 'blob/path' not in cs_data.dtype.names:
+        if "blob/idx" not in cs_data.dtype.names or "blob/path" not in cs_data.dtype.names:
             raise ValueError("CS file must contain fields: 'blob/idx' and 'blob/path'")
 
-        blob_idx = cs_data['blob/idx']
-        blob_paths = cs_data['blob/path']
+        blob_idx = cs_data["blob/idx"]
+        blob_paths = cs_data["blob/path"]
         if np.any(blob_idx < 0):
             raise ValueError("CS file contains negative blob/idx values")
 
@@ -789,14 +819,14 @@ class CryoSparcLoader(MultiMRCLoader):
         paths_series = pd.array(blob_paths, dtype=object)
         paths_series = pd.Series(paths_series).astype(str)
         # Strip leading '>' (cryoSPARC path marker)
-        paths_series = paths_series.str.lstrip('>')
+        paths_series = paths_series.str.lstrip(">")
 
         if strip_prefix:
             if not paths_series.str.startswith(strip_prefix).any():
                 raise ValueError(f"No paths match strip_prefix: {strip_prefix}")
             mask = paths_series.str.startswith(strip_prefix)
             paths_series = paths_series.copy()
-            paths_series[mask] = paths_series[mask].str[len(strip_prefix):].str.lstrip('/')
+            paths_series[mask] = paths_series[mask].str[len(strip_prefix) :].str.lstrip("/")
 
         if not datadir:
             datadir = os.path.abspath(os.path.dirname(filepath))
@@ -809,7 +839,7 @@ class CryoSparcLoader(MultiMRCLoader):
         raw_paths = list(dict.fromkeys(paths_series.tolist()))
 
         # Vectorised path join (same approach as StarLoader)
-        rel_mask = ~paths_series.str.startswith('/')
+        rel_mask = ~paths_series.str.startswith("/")
         if rel_mask.all():
             full_paths_series = datadir + os.sep + paths_series
         elif rel_mask.any():
@@ -821,24 +851,22 @@ class CryoSparcLoader(MultiMRCLoader):
         unique_map = {p: _resolve_mrc_path(p) for p in full_paths_series.unique()}
         full_paths_series = full_paths_series.map(unique_map)
 
-        df = pd.DataFrame({'mrc_file': full_paths_series.values, 'mrc_index': blob_idx})
+        df = pd.DataFrame({"mrc_file": full_paths_series.values, "mrc_index": blob_idx})
 
-        super().__init__(df, indices, lazy, max_threads, raw_paths=raw_paths,
-                         skip_staging=skip_staging)
+        super().__init__(df, indices, lazy, max_threads, raw_paths=raw_paths, skip_staging=skip_staging)
 
 
 # ---------------------------------------------------------------------------
 # Downsampling wrapper
 # ---------------------------------------------------------------------------
 
+
 class DownsamplingImageLoader(ImageLoader):
     """Wrapper that Fourier-crops images on the fly during loading."""
 
     def __init__(self, base_loader: ImageLoader, target_D: int):
         if target_D > base_loader.D:
-            raise ValueError(
-                f"target_D ({target_D}) must be <= source image size ({base_loader.D})"
-            )
+            raise ValueError(f"target_D ({target_D}) must be <= source image size ({base_loader.D})")
         if target_D % 2 != 0:
             raise ValueError(f"target_D must be even, got {target_D}")
 
@@ -852,5 +880,5 @@ class DownsamplingImageLoader(ImageLoader):
         if self._target_D == self._base.D:
             return images
         from recovar.data_io.downsample import downsample_images
-        return downsample_images(images, self._target_D)
 
+        return downsample_images(images, self._target_D)

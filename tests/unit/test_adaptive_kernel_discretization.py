@@ -9,6 +9,7 @@ Tests are organised in three tiers:
    (grid_size=4, n_images=8) so every batch in the real code is exercised
    without GPU memory pressure.
 """
+
 import numpy as np
 import pytest
 
@@ -28,6 +29,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # Tier 1 – pure-Python / numpy utilities
 # ---------------------------------------------------------------------------
+
 
 def test_get_feature_size_known_degrees():
     assert akd.get_feature_size(0) == 1
@@ -164,14 +166,12 @@ def test_pad_heterogeneity_kernel_batch_preserves_valid_rows_and_zero_weights_pa
 # Tier 2 – JAX-traced functions on tiny synthetic inputs
 # ---------------------------------------------------------------------------
 
+
 def test_full_volume_to_half_volume_to_full_roundtrip():
     """full→half→full should preserve values in the 'negative-frequency' half."""
     vol_shape = (4, 4, 4)
     vol_size = int(np.prod(vol_shape))
-    vol = jnp.array(
-        np.random.randn(vol_size).astype(np.complex64) +
-        1j * np.random.randn(vol_size).astype(np.float32)
-    )
+    vol = jnp.array(np.random.randn(vol_size).astype(np.complex64) + 1j * np.random.randn(vol_size).astype(np.float32))
     half = akd.full_volume_to_half_volume(vol, vol_shape)
     half_size = int(np.prod(akd.volume_shape_to_half_volume_shape(vol_shape)))
     assert half.shape == (half_size,)
@@ -233,6 +233,7 @@ def test_make_X_mat_pol_degree_1_shape():
 # Tier 3 – Dataset-level: precompute + reconstruct with a tiny dataset
 # ---------------------------------------------------------------------------
 
+
 def test_precompute_triangular_kernel_shapes():
     """precompute_triangular_kernel returns XWX and F with expected shapes."""
     cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=8)
@@ -275,7 +276,9 @@ def test_precompute_kernel_with_heterogeneity_bins():
     het_bins = np.array([0.3, 0.6, 1.0], dtype=np.float32)
 
     XWX, F = akd.precompute_triangular_kernel(
-        cryo, noise_variance, pol_degree=0,
+        cryo,
+        noise_variance,
+        pol_degree=0,
         heterogeneity_distances=het_dists,
         heterogeneity_bins=het_bins,
     )
@@ -322,10 +325,17 @@ def test_even_less_naive_matches_reference_bin_loop(gpu_device):
 
     with jax.default_device(gpu_device):
         est_new, lhs_new, rhs_new = akd.even_less_naive_heterogeneity_scheme_relion_style(
-            cryo, None, het_dists, bins,
-            batch_size=batch_size, tau=None, grid_correct=False,
-            use_spherical_mask=False, return_lhs_rhs=True,
-            heterogeneity_kernel="square", upsampling_factor=1,
+            cryo,
+            None,
+            het_dists,
+            bins,
+            batch_size=batch_size,
+            tau=None,
+            grid_correct=False,
+            use_spherical_mask=False,
+            return_lhs_rhs=True,
+            heterogeneity_kernel="square",
+            upsampling_factor=1,
         )
 
         inds = np.digitize(het_dists, bins, right=True).astype(np.int32)
@@ -375,10 +385,14 @@ def test_even_less_naive_matches_reference_bin_loop(gpu_device):
         est_ref = []
         for idx in range(n_bins):
             est = relion_functions.post_process_from_filter_v2(
-                lhs_ref[idx], rhs_ref[idx],
-                cryo.volume_shape, 1,
-                tau=None, kernel="triangular",
-                use_spherical_mask=False, grid_correct=False,
+                lhs_ref[idx],
+                rhs_ref[idx],
+                cryo.volume_shape,
+                1,
+                tau=None,
+                kernel="triangular",
+                use_spherical_mask=False,
+                grid_correct=False,
                 input_half_volume=True,
             )
             est_ref.append(np.asarray(est).reshape(-1))
@@ -392,6 +406,7 @@ def test_even_less_naive_matches_reference_bin_loop(gpu_device):
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.gpu
 def test_full_volume_to_half_volume_roundtrip_gpu(gpu_device):
@@ -408,7 +423,9 @@ def test_full_volume_to_half_volume_roundtrip_gpu(gpu_device):
     with jax.default_device(gpu_device):
         vol_g = jax.device_put(vol, gpu_device)
         gpu_half = np.asarray(akd.full_volume_to_half_volume(vol_g, vol_shape))
-        gpu_full = np.asarray(akd.half_volume_to_full_volume(jax.device_put(jnp.array(cpu_half), gpu_device), vol_shape))
+        gpu_full = np.asarray(
+            akd.half_volume_to_full_volume(jax.device_put(jnp.array(cpu_half), gpu_device), vol_shape)
+        )
 
     np.testing.assert_allclose(cpu_half, gpu_half, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(cpu_full, gpu_full, atol=1e-5, rtol=1e-5)

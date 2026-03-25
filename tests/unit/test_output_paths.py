@@ -36,7 +36,6 @@ def test_variance_filename():
 
 
 class TestResultPaths:
-
     def test_directory_properties(self):
         rp = ResultPaths("/out")
         assert rp.model_dir == os.path.join("/out", "model")
@@ -102,7 +101,6 @@ class TestResultPaths:
 
 
 class TestAnalysisPaths:
-
     def test_kmeans_dir(self):
         ap = AnalysisPaths("/analysis_4")
         assert ap.kmeans_dir == os.path.join("/analysis_4", "kmeans")
@@ -128,6 +126,4 @@ class TestAnalysisPaths:
         assert AnalysisPaths.halfmap_filename("center", 1, 2) == "center001_half2_unfil.mrc"
 
     def test_diagnostics_subdir(self):
-        assert AnalysisPaths.diagnostics_subdir("center", 0) == os.path.join(
-            "diagnostics", "center000"
-        )
+        assert AnalysisPaths.diagnostics_subdir("center", 0) == os.path.join("diagnostics", "center000")

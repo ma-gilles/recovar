@@ -86,6 +86,7 @@ def make_tiny_cryo_dataset(grid_size=4, n_images=8, seed=0):
     )
     return cryo
 
+
 class TinyFTImageStack:
     """In-memory Fourier-domain stack that implements the image-backend contract."""
 
@@ -100,7 +101,9 @@ class TinyFTImageStack:
         self.image_shape = (self.D, self.D)
         self.mask = np.ones(self.image_shape, dtype=np.float32)
         self.Np = self.n_images
-        self._images_fourier = np.asarray(fourier_transform_utils.get_dft2(images_real)).reshape(self.n_images, -1).astype(np.complex64)
+        self._images_fourier = (
+            np.asarray(fourier_transform_utils.get_dft2(images_real)).reshape(self.n_images, -1).astype(np.complex64)
+        )
 
     def get_dataset_generator(self, batch_size, num_workers=0, **kwargs):
         for start in range(0, self.n_images, batch_size):
@@ -178,14 +181,14 @@ def make_tiny_loader_files(
     # Build a tiny STAR where rows map to the same MRCS stack and grouped particles.
     # Particles are assigned cyclically to keep deterministic groups.
     groups = [f"g{(i % n_particles) + 1}" for i in range(n_images)]
-    image_names = [f"{i+1}@{particles_mrcs.name}" for i in range(n_images)]
+    image_names = [f"{i + 1}@{particles_mrcs.name}" for i in range(n_images)]
     df = pd.DataFrame(
         {
-        "_rlnImageName": image_names,
-        "_rlnGroupName": groups,
-        "_rlnMicrographPreExposure": np.linspace(1.0, float(n_images), n_images, dtype=np.float32),
-        "_rlnCtfScalefactor": np.ones(n_images, dtype=np.float32),
-        "_rlnCtfBfactor": -np.linspace(1.0, float(n_images), n_images, dtype=np.float32),
+            "_rlnImageName": image_names,
+            "_rlnGroupName": groups,
+            "_rlnMicrographPreExposure": np.linspace(1.0, float(n_images), n_images, dtype=np.float32),
+            "_rlnCtfScalefactor": np.ones(n_images, dtype=np.float32),
+            "_rlnCtfBfactor": -np.linspace(1.0, float(n_images), n_images, dtype=np.float32),
         }
     )
     particles_star = out_dir / "particles.star"

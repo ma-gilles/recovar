@@ -25,16 +25,24 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("--host", default="127.0.0.1",
-                        help="Host to bind to (default: 127.0.0.1). Use 0.0.0.0 for remote access")
-    parser.add_argument("--port", type=int, default=5000,
-                        help="Port to bind to (default: 5000)")
-    parser.add_argument("--scan-dir", dest="scan_dirs", action="append", default=[],
-                        help="Directory to scan for existing pipeline outputs (can be repeated)")
-    parser.add_argument("--debug", action="store_true",
-                        help="Run in debug mode with auto-reload")
-    parser.add_argument("--python-path", dest="python_path", default=None,
-                        help="Python interpreter path for launching jobs (default: current interpreter)")
+    parser.add_argument(
+        "--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1). Use 0.0.0.0 for remote access"
+    )
+    parser.add_argument("--port", type=int, default=5000, help="Port to bind to (default: 5000)")
+    parser.add_argument(
+        "--scan-dir",
+        dest="scan_dirs",
+        action="append",
+        default=[],
+        help="Directory to scan for existing pipeline outputs (can be repeated)",
+    )
+    parser.add_argument("--debug", action="store_true", help="Run in debug mode with auto-reload")
+    parser.add_argument(
+        "--python-path",
+        dest="python_path",
+        default=None,
+        help="Python interpreter path for launching jobs (default: current interpreter)",
+    )
     args = parser.parse_args()
 
     # Set up basic logging for CLI usage
@@ -44,9 +52,9 @@ def main():
     try:
         import flask
     except ImportError:
-        logger.error("Flask is required for the GUI. Install it with:\n"
-                     "  pip install flask\n"
-                     "  # or: pip install recovar[gui]")
+        logger.error(
+            "Flask is required for the GUI. Install it with:\n  pip install flask\n  # or: pip install recovar[gui]"
+        )
         sys.exit(1)
 
     from recovar.gui.app import create_app

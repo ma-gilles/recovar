@@ -46,45 +46,58 @@ def _pairwise_sqeuclidean(points):
     np.maximum(distances, 0.0, out=distances)
     return distances
 
+
 def add_args(parser: argparse.ArgumentParser):
 
-    parser = parser_args.standard_downstream_args(parser, analyze = True)
+    parser = parser_args.standard_downstream_args(parser, analyze=True)
 
     parser.add_argument(
         "--zdim", type=int, required=True, help="Dimension of latent variable (a single int, not a list)"
     )
 
     parser.add_argument(
-        "--n-clusters", dest= "n_clusters", type=int, default=20, help="number of k-means clusters (default 20). The clustering is only used to sample the latent space, and the actual cluster labels are not used to generate volumes."
+        "--n-clusters",
+        dest="n_clusters",
+        type=int,
+        default=20,
+        help="number of k-means clusters (default 20). The clustering is only used to sample the latent space, and the actual cluster labels are not used to generate volumes.",
     )
 
     parser.add_argument(
         "--normalize-kmeans",
         dest="normalize_kmeans",
         action="store_true",
-        help="whether to normalize the zs before computing k-means"
+        help="whether to normalize the zs before computing k-means",
     )
 
     parser.add_argument(
-        "--n-trajectories", type=int, default=0, dest="n_trajectories", help="number of trajectories to compute between k-means clusters (default 0)"
+        "--n-trajectories",
+        type=int,
+        default=0,
+        dest="n_trajectories",
+        help="number of trajectories to compute between k-means clusters (default 0)",
     )
 
     parser.add_argument(
         "--skip-umap",
         dest="skip_umap",
         action="store_true",
-        help="whether to skip u-map embedding (can be slow for large dataset)"
+        help="whether to skip u-map embedding (can be slow for large dataset)",
     )
 
     parser.add_argument(
         "--skip-centers",
         dest="skip_centers",
         action="store_true",
-        help="whether to generate the volume of the k-means centers"
+        help="whether to generate the volume of the k-means centers",
     )
 
     parser.add_argument(
-        "--n-vols-along-path", type=int, default=6, dest="n_vols_along_path", help="number of volumes to compute along each trajectory (default 6)"
+        "--n-vols-along-path",
+        type=int,
+        default=6,
+        dest="n_vols_along_path",
+        help="number of volumes to compute along each trajectory (default 6)",
     )
 
     parser.add_argument(
@@ -97,15 +110,39 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40, n_paths = 0, skip_umap = False, q = None, n_std = None, B_factor=0, n_bins=30, n_vols_along_path = 6, skip_centers = False, normalize_kmeans = False, density_path = None, no_z_reg = False, lazy = False, n_min_particles = 0, maskrad_fraction = 0.5, apply_global_filtering = False, fsc_mask_radius = None, fsc_mask_edgewidth = None, args = None):
+def analyze(
+    recovar_result_dir,
+    output_folder=None,
+    zdim=4,
+    n_clusters=40,
+    n_paths=0,
+    skip_umap=False,
+    q=None,
+    n_std=None,
+    B_factor=0,
+    n_bins=30,
+    n_vols_along_path=6,
+    skip_centers=False,
+    normalize_kmeans=False,
+    density_path=None,
+    no_z_reg=False,
+    lazy=False,
+    n_min_particles=0,
+    maskrad_fraction=0.5,
+    apply_global_filtering=False,
+    fsc_mask_radius=None,
+    fsc_mask_edgewidth=None,
+    args=None,
+):
 
     po = o.PipelineOutput(recovar_result_dir)
 
     # Auto-remap stored paths when filesystem has been migrated
     _params = getattr(po, "params", None)
-    _input_args = _params.get('input_args') if hasattr(_params, "get") else None
+    _input_args = _params.get("input_args") if hasattr(_params, "get") else None
     if _input_args is not None:
         from recovar.commands.compute_state import _auto_remap_paths
+
         if args is not None:
             if getattr(args, "particles", None) is not None:
                 _input_args.particles = args.particles
@@ -116,9 +153,9 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         _auto_remap_paths(_input_args, recovar_result_dir)
 
     # Select reg vs noreg entry names
-    coords_entry = 'latent_coords_noreg' if no_z_reg else 'latent_coords'
-    precision_entry = 'latent_precision_noreg' if no_z_reg else 'latent_precision'
-    contrast_entry = 'contrasts_noreg' if no_z_reg else 'contrasts'
+    coords_entry = "latent_coords_noreg" if no_z_reg else "latent_coords"
+    precision_entry = "latent_precision_noreg" if no_z_reg else "latent_precision"
+    contrast_entry = "contrasts_noreg" if no_z_reg else "contrasts"
 
     zs_keys = _get_embedding_keys(po, coords_entry)
 
@@ -130,48 +167,49 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         zdim = zs_keys[0]
         logger.info("using zdim=%d", zdim)
 
-    noreg_suffix = '_noreg' if no_z_reg else ''
+    noreg_suffix = "_noreg" if no_z_reg else ""
     if output_folder is None:
-        output_folder = recovar_result_dir + f'/analysis_{zdim}{noreg_suffix}/'
+        output_folder = recovar_result_dir + f"/analysis_{zdim}{noreg_suffix}/"
 
     if zdim not in zs_keys:
-        logger.error("z-dim not found in results. Options are: %s", ','.join(str(e) for e in zs_keys))
+        logger.error("z-dim not found in results. Options are: %s", ",".join(str(e) for e in zs_keys))
         raise ValueError("Requested zdim was not found in embedding outputs.")
 
-    zs, cov_zs, contrasts = _get_embedding_components(
-        po, zdim, coords_entry, precision_entry, contrast_entry
-    )
+    zs, cov_zs, contrasts = _get_embedding_components(po, zdim, coords_entry, precision_entry, contrast_entry)
 
     # Keep memory footprint low for downstream JAX kernels.
     zs = np.asarray(zs, dtype=np.float32)
     cov_zs = np.asarray(cov_zs, dtype=np.float32)
     contrasts = np.asarray(contrasts, dtype=np.float32)
 
-    cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
+    cryos = po.get("lazy_dataset") if lazy else po.get("dataset")
     embedding.set_contrasts_in_cryos(cryos, contrasts)
 
     # Get the mask from pipeline output for FSC filtering
     fsc_mask = None
     if apply_global_filtering:
         try:
-            fsc_mask = po.get('volume_mask')
+            fsc_mask = po.get("volume_mask")
             logger.info("Using pipeline output volume_mask for FSC filtering")
         except (KeyError, FileNotFoundError):
             logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
 
     if density_path is not None:
         dens_pkl = utils.pickle_load(density_path)
-        input_density = dens_pkl['density']
-        latent_space_bounds = dens_pkl['latent_space_bounds']
-        logger.warning("density dimension is less than zs dimension, truncate zs dimension to match density dimension = %d", input_density.ndim)
+        input_density = dens_pkl["density"]
+        latent_space_bounds = dens_pkl["latent_space_bounds"]
+        logger.warning(
+            "density dimension is less than zs dimension, truncate zs dimension to match density dimension = %d",
+            input_density.ndim,
+        )
         zdim = input_density.ndim
         zs = zs[:, :zdim]
         cov_zs = cov_zs[:, :zdim, :zdim]
     else:
         density, latent_space_bounds = latent_density.compute_latent_space_density(
-            zs, cov_zs, pca_dim_max=np.min([4, zs.shape[-1]]), num_points=50, density_option='kde'
+            zs, cov_zs, pca_dim_max=np.min([4, zs.shape[-1]]), num_points=50, density_option="kde"
         )
-        po.params['density'] = density
+        po.params["density"] = density
         input_density = None
         latent_space_bounds = None
 
@@ -191,61 +229,78 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
     utils.basic_config_logger(output_folder)
 
     # Create subdirectories for organized output
-    plots_dir = os.path.join(output_folder, 'plots')
-    data_dir = os.path.join(output_folder, 'data')
+    plots_dir = os.path.join(output_folder, "plots")
+    data_dir = os.path.join(output_folder, "data")
     o.mkdir_safe(plots_dir)
     o.mkdir_safe(data_dir)
 
     import matplotlib.pyplot as plt
     from recovar.output import plot_utils
+
     fig, ax = plt.subplots(figsize=(8, 6))
     plot_utils.plot_contrast_histogram(contrasts, ax=ax, zdim_key=f"{zdim}{noreg_suffix}")
-    plt.savefig(os.path.join(plots_dir, 'contrast_histogram.png'), bbox_inches='tight')
+    plt.savefig(os.path.join(plots_dir, "contrast_histogram.png"), bbox_inches="tight")
     plt.close()
 
     zs_unsort = zs
     if normalize_kmeans:
         std = np.std(zs_unsort, axis=0)
-        centers, labels = o.kmeans_analysis(os.path.join(plots_dir, 'PCA/'), zs_unsort / std, n_clusters=n_clusters)
+        centers, labels = o.kmeans_analysis(os.path.join(plots_dir, "PCA/"), zs_unsort / std, n_clusters=n_clusters)
         centers = centers * std
     else:
-        centers, labels = o.kmeans_analysis(os.path.join(plots_dir, 'PCA/'), zs_unsort, n_clusters=n_clusters)
+        centers, labels = o.kmeans_analysis(os.path.join(plots_dir, "PCA/"), zs_unsort, n_clusters=n_clusters)
 
     # Kmeans volumes go into kmeans/ subdirectory
-    kmeans_dir = os.path.join(output_folder, 'kmeans/')
+    kmeans_dir = os.path.join(output_folder, "kmeans/")
     o.mkdir_safe(kmeans_dir)
-    kmeans_result = {'centers': centers, 'labels': reorder(labels)}
-    utils.pickle_dump(kmeans_result, os.path.join(data_dir, 'kmeans_result.pkl'))
-    np.savetxt(os.path.join(kmeans_dir, 'centers.txt'), centers)
+    kmeans_result = {"centers": centers, "labels": reorder(labels)}
+    utils.pickle_dump(kmeans_result, os.path.join(data_dir, "kmeans_result.pkl"))
+    np.savetxt(os.path.join(kmeans_dir, "centers.txt"), centers)
 
     if density_path is not None:
         _, z_to_grid = latent_density.get_grid_z_mappings(latent_space_bounds, input_density.shape[0])
         centers_grid = z_to_grid(centers)
 
-        o.mkdir_safe(os.path.join(plots_dir, 'density/'))
-        o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(plots_dir, 'density/'))
+        o.mkdir_safe(os.path.join(plots_dir, "density/"))
+        o.plot_over_density(
+            input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(plots_dir, "density/")
+        )
 
-        o.mkdir_safe(os.path.join(plots_dir, 'density_sliced/'))
-        o.plot_over_density(input_density, points=centers_grid, annotate=True, plot_folder=os.path.join(plots_dir, 'density_sliced/'), projection_function='slice')
+        o.mkdir_safe(os.path.join(plots_dir, "density_sliced/"))
+        o.plot_over_density(
+            input_density,
+            points=centers_grid,
+            annotate=True,
+            plot_folder=os.path.join(plots_dir, "density_sliced/"),
+            projection_function="slice",
+        )
 
     if (not skip_umap) and (zdim > 1):
         mapper = o.umap_latent_space(zs_unsort)
-        o.mkdir_safe(os.path.join(plots_dir, 'umap/'))
-        utils.pickle_dump(reorder(mapper.embedding_), os.path.join(plots_dir, 'umap/umap_embedding.pkl'))
+        o.mkdir_safe(os.path.join(plots_dir, "umap/"))
+        utils.pickle_dump(reorder(mapper.embedding_), os.path.join(plots_dir, "umap/umap_embedding.pkl"))
         from recovar.output import output
+
         _, kmeans_ind = output.get_nearest_point(zs_unsort, centers)
 
-        o.plot_umap(os.path.join(plots_dir, 'umap/'), mapper.embedding_, mapper.embedding_[kmeans_ind])
+        o.plot_umap(os.path.join(plots_dir, "umap/"), mapper.embedding_, mapper.embedding_[kmeans_ind])
 
     if not skip_centers:
         o.compute_and_save_reweighted(
-            cryos,centers, zs, cov_zs, kmeans_dir, B_factor, n_bins,
-            n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
+            cryos,
+            centers,
+            zs,
+            cov_zs,
+            kmeans_dir,
+            B_factor,
+            n_bins,
+            n_min_particles=n_min_particles,
+            maskrad_fraction=maskrad_fraction,
             apply_global_filtering=apply_global_filtering,
             fsc_mask=fsc_mask,
             fsc_mask_radius=fsc_mask_radius,
             fsc_mask_edgewidth=fsc_mask_edgewidth,
-            vol_prefix="center"
+            vol_prefix="center",
         )
 
     if zdim > 1:
@@ -254,32 +309,52 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
             z_st = centers[pair[0]]
             z_end = centers[pair[1]]
 
-            traj_folder = os.path.join(output_folder, f'traj{pair_idx:03d}/')
+            traj_folder = os.path.join(output_folder, f"traj{pair_idx:03d}/")
             o.mkdir_safe(traj_folder)
             try:
                 full_path, subsampled_path = o.make_trajectory_plots_from_results(
-                    po, zdim, traj_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
-                    n_vols_along_path=n_vols_along_path, plot_llh=False, input_density=input_density,
-                    latent_space_bounds=latent_space_bounds
+                    po,
+                    zdim,
+                    traj_folder,
+                    cryos=cryos,
+                    z_st=z_st,
+                    z_end=z_end,
+                    gt_volumes=None,
+                    n_vols_along_path=n_vols_along_path,
+                    plot_llh=False,
+                    input_density=input_density,
+                    latent_space_bounds=latent_space_bounds,
                 )
             except RuntimeError as e:
-                logger.warning("Trajectory %d (clusters %d→%d) failed: %s. "
-                               "Skipping this trajectory.", pair_idx, pair[0], pair[1], e)
+                logger.warning(
+                    "Trajectory %d (clusters %d→%d) failed: %s. Skipping this trajectory.",
+                    pair_idx,
+                    pair[0],
+                    pair[1],
+                    e,
+                )
                 continue
 
             logger.info("trajectory %d done", pair_idx)
             o.compute_and_save_reweighted(
-                cryos,subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
-                n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
+                cryos,
+                subsampled_path,
+                zs,
+                cov_zs,
+                traj_folder,
+                B_factor,
+                n_bins,
+                n_min_particles=n_min_particles,
+                maskrad_fraction=maskrad_fraction,
                 apply_global_filtering=apply_global_filtering,
                 fsc_mask=fsc_mask,
                 fsc_mask_radius=fsc_mask_radius,
                 fsc_mask_edgewidth=fsc_mask_edgewidth,
-                vol_prefix="state"
+                vol_prefix="state",
             )
 
     else:
-        traj_folder = os.path.join(output_folder, 'traj000/')
+        traj_folder = os.path.join(output_folder, "traj000/")
         o.mkdir_safe(traj_folder)
         q = 0.03
         zs_1d = np.asarray(zs).reshape(-1)
@@ -288,23 +363,33 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
         z_end = pairs[1]
         subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:, None]
         o.compute_and_save_reweighted(
-            cryos,subsampled_path, zs, cov_zs, traj_folder, B_factor, n_bins,
-            save_all_estimates=False, n_min_particles=n_min_particles, maskrad_fraction=maskrad_fraction,
+            cryos,
+            subsampled_path,
+            zs,
+            cov_zs,
+            traj_folder,
+            B_factor,
+            n_bins,
+            save_all_estimates=False,
+            n_min_particles=n_min_particles,
+            maskrad_fraction=maskrad_fraction,
             apply_global_filtering=apply_global_filtering,
             fsc_mask=fsc_mask,
             fsc_mask_radius=fsc_mask_radius,
             fsc_mask_edgewidth=fsc_mask_edgewidth,
-            vol_prefix="state"
+            vol_prefix="state",
         )
 
-    kmeans_res = {'centers': centers.tolist(), 'pairs': pairs}
-    utils.pickle_dump(kmeans_res, os.path.join(data_dir, 'trajectory_endpoints.pkl'))
+    kmeans_res = {"centers": centers.tolist(), "pairs": pairs}
+    utils.pickle_dump(kmeans_res, os.path.join(data_dir, "trajectory_endpoints.pkl"))
 
     # Generate summary plot
     try:
         plot_utils.analyze_summary(
-            zs_unsort, centers, labels,
-            os.path.join(plots_dir, 'summary.png'),
+            zs_unsort,
+            centers,
+            labels,
+            os.path.join(plots_dir, "summary.png"),
         )
         logger.info("Saved analysis summary to plots/summary.png")
     except Exception as e:
@@ -314,25 +399,25 @@ def analyze(recovar_result_dir, output_folder = None, zdim = 4, n_clusters = 40,
 def pick_pairs(centers, n_pairs):
     # We try to pick some pairs that cover the latent space in some way.
     # This probably could be improved
-    #     
+    #
     # Pick some pairs that are far away from each other.
     pairs = []
     X = _pairwise_sqeuclidean(centers)
 
-    for _ in range(n_pairs//2):
-        i_idx,j_idx = np.unravel_index(np.argmax(X), X.shape)
-        X[i_idx, :] = 0 
-        X[:, i_idx] = 0 
-        X[j_idx, :] = 0 
-        X[:, j_idx] = 0 
+    for _ in range(n_pairs // 2):
+        i_idx, j_idx = np.unravel_index(np.argmax(X), X.shape)
+        X[i_idx, :] = 0
+        X[:, i_idx] = 0
+        X[j_idx, :] = 0
+        X[:, j_idx] = 0
         pairs.append([i_idx, j_idx])
 
     # Pick some pairs that are far in the first few principal components.
     zdim = centers.shape[-1]
-    max_k = np.min([(n_pairs - n_pairs//2), zdim])
+    max_k = np.min([(n_pairs - n_pairs // 2), zdim])
     for k in range(max_k):
-        i_idx = np.argmax(centers[:,k])
-        j_idx = np.argmin(centers[:,k])
+        i_idx = np.argmax(centers[:, k])
+        j_idx = np.argmin(centers[:, k])
         pairs.append([i_idx, j_idx])
 
     return pairs
@@ -343,9 +428,32 @@ def main():
     args = add_args(parser).parse_args()
 
     from recovar.project.job_context import job_context
+
     with job_context(args, "analyze") as ctx:
         result_dir = ctx.pipeline_dir or args.result_dir
-        analyze(result_dir, output_folder=ctx.output_dir, zdim=args.zdim, n_clusters=args.n_clusters, n_paths=args.n_trajectories, skip_umap=args.skip_umap, B_factor=args.Bfactor, n_bins=args.n_bins, n_vols_along_path=args.n_vols_along_path, skip_centers=args.skip_centers, normalize_kmeans=args.normalize_kmeans, density_path=args.density, no_z_reg=args.no_z_regularization, lazy=args.lazy, n_min_particles=args.n_min_particles, maskrad_fraction=args.maskrad_fraction, apply_global_filtering=args.apply_global_filtering, fsc_mask_radius=args.fsc_mask_radius, fsc_mask_edgewidth=args.fsc_mask_edgewidth, args=args)
+        analyze(
+            result_dir,
+            output_folder=ctx.output_dir,
+            zdim=args.zdim,
+            n_clusters=args.n_clusters,
+            n_paths=args.n_trajectories,
+            skip_umap=args.skip_umap,
+            B_factor=args.Bfactor,
+            n_bins=args.n_bins,
+            n_vols_along_path=args.n_vols_along_path,
+            skip_centers=args.skip_centers,
+            normalize_kmeans=args.normalize_kmeans,
+            density_path=args.density,
+            no_z_reg=args.no_z_regularization,
+            lazy=args.lazy,
+            n_min_particles=args.n_min_particles,
+            maskrad_fraction=args.maskrad_fraction,
+            apply_global_filtering=args.apply_global_filtering,
+            fsc_mask_radius=args.fsc_mask_radius,
+            fsc_mask_edgewidth=args.fsc_mask_edgewidth,
+            args=args,
+        )
+
 
 if __name__ == "__main__":
     main()

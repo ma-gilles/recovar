@@ -40,7 +40,9 @@ def test_run_test_outliers_pipeline_defaults_to_run_all(monkeypatch, tmp_path):
     monkeypatch.setattr(run_test_outliers_pipeline.subprocess, "run", fake_run)
     monkeypatch.setattr(run_test_outliers_pipeline, "create_outlier_volume", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(run_test_outliers_pipeline, "verify_outlier_results", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(run_test_outliers_pipeline, "analyze_outlier_detection_accuracy", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        run_test_outliers_pipeline, "analyze_outlier_detection_accuracy", lambda *_args, **_kwargs: True
+    )
     monkeypatch.setattr(run_test_outliers_pipeline, "verify_temp_cleanup", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         run_test_outliers_pipeline.jax,
@@ -73,7 +75,9 @@ def test_run_test_outliers_pipeline_tilt_basic_emits_tilt_flags(monkeypatch, tmp
     )
     monkeypatch.setattr(run_test_outliers_pipeline, "create_outlier_volume", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(run_test_outliers_pipeline, "verify_outlier_results", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(run_test_outliers_pipeline, "analyze_outlier_detection_accuracy", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        run_test_outliers_pipeline, "analyze_outlier_detection_accuracy", lambda *_args, **_kwargs: True
+    )
     monkeypatch.setattr(run_test_outliers_pipeline, "verify_temp_cleanup", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         run_test_outliers_pipeline.jax,

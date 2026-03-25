@@ -42,21 +42,18 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output-dir", required=True, help="Base output directory")
-    parser.add_argument("--old-conda-env", default="recovar",
-                        help="Conda env name for ~/recovar (default: recovar)")
-    parser.add_argument("--old-repo", default=os.path.expanduser("~/recovar"),
-                        help="Path to old recovar repo (default: ~/recovar)")
+    parser.add_argument("--old-conda-env", default="recovar", help="Conda env name for ~/recovar (default: recovar)")
+    parser.add_argument(
+        "--old-repo", default=os.path.expanduser("~/recovar"), help="Path to old recovar repo (default: ~/recovar)"
+    )
     parser.add_argument("--grid-size", type=int, default=128)
     parser.add_argument("--n-images", type=int, default=50000)
     parser.add_argument("--noise-level", type=float, default=0.1)
     parser.add_argument("--contrast-std", type=float, default=0.1)
-    parser.add_argument("--tomo-tilts", type=int, default=-1,
-                        help="Number of tilts for cryo-ET (default -1 = SPA)")
-    parser.add_argument("--noise-model", default="radial",
-                        help="Noise model (default: radial)")
+    parser.add_argument("--tomo-tilts", type=int, default=-1, help="Number of tilts for cryo-ET (default -1 = SPA)")
+    parser.add_argument("--noise-model", default="radial", help="Noise model (default: radial)")
     args = parser.parse_args()
 
     out_dir = Path(args.output_dir)
@@ -68,7 +65,8 @@ def main():
     from recovar.output import output, metrics, plot_utils
     from recovar.simulation import synthetic_dataset
     from recovar.commands.run_test_all_metrics import (
-        make_big_test_dataset, load_u_real_for_metrics,
+        make_big_test_dataset,
+        load_u_real_for_metrics,
     )
     from recovar import utils
     import recovar.core.fourier_transform_utils as ftu
@@ -84,6 +82,7 @@ def main():
 
     # Generate PDB trajectory volumes
     from recovar.simulation.trajectory_generation import generate_trajectory_volumes
+
     gen_prefix = str(out_dir / "generated_volumes" / "vol")
     vol_input = generate_trajectory_volumes(
         output_dir=str(out_dir),
@@ -98,7 +97,8 @@ def main():
 
     # Generate dataset with fixed seed
     sim_info = make_big_test_dataset(
-        vol_input, str(out_dir),
+        vol_input,
+        str(out_dir),
         noise_level=args.noise_level,
         grid_size=grid_size,
         n_images=args.n_images,
@@ -117,8 +117,9 @@ def main():
     gt_mask_path = os.path.join(dataset_dir, "gt_masks", "gt_union_mask.mrc")
     os.makedirs(os.path.dirname(gt_mask_path), exist_ok=True)
     utils.write_mrc(gt_mask_path, gt_soft_mask, voxel_size=4.25 * 128 / grid_size)
-    logger.info("GT union mask saved: %s (%.1f%% voxels)",
-                gt_mask_path, 100 * gt_binary_mask.sum() / gt_binary_mask.size)
+    logger.info(
+        "GT union mask saved: %s (%.1f%% voxels)", gt_mask_path, 100 * gt_binary_mask.sum() / gt_binary_mask.size
+    )
 
     # ================================================================
     # Step 2: Run OLD pipeline via conda subprocess
@@ -126,12 +127,16 @@ def main():
     logger.info("=== Step 2: Run OLD pipeline ===")
     old_pipe_dir = os.path.join(dataset_dir, "pipeline_output_old")
 
-    particles_path = (f"{dataset_dir}/particles.star" if is_tomo
-                      else f"{dataset_dir}/particles.{grid_size}.mrcs")
+    particles_path = f"{dataset_dir}/particles.star" if is_tomo else f"{dataset_dir}/particles.{grid_size}.mrcs"
 
     old_cmd = [
-        "conda", "run", "-n", args.old_conda_env,
-        "python", "-c", textwrap.dedent(f"""\
+        "conda",
+        "run",
+        "-n",
+        args.old_conda_env,
+        "python",
+        "-c",
+        textwrap.dedent(f"""\
         import argparse, sys, os
         sys.path.insert(0, '{args.old_repo}')
         from recovar.commands import pipeline
@@ -177,8 +182,12 @@ def main():
 
     # Mean FSC
     _, scores["mean_fsc"] = plot_utils.plot_fsc_new(
-        gt_mean, po.get("mean"), np.array(volume_shape), voxel_size,
-        threshold=0.5, name="Mean FSC",
+        gt_mean,
+        po.get("mean"),
+        np.array(volume_shape),
+        voxel_size,
+        threshold=0.5,
+        name="Mean FSC",
     )
 
     # Variance FSC: GT Fourier variance vs variance_est['combined']
@@ -186,8 +195,12 @@ def main():
     gt_fourier_var = np.sum(np.abs(cov_sqrt) ** 2, axis=-1)
     est_var = np.asarray(po.get("variance_est")["combined"])
     _, scores["variance_fsc"] = plot_utils.plot_fsc_new(
-        gt_fourier_var, est_var, np.array(volume_shape), voxel_size,
-        threshold=0.5, name="Variance FSC",
+        gt_fourier_var,
+        est_var,
+        np.array(volume_shape),
+        voxel_size,
+        threshold=0.5,
+        name="Variance FSC",
     )
 
     # SVD relative variance
@@ -203,6 +216,7 @@ def main():
     # Contrasts + embedding
     # Use unsorted (original image order) embeddings to match GT ordering.
     from recovar.commands.run_test_all_metrics import load_unsorted_embedding_component
+
     with open(sim_info_path, "rb") as f:
         si = pickle.load(f)
     pa = np.asarray(si["image_assignment"]).ravel()
@@ -240,7 +254,10 @@ def main():
         if os.path.exists(state_path):
             est_map = utils.load_mrc(state_path)
             em = metrics.compute_volume_error_metrics_from_gt(
-                gt_map, est_map, voxel_size, gt_binary_mask,
+                gt_map,
+                est_map,
+                voxel_size,
+                gt_binary_mask,
             )
             scores[f"state_{l_idx}_locres_median"] = em.get("median_locres")
             scores[f"state_{l_idx}_locres_90pct"] = em.get("ninety_pc_locres")

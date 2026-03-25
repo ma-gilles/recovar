@@ -18,10 +18,11 @@ def _make_real_volume(idx, n_vols, grid):
     x = np.linspace(-1.0, 1.0, grid, dtype=np.float32)
     xx, yy, zz = np.meshgrid(x, x, x, indexing="ij")
     t = 2.0 * np.pi * idx / max(n_vols, 1)
-    vol = (
-        np.exp(-((xx - 0.3 * np.cos(t)) ** 2 + (yy - 0.25 * np.sin(t)) ** 2 + (zz - 0.2 * np.cos(2 * t)) ** 2) / (2 * 0.18**2))
-        + 0.7
-        * np.exp(-((xx + 0.25 * np.sin(1.3 * t)) ** 2 + (yy - 0.2 * np.cos(1.1 * t)) ** 2 + (zz + 0.2 * np.sin(t)) ** 2) / (2 * 0.16**2))
+    vol = np.exp(
+        -((xx - 0.3 * np.cos(t)) ** 2 + (yy - 0.25 * np.sin(t)) ** 2 + (zz - 0.2 * np.cos(2 * t)) ** 2) / (2 * 0.18**2)
+    ) + 0.7 * np.exp(
+        -((xx + 0.25 * np.sin(1.3 * t)) ** 2 + (yy - 0.2 * np.cos(1.1 * t)) ** 2 + (zz + 0.2 * np.sin(t)) ** 2)
+        / (2 * 0.16**2)
     )
     vol = vol.astype(np.float32)
     vol -= vol.mean()
@@ -123,8 +124,6 @@ def test_run_test_all_metrics_tiny_regression_uses_saved_baseline(tmp_path):
     directional_keys = [
         k
         for k, v in second_scores.items()
-        if k in first_scores
-        and isinstance(v, (int, float))
-        and metric_direction(k) != "ignore"
+        if k in first_scores and isinstance(v, (int, float)) and metric_direction(k) != "ignore"
     ]
     assert directional_keys, "expected at least one directional metric to be checked"

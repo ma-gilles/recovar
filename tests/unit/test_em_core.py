@@ -7,6 +7,7 @@ Covers:
   norm_squared_residuals_from_ft  – vmapped batch shapes
   IMAGE_AXIS / VOL_AXIS / ROT_AXIS / TRANS_AXIS constants
 """
+
 import numpy as np
 import pytest
 
@@ -34,6 +35,7 @@ def _ft_images(n: int, seed: int = 0) -> jnp.ndarray:
 # axis constants
 # ---------------------------------------------------------------------------
 
+
 def test_axis_constants_are_distinct_integers():
     axes = {em_core.IMAGE_AXIS, em_core.VOL_AXIS, em_core.ROT_AXIS, em_core.TRANS_AXIS}
     assert len(axes) == 4
@@ -44,6 +46,7 @@ def test_axis_constants_are_distinct_integers():
 # ---------------------------------------------------------------------------
 # crosscorr_from_ft
 # ---------------------------------------------------------------------------
+
 
 def test_crosscorr_from_ft_output_shape():
     """crosscorr_from_ft must return shape (n_imgs, H, W)."""
@@ -68,8 +71,8 @@ def test_crosscorr_from_ft_self_correlation_peaks_at_center():
     get_idft2 applies ifftshift so zero-lag sits at (H//2, W//2) = (2, 2)
     for a 4x4 image, not at flat index 0.
     """
-    img = _ft_images(1)           # shape (1, 16)
-    one = img[0]                  # shape (16,)
+    img = _ft_images(1)  # shape (1, 16)
+    one = img[0]  # shape (16,)
     result = em_core.crosscorr_from_ft(img, one, IMAGE_SHAPE)  # (1, 4, 4)
     corr = np.asarray(result)[0].real  # (4, 4)
     peak_flat = int(np.argmax(np.abs(corr.ravel())))
@@ -82,11 +85,12 @@ def test_crosscorr_from_ft_self_correlation_peaks_at_center():
 # norm_squared_residuals_from_ft_one_image
 # ---------------------------------------------------------------------------
 
+
 def test_norm_squared_residuals_shape_2d_input():
     """With (n_poses, image_size) input, output shape matches input."""
     n_poses = 5
-    many = _ft_images(n_poses)    # (5, 16)
-    one = _ft_images(1)[0]        # (16,)
+    many = _ft_images(n_poses)  # (5, 16)
+    one = _ft_images(1)[0]  # (16,)
     result = em_core.norm_squared_residuals_from_ft_one_image(many, one, IMAGE_SHAPE)
     assert result.shape == many.shape
 
@@ -103,12 +107,13 @@ def test_norm_squared_residuals_shape_3d_input():
 # norm_squared_residuals_from_ft  (vmapped over first axis)
 # ---------------------------------------------------------------------------
 
+
 def test_norm_squared_residuals_from_ft_batch_shape():
     """vmapped version maps independently over images: (n_images, n_poses, image_size)."""
     n_images = 4
     n_poses = 3
     many = jnp.stack([_ft_images(n_poses, seed=i) for i in range(n_images)])  # (4, 3, 16)
-    ones = _ft_images(n_images, seed=99)                                        # (4, 16)
+    ones = _ft_images(n_images, seed=99)  # (4, 16)
     result = em_core.norm_squared_residuals_from_ft(many, ones, IMAGE_SHAPE)
     assert result.shape == (n_images, n_poses, IMAGE_SIZE)
 

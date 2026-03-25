@@ -36,11 +36,33 @@ logger = logging.getLogger(__name__)
 # B  = right arm (8 chains)
 # Db = top arm minus the "head" chains (12 chains)
 CHAIN_GROUPS_5NRL = {
-    'Ab': ['A', 'C', 'D', 'E', 'F', 'J', 'K', 'L', 'M', 'N', 'X',
-           'b', 'd', 'e', 'f', 'g', 'h', 'i', '4', '5', '6', 'G', 'H'],
-    'B':  ['B', 'k', 'l', 'm', 'n', 'p', 'q', 'r'],
-    'Db': ['I', 'O', 'P', 'Q', 'S',
-           'a', 'z', 'o', 'j', '3', '7', '8'],
+    "Ab": [
+        "A",
+        "C",
+        "D",
+        "E",
+        "F",
+        "J",
+        "K",
+        "L",
+        "M",
+        "N",
+        "X",
+        "b",
+        "d",
+        "e",
+        "f",
+        "g",
+        "h",
+        "i",
+        "4",
+        "5",
+        "6",
+        "G",
+        "H",
+    ],
+    "B": ["B", "k", "l", "m", "n", "p", "q", "r"],
+    "Db": ["I", "O", "P", "Q", "S", "a", "z", "o", "j", "3", "7", "8"],
 }
 
 # Hinge point: atom index 59060 in the concatenated (Ab+B+Db) coordinate array
@@ -50,13 +72,17 @@ HINGE_INDEX_5NRL = 59060
 # Default location of the pre-extracted 5nrl atom data (coords, elements,
 # chain IDs stored as a compressed npz — ~1.2 MB vs 14 MB for the full CIF).
 DEFAULT_5NRL_PATH = os.path.join(
-    os.path.dirname(__file__), '..', 'assets', '5nrl_atoms.npz',
+    os.path.dirname(__file__),
+    "..",
+    "assets",
+    "5nrl_atoms.npz",
 )
 
 
 # ---------------------------------------------------------------------------
 # Atom-group utilities
 # ---------------------------------------------------------------------------
+
 
 def split_atom_group_by_chains(atoms, chain_groups):
     """Split an AtomGroup into sub-groups by chain ID lists.
@@ -81,7 +107,7 @@ def split_atom_group_by_chains(atoms, chain_groups):
     for chains in chain_groups:
         mask = np.zeros(len(chain_ids), dtype=bool)
         for c in chains:
-            mask |= (chain_ids == c)
+            mask |= chain_ids == c
         groups.append((all_coords[mask].copy(), all_elements[mask].copy()))
     return groups
 
@@ -89,6 +115,7 @@ def split_atom_group_by_chains(atoms, chain_groups):
 # ---------------------------------------------------------------------------
 # Rigid-body motion primitives
 # ---------------------------------------------------------------------------
+
 
 def rigid_motion(coords, pivot, rotation):
     """Apply a rigid-body rotation around *pivot*.
@@ -109,18 +136,21 @@ def rigid_motion(coords, pivot, rotation):
 def rot_around_x(t_degrees):
     """Rotation of ``-10 + t`` degrees around the x-axis (notebook convention)."""
     from scipy.spatial.transform import Rotation
-    return Rotation.from_euler('x', -10 + t_degrees, degrees=True)
+
+    return Rotation.from_euler("x", -10 + t_degrees, degrees=True)
 
 
 def rot_around_z(t_degrees):
     """Rotation of *t* degrees around the z-axis."""
     from scipy.spatial.transform import Rotation
-    return Rotation.from_euler('z', t_degrees, degrees=True)
+
+    return Rotation.from_euler("z", t_degrees, degrees=True)
 
 
 # ---------------------------------------------------------------------------
 # Trajectory path functions (from make_trajectories.ipynb)
 # ---------------------------------------------------------------------------
+
 
 def generate_conformation_2D(group_coords, t_right, t_top, fixed_pt):
     """Generate a 2-D conformation by rotating subcomplexes B and Db.
@@ -191,20 +221,22 @@ def stitched_path(t, group_coords, fixed_pt):
 # Prepare 5nrl subcomplexes (centered, with hinge point)
 # ---------------------------------------------------------------------------
 
+
 def _load_5nrl_atoms(path):
     """Load 5nrl atom data from a ``.npz``, ``.cif``, or ``.pdb`` file."""
     from recovar.simulation.pdb_utils import AtomGroup
 
-    if path.endswith('.npz'):
+    if path.endswith(".npz"):
         data = np.load(path, allow_pickle=False)
         atoms = AtomGroup()
-        atoms.setCoords(data['coords'].astype(np.float64))
-        atoms.setElements(data['elements'])
-        atoms.setChids(data['chain_ids'])
+        atoms.setCoords(data["coords"].astype(np.float64))
+        atoms.setElements(data["elements"])
+        atoms.setChids(data["chain_ids"])
         return atoms
 
     # Fall back to full CIF/PDB parsing
     from recovar.simulation.pdb_utils import parse_pdb
+
     return parse_pdb(path)
 
 
@@ -231,21 +263,17 @@ def prepare_5nrl_subcomplexes(pdb_path=None):
     if pdb_path is None:
         pdb_path = DEFAULT_5NRL_PATH
     if not os.path.isfile(pdb_path):
-        raise FileNotFoundError(
-            f"5nrl data file not found: {pdb_path}.  "
-            f"Expected at {DEFAULT_5NRL_PATH}"
-        )
+        raise FileNotFoundError(f"5nrl data file not found: {pdb_path}.  Expected at {DEFAULT_5NRL_PATH}")
 
     atoms = _load_5nrl_atoms(pdb_path)
-    logger.info("Loaded %s: %d atoms, %d chains",
-                pdb_path, atoms.numAtoms(), len(set(atoms.getChids().tolist())))
+    logger.info("Loaded %s: %d atoms, %d chains", pdb_path, atoms.numAtoms(), len(set(atoms.getChids().tolist())))
 
-    chain_lists = [CHAIN_GROUPS_5NRL['Ab'], CHAIN_GROUPS_5NRL['B'], CHAIN_GROUPS_5NRL['Db']]
+    chain_lists = [CHAIN_GROUPS_5NRL["Ab"], CHAIN_GROUPS_5NRL["B"], CHAIN_GROUPS_5NRL["Db"]]
     groups = split_atom_group_by_chains(atoms, chain_lists)
     group_coords = [g[0] for g in groups]
     group_elements = [g[1] for g in groups]
 
-    for name, coords in zip(['Ab', 'B', 'Db'], group_coords):
+    for name, coords in zip(["Ab", "B", "Db"], group_coords):
         logger.info("Subcomplex %s: %d atoms", name, len(coords))
 
     # Center
@@ -259,6 +287,7 @@ def prepare_5nrl_subcomplexes(pdb_path=None):
         fixed_pt = all_centered[HINGE_INDEX_5NRL].copy()
     else:
         from scipy.spatial import cKDTree
+
         tree = cKDTree(group_coords[0])
         dists, _ = tree.query(group_coords[1], k=1)
         closest = np.argsort(dists)[:50]
@@ -272,6 +301,7 @@ def prepare_5nrl_subcomplexes(pdb_path=None):
 # B-factor scaling (matching the notebook's apply_B_factor)
 # ---------------------------------------------------------------------------
 
+
 def compute_bfactor_scaling(volume_shape, voxel_size, Bfactor):
     """Compute frequency-dependent B-factor dampening in 3-D.
 
@@ -281,6 +311,7 @@ def compute_bfactor_scaling(volume_shape, voxel_size, Bfactor):
     Returns an array of shape *volume_shape* (not flattened).
     """
     from recovar import core as core_module
+
     vol_idx = np.arange(np.prod(volume_shape))
     freqs = core_module.vec_indices_to_frequencies(vol_idx, volume_shape) / (volume_shape[0] * voxel_size)
     freq_norms = np.linalg.norm(freqs, axis=-1) ** 2
@@ -290,6 +321,7 @@ def compute_bfactor_scaling(volume_shape, voxel_size, Bfactor):
 # ---------------------------------------------------------------------------
 # Volume generation
 # ---------------------------------------------------------------------------
+
 
 def generate_trajectory_volumes(
     output_dir,
@@ -373,8 +405,12 @@ def generate_trajectory_volumes(
         ag.setElements(all_types)
 
         ft_mol = ssp.generate_molecule_spectrum_from_pdb_id(
-            ag, voxel_size=voxel_size, grid_size=grid_size,
-            force_symmetry=True, from_atom_group=True, do_center_atoms=False,
+            ag,
+            voxel_size=voxel_size,
+            grid_size=grid_size,
+            force_symmetry=True,
+            from_atom_group=True,
+            do_center_atoms=False,
         )
         ft_mol = ft_mol.reshape(volume_shape) * B_fac_scaling
         vol = ftu.get_idft3(ft_mol.reshape(volume_shape)).real

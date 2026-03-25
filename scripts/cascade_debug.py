@@ -3,20 +3,28 @@
 
 Tests whether small per-function drifts compound into the 66% contrast regression.
 """
+
 import json, logging, os, pickle, time, numpy as np
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
+
 def main():
     import argparse
+
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dataset-dir", default=None,
-                    help="Override dataset dir (default: PDB baseline or FUNCTION_TEST_DATASET_DIR)")
-    ap.add_argument("--baseline-dir", required=True,
-                    help="Directory with baseline intermediates")
-    ap.add_argument("--swap-after-step", type=int, default=0,
-                    help="Use OLD intermediates for steps 1..N, NEW code for N+1..end. "
-                         "0=full cascade (all NEW). 6=all OLD inputs to embedding.")
+    ap.add_argument(
+        "--dataset-dir", default=None, help="Override dataset dir (default: PDB baseline or FUNCTION_TEST_DATASET_DIR)"
+    )
+    ap.add_argument("--baseline-dir", required=True, help="Directory with baseline intermediates")
+    ap.add_argument(
+        "--swap-after-step",
+        type=int,
+        default=0,
+        help="Use OLD intermediates for steps 1..N, NEW code for N+1..end. "
+        "0=full cascade (all NEW). 6=all OLD inputs to embedding.",
+    )
     cli_args = ap.parse_args()
 
     from recovar import utils
@@ -60,9 +68,7 @@ def main():
         ctf_file=ctf_file,
         datadir=None,
     )
-    cryos = halfsets.load_halfset_dataset(
-        dataset_spec, ind_split=ind_split, lazy=True
-    )
+    cryos = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=True)
     volume_shape = cryos[0].volume_shape
     volume_size = cryos[0].volume_size
     vol_norm = np.sqrt(np.prod(volume_shape))
@@ -85,14 +91,20 @@ def main():
     noise_var_from_hf = load_old("noise_var_from_hf")
     if swap >= 1:
         logger.info("  [USING OLD mean]")
-        means = {"combined": load_old("mean_combined"), "lhs": load_old("means_lhs"),
-                 "corrected0": load_old("mean_corrected0"), "corrected1": load_old("mean_corrected1")}
+        means = {
+            "combined": load_old("mean_combined"),
+            "lhs": load_old("means_lhs"),
+            "corrected0": load_old("mean_corrected0"),
+            "corrected1": load_old("mean_corrected1"),
+        }
         mean_prior = load_old("mean_prior")
     else:
         means, mean_prior, _ = homogeneous.get_mean_conformation_relion(
-            cryos, batch_size, noise_variance=noise_var_from_hf, use_regularization=False)
+            cryos, batch_size, noise_variance=noise_var_from_hf, use_regularization=False
+        )
     _, mean_fsc = plot_utils.plot_fsc_new(
-        gt_mean, means["combined"], np.array(volume_shape), voxel_size, threshold=0.5, name="Mean FSC")
+        gt_mean, means["combined"], np.array(volume_shape), voxel_size, threshold=0.5, name="Mean FSC"
+    )
     scores_cascade["mean_fsc"] = float(np.asarray(mean_fsc))
     logger.info("mean_fsc: cascade=%.8f baseline=%.8f", scores_cascade["mean_fsc"], baseline["mean_fsc"])
 
@@ -111,11 +123,14 @@ def main():
         noise_var_used = load_old("noise_var_used")
     else:
         masked_image_PS, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
-            cryos[0], dilated_volume_mask, batch_size)
+            cryos[0], dilated_volume_mask, batch_size
+        )
         radial_ub_noise_var, _, _ = noise.estimate_radial_noise_upper_bound_from_inside_mask_v2(
-            cryos[0], means["combined"], dilated_volume_mask, batch_size)
+            cryos[0], means["combined"], dilated_volume_mask, batch_size
+        )
         _, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
-            cryos[0], dilated_volume_mask, batch_size)
+            cryos[0], dilated_volume_mask, batch_size
+        )
         noise_var_used = np.where(masked_image_PS > radial_ub_noise_var, radial_ub_noise_var, masked_image_PS)
         noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
 
@@ -131,7 +146,8 @@ def main():
     # Upper-bound noise by signal+noise (matches pipeline line 827)
     logger.info("=== CASCADE STEP 3b: Upper-bound noise ===")
     variance_est_ub, ub_noise_var = noise.upper_bound_noise_by_signal_p_noise_dispatched(
-        noise_var_used, cryos, means, batch_size, dilated_volume_mask)
+        noise_var_used, cryos, means, batch_size, dilated_volume_mask
+    )
 
     # ==============================
     # STEP 4: Variance (NEW code, CASCADE mean+noise)
@@ -142,15 +158,20 @@ def main():
         variance_est = {"combined": load_old("variance_combined")}
     else:
         variance_est, variance_prior, _, _, _ = covariance_estimation.compute_variance(
-            cryos, means["combined"], utils.safe_batch_size(batch_size // 2),
-            dilated_volume_mask, use_regularization=True, disc_type="cubic")
+            cryos,
+            means["combined"],
+            utils.safe_batch_size(batch_size // 2),
+            dilated_volume_mask,
+            use_regularization=True,
+            disc_type="cubic",
+        )
 
     # Variance FSC: GT Fourier variance vs variance_est['combined'] (both Fourier-space)
     cov_sqrt = gt.get_covariance_square_root(contrasted=False)
     gt_fourier_var = np.sum(np.abs(cov_sqrt) ** 2, axis=-1)
     _, var_fsc = plot_utils.plot_fsc_new(
-        gt_fourier_var, variance_est["combined"], np.array(volume_shape), voxel_size,
-        threshold=0.5, name="Variance FSC")
+        gt_fourier_var, variance_est["combined"], np.array(volume_shape), voxel_size, threshold=0.5, name="Variance FSC"
+    )
     scores_cascade["variance_fsc"] = float(np.asarray(var_fsc))
     logger.info("variance_fsc: cascade=%.8f baseline=%.8f", scores_cascade["variance_fsc"], baseline["variance_fsc"])
 
@@ -173,13 +194,22 @@ def main():
         valid_idx = cryos[0].get_valid_frequency_indices()
         covariance_options = covariance_estimation.get_default_covariance_computation_options(grid_size)
 
-        u_out, s_out, covariance_cols, picked_frequencies, column_fscs = \
+        u_out, s_out, covariance_cols, picked_frequencies, column_fscs = (
             principal_components.estimate_principal_components(
-                cryos, options, means, mean_prior, volume_mask, dilated_volume_mask,
-                valid_idx, batch_size, gpu_memory_to_use=gpu_memory,
+                cryos,
+                options,
+                means,
+                mean_prior,
+                volume_mask,
+                dilated_volume_mask,
+                valid_idx,
+                batch_size,
+                gpu_memory_to_use=gpu_memory,
                 covariance_options=covariance_options,
                 variance_estimate=variance_est["combined"],
-                use_reg_mean_in_contrast=True)
+                use_reg_mean_in_contrast=True,
+            )
+        )
         u = u_out
         s = s_out
 
@@ -189,8 +219,11 @@ def main():
     _, rel_var, _ = metrics.get_all_variance_scores(u_est, u_gt, s_gt)
     scores_cascade["pcs_relative_variance_4"] = float(rel_var[4]) if rel_var.size > 4 else None
     scores_cascade["pcs_relative_variance_10"] = float(rel_var[10]) if rel_var.size > 10 else None
-    logger.info("pcs_relative_variance_4: cascade=%.8f baseline=%.8f",
-                scores_cascade.get("pcs_relative_variance_4", 0), baseline.get("pcs_relative_variance_4", 0))
+    logger.info(
+        "pcs_relative_variance_4: cascade=%.8f baseline=%.8f",
+        scores_cascade.get("pcs_relative_variance_4", 0),
+        baseline.get("pcs_relative_variance_4", 0),
+    )
 
     # ==============================
     # STEP 6: Embedding with contrast (NEW code, CASCADE PCA)
@@ -199,17 +232,27 @@ def main():
     for zdim in [4, 10]:
         n_pcs_to_use = zdim
         zs, _, est_contrasts_reg, _ = embedding.get_per_image_embedding(
-            means["combined"], u["rescaled"], s["rescaled"], n_pcs_to_use,
-            cryos, volume_mask, gpu_memory, "linear_interp",
-            contrast_grid=None, contrast_option="contrast",
-            ignore_zero_frequency=False)
+            means["combined"],
+            u["rescaled"],
+            s["rescaled"],
+            n_pcs_to_use,
+            cryos,
+            volume_mask,
+            gpu_memory,
+            "linear_interp",
+            contrast_grid=None,
+            contrast_option="contrast",
+            ignore_zero_frequency=False,
+        )
 
         _, avg_var = metrics.variance_of_zs(zs, pa)
         scores_cascade[f"embedding_squared_error_{zdim}"] = float(avg_var)
 
         contrast_mae = float(np.mean(np.abs(gt_contrasts - est_contrasts_reg.ravel())))
         scores_cascade[f"contrasts_{zdim}"] = contrast_mae
-        logger.info("contrasts_%d: cascade=%.8f baseline=%.8f", zdim, contrast_mae, baseline.get(f"contrasts_{zdim}", 0))
+        logger.info(
+            "contrasts_%d: cascade=%.8f baseline=%.8f", zdim, contrast_mae, baseline.get(f"contrasts_{zdim}", 0)
+        )
 
     # ==============================
     # SUMMARY

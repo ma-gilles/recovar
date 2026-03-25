@@ -15,4 +15,3 @@ def test_can_import_fourier_transform_utils_module():
     mod = importlib.import_module("recovar.core.fourier_transform_utils")
     assert hasattr(mod, "get_dft3")
     assert hasattr(mod, "get_idft3")
-

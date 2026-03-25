@@ -50,12 +50,18 @@ def test_compute_state_gpu_memory_stress_256(tmp_path):
 
     # 1. Generate synthetic dataset
     create_cmd = [
-        sys.executable, "-m", "recovar.commands.make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.commands.make_test_dataset",
         str(dataset_dir),
-        "--image-size", "256",
-        "--n-images", "5000",
-        "--noise-level", "0.5",
-        "--seed", "42",
+        "--image-size",
+        "256",
+        "--n-images",
+        "5000",
+        "--noise-level",
+        "0.5",
+        "--seed",
+        "42",
     ]
     subprocess.run(create_cmd, check=True, env=env, timeout=600)
 
@@ -66,13 +72,21 @@ def test_compute_state_gpu_memory_stress_256(tmp_path):
     # 2. Run pipeline to get embeddings
     pipeline_output = test_dataset / "pipeline_output"
     pipeline_cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline",
         str(particles),
-        "--ctf", str(test_dataset / "ctf.pkl"),
-        "--poses", str(test_dataset / "poses.pkl"),
-        "--mask", "from_halfmaps",
-        "-o", str(pipeline_output),
-        "--zdim", "4",
+        "--ctf",
+        str(test_dataset / "ctf.pkl"),
+        "--poses",
+        str(test_dataset / "poses.pkl"),
+        "--mask",
+        "from_halfmaps",
+        "-o",
+        str(pipeline_output),
+        "--zdim",
+        "4",
         "--lazy",
     ]
     subprocess.run(pipeline_cmd, check=True, env=env, timeout=3600)
@@ -92,7 +106,9 @@ np.savetxt('{centers_file}', km.cluster_centers_)
 """
     subprocess.run(
         [sys.executable, "-c", kmeans_script],
-        check=True, env=env, timeout=120,
+        check=True,
+        env=env,
+        timeout=120,
     )
     assert centers_file.exists(), "k-means centers file not created"
     centers = np.loadtxt(str(centers_file))
@@ -101,16 +117,26 @@ np.savetxt('{centers_file}', km.cluster_centers_)
     # 4. Run compute_state — this is the OOM stress test
     state_output = output_dir / "state_output"
     state_cmd = [
-        sys.executable, "-m", "recovar.command_line", "compute_state",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "compute_state",
         str(pipeline_output),
-        "-o", str(state_output),
-        "--latent-points", str(centers_file),
+        "-o",
+        str(state_output),
+        "--latent-points",
+        str(centers_file),
         "--lazy",
-        "--n-bins", "50",
+        "--n-bins",
+        "50",
     ]
     result = subprocess.run(
-        state_cmd, check=True, env=env, timeout=3600,
-        capture_output=True, text=True,
+        state_cmd,
+        check=True,
+        env=env,
+        timeout=3600,
+        capture_output=True,
+        text=True,
     )
 
     # 5. Verify outputs exist
@@ -118,6 +144,5 @@ np.savetxt('{centers_file}', km.cluster_centers_)
     # Check that volumes were written (one per latent point)
     mrc_files = list(state_output.glob("*.mrc"))
     assert len(mrc_files) > 0, (
-        f"No MRC files in {state_output}. "
-        f"stdout: {result.stdout[-500:]}\nstderr: {result.stderr[-500:]}"
+        f"No MRC files in {state_output}. stdout: {result.stdout[-500:]}\nstderr: {result.stderr[-500:]}"
     )

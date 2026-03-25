@@ -59,6 +59,7 @@ _REGENERATE = os.environ.get("CS_REGR_REGENERATE_BASELINE", "") == "1"
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _output_base(tmp_path: Path, name: str) -> Path:
     base = os.environ.get("LONG_METRICS_OUTPUT_BASE")
     if base:
@@ -71,6 +72,7 @@ def _output_base(tmp_path: Path, name: str) -> Path:
 
 def _gpu_env():
     from conftest import gpu_subprocess_env
+
     return gpu_subprocess_env()
 
 
@@ -86,15 +88,20 @@ def _run(cmd, **kwargs):
     return result
 
 
-def _make_dataset(output_dir: Path, tilt_series: bool = False,
-                   premultiplied_ctf: bool = False) -> Path:
+def _make_dataset(output_dir: Path, tilt_series: bool = False, premultiplied_ctf: bool = False) -> Path:
     cmd = [
-        sys.executable, "-m", "recovar.commands.make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.commands.make_test_dataset",
         str(output_dir),
-        "--grid-size", str(_GRID),
-        "--n-images", str(_N_IMAGES_ET if tilt_series else _N_IMAGES_SPA),
-        "--noise-level", str(_NOISE),
-        "--seed", str(_SEED),
+        "--grid-size",
+        str(_GRID),
+        "--n-images",
+        str(_N_IMAGES_ET if tilt_series else _N_IMAGES_SPA),
+        "--noise-level",
+        str(_NOISE),
+        "--seed",
+        str(_SEED),
     ]
     if tilt_series:
         cmd += ["--tilt-series", "--n-tilts", str(_N_TILTS)]
@@ -106,10 +113,13 @@ def _make_dataset(output_dir: Path, tilt_series: bool = False,
     return ds
 
 
-def _run_pipeline(dataset_dir: Path, output_dir: Path,
-                   premultiplied_ctf: bool = False,
-                   noise_model: str | None = None,
-                   tilt_series: bool = False) -> Path:
+def _run_pipeline(
+    dataset_dir: Path,
+    output_dir: Path,
+    premultiplied_ctf: bool = False,
+    noise_model: str | None = None,
+    tilt_series: bool = False,
+) -> Path:
     from recovar.simulation import synthetic_dataset
     from recovar.output import metrics
     from recovar import utils
@@ -127,15 +137,23 @@ def _run_pipeline(dataset_dir: Path, output_dir: Path,
         particles = dataset_dir / f"particles.{_GRID}.mrcs"
     pipeline_out = output_dir / "pipeline_output"
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline",
         str(particles),
-        "--poses", str(dataset_dir / "poses.pkl"),
-        "--ctf", str(dataset_dir / "ctf.pkl"),
+        "--poses",
+        str(dataset_dir / "poses.pkl"),
+        "--ctf",
+        str(dataset_dir / "ctf.pkl"),
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", mask_path,
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        mask_path,
         "--lazy",
-        "--zdim", str(_ZDIM),
+        "--zdim",
+        str(_ZDIM),
     ]
     if tilt_series:
         cmd += ["--tilt-series"]
@@ -148,8 +166,9 @@ def _run_pipeline(dataset_dir: Path, output_dir: Path,
     return pipeline_out
 
 
-def _select_latent_points(pipeline_output_dir: Path, dataset_dir: Path,
-                          tilt_series: bool = False) -> tuple[np.ndarray, list[int]]:
+def _select_latent_points(
+    pipeline_output_dir: Path, dataset_dir: Path, tilt_series: bool = False
+) -> tuple[np.ndarray, list[int]]:
     from recovar.output import output
     from recovar.commands.run_test_all_metrics import (
         select_state_target_latent_points,
@@ -162,9 +181,7 @@ def _select_latent_points(pipeline_output_dir: Path, dataset_dir: Path,
 
     po = output.PipelineOutput(str(pipeline_output_dir))
     embedding_cache = {}
-    unsorted_zs = load_unsorted_embedding_component(
-        po, "latent_coords", _ZDIM, cache=embedding_cache
-    )
+    unsorted_zs = load_unsorted_embedding_component(po, "latent_coords", _ZDIM, cache=embedding_cache)
 
     n_zs = unsorted_zs.shape[0]
     if tilt_series:
@@ -189,17 +206,21 @@ def _select_latent_points(pipeline_output_dir: Path, dataset_dir: Path,
     return points, labels
 
 
-def _run_new_compute_state(pipeline_output_dir: Path, latent_points: np.ndarray,
-                           output_dir: Path) -> Path:
+def _run_new_compute_state(pipeline_output_dir: Path, latent_points: np.ndarray, output_dir: Path) -> Path:
     pts_path = output_dir / "latent_points.txt"
     np.savetxt(str(pts_path), latent_points)
 
     state_out = output_dir / "new_compute_state"
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "compute_state",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "compute_state",
         str(pipeline_output_dir),
-        "-o", str(state_out),
-        "--latent-points", str(pts_path),
+        "-o",
+        str(state_out),
+        "--latent-points",
+        str(pts_path),
         "--lazy",
     ]
     _run(cmd)
@@ -210,7 +231,8 @@ def _convert_for_old_code(pipeline_output_dir: Path, output_dir: Path) -> Path:
     converted = output_dir / "converted_pipeline_output"
     convert_script = _REPO_ROOT / "scripts" / "convert_pipeline_output_for_old_code.py"
     cmd = [
-        sys.executable, str(convert_script),
+        sys.executable,
+        str(convert_script),
         str(pipeline_output_dir),
         str(converted),
     ]
@@ -219,8 +241,7 @@ def _convert_for_old_code(pipeline_output_dir: Path, output_dir: Path) -> Path:
     return converted
 
 
-def _run_old_compute_state(converted_pipeline_dir: Path, latent_points: np.ndarray,
-                           output_dir: Path) -> Path:
+def _run_old_compute_state(converted_pipeline_dir: Path, latent_points: np.ndarray, output_dir: Path) -> Path:
     pts_path = output_dir / "latent_points.txt"
     if not pts_path.exists():
         np.savetxt(str(pts_path), latent_points)
@@ -228,7 +249,8 @@ def _run_old_compute_state(converted_pipeline_dir: Path, latent_points: np.ndarr
     state_out = output_dir / "old_compute_state"
 
     runner_script = output_dir / "_run_old_compute_state.py"
-    runner_script.write_text(textwrap.dedent(f"""\
+    runner_script.write_text(
+        textwrap.dedent(f"""\
         import sys
         sys.path.insert(0, {str(_OLD_RECOVAR)!r})
 
@@ -239,21 +261,24 @@ def _run_old_compute_state(converted_pipeline_dir: Path, latent_points: np.ndarr
         parser = compute_state.add_args(parser)
         args = parser.parse_args()
         compute_state.compute_state(args)
-    """))
+    """)
+    )
 
     cmd = [
-        sys.executable, str(runner_script),
+        sys.executable,
+        str(runner_script),
         str(converted_pipeline_dir),
-        "-o", str(state_out),
-        "--latent-points", str(pts_path),
+        "-o",
+        str(state_out),
+        "--latent-points",
+        str(pts_path),
         "--lazy",
     ]
     _run(cmd)
     return state_out
 
 
-def _extract_volumes_real_space(state_dir: Path, n_vols: int,
-                                style: str = "new") -> list[np.ndarray]:
+def _extract_volumes_real_space(state_dir: Path, n_vols: int, style: str = "new") -> list[np.ndarray]:
     from recovar import utils
 
     vols = []
@@ -273,11 +298,13 @@ def _extract_volumes_real_space(state_dir: Path, n_vols: int,
     return vols
 
 
-def _compute_gt_volume_metrics(reconstructed_vols: list[np.ndarray | None],
-                               gt_thing,
-                               volume_shape: tuple,
-                               voxel_size: float,
-                               state_labels: list[int]) -> dict:
+def _compute_gt_volume_metrics(
+    reconstructed_vols: list[np.ndarray | None],
+    gt_thing,
+    volume_shape: tuple,
+    voxel_size: float,
+    state_labels: list[int],
+) -> dict:
     from recovar.core.fourier_transform_utils import get_idft3
     from recovar.output import metrics as output_metrics
 
@@ -309,10 +336,7 @@ def _compute_gt_volume_metrics(reconstructed_vols: list[np.ndarray | None],
 def _load_baseline(mode: str) -> dict:
     path = _BASELINE_DIR / f"{mode}.json"
     if not path.exists():
-        pytest.fail(
-            f"Baseline missing: {path}\n"
-            f"Generate with: CS_REGR_REGENERATE_BASELINE=1 pytest ... --long-test"
-        )
+        pytest.fail(f"Baseline missing: {path}\nGenerate with: CS_REGR_REGENERATE_BASELINE=1 pytest ... --long-test")
     with open(path) as f:
         return json.load(f)
 
@@ -323,11 +347,14 @@ def _save_baseline(mode: str, data: dict):
         json.dump(data, f, indent=2, default=float)
 
 
-def _run_and_collect_metrics(tmp_path: Path, tilt_series: bool = False,
-                              premultiplied_ctf: bool = False,
-                              noise_model: str | None = None,
-                              mode_override: str | None = None,
-                              pipeline_tilt_series: bool = False) -> dict:
+def _run_and_collect_metrics(
+    tmp_path: Path,
+    tilt_series: bool = False,
+    premultiplied_ctf: bool = False,
+    noise_model: str | None = None,
+    mode_override: str | None = None,
+    pipeline_tilt_series: bool = False,
+) -> dict:
     """Generate dataset, run pipeline + NEW compute_state, return metrics.
 
     ``pipeline_tilt_series`` loads particles.star with ``--tilt-series``
@@ -340,23 +367,23 @@ def _run_and_collect_metrics(tmp_path: Path, tilt_series: bool = False,
 
     snap0 = perf_snapshot()
     dataset_dir = _make_dataset(
-        out_base / "data", tilt_series=tilt_series,
+        out_base / "data",
+        tilt_series=tilt_series,
         premultiplied_ctf=premultiplied_ctf,
     )
     perf_stages["make_dataset"] = stage_perf(snap0, perf_snapshot())
 
     snap1 = perf_snapshot()
     pipeline_dir = _run_pipeline(
-        dataset_dir, out_base,
+        dataset_dir,
+        out_base,
         premultiplied_ctf=premultiplied_ctf,
         noise_model=noise_model,
         tilt_series=pipeline_tilt_series,
     )
     perf_stages["pipeline"] = stage_perf(snap1, perf_snapshot())
 
-    latent_points, labels = _select_latent_points(
-        pipeline_dir, dataset_dir, tilt_series=tilt_series
-    )
+    latent_points, labels = _select_latent_points(pipeline_dir, dataset_dir, tilt_series=tilt_series)
     n_vols = latent_points.shape[0]
     print(f"\n[{mode.upper()}] Selected {n_vols} latent points for labels {labels}")
 
@@ -366,9 +393,11 @@ def _run_and_collect_metrics(tmp_path: Path, tilt_series: bool = False,
 
     sim_info_path = str(dataset_dir / "simulation_info.pkl")
     from recovar.simulation import synthetic_dataset
+
     gt = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
 
     from recovar.output import output
+
     po = output.PipelineOutput(str(pipeline_dir))
     volume_shape = po.get("volume_shape")
     voxel_size = po.get("voxel_size")
@@ -387,11 +416,8 @@ def _run_and_collect_metrics(tmp_path: Path, tilt_series: bool = False,
 
     # Performance tracking
     perf_record = build_perf_record(perf_stages)
-    perf_path = str(
-        _PERF_BASELINE_DIR / f"perf_compute_state_regression_{mode}.json"
-    )
-    check_perf_regression(perf_record, perf_path,
-                          test_name=f"compute_state_regression_{mode}")
+    perf_path = str(_PERF_BASELINE_DIR / f"perf_compute_state_regression_{mode}.json")
+    check_perf_regression(perf_record, perf_path, test_name=f"compute_state_regression_{mode}")
 
     return current
 
@@ -400,13 +426,16 @@ def _run_and_collect_metrics(tmp_path: Path, tilt_series: bool = False,
 # Tests
 # ---------------------------------------------------------------------------
 
+
 def test_compute_state_regression_spa(tmp_path):
     """Check compute_state quality against committed baseline (SPA)."""
     current = _run_and_collect_metrics(tmp_path, tilt_series=False)
     baseline = _load_baseline("spa")
 
     checked, failures = log_comparison_table(
-        current, baseline, _TOL_FRAC,
+        current,
+        baseline,
+        _TOL_FRAC,
         title="compute_state regression: SPA",
     )
 
@@ -415,19 +444,18 @@ def test_compute_state_regression_spa(tmp_path):
     print(f"BASELINE: {json.dumps(baseline, indent=2, default=float)}")
 
     if checked > 0:
-        assert not failures, (
-            f"compute_state SPA regressed vs baseline:\n" + "\n".join(failures)
-        )
+        assert not failures, f"compute_state SPA regressed vs baseline:\n" + "\n".join(failures)
 
 
 def test_compute_state_regression_et(tmp_path):
     """Check compute_state quality against committed baseline (ET)."""
-    current = _run_and_collect_metrics(tmp_path, tilt_series=True,
-                                       pipeline_tilt_series=True)
+    current = _run_and_collect_metrics(tmp_path, tilt_series=True, pipeline_tilt_series=True)
     baseline = _load_baseline("et")
 
     checked, failures = log_comparison_table(
-        current, baseline, _TOL_FRAC,
+        current,
+        baseline,
+        _TOL_FRAC,
         title="compute_state regression: ET",
     )
 
@@ -436,9 +464,7 @@ def test_compute_state_regression_et(tmp_path):
     print(f"BASELINE: {json.dumps(baseline, indent=2, default=float)}")
 
     if checked > 0:
-        assert not failures, (
-            f"compute_state ET regressed vs baseline:\n" + "\n".join(failures)
-        )
+        assert not failures, f"compute_state ET regressed vs baseline:\n" + "\n".join(failures)
 
 
 def test_compute_state_regression_et_premultiplied_radial_per_tilt(tmp_path):
@@ -464,7 +490,9 @@ def test_compute_state_regression_et_premultiplied_radial_per_tilt(tmp_path):
     baseline = _load_baseline("et_premultiplied")
 
     checked, failures = log_comparison_table(
-        current, baseline, _TOL_FRAC,
+        current,
+        baseline,
+        _TOL_FRAC,
         title="compute_state regression: ET premultiplied + radial_per_tilt",
     )
 
@@ -473,7 +501,4 @@ def test_compute_state_regression_et_premultiplied_radial_per_tilt(tmp_path):
     print(f"BASELINE: {json.dumps(baseline, indent=2, default=float)}")
 
     if checked > 0:
-        assert not failures, (
-            f"compute_state ET premultiplied regressed vs baseline:\n"
-            + "\n".join(failures)
-        )
+        assert not failures, f"compute_state ET premultiplied regressed vs baseline:\n" + "\n".join(failures)

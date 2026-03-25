@@ -23,7 +23,11 @@ def _benchmark_case(shape, order, repeat, anisotropic=False):
     rng = np.random.default_rng(sum(shape) + order)
     speed = 0.5 + rng.random(shape)
     start = tuple(axis // 2 for axis in shape)
-    dx = np.linspace(0.4, 1.6, num=len(shape), dtype=np.float64) if anisotropic else np.ones(len(shape), dtype=np.float64)
+    dx = (
+        np.linspace(0.4, 1.6, num=len(shape), dtype=np.float64)
+        if anisotropic
+        else np.ones(len(shape), dtype=np.float64)
+    )
 
     phi = np.ones(shape, dtype=np.float64)
     phi[start] = -1.0

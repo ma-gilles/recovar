@@ -126,8 +126,11 @@ def test_generate_simulated_dataset_tilt_branch_wires_ctf_and_metadata(monkeypat
     monkeypatch.setattr(
         simulator,
         "simulate_data",
-        lambda experiment_dataset, volumes, noise_variance, batch_size, image_assignments, per_image_contrast, per_image_noise_scale, **kwargs: np.zeros(
-            (experiment_dataset.n_images, experiment_dataset.image_shape[0], experiment_dataset.image_shape[1]), dtype=np.float32
+        lambda experiment_dataset, volumes, noise_variance, batch_size, image_assignments, per_image_contrast, per_image_noise_scale, **kwargs: (
+            np.zeros(
+                (experiment_dataset.n_images, experiment_dataset.image_shape[0], experiment_dataset.image_shape[1]),
+                dtype=np.float32,
+            )
         ),
     )
 
@@ -182,7 +185,14 @@ def test_generate_simulated_dataset_extra_particles_and_outliers(monkeypatch):
             self.volume_shape = (grid_size, grid_size, grid_size)
 
     def _fake_cryo_dataset(image_stack, voxel_size, metadata, ctf_evaluator=None, grid_size=None, **kwargs):
-        return _FakeDatasetObj(metadata.n_images, grid_size, ctf_evaluator, metadata._ctf_params, metadata._rotation_matrices, metadata._translations)
+        return _FakeDatasetObj(
+            metadata.n_images,
+            grid_size,
+            ctf_evaluator,
+            metadata._ctf_params,
+            metadata._rotation_matrices,
+            metadata._translations,
+        )
 
     monkeypatch.setattr(simulator.cryoem_dataset, "CryoEMDataset", _fake_cryo_dataset)
     monkeypatch.setattr(simulator.utils, "get_gpu_memory_total", lambda: 10)
@@ -191,10 +201,23 @@ def test_generate_simulated_dataset_extra_particles_and_outliers(monkeypatch):
     call_values = [1.0, 10.0, 99.0]
     calls = {"n": 0}
 
-    def _fake_simulate_data(experiment_dataset, volumes, noise_variance, batch_size, image_assignments, per_image_contrast, per_image_noise_scale, **kwargs):
+    def _fake_simulate_data(
+        experiment_dataset,
+        volumes,
+        noise_variance,
+        batch_size,
+        image_assignments,
+        per_image_contrast,
+        per_image_noise_scale,
+        **kwargs,
+    ):
         val = call_values[calls["n"]]
         calls["n"] += 1
-        return np.full((experiment_dataset.n_images, experiment_dataset.image_shape[0], experiment_dataset.image_shape[1]), val, dtype=np.float32)
+        return np.full(
+            (experiment_dataset.n_images, experiment_dataset.image_shape[0], experiment_dataset.image_shape[1]),
+            val,
+            dtype=np.float32,
+        )
 
     monkeypatch.setattr(simulator, "simulate_data", _fake_simulate_data)
 

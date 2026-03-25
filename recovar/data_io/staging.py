@@ -122,6 +122,7 @@ logger = logging.getLogger(__name__)
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def get_cache_dir() -> Optional[str]:
     """Return the configured staging directory, or None if disabled.
 
@@ -132,7 +133,7 @@ def get_cache_dir() -> Optional[str]:
     """
     val = os.environ.get("RECOVAR_CACHE_DIR")
     if val is not None:
-        return val or None   # '' -> explicitly disabled
+        return val or None  # '' -> explicitly disabled
     return os.environ.get("TMPDIR")
 
 
@@ -170,7 +171,7 @@ def stage_mrc(src_path: str, cache_dir: str) -> str:
     try:
         stat = os.stat(src_path)
     except OSError:
-        return src_path   # source missing -- let the caller raise
+        return src_path  # source missing -- let the caller raise
 
     key = _cache_key(abs_src, stat)
     suffix = Path(src_path).suffix or ".mrcs"
@@ -191,7 +192,8 @@ def stage_mrc(src_path: str, cache_dir: str) -> str:
     size_gb = stat.st_size / 1e9
     logger.info(
         "Staging %.2f GB to local storage: %s",
-        size_gb, os.path.basename(src_path),
+        size_gb,
+        os.path.basename(src_path),
     )
     t0 = time.monotonic()
 
@@ -200,13 +202,11 @@ def stage_mrc(src_path: str, cache_dir: str) -> str:
         tmp_fd, tmp_path = tempfile.mkstemp(dir=stage_dir, suffix=".tmp")
         os.close(tmp_fd)
         shutil.copy2(src_path, tmp_path)
-        os.replace(tmp_path, str(dest))     # atomic
+        os.replace(tmp_path, str(dest))  # atomic
         sentinel.write_text(str(stat.st_mtime_ns))
-        tmp_path = None                     # ownership transferred
+        tmp_path = None  # ownership transferred
     except Exception as exc:
-        logger.warning(
-            "Staging failed (%s); falling back to source: %s", exc, src_path
-        )
+        logger.warning("Staging failed (%s); falling back to source: %s", exc, src_path)
         if tmp_path is not None:
             try:
                 os.unlink(tmp_path)
@@ -216,15 +216,14 @@ def stage_mrc(src_path: str, cache_dir: str) -> str:
 
     elapsed = time.monotonic() - t0
     mb_s = (stat.st_size / 1e6) / elapsed if elapsed > 0 else 0
-    logger.info(
-        "Staged %s in %.1fs (%.0f MB/s)", os.path.basename(src_path), elapsed, mb_s
-    )
+    logger.info("Staged %s in %.1fs (%.0f MB/s)", os.path.basename(src_path), elapsed, mb_s)
     return str(dest)
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _cache_key(abs_path: str, stat: os.stat_result) -> str:
     """Short, collision-resistant key derived from path, mtime, and size."""

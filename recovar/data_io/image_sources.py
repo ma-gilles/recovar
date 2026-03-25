@@ -60,11 +60,7 @@ def _infer_backend_n_images(backend):
 
 def _build_backend_index_layout(backend, *, tilt_series):
     original_image_indices = _infer_backend_original_image_indices(backend)
-    if (
-        not tilt_series
-        or not hasattr(backend, "dataset_tilt_indices")
-        or not hasattr(backend, "_particle_tilts")
-    ):
+    if not tilt_series or not hasattr(backend, "dataset_tilt_indices") or not hasattr(backend, "_particle_tilts"):
         return DatasetIndexLayout.from_image_indices(original_image_indices)
 
     original_group_indices = np.asarray(
@@ -72,8 +68,7 @@ def _build_backend_index_layout(backend, *, tilt_series):
         dtype=np.int32,
     )
     group_local_image_indices = tuple(
-        np.asarray(local_images, dtype=np.int32)
-        for local_images in getattr(backend, "_particle_tilts")
+        np.asarray(local_images, dtype=np.int32) for local_images in getattr(backend, "_particle_tilts")
     )
     return DatasetIndexLayout.from_grouped_images(
         original_image_indices=original_image_indices,
@@ -165,7 +160,9 @@ class ImageSource:
     def tilt_particles(self):
         if not self.tilt_series:
             return None
-        return [np.asarray(local_images, dtype=np.int32) for local_images in self.index_layout.group_local_image_indices]
+        return [
+            np.asarray(local_images, dtype=np.int32) for local_images in self.index_layout.group_local_image_indices
+        ]
 
     @property
     def particle_tilts(self):
@@ -289,21 +286,13 @@ class BackendImageSource(ImageSource):
             if subset_indices is None:
                 generator = self.backend.get_image_generator(batch_size, num_workers=num_workers)
             else:
-                subset_indices = _normalize_indices(
-                    subset_indices, self.n_images, name="subset_indices"
-                )
-                generator = self.backend.get_image_subset_generator(
-                    batch_size, subset_indices, num_workers=num_workers
-                )
+                subset_indices = _normalize_indices(subset_indices, self.n_images, name="subset_indices")
+                generator = self.backend.get_image_subset_generator(batch_size, subset_indices, num_workers=num_workers)
         else:
             if subset_indices is None:
-                generator = self.backend.get_dataset_generator(
-                    batch_size, num_workers=num_workers, **kwargs
-                )
+                generator = self.backend.get_dataset_generator(batch_size, num_workers=num_workers, **kwargs)
             else:
-                subset_indices = _normalize_indices(
-                    subset_indices, self.n_groups, name="subset_indices"
-                )
+                subset_indices = _normalize_indices(subset_indices, self.n_groups, name="subset_indices")
                 generator = self.backend.get_dataset_subset_generator(
                     batch_size, subset_indices, num_workers=num_workers, **kwargs
                 )
@@ -418,9 +407,7 @@ class SubsetImageSource(ImageSource):
             if subset_indices is None:
                 parent_subset = self._parent_local_image_indices
             else:
-                subset_indices = _normalize_indices(
-                    subset_indices, self.n_images, name="subset_indices"
-                )
+                subset_indices = _normalize_indices(subset_indices, self.n_images, name="subset_indices")
                 parent_subset = self._parent_local_image_indices[subset_indices]
 
             for images, _parent_particle_indices, parent_image_indices in self.parent.iter_batches(
@@ -430,9 +417,7 @@ class SubsetImageSource(ImageSource):
                 num_workers=num_workers,
                 **kwargs,
             ):
-                local_image_indices = self._remap_parent_images(
-                    np.asarray(parent_image_indices, dtype=np.int32)
-                )
+                local_image_indices = self._remap_parent_images(np.asarray(parent_image_indices, dtype=np.int32))
                 yield (
                     images,
                     local_image_indices,
@@ -443,9 +428,7 @@ class SubsetImageSource(ImageSource):
         if subset_indices is None:
             parent_group_subset = self._parent_local_group_indices
         else:
-            subset_indices = _normalize_indices(
-                subset_indices, self.n_groups, name="subset_indices"
-            )
+            subset_indices = _normalize_indices(subset_indices, self.n_groups, name="subset_indices")
             parent_group_subset = self._parent_local_group_indices[subset_indices]
 
         for images, parent_group_indices, parent_image_indices in self.parent.iter_batches(

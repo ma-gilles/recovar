@@ -389,7 +389,11 @@ def test_run_test_dataset_main_uses_cpu_flag_and_skips_gpu_check(monkeypatch, tm
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
-    monkeypatch.setattr(run_test_dataset.jax, "devices", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")))
+    monkeypatch.setattr(
+        run_test_dataset.jax,
+        "devices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")),
+    )
     monkeypatch.setattr(run_test_dataset.os.path, "exists", lambda _p: False)
     monkeypatch.setattr(
         run_test_dataset.sys,

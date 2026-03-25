@@ -43,7 +43,9 @@ def main() -> None:
     p.add_argument("--output-dir", required=True)
     p.add_argument("--n-volumes", type=int, default=None, help="If omitted, auto-discovers from prefix.")
     p.add_argument("--projection-axis", type=int, default=2, choices=[0, 1, 2])
-    p.add_argument("--generate-if-missing", action="store_true", help="Generate synthetic volumes if prefix is missing.")
+    p.add_argument(
+        "--generate-if-missing", action="store_true", help="Generate synthetic volumes if prefix is missing."
+    )
     p.add_argument("--generate-grid-size", type=int, default=128)
     p.add_argument("--generate-n-volumes", type=int, default=50)
     args = p.parse_args()

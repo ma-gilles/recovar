@@ -76,13 +76,23 @@ class TestProjectMaxR:
         from recovar.cuda_backproject import project as cuda_project
 
         cuda_out = cuda_project(
-            vol, rots, self.image_shape, self.volume_shape,
-            order=1, half_volume=half_volume, half_image=half_image,
+            vol,
+            rots,
+            self.image_shape,
+            self.volume_shape,
+            order=1,
+            half_volume=half_volume,
+            half_image=half_image,
             max_r=max_r,
         )
         jax_out = relion_interp.project(
-            vol, rots, self.image_shape, self.volume_shape,
-            order=1, half_volume=half_volume, half_image=half_image,
+            vol,
+            rots,
+            self.image_shape,
+            self.volume_shape,
+            order=1,
+            half_volume=half_volume,
+            half_image=half_image,
             max_r=max_r,
         )
         return np.array(cuda_out), np.array(jax_out)
@@ -167,13 +177,23 @@ class TestBackprojectMaxR:
 
         cuda_vol = cuda_bp(
             jnp.zeros(vol_size, dtype=jnp.complex64),
-            slices, rots, self.image_shape, self.volume_shape,
-            order=1, half_volume=half_volume, half_image=half_image,
+            slices,
+            rots,
+            self.image_shape,
+            self.volume_shape,
+            order=1,
+            half_volume=half_volume,
+            half_image=half_image,
             max_r=max_r,
         )
         jax_vol = relion_interp.backproject(
-            slices, rots, self.image_shape, self.volume_shape,
-            order=1, half_volume=half_volume, half_image=half_image,
+            slices,
+            rots,
+            self.image_shape,
+            self.volume_shape,
+            order=1,
+            half_volume=half_volume,
+            half_image=half_image,
             max_r=max_r,
         )
         return np.array(cuda_vol), np.array(jax_vol)
@@ -216,26 +236,26 @@ class TestSlicingDispatchMaxR:
 
     def test_slice_volume_max_r(self):
         from recovar.core.slicing import slice_volume
+
         vol = _hermitian_volume(self.N)
         rots = _random_rotations(self.n_images)
-        out_none = slice_volume(vol, rots, self.image_shape, self.volume_shape,
-                                "linear_interp", max_r=None)
-        out_clip = slice_volume(vol, rots, self.image_shape, self.volume_shape,
-                                "linear_interp", max_r=5.0)
+        out_none = slice_volume(vol, rots, self.image_shape, self.volume_shape, "linear_interp", max_r=None)
+        out_clip = slice_volume(vol, rots, self.image_shape, self.volume_shape, "linear_interp", max_r=5.0)
         assert np.sum(np.abs(np.array(out_clip)) < 1e-30) > np.sum(np.abs(np.array(out_none)) < 1e-30)
 
     def test_adjoint_slice_volume_max_r(self):
         from recovar.core.slicing import adjoint_slice_volume
+
         rng = np.random.default_rng(99)
         rots = _random_rotations(self.n_images, seed=99)
         slices = jnp.array(
-            (rng.standard_normal((self.n_images, self.N * self.N)) +
-             1j * rng.standard_normal((self.n_images, self.N * self.N))).astype(np.complex64)
+            (
+                rng.standard_normal((self.n_images, self.N * self.N))
+                + 1j * rng.standard_normal((self.n_images, self.N * self.N))
+            ).astype(np.complex64)
         )
-        out_none = adjoint_slice_volume(slices, rots, self.image_shape, self.volume_shape,
-                                        "linear_interp", max_r=None)
-        out_clip = adjoint_slice_volume(slices, rots, self.image_shape, self.volume_shape,
-                                        "linear_interp", max_r=5.0)
+        out_none = adjoint_slice_volume(slices, rots, self.image_shape, self.volume_shape, "linear_interp", max_r=None)
+        out_clip = adjoint_slice_volume(slices, rots, self.image_shape, self.volume_shape, "linear_interp", max_r=5.0)
         n_nz_none = np.sum(np.abs(np.array(out_none)) > 1e-30)
         n_nz_clip = np.sum(np.abs(np.array(out_clip)) > 1e-30)
         assert n_nz_clip < n_nz_none
@@ -255,10 +275,9 @@ class TestNearestOrderMaxR:
         rots = _random_rotations(self.n_images)
         vol = _hermitian_volume(self.N)
         from recovar.cuda_backproject import project as cuda_project
-        cuda_out = cuda_project(vol, rots, self.image_shape, self.volume_shape,
-                                order=0, max_r=5.0)
-        jax_out = relion_interp.project(vol, rots, self.image_shape, self.volume_shape,
-                                        order=0, max_r=5.0)
+
+        cuda_out = cuda_project(vol, rots, self.image_shape, self.volume_shape, order=0, max_r=5.0)
+        jax_out = relion_interp.project(vol, rots, self.image_shape, self.volume_shape, order=0, max_r=5.0)
         rel_err = np.linalg.norm(np.array(cuda_out) - np.array(jax_out)) / (np.linalg.norm(np.array(jax_out)) + 1e-30)
         assert rel_err < 0.20, f"order=0 max_r mismatch: rel_err={rel_err}"
 
@@ -267,14 +286,23 @@ class TestNearestOrderMaxR:
         rng = np.random.default_rng(77)
         rots = _random_rotations(self.n_images, seed=77)
         slices = jnp.array(
-            (rng.standard_normal((self.n_images, self.N * self.N)) +
-             1j * rng.standard_normal((self.n_images, self.N * self.N))).astype(np.complex64)
+            (
+                rng.standard_normal((self.n_images, self.N * self.N))
+                + 1j * rng.standard_normal((self.n_images, self.N * self.N))
+            ).astype(np.complex64)
         )
         from recovar.cuda_backproject import backproject as cuda_bp
+
         vol_size = int(np.prod(self.volume_shape))
-        cuda_vol = cuda_bp(jnp.zeros(vol_size, dtype=jnp.complex64), slices, rots,
-                           self.image_shape, self.volume_shape, order=0, max_r=5.0)
-        jax_vol = relion_interp.backproject(slices, rots, self.image_shape, self.volume_shape,
-                                            order=0, max_r=5.0)
+        cuda_vol = cuda_bp(
+            jnp.zeros(vol_size, dtype=jnp.complex64),
+            slices,
+            rots,
+            self.image_shape,
+            self.volume_shape,
+            order=0,
+            max_r=5.0,
+        )
+        jax_vol = relion_interp.backproject(slices, rots, self.image_shape, self.volume_shape, order=0, max_r=5.0)
         rel_err = np.linalg.norm(np.array(cuda_vol) - np.array(jax_vol)) / (np.linalg.norm(np.array(jax_vol)) + 1e-30)
         assert rel_err < 0.30, f"order=0 backproject max_r mismatch: rel_err={rel_err}"

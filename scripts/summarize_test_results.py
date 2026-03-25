@@ -19,8 +19,7 @@ def parse_junit_xml(path: Path) -> dict:
     try:
         tree = ET.parse(path)
     except ET.ParseError:
-        return {"name": path.stem, "tests": 0, "fail": 0, "error": 0,
-                "time": 0.0, "status": "PARSE_ERROR"}
+        return {"name": path.stem, "tests": 0, "fail": 0, "error": 0, "time": 0.0, "status": "PARSE_ERROR"}
 
     root = tree.getroot()
     # Handle both <testsuites> and <testsuite> as root
@@ -41,22 +40,19 @@ def parse_junit_xml(path: Path) -> dict:
     if tests == 0:
         status = "NO_TESTS"
 
-    return {"name": path.stem, "tests": tests, "fail": fail + error,
-            "time": total_time, "status": status}
+    return {"name": path.stem, "tests": tests, "fail": fail + error, "time": total_time, "status": status}
 
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: summarize_test_results.py <junit_xml> [<junit_xml> ...]",
-              file=sys.stderr)
+        print("Usage: summarize_test_results.py <junit_xml> [<junit_xml> ...]", file=sys.stderr)
         sys.exit(2)
 
     results = []
     for arg in sys.argv[1:]:
         p = Path(arg)
         if not p.exists():
-            results.append({"name": p.stem, "tests": 0, "fail": 0,
-                            "time": 0.0, "status": "MISSING"})
+            results.append({"name": p.stem, "tests": 0, "fail": 0, "time": 0.0, "status": "MISSING"})
         else:
             results.append(parse_junit_xml(p))
 
@@ -75,12 +71,10 @@ def main() -> None:
             group = "_".join(parts[4:])
         else:
             group = name
-        print(f"  {group:20s} {r['status']:5s}  tests={r['tests']:4d}  "
-              f"fail={r['fail']:2d}  time={r['time']:.1f}s")
+        print(f"  {group:20s} {r['status']:5s}  tests={r['tests']:4d}  fail={r['fail']:2d}  time={r['time']:.1f}s")
 
     overall = "PASS" if all_pass else "FAIL"
-    print(f"  {'TOTAL':20s} {overall:5s}  tests={total_tests:4d}  "
-          f"fail={total_fail:2d}  time={total_time:.1f}s")
+    print(f"  {'TOTAL':20s} {overall:5s}  tests={total_tests:4d}  fail={total_fail:2d}  time={total_time:.1f}s")
     print()
 
     sys.exit(0 if all_pass else 1)

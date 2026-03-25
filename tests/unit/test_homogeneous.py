@@ -96,12 +96,14 @@ def test_get_mean_conformation_relion_use_regularization_switch(monkeypatch):
     ds.halfset_indices = [np.array([0], dtype=np.int32), np.array([1], dtype=np.int32)]
 
     means_unreg, *_ = homogeneous.get_mean_conformation_relion(
-        dataset=ds, batch_size=1,
+        dataset=ds,
+        batch_size=1,
         noise_variance=np.ones(2, dtype=np.float32),
         use_regularization=False,
     )
     means_reg, *_ = homogeneous.get_mean_conformation_relion(
-        dataset=ds, batch_size=1,
+        dataset=ds,
+        batch_size=1,
         noise_variance=np.ones(2, dtype=np.float32),
         use_regularization=True,
     )

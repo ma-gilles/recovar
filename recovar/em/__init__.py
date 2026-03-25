@@ -102,5 +102,3 @@ __all__ = [
     "estimate_principal_components_simple",
     "estimate_principal_components_halfset",
 ]
-
-

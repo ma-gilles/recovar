@@ -187,7 +187,9 @@ def test_get_grid_of_radial_distances_real_scaled_and_shift_validation():
     )
     assert np.issubdtype(np.asarray(r_scaled).dtype, np.floating)
 
-    r_scalar = fourier_transform_utils.get_grid_of_radial_distances_real((5, 7), frequency_shift=1.0, scaled=False, rounded=False)
+    r_scalar = fourier_transform_utils.get_grid_of_radial_distances_real(
+        (5, 7), frequency_shift=1.0, scaled=False, rounded=False
+    )
     r_vector = fourier_transform_utils.get_grid_of_radial_distances_real(
         (5, 7),
         frequency_shift=np.array([1.0, 1.0], dtype=np.float32),
@@ -197,11 +199,15 @@ def test_get_grid_of_radial_distances_real_scaled_and_shift_validation():
     np.testing.assert_allclose(r_scalar, r_vector, atol=1e-7, rtol=1e-7)
 
     with pytest.raises(ValueError, match="frequency_shift must be scalar or shape"):
-        fourier_transform_utils.get_grid_of_radial_distances_real((4, 4, 4), frequency_shift=np.array([0.0, 0.0], dtype=np.float32))
+        fourier_transform_utils.get_grid_of_radial_distances_real(
+            (4, 4, 4), frequency_shift=np.array([0.0, 0.0], dtype=np.float32)
+        )
 
 
 def test_get_grid_of_radial_distances_frequency_shift_scalar_and_vector():
-    r_scalar = fourier_transform_utils.get_grid_of_radial_distances((3, 3, 3), frequency_shift=1.0, scaled=False, rounded=False)
+    r_scalar = fourier_transform_utils.get_grid_of_radial_distances(
+        (3, 3, 3), frequency_shift=1.0, scaled=False, rounded=False
+    )
     r_vector = fourier_transform_utils.get_grid_of_radial_distances(
         (3, 3, 3), frequency_shift=np.array([1.0, 1.0, 1.0], dtype=np.float32), scaled=False, rounded=False
     )
@@ -256,8 +262,7 @@ def test_full_volume_to_half_volume_is_direct_last_axis_mapping():
     rng = np.random.default_rng(63)
     volume_shape = (6, 5, 8)
     full = (
-        rng.standard_normal(volume_shape).astype(np.float32)
-        + 1j * rng.standard_normal(volume_shape).astype(np.float32)
+        rng.standard_normal(volume_shape).astype(np.float32) + 1j * rng.standard_normal(volume_shape).astype(np.float32)
     ).astype(np.complex64)
     idx = _full_last_axis_indices_for_rfft(volume_shape[-1])
 
@@ -275,8 +280,7 @@ def test_full_image_to_half_image_is_direct_last_axis_mapping():
     rng = np.random.default_rng(64)
     image_shape = (6, 8)
     full = (
-        rng.standard_normal(image_shape).astype(np.float32)
-        + 1j * rng.standard_normal(image_shape).astype(np.float32)
+        rng.standard_normal(image_shape).astype(np.float32) + 1j * rng.standard_normal(image_shape).astype(np.float32)
     ).astype(np.complex64)
     idx = _full_last_axis_indices_for_rfft(image_shape[-1])
 
@@ -370,16 +374,19 @@ def test_half_full_image_mapping_matches_real_fft_helpers_for_real_input():
     np.testing.assert_allclose(np.asarray(full_from_half), np.asarray(full), atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.parametrize("shape", [
-    (4, 4, 8),   # all even
-    (5, 6, 8),   # odd × even × even
-    (5, 7, 9),   # all odd
-    (7, 5, 11),  # odd × odd × odd
-    (3, 3, 3),   # small odd
-    (6, 6, 6),   # small even
-    (4, 5, 6),   # mixed
-    (8, 7, 5),   # mixed reversed
-])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (4, 4, 8),  # all even
+        (5, 6, 8),  # odd × even × even
+        (5, 7, 9),  # all odd
+        (7, 5, 11),  # odd × odd × odd
+        (3, 3, 3),  # small odd
+        (6, 6, 6),  # small even
+        (4, 5, 6),  # mixed
+        (8, 7, 5),  # mixed reversed
+    ],
+)
 def test_half_to_full_volume_matches_fft_diverse_shapes(shape):
     """half_volume_to_full(rfft3(vol)) == fft3(vol) for diverse even/odd shapes."""
     rng = np.random.default_rng(42)
@@ -390,14 +397,17 @@ def test_half_to_full_volume_matches_fft_diverse_shapes(shape):
     np.testing.assert_allclose(full_from_half, full_ref, atol=1e-5, rtol=1e-5)
 
 
-@pytest.mark.parametrize("shape", [
-    (4, 6),   # even × even
-    (5, 8),   # odd × even
-    (7, 9),   # odd × odd
-    (5, 5),   # small odd
-    (3, 3),   # tiny odd
-    (6, 7),   # even × odd
-])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (4, 6),  # even × even
+        (5, 8),  # odd × even
+        (7, 9),  # odd × odd
+        (5, 5),  # small odd
+        (3, 3),  # tiny odd
+        (6, 7),  # even × odd
+    ],
+)
 def test_half_to_full_image_matches_fft_diverse_shapes(shape):
     """half_image_to_full(rfft2(img)) == fft2(img) for diverse even/odd shapes."""
     rng = np.random.default_rng(42)
@@ -441,9 +451,15 @@ def test_dft_idft_roundtrip_1d_2d_3d():
     x2 = rng.standard_normal((4, 5)) + 1j * rng.standard_normal((4, 5))
     x3 = rng.standard_normal((4, 4, 4)) + 1j * rng.standard_normal((4, 4, 4))
 
-    np.testing.assert_allclose(fourier_transform_utils.get_idft(fourier_transform_utils.get_dft(x1)), x1, atol=1e-10, rtol=1e-10)
-    np.testing.assert_allclose(fourier_transform_utils.get_idft2(fourier_transform_utils.get_dft2(x2)), x2, atol=1e-10, rtol=1e-10)
-    np.testing.assert_allclose(fourier_transform_utils.get_idft3(fourier_transform_utils.get_dft3(x3)), x3, atol=1e-10, rtol=1e-10)
+    np.testing.assert_allclose(
+        fourier_transform_utils.get_idft(fourier_transform_utils.get_dft(x1)), x1, atol=1e-10, rtol=1e-10
+    )
+    np.testing.assert_allclose(
+        fourier_transform_utils.get_idft2(fourier_transform_utils.get_dft2(x2)), x2, atol=1e-10, rtol=1e-10
+    )
+    np.testing.assert_allclose(
+        fourier_transform_utils.get_idft3(fourier_transform_utils.get_dft3(x3)), x3, atol=1e-10, rtol=1e-10
+    )
 
 
 def test_dft3_idft3_custom_axes_roundtrip():
@@ -619,16 +635,16 @@ def test_dft2_real_idft2_real_roundtrip_gpu(gpu_device):
     x = rng.standard_normal((6, 10)).astype(np.float32)
 
     cpu_half = np.asarray(fourier_transform_utils.get_dft2_real(x))
-    cpu_back = np.asarray(fourier_transform_utils.get_idft2_real(
-        fourier_transform_utils.get_dft2_real(x), image_shape=x.shape
-    ))
+    cpu_back = np.asarray(
+        fourier_transform_utils.get_idft2_real(fourier_transform_utils.get_dft2_real(x), image_shape=x.shape)
+    )
 
     with jax.default_device(gpu_device):
         x_g = jax.device_put(jnp.array(x), gpu_device)
         gpu_half = np.asarray(fourier_transform_utils.get_dft2_real(x_g))
-        gpu_back = np.asarray(fourier_transform_utils.get_idft2_real(
-            fourier_transform_utils.get_dft2_real(x_g), image_shape=x.shape
-        ))
+        gpu_back = np.asarray(
+            fourier_transform_utils.get_idft2_real(fourier_transform_utils.get_dft2_real(x_g), image_shape=x.shape)
+        )
 
     np.testing.assert_allclose(cpu_half, gpu_half, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(cpu_back, gpu_back, atol=1e-5, rtol=1e-5)
@@ -639,15 +655,15 @@ def test_dft3_real_idft3_real_roundtrip_gpu(gpu_device):
     rng = np.random.default_rng(13)
     x = rng.standard_normal((6, 6, 10)).astype(np.float32)
 
-    cpu_back = np.asarray(fourier_transform_utils.get_idft3_real(
-        fourier_transform_utils.get_dft3_real(x), volume_shape=x.shape
-    ))
+    cpu_back = np.asarray(
+        fourier_transform_utils.get_idft3_real(fourier_transform_utils.get_dft3_real(x), volume_shape=x.shape)
+    )
 
     with jax.default_device(gpu_device):
         x_g = jax.device_put(jnp.array(x), gpu_device)
-        gpu_back = np.asarray(fourier_transform_utils.get_idft3_real(
-            fourier_transform_utils.get_dft3_real(x_g), volume_shape=x.shape
-        ))
+        gpu_back = np.asarray(
+            fourier_transform_utils.get_idft3_real(fourier_transform_utils.get_dft3_real(x_g), volume_shape=x.shape)
+        )
 
     np.testing.assert_allclose(cpu_back, gpu_back, atol=1e-5, rtol=1e-5)
 
@@ -660,16 +676,20 @@ def test_half_full_volume_roundtrip_gpu(gpu_device):
     half = fourier_transform_utils.get_dft3_real(x)
 
     cpu_full = np.asarray(fourier_transform_utils.half_volume_to_full_volume(half, volume_shape))
-    cpu_half_back = np.asarray(fourier_transform_utils.full_volume_to_half_volume(
-        fourier_transform_utils.half_volume_to_full_volume(half, volume_shape), volume_shape
-    ))
+    cpu_half_back = np.asarray(
+        fourier_transform_utils.full_volume_to_half_volume(
+            fourier_transform_utils.half_volume_to_full_volume(half, volume_shape), volume_shape
+        )
+    )
 
     with jax.default_device(gpu_device):
         half_g = jax.device_put(jnp.array(np.asarray(half)), gpu_device)
         gpu_full = np.asarray(fourier_transform_utils.half_volume_to_full_volume(half_g, volume_shape))
-        gpu_half_back = np.asarray(fourier_transform_utils.full_volume_to_half_volume(
-            fourier_transform_utils.half_volume_to_full_volume(half_g, volume_shape), volume_shape
-        ))
+        gpu_half_back = np.asarray(
+            fourier_transform_utils.full_volume_to_half_volume(
+                fourier_transform_utils.half_volume_to_full_volume(half_g, volume_shape), volume_shape
+            )
+        )
 
     np.testing.assert_allclose(cpu_full, gpu_full, atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(cpu_half_back, gpu_half_back, atol=1e-5, rtol=1e-5)
@@ -680,6 +700,8 @@ def test_get_k_coordinate_of_each_pixel_gpu(gpu_device):
     cpu_coords = np.asarray(fourier_transform_utils.get_k_coordinate_of_each_pixel((4, 6), voxel_size=1.5, scaled=True))
 
     with jax.default_device(gpu_device):
-        gpu_coords = np.asarray(fourier_transform_utils.get_k_coordinate_of_each_pixel((4, 6), voxel_size=1.5, scaled=True))
+        gpu_coords = np.asarray(
+            fourier_transform_utils.get_k_coordinate_of_each_pixel((4, 6), voxel_size=1.5, scaled=True)
+        )
 
     np.testing.assert_allclose(cpu_coords, gpu_coords, atol=1e-5, rtol=1e-5)

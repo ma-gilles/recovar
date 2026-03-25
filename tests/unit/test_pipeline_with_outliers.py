@@ -127,6 +127,7 @@ def test_pipeline_with_outliers_uses_original_image_ids_between_rounds(tmp_path,
         fake_standard_recovar_pipeline,
     )
     import recovar.commands.outlier_detection as outlier_detection
+
     monkeypatch.setattr(outlier_detection, "main", fake_outlier_main)
 
     pipeline_with_outliers._run_pipeline_with_outlier_removal_impl(args)
@@ -187,6 +188,7 @@ def test_pipeline_with_outliers_uses_original_particle_ids_between_rounds(tmp_pa
         fake_standard_recovar_pipeline,
     )
     import recovar.commands.outlier_detection as outlier_detection
+
     monkeypatch.setattr(outlier_detection, "main", fake_outlier_main)
 
     pipeline_with_outliers._run_pipeline_with_outlier_removal_impl(args)

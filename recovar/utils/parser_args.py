@@ -8,14 +8,14 @@ def add_project_arg(parser: argparse.ArgumentParser):
         type=os.path.abspath,
         default=None,
         help="Path to a recovar project directory (containing project.json). "
-             "If omitted, auto-detects by walking up from the current directory. "
-             "When a project is active, output directories are auto-generated "
-             "(e.g. ComputeState/job_0001/).",
+        "If omitted, auto-detects by walking up from the current directory. "
+        "When a project is active, output directories are auto-generated "
+        "(e.g. ComputeState/job_0001/).",
     )
     return parser
 
 
-def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
+def standard_downstream_args(parser: argparse.ArgumentParser, analyze=False):
 
     parser.add_argument(
         "result_dir",
@@ -28,68 +28,89 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze= False):
         "--outdir",
         type=os.path.abspath,
         help="Output directory. If omitted and a project is active, "
-             "auto-generates a numbered directory (e.g. ComputeState/job_0001/).",
+        "auto-generates a numbered directory (e.g. ComputeState/job_0001/).",
     )
 
     add_project_arg(parser)
 
-
-
     parser.add_argument(
-        "--Bfactor",  type =float, default=0, help="B-factor sharpening. The B-factor of the consensus reconstruction is probably a good guess. Default is 0, which means no sharpening."
+        "--Bfactor",
+        type=float,
+        default=0,
+        help="B-factor sharpening. The B-factor of the consensus reconstruction is probably a good guess. Default is 0, which means no sharpening.",
     )
 
     parser.add_argument(
-        "--n-bins",  type =int, default=50, dest="n_bins",help="number of bins for kernel regression. Default is 50 and works well for most cases. E.g., it was used to generate all figures in the paper"
-    )   
-
-    parser.add_argument(
-        "--maskrad-fraction",  type =float, default=20, dest="maskrad_fraction",help="Radius of mask used in kernel regression. Default = 20, which means radius = grid_size/20 pixels, or grid_size * voxel_size / 20 angstrom. Default works well for most cases. E.g., it was used to generate all figures in the paper. If you are using cryo-ET or very noisy (or very not noisy data), you might want to decrease (increase) this value. If you are using low resolution data (say less than 128x128 images), you might want to increase this value. If you are using very high resolution data (say more than 512x512 images), you might want to decrease this value. I have little experience with these cases."
+        "--n-bins",
+        type=int,
+        default=50,
+        dest="n_bins",
+        help="number of bins for kernel regression. Default is 50 and works well for most cases. E.g., it was used to generate all figures in the paper",
     )
 
     parser.add_argument(
-        "--n-min-particles",  type =int, default=None, dest="n_min_particles",help="minimum number of particles to compute kernel regression. Default = 100. Default works well for most cases. E.g., it was used to generate all figures in the paper. If you are using cryo-ET or very noisy (or very not noisy data), you might want to increase (decrease) this value."
+        "--maskrad-fraction",
+        type=float,
+        default=20,
+        dest="maskrad_fraction",
+        help="Radius of mask used in kernel regression. Default = 20, which means radius = grid_size/20 pixels, or grid_size * voxel_size / 20 angstrom. Default works well for most cases. E.g., it was used to generate all figures in the paper. If you are using cryo-ET or very noisy (or very not noisy data), you might want to decrease (increase) this value. If you are using low resolution data (say less than 128x128 images), you might want to increase this value. If you are using very high resolution data (say more than 512x512 images), you might want to decrease this value. I have little experience with these cases.",
     )
 
     parser.add_argument(
-        "--zdim1",  action="store_true", help="Whether dimension 1 is used. This is an annoying corner case for np.loadtxt..."
+        "--n-min-particles",
+        type=int,
+        default=None,
+        dest="n_min_particles",
+        help="minimum number of particles to compute kernel regression. Default = 100. Default works well for most cases. E.g., it was used to generate all figures in the paper. If you are using cryo-ET or very noisy (or very not noisy data), you might want to increase (decrease) this value.",
     )
 
     parser.add_argument(
-        "--no-z-regularization",  action="store_true", dest="no_z_regularization", help="Whether to use z regularization"
+        "--zdim1",
+        action="store_true",
+        help="Whether dimension 1 is used. This is an annoying corner case for np.loadtxt...",
     )
 
     parser.add_argument(
-        "--lazy",  action="store_true", help="Whether to use lazy loading")
+        "--no-z-regularization", action="store_true", dest="no_z_regularization", help="Whether to use z regularization"
+    )
+
+    parser.add_argument("--lazy", action="store_true", help="Whether to use lazy loading")
 
     parser.add_argument(
-        "--particles",  default=None, help="Particle stack dataset. If you don't pass an argument, the same stack as provided to pipeline.py will be used. You should use this option in case you want to use a higher resolution stack.")
+        "--particles",
+        default=None,
+        help="Particle stack dataset. If you don't pass an argument, the same stack as provided to pipeline.py will be used. You should use this option in case you want to use a higher resolution stack.",
+    )
 
     parser.add_argument(
         "--datadir",
         type=os.path.abspath,
         help="Path prefix to particle stack if loading relative paths from a .star or .cs file. If not specified, uses the directory of the star file.",
     )
-    
+
     parser.add_argument(
         "--strip-prefix",
         help="Path prefix to strip from filenames in star file (using in starfile input ONLY). Useful when star file contains longer paths than available on the system. By default, it strips the full path (except the filename). E.g, if you starfile path is Extract/job193/Subtomograms/XXX/XXX.mrcs, and your directory looks like /your/path/to/Subtomograms, then you can use --strip-prefix Extract/job193 --datadir /your/path/to/.",
     )
 
     parser.add_argument(
-        "--apply-global-filtering", action="store_true",
+        "--apply-global-filtering",
+        action="store_true",
         help="Apply global FSC filtering to generated halfmaps and save them with _filtered.mrc suffix. Uses the pipeline's volume_mask for FSC estimation.",
     )
 
     parser.add_argument(
-        "--fsc-mask-radius", type=float, default=None,
+        "--fsc-mask-radius",
+        type=float,
+        default=None,
         help="Radius of spherical mask for FSC estimation (in Angstroms). If None, uses pipeline output volume_mask. Overrides the pipeline mask if specified.",
     )
 
     parser.add_argument(
-        "--fsc-mask-edgewidth", type=float, default=None,
+        "--fsc-mask-edgewidth",
+        type=float,
+        default=None,
         help="Edge width of FSC mask (in Angstroms). If None, uses 10%% of fsc-mask-radius. Only used if fsc-mask-radius is specified.",
     )
 
     return parser
-

@@ -15,6 +15,7 @@ pytestmark = pytest.mark.unit
 # batch_st_end
 # ---------------------------------------------------------------------------
 
+
 class TestBatchStEnd:
     def test_first_batch(self):
         st, end = linalg.batch_st_end(0, 10, 50)
@@ -40,6 +41,7 @@ class TestBatchStEnd:
 # ---------------------------------------------------------------------------
 # inner_product
 # ---------------------------------------------------------------------------
+
 
 class TestInnerProduct:
     def test_real_vectors(self):
@@ -77,12 +79,13 @@ class TestInnerProduct:
 # batch_inner_product
 # ---------------------------------------------------------------------------
 
+
 class TestBatchInnerProduct:
     def test_basic(self):
         x = jnp.array([[1.0, 2.0], [3.0, 4.0]])
         y = jnp.array([[5.0, 6.0], [7.0, 8.0]])
         result = linalg.batch_inner_product(x, y)
-        expected = np.array([1*5 + 2*6, 3*7 + 4*8], dtype=np.float32)
+        expected = np.array([1 * 5 + 2 * 6, 3 * 7 + 4 * 8], dtype=np.float32)
         np.testing.assert_allclose(result, expected, atol=1e-5)
 
     def test_complex(self):
@@ -114,6 +117,7 @@ class TestBatchInnerProduct:
 # ---------------------------------------------------------------------------
 # half_spectrum_last_axis_weights
 # ---------------------------------------------------------------------------
+
 
 class TestHalfSpectrumWeights:
     def test_even_n(self):
@@ -150,6 +154,7 @@ class TestHalfSpectrumWeights:
 # broadcast_dot / broadcast_outer
 # ---------------------------------------------------------------------------
 
+
 class TestBroadcastOps:
     def test_broadcast_dot_real(self):
         x = jnp.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
@@ -175,6 +180,7 @@ class TestBroadcastOps:
 # multiply_along_axis
 # ---------------------------------------------------------------------------
 
+
 class TestMultiplyAlongAxis:
     def test_axis_0(self):
         A = jnp.ones((3, 4, 5))
@@ -196,6 +202,7 @@ class TestMultiplyAlongAxis:
 # ---------------------------------------------------------------------------
 # batch_hermitian_linear_solver / batch_linear_solver
 # ---------------------------------------------------------------------------
+
 
 class TestLinearSolvers:
     def test_hermitian_solver_identity(self):
@@ -224,6 +231,7 @@ class TestLinearSolvers:
 # solve_by_SVD
 # ---------------------------------------------------------------------------
 
+
 class TestSolveBySVD:
     def test_identity_system(self):
         A = jnp.eye(3)[None, ...]  # batch of 1
@@ -247,6 +255,7 @@ class TestSolveBySVD:
 # ---------------------------------------------------------------------------
 # l2_distance
 # ---------------------------------------------------------------------------
+
 
 class TestL2Distance:
     def test_identical_points(self):
@@ -277,6 +286,7 @@ class TestL2Distance:
 # thin_svd
 # ---------------------------------------------------------------------------
 
+
 class TestThinSVD:
     def test_identity_matrix(self):
         A = np.eye(4, dtype=np.float32)
@@ -302,6 +312,7 @@ class TestThinSVD:
 # ---------------------------------------------------------------------------
 # half_spectrum_inner_product
 # ---------------------------------------------------------------------------
+
 
 class TestHalfSpectrumInnerProduct:
     def test_matches_full_spectrum_2d(self):
@@ -346,15 +357,14 @@ class TestBatchHalfSpectrumInnerProduct:
         result = linalg.batch_half_spectrum_inner_product(fts_half, fts_half, full_shape)
         assert result.shape == (batch,)
         for i in range(batch):
-            single = linalg.half_spectrum_inner_product(
-                fts_half[i], fts_half[i], full_shape
-            )
+            single = linalg.half_spectrum_inner_product(fts_half[i], fts_half[i], full_shape)
             np.testing.assert_allclose(float(result[i].real), float(single.real), rtol=1e-4)
 
 
 # ---------------------------------------------------------------------------
 # _coerce_half_grid
 # ---------------------------------------------------------------------------
+
 
 class TestCoerceHalfGrid:
     def test_grid_shape_passthrough(self):
@@ -393,6 +403,7 @@ class TestCoerceHalfGrid:
 # ---------------------------------------------------------------------------
 # blockwise operations (small-scale tests)
 # ---------------------------------------------------------------------------
+
 
 class TestBlockwiseOps:
     def test_blockwise_X_T_X(self):

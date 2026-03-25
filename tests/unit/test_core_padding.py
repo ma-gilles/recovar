@@ -15,6 +15,7 @@ pytestmark = pytest.mark.unit
 # pad / unpad images in spatial domain
 # ---------------------------------------------------------------------------
 
+
 class TestPadUnpadImagesSpatial:
     def test_roundtrip(self):
         rng = np.random.RandomState(42)
@@ -54,6 +55,7 @@ class TestPadUnpadImagesSpatial:
 # pad / unpad volume in spatial domain
 # ---------------------------------------------------------------------------
 
+
 class TestPadUnpadVolumeSpatial:
     def test_roundtrip(self):
         rng = np.random.RandomState(42)
@@ -88,6 +90,7 @@ class TestPadUnpadVolumeSpatial:
 # pad / unpad images in Fourier domain
 # ---------------------------------------------------------------------------
 
+
 class TestPadUnpadImagesFourier:
     def test_roundtrip(self):
         rng = np.random.RandomState(42)
@@ -109,6 +112,7 @@ class TestPadUnpadImagesFourier:
 # pad / unpad volume in Fourier domain
 # ---------------------------------------------------------------------------
 
+
 class TestPadUnpadVolumeFourier:
     def test_roundtrip_spatial(self):
         """Pad then unpad via Fourier domain recovers original spatial volume."""
@@ -122,6 +126,7 @@ class TestPadUnpadVolumeFourier:
 
         # unpad_volume_fourier_domain expects Fourier input from the library's DFT
         import recovar.core.fourier_transform_utils as ftu
+
         padded_ft = ftu.get_dft3(padded).ravel()
         unpadded_ft = padding.unpad_volume_fourier_domain(padded_ft, (8, 8, 8), pad)
         # Convert back to spatial to compare
@@ -132,6 +137,7 @@ class TestPadUnpadVolumeFourier:
 # ---------------------------------------------------------------------------
 # padded_dft
 # ---------------------------------------------------------------------------
+
 
 class TestPaddedDft:
     def test_output_shape(self):

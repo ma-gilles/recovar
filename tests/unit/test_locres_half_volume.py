@@ -18,9 +18,7 @@ def _legacy_sampling_points(grid_size, locres_sampling, locres_maskrad, voxel_si
     myrad = grid_size // 2 - maskrad_pix
 
     sampling_points = []
-    grid = np.array(
-        fourier_transform_utils.get_1d_frequency_grid(grid_size, 1, scaled=False)[::step_size]
-    )
+    grid = np.array(fourier_transform_utils.get_1d_frequency_grid(grid_size, 1, scaled=False)[::step_size])
     for kk in grid:
         for ii in grid:
             for jj in grid:
@@ -116,12 +114,8 @@ def _legacy_local_error_with_cov(
     if noise_variance is not None:
         noise_variance = noise_variance.reshape(map1.shape)
         noise_scale = np.sqrt(noise_variance).reshape(map1.shape)
-        map1 = fourier_transform_utils.get_idft3(
-            fourier_transform_utils.get_dft3(map1) * noise_scale
-        ).real
-        map2 = fourier_transform_utils.get_idft3(
-            fourier_transform_utils.get_dft3(map2) * noise_scale
-        ).real
+        map1 = fourier_transform_utils.get_idft3(fourier_transform_utils.get_dft3(map1) * noise_scale).real
+        map2 = fourier_transform_utils.get_idft3(fourier_transform_utils.get_dft3(map2) * noise_scale).real
 
     mask_ft = fourier_transform_utils.get_dft3(mask)
     map1_square_ft = fourier_transform_utils.get_dft3(map1 * map1)
@@ -243,14 +237,8 @@ def test_filter_with_global_fsc_half_matches_full():
     )
     mask = mask_fn.raised_cosine_mask(volume_shape, 4, 5, -1)
 
-    ft_full = 0.5 * (
-        fourier_transform_utils.get_dft3(map1)
-        + fourier_transform_utils.get_dft3(map2)
-    )
-    ft_half = 0.5 * (
-        fourier_transform_utils.get_dft3_real(map1)
-        + fourier_transform_utils.get_dft3_real(map2)
-    )
+    ft_full = 0.5 * (fourier_transform_utils.get_dft3(map1) + fourier_transform_utils.get_dft3(map2))
+    ft_half = 0.5 * (fourier_transform_utils.get_dft3_real(map1) + fourier_transform_utils.get_dft3_real(map2))
 
     out_full = np.asarray(
         locres.filter_with_global_fsc(

@@ -147,8 +147,7 @@ def interpolate_with_spline(
     # Validate dimensions
     if len(coords) != coeff_array.ndim:
         raise ValueError(
-            f"Number of coordinate arrays ({len(coords)}) must match "
-            f"coefficient dimensions ({coeff_array.ndim})"
+            f"Number of coordinate arrays ({len(coords)}) must match coefficient dimensions ({coeff_array.ndim})"
         )
 
     # Stack and flatten coordinates for vectorized processing
@@ -158,9 +157,7 @@ def interpolate_with_spline(
     if boundary_mode == "wrap":
         evaluator = lambda coord: _eval_spline_point_wrap(coeff_array, coord)
     else:
-        evaluator = lambda coord: _eval_spline_point_fill(
-            coeff_array, coord, fill_value
-        )
+        evaluator = lambda coord: _eval_spline_point_fill(coeff_array, coord, fill_value)
 
     flat_result = vmap(evaluator)(flat_coords)
 
@@ -198,6 +195,7 @@ def _eval_spline_point_fill(coeffs: Array, coord: Array, fill_value: ArrayLike) 
 # Compatibility API
 # =============================================================================
 
+
 def map_coordinates(input, coordinates, order, mode="wrap", cval=0.0):
     """Cubic spline interpolation compatible with scipy/cryojax API.
 
@@ -215,18 +213,14 @@ def map_coordinates(input, coordinates, order, mode="wrap", cval=0.0):
         Interpolated values
     """
     if order != 3:
-        raise NotImplementedError(
-            f"This implementation only supports cubic splines (order=3), got order={order}"
-        )
+        raise NotImplementedError(f"This implementation only supports cubic splines (order=3), got order={order}")
 
     coeffs = calculate_spline_coefficients(input)
     # Use map_coordinates_with_cubic_spline for consistent coord handling
     return map_coordinates_with_cubic_spline(coeffs, coordinates, mode, cval)
 
 
-def map_coordinates_with_cubic_spline(
-    coefficients, coordinates, mode="wrap", cval=0.0
-):
+def map_coordinates_with_cubic_spline(coefficients, coordinates, mode="wrap", cval=0.0):
     """Interpolate using precomputed cubic spline coefficients.
 
     Coordinates are shifted by -1 for periodic convention.
@@ -241,7 +235,7 @@ def map_coordinates_with_cubic_spline(
     coefficients = jnp.asarray(coefficients)
     ndim = coefficients.ndim
     # Normalize coordinates to list-of-arrays
-    if isinstance(coordinates, jnp.ndarray) or (hasattr(coordinates, 'shape') and hasattr(coordinates, 'ndim')):
+    if isinstance(coordinates, jnp.ndarray) or (hasattr(coordinates, "shape") and hasattr(coordinates, "ndim")):
         coordinates = jnp.asarray(coordinates)
         if coordinates.ndim >= 2 and coordinates.shape[0] == ndim:
             coords_list = [coordinates[i] - 1 for i in range(ndim)]

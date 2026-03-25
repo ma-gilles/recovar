@@ -36,15 +36,9 @@ class ImageMetadata:
         ctf_params = np.asarray(ctf_params, dtype=ctf_dtype)
 
         if rotation_matrices.ndim != 3 or rotation_matrices.shape[1:] != (3, 3):
-            raise ValueError(
-                "rotation_matrices must have shape (N, 3, 3), "
-                f"got {rotation_matrices.shape}"
-            )
+            raise ValueError(f"rotation_matrices must have shape (N, 3, 3), got {rotation_matrices.shape}")
         if translations.ndim != 2 or translations.shape[1] != 2:
-            raise ValueError(
-                "translations must have shape (N, 2), "
-                f"got {translations.shape}"
-            )
+            raise ValueError(f"translations must have shape (N, 2), got {translations.shape}")
         if ctf_params.ndim != 2:
             raise ValueError(f"ctf_params must have shape (N, C), got {ctf_params.shape}")
 
@@ -93,8 +87,7 @@ class ImageMetadata:
             )
         if translations.shape != self._translations.shape:
             raise ValueError(
-                "translations shape must stay fixed at "
-                f"{self._translations.shape}, got {translations.shape}"
+                f"translations shape must stay fixed at {self._translations.shape}, got {translations.shape}"
             )
         self._rotation_matrices = rotation_matrices
         self._translations = translations
@@ -102,10 +95,7 @@ class ImageMetadata:
     def set_ctf(self, ctf_params):
         ctf_params = np.asarray(ctf_params, dtype=self.ctf_dtype)
         if ctf_params.shape != self._ctf_params.shape:
-            raise ValueError(
-                "ctf_params shape must stay fixed at "
-                f"{self._ctf_params.shape}, got {ctf_params.shape}"
-            )
+            raise ValueError(f"ctf_params shape must stay fixed at {self._ctf_params.shape}, got {ctf_params.shape}")
         self._ctf_params = ctf_params
 
     def set_ctf_column(self, col, values):

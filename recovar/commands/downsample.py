@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def downsample_to_disk(
     particles_file: str,
     target_D: int,
@@ -86,9 +87,7 @@ def downsample_to_disk(
     logger.info("Loaded %d images at %d\u00d7%d", n_images, orig_D, orig_D)
 
     if target_D > orig_D:
-        raise ValueError(
-            f"Target D ({target_D}) > original D ({orig_D})"
-        )
+        raise ValueError(f"Target D ({target_D}) > original D ({orig_D})")
     if target_D == orig_D:
         logger.info("Target D == original D (%d), nothing to do.", orig_D)
 
@@ -107,6 +106,7 @@ def downsample_to_disk(
     use_gpu = _gpu_available()
     if use_gpu:
         from recovar.utils import helpers
+
         gpu_memory = helpers.get_gpu_memory_total()
         batch_size = get_downsample_batch_size(orig_D, gpu_memory)
         logger.info("GPU downsampling: batch_size=%d (%.1f GB GPU)", batch_size, gpu_memory)
@@ -141,7 +141,10 @@ def downsample_to_disk(
             eta = (n_images - end) / rate if rate > 0 else 0
             logger.info(
                 "  %d / %d  (%.1f img/s, ETA %.0fs)",
-                end, n_images, rate, eta,
+                end,
+                n_images,
+                rate,
+                eta,
             )
 
     elapsed = time.time() - t0
@@ -162,30 +165,29 @@ def downsample_to_disk(
 # CLI entry point
 # ---------------------------------------------------------------------------
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Downsample particle images via Fourier cropping and save to disk."
-    )
+    parser = argparse.ArgumentParser(description="Downsample particle images via Fourier cropping and save to disk.")
     parser.add_argument("particles", help="Input particles (.mrcs, .star, .cs, or .txt)")
-    parser.add_argument("-D", "--target-D", type=int, required=True,
-                        help="Target box size in pixels (must be even)")
-    parser.add_argument("-o", "--outdir", required=True,
-                        help="Output directory")
-    parser.add_argument("--datadir", default=None,
-                        help="Path prefix for resolving relative image paths")
-    parser.add_argument("--strip-prefix", default=None,
-                        help="Prefix to strip from paths in star file")
-    parser.add_argument("--batch-size", type=int, default=1000,
-                        help="Number of images per batch (default: 1000)")
-    parser.add_argument("--chunk-size", type=int, default=None,
-                        help="Split output into chunks of this many images "
-                             "(default: single file)")
+    parser.add_argument("-D", "--target-D", type=int, required=True, help="Target box size in pixels (must be even)")
+    parser.add_argument("-o", "--outdir", required=True, help="Output directory")
+    parser.add_argument("--datadir", default=None, help="Path prefix for resolving relative image paths")
+    parser.add_argument("--strip-prefix", default=None, help="Prefix to strip from paths in star file")
+    parser.add_argument("--batch-size", type=int, default=1000, help="Number of images per batch (default: 1000)")
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=None,
+        help="Split output into chunks of this many images (default: single file)",
+    )
     from recovar.utils.parser_args import add_project_arg
+
     add_project_arg(parser)
 
     args = parser.parse_args()
 
     from recovar.project.job_context import job_context
+
     with job_context(args, "downsample") as ctx:
         args.outdir = ctx.output_dir
 
@@ -193,6 +195,7 @@ def main():
         os.makedirs(args.outdir, exist_ok=True)
         log_path = os.path.join(args.outdir, "downsample.log")
         from recovar.utils.helpers import RobustFileHandler, RobustStreamHandler
+
         logging.basicConfig(
             level=logging.INFO,
             format="%(asctime)s %(levelname)s %(message)s",
@@ -227,13 +230,15 @@ def main():
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+
 def _get_pixel_size(filepath: str):
     """Try to extract pixel size from the input file."""
-    ext = filepath.rsplit('.', 1)[-1].lower()
+    ext = filepath.rsplit(".", 1)[-1].lower()
 
-    if ext == 'star':
+    if ext == "star":
         try:
             from recovar.data_io.starfile import StarFile
+
             sf = StarFile.load(filepath)
             apix = sf.apix
             if apix is not None and len(apix) > 0:
@@ -241,17 +246,17 @@ def _get_pixel_size(filepath: str):
         except (ImportError, KeyError, ValueError, OSError):
             pass
 
-    elif ext == 'cs':
+    elif ext == "cs":
         try:
             data = np.load(filepath, allow_pickle=True)
-            if 'blob/psize_A' in data.dtype.names:
-                return float(data['blob/psize_A'][0])
+            if "blob/psize_A" in data.dtype.names:
+                return float(data["blob/psize_A"][0])
         except (ValueError, KeyError, OSError, IndexError):
             pass
 
-    elif ext in ('mrcs', 'mrc'):
+    elif ext in ("mrcs", "mrc"):
         try:
-            with mrcfile.open(filepath, mode='r', header_only=True) as mrc:
+            with mrcfile.open(filepath, mode="r", header_only=True) as mrc:
                 vsize = float(mrc.voxel_size.x)
                 if vsize > 0:
                     return vsize
@@ -270,14 +275,14 @@ def _write_output_star(input_path, mrcs_path, star_path, target_D, new_apix, n_i
     """
     import pandas as pd
 
-    ext = input_path.rsplit('.', 1)[-1].lower()
+    ext = input_path.rsplit(".", 1)[-1].lower()
 
     # Relative path to mrcs from star file location
     star_dir = os.path.dirname(os.path.abspath(star_path))
     mrcs_abs = os.path.abspath(mrcs_path)
     mrcs_rel = os.path.relpath(mrcs_abs, star_dir)
 
-    if ext == 'star':
+    if ext == "star":
         # Copy metadata from input star, update pixel size and image names.
         # Use our own cached read_star (fast) rather than the external starfile package.
         try:
@@ -287,15 +292,13 @@ def _write_output_star(input_path, mrcs_path, star_path, target_D, new_apix, n_i
             particles_df, optics_df = read_star(input_path)
 
             if optics_df is not None:
-                if '_rlnImagePixelSize' in optics_df.columns:
-                    optics_df['_rlnImagePixelSize'] = str(new_apix)
-                if '_rlnImageSize' in optics_df.columns:
-                    optics_df['_rlnImageSize'] = str(target_D)
+                if "_rlnImagePixelSize" in optics_df.columns:
+                    optics_df["_rlnImagePixelSize"] = str(new_apix)
+                if "_rlnImageSize" in optics_df.columns:
+                    optics_df["_rlnImageSize"] = str(target_D)
 
-            if '_rlnImageName' in particles_df.columns:
-                particles_df['_rlnImageName'] = [
-                    f"{i+1}@{mrcs_rel}" for i in range(len(particles_df))
-                ]
+            if "_rlnImageName" in particles_df.columns:
+                particles_df["_rlnImageName"] = [f"{i + 1}@{mrcs_rel}" for i in range(len(particles_df))]
 
             write_star(star_path, particles_df, optics_df)
             logger.info("Wrote STAR file with full metadata from input")
@@ -303,11 +306,10 @@ def _write_output_star(input_path, mrcs_path, star_path, target_D, new_apix, n_i
         except (KeyError, ValueError, OSError) as e:
             logger.warning("Failed to copy STAR metadata: %s. Writing minimal STAR.", e)
 
-    elif ext == 'cs':
+    elif ext == "cs":
         # Convert cryoSPARC metadata to RELION STAR format
         try:
-            _write_star_from_cs(input_path, star_path, mrcs_rel, target_D,
-                                new_apix, n_images)
+            _write_star_from_cs(input_path, star_path, mrcs_rel, target_D, new_apix, n_images)
             return
         except (ImportError, KeyError, ValueError, OSError) as e:
             logger.warning("Failed to convert CS metadata: %s. Writing minimal STAR.", e)
@@ -326,42 +328,42 @@ def _write_star_from_cs(cs_path, star_path, mrcs_rel, target_D, new_apix, n_imag
 
     # --- Optics table ---
     # Get microscope params from first particle
-    volt = float(data['ctf/accel_kv'][0]) if 'ctf/accel_kv' in data.dtype.names else 300.0
-    cs_mm = float(data['ctf/cs_mm'][0]) if 'ctf/cs_mm' in data.dtype.names else 2.7
-    amp = float(data['ctf/amp_contrast'][0]) if 'ctf/amp_contrast' in data.dtype.names else 0.1
+    volt = float(data["ctf/accel_kv"][0]) if "ctf/accel_kv" in data.dtype.names else 300.0
+    cs_mm = float(data["ctf/cs_mm"][0]) if "ctf/cs_mm" in data.dtype.names else 2.7
+    amp = float(data["ctf/amp_contrast"][0]) if "ctf/amp_contrast" in data.dtype.names else 0.1
 
-    optics = pd.DataFrame({
-        'rlnOpticsGroup': [1],
-        'rlnOpticsGroupName': ['opticsGroup1'],
-        'rlnImagePixelSize': [new_apix or 1.0],
-        'rlnImageSize': [target_D],
-        'rlnImageDimensionality': [2],
-        'rlnVoltage': [volt],
-        'rlnSphericalAberration': [cs_mm],
-        'rlnAmplitudeContrast': [amp],
-    })
+    optics = pd.DataFrame(
+        {
+            "rlnOpticsGroup": [1],
+            "rlnOpticsGroupName": ["opticsGroup1"],
+            "rlnImagePixelSize": [new_apix or 1.0],
+            "rlnImageSize": [target_D],
+            "rlnImageDimensionality": [2],
+            "rlnVoltage": [volt],
+            "rlnSphericalAberration": [cs_mm],
+            "rlnAmplitudeContrast": [amp],
+        }
+    )
 
     # --- Particles table ---
-    particles = pd.DataFrame({
-        'rlnImageName': [f"{i+1}@{mrcs_rel}" for i in range(n_images)],
-        'rlnOpticsGroup': np.ones(n_images, dtype=int),
-    })
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": [f"{i + 1}@{mrcs_rel}" for i in range(n_images)],
+            "rlnOpticsGroup": np.ones(n_images, dtype=int),
+        }
+    )
 
     # CTF parameters
-    if 'ctf/df1_A' in data.dtype.names:
-        particles['rlnDefocusU'] = data['ctf/df1_A'][:n_images].astype(np.float64)
-        particles['rlnDefocusV'] = data['ctf/df2_A'][:n_images].astype(np.float64)
-        particles['rlnDefocusAngle'] = np.degrees(
-            data['ctf/df_angle_rad'][:n_images].astype(np.float64)
-        )
-    if 'ctf/phase_shift_rad' in data.dtype.names:
-        particles['rlnPhaseShift'] = np.degrees(
-            data['ctf/phase_shift_rad'][:n_images].astype(np.float64)
-        )
+    if "ctf/df1_A" in data.dtype.names:
+        particles["rlnDefocusU"] = data["ctf/df1_A"][:n_images].astype(np.float64)
+        particles["rlnDefocusV"] = data["ctf/df2_A"][:n_images].astype(np.float64)
+        particles["rlnDefocusAngle"] = np.degrees(data["ctf/df_angle_rad"][:n_images].astype(np.float64))
+    if "ctf/phase_shift_rad" in data.dtype.names:
+        particles["rlnPhaseShift"] = np.degrees(data["ctf/phase_shift_rad"][:n_images].astype(np.float64))
 
     # Poses (Rodrigues → RELION Euler angles)
     pose_key = None
-    for key in ('alignments3D/pose', 'alignments_class_0/pose'):
+    for key in ("alignments3D/pose", "alignments_class_0/pose"):
         if key in data.dtype.names:
             pose_key = key
             break
@@ -371,35 +373,33 @@ def _write_star_from_cs(cs_path, star_path, mrcs_rel, target_D, new_apix, n_imag
         # CS → internal rotation matrices (transpose to match convention)
         R_int = SciPyRot.from_rotvec(rotvecs).as_matrix().transpose(0, 2, 1)
         # Internal → RELION Euler angles (invert R_from_relion)
-        frame_adjust = np.array(
-            [[1, -1, 1], [-1, 1, -1], [1, -1, 1]], dtype=np.float64
-        )
+        frame_adjust = np.array([[1, -1, 1], [-1, 1, -1], [1, -1, 1]], dtype=np.float64)
         R_adj = R_int * frame_adjust
-        angles = SciPyRot.from_matrix(R_adj).as_euler('zxz', degrees=True)
+        angles = SciPyRot.from_matrix(R_adj).as_euler("zxz", degrees=True)
         angles[:, 0] -= 90.0
         angles[:, 2] += 90.0
 
-        particles['rlnAngleRot'] = angles[:, 0]
-        particles['rlnAngleTilt'] = angles[:, 1]
-        particles['rlnAnglePsi'] = angles[:, 2]
+        particles["rlnAngleRot"] = angles[:, 0]
+        particles["rlnAngleTilt"] = angles[:, 1]
+        particles["rlnAnglePsi"] = angles[:, 2]
 
     # Translations (pixels → Angstroms)
     shift_key = None
-    for key in ('alignments3D/shift', 'alignments_class_0/shift'):
+    for key in ("alignments3D/shift", "alignments_class_0/shift"):
         if key in data.dtype.names:
             shift_key = key
             break
 
     if shift_key is not None:
-        orig_apix = float(data['blob/psize_A'][0]) if 'blob/psize_A' in data.dtype.names else 1.0
+        orig_apix = float(data["blob/psize_A"][0]) if "blob/psize_A" in data.dtype.names else 1.0
         shifts_px = data[shift_key][:n_images].astype(np.float64)
         shifts_angst = shifts_px * orig_apix
-        particles['rlnOriginXAngst'] = shifts_angst[:, 0]
-        particles['rlnOriginYAngst'] = shifts_angst[:, 1]
+        particles["rlnOriginXAngst"] = shifts_angst[:, 0]
+        particles["rlnOriginYAngst"] = shifts_angst[:, 1]
 
     # Half-set assignments
     split_key = None
-    for key in ('alignments3D/split', 'alignments_class_0/split'):
+    for key in ("alignments3D/split", "alignments_class_0/split"):
         if key in data.dtype.names:
             split_key = key
             break
@@ -407,9 +407,9 @@ def _write_star_from_cs(cs_path, star_path, mrcs_rel, target_D, new_apix, n_imag
     if split_key is not None:
         splits = data[split_key][:n_images].astype(int)
         # CS uses 0/1, RELION uses 1/2
-        particles['rlnRandomSubset'] = splits + 1
+        particles["rlnRandomSubset"] = splits + 1
 
-    starfile.write({'optics': optics, 'particles': particles}, star_path, overwrite=True)
+    starfile.write({"optics": optics, "particles": particles}, star_path, overwrite=True)
     logger.info("Wrote STAR file with metadata converted from cryoSPARC .cs")
 
 
@@ -418,23 +418,27 @@ def _write_minimal_star(star_path, mrcs_rel, target_D, new_apix, n_images):
     import starfile
     import pandas as pd
 
-    optics = pd.DataFrame({
-        'rlnOpticsGroup': [1],
-        'rlnOpticsGroupName': ['opticsGroup1'],
-        'rlnImagePixelSize': [new_apix or 1.0],
-        'rlnImageSize': [target_D],
-        'rlnImageDimensionality': [2],
-        'rlnVoltage': [300.0],
-        'rlnAmplitudeContrast': [0.1],
-        'rlnSphericalAberration': [2.7],
-    })
+    optics = pd.DataFrame(
+        {
+            "rlnOpticsGroup": [1],
+            "rlnOpticsGroupName": ["opticsGroup1"],
+            "rlnImagePixelSize": [new_apix or 1.0],
+            "rlnImageSize": [target_D],
+            "rlnImageDimensionality": [2],
+            "rlnVoltage": [300.0],
+            "rlnAmplitudeContrast": [0.1],
+            "rlnSphericalAberration": [2.7],
+        }
+    )
 
-    particles = pd.DataFrame({
-        'rlnImageName': [f"{i+1}@{mrcs_rel}" for i in range(n_images)],
-        'rlnOpticsGroup': np.ones(n_images, dtype=int),
-    })
+    particles = pd.DataFrame(
+        {
+            "rlnImageName": [f"{i + 1}@{mrcs_rel}" for i in range(n_images)],
+            "rlnOpticsGroup": np.ones(n_images, dtype=int),
+        }
+    )
 
-    starfile.write({'optics': optics, 'particles': particles}, star_path, overwrite=True)
+    starfile.write({"optics": optics, "particles": particles}, star_path, overwrite=True)
     logger.info("Wrote minimal STAR file (no poses/CTF \u2014 use original file for pipeline)")
 
 

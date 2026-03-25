@@ -5,6 +5,7 @@ DEFAULT_FFT_NORM = "backward"
 
 # TODO: some of these functions are built-in numpy/jnp. These should be used instead, or optimized otherwise
 
+
 def get_1d_frequency_grid(n, voxel_size=1, scaled=False):
     # Equivalent to the old even/odd linspace logic, but cheaper and exact on integer steps.
     half = n // 2
@@ -277,9 +278,7 @@ def _coerce_grid_or_flat(arr, grid_shape, name):
         out_shape = tuple(arr.shape[:-1]) + grid_shape
         return arr.reshape(out_shape), True
 
-    raise ValueError(
-        f"{name} must have trailing shape {grid_shape} or trailing flat size {flat_size}, got {arr.shape}"
-    )
+    raise ValueError(f"{name} must have trailing shape {grid_shape} or trailing flat size {flat_size}, got {arr.shape}")
 
 
 def _restore_grid_or_flat(arr_grid, return_flat, n_spatial_dims):
@@ -415,9 +414,7 @@ def half_volume_to_full_volume(half_volume, volume_shape):
         #   General: partner(j) = (N - (N % 2) - j) % N
         partner_i0 = (N0 - (N0 % 2) - jnp.arange(N0)) % N0
         partner_i1 = (N1 - (N1 % 2) - jnp.arange(N1)) % N1
-        conj_partner = jnp.conj(
-            jnp.take(jnp.take(half_grid, partner_i0, axis=-3), partner_i1, axis=-2)
-        )
+        conj_partner = jnp.conj(jnp.take(jnp.take(half_grid, partner_i0, axis=-3), partner_i1, axis=-2))
         source_cols = ic2 - redundant
         full_grid = full_grid.at[..., :, :, redundant].set(conj_partner[..., source_cols])
 

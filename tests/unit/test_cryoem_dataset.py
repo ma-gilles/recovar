@@ -812,8 +812,7 @@ class _FakeImageStack:
         self.Np = Np
         self.mask = np.ones((D, D), dtype=np.float32)
         self._particle_tilts = [
-            np.asarray(chunk, dtype=np.int32)
-            for chunk in np.array_split(np.arange(n_images, dtype=np.int32), Np)
+            np.asarray(chunk, dtype=np.int32) for chunk in np.array_split(np.arange(n_images, dtype=np.int32), Np)
         ]
         self.particles = self._particle_tilts
         self.dataset_tilt_indices = np.arange(Np, dtype=np.int32)
@@ -851,9 +850,7 @@ def test_iter_batches_skips_outer_prefetch_when_image_source_already_prefetches(
         def __init__(self, *, already_prefetches):
             self.info = dataset.ImageSourceInfo()
             self._already_prefetches = already_prefetches
-            self._index_layout = DatasetIndexLayout.from_image_indices(
-                np.array([0, 1], dtype=np.int32)
-            )
+            self._index_layout = DatasetIndexLayout.from_image_indices(np.array([0, 1], dtype=np.int32))
             self._mult = 1.0
             self._mask = np.ones((4, 4), dtype=np.float32)
 
@@ -1194,7 +1191,11 @@ def test_load_dataset_defaults_tilt_series_ctf_by_mode(monkeypatch):
             self.tilt_numbers = np.arange(4, dtype=np.float32)
             self.dose = np.arange(4, dtype=np.float32)
 
-    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(
+        image_sources.image_backends,
+        "ParticleImageDataset",
+        lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0),
+    )
     monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
@@ -1236,7 +1237,11 @@ def test_load_dataset_from_star_branch_sets_contrast_and_bfactor(monkeypatch):
             self.ctfBfactor = np.array([-5.0, -10.0, -15.0, -20.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(
+        image_sources.image_backends,
+        "ParticleImageDataset",
+        lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0),
+    )
     monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
@@ -1271,7 +1276,11 @@ def test_load_dataset_v2_scale_from_star_uses_star_scaling_and_zero_angles(monke
             self.ctfBfactor = np.array([-4.0, -8.0, -12.0, -16.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(
+        image_sources.image_backends,
+        "ParticleImageDataset",
+        lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0),
+    )
     monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
@@ -1309,7 +1318,11 @@ def test_load_dataset_warp_alias_for_non_tilt_series_maps_to_v2_scale(monkeypatc
             self.ctfBfactor = np.array([-4.0, -8.0, -12.0, -16.0], dtype=np.float32)
             self.tilt_numbers = np.array([0, 1, 2, 3], dtype=np.float32)
 
-    monkeypatch.setattr(image_sources.image_backends, "ParticleImageDataset", lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0))
+    monkeypatch.setattr(
+        image_sources.image_backends,
+        "ParticleImageDataset",
+        lambda *a, **k: _FakeImageStack(n_images=4, D=8, padding=0),
+    )
     monkeypatch.setattr(image_sources.image_backends, "TiltSeriesDataset", _FakeTiltSeriesData)
     monkeypatch.setattr(load_utils, "load_ctf_params", _fake_load_ctf_params)
     monkeypatch.setattr(load_utils, "load_poses", _fake_load_poses)
@@ -1370,7 +1383,9 @@ def test_get_split_indices_from_pickle_file_path(tmp_path, monkeypatch):
     with open(ind_file, "wb") as f:
         pickle.dump(np.array([7, 1, 5, 3], dtype=int), f)
 
-    monkeypatch.setattr(halfsets, "split_index_list", lambda idx, split_random_seed=0: [np.sort(idx[:2]), np.sort(idx[2:])])
+    monkeypatch.setattr(
+        halfsets, "split_index_list", lambda idx, split_random_seed=0: [np.sort(idx[:2]), np.sort(idx[2:])]
+    )
     out = halfsets.get_split_indices("unused.star", ind_file=str(ind_file), validate_split=True)
     np.testing.assert_array_equal(out[0], np.array([1, 7]))
     np.testing.assert_array_equal(out[1], np.array([3, 5]))
@@ -1483,6 +1498,7 @@ def test_load_halfset_dataset_calls_loader_once(monkeypatch):
         def __init__(self, ind):
             self.grid_size = 4
             self._ind = ind
+
         def subset(self, indices):
             return _FakeDataset(indices)
 
@@ -1678,7 +1694,7 @@ def test_subsampled_image_stack_image_subset_generator_none_emits_full_local_ran
         def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
             subset_indices = np.asarray(subset_indices, dtype=np.int32)
             for start in range(0, subset_indices.size, batch_size):
-                chunk = subset_indices[start:start + batch_size]
+                chunk = subset_indices[start : start + batch_size]
                 imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
                 yield imgs, chunk, chunk
 
@@ -1707,7 +1723,7 @@ def test_subsampled_image_stack_image_generator_alias_emits_all_local_indices():
         def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
             subset_indices = np.asarray(subset_indices, dtype=np.int32)
             for start in range(0, subset_indices.size, batch_size):
-                chunk = subset_indices[start:start + batch_size]
+                chunk = subset_indices[start : start + batch_size]
                 imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
                 yield imgs, chunk, chunk
 
@@ -1723,6 +1739,7 @@ def test_subsampled_image_stack_prefers_backing_image_subset_generator_when_avai
     """When the backing stack has get_image_subset_generator and tilt_series_flag
     is set, the CryoEMDataset subset should use it instead of
     get_dataset_subset_generator."""
+
     class _BackingStack:
         def __init__(self, n=10, D=4):
             self.n_images = n
@@ -1848,7 +1865,7 @@ def test_subsampled_image_stack_subset_generator_handles_multiple_underlying_bat
         def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
             subset_indices = np.asarray(subset_indices, dtype=np.int32)
             for start in range(0, subset_indices.size, batch_size):
-                chunk = subset_indices[start:start + batch_size]
+                chunk = subset_indices[start : start + batch_size]
                 imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
                 # Return original-image indices from backing stack.
                 yield imgs, chunk, chunk
@@ -1897,6 +1914,7 @@ def test_subsampled_image_stack_dataset_generator_preserves_duplicate_original_i
     """Subset with duplicate original indices: the remap maps each original
     index to a single local position (last-write-wins), so duplicates in the
     subset collapse. Verify the generator still emits all local indices."""
+
     class _BackingStack:
         def __init__(self, n=10, D=4):
             self.n_images = n
@@ -1913,7 +1931,7 @@ def test_subsampled_image_stack_dataset_generator_preserves_duplicate_original_i
         def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
             subset_indices = np.asarray(subset_indices, dtype=np.int32)
             for start in range(0, subset_indices.size, batch_size):
-                chunk = subset_indices[start:start + batch_size]
+                chunk = subset_indices[start : start + batch_size]
                 imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
                 yield imgs, chunk, chunk
 
@@ -1944,7 +1962,7 @@ def test_subsampled_image_stack_subset_generator_preserves_duplicate_requests():
         def get_dataset_subset_generator(self, batch_size, subset_indices, num_workers=0, **kwargs):
             subset_indices = np.asarray(subset_indices, dtype=np.int32)
             for start in range(0, subset_indices.size, batch_size):
-                chunk = subset_indices[start:start + batch_size]
+                chunk = subset_indices[start : start + batch_size]
                 imgs = np.zeros((chunk.size, self.D * self.D), dtype=np.complex64)
                 yield imgs, chunk, chunk
 
@@ -1965,6 +1983,7 @@ def test_subsampled_image_stack_generator_raises_on_unmapped_underlying_index():
     """When the backing stack yields an index outside the remap table, the
     subset view should raise an IndexError (numpy will raise on out-of-bounds
     access into the remap array)."""
+
     class _BackingStack:
         def __init__(self, n=10, D=4):
             self.n_images = n
@@ -2079,6 +2098,7 @@ def test_subsample_cryoem_dataset_rejects_out_of_range_indices():
 
     with pytest.raises(IndexError, match="out-of-range values for total size"):
         dataset.subsample_cryoem_dataset(cryo, np.array([0, 3], dtype=np.int32))
+
 
 def test_get_split_indices_from_empty_ind_file_raises(tmp_path):
     ind_file = tmp_path / "empty.pkl"

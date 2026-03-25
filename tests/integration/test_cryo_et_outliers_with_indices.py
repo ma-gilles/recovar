@@ -62,6 +62,7 @@ _N_VOLS = 12
 def _write_volumes(prefix: Path, n_vols: int, grid: int):
     """Generate simple synthetic volumes."""
     from scipy.ndimage import gaussian_filter
+
     prefix.parent.mkdir(parents=True, exist_ok=True)
     rng = np.random.RandomState(42)
     for i in range(n_vols):
@@ -77,7 +78,7 @@ def _write_volumes(prefix: Path, n_vols: int, grid: int):
 def _create_outlier_volume(path: str, grid: int):
     """Create a distinctive outlier volume."""
     vol = np.zeros((grid, grid, grid), dtype=np.float32)
-    vol[grid // 4:3 * grid // 4, grid // 4:3 * grid // 4, grid // 4:3 * grid // 4] = 1.0
+    vol[grid // 4 : 3 * grid // 4, grid // 4 : 3 * grid // 4, grid // 4 : 3 * grid // 4] = 1.0
     with mrcfile.new(path, overwrite=True) as m:
         m.set_data(vol)
 
@@ -96,48 +97,71 @@ def _make_gt_mask(volumes_prefix: Path, grid: int) -> str:
     return mask_path
 
 
-def _generate_dataset(output_dir: Path, volumes_prefix: Path, grid: int,
-                      n_images: int, n_tilts: int, pct_outliers: float,
-                      pct_tilt: float) -> Path:
+def _generate_dataset(
+    output_dir: Path, volumes_prefix: Path, grid: int, n_images: int, n_tilts: int, pct_outliers: float, pct_tilt: float
+) -> Path:
     """Generate cryo-ET tilt-series dataset with outliers."""
     output_dir.mkdir(parents=True, exist_ok=True)
     outlier_vol = output_dir / "outlier_volume.mrc"
     _create_outlier_volume(str(outlier_vol), grid)
 
     from conftest import gpu_subprocess_env
+
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "make_test_dataset",
         str(output_dir),
-        "--n-images", str(n_images),
-        "--outlier-file-input", str(outlier_vol),
-        "--percent-outliers", str(pct_outliers),
-        "--percent-tilt-series-outliers", str(pct_tilt),
-        "--grid-size", str(grid),
-        "--volume-input", str(volumes_prefix),
+        "--n-images",
+        str(n_images),
+        "--outlier-file-input",
+        str(outlier_vol),
+        "--percent-outliers",
+        str(pct_outliers),
+        "--percent-tilt-series-outliers",
+        str(pct_tilt),
+        "--grid-size",
+        str(grid),
+        "--volume-input",
+        str(volumes_prefix),
         "--tilt-series",
-        "--n-tilts", str(n_tilts),
+        "--n-tilts",
+        str(n_tilts),
     ]
     subprocess.run(cmd, check=True, env=gpu_subprocess_env())
     return output_dir / "test_dataset"
 
 
-def _run_pipeline(dataset_dir: Path, pipeline_out: Path, mask_path: str,
-                  k_rounds: int, extra_args: list[str] | None = None):
+def _run_pipeline(
+    dataset_dir: Path, pipeline_out: Path, mask_path: str, k_rounds: int, extra_args: list[str] | None = None
+):
     """Run pipeline_with_outliers."""
     from conftest import gpu_subprocess_env
+
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(dataset_dir / "particles.star"),
-        "--poses", str(dataset_dir / "poses.pkl"),
-        "--ctf", str(dataset_dir / "ctf.pkl"),
+        "--poses",
+        str(dataset_dir / "poses.pkl"),
+        "--ctf",
+        str(dataset_dir / "ctf.pkl"),
         "--tilt-series",
-        "--tilt-series-ctf", "relion5",
+        "--tilt-series-ctf",
+        "relion5",
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", mask_path,
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        mask_path,
         "--lazy",
-        "--zdim", "4",
-        "--k-rounds", str(k_rounds),
+        "--zdim",
+        "4",
+        "--k-rounds",
+        str(k_rounds),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
@@ -147,8 +171,9 @@ def _run_pipeline(dataset_dir: Path, pipeline_out: Path, mask_path: str,
     subprocess.run(cmd, check=True, env=gpu_subprocess_env())
 
 
-def _compute_metrics(pipeline_out: Path, sim_info_path: Path, k_rounds: int,
-                     subset_ind: np.ndarray | None = None) -> dict:
+def _compute_metrics(
+    pipeline_out: Path, sim_info_path: Path, k_rounds: int, subset_ind: np.ndarray | None = None
+) -> dict:
     """Compute outlier detection metrics, optionally for a subset."""
     with open(sim_info_path, "rb") as f:
         sim_info = pickle.load(f)
@@ -223,6 +248,7 @@ def _print_metrics(label: str, metrics: dict):
 # Test
 # ---------------------------------------------------------------------------
 
+
 def test_cryo_et_outliers_with_indices(tmp_path):
     """
     Cryo-ET outlier detection stress test with --ind and --particle-ind.
@@ -280,8 +306,7 @@ def test_cryo_et_outliers_with_indices(tmp_path):
         pickle.dump(ind, f)
 
     pipe_ind = tmp_path / "pipe_ind"
-    _run_pipeline(dataset_dir, pipe_ind, mask_path, _K_ROUNDS,
-                  extra_args=["--ind", str(ind_path)])
+    _run_pipeline(dataset_dir, pipe_ind, mask_path, _K_ROUNDS, extra_args=["--ind", str(ind_path)])
     m_ind = _compute_metrics(pipe_ind, sim_info_path, _K_ROUNDS, subset_ind=ind)
     _print_metrics(f"--ind (n={n_keep_images}/{n_total_images} images)", m_ind)
 
@@ -309,8 +334,9 @@ def test_cryo_et_outliers_with_indices(tmp_path):
             pickle.dump(particle_ind, f)
 
         pipe_pind = tmp_path / "pipe_pind"
-        _run_pipeline(dataset_dir, pipe_pind, mask_path, _K_ROUNDS,
-                      extra_args=["--particle-ind", str(particle_ind_path)])
+        _run_pipeline(
+            dataset_dir, pipe_pind, mask_path, _K_ROUNDS, extra_args=["--particle-ind", str(particle_ind_path)]
+        )
 
         # Check particle-level outputs exist
         for r in range(1, _K_ROUNDS + 1):
@@ -325,8 +351,10 @@ def test_cryo_et_outliers_with_indices(tmp_path):
                     f"--particle-ind round {r}: particle_inliers({n_pin}) + "
                     f"particle_outliers({n_pout}) != particle_subset({n_keep_particles})"
                 )
-                print(f"\n--particle-ind round {r}: {n_pin} inlier particles, {n_pout} outlier particles "
-                      f"(from {n_keep_particles}/{n_particles})")
+                print(
+                    f"\n--particle-ind round {r}: {n_pin} inlier particles, {n_pout} outlier particles "
+                    f"(from {n_keep_particles}/{n_particles})"
+                )
 
     # ============================
     # Summary comparison

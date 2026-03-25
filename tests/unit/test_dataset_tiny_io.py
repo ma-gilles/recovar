@@ -609,7 +609,9 @@ def test_load_dataset_tiny_tilt_series_from_simulator_files(sim_tiny_tilt_files)
     assert got_images == subset_images.tolist()
 
 
-def test_simulator_tilt_dataset_subset_generator_images_mode_preserves_particle_order_and_duplicates(sim_tiny_tilt_files):
+def test_simulator_tilt_dataset_subset_generator_images_mode_preserves_particle_order_and_duplicates(
+    sim_tiny_tilt_files,
+):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     ds = tilt_dataset.TiltSeriesDataset(
@@ -742,7 +744,7 @@ def test_simulator_tilt_dataset_random_tilts_clamps_when_requested_exceeds_avail
         files["particles_star"],
         datadir=datadir,
         lazy=True,
-        num_tilts=7,          # intentionally larger than available per particle in this tiny set
+        num_tilts=7,  # intentionally larger than available per particle in this tiny set
         random_tilts=True,
         tilt_file_option="relion5",
     )
@@ -851,7 +853,9 @@ def test_simulator_tiny_tilt_resolve_halfset_indices_applies_n_images_cap(sim_ti
     np.testing.assert_array_equal(got[1], expected[1])
 
 
-def test_simulator_tiny_tilt_split_indices_with_halfset_file_and_filters_preserves_particle_order(sim_tiny_tilt_files, tmp_path):
+def test_simulator_tiny_tilt_split_indices_with_halfset_file_and_filters_preserves_particle_order(
+    sim_tiny_tilt_files, tmp_path
+):
     files = sim_tiny_tilt_files
     datadir = str(Path(files["particles_star"]).parent)
     particles_to_tilts, _ = tilt_dataset.TiltSeriesDataset.parse_particle_tilt(files["particles_star"])
@@ -863,6 +867,7 @@ def test_simulator_tiny_tilt_split_indices_with_halfset_file_and_filters_preserv
     halfsets_path = tmp_path / "particle_halfsets.pkl"
     tilt_ind_path = tmp_path / "tilt_ind.pkl"
     import pickle
+
     with open(halfsets_path, "wb") as f:
         # The first halfset is intentionally out-of-order; this order should be preserved.
         pickle.dump([np.array([4, 0, 2], dtype=np.int32), np.array([1, 3], dtype=np.int32)], f)
@@ -870,7 +875,9 @@ def test_simulator_tiny_tilt_split_indices_with_halfset_file_and_filters_preserv
         pickle.dump(selected_particles, f)
 
     # Keep at most two tilts per particle and allow only this shuffled image subset.
-    allowed_images = np.concatenate([particles_to_tilts[2], particles_to_tilts[4], particles_to_tilts[0]])[[0, 1, 2, 3, 4, 5]]
+    allowed_images = np.concatenate([particles_to_tilts[2], particles_to_tilts[4], particles_to_tilts[0]])[
+        [0, 1, 2, 3, 4, 5]
+    ]
     ind_path = tmp_path / "allowed_images.pkl"
     with open(ind_path, "wb") as f:
         pickle.dump(np.asarray(allowed_images, dtype=np.int32), f)
@@ -986,6 +993,7 @@ def test_tiny_tilt_get_split_tilt_indices_with_particle_subset_file(tmp_path):
     # Keep only particle ids 0 and 2.
     tilt_ind_file = tmp_path / "tilt_ind.pkl"
     import pickle
+
     with open(tilt_ind_file, "wb") as f:
         pickle.dump(np.array([0, 2], dtype=np.int32), f)
 
@@ -1005,6 +1013,7 @@ def test_tiny_tilt_get_split_tilt_indices_with_particle_subset_file(tmp_path):
 def test_tiny_tilt_resolve_halfset_indices_respects_ind_intersection(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
     import pickle
+
     halfsets_path = tmp_path / "halfsets.pkl"
     ind_path = tmp_path / "ind.pkl"
     with open(halfsets_path, "wb") as f:
@@ -1132,6 +1141,7 @@ def test_tiny_tilt_particle_subset_generator_preserves_duplicates(tmp_path):
     got_particles = [int(_batch_particle_indices(batch)[0]) for batch in batches]
     assert got_particles == [2, 0, 2]
 
+
 def test_tiny_tilt_split_indices_accepts_in_memory_halfsets_and_arrays(tmp_path):
     files = tiny_synthetic.make_tiny_loader_files(tmp_path, grid_size=8, n_images=6, n_particles=3)
 
@@ -1214,7 +1224,7 @@ def test_tiny_tilt_loading_with_strip_prefix_resolves_prefixed_star_paths(tmp_pa
     mrcs_name = Path(files["particles_mrcs"]).name
 
     star = starfile.StarFile.load(files["particles_star"])
-    star.df["_rlnImageName"] = [f"{i+1}@{bad_prefix}/{mrcs_name}" for i in range(files["n_images"])]
+    star.df["_rlnImageName"] = [f"{i + 1}@{bad_prefix}/{mrcs_name}" for i in range(files["n_images"])]
     prefixed_star = tmp_path / "particles_prefixed.star"
     starfile.write_star(str(prefixed_star), data=star.df)
 
@@ -1497,11 +1507,11 @@ def test_tiny_tilt_loading_preserves_pose_and_ctf_row_alignment_with_reordered_d
     ctf[:, 1] = 1.5  # Apix
     ctf[:, 2] = 10_000.0 + np.arange(n, dtype=np.float32) * 101.0  # DFU
     ctf[:, 3] = 11_000.0 + np.arange(n, dtype=np.float32) * 103.0  # DFV
-    ctf[:, 4] = np.arange(n, dtype=np.float32) * 2.0               # DFANG
+    ctf[:, 4] = np.arange(n, dtype=np.float32) * 2.0  # DFANG
     ctf[:, 5] = 300.0
     ctf[:, 6] = 2.7
     ctf[:, 7] = 0.1
-    ctf[:, 8] = np.arange(n, dtype=np.float32) * 0.25              # phase shift
+    ctf[:, 8] = np.arange(n, dtype=np.float32) * 0.25  # phase shift
     utils.pickle_dump(ctf, files["ctf_pkl"])
 
     rots = np.repeat(np.eye(3, dtype=np.float32)[None], n, axis=0)
@@ -1648,7 +1658,9 @@ def test_tiny_tilt_load_halfset_dataset_preserves_pose_and_ctf_alignment(tmp_pat
         half_dataset_indices = dataset_indices[half_idx]
         np.testing.assert_array_equal(half_dataset_indices, half)
         np.testing.assert_allclose(np.asarray(cryos.rotation_matrices)[half_idx], rots[half], atol=1e-7)
-        np.testing.assert_allclose(np.asarray(cryos.translations)[half_idx], trans_frac[half] * files["grid_size"], atol=1e-7)
+        np.testing.assert_allclose(
+            np.asarray(cryos.translations)[half_idx], trans_frac[half] * files["grid_size"], atol=1e-7
+        )
         np.testing.assert_allclose(
             np.asarray(cryos.CTF_params)[half_idx, core.CTFParamIndex.DFU],
             ctf[half, 2],
@@ -1891,4 +1903,6 @@ def test_simulator_tiny_tilt_series_generator_forces_batch_size_one_and_particle
         if idx >= 4:
             break
 
-    np.testing.assert_array_equal(np.asarray(got_particles, dtype=np.int32), np.arange(len(got_particles), dtype=np.int32))
+    np.testing.assert_array_equal(
+        np.asarray(got_particles, dtype=np.int32), np.arange(len(got_particles), dtype=np.int32)
+    )

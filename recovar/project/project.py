@@ -28,6 +28,7 @@ PROJECT_VERSION = "1.0"
 def _get_recovar_version():
     try:
         from recovar import __version__
+
         return str(__version__)
     except Exception:
         return "unknown"
@@ -172,9 +173,9 @@ class RecovarProject:
     # Job lifecycle
     # ------------------------------------------------------------------
 
-    def register_job_start(self, uid: str, command_name: str,
-                           command_line: str = "",
-                           parent_jobs: Optional[list] = None):
+    def register_job_start(
+        self, uid: str, command_name: str, command_line: str = "", parent_jobs: Optional[list] = None
+    ):
         """Add a job entry to project.json with status=running."""
         entry = {
             "uid": uid,
@@ -262,6 +263,5 @@ class RecovarProject:
         # No argument — find latest pipeline
         uid = self.find_latest_job("Pipeline")
         if uid is None:
-            raise ValueError("No completed Pipeline job found in project. "
-                             "Run 'recovar pipeline' first.")
+            raise ValueError("No completed Pipeline job found in project. Run 'recovar pipeline' first.")
         return self.get_job_dir(uid)

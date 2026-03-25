@@ -23,9 +23,9 @@ def _log_ctf_params(params: np.ndarray) -> None:
     """Log one example CTF row after image-size rescaling."""
     if len(params) != 9:
         raise ValueError(f"Expected 9 CTF parameters, got {len(params)}")
-    
+
     param_names = [
-        ("Image size (pix)", int(params[0])),   
+        ("Image size (pix)", int(params[0])),
         ("A/pix", params[1]),
         ("DefocusU (A)", params[2]),
         ("DefocusV (A)", params[3]),
@@ -33,26 +33,26 @@ def _log_ctf_params(params: np.ndarray) -> None:
         ("voltage (kV)", params[5]),
         ("cs (mm)", params[6]),
         ("w", params[7]),
-        ("Phase shift (deg)", params[8])
+        ("Phase shift (deg)", params[8]),
     ]
-    
+
     for name, value in param_names:
         logger.info("%18s: %s", name, value)
 
 
 def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:
     """Load and adjust CTF parameters for a given image size.
-    
+
     Args:
         D: Target image dimension (must be even)
         ctf_params_pkl: Path to pickle file containing CTF parameters
-        
+
     Returns:
         CTF parameters array with shape (N, 8), excluding image size column
     """
     if D % 2 != 0:
         raise ValueError(f"Image dimension D must be even, got {D}")
-    
+
     # Load parameters from pickle
     ctf_params = np.asarray(utils.pickle_load(ctf_params_pkl))
     if ctf_params.ndim != 2:
@@ -65,19 +65,19 @@ def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:
         raise ValueError("CTF parameters must be numeric")
     if not np.all(np.isfinite(ctf_params)):
         raise ValueError("CTF parameters contain non-finite values (NaN/Inf)")
-    
+
     # Adjust pixel size based on original and target dimensions
     original_D = ctf_params[0, 0]
     original_Apix = ctf_params[0, 1]
     new_Apix = original_D * original_Apix / D
-    
+
     # Update all rows with new dimensions
     ctf_params[:, 0] = D
     ctf_params[:, 1] = new_Apix
-    
+
     # Log the first entry as example
     _log_ctf_params(ctf_params[0])
-    
+
     # Return without the image size column
     return ctf_params[:, 1:]
 
@@ -89,7 +89,7 @@ def load_poses(
     ind: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, Optional[np.ndarray], int]:
     """Load pose information (rotations and translations) from pickle files.
-    
+
     Args:
         infile: Path to pickle file(s). Can be:
                 - Single file containing (rotations, translations) tuple
@@ -98,7 +98,7 @@ def load_poses(
         Nimg: Expected number of images
         D: Image dimension in pixels
         ind: Optional index array to filter poses
-        
+
     Returns:
         Tuple of (rotations, translations, D) where:
             - rotations: (Nimg, 3, 3) array of rotation matrices
@@ -108,10 +108,10 @@ def load_poses(
     # Handle file input
     if isinstance(infile, str):
         infile = [infile]
-    
+
     if len(infile) not in (1, 2):
         raise ValueError(f"Expected 1 or 2 input files, got {len(infile)}")
-    
+
     # Load data from pickle file(s)
     if len(infile) == 2:
         # Separate rotation and translation files
@@ -123,7 +123,7 @@ def load_poses(
         poses = utils.pickle_load(infile[0])
         if not isinstance(poses, tuple):
             poses = (poses,)
-    
+
     # Extract rotations
     rots = np.asarray(poses[0])
     if not np.issubdtype(rots.dtype, np.number):
@@ -142,7 +142,7 @@ def load_poses(
 
     if rots.shape != expected_rot_shape:
         raise ValueError(f"Rotation array has shape {rots.shape}, expected {expected_rot_shape}")
-    
+
     # Extract translations if available
     trans = None
     if len(poses) == 2:
@@ -160,24 +160,22 @@ def load_poses(
         # Apply the same pose subset as rotations to preserve row alignment.
         if pose_ind is not None:
             trans = trans[pose_ind]
-        
+
         # Validate translation shape
         expected_trans_shape = (Nimg, 2)
         if trans.shape != expected_trans_shape:
-            raise ValueError(
-                f"Translation array has shape {trans.shape}, expected {expected_trans_shape}"
-            )
-        
+            raise ValueError(f"Translation array has shape {trans.shape}, expected {expected_trans_shape}")
+
         # Check that translations are in fractional units (0-1 range)
         if not np.all(np.abs(trans) <= 1):
             raise ValueError(
                 "Translations must be in fractional units with |value| <= 1. "
                 "Old pose format with pixel units is not supported."
             )
-        
+
         # Convert from fractional units to pixels
         trans = trans * D
     else:
         logger.warning("No translations found in pose file")
-    
+
     return rots, trans, D

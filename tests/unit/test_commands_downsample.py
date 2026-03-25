@@ -6,6 +6,7 @@ Covers:
   _get_pixel_size()   – pixel-size extraction from MRC headers
   downsample_to_disk  – input validation (odd D, target > orig)
 """
+
 import argparse
 import sys
 from types import SimpleNamespace
@@ -21,6 +22,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # _get_pixel_size
 # ---------------------------------------------------------------------------
+
 
 def test_get_pixel_size_from_mrc(tmp_path):
     """_get_pixel_size should read voxel_size.x from an MRC file."""
@@ -58,6 +60,7 @@ def test_get_pixel_size_returns_none_for_mrc_with_zero_voxel_size(tmp_path):
 # downsample_to_disk – input validation
 # ---------------------------------------------------------------------------
 
+
 def test_downsample_to_disk_rejects_odd_target_D(tmp_path):
     """Target box size must be even."""
     with pytest.raises(ValueError, match="even"):
@@ -71,6 +74,7 @@ def test_downsample_to_disk_rejects_odd_target_D(tmp_path):
 # ---------------------------------------------------------------------------
 # main – argument parsing
 # ---------------------------------------------------------------------------
+
 
 def test_main_registers_particles_positional():
     """'particles' is a required positional argument."""
@@ -125,6 +129,7 @@ def test_main_exits_on_odd_target_D(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 # _write_minimal_star
 # ---------------------------------------------------------------------------
+
 
 def test_write_minimal_star_creates_file(tmp_path):
     """_write_minimal_star should create a valid STAR file."""

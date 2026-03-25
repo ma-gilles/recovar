@@ -6,7 +6,6 @@ from recovar.heterogeneity import trajectory
 pytestmark = pytest.mark.unit
 
 
-
 def test_get_cum_curvelength_monotonic():
     pts = np.array(
         [
@@ -29,7 +28,6 @@ def test_resample_at_uniform_pts_shapes():
     assert out.shape == (4, 2)
     assert np.isclose(out[0, 0], 0.0)
     assert np.isclose(out[-1, 0], 3.0)
-
 
 
 def test_get_grid_spacing():

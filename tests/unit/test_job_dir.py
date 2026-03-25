@@ -18,6 +18,7 @@ from recovar.output.output_paths import VolumeOutputPaths, resolve_volume_diag_p
 # VolumeOutputPaths tests
 # ---------------------------------------------------------------------------
 
+
 class TestVolumeOutputPaths:
     def test_primary_output_paths(self, tmp_path):
         vp = VolumeOutputPaths(str(tmp_path), "center", 0)
@@ -69,6 +70,7 @@ class TestVolumeOutputPaths:
 # resolve_volume_diag_path tests
 # ---------------------------------------------------------------------------
 
+
 class TestResolveVolumeDiagPath:
     def test_new_layout(self, tmp_path):
         """Find file in diagnostics/{stem}/ layout."""
@@ -107,6 +109,7 @@ class TestResolveVolumeDiagPath:
 # JobDir tests
 # ---------------------------------------------------------------------------
 
+
 class TestJobDir:
     def test_basic_properties(self, tmp_path):
         job = JobDir(str(tmp_path / "myoutput"), "compute_state")
@@ -126,6 +129,7 @@ class TestJobDir:
 
         # Simulate args
         import argparse
+
         args = argparse.Namespace(outdir=str(tmp_path / "myoutput"), n_bins=50)
 
         job.start(args)
@@ -172,6 +176,7 @@ class TestJobDir:
 # ---------------------------------------------------------------------------
 # Auto-numbering tests
 # ---------------------------------------------------------------------------
+
 
 class TestAutoNumbering:
     def test_first_job(self, tmp_path):
@@ -222,9 +227,11 @@ class TestAutoNumbering:
 # Helper function tests
 # ---------------------------------------------------------------------------
 
+
 class TestHelpers:
     def test_args_to_dict(self):
         import argparse
+
         args = argparse.Namespace(
             outdir="/path/to/out",
             n_bins=50,

@@ -18,6 +18,7 @@ def _process_images_if_available(experiment_dataset, images):
         return images
     return process_images(images)
 
+
 def compute_residual(
     images,
     ctf_params,
@@ -30,27 +31,45 @@ def compute_residual(
     images = core.translate_images(images, translations, config.image_shape)
 
     projected_mean = core_forward.forward_model(
-        config, mean_estimate, ctf_params, rotation_matrices,
+        config,
+        mean_estimate,
+        ctf_params,
+        rotation_matrices,
     )
     difference = images - projected_mean
     difference /= jnp.sqrt(noise_variance)[None]
 
-    return jnp.linalg.norm(difference, axis=-1)**2
+    return jnp.linalg.norm(difference, axis=-1) ** 2
 
 
-def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_size, disc_type='cubic'):
+def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_size, disc_type="cubic"):
 
-    if disc_type == 'cubic':
+    if disc_type == "cubic":
         from recovar.heterogeneity import covariance_estimation
-        volumes = covariance_estimation.compute_spline_coeffs_in_batch(volumes, experiment_dataset.volume_shape, gpu_memory=None)
+
+        volumes = covariance_estimation.compute_spline_coeffs_in_batch(
+            volumes, experiment_dataset.volume_shape, gpu_memory=None
+        )
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
-    logger.info("Computing image assignment: %d volumes, %d images, batch_size=%d",
-                volumes.shape[0], experiment_dataset.n_units, batch_size)
+    logger.info(
+        "Computing image assignment: %d volumes, %d images, batch_size=%d",
+        volumes.shape[0],
+        experiment_dataset.n_units,
+        batch_size,
+    )
     volumes = jnp.asarray(volumes, dtype=experiment_dataset.dtype)
     residuals = np.zeros((volumes.shape[0], experiment_dataset.n_units), dtype=experiment_dataset.dtype_real)
-    for images, rotation_matrices, translations, ctf_params, _noise_variance, particle_indices, image_indices in experiment_dataset.iter_batches(batch_size):
+    for (
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        _noise_variance,
+        particle_indices,
+        image_indices,
+    ) in experiment_dataset.iter_batches(batch_size):
         images = _process_images_if_available(experiment_dataset, images)
         for volume_ind in range(volumes.shape[0]):
             residuals[volume_ind, particle_indices] = compute_residual(
@@ -65,11 +84,14 @@ def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_
     return residuals
 
 
-def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, batch_size, disc_type='cubic'):
+def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, batch_size, disc_type="cubic"):
 
-    if disc_type == 'cubic':
+    if disc_type == "cubic":
         from recovar.heterogeneity import covariance_estimation
-        volumes = covariance_estimation.compute_spline_coeffs_in_batch(volumes, experiment_dataset.volume_shape, gpu_memory=None)
+
+        volumes = covariance_estimation.compute_spline_coeffs_in_batch(
+            volumes, experiment_dataset.volume_shape, gpu_memory=None
+        )
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
@@ -78,7 +100,15 @@ def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, ba
     if volumes.shape[0] != 2:
         raise ValueError(f"Only two volumes are supported, got {volumes.shape[0]}")
     difference = volumes[0] - volumes[1]
-    for images, rotation_matrices, translations, ctf_params, _noise_variance, particle_indices, image_indices in experiment_dataset.iter_batches(batch_size):
+    for (
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        _noise_variance,
+        particle_indices,
+        image_indices,
+    ) in experiment_dataset.iter_batches(batch_size):
         images = _process_images_if_available(experiment_dataset, images)
         res = compute_residual(
             images * 0,

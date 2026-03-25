@@ -43,11 +43,14 @@ class TestAtomGroup:
 class TestPdbWriteReadRoundtrip:
     def test_roundtrip(self):
         ag = AtomGroup()
-        coords = np.array([
-            [1.234, 5.678, 9.012],
-            [10.0, -20.5, 30.75],
-            [0.0, 0.0, 0.0],
-        ], dtype=np.float64)
+        coords = np.array(
+            [
+                [1.234, 5.678, 9.012],
+                [10.0, -20.5, 30.75],
+                [0.0, 0.0, 0.0],
+            ],
+            dtype=np.float64,
+        )
         ag.setCoords(coords)
         ag.setNames(np.array(["CA", "CB", "N"]))
         ag.setElements(np.array(["C", "C", "N"]))

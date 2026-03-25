@@ -43,7 +43,7 @@ def disk_mask(image_shape, max_r):
     H, W = image_shape
     k0 = np.arange(H) - H // 2
     k1 = np.arange(W) - W // 2
-    K0, K1 = np.meshgrid(k0, k1, indexing='ij')
+    K0, K1 = np.meshgrid(k0, k1, indexing="ij")
     r2 = K0**2 + K1**2
     mask = (r2 <= max_r**2).astype(np.float32)
     return jnp.array(mask.ravel())
@@ -54,7 +54,7 @@ def half_disk_mask(image_shape, max_r):
     H, W = image_shape
     k0 = np.arange(H) - H // 2
     k1 = np.arange(W // 2 + 1)  # rfft: 0..W/2
-    K0, K1 = np.meshgrid(k0, k1, indexing='ij')
+    K0, K1 = np.meshgrid(k0, k1, indexing="ij")
     r2 = K0**2 + K1**2
     mask = (r2 <= max_r**2).astype(np.float32)
     return jnp.array(mask.ravel())
@@ -82,9 +82,9 @@ def main():
         volume_shape = (N, N, N)
         max_r = N // 2 - 1
 
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"N={N}, n_images={n_images}, max_r={max_r}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         rots = random_rotations(n_images)
         vol_full = hermitian_volume(N)
@@ -103,67 +103,88 @@ def main():
 
             rng = np.random.default_rng(42)
             slices = jnp.array(
-                (rng.standard_normal((n_images, n_pix)) +
-                 1j * rng.standard_normal((n_images, n_pix))).astype(np.complex64)
+                (rng.standard_normal((n_images, n_pix)) + 1j * rng.standard_normal((n_images, n_pix))).astype(
+                    np.complex64
+                )
             )
 
             print(f"\n  --- {label} ---")
 
             # PROJECT benchmarks
-            ms_proj_none = bench(cuda_project, vol, rots, image_shape, volume_shape,
-                                 1, half_vol, half_img, None)
-            ms_proj_maxr = bench(cuda_project, vol, rots, image_shape, volume_shape,
-                                 1, half_vol, half_img, float(max_r))
+            ms_proj_none = bench(cuda_project, vol, rots, image_shape, volume_shape, 1, half_vol, half_img, None)
+            ms_proj_maxr = bench(
+                cuda_project, vol, rots, image_shape, volume_shape, 1, half_vol, half_img, float(max_r)
+            )
+
             # External mask approach: project without max_r, then mask output
             def proj_then_mask(v, r):
-                out = cuda_project(v, r, image_shape, volume_shape,
-                                   1, half_vol, half_img, None)
+                out = cuda_project(v, r, image_shape, volume_shape, 1, half_vol, half_img, None)
                 return out * mask[None, :]
+
             ms_proj_ext = bench(proj_then_mask, vol, rots)
 
-            print(f"  PROJECT:  no_maxr={ms_proj_none:.2f}ms  cuda_maxr={ms_proj_maxr:.2f}ms  "
-                  f"ext_mask={ms_proj_ext:.2f}ms  "
-                  f"speedup_vs_ext={ms_proj_ext/ms_proj_maxr:.2f}x")
+            print(
+                f"  PROJECT:  no_maxr={ms_proj_none:.2f}ms  cuda_maxr={ms_proj_maxr:.2f}ms  "
+                f"ext_mask={ms_proj_ext:.2f}ms  "
+                f"speedup_vs_ext={ms_proj_ext / ms_proj_maxr:.2f}x"
+            )
 
             # BACKPROJECT benchmarks
             vol_shape_flat = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_vol else volume_shape
             vol_size = int(np.prod(vol_shape_flat))
             zero_vol = jnp.zeros(vol_size, dtype=jnp.complex64)
 
-            ms_bp_none = bench(cuda_bp, zero_vol, slices, rots, image_shape, volume_shape,
-                               1, half_vol, half_img, None)
-            ms_bp_maxr = bench(cuda_bp, zero_vol, slices, rots, image_shape, volume_shape,
-                               1, half_vol, half_img, float(max_r))
+            ms_bp_none = bench(cuda_bp, zero_vol, slices, rots, image_shape, volume_shape, 1, half_vol, half_img, None)
+            ms_bp_maxr = bench(
+                cuda_bp, zero_vol, slices, rots, image_shape, volume_shape, 1, half_vol, half_img, float(max_r)
+            )
             # External mask: mask slices first, then backproject
             masked_slices = slices * mask[None, :]
-            ms_bp_ext = bench(cuda_bp, zero_vol, masked_slices, rots, image_shape, volume_shape,
-                              1, half_vol, half_img, None)
+            ms_bp_ext = bench(
+                cuda_bp, zero_vol, masked_slices, rots, image_shape, volume_shape, 1, half_vol, half_img, None
+            )
 
-            print(f"  BACKPROJ: no_maxr={ms_bp_none:.2f}ms  cuda_maxr={ms_bp_maxr:.2f}ms  "
-                  f"ext_mask={ms_bp_ext:.2f}ms  "
-                  f"speedup_vs_ext={ms_bp_ext/ms_bp_maxr:.2f}x")
+            print(
+                f"  BACKPROJ: no_maxr={ms_bp_none:.2f}ms  cuda_maxr={ms_bp_maxr:.2f}ms  "
+                f"ext_mask={ms_bp_ext:.2f}ms  "
+                f"speedup_vs_ext={ms_bp_ext / ms_bp_maxr:.2f}x"
+            )
 
             # Accuracy: CUDA max_r vs relion_interp max_r (small N only)
             if N <= 64:
                 jax_proj = relion_interp.project(
-                    vol, rots, image_shape, volume_shape,
-                    order=1, half_volume=half_vol, half_image=half_img,
+                    vol,
+                    rots,
+                    image_shape,
+                    volume_shape,
+                    order=1,
+                    half_volume=half_vol,
+                    half_image=half_img,
                     max_r=float(max_r),
                 )
-                cuda_proj = cuda_project(vol, rots, image_shape, volume_shape,
-                                         1, half_vol, half_img, float(max_r))
+                cuda_proj = cuda_project(vol, rots, image_shape, volume_shape, 1, half_vol, half_img, float(max_r))
                 rel_err = float(jnp.linalg.norm(cuda_proj - jax_proj) / (jnp.linalg.norm(jax_proj) + 1e-30))
                 print(f"  ACCURACY (project): CUDA vs relion_interp rel_err = {rel_err:.2e}")
 
                 jax_bp = relion_interp.backproject(
-                    slices[:10], rots[:10], image_shape, volume_shape,
-                    order=1, half_volume=half_vol, half_image=half_img,
+                    slices[:10],
+                    rots[:10],
+                    image_shape,
+                    volume_shape,
+                    order=1,
+                    half_volume=half_vol,
+                    half_image=half_img,
                     max_r=float(max_r),
                 )
                 cuda_bp_out = cuda_bp(
                     jnp.zeros(vol_size, dtype=jnp.complex64),
-                    slices[:10], rots[:10], image_shape, volume_shape,
-                    order=1, half_volume=half_vol, half_image=half_img,
+                    slices[:10],
+                    rots[:10],
+                    image_shape,
+                    volume_shape,
+                    order=1,
+                    half_volume=half_vol,
+                    half_image=half_img,
                     max_r=float(max_r),
                 )
                 rel_err_bp = float(jnp.linalg.norm(cuda_bp_out - jax_bp) / (jnp.linalg.norm(jax_bp) + 1e-30))

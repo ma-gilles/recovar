@@ -100,8 +100,7 @@ def test_flatten_to_relion30_includes_optics_fields():
 def test_read_star_rejects_duplicate_data_blocks(tmp_path):
     path = tmp_path / "dup.star"
     path.write_text(
-        "data_particles\n\nloop_\n_rlnImageName #1\n1@a.mrcs\n\n"
-        "data_particles\n\nloop_\n_rlnImageName #1\n2@a.mrcs\n"
+        "data_particles\n\nloop_\n_rlnImageName #1\n1@a.mrcs\n\ndata_particles\n\nloop_\n_rlnImageName #1\n2@a.mrcs\n"
     )
     with pytest.raises(ValueError, match="Duplicate data block"):
         read_star(str(path))
@@ -109,13 +108,7 @@ def test_read_star_rejects_duplicate_data_blocks(tmp_path):
 
 def test_read_star_rejects_inconsistent_row_lengths(tmp_path):
     path = tmp_path / "bad_rows.star"
-    path.write_text(
-        "data_particles\n\nloop_\n"
-        "_rlnImageName #1\n"
-        "_rlnDefocusU #2\n"
-        "1@a.mrcs 10000\n"
-        "2@a.mrcs\n"
-    )
+    path.write_text("data_particles\n\nloop_\n_rlnImageName #1\n_rlnDefocusU #2\n1@a.mrcs 10000\n2@a.mrcs\n")
     with pytest.raises(ValueError, match="Inconsistent row lengths"):
         read_star(str(path))
 
@@ -129,22 +122,14 @@ def test_read_star_rejects_when_no_nonempty_data_table_exists(tmp_path):
 
 def test_read_star_column_count_mismatch(tmp_path):
     path = tmp_path / "col_mismatch.star"
-    path.write_text(
-        "data_\n\nloop_\n_rlnImageName\n_rlnDefocusU\n"
-        "1@a.mrcs 10000 extra_col\n"
-    )
+    path.write_text("data_\n\nloop_\n_rlnImageName\n_rlnDefocusU\n1@a.mrcs 10000 extra_col\n")
     with pytest.raises(ValueError, match="Column count mismatch"):
         read_star(str(path))
 
 
 def test_read_star_ignores_comments(tmp_path):
     path = tmp_path / "comments.star"
-    path.write_text(
-        "# This is a comment\n"
-        "data_\n\nloop_\n_rlnImageName\n"
-        "# Another comment\n"
-        "1@a.mrcs\n2@a.mrcs\n"
-    )
+    path.write_text("# This is a comment\ndata_\n\nloop_\n_rlnImageName\n# Another comment\n1@a.mrcs\n2@a.mrcs\n")
     main, optics = read_star(str(path))
     assert len(main) == 2
 
@@ -152,6 +137,7 @@ def test_read_star_ignores_comments(tmp_path):
 # ---------------------------------------------------------------------------
 # StarFile constructor edge cases
 # ---------------------------------------------------------------------------
+
 
 def test_starfile_from_data():
     df = pd.DataFrame({"_rlnImageName": ["a", "b"], "_rlnDefocusU": ["1", "2"]})
@@ -168,9 +154,7 @@ def test_starfile_no_args_raises():
 
 def test_starfile_both_args_raises(tmp_path):
     path = tmp_path / "test.star"
-    path.write_text(
-        "data_\n\nloop_\n_rlnImageName\n1@a.mrcs\n"
-    )
+    path.write_text("data_\n\nloop_\n_rlnImageName\n1@a.mrcs\n")
     df = pd.DataFrame({"_rlnImageName": ["a"]})
     with pytest.raises(ValueError, match="exactly one"):
         StarFile(str(path), data=df)
@@ -212,6 +196,7 @@ def test_starfile_ne_optics_mismatch():
 # get_optics_values edge cases
 # ---------------------------------------------------------------------------
 
+
 def test_get_optics_values_missing_field():
     df = pd.DataFrame({"_rlnImageName": ["a"]})
     sf = StarFile(data=df)
@@ -229,6 +214,7 @@ def test_get_optics_values_dtype_cast():
 # ---------------------------------------------------------------------------
 # set_optics_values edge cases
 # ---------------------------------------------------------------------------
+
 
 def test_set_optics_values_scalar():
     df = pd.DataFrame({"_rlnDefocusU": ["100", "200", "300"]})
@@ -255,13 +241,16 @@ def test_set_optics_values_unknown_field():
 # apix fallback (old RELION format)
 # ---------------------------------------------------------------------------
 
+
 def test_apix_old_format():
     """Test pixel size from _rlnDetectorPixelSize and _rlnMagnification."""
-    df = pd.DataFrame({
-        "_rlnImageName": ["a", "b"],
-        "_rlnDetectorPixelSize": ["14.0", "14.0"],
-        "_rlnMagnification": ["100000", "100000"],
-    })
+    df = pd.DataFrame(
+        {
+            "_rlnImageName": ["a", "b"],
+            "_rlnDetectorPixelSize": ["14.0", "14.0"],
+            "_rlnMagnification": ["100000", "100000"],
+        }
+    )
     sf = StarFile(data=df)
     apix = sf.apix
     assert apix is not None
@@ -284,6 +273,7 @@ def test_resolution_none_when_no_fields():
 # ---------------------------------------------------------------------------
 # flatten_to_relion30 passthrough
 # ---------------------------------------------------------------------------
+
 
 def test_flatten_to_relion30_noop_on_relion30():
     df = pd.DataFrame({"_rlnImageName": ["a", "b"]})

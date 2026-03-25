@@ -16,14 +16,24 @@ pytestmark = pytest.mark.unit
 # Registry tests
 # ---------------------------------------------------------------------------
 
+
 class TestRegistry:
     def test_all_commands_have_types(self):
         expected = {
-            "pipeline", "analyze", "compute_state", "compute_trajectory",
-            "estimate_conformational_density", "estimate_stable_states",
-            "junk_particle_detection", "outlier_detection", "postprocess",
-            "downsample", "extract_image_subset", "extract_image_subset_from_kmeans",
-            "pipeline_with_outliers", "reconstruct_from_external_embedding",
+            "pipeline",
+            "analyze",
+            "compute_state",
+            "compute_trajectory",
+            "estimate_conformational_density",
+            "estimate_stable_states",
+            "junk_particle_detection",
+            "outlier_detection",
+            "postprocess",
+            "downsample",
+            "extract_image_subset",
+            "extract_image_subset_from_kmeans",
+            "pipeline_with_outliers",
+            "reconstruct_from_external_embedding",
         }
         assert expected.issubset(set(JOB_TYPES.keys()))
 
@@ -44,6 +54,7 @@ class TestRegistry:
 # ---------------------------------------------------------------------------
 # RecovarProject tests
 # ---------------------------------------------------------------------------
+
 
 class TestRecovarProject:
     def test_init_creates_project_json(self, tmp_path):
@@ -167,6 +178,7 @@ class TestRecovarProject:
 # find_project_root tests
 # ---------------------------------------------------------------------------
 
+
 class TestFindProjectRoot:
     def test_finds_in_current_dir(self, tmp_path):
         (tmp_path / "project.json").write_text("{}")
@@ -189,6 +201,7 @@ class TestFindProjectRoot:
 # job_context tests
 # ---------------------------------------------------------------------------
 
+
 class TestJobContext:
     def test_project_mode_creates_job_dir(self, tmp_path):
         from recovar.project.job_context import job_context
@@ -206,8 +219,7 @@ class TestJobContext:
 
         # After context exits, job should be completed
         jobs = proj.list_jobs()
-        assert any(j["uid"] == "ReconstructState/job_0001" and j["status"] == "completed"
-                    for j in jobs)
+        assert any(j["uid"] == "ReconstructState/job_0001" and j["status"] == "completed" for j in jobs)
 
     def test_standalone_mode_with_explicit_outdir(self, tmp_path):
         from recovar.project.job_context import job_context
@@ -236,5 +248,4 @@ class TestJobContext:
                 raise RuntimeError("test failure")
 
         jobs = proj.list_jobs()
-        assert any(j["uid"] == "ReconstructState/job_0001" and j["status"] == "failed"
-                    for j in jobs)
+        assert any(j["uid"] == "ReconstructState/job_0001" and j["status"] == "failed" for j in jobs)

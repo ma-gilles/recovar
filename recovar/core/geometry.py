@@ -128,9 +128,7 @@ def _half_image_rotations_to_coords(rotation_matrices, image_shape, volume_shape
     ``(n_images, n_half_pixels, 3)``.
     """
     three_d_upsampling_factor = volume_shape[0] // image_shape[0]
-    half_plane = get_unrotated_half_plane_grid_points(
-        image_shape, three_d_upsampling_factor
-    )  # (H*(W//2+1), 3)
+    half_plane = get_unrotated_half_plane_grid_points(image_shape, three_d_upsampling_factor)  # (H*(W//2+1), 3)
 
     def rotate_one(rot):
         rotated = jnp.matmul(half_plane, rot, precision=jax.lax.Precision.HIGHEST)
@@ -165,7 +163,7 @@ def translate_single_image(image, translation, lattice):
 batch_translate = jax.vmap(translate_single_image, in_axes=(0, 0, None))
 
 
-@functools.partial(jax.jit, static_argnums=2, static_argnames=['half_image'])
+@functools.partial(jax.jit, static_argnums=2, static_argnames=["half_image"])
 def translate_images(image, translation, image_shape, *, half_image=False):
     """Apply in-plane translations to Fourier-space images via phase shifts.
 

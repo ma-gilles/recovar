@@ -6,6 +6,7 @@ Covers construction and initial attribute values for:
 
 No E-step or M-step is invoked – only attribute inspection.
 """
+
 import numpy as np
 import pytest
 
@@ -35,6 +36,7 @@ def _noise_variance():
 # EMState
 # ---------------------------------------------------------------------------
 
+
 def test_EMState_stores_mean_and_variance():
     mean = _mean()
     mean_var = _mean_variance()
@@ -59,6 +61,7 @@ def test_EMState_name_is_EM():
 # ---------------------------------------------------------------------------
 # SGDState
 # ---------------------------------------------------------------------------
+
 
 def test_SGDState_stores_attributes():
     mean = _mean()
@@ -89,6 +92,7 @@ def test_SGDState_has_sgd_batchsize_attribute():
 # ---------------------------------------------------------------------------
 # HeterogeneousEMState
 # ---------------------------------------------------------------------------
+
 
 def test_HeterogeneousEMState_stores_attributes():
     mean = _mean()
@@ -124,6 +128,7 @@ def test_HeterogeneousEMState_volume_mask_is_created():
     assert state.volume_mask is not None
     # volume_mask must have size equal to VOLUME_SIZE
     import numpy as np
+
     assert np.asarray(state.volume_mask).size == VOLUME_SIZE
 
 

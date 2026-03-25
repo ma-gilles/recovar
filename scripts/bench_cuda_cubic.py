@@ -73,12 +73,12 @@ def main():
     print()
 
     configs = [
-        (64,   100),
-        (64,   1000),
-        (128,  100),
-        (128,  1000),
-        (256,  100),
-        (256,  500),
+        (64, 100),
+        (64, 1000),
+        (128, 100),
+        (128, 1000),
+        (256, 100),
+        (256, 500),
     ]
 
     print(f"{'N':>5} {'n_img':>6} │ {'CUDA ms':>10} {'JAX ms':>10} {'Speedup':>8} │ {'CUDA MB':>10} {'JAX MB':>10}")
@@ -98,19 +98,18 @@ def main():
 
             # CUDA cubic
             def cuda_fn(c, r):
-                return cuda_project(c, r, image_shape, volume_shape,
-                                    order=3, half_volume=False, half_image=False)
+                return cuda_project(c, r, image_shape, volume_shape, order=3, half_volume=False, half_image=False)
 
             cuda_ms, cuda_mb, cuda_out = bench_forward(cuda_fn, coeffs_g, rots_g)
 
             # JAX cubic (force disable CUDA)
             os.environ["RECOVAR_DISABLE_CUDA"] = "1"
             import recovar.cuda_backproject as cb
+
             cb._cuda_ok = None
 
             def jax_fn(c, r):
-                return slicing.slice_from_cubic_coefficients(
-                    c, r, image_shape, volume_shape, half_image=False)
+                return slicing.slice_from_cubic_coefficients(c, r, image_shape, volume_shape, half_image=False)
 
             jax_ms, jax_mb, jax_out = bench_forward(jax_fn, coeffs_g, rots_g)
 
@@ -122,8 +121,10 @@ def main():
             err = float(jnp.max(jnp.abs(cuda_out - jax_out)))
             rel = float(jnp.max(jnp.abs(cuda_out - jax_out) / (jnp.abs(jax_out) + 1e-10)))
 
-        speedup = jax_ms / cuda_ms if cuda_ms > 0 else float('inf')
-        print(f"{N:>5} {n_images:>6} │ {cuda_ms:>10.2f} {jax_ms:>10.2f} {speedup:>7.2f}x │ {cuda_mb:>10.1f} {jax_mb:>10.1f}   max_err={err:.2e} rel={rel:.2e}")
+        speedup = jax_ms / cuda_ms if cuda_ms > 0 else float("inf")
+        print(
+            f"{N:>5} {n_images:>6} │ {cuda_ms:>10.2f} {jax_ms:>10.2f} {speedup:>7.2f}x │ {cuda_mb:>10.1f} {jax_mb:>10.1f}   max_err={err:.2e} rel={rel:.2e}"
+        )
 
     print()
     print("Done.")

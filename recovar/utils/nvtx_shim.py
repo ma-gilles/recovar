@@ -21,6 +21,7 @@ except ImportError:
                     @functools.wraps(fn)
                     def wrapper(*args, **kwargs):
                         return fn(*args, **kwargs)
+
                     return wrapper
 
                 def __enter__(self):

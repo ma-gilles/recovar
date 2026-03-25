@@ -145,11 +145,11 @@ def test_prior_iteration_relion_style_and_downsample_from_fsc():
 def test_covariance_update_col_basic_formula():
     """Verify Wiener filter: cov = B / (H + 1/prior)."""
     import jax.numpy as jnp
+
     H = np.array([2.0, 4.0], dtype=np.float32)
     B = np.array([6.0, 8.0], dtype=np.float32)
     prior = np.array([1.0, 2.0], dtype=np.float32)
-    out = np.asarray(regularization.covariance_update_col(
-        jnp.array(H), jnp.array(B), jnp.array(prior)))
+    out = np.asarray(regularization.covariance_update_col(jnp.array(H), jnp.array(B), jnp.array(prior)))
     expected = B / (H + 1.0 / prior)
     np.testing.assert_allclose(out, expected, rtol=1e-5)
 
@@ -157,11 +157,11 @@ def test_covariance_update_col_basic_formula():
 def test_covariance_update_col_zeros_below_epsilon():
     """Voxels with H ~ 0 must produce zero output."""
     import jax.numpy as jnp
+
     H = np.array([0.0, 3.0], dtype=np.float32)
     B = np.array([99.0, 6.0], dtype=np.float32)
     prior = np.array([1.0, 1.0], dtype=np.float32)
-    out = np.asarray(regularization.covariance_update_col(
-        jnp.array(H), jnp.array(B), jnp.array(prior)))
+    out = np.asarray(regularization.covariance_update_col(jnp.array(H), jnp.array(B), jnp.array(prior)))
     assert float(out[0]) == 0.0, "Uncovered voxel should produce zero"
     assert np.isfinite(out[1])
 
@@ -169,11 +169,11 @@ def test_covariance_update_col_zeros_below_epsilon():
 def test_covariance_update_col_complex_b():
     """Works with complex B (common case)."""
     import jax.numpy as jnp
+
     H = np.array([2.0], dtype=np.float32)
     B = np.array([2.0 + 4.0j], dtype=np.complex64)
     prior = np.array([1.0], dtype=np.float32)
-    out = np.asarray(regularization.covariance_update_col(
-        jnp.array(H), jnp.array(B), jnp.array(prior)))
+    out = np.asarray(regularization.covariance_update_col(jnp.array(H), jnp.array(B), jnp.array(prior)))
     expected = B / (H + 1.0 / prior)
     np.testing.assert_allclose(out, expected, rtol=1e-5)
 
@@ -238,6 +238,7 @@ def test_sum_over_shells_nonneg_input():
 def test_downsample_lhs_shape_factor1():
     """Factor=1 preserves shape."""
     import jax.numpy as jnp
+
     shape = (4, 4, 4)
     lhs = jnp.ones(shape, dtype=jnp.float32)
     out = regularization.downsample_lhs(lhs, shape, upsampling_factor=1)
@@ -247,6 +248,7 @@ def test_downsample_lhs_shape_factor1():
 def test_downsample_lhs_shape_factor2():
     """Factor=2 halves each dimension."""
     import jax.numpy as jnp
+
     shape = (8, 8, 8)
     lhs = jnp.ones(shape, dtype=jnp.float32)
     out = regularization.downsample_lhs(lhs, shape, upsampling_factor=2)
@@ -256,6 +258,7 @@ def test_downsample_lhs_shape_factor2():
 def test_downsample_lhs_nonnegative():
     """Output is clipped to >= 0."""
     import jax.numpy as jnp
+
     shape = (4, 4, 4)
     rng = np.random.default_rng(7)
     lhs = jnp.array(rng.normal(size=shape).astype(np.float32))
@@ -300,7 +303,9 @@ def test_get_fsc_gpu_on_gpu(gpu_device):
     with jax.default_device(gpu_device):
         v1_g = jax.device_put(jnp.array(v1), gpu_device)
         v2_g = jax.device_put(jnp.array(v2), gpu_device)
-        gpu_fsc = np.asarray(regularization.get_fsc_gpu(v1_g, v2_g, shape, substract_shell_mean=False, frequency_shift=0))
+        gpu_fsc = np.asarray(
+            regularization.get_fsc_gpu(v1_g, v2_g, shape, substract_shell_mean=False, frequency_shift=0)
+        )
 
     np.testing.assert_allclose(cpu_fsc, gpu_fsc, atol=1e-5, rtol=1e-5)
 

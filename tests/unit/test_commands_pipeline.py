@@ -3,6 +3,7 @@ Unit tests for recovar.commands.pipeline and recovar.commands.pipeline_with_outl
 
 Only tests argument registration via add_args() – no actual EM execution.
 """
+
 import argparse
 from types import SimpleNamespace
 
@@ -26,6 +27,7 @@ def _parser_with_pipeline_args() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 # pipeline.add_args
 # ---------------------------------------------------------------------------
+
 
 def test_pipeline_registers_particles_positional():
     """'particles' is a required positional argument."""
@@ -80,6 +82,7 @@ def test_pipeline_registers_n_images():
 # pipeline_with_outliers
 # ---------------------------------------------------------------------------
 
+
 def test_pipeline_with_outliers_module_importable():
     assert callable(pwo_cmd.run_pipeline_with_outlier_removal)
 
@@ -88,7 +91,7 @@ def test_pipeline_with_outliers_reuses_pipeline_add_args():
     """pipeline_with_outliers calls pipeline.add_args, so --zdim must be available
     when we build the combined parser the same way the command does."""
     parser = argparse.ArgumentParser()
-    pipeline_cmd.add_args(parser)                   # same call as pwo_cmd
+    pipeline_cmd.add_args(parser)  # same call as pwo_cmd
     parser.add_argument("--k-rounds", type=int, default=1)
     parser.add_argument("--use-contrast-detection", action="store_true")
     actions = parser._option_string_actions
@@ -112,7 +115,7 @@ def test_pipeline_with_outliers_junk_detection_flag_is_store_true():
     pipeline_cmd.add_args(parser)
     parser.add_argument("--use-junk-detection", action="store_true")
     action = parser._option_string_actions["--use-junk-detection"]
-    assert action.const is True   # store_true stores True
+    assert action.const is True  # store_true stores True
 
 
 def test_standard_pipeline_estimates_initial_noise_from_halfset_zero(monkeypatch, tmp_path):

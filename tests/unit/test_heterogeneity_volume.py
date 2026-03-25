@@ -11,6 +11,7 @@ choice_most_likely_split) are tested at the smoke-test level using tiny
 synthetic arrays so that every code path is executed at least once without
 any on-disk I/O.
 """
+
 import numpy as np
 import pytest
 
@@ -28,6 +29,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # Tier 1 – pure-numpy helpers
 # ---------------------------------------------------------------------------
+
 
 def test_pick_minimum_discretization_size_enough_images():
     """With enough images the returned threshold is above the chi2 quantile."""
@@ -79,6 +81,7 @@ def test_pick_heterogeneity_bins2_n_bins_respected():
 # Tier 2 – JAX functions on tiny arrays
 # ---------------------------------------------------------------------------
 
+
 def test_smooth_shell_error_output_shape():
     """smooth_shell_error preserves the last (shell) dimension.
 
@@ -94,7 +97,11 @@ def test_smooth_shell_error_output_shape():
     subarray_size = (n_shells + 1) * 2
 
     result = hv.batch_smooth_shell_error(
-        shell_error, voxel_size, subarray_size, 50, 3  # all positional
+        shell_error,
+        voxel_size,
+        subarray_size,
+        50,
+        3,  # all positional
     )
     assert result.shape == (2, n_estimators, n_shells)
     assert np.all(np.isfinite(np.asarray(result)))
@@ -142,6 +149,7 @@ def test_smoothed_best_choice_output_shape_and_finite():
 # Tier 3 – make_volumes_kernel_estimate_local smoke test
 # ---------------------------------------------------------------------------
 
+
 def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
     """
     make_volumes_kernel_estimate_local must run without crashing on tiny data.
@@ -170,6 +178,7 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
     bins = hv.pick_heterogeneity_bins2(ndim=2, log_likelihoods=np.concatenate(het_dists), n_bins=3)
 
     from recovar.output.output_paths import VolumeOutputPaths
+
     vol_paths = VolumeOutputPaths(str(tmp_path / "hv_output"), "state", 0)
 
     hv.make_volumes_kernel_estimate_local(
@@ -180,7 +189,7 @@ def test_make_volumes_kernel_estimate_local_smoke(tmp_path):
         bins=bins,
         B_factor=0,
         tau=None,
-        n_min_particles=2,   # very small to avoid "no images" assertion
+        n_min_particles=2,  # very small to avoid "no images" assertion
         metric_used="locshellmost_likely",
         locres_sampling=2,
         kernel_rad=1,
@@ -207,6 +216,7 @@ def test_make_volumes_kernel_estimate_local_uses_get_halfset_cache(tmp_path):
     bins = hv.pick_heterogeneity_bins2(ndim=2, log_likelihoods=np.concatenate(het_dists), n_bins=3)
 
     from recovar.output.output_paths import VolumeOutputPaths
+
     vol_paths2 = VolumeOutputPaths(str(tmp_path / "hv_output_halfsets"), "state", 0)
     hv.make_volumes_kernel_estimate_local(
         heterogeneity_distances=het_dists,
@@ -289,8 +299,9 @@ def test_smoothed_best_choice_gpu(gpu_device):
     vol_size = int(np.prod(vol_shape))
     rng = np.random.default_rng(7)
 
-    estimates = (rng.standard_normal((n_est, vol_size)).astype(np.float32)
-                 + 1j * rng.standard_normal((n_est, vol_size)).astype(np.float32))
+    estimates = rng.standard_normal((n_est, vol_size)).astype(np.float32) + 1j * rng.standard_normal(
+        (n_est, vol_size)
+    ).astype(np.float32)
     choice = rng.integers(0, n_est, size=(vol_size,), dtype=np.int32)
 
     cpu_est, cpu_choice = hv.smoothed_best_choice(jnp.array(estimates), jnp.array(choice), kernel_rad=1)

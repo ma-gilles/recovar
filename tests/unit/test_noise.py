@@ -101,9 +101,7 @@ def test_variable_radial_noise_model_via_dataset_1d_broadcast():
             self.noise = None
 
         def set_variable_radial_noise_model(self, noise_variance_radials):
-            _, dose_indices = jnp.unique(
-                self.CTF_params[:, core.CTFParamIndex.DOSE], return_inverse=True
-            )
+            _, dose_indices = jnp.unique(self.CTF_params[:, core.CTFParamIndex.DOSE], return_inverse=True)
             if noise_variance_radials is not None and np.ndim(noise_variance_radials) == 1:
                 n_doses = int(jnp.max(dose_indices)) + 1
                 noise_variance_radials = np.tile(noise_variance_radials, (n_doses, 1))
@@ -127,9 +125,7 @@ def test_variable_radial_noise_model_via_dataset_1d_broadcast():
 
     # All dose levels should have the same radial profile (broadcast from 1D)
     for i in range(n_tilts):
-        np.testing.assert_array_equal(
-            ds.noise.noise_variance_radials[i], radial_1d
-        )
+        np.testing.assert_array_equal(ds.noise.noise_variance_radials[i], radial_1d)
 
 
 def test_upper_bound_noise_dispatched_1d_noise():
@@ -170,9 +166,11 @@ def test_batch_make_radial_noise_matches_vmap():
         single = np.asarray(noise.make_radial_noise(radials[i], image_shape))
         np.testing.assert_allclose(batch_out[i], single, atol=1e-6)
 
+
 def test_batch_basis_times_coords2_matches_matmul():
     """batch_basis_times_coords2 should match direct basis @ coords.T."""
     import jax.numpy as jnp
+
     rng = np.random.default_rng(42)
     # basis: (pixels, n_basis), coords: (n_images, n_basis)
     basis = jnp.array(rng.normal(size=(10, 3)).astype(np.float32))
@@ -301,8 +299,9 @@ def test_make_radial_noise_half_matches_full_extraction():
         half_from_full = np.asarray(
             fourier_transform_utils.full_image_to_half_image(full.reshape(1, -1), image_shape)
         ).ravel()
-        np.testing.assert_allclose(half_native, half_from_full, atol=1e-6, rtol=1e-6,
-                                   err_msg=f"Failed for image_shape={image_shape}")
+        np.testing.assert_allclose(
+            half_native, half_from_full, atol=1e-6, rtol=1e-6, err_msg=f"Failed for image_shape={image_shape}"
+        )
 
 
 def test_make_radial_noise_half_scalar():
@@ -324,9 +323,7 @@ def test_batch_make_radial_noise_half_matches_full():
     )
     full = np.asarray(noise.batch_make_radial_noise(radials, image_shape))
     half_native = np.asarray(noise.batch_make_radial_noise_half(radials, image_shape))
-    half_from_full = np.asarray(
-        fourier_transform_utils.full_image_to_half_image(full, image_shape)
-    )
+    half_from_full = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half_native, half_from_full, atol=1e-6, rtol=1e-6)
 
 
@@ -433,7 +430,7 @@ class _MockNoiseDataset:
     def _iter_indices(self, indices, batch_size):
         idx = np.asarray(indices, dtype=np.int32)
         for start in range(0, idx.size, batch_size):
-            batch_ind = idx[start:start + batch_size]
+            batch_ind = idx[start : start + batch_size]
             yield self._images[batch_ind], batch_ind, batch_ind
 
     def iter_batches(self, batch_size, *, indices=None, **kwargs):
@@ -442,7 +439,7 @@ class _MockNoiseDataset:
             indices = np.arange(self.n_images, dtype=np.int32)
         idx = np.asarray(indices, dtype=np.int32)
         for start in range(0, idx.size, batch_size):
-            batch_ind = idx[start:start + batch_size]
+            batch_ind = idx[start : start + batch_size]
             yield (
                 self._images[batch_ind],
                 self.rotation_matrices[batch_ind],
@@ -466,7 +463,15 @@ def _legacy_estimate_noise_variance(dataset, batch_size, max_images=10000):
         data_generator = dataset.iter_batches(batch_size=batch_size)
         n_images_used = dataset.n_images
 
-    for batch, _rotation_matrices, _translations, _ctf_params, _noise_variance, _particle_indices, _image_indices in data_generator:
+    for (
+        batch,
+        _rotation_matrices,
+        _translations,
+        _ctf_params,
+        _noise_variance,
+        _particle_indices,
+        _image_indices,
+    ) in data_generator:
         batch = dataset.image_source.process_images(batch)
         sum_sq += jnp.sum(jnp.abs(batch) ** 2, axis=0)
 
@@ -486,7 +491,15 @@ def _legacy_estimate_noise_level_no_masks(dataset, image_subset, mean_estimate, 
     config = ForwardModelConfig.from_dataset(dataset, disc_type=disc_type)
     data_generator = dataset.iter_batches(batch_size=batch_size, indices=image_subset)
 
-    for batch, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, batch_ind in data_generator:
+    for (
+        batch,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        _noise_variance,
+        _particle_indices,
+        batch_ind,
+    ) in data_generator:
         batch = dataset.image_source.process_images(batch)
         batch = core.translate_images(batch, dataset.translations[batch_ind], dataset.image_shape)
         ctf = dataset.ctf_evaluator(ctf_params, dataset.image_shape, dataset.voxel_size)
@@ -505,9 +518,13 @@ def _legacy_estimate_noise_level_no_masks(dataset, image_subset, mean_estimate, 
 
         averaged_ps = regularization.batch_average_over_shells(jnp.abs(batch) ** 2, dataset.image_shape, 0)
         lhs += jnp.sum(averaged_ps, axis=0)
-        rhs += batch.shape[0] if not dataset.premultiplied_ctf else jnp.sum(
-            regularization.batch_average_over_shells(jnp.abs(ctf) ** 2, dataset.image_shape, 0),
-            axis=0,
+        rhs += (
+            batch.shape[0]
+            if not dataset.premultiplied_ctf
+            else jnp.sum(
+                regularization.batch_average_over_shells(jnp.abs(ctf) ** 2, dataset.image_shape, 0),
+                axis=0,
+            )
         )
 
     estimated_noise = lhs / rhs

@@ -16,6 +16,7 @@ from recovar.gui.app import create_app, _next_clone_name, _safe_path
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def app_with_job(tmp_path):
     """Create a Flask test app with one completed job."""
@@ -63,6 +64,7 @@ def _get_job_id(client):
 # _safe_path
 # ---------------------------------------------------------------------------
 
+
 class TestSafePath:
     def test_valid_path(self, tmp_path):
         f = tmp_path / "test.txt"
@@ -87,6 +89,7 @@ class TestSafePath:
 # _next_clone_name
 # ---------------------------------------------------------------------------
 
+
 class TestNextCloneName:
     def test_adds_v2(self):
         assert _next_clone_name("my_run") == "my_run_v2"
@@ -103,6 +106,7 @@ class TestNextCloneName:
 # ---------------------------------------------------------------------------
 # Dashboard & Job detail pages
 # ---------------------------------------------------------------------------
+
 
 class TestDashboard:
     def test_returns_200(self, client):
@@ -130,6 +134,7 @@ class TestJobDetail:
 # API: Logs (returns HTML)
 # ---------------------------------------------------------------------------
 
+
 class TestAPILogs:
     def test_returns_html(self, client):
         job_id = _get_job_id(client)
@@ -145,6 +150,7 @@ class TestAPILogs:
 # ---------------------------------------------------------------------------
 # API: Status (returns HTML)
 # ---------------------------------------------------------------------------
+
 
 class TestAPIStatus:
     def test_returns_html(self, client):
@@ -163,6 +169,7 @@ class TestAPIStatus:
 # ---------------------------------------------------------------------------
 # API: Analysis (returns JSON)
 # ---------------------------------------------------------------------------
+
 
 class TestAPIAnalysis:
     def test_get_analysis(self, client):
@@ -185,6 +192,7 @@ class TestAPIAnalysis:
 # API: System info (returns JSON)
 # ---------------------------------------------------------------------------
 
+
 class TestAPISystem:
     def test_returns_system_info(self, client):
         resp = client.get("/api/system")
@@ -198,6 +206,7 @@ class TestAPISystem:
 # ---------------------------------------------------------------------------
 # API: Browse (returns JSON)
 # ---------------------------------------------------------------------------
+
 
 class TestAPIBrowse:
     def test_browse_home(self, client):
@@ -218,6 +227,7 @@ class TestAPIBrowse:
 # API: Volume raw (returns file or 404)
 # ---------------------------------------------------------------------------
 
+
 class TestAPIVolumeRaw:
     def test_missing_path(self, client):
         resp = client.get("/api/volume/raw")
@@ -231,6 +241,7 @@ class TestAPIVolumeRaw:
 # ---------------------------------------------------------------------------
 # API: Tasks (returns JSON)
 # ---------------------------------------------------------------------------
+
 
 class TestAPITasks:
     def test_list_tasks(self, client):
@@ -250,6 +261,7 @@ class TestAPITasks:
 # ---------------------------------------------------------------------------
 # Debug Molstar page
 # ---------------------------------------------------------------------------
+
 
 class TestDebugMolstar:
     def test_returns_200(self, client):

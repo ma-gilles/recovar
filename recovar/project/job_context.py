@@ -130,8 +130,7 @@ def job_context(args, command_name: str):
             # But use the user's explicit path
     elif result_dir is not None:
         # No project, no explicit outdir — auto-generate inside result_dir
-        ctx.output_dir = os.path.join(os.path.abspath(result_dir),
-                                       jt.dir_name if jt else command_name)
+        ctx.output_dir = os.path.join(os.path.abspath(result_dir), jt.dir_name if jt else command_name)
         os.makedirs(ctx.output_dir, exist_ok=True)
     else:
         raise ValueError(
@@ -163,8 +162,10 @@ def job_context(args, command_name: str):
     # --- Register in project ---
     if project is not None and ctx.uid is not None:
         import sys
+
         project.register_job_start(
-            ctx.uid, command_name,
+            ctx.uid,
+            command_name,
             command_line="python " + " ".join(sys.argv),
             parent_jobs=ctx.parent_jobs,
         )

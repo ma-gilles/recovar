@@ -95,8 +95,11 @@ class TestHalfVolumeRoundtrip:
         recovered = ftu.half_volume_to_full_volume(half_coeffs, volume_shape)
 
         np.testing.assert_allclose(
-            np.asarray(recovered), np.asarray(coeffs), atol=1e-12, rtol=1e-12,
-            err_msg="Half-volume roundtrip not lossless"
+            np.asarray(recovered),
+            np.asarray(coeffs),
+            atol=1e-12,
+            rtol=1e-12,
+            err_msg="Half-volume roundtrip not lossless",
         )
 
     def test_precompute_half_matches_full(self):
@@ -111,8 +114,10 @@ class TestHalfVolumeRoundtrip:
         half_direct = slicing.precompute_cubic_coefficients_half(vol, volume_shape)
 
         np.testing.assert_allclose(
-            np.asarray(half_direct), np.asarray(half_from_full),
-            atol=1e-12, rtol=1e-12,
+            np.asarray(half_direct),
+            np.asarray(half_from_full),
+            atol=1e-12,
+            rtol=1e-12,
         )
 
 
@@ -122,6 +127,7 @@ class TestCubicSlicingEquivalence:
     def _random_rotations(self, n, rng):
         """Generate random rotation matrices."""
         from scipy.spatial.transform import Rotation
+
         return Rotation.random(n, random_state=rng).as_matrix().astype(np.float64)
 
     def test_half_image_matches_full_image(self):
@@ -138,19 +144,30 @@ class TestCubicSlicingEquivalence:
         coeffs = slicing.precompute_cubic_coefficients(vol, volume_shape)
 
         full_slices = slicing.slice_volume(
-            coeffs, rots, image_shape, volume_shape, "cubic",
+            coeffs,
+            rots,
+            image_shape,
+            volume_shape,
+            "cubic",
             max_r=None,
         )
         half_slices = slicing.slice_volume(
-            coeffs, rots, image_shape, volume_shape, "cubic",
-            half_image=True, max_r=None,
+            coeffs,
+            rots,
+            image_shape,
+            volume_shape,
+            "cubic",
+            half_image=True,
+            max_r=None,
         )
 
         # Extract half from full
         full_half = ftu.full_image_to_half_image(np.asarray(full_slices), image_shape)
         np.testing.assert_allclose(
-            np.asarray(half_slices), full_half,
-            atol=1e-10, rtol=1e-10,
+            np.asarray(half_slices),
+            full_half,
+            atol=1e-10,
+            rtol=1e-10,
             err_msg="Half-image cubic slicing doesn't match full",
         )
 
@@ -169,18 +186,27 @@ class TestCubicSlicingEquivalence:
 
         # slice_volume with pre-computed coefficients
         direct = slicing.slice_volume(
-            coeffs, rots, image_shape, volume_shape, "cubic",
+            coeffs,
+            rots,
+            image_shape,
+            volume_shape,
+            "cubic",
             max_r=None,
         )
 
         # Explicit precomputed slicer
         precomp = slicing.slice_from_cubic_coefficients(
-            coeffs, rots, image_shape, volume_shape,
+            coeffs,
+            rots,
+            image_shape,
+            volume_shape,
         )
 
         np.testing.assert_allclose(
-            np.asarray(precomp), np.asarray(direct),
-            atol=1e-10, rtol=1e-10,
+            np.asarray(precomp),
+            np.asarray(direct),
+            atol=1e-10,
+            rtol=1e-10,
         )
 
     def test_half_coeffs_matches_full_coeffs(self):
@@ -197,15 +223,23 @@ class TestCubicSlicingEquivalence:
         half_coeffs = slicing.precompute_cubic_coefficients_half(vol, volume_shape)
 
         result_full = slicing.slice_from_cubic_coefficients(
-            full_coeffs, rots, image_shape, volume_shape,
+            full_coeffs,
+            rots,
+            image_shape,
+            volume_shape,
         )
         result_half = slicing.slice_from_cubic_coefficients(
-            half_coeffs, rots, image_shape, volume_shape,
+            half_coeffs,
+            rots,
+            image_shape,
+            volume_shape,
         )
 
         np.testing.assert_allclose(
-            np.asarray(result_half), np.asarray(result_full),
-            atol=1e-10, rtol=1e-10,
+            np.asarray(result_half),
+            np.asarray(result_full),
+            atol=1e-10,
+            rtol=1e-10,
             err_msg="Half-coefficients slicing doesn't match full",
         )
 
@@ -220,16 +254,28 @@ class TestCubicSlicingEquivalence:
         rots = self._random_rotations(2, rng)
 
         result_full = slicing.slice_volume(
-            vol.ravel(), rots, image_shape, volume_shape, "cubic",
-            half_volume=False, max_r=None,
+            vol.ravel(),
+            rots,
+            image_shape,
+            volume_shape,
+            "cubic",
+            half_volume=False,
+            max_r=None,
         )
         half_vol = ftu.full_volume_to_half_volume(vol, volume_shape).ravel()
         result_half = slicing.slice_volume(
-            half_vol, rots, image_shape, volume_shape, "cubic",
-            half_volume=True, max_r=None,
+            half_vol,
+            rots,
+            image_shape,
+            volume_shape,
+            "cubic",
+            half_volume=True,
+            max_r=None,
         )
 
         np.testing.assert_allclose(
-            np.asarray(result_half), np.asarray(result_full),
-            atol=1e-10, rtol=1e-10,
+            np.asarray(result_half),
+            np.asarray(result_full),
+            atol=1e-10,
+            rtol=1e-10,
         )

@@ -28,6 +28,7 @@ pytestmark = pytest.mark.unit
 # split_atom_group_by_chains
 # ---------------------------------------------------------------------------
 
+
 class TestSplitAtomGroupByChains:
     def test_basic_split(self):
         atoms = AtomGroup()
@@ -57,9 +58,11 @@ class TestSplitAtomGroupByChains:
 # rigid_motion
 # ---------------------------------------------------------------------------
 
+
 class TestRigidMotion:
     def test_identity_rotation(self):
         from scipy.spatial.transform import Rotation
+
         coords = np.array([[1, 2, 3], [4, 5, 6]], dtype=np.float64)
         pivot = np.array([0, 0, 0], dtype=np.float64)
         result = rigid_motion(coords, pivot, Rotation.identity())
@@ -67,15 +70,17 @@ class TestRigidMotion:
 
     def test_rotation_around_pivot(self):
         from scipy.spatial.transform import Rotation
+
         # 180-degree rotation around z-axis: (1,0,0) -> (-1,0,0)
         coords = np.array([[2, 0, 0]], dtype=np.float64)
         pivot = np.array([1, 0, 0], dtype=np.float64)
-        rot = Rotation.from_euler('z', 180, degrees=True)
+        rot = Rotation.from_euler("z", 180, degrees=True)
         result = rigid_motion(coords, pivot, rot)
         np.testing.assert_allclose(result, [[0, 0, 0]], atol=1e-14)
 
     def test_preserves_distances(self):
         from scipy.spatial.transform import Rotation
+
         rng = np.random.default_rng(42)
         coords = rng.standard_normal((50, 3))
         pivot = rng.standard_normal(3)
@@ -84,12 +89,14 @@ class TestRigidMotion:
 
         # Pairwise distances should be preserved
         from scipy.spatial.distance import pdist
+
         np.testing.assert_allclose(pdist(result), pdist(coords), atol=1e-12)
 
 
 # ---------------------------------------------------------------------------
 # generate_conformation_2D and path functions
 # ---------------------------------------------------------------------------
+
 
 class TestPathFunctions:
     @pytest.fixture
@@ -141,6 +148,7 @@ class TestPathFunctions:
 # compute_bfactor_scaling
 # ---------------------------------------------------------------------------
 
+
 class TestBfactorScaling:
     def test_shape(self):
         shape = (16, 16, 16)
@@ -170,6 +178,7 @@ class TestBfactorScaling:
 # ---------------------------------------------------------------------------
 # prepare_5nrl_subcomplexes (loading the shipped .npz asset)
 # ---------------------------------------------------------------------------
+
 
 class TestPrepare5nrl:
     def test_loads_and_returns_correct_structure(self):
@@ -203,6 +212,7 @@ class TestPrepare5nrl:
 # generate_trajectory_volumes (tiny grid, fast)
 # ---------------------------------------------------------------------------
 
+
 class TestGenerateTrajectoryVolumes:
     def test_generates_mrc_files(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -231,7 +241,8 @@ class TestGenerateTrajectoryVolumes:
                 max_rotation_degrees=10.0,
             )
             from recovar import utils
+
             vol_first = utils.load_mrc(f"{prefix}0000.mrc")
-            vol_last = utils.load_mrc(f"{prefix}{n_vols-1:04d}.mrc")
+            vol_last = utils.load_mrc(f"{prefix}{n_vols - 1:04d}.mrc")
             # Volumes at different trajectory points should differ
             assert not np.allclose(vol_first, vol_last, atol=1e-6)
