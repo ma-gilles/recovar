@@ -9,6 +9,8 @@ import sys
 
 import jax
 
+from recovar.output import output
+
 logger = logging.getLogger(__name__)
 
 

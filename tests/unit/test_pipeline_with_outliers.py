@@ -9,6 +9,16 @@ from recovar.commands import pipeline_with_outliers
 pytestmark = pytest.mark.unit
 
 
+class _FakePO:
+    """Fake PipelineOutput that supports .get() for embeddings."""
+
+    def get(self, key):
+        return {4: np.zeros((1, 4), dtype=np.float32)}
+
+    def get_embedding_component(self, entry, zdim):
+        return np.zeros((1, 4), dtype=np.float32)
+
+
 def _make_args(tmp_path, *, tilt_series=False):
     return argparse.Namespace(
         outdir=str(tmp_path / "pipeline"),
@@ -78,10 +88,9 @@ def _make_args(tmp_path, *, tilt_series=False):
 
 def _write_round_artifacts(round_outdir):
     model_dir = round_outdir / "model"
-    model_dir.mkdir(parents=True, exist_ok=True)
-    embeddings = {"latent_coords": {4: np.zeros((1, 4), dtype=np.float32)}}
-    with open(model_dir / "embeddings.pkl", "wb") as f:
-        pickle.dump(embeddings, f)
+    zdim_dir = model_dir / "zdim_4"
+    zdim_dir.mkdir(parents=True, exist_ok=True)
+    np.save(str(zdim_dir / "latent_coords.npy"), np.zeros((1, 4), dtype=np.float32))
     with open(round_outdir / "command.txt", "w") as f:
         f.write("test")
 
@@ -94,7 +103,7 @@ def test_pipeline_with_outliers_uses_original_image_ids_between_rounds(tmp_path,
     monkeypatch.setattr(pipeline_with_outliers, "add_args", lambda parser: None)
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
     monkeypatch.setattr(pipeline_with_outliers.output, "mkdir_safe", os.makedirs)
-    monkeypatch.setattr(pipeline_with_outliers.output, "PipelineOutput", lambda outdir: object())
+    monkeypatch.setattr(pipeline_with_outliers.output, "PipelineOutput", lambda outdir: _FakePO())
     monkeypatch.setattr(
         pipeline_with_outliers.output,
         "standard_pipeline_plots",
@@ -148,7 +157,7 @@ def test_pipeline_with_outliers_uses_original_particle_ids_between_rounds(tmp_pa
     monkeypatch.setattr(pipeline_with_outliers, "add_args", lambda parser: None)
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
     monkeypatch.setattr(pipeline_with_outliers.output, "mkdir_safe", os.makedirs)
-    monkeypatch.setattr(pipeline_with_outliers.output, "PipelineOutput", lambda outdir: object())
+    monkeypatch.setattr(pipeline_with_outliers.output, "PipelineOutput", lambda outdir: _FakePO())
     monkeypatch.setattr(
         pipeline_with_outliers.output,
         "standard_pipeline_plots",
