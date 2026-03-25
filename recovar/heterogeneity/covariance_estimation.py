@@ -623,6 +623,7 @@ def variance_relion_style_triangular_kernel(
         noise_model=experiment_dataset.noise,
         noise_half=False,
         indices=image_subset,
+        pad_batches=True,
     ):
         images = experiment_dataset.process_images_half(images)
         Ft_y, Ft_ctf, Ft_im, Ft_one = variance_relion_kernel_trilinear(
@@ -981,6 +982,7 @@ def compute_H_B_for_halfset(
             noise_half=False,
             noise_by_particle=True,
             by_image=not cryo.tilt_series_flag,
+            pad_batches=True,
         )
         if halfset_id is not None:
             _iter_kw["halfset_id"] = halfset_id

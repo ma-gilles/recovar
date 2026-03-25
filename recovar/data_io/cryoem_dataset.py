@@ -42,6 +42,48 @@ from recovar.data_io.image_loader import ImageLoader
 _SENTINEL = object()
 
 
+def _pad_noise_to_inf(noise_variance, n_real, target_batch_size):
+    """Pad noise variance with inf so padded images contribute zero weight.
+
+    Only pads arrays whose leading axis matches n_real (per-image noise).
+    Scalar, broadcast (shape[0]==1), or None noise is returned as-is since
+    it already applies uniformly to all images including padded ones.
+    """
+    if noise_variance is None:
+        return None
+    arr = np.asarray(noise_variance)
+    # Only pad if the leading dimension is per-image (matches n_real)
+    if arr.ndim >= 1 and arr.shape[0] == n_real:
+        padded = np.full((target_batch_size, *arr.shape[1:]), np.inf, dtype=arr.dtype)
+        padded[:n_real] = arr
+        return padded
+    # Scalar, broadcast, or unexpected shape — return unchanged
+    return noise_variance
+
+
+def _pad_batch_iter(iterable, target_batch_size):
+    """Pad the final batch so every batch has identical shape.
+
+    Zero images + infinite noise variance = zero contribution to any
+    accumulator, so padding is mathematically neutral for all downstream
+    consumers.  Indices are repeated from row 0 (valid but irrelevant since
+    the contribution is zero).
+    """
+    for batch in iterable:
+        images, rot, trans, ctf, noise_var, part_idx, img_idx = batch
+        n = images.shape[0]
+        if n < target_batch_size:
+            pad = target_batch_size - n
+            images = np.concatenate([images, np.zeros((pad, *images.shape[1:]), dtype=images.dtype)])
+            rot = np.concatenate([rot, np.repeat(rot[:1], pad, axis=0)])
+            trans = np.concatenate([trans, np.repeat(trans[:1], pad, axis=0)])
+            ctf = np.concatenate([ctf, np.repeat(ctf[:1], pad, axis=0)])
+            noise_var = _pad_noise_to_inf(noise_var, n, target_batch_size)
+            part_idx = np.concatenate([part_idx, np.repeat(part_idx[:1], pad)])
+            img_idx = np.concatenate([img_idx, np.repeat(img_idx[:1], pad)])
+        yield (images, rot, trans, ctf, noise_var, part_idx, img_idx)
+
+
 def _prefetch_iter(iterable):
     """1-lookahead prefetch: loads next batch while caller processes current."""
     from concurrent.futures import ThreadPoolExecutor
@@ -848,6 +890,7 @@ class CryoEMDataset:
         noise_by_particle=False,
         by_image=True,
         prefetch=True,
+        pad_batches=False,
     ):
         """Iterate over dataset batches, yielding explicit batch fields.
 
@@ -868,6 +911,11 @@ class CryoEMDataset:
             True = flat per-image iteration; False = particle-grouped (tilt).
         prefetch : bool
             Enable 1-lookahead prefetch buffer (default True).
+        pad_batches : bool
+            Pad the final batch to ``batch_size`` with zero images and
+            infinite noise variance (default True).  This ensures every
+            batch has an identical shape, avoiding JIT recompilation for
+            the tail batch.  Only applies when ``by_image=True``.
 
         Yields
         ------
@@ -888,6 +936,8 @@ class CryoEMDataset:
             noise_half=noise_half,
             noise_by_particle=noise_by_particle,
         )
+        if pad_batches and by_image:
+            inner = _pad_batch_iter(inner, batch_size)
         if prefetch and not self.image_source.already_prefetches:
             return _prefetch_iter(inner)
         return inner

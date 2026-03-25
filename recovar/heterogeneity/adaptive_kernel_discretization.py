@@ -710,6 +710,7 @@ def precompute_triangular_kernel(
         batch_size,
         noise_model=experiment_dataset.noise,
         noise_half=False,
+        pad_batches=True,
     ):
         images = experiment_dataset.process_images_half(images)
         XWX, F = precompute_triangular_kernel_batch(
@@ -1818,22 +1819,14 @@ def even_less_naive_heterogeneity_scheme_relion_style(
             noise_model=experiment_dataset.noise,
             noise_half=False,
             indices=image_inds,
+            pad_batches=True,
         )
         for raw_images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in raw_batches:
+            # Batches arrive pre-padded from iter_batches (fixed shape, avoids JIT recompilation).
             if use_fast_rfft:
-                # Pad BEFORE rfft so padded_rfft always sees a fixed batch
-                # shape — avoids JIT recompilation for unique tail-batch sizes.
-                raw_images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
-                    raw_images, rotation_matrices, translations, ctf_params, noise_variance,
-                    target_batch_size=batch_size,
-                )
                 images = _process_images_half_fast(raw_images, experiment_dataset)
             else:
                 images = experiment_dataset.process_images_half(raw_images)
-                images, rotation_matrices, translations, ctf_params, noise_variance = _pad_heterogeneity_kernel_batch(
-                    images, rotation_matrices, translations, ctf_params, noise_variance,
-                    target_batch_size=batch_size,
-                )
             Ft_y_acc, Ft_ctf_acc = _heterogeneity_kernel_batch_from_fft(
                 config,
                 images,
