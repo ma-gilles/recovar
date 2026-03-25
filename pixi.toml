@@ -88,6 +88,8 @@ default = { features = ["cuda"] }
 [tasks]
 # Install RECOVAR in editable mode without dependencies
 install-recovar = "pip install -e . --no-deps --no-build-isolation --ignore-installed"
+# Install git pre-commit hook that runs ruff format on staged files
+install-hooks = "python scripts/install_hooks.py"
 build-native-fmm = "pip install -e . --no-deps --no-build-isolation --force-reinstall --ignore-installed"
 
 # Test installation

@@ -21,25 +21,12 @@ jobs:
 
       - run: pip install ruff
 
-      - name: Ruff format check (changed .py files only)
-        run: |
-          BASE=${{ github.event.pull_request.base.sha || 'HEAD~1' }}
-          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- '*.py' || true)
-          if [ -n "$FILES" ]; then
-            echo "Checking: $FILES"
-            echo "$FILES" | xargs ruff format --check --diff
-          else
-            echo "No Python files changed"
-          fi
+      - name: Ruff format check
+        run: ruff format --check recovar/ tests/ scripts/
 
-      - name: Ruff lint (changed .py files only)
+      - name: Ruff lint
         if: always()
-        run: |
-          BASE=${{ github.event.pull_request.base.sha || 'HEAD~1' }}
-          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- '*.py' || true)
-          if [ -n "$FILES" ]; then
-            echo "$FILES" | xargs ruff check
-          fi
+        run: ruff check recovar/ tests/ scripts/
 
   fast-tests:
     name: Unit tests
