@@ -180,8 +180,16 @@ def main():
 
     # ── Step 2: Output directory ─────────────────────────────────────────
     _heading("Step 2: Output directory")
-    outdir = _prompt("Output directory", default="recovar_output")
-    cmd_parts.extend(["-o", outdir])
+    _info("You can use a simple output directory, or use the project system")
+    _info("for organized, auto-numbered job directories.")
+    use_project = _prompt_yesno("Use project system (recommended for multi-step workflows)?", default=False)
+    if use_project:
+        project_dir = _prompt("Project directory", default="recovar_project")
+        cmd_parts.extend(["--project", project_dir])
+        _info(f"Output will be auto-numbered under {project_dir}/Pipeline/job_NNNN/")
+    else:
+        outdir = _prompt("Output directory", default="recovar_output")
+        cmd_parts.extend(["-o", outdir])
 
     # ── Step 2b: Data directory & strip-prefix (for .star / .cs) ────────
     if is_star_or_cs:

@@ -10,6 +10,8 @@ All RECOVAR commands follow the pattern `recovar <command> [arguments]`.
 | `analyze` | Post-pipeline analysis (k-means, volumes, UMAP) |
 | `gui` | Launch the web GUI for interactive job management and analysis |
 | `quickstart` | Interactive wizard for pipeline setup |
+| `init_project` | Initialize a project directory with auto-numbered jobs |
+| `project_status` | Show status of all jobs in a project |
 | `downsample` | Pre-downsample images to disk |
 | `parse_relion5_tomo` | Convert RELION5 tilt-series data to 2D tilt format |
 
@@ -230,12 +232,12 @@ Selection (one required):
 Extract particles from k-means clusters.
 
 ```bash
-recovar extract_image_subset_from_kmeans centers.pkl output.pkl indices [-i]
+recovar extract_image_subset_from_kmeans kmeans_result.pkl output.pkl indices [-i]
 ```
 
 | Argument | Description |
 |----------|-------------|
-| `centers.pkl` | Path to centers.pkl from analyze |
+| `kmeans_result.pkl` | Path to `data/kmeans_result.pkl` from analyze |
 | `output.pkl` | Output indices file |
 | `indices` | Comma-separated cluster indices |
 | `-i` | Invert selection |
@@ -282,3 +284,55 @@ recovar gui [options]
 | `--python-path` | Current | Python interpreter for job execution |
 
 See the [GUI Guide](../guide/gui.md) for full documentation.
+
+---
+
+## `init_project`
+
+Initialize a new project directory with auto-numbered job tracking.
+
+```bash
+recovar init_project [directory] [--name "Project Name"]
+```
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `directory` | `.` | Directory to initialize (created if needed) |
+| `--name` | Directory name | Human-readable project name |
+
+Creates a `project.json` file in the directory. Subsequent commands using `--project` will auto-generate numbered job directories (e.g. `Pipeline/job_0001/`, `Analyze/job_0001/`).
+
+---
+
+## `project_status`
+
+Show status of all jobs in a project.
+
+```bash
+recovar project_status [directory] [--tree]
+```
+
+| Argument | Default | Description |
+|----------|---------|-------------|
+| `directory` | `.` | Project directory |
+| `--tree` | False | Show job dependency tree instead of table |
+
+---
+
+## Common flag: `--project`
+
+All commands that produce output accept `--project <dir>` to enable project mode. When active, output directories are auto-generated. If you run from within a project directory (containing `project.json`), it is auto-detected without needing the flag.
+
+Each job creates `job.json`, `command.txt`, `run.log`, and `README.txt` metadata files.
+
+### Project directory naming
+
+| CLI command | Directory name | Example |
+|-------------|----------------|---------|
+| `pipeline` | `Pipeline/` | `Pipeline/job_0001/` |
+| `analyze` | `Analyze/` | `Analyze/job_0001/` |
+| `compute_state` | `ReconstructState/` | `ReconstructState/job_0001/` |
+| `compute_trajectory` | `ReconstructTrajectory/` | `ReconstructTrajectory/job_0001/` |
+| `estimate_conformational_density` | `Density/` | `Density/job_0001/` |
+| `junk_particle_detection` | `JunkDetection/` | `JunkDetection/job_0001/` |
+| `outlier_detection` | `OutlierDetection/` | `OutlierDetection/job_0001/` |

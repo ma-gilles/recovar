@@ -11,7 +11,7 @@ RECOVAR includes tools for detecting junk particles and outliers in your dataset
 recovar junk_particle_detection output -o junk_output
 ```
 
-This analyzes the pipeline output to identify particles that are likely junk (ice, aggregates, etc.) based on their fit to the model.
+This analyzes the pipeline output to identify particles that are likely junk (ice, aggregates, etc.) based on their fit to the model. Output is organized into `plots/` and `data/` subdirectories. Use `--save-all-plots` for a full diagnostic plot dump (default: just indices and summary).
 
 ## Outlier detection
 
@@ -19,7 +19,7 @@ This analyzes the pipeline output to identify particles that are likely junk (ic
 recovar outlier_detection output -o outlier_output
 ```
 
-Identifies statistical outliers in the dataset.
+Identifies statistical outliers in the dataset. Like junk detection, output uses `plots/` and `data/` subdirectories, with `--save-all-plots` for full diagnostics.
 
 ## Pipeline with outliers
 

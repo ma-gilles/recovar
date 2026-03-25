@@ -100,7 +100,7 @@ The isolated cluster 0 represents junk or a distinct species. Exclude it and re-
 recovar extract_image_subset_from_kmeans \
     output/analysis_20/data/kmeans_result.pkl \
     subset_ind.pkl \
-    0 --inverse
+    0 -i
 ```
 
 ### Step 4: Re-run pipeline on the subset
@@ -134,11 +134,11 @@ With the outlier removed, all 20 clusters now sample the main conformational lan
 ### View volumes
 
 ```bash
-# View k-means cluster center volumes
-chimerax output_subset/analysis_20/kmeans/center*.mrc
+# View k-means cluster center volumes (1-indexed, zero-padded)
+chimerax output_subset/analysis_20/kmeans/center000.mrc center001.mrc ...
 
 # View a trajectory as a conformational movie
-chimerax output_subset/analysis_20/traj000/state*.mrc
+chimerax output_subset/analysis_20/traj000/state000.mrc state001.mrc ...
 ```
 
 !!! tip "Interactive exploration with the GUI"
@@ -225,6 +225,7 @@ recovar compute_trajectory output \
     --zdim=4 \
     --density output/density/deconv_density_knee.pkl \
     --endpts output/analysis_4/kmeans/centers.txt \
+
     --ind 0,19
 ```
 
@@ -238,9 +239,10 @@ This generates volumes along the minimum free-energy path:
 
 ```
 output/trajectory_density/
-├── state000.mrc ... state005.mrc  # Volumes along the path
-├── latent_coords.txt              # Latent coordinates of each state
-└── density/                       # Local density at each state
+├── state000.mrc ... state005.mrc   # Volumes along the path
+├── state000_half1_unfil.mrc ...    # Half-maps for FSC
+├── diagnostics/state000/           # Per-volume diagnostics
+└── latent_coords.txt               # Latent coordinates of each state
 ```
 
 View the trajectory in ChimeraX:
@@ -289,7 +291,16 @@ For the full GUI reference, see the [GUI Guide](gui.md).
 
 ```
 output/
-├── model/                         # Internal model (mean, eigenvolumes, eigenvalues)
+├── job.json                       # Job metadata (version, timing, parameters)
+├── command.txt                    # Command that was run
+├── run.log                        # Full log
+├── README.txt                     # Human-readable output summary
+├── model/                         # Internal model
+│   ├── params.pkl
+│   ├── zdim_4/                    # Per-zdim embeddings
+│   │   └── latent_coords.npy
+│   └── zdim_10/
+│       └── latent_coords.npy
 └── output/
     ├── volumes/                   # mean.mrc, half-maps, eigenvolumes, variance maps
     └── plots/                     # Diagnostic plots
@@ -299,6 +310,8 @@ output/
 
 ```
 output/analysis_<zdim>/
+├── job.json                       # Job metadata
+├── command.txt, run.log, README.txt
 ├── plots/                         # All visualization outputs
 │   ├── contrast_histogram.png
 │   ├── PCA/                       # PC scatter plots with k-means centers
@@ -306,23 +319,31 @@ output/analysis_<zdim>/
 │   ├── density/                   # Density plots (if density provided)
 │   └── density_sliced/            # Sliced density plots
 ├── data/                          # Non-volume data files
-│   ├── kmeans_result.pkl
+│   ├── kmeans_result.pkl          # K-means labels and centers
 │   └── trajectory_endpoints.pkl
-├── kmeans/                        # Cluster center volumes (.mrc) and assignments
-└── traj000/, traj001/             # Trajectory volumes along paths
+├── kmeans/                        # Cluster center volumes
+│   ├── center000.mrc, center001.mrc, ...
+│   ├── center000_half1_unfil.mrc  # Half-maps
+│   ├── centers.txt                # Center coordinates
+│   └── diagnostics/center000/     # Per-volume diagnostics
+└── traj000/, traj001/             # Trajectory volumes
+    ├── state000.mrc, state001.mrc, ...
+    └── diagnostics/state000/      # Per-volume diagnostics
 ```
 
 ## Command reference
 
 | Step | Command |
 |------|---------|
+| Init project | `recovar init_project my_project` |
 | Run pipeline | `recovar pipeline <particles> -o out --mask mask.mrc` |
 | Analyze | `recovar analyze out --zdim=10 --n-clusters=20` |
-| Extract subset | `recovar extract_image_subset_from_kmeans result.pkl out.pkl 0 -i` |
+| Extract subset | `recovar extract_image_subset_from_kmeans data/kmeans_result.pkl out.pkl 0 -i` |
 | Re-run on subset | `recovar pipeline <particles> -o out2 --ind subset.pkl` |
 | Density estimation | `recovar estimate_conformational_density out --pca_dim=4` |
 | Trajectory | `recovar compute_trajectory out -o traj --density density.pkl --endpts centers.txt` |
 | Custom volumes | `recovar compute_state out -o vols --latent-points coords.txt` |
+| Project status | `recovar project_status` |
 | Launch GUI | `recovar gui --scan-dir out` |
 
 ## Tips

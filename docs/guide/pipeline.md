@@ -117,19 +117,33 @@ See [Cryo-ET](cryo-et.md) for details.
 
 ```
 output/
+  job.json                 # Job metadata (version, timing, parameters)
   command.txt              # Command that was run
   run.log                  # Full log
+  README.txt               # Human-readable output summary
   downsampled/             # Pre-downsampled images (if --downsample used)
     particles.128.mrcs
     particles.128.star
+  model/                   # Internal model data
+    params.pkl             # Pipeline parameters
+    zdim_4/                # Per-zdim embedding directories
+      latent_coords.npy    # Latent coordinates for zdim=4
+    zdim_10/
+      latent_coords.npy
+    ...
   output/
     volumes/
       mean.mrc             # Mean reconstruction
+      mean_filt.mrc        # Filtered mean
       mean_half1_unfil.mrc # Unfiltered half-map 1
       mean_half2_unfil.mrc # Unfiltered half-map 2
       mask.mrc             # Solvent mask used
-    analysis_*/            # Results per zdim (after running analyze)
+      dilated_mask.mrc     # Dilated mask
+    plots/                 # Diagnostic plots
+  analysis_*/              # Results per zdim (after running analyze)
 ```
+
+When using the **project system** (`--project`), pipeline output is placed into auto-numbered directories like `Pipeline/job_0001/`.
 
 ## Example output
 
