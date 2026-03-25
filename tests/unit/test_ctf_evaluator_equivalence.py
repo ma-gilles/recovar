@@ -20,6 +20,7 @@ pytestmark = pytest.mark.unit
 # Helper: realistic CTF parameters (not zeros)
 # ---------------------------------------------------------------------------
 
+
 def _make_realistic_ctf_params(n, n_cols=11):
     """Return ``(n, n_cols)`` CTF params with realistic, non-zero values."""
     rng = np.random.default_rng(42)
@@ -85,9 +86,16 @@ def test_tilt_series_mode_bitwise_identical(image_shape, half_image):
     )
 
     out_eval = np.asarray(evaluator(params, image_shape, 1.5, half_image=half_image))
-    out_ref = np.asarray(core_ctf._compute_tilt_series_ctf(
-        params, image_shape, 1.5, dose_per_tilt, angle_per_tilt, half_image=half_image,
-    ))
+    out_ref = np.asarray(
+        core_ctf._compute_tilt_series_ctf(
+            params,
+            image_shape,
+            1.5,
+            dose_per_tilt,
+            angle_per_tilt,
+            half_image=half_image,
+        )
+    )
 
     np.testing.assert_array_equal(out_eval, out_ref)
 
@@ -105,12 +113,15 @@ def test_cryo_et_mode_bitwise_identical(image_shape, half_image):
     np.testing.assert_array_equal(out_eval, out_ref)
 
 
-@pytest.mark.parametrize("mode,n_cols", [
-    (core_ctf.CTFMode.SPA, 9),
-    (core_ctf.CTFMode.SPA_ANTIALIASED, 9),
-    (core_ctf.CTFMode.TILT_SERIES, 11),
-    (core_ctf.CTFMode.CRYO_ET, 11),
-])
+@pytest.mark.parametrize(
+    "mode,n_cols",
+    [
+        (core_ctf.CTFMode.SPA, 9),
+        (core_ctf.CTFMode.SPA_ANTIALIASED, 9),
+        (core_ctf.CTFMode.TILT_SERIES, 11),
+        (core_ctf.CTFMode.CRYO_ET, 11),
+    ],
+)
 def test_ctf_evaluator_output_dtype_is_float32(mode, n_cols):
     """All modes return float32 — proves the old CTF_fun() dtype cast was redundant."""
     params = _make_realistic_ctf_params(3, n_cols=n_cols)

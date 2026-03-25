@@ -54,12 +54,12 @@ def test_M_step_batch_runs_and_accumulates():
     images = (rng.normal(size=(n_images, n_pixels)) + 1j * rng.normal(size=(n_images, n_pixels))).astype(np.complex64)
     # Realistic CTF params: DFU, DFV, DFANG, VOLT, CS, W, PHASE_SHIFT, BFACTOR, CONTRAST
     CTF_params = np.zeros((n_images, 9), dtype=np.float32)
-    CTF_params[:, 0] = 15000.0   # DFU (Angstrom)
-    CTF_params[:, 1] = 15000.0   # DFV (Angstrom)
-    CTF_params[:, 3] = 300.0     # VOLT (kV)
-    CTF_params[:, 4] = 2.7       # CS (mm)
-    CTF_params[:, 5] = 0.1       # W (amplitude contrast)
-    CTF_params[:, 8] = 1.0       # CONTRAST
+    CTF_params[:, 0] = 15000.0  # DFU (Angstrom)
+    CTF_params[:, 1] = 15000.0  # DFV (Angstrom)
+    CTF_params[:, 3] = 300.0  # VOLT (kV)
+    CTF_params[:, 4] = 2.7  # CS (mm)
+    CTF_params[:, 5] = 0.1  # W (amplitude contrast)
+    CTF_params[:, 8] = 1.0  # CONTRAST
     rotation_matrices = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
     translations = np.zeros((n_images, 2), dtype=np.float32)
     noise_variance = np.ones((n_images, n_pixels), dtype=np.float32)
@@ -71,11 +71,20 @@ def test_M_step_batch_runs_and_accumulates():
     rhs = jnp.zeros((volume_size, basis_size), dtype=np.complex64)
 
     lhs_out, rhs_out = ppca.M_step_batch(
-        images, lhs, rhs,
-        latent_means, latent_covs,
-        CTF_params, rotation_matrices, translations,
-        image_shape, volume_shape, grid_size, voxel_size,
-        noise_variance, core.CTFEvaluator(),
+        images,
+        lhs,
+        rhs,
+        latent_means,
+        latent_covs,
+        CTF_params,
+        rotation_matrices,
+        translations,
+        image_shape,
+        volume_shape,
+        grid_size,
+        voxel_size,
+        noise_variance,
+        core.CTFEvaluator(),
     )
 
     assert lhs_out.shape == (volume_size, basis_size * basis_size)

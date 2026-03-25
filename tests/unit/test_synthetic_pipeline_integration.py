@@ -13,7 +13,9 @@ def test_simulator_to_synthetic_dataset_to_metrics_tiny():
     grid_size = 4
     n_images = 8
     volume_size = int(grid_size**3)
-    main_image_stack, ctf_params, rots, trans, _, _, _ = make_tiny_simulation(grid_size=grid_size, n_images=n_images, seed=0)
+    main_image_stack, ctf_params, rots, trans, _, _, _ = make_tiny_simulation(
+        grid_size=grid_size, n_images=n_images, seed=0
+    )
 
     assert main_image_stack.shape == (n_images, grid_size, grid_size)
     assert ctf_params.shape[0] == n_images

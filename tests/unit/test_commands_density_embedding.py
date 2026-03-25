@@ -100,7 +100,15 @@ def test_estimate_conformational_density_forwards_percentile_and_defaults(monkey
 def test_compute_embedding_uses_saved_z_keys(monkeypatch):
     fake_results = {
         "input_args": SimpleNamespace(zdim=[4, 10]),
-        "means": MeanEstimate(combined=np.zeros(4, dtype=np.float32), corrected0=np.zeros(4, dtype=np.float32), corrected1=np.zeros(4, dtype=np.float32), corrected0reg=np.zeros(4, dtype=np.float32), corrected1reg=np.zeros(4, dtype=np.float32), lhs=np.zeros(4, dtype=np.float32), prior=np.zeros(4, dtype=np.float32)),
+        "means": MeanEstimate(
+            combined=np.zeros(4, dtype=np.float32),
+            corrected0=np.zeros(4, dtype=np.float32),
+            corrected1=np.zeros(4, dtype=np.float32),
+            corrected0reg=np.zeros(4, dtype=np.float32),
+            corrected1reg=np.zeros(4, dtype=np.float32),
+            lhs=np.zeros(4, dtype=np.float32),
+            prior=np.zeros(4, dtype=np.float32),
+        ),
         "u": {"rescaled": np.zeros((4, 2), dtype=np.float32)},
         "s": {"rescaled": np.ones(2, dtype=np.float32)},
         "cov_noise": np.ones(4, dtype=np.float32),
@@ -145,7 +153,15 @@ def test_compute_embedding_uses_saved_z_keys(monkeypatch):
 def test_compute_embedding_falls_back_to_input_args_zdim(monkeypatch):
     fake_results = {
         "input_args": SimpleNamespace(zdim=[6]),
-        "means": MeanEstimate(combined=np.zeros(4, dtype=np.float32), corrected0=np.zeros(4, dtype=np.float32), corrected1=np.zeros(4, dtype=np.float32), corrected0reg=np.zeros(4, dtype=np.float32), corrected1reg=np.zeros(4, dtype=np.float32), lhs=np.zeros(4, dtype=np.float32), prior=np.zeros(4, dtype=np.float32)),
+        "means": MeanEstimate(
+            combined=np.zeros(4, dtype=np.float32),
+            corrected0=np.zeros(4, dtype=np.float32),
+            corrected1=np.zeros(4, dtype=np.float32),
+            corrected0reg=np.zeros(4, dtype=np.float32),
+            corrected1reg=np.zeros(4, dtype=np.float32),
+            lhs=np.zeros(4, dtype=np.float32),
+            prior=np.zeros(4, dtype=np.float32),
+        ),
         "u": {"rescaled": np.zeros((4, 2), dtype=np.float32)},
         "s": {"rescaled": np.ones(2, dtype=np.float32)},
         "cov_noise": np.ones(4, dtype=np.float32),
@@ -162,7 +178,9 @@ def test_compute_embedding_falls_back_to_input_args_zdim(monkeypatch):
     monkeypatch.setattr(
         compute_embedding.embedding,
         "get_per_image_embedding",
-        lambda *_args, **_kwargs: (calls.append(_args[3]) or (np.zeros((2, _args[3])), np.zeros((2, _args[3], _args[3])), np.zeros(2))),
+        lambda *_args, **_kwargs: (
+            calls.append(_args[3]) or (np.zeros((2, _args[3])), np.zeros((2, _args[3], _args[3])), np.zeros(2))
+        ),
     )
 
     latent_coords, latent_precision, _ = compute_embedding.compute_embedding("/tmp/fake")

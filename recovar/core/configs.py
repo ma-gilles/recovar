@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 # ForwardModelConfig — static compile-time constants for the forward model
 # ---------------------------------------------------------------------------
 
+
 class ForwardModelConfig(eqx.Module):
     """Bundles geometry, CTF, and discretization parameters.
 
@@ -74,9 +75,12 @@ class ForwardModelConfig(eqx.Module):
         be modified via ``eqx.tree_at``.
         """
         fields = dict(
-            image_shape=self.image_shape, volume_shape=self.volume_shape,
-            grid_size=self.grid_size, voxel_size=self.voxel_size,
-            padding=self.padding, disc_type=self.disc_type,
+            image_shape=self.image_shape,
+            volume_shape=self.volume_shape,
+            grid_size=self.grid_size,
+            voxel_size=self.voxel_size,
+            padding=self.padding,
+            disc_type=self.disc_type,
             ctf=self.ctf,
             premultiplied_ctf=self.premultiplied_ctf,
             volume_mask_threshold=self.volume_mask_threshold,
@@ -143,23 +147,29 @@ class ForwardModelConfig(eqx.Module):
             volume_shape=volume_shape,
             grid_size=grid_size,
             voxel_size=float(cryo.voxel_size),
-            padding=int(getattr(cryo, 'padding', 0)),
+            padding=int(getattr(cryo, "padding", 0)),
             disc_type=disc_type,
             ctf=ctf_eval,
-            premultiplied_ctf=bool(getattr(cryo, 'premultiplied_ctf', False)),
-            volume_mask_threshold=float(getattr(cryo, 'volume_mask_threshold', 0.0)),
+            premultiplied_ctf=bool(getattr(cryo, "premultiplied_ctf", False)),
+            volume_mask_threshold=float(getattr(cryo, "volume_mask_threshold", 0.0)),
             volume_upsampling_factor=volume_upsampling,
-            data_multiplier=float(getattr(cryo, 'data_multiplier', 1.0)),
+            data_multiplier=float(getattr(cryo, "data_multiplier", 1.0)),
             process_fn=process_fn,
         )
-        logger.debug("ForwardModelConfig: grid=%d, image=%s, disc=%s, premult_ctf=%s",
-                     grid_size, config.image_shape, disc_type, config.premultiplied_ctf)
+        logger.debug(
+            "ForwardModelConfig: grid=%d, image=%s, disc=%s, premult_ctf=%s",
+            grid_size,
+            config.image_shape,
+            disc_type,
+            config.premultiplied_ctf,
+        )
         return config
 
 
 # ---------------------------------------------------------------------------
 # ModelState — current reconstruction state (dynamic arrays)
 # ---------------------------------------------------------------------------
+
 
 class ModelState(eqx.Module):
     """Current reconstruction state passed to jitted functions.
@@ -177,6 +187,7 @@ class ModelState(eqx.Module):
 # ---------------------------------------------------------------------------
 # Per-function option modules (all static — controls compilation)
 # ---------------------------------------------------------------------------
+
 
 class CovColumnOpts(eqx.Module):
     """Static options for covariance column (H/B) computation."""

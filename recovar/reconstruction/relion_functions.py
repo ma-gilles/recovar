@@ -20,14 +20,14 @@ logger = logging.getLogger(__name__)
 def griddingCorrect(vol_in, ori_size, padding_factor, order=0):
     """Radial sinc gridding correction."""
     og_shape = vol_in.shape
-    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False) + 0.
+    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False) + 0.0
     r = np.linalg.norm(pixels, axis=-1)
     safe_rval = np.where(r > 0, r / (ori_size * padding_factor), 1.0)
     sinc = np.where(r > 0, np.sin(np.pi * safe_rval) / (np.pi * safe_rval), 1.0)
     if order == 0:
         kernel = sinc
     elif order == 1:
-        kernel = sinc ** 2
+        kernel = sinc**2
     else:
         raise ValueError("Order not implemented")
     return (vol_in.reshape(-1) / kernel).reshape(og_shape), kernel.reshape(og_shape)
@@ -40,7 +40,7 @@ def griddingCorrect_square(vol_in, ori_size, padding_factor, order=0):
     pixels_rescaled = pixels / (ori_size * padding_factor)
 
     def sinc(ar):
-        return jnp.where(jnp.abs(ar) < 1e-8, 1., jnp.sin(jnp.pi * ar) / (jnp.pi * ar))
+        return jnp.where(jnp.abs(ar) < 1e-8, 1.0, jnp.sin(jnp.pi * ar) / (jnp.pi * ar))
 
     if order == 0:
         kernel_fn = sinc
@@ -54,8 +54,13 @@ def griddingCorrect_square(vol_in, ori_size, padding_factor, order=0):
 
 
 def relion_style_triangular_kernel(
-    experiment_dataset, cov_noise, batch_size, disc_type='linear_interp',
-    index_subset=None, upsampling_factor=None, by_image=True,
+    experiment_dataset,
+    cov_noise,
+    batch_size,
+    disc_type="linear_interp",
+    index_subset=None,
+    upsampling_factor=None,
+    by_image=True,
 ):
     """RELION-style triangular kernel reconstruction.
 
@@ -84,13 +89,19 @@ def relion_style_triangular_kernel(
     uf = upsampling_factor if upsampling_factor is not None else 1
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type, upsampling_factor=uf)
     noise_model = (
-        noise.as_noise_model(cov_noise, config.image_shape)
-        if cov_noise is not None
-        else experiment_dataset.noise
+        noise.as_noise_model(cov_noise, config.image_shape) if cov_noise is not None else experiment_dataset.noise
     )
 
     Ft_y, Ft_ctf = None, None
-    for images, rotation_matrices, translations, ctf_params, noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+    for (
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        _particle_indices,
+        _image_indices,
+    ) in experiment_dataset.iter_batches(
         batch_size,
         noise_model=noise_model,
         indices=index_subset,
@@ -129,9 +140,7 @@ def relion_kernel_batch(
     Applies pad + rfft2 internally, then backprojects with half_image and
     half_volume layouts for maximum memory efficiency.
     """
-    half_images = padding.padded_rfft(
-        images * config.data_multiplier, config.grid_size, config.padding
-    )
+    half_images = padding.padded_rfft(images * config.data_multiplier, config.grid_size, config.padding)
     return _relion_kernel_batch_half(
         config,
         half_images,
@@ -174,23 +183,40 @@ def relion_kernel_batch_from_fft(
 
 @eqx.filter_jit
 def _relion_kernel_batch_half(
-    config, half_images, ctf_params, rotation_matrices, translations, noise_variances, Ft_y, Ft_ctf,
+    config,
+    half_images,
+    ctf_params,
+    rotation_matrices,
+    translations,
+    noise_variances,
+    Ft_y,
+    Ft_ctf,
 ):
     """Backproject half-spectrum images into half-volume accumulators."""
     half_images = core.translate_images(half_images, translations, config.image_shape, half_image=True)
-    noise_half = noise.to_batched_half_pixel_noise(
-        noise_variances, config.image_shape, batch_size=half_images.shape[0]
-    )
+    noise_half = noise.to_batched_half_pixel_noise(noise_variances, config.image_shape, batch_size=half_images.shape[0])
     ctf_half = config.compute_ctf_half(ctf_params)
 
     images_weighted = (ctf_half * half_images if not config.premultiplied_ctf else half_images) / noise_half
     Ft_y = core.adjoint_slice_volume(
-        images_weighted, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
-        volume=Ft_y, half_image=True, half_volume=True,
+        images_weighted,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        config.disc_type,
+        volume=Ft_y,
+        half_image=True,
+        half_volume=True,
     )
     Ft_ctf = core.adjoint_slice_volume(
-        ctf_half ** 2 / noise_half, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
-        volume=Ft_ctf, half_image=True, half_volume=True,
+        ctf_half**2 / noise_half,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        config.disc_type,
+        volume=Ft_ctf,
+        half_image=True,
+        half_volume=True,
     )
     return Ft_y, Ft_ctf
 
@@ -215,34 +241,65 @@ def residual_relion_kernel_trilinear(
     """
     CTF = config.compute_ctf(ctf_params)
     images = core.translate_images(images, translations, config.image_shape)
-    images = images - core.slice_volume(
-        mean_estimate, rotation_matrices, config.image_shape, config.volume_shape, "linear_interp",
-    ) * CTF
+    images = (
+        images
+        - core.slice_volume(
+            mean_estimate,
+            rotation_matrices,
+            config.image_shape,
+            config.volume_shape,
+            "linear_interp",
+        )
+        * CTF
+    )
     images_squared = jnp.abs(images) ** 2 - cov_noise
-    CTF_fourth = CTF ** 4
+    CTF_fourth = CTF**4
 
     images_squared_half = fourier_transform_utils.full_image_to_half_image(images_squared, config.image_shape)
     Ft_y = core.adjoint_slice_volume(
-        images_squared_half, rotation_matrices, config.image_shape, config.volume_shape, "linear_interp",
-        volume=Ft_y, half_image=True, half_volume=True,
+        images_squared_half,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        "linear_interp",
+        volume=Ft_y,
+        half_image=True,
+        half_volume=True,
     )
     CTF_fourth_half = fourier_transform_utils.full_image_to_half_image(CTF_fourth, config.image_shape)
     Ft_ctf = core.adjoint_slice_volume(
-        CTF_fourth_half, rotation_matrices, config.image_shape, config.volume_shape, "linear_interp",
-        volume=Ft_ctf, half_image=True, half_volume=True,
+        CTF_fourth_half,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        "linear_interp",
+        volume=Ft_ctf,
+        half_image=True,
+        half_volume=True,
     )
     return Ft_y, Ft_ctf
 
 
-def residual_relion_style_triangular_kernel(experiment_dataset, mean_estimate, cov_noise, batch_size, index_subset=None):
+def residual_relion_style_triangular_kernel(
+    experiment_dataset, mean_estimate, cov_noise, batch_size, index_subset=None
+):
     """Residual RELION-style triangular kernel reconstruction."""
     config = ForwardModelConfig.from_dataset(
-        experiment_dataset, disc_type='linear_interp',
+        experiment_dataset,
+        disc_type="linear_interp",
         upsampling_factor=1,
     )
 
     Ft_y, Ft_ctf = None, None
-    for images, rotation_matrices, translations, ctf_params, _noise_variance, _particle_indices, _image_indices in experiment_dataset.iter_batches(
+    for (
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        _noise_variance,
+        _particle_indices,
+        _image_indices,
+    ) in experiment_dataset.iter_batches(
         batch_size,
         indices=index_subset,
         by_image=False,
@@ -256,7 +313,8 @@ def residual_relion_style_triangular_kernel(experiment_dataset, mean_estimate, c
             rotation_matrices,
             translations,
             cov_noise,
-            Ft_y=Ft_y, Ft_ctf=Ft_ctf,
+            Ft_y=Ft_y,
+            Ft_ctf=Ft_ctf,
         )
 
     if Ft_y is not None:
@@ -288,10 +346,7 @@ def _as_flat_single_volume(arr, volume_shape):
         return arr.reshape(-1), True
     if arr.ndim == 1 and int(arr.shape[0]) == flat_size:
         return arr, False
-    raise ValueError(
-        f"Expected array with shape {volume_shape} or ({flat_size},), got {arr.shape}"
-    )
-
+    raise ValueError(f"Expected array with shape {volume_shape} or ({flat_size},), got {arr.shape}")
 
 
 def adjust_regularization_relion_style(
@@ -305,35 +360,33 @@ def adjust_regularization_relion_style(
     """
     volume_shape = tuple(int(s) for s in volume_shape)
     packed_shape = (
-        fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
-        if half_volume
-        else volume_shape
+        fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
     )
     filter_flat, input_is_grid = _as_flat_single_volume(filter, packed_shape)
 
     # Exact half-volume behavior: reuse full-volume implementation and repack.
     if half_volume:
-        filter_full = fourier_transform_utils.half_volume_to_full_volume(
-            filter_flat, volume_shape
-        ).reshape(-1).real
+        filter_full = fourier_transform_utils.half_volume_to_full_volume(filter_flat, volume_shape).reshape(-1).real
         reg_full = adjust_regularization_relion_style(
-            filter_full, volume_shape, tau=tau, padding_factor=padding_factor,
-            max_res_shell=max_res_shell, half_volume=False,
+            filter_full,
+            volume_shape,
+            tau=tau,
+            padding_factor=padding_factor,
+            max_res_shell=max_res_shell,
+            half_volume=False,
         )
-        reg_half = fourier_transform_utils.full_volume_to_half_volume(
-            reg_full, volume_shape
-        ).reshape(-1)
+        reg_half = fourier_transform_utils.full_volume_to_half_volume(reg_full, volume_shape).reshape(-1)
         if input_is_grid:
             return reg_half.reshape(packed_shape)
         return reg_half
 
     if tau is not None:
-        oversampling_factor = padding_factor ** 3
+        oversampling_factor = padding_factor**3
         og_volume_shape = tuple(s // padding_factor for s in volume_shape)
         tau = upscale_tau(tau, padding_factor, og_volume_shape, tau_is_1d=False)
         safe_tau = jnp.where(tau > 1e-20, tau, jnp.float32(1.0))
         inv_tau = 1 / (oversampling_factor * safe_tau)
-        inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1. / (0.001 * filter_flat), inv_tau)
+        inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
         inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
         regularized_filter = filter_flat + inv_tau
     else:
@@ -368,32 +421,52 @@ def _infer_half_volume_layout(arr, volume_shape):
         return True
     if arr.ndim == 1 and int(arr.shape[0]) == full_size:
         return False
-    raise ValueError(
-        f"Could not infer half/full Fourier layout for shape {arr.shape} and volume_shape={volume_shape}"
-    )
+    raise ValueError(f"Could not infer half/full Fourier layout for shape {arr.shape} and volume_shape={volume_shape}")
 
 
-def post_process_from_filter(cryo, Ft_ctf, F_ty, tau=None, disc_type='nearest', use_spherical_mask=True, grid_correct=True, gridding_correct="square", kernel_width=1):
+def post_process_from_filter(
+    cryo,
+    Ft_ctf,
+    F_ty,
+    tau=None,
+    disc_type="nearest",
+    use_spherical_mask=True,
+    grid_correct=True,
+    gridding_correct="square",
+    kernel_width=1,
+):
     """Post-process RELION-style reconstruction from filter weights.
 
     Thin wrapper around ``post_process_from_filter_v2`` that extracts the
     necessary geometry from a dataset object (*cryo*).
     """
-    kernel = 'triangular' if disc_type == 'linear_interp' else 'square'
+    kernel = "triangular" if disc_type == "linear_interp" else "square"
     return post_process_from_filter_v2(
-        Ft_ctf, F_ty,
-        cryo.volume_shape, 1,
-        tau=tau, kernel=kernel,
-        use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
-        gridding_correct=gridding_correct, kernel_width=kernel_width,
+        Ft_ctf,
+        F_ty,
+        cryo.volume_shape,
+        1,
+        tau=tau,
+        kernel=kernel,
+        use_spherical_mask=use_spherical_mask,
+        grid_correct=grid_correct,
+        gridding_correct=gridding_correct,
+        kernel_width=kernel_width,
     )
 
 
 @functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13])
 def post_process_from_filter_v2(
-    Ft_ctf, F_ty, og_volume_shape, volume_upsampling_factor,
-    tau=None, kernel='triangular', use_spherical_mask=True,
-    grid_correct=True, gridding_correct="square", kernel_width=1,
+    Ft_ctf,
+    F_ty,
+    og_volume_shape,
+    volume_upsampling_factor,
+    tau=None,
+    kernel="triangular",
+    use_spherical_mask=True,
+    grid_correct=True,
+    gridding_correct="square",
+    kernel_width=1,
     volume_mask=None,
     return_real_space=False,
     return_half_volume=False,
@@ -415,23 +488,26 @@ def post_process_from_filter_v2(
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, packed_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, packed_shape)
         # Expand canonical half-volume to full before regularization/iDFT.
-        Ft_ctf_flat = fourier_transform_utils.half_volume_to_full_volume(
-            Ft_ctf_flat, upsampled_volume_shape
-        ).reshape(-1).real
-        F_ty_flat = fourier_transform_utils.half_volume_to_full_volume(
-            F_ty_flat, upsampled_volume_shape
-        ).reshape(-1)
+        Ft_ctf_flat = (
+            fourier_transform_utils.half_volume_to_full_volume(Ft_ctf_flat, upsampled_volume_shape).reshape(-1).real
+        )
+        F_ty_flat = fourier_transform_utils.half_volume_to_full_volume(F_ty_flat, upsampled_volume_shape).reshape(-1)
     else:
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, upsampled_volume_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, upsampled_volume_shape)
 
-    valid_indices = mask.get_radial_mask(
-        upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1
-    ).reshape(-1).astype(Ft_ctf_flat.real.dtype)
+    valid_indices = (
+        mask.get_radial_mask(upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1)
+        .reshape(-1)
+        .astype(Ft_ctf_flat.real.dtype)
+    )
 
     Ft_ctf2 = adjust_regularization_relion_style(
-        Ft_ctf_flat.real, upsampled_volume_shape, tau=tau,
-        padding_factor=volume_upsampling_factor, max_res_shell=None,
+        Ft_ctf_flat.real,
+        upsampled_volume_shape,
+        tau=tau,
+        padding_factor=volume_upsampling_factor,
+        max_res_shell=None,
         half_volume=False,
     )
     vol = (F_ty_flat * valid_indices) / Ft_ctf2
@@ -447,9 +523,11 @@ def post_process_from_filter_v2(
         vol = vol * volume_mask
 
     if grid_correct:
-        order = 1 if kernel == 'triangular' else 0
+        order = 1 if kernel == "triangular" else 0
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
-        vol, _ = grid_fn(vol.reshape(og_volume_shape), og_volume_shape[0], volume_upsampling_factor / kernel_width, order=order)
+        vol, _ = grid_fn(
+            vol.reshape(og_volume_shape), og_volume_shape[0], volume_upsampling_factor / kernel_width, order=order
+        )
 
     if return_real_space:
         return vol.real.astype(Ft_ctf2.real.dtype)
@@ -461,17 +539,36 @@ def post_process_from_filter_v2(
     return vol.astype(F_ty_flat.dtype)
 
 
-def relion_reconstruct(cryo, noise_variance, batch_size=100, disc_type='linear_interp', use_spherical_mask=True, upsampling_factor=2, grid_correct=True, gridding_correct="square", tau=None):
+def relion_reconstruct(
+    cryo,
+    noise_variance,
+    batch_size=100,
+    disc_type="linear_interp",
+    use_spherical_mask=True,
+    upsampling_factor=2,
+    grid_correct=True,
+    gridding_correct="square",
+    tau=None,
+):
     """Full mean reconstruction pipeline: accumulate → post-process."""
     Ft_ctf, F_ty = relion_style_triangular_kernel(
-        cryo, noise_variance.astype(np.float32), batch_size, disc_type=disc_type,
+        cryo,
+        noise_variance.astype(np.float32),
+        batch_size,
+        disc_type=disc_type,
         upsampling_factor=upsampling_factor,
     )
-    kernel = 'triangular' if disc_type == 'linear_interp' else 'square'
+    kernel = "triangular" if disc_type == "linear_interp" else "square"
     estimate = post_process_from_filter_v2(
-        Ft_ctf, F_ty, cryo.volume_shape, upsampling_factor,
-        tau=tau, kernel=kernel,
-        use_spherical_mask=use_spherical_mask, grid_correct=grid_correct,
-        gridding_correct=gridding_correct, kernel_width=1,
+        Ft_ctf,
+        F_ty,
+        cryo.volume_shape,
+        upsampling_factor,
+        tau=tau,
+        kernel=kernel,
+        use_spherical_mask=use_spherical_mask,
+        grid_correct=grid_correct,
+        gridding_correct=gridding_correct,
+        kernel_width=1,
     )
     return estimate, Ft_ctf

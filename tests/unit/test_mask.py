@@ -65,7 +65,7 @@ def test_smooth_circular_mask_exact_formula():
     half = image_size // 2
     coords = np.arange(-half, image_size - half, dtype=float)
     gx, gy = np.meshgrid(coords, coords, indexing="xy")
-    r = np.sqrt(gx ** 2 + gy ** 2)
+    r = np.sqrt(gx**2 + gy**2)
 
     for i in range(image_size):
         for j in range(image_size):

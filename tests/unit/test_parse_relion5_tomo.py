@@ -22,6 +22,7 @@ pytestmark = pytest.mark.unit
 # Fixtures: synthetic RELION5 star files
 # ---------------------------------------------------------------------------
 
+
 def _write_text(path, text):
     with open(path, "w") as f:
         f.write(textwrap.dedent(text))
@@ -89,8 +90,7 @@ def _make_tomograms_star(path, ts_star_relpath, n_tomos=1):
         f.write("\n".join(rows) + "\n")
 
 
-def _make_particles_star(path, n_particles=3, n_tilts=5,
-                          tomo_name="tomo_001", has_subtomo_rot=False):
+def _make_particles_star(path, n_particles=3, n_tilts=5, tomo_name="tomo_001", has_subtomo_rot=False):
     """Write a minimal RELION5 particles.star with optics + particles blocks."""
     visible = "[" + ",".join(["1"] * n_tilts) + "]"
 
@@ -146,10 +146,7 @@ def _make_particles_star(path, n_particles=3, n_tilts=5,
         subset = (p % 2) + 1
         name = f"{tomo_name}/{p + 1}"
         img = f"Extract/Subtomograms/{tomo_name}/{p + 1}_stack2d.mrcs"
-        row = (
-            f"{tomo_name} {x:.3f} {y:.3f} {z:.3f} 1 {name} {img} "
-            f"{rot:.3f} {tilt:.3f} {psi:.3f} {subset} {visible}"
-        )
+        row = f"{tomo_name} {x:.3f} {y:.3f} {z:.3f} 1 {name} {img} {rot:.3f} {tilt:.3f} {psi:.3f} {subset} {visible}"
         if has_subtomo_rot:
             srot, stilt, spsi = rng.uniform(-10, 10, 3)
             row += f" {srot:.3f} {stilt:.3f} {spsi:.3f}"
@@ -185,8 +182,7 @@ def relion5_data(tmp_path):
     extract_dir = tmp_path / "Extract" / "job002"
     extract_dir.mkdir(parents=True)
     particles_star = extract_dir / "particles.star"
-    _make_particles_star(str(particles_star), n_particles=n_particles,
-                          n_tilts=n_tilts)
+    _make_particles_star(str(particles_star), n_particles=n_particles, n_tilts=n_tilts)
 
     return {
         "root": tmp_path,
@@ -201,8 +197,8 @@ def relion5_data(tmp_path):
 # Tests: Tomogram class
 # ---------------------------------------------------------------------------
 
-class TestTomogram:
 
+class TestTomogram:
     def test_local_defocus_at_origin_equals_global(self):
         """At the origin, depth offset is zero so local == global defocus."""
         tomo = Tomogram(
@@ -210,9 +206,11 @@ class TestTomogram:
             defocus_u=np.array([25000.0]),
             defocus_v=np.array([26000.0]),
             defocus_angle=np.array([45.0]),
-            x_tilts=np.array([30.0]), y_tilts=np.array([0.0]),
+            x_tilts=np.array([30.0]),
+            y_tilts=np.array([0.0]),
             z_rots=np.array([0.0]),
-            x_shifts=np.array([0.0]), y_shifts=np.array([0.0]),
+            x_shifts=np.array([0.0]),
+            y_shifts=np.array([0.0]),
             hand=1,
         )
         u, v, a = tomo.local_defocus(0, np.array([0.0, 0.0, 0.0]))
@@ -227,9 +225,11 @@ class TestTomogram:
             defocus_u=np.array([30000.0]),
             defocus_v=np.array([30000.0]),
             defocus_angle=np.array([0.0]),
-            x_tilts=np.array([45.0]), y_tilts=np.array([0.0]),
+            x_tilts=np.array([45.0]),
+            y_tilts=np.array([0.0]),
             z_rots=np.array([0.0]),
-            x_shifts=np.array([0.0]), y_shifts=np.array([0.0]),
+            x_shifts=np.array([0.0]),
+            y_shifts=np.array([0.0]),
             hand=1,
         )
         u_origin, _, _ = tomo.local_defocus(0, np.array([0.0, 0.0, 0.0]))
@@ -241,24 +241,31 @@ class TestTomogram:
         n = 4
         tomo = Tomogram(
             pixel_size=1.0,
-            defocus_u=np.zeros(n), defocus_v=np.zeros(n),
+            defocus_u=np.zeros(n),
+            defocus_v=np.zeros(n),
             defocus_angle=np.zeros(n),
             x_tilts=np.linspace(-40, 40, n),
-            y_tilts=np.zeros(n), z_rots=np.zeros(n),
-            x_shifts=np.zeros(n), y_shifts=np.zeros(n),
+            y_tilts=np.zeros(n),
+            z_rots=np.zeros(n),
+            x_shifts=np.zeros(n),
+            y_shifts=np.zeros(n),
             hand=1,
         )
         # Build a minimal tilt_df
-        tilt_df = pd.DataFrame({
-            "_rlnMicrographName": [f"mic_{i}.mrc" for i in range(n)],
-            "_rlnMicrographPreExposure": [str(i * 3.0) for i in range(n)],
-            "_rlnCtfScalefactor": ["1.0"] * n,
-            "_rlnTomoNominalStageTiltAngle": [str(a) for a in np.linspace(-40, 40, n)],
-        })
+        tilt_df = pd.DataFrame(
+            {
+                "_rlnMicrographName": [f"mic_{i}.mrc" for i in range(n)],
+                "_rlnMicrographPreExposure": [str(i * 3.0) for i in range(n)],
+                "_rlnCtfScalefactor": ["1.0"] * n,
+                "_rlnTomoNominalStageTiltAngle": [str(a) for a in np.linspace(-40, 40, n)],
+            }
+        )
         base_rot = R.from_euler("ZYZ", [30, 60, 90], degrees=True)
         df = tomo.expand_particles_batch(
             np.array([[100.0, 200.0, -50.0]]),
-            ["stack.mrcs"], tilt_df, ["particle/1"],
+            ["stack.mrcs"],
+            tilt_df,
+            ["particle/1"],
             base_rot,
             np.array([1]),
         )
@@ -274,22 +281,29 @@ class TestTomogram:
         n = 3
         tomo = Tomogram(
             pixel_size=1.0,
-            defocus_u=np.zeros(n), defocus_v=np.zeros(n),
+            defocus_u=np.zeros(n),
+            defocus_v=np.zeros(n),
             defocus_angle=np.zeros(n),
             x_tilts=np.array([0.0, 20.0, -20.0]),
-            y_tilts=np.zeros(n), z_rots=np.zeros(n),
-            x_shifts=np.zeros(n), y_shifts=np.zeros(n),
+            y_tilts=np.zeros(n),
+            z_rots=np.zeros(n),
+            x_shifts=np.zeros(n),
+            y_shifts=np.zeros(n),
             hand=1,
         )
-        tilt_df = pd.DataFrame({
-            "_rlnMicrographName": [f"mic_{i}.mrc" for i in range(n)],
-            "_rlnMicrographPreExposure": ["3.0", "6.0", "9.0"],
-            "_rlnCtfScalefactor": ["1.0"] * n,
-            "_rlnTomoNominalStageTiltAngle": ["0.0", "20.0", "-20.0"],
-        })
+        tilt_df = pd.DataFrame(
+            {
+                "_rlnMicrographName": [f"mic_{i}.mrc" for i in range(n)],
+                "_rlnMicrographPreExposure": ["3.0", "6.0", "9.0"],
+                "_rlnCtfScalefactor": ["1.0"] * n,
+                "_rlnTomoNominalStageTiltAngle": ["0.0", "20.0", "-20.0"],
+            }
+        )
         df = tomo.expand_particles_batch(
             np.array([[0.0, 0.0, 0.0]]),
-            ["stack.mrcs"], tilt_df, ["p/1"],
+            ["stack.mrcs"],
+            tilt_df,
+            ["p/1"],
             None,
             np.array([1]),
         )
@@ -302,8 +316,8 @@ class TestTomogram:
 # Tests: visible frames parsing
 # ---------------------------------------------------------------------------
 
-class TestParseVisibleFrames:
 
+class TestParseVisibleFrames:
     def test_all_visible(self):
         assert _parse_visible_frames("[1,1,1,1]") == [0, 1, 2, 3]
 
@@ -318,8 +332,8 @@ class TestParseVisibleFrames:
 # Tests: end-to-end conversion
 # ---------------------------------------------------------------------------
 
-class TestConvert:
 
+class TestConvert:
     def test_basic_conversion(self, relion5_data, tmp_path):
         output = str(tmp_path / "output.star")
         convert(
@@ -352,12 +366,20 @@ class TestConvert:
         )
         df, _ = read_star(output)
         required = [
-            "_rlnDefocusU", "_rlnDefocusV", "_rlnDefocusAngle",
-            "_rlnImageName", "_rlnGroupName",
-            "_rlnAngleRot", "_rlnAngleTilt", "_rlnAnglePsi",
-            "_rlnOriginXAngst", "_rlnOriginYAngst",
-            "_rlnCtfScalefactor", "_rlnRandomSubset",
-            "_rlnMicrographPreExposure", "_rlnOpticsGroup",
+            "_rlnDefocusU",
+            "_rlnDefocusV",
+            "_rlnDefocusAngle",
+            "_rlnImageName",
+            "_rlnGroupName",
+            "_rlnAngleRot",
+            "_rlnAngleTilt",
+            "_rlnAnglePsi",
+            "_rlnOriginXAngst",
+            "_rlnOriginYAngst",
+            "_rlnCtfScalefactor",
+            "_rlnRandomSubset",
+            "_rlnMicrographPreExposure",
+            "_rlnOpticsGroup",
         ]
         for col in required:
             assert col in df.columns, f"Missing column: {col}"
@@ -374,8 +396,7 @@ class TestConvert:
         for group in groups:
             mask = df["_rlnGroupName"] == group
             doses = df[mask]["_rlnMicrographPreExposure"].values.astype(float)
-            assert np.all(np.diff(doses) >= 0), \
-                f"Doses not sorted for group {group}: {doses}"
+            assert np.all(np.diff(doses) >= 0), f"Doses not sorted for group {group}: {doses}"
 
     def test_random_subset_preserved(self, relion5_data, tmp_path):
         output = str(tmp_path / "output.star")
@@ -397,8 +418,7 @@ class TestConvert:
         )
         df, _ = read_star(output)
         groups = sorted(df["_rlnGroupName"].unique())
-        expected = sorted([f"tomo_001/{i + 1}"
-                           for i in range(relion5_data["n_particles"])])
+        expected = sorted([f"tomo_001/{i + 1}" for i in range(relion5_data["n_particles"])])
         assert groups == expected
 
     def test_image_names_format(self, relion5_data, tmp_path):
@@ -443,15 +463,13 @@ class TestConvert:
 
         # Without subtomo orientation
         p1 = tmp_path / "p1.star"
-        _make_particles_star(str(p1), n_particles=1, n_tilts=n_tilts,
-                              has_subtomo_rot=False)
+        _make_particles_star(str(p1), n_particles=1, n_tilts=n_tilts, has_subtomo_rot=False)
         out1 = str(tmp_path / "out1.star")
         convert(str(tomo_star), str(p1), out1)
 
         # With subtomo orientation
         p2 = tmp_path / "p2.star"
-        _make_particles_star(str(p2), n_particles=1, n_tilts=n_tilts,
-                              has_subtomo_rot=True)
+        _make_particles_star(str(p2), n_particles=1, n_tilts=n_tilts, has_subtomo_rot=True)
         out2 = str(tmp_path / "out2.star")
         convert(str(tomo_star), str(p2), out2)
 
@@ -461,8 +479,7 @@ class TestConvert:
         # Angles should differ (subtomo orientation != identity)
         rot1 = df1["_rlnAngleRot"].values.astype(float)
         rot2 = df2["_rlnAngleRot"].values.astype(float)
-        assert not np.allclose(rot1, rot2, atol=0.1), \
-            "Subtomogram orientation should produce different angles"
+        assert not np.allclose(rot1, rot2, atol=0.1), "Subtomogram orientation should produce different angles"
 
     def test_partial_visible_frames(self, tmp_path):
         """Particles with some invisible tilts should produce fewer rows."""
@@ -555,8 +572,8 @@ class TestConvert:
 # Tests: geometry consistency
 # ---------------------------------------------------------------------------
 
-class TestGeometryConsistency:
 
+class TestGeometryConsistency:
     def test_hand_affects_defocus(self):
         """Changing handedness should flip the defocus depth offset."""
         n = 1
@@ -565,9 +582,11 @@ class TestGeometryConsistency:
             defocus_u=np.array([30000.0]),
             defocus_v=np.array([30000.0]),
             defocus_angle=np.array([0.0]),
-            x_tilts=np.array([30.0]), y_tilts=np.array([0.0]),
+            x_tilts=np.array([30.0]),
+            y_tilts=np.array([0.0]),
             z_rots=np.array([0.0]),
-            x_shifts=np.array([0.0]), y_shifts=np.array([0.0]),
+            x_shifts=np.array([0.0]),
+            y_shifts=np.array([0.0]),
         )
         tomo_pos = Tomogram(**kwargs, hand=1)
         tomo_neg = Tomogram(**kwargs, hand=-1)
@@ -601,15 +620,20 @@ class TestGeometryConsistency:
             y_shifts=np.array([0.0]),
             hand=1,
         )
-        tilt_df = pd.DataFrame({
-            "_rlnMicrographName": ["mic.mrc"],
-            "_rlnMicrographPreExposure": ["3.0"],
-            "_rlnCtfScalefactor": ["1.0"],
-            "_rlnTomoNominalStageTiltAngle": ["20.0"],
-        })
+        tilt_df = pd.DataFrame(
+            {
+                "_rlnMicrographName": ["mic.mrc"],
+                "_rlnMicrographPreExposure": ["3.0"],
+                "_rlnCtfScalefactor": ["1.0"],
+                "_rlnTomoNominalStageTiltAngle": ["20.0"],
+            }
+        )
         df = tomo.expand_particles_batch(
-            np.array([[0.0, 0.0, 0.0]]), ["stack.mrcs"],
-            tilt_df, ["p/1"], R_base,
+            np.array([[0.0, 0.0, 0.0]]),
+            ["stack.mrcs"],
+            tilt_df,
+            ["p/1"],
+            R_base,
             np.array([1]),
         )
         # Verify non-zero angles
@@ -620,8 +644,7 @@ class TestGeometryConsistency:
         """Verify our Tomogram class exactly matches the original
         relion2cryodrgn defocus geometry (Ryan Feathers / Bogdan Toader)."""
 
-        def ryan_local_defocus(x_tilt, y_tilt, z_rot, x_shift, y_shift,
-                                dfu, dfv, dfa, point, hand):
+        def ryan_local_defocus(x_tilt, y_tilt, z_rot, x_shift, y_shift, dfu, dfv, dfa, point, hand):
             Rx = R.from_euler("x", x_tilt, degrees=True)
             Ry = R.from_euler("y", y_tilt, degrees=True)
             Rz = R.from_euler("z", z_rot, degrees=True)
@@ -649,9 +672,15 @@ class TestGeometryConsistency:
 
         tomo = Tomogram(
             pixel_size=1.5,
-            defocus_u=dfu, defocus_v=dfv, defocus_angle=dfa,
-            x_tilts=x_tilts, y_tilts=y_tilts, z_rots=z_rots,
-            x_shifts=x_shifts, y_shifts=y_shifts, hand=-1,
+            defocus_u=dfu,
+            defocus_v=dfv,
+            defocus_angle=dfa,
+            x_tilts=x_tilts,
+            y_tilts=y_tilts,
+            z_rots=z_rots,
+            x_shifts=x_shifts,
+            y_shifts=y_shifts,
+            hand=-1,
         )
 
         point = np.array([300.0, -150.0, 200.0])
@@ -660,33 +689,40 @@ class TestGeometryConsistency:
             # Defocus
             our_u, our_v, our_a = tomo.local_defocus(i, point)
             ref_u, ref_v, ref_a = ryan_local_defocus(
-                x_tilts[i], y_tilts[i], z_rots[i],
-                x_shifts[i], y_shifts[i],
-                dfu[i], dfv[i], dfa[i], point, -1,
+                x_tilts[i],
+                y_tilts[i],
+                z_rots[i],
+                x_shifts[i],
+                y_shifts[i],
+                dfu[i],
+                dfv[i],
+                dfa[i],
+                point,
+                -1,
             )
-            assert our_u == pytest.approx(ref_u, abs=1e-10), \
-                f"DefocusU mismatch at tilt {i}"
-            assert our_v == pytest.approx(ref_v, abs=1e-10), \
-                f"DefocusV mismatch at tilt {i}"
-            assert our_a == pytest.approx(ref_a, abs=1e-10), \
-                f"DefocusAngle mismatch at tilt {i}"
+            assert our_u == pytest.approx(ref_u, abs=1e-10), f"DefocusU mismatch at tilt {i}"
+            assert our_v == pytest.approx(ref_v, abs=1e-10), f"DefocusV mismatch at tilt {i}"
+            assert our_a == pytest.approx(ref_a, abs=1e-10), f"DefocusAngle mismatch at tilt {i}"
 
 
 # ---------------------------------------------------------------------------
 # Tests: Tomogram edge cases
 # ---------------------------------------------------------------------------
 
-class TestTomogramEdgeCases:
 
+class TestTomogramEdgeCases:
     def test_defocus_offset_proportional_to_depth(self):
         """Defocus offset should scale linearly with z displacement."""
         tomo = Tomogram(
             pixel_size=1.0,
-            defocus_u=np.array([30000.0]), defocus_v=np.array([30000.0]),
+            defocus_u=np.array([30000.0]),
+            defocus_v=np.array([30000.0]),
             defocus_angle=np.array([0.0]),
-            x_tilts=np.array([45.0]), y_tilts=np.array([0.0]),
+            x_tilts=np.array([45.0]),
+            y_tilts=np.array([0.0]),
             z_rots=np.array([0.0]),
-            x_shifts=np.array([0.0]), y_shifts=np.array([0.0]),
+            x_shifts=np.array([0.0]),
+            y_shifts=np.array([0.0]),
             hand=1,
         )
         u0, _, _ = tomo.local_defocus(0, np.array([0.0, 0.0, 0.0]))
@@ -728,27 +764,32 @@ class TestTomogramEdgeCases:
             defocus_v=np.array([20500.0, 21500.0, 22500.0]),
             defocus_angle=np.zeros(n),
             x_tilts=np.array([-30.0, 0.0, 30.0]),
-            y_tilts=np.zeros(n), z_rots=np.zeros(n),
-            x_shifts=np.zeros(n), y_shifts=np.zeros(n),
+            y_tilts=np.zeros(n),
+            z_rots=np.zeros(n),
+            x_shifts=np.zeros(n),
+            y_shifts=np.zeros(n),
             hand=1,
         )
-        tilt_df = pd.DataFrame({
-            '_rlnMicrographName': ['m0.mrc', 'm1.mrc', 'm2.mrc'],
-            '_rlnMicrographPreExposure': ['3.0', '6.0', '9.0'],
-            '_rlnCtfScalefactor': ['1.0', '0.9', '0.8'],
-            '_rlnTomoNominalStageTiltAngle': ['-30.0', '0.0', '30.0'],
-        })
+        tilt_df = pd.DataFrame(
+            {
+                "_rlnMicrographName": ["m0.mrc", "m1.mrc", "m2.mrc"],
+                "_rlnMicrographPreExposure": ["3.0", "6.0", "9.0"],
+                "_rlnCtfScalefactor": ["1.0", "0.9", "0.8"],
+                "_rlnTomoNominalStageTiltAngle": ["-30.0", "0.0", "30.0"],
+            }
+        )
         df = tomo.expand_particles_batch(
-            np.array([[0.0, 0.0, 0.0]]), ['stack.mrcs'],
-            tilt_df, ['p/1'], None,
+            np.array([[0.0, 0.0, 0.0]]),
+            ["stack.mrcs"],
+            tilt_df,
+            ["p/1"],
+            None,
             np.array([1]),
         )
         # Should be numeric (float)
-        assert df['_rlnMicrographPreExposure'].dtype in [np.float64, np.float32]
-        assert df['_rlnCtfScalefactor'].dtype in [np.float64, np.float32]
-        np.testing.assert_allclose(
-            df['_rlnDefocusU'].values, [20000.0, 21000.0, 22000.0], atol=1e-6
-        )
+        assert df["_rlnMicrographPreExposure"].dtype in [np.float64, np.float32]
+        assert df["_rlnCtfScalefactor"].dtype in [np.float64, np.float32]
+        np.testing.assert_allclose(df["_rlnDefocusU"].values, [20000.0, 21000.0, 22000.0], atol=1e-6)
 
     def test_expand_preserves_ctf_scalefactor(self):
         """CTF scale factors from the tilt series should appear unchanged."""
@@ -756,56 +797,72 @@ class TestTomogramEdgeCases:
         ctf_scales = np.array([1.0, 0.95, 0.85, 0.7])
         tomo = Tomogram(
             pixel_size=1.0,
-            defocus_u=np.zeros(n), defocus_v=np.zeros(n),
+            defocus_u=np.zeros(n),
+            defocus_v=np.zeros(n),
             defocus_angle=np.zeros(n),
             x_tilts=np.linspace(-40, 40, n),
-            y_tilts=np.zeros(n), z_rots=np.zeros(n),
-            x_shifts=np.zeros(n), y_shifts=np.zeros(n),
+            y_tilts=np.zeros(n),
+            z_rots=np.zeros(n),
+            x_shifts=np.zeros(n),
+            y_shifts=np.zeros(n),
             hand=1,
         )
-        tilt_df = pd.DataFrame({
-            '_rlnMicrographName': [f'm{i}.mrc' for i in range(n)],
-            '_rlnMicrographPreExposure': [str(i * 3.0) for i in range(n)],
-            '_rlnCtfScalefactor': [str(c) for c in ctf_scales],
-            '_rlnTomoNominalStageTiltAngle': [str(a) for a in np.linspace(-40, 40, n)],
-        })
+        tilt_df = pd.DataFrame(
+            {
+                "_rlnMicrographName": [f"m{i}.mrc" for i in range(n)],
+                "_rlnMicrographPreExposure": [str(i * 3.0) for i in range(n)],
+                "_rlnCtfScalefactor": [str(c) for c in ctf_scales],
+                "_rlnTomoNominalStageTiltAngle": [str(a) for a in np.linspace(-40, 40, n)],
+            }
+        )
         df = tomo.expand_particles_batch(
-            np.array([[0.0, 0.0, 0.0]]), ['stack.mrcs'],
-            tilt_df, ['p/1'], None,
+            np.array([[0.0, 0.0, 0.0]]),
+            ["stack.mrcs"],
+            tilt_df,
+            ["p/1"],
+            None,
             np.array([1]),
         )
-        np.testing.assert_allclose(df['_rlnCtfScalefactor'].values, ctf_scales)
+        np.testing.assert_allclose(df["_rlnCtfScalefactor"].values, ctf_scales)
 
     def test_identity_orientation_at_zero_tilt(self):
         """Identity base orientation with zero tilt should give near-zero angles."""
         tomo = Tomogram(
             pixel_size=1.0,
-            defocus_u=np.array([0.0]), defocus_v=np.array([0.0]),
+            defocus_u=np.array([0.0]),
+            defocus_v=np.array([0.0]),
             defocus_angle=np.array([0.0]),
-            x_tilts=np.array([0.0]), y_tilts=np.array([0.0]),
+            x_tilts=np.array([0.0]),
+            y_tilts=np.array([0.0]),
             z_rots=np.array([0.0]),
-            x_shifts=np.array([0.0]), y_shifts=np.array([0.0]),
+            x_shifts=np.array([0.0]),
+            y_shifts=np.array([0.0]),
             hand=1,
         )
-        tilt_df = pd.DataFrame({
-            '_rlnMicrographName': ['mic.mrc'],
-            '_rlnMicrographPreExposure': ['3.0'],
-            '_rlnCtfScalefactor': ['1.0'],
-            '_rlnTomoNominalStageTiltAngle': ['0.0'],
-        })
+        tilt_df = pd.DataFrame(
+            {
+                "_rlnMicrographName": ["mic.mrc"],
+                "_rlnMicrographPreExposure": ["3.0"],
+                "_rlnCtfScalefactor": ["1.0"],
+                "_rlnTomoNominalStageTiltAngle": ["0.0"],
+            }
+        )
         # Identity rotation at zero tilt: final rotation is identity @ identity = identity
         R_identity = R.identity()
         df = tomo.expand_particles_batch(
-            np.array([[0.0, 0.0, 0.0]]), ['stack.mrcs'],
-            tilt_df, ['p/1'], R_identity,
+            np.array([[0.0, 0.0, 0.0]]),
+            ["stack.mrcs"],
+            tilt_df,
+            ["p/1"],
+            R_identity,
             np.array([1]),
         )
         # ZYZ Euler of identity is (0, 0, 0)
         # But the tilt rotation matrix at zero tilt is also identity
         # so R_final = I @ I = I -> ZYZ = (0, 0, 0)
-        rot = float(df['_rlnAngleRot'].iloc[0])
-        tilt = float(df['_rlnAngleTilt'].iloc[0])
-        psi = float(df['_rlnAnglePsi'].iloc[0])
+        rot = float(df["_rlnAngleRot"].iloc[0])
+        tilt = float(df["_rlnAngleTilt"].iloc[0])
+        psi = float(df["_rlnAnglePsi"].iloc[0])
         # sin(tilt) should be ~0; rot+psi is degenerate but tilt should be ~0
         assert abs(tilt) < 1e-6
 
@@ -856,8 +913,8 @@ class TestTomogramEdgeCases:
 # Tests: visible frames edge cases
 # ---------------------------------------------------------------------------
 
-class TestParseVisibleFramesEdgeCases:
 
+class TestParseVisibleFramesEdgeCases:
     def test_single_visible(self):
         assert _parse_visible_frames("[1]") == [0]
 
@@ -887,8 +944,8 @@ class TestParseVisibleFramesEdgeCases:
 # Tests: convert() edge cases
 # ---------------------------------------------------------------------------
 
-class TestConvertEdgeCases:
 
+class TestConvertEdgeCases:
     def test_multiple_tomograms(self, tmp_path):
         """Particles from multiple tomograms should all be converted."""
         n_tilts = 3
@@ -966,8 +1023,8 @@ class TestConvertEdgeCases:
         assert len(df) == 3 * n_tilts
 
         # Check that all three groups exist
-        groups = sorted(df['_rlnGroupName'].unique())
-        assert groups == ['tomo_000/1', 'tomo_000/2', 'tomo_001/1']
+        groups = sorted(df["_rlnGroupName"].unique())
+        assert groups == ["tomo_000/1", "tomo_000/2", "tomo_001/1"]
 
     def test_single_particle(self, tmp_path):
         """Single particle conversion should work."""
@@ -987,7 +1044,7 @@ class TestConvertEdgeCases:
 
         df, _ = read_star(output)
         assert len(df) == n_tilts
-        assert len(df['_rlnGroupName'].unique()) == 1
+        assert len(df["_rlnGroupName"].unique()) == 1
 
     def test_missing_optics_raises(self, tmp_path):
         """particles.star without optics table should raise ValueError."""
@@ -1085,10 +1142,8 @@ class TestConvertEdgeCases:
         """Running convert() twice on the same input should give identical output."""
         out1 = str(tmp_path / "out1.star")
         out2 = str(tmp_path / "out2.star")
-        convert(relion5_data["tomograms"], relion5_data["particles"],
-                out1)
-        convert(relion5_data["tomograms"], relion5_data["particles"],
-                out2)
+        convert(relion5_data["tomograms"], relion5_data["particles"], out1)
+        convert(relion5_data["tomograms"], relion5_data["particles"], out2)
 
         df1, op1 = read_star(out1)
         df2, op2 = read_star(out2)
@@ -1099,43 +1154,39 @@ class TestConvertEdgeCases:
     def test_origins_are_zero(self, relion5_data, tmp_path):
         """All _rlnOriginXAngst and _rlnOriginYAngst should be zero."""
         output = str(tmp_path / "output.star")
-        convert(relion5_data["tomograms"], relion5_data["particles"],
-                output)
+        convert(relion5_data["tomograms"], relion5_data["particles"], output)
         df, _ = read_star(output)
-        ox = df['_rlnOriginXAngst'].values.astype(float)
-        oy = df['_rlnOriginYAngst'].values.astype(float)
+        ox = df["_rlnOriginXAngst"].values.astype(float)
+        oy = df["_rlnOriginYAngst"].values.astype(float)
         np.testing.assert_array_equal(ox, 0.0)
         np.testing.assert_array_equal(oy, 0.0)
 
     def test_optics_values_propagated(self, relion5_data, tmp_path):
         """Verify that optics values from the input are in the output."""
         output = str(tmp_path / "output.star")
-        convert(relion5_data["tomograms"], relion5_data["particles"],
-                output)
+        convert(relion5_data["tomograms"], relion5_data["particles"], output)
         _, optics = read_star(output)
-        assert optics['_rlnVoltage'].values[0] == '300.0'
-        assert optics['_rlnSphericalAberration'].values[0] == '2.7'
-        assert optics['_rlnAmplitudeContrast'].values[0] == '0.1'
-        assert optics['_rlnImageDimensionality'].values[0] == '2'
-        assert optics['_rlnOpticsGroupName'].values[0] == 'opticsGroup1'
+        assert optics["_rlnVoltage"].values[0] == "300.0"
+        assert optics["_rlnSphericalAberration"].values[0] == "2.7"
+        assert optics["_rlnAmplitudeContrast"].values[0] == "0.1"
+        assert optics["_rlnImageDimensionality"].values[0] == "2"
+        assert optics["_rlnOpticsGroupName"].values[0] == "opticsGroup1"
 
     def test_all_optics_group_one(self, relion5_data, tmp_path):
         """All particles should have _rlnOpticsGroup = 1."""
         output = str(tmp_path / "output.star")
-        convert(relion5_data["tomograms"], relion5_data["particles"],
-                output)
+        convert(relion5_data["tomograms"], relion5_data["particles"], output)
         df, _ = read_star(output)
-        groups = df['_rlnOpticsGroup'].values
-        assert all(g == '1' for g in groups)
+        groups = df["_rlnOpticsGroup"].values
+        assert all(g == "1" for g in groups)
 
     def test_defocus_values_nontrivial(self, relion5_data, tmp_path):
         """Output defocus should not be all-zero -- should have real values."""
         output = str(tmp_path / "output.star")
-        convert(relion5_data["tomograms"], relion5_data["particles"],
-                output)
+        convert(relion5_data["tomograms"], relion5_data["particles"], output)
         df, _ = read_star(output)
-        dfu = df['_rlnDefocusU'].values.astype(float)
-        dfv = df['_rlnDefocusV'].values.astype(float)
+        dfu = df["_rlnDefocusU"].values.astype(float)
+        dfv = df["_rlnDefocusV"].values.astype(float)
         assert np.any(dfu != 0)
         assert np.any(dfv != 0)
         # The synthetic data has defocus around 30000-31400
@@ -1145,11 +1196,10 @@ class TestConvertEdgeCases:
     def test_stage_tilt_angle_preserved(self, relion5_data, tmp_path):
         """_rlnTomoNominalStageTiltAngle should be present and non-trivial."""
         output = str(tmp_path / "output.star")
-        convert(relion5_data["tomograms"], relion5_data["particles"],
-                output)
+        convert(relion5_data["tomograms"], relion5_data["particles"], output)
         df, _ = read_star(output)
-        assert '_rlnTomoNominalStageTiltAngle' in df.columns
-        angles = df['_rlnTomoNominalStageTiltAngle'].values.astype(float)
+        assert "_rlnTomoNominalStageTiltAngle" in df.columns
+        angles = df["_rlnTomoNominalStageTiltAngle"].values.astype(float)
         # Our synthetic data has tilts from -60 to 60
         assert np.min(angles) < -10
         assert np.max(angles) > 10
@@ -1157,33 +1207,30 @@ class TestConvertEdgeCases:
     def test_each_group_has_consistent_random_subset(self, relion5_data, tmp_path):
         """Each particle group should have the same _rlnRandomSubset for all tilts."""
         output = str(tmp_path / "output.star")
-        convert(relion5_data["tomograms"], relion5_data["particles"],
-                output)
+        convert(relion5_data["tomograms"], relion5_data["particles"], output)
         df, _ = read_star(output)
-        for group in df['_rlnGroupName'].unique():
-            mask = df['_rlnGroupName'] == group
-            subsets = df[mask]['_rlnRandomSubset'].values.astype(int)
-            assert len(set(subsets)) == 1, \
-                f"Group {group} has mixed subsets: {set(subsets)}"
+        for group in df["_rlnGroupName"].unique():
+            mask = df["_rlnGroupName"] == group
+            subsets = df[mask]["_rlnRandomSubset"].values.astype(int)
+            assert len(set(subsets)) == 1, f"Group {group} has mixed subsets: {set(subsets)}"
 
     def test_micrograph_name_preserved(self, relion5_data, tmp_path):
         """_rlnMicrographName should be propagated from tilt series."""
         output = str(tmp_path / "output.star")
-        convert(relion5_data["tomograms"], relion5_data["particles"],
-                output)
+        convert(relion5_data["tomograms"], relion5_data["particles"], output)
         df, _ = read_star(output)
-        assert '_rlnMicrographName' in df.columns
-        names = df['_rlnMicrographName'].values
+        assert "_rlnMicrographName" in df.columns
+        names = df["_rlnMicrographName"].values
         # Should contain mic_000.mrc, mic_001.mrc, etc. from our fixture
-        assert any('mic_' in n for n in names)
+        assert any("mic_" in n for n in names)
 
 
 # ---------------------------------------------------------------------------
 # Tests: quantitative geometry checks
 # ---------------------------------------------------------------------------
 
-class TestQuantitativeGeometry:
 
+class TestQuantitativeGeometry:
     def test_defocus_offset_at_45deg_tilt_known_value(self):
         """At 45-degree x-tilt, z-displacement projects to z' = z * cos(45) + ...
         The depth offset for a pure Z displacement is z * sin(45) * hand."""
@@ -1281,9 +1328,15 @@ class TestQuantitativeGeometry:
 
             tomo = Tomogram(
                 pixel_size=rng.uniform(0.5, 3.0),
-                defocus_u=dfu, defocus_v=dfv, defocus_angle=dfa,
-                x_tilts=x_tilts, y_tilts=y_tilts, z_rots=z_rots,
-                x_shifts=x_shifts, y_shifts=y_shifts, hand=hand,
+                defocus_u=dfu,
+                defocus_v=dfv,
+                defocus_angle=dfa,
+                x_tilts=x_tilts,
+                y_tilts=y_tilts,
+                z_rots=z_rots,
+                x_shifts=x_shifts,
+                y_shifts=y_shifts,
+                hand=hand,
             )
 
             for _ in range(5):

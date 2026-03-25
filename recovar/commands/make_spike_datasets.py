@@ -49,10 +49,15 @@ def main(
     bfactored_vols = [
         simulator.Bfactorize_vol(
             ssp.generate_molecule_spectrum_from_pdb_id(
-                atoms, voxel_size=voxel_size, grid_size=grid_size,
-                do_center_atoms=False, from_atom_group=True,
+                atoms,
+                voxel_size=voxel_size,
+                grid_size=grid_size,
+                do_center_atoms=False,
+                from_atom_group=True,
             ).reshape(-1),
-            voxel_size, Bfactor, volume_shape,
+            voxel_size,
+            Bfactor,
+            volume_shape,
         )
         for atoms in pdb_atoms
     ]
@@ -124,17 +129,17 @@ def main(
         error_predicted[idx] = image_assignment.estimate_false_positive_rate(
             cryo, gt_volumes, image_cov_noise, batch_size, disc_type=disc_type_infer
         )
-        logger.info("observed errors: %s", error_observed[:idx + 1])
-        logger.info("predicted errors: %s", error_predicted[:idx + 1])
+        logger.info("observed errors: %s", error_observed[: idx + 1])
+        logger.info("predicted errors: %s", error_predicted[: idx + 1])
 
         # Deconvolution check
         observed_pop = np.array([np.mean(assignments == 0), np.mean(assignments == 1)])
         deconvolve_matrix = np.array(
-            [[1 - error_predicted[idx], error_predicted[idx]],
-             [error_predicted[idx], 1 - error_predicted[idx]]]
+            [[1 - error_predicted[idx], error_predicted[idx]], [error_predicted[idx], 1 - error_predicted[idx]]]
         )
-        logger.info("observed pop: %s, deconvolved pop: %s",
-                     observed_pop, np.linalg.solve(deconvolve_matrix, observed_pop))
+        logger.info(
+            "observed pop: %s, deconvolved pop: %s", observed_pop, np.linalg.solve(deconvolve_matrix, observed_pop)
+        )
 
         # Save results
         result = {
@@ -156,12 +161,22 @@ def main(
         # Update plot after each noise level
         plt.figure(figsize=(10, 6))
         plt.semilogx(
-            noise_level_tests[:idx + 1], error_predicted[:idx + 1],
-            "-o", label="Analytical", color="blue", markersize=6, linewidth=2,
+            noise_level_tests[: idx + 1],
+            error_predicted[: idx + 1],
+            "-o",
+            label="Analytical",
+            color="blue",
+            markersize=6,
+            linewidth=2,
         )
         plt.semilogx(
-            noise_level_tests[:idx + 1], error_observed[:idx + 1],
-            "-s", label="Observed", color="green", markersize=6, linewidth=2,
+            noise_level_tests[: idx + 1],
+            error_observed[: idx + 1],
+            "-s",
+            label="Observed",
+            color="green",
+            markersize=6,
+            linewidth=2,
         )
         plt.xlabel("Noise Level", fontsize=14)
         plt.ylabel("False Positive Rate", fontsize=14)
@@ -177,5 +192,5 @@ def main(
         plt.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

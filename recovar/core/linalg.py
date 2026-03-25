@@ -22,8 +22,9 @@ _matmul = jax.jit(lambda x, y: x @ y)
 
 def batch_st_end(k, batch_size, n_rows):
     batch_st = int(k * batch_size)
-    batch_end = int(np.min([(k+1) * batch_size, n_rows]))
+    batch_end = int(np.min([(k + 1) * batch_size, n_rows]))
     return batch_st, batch_end
+
 
 def blockwise_Y_T_X(Y, X, batch_size=None, memory_to_use=10):
     # X and Y are tall and skinny; result Y^T @ X is small.
@@ -85,48 +86,50 @@ def blockwise_A_X(A, X, batch_size=None, memory_to_use=10):
     for k in range(n_blocks):
         batch_st, batch_end = batch_st_end(k, batch_size, n_rows)
         Z[batch_st:batch_end] = np.array(_matmul(A[batch_st:batch_end], X_dev))
-    return Z        
-
+    return Z
 
 
 # Legacy SVD methods used only for debugging; prefer randomized_svd for production
-def thin_svd_in_blocks(X, np = np, memory_to_use = 5, epsilon = 1e-8, n_components = -1):
-    '''
+def thin_svd_in_blocks(X, np=np, memory_to_use=5, epsilon=1e-8, n_components=-1):
+    """
     This is an unstable method for SVD but that can run on GPU.
     This should be only (maybe) used for matrices that cannot fit on the GPU.
-    
+
     Same as SVD but dispatch matrices in blocks to gpu (also pretty unstable)
-    '''
-    
-    Y = blockwise_X_T_X(X, memory_to_use = memory_to_use)
-    Ys, Yu = np.linalg.eigh(Y)#, full_matrices = True)
+    """
+
+    Y = blockwise_X_T_X(X, memory_to_use=memory_to_use)
+    Ys, Yu = np.linalg.eigh(Y)  # , full_matrices = True)
     sigma = np.sqrt(np.where(Ys > 0, Ys, 0))
     # Avoid an annoying warning?
-    sigma_pos = np.where( sigma > epsilon , sigma, epsilon)
-    sigma_inv = np.where( sigma > epsilon , 1/ sigma_pos, 0)
-    
-    U = blockwise_A_X(X, Yu, memory_to_use = memory_to_use)
+    sigma_pos = np.where(sigma > epsilon, sigma, epsilon)
+    sigma_inv = np.where(sigma > epsilon, 1 / sigma_pos, 0)
+
+    U = blockwise_A_X(X, Yu, memory_to_use=memory_to_use)
     U = U * sigma_inv
     V = Yu
-    
+
     n_components = n_components if n_components > 0 else X.shape[0]
-    
-    return np.flip(U, axis =1)[:,:n_components], np.flip(sigma)[:n_components], np.conj(np.flip(V, axis =1))[:,:n_components].T
+
+    return (
+        np.flip(U, axis=1)[:, :n_components],
+        np.flip(sigma)[:n_components],
+        np.conj(np.flip(V, axis=1))[:, :n_components].T,
+    )
 
 
-
-def thin_svd(X, np = np, epsilon = 1e-8):
-    '''
+def thin_svd(X, np=np, epsilon=1e-8):
+    """
     For some reason, the built in svd seems to allocate a lot more memory than necessary.
-    '''
+    """
     Y = np.conj(X).T @ X
-    Ys, Yu = np.linalg.eigh(Y)#, full_matrices = True)
+    Ys, Yu = np.linalg.eigh(Y)  # , full_matrices = True)
     sigma = np.sqrt(np.where(Ys > 0, Ys, 0))
     safe_sigma = np.where(sigma > epsilon, sigma, 1)
     sigma_inv = np.where(sigma > epsilon, 1 / safe_sigma, 0)
     U = (X @ Yu) * sigma_inv
     V = Yu
-    return np.flip(U, axis =1), np.flip(sigma), np.flip(V, axis =1)
+    return np.flip(U, axis=1), np.flip(sigma), np.flip(V, axis=1)
 
 
 _qr_jit = jax.jit(jnp.linalg.qr)
@@ -150,25 +153,29 @@ def randomized_svd(A, n_pcs=200):
 
 #### batching IDFT
 
+
 # Assumes input are of size (vol_size, n_vol)
-@functools.partial(jax.jit, static_argnums = [1])
-def idft3(x, vec_shape ):
+@functools.partial(jax.jit, static_argnums=[1])
+def idft3(x, vec_shape):
     x = x.reshape([*vec_shape, x.shape[-1]])
-    x = fourier_transform_utils.get_idft3(x, axes =(0,1,2))
+    x = fourier_transform_utils.get_idft3(x, axes=(0, 1, 2))
     x = x.reshape([-1, x.shape[-1]])
     return x
+
 
 # batch_idft3/batch_dft3 allocate the output on CPU (numpy) because
 # the full output array is too large for GPU.  The per-block DFT runs
 # on GPU via the jitted idft3/dft3 above, and results are pulled back
 # with jax.device_get.  Using jax.numpy for the output would force
 # everything onto device memory, defeating the purpose of batching.
-@functools.partial(jax.jit, static_argnums = [1])
+@functools.partial(jax.jit, static_argnums=[1])
 def dft3(x, vec_shape):
     x = x.reshape([*vec_shape, x.shape[-1]])
-    x = fourier_transform_utils.get_dft3(x, axes =(0,1,2))
+    x = fourier_transform_utils.get_dft3(x, axes=(0, 1, 2))
     x = x.reshape([-1, x.shape[-1]])
     return x
+
+
 def batch_idft3(x, vec_shape, batch_size):
     x_out = np.empty_like(x)
     n_tot = x.shape[-1]
@@ -176,9 +183,7 @@ def batch_idft3(x, vec_shape, batch_size):
     logger.info("batch_idft3 in %d blocks", n_blocks)
     for k in range(n_blocks):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
-        x_out[:, batch_st:batch_end] = jax.device_get(
-            idft3(x[:, batch_st:batch_end], vec_shape=vec_shape)
-        )
+        x_out[:, batch_st:batch_end] = jax.device_get(idft3(x[:, batch_st:batch_end], vec_shape=vec_shape))
     return x_out
 
 
@@ -189,10 +194,9 @@ def batch_dft3(x, vec_shape, batch_size):
     logger.info("batch_dft3 in %d blocks", n_blocks)
     for k in range(n_blocks):
         batch_st, batch_end = batch_st_end(k, batch_size, n_tot)
-        x_out[:, batch_st:batch_end] = jax.device_get(
-            dft3(x[:, batch_st:batch_end], vec_shape=vec_shape)
-        )
+        x_out[:, batch_st:batch_end] = jax.device_get(dft3(x[:, batch_st:batch_end], vec_shape=vec_shape))
     return x_out
+
 
 def broadcast_dot(x, y):
     """Batched conjugate inner product: ``sum_k conj(x[...,k]) * y[...,k]``."""
@@ -253,6 +257,7 @@ def half_spectrum_last_axis_weights(last_axis_size, dtype=jnp.float32):
             w = w.at[1:].set(2)
     return w
 
+
 def rfft2_hermitian_weights(image_shape, dtype=jnp.float32):
     """Precompute ``sqrt(w)`` weights for 2-D half-spectrum (rfft2) inner products.
 
@@ -291,7 +296,7 @@ def _coerce_half_grid(arr, full_shape, name):
         return arr, False
     if arr.ndim == 1 and int(arr.shape[0]) == flat_size:
         return arr.reshape(half_shape), True
-    if arr.ndim == len(half_shape) + 1 and tuple(arr.shape[-len(half_shape):]) == half_shape:
+    if arr.ndim == len(half_shape) + 1 and tuple(arr.shape[-len(half_shape) :]) == half_shape:
         return arr, False
     if arr.ndim == 2 and int(arr.shape[-1]) == flat_size:
         return arr.reshape((arr.shape[0],) + half_shape), True
@@ -329,7 +334,9 @@ def half_spectrum_inner_product(x_half, y_half, full_shape):
     x_half_grid, _ = _coerce_half_grid(x_half, full_shape, "x_half")
     y_half_grid, _ = _coerce_half_grid(y_half, full_shape, "y_half")
     if x_half_grid.shape != y_half_grid.shape:
-        raise ValueError(f"x_half and y_half must have matching shapes, got {x_half_grid.shape} and {y_half_grid.shape}")
+        raise ValueError(
+            f"x_half and y_half must have matching shapes, got {x_half_grid.shape} and {y_half_grid.shape}"
+        )
     if x_half_grid.ndim != len(full_shape):
         raise ValueError(
             f"half_spectrum_inner_product expects non-batched input with ndim={len(full_shape)}, "
@@ -347,46 +354,48 @@ def batch_half_spectrum_inner_product(x_half, y_half, full_shape):
     x_half_grid, _ = _coerce_half_grid(x_half, full_shape, "x_half")
     y_half_grid, _ = _coerce_half_grid(y_half, full_shape, "y_half")
     if x_half_grid.shape != y_half_grid.shape:
-        raise ValueError(f"x_half and y_half must have matching shapes, got {x_half_grid.shape} and {y_half_grid.shape}")
+        raise ValueError(
+            f"x_half and y_half must have matching shapes, got {x_half_grid.shape} and {y_half_grid.shape}"
+        )
     if x_half_grid.ndim != len(full_shape) + 1:
         raise ValueError(
-            f"batch_half_spectrum_inner_product expects batched input with ndim={len(full_shape)+1}, "
+            f"batch_half_spectrum_inner_product expects batched input with ndim={len(full_shape) + 1}, "
             f"got shape {x_half_grid.shape}"
         )
     return _weighted_half_inner_products(x_half_grid, y_half_grid, full_shape, batched=True)
+
 
 def multiply_along_axis(A, B, axis):
     return jnp.swapaxes(jnp.swapaxes(A, axis, -1) * B, -1, axis)
 
 
-def batch_hermitian_linear_solver(A,b):
-    return jax.scipy.linalg.solve(A,b, assume_a = 'pos')
-
-def batch_linear_solver(A,b):
-    return jax.scipy.linalg.solve(A,b)
+def batch_hermitian_linear_solver(A, b):
+    return jax.scipy.linalg.solve(A, b, assume_a="pos")
 
 
+def batch_linear_solver(A, b):
+    return jax.scipy.linalg.solve(A, b)
 
 
-def solve_by_SVD(A,b, hermitian = False):
-    U,S,Vh = jax.numpy.linalg.svd(A, hermitian = False)
+def solve_by_SVD(A, b, hermitian=False):
+    U, S, Vh = jax.numpy.linalg.svd(A, hermitian=False)
 
-    if b.ndim == A.ndim -1:
+    if b.ndim == A.ndim - 1:
         expand = True
-        b = b[...,None]
+        b = b[..., None]
     else:
         expand = False
-    
-    Uhb = jax.lax.batch_matmul(jnp.conj(U.swapaxes(-1,-2)),b)/ S[...,None]
-    x = jax.lax.batch_matmul(jnp.conj(Vh.swapaxes(-1,-2)),Uhb)
+
+    Uhb = jax.lax.batch_matmul(jnp.conj(U.swapaxes(-1, -2)), b) / S[..., None]
+    x = jax.lax.batch_matmul(jnp.conj(Vh.swapaxes(-1, -2)), Uhb)
 
     if expand:
-        x = x[...,0]
+        x = x[..., 0]
 
     return x
 
 
-def l2_distance(X,Y):
+def l2_distance(X, Y):
     x_norm = jnp.sum(jnp.abs(X) ** 2, axis=-1, keepdims=True)
     y_norm = jnp.sum(jnp.abs(Y) ** 2, axis=-1)[None, :]
     cross = jnp.conj(X) @ Y.T

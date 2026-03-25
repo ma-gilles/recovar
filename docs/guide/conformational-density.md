@@ -29,7 +29,7 @@ This deconvolves the particle distribution in latent space to produce density es
 ## Estimating stable states
 
 ```bash
-recovar estimate_stable_states density_output/deconv_density_knee.pkl \
+recovar estimate_stable_states density_output/data/deconv_density_knee.pkl \
     -o stable_states
 ```
 
@@ -41,7 +41,7 @@ The density can guide trajectory computation to follow low free-energy paths:
 
 ```bash
 recovar compute_trajectory output -o trajectory --zdim=10 \
-    --density density_output/deconv_density_knee.pkl \
+    --density density_output/data/deconv_density_knee.pkl \
     --endpts centers.txt --ind 0,1
 ```
 

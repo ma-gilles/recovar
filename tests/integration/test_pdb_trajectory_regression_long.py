@@ -53,8 +53,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 # Default baseline: established from old pipeline (commit 911604e) on PDB dataset
 # with noise_level=0.1 (high SNR).
 _DEFAULT_PDB_BASELINE_JSON = (
-    _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics"
-    / "pdb_5nrl_old_pipeline" / "all_scores.json"
+    _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "pdb_5nrl_old_pipeline" / "all_scores.json"
 )
 
 # Default run args matching the PDB dataset generation parameters.
@@ -107,6 +106,7 @@ def _run_pdb_metrics(output_dir, run_args, reuse_dataset=False):
     if run_args:
         cmd.extend(shlex.split(run_args))
     from conftest import gpu_subprocess_env
+
     subprocess.run(cmd, check=True, env=gpu_subprocess_env())
     score_path = output_dir / "test_dataset" / "metrics_plot" / "all_scores.json"
     assert score_path.exists(), f"missing score file at {score_path}"
@@ -126,9 +126,7 @@ def test_pdb_trajectory_regression(tmp_path):
     reconstruction quality on realistic PDB-derived data beyond the
     tolerance threshold will fail.
     """
-    baseline_json = Path(
-        os.environ.get("PDB_REGRESSION_BASELINE_JSON", str(_DEFAULT_PDB_BASELINE_JSON))
-    )
+    baseline_json = Path(os.environ.get("PDB_REGRESSION_BASELINE_JSON", str(_DEFAULT_PDB_BASELINE_JSON)))
     run_args = os.environ.get("PDB_REGRESSION_RUN_ARGS", _DEFAULT_RUN_ARGS)
     tol_frac = float(os.environ.get("PDB_REGRESSION_TOL_FRAC", "0.10"))
 
@@ -144,7 +142,9 @@ def test_pdb_trajectory_regression(tmp_path):
 
     perf_stages = {"pdb_trajectory": stage_perf(snap_before, snap_after)}
     perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "pdb_5nrl_old_pipeline" / "perf_baseline.json")
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "pdb_5nrl_old_pipeline" / "perf_baseline.json"
+    )
     check_perf_regression(perf_record, perf_baseline_path, "test_pdb_trajectory_regression")
 
     assert baseline_json.exists(), f"PDB baseline not found: {baseline_json}"

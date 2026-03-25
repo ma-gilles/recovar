@@ -237,12 +237,19 @@ def test_M_with_precompute_handles_small_rotation_count_without_zero_batch(monke
     monkeypatch.setattr(
         rec_utils,
         "index_batch_iter",
-        lambda n_units, batch_size: [np.arange(n_units, dtype=np.int32)] if batch_size >= 1 else (_ for _ in ()).throw(AssertionError("batch_size must be >= 1")),
+        lambda n_units, batch_size: (
+            [np.arange(n_units, dtype=np.int32)]
+            if batch_size >= 1
+            else (_ for _ in ()).throw(AssertionError("batch_size must be >= 1"))
+        ),
     )
     monkeypatch.setattr(
         m_step,
         "sum_up_images_fixed_rots_eqx",
-        lambda _config, *_args, Ft_y=0, Ft_ctf=0, **_kwargs: (Ft_y + jnp.ones_like(Ft_y), Ft_ctf + 2.0 * jnp.ones_like(Ft_ctf)),
+        lambda _config, *_args, Ft_y=0, Ft_ctf=0, **_kwargs: (
+            Ft_y + jnp.ones_like(Ft_y),
+            Ft_ctf + 2.0 * jnp.ones_like(Ft_ctf),
+        ),
     )
 
     probs = jnp.array([[[0.6, 0.4]]], dtype=jnp.float32)

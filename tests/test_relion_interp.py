@@ -28,6 +28,7 @@ from recovar.core import fourier_transform_utils as ftu
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 def _random_rotation(key):
     """Generate a random 3×3 rotation matrix via QR decomposition."""
     mat = random.normal(key, (3, 3))
@@ -60,12 +61,13 @@ def _make_hermitian_volume(vol, volume_shape):
 
 def _force_jax_path():
     """Context manager to force slicing to use JAX fallback (same pixel ordering)."""
-    return patch.object(slicing, '_on_gpu', return_value=False)
+    return patch.object(slicing, "_on_gpu", return_value=False)
 
 
 # ---------------------------------------------------------------------------
 # Test: projection agrees with existing implementation
 # ---------------------------------------------------------------------------
+
 
 class TestProjectionAgreement:
     """Verify RELION-style projection matches existing recovar projection."""
@@ -85,18 +87,31 @@ class TestProjectionAgreement:
 
         with _force_jax_path():
             existing = slicing.slice_volume(
-                vol, rots, image_shape, volume_shape, disc_type,
-                half_volume=False, half_image=False, max_r=None,
+                vol,
+                rots,
+                image_shape,
+                volume_shape,
+                disc_type,
+                half_volume=False,
+                half_image=False,
+                max_r=None,
             )
 
         relion = relion_interp.project(
-            vol, rots, image_shape, volume_shape,
-            order=order, half_volume=False, half_image=False,
+            vol,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=False,
+            half_image=False,
         )
 
         np.testing.assert_allclose(
-            np.array(relion), np.array(existing),
-            rtol=1e-4, atol=1e-5,
+            np.array(relion),
+            np.array(existing),
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"Full-vol full-img order={order} N={N}",
         )
 
@@ -110,26 +125,37 @@ class TestProjectionAgreement:
         disc_type = "nearest" if order == 0 else "linear_interp"
 
         k1, k2 = random.split(key)
-        vol_full = _make_hermitian_volume(
-            _random_volume(k1, (N * N * N,)), volume_shape
-        )
+        vol_full = _make_hermitian_volume(_random_volume(k1, (N * N * N,)), volume_shape)
         vol_half = ftu.full_volume_to_half_volume(vol_full, volume_shape)
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         with _force_jax_path():
             existing = slicing.slice_volume(
-                vol_half, rots, image_shape, volume_shape, disc_type,
-                half_volume=True, half_image=False, max_r=None,
+                vol_half,
+                rots,
+                image_shape,
+                volume_shape,
+                disc_type,
+                half_volume=True,
+                half_image=False,
+                max_r=None,
             )
 
         relion = relion_interp.project(
-            vol_half, rots, image_shape, volume_shape,
-            order=order, half_volume=True, half_image=False,
+            vol_half,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=True,
+            half_image=False,
         )
 
         np.testing.assert_allclose(
-            np.array(relion), np.array(existing),
-            rtol=1e-4, atol=1e-5,
+            np.array(relion),
+            np.array(existing),
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"Half-vol full-img order={order} N={N}",
         )
 
@@ -148,18 +174,31 @@ class TestProjectionAgreement:
 
         with _force_jax_path():
             existing = slicing.slice_volume(
-                vol, rots, image_shape, volume_shape, disc_type,
-                half_volume=False, half_image=True, max_r=None,
+                vol,
+                rots,
+                image_shape,
+                volume_shape,
+                disc_type,
+                half_volume=False,
+                half_image=True,
+                max_r=None,
             )
 
         relion = relion_interp.project(
-            vol, rots, image_shape, volume_shape,
-            order=order, half_volume=False, half_image=True,
+            vol,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=False,
+            half_image=True,
         )
 
         np.testing.assert_allclose(
-            np.array(relion), np.array(existing),
-            rtol=1e-4, atol=1e-5,
+            np.array(relion),
+            np.array(existing),
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"Full-vol half-img order={order} N={N}",
         )
 
@@ -173,26 +212,37 @@ class TestProjectionAgreement:
         disc_type = "nearest" if order == 0 else "linear_interp"
 
         k1, k2 = random.split(key)
-        vol_full = _make_hermitian_volume(
-            _random_volume(k1, (N * N * N,)), volume_shape
-        )
+        vol_full = _make_hermitian_volume(_random_volume(k1, (N * N * N,)), volume_shape)
         vol_half = ftu.full_volume_to_half_volume(vol_full, volume_shape)
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         with _force_jax_path():
             existing = slicing.slice_volume(
-                vol_half, rots, image_shape, volume_shape, disc_type,
-                half_volume=True, half_image=True, max_r=None,
+                vol_half,
+                rots,
+                image_shape,
+                volume_shape,
+                disc_type,
+                half_volume=True,
+                half_image=True,
+                max_r=None,
             )
 
         relion = relion_interp.project(
-            vol_half, rots, image_shape, volume_shape,
-            order=order, half_volume=True, half_image=True,
+            vol_half,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=True,
+            half_image=True,
         )
 
         np.testing.assert_allclose(
-            np.array(relion), np.array(existing),
-            rtol=1e-4, atol=1e-5,
+            np.array(relion),
+            np.array(existing),
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"Half-vol half-img order={order} N={N}",
         )
 
@@ -200,6 +250,7 @@ class TestProjectionAgreement:
 # ---------------------------------------------------------------------------
 # Test: backprojection agrees with existing
 # ---------------------------------------------------------------------------
+
 
 class TestBackprojectionAgreement:
     """Verify RELION-style backprojection matches existing."""
@@ -218,18 +269,31 @@ class TestBackprojectionAgreement:
 
         with _force_jax_path():
             existing = slicing.adjoint_slice_volume(
-                imgs, rots, image_shape, volume_shape, disc_type,
-                half_image=False, half_volume=False, max_r=None,
+                imgs,
+                rots,
+                image_shape,
+                volume_shape,
+                disc_type,
+                half_image=False,
+                half_volume=False,
+                max_r=None,
             )
 
         relion = relion_interp.backproject(
-            imgs, rots, image_shape, volume_shape,
-            order=order, half_volume=False, half_image=False,
+            imgs,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=False,
+            half_image=False,
         )
 
         np.testing.assert_allclose(
-            np.array(relion), np.array(existing),
-            rtol=1e-3, atol=1e-4,
+            np.array(relion),
+            np.array(existing),
+            rtol=1e-3,
+            atol=1e-4,
             err_msg=f"BP full-vol full-img order={order} N={N}",
         )
 
@@ -247,18 +311,31 @@ class TestBackprojectionAgreement:
 
         with _force_jax_path():
             existing = slicing.adjoint_slice_volume(
-                imgs, rots, image_shape, volume_shape, disc_type,
-                half_image=False, half_volume=True, max_r=None,
+                imgs,
+                rots,
+                image_shape,
+                volume_shape,
+                disc_type,
+                half_image=False,
+                half_volume=True,
+                max_r=None,
             )
 
         relion = relion_interp.backproject(
-            imgs, rots, image_shape, volume_shape,
-            order=order, half_volume=True, half_image=False,
+            imgs,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=True,
+            half_image=False,
         )
 
         np.testing.assert_allclose(
-            np.array(relion), np.array(existing),
-            rtol=1e-3, atol=1e-4,
+            np.array(relion),
+            np.array(existing),
+            rtol=1e-3,
+            atol=1e-4,
             err_msg=f"BP half-vol full-img order={order} N={N}",
         )
 
@@ -266,6 +343,7 @@ class TestBackprojectionAgreement:
 # ---------------------------------------------------------------------------
 # Test: adjoint consistency (dot-product test)
 # ---------------------------------------------------------------------------
+
 
 class TestAdjointConsistency:
     """Verify ⟨Ax, y⟩ = ⟨x, A†y⟩ for the RELION-style forward/adjoint pair."""
@@ -292,22 +370,30 @@ class TestAdjointConsistency:
         x = _random_volume(k2, (n_voxels,))
         if half_volume:
             x_full = ftu.half_volume_to_full_volume(x, volume_shape)
-            x_hermitian = ftu.full_volume_to_half_volume(
-                _make_hermitian_volume(x_full, volume_shape), volume_shape
-            )
+            x_hermitian = ftu.full_volume_to_half_volume(_make_hermitian_volume(x_full, volume_shape), volume_shape)
             x = x_hermitian
         y = _random_volume(k3, (2, n_pixels))
 
         # Forward: Ax
         Ax = relion_interp.project(
-            x, rots, image_shape, volume_shape,
-            order=order, half_volume=half_volume, half_image=half_image,
+            x,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
         )
 
         # Adjoint: A†y
         Ady = relion_interp.backproject(
-            y, rots, image_shape, volume_shape,
-            order=order, half_volume=half_volume, half_image=half_image,
+            y,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
         )
 
         # ⟨Ax, y⟩
@@ -329,6 +415,7 @@ class TestAdjointConsistency:
 # Test: max_r clipping
 # ---------------------------------------------------------------------------
 
+
 class TestMaxRClipping:
     """Verify that max_r clips high-frequency pixels to zero."""
 
@@ -344,16 +431,20 @@ class TestMaxRClipping:
 
         # With very small max_r, most pixels should be zero
         result = relion_interp.project(
-            vol, rots, image_shape, volume_shape,
-            order=1, half_volume=False, half_image=False, max_r=2.0,
+            vol,
+            rots,
+            image_shape,
+            volume_shape,
+            order=1,
+            half_volume=False,
+            half_image=False,
+            max_r=2.0,
         )
 
         n_nonzero = jnp.count_nonzero(jnp.abs(result) > 1e-10)
         n_total = result.size
         # Only a small sphere (r <= 2) should be nonzero
-        assert n_nonzero < n_total * 0.1, (
-            f"Expected < 10% nonzero with max_r=2, got {n_nonzero}/{n_total}"
-        )
+        assert n_nonzero < n_total * 0.1, f"Expected < 10% nonzero with max_r=2, got {n_nonzero}/{n_total}"
 
     def test_no_max_r_all_nonzero(self):
         N = 16
@@ -367,8 +458,14 @@ class TestMaxRClipping:
         rots = jnp.eye(3)[None, :, :]
 
         result = relion_interp.project(
-            vol, rots, image_shape, volume_shape,
-            order=0, half_volume=False, half_image=False, max_r=None,
+            vol,
+            rots,
+            image_shape,
+            volume_shape,
+            order=0,
+            half_volume=False,
+            half_image=False,
+            max_r=None,
         )
 
         # Most interior pixels should be nonzero
@@ -379,6 +476,7 @@ class TestMaxRClipping:
 # ---------------------------------------------------------------------------
 # Test: identity rotation roundtrip
 # ---------------------------------------------------------------------------
+
 
 class TestIdentityRotation:
     """With identity rotation, projection extracts the z=0 central slice."""
@@ -393,20 +491,33 @@ class TestIdentityRotation:
 
         rots = jnp.eye(3)[None, :, :]
         result = relion_interp.project(
-            vol.ravel(), rots, image_shape, volume_shape,
-            order=0, half_volume=False, half_image=False,
+            vol.ravel(),
+            rots,
+            image_shape,
+            volume_shape,
+            order=0,
+            half_volume=False,
+            half_image=False,
         )
 
         # Compare with existing implementation using JAX path
         with _force_jax_path():
             existing = slicing.slice_volume(
-                vol.ravel(), rots, image_shape, volume_shape, "nearest",
-                half_volume=False, half_image=False, max_r=None,
+                vol.ravel(),
+                rots,
+                image_shape,
+                volume_shape,
+                "nearest",
+                half_volume=False,
+                half_image=False,
+                max_r=None,
             )
 
         np.testing.assert_allclose(
-            np.array(result), np.array(existing),
-            rtol=1e-5, atol=1e-6,
+            np.array(result),
+            np.array(existing),
+            rtol=1e-5,
+            atol=1e-6,
             err_msg="Identity rotation nearest should match existing code",
         )
 
@@ -418,6 +529,7 @@ class TestIdentityRotation:
 # ---------------------------------------------------------------------------
 # Test: backprojection with half_image input
 # ---------------------------------------------------------------------------
+
 
 def _make_hermitian_images(imgs_random, image_shape):
     """Make images Hermitian-symmetric (as would come from FFT of real-space images)."""
@@ -447,15 +559,18 @@ class TestHalfImageBackprojection:
 
         k1, k2 = random.split(key)
         # Hermitian-symmetric images (as from FFT of real data)
-        imgs_full = _make_hermitian_images(
-            _random_volume(k1, (3, N * N)), image_shape
-        )
+        imgs_full = _make_hermitian_images(_random_volume(k1, (3, N * N)), image_shape)
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         # Reference: backproject from full images
         bp_full = relion_interp.backproject(
-            imgs_full, rots, image_shape, volume_shape,
-            order=order, half_volume=False, half_image=False,
+            imgs_full,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=False,
+            half_image=False,
         )
 
         # Extract half-images (rfft convention)
@@ -463,13 +578,20 @@ class TestHalfImageBackprojection:
 
         # Backproject from half images
         bp_half = relion_interp.backproject(
-            imgs_half, rots, image_shape, volume_shape,
-            order=order, half_volume=False, half_image=True,
+            imgs_half,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=False,
+            half_image=True,
         )
 
         np.testing.assert_allclose(
-            np.array(bp_half), np.array(bp_full),
-            rtol=1e-4, atol=1e-5,
+            np.array(bp_half),
+            np.array(bp_full),
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"half-img vs full-img BP into full vol, order={order}",
         )
 
@@ -482,15 +604,18 @@ class TestHalfImageBackprojection:
         image_shape = (N, N)
 
         k1, k2 = random.split(key)
-        imgs_full = _make_hermitian_images(
-            _random_volume(k1, (3, N * N)), image_shape
-        )
+        imgs_full = _make_hermitian_images(_random_volume(k1, (3, N * N)), image_shape)
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         # Reference: backproject from full images into half volume
         bp_full = relion_interp.backproject(
-            imgs_full, rots, image_shape, volume_shape,
-            order=order, half_volume=True, half_image=False,
+            imgs_full,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=True,
+            half_image=False,
         )
 
         # Extract half-images
@@ -498,13 +623,20 @@ class TestHalfImageBackprojection:
 
         # Backproject from half images into half volume
         bp_half = relion_interp.backproject(
-            imgs_half, rots, image_shape, volume_shape,
-            order=order, half_volume=True, half_image=True,
+            imgs_half,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=True,
+            half_image=True,
         )
 
         np.testing.assert_allclose(
-            np.array(bp_half), np.array(bp_full),
-            rtol=1e-4, atol=1e-5,
+            np.array(bp_half),
+            np.array(bp_full),
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"half-img vs full-img BP into half vol, order={order}",
         )
 
@@ -512,6 +644,7 @@ class TestHalfImageBackprojection:
 # ---------------------------------------------------------------------------
 # Test: adjoint with half_image
 # ---------------------------------------------------------------------------
+
 
 class TestAdjointHalfImage:
     """Verify adjoint consistency for the half_image backprojection path.
@@ -547,25 +680,31 @@ class TestAdjointHalfImage:
         x = _random_volume(k2, (n_voxels,))
         if half_volume:
             x_full = ftu.half_volume_to_full_volume(x, volume_shape)
-            x = ftu.full_volume_to_half_volume(
-                _make_hermitian_volume(x_full, volume_shape), volume_shape
-            )
+            x = ftu.full_volume_to_half_volume(_make_hermitian_volume(x_full, volume_shape), volume_shape)
         # Use Hermitian-symmetric images (from real-space data)
-        y_full = _make_hermitian_images(
-            _random_volume(k3, (2, n_full_pixels)), image_shape
-        )
+        y_full = _make_hermitian_images(_random_volume(k3, (2, n_full_pixels)), image_shape)
         y_half = ftu.full_image_to_half_image(y_full, image_shape)
 
         # Forward: Ax (full image output)
         Ax = relion_interp.project(
-            x, rots, image_shape, volume_shape,
-            order=order, half_volume=half_volume, half_image=False,
+            x,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=False,
         )
 
         # Adjoint: A†y via half_image backprojection
         Ady = relion_interp.backproject(
-            y_half, rots, image_shape, volume_shape,
-            order=order, half_volume=half_volume, half_image=True,
+            y_half,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=True,
         )
 
         lhs = jnp.sum(jnp.conj(Ax) * y_full).real
@@ -582,6 +721,7 @@ class TestAdjointHalfImage:
 # Test: CUDA matches relion_interp (forward projection)
 # ---------------------------------------------------------------------------
 
+
 class TestCUDAMatch:
     """Verify CUDA projection matches relion_interp (requires GPU)."""
 
@@ -592,6 +732,7 @@ class TestCUDAMatch:
     def test_cuda_project_vs_relion(self, N, order, half_volume, half_image):
         """CUDA and relion_interp forward projection should agree to FP precision."""
         import jax
+
         if jax.default_backend() != "gpu":
             pytest.skip("No GPU available")
 
@@ -602,9 +743,7 @@ class TestCUDAMatch:
 
         k1, k2 = random.split(key)
         if half_volume:
-            vol_full = _make_hermitian_volume(
-                _random_volume(k1, (N * N * N,)), volume_shape
-            )
+            vol_full = _make_hermitian_volume(_random_volume(k1, (N * N * N,)), volume_shape)
             vol = ftu.full_volume_to_half_volume(vol_full, volume_shape)
         else:
             vol = _random_volume(k1, (N * N * N,))
@@ -613,19 +752,32 @@ class TestCUDAMatch:
 
         # CUDA path (through slicing which calls cuda_project)
         cuda_result = slicing.slice_volume(
-            vol, rots, image_shape, volume_shape, disc_type,
-            half_volume=half_volume, half_image=half_image, max_r=None,
+            vol,
+            rots,
+            image_shape,
+            volume_shape,
+            disc_type,
+            half_volume=half_volume,
+            half_image=half_image,
+            max_r=None,
         )
 
         # relion_interp
         relion_result = relion_interp.project(
-            vol, rots, image_shape, volume_shape,
-            order=order, half_volume=half_volume, half_image=half_image,
+            vol,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
         )
 
         np.testing.assert_allclose(
-            np.array(cuda_result), np.array(relion_result),
-            rtol=1e-4, atol=1e-5,
+            np.array(cuda_result),
+            np.array(relion_result),
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"CUDA vs relion project: order={order} hv={half_volume} hi={half_image} N={N}",
         )
 
@@ -636,6 +788,7 @@ class TestCUDAMatch:
     def test_cuda_backproject_vs_relion(self, N, order, half_volume, half_image):
         """CUDA and relion_interp backprojection should agree to FP precision."""
         import jax
+
         if jax.default_backend() != "gpu":
             pytest.skip("No GPU available")
 
@@ -649,9 +802,7 @@ class TestCUDAMatch:
         # For half_image: both CUDA and JAX assume Hermitian-symmetric input,
         # so we must use Hermitian images to get consistent results.
         if half_image:
-            imgs_full = _make_hermitian_images(
-                _random_volume(k1, (3, N * N)), image_shape
-            )
+            imgs_full = _make_hermitian_images(_random_volume(k1, (3, N * N)), image_shape)
             imgs = ftu.full_image_to_half_image(imgs_full, image_shape)
         else:
             imgs = _random_volume(k1, (3, N * N))
@@ -663,19 +814,32 @@ class TestCUDAMatch:
         # CUDA backproject
         cuda_vol = jnp.zeros(vol_flat, dtype=imgs.dtype)
         cuda_result = cuda_bp(
-            cuda_vol, imgs, rots, image_shape, volume_shape,
-            order=order, half_volume=half_volume, half_image=half_image,
+            cuda_vol,
+            imgs,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
         )
 
         # relion_interp backproject
         relion_result = relion_interp.backproject(
-            imgs, rots, image_shape, volume_shape,
-            order=order, half_volume=half_volume, half_image=half_image,
+            imgs,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
         )
 
         np.testing.assert_allclose(
-            np.array(cuda_result), np.array(relion_result),
-            rtol=1e-3, atol=1e-4,
+            np.array(cuda_result),
+            np.array(relion_result),
+            rtol=1e-3,
+            atol=1e-4,
             err_msg=f"CUDA vs relion BP: order={order} hv={half_volume} hi={half_image} N={N}",
         )
 
@@ -683,6 +847,7 @@ class TestCUDAMatch:
 # ---------------------------------------------------------------------------
 # Test: larger volume size
 # ---------------------------------------------------------------------------
+
 
 class TestLargerVolume:
     """Stress test with N=64 to catch boundary / off-by-one issues."""
@@ -700,19 +865,31 @@ class TestLargerVolume:
 
         with _force_jax_path():
             existing = slicing.slice_volume(
-                vol, rots, image_shape, volume_shape,
+                vol,
+                rots,
+                image_shape,
+                volume_shape,
                 "nearest" if order == 0 else "linear_interp",
-                half_volume=False, half_image=False, max_r=None,
+                half_volume=False,
+                half_image=False,
+                max_r=None,
             )
 
         relion = relion_interp.project(
-            vol, rots, image_shape, volume_shape,
-            order=order, half_volume=False, half_image=False,
+            vol,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=False,
+            half_image=False,
         )
 
         np.testing.assert_allclose(
-            np.array(relion), np.array(existing),
-            rtol=1e-4, atol=1e-5,
+            np.array(relion),
+            np.array(existing),
+            rtol=1e-4,
+            atol=1e-5,
             err_msg=f"N=64 full-vol full-img order={order}",
         )
 
@@ -720,6 +897,7 @@ class TestLargerVolume:
 # ---------------------------------------------------------------------------
 # Test: dispatch through slicing.py matches relion_interp directly
 # ---------------------------------------------------------------------------
+
 
 class TestSlicingDispatch:
     """Verify slicing.py JAX fallback routes correctly through relion_interp."""
@@ -737,9 +915,7 @@ class TestSlicingDispatch:
 
         k1, k2 = random.split(key)
         if half_volume:
-            vol_full = _make_hermitian_volume(
-                _random_volume(k1, (N * N * N,)), volume_shape
-            )
+            vol_full = _make_hermitian_volume(_random_volume(k1, (N * N * N,)), volume_shape)
             vol = ftu.full_volume_to_half_volume(vol_full, volume_shape)
         else:
             vol = _random_volume(k1, (N * N * N,))
@@ -748,18 +924,31 @@ class TestSlicingDispatch:
 
         with _force_jax_path():
             dispatch_result = slicing.slice_volume(
-                vol, rots, image_shape, volume_shape, disc_type,
-                half_volume=half_volume, half_image=half_image, max_r=None,
+                vol,
+                rots,
+                image_shape,
+                volume_shape,
+                disc_type,
+                half_volume=half_volume,
+                half_image=half_image,
+                max_r=None,
             )
 
         relion_result = relion_interp.project(
-            vol, rots, image_shape, volume_shape,
-            order=order, half_volume=half_volume, half_image=half_image,
+            vol,
+            rots,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
         )
 
         np.testing.assert_allclose(
-            np.array(dispatch_result), np.array(relion_result),
-            rtol=1e-5, atol=1e-6,
+            np.array(dispatch_result),
+            np.array(relion_result),
+            rtol=1e-5,
+            atol=1e-6,
             err_msg=f"Dispatch vs direct: order={order} hv={half_volume} hi={half_image}",
         )
 

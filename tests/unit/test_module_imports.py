@@ -21,11 +21,7 @@ OPTIONAL_IMPORT_ERROR_TOKENS = (
 
 def _module_names():
     root = Path(__file__).resolve().parents[2] / "recovar"
-    return sorted(
-        p.stem
-        for p in root.glob("*.py")
-        if p.stem not in SKIP_IMPORT_MODULES
-    )
+    return sorted(p.stem for p in root.glob("*.py") if p.stem not in SKIP_IMPORT_MODULES)
 
 
 @pytest.mark.parametrize("mod_name", _module_names())

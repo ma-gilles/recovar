@@ -5,6 +5,7 @@ Covers:
   main() – argument registration (host, port, scan-dir, debug)
   main() – Flask import error handling
 """
+
 import argparse
 import sys
 
@@ -18,6 +19,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # Argument registration (replicated from the parser in main())
 # ---------------------------------------------------------------------------
+
 
 def _parser() -> argparse.ArgumentParser:
     """Build the same parser that gui.main() uses."""

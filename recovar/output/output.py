@@ -439,7 +439,9 @@ def save_pipeline_results(
     utils.pickle_dump(ind_split, paths.halfsets)
     utils.pickle_dump(result, paths.params)
     utils.pickle_dump(covariance_cols, paths.covariance_cols)
-    utils.pickle_dump(embedding_dict, paths.embeddings)
+
+    # Save embeddings as per-zdim directories with individual .npy files
+    _save_embeddings_per_zdim(paths, embedding_dict)
 
     if zs_full is not None:
         utils.pickle_dump(zs_full, paths.zs_with_complement)
@@ -447,6 +449,91 @@ def save_pipeline_results(
     write_metadata_json(paths, result)
 
     logger.info("Saved pipeline results to %s", paths.model_dir)
+
+
+# Embedding field names that are saved as .npy files per zdim
+_EMBEDDING_FIELDS = [
+    'latent_coords', 'latent_coords_noreg',
+    'latent_precision', 'latent_precision_noreg',
+    'contrasts', 'contrasts_noreg',
+]
+
+
+def _save_embeddings_per_zdim(paths, embedding_dict):
+    """Save embeddings as per-zdim directories with individual .npy files.
+
+    Creates ``model/zdim_{N}/`` for each computed zdim, containing::
+
+        latent_coords.npy
+        latent_coords_noreg.npy
+        latent_precision.npy
+        latent_precision_noreg.npy
+        contrasts.npy
+        contrasts_noreg.npy
+
+    Parameters
+    ----------
+    paths : ResultPaths
+    embedding_dict : dict
+        Built by :func:`build_embedding_dict`.
+    """
+    # Collect all zdims from any field
+    all_zdims = set()
+    for field in _EMBEDDING_FIELDS:
+        if field in embedding_dict and isinstance(embedding_dict[field], dict):
+            all_zdims.update(embedding_dict[field].keys())
+
+    for zdim in sorted(all_zdims):
+        zdim_dir = paths.embedding_zdim_dir(zdim)
+        os.makedirs(zdim_dir, exist_ok=True)
+        for field in _EMBEDDING_FIELDS:
+            if field in embedding_dict and zdim in embedding_dict[field]:
+                arr = np.asarray(embedding_dict[field][zdim])
+                np.save(os.path.join(zdim_dir, f"{field}.npy"), arr)
+
+    logger.info("Saved embeddings for zdims %s to per-zdim directories", sorted(all_zdims))
+
+
+def _load_embeddings_per_zdim(paths):
+    """Load embeddings from per-zdim .npy directories.
+
+    Returns the same dict structure as the legacy ``embeddings.pkl``::
+
+        {
+            'latent_coords': {2: array, 4: array, ...},
+            'latent_coords_noreg': {2: array, 4: array, ...},
+            ...
+        }
+
+    Returns None if no zdim directories are found.
+    """
+    import re
+    model_dir = paths.model_dir
+    if not os.path.isdir(model_dir):
+        return None
+
+    # Find zdim_* directories
+    zdim_dirs = {}
+    pattern = re.compile(r"^zdim_(\d+)$")
+    for name in os.listdir(model_dir):
+        m = pattern.match(name)
+        if m and os.path.isdir(os.path.join(model_dir, name)):
+            zdim_dirs[int(m.group(1))] = os.path.join(model_dir, name)
+
+    if not zdim_dirs:
+        return None
+
+    # Build the embedding dict
+    embedding = {field: {} for field in _EMBEDDING_FIELDS}
+    for zdim in sorted(zdim_dirs):
+        zdim_dir = zdim_dirs[zdim]
+        for field in _EMBEDDING_FIELDS:
+            npy_path = os.path.join(zdim_dir, f"{field}.npy")
+            if os.path.isfile(npy_path):
+                embedding[field][zdim] = np.load(npy_path)
+
+    logger.info("Loaded embeddings from per-zdim directories: zdims=%s", sorted(zdim_dirs))
+    return embedding
 
 
 def write_metadata_json(paths, result):
@@ -597,7 +684,11 @@ def plot_umap(output_folder, zs, centers):
 
 
 def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_folder, B_factor, n_bins = 30, n_min_particles = 100, embedding_option = 'cov_dist', save_all_estimates = False, maskrad_fraction= 20, apply_global_filtering=False, fsc_mask = None, fsc_mask_radius = None, fsc_mask_edgewidth = None, vol_prefix="state"):
-    """Compute reweighted volume estimates and save with RELION-style organization.
+    """Compute reweighted volume estimates and save with standardized organization.
+
+    Primary volumes (filtered, half-maps) are placed directly in
+    *output_folder*.  Diagnostics (params, local resolution, etc.) go
+    into ``output_folder/diagnostics/{prefix}{idx:03d}/``.
 
     Parameters
     ----------
@@ -605,7 +696,7 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
         Dataset with ``halfset_indices`` set.  Halfset datasets are
         obtained lazily via ``dataset.get_halfset(k)``.
     """
-    from recovar.output.output_paths import AnalysisPaths
+    from recovar.output.output_paths import VolumeOutputPaths
     ds = dataset
 
     if n_min_particles is None:
@@ -616,16 +707,12 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
     n_vols = path_subsampled.shape[0]
 
     for k in range(n_vols):
-        vol_idx = k  # 0-indexed
-        vol_stem = AnalysisPaths.vol_stem(vol_prefix, vol_idx)
-
-        # Diagnostics go into a per-volume subdirectory
-        diag_dir = os.path.join(output_folder, AnalysisPaths.diagnostics_subdir(vol_prefix, vol_idx)) + "/"
-        mkdir_safe(diag_dir)
+        vol_paths = VolumeOutputPaths(output_folder, vol_prefix, k)
+        vol_paths.ensure_dirs()
 
         ndim = zs.shape[-1]
         latent_points = path_subsampled[k][None]
-        np.savetxt(os.path.join(diag_dir, 'latent_coords.txt'), latent_points)
+        np.savetxt(vol_paths.latent_coords, latent_points)
 
         if embedding_option == 'llh':
             log_likelihoods = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[...,0]
@@ -643,26 +730,11 @@ def compute_and_save_reweighted(dataset, path_subsampled, zs, cov_zs,  output_fo
 
         locres_maskrad = ds.grid_size * ds.voxel_size / maskrad_fraction
         logger.info("Mask radius fraction = %s. Setting locres_maskrad = locres_sampling = box_size * voxel_size / %s = %.1f Angstroms. Using %d particles for template.", maskrad_fraction, maskrad_fraction, locres_maskrad, n_min_particles)
-        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, diag_dir, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
+        heterogeneity_volume.make_volumes_kernel_estimate_local(heterogeneity_distances, ds, vol_paths, ndim, n_bins, B_factor, tau=None, n_min_particles=n_min_particles, locres_sampling=locres_maskrad, locres_maskrad=locres_maskrad, locres_edgwidth=0, upsampling_for_ests=1, use_mask_ests=False, grid_correct_ests=False, save_all_estimates=save_all_estimates, metric_used='locshellmost_likely')
 
-        primary_stem = _promote_reweighted_volume_outputs(diag_dir, output_folder, vol_prefix, vol_idx)
-        logger.info("Done with volume %d: %s.mrc", vol_idx, primary_stem)
+        logger.info("Done with volume %d: %s", k, vol_paths.stem)
 
     np.savetxt(os.path.join(output_folder, 'latent_coords.txt'), path_subsampled)
-
-
-def _promote_reweighted_volume_outputs(diag_dir, output_folder, vol_prefix, vol_idx):
-    """Move primary reweighted outputs from diagnostics/ into the flat analysis dir."""
-    vol_stem = AnalysisPaths.vol_stem(vol_prefix, vol_idx)
-    primary_stem = os.path.join(output_folder, vol_stem)
-    rename_map = {
-        os.path.join(diag_dir, "filtered.mrc"): primary_stem + ".mrc",
-        os.path.join(diag_dir, "half1_unfil.mrc"): primary_stem + "_half1_unfil.mrc",
-        os.path.join(diag_dir, "half2_unfil.mrc"): primary_stem + "_half2_unfil.mrc",
-    }
-    for src, dst in rename_map.items():
-        os.replace(src, dst)
-    return primary_stem
 
 
 def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path):
@@ -723,8 +795,14 @@ class PipelineOutput:
         self.version = str(self.params['version']) if 'version' in self.params else '0'
 
     def _ensure_embedding_raw_loaded(self):
-        if self.embedding is None:
-            self.embedding = utils.pickle_load(self.paths.embeddings)
+        if self.embedding is not None:
+            return
+        # Try new per-zdim .npy format first
+        self.embedding = _load_embeddings_per_zdim(self.paths)
+        if self.embedding is not None:
+            return
+        # Fall back to legacy monolithic embeddings.pkl
+        self.embedding = utils.pickle_load(self.paths.embeddings)
 
     def _get_input_args(self):
         if not hasattr(self.params, "get") or "input_args" not in self.params:

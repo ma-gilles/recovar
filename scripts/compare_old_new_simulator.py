@@ -9,6 +9,7 @@ Tests:
 Usage:
   PYTHONNOUSERSITE=1 python scripts/compare_old_new_simulator.py
 """
+
 import sys
 import os
 import time
@@ -46,6 +47,7 @@ def reset_gpu_peak():
     try:
         # Force garbage collection
         import gc
+
         gc.collect()
         jax.clear_caches()
     except Exception:
@@ -85,9 +87,8 @@ def test_single_batch_equivalence():
 
                 if disc_type == "cubic":
                     from recovar.core import cubic_interpolation
-                    volume = cubic_interpolation.calculate_spline_coefficients(
-                        volume.reshape(volume_shape)
-                    )
+
+                    volume = cubic_interpolation.calculate_spline_coefficients(volume.reshape(volume_shape))
 
                 rot_matrices = jnp.array(rng.randn(batch_size, 3, 3).astype(np.float32))
                 translations = jnp.zeros((batch_size, 2), dtype=np.float32)
@@ -104,9 +105,17 @@ def test_single_batch_equivalence():
                 try:
                     t0 = time.time()
                     old_result = simulator.simulate_data_batch(
-                        volume, rot_matrices, translations, ctf_params,
-                        voxel_size, volume_shape, image_shape, grid_size,
-                        disc_type, ctf, skip_ctf=True,
+                        volume,
+                        rot_matrices,
+                        translations,
+                        ctf_params,
+                        voxel_size,
+                        volume_shape,
+                        image_shape,
+                        grid_size,
+                        disc_type,
+                        ctf,
+                        skip_ctf=True,
                     )
                     old_result.block_until_ready()
                     old_time = time.time() - t0
@@ -134,7 +143,11 @@ def test_single_batch_equivalence():
                 try:
                     t0 = time.time()
                     new_result = simulator.simulate_batch(
-                        config, volume, rot_matrices, translations, ctf_params,
+                        config,
+                        volume,
+                        rot_matrices,
+                        translations,
+                        ctf_params,
                         skip_ctf=True,
                     )
                     new_result.block_until_ready()
@@ -182,6 +195,7 @@ def test_full_dataset_generation():
 
     # Generate test volumes first
     from recovar.simulation.trajectory_generation import generate_trajectory_volumes
+
     with tempfile.TemporaryDirectory() as tmpdir:
         vol_prefix = generate_trajectory_volumes(
             output_dir=tmpdir,
@@ -199,8 +213,11 @@ def test_full_dataset_generation():
             try:
                 t0 = time.time()
                 sim_info = make_big_test_dataset(
-                    vol_prefix, out_dir,
-                    noise_level=0.1, grid_size=grid_size, n_images=n_images,
+                    vol_prefix,
+                    out_dir,
+                    noise_level=0.1,
+                    grid_size=grid_size,
+                    n_images=n_images,
                     contrast_std=0.1,
                 )
                 elapsed = time.time() - t0
@@ -259,9 +276,17 @@ def test_oom_scenario():
     try:
         t0 = time.time()
         old_result = simulator.simulate_data_batch(
-            volume, rot_matrices, translations, ctf_params,
-            voxel_size, volume_shape, image_shape, grid_size,
-            "cubic", ctf, skip_ctf=True,
+            volume,
+            rot_matrices,
+            translations,
+            ctf_params,
+            voxel_size,
+            volume_shape,
+            image_shape,
+            grid_size,
+            "cubic",
+            ctf,
+            skip_ctf=True,
         )
         old_result.block_until_ready()
         old_time = time.time() - t0
@@ -287,7 +312,11 @@ def test_oom_scenario():
     try:
         t0 = time.time()
         new_result = simulator.simulate_batch(
-            config, volume, rot_matrices, translations, ctf_params,
+            config,
+            volume,
+            rot_matrices,
+            translations,
+            ctf_params,
             skip_ctf=True,
         )
         new_result.block_until_ready()
@@ -311,7 +340,12 @@ def test_oom_scenario():
         reset_gpu_peak()
         try:
             result = simulator.simulate_batch(
-                config, volume, rm, tr, cp, skip_ctf=True,
+                config,
+                volume,
+                rm,
+                tr,
+                cp,
+                skip_ctf=True,
             )
             result.block_until_ready()
             mem = get_gpu_mem_used_mb()
@@ -367,8 +401,14 @@ def test_pipeline_functions():
     # forward_model: old vs new
     print("\n  forward_model_from_map:")
     old_fm = core_forward.forward_model_from_map(
-        volume, ctf_params, rot_matrices,
-        image_shape, volume_shape, voxel_size, ctf, "linear_interp",
+        volume,
+        ctf_params,
+        rot_matrices,
+        image_shape,
+        volume_shape,
+        voxel_size,
+        ctf,
+        "linear_interp",
     )
     new_fm = core_forward.forward_model(config, volume, ctf_params, rot_matrices)
 
@@ -378,8 +418,14 @@ def test_pipeline_functions():
     # adjoint:
     print("  adjoint_forward_model_from_map:")
     old_adj = core_forward.adjoint_forward_model_from_map(
-        old_fm, ctf_params, rot_matrices,
-        image_shape, volume_shape, voxel_size, ctf, "linear_interp",
+        old_fm,
+        ctf_params,
+        rot_matrices,
+        image_shape,
+        volume_shape,
+        voxel_size,
+        ctf,
+        "linear_interp",
     )
     new_adj = core_forward.adjoint_forward_model(config, old_fm, ctf_params, rot_matrices)
     max_diff = float(jnp.max(jnp.abs(old_adj - new_adj)))

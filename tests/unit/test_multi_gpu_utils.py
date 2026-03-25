@@ -45,8 +45,10 @@ def test_compute_H_B_multi_gpu_single_device_path(monkeypatch):
     class _FakeCtx:
         def __init__(self, _d):
             pass
+
         def __enter__(self):
             return self
+
         def __exit__(self, exc_type, exc, tb):
             return False
 

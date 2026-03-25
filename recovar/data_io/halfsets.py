@@ -51,9 +51,7 @@ class HalfsetDatasetSpec:
         elif uninvert_data_str == "true":
             uninvert_data = True
         else:
-            raise ValueError(
-                f"uninvert_data must be 'automatic', 'true', or 'false'; got {uninvert_data_str!r}"
-            )
+            raise ValueError(f"uninvert_data must be 'automatic', 'true', or 'false'; got {uninvert_data_str!r}")
 
         return cls(
             particles_file=args.particles,
@@ -72,9 +70,11 @@ class HalfsetDatasetSpec:
             uninvert_data=uninvert_data,
         )
 
+
 # ---------------------------------------------------------------------------
 # Core splitting
 # ---------------------------------------------------------------------------
+
 
 def split_index_list(all_valid_image_indices, split_random_seed=0):
     """Split a list of indices into two balanced halves with reproducible randomization.
@@ -110,9 +110,16 @@ def split_index_list(all_valid_image_indices, split_random_seed=0):
 # SPA halfset splitting
 # ---------------------------------------------------------------------------
 
-def get_split_indices(particles_file, datadir=None, strip_prefix=None,
-                      ind_file=None, split_random_seed=0, validate_split=True,
-                      n_images=None):
+
+def get_split_indices(
+    particles_file,
+    datadir=None,
+    strip_prefix=None,
+    ind_file=None,
+    split_random_seed=0,
+    validate_split=True,
+    n_images=None,
+):
     """Get indices for splitting dataset into halfsets.
 
     Args:
@@ -128,6 +135,7 @@ def get_split_indices(particles_file, datadir=None, strip_prefix=None,
         List of two numpy arrays containing indices for each halfset
     """
     from recovar.data_io.cryoem_dataset import get_num_images_in_dataset
+
     if ind_file is None:
         if n_images is None:
             n_images = get_num_images_in_dataset(particles_file, datadir=datadir, strip_prefix=strip_prefix)
@@ -149,15 +157,15 @@ def get_split_indices(particles_file, datadir=None, strip_prefix=None,
         n1, n2 = len(split_indices[0]), len(split_indices[1])
         total = n1 + n2
         if abs(n1 - n2) > max(1, total * 0.01):
-            logger.warning("Split is imbalanced: %s vs %s images (%.1f%% difference)",
-                           n1, n2, abs(n1 - n2) / total * 100)
+            logger.warning(
+                "Split is imbalanced: %s vs %s images (%.1f%% difference)", n1, n2, abs(n1 - n2) / total * 100
+            )
 
         overlap = np.intersect1d(split_indices[0], split_indices[1])
         if len(overlap) > 0:
             raise ValueError(f"Split contains {len(overlap)} overlapping indices")
 
-    logger.info("Split dataset into halfsets: %s and %s images",
-                len(split_indices[0]), len(split_indices[1]))
+    logger.info("Split dataset into halfsets: %s and %s images", len(split_indices[0]), len(split_indices[1]))
     return split_indices
 
 
@@ -165,9 +173,14 @@ def get_split_indices(particles_file, datadir=None, strip_prefix=None,
 # Tilt-series halfset splitting
 # ---------------------------------------------------------------------------
 
+
 def get_split_tilt_indices(
-    particles_file, ind_file=None, tilt_ind_file=None, ntilts=None,
-    datadir=None, particle_halfset_indices_file=None,
+    particles_file,
+    ind_file=None,
+    tilt_ind_file=None,
+    ntilts=None,
+    datadir=None,
+    particle_halfset_indices_file=None,
 ):
     """Split a tilt-series dataset into two halfsets (image indices).
 
@@ -267,8 +280,8 @@ def get_split_tilt_indices(
 # RELION halfset detection
 # ---------------------------------------------------------------------------
 
-def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None,
-                                    strip_prefix=None):
+
+def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None, strip_prefix=None):
     """Read halfset assignments from `_rlnRandomSubset` when present.
 
     Returns ``(halfsets, n_total)`` where *halfsets* is a list of two index
@@ -276,18 +289,19 @@ def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None,
     is absent. Non-STAR inputs are ignored by design; malformed STAR inputs
     fail loudly.
     """
-    if not str(particles_file).endswith('.star'):
+    if not str(particles_file).endswith(".star"):
         return None, None
 
     from recovar.data_io.starfile import read_star
+
     df, _ = read_star(particles_file)
 
     n_total = len(df)
 
-    if '_rlnRandomSubset' not in df.columns:
+    if "_rlnRandomSubset" not in df.columns:
         return None, n_total
 
-    subsets = df['_rlnRandomSubset'].values.astype(int)
+    subsets = df["_rlnRandomSubset"].values.astype(int)
     unique_vals = np.unique(subsets)
     if not (set(unique_vals) <= {1, 2}):
         logger.warning(
@@ -314,7 +328,8 @@ def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None,
 
     logger.info(
         "Using RELION halfsets from _rlnRandomSubset: %d and %d images",
-        len(halfsets[0]), len(halfsets[1]),
+        len(halfsets[0]),
+        len(halfsets[1]),
     )
     return halfsets, n_total
 
@@ -322,6 +337,7 @@ def _read_relion_halfsets_from_star(particles_file, ind_file=None, datadir=None,
 # ---------------------------------------------------------------------------
 # High-level dataset splitting
 # ---------------------------------------------------------------------------
+
 
 def load_halfset_dataset(spec: HalfsetDatasetSpec, *, ind_split, lazy=False):
     """Load one dataset view and attach halfset-local indices for iteration."""
@@ -367,45 +383,56 @@ def resolve_halfset_indices(args):
     """
     from recovar.data_io.cryoem_dataset import get_num_images_in_dataset
 
-    is_tilt = getattr(args, 'tilt_series', False) or getattr(args, 'tilt_series_ctf', 'cryoem') != 'cryoem'
-    datadir = getattr(args, 'datadir', None)
-    strip_prefix = getattr(args, 'strip_prefix', None)
-    ind_file = getattr(args, 'ind', None)
-    tilt_ind_file = getattr(args, 'tilt_ind', None)
-    ntilts = getattr(args, 'ntilts', None)
-    n_images = getattr(args, 'n_images', None) or -1
+    is_tilt = getattr(args, "tilt_series", False) or getattr(args, "tilt_series_ctf", "cryoem") != "cryoem"
+    datadir = getattr(args, "datadir", None)
+    strip_prefix = getattr(args, "strip_prefix", None)
+    ind_file = getattr(args, "ind", None)
+    tilt_ind_file = getattr(args, "tilt_ind", None)
+    ntilts = getattr(args, "ntilts", None)
+    n_images = getattr(args, "n_images", None) or -1
 
     if args.halfsets is None:
         n_total_from_star = None
         if not is_tilt:
             halfsets, n_total_from_star = _read_relion_halfsets_from_star(
-                args.particles, ind_file=ind_file,
-                datadir=datadir, strip_prefix=strip_prefix,
+                args.particles,
+                ind_file=ind_file,
+                datadir=datadir,
+                strip_prefix=strip_prefix,
             )
             if halfsets is not None:
                 if n_images > 0:
-                    halfsets = [halfset[:n_images // 2] for halfset in halfsets]
+                    halfsets = [halfset[: n_images // 2] for halfset in halfsets]
                     logger.info("using only %s particles", n_images)
                 return halfsets
 
         logger.info("Randomly splitting dataset into halfsets")
         if is_tilt:
             halfsets = get_split_tilt_indices(
-                args.particles, ind_file=ind_file, tilt_ind_file=tilt_ind_file,
-                ntilts=ntilts, datadir=datadir,
+                args.particles,
+                ind_file=ind_file,
+                tilt_ind_file=tilt_ind_file,
+                ntilts=ntilts,
+                datadir=datadir,
             )
         else:
             halfsets = get_split_indices(
-                args.particles, datadir=datadir, strip_prefix=strip_prefix,
-                ind_file=ind_file, n_images=n_total_from_star,
+                args.particles,
+                datadir=datadir,
+                strip_prefix=strip_prefix,
+                ind_file=ind_file,
+                n_images=n_total_from_star,
             )
 
     else:
         logger.info("Loading halfsets from file")
         if is_tilt:
             halfsets = get_split_tilt_indices(
-                args.particles, ind_file=ind_file, tilt_ind_file=tilt_ind_file,
-                ntilts=ntilts, datadir=datadir,
+                args.particles,
+                ind_file=ind_file,
+                tilt_ind_file=tilt_ind_file,
+                ntilts=ntilts,
+                datadir=datadir,
                 particle_halfset_indices_file=args.halfsets,
             )
         else:
@@ -418,7 +445,9 @@ def resolve_halfset_indices(args):
             n_images_total = None
             if needs_n_images:
                 n_images_total = get_num_images_in_dataset(
-                    args.particles, datadir=datadir, strip_prefix=strip_prefix,
+                    args.particles,
+                    datadir=datadir,
+                    strip_prefix=strip_prefix,
                 )
             halfsets = [
                 normalize_image_indices(halfsets[0], n_total=n_images_total, name="halfsets[0]"),
@@ -429,16 +458,15 @@ def resolve_halfset_indices(args):
                 ind_raw = load_index_like(ind_file)
                 if n_images_total is None and np.asarray(ind_raw).dtype == bool:
                     n_images_total = get_num_images_in_dataset(
-                        args.particles, datadir=datadir, strip_prefix=strip_prefix,
+                        args.particles,
+                        datadir=datadir,
+                        strip_prefix=strip_prefix,
                     )
                 ind = normalize_image_indices(ind_raw, n_total=n_images_total, name="ind")
-                halfsets = [
-                    np.asarray(halfset)[np.isin(np.asarray(halfset), ind)]
-                    for halfset in halfsets
-                ]
+                halfsets = [np.asarray(halfset)[np.isin(np.asarray(halfset), ind)] for halfset in halfsets]
 
     if n_images > 0:
-        halfsets = [halfset[:n_images // 2] for halfset in halfsets]
+        halfsets = [halfset[: n_images // 2] for halfset in halfsets]
         logger.info("using only %s particles", n_images)
     return halfsets
 

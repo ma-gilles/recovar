@@ -6,6 +6,7 @@ Covers:
   main        – pickle_load called with correct path; downstream called
   estimate_stable_states – directory creation and file writes (mocked)
 """
+
 import argparse
 import os
 import sys
@@ -21,6 +22,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # parse_args / argument registration
 # ---------------------------------------------------------------------------
+
 
 def test_parse_args_registers_density_positional():
     """'density' is a required positional arg."""
@@ -63,6 +65,7 @@ def test_parse_args_n_local_maxs_default_is_three():
 # main – pickle_load + downstream call verification
 # ---------------------------------------------------------------------------
 
+
 def test_main_loads_pickle_with_given_path(monkeypatch, tmp_path):
     """main() must call utils.pickle_load with the path from args.density."""
     loaded_paths = []
@@ -71,18 +74,23 @@ def test_main_loads_pickle_with_given_path(monkeypatch, tmp_path):
     fake_bounds = np.array([[-1, 1], [-1, 1]], dtype=np.float32)
     fake_dens_pkl = {"density": fake_density, "latent_space_bounds": fake_bounds}
 
-    monkeypatch.setattr(ess_cmd.utils, "pickle_load",
-                        lambda path: (loaded_paths.append(path), fake_dens_pkl)[1])
+    monkeypatch.setattr(ess_cmd.utils, "pickle_load", lambda path: (loaded_paths.append(path), fake_dens_pkl)[1])
     monkeypatch.setattr(
-        ess_cmd, "estimate_stable_states",
+        ess_cmd,
+        "estimate_stable_states",
         lambda *a, **kw: None,
     )
 
-    monkeypatch.setattr(sys, "argv", [
-        "estimate_stable_states",
-        "density.pkl",
-        "-o", str(tmp_path / "out"),
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "estimate_stable_states",
+            "density.pkl",
+            "-o",
+            str(tmp_path / "out"),
+        ],
+    )
 
     ess_cmd.main()
 
@@ -107,11 +115,16 @@ def test_main_calls_estimate_stable_states(monkeypatch, tmp_path):
     monkeypatch.setattr(ess_cmd, "estimate_stable_states", fake_ess)
 
     out_dir = str(tmp_path / "states")
-    monkeypatch.setattr(sys, "argv", [
-        "estimate_stable_states",
-        "density.pkl",
-        "-o", out_dir,
-    ])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "estimate_stable_states",
+            "density.pkl",
+            "-o",
+            out_dir,
+        ],
+    )
 
     ess_cmd.main()
 
@@ -123,13 +136,14 @@ def test_main_calls_estimate_stable_states(monkeypatch, tmp_path):
 # estimate_stable_states – directory creation and downstream calls (mocked)
 # ---------------------------------------------------------------------------
 
+
 def test_estimate_stable_states_creates_output_dirs(monkeypatch, tmp_path):
     """estimate_stable_states must call mkdir_safe for the output path."""
     made_dirs = []
-    monkeypatch.setattr(ess_cmd.output, "mkdir_safe",
-                        lambda p: made_dirs.append(p))
+    monkeypatch.setattr(ess_cmd.output, "mkdir_safe", lambda p: made_dirs.append(p))
     monkeypatch.setattr(
-        ess_cmd.deconvolve_density, "find_local_maxs_of_density",
+        ess_cmd.deconvolve_density,
+        "find_local_maxs_of_density",
         lambda *a, **kw: (np.zeros((2, 2)), np.zeros((2, 2))),
     )
     monkeypatch.setattr(ess_cmd.output, "plot_over_density", lambda *a, **kw: None)
@@ -150,7 +164,8 @@ def test_estimate_stable_states_calls_find_local_maxs(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(ess_cmd.output, "mkdir_safe", lambda _: None)
     monkeypatch.setattr(
-        ess_cmd.deconvolve_density, "find_local_maxs_of_density",
+        ess_cmd.deconvolve_density,
+        "find_local_maxs_of_density",
         lambda density, bounds, **kw: (
             calls.append({"density": density, "bounds": bounds}),
             (np.zeros((1, 2)), np.zeros((1, 2))),

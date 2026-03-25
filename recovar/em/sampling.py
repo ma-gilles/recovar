@@ -4,7 +4,8 @@ import healpy as hp
 import numpy as np
 from recovar import utils
 
-def get_rotation_grid(nside_level, n_in_planes = None, matrices = False):
+
+def get_rotation_grid(nside_level, n_in_planes=None, matrices=False):
 
     #  * order	Npix	Theta-sampling
     #  * 0		12		58.6
@@ -22,33 +23,34 @@ def get_rotation_grid(nside_level, n_in_planes = None, matrices = False):
     z = hp.pix2ang(nside, np.arange(m))
 
     if n_in_planes is None:
-        angle_res = 360 / ( 6 * 2**nside_level)
+        angle_res = 360 / (6 * 2**nside_level)
         n_in_planes = np.round(360 / angle_res).astype(int)
 
     in_angle_angles = np.linspace(0, 2 * np.pi, n_in_planes, endpoint=False)
-    angles = np.meshgrid( np.arange(m), in_angle_angles )
+    angles = np.meshgrid(np.arange(m), in_angle_angles)
     theta = z[0][angles[0]]
     phi = z[1][angles[0]]
-    angles = np.stack( [theta, phi, angles[1] ], axis=-1)
-    angles = angles.reshape( -1, 3)
+    angles = np.stack([theta, phi, angles[1]], axis=-1)
+    angles = angles.reshape(-1, 3)
     angles = angles / (2 * np.pi) * 360
     if matrices:
         angles = utils.R_from_relion(angles)
     return angles
 
+
 def get_angle_resolution(nside_level):
     nside = 2**nside_level
     return hp.nside2resol(nside, arcmin=True) / 60
 
+
 def get_translation_grid(max_pixel, pixel_offset):
-    gridded_max_pixel = (max_pixel // pixel_offset ) * pixel_offset
+    gridded_max_pixel = (max_pixel // pixel_offset) * pixel_offset
     xrange = np.arange(-gridded_max_pixel, gridded_max_pixel + 1, pixel_offset)
     x, y = np.meshgrid(xrange, xrange)
-    grid = np.stack([x.flatten(), y.flatten()], axis = 1)
-    norm_res = np.linalg.norm(grid, axis = 1) <= max_pixel + 0.001
-    grid = grid[norm_res] 
+    grid = np.stack([x.flatten(), y.flatten()], axis=1)
+    norm_res = np.linalg.norm(grid, axis=1) <= max_pixel + 0.001
+    grid = grid[norm_res]
     return grid
-
 
 
 def get_healpix_children(parent_pixels, parent_nside_level):
@@ -69,7 +71,7 @@ def get_healpix_children(parent_pixels, parent_nside_level):
             Children of ``parent_pixels[i]`` are at positions ``4*i:4*(i+1)``.
     """
     parent_pixels = np.asarray(parent_pixels)
-    nside_parent = 2 ** parent_nside_level
+    nside_parent = 2**parent_nside_level
     nside_child = 2 * nside_parent
     parent_nested = hp.ring2nest(nside_parent, parent_pixels)
     children_nested = 4 * np.repeat(parent_nested, 4) + np.tile(np.arange(4), len(parent_pixels))
@@ -102,10 +104,10 @@ def get_oversampled_rotation_grid(parent_pixels, parent_nside_level, oversamplin
         current_pixels = children
 
     fine_nside_level = parent_nside_level + oversampling_order
-    fine_nside = 2 ** fine_nside_level
+    fine_nside = 2**fine_nside_level
     theta, phi = hp.pix2ang(fine_nside, current_pixels)
 
-    angle_res = 360 / (6 * 2 ** fine_nside_level)
+    angle_res = 360 / (6 * 2**fine_nside_level)
     n_in_planes = int(np.round(360 / angle_res))
     in_plane_angles = np.linspace(0, 2 * np.pi, n_in_planes, endpoint=False)
 
@@ -138,7 +140,7 @@ def get_oversampled_translation_grid(parent_translations, pixel_offset, oversamp
     """
     parent_translations = np.asarray(parent_translations)
     n_parents = len(parent_translations)
-    n_subdiv = 2 ** oversampling_order  # per dimension
+    n_subdiv = 2**oversampling_order  # per dimension
     fine_offset = pixel_offset / n_subdiv
 
     half_offsets = np.linspace(
@@ -148,11 +150,9 @@ def get_oversampled_translation_grid(parent_translations, pixel_offset, oversamp
     )
     dx, dy = np.meshgrid(half_offsets, half_offsets)
     child_offsets = np.stack([dx.ravel(), dy.ravel()], axis=-1)  # (4**os, 2)
-    n_children = n_subdiv ** 2
+    n_children = n_subdiv**2
 
-    fine_translations = (
-        parent_translations[:, None, :] + child_offsets[None, :, :]
-    ).reshape(-1, 2)
+    fine_translations = (parent_translations[:, None, :] + child_offsets[None, :, :]).reshape(-1, 2)
     parent_map = np.repeat(np.arange(n_parents), n_children)
     return fine_translations, parent_map
 
@@ -174,10 +174,10 @@ def subdivide_healpix_pixels(pixels, nside_level):
     pixels = np.asarray(pixels)
     child_pixels = get_healpix_children(pixels, nside_level)
     child_nside_level = nside_level + 1
-    child_nside = 2 ** child_nside_level
+    child_nside = 2**child_nside_level
     theta, phi = hp.pix2ang(child_nside, child_pixels)
 
-    angle_res = 360 / (6 * 2 ** child_nside_level)
+    angle_res = 360 / (6 * 2**child_nside_level)
     n_in_planes = int(np.round(360 / angle_res))
     in_plane_angles = np.linspace(0, 2 * np.pi, n_in_planes, endpoint=False)
 
@@ -195,6 +195,6 @@ def subdivide_healpix_pixels(pixels, nside_level):
 @functools.partial(jax.jit, static_argnums=[1])
 def translations_to_indices(translations, image_shape):
     # Assumes that translations are integers
-    indices = translations + image_shape[0]//2
-    vec_indices = indices[...,1] * image_shape[1] + indices[...,0]
+    indices = translations + image_shape[0] // 2
+    vec_indices = indices[..., 1] * image_shape[1] + indices[..., 0]
     return vec_indices

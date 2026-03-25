@@ -61,14 +61,12 @@ def _compute_latent_distances(dataset, latent_point, zs, cov_zs, embedding_optio
         log_likelihoods = latent_density.compute_latent_log_likelihood(latent_points, zs, cov_zs)[..., 0]
         heterogeneity_distances = log_likelihoods - np.min(log_likelihoods)
     elif embedding_option == "cov_dist":
-        heterogeneity_distances = latent_density.compute_latent_quadratic_forms_in_batch(
-            latent_points, zs, cov_zs
-        )[..., 0]
+        heterogeneity_distances = latent_density.compute_latent_quadratic_forms_in_batch(latent_points, zs, cov_zs)[
+            ..., 0
+        ]
     elif embedding_option == "dist":
         identity_cov = np.broadcast_to(np.eye(ndim, dtype=np.float32), cov_zs.shape)
-        heterogeneity_distances = latent_density.compute_latent_log_likelihood(
-            latent_points, zs, identity_cov
-        )[..., 0]
+        heterogeneity_distances = latent_density.compute_latent_log_likelihood(latent_points, zs, identity_cov)[..., 0]
     else:
         raise ValueError(f"Unknown embedding option: {embedding_option}")
     return dataset.split_halfset_array(heterogeneity_distances, per_particle=dataset.tilt_series_flag)
@@ -90,10 +88,13 @@ def _profile_one_volume(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     t0 = time.perf_counter()
+    from recovar.output.output_paths import VolumeOutputPaths
+
+    vol_paths = VolumeOutputPaths(str(output_dir), "state", 0)
     heterogeneity_volume.make_volumes_kernel_estimate_local(
         heterogeneity_distances,
         dataset,
-        str(output_dir) + "/",
+        vol_paths,
         -1,
         n_bins,
         bfactor,

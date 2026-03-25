@@ -47,10 +47,31 @@ This runs k-means clustering, generates representative volumes, computes UMAP em
 Open the generated `.mrc` files in ChimeraX, Chimera, or any MRC viewer:
 
 ```
-output/analysis_10/kmeans/vol0000.mrc
-output/analysis_10/kmeans/vol0001.mrc
+output/analysis_10/kmeans/center000.mrc
+output/analysis_10/kmeans/center001.mrc
 ...
 ```
+
+## Project system
+
+For multi-step workflows, use the project system. It auto-numbers job directories (e.g. `Pipeline/job_0001/`, `Analyze/job_0001/`) and tracks job metadata (`job.json`, `command.txt`, `run.log`, `README.txt`).
+
+```bash
+# Initialize a project directory
+recovar init_project my_project
+cd my_project
+
+# Run pipeline (auto-creates Pipeline/job_0001/)
+recovar pipeline particles.star --mask mask.mrc --project .
+
+# Analyze (auto-creates Analyze/job_0001/)
+recovar analyze Pipeline/job_0001 --zdim=10 --project .
+
+# Check status of all jobs
+recovar project_status
+```
+
+All commands accept `--project <dir>` to enable project mode. If you run from within a project directory, it is auto-detected.
 
 ## Web GUI
 

@@ -44,40 +44,59 @@ def run_junk_detection(output_dir, use_old=False):
     # 1. Generate dataset (same seed always)
     if not os.path.exists(os.path.join(test_dataset, "particles.star")):
         import subprocess
-        subprocess.run([
-            sys.executable, "-m", "recovar.commands.make_test_dataset",
-            dataset_dir,
-            "--image-size", "128",
-            "--n-images", "10000",
-            "--noise-level", "0.1",
-            "--seed", "42",
-            "--n-tilts", "7",
-        ], check=True)
+
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "recovar.commands.make_test_dataset",
+                dataset_dir,
+                "--image-size",
+                "128",
+                "--n-images",
+                "10000",
+                "--noise-level",
+                "0.1",
+                "--seed",
+                "42",
+                "--n-tilts",
+                "7",
+            ],
+            check=True,
+        )
 
     # 2. Run pipeline
     if not os.path.exists(pipe_output):
         p_parser = pipeline.add_args(argparse.ArgumentParser())
-        p_args = p_parser.parse_args([
-            os.path.join(test_dataset, "particles.star"),
-            "--ctf", os.path.join(test_dataset, "ctf.pkl"),
-            "--poses", os.path.join(test_dataset, "poses.pkl"),
-            "--mask", "from_halfmaps",
-            "-o", pipe_output,
-            "--zdim", "4",
-            "--lazy",
-            "--correct-contrast",
-        ])
+        p_args = p_parser.parse_args(
+            [
+                os.path.join(test_dataset, "particles.star"),
+                "--ctf",
+                os.path.join(test_dataset, "ctf.pkl"),
+                "--poses",
+                os.path.join(test_dataset, "poses.pkl"),
+                "--mask",
+                "from_halfmaps",
+                "-o",
+                pipe_output,
+                "--zdim",
+                "4",
+                "--lazy",
+                "--correct-contrast",
+            ]
+        )
         pipeline.standard_recovar_pipeline(p_args)
 
     # 3. Run junk detection with verbose output
     po = o.PipelineOutput(pipe_output)
-    cryos = po.get('dataset')
+    cryos = po.get("dataset")
     zdim = 4
-    coords_entry = 'latent_coords'
+    coords_entry = "latent_coords"
     zs = po.get(coords_entry)[zdim]
 
     # K-means
     from sklearn.cluster import MiniBatchKMeans
+
     km = MiniBatchKMeans(n_clusters=100, random_state=42, batch_size=min(5000, len(zs)))
     km.fit(zs)
     centers = km.cluster_centers_
@@ -91,8 +110,8 @@ def run_junk_detection(output_dir, use_old=False):
     from recovar.core import fourier_transform_utils
     from recovar.output import plot_utils
 
-    volume_shape = po.get('volume_shape')
-    mean_volume = po.get('mean').reshape(volume_shape)
+    volume_shape = po.get("volume_shape")
+    mean_volume = po.get("mean").reshape(volume_shape)
     mean_real = np.real(fourier_transform_utils.get_idft3(mean_volume))
 
     batch_size = 500
@@ -101,7 +120,7 @@ def run_junk_detection(output_dir, use_old=False):
 
     cluster_scores = {}
     for ci in range(len(centers)):
-        zs_subsets = [zs[:cryos[0].n_units], zs[cryos[0].n_units:]]
+        zs_subsets = [zs[: cryos[0].n_units], zs[cryos[0].n_units :]]
         halfmaps = [None, None]
 
         for hi, zs_sub in enumerate(zs_subsets):
@@ -109,15 +128,22 @@ def run_junk_detection(output_dir, use_old=False):
             closest = np.argsort(distances)[:n_particles_per_cluster]
 
             Ft_ctf, F_ty = relion_functions.relion_style_triangular_kernel(
-                cryos[hi], None, batch_size,
-                disc_type='linear_interp',
+                cryos[hi],
+                None,
+                batch_size,
+                disc_type="linear_interp",
                 index_subset=closest,
                 upsampling_factor=2,
             )
             halfmap = relion_functions.post_process_from_filter_v2(
-                Ft_ctf, F_ty, cryos[hi].volume_shape, 2,
-                kernel='triangular', use_spherical_mask=True,
-                grid_correct=True, gridding_correct="square",
+                Ft_ctf,
+                F_ty,
+                cryos[hi].volume_shape,
+                2,
+                kernel="triangular",
+                use_spherical_mask=True,
+                grid_correct=True,
+                gridding_correct="square",
             )
             halfmaps[hi] = halfmap
 
@@ -130,15 +156,15 @@ def run_junk_detection(output_dir, use_old=False):
         fsc_vs_mean = plot_utils.compute_fsc(combined_real, mean_real)
 
         fsc_auc = float(np.mean(fsc_hh[1:]))
-        fsc_val = float(fsc_hh[len(fsc_hh)//4]) if len(fsc_hh) > 4 else float(fsc_hh[-1])
+        fsc_val = float(fsc_hh[len(fsc_hh) // 4]) if len(fsc_hh) > 4 else float(fsc_hh[-1])
         fsc_mean_auc = float(np.mean(fsc_vs_mean[1:]))
 
         cluster_scores[ci] = {
-            'fsc_auc': fsc_auc,
-            'fsc_quarter': fsc_val,
-            'fsc_vs_mean_auc': fsc_mean_auc,
-            'n_particles_h0': int(min(n_particles_per_cluster, len(zs_subsets[0]))),
-            'n_particles_h1': int(min(n_particles_per_cluster, len(zs_subsets[1]))),
+            "fsc_auc": fsc_auc,
+            "fsc_quarter": fsc_val,
+            "fsc_vs_mean_auc": fsc_mean_auc,
+            "n_particles_h0": int(min(n_particles_per_cluster, len(zs_subsets[0]))),
+            "n_particles_h1": int(min(n_particles_per_cluster, len(zs_subsets[1]))),
         }
 
         if ci % 20 == 0:
@@ -154,9 +180,10 @@ def run_junk_detection(output_dir, use_old=False):
         pickle.dump(labels, f)
 
     # Summary stats
-    aucs = [v['fsc_auc'] for v in cluster_scores.values()]
-    print(f"\nFSC AUC: mean={np.mean(aucs):.4f}, std={np.std(aucs):.4f}, "
-          f"min={np.min(aucs):.4f}, max={np.max(aucs):.4f}")
+    aucs = [v["fsc_auc"] for v in cluster_scores.values()]
+    print(
+        f"\nFSC AUC: mean={np.mean(aucs):.4f}, std={np.std(aucs):.4f}, min={np.min(aucs):.4f}, max={np.max(aucs):.4f}"
+    )
     print(f"Saved to {junk_output}")
 
 
@@ -171,10 +198,10 @@ def compare_results(dir_old, dir_new):
     print("-" * 70)
     diffs = []
     for ci in sorted(old.keys(), key=int):
-        o_auc = old[ci]['fsc_auc']
-        n_auc = new.get(ci, {}).get('fsc_auc', float('nan'))
-        o_mean = old[ci]['fsc_vs_mean_auc']
-        n_mean = new.get(ci, {}).get('fsc_vs_mean_auc', float('nan'))
+        o_auc = old[ci]["fsc_auc"]
+        n_auc = new.get(ci, {}).get("fsc_auc", float("nan"))
+        o_mean = old[ci]["fsc_vs_mean_auc"]
+        n_mean = new.get(ci, {}).get("fsc_vs_mean_auc", float("nan"))
         diff = n_auc - o_auc
         diffs.append(diff)
         flag = " ***" if abs(diff) > 0.05 else ""
@@ -190,8 +217,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=str, help="Output directory for run")
     parser.add_argument("--old", action="store_true", help="Use ~/recovar (old code)")
-    parser.add_argument("--compare", nargs=2, metavar=("OLD_DIR", "NEW_DIR"),
-                        help="Compare two output directories")
+    parser.add_argument("--compare", nargs=2, metavar=("OLD_DIR", "NEW_DIR"), help="Compare two output directories")
     args = parser.parse_args()
 
     if args.compare:

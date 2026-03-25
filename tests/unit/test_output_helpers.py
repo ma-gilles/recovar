@@ -55,7 +55,9 @@ def test_pipeline_output_get_embedding_component_uses_particle_halfsets(tmp_path
         str(model_dir / "embeddings.pkl"),
     )
     # image halfsets != particle halfsets to make selection explicit.
-    utils.pickle_dump([np.array([1, 3], dtype=np.int32), np.array([0, 2], dtype=np.int32)], str(model_dir / "halfsets.pkl"))
+    utils.pickle_dump(
+        [np.array([1, 3], dtype=np.int32), np.array([0, 2], dtype=np.int32)], str(model_dir / "halfsets.pkl")
+    )
     utils.pickle_dump(
         [np.array([2, 0], dtype=np.int32), np.array([3, 1], dtype=np.int32)],
         str(model_dir / "particles_halfsets.pkl"),
@@ -87,7 +89,9 @@ def test_pipeline_output_get_embedding_component_uses_image_halfsets_for_unshare
         },
         str(model_dir / "embeddings.pkl"),
     )
-    utils.pickle_dump([np.array([1, 3], dtype=np.int32), np.array([0, 2], dtype=np.int32)], str(model_dir / "halfsets.pkl"))
+    utils.pickle_dump(
+        [np.array([1, 3], dtype=np.int32), np.array([0, 2], dtype=np.int32)], str(model_dir / "halfsets.pkl")
+    )
     utils.pickle_dump(
         [np.array([2, 0], dtype=np.int32), np.array([3, 1], dtype=np.int32)],
         str(model_dir / "particles_halfsets.pkl"),
@@ -115,7 +119,9 @@ def test_pipeline_output_get_embedding_component_missing_shared_flag_defaults_to
         },
         str(model_dir / "embeddings.pkl"),
     )
-    utils.pickle_dump([np.array([1, 3], dtype=np.int32), np.array([0, 2], dtype=np.int32)], str(model_dir / "halfsets.pkl"))
+    utils.pickle_dump(
+        [np.array([1, 3], dtype=np.int32), np.array([0, 2], dtype=np.int32)], str(model_dir / "halfsets.pkl")
+    )
     utils.pickle_dump(
         [np.array([2, 0], dtype=np.int32), np.array([3, 1], dtype=np.int32)],
         str(model_dir / "particles_halfsets.pkl"),
@@ -144,7 +150,9 @@ def test_pipeline_output_get_embedding_component_dict_input_args_unshared_tilt_u
         },
         str(model_dir / "embeddings.pkl"),
     )
-    utils.pickle_dump([np.array([1, 3], dtype=np.int32), np.array([0, 2], dtype=np.int32)], str(model_dir / "halfsets.pkl"))
+    utils.pickle_dump(
+        [np.array([1, 3], dtype=np.int32), np.array([0, 2], dtype=np.int32)], str(model_dir / "halfsets.pkl")
+    )
     utils.pickle_dump(
         [np.array([2, 0], dtype=np.int32), np.array([3, 1], dtype=np.int32)],
         str(model_dir / "particles_halfsets.pkl"),

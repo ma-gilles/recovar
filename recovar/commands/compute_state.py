@@ -1,4 +1,4 @@
-import recovar.jax_config 
+import recovar.jax_config
 import logging
 import numpy as np
 import warnings
@@ -6,6 +6,7 @@ from recovar.output import output as o
 from recovar.heterogeneity import embedding
 import pickle
 import os, argparse
+
 logger = logging.getLogger(__name__)
 from recovar.utils import parser_args
 
@@ -53,7 +54,7 @@ def _auto_remap_paths(input_args, actual_result_dir: str):
     for attr in _PATH_REMAP_ATTRS:
         val = getattr(input_args, attr, None)
         if isinstance(val, str) and val.startswith(old_prefix):
-            new_val = new_prefix + val[len(old_prefix):]
+            new_val = new_prefix + val[len(old_prefix) :]
             if os.path.exists(new_val):
                 setattr(input_args, attr, new_val)
                 logger.info("  %s: %s -> %s", attr, val, new_val)
@@ -115,12 +116,14 @@ def add_args(parser: argparse.ArgumentParser):
     parser = parser_args.standard_downstream_args(parser)
 
     parser.add_argument(
-        "--latent-points", type=os.path.abspath,
+        "--latent-points",
+        type=os.path.abspath,
         required=True,
         help="path to latent points (.txt file). E.g., you can use the output of k-means and input output/analysis_2/centers.txt from analyze.py. Or you can make your own latent points. It should be a .txt file with shape (n_points, zdim).",
     )
     parser.add_argument(
-        "--save-all-estimates", action="store_true",
+        "--save-all-estimates",
+        action="store_true",
         help="Save all estimates. This is useful for debugging.",
     )
 
@@ -144,9 +147,9 @@ def compute_state(args):
     result_dir = os.fspath(args.result_dir)
     outdir = os.fspath(args.outdir)
     po = o.PipelineOutput(result_dir)
-    
+
     params = getattr(po, "params", None)
-    input_args = params.get('input_args') if hasattr(params, "get") else None
+    input_args = params.get("input_args") if hasattr(params, "get") else None
     particles_override = getattr(args, "particles", None)
     datadir_override = getattr(args, "datadir", None)
     strip_prefix_override = getattr(args, "strip_prefix", None)
@@ -168,29 +171,29 @@ def compute_state(args):
 
     if zdim1:
         if target_zs.ndim > 1 and target_zs.shape[-1] != 1:
-            raise ValueError(
-                f"--zdim1 expects scalar/1D latent points or Nx1 arrays; got shape {target_zs.shape}"
-            )
-        zdim =1
+            raise ValueError(f"--zdim1 expects scalar/1D latent points or Nx1 arrays; got shape {target_zs.shape}")
+        zdim = 1
         target_zs = np.atleast_1d(target_zs).reshape(-1, 1)
     else:
         if target_zs.ndim == 0:
             raise ValueError("Scalar latent point requires --zdim1.")
         zdim = target_zs.shape[-1]
-        if target_zs.ndim ==1:
+        if target_zs.ndim == 1:
             logger.warning("Did you mean to use --zdim1?")
             target_zs = target_zs[None]
 
     # Select reg vs noreg entry names
-    coords_entry = 'latent_coords_noreg' if no_z_regularization else 'latent_coords'
-    precision_entry = 'latent_precision_noreg' if no_z_regularization else 'latent_precision'
-    contrast_entry = 'contrasts_noreg' if no_z_regularization else 'contrasts'
+    coords_entry = "latent_coords_noreg" if no_z_regularization else "latent_coords"
+    precision_entry = "latent_precision_noreg" if no_z_regularization else "latent_precision"
+    contrast_entry = "contrasts_noreg" if no_z_regularization else "contrasts"
 
     zs_keys = po.get_embedding_keys(coords_entry)
 
     if zdim not in zs_keys:
-        options = ','.join(str(e) for e in zs_keys)
-        raise ValueError(f"zdim {zdim} from provided latent points is not found in embedding results. Options are: {options}")
+        options = ",".join(str(e) for e in zs_keys)
+        raise ValueError(
+            f"zdim {zdim} from provided latent points is not found in embedding results. Options are: {options}"
+        )
 
     contrasts_key = po.get_embedding_component(contrast_entry, zdim)
     zs_key = po.get_embedding_component(coords_entry, zdim)
@@ -201,7 +204,7 @@ def compute_state(args):
     zs_key = np.asarray(zs_key, dtype=np.float32)
     cov_zs_key = np.asarray(cov_zs_key, dtype=np.float32)
 
-    dataset = po.get('lazy_dataset') if lazy else po.get('dataset')
+    dataset = po.get("lazy_dataset") if lazy else po.get("dataset")
 
     # Embeddings are in dataset-local order (sorted original indices),
     # matching the unified dataset's CTF_params ordering.
@@ -215,25 +218,41 @@ def compute_state(args):
     fsc_mask = None
     if apply_global_filtering:
         try:
-            fsc_mask = po.get('volume_mask')
+            fsc_mask = po.get("volume_mask")
             logger.info("Using pipeline output volume_mask for FSC filtering")
         except (KeyError, FileNotFoundError):
             logger.warning("Could not load volume_mask from pipeline output, proceeding without FSC mask")
 
     o.compute_and_save_reweighted(
-        dataset, target_zs, zs, cov_zs, output_folder, bfactor,
-        n_bins=n_bins, maskrad_fraction=maskrad_fraction,
-        n_min_particles=n_min_particles, save_all_estimates=save_all_estimates,
+        dataset,
+        target_zs,
+        zs,
+        cov_zs,
+        output_folder,
+        bfactor,
+        n_bins=n_bins,
+        maskrad_fraction=maskrad_fraction,
+        n_min_particles=n_min_particles,
+        save_all_estimates=save_all_estimates,
         apply_global_filtering=apply_global_filtering,
         fsc_mask=fsc_mask,
         fsc_mask_radius=fsc_mask_radius,
         fsc_mask_edgewidth=fsc_mask_edgewidth,
     )
 
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     args = add_args(parser).parse_args()
-    compute_state(args)
+
+    from recovar.project.job_context import job_context
+
+    with job_context(args, "compute_state") as ctx:
+        args.outdir = ctx.output_dir
+        if ctx.pipeline_dir:
+            args.result_dir = ctx.pipeline_dir
+        compute_state(args)
+
 
 if __name__ == "__main__":
     main()

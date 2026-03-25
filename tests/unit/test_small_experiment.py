@@ -45,4 +45,3 @@ def test_make_random_sampling_scheme_shape_and_range():
     assert indices.shape[0] == 3
     assert int(indices.min()) >= 0
     assert int(indices.max()) < n
-

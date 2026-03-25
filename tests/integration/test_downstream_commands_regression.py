@@ -41,15 +41,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BASELINE_DIR = _REPO_ROOT / "tests" / "baselines" / "downstream_commands"
 
 
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _gpu_env():
-    return dict(os.environ, PYTHONNOUSERSITE="1",
-                XLA_PYTHON_CLIENT_PREALLOCATE="false")
+    return dict(os.environ, PYTHONNOUSERSITE="1", XLA_PYTHON_CLIENT_PREALLOCATE="false")
 
 
 def _run(cmd, **kwargs):
@@ -69,8 +67,7 @@ def _load_baseline(name: str) -> dict:
     path = _BASELINE_DIR / f"{name}.json"
     if not path.exists():
         pytest.fail(
-            f"Baseline file missing: {path}\n"
-            f"Generate it by running the test with DOWNSTREAM_OVERWRITE_BASELINE=1"
+            f"Baseline file missing: {path}\nGenerate it by running the test with DOWNSTREAM_OVERWRITE_BASELINE=1"
         )
     with open(path) as f:
         return json.load(f)
@@ -97,7 +94,10 @@ def _check_regression(name: str, current: dict, tol_frac: float = _TOL_FRAC):
     baseline = _load_baseline(name)
 
     checked, failures = log_comparison_table(
-        current, baseline, tol_frac, title=f"Downstream: {name}",
+        current,
+        baseline,
+        tol_frac,
+        title=f"Downstream: {name}",
     )
     if checked > 0:
         assert not failures, "regressions:\n" + "\n".join(failures)
@@ -106,6 +106,7 @@ def _check_regression(name: str, current: dict, tol_frac: float = _TOL_FRAC):
 # ---------------------------------------------------------------------------
 # Module-scoped fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def shared_dir(tmp_path_factory):
@@ -121,13 +122,21 @@ def dataset_dir(shared_dir):
     create_outlier_volume(str(outlier_vol), grid_size=_GRID)
 
     make_cmd = [
-        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "make_test_dataset",
         str(shared_dir),
-        "--n-images", str(_N_IMAGES),
-        "--outlier-file-input", str(outlier_vol),
-        "--percent-outliers", "0.20",
-        "--image-size", str(_GRID),
-        "--seed", "42",
+        "--n-images",
+        str(_N_IMAGES),
+        "--outlier-file-input",
+        str(outlier_vol),
+        "--percent-outliers",
+        "0.20",
+        "--image-size",
+        str(_GRID),
+        "--seed",
+        "42",
     ]
     _run(make_cmd)
     ds = shared_dir / "test_dataset"
@@ -156,15 +165,23 @@ def pipeline_output(dataset_dir, shared_dir):
     utils.write_mrc(mask_path, gt_union_soft_mask)
 
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline",
         str(mrcs),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", mask_path,
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        mask_path,
         "--lazy",
-        "--zdim", str(_ZDIM),
+        "--zdim",
+        str(_ZDIM),
     ]
     _run(cmd)
     assert (pipeline_out / "model" / "params.pkl").exists()
@@ -176,11 +193,17 @@ def analyze_output(pipeline_output, shared_dir):
     """Run analyze and return output dir."""
     analyze_out = shared_dir / "analysis_output"
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "analyze",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "analyze",
         str(pipeline_output),
-        "--zdim", str(_ZDIM),
-        "-o", str(analyze_out),
-        "--n-clusters", str(_N_CLUSTERS),
+        "--zdim",
+        str(_ZDIM),
+        "-o",
+        str(analyze_out),
+        "--n-clusters",
+        str(_N_CLUSTERS),
         "--skip-umap",
         "--lazy",
     ]
@@ -193,11 +216,15 @@ def density_output(pipeline_output, shared_dir):
     """Run density estimation and return output dir."""
     density_out = shared_dir / "density_output"
     cmd = [
-        sys.executable, "-m", "recovar.command_line",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
         "estimate_conformational_density",
         str(pipeline_output),
-        "--output_dir", str(density_out),
-        "--pca_dim", "2",
+        "--output_dir",
+        str(density_out),
+        "--pca_dim",
+        "2",
     ]
     _run(cmd)
     return density_out
@@ -207,10 +234,12 @@ def density_output(pipeline_output, shared_dir):
 # Regression tests
 # ---------------------------------------------------------------------------
 
+
 def test_analyze_kmeans_regression(analyze_output):
     """Check k-means cluster quality: structural invariants only."""
     from recovar import utils
-    result = utils.pickle_load(str(analyze_output / "kmeans_result.pkl"))
+
+    result = utils.pickle_load(str(analyze_output / "data" / "kmeans_result.pkl"))
     centers = np.asarray(result["centers"])
     labels = np.asarray(result["labels"])
 
@@ -234,10 +263,15 @@ def test_compute_state_volume_quality(pipeline_output, analyze_output, shared_di
 
     state_out = shared_dir / "regression_compute_state"
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "compute_state",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "compute_state",
         str(pipeline_output),
-        "-o", str(state_out),
-        "--latent-points", str(pts_path),
+        "-o",
+        str(state_out),
+        "--latent-points",
+        str(pts_path),
         "--lazy",
     ]
     _run(cmd)
@@ -251,7 +285,7 @@ def test_compute_state_volume_quality(pipeline_output, analyze_output, shared_di
         locres_mrc = diagnostics / f"state{i:03d}" / "local_resolution.mrc"
         if not locres_mrc.exists():
             continue
-        with mrcfile.open(str(locres_mrc), mode='r') as mrc:
+        with mrcfile.open(str(locres_mrc), mode="r") as mrc:
             locres_map = np.array(mrc.data, dtype=np.float32)
         valid = locres_map[np.isfinite(locres_map) & (locres_map > 0)]
         if valid.size == 0:
@@ -265,7 +299,9 @@ def test_compute_state_volume_quality(pipeline_output, analyze_output, shared_di
 
     perf_stages = {"compute_state": stage_perf(snap_before, perf_snapshot())}
     perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_compute_state.json")
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_compute_state.json"
+    )
     check_perf_regression(perf_record, perf_baseline_path, "test_compute_state_volume_quality")
 
 
@@ -278,25 +314,29 @@ def test_compute_trajectory_regression(pipeline_output, analyze_output, shared_d
     traj_out = shared_dir / "regression_trajectory"
     n_vols = 4
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "compute_trajectory",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "compute_trajectory",
         str(pipeline_output),
-        "-o", str(traj_out),
-        "--zdim", str(_ZDIM),
-        "--endpts", str(centers_txt),
-        "--ind", "0,1",
-        "--n-vols-along-path", str(n_vols),
+        "-o",
+        str(traj_out),
+        "--zdim",
+        str(_ZDIM),
+        "--endpts",
+        str(centers_txt),
+        "--ind",
+        "0,1",
+        "--n-vols-along-path",
+        str(n_vols),
         "--lazy",
     ]
     _run(cmd)
 
     from recovar import utils
-    mrc_files = sorted(
-        p for p in traj_out.rglob("state*.mrc")
-        if "_half" not in p.name
-    )
-    assert len(mrc_files) >= n_vols, (
-        f"Expected at least {n_vols} trajectory volumes, got {len(mrc_files)}"
-    )
+
+    mrc_files = sorted(p for p in traj_out.rglob("state*.mrc") if "_half" not in p.name)
+    assert len(mrc_files) >= n_vols, f"Expected at least {n_vols} trajectory volumes, got {len(mrc_files)}"
 
     vols = [utils.load_mrc(str(p)) for p in mrc_files[:n_vols]]
     end_to_end = float(np.linalg.norm(vols[0] - vols[-1]))
@@ -306,14 +346,17 @@ def test_compute_trajectory_regression(pipeline_output, analyze_output, shared_d
 
     perf_stages = {"compute_trajectory": stage_perf(snap_before, perf_snapshot())}
     perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_compute_trajectory.json")
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_compute_trajectory.json"
+    )
     check_perf_regression(perf_record, perf_baseline_path, "test_compute_trajectory_regression")
 
 
 def test_density_estimation_regression(density_output):
     """Check that estimated density has reasonable structure."""
     from recovar import utils
-    knee_pkl = density_output / "deconv_density_knee.pkl"
+
+    knee_pkl = density_output / "data" / "deconv_density_knee.pkl"
     assert knee_pkl.exists()
 
     result = utils.pickle_load(str(knee_pkl))
@@ -328,14 +371,19 @@ def test_stable_states_regression(density_output, shared_dir):
     """Check that stable states are found."""
     snap_before = perf_snapshot()
 
-    knee_pkl = density_output / "deconv_density_knee.pkl"
+    knee_pkl = density_output / "data" / "deconv_density_knee.pkl"
 
     stable_out = shared_dir / "regression_stable_states"
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "estimate_stable_states",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "estimate_stable_states",
         str(knee_pkl),
-        "-o", str(stable_out),
-        "--n_local_maxs", "3",
+        "-o",
+        str(stable_out),
+        "--n_local_maxs",
+        "3",
     ]
     _run(cmd)
 
@@ -350,7 +398,9 @@ def test_stable_states_regression(density_output, shared_dir):
 
     perf_stages = {"stable_states": stage_perf(snap_before, perf_snapshot())}
     perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_stable_states.json")
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_stable_states.json"
+    )
     check_perf_regression(perf_record, perf_baseline_path, "test_stable_states_regression")
 
 
@@ -360,17 +410,24 @@ def test_extract_kmeans_subset_regression(analyze_output, shared_dir):
 
     from recovar import utils
 
-    kmeans_pkl = analyze_output / "kmeans_result.pkl"
-    subset_out = shared_dir / "regression_kmeans_subset.pkl"
+    kmeans_pkl = analyze_output / "data" / "kmeans_result.pkl"
+    subset_out = shared_dir / "regression_kmeans_subset"
 
     cmd = [
-        sys.executable, "-m", "recovar.command_line",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
         "extract_image_subset_from_kmeans",
-        str(kmeans_pkl), str(subset_out), "0,1",
+        str(kmeans_pkl),
+        str(subset_out),
+        "0,1",
     ]
     _run(cmd)
 
-    indices = utils.pickle_load(str(subset_out))
+    # job_context creates a directory; the actual output is indices.pkl inside
+    subset_pkl = subset_out / "indices.pkl"
+    assert subset_pkl.exists(), f"No indices.pkl found in {subset_out}"
+    indices = utils.pickle_load(str(subset_pkl))
     kmeans_result = utils.pickle_load(str(kmeans_pkl))
     labels = np.asarray(kmeans_result["labels"])
     n_valid = int(np.sum(~np.isnan(labels)))
@@ -381,5 +438,7 @@ def test_extract_kmeans_subset_regression(analyze_output, shared_dir):
 
     perf_stages = {"extract_kmeans_subset": stage_perf(snap_before, perf_snapshot())}
     perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_extract_kmeans_subset.json")
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "downstream_commands" / "perf_baseline_extract_kmeans_subset.json"
+    )
     check_perf_regression(perf_record, perf_baseline_path, "test_extract_kmeans_subset_regression")

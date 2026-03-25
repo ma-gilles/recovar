@@ -6,6 +6,7 @@ Covers:
   _parse_visible_frames()  – frame selection parsing
   Tomogram geometry        – rotation matrices, local defocus
 """
+
 import argparse
 
 import numpy as np
@@ -21,6 +22,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # add_args – argument registration
 # ---------------------------------------------------------------------------
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
@@ -57,6 +59,7 @@ def test_registers_verbose_flag():
 # _parse_visible_frames
 # ---------------------------------------------------------------------------
 
+
 def test_parse_visible_frames_basic():
     result = tomo_cmd._parse_visible_frames("[1,1,0,1,0,1]")
     assert result == [0, 1, 3, 5]
@@ -80,6 +83,7 @@ def test_parse_visible_frames_single():
 # ---------------------------------------------------------------------------
 # Tomogram – defocus and rotation
 # ---------------------------------------------------------------------------
+
 
 def _make_simple_tomogram(n_tilts=3):
     """Create a Tomogram with simple geometry for testing."""
@@ -138,17 +142,20 @@ def test_local_defocus_varies_with_depth():
 # Tomogram.expand_particles_batch – basic structure
 # ---------------------------------------------------------------------------
 
+
 def test_expand_particles_batch_returns_correct_number_of_rows():
     """expand_particles_batch should produce M * n_tilts rows."""
     n_tilts = 3
     tomo = _make_simple_tomogram(n_tilts=n_tilts)
 
-    tilt_df = pd.DataFrame({
-        '_rlnMicrographName': [f'mic_{i}.mrc' for i in range(n_tilts)],
-        '_rlnMicrographPreExposure': np.arange(n_tilts, dtype=float),
-        '_rlnCtfScalefactor': np.ones(n_tilts),
-        '_rlnTomoNominalStageTiltAngle': np.zeros(n_tilts),
-    })
+    tilt_df = pd.DataFrame(
+        {
+            "_rlnMicrographName": [f"mic_{i}.mrc" for i in range(n_tilts)],
+            "_rlnMicrographPreExposure": np.arange(n_tilts, dtype=float),
+            "_rlnCtfScalefactor": np.ones(n_tilts),
+            "_rlnTomoNominalStageTiltAngle": np.zeros(n_tilts),
+        }
+    )
 
     df_2d = tomo.expand_particles_batch(
         points_3d=np.array([[0.0, 0.0, 0.0]]),
@@ -160,10 +167,10 @@ def test_expand_particles_batch_returns_correct_number_of_rows():
     )
 
     assert len(df_2d) == n_tilts
-    assert '_rlnDefocusU' in df_2d.columns
-    assert '_rlnImageName' in df_2d.columns
-    assert '_rlnGroupName' in df_2d.columns
-    assert all(df_2d['_rlnGroupName'] == "particle_001")
+    assert "_rlnDefocusU" in df_2d.columns
+    assert "_rlnImageName" in df_2d.columns
+    assert "_rlnGroupName" in df_2d.columns
+    assert all(df_2d["_rlnGroupName"] == "particle_001")
 
 
 def test_expand_particles_batch_multiple_particles():
@@ -171,12 +178,14 @@ def test_expand_particles_batch_multiple_particles():
     n_tilts = 4
     tomo = _make_simple_tomogram(n_tilts=n_tilts)
 
-    tilt_df = pd.DataFrame({
-        '_rlnMicrographName': [f'mic_{i}.mrc' for i in range(n_tilts)],
-        '_rlnMicrographPreExposure': np.arange(n_tilts, dtype=float),
-        '_rlnCtfScalefactor': np.ones(n_tilts),
-        '_rlnTomoNominalStageTiltAngle': np.zeros(n_tilts),
-    })
+    tilt_df = pd.DataFrame(
+        {
+            "_rlnMicrographName": [f"mic_{i}.mrc" for i in range(n_tilts)],
+            "_rlnMicrographPreExposure": np.arange(n_tilts, dtype=float),
+            "_rlnCtfScalefactor": np.ones(n_tilts),
+            "_rlnTomoNominalStageTiltAngle": np.zeros(n_tilts),
+        }
+    )
 
     M = 3
     R_batch = R.from_matrix(np.broadcast_to(np.eye(3), (M, 3, 3)).copy())
@@ -193,8 +202,8 @@ def test_expand_particles_batch_multiple_particles():
     assert len(df_2d) == M * n_tilts
     # Check each group appears n_tilts times
     for i in range(M):
-        assert (df_2d['_rlnGroupName'] == f"group_{i}").sum() == n_tilts
+        assert (df_2d["_rlnGroupName"] == f"group_{i}").sum() == n_tilts
     # Check random subsets preserved
     for i in range(M):
-        subset_vals = df_2d[df_2d['_rlnGroupName'] == f"group_{i}"]['_rlnRandomSubset']
+        subset_vals = df_2d[df_2d["_rlnGroupName"] == f"group_{i}"]["_rlnRandomSubset"]
         assert all(subset_vals == [1, 2, 1][i])

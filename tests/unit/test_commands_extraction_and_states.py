@@ -66,7 +66,9 @@ def test_extract_image_subset_uses_coordinate_to_pick_subvolume(monkeypatch, tmp
     monkeypatch.setattr(extract_image_subset.utils, "pickle_load", fake_pickle_load)
     monkeypatch.setattr(extract_image_subset.utils, "load_mrc", fake_load_mrc)
     monkeypatch.setattr(extract_image_subset.locres, "get_sampling_points", fake_get_sampling_points)
-    monkeypatch.setattr(extract_image_subset.heterogeneity_volume, "get_inds_for_subvolume", fake_get_inds_for_subvolume)
+    monkeypatch.setattr(
+        extract_image_subset.heterogeneity_volume, "get_inds_for_subvolume", fake_get_inds_for_subvolume
+    )
     monkeypatch.setattr(extract_image_subset.utils, "pickle_dump", fake_pickle_dump)
 
     extract_image_subset.extract_image_subset(
@@ -87,10 +89,26 @@ def test_extract_image_subset_uses_mask_center_of_mass(monkeypatch, tmp_path):
     mask_arr = np.zeros((6, 6, 6), dtype=np.float32)
     mask_arr[4, 2, 2] = 1.0
 
-    monkeypatch.setattr(extract_image_subset.utils, "load_mrc", lambda path: mask_arr if path.endswith("mask.mrc") else np.zeros((16, 16, 16), dtype=np.float32))
-    monkeypatch.setattr(extract_image_subset.utils, "pickle_load", lambda _p: {"locres_sampling": 2, "locres_maskrad": 0.5, "voxel_size": 1.0})
-    monkeypatch.setattr(extract_image_subset.locres, "get_sampling_points", lambda *_args, **_kwargs: np.array([[0, 0, 0], [4, 2, 2]], dtype=np.float32) - 8)
-    monkeypatch.setattr(extract_image_subset.heterogeneity_volume, "get_inds_for_subvolume", lambda _d, idx: np.array([idx], dtype=np.int32))
+    monkeypatch.setattr(
+        extract_image_subset.utils,
+        "load_mrc",
+        lambda path: mask_arr if path.endswith("mask.mrc") else np.zeros((16, 16, 16), dtype=np.float32),
+    )
+    monkeypatch.setattr(
+        extract_image_subset.utils,
+        "pickle_load",
+        lambda _p: {"locres_sampling": 2, "locres_maskrad": 0.5, "voxel_size": 1.0},
+    )
+    monkeypatch.setattr(
+        extract_image_subset.locres,
+        "get_sampling_points",
+        lambda *_args, **_kwargs: np.array([[0, 0, 0], [4, 2, 2]], dtype=np.float32) - 8,
+    )
+    monkeypatch.setattr(
+        extract_image_subset.heterogeneity_volume,
+        "get_inds_for_subvolume",
+        lambda _d, idx: np.array([idx], dtype=np.int32),
+    )
     monkeypatch.setattr(extract_image_subset.utils, "pickle_dump", lambda inds, _p: captured.setdefault("inds", inds))
 
     extract_image_subset.extract_image_subset(
@@ -145,11 +163,15 @@ def test_estimate_stable_states_writes_outputs(monkeypatch, tmp_path):
     monkeypatch.setattr(
         estimate_stable_states.output,
         "plot_over_density",
-        lambda density, points, annotate, plot_folder, cmap: called.setdefault("plot", (density.shape, points.shape, annotate, plot_folder, cmap)),
+        lambda density, points, annotate, plot_folder, cmap: called.setdefault(
+            "plot", (density.shape, points.shape, annotate, plot_folder, cmap)
+        ),
     )
 
     density = np.zeros((8, 8), dtype=np.float32)
-    estimate_stable_states.estimate_stable_states(density, {"x": [-1, 1]}, percent_top=5, n_local_maxs=2, file_path=str(tmp_path))
+    estimate_stable_states.estimate_stable_states(
+        density, {"x": [-1, 1]}, percent_top=5, n_local_maxs=2, file_path=str(tmp_path)
+    )
 
     assert called["args"][2] == 5
     assert called["args"][3] == 2

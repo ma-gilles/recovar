@@ -27,9 +27,16 @@ logger = logging.getLogger(__name__)
 # Pipeline entry point
 # ---------------------------------------------------------------------------
 
-def masking_options(volume_mask_option, means, volume_shape,
-                    dtype_real=np.float32, mask_dilation_iter=0,
-                    keep_input_mask=False, dilated_mask_dilations_iter=None):
+
+def masking_options(
+    volume_mask_option,
+    means,
+    volume_shape,
+    dtype_real=np.float32,
+    mask_dilation_iter=0,
+    keep_input_mask=False,
+    dilated_mask_dilations_iter=None,
+):
     """Build volume mask and dilated mask from a pipeline mask specification.
 
     Args:
@@ -53,7 +60,7 @@ def masking_options(volume_mask_option, means, volume_shape,
     kernel_size = 3
 
     if not isinstance(volume_mask_option, str):
-        raise ValueError('mask option not recognized')
+        raise ValueError("mask option not recognized")
 
     if volume_mask_option.endswith(".mrc"):
         input_mask = utils.load_mrc(volume_mask_option).astype(np.float32)
@@ -61,53 +68,51 @@ def masking_options(volume_mask_option, means, volume_shape,
         if keep_input_mask:
             volume_mask = input_mask
         else:
-            logger.info('Using input mask')
+            logger.info("Using input mask")
             if mask_dilation_iter > 0:
-                logger.info('Thresholding and dilating input mask')
+                logger.info("Thresholding and dilating input mask")
                 input_mask = input_mask > 0.99
                 input_mask = binary_dilation(input_mask, iterations=mask_dilation_iter)
 
             if input_mask.shape[0] != volume_shape[0]:
                 input_mask = skimage.transform.rescale(input_mask, volume_shape[0] / input_mask.shape[0])
 
-            logger.info('Thresholding mask at 0.5 and softening with cosine kernel of radius %d pixels', kernel_size)
+            logger.info("Thresholding mask at 0.5 and softening with cosine kernel of radius %d pixels", kernel_size)
             input_mask = input_mask > 0.5
             volume_mask = soften_volume_mask(input_mask, kernel_size)
 
         dilated_volume_mask = binary_dilation(input_mask, iterations=dilated_mask_dilations_iter)
         dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
 
-    elif volume_mask_option == 'from_halfmaps':
+    elif volume_mask_option == "from_halfmaps":
         volume_mask = _mask_from_halfmaps(means, smax=3)
-        logger.info('Softening mask')
+        logger.info("Softening mask")
 
         dilated_volume_mask = binary_dilation(volume_mask, iterations=dilated_mask_dilations_iter)
         volume_mask = soften_volume_mask(volume_mask, kernel_size)
         dilated_volume_mask = soften_volume_mask(dilated_volume_mask, kernel_size)
-        logger.info('using mask computed from mean')
+        logger.info("using mask computed from mean")
 
-    elif volume_mask_option == 'sphere':
+    elif volume_mask_option == "sphere":
         volume_mask = get_radial_mask(volume_shape)
         dilated_volume_mask = get_radial_mask(volume_shape)
-        logger.info('using spherical mask')
+        logger.info("using spherical mask")
 
-    elif volume_mask_option == 'none':
+    elif volume_mask_option == "none":
         volume_mask = np.ones(volume_shape)
         dilated_volume_mask = volume_mask
-        logger.info('using no mask')
+        logger.info("using no mask")
 
     else:
-        raise ValueError(
-            'mask option not recognized. Options: a .mrc path, from_halfmaps, sphere, none'
-        )
+        raise ValueError("mask option not recognized. Options: a .mrc path, from_halfmaps, sphere, none")
 
-    return (np.array(volume_mask.astype(dtype_real)),
-            np.array(dilated_volume_mask.astype(dtype_real)))
+    return (np.array(volume_mask.astype(dtype_real)), np.array(dilated_volume_mask.astype(dtype_real)))
 
 
 # ---------------------------------------------------------------------------
 # Mask generation from half-maps / ground truth
 # ---------------------------------------------------------------------------
+
 
 def make_mask_from_half_maps(halfmap1, halfmap2, smax=3):
     """Generate a binary mask from two real-space half-maps via local correlation.
@@ -159,8 +164,7 @@ def make_mask_from_gt(gt_map, smax=3, iter=10, from_ft=True):
     return soften_volume_mask(dilated, kern_rad=2)
 
 
-def make_union_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
-                       dilation_iters=None, kern_rad=3):
+def make_union_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1, dilation_iters=None, kern_rad=3):
     """Create a union mask from multiple ground-truth real-space volumes.
 
     For each volume, generates a per-volume mask via ``make_mask_from_gt``,
@@ -187,8 +191,7 @@ def make_union_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
 
     # Normalise input to a list of 3-D arrays
     if isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 2:
-        gt_volumes_real = [gt_volumes_real[i].reshape(volume_shape)
-                          for i in range(gt_volumes_real.shape[0])]
+        gt_volumes_real = [gt_volumes_real[i].reshape(volume_shape) for i in range(gt_volumes_real.shape[0])]
     elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 4:
         gt_volumes_real = [gt_volumes_real[i] for i in range(gt_volumes_real.shape[0])]
     elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 3:
@@ -198,7 +201,7 @@ def make_union_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
     for vol in gt_volumes_real:
         vol_3d = np.asarray(vol).reshape(volume_shape)
         per_vol_mask = make_mask_from_gt(vol_3d, smax=smax, iter=iter, from_ft=False)
-        union_mask |= (per_vol_mask > 0.5)
+        union_mask |= per_vol_mask > 0.5
 
     dilated = binary_dilation(union_mask, iterations=dilation_iters)
     binary_mask = np.asarray(dilated, dtype=bool)
@@ -210,6 +213,7 @@ def make_union_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
 # ---------------------------------------------------------------------------
 # Mask softening
 # ---------------------------------------------------------------------------
+
 
 def soften_volume_mask(binary_volume_mask, kern_rad=3):
     """Soften a binary mask with a cosine taper based on distance transform.
@@ -238,6 +242,7 @@ def soften_volume_mask(binary_volume_mask, kern_rad=3):
 # Radial / spherical masks
 # ---------------------------------------------------------------------------
 
+
 def get_radial_mask(shape, radius=None):
     """Binary spherical mask.
 
@@ -249,9 +254,9 @@ def get_radial_mask(shape, radius=None):
         Boolean array with True inside the sphere.
     """
     radius = shape[0] // 2 - 1 if radius is None else radius
-    volume_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(
-        shape, voxel_size=1, scaled=False
-    ).reshape(list(shape) + [len(list(shape))])
+    volume_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False).reshape(
+        list(shape) + [len(list(shape))]
+    )
     return jnp.linalg.norm(volume_coords, axis=-1) < radius + 1e-7
 
 
@@ -270,9 +275,7 @@ def raised_cosine_mask(volume_shape, radius, radius_p, offset):
     Returns:
         Mask array of shape ``volume_shape``.
     """
-    grid = fourier_transform_utils.get_k_coordinate_of_each_pixel_3d(
-        volume_shape, voxel_size=1, scaled=False
-    )
+    grid = fourier_transform_utils.get_k_coordinate_of_each_pixel_3d(volume_shape, voxel_size=1, scaled=False)
     grid -= offset
     distances = jnp.linalg.norm(grid, axis=-1)
 
@@ -307,9 +310,9 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
     radius_p = radius + cosine_width
     shape = vol.shape
 
-    volume_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(
-        shape, voxel_size=1, scaled=False
-    ).reshape(list(shape) + [len(list(shape))])
+    volume_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False).reshape(
+        list(shape) + [len(list(shape))]
+    )
     r = jnp.linalg.norm(volume_coords, axis=-1)
 
     mask1 = r <= radius
@@ -341,6 +344,7 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
 # ---------------------------------------------------------------------------
 # 2D image masks
 # ---------------------------------------------------------------------------
+
 
 def window_mask(D, in_rad, out_rad):
     """2D circular window mask with linear taper (normalised coordinates).
@@ -393,6 +397,7 @@ def smooth_circular_mask(image_size, radius, thickness):
 # Internal helpers (adapted from EMDA - https://emda.readthedocs.io/)
 # ---------------------------------------------------------------------------
 
+
 def _mask_from_halfmaps(means, smax=3):
     """Generate mask from pipeline means object (Fourier-space half-maps)."""
     vol_shape = utils.guess_vol_shape_from_vol_size(means.corrected0.size)
@@ -418,9 +423,12 @@ def make_soft_edged_kernel(r1, shape):
     else:
         boxsize = 2 * r1 + 1
 
-    volume_coords = fourier_transform_utils.get_k_coordinate_of_each_pixel(
-        shape, voxel_size=1, scaled=False
-    ).reshape(list(shape) + [len(list(shape))]) + 1
+    volume_coords = (
+        fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False).reshape(
+            list(shape) + [len(list(shape))]
+        )
+        + 1
+    )
     distances = jnp.linalg.norm(volume_coords, axis=-1)
 
     half_boxsize = boxsize // 2
@@ -468,22 +476,21 @@ def _local_correlation_3d(half1, half2, kern):
     var3_B = np.where(var3_B < reg_b, reg_b, var3_B)
     return cov3_AB / np.sqrt(var3_A * var3_B)
 
-def make_moving_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
-                        dilation_iters=None, kern_rad=3):
+
+def make_moving_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1, dilation_iters=None, kern_rad=3):
     """Create a mask for the moving region across GT volumes."""
     if dilation_iters is None:
         dilation_iters = int(np.ceil(6 * volume_shape[0] / 128))
 
     if isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 2:
-        gt_volumes_real = [gt_volumes_real[i].reshape(volume_shape)
-                           for i in range(gt_volumes_real.shape[0])]
+        gt_volumes_real = [gt_volumes_real[i].reshape(volume_shape) for i in range(gt_volumes_real.shape[0])]
     elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 4:
         gt_volumes_real = [gt_volumes_real[i] for i in range(gt_volumes_real.shape[0])]
     elif isinstance(gt_volumes_real, np.ndarray) and gt_volumes_real.ndim == 3:
         gt_volumes_real = [gt_volumes_real]
 
     if len(gt_volumes_real) == 0:
-        raise ValueError('gt_volumes_real must contain at least one volume')
+        raise ValueError("gt_volumes_real must contain at least one volume")
 
     volumes = np.asarray(
         [np.asarray(vol).reshape(volume_shape) for vol in gt_volumes_real],
@@ -492,12 +499,15 @@ def make_moving_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1,
     mean_volume = np.mean(volumes, axis=0)
     moving_signal = np.sqrt(np.mean((volumes - mean_volume[None]) ** 2, axis=0))
 
-    moving_mask = make_mask_from_gt(
-        moving_signal,
-        smax=smax,
-        iter=iter,
-        from_ft=False,
-    ) > 0.5
+    moving_mask = (
+        make_mask_from_gt(
+            moving_signal,
+            smax=smax,
+            iter=iter,
+            from_ft=False,
+        )
+        > 0.5
+    )
     if dilation_iters > 0 and np.any(moving_mask):
         moving_mask = binary_dilation(moving_mask, iterations=dilation_iters)
 

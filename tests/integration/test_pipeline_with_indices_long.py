@@ -61,9 +61,7 @@ pytestmark = [
 ]
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_PIPELINE_IND_BASELINE_JSON = (
-    _REPO_ROOT / "tests" / "baselines" / "pipeline_with_indices" / "spa_baseline.json"
-)
+_DEFAULT_PIPELINE_IND_BASELINE_JSON = _REPO_ROOT / "tests" / "baselines" / "pipeline_with_indices" / "spa_baseline.json"
 _DEFAULT_PIPELINE_IND_ET_BASELINE_JSON = (
     _REPO_ROOT / "tests" / "baselines" / "pipeline_with_indices" / "cryo_et_baseline.json"
 )
@@ -72,6 +70,7 @@ _DEFAULT_PIPELINE_IND_ET_BASELINE_JSON = (
 # ---------------------------------------------------------------------------
 # Helpers (parallel structure to test_run_test_outliers_pipeline_regression)
 # ---------------------------------------------------------------------------
+
 
 def _require_env(name: str) -> str:
     val = os.environ.get(name)
@@ -148,13 +147,21 @@ def _make_dataset(
     dataset_dir.mkdir(parents=True, exist_ok=True)
 
     make_cmd = [
-        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "make_test_dataset",
         str(output_dir),
-        "--n-images", str(n_images),
-        "--outlier-file-input", str(outlier_vol),
-        "--percent-outliers", str(percent_outliers),
-        "--image-size", str(grid_size),
-        "--seed", "42",
+        "--n-images",
+        str(n_images),
+        "--outlier-file-input",
+        str(outlier_vol),
+        "--percent-outliers",
+        str(percent_outliers),
+        "--image-size",
+        str(grid_size),
+        "--seed",
+        "42",
     ]
     if extra_args:
         make_cmd.extend(shlex.split(extra_args))
@@ -184,15 +191,24 @@ def _make_tilt_dataset(
     dataset_dir.mkdir(parents=True, exist_ok=True)
 
     make_cmd = [
-        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "make_test_dataset",
         str(output_dir),
-        "--n-images", str(n_images),
-        "--outlier-file-input", str(outlier_vol),
-        "--percent-outliers", str(percent_outliers),
-        "--percent-tilt-series-outliers", str(pct_tilt_outliers),
+        "--n-images",
+        str(n_images),
+        "--outlier-file-input",
+        str(outlier_vol),
+        "--percent-outliers",
+        str(percent_outliers),
+        "--percent-tilt-series-outliers",
+        str(pct_tilt_outliers),
         "--tilt-series",
-        "--image-size", str(grid_size),
-        "--seed", "42",
+        "--image-size",
+        str(grid_size),
+        "--seed",
+        "42",
     ]
     subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
     return dataset_dir
@@ -213,17 +229,27 @@ def _run_pipeline_with_ind(
 
     mask_arg = mask_path if mask_path else "from_halfmaps"
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(mrcs),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
-        "--ind", str(ind_path),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
+        "--ind",
+        str(ind_path),
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", mask_arg,
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        mask_arg,
         "--lazy",
-        "--zdim", "4",
-        "--k-rounds", str(k_rounds),
+        "--zdim",
+        "4",
+        "--k-rounds",
+        str(k_rounds),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
@@ -245,19 +271,30 @@ def _run_pipeline_with_particle_ind(
 
     mask_arg = mask_path if mask_path else "from_halfmaps"
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(star),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--tilt-series",
-        "--tilt-series-ctf", "relion5",
-        "--particle-ind", str(particle_ind_path),
+        "--tilt-series-ctf",
+        "relion5",
+        "--particle-ind",
+        str(particle_ind_path),
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", mask_arg,
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        mask_arg,
         "--lazy",
-        "--zdim", "4",
-        "--k-rounds", str(k_rounds),
+        "--zdim",
+        "4",
+        "--k-rounds",
+        str(k_rounds),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
@@ -298,9 +335,7 @@ def _compute_outlier_metrics_for_ind_subset(
         with open(inliers_file, "rb") as f:
             detected_inliers = np.asarray(pickle.load(f), dtype=np.int64)
 
-        detected_outlier_set = set(
-            int(i) for i in np.setdiff1d(np.arange(n_subset), detected_inliers)
-        )
+        detected_outlier_set = set(int(i) for i in np.setdiff1d(np.arange(n_subset), detected_inliers))
         tp = len(detected_outlier_set & true_outlier_local_indices)
         fp = len(detected_outlier_set - true_outlier_local_indices)
         fn = len(true_outlier_local_indices - detected_outlier_set)
@@ -351,9 +386,7 @@ def _compute_particle_outlier_metrics_for_particle_ind_subset(
         with open(inliers_file, "rb") as f:
             particle_inliers = np.asarray(pickle.load(f), dtype=np.int64)
 
-        detected_particle_outliers = set(
-            int(i) for i in np.setdiff1d(np.arange(n_subset), particle_inliers)
-        )
+        detected_particle_outliers = set(int(i) for i in np.setdiff1d(np.arange(n_subset), particle_inliers))
         tp = len(detected_particle_outliers & true_particle_outliers)
         fp = len(detected_particle_outliers - true_particle_outliers)
         fn = len(true_particle_outliers - detected_particle_outliers)
@@ -388,8 +421,7 @@ def _check_ind_partition_consistency(
         if r == 1:
             total_detected = int(inliers.size + outliers.size)
             assert total_detected == n_subset, (
-                f"round 1: inliers({inliers.size}) + outliers({outliers.size}) "
-                f"!= n_subset({n_subset})"
+                f"round 1: inliers({inliers.size}) + outliers({outliers.size}) != n_subset({n_subset})"
             )
 
 
@@ -431,9 +463,7 @@ def test_pipeline_spa_with_ind_regression(tmp_path):
     volumes_prefix = os.environ.get("LONG_METRICS_VOLUMES_DIR") or None
     if volumes_prefix and not Path(f"{volumes_prefix}0000.mrc").exists():
         pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
-    baseline_json = Path(
-        os.environ.get("PIPELINE_IND_BASELINE_JSON", str(_DEFAULT_PIPELINE_IND_BASELINE_JSON))
-    )
+    baseline_json = Path(os.environ.get("PIPELINE_IND_BASELINE_JSON", str(_DEFAULT_PIPELINE_IND_BASELINE_JSON)))
 
     ind_frac = float(os.environ.get("PIPELINE_IND_FRAC", "0.80"))
     n_images = int(os.environ.get("PIPELINE_IND_N_IMAGES", "10000"))
@@ -555,9 +585,7 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
     volumes_prefix = os.environ.get("LONG_METRICS_VOLUMES_DIR") or None
     if volumes_prefix and not Path(f"{volumes_prefix}0000.mrc").exists():
         pytest.skip(f"invalid LONG_METRICS_VOLUMES_DIR prefix: {volumes_prefix}")
-    baseline_json = Path(
-        os.environ.get("PIPELINE_IND_ET_BASELINE_JSON", str(_DEFAULT_PIPELINE_IND_ET_BASELINE_JSON))
-    )
+    baseline_json = Path(os.environ.get("PIPELINE_IND_ET_BASELINE_JSON", str(_DEFAULT_PIPELINE_IND_ET_BASELINE_JSON)))
 
     ind_frac = float(os.environ.get("PIPELINE_IND_FRAC", "0.80"))
     n_images = int(os.environ.get("PIPELINE_IND_N_IMAGES", "10000"))
@@ -631,9 +659,7 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
     # --particle-ind because image count depends on tilts per subset particle.
     # We verify output files exist instead.
     for r in range(1, k_rounds + 1):
-        assert (pipeline_out / f"inliers_round_{r}.pkl").exists(), (
-            f"missing inliers_round_{r}.pkl in {pipeline_out}"
-        )
+        assert (pipeline_out / f"inliers_round_{r}.pkl").exists(), f"missing inliers_round_{r}.pkl in {pipeline_out}"
 
     # Particle-level outlier metrics for the subset
     particle_metrics = _compute_particle_outlier_metrics_for_particle_ind_subset(
@@ -667,5 +693,7 @@ def test_pipeline_cryo_et_with_particle_ind_regression(tmp_path):
 
     perf_stages = {"pipeline_cryo_et_with_particle_ind": stage_perf(snap_before, perf_snapshot())}
     perf_record = build_perf_record(perf_stages)
-    perf_baseline_path = str(_REPO_ROOT / "tests" / "baselines" / "pipeline_with_indices" / "perf_baseline_cryo_et.json")
+    perf_baseline_path = str(
+        _REPO_ROOT / "tests" / "baselines" / "pipeline_with_indices" / "perf_baseline_cryo_et.json"
+    )
     check_perf_regression(perf_record, perf_baseline_path, "test_pipeline_cryo_et_with_particle_ind")

@@ -94,7 +94,9 @@ def main() -> None:
         description="Compare old/new pipeline (and optionally compute_state) on one fixed dataset."
     )
     parser.add_argument("--dataset-dir", type=Path, required=True, help="Directory with particles/poses/ctf files.")
-    parser.add_argument("--other-repo-root", type=Path, required=True, help="Second repo root to compare against current.")
+    parser.add_argument(
+        "--other-repo-root", type=Path, required=True, help="Second repo root to compare against current."
+    )
     parser.add_argument(
         "--current-repo-root",
         type=Path,

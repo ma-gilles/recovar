@@ -32,6 +32,7 @@ def _make_hermitian_volume(N, rng, dtype=np.complex64):
 def _random_rotations(n, rng):
     """Generate random rotation matrices."""
     from scipy.spatial.transform import Rotation
+
     return Rotation.random(n, random_state=rng).as_matrix().astype(np.float32)
 
 
@@ -64,13 +65,19 @@ class TestCudaCubicProject:
 
             # JAX path (force CPU fallback by computing on GPU without CUDA)
             import os
+
             os.environ["RECOVAR_DISABLE_CUDA"] = "1"
             try:
                 # Reset cached state
                 import recovar.cuda_backproject as cb
+
                 cb._cuda_ok = None
                 jax_result = slicing.slice_volume(
-                    coeffs_g, rots_g, image_shape, volume_shape, "cubic",
+                    coeffs_g,
+                    rots_g,
+                    image_shape,
+                    volume_shape,
+                    "cubic",
                     max_r=None,
                 )
             finally:
@@ -79,14 +86,22 @@ class TestCudaCubicProject:
 
             # CUDA path
             from recovar.cuda_backproject import project
+
             cuda_result = project(
-                coeffs_g, rots_g, image_shape, volume_shape,
-                order=3, half_volume=False, half_image=False,
+                coeffs_g,
+                rots_g,
+                image_shape,
+                volume_shape,
+                order=3,
+                half_volume=False,
+                half_image=False,
             )
 
         np.testing.assert_allclose(
-            np.asarray(cuda_result), np.asarray(jax_result),
-            atol=1e-5, rtol=1e-5,
+            np.asarray(cuda_result),
+            np.asarray(jax_result),
+            atol=1e-5,
+            rtol=1e-5,
             err_msg="CUDA cubic doesn't match JAX cubic (full vol, full img)",
         )
 
@@ -108,18 +123,31 @@ class TestCudaCubicProject:
             rots_g = jax.device_put(jnp.array(rots))
 
             from recovar.cuda_backproject import project
+
             full_result = project(
-                coeffs_g, rots_g, image_shape, volume_shape,
-                order=3, half_volume=False, half_image=False,
+                coeffs_g,
+                rots_g,
+                image_shape,
+                volume_shape,
+                order=3,
+                half_volume=False,
+                half_image=False,
             )
             half_result = project(
-                half_g, rots_g, image_shape, volume_shape,
-                order=3, half_volume=True, half_image=False,
+                half_g,
+                rots_g,
+                image_shape,
+                volume_shape,
+                order=3,
+                half_volume=True,
+                half_image=False,
             )
 
         np.testing.assert_allclose(
-            np.asarray(half_result), np.asarray(full_result),
-            atol=1e-5, rtol=1e-5,
+            np.asarray(half_result),
+            np.asarray(full_result),
+            atol=1e-5,
+            rtol=1e-5,
             err_msg="CUDA cubic half-vol doesn't match full-vol",
         )
 
@@ -139,19 +167,32 @@ class TestCudaCubicProject:
             rots_g = jax.device_put(jnp.array(rots))
 
             from recovar.cuda_backproject import project
+
             full_result = project(
-                coeffs_g, rots_g, image_shape, volume_shape,
-                order=3, half_volume=False, half_image=False,
+                coeffs_g,
+                rots_g,
+                image_shape,
+                volume_shape,
+                order=3,
+                half_volume=False,
+                half_image=False,
             )
             half_result = project(
-                coeffs_g, rots_g, image_shape, volume_shape,
-                order=3, half_volume=False, half_image=True,
+                coeffs_g,
+                rots_g,
+                image_shape,
+                volume_shape,
+                order=3,
+                half_volume=False,
+                half_image=True,
             )
 
         full_half = ftu.full_image_to_half_image(np.asarray(full_result), image_shape)
         np.testing.assert_allclose(
-            np.asarray(half_result), full_half,
-            atol=1e-5, rtol=1e-5,
+            np.asarray(half_result),
+            full_half,
+            atol=1e-5,
+            rtol=1e-5,
             err_msg="CUDA cubic half-image doesn't match full image",
         )
 
@@ -173,14 +214,11 @@ class TestCudaCubicProject:
             rots_g = jax.device_put(jnp.array(rots))
 
             from recovar.cuda_backproject import project
-            r_ff = project(coeffs_g, rots_g, image_shape, volume_shape,
-                           order=3, half_volume=False, half_image=False)
-            r_fh = project(coeffs_g, rots_g, image_shape, volume_shape,
-                           order=3, half_volume=False, half_image=True)
-            r_hf = project(half_g, rots_g, image_shape, volume_shape,
-                           order=3, half_volume=True, half_image=False)
-            r_hh = project(half_g, rots_g, image_shape, volume_shape,
-                           order=3, half_volume=True, half_image=True)
+
+            r_ff = project(coeffs_g, rots_g, image_shape, volume_shape, order=3, half_volume=False, half_image=False)
+            r_fh = project(coeffs_g, rots_g, image_shape, volume_shape, order=3, half_volume=False, half_image=True)
+            r_hf = project(half_g, rots_g, image_shape, volume_shape, order=3, half_volume=True, half_image=False)
+            r_hh = project(half_g, rots_g, image_shape, volume_shape, order=3, half_volume=True, half_image=True)
 
         # full-vol full-img vs full-vol half-img
         ff_half = ftu.full_image_to_half_image(np.asarray(r_ff), image_shape)
@@ -212,9 +250,9 @@ class TestCudaCubicVJP:
             rots_g = jax.device_put(jnp.array(rots))
 
             from recovar.core.cuda_ops import cuda_project
+
             def loss(v):
-                imgs = cuda_project(v, rots_g, image_shape, volume_shape,
-                                    3, False, False, None)
+                imgs = cuda_project(v, rots_g, image_shape, volume_shape, 3, False, False, None)
                 return jnp.sum(jnp.abs(imgs) ** 2)
 
             grad = jax.grad(loss)(coeffs_g)

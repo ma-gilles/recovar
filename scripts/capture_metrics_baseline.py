@@ -33,8 +33,7 @@ def main() -> None:
     p.add_argument("--volumes-prefix", default="")
     p.add_argument("--run-args", default="")
     p.add_argument("--notes", default="")
-    p.add_argument("--force", action="store_true",
-                   help="Overwrite existing baseline without prompting.")
+    p.add_argument("--force", action="store_true", help="Overwrite existing baseline without prompting.")
     args = p.parse_args()
 
     src = Path(args.scores_json)
@@ -43,9 +42,7 @@ def main() -> None:
 
     out_dir = Path("tests/baselines/run_test_all_metrics") / args.name
     if (out_dir / "all_scores.json").exists() and not args.force:
-        raise FileExistsError(
-            f"Baseline already exists at {out_dir}. Use --force to overwrite."
-        )
+        raise FileExistsError(f"Baseline already exists at {out_dir}. Use --force to overwrite.")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     with open(src, "r") as f:

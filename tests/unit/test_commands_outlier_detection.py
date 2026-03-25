@@ -37,7 +37,9 @@ class _FakePipelineOutput:
 
 def test_outlier_detection_from_contrast_spa_returns_image_indices():
     payload = {
-        "input_args": SimpleNamespace(tilt_series=False, shared_contrast_across_tilts=False, particles="particles.mrcs"),
+        "input_args": SimpleNamespace(
+            tilt_series=False, shared_contrast_across_tilts=False, particles="particles.mrcs"
+        ),
         "contrasts": {4: np.array([0.05, 0.2, 4.0, 0.5], dtype=np.float32)},
         "halfsets": [np.array([0, 1], dtype=np.int32), np.array([2, 3], dtype=np.int32)],
         "particles_halfsets": [np.array([0, 1], dtype=np.int32), np.array([2, 3], dtype=np.int32)],
@@ -173,7 +175,7 @@ def test_outlier_detection_main_combines_anomaly_and_contrast_for_spa(monkeypatc
         lambda _p: _FakePipelineOutput(payload, sorted_payload=sorted_payload),
     )
 
-    def fake_plot(_zs, _orig_indices, folder):
+    def fake_plot(_zs, _orig_indices, folder, **_kw):
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, "inliers_consensus.pkl"), "wb") as f:
             pickle.dump(np.array([0, 2, 3], dtype=np.int32), f)
@@ -197,7 +199,7 @@ def test_outlier_detection_main_combines_anomaly_and_contrast_for_spa(monkeypatc
 
     outlier_cmd.main()
 
-    combined_dir = outdir / "combined_results"
+    combined_dir = outdir / "data" / "combined_results"
     with open(combined_dir / "combined_image_outliers_4.pkl", "rb") as f:
         combined_image_outliers = pickle.load(f)
     with open(combined_dir / "combined_particle_outliers_4.pkl", "rb") as f:
@@ -252,7 +254,7 @@ def test_outlier_detection_main_tilt_maps_particle_outliers_to_images(monkeypatc
         lambda _p: _FakePipelineOutput(payload, sorted_payload=sorted_payload),
     )
 
-    def fake_plot(_zs, _orig_indices, folder):
+    def fake_plot(_zs, _orig_indices, folder, **_kw):
         os.makedirs(folder, exist_ok=True)
         with open(os.path.join(folder, "inliers_consensus.pkl"), "wb") as f:
             pickle.dump(np.array([1], dtype=np.int32), f)
@@ -277,7 +279,7 @@ def test_outlier_detection_main_tilt_maps_particle_outliers_to_images(monkeypatc
 
     outlier_cmd.main()
 
-    combined_dir = outdir / "combined_results"
+    combined_dir = outdir / "data" / "combined_results"
     with open(combined_dir / "combined_image_outliers_4.pkl", "rb") as f:
         combined_image_outliers = pickle.load(f)
     with open(combined_dir / "combined_particle_outliers_4.pkl", "rb") as f:
@@ -341,7 +343,7 @@ def test_outlier_detection_main_uses_sorted_embedding_component(monkeypatch, tmp
         lambda _p: _FakePipelineOutput(payload, sorted_payload=sorted_payload),
     )
 
-    def fake_plot(zs, original_indices, folder):
+    def fake_plot(zs, original_indices, folder, **_kw):
         assert zs.shape == (3, 2)
         np.testing.assert_array_equal(
             zs,
@@ -438,9 +440,10 @@ def test_create_outlier_visualizations_tilt_series_uses_image_length_contrast_ax
         is_tilt_series=True,
         starfile="particles.star",
         noreg=False,
+        save_all_plots=True,
     )
 
-    stats_path = tmp_path / "outlier_visualizations" / "combined_4_stats.txt"
+    stats_path = tmp_path / "data" / "outlier_visualizations" / "combined_4_stats.txt"
     assert stats_path.exists()
     stats_text = stats_path.read_text()
     assert "Outlier contrast - Mean: 0.250" in stats_text

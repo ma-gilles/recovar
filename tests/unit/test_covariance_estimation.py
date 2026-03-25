@@ -149,8 +149,7 @@ def test_set_covariance_options_updates_only_present_keys():
 
 
 def test_compute_regularized_covariance_columns_in_batch_concatenates(monkeypatch):
-    mock_cryo = type("Cryo", (), {"grid_size": 4,
-                                   "halfset_indices": [np.arange(5), np.arange(5, 10)]})()
+    mock_cryo = type("Cryo", (), {"grid_size": 4, "halfset_indices": [np.arange(5), np.arange(5, 10)]})()
     cryos = mock_cryo
     picked_frequencies = np.arange(10)
 
@@ -224,7 +223,18 @@ def test_compute_regularized_covariance_columns_with_real_tiny_dataset(monkeypat
         lambda avg, volume_shape: np.ones(volume_shape, dtype=np.float32),
     )
 
-    def _fake_reg_relion(Hs, Bs, mean_prior, picked_frequencies, volume_noise_var, mask_final, volume_shape, gpu_memory, reg_init_multiplier, options):
+    def _fake_reg_relion(
+        Hs,
+        Bs,
+        mean_prior,
+        picked_frequencies,
+        volume_noise_var,
+        mask_final,
+        volume_shape,
+        gpu_memory,
+        reg_init_multiplier,
+        options,
+    ):
         n_cols = len(picked_frequencies)
         vol_size = int(np.prod(volume_shape))
         est = np.ones((n_cols, vol_size), dtype=np.complex64)
@@ -257,6 +267,7 @@ def test_compute_both_h_b_selects_combined_or_corrected_mean(monkeypatch):
     ds = make_tiny_cryo_dataset(grid_size=4, n_images=8, seed=0)
     ds.halfset_indices = [np.arange(4, dtype=np.int32), np.arange(4, 8, dtype=np.int32)]
     from recovar.reconstruction.homogeneous import MeanEstimate
+
     means = MeanEstimate(
         combined=np.array([11], dtype=np.float32),
         corrected0=np.array([21], dtype=np.float32),
@@ -412,19 +423,32 @@ def test_compute_h_b_for_halfset_batches_frequency_chunks(monkeypatch):
 
     freq_calls = []
 
-    def _fake_freq_batch(config, opts, freq_batch, images, ctf_on_grid,
-                         plane_coords, rotation_matrices, noise_variances,
-                         image_mask, tilt_labels, premultiplied_ctf,
-                         shared_label, no_mask, H_accum=None, B_accum=None):
+    def _fake_freq_batch(
+        config,
+        opts,
+        freq_batch,
+        images,
+        ctf_on_grid,
+        plane_coords,
+        rotation_matrices,
+        noise_variances,
+        image_mask,
+        tilt_labels,
+        premultiplied_ctf,
+        shared_label,
+        no_mask,
+        H_accum=None,
+        B_accum=None,
+    ):
         n_freq = freq_batch.shape[0]
         volume_size = config.volume_size
         freq_calls.extend(int(f) for f in np.asarray(freq_batch))
-        H = jnp.broadcast_to(
-            jnp.asarray(freq_batch, dtype=jnp.float32)[:, None],
-            (n_freq, volume_size)).astype(jnp.complex64)
+        H = jnp.broadcast_to(jnp.asarray(freq_batch, dtype=jnp.float32)[:, None], (n_freq, volume_size)).astype(
+            jnp.complex64
+        )
         B = jnp.broadcast_to(
-            (jnp.asarray(freq_batch, dtype=jnp.float32)[:, None] + 100.0).astype(jnp.complex64),
-            (n_freq, volume_size))
+            (jnp.asarray(freq_batch, dtype=jnp.float32)[:, None] + 100.0).astype(jnp.complex64), (n_freq, volume_size)
+        )
         if H_accum is not None:
             H = H_accum + H
         if B_accum is not None:
@@ -500,10 +524,23 @@ def test_compute_h_b_for_halfset_preprocesses_tilt_labels_before_freq_kernel(mon
 
     seen_labels = []
 
-    def fake_compute_freq_batch(config, opts, freq_batch, images, ctf_on_grid,
-                                plane_coords, rotation_matrices, noise_variances,
-                                image_mask, tilt_labels, premultiplied_ctf,
-                                shared_label, no_mask, H_accum=None, B_accum=None):
+    def fake_compute_freq_batch(
+        config,
+        opts,
+        freq_batch,
+        images,
+        ctf_on_grid,
+        plane_coords,
+        rotation_matrices,
+        noise_variances,
+        image_mask,
+        tilt_labels,
+        premultiplied_ctf,
+        shared_label,
+        no_mask,
+        H_accum=None,
+        B_accum=None,
+    ):
         seen_labels.append(np.array(tilt_labels))
         assert shared_label is True
         return H_accum, B_accum
@@ -536,6 +573,7 @@ def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
 
     # Scale factor per half: half0 → 1.0, half1 → 2.0
     half0_idx = set(ds.halfset_indices[0].tolist())
+
     def _fake_var_kernel(cryo, mean_estimate, batch_size, image_subset=None, volume_mask=None, disc_type=""):
         original_indices = cryo.original_image_indices_from_local(np.arange(cryo.n_images))
         scale = 1.0 if set(original_indices.tolist()) == half0_idx else 2.0
@@ -547,6 +585,7 @@ def test_compute_variance_orchestration_with_stubbed_kernels(monkeypatch):
 
     monkeypatch.setattr(cov_est, "variance_relion_style_triangular_kernel", _fake_var_kernel)
     import recovar.reconstruction.relion_functions as relion_functions
+
     monkeypatch.setattr(relion_functions, "adjust_regularization_relion_style", lambda lhs, *args, **kwargs: lhs)
     monkeypatch.setattr(
         cov_est.regularization,
@@ -616,15 +655,17 @@ def test_compute_freq_batch_two_calls_accumulate():
     n_images = 6
     image_shape = (grid_size, grid_size)
     volume_shape = (grid_size, grid_size, grid_size)
-    volume_size = grid_size ** 3
-    n_pix = grid_size ** 2
+    volume_size = grid_size**3
+    n_pix = grid_size**2
 
-    images = jnp.array(rng.randn(n_images, n_pix).astype(np.float32)
-                        + 1j * rng.randn(n_images, n_pix).astype(np.float32),
-                        dtype=jnp.complex64)
-    ctf = jnp.array(rng.randn(n_images, n_pix).astype(np.float32)
-                     + 1j * rng.randn(n_images, n_pix).astype(np.float32),
-                     dtype=jnp.complex64)
+    images = jnp.array(
+        rng.randn(n_images, n_pix).astype(np.float32) + 1j * rng.randn(n_images, n_pix).astype(np.float32),
+        dtype=jnp.complex64,
+    )
+    ctf = jnp.array(
+        rng.randn(n_images, n_pix).astype(np.float32) + 1j * rng.randn(n_images, n_pix).astype(np.float32),
+        dtype=jnp.complex64,
+    )
     plane_coords = jnp.array(rng.randn(n_images, n_pix, 3).astype(np.float32))
     rot = jnp.array(np.stack([np.eye(3, dtype=np.float32) for _ in range(n_images)]))
     noise_var = jnp.array(rng.rand(n_images, n_pix).astype(np.float32) + 0.1)
@@ -639,7 +680,9 @@ def test_compute_freq_batch_two_calls_accumulate():
         voxel_size=1.0,
         padding=0,
         disc_type="linear_interp",
-        ctf=as_ctf_evaluator(lambda params, shape, voxel, **kw: jnp.ones((params.shape[0], shape[0]*shape[1]), dtype=jnp.complex64)),
+        ctf=as_ctf_evaluator(
+            lambda params, shape, voxel, **kw: jnp.ones((params.shape[0], shape[0] * shape[1]), dtype=jnp.complex64)
+        ),
     )
     opts = CovColumnOpts(
         right_kernel="triangular",
@@ -651,23 +694,42 @@ def test_compute_freq_batch_two_calls_accumulate():
 
     # Single call with all images
     H_all, B_all = cov_est.compute_freq_batch(
-        config, opts, freq_indices,
-        images, ctf, plane_coords, rot, noise_var,
-        image_mask, None,
-        False, False, True)
+        config, opts, freq_indices, images, ctf, plane_coords, rot, noise_var, image_mask, None, False, False, True
+    )
 
     # Two calls: split images into halves, accumulate
     H_acc, B_acc = cov_est.compute_freq_batch(
-        config, opts, freq_indices,
-        images[:3], ctf[:3], plane_coords[:3], rot[:3], noise_var[:3],
-        image_mask[:3], None,
-        False, False, True)
+        config,
+        opts,
+        freq_indices,
+        images[:3],
+        ctf[:3],
+        plane_coords[:3],
+        rot[:3],
+        noise_var[:3],
+        image_mask[:3],
+        None,
+        False,
+        False,
+        True,
+    )
     H_acc, B_acc = cov_est.compute_freq_batch(
-        config, opts, freq_indices,
-        images[3:], ctf[3:], plane_coords[3:], rot[3:], noise_var[3:],
-        image_mask[3:], None,
-        False, False, True,
-        H_accum=H_acc, B_accum=B_acc)
+        config,
+        opts,
+        freq_indices,
+        images[3:],
+        ctf[3:],
+        plane_coords[3:],
+        rot[3:],
+        noise_var[3:],
+        image_mask[3:],
+        None,
+        False,
+        False,
+        True,
+        H_accum=H_acc,
+        B_accum=B_acc,
+    )
 
     np.testing.assert_allclose(np.asarray(H_acc), np.asarray(H_all), atol=1e-4, rtol=1e-4)
     np.testing.assert_allclose(np.asarray(B_acc), np.asarray(B_all), atol=1e-4, rtol=1e-4)
@@ -774,23 +836,20 @@ def test_preprocess_tilt_labels_for_batch_gpu(gpu_device):
 # Variance kernel equivalence: new half-vol must match old full-vol reference
 # ---------------------------------------------------------------------------
 
+
 def _make_variance_test_fixtures(grid_size=4, n_images=4, seed=42):
     """Return (config, batch_data, mean_estimate, volume_mask, image_mask)."""
     cryo = make_tiny_cryo_dataset_with_images(grid_size=grid_size, n_images=n_images, seed=seed)
     config = ForwardModelConfig.from_dataset(cryo, disc_type="linear_interp")
 
-    images_batch, _, indices = next(
-        cryo.image_source.iter_batches(batch_size=n_images, batch_mode="groups")
-    )
+    images_batch, _, indices = next(cryo.image_source.iter_batches(batch_size=n_images, batch_mode="groups"))
 
     # nan_to_num: tiny-grid DFTs can produce NaN at edge frequencies;
     # NaN in slices propagates through the VJP-based JAX half-volume adjoint.
     full_images = jnp.nan_to_num(jnp.asarray(images_batch))
     # The variance kernel expects half-image (rfft-packed) batches from the
     # explicit dataset iterator path.
-    half_images = fourier_transform_utils.full_image_to_half_image(
-        full_images, config.image_shape
-    )
+    half_images = fourier_transform_utils.full_image_to_half_image(full_images, config.image_shape)
     batch_data = _make_batch_fields(
         images=half_images,
         ctf_params=jnp.asarray(cryo.CTF_params[indices]),
@@ -821,14 +880,22 @@ def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, i
     images = core.translate_images(images, batch_data.translations, config.image_shape)
 
     if config.premultiplied_ctf:
-        images = images - core.slice_volume(
-            mean_estimate, batch_data.rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
-        ) * CTF ** 2
-        noise_p_variance_ctf = CTF ** 2
+        images = (
+            images
+            - core.slice_volume(
+                mean_estimate, batch_data.rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+            )
+            * CTF**2
+        )
+        noise_p_variance_ctf = CTF**2
     else:
-        images = images - core.slice_volume(
-            mean_estimate, batch_data.rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
-        ) * CTF
+        images = (
+            images
+            - core.slice_volume(
+                mean_estimate, batch_data.rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+            )
+            * CTF
+        )
         noise_p_variance_ctf = jnp.ones_like(images)
 
     img_power_full = jnp.abs(images) ** 2
@@ -836,19 +903,26 @@ def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, i
 
     if volume_mask is not None:
         image_mask_per_image = covariance_core.get_per_image_tight_mask(
-            volume_mask, batch_data.rotation_matrices, image_mask, config.volume_mask_threshold,
-            config.image_shape, config.volume_shape, config.grid_size, config.padding,
-            "linear_interp", soften=soften,
+            volume_mask,
+            batch_data.rotation_matrices,
+            image_mask,
+            config.volume_mask_threshold,
+            config.image_shape,
+            config.volume_shape,
+            config.grid_size,
+            config.padding,
+            "linear_interp",
+            soften=soften,
         )
         images = covariance_core.apply_image_masks(images, image_mask_per_image, config.image_shape)
         if config.premultiplied_ctf:
-            noise_variances = noise_variances * CTF ** 2
+            noise_variances = noise_variances * CTF**2
         cov_noise = noise_mod.get_masked_noise_variance_from_noise_variance(
             image_mask_per_image, noise_variances, config.image_shape
         )
 
     images_squared = jnp.abs(images) ** 2 - cov_noise.reshape(images.shape)
-    CTF_squared = CTF ** 2
+    CTF_squared = CTF**2
     if not config.premultiplied_ctf:
         images_squared *= CTF_squared
 
@@ -857,7 +931,7 @@ def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, i
             arr, batch_data.rotation_matrices, config.image_shape, config.volume_shape, "linear_interp"
         )
 
-    return _bp(images_squared), _bp(CTF_squared ** 2), _bp(img_power_full), _bp(noise_p_variance_ctf)
+    return _bp(images_squared), _bp(CTF_squared**2), _bp(img_power_full), _bp(noise_p_variance_ctf)
 
 
 def _to_full(half_vol, volume_shape):
@@ -889,9 +963,7 @@ def test_variance_kernel_with_mask_matches_reference():
     ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
         config, batch_data, mean_estimate, volume_mask, image_mask
     )
-    new_y, new_ctf, new_im, new_one = _call_variance_kernel(
-        config, batch_data, mean_estimate, volume_mask, image_mask
-    )
+    new_y, new_ctf, new_im, new_one = _call_variance_kernel(config, batch_data, mean_estimate, volume_mask, image_mask)
 
     vol_shape = config.volume_shape
     np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-5, rtol=1e-5)
@@ -930,8 +1002,15 @@ def test_variance_kernel_accumulator_matches_sequential_sum():
     # Accumulator: pass running accumulators between calls.
     acc_y, acc_ctf, acc_im, acc_one = _call_variance_kernel(config, b1, **kwargs)
     acc_y, acc_ctf, acc_im, acc_one = _call_variance_kernel(
-        config, b2, mean_estimate=mean_estimate, volume_mask=volume_mask, image_mask=image_mask,
-        Ft_y=acc_y, Ft_ctf=acc_ctf, Ft_im=acc_im, Ft_one=acc_one,
+        config,
+        b2,
+        mean_estimate=mean_estimate,
+        volume_mask=volume_mask,
+        image_mask=image_mask,
+        Ft_y=acc_y,
+        Ft_ctf=acc_ctf,
+        Ft_im=acc_im,
+        Ft_one=acc_one,
     )
 
     np.testing.assert_allclose(_to_full(acc_y, vol_shape), ref_y, atol=1e-5, rtol=1e-5)
@@ -944,10 +1023,12 @@ def test_variance_kernel_accumulator_matches_sequential_sum():
 # Double-precision equivalence: new kernel vs reference at float64
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def enable_x64():
     """Enable 64-bit JAX arithmetic for this test, restoring the previous state afterward."""
     import jax
+
     prev = jax.config.jax_enable_x64
     jax.config.update("jax_enable_x64", True)
     yield
@@ -979,9 +1060,7 @@ def test_variance_kernel_no_mask_f64(enable_x64):
     ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
         config, bd64, mean64, volume_mask=None, image_mask=im64
     )
-    new_y, new_ctf, new_im, new_one = _call_variance_kernel(
-        config, bd64, mean64, volume_mask=None, image_mask=im64
-    )
+    new_y, new_ctf, new_im, new_one = _call_variance_kernel(config, bd64, mean64, volume_mask=None, image_mask=im64)
 
     vol_shape = config.volume_shape
     np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-7, rtol=0)
@@ -998,12 +1077,8 @@ def test_variance_kernel_with_mask_f64(enable_x64):
     vm64 = volume_mask.astype(jnp.float64)
     im64 = image_mask.astype(jnp.float64)
 
-    ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(
-        config, bd64, mean64, vm64, im64
-    )
-    new_y, new_ctf, new_im, new_one = _call_variance_kernel(
-        config, bd64, mean64, vm64, im64
-    )
+    ref_y, ref_ctf, ref_im, ref_one = _reference_variance_kernel(config, bd64, mean64, vm64, im64)
+    new_y, new_ctf, new_im, new_one = _call_variance_kernel(config, bd64, mean64, vm64, im64)
 
     vol_shape = config.volume_shape
     np.testing.assert_allclose(_to_full(new_y, vol_shape), np.asarray(ref_y), atol=1e-7, rtol=0)
@@ -1047,8 +1122,15 @@ def test_variance_kernel_accumulator_f64(enable_x64):
     # Accumulated run.
     acc_y, acc_c, acc_im, acc_o = _call_variance_kernel(config, b1, **kwargs)
     acc_y, acc_c, acc_im, acc_o = _call_variance_kernel(
-        config, b2, mean_estimate=mean64, volume_mask=vm64, image_mask=im64,
-        Ft_y=acc_y, Ft_ctf=acc_c, Ft_im=acc_im, Ft_one=acc_o,
+        config,
+        b2,
+        mean_estimate=mean64,
+        volume_mask=vm64,
+        image_mask=im64,
+        Ft_y=acc_y,
+        Ft_ctf=acc_c,
+        Ft_im=acc_im,
+        Ft_one=acc_o,
     )
 
     # Same code path: differences are only from float64 accumulation order — near machine eps.
@@ -1069,13 +1151,12 @@ def _make_reduce_cov_fixtures(grid_size=4, n_images=6, seed=0):
     """Build (config, batch_data, model, hermitian_weights, image_mask) for reduce_covariance_inner tests."""
     cryo = make_tiny_cryo_dataset_with_images(grid_size=grid_size, n_images=n_images, seed=seed)
     config = ForwardModelConfig.from_dataset(
-        cryo, disc_type="linear_interp",
+        cryo,
+        disc_type="linear_interp",
         process_fn=cryo.image_source.process_images,
     )
 
-    images_batch, _, indices = next(
-        cryo.image_source.iter_batches(batch_size=n_images, batch_mode="groups")
-    )
+    images_batch, _, indices = next(cryo.image_source.iter_batches(batch_size=n_images, batch_mode="groups"))
     images = jnp.nan_to_num(jnp.asarray(images_batch))
 
     batch_data = _make_batch_fields(
@@ -1093,12 +1174,14 @@ def _make_reduce_cov_fixtures(grid_size=4, n_images=6, seed=0):
     # Pre-convert to half-volumes (matching what compute_projected_covariance does).
     # reduce_covariance_inner expects half volumes when disc_type != 'cubic'.
     mean_estimate_half = fourier_transform_utils.full_volume_to_half_volume(
-        mean_estimate_full.reshape(cryo.volume_shape), cryo.volume_shape,
+        mean_estimate_full.reshape(cryo.volume_shape),
+        cryo.volume_shape,
     ).reshape(-1)
     # basis is (n_basis, vol_size) after .T in compute_projected_covariance
     basis_T = basis_full.T  # (3, vol_size)
     basis_half = fourier_transform_utils.full_volume_to_half_volume(
-        basis_T.reshape(3, *cryo.volume_shape), cryo.volume_shape,
+        basis_T.reshape(3, *cryo.volume_shape),
+        cryo.volume_shape,
     ).reshape(3, -1)
 
     model_half = ModelState(
@@ -1133,9 +1216,15 @@ def _reduce_covariance_inner_reference(config, batch_data, model, opts, image_ma
 
     if do_mask_images:
         image_mask = covariance_core.get_per_image_tight_mask(
-            model.volume_mask, rotation_matrices, image_mask,
-            config.volume_mask_threshold, config.image_shape, config.volume_shape,
-            config.grid_size, config.padding, 'linear_interp',
+            model.volume_mask,
+            rotation_matrices,
+            image_mask,
+            config.volume_mask_threshold,
+            config.image_shape,
+            config.volume_shape,
+            config.grid_size,
+            config.padding,
+            "linear_interp",
         )
 
     if config.process_fn is not None:
@@ -1144,19 +1233,29 @@ def _reduce_covariance_inner_reference(config, batch_data, model, opts, image_ma
 
     # Old code: full images when masking
     projected_mean = core_forward.forward_model(
-        config, model.mean_estimate, ctf_params, rotation_matrices,
-        half_image=False, half_volume=False,
+        config,
+        model.mean_estimate,
+        ctf_params,
+        rotation_matrices,
+        half_image=False,
+        half_volume=False,
     )
 
     if do_mask_images:
         batch = covariance_core.apply_image_masks(batch, image_mask, config.image_shape, half_images=False)
-        projected_mean = covariance_core.apply_image_masks(projected_mean, image_mask, config.image_shape, half_images=False)
+        projected_mean = covariance_core.apply_image_masks(
+            projected_mean, image_mask, config.image_shape, half_images=False
+        )
 
     config_u = config.replace(disc_type=opts.disc_type_u)
     AUs = covariance_core.batch_vol_forward_from_map(
-        config_u, model.basis, ctf_params, rotation_matrices,
+        config_u,
+        model.basis,
+        ctf_params,
+        rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
-        half_image=False, half_volume=False,
+        half_image=False,
+        half_volume=False,
     )
 
     if do_mask_images:
@@ -1164,16 +1263,19 @@ def _reduce_covariance_inner_reference(config, batch_data, model, opts, image_ma
 
     # Convert to half and apply weights (old path: always full→half here)
     if hermitian_weights is not None:
-        batch = fourier_transform_utils.full_image_to_half_image(
-            batch, config.image_shape) * hermitian_weights
-        projected_mean = fourier_transform_utils.full_image_to_half_image(
-            projected_mean, config.image_shape) * hermitian_weights
+        batch = fourier_transform_utils.full_image_to_half_image(batch, config.image_shape) * hermitian_weights
+        projected_mean = (
+            fourier_transform_utils.full_image_to_half_image(projected_mean, config.image_shape) * hermitian_weights
+        )
         n_b, n_i = AUs.shape[0], AUs.shape[1]
-        AUs = fourier_transform_utils.full_image_to_half_image(
-            AUs.reshape(n_b * n_i, -1), config.image_shape,
-        ).reshape(n_b, n_i, -1) * hermitian_weights[None, None, :]
-        noise_variance = fourier_transform_utils.full_image_to_half_image(
-            noise_variance, config.image_shape)
+        AUs = (
+            fourier_transform_utils.full_image_to_half_image(
+                AUs.reshape(n_b * n_i, -1),
+                config.image_shape,
+            ).reshape(n_b, n_i, -1)
+            * hermitian_weights[None, None, :]
+        )
+        noise_variance = fourier_transform_utils.full_image_to_half_image(noise_variance, config.image_shape)
 
     AUs = AUs.transpose(1, 2, 0)
 
@@ -1190,7 +1292,7 @@ def _reduce_covariance_inner_reference(config, batch_data, model, opts, image_ma
     rhs = (outer_products - UALambdaAUs).real.astype(ctf_params.dtype)
 
     _n = AU_t_AU.shape[-1]
-    lhs = jnp.einsum('bik,bjl->ijkl', AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
+    lhs = jnp.einsum("bik,bjl->ijkl", AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
     return lhs, rhs
 
 
@@ -1202,13 +1304,21 @@ def test_reduce_covariance_inner_masked_half_matches_full():
 
     # Half-image path (hermitian weights → half projection + sqrt(w) + .real)
     lhs_half, rhs_half = _call_reduce_covariance_inner(
-        config, batch_data, model_full, opts, image_mask,
+        config,
+        batch_data,
+        model_full,
+        opts,
+        image_mask,
         hermitian_weights=hermitian_weights,
     )
 
     # Full-image path (no hermitian weights → full projection)
     lhs_full, rhs_full = _call_reduce_covariance_inner(
-        config, batch_data, model_full, opts, image_mask,
+        config,
+        batch_data,
+        model_full,
+        opts,
+        image_mask,
         hermitian_weights=None,
     )
 
@@ -1239,7 +1349,11 @@ def test_reduce_covariance_inner_unmasked_still_works():
     opts = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=False)
 
     lhs, rhs = _call_reduce_covariance_inner(
-        config, batch_data, model_full, opts, image_mask,
+        config,
+        batch_data,
+        model_full,
+        opts,
+        image_mask,
         hermitian_weights=hermitian_weights,
     )
 
@@ -1257,11 +1371,19 @@ def test_reduce_covariance_inner_masked_vs_unmasked_differ():
     opts_no_mask = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=False)
 
     lhs_mask, rhs_mask = _call_reduce_covariance_inner(
-        config, batch_data, model_full, opts_mask, image_mask,
+        config,
+        batch_data,
+        model_full,
+        opts_mask,
+        image_mask,
         hermitian_weights=hermitian_weights,
     )
     lhs_no, rhs_no = _call_reduce_covariance_inner(
-        config, batch_data, model_full, opts_no_mask, image_mask,
+        config,
+        batch_data,
+        model_full,
+        opts_no_mask,
+        image_mask,
         hermitian_weights=hermitian_weights,
     )
 
@@ -1342,14 +1464,10 @@ def test_apply_image_masks_to_eigen_half_matches_full():
     rng = np.random.RandomState(42)
     # Real-space images → DFT → Hermitian-symmetric full spectrum
     real_imgs = rng.randn(n_basis, n_images, *image_shape).astype(np.float32)
-    proj_eigen_full = jnp.array(
-        fourier_transform_utils.get_dft2(real_imgs).reshape(n_basis, n_images, -1)
-    )
+    proj_eigen_full = jnp.array(fourier_transform_utils.get_dft2(real_imgs).reshape(n_basis, n_images, -1))
 
     # Random real-space mask
-    image_masks = jnp.array(
-        (rng.rand(n_images, *image_shape) > 0.3).astype(np.float32)
-    )
+    image_masks = jnp.array((rng.rand(n_images, *image_shape) > 0.3).astype(np.float32))
 
     # Full-image path (reference)
     result_full = covariance_core.apply_image_masks_to_eigen(
@@ -1383,23 +1501,15 @@ def test_apply_image_masks_half_matches_full():
 
     rng = np.random.RandomState(99)
     real_imgs = rng.randn(n_images, *image_shape).astype(np.float32)
-    images_full = jnp.array(
-        fourier_transform_utils.get_dft2(real_imgs).reshape(n_images, -1)
-    )
-    image_masks = jnp.array(
-        (rng.rand(n_images, *image_shape) > 0.3).astype(np.float32)
-    )
+    images_full = jnp.array(fourier_transform_utils.get_dft2(real_imgs).reshape(n_images, -1))
+    image_masks = jnp.array((rng.rand(n_images, *image_shape) > 0.3).astype(np.float32))
 
     # Full-image path
-    result_full = covariance_core.apply_image_masks(
-        images_full, image_masks, image_shape, half_images=False
-    )
+    result_full = covariance_core.apply_image_masks(images_full, image_masks, image_shape, half_images=False)
 
     # Half-image path
     images_half = fourier_transform_utils.full_image_to_half_image(images_full, image_shape)
-    result_half = covariance_core.apply_image_masks(
-        images_half, image_masks, image_shape, half_images=True
-    )
+    result_half = covariance_core.apply_image_masks(images_half, image_masks, image_shape, half_images=True)
 
     # Convert half result back to full for comparison
     result_half_full = fourier_transform_utils.half_image_to_full_image(result_half, image_shape)
@@ -1436,16 +1546,16 @@ def test_variance_relion_style_triangular_kernel_uses_upsampled_volume_shape(mon
     seen = {}
 
     def _fake_kernel(config, *args, **kwargs):
-        seen['volume_shape'] = tuple(config.volume_shape)
-        raise RuntimeError('stop-after-config')
+        seen["volume_shape"] = tuple(config.volume_shape)
+        raise RuntimeError("stop-after-config")
 
-    monkeypatch.setattr(cov_est, 'variance_relion_kernel_trilinear', _fake_kernel)
+    monkeypatch.setattr(cov_est, "variance_relion_kernel_trilinear", _fake_kernel)
 
-    with pytest.raises(RuntimeError, match='stop-after-config'):
+    with pytest.raises(RuntimeError, match="stop-after-config"):
         cov_est.variance_relion_style_triangular_kernel(
             _FakeDataset(),
             mean_estimate=np.zeros(8, dtype=np.complex64),
             batch_size=1,
         )
 
-    assert seen['volume_shape'] == (8, 8, 8)
+    assert seen["volume_shape"] == (8, 8, 8)

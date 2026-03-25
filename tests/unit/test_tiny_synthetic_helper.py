@@ -24,7 +24,9 @@ def test_tiny_ctf_pose_generator_shapes():
 
 
 def test_make_tiny_simulation_and_hvd_end_to_end():
-    stack, ctf_params, rots, trans, sim_info, _, _ = tiny_synthetic.make_tiny_simulation(grid_size=4, n_images=6, seed=0)
+    stack, ctf_params, rots, trans, sim_info, _, _ = tiny_synthetic.make_tiny_simulation(
+        grid_size=4, n_images=6, seed=0
+    )
     assert stack.shape == (6, 4, 4)
     assert ctf_params.shape[0] == 6
     assert rots.shape == (6, 3, 3)

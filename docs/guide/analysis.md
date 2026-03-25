@@ -69,7 +69,7 @@ Use `compute_trajectory` to compute high-density (low free-energy) paths through
 
 ```bash
 recovar compute_trajectory output -o trajectory --zdim=10 \
-    --density density/deconv_density_knee.pkl \
+    --density density/data/deconv_density_knee.pkl \
     --endpts centers.txt --ind 0,1
 ```
 
@@ -108,14 +108,17 @@ Open `.mrc` files in ChimeraX, Chimera, or any MRC viewer:
 ```
 output/analysis_10/
   kmeans/
-    all_volumes/
-      vol0000.mrc     # K-means center 0
-      vol0001.mrc     # K-means center 1
-      ...
-  trajectory_0_1/
-    vol0000.mrc       # Start of trajectory
-    vol0001.mrc       # Along trajectory
+    center000.mrc              # K-means center 0
+    center001.mrc              # K-means center 1
+    center000_half1_unfil.mrc  # Half-map 1 (for FSC)
     ...
+    centers.txt                # Center coordinates
+    diagnostics/center000/     # Per-volume diagnostics
+  traj000/
+    state000.mrc               # Start of trajectory
+    state001.mrc               # Along trajectory
+    ...
+    diagnostics/state000/      # Per-volume diagnostics
 ```
 
 ### UMAP plots
@@ -127,7 +130,7 @@ UMAP embeddings are saved in the analysis directory. Use the Jupyter notebook ke
 Load the trajectory volumes as a series in ChimeraX to create conformational movies:
 
 ```
-open vol0000.mrc vol0001.mrc vol0002.mrc ... as_series
+open state000.mrc state001.mrc state002.mrc ... as_series
 ```
 
 ## Example output

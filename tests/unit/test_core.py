@@ -163,7 +163,8 @@ import jax
 def test_vol_vec_index_roundtrip_on_gpu(gpu_device):
     vol_shape = (4, 5, 6)
     vol_indices = np.array(
-        [[[0, 0, 0], [1, 2, 3]], [[3, 4, 5], [2, 1, 0]]], dtype=np.int32,
+        [[[0, 0, 0], [1, 2, 3]], [[3, 4, 5], [2, 1, 0]]],
+        dtype=np.int32,
     )
     with jax.default_device(gpu_device):
         vec = core.vol_indices_to_vec_indices(jax.device_put(vol_indices), vol_shape)
@@ -223,9 +224,7 @@ def test_translate_images_on_gpu(gpu_device):
     image = np.array([[1 + 0j, 2 + 1j, 3 - 1j, 4 + 0j]], dtype=np.complex64)
     translations = np.array([[0.0, 0.0]], dtype=np.float32)
     with jax.default_device(gpu_device):
-        gpu_out = np.asarray(
-            core.translate_images(jax.device_put(image), jax.device_put(translations), image_shape)
-        )
+        gpu_out = np.asarray(core.translate_images(jax.device_put(image), jax.device_put(translations), image_shape))
     np.testing.assert_allclose(gpu_out, image, atol=1e-5, rtol=1e-5)
 
 
@@ -244,9 +243,7 @@ def test_evaluate_ctf_on_gpu(gpu_device):
     ctf_params = np.array([[15000.0, 15000.0, 0.0, 300.0, 2.7, 0.1, 0.0, 0.0, 1.0]], dtype=np.float32)
     cpu_out = np.asarray(core.evaluate_ctf(freqs, ctf_params))
     with jax.default_device(gpu_device):
-        gpu_out = np.asarray(
-            core.evaluate_ctf(jax.device_put(freqs), jax.device_put(ctf_params))
-        )
+        gpu_out = np.asarray(core.evaluate_ctf(jax.device_put(freqs), jax.device_put(ctf_params)))
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
 
@@ -258,14 +255,15 @@ def test_slice_volume_on_gpu(gpu_device):
     volume = rng.standard_normal(np.prod(volume_shape)).astype(np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
 
-    cpu_out = np.asarray(
-        core.slice_volume(volume, rotation_matrices, image_shape, volume_shape, "nearest")
-    )
+    cpu_out = np.asarray(core.slice_volume(volume, rotation_matrices, image_shape, volume_shape, "nearest"))
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core.slice_volume(
-                jax.device_put(volume), jax.device_put(rotation_matrices),
-                image_shape, volume_shape, "nearest",
+                jax.device_put(volume),
+                jax.device_put(rotation_matrices),
+                image_shape,
+                volume_shape,
+                "nearest",
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)

@@ -33,9 +33,7 @@ _FORCE_PYTHON = _env_flag("RECOVAR_FORCE_PYTHON_FMM")
 _REQUIRE_NATIVE = _env_flag("RECOVAR_REQUIRE_NATIVE_FMM")
 
 if _FORCE_PYTHON and _REQUIRE_NATIVE:
-    raise RuntimeError(
-        "RECOVAR_FORCE_PYTHON_FMM and RECOVAR_REQUIRE_NATIVE_FMM cannot both be enabled"
-    )
+    raise RuntimeError("RECOVAR_FORCE_PYTHON_FMM and RECOVAR_REQUIRE_NATIVE_FMM cannot both be enabled")
 
 _NATIVE = None
 _NATIVE_IMPORT_ERROR = None
@@ -46,8 +44,7 @@ if not _FORCE_PYTHON:
         _NATIVE_IMPORT_ERROR = exc
         if _REQUIRE_NATIVE:
             raise ImportError(
-                "RECOVAR_REQUIRE_NATIVE_FMM=1 but recovar._fast_marching_native "
-                "could not be imported"
+                "RECOVAR_REQUIRE_NATIVE_FMM=1 but recovar._fast_marching_native could not be imported"
             ) from exc
 
 
@@ -185,9 +182,7 @@ class _TravelTimeMarcher:
                     if neighbor != -1 and self.phi[flat_index] * self.phi[neighbor] < 0:
                         borders_zero_level_set = True
                         dist_to_interface = (
-                            self.dx[axis]
-                            * self.phi[flat_index]
-                            / (self.phi[flat_index] - self.phi[neighbor])
+                            self.dx[axis] * self.phi[flat_index] / (self.phi[flat_index] - self.phi[neighbor])
                         )
                         if local_distance[axis] == 0.0 or local_distance[axis] > dist_to_interface:
                             local_distance[axis] = dist_to_interface

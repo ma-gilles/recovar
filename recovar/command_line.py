@@ -29,9 +29,7 @@ def main_commands() -> None:
     cmd_dir = os.path.join(os.path.dirname(__file__), "commands")
 
     available_cmds = sorted(
-        os.path.splitext(f)[0]
-        for f in os.listdir(cmd_dir)
-        if f.endswith(".py") and f != "__init__.py"
+        os.path.splitext(f)[0] for f in os.listdir(cmd_dir) if f.endswith(".py") and f != "__init__.py"
     )
 
     if len(sys.argv) < 2:

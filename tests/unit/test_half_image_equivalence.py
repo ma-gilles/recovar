@@ -3,6 +3,7 @@
 For each pipeline function that was converted from full-image to half-image format,
 this test module calls both variants with identical input and checks exact equivalence.
 """
+
 import numpy as np
 import pytest
 import jax
@@ -15,6 +16,7 @@ from recovar import core
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def random_rotations(n, rng):
     z = rng.standard_normal((n, 3, 3))
@@ -38,7 +40,7 @@ def hermitian_real_images(n_images, image_shape, rng):
     """Generate real-valued Hermitian spectra (like CTF^2 terms)."""
     H, W = image_shape
     real_imgs = rng.standard_normal((n_images, H, W)).astype(np.float32)
-    full_centered = np.abs(np.fft.fftshift(np.fft.fft2(real_imgs), axes=(-2, -1)))**2
+    full_centered = np.abs(np.fft.fftshift(np.fft.fft2(real_imgs), axes=(-2, -1))) ** 2
     return full_centered.reshape(n_images, H * W).astype(np.float32)
 
 
@@ -56,9 +58,7 @@ def assert_close(a, b, name, rtol=1e-5, atol=1e-6):
     max_err = np.max(np.abs(a_np - b_np))
     scale = max(np.max(np.abs(a_np)), 1e-30)
     rel_err = max_err / scale
-    assert rel_err < rtol or max_err < atol, (
-        f"{name}: max_err={max_err:.2e}, rel_err={rel_err:.2e}"
-    )
+    assert rel_err < rtol or max_err < atol, f"{name}: max_err={max_err:.2e}, rel_err={rel_err:.2e}"
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +82,7 @@ def n_images(request):
 # ---------------------------------------------------------------------------
 # Test 1: adjoint_slice_volume full vs from_half_images
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
@@ -108,6 +109,7 @@ def test_adjoint_full_vs_half_images(N, n_images):
 # Test 2: adjoint_slice_volume with volume accumulation
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 def test_adjoint_accumulate_full_vs_half(N, n_images):
@@ -119,14 +121,19 @@ def test_adjoint_accumulate_full_vs_half(N, n_images):
     rots = jnp.array(random_rotations(n_images, rng))
     images = jnp.array(hermitian_images(n_images, image_shape, rng))
     images_half = fourier_transform_utils.full_image_to_half_image(images, image_shape)
-    seed = jnp.array(rng.standard_normal(vol_size).astype(np.float32) + 1j * rng.standard_normal(vol_size).astype(np.float32), dtype=jnp.complex64)
+    seed = jnp.array(
+        rng.standard_normal(vol_size).astype(np.float32) + 1j * rng.standard_normal(vol_size).astype(np.float32),
+        dtype=jnp.complex64,
+    )
 
     from recovar.core.slicing import (
         adjoint_slice_volume,
     )
 
     vol_full = adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp", volume=seed)
-    vol_half = adjoint_slice_volume(images_half, rots, image_shape, volume_shape, "linear_interp", volume=seed, half_image=True)
+    vol_half = adjoint_slice_volume(
+        images_half, rots, image_shape, volume_shape, "linear_interp", volume=seed, half_image=True
+    )
 
     assert_close(vol_full, vol_half, "adjoint_map accumulate full vs half")
 
@@ -134,6 +141,7 @@ def test_adjoint_accumulate_full_vs_half(N, n_images):
 # ---------------------------------------------------------------------------
 # Test 3: adjoint with real-valued images (like CTF^2 terms)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
@@ -160,6 +168,7 @@ def test_adjoint_real_images_full_vs_half(N, n_images):
 # ---------------------------------------------------------------------------
 # Test 4: M-step pattern — probability-weighted backprojection
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("N", SIZES)
 def test_mstep_backproject_full_vs_half(N):
@@ -195,6 +204,7 @@ def test_mstep_backproject_full_vs_half(N):
 # Test 6: adjoint_slice_volume full vs from_half_images (linear_interp)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 def test_adjoint_map_full_vs_half(N, n_images):
@@ -220,6 +230,7 @@ def test_adjoint_map_full_vs_half(N, n_images):
 # Test 7: slice_volume + custom_vjp CUDA path (forward & backward)
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 def test_slice_volume_vjp_consistency(N, n_images):
@@ -229,11 +240,15 @@ def test_slice_volume_vjp_consistency(N, n_images):
     volume_shape = (N, N, N)
     vol_size = N**3
     rots = jnp.array(random_rotations(n_images, rng))
-    vol = jnp.array(rng.standard_normal(vol_size).astype(np.float32) + 1j * rng.standard_normal(vol_size).astype(np.float32), dtype=jnp.complex64)
+    vol = jnp.array(
+        rng.standard_normal(vol_size).astype(np.float32) + 1j * rng.standard_normal(vol_size).astype(np.float32),
+        dtype=jnp.complex64,
+    )
     images = jnp.array(hermitian_images(n_images, image_shape, rng))
 
     # Forward
     from recovar.core.slicing import slice_volume, adjoint_slice_volume
+
     projected = slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
     assert projected.shape == (n_images, N * N)
 
@@ -251,6 +266,7 @@ def test_slice_volume_vjp_consistency(N, n_images):
 # ---------------------------------------------------------------------------
 # Test 8: batch_vol vmap pattern (as used in backproject_one_image)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("N", SIZES)
 def test_batch_vol_adjoint_full_vs_half(N):
@@ -274,11 +290,15 @@ def test_batch_vol_adjoint_full_vs_half(N):
     # VOL_AXIS=0 here to match the (n_vols, ...) leading axis
     batch_full_jax = jax.vmap(
         lambda imgs, rots: core.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp"),
-        in_axes=(0, 0), out_axes=0,
+        in_axes=(0, 0),
+        out_axes=0,
     )
     batch_half = jax.vmap(
-        lambda imgs, rots: core.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True),
-        in_axes=(0, 0), out_axes=0,
+        lambda imgs, rots: core.adjoint_slice_volume(
+            imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True
+        ),
+        in_axes=(0, 0),
+        out_axes=0,
     )
 
     images_half = fourier_transform_utils.full_image_to_half_image(images, image_shape)
@@ -292,6 +312,7 @@ def test_batch_vol_adjoint_full_vs_half(N):
 # ---------------------------------------------------------------------------
 # Test 9: project from half volume matches project from full volume
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
@@ -316,6 +337,7 @@ def test_project_from_half_volume(N, n_images):
 # Test 10: project from half volume via map matches full
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 def test_project_map_from_half_volume(N, n_images):
@@ -338,6 +360,7 @@ def test_project_map_from_half_volume(N, n_images):
 # ---------------------------------------------------------------------------
 # Test 13: VJP of slice_volume
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
@@ -385,6 +408,7 @@ def test_half_volume_vjp_consistency(N, n_images):
 # Test 13b: JVP of slice_volume
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 def test_half_volume_jvp_consistency(N, n_images):
@@ -416,9 +440,7 @@ def test_half_volume_jvp_consistency(N, n_images):
         volume_shape,
         "linear_interp",
     )
-    f_half = lambda x: slice_volume(
-        x, rots, image_shape, volume_shape, "linear_interp", half_volume=True
-    )
+    f_half = lambda x: slice_volume(x, rots, image_shape, volume_shape, "linear_interp", half_volume=True)
 
     y_ref, dy_ref = jax.jvp(f_ref, (hv,), (tangent,))
     y_half, dy_half = jax.jvp(f_half, (hv,), (tangent,))
@@ -432,6 +454,7 @@ def test_half_volume_jvp_consistency(N, n_images):
 # ---------------------------------------------------------------------------
 
 BATCH_SIZES = [3, 7]
+
 
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
@@ -462,6 +485,7 @@ def test_batch_project(N, n_images, batch):
 # ---------------------------------------------------------------------------
 # Test 15: Batch backproject (multiple volumes, shared rotations)
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
@@ -495,6 +519,7 @@ def test_batch_backproject(N, n_images, batch):
 # Test 16: Batch backproject with seed volumes
 # ---------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 def test_batch_backproject_with_seed(N, n_images):
@@ -522,7 +547,5 @@ def test_batch_backproject_with_seed(N, n_images):
     )
 
     for b in range(batch):
-        ref = adjoint_slice_volume(
-            images[b], rots, image_shape, volume_shape, "linear_interp", volume=seed_vols[b]
-        )
+        ref = adjoint_slice_volume(images[b], rots, image_shape, volume_shape, "linear_interp", volume=seed_vols[b])
         assert_close(batch_result[b], ref, f"batch_backproject_seed vol {b}", rtol=1e-4)

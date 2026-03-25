@@ -6,6 +6,7 @@ Tests functions that require NO experiment_dataset mock:
   - solve_covariance
   - compute_bHb_terms  (with trivial CTF/process_images)
 """
+
 import numpy as np
 import pytest
 
@@ -67,8 +68,9 @@ def test_UPLambdainvPU_single_pc_diagonal():
     """With n_pc=1, identity CTF, unit noise: H[r, r, 0, 0] = ||u_proj[r]||^2."""
     rng = np.random.default_rng(99)
     n_rot, n_pc = 2, 1
-    u_raw = (rng.standard_normal((n_rot, n_pc, IMG_SZ)) +
-             1j * rng.standard_normal((n_rot, n_pc, IMG_SZ))).astype(np.complex64)
+    u_raw = (rng.standard_normal((n_rot, n_pc, IMG_SZ)) + 1j * rng.standard_normal((n_rot, n_pc, IMG_SZ))).astype(
+        np.complex64
+    )
     u_proj = jnp.array(u_raw)
     CTF = jnp.ones((n_rot, IMG_SZ), dtype=jnp.float32)
     noise = jnp.ones((n_rot, IMG_SZ), dtype=jnp.float32)
@@ -125,8 +127,7 @@ def test_bLambdainvPU_output_shape():
     # CTF must have shape (n_images, image_size) to match batch
     CTF = jnp.ones((N_IMG, IMG_SZ), dtype=jnp.float32)
     noise_var = jnp.ones(IMG_SZ, dtype=jnp.float32)
-    b = hetero.compute_bLambdainvPU_terms(
-        mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
+    b = hetero.compute_bLambdainvPU_terms(mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
     assert b.shape == (N_ROT, N_IMG, N_PC, N_TRANS)
 
 
@@ -137,8 +138,7 @@ def test_bLambdainvPU_output_is_real():
     trans = jnp.zeros((N_TRANS, 2), dtype=jnp.float32)
     CTF = jnp.ones((N_IMG, IMG_SZ), dtype=jnp.float32)
     noise_var = jnp.ones(IMG_SZ, dtype=jnp.float32)
-    b = hetero.compute_bLambdainvPU_terms(
-        mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
+    b = hetero.compute_bLambdainvPU_terms(mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
     assert jnp.issubdtype(b.dtype, jnp.floating)
 
 
@@ -149,8 +149,7 @@ def test_bLambdainvPU_no_nan():
     trans = jnp.zeros((N_TRANS, 2), dtype=jnp.float32)
     CTF = jnp.ones((N_IMG, IMG_SZ), dtype=jnp.float32)
     noise_var = jnp.ones(IMG_SZ, dtype=jnp.float32)
-    b = hetero.compute_bLambdainvPU_terms(
-        mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
+    b = hetero.compute_bLambdainvPU_terms(mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
     assert jnp.all(jnp.isfinite(b))
 
 
@@ -162,8 +161,7 @@ def test_bLambdainvPU_zero_images_zero_mean():
     trans = jnp.zeros((N_TRANS, 2), dtype=jnp.float32)
     CTF = jnp.ones((N_IMG, IMG_SZ), dtype=jnp.float32)
     noise_var = jnp.ones(IMG_SZ, dtype=jnp.float32)
-    b = hetero.compute_bLambdainvPU_terms(
-        mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
+    b = hetero.compute_bLambdainvPU_terms(mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
     np.testing.assert_allclose(np.array(b), 0.0, atol=1e-6)
 
 
@@ -175,8 +173,7 @@ def test_bLambdainvPU_zero_u_gives_zero():
     trans = jnp.zeros((N_TRANS, 2), dtype=jnp.float32)
     CTF = jnp.ones((N_IMG, IMG_SZ), dtype=jnp.float32)
     noise_var = jnp.ones(IMG_SZ, dtype=jnp.float32)
-    b = hetero.compute_bLambdainvPU_terms(
-        mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
+    b = hetero.compute_bLambdainvPU_terms(mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
     np.testing.assert_allclose(np.array(b), 0.0, atol=1e-6)
 
 
@@ -184,17 +181,19 @@ def test_bLambdainvPU_noise_scaling_mean_term():
     """With zero images, only b2 survives. Doubling noise halves b2."""
     rng = np.random.default_rng(77)
     n_rot, n_pc, n_img = 2, 1, 1
-    mean_proj = jnp.array((rng.standard_normal((n_rot, IMG_SZ)) +
-                           1j * rng.standard_normal((n_rot, IMG_SZ))).astype(np.complex64))
-    u_proj = jnp.array((rng.standard_normal((n_rot, n_pc, IMG_SZ)) +
-                        1j * rng.standard_normal((n_rot, n_pc, IMG_SZ))).astype(np.complex64))
+    mean_proj = jnp.array(
+        (rng.standard_normal((n_rot, IMG_SZ)) + 1j * rng.standard_normal((n_rot, IMG_SZ))).astype(np.complex64)
+    )
+    u_proj = jnp.array(
+        (rng.standard_normal((n_rot, n_pc, IMG_SZ)) + 1j * rng.standard_normal((n_rot, n_pc, IMG_SZ))).astype(
+            np.complex64
+        )
+    )
     images = jnp.zeros((n_img, IMG_SZ), dtype=jnp.complex64)
     trans = jnp.zeros((1, 2), dtype=jnp.float32)
     CTF = jnp.ones((n_img, IMG_SZ), dtype=jnp.float32)
-    b1 = hetero.compute_bLambdainvPU_terms(
-        mean_proj, u_proj, images, trans, CTF, jnp.ones(IMG_SZ), IMAGE_SHAPE)
-    b2 = hetero.compute_bLambdainvPU_terms(
-        mean_proj, u_proj, images, trans, CTF, 2.0 * jnp.ones(IMG_SZ), IMAGE_SHAPE)
+    b1 = hetero.compute_bLambdainvPU_terms(mean_proj, u_proj, images, trans, CTF, jnp.ones(IMG_SZ), IMAGE_SHAPE)
+    b2 = hetero.compute_bLambdainvPU_terms(mean_proj, u_proj, images, trans, CTF, 2.0 * jnp.ones(IMG_SZ), IMAGE_SHAPE)
     np.testing.assert_allclose(np.array(b1), 2.0 * np.array(b2), rtol=1e-4)
 
 
@@ -206,8 +205,7 @@ def test_bLambdainvPU_multiple_translations_shape():
     trans = jnp.zeros((n_trans, 2), dtype=jnp.float32)
     CTF = jnp.ones((N_IMG, IMG_SZ), dtype=jnp.float32)
     noise_var = jnp.ones(IMG_SZ, dtype=jnp.float32)
-    b = hetero.compute_bLambdainvPU_terms(
-        mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
+    b = hetero.compute_bLambdainvPU_terms(mean_proj, u_proj, images, trans, CTF, noise_var, IMAGE_SHAPE)
     assert b.shape == (N_ROT, N_IMG, N_PC, n_trans)
 
 
@@ -276,6 +274,7 @@ def test_solve_covariance_pd_lhs_finite():
 # Tests for compute_bHb_terms
 # ---------------------------------------------------------------------------
 
+
 def _identity_ctf(CTF_params, image_shape, voxel_size):
     n = CTF_params.shape[0]
     sz = image_shape[0] * image_shape[1]
@@ -292,14 +291,19 @@ def _make_bHb_inputs(rng, n_rot=2, n_pc=2, n_img=2, n_trans=1):
     CTF_params.shape[0] == n_img (one CTF per image).
     mean_projections / u_projections have n_rot (separate dimension).
     """
-    mean_proj = jnp.array((rng.standard_normal((n_rot, IMG_SZ)) +
-                           1j * rng.standard_normal((n_rot, IMG_SZ))).astype(np.complex64))
+    mean_proj = jnp.array(
+        (rng.standard_normal((n_rot, IMG_SZ)) + 1j * rng.standard_normal((n_rot, IMG_SZ))).astype(np.complex64)
+    )
     u_proj = jnp.array(
-        0.01 * (rng.standard_normal((n_rot, n_pc, IMG_SZ)) +
-                1j * rng.standard_normal((n_rot, n_pc, IMG_SZ))).astype(np.complex64))
+        0.01
+        * (rng.standard_normal((n_rot, n_pc, IMG_SZ)) + 1j * rng.standard_normal((n_rot, n_pc, IMG_SZ))).astype(
+            np.complex64
+        )
+    )
     s = jnp.ones(n_pc, dtype=jnp.float32) * 2.0
-    batch = jnp.array((rng.standard_normal((n_img, IMG_SZ)) +
-                       1j * rng.standard_normal((n_img, IMG_SZ))).astype(np.complex64))
+    batch = jnp.array(
+        (rng.standard_normal((n_img, IMG_SZ)) + 1j * rng.standard_normal((n_img, IMG_SZ))).astype(np.complex64)
+    )
     trans = jnp.zeros((n_trans, 2), dtype=jnp.float32)
     # CTF_params indexed by image, not rotation
     CTF_params = jnp.zeros((n_img, 9), dtype=jnp.float32)
@@ -309,29 +313,28 @@ def _make_bHb_inputs(rng, n_rot=2, n_pc=2, n_img=2, n_trans=1):
 
 def test_bHb_output_shape():
     n_rot, n_pc, n_img, n_trans = 2, 2, 3, 1
-    mean_proj, u_proj, s, batch, trans, CTF_params, noise_var = \
-        _make_bHb_inputs(np.random.default_rng(7), n_rot, n_pc, n_img, n_trans)
+    mean_proj, u_proj, s, batch, trans, CTF_params, noise_var = _make_bHb_inputs(
+        np.random.default_rng(7), n_rot, n_pc, n_img, n_trans
+    )
     result = hetero.compute_bHb_terms(
-        mean_proj, u_proj, s, batch, trans, CTF_params,
-        _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process)
+        mean_proj, u_proj, s, batch, trans, CTF_params, _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process
+    )
     assert result.shape == (n_img, n_rot, n_trans)
 
 
 def test_bHb_output_is_real():
-    mean_proj, u_proj, s, batch, trans, CTF_params, noise_var = \
-        _make_bHb_inputs(np.random.default_rng(8))
+    mean_proj, u_proj, s, batch, trans, CTF_params, noise_var = _make_bHb_inputs(np.random.default_rng(8))
     result = hetero.compute_bHb_terms(
-        mean_proj, u_proj, s, batch, trans, CTF_params,
-        _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process)
+        mean_proj, u_proj, s, batch, trans, CTF_params, _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process
+    )
     assert jnp.issubdtype(result.dtype, jnp.floating)
 
 
 def test_bHb_no_nan():
-    mean_proj, u_proj, s, batch, trans, CTF_params, noise_var = \
-        _make_bHb_inputs(np.random.default_rng(9))
+    mean_proj, u_proj, s, batch, trans, CTF_params, noise_var = _make_bHb_inputs(np.random.default_rng(9))
     result = hetero.compute_bHb_terms(
-        mean_proj, u_proj, s, batch, trans, CTF_params,
-        _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process)
+        mean_proj, u_proj, s, batch, trans, CTF_params, _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process
+    )
     assert jnp.all(jnp.isfinite(result))
 
 
@@ -346,32 +349,42 @@ def test_bHb_zero_u_cholesky_succeeds():
     CTF_params = jnp.zeros((n_img, 9), dtype=jnp.float32)
     noise_var = jnp.ones(IMG_SZ, dtype=jnp.float32)
     result = hetero.compute_bHb_terms(
-        mean_proj, u_proj, s, batch, trans, CTF_params,
-        _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process)
+        mean_proj, u_proj, s, batch, trans, CTF_params, _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process
+    )
     assert result.shape == (n_img, n_rot, 1)
     assert jnp.all(jnp.isfinite(result))
 
 
 def test_bHb_changing_s_changes_output():
     """Changing prior variance s must change the ELBO term."""
-    mean_proj, u_proj, s, batch, trans, CTF_params, noise_var = \
-        _make_bHb_inputs(np.random.default_rng(10))
+    mean_proj, u_proj, s, batch, trans, CTF_params, noise_var = _make_bHb_inputs(np.random.default_rng(10))
     r1 = hetero.compute_bHb_terms(
-        mean_proj, u_proj, s, batch, trans, CTF_params,
-        _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process)
+        mean_proj, u_proj, s, batch, trans, CTF_params, _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process
+    )
     r2 = hetero.compute_bHb_terms(
-        mean_proj, u_proj, s * 10, batch, trans, CTF_params,
-        _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process)
+        mean_proj,
+        u_proj,
+        s * 10,
+        batch,
+        trans,
+        CTF_params,
+        _identity_ctf,
+        noise_var,
+        1.0,
+        IMAGE_SHAPE,
+        _identity_process,
+    )
     assert not jnp.allclose(r1, r2)
 
 
 def test_bHb_multiple_translations_shape():
     n_rot, n_pc, n_img, n_trans = 2, 2, 2, 3
-    mean_proj, u_proj, s, batch, trans, CTF_params, noise_var = \
-        _make_bHb_inputs(np.random.default_rng(11), n_rot, n_pc, n_img, n_trans)
+    mean_proj, u_proj, s, batch, trans, CTF_params, noise_var = _make_bHb_inputs(
+        np.random.default_rng(11), n_rot, n_pc, n_img, n_trans
+    )
     result = hetero.compute_bHb_terms(
-        mean_proj, u_proj, s, batch, trans, CTF_params,
-        _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process)
+        mean_proj, u_proj, s, batch, trans, CTF_params, _identity_ctf, noise_var, 1.0, IMAGE_SHAPE, _identity_process
+    )
     assert result.shape == (n_img, n_rot, n_trans)
 
 
@@ -383,15 +396,14 @@ def test_bHb_multiple_translations_shape():
 @pytest.mark.gpu
 def test_UPLambdainvPU_on_gpu(gpu_device):
     rng = np.random.default_rng(200)
-    u_raw = (rng.standard_normal((N_ROT, N_PC, IMG_SZ)) +
-             1j * rng.standard_normal((N_ROT, N_PC, IMG_SZ))).astype(np.complex64)
+    u_raw = (rng.standard_normal((N_ROT, N_PC, IMG_SZ)) + 1j * rng.standard_normal((N_ROT, N_PC, IMG_SZ))).astype(
+        np.complex64
+    )
     CTF_raw = np.ones((N_ROT, IMG_SZ), dtype=np.float32)
     noise_raw = np.ones((N_ROT, IMG_SZ), dtype=np.float32)
-    cpu_out = np.array(hetero.compute_UPLambdainvPU(
-        jnp.array(u_raw), jnp.array(CTF_raw), jnp.array(noise_raw)))
+    cpu_out = np.array(hetero.compute_UPLambdainvPU(jnp.array(u_raw), jnp.array(CTF_raw), jnp.array(noise_raw)))
     with jax.default_device(gpu_device):
-        gpu_out = np.array(hetero.compute_UPLambdainvPU(
-            jnp.array(u_raw), jnp.array(CTF_raw), jnp.array(noise_raw)))
+        gpu_out = np.array(hetero.compute_UPLambdainvPU(jnp.array(u_raw), jnp.array(CTF_raw), jnp.array(noise_raw)))
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
 
@@ -412,24 +424,45 @@ def test_solve_covariance_on_gpu(gpu_device):
 def test_bHb_on_gpu(gpu_device):
     rng = np.random.default_rng(202)
     n_rot, n_pc, n_img = 2, 2, 2
-    mean_proj = (rng.standard_normal((n_rot, IMG_SZ)) +
-                 1j * rng.standard_normal((n_rot, IMG_SZ))).astype(np.complex64)
-    u_proj = (0.01 * (rng.standard_normal((n_rot, n_pc, IMG_SZ)) +
-              1j * rng.standard_normal((n_rot, n_pc, IMG_SZ)))).astype(np.complex64)
+    mean_proj = (rng.standard_normal((n_rot, IMG_SZ)) + 1j * rng.standard_normal((n_rot, IMG_SZ))).astype(np.complex64)
+    u_proj = (
+        0.01 * (rng.standard_normal((n_rot, n_pc, IMG_SZ)) + 1j * rng.standard_normal((n_rot, n_pc, IMG_SZ)))
+    ).astype(np.complex64)
     s = np.ones(n_pc, dtype=np.float32) * 2.0
-    batch = (rng.standard_normal((n_img, IMG_SZ)) +
-             1j * rng.standard_normal((n_img, IMG_SZ))).astype(np.complex64)
+    batch = (rng.standard_normal((n_img, IMG_SZ)) + 1j * rng.standard_normal((n_img, IMG_SZ))).astype(np.complex64)
     trans = np.zeros((1, 2), dtype=np.float32)
     # CTF_params indexed by image, not rotation
     CTF_params = np.zeros((n_img, 9), dtype=np.float32)
     noise_var = np.ones(IMG_SZ, dtype=np.float32)
-    cpu_out = np.array(hetero.compute_bHb_terms(
-        jnp.array(mean_proj), jnp.array(u_proj), jnp.array(s),
-        jnp.array(batch), jnp.array(trans), jnp.array(CTF_params),
-        _identity_ctf, jnp.array(noise_var), 1.0, IMAGE_SHAPE, _identity_process))
+    cpu_out = np.array(
+        hetero.compute_bHb_terms(
+            jnp.array(mean_proj),
+            jnp.array(u_proj),
+            jnp.array(s),
+            jnp.array(batch),
+            jnp.array(trans),
+            jnp.array(CTF_params),
+            _identity_ctf,
+            jnp.array(noise_var),
+            1.0,
+            IMAGE_SHAPE,
+            _identity_process,
+        )
+    )
     with jax.default_device(gpu_device):
-        gpu_out = np.array(hetero.compute_bHb_terms(
-            jnp.array(mean_proj), jnp.array(u_proj), jnp.array(s),
-            jnp.array(batch), jnp.array(trans), jnp.array(CTF_params),
-            _identity_ctf, jnp.array(noise_var), 1.0, IMAGE_SHAPE, _identity_process))
+        gpu_out = np.array(
+            hetero.compute_bHb_terms(
+                jnp.array(mean_proj),
+                jnp.array(u_proj),
+                jnp.array(s),
+                jnp.array(batch),
+                jnp.array(trans),
+                jnp.array(CTF_params),
+                _identity_ctf,
+                jnp.array(noise_var),
+                1.0,
+                IMAGE_SHAPE,
+                _identity_process,
+            )
+        )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-4, rtol=1e-4)

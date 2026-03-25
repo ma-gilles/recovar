@@ -92,7 +92,7 @@ def test_generate_conformation_from_reprojection_linear_combination():
     expected = np.array(
         [
             [11.0, 24.0],  # mean + [1,4]
-            [9.0, 21.0],   # mean + [-1,1]
+            [9.0, 21.0],  # mean + [-1,1]
         ],
         dtype=np.float32,
     )
@@ -297,10 +297,7 @@ def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_seri
             return _HalfsetCryo(len(self.halfset_indices[halfset_id]))
 
         def materialize_halfset_datasets(self):
-            return tuple(
-                self.get_halfset_dataset(halfset_id, independent=True, lazy=True)
-                for halfset_id in range(2)
-            )
+            return tuple(self.get_halfset_dataset(halfset_id, independent=True, lazy=True) for halfset_id in range(2))
 
     ds = _TiltCryo()
     mean = np.zeros((4,), dtype=np.complex64)
@@ -441,7 +438,22 @@ def test_get_coords_shared_label_splits_mixed_particle_batches(monkeypatch):
 
     calls = []
 
-    def fake_compute_batch_coords(config, images, model, opts, image_mask, contrast_grid, contrast_mean, contrast_variance, hermitian_weights, *, rotation_matrices, translations, ctf_params, noise_variance):
+    def fake_compute_batch_coords(
+        config,
+        images,
+        model,
+        opts,
+        image_mask,
+        contrast_grid,
+        contrast_mean,
+        contrast_variance,
+        hermitian_weights,
+        *,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+    ):
         _ = (config, model, image_mask, contrast_grid, contrast_mean, contrast_variance, hermitian_weights)
         local_idx = np.asarray(ctf_params)[:, 0].astype(int)
         # ctf_params are zeros in this fixture, so infer group size from batch length
@@ -462,10 +474,10 @@ def test_get_coords_shared_label_splits_mixed_particle_batches(monkeypatch):
     basis_size = 2
     xs, cov, contrasts, bias = embedding.get_coords_in_basis_and_contrast_3(
         experiment_dataset=cryo,
-        mean_estimate=np.zeros((4 ** 3,), dtype=np.complex64),
-        basis=np.zeros((basis_size, 4 ** 3), dtype=np.complex64),
+        mean_estimate=np.zeros((4**3,), dtype=np.complex64),
+        basis=np.zeros((basis_size, 4**3), dtype=np.complex64),
         eigenvalues=np.ones((basis_size,), dtype=np.float32),
-        volume_mask=np.ones((4 ** 3,), dtype=np.float32),
+        volume_mask=np.ones((4**3,), dtype=np.float32),
         contrast_grid=np.array([1.0], dtype=np.float32),
         batch_size=8,
         disc_type="linear_interp",
@@ -559,10 +571,10 @@ def test_get_coords_shared_label_grouped_shared_contrast(monkeypatch):
     cryo = _DummyTiltCryo()
     xs, cov, contrasts, bias = embedding.get_coords_in_basis_and_contrast_3(
         experiment_dataset=cryo,
-        mean_estimate=np.zeros((4 ** 3,), dtype=np.complex64),
-        basis=np.zeros((2, 4 ** 3), dtype=np.complex64),
+        mean_estimate=np.zeros((4**3,), dtype=np.complex64),
+        basis=np.zeros((2, 4**3), dtype=np.complex64),
         eigenvalues=np.ones((2,), dtype=np.float32),
-        volume_mask=np.ones((4 ** 3,), dtype=np.float32),
+        volume_mask=np.ones((4**3,), dtype=np.float32),
         contrast_grid=np.array([1.0], dtype=np.float32),
         batch_size=8,
         disc_type="linear_interp",
@@ -592,9 +604,7 @@ def test_solve_contrast_linear_system_identity_case():
     eigenvalues = jnp.ones(zdim, dtype=jnp.float32)
     contrast = 1.0
 
-    sol = np.asarray(embedding.solve_contrast_linear_system(
-        AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast
-    ))
+    sol = np.asarray(embedding.solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast))
     # A = I + I = 2I, b = AU_t_images => sol = AU_t_images / 2
     np.testing.assert_allclose(sol, np.array([0.5, 1.0]), atol=1e-5)
 
@@ -608,9 +618,7 @@ def test_solve_contrast_linear_system_zero_contrast():
     eigenvalues = jnp.ones(zdim, dtype=jnp.float32)
     contrast = 0.0
 
-    sol = np.asarray(embedding.solve_contrast_linear_system(
-        AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast
-    ))
+    sol = np.asarray(embedding.solve_contrast_linear_system(AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast))
     np.testing.assert_allclose(sol, np.zeros(zdim), atol=1e-5)
 
 
@@ -635,8 +643,7 @@ def test_compute_contrast_residual_fast_2_at_zero_xs():
     contrast = jnp.array([1.0], dtype=jnp.float32)
 
     fit_res, prior_res = embedding.compute_contrast_residual_fast_2(
-        xs, AU_t_images, image_norms_sq, AU_t_Amean, Amean_norms_sq,
-        image_T_A_mean, AU_t_AU, eigenvalues, contrast
+        xs, AU_t_images, image_norms_sq, AU_t_Amean, Amean_norms_sq, image_T_A_mean, AU_t_AU, eigenvalues, contrast
     )
     # With xs=0: p1=0, p2=0, p3=image_norms_sq, p4=0, p5=0, p6=0
     np.testing.assert_allclose(float(fit_res[0]), 5.0, atol=1e-5)
@@ -658,8 +665,7 @@ def test_compute_contrast_residual_fast_2_prior_scales_with_eigenvalues():
     contrast = jnp.array([1.0], dtype=jnp.float32)
 
     _, prior_res = embedding.compute_contrast_residual_fast_2(
-        xs, AU_t_images, image_norms_sq, AU_t_Amean, Amean_norms_sq,
-        image_T_A_mean, AU_t_AU, eigenvalues, contrast
+        xs, AU_t_images, image_norms_sq, AU_t_Amean, Amean_norms_sq, image_T_A_mean, AU_t_AU, eigenvalues, contrast
     )
     # prior = xs^T diag(1/eigenvalues) xs = 1/2 + 1/4 = 0.75
     np.testing.assert_allclose(float(prior_res[0]), 0.75, atol=1e-5)
@@ -722,9 +728,7 @@ def test_rfft2_hermitian_weights_inner_product_equivalence(H, W):
 def _hermitian_flat(rng, n, H, W):
     """DFT of random real images → Hermitian-symmetric, shape (n, H*W)."""
     real = rng.standard_normal((n, H, W)).astype(np.float32)
-    return jnp.array(
-        np.fft.fftshift(np.fft.fft2(real), axes=(-2, -1)).reshape(n, -1).astype(np.complex64)
-    )
+    return jnp.array(np.fft.fftshift(np.fft.fft2(real), axes=(-2, -1)).reshape(n, -1).astype(np.complex64))
 
 
 def _radial_noise_var(n_images, H, W):
@@ -736,7 +740,7 @@ def _radial_noise_var(n_images, H, W):
     kx = np.fft.fftshift(np.fft.fftfreq(W))
     ky = np.fft.fftshift(np.fft.fftfreq(H))
     KX, KY = np.meshgrid(kx, ky)
-    rad = np.sqrt(KX ** 2 + KY ** 2).astype(np.float32)
+    rad = np.sqrt(KX**2 + KY**2).astype(np.float32)
     nv = (1.0 + 5.0 * rad).reshape(-1)
     return jnp.tile(jnp.array(nv), (n_images, 1))
 
@@ -744,15 +748,18 @@ def _radial_noise_var(n_images, H, W):
 def _half_image_of(arr_full, image_shape):
     """Extract half-spectrum from a full-spectrum array: (n, H*W) → (n, H*(W//2+1))."""
     import recovar.core.fourier_transform_utils as ftu_mod
+
     return ftu_mod.full_image_to_half_image(arr_full, image_shape)
 
 
 def _make_forward_model_mock(proj_mean_full, image_shape):
     """Return a forward_model mock that handles half_image=True/False."""
+
     def mock(*a, half_image=False, **kw):
         if half_image:
             return _half_image_of(proj_mean_full, image_shape)
         return proj_mean_full
+
     return mock
 
 
@@ -761,17 +768,20 @@ def _make_batch_vol_mock(aus_full, image_shape):
 
     aus_full: (n_basis, n_images, H*W) full-spectrum.
     """
+
     def mock(*a, half_image=False, **kw):
         if half_image:
             n_b, n_i = aus_full.shape[0], aus_full.shape[1]
             half = _half_image_of(aus_full.reshape(n_b * n_i, -1), image_shape)
             return half.reshape(n_b, n_i, -1)
         return aus_full
+
     return mock
 
 
 def _minimal_config(image_shape, premultiplied_ctf=False):
     from recovar.core import ctf as ctf_mod
+
     H, _ = image_shape
     return ForwardModelConfig(
         image_shape=image_shape,
@@ -781,7 +791,6 @@ def _minimal_config(image_shape, premultiplied_ctf=False):
         padding=0,
         disc_type="linear_interp",
         ctf=ctf_mod.CTFEvaluator(),
-
         premultiplied_ctf=premultiplied_ctf,
         process_fn=None,
     )
@@ -805,10 +814,14 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
     image_shape = (H, W)
     rng = np.random.default_rng(42)
 
-    images_flat = _hermitian_flat(rng, n_images, H, W)      # (n_images, H*W)
-    proj_mean   = _hermitian_flat(rng, n_images, H, W)      # (n_images, H*W)
-    aus = jnp.stack([_hermitian_flat(rng, n_images, H, W)   # (n_basis, n_images, H*W)
-                     for _ in range(n_basis)])
+    images_flat = _hermitian_flat(rng, n_images, H, W)  # (n_images, H*W)
+    proj_mean = _hermitian_flat(rng, n_images, H, W)  # (n_images, H*W)
+    aus = jnp.stack(
+        [
+            _hermitian_flat(rng, n_images, H, W)  # (n_basis, n_images, H*W)
+            for _ in range(n_basis)
+        ]
+    )
 
     noise_var = (
         jnp.ones((n_images, H * W), dtype=jnp.float32)
@@ -818,10 +831,8 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
 
     # Inject controlled Hermitian data; bypass translate (zero translations = identity anyway)
     monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s, **kw: b)
-    monkeypatch.setattr(embedding.core_forward, "forward_model",
-                        _make_forward_model_mock(proj_mean, image_shape))
-    monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
-                        _make_batch_vol_mock(aus, image_shape))
+    monkeypatch.setattr(embedding.core_forward, "forward_model", _make_forward_model_mock(proj_mean, image_shape))
+    monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map", _make_batch_vol_mock(aus, image_shape))
 
     config = _minimal_config(image_shape, premultiplied_ctf=False)
     batch_data = _make_batch_fields(
@@ -832,9 +843,9 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
         noise_variance=noise_var,
     )
     model = ModelState(
-        mean_estimate=jnp.zeros((H ** 3,), dtype=jnp.complex64),
-        volume_mask=jnp.ones((H ** 3,), dtype=jnp.float32),
-        basis=jnp.zeros((n_basis, H ** 3), dtype=jnp.complex64),
+        mean_estimate=jnp.zeros((H**3,), dtype=jnp.complex64),
+        volume_mask=jnp.ones((H**3,), dtype=jnp.float32),
+        basis=jnp.zeros((n_basis, H**3), dtype=jnp.complex64),
         eigenvalues=jnp.ones(n_basis, dtype=jnp.complex64),
     )
 
@@ -842,8 +853,7 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
     full_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=None)
     half_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=hw)
 
-    names = ["AU_t_images", "AU_t_Amean", "AU_t_AU",
-             "image_norms_sq", "image_T_A_mean", "A_mean_norm_sq"]
+    names = ["AU_t_images", "AU_t_Amean", "AU_t_AU", "image_norms_sq", "image_T_A_mean", "A_mean_norm_sq"]
     for name, f, h in zip(names, full_out, half_out):
         f_np = np.asarray(f)
         h_np = np.asarray(h)
@@ -856,8 +866,10 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
         # off-diagonal Gram matrix elements (near-orthogonal basis) where absolute
         # BLAS GEMM error (~0.2) can be ~5% relative — confirmed not a bug via float64.
         np.testing.assert_allclose(
-            h_np, f_np.real,
-            rtol=5e-3, atol=1.0,
+            h_np,
+            f_np.real,
+            rtol=5e-3,
+            atol=1.0,
             err_msg=f"{name}: max_err={np.max(np.abs(h_np - f_np.real)):.4g}",
         )
 
@@ -866,7 +878,9 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
         if np.iscomplexobj(f_np):
             scale = max(float(np.max(np.abs(f_np.real))), 1e-8)
             np.testing.assert_allclose(
-                f_np.imag / scale, 0.0, atol=1e-3,
+                f_np.imag / scale,
+                0.0,
+                atol=1e-3,
                 err_msg=f"{name} full-spectrum imag should be ~0 for Hermitian data",
             )
 
@@ -887,25 +901,23 @@ def test_compute_batch_coords_p1_premult_ctf_half_matches_full(H, W, monkeypatch
     rng = np.random.default_rng(7)
 
     images_flat = _hermitian_flat(rng, n_images, H, W)
-    proj_mean   = _hermitian_flat(rng, n_images, H, W)
+    proj_mean = _hermitian_flat(rng, n_images, H, W)
     aus = jnp.stack([_hermitian_flat(rng, n_images, H, W) for _ in range(n_basis)])
-    noise_var   = jnp.ones((n_images, H * W), dtype=jnp.float32)
+    noise_var = jnp.ones((n_images, H * W), dtype=jnp.float32)
 
     monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s, **kw: b)
-    monkeypatch.setattr(embedding.core_forward, "forward_model",
-                        _make_forward_model_mock(proj_mean, image_shape))
-    monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
-                        _make_batch_vol_mock(aus, image_shape))
+    monkeypatch.setattr(embedding.core_forward, "forward_model", _make_forward_model_mock(proj_mean, image_shape))
+    monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map", _make_batch_vol_mock(aus, image_shape))
 
     config = _minimal_config(image_shape, premultiplied_ctf=True)
     # Use standard non-zero CTF params so CTF is non-trivial (defocus=1 μm, 300 kV)
     ctf_std = np.zeros((n_images, 9), dtype=np.float32)
-    ctf_std[:, 0] = 10000.0   # DFU
-    ctf_std[:, 1] = 10000.0   # DFV
-    ctf_std[:, 3] = 300.0     # VOLT
-    ctf_std[:, 4] = 2.7       # CS
-    ctf_std[:, 5] = 0.1       # W (amplitude contrast)
-    ctf_std[:, 8] = 1.0       # CONTRAST scale
+    ctf_std[:, 0] = 10000.0  # DFU
+    ctf_std[:, 1] = 10000.0  # DFV
+    ctf_std[:, 3] = 300.0  # VOLT
+    ctf_std[:, 4] = 2.7  # CS
+    ctf_std[:, 5] = 0.1  # W (amplitude contrast)
+    ctf_std[:, 8] = 1.0  # CONTRAST scale
     batch_data = _make_batch_fields(
         images=images_flat,
         rotation_matrices=jnp.zeros((n_images, 3, 3)),
@@ -914,9 +926,9 @@ def test_compute_batch_coords_p1_premult_ctf_half_matches_full(H, W, monkeypatch
         noise_variance=noise_var,
     )
     model = ModelState(
-        mean_estimate=jnp.zeros((H ** 3,), dtype=jnp.complex64),
-        volume_mask=jnp.ones((H ** 3,), dtype=jnp.float32),
-        basis=jnp.zeros((n_basis, H ** 3), dtype=jnp.complex64),
+        mean_estimate=jnp.zeros((H**3,), dtype=jnp.complex64),
+        volume_mask=jnp.ones((H**3,), dtype=jnp.float32),
+        basis=jnp.zeros((n_basis, H**3), dtype=jnp.complex64),
         eigenvalues=jnp.ones(n_basis, dtype=jnp.complex64),
     )
 
@@ -924,12 +936,14 @@ def test_compute_batch_coords_p1_premult_ctf_half_matches_full(H, W, monkeypatch
     full_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=None)
     half_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=hw)
 
-    names = ["AU_t_images", "AU_t_Amean", "AU_t_AU",
-             "image_norms_sq", "image_T_A_mean", "A_mean_norm_sq"]
+    names = ["AU_t_images", "AU_t_Amean", "AU_t_AU", "image_norms_sq", "image_T_A_mean", "A_mean_norm_sq"]
     for name, f, h in zip(names, full_out, half_out):
         f_np, h_np = np.asarray(f), np.asarray(h)
         np.testing.assert_allclose(
-            h_np, f_np.real, rtol=5e-3, atol=1.0,
+            h_np,
+            f_np.real,
+            rtol=5e-3,
+            atol=1.0,
             err_msg=f"{name}: max_err={np.max(np.abs(h_np - f_np.real)):.4g}",
         )
 
@@ -956,17 +970,18 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
             return jnp.array(fft.reshape(n, -1))
 
         images_flat = hermitian_flat64(n_images, H, W)
-        proj_mean   = hermitian_flat64(n_images, H, W)
+        proj_mean = hermitian_flat64(n_images, H, W)
         aus = jnp.stack([hermitian_flat64(n_images, H, W) for _ in range(n_basis)])
-        noise_var   = jnp.ones((n_images, H * W), dtype=jnp.float64)
+        noise_var = jnp.ones((n_images, H * W), dtype=jnp.float64)
 
         monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s, **kw: b)
-        monkeypatch.setattr(embedding.core_forward, "forward_model",
-                            _make_forward_model_mock(proj_mean, image_shape))
-        monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
-                            _make_batch_vol_mock(aus, image_shape))
+        monkeypatch.setattr(embedding.core_forward, "forward_model", _make_forward_model_mock(proj_mean, image_shape))
+        monkeypatch.setattr(
+            embedding.covariance_core, "batch_vol_forward_from_map", _make_batch_vol_mock(aus, image_shape)
+        )
 
         from recovar.core import ctf as ctf_mod
+
         config = ForwardModelConfig(
             image_shape=image_shape,
             volume_shape=(H, H, H),
@@ -975,7 +990,6 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
             padding=0,
             disc_type="linear_interp",
             ctf=ctf_mod.CTFEvaluator(),
-    
             premultiplied_ctf=False,
             process_fn=None,
         )
@@ -987,9 +1001,9 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
             noise_variance=noise_var,
         )
         model = ModelState(
-            mean_estimate=jnp.zeros((H ** 3,), dtype=jnp.complex128),
-            volume_mask=jnp.ones((H ** 3,), dtype=jnp.float64),
-            basis=jnp.zeros((n_basis, H ** 3), dtype=jnp.complex128),
+            mean_estimate=jnp.zeros((H**3,), dtype=jnp.complex128),
+            volume_mask=jnp.ones((H**3,), dtype=jnp.float64),
+            basis=jnp.zeros((n_basis, H**3), dtype=jnp.complex128),
             eigenvalues=jnp.ones(n_basis, dtype=jnp.complex128),
         )
 
@@ -997,15 +1011,16 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
         full_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=None)
         half_out = _call_compute_batch_coords_p1(config, batch_data, model, hermitian_weights=hw64)
 
-        names = ["AU_t_images", "AU_t_Amean", "AU_t_AU",
-                 "image_norms_sq", "image_T_A_mean", "A_mean_norm_sq"]
+        names = ["AU_t_images", "AU_t_Amean", "AU_t_AU", "image_norms_sq", "image_T_A_mean", "A_mean_norm_sq"]
         for name, f, h in zip(names, full_out, half_out):
             f_np, h_np = np.asarray(f), np.asarray(h)
             # float64: relative error ~5e-6 due to BLAS GEMM rounding over n_terms;
             # atol=1e-7 handles near-zero off-diagonal Gram matrix elements.
             np.testing.assert_allclose(
-                h_np, f_np.real,
-                rtol=1e-5, atol=1e-7,
+                h_np,
+                f_np.real,
+                rtol=1e-5,
+                atol=1e-7,
                 err_msg=f"{name}: max_err={np.max(np.abs(h_np - f_np.real)):.4g}",
             )
     finally:
@@ -1020,12 +1035,12 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
 def _make_standard_ctf_params(n_images, dtype=np.float32):
     """Standard non-degenerate CTF params (1 μm defocus, 300 kV, Cs=2.7 mm)."""
     p = np.zeros((n_images, 9), dtype=dtype)
-    p[:, 0] = 10000.0   # DFU (Å)
-    p[:, 1] = 10000.0   # DFV (Å)
-    p[:, 3] = 300.0     # VOLT (kV)
-    p[:, 4] = 2.7       # CS (mm)
-    p[:, 5] = 0.1       # W
-    p[:, 8] = 1.0       # CONTRAST
+    p[:, 0] = 10000.0  # DFU (Å)
+    p[:, 1] = 10000.0  # DFV (Å)
+    p[:, 3] = 300.0  # VOLT (kV)
+    p[:, 4] = 2.7  # CS (mm)
+    p[:, 5] = 0.1  # W
+    p[:, 8] = 1.0  # CONTRAST
     return p
 
 
@@ -1046,9 +1061,11 @@ def _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6):
 
     # --- Basis: projections of real volumes (will be Hermitian when projected) ---
     basis_real = rng.standard_normal((n_basis, H, H, H)).astype(np.float32)
-    basis_fourier = np.fft.fftshift(
-        np.fft.fftn(basis_real, axes=(-3, -2, -1)), axes=(-3, -2, -1)
-    ).astype(np.complex64).reshape(n_basis, -1)
+    basis_fourier = (
+        np.fft.fftshift(np.fft.fftn(basis_real, axes=(-3, -2, -1)), axes=(-3, -2, -1))
+        .astype(np.complex64)
+        .reshape(n_basis, -1)
+    )
     basis = jnp.array(basis_fourier)
 
     # --- Random rotation matrices (orthogonal) ---
@@ -1065,20 +1082,20 @@ def _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6):
     fourier_imgs = np.fft.fftshift(np.fft.fft2(real_imgs), axes=(-2, -1)).astype(np.complex64)
     images_flat = jnp.array(fourier_imgs.reshape(n_images, -1))
 
-    ctf_params  = jnp.array(_make_standard_ctf_params(n_images))
+    ctf_params = jnp.array(_make_standard_ctf_params(n_images))
     translations = jnp.zeros((n_images, 2), dtype=jnp.float32)
-    noise_var   = jnp.ones((n_images, H * W), dtype=jnp.float32)
+    noise_var = jnp.ones((n_images, H * W), dtype=jnp.float32)
 
     from recovar.core import ctf as ctf_mod
+
     config = ForwardModelConfig(
         image_shape=image_shape,
         volume_shape=(H, H, H),
         grid_size=H,
-        voxel_size=4.0,   # 4 Å/pix — physically reasonable
+        voxel_size=4.0,  # 4 Å/pix — physically reasonable
         padding=0,
         disc_type="linear_interp",
         ctf=ctf_mod.CTFEvaluator(),
-
         premultiplied_ctf=False,
         process_fn=None,
     )
@@ -1091,7 +1108,7 @@ def _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6):
     )
     model = ModelState(
         mean_estimate=mean_estimate,
-        volume_mask=jnp.ones((H ** 3,), dtype=jnp.float32),
+        volume_mask=jnp.ones((H**3,), dtype=jnp.float32),
         basis=basis,
         eigenvalues=jnp.ones(n_basis, dtype=jnp.complex64),
     )
@@ -1106,19 +1123,29 @@ def _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6):
     hw = embedding._rfft2_hermitian_weights(image_shape)
 
     full_xs, full_contrast, full_cov, full_bias = _call_compute_batch_coords(
-        config, batch_data, model, opts, image_mask, contrast_grid,
+        config,
+        batch_data,
+        model,
+        opts,
+        image_mask,
+        contrast_grid,
         hermitian_weights=None,
     )
     half_xs, half_contrast, half_cov, half_bias = _call_compute_batch_coords(
-        config, batch_data, model, opts, image_mask, contrast_grid,
+        config,
+        batch_data,
+        model,
+        opts,
+        image_mask,
+        contrast_grid,
         hermitian_weights=hw,
     )
 
     results = {
-        "xs":       (np.asarray(half_xs),       np.asarray(full_xs)),
-        "contrast": (np.asarray(half_contrast),  np.asarray(full_contrast)),
-        "cov":      (np.asarray(half_cov),       np.asarray(full_cov)),
-        "bias":     (np.asarray(half_bias),      np.asarray(full_bias)),
+        "xs": (np.asarray(half_xs), np.asarray(full_xs)),
+        "contrast": (np.asarray(half_contrast), np.asarray(full_contrast)),
+        "cov": (np.asarray(half_cov), np.asarray(full_cov)),
+        "bias": (np.asarray(half_bias), np.asarray(full_bias)),
     }
     return results
 
@@ -1147,15 +1174,15 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
 
     with jax.default_device(gpu_device):
         images_flat = _hermitian_flat(rng, n_images, H, W)
-        proj_mean   = _hermitian_flat(rng, n_images, H, W)
+        proj_mean = _hermitian_flat(rng, n_images, H, W)
         aus = jnp.stack([_hermitian_flat(rng, n_images, H, W) for _ in range(n_basis)])
-        noise_var   = jnp.ones((n_images, H * W), dtype=jnp.float32)
+        noise_var = jnp.ones((n_images, H * W), dtype=jnp.float32)
 
         monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s, **kw: b)
-        monkeypatch.setattr(embedding.core_forward, "forward_model",
-                            _make_forward_model_mock(proj_mean, image_shape))
-        monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
-                            _make_batch_vol_mock(aus, image_shape))
+        monkeypatch.setattr(embedding.core_forward, "forward_model", _make_forward_model_mock(proj_mean, image_shape))
+        monkeypatch.setattr(
+            embedding.covariance_core, "batch_vol_forward_from_map", _make_batch_vol_mock(aus, image_shape)
+        )
 
         config = _minimal_config(image_shape, premultiplied_ctf=False)
         batch_data = _make_batch_fields(
@@ -1166,9 +1193,9 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
             noise_variance=noise_var,
         )
         model = ModelState(
-            mean_estimate=jnp.zeros((H ** 3,), dtype=jnp.complex64),
-            volume_mask=jnp.ones((H ** 3,), dtype=jnp.float32),
-            basis=jnp.zeros((n_basis, H ** 3), dtype=jnp.complex64),
+            mean_estimate=jnp.zeros((H**3,), dtype=jnp.complex64),
+            volume_mask=jnp.ones((H**3,), dtype=jnp.float32),
+            basis=jnp.zeros((n_basis, H**3), dtype=jnp.complex64),
             eigenvalues=jnp.ones(n_basis, dtype=jnp.complex64),
         )
         opts = EmbeddingOpts(compute_covariances=True, compute_bias=True, shared_label=False)
@@ -1178,19 +1205,29 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
 
         with jax.disable_jit():
             full_xs, full_contrast, full_cov, full_bias = _call_compute_batch_coords(
-                config, batch_data, model, opts, image_mask, contrast_grid,
+                config,
+                batch_data,
+                model,
+                opts,
+                image_mask,
+                contrast_grid,
                 hermitian_weights=None,
             )
             half_xs, half_contrast, half_cov, half_bias = _call_compute_batch_coords(
-                config, batch_data, model, opts, image_mask, contrast_grid,
+                config,
+                batch_data,
+                model,
+                opts,
+                image_mask,
+                contrast_grid,
                 hermitian_weights=hw,
             )
 
     for name, full_val, half_val in [
-        ("xs",       full_xs,       half_xs),
+        ("xs", full_xs, half_xs),
         ("contrast", full_contrast, half_contrast),
-        ("cov",      full_cov,      half_cov),
-        ("bias",     full_bias,     half_bias),
+        ("cov", full_cov, half_cov),
+        ("bias", full_bias, half_bias),
     ]:
         f_np = np.asarray(full_val)
         h_np = np.asarray(half_val)
@@ -1198,10 +1235,11 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
         # atol=1.0 handles small-magnitude off-diagonal Gram matrix entries where
         # absolute BLAS GEMM error (~0.2) can dominate the relative tolerance.
         np.testing.assert_allclose(
-            h_np, f_np.real,
-            rtol=5e-3, atol=1.0,
-            err_msg=f"Half vs full mismatch in '{name}': "
-                    f"max_err={np.max(np.abs(h_np - f_np.real)):.4g}",
+            h_np,
+            f_np.real,
+            rtol=5e-3,
+            atol=1.0,
+            err_msg=f"Half vs full mismatch in '{name}': max_err={np.max(np.abs(h_np - f_np.real)):.4g}",
         )
 
 
@@ -1235,22 +1273,30 @@ def test_get_per_image_embedding_multi_zdim_matches_per_zdim(gpu_device):
         zs_ref, cov_ref = {}, {}
         for k in n_pcs_list:
             zs, cov, _, _ = get_per_image_embedding(
-                mean_np, u, s, k, cryos, volume_mask, gpu_memory, contrast_option='none')
+                mean_np, u, s, k, cryos, volume_mask, gpu_memory, contrast_option="none"
+            )
             zs_ref[k] = zs
             cov_ref[k] = cov
 
         # New: single-pass multi-zdim
         zs_reg, _ = get_per_image_embedding_multi_zdim(
-            mean_np, u, s, n_pcs_list, cryos, volume_mask, gpu_memory, contrast_option='none')
+            mean_np, u, s, n_pcs_list, cryos, volume_mask, gpu_memory, contrast_option="none"
+        )
 
         for k in n_pcs_list:
             xs_m, cov_m, _ = zs_reg[k]
             np.testing.assert_allclose(
-                xs_m, zs_ref[k], rtol=1e-4, atol=1e-5,
+                xs_m,
+                zs_ref[k],
+                rtol=1e-4,
+                atol=1e-5,
                 err_msg=f"xs mismatch at n_pcs={k}: max_err={np.max(np.abs(xs_m - zs_ref[k])):.3g}",
             )
             np.testing.assert_allclose(
-                cov_m, cov_ref[k], rtol=1e-4, atol=1e-5,
+                cov_m,
+                cov_ref[k],
+                rtol=1e-4,
+                atol=1e-5,
                 err_msg=f"cov mismatch at n_pcs={k}: max_err={np.max(np.abs(cov_m - cov_ref[k])):.3g}",
             )
 
@@ -1260,8 +1306,10 @@ def _make_multi_zdim_test_fixtures():
     from helpers import tiny_synthetic
 
     cryo = tiny_synthetic.make_tiny_cryo_dataset_with_images(grid_size=8, n_images=12, seed=3)
-    cryo.halfset_indices = [np.arange(cryo.n_images // 2, dtype=np.int32),
-                            np.arange(cryo.n_images // 2, cryo.n_images, dtype=np.int32)]
+    cryo.halfset_indices = [
+        np.arange(cryo.n_images // 2, dtype=np.int32),
+        np.arange(cryo.n_images // 2, cryo.n_images, dtype=np.int32),
+    ]
     cryos = cryo
     volume_mask = np.ones(cryo.volume_size, dtype=np.float32)
     mean_np = np.zeros(cryo.volume_size, dtype=np.complex64)
@@ -1282,15 +1330,13 @@ def test_compute_batch_coords_half_vs_full_cpu(monkeypatch):
     rng = np.random.default_rng(42)
 
     images_flat = _hermitian_flat(rng, n_images, H, W)
-    proj_mean   = _hermitian_flat(rng, n_images, H, W)
+    proj_mean = _hermitian_flat(rng, n_images, H, W)
     aus = jnp.stack([_hermitian_flat(rng, n_images, H, W) for _ in range(n_basis)])
     noise_var = jnp.ones((n_images, H * W), dtype=jnp.float32)
 
     monkeypatch.setattr(embedding.core, "translate_images", lambda b, t, s, **kw: b)
-    monkeypatch.setattr(embedding.core_forward, "forward_model",
-                        _make_forward_model_mock(proj_mean, image_shape))
-    monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map",
-                        _make_batch_vol_mock(aus, image_shape))
+    monkeypatch.setattr(embedding.core_forward, "forward_model", _make_forward_model_mock(proj_mean, image_shape))
+    monkeypatch.setattr(embedding.covariance_core, "batch_vol_forward_from_map", _make_batch_vol_mock(aus, image_shape))
 
     config = _minimal_config(image_shape, premultiplied_ctf=False)
     batch_data = _make_batch_fields(
@@ -1301,9 +1347,9 @@ def test_compute_batch_coords_half_vs_full_cpu(monkeypatch):
         noise_variance=noise_var,
     )
     model = ModelState(
-        mean_estimate=jnp.zeros((H ** 3,), dtype=jnp.complex64),
-        volume_mask=jnp.ones((H ** 3,), dtype=jnp.float32),
-        basis=jnp.zeros((n_basis, H ** 3), dtype=jnp.complex64),
+        mean_estimate=jnp.zeros((H**3,), dtype=jnp.complex64),
+        volume_mask=jnp.ones((H**3,), dtype=jnp.float32),
+        basis=jnp.zeros((n_basis, H**3), dtype=jnp.complex64),
         eigenvalues=jnp.ones(n_basis, dtype=jnp.complex64),
     )
     opts = EmbeddingOpts(compute_covariances=True, compute_bias=True, shared_label=False)
@@ -1313,27 +1359,38 @@ def test_compute_batch_coords_half_vs_full_cpu(monkeypatch):
 
     with jax.disable_jit():
         full_xs, full_contrast, full_cov, full_bias = _call_compute_batch_coords(
-            config, batch_data, model, opts, image_mask, contrast_grid,
+            config,
+            batch_data,
+            model,
+            opts,
+            image_mask,
+            contrast_grid,
             hermitian_weights=None,
         )
         half_xs, half_contrast, half_cov, half_bias = _call_compute_batch_coords(
-            config, batch_data, model, opts, image_mask, contrast_grid,
+            config,
+            batch_data,
+            model,
+            opts,
+            image_mask,
+            contrast_grid,
             hermitian_weights=hw,
         )
 
     for name, full_val, half_val in [
-        ("xs",       full_xs,       half_xs),
+        ("xs", full_xs, half_xs),
         ("contrast", full_contrast, half_contrast),
-        ("cov",      full_cov,      half_cov),
-        ("bias",     full_bias,     half_bias),
+        ("cov", full_cov, half_cov),
+        ("bias", full_bias, half_bias),
     ]:
         f_np = np.asarray(full_val)
         h_np = np.asarray(half_val)
         # For exactly Hermitian data (monkeypatched), the half path (.real enforcement)
         # and full path give the same linear system; differences are float32 matmul noise.
         np.testing.assert_allclose(
-            h_np, f_np.real,
-            rtol=5e-3, atol=1.0,
-            err_msg=f"Half vs full mismatch in '{name}': "
-                    f"max_err={np.max(np.abs(h_np - f_np.real)):.4g}",
+            h_np,
+            f_np.real,
+            rtol=5e-3,
+            atol=1.0,
+            err_msg=f"Half vs full mismatch in '{name}': max_err={np.max(np.abs(h_np - f_np.real)):.4g}",
         )

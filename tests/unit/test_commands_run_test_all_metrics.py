@@ -8,6 +8,7 @@ Covers:
   load_unsorted_embedding_component() – component API dispatch
   _stage_perf()                – performance snapshot math
 """
+
 import argparse
 import sys
 from types import SimpleNamespace
@@ -25,6 +26,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # Metric direction tokens
 # ---------------------------------------------------------------------------
+
 
 def test_lower_is_better_contains_error():
     assert "error" in rtam.LOWER_IS_BETTER_TOKENS
@@ -57,6 +59,7 @@ def test_direction_tokens_are_disjoint():
 # validate_storage_args_for_generated_volumes
 # ---------------------------------------------------------------------------
 
+
 def test_validate_storage_args_passes_with_volume_input():
     """When --volume-input is given, no validation error."""
     args = SimpleNamespace(volume_input="/some/path")
@@ -66,23 +69,17 @@ def test_validate_storage_args_passes_with_volume_input():
 def test_validate_storage_args_passes_with_explicit_outdir():
     """When --output-dir is given explicitly, no validation error."""
     args = SimpleNamespace(volume_input=None)
-    rtam.validate_storage_args_for_generated_volumes(
-        args, ["--output-dir", "/tmp/out", "--generate-pdb-volumes"]
-    )
+    rtam.validate_storage_args_for_generated_volumes(args, ["--output-dir", "/tmp/out", "--generate-pdb-volumes"])
 
 
 def test_validate_storage_args_passes_with_short_outdir_flag():
     args = SimpleNamespace(volume_input=None)
-    rtam.validate_storage_args_for_generated_volumes(
-        args, ["-o", "/tmp/out", "--generate-pdb-volumes"]
-    )
+    rtam.validate_storage_args_for_generated_volumes(args, ["-o", "/tmp/out", "--generate-pdb-volumes"])
 
 
 def test_validate_storage_args_passes_with_equals_syntax():
     args = SimpleNamespace(volume_input=None)
-    rtam.validate_storage_args_for_generated_volumes(
-        args, ["--output-dir=/tmp/out", "--generate-pdb-volumes"]
-    )
+    rtam.validate_storage_args_for_generated_volumes(args, ["--output-dir=/tmp/out", "--generate-pdb-volumes"])
 
 
 def test_default_output_dir_prefers_tmp_recovar_dir(monkeypatch):
@@ -100,14 +97,13 @@ def test_validate_storage_args_raises_without_outdir():
     """When generating volumes without explicit --output-dir, should raise."""
     args = SimpleNamespace(volume_input=None)
     with pytest.raises(ValueError, match="--output-dir"):
-        rtam.validate_storage_args_for_generated_volumes(
-            args, ["--generate-pdb-volumes"]
-        )
+        rtam.validate_storage_args_for_generated_volumes(args, ["--generate-pdb-volumes"])
 
 
 # ---------------------------------------------------------------------------
 # load_u_real_for_metrics
 # ---------------------------------------------------------------------------
+
 
 def test_load_u_real_for_metrics_uses_get_u_real_when_available():
     """Should prefer the get_u_real() method."""
@@ -119,6 +115,7 @@ def test_load_u_real_for_metrics_uses_get_u_real_when_available():
 
     result = rtam.load_u_real_for_metrics(FakePO(), 3)
     np.testing.assert_array_equal(result, expected[:3])
+
 
 def test_load_u_real_for_metrics_rejects_zero():
     with pytest.raises(ValueError, match="positive"):
@@ -133,6 +130,7 @@ def test_load_u_real_for_metrics_rejects_negative():
 # ---------------------------------------------------------------------------
 # load_unsorted_embedding_component
 # ---------------------------------------------------------------------------
+
 
 def test_load_unsorted_embedding_component_uses_get_unsorted():
     """Should use the PipelineOutput component helper."""
@@ -183,6 +181,7 @@ def test_load_unsorted_embedding_component_prefers_pipeline_output_method():
 # _stage_perf
 # ---------------------------------------------------------------------------
 
+
 def test_stage_perf_computes_wall_seconds():
     before = {"wall_time": 100.0, "cpu_rss_bytes": 1e9, "gpu_bytes_in_use": 0, "gpu_peak_bytes": 0}
     after = {"wall_time": 107.5, "cpu_rss_bytes": 1.5e9, "gpu_bytes_in_use": 0, "gpu_peak_bytes": 0}
@@ -217,29 +216,30 @@ def test_stage_perf_gpu_peak_from_earlier_stage():
 # main – argument registration
 # ---------------------------------------------------------------------------
 
+
 def test_main_registers_volume_input():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--volume-input', '-i', required=False, default=None)
+    parser.add_argument("--volume-input", "-i", required=False, default=None)
     actions = parser._option_string_actions
     assert "--volume-input" in actions or "-i" in actions
 
 
 def test_main_registers_output_dir():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--output-dir', '-o', default='/tmp/recovar_test_all_metrics')
+    parser.add_argument("--output-dir", "-o", default="/tmp/recovar_test_all_metrics")
     actions = parser._option_string_actions
     assert "--output-dir" in actions or "-o" in actions
 
 
 def test_main_registers_grid_size_with_default():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--grid-size', type=int, default=64)
+    parser.add_argument("--grid-size", type=int, default=64)
     action = parser._option_string_actions["--grid-size"]
     assert action.default == 64
 
 
 def test_main_registers_n_images_with_default():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--n-images', type=float, default=5e4)
+    parser.add_argument("--n-images", type=float, default=5e4)
     action = parser._option_string_actions["--n-images"]
     assert action.default == pytest.approx(5e4)

@@ -40,7 +40,9 @@ def test_run_test_outliers_pipeline_defaults_to_run_all(monkeypatch, tmp_path):
     monkeypatch.setattr(run_test_outliers_pipeline.subprocess, "run", fake_run)
     monkeypatch.setattr(run_test_outliers_pipeline, "create_outlier_volume", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(run_test_outliers_pipeline, "verify_outlier_results", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(run_test_outliers_pipeline, "analyze_outlier_detection_accuracy", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        run_test_outliers_pipeline, "analyze_outlier_detection_accuracy", lambda *_args, **_kwargs: True
+    )
     monkeypatch.setattr(run_test_outliers_pipeline, "verify_temp_cleanup", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         run_test_outliers_pipeline.jax,
@@ -73,7 +75,9 @@ def test_run_test_outliers_pipeline_tilt_basic_emits_tilt_flags(monkeypatch, tmp
     )
     monkeypatch.setattr(run_test_outliers_pipeline, "create_outlier_volume", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(run_test_outliers_pipeline, "verify_outlier_results", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(run_test_outliers_pipeline, "analyze_outlier_detection_accuracy", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        run_test_outliers_pipeline, "analyze_outlier_detection_accuracy", lambda *_args, **_kwargs: True
+    )
     monkeypatch.setattr(run_test_outliers_pipeline, "verify_temp_cleanup", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(
         run_test_outliers_pipeline.jax,
@@ -103,19 +107,25 @@ def test_run_test_outliers_pipeline_tilt_basic_emits_tilt_flags(monkeypatch, tmp
 def test_pipeline_with_outliers_restores_argv_and_uses_previous_round_image_indices(monkeypatch, tmp_path):
     calls = []
 
+    class _FakePO:
+        def get(self, key):
+            return {4: np.zeros((6, 4), dtype=np.float32)}
+
+        def get_embedding_component(self, entry, zdim):
+            return np.zeros((6, 4), dtype=np.float32)
+
     def fake_standard_recovar_pipeline(args):
         calls.append({"outdir": args.outdir, "ind": args.ind, "tilt_ind": args.tilt_ind})
-        model_dir = os.path.join(args.outdir, "model")
-        os.makedirs(model_dir, exist_ok=True)
-        embeddings = {"latent_coords": {4: np.zeros((6, 4), dtype=np.float32)}}
-        with open(os.path.join(model_dir, "embeddings.pkl"), "wb") as f:
-            pickle.dump(embeddings, f)
+        # Create per-zdim embedding dir (new format)
+        zdim_dir = os.path.join(args.outdir, "model", "zdim_4")
+        os.makedirs(zdim_dir, exist_ok=True)
+        np.save(os.path.join(zdim_dir, "latent_coords.npy"), np.zeros((6, 4), dtype=np.float32))
 
     def fake_outlier_main():
         argv = list(pipeline_with_outliers.sys.argv)
         outdir = argv[argv.index("--output-dir") + 1]
         zdim_key = argv[argv.index("--zdim-key") + 1]
-        combined = os.path.join(outdir, "combined_results")
+        combined = os.path.join(outdir, "data", "combined_results")
         os.makedirs(combined, exist_ok=True)
         with open(os.path.join(combined, f"combined_image_inliers_{zdim_key}.pkl"), "wb") as f:
             pickle.dump(np.array([0, 2, 4], dtype=np.int32), f)
@@ -123,7 +133,7 @@ def test_pipeline_with_outliers_restores_argv_and_uses_previous_round_image_indi
             pickle.dump(np.array([1, 3, 5], dtype=np.int32), f)
 
     monkeypatch.setattr(pipeline_with_outliers, "standard_recovar_pipeline", fake_standard_recovar_pipeline)
-    monkeypatch.setattr(pipeline_with_outliers.output, "PipelineOutput", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(pipeline_with_outliers.output, "PipelineOutput", lambda *_args, **_kwargs: _FakePO())
     monkeypatch.setattr(pipeline_with_outliers.output, "standard_pipeline_plots", lambda *_args, **_kwargs: None)
 
     import recovar.commands.outlier_detection as outlier_detection_cmd
@@ -182,18 +192,24 @@ def test_pipeline_with_outliers_restores_argv_and_uses_previous_round_image_indi
 
 
 def test_pipeline_with_outliers_restores_argv_when_outlier_detection_raises(monkeypatch, tmp_path):
+    class _FakePO2:
+        def get(self, key):
+            return {4: np.zeros((4, 4), dtype=np.float32)}
+
+        def get_embedding_component(self, entry, zdim):
+            return np.zeros((4, 4), dtype=np.float32)
+
     def fake_standard_recovar_pipeline(args):
         model_dir = os.path.join(args.outdir, "model")
-        os.makedirs(model_dir, exist_ok=True)
-        embeddings = {"latent_coords": {4: np.zeros((4, 4), dtype=np.float32)}}
-        with open(os.path.join(model_dir, "embeddings.pkl"), "wb") as f:
-            pickle.dump(embeddings, f)
+        zdim_dir = os.path.join(model_dir, "zdim_4")
+        os.makedirs(zdim_dir, exist_ok=True)
+        np.save(os.path.join(zdim_dir, "latent_coords.npy"), np.zeros((4, 4), dtype=np.float32))
 
     def fake_outlier_main():
         raise RuntimeError("forced-outlier-failure")
 
     monkeypatch.setattr(pipeline_with_outliers, "standard_recovar_pipeline", fake_standard_recovar_pipeline)
-    monkeypatch.setattr(pipeline_with_outliers.output, "PipelineOutput", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(pipeline_with_outliers.output, "PipelineOutput", lambda *_args, **_kwargs: _FakePO2())
     monkeypatch.setattr(pipeline_with_outliers.output, "standard_pipeline_plots", lambda *_args, **_kwargs: None)
 
     import recovar.commands.outlier_detection as outlier_detection_cmd

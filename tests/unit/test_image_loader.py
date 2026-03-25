@@ -184,7 +184,9 @@ def test_mrc_loader_constructor_rejects_bad_subset_masks(tmp_path):
     utils.write_mrc(str(mrc_path), data)
 
     with pytest.raises(ValueError, match="boolean mask must be 1D"):
-        image_loader.MRCLoader(str(mrc_path), indices=np.array([[True, False, True, False, True]], dtype=bool), lazy=True)
+        image_loader.MRCLoader(
+            str(mrc_path), indices=np.array([[True, False, True, False, True]], dtype=bool), lazy=True
+        )
 
     with pytest.raises(ValueError, match="boolean mask length.*must match total size"):
         image_loader.MRCLoader(str(mrc_path), indices=np.array([True, False], dtype=bool), lazy=True)
@@ -401,13 +403,15 @@ def test_tilt_series_dataset_strip_prefix_with_tiny_real_files(tmp_path):
     mrcs_name = (tmp_path / "tiny" / "particles.mrcs").name
 
     sf = starfile.StarFile.load(files["particles_star"])
-    sf.df["_rlnImageName"] = [f"{i+1}@{bad_prefix}/{mrcs_name}" for i in range(files["n_images"])]
+    sf.df["_rlnImageName"] = [f"{i + 1}@{bad_prefix}/{mrcs_name}" for i in range(files["n_images"])]
     prefixed_star = tmp_path / "prefixed.star"
     starfile.write_star(str(prefixed_star), data=sf.df)
 
     # Without strip_prefix the prefixed path is unresolved.
     with pytest.raises(Exception):
-        cryo_dataset.TiltSeriesDataset(str(prefixed_star), datadir=str(tmp_path / "tiny"), lazy=True, tilt_file_option="relion5")
+        cryo_dataset.TiltSeriesDataset(
+            str(prefixed_star), datadir=str(tmp_path / "tiny"), lazy=True, tilt_file_option="relion5"
+        )
 
     ds = cryo_dataset.TiltSeriesDataset(
         str(prefixed_star),
@@ -696,16 +700,22 @@ def test_load_images_dispatches_to_expected_loader(monkeypatch):
     idx = np.array([0, 2], dtype=np.int32)
     assert image_loader.load_images("particles.mrcs", indices=idx, lazy=False) is sentinels["mrc"]
     assert image_loader.load_images("particles.mrc", indices=idx, lazy=True) is sentinels["mrc"]
-    assert image_loader.load_images(
-        "particles.star",
-        indices=idx,
-        datadir="/tmp/data",
-        lazy=True,
-        max_threads=8,
-        strip_prefix="old/",
-    ) is sentinels["star"]
+    assert (
+        image_loader.load_images(
+            "particles.star",
+            indices=idx,
+            datadir="/tmp/data",
+            lazy=True,
+            max_threads=8,
+            strip_prefix="old/",
+        )
+        is sentinels["star"]
+    )
     assert image_loader.load_images("particles.txt", indices=idx, lazy=True, max_threads=4) is sentinels["txt"]
-    assert image_loader.load_images("particles.cs", indices=idx, datadir="/tmp/cs", lazy=False, max_threads=2) is sentinels["cs"]
+    assert (
+        image_loader.load_images("particles.cs", indices=idx, datadir="/tmp/cs", lazy=False, max_threads=2)
+        is sentinels["cs"]
+    )
 
     np.testing.assert_array_equal(calls["mrc"][1], idx)
     np.testing.assert_array_equal(calls["star"][1], idx)
@@ -859,10 +869,12 @@ def test_multi_mrc_loader_mrc_to_mrcs_extension_fallback(tmp_path):
 
     # file_map references .mrc (without the 's'), but the actual file is .mrcs
     mrc_ref = str(tmp_path / "stack.mrc")
-    df = pd.DataFrame({
-        'mrc_file': [mrc_ref, mrc_ref, mrc_ref],
-        'mrc_index': [0, 1, 2],
-    })
+    df = pd.DataFrame(
+        {
+            "mrc_file": [mrc_ref, mrc_ref, mrc_ref],
+            "mrc_index": [0, 1, 2],
+        }
+    )
 
     loader = image_loader.MultiMRCLoader(df, lazy=True)
     out = loader.get(np.array([0, 2], dtype=np.int32))
@@ -879,10 +891,12 @@ def test_multi_mrc_loader_mrcs_to_mrc_extension_fallback(tmp_path):
 
     # file_map references .mrcs, but the actual file is .mrc
     mrcs_ref = str(tmp_path / "stack.mrcs")
-    df = pd.DataFrame({
-        'mrc_file': [mrcs_ref, mrcs_ref, mrcs_ref],
-        'mrc_index': [0, 1, 2],
-    })
+    df = pd.DataFrame(
+        {
+            "mrc_file": [mrcs_ref, mrcs_ref, mrcs_ref],
+            "mrc_index": [0, 1, 2],
+        }
+    )
 
     loader = image_loader.MultiMRCLoader(df, lazy=True)
     out = loader.get(np.array([1], dtype=np.int32))
@@ -922,11 +936,13 @@ def test_cryosparc_loader_strip_prefix_with_extension_fallback(tmp_path):
     cs_dtype = np.dtype([("blob/idx", np.int32), ("blob/path", "U64")])
     cs = np.zeros(3, dtype=cs_dtype)
     cs["blob/idx"] = np.array([0, 1, 2], dtype=np.int32)
-    cs["blob/path"] = np.array([
-        ">J3/imported/stack.mrc",
-        ">J3/imported/stack.mrc",
-        ">J3/imported/stack.mrc",
-    ])
+    cs["blob/path"] = np.array(
+        [
+            ">J3/imported/stack.mrc",
+            ">J3/imported/stack.mrc",
+            ">J3/imported/stack.mrc",
+        ]
+    )
     cs_path = tmp_path / "particles.cs"
     with open(cs_path, "wb") as f:
         np.save(f, cs)

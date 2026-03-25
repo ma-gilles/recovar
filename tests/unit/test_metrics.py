@@ -25,7 +25,6 @@ def test_variance_of_zs_zero_with_constant_labels():
     assert ratio == pytest.approx(0.0)
 
 
-
 def test_fro_norm_diff_low_rank_matches_dense():
     u = np.eye(2, dtype=np.float32)
     v = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=np.float32)

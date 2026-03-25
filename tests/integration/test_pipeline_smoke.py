@@ -38,8 +38,7 @@ pytestmark = [pytest.mark.integration]
 
 # Force CPU for all subprocesses spawned by smoke tests (no GPU required).
 # Include PYTHONNOUSERSITE=1 to prevent importing the wrong recovar from user-site.
-_CPU_ENV = dict(os.environ, CUDA_VISIBLE_DEVICES="", JAX_PLATFORMS="cpu",
-                PYTHONNOUSERSITE="1")
+_CPU_ENV = dict(os.environ, CUDA_VISIBLE_DEVICES="", JAX_PLATFORMS="cpu", PYTHONNOUSERSITE="1")
 
 
 def _run(cmd, **kwargs):
@@ -53,6 +52,7 @@ def _run(cmd, **kwargs):
             f"Command failed (rc={result.returncode}):\n  {' '.join(cmd[:6])}...\n"
             f"--- stderr (last 80 lines) ---\n{tail}"
         )
+
 
 _SMOKE_N_IMAGES = int(os.environ.get("SMOKE_N_IMAGES", "50"))
 # For cryo-ET, make_test_dataset hard-codes n_tilts=27, so we need more
@@ -73,6 +73,7 @@ def _smoke_output_dir(tmp_path: Path, name: str) -> Path:
 
 def _make_outlier_vol(output_dir: Path) -> Path:
     from recovar.commands.run_test_outliers_pipeline import create_outlier_volume
+
     vol = output_dir / "outlier_volume.mrc"
     create_outlier_volume(str(vol), grid_size=_SMOKE_GRID)
     return vol
@@ -92,13 +93,21 @@ def _generate_dataset(
         n_images = _SMOKE_N_IMAGES_ET if tilt_series else _SMOKE_N_IMAGES
 
     make_cmd = [
-        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "make_test_dataset",
         str(output_dir),
-        "--n-images", str(n_images),
-        "--outlier-file-input", str(outlier_vol),
-        "--percent-outliers", str(_SMOKE_PCT_OUTLIERS),
-        "--image-size", str(_SMOKE_GRID),
-        "--seed", "42",
+        "--n-images",
+        str(n_images),
+        "--outlier-file-input",
+        str(outlier_vol),
+        "--percent-outliers",
+        str(_SMOKE_PCT_OUTLIERS),
+        "--image-size",
+        str(_SMOKE_GRID),
+        "--seed",
+        "42",
     ]
     if tilt_series:
         make_cmd += ["--tilt-series"]
@@ -130,21 +139,31 @@ def test_pipeline_spa_smoke(tmp_path):
     pipeline_out = dataset_dir / "pipeline_smoke_output"
 
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(mrcs),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        "from_halfmaps",
         "--lazy",
-        "--zdim", str(_SMOKE_ZDIM),
-        "--k-rounds", str(_SMOKE_K_ROUNDS),
+        "--zdim",
+        str(_SMOKE_ZDIM),
+        "--k-rounds",
+        str(_SMOKE_K_ROUNDS),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb", "8",
+        "--gpu-gb",
+        "8",
     ]
     _run(cmd)
 
@@ -187,23 +206,34 @@ def test_pipeline_cryo_et_smoke(tmp_path):
     pipeline_out = dataset_dir / "pipeline_smoke_et_output"
 
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(star),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--tilt-series",
-        "--tilt-series-ctf", "relion5",
+        "--tilt-series-ctf",
+        "relion5",
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        "from_halfmaps",
         "--lazy",
-        "--zdim", str(_SMOKE_ZDIM),
-        "--k-rounds", str(_SMOKE_K_ROUNDS),
+        "--zdim",
+        str(_SMOKE_ZDIM),
+        "--k-rounds",
+        str(_SMOKE_K_ROUNDS),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb", "8",
+        "--gpu-gb",
+        "8",
     ]
     _run(cmd)
 
@@ -236,24 +266,36 @@ def test_pipeline_cryo_et_radial_per_tilt_noise_smoke(tmp_path):
     pipeline_out = dataset_dir / "pipeline_smoke_et_rpt_output"
 
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(star),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--tilt-series",
-        "--tilt-series-ctf", "relion5",
-        "--noise-model", "radial_per_tilt",
+        "--tilt-series-ctf",
+        "relion5",
+        "--noise-model",
+        "radial_per_tilt",
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        "from_halfmaps",
         "--lazy",
-        "--zdim", str(_SMOKE_ZDIM),
-        "--k-rounds", str(_SMOKE_K_ROUNDS),
+        "--zdim",
+        str(_SMOKE_ZDIM),
+        "--k-rounds",
+        str(_SMOKE_K_ROUNDS),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb", "8",
+        "--gpu-gb",
+        "8",
     ]
     _run(cmd)
 
@@ -282,24 +324,35 @@ def test_pipeline_cryo_et_premultiplied_ctf_smoke(tmp_path):
     pipeline_out = dataset_dir / "pipeline_smoke_et_pctf_output"
 
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(star),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--tilt-series",
-        "--tilt-series-ctf", "relion5",
+        "--tilt-series-ctf",
+        "relion5",
         "--premultiplied-ctf",
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        "from_halfmaps",
         "--lazy",
-        "--zdim", str(_SMOKE_ZDIM),
-        "--k-rounds", str(_SMOKE_K_ROUNDS),
+        "--zdim",
+        str(_SMOKE_ZDIM),
+        "--k-rounds",
+        str(_SMOKE_K_ROUNDS),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb", "8",
+        "--gpu-gb",
+        "8",
     ]
     _run(cmd)
 
@@ -329,25 +382,37 @@ def test_pipeline_cryo_et_radial_per_tilt_premultiplied_ctf_smoke(tmp_path):
     pipeline_out = dataset_dir / "pipeline_smoke_et_rpt_pctf_output"
 
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(star),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--tilt-series",
-        "--tilt-series-ctf", "relion5",
-        "--noise-model", "radial_per_tilt",
+        "--tilt-series-ctf",
+        "relion5",
+        "--noise-model",
+        "radial_per_tilt",
         "--premultiplied-ctf",
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        "from_halfmaps",
         "--lazy",
-        "--zdim", str(_SMOKE_ZDIM),
-        "--k-rounds", str(_SMOKE_K_ROUNDS),
+        "--zdim",
+        str(_SMOKE_ZDIM),
+        "--k-rounds",
+        str(_SMOKE_K_ROUNDS),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb", "8",
+        "--gpu-gb",
+        "8",
     ]
     _run(cmd)
 
@@ -377,22 +442,33 @@ def test_pipeline_spa_radial_noise_smoke(tmp_path):
     pipeline_out = dataset_dir / "pipeline_smoke_spa_radial_output"
 
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(mrcs),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
-        "--noise-model", "radial",
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
+        "--noise-model",
+        "radial",
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        "from_halfmaps",
         "--lazy",
-        "--zdim", str(_SMOKE_ZDIM),
-        "--k-rounds", str(_SMOKE_K_ROUNDS),
+        "--zdim",
+        str(_SMOKE_ZDIM),
+        "--k-rounds",
+        str(_SMOKE_K_ROUNDS),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
         "--accept-cpu",
-        "--gpu-gb", "8",
+        "--gpu-gb",
+        "8",
     ]
     _run(cmd)
 
@@ -415,8 +491,7 @@ _GPU_PCT_OUTLIERS = 0.20
 
 def _gpu_env():
     """Env for GPU subprocesses: inherit CUDA_VISIBLE_DEVICES, disable preallocate."""
-    return dict(os.environ, PYTHONNOUSERSITE="1",
-                XLA_PYTHON_CLIENT_PREALLOCATE="false")
+    return dict(os.environ, PYTHONNOUSERSITE="1", XLA_PYTHON_CLIENT_PREALLOCATE="false")
 
 
 def _generate_gpu_dataset(
@@ -428,13 +503,21 @@ def _generate_gpu_dataset(
     dataset_dir.mkdir(parents=True, exist_ok=True)
     n_images = _GPU_N_IMAGES_ET if tilt_series else _GPU_N_IMAGES
     make_cmd = [
-        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "make_test_dataset",
         str(output_dir),
-        "--n-images", str(n_images),
-        "--outlier-file-input", str(outlier_vol),
-        "--percent-outliers", str(_GPU_PCT_OUTLIERS),
-        "--image-size", str(_GPU_GRID),
-        "--seed", "42",
+        "--n-images",
+        str(n_images),
+        "--outlier-file-input",
+        str(outlier_vol),
+        "--percent-outliers",
+        str(_GPU_PCT_OUTLIERS),
+        "--image-size",
+        str(_GPU_GRID),
+        "--seed",
+        "42",
     ]
     if tilt_series:
         make_cmd += ["--tilt-series"]
@@ -444,6 +527,7 @@ def _generate_gpu_dataset(
 
 def _make_gpu_outlier_vol(output_dir: Path) -> Path:
     from recovar.commands.run_test_outliers_pipeline import create_outlier_volume
+
     vol = output_dir / "outlier_volume.mrc"
     create_outlier_volume(str(vol), grid_size=_GPU_GRID)
     return vol
@@ -462,16 +546,25 @@ def test_pipeline_spa_gpu(tmp_path):
     pipeline_out = dataset_dir / "pipeline_gpu_spa_output"
 
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(mrcs),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        "from_halfmaps",
         "--lazy",
-        "--zdim", str(_GPU_ZDIM),
-        "--k-rounds", str(_GPU_K_ROUNDS),
+        "--zdim",
+        str(_GPU_ZDIM),
+        "--k-rounds",
+        str(_GPU_K_ROUNDS),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
@@ -502,20 +595,31 @@ def test_pipeline_cryo_et_gpu(tmp_path):
     pipeline_out = dataset_dir / "pipeline_gpu_et_output"
 
     cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         str(star),
-        "--poses", str(poses),
-        "--ctf", str(ctf),
+        "--poses",
+        str(poses),
+        "--ctf",
+        str(ctf),
         "--tilt-series",
-        "--tilt-series-ctf", "relion5",
-        "--noise-model", "radial_per_tilt",
+        "--tilt-series-ctf",
+        "relion5",
+        "--noise-model",
+        "radial_per_tilt",
         "--premultiplied-ctf",
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", "from_halfmaps",
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        "from_halfmaps",
         "--lazy",
-        "--zdim", str(_GPU_ZDIM),
-        "--k-rounds", str(_GPU_K_ROUNDS),
+        "--zdim",
+        str(_GPU_ZDIM),
+        "--k-rounds",
+        str(_GPU_K_ROUNDS),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",

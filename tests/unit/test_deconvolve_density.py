@@ -29,9 +29,7 @@ def _legacy_estimate_kernel_by_sampling(grids_inp, cov_zs, gauss_kde_covariance,
 
     pca_dim_max = grids_inp.shape[-1]
     for pca_dim in range(pca_dim_max):
-        coord_pca = jnp.flip(
-            jnp.linspace(-grid_size[pca_dim] / 2, grid_size[pca_dim] / 2, num_points, endpoint=False)
-        )
+        coord_pca = jnp.flip(jnp.linspace(-grid_size[pca_dim] / 2, grid_size[pca_dim] / 2, num_points, endpoint=False))
         coord_pca_1d.append(coord_pca)
     grids = jnp.meshgrid(*coord_pca_1d, indexing="ij")
     grids_flat = jnp.transpose(jnp.vstack([jnp.reshape(g, -1) for g in grids])).astype(np.float32)
@@ -118,7 +116,9 @@ def _legacy_compute_deconvolved_density(
             raise ValueError(f"Unsupported grid dimensionality: {fun_on_grid.ndim}")
 
         dx /= jnp.mean(dx)
-        return 1e8 * (jnp.mean((residuals * 1e0) ** 2) + alpha * jnp.mean(jnp.array(jnp.gradient(fun_on_grid, *dx)) ** 2))
+        return 1e8 * (
+            jnp.mean((residuals * 1e0) ** 2) + alpha * jnp.mean(jnp.array(jnp.gradient(fun_on_grid, *dx)) ** 2)
+        )
 
     cost = np.zeros_like(alphas)
     reg_cost = np.zeros_like(alphas)

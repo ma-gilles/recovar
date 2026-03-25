@@ -183,7 +183,11 @@ class TestNewForwardModelAPI:
         ctf_params = np.zeros((1, 9), dtype=np.float32)
 
         slices, adj = core_forward.forward_model_and_adjoint(
-            config, volume, ctf_params, rots, skip_ctf=True,
+            config,
+            volume,
+            ctf_params,
+            rots,
+            skip_ctf=True,
         )
         assert np.asarray(slices).shape == (1, IMAGE_SHAPE[0] * IMAGE_SHAPE[1])
         pulled = adj(np.ones_like(np.asarray(slices)))[0]
@@ -196,7 +200,12 @@ class TestNewForwardModelAPI:
         ctf_params = np.zeros((1, 9), dtype=np.float32)
 
         out = core_forward.compute_AtAv(
-            config, volume, ctf_params, rots, noise_variance=1.0, skip_ctf=True,
+            config,
+            volume,
+            ctf_params,
+            rots,
+            noise_variance=1.0,
+            skip_ctf=True,
         )
         assert isinstance(out, tuple)
         assert np.asarray(out[0]).shape == (np.prod(VOLUME_SHAPE),)

@@ -69,6 +69,7 @@ def tilt_files(tmp_path_factory):
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _load_tilt_cryo(tilt_files, ind=None):
     """Load tiny cryo-ET dataset with optional image-level ind."""
     return recovar_dataset.load_dataset(
@@ -84,9 +85,7 @@ def _load_tilt_cryo(tilt_files, ind=None):
 
 def _parse_p2t(tilt_files):
     """Return (particles_to_tilts: List[ndarray], tilts_to_particles: dict)."""
-    return cryo_dataset.TiltSeriesDataset.parse_particle_tilt(
-        tilt_files["particles_star"]
-    )
+    return cryo_dataset.TiltSeriesDataset.parse_particle_tilt(tilt_files["particles_star"])
 
 
 def _all_image_indices(p2t):
@@ -183,7 +182,7 @@ def test_load_tilt_boolean_mask_subset_aligns_ctf(tilt_files):
     """Boolean mask with some True values: CTF shape matches selected count."""
     mask = np.zeros(_N_IMAGES, dtype=bool)
     # Select the first tilt of every particle (index 0, 3, 6, …)
-    mask[:: _N_TILTS] = True
+    mask[::_N_TILTS] = True
     selected_count = int(mask.sum())
 
     cryo = _load_tilt_cryo(tilt_files, ind=mask)
@@ -396,11 +395,9 @@ def test_get_split_tilt_indices_precomputed_halfsets_are_respected(tilt_files):
     for i, tilts in enumerate(p2t):
         particle_images = set(np.asarray(tilts, dtype=np.int32).tolist())
         if i % 2 == 0:
-            assert particle_images.issubset(set(half0_images.tolist())), \
-                f"even particle {i} images leaked into half1"
+            assert particle_images.issubset(set(half0_images.tolist())), f"even particle {i} images leaked into half1"
         else:
-            assert particle_images.issubset(set(half1_images.tolist())), \
-                f"odd particle {i} images leaked into half0"
+            assert particle_images.issubset(set(half1_images.tolist())), f"odd particle {i} images leaked into half0"
 
 
 def test_get_split_tilt_indices_precomputed_with_duplicates_deduped(tilt_files):
@@ -448,9 +445,7 @@ def test_reorder_roundtrip_two_halfsets(tilt_files):
     arr = np.concatenate([val0, val1])
     halfsets = [half0_idx, half1_idx]
 
-    out = recovar_dataset.reorder_to_original_indexing_from_halfsets(
-        arr, halfsets, num_images=n_total
-    )
+    out = recovar_dataset.reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images=n_total)
     assert out.shape == (n_total,)
     np.testing.assert_array_equal(out[half0_idx], val0)
     np.testing.assert_array_equal(out[half1_idx], val1)
@@ -458,8 +453,7 @@ def test_reorder_roundtrip_two_halfsets(tilt_files):
 
 def test_reorder_raises_on_duplicate_halfset_indices():
     """Duplicate dataset indices across halfsets must raise ValueError."""
-    halfsets = [np.array([0, 1, 2], dtype=np.int32),
-                np.array([2, 3, 4], dtype=np.int32)]  # index 2 in both
+    halfsets = [np.array([0, 1, 2], dtype=np.int32), np.array([2, 3, 4], dtype=np.int32)]  # index 2 in both
     arr = np.ones(6, dtype=np.float32)
     with pytest.raises(ValueError, match="duplicate"):
         recovar_dataset.reorder_to_original_indexing_from_halfsets(arr, halfsets)
@@ -467,12 +461,12 @@ def test_reorder_raises_on_duplicate_halfset_indices():
 
 def test_reorder_absent_images_are_nan():
     """Images not in either halfset have NaN in the output."""
-    halfsets = [np.array([0, 2], dtype=np.int32),  # skip index 1
-                np.array([3], dtype=np.int32)]
+    halfsets = [
+        np.array([0, 2], dtype=np.int32),  # skip index 1
+        np.array([3], dtype=np.int32),
+    ]
     arr = np.array([10.0, 20.0, 30.0], dtype=np.float32)
-    out = recovar_dataset.reorder_to_original_indexing_from_halfsets(
-        arr, halfsets, num_images=4
-    )
+    out = recovar_dataset.reorder_to_original_indexing_from_halfsets(arr, halfsets, num_images=4)
     assert out.shape == (4,)
     assert np.isnan(out[1])
     assert float(out[0]) == pytest.approx(10.0)
@@ -526,9 +520,7 @@ def test_load_tilt_single_tilt_per_particle_subset(tilt_files):
     """Selecting exactly one tilt per particle → n_units == n_particles."""
     p2t, _ = _parse_p2t(tilt_files)
     # First tilt (index 0 within each particle's tilt list) of each particle
-    one_per_particle = np.array(
-        [int(tilts[0]) for tilts in p2t], dtype=np.int32
-    )
+    one_per_particle = np.array([int(tilts[0]) for tilts in p2t], dtype=np.int32)
     cryo = _load_tilt_cryo(tilt_files, ind=one_per_particle)
     assert cryo.n_units == _N_PARTICLES
     assert cryo.n_images == _N_PARTICLES  # one tilt each

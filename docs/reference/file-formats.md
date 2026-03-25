@@ -36,11 +36,19 @@ Legacy format for poses and CTF parameters:
 
 ```
 output/
+  job.json                      # Job metadata (version, timing, parameters)
   command.txt                   # Command line used
   run.log                       # Full log
+  README.txt                    # Human-readable output summary
   downsampled/                  # Cached downsampled data (if --downsample)
     particles.128.mrcs
     particles.128.star
+  model/                        # Internal model
+    params.pkl
+    zdim_4/                     # Per-zdim embeddings
+      latent_coords.npy
+    zdim_10/
+      latent_coords.npy
   output/
     volumes/
       mean.mrc                  # Mean reconstruction
@@ -49,34 +57,54 @@ output/
       mean_half2_unfil.mrc      # Half-map 2
       mask.mrc                  # Mask used
       dilated_mask.mrc          # Dilated mask
+    plots/                      # Diagnostic plots (eigenvalues, FSC, etc.)
 ```
 
 ### Analysis output
 
 ```
 output/analysis_10/
-  kmeans_result.pkl               # K-means labels and centers
-  kmeans/
-    centers.txt                   # Center coordinates (loadable with np.loadtxt)
-    vol0000.mrc                   # Volume at cluster center 0
-    vol0001.mrc                   # Volume at cluster center 1
-    ...
-  umap/                           # UMAP embeddings and plots
-  PCA/                            # PC scatter plots
-  contrast_histogram.png
+  job.json                      # Job metadata
+  command.txt                   # Command used
+  run.log                       # Full log
+  README.txt                    # Output summary
+  plots/                        # All plots
+    contrast_histogram.png
+    PCA/                        # PC scatter plots with k-means
+    umap/                       # UMAP embeddings
+    density/                    # Density plots (if provided)
+    density_sliced/             # Sliced density plots
+  data/                         # Non-volume data
+    kmeans_result.pkl           # K-means labels and centers
+    trajectory_endpoints.pkl    # Trajectory endpoint indices
+  kmeans/                       # K-means cluster center volumes
+    center000.mrc               # Volume at cluster center 0
+    center001.mrc               # Volume at cluster center 1
+    center000_half1_unfil.mrc   # Half-map for FSC
+    centers.txt                 # Center coordinates (np.loadtxt)
+    diagnostics/center000/      # Per-volume diagnostics
+  traj000/                      # Trajectory 0 volumes
+    state000.mrc
+    state001.mrc
+    diagnostics/state000/       # Per-volume diagnostics
 ```
 
 ### Density output
 
 ```
 density/
-  all_densities/
-    deconv_density_0.pkl        # Density at alpha[0]
-    deconv_density_1.pkl        # Density at alpha[1]
-    ...
-  deconv_density_knee.pkl       # Optimal density (L-curve knee)
-  all_densities.png             # Visualization of all densities
-  Lcurve.png                    # L-curve for alpha selection
+  job.json                      # Job metadata
+  command.txt                   # Command used
+  run.log                       # Full log
+  plots/                        # Density plots
+    all_densities.png           # Visualization of all densities
+    Lcurve.png                  # L-curve for alpha selection
+  data/                         # Density data
+    deconv_density_knee.pkl     # Optimal density (L-curve knee)
+    all_densities/              # All regularization levels
+      deconv_density_0.pkl      # Density at alpha[0]
+      deconv_density_1.pkl      # Density at alpha[1]
+      ...
 ```
 
 ### Volume files (`.mrc`)

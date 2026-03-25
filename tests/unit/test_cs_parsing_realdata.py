@@ -21,12 +21,10 @@ from recovar.data_io.metadata_readers import (
 
 pytestmark = pytest.mark.unit
 
-FIXTURE_DIR = os.path.join(
-    os.path.dirname(__file__), '..', 'fixtures', 'cryosparc_cs_subset'
-)
+FIXTURE_DIR = os.path.join(os.path.dirname(__file__), "..", "fixtures", "cryosparc_cs_subset")
 
-CS_PATH = os.path.join(FIXTURE_DIR, 'particles_20.cs.npy')
-REF_PATH = os.path.join(FIXTURE_DIR, 'reference_values.npz')
+CS_PATH = os.path.join(FIXTURE_DIR, "particles_20.cs.npy")
+REF_PATH = os.path.join(FIXTURE_DIR, "reference_values.npz")
 
 
 @pytest.fixture
@@ -48,19 +46,18 @@ def test_load_cs_structured_array():
 
 def test_cs_has_required_pose_fields():
     data = _load_cs(CS_PATH)
-    assert 'alignments3D/pose' in data.dtype.names
-    assert 'alignments3D/shift' in data.dtype.names
+    assert "alignments3D/pose" in data.dtype.names
+    assert "alignments3D/shift" in data.dtype.names
 
 
 def test_cs_has_required_ctf_fields():
     data = _load_cs(CS_PATH)
-    for field in ('ctf/df1_A', 'ctf/df2_A', 'ctf/df_angle_rad',
-                  'ctf/accel_kv', 'ctf/cs_mm', 'ctf/amp_contrast'):
+    for field in ("ctf/df1_A", "ctf/df2_A", "ctf/df_angle_rad", "ctf/accel_kv", "ctf/cs_mm", "ctf/amp_contrast"):
         assert field in data.dtype.names, f"Missing CTF field: {field}"
 
 
 def test_parse_poses_shape(ref):
-    D = int(ref['D'])
+    D = int(ref["D"])
     rots, trans = parse_poses_from_cs(CS_PATH, D)
     assert rots.shape == (20, 3, 3)
     assert trans.shape == (20, 2)
@@ -68,29 +65,33 @@ def test_parse_poses_shape(ref):
 
 def test_parse_poses_rotation_regression(ref):
     """Rotation matrices should match reference to machine precision."""
-    D = int(ref['D'])
+    D = int(ref["D"])
     rots, _ = parse_poses_from_cs(CS_PATH, D)
     np.testing.assert_allclose(
-        rots, ref['rotations'],
-        atol=1e-10, rtol=1e-12,
+        rots,
+        ref["rotations"],
+        atol=1e-10,
+        rtol=1e-12,
         err_msg="Rotation matrices differ from reference",
     )
 
 
 def test_parse_poses_translation_regression(ref):
     """Translations should match reference to machine precision."""
-    D = int(ref['D'])
+    D = int(ref["D"])
     _, trans = parse_poses_from_cs(CS_PATH, D)
     np.testing.assert_allclose(
-        trans, ref['translations'],
-        atol=1e-10, rtol=1e-12,
+        trans,
+        ref["translations"],
+        atol=1e-10,
+        rtol=1e-12,
         err_msg="Translations differ from reference",
     )
 
 
 def test_parse_poses_rotations_are_orthogonal(ref):
     """All rotation matrices should be proper rotations (det=1, R^T R = I)."""
-    D = int(ref['D'])
+    D = int(ref["D"])
     rots, _ = parse_poses_from_cs(CS_PATH, D)
     for i in range(len(rots)):
         R = rots[i]
@@ -99,25 +100,27 @@ def test_parse_poses_rotations_are_orthogonal(ref):
 
 
 def test_parse_ctf_shape(ref):
-    D = int(ref['D'])
+    D = int(ref["D"])
     ctf = parse_ctf_from_cs(CS_PATH, D)
     assert ctf.shape == (20, 8)
 
 
 def test_parse_ctf_regression(ref):
     """CTF parameters should match reference to machine precision."""
-    D = int(ref['D'])
+    D = int(ref["D"])
     ctf = parse_ctf_from_cs(CS_PATH, D)
     np.testing.assert_allclose(
-        ctf, ref['ctf'],
-        atol=1e-10, rtol=1e-12,
+        ctf,
+        ref["ctf"],
+        atol=1e-10,
+        rtol=1e-12,
         err_msg="CTF parameters differ from reference",
     )
 
 
 def test_parse_ctf_values_reasonable(ref):
     """CTF values should be in physically reasonable ranges."""
-    D = int(ref['D'])
+    D = int(ref["D"])
     ctf = parse_ctf_from_cs(CS_PATH, D)
     apix = ctf[:, 0]
     dfu = ctf[:, 1]

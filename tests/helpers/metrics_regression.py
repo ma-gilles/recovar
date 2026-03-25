@@ -92,8 +92,7 @@ def compare_metric(current, baseline, direction, tol_frac, metric_name=None):
     return True, "ignored"
 
 
-def log_comparison_table(current, baseline, tol_frac, title="Metric Comparison",
-                         direction_fn=None, skip_unknown=True):
+def log_comparison_table(current, baseline, tol_frac, title="Metric Comparison", direction_fn=None, skip_unknown=True):
     """Print a comparison table for all shared numeric metrics.
 
     Always prints every metric — not just failures. This makes it possible

@@ -79,10 +79,12 @@ def _install_main_runtime_stubs(monkeypatch, tmp_path, *, mean_fsc=0.5, variance
         "subspace_angles",
         lambda *_args, **_kwargs: np.linspace(0.0, 1.0, 20, dtype=np.float32),
     )
+
     def _fake_idft3(arr):
         a = np.asarray(arr)
-        n = round(a.size ** (1/3))
+        n = round(a.size ** (1 / 3))
         return a.reshape(n, n, n)
+
     monkeypatch.setattr(rtam.fourier_transform_utils, "get_idft3", _fake_idft3)
     monkeypatch.setattr(
         rtam.utils,
@@ -744,6 +746,7 @@ def test_load_u_real_for_metrics_prefers_selective_api():
     out = rtam.load_u_real_for_metrics(_PO(), 3)
     assert out.shape == (3, 2, 2, 2)
 
+
 def test_load_u_real_for_metrics_rejects_nonpositive_request():
     class _PO:
         def get_u_real(self, _n_pcs):
@@ -755,6 +758,7 @@ def test_load_u_real_for_metrics_rejects_nonpositive_request():
 
 def test_load_unsorted_embedding_component_caches_by_component():
     """Components are cached by (entry, key)."""
+
     class _PO:
         def __init__(self):
             self.get_calls = 0
@@ -910,6 +914,7 @@ def test_select_state_target_latent_points_rejects_all_nonfinite_rows():
             max_points=2,
         )
 
+
 def test_compare_scores_against_baseline_checks_shared_canonical_keys():
     current = {
         "svd_relative_variance_4": 0.90,
@@ -937,8 +942,8 @@ def test_compare_scores_against_baseline_checks_locres_metrics():
 def test_compare_scores_against_baseline_skips_non_numeric_values():
     current = {
         "mean_fsc": 0.80,
-        "meta_list": [1, 2, 3],   # should be ignored
-        "meta_dict": {"a": 1},    # should be ignored
+        "meta_list": [1, 2, 3],  # should be ignored
+        "meta_dict": {"a": 1},  # should be ignored
     }
     baseline = {
         "mean_fsc": 0.79,

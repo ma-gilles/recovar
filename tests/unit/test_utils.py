@@ -18,7 +18,9 @@ pytestmark = pytest.mark.unit
 
 def test_make_radial_image_matches_manual_indexing():
     average = jnp.array([10.0, 20.0], dtype=jnp.float32)
-    radial_distances = fourier_transform_utils.get_grid_of_radial_distances((3, 3), scaled=False).astype(int).reshape(-1)
+    radial_distances = (
+        fourier_transform_utils.get_grid_of_radial_distances((3, 3), scaled=False).astype(int).reshape(-1)
+    )
     expected = np.asarray(average)[np.asarray(radial_distances)]
 
     out = utils.make_radial_image(average, (3, 3), extend_last_frequency=False)
@@ -306,8 +308,10 @@ def test_robust_stream_handler_handles_oserror(tmp_path, monkeypatch):
     record = logging.LogRecord("test", logging.INFO, "", 0, "msg", (), None)
     # Monkey-patch emit to raise OSError
     original_emit = logging.StreamHandler.emit
+
     def bad_emit(self, record):
         raise OSError("stale handle")
+
     monkeypatch.setattr(logging.StreamHandler, "emit", bad_emit)
     # Should not raise
     handler.emit(record)

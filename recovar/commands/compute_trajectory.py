@@ -7,23 +7,28 @@ from recovar.data_io import cryoem_dataset
 from recovar.heterogeneity import latent_density, embedding
 import os, argparse
 from recovar.utils import parser_args
+
 logger = logging.getLogger(__name__)
+
 
 def add_args(parser: argparse.ArgumentParser):
 
-
     parser = parser_args.standard_downstream_args(parser)
 
+    parser.add_argument("--zdim", type=int, help="Dimension of latent variable (a single int, not a list)")
+
     parser.add_argument(
-        "--zdim", type=int, help="Dimension of latent variable (a single int, not a list)"
+        "--override_z_regularization",
+        action="store_true",
+        help="Whether to override z regularization. It probably does not make sense to use this option, because the deconvolved density uses the UNREGULARIZED z's (see paper for why).",
     )
 
     parser.add_argument(
-        "--override_z_regularization", action="store_true", help= "Whether to override z regularization. It probably does not make sense to use this option, because the deconvolved density uses the UNREGULARIZED z's (see paper for why)."
-    )
-
-    parser.add_argument(
-        "--n-vols-along-path", type=int, default=6, dest="n_vols_along_path", help="number of volumes to compute along each trajectory (default 6)"
+        "--n-vols-along-path",
+        type=int,
+        default=6,
+        dest="n_vols_along_path",
+        help="number of volumes to compute along each trajectory (default 6)",
     )
 
     parser.add_argument(
@@ -34,7 +39,7 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     def list_of_ints(arg):
-        return list(map(int, arg.split(',')))
+        return list(map(int, arg.split(",")))
 
     parser.add_argument(
         "--ind",
@@ -68,14 +73,27 @@ def add_args(parser: argparse.ArgumentParser):
     return parser
 
 
-def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_factor=0, n_bins=30, n_vols_along_path = 6, density_path = None, no_z_reg = False, z_st = None, z_end = None, args = None):
+def compute_trajectory(
+    recovar_result_dir,
+    output_folder=None,
+    zdim=4,
+    B_factor=0,
+    n_bins=30,
+    n_vols_along_path=6,
+    density_path=None,
+    no_z_reg=False,
+    z_st=None,
+    z_end=None,
+    args=None,
+):
     po = o.PipelineOutput(recovar_result_dir)
 
     # Auto-remap stored paths when filesystem has been migrated
     params = getattr(po, "params", None)
-    input_args = params.get('input_args') if hasattr(params, "get") else None
+    input_args = params.get("input_args") if hasattr(params, "get") else None
     if input_args is not None:
         from recovar.commands.compute_state import _auto_remap_paths
+
         if args is not None:
             if getattr(args, "particles", None) is not None:
                 input_args.particles = args.particles
@@ -87,9 +105,9 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
 
     lazy = bool(getattr(args, "lazy", False))
     # Select reg vs noreg entry names
-    coords_entry = 'latent_coords_noreg' if no_z_reg else 'latent_coords'
-    precision_entry = 'latent_precision_noreg' if no_z_reg else 'latent_precision'
-    contrast_entry = 'contrasts_noreg' if no_z_reg else 'contrasts'
+    coords_entry = "latent_coords_noreg" if no_z_reg else "latent_coords"
+    precision_entry = "latent_precision_noreg" if no_z_reg else "latent_precision"
+    contrast_entry = "contrasts_noreg" if no_z_reg else "contrasts"
 
     if hasattr(po, "get_embedding_keys"):
         zs_keys = list(po.get_embedding_keys(coords_entry))
@@ -103,13 +121,13 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
     elif zdim is None:
         zdim = zs_keys[0]
         logger.info("using zdim=%s", zdim)
-    noreg_suffix = '_noreg' if no_z_reg else ''
+    noreg_suffix = "_noreg" if no_z_reg else ""
     logger.info("using zdim=%s%s", zdim, noreg_suffix)
     if output_folder is None:
         raise ValueError("output_folder is required")
 
     if zdim not in zs_keys:
-        logger.error("z-dim not found in results. Options are: %s", ','.join(str(e) for e in zs_keys))
+        logger.error("z-dim not found in results. Options are: %s", ",".join(str(e) for e in zs_keys))
         raise ValueError("Requested zdim was not found in embedding outputs.")
 
     if hasattr(po, "get_embedding_component"):
@@ -126,22 +144,25 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
     cov_zs = np.asarray(cov_zs, dtype=np.float32)
     contrasts = np.asarray(contrasts, dtype=np.float32)
 
-    cryos = po.get('lazy_dataset') if lazy else po.get('dataset')
+    cryos = po.get("lazy_dataset") if lazy else po.get("dataset")
     embedding.set_contrasts_in_cryos(cryos, contrasts)
 
     if density_path is not None:
         dens_pkl = utils.pickle_load(density_path)
-        input_density = dens_pkl['density']
-        latent_space_bounds = dens_pkl['latent_space_bounds']
-        logger.warning("density dimension is less than zs dimension, truncate zs dimension to match density dimension = %s", input_density.ndim)
+        input_density = dens_pkl["density"]
+        latent_space_bounds = dens_pkl["latent_space_bounds"]
+        logger.warning(
+            "density dimension is less than zs dimension, truncate zs dimension to match density dimension = %s",
+            input_density.ndim,
+        )
         zdim = input_density.ndim
         zs = zs[:, :zdim]
         cov_zs = cov_zs[:, :zdim, :zdim]
     else:
         density, latent_space_bounds = latent_density.compute_latent_space_density(
-            zs, cov_zs, pca_dim_max=np.min([4, zs.shape[-1]]), num_points=50, density_option='kde'
+            zs, cov_zs, pca_dim_max=np.min([4, zs.shape[-1]]), num_points=50, density_option="kde"
         )
-        po.params['density'] = density
+        po.params["density"] = density
         input_density = None
         latent_space_bounds = None
 
@@ -150,8 +171,8 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         z_end = np.concatenate([z_end, np.zeros(zs.shape[1] - z_end.shape[0])])
         logger.warning("endpoints are padded with 0 to match zs dimension = %s", zs.shape[1])
     elif zs.shape[1] < z_st.shape[0]:
-        z_st = z_st[:zs.shape[1]]
-        z_end = z_end[:zs.shape[1]]
+        z_st = z_st[: zs.shape[1]]
+        z_end = z_end[: zs.shape[1]]
         logger.warning("endpoints are truncated to match zs dimension = %s", zs.shape[1])
 
     if args is not None:
@@ -170,14 +191,22 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         path_folder = output_folder
         o.mkdir_safe(path_folder)
         full_path, subsampled_path = o.make_trajectory_plots_from_results(
-            po, zdim, path_folder, cryos=cryos, z_st=z_st, z_end=z_end, gt_volumes=None,
-            n_vols_along_path=n_vols_along_path, plot_llh=False, input_density=input_density,
-            latent_space_bounds=latent_space_bounds
+            po,
+            zdim,
+            path_folder,
+            cryos=cryos,
+            z_st=z_st,
+            z_end=z_end,
+            gt_volumes=None,
+            n_vols_along_path=n_vols_along_path,
+            plot_llh=False,
+            input_density=input_density,
+            latent_space_bounds=latent_space_bounds,
         )
         logger.info("path done")
 
     else:
-        path_folder = os.path.join(output_folder, 'path0')
+        path_folder = os.path.join(output_folder, "path0")
         o.mkdir_safe(path_folder)
         q = 0.03
         zs_1d = np.asarray(zs).reshape(-1)
@@ -186,9 +215,18 @@ def compute_trajectory(recovar_result_dir, output_folder = None, zdim = 4,  B_fa
         z_end = pairs[1]
         subsampled_path = np.linspace(z_st, z_end, n_vols_along_path)[:, None]
     o.compute_and_save_reweighted(
-        cryos, subsampled_path, zs, cov_zs, path_folder, B_factor, n_bins,
-        maskrad_fraction=maskrad_fraction, n_min_particles=n_min_particles, save_all_estimates=False
+        cryos,
+        subsampled_path,
+        zs,
+        cov_zs,
+        path_folder,
+        B_factor,
+        n_bins,
+        maskrad_fraction=maskrad_fraction,
+        n_min_particles=n_min_particles,
+        save_all_estimates=False,
     )
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
@@ -211,7 +249,23 @@ def main():
     else:
         raise Exception("end point format wrong. Either pass end points file or z_st_file and z_end_file")
 
-    compute_trajectory(args.result_dir, output_folder = args.outdir, zdim= args.zdim, B_factor = args.Bfactor, n_bins = args.n_bins, n_vols_along_path = args.n_vols_along_path, density_path = args.density, no_z_reg = not args.override_z_regularization, z_st = z_st, z_end = z_end, args = args)
+    from recovar.project.job_context import job_context
+
+    with job_context(args, "compute_trajectory") as ctx:
+        result_dir = ctx.pipeline_dir or args.result_dir
+        compute_trajectory(
+            result_dir,
+            output_folder=ctx.output_dir,
+            zdim=args.zdim,
+            B_factor=args.Bfactor,
+            n_bins=args.n_bins,
+            n_vols_along_path=args.n_vols_along_path,
+            density_path=args.density,
+            no_z_reg=not args.override_z_regularization,
+            z_st=z_st,
+            z_end=z_end,
+            args=args,
+        )
 
 
 if __name__ == "__main__":

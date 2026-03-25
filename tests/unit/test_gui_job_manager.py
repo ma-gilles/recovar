@@ -33,6 +33,7 @@ from recovar.gui.job_manager import (
 # _is_output_volume
 # ---------------------------------------------------------------------------
 
+
 class TestIsOutputVolume:
     def test_accepts_plain_mrc(self):
         assert _is_output_volume("mean.mrc")
@@ -67,6 +68,7 @@ class TestIsOutputVolume:
 # _vol_display_name
 # ---------------------------------------------------------------------------
 
+
 class TestVolDisplayName:
     def test_known_names(self):
         assert _vol_display_name("mean.mrc") == "Mean Volume"
@@ -98,6 +100,7 @@ class TestVolDisplayName:
 # _categorize_volume
 # ---------------------------------------------------------------------------
 
+
 class TestCategorizeVolume:
     def test_reconstruction(self):
         assert _categorize_volume("mean.mrc") == "reconstruction"
@@ -127,6 +130,7 @@ class TestCategorizeVolume:
 # _load_json / _save_json
 # ---------------------------------------------------------------------------
 
+
 class TestLoadSaveJson:
     def test_roundtrip(self, tmp_path):
         path = str(tmp_path / "data.json")
@@ -152,6 +156,7 @@ class TestLoadSaveJson:
 # _list_volumes / _list_images / _has_output_volumes
 # ---------------------------------------------------------------------------
 
+
 class TestListVolumes:
     def test_empty_dir(self, tmp_path):
         assert _list_volumes(str(tmp_path)) == []
@@ -161,8 +166,7 @@ class TestListVolumes:
 
     def test_filters_correctly(self, tmp_path):
         # Create test files
-        for name in ["mean.mrc", "mean_half1.mrc", "mean_unfil.mrc",
-                      "vol_mask.mrc", "center0.mrc", "notes.txt"]:
+        for name in ["mean.mrc", "mean_half1.mrc", "mean_unfil.mrc", "vol_mask.mrc", "center0.mrc", "notes.txt"]:
             (tmp_path / name).touch()
         vols = _list_volumes(str(tmp_path))
         names = [v["name"] for v in vols]
@@ -228,10 +232,10 @@ class TestHasOutputVolumes:
 # Job dataclass
 # ---------------------------------------------------------------------------
 
+
 class TestJob:
     def test_roundtrip(self):
-        job = Job(id="j1", name="test", output_dir="/tmp/out",
-                  status=STATUS_COMPLETED, created_at=1000.0)
+        job = Job(id="j1", name="test", output_dir="/tmp/out", status=STATUS_COMPLETED, created_at=1000.0)
         d = job.to_dict()
         j2 = Job.from_dict(d)
         assert j2.id == "j1"
@@ -259,18 +263,18 @@ class TestJob:
 # ComputeTask dataclass
 # ---------------------------------------------------------------------------
 
+
 class TestComputeTask:
     def test_defaults(self):
-        task = ComputeTask(id="t1", job_id="j1", task_type="volume",
-                           status=STATUS_QUEUED, output_dir="/tmp")
+        task = ComputeTask(id="t1", job_id="j1", task_type="volume", status=STATUS_QUEUED, output_dir="/tmp")
         assert task.slurm_job_id is None
         assert task.pid is None
         assert task.error is None
 
     def test_to_dict(self):
-        task = ComputeTask(id="t1", job_id="j1", task_type="volume",
-                           status=STATUS_COMPLETED, output_dir="/tmp",
-                           label="Test Volume")
+        task = ComputeTask(
+            id="t1", job_id="j1", task_type="volume", status=STATUS_COMPLETED, output_dir="/tmp", label="Test Volume"
+        )
         d = task.to_dict()
         assert d["id"] == "t1"
         assert d["label"] == "Test Volume"
@@ -280,6 +284,7 @@ class TestComputeTask:
 # JobManager persistence
 # ---------------------------------------------------------------------------
 
+
 class TestJobManagerPersistence:
     def test_save_and_load(self, tmp_path):
         state_dir = str(tmp_path / "state")
@@ -287,8 +292,13 @@ class TestJobManagerPersistence:
 
         # Create a manager and add a job
         mgr = JobManager(state_dir=state_dir)
-        job = Job(id="j1", name="test_job", output_dir=str(tmp_path / "output"),
-                  status=STATUS_COMPLETED, created_at=time.time())
+        job = Job(
+            id="j1",
+            name="test_job",
+            output_dir=str(tmp_path / "output"),
+            status=STATUS_COMPLETED,
+            created_at=time.time(),
+        )
         mgr._jobs["j1"] = job
         mgr._save()
 
@@ -308,6 +318,7 @@ class TestJobManagerPersistence:
 # ---------------------------------------------------------------------------
 # JobManager.discover_jobs
 # ---------------------------------------------------------------------------
+
 
 class TestDiscoverJobs:
     def test_discovers_by_metadata_json(self, tmp_path):
@@ -367,6 +378,7 @@ class TestDiscoverJobs:
 # JobManager.get_analysis_info
 # ---------------------------------------------------------------------------
 
+
 class TestGetAnalysisInfo:
     def _make_job(self, tmp_path, state_dir):
         """Create a JobManager with a fake completed job."""
@@ -385,8 +397,7 @@ class TestGetAnalysisInfo:
         (model_dir / "params.pkl").touch()
 
         mgr = JobManager(state_dir=state_dir)
-        job = Job(id="j1", name="test", output_dir=str(output_dir),
-                  status=STATUS_COMPLETED, created_at=time.time())
+        job = Job(id="j1", name="test", output_dir=str(output_dir), status=STATUS_COMPLETED, created_at=time.time())
         mgr._jobs["j1"] = job
         return mgr
 
@@ -471,6 +482,7 @@ class TestGetAnalysisInfo:
 # JobManager.get_job_params
 # ---------------------------------------------------------------------------
 
+
 class TestGetJobParams:
     def test_returns_metadata_json(self, tmp_path):
         state_dir = str(tmp_path / "state")
@@ -494,8 +506,7 @@ class TestGetJobParams:
         output_dir.mkdir()
 
         mgr = JobManager(state_dir=state_dir)
-        job = Job(id="j1", name="test", output_dir=str(output_dir),
-                  command="recovar.commands.pipeline")
+        job = Job(id="j1", name="test", output_dir=str(output_dir), command="recovar.commands.pipeline")
         mgr._jobs["j1"] = job
 
         params = mgr.get_job_params("j1")
@@ -510,6 +521,7 @@ class TestGetJobParams:
 # JobManager._recover_compute_tasks
 # ---------------------------------------------------------------------------
 
+
 class TestRecoverComputeTasks:
     def test_recovers_volume_task_with_meta(self, tmp_path):
         state_dir = str(tmp_path / "state")
@@ -523,15 +535,20 @@ class TestRecoverComputeTasks:
         (task_dir / "vol.mrc").touch()
         (task_dir / "compute.sbatch").touch()
         with open(task_dir / "task_meta.json", "w") as f:
-            json.dump({
-                "id": "volume_abc", "job_id": "j1",
-                "task_type": "volume", "label": "Test Vol",
-                "slurm_job_id": None, "created_at": 1000.0,
-            }, f)
+            json.dump(
+                {
+                    "id": "volume_abc",
+                    "job_id": "j1",
+                    "task_type": "volume",
+                    "label": "Test Vol",
+                    "slurm_job_id": None,
+                    "created_at": 1000.0,
+                },
+                f,
+            )
 
         mgr = JobManager(state_dir=state_dir)
-        job = Job(id="j1", name="test", output_dir=str(output_dir),
-                  status=STATUS_COMPLETED)
+        job = Job(id="j1", name="test", output_dir=str(output_dir), status=STATUS_COMPLETED)
         mgr._jobs["j1"] = job
         mgr._recover_compute_tasks()
 
@@ -597,6 +614,7 @@ class TestRecoverComputeTasks:
 # JobManager.get_compute_task
 # ---------------------------------------------------------------------------
 
+
 class TestGetComputeTask:
     def test_returns_none_for_unknown(self, tmp_path):
         mgr = JobManager(state_dir=str(tmp_path))
@@ -612,8 +630,11 @@ class TestGetComputeTask:
 
         mgr = JobManager(state_dir=state_dir)
         task = ComputeTask(
-            id="t1", job_id="j1", task_type="volume",
-            status=STATUS_COMPLETED, output_dir=str(task_dir),
+            id="t1",
+            job_id="j1",
+            task_type="volume",
+            status=STATUS_COMPLETED,
+            output_dir=str(task_dir),
             label="Test",
         )
         mgr._compute_tasks["t1"] = task
@@ -632,8 +653,11 @@ class TestGetComputeTask:
 
         mgr = JobManager(state_dir=state_dir)
         task = ComputeTask(
-            id="t1", job_id="j1", task_type="volume",
-            status=STATUS_FAILED, output_dir=str(task_dir),
+            id="t1",
+            job_id="j1",
+            task_type="volume",
+            status=STATUS_FAILED,
+            output_dir=str(task_dir),
             error="No output",
         )
         mgr._compute_tasks["t1"] = task
@@ -653,6 +677,7 @@ class TestGetComputeTask:
 # JobManager._save_task_meta
 # ---------------------------------------------------------------------------
 
+
 class TestSaveTaskMeta:
     def test_writes_metadata(self, tmp_path):
         state_dir = str(tmp_path / "state")
@@ -662,9 +687,13 @@ class TestSaveTaskMeta:
 
         mgr = JobManager(state_dir=state_dir)
         task = ComputeTask(
-            id="t1", job_id="j1", task_type="volume",
-            status=STATUS_COMPLETED, output_dir=str(task_dir),
-            slurm_job_id="12345", label="My Volume",
+            id="t1",
+            job_id="j1",
+            task_type="volume",
+            status=STATUS_COMPLETED,
+            output_dir=str(task_dir),
+            slurm_job_id="12345",
+            label="My Volume",
             created_at=1000.0,
         )
         mgr._save_task_meta(task)
@@ -680,16 +709,20 @@ class TestSaveTaskMeta:
 # JobManager.list_jobs / get_job / delete_job
 # ---------------------------------------------------------------------------
 
+
 class TestJobManagerCRUD:
     def _make_mgr(self, tmp_path):
         state_dir = str(tmp_path / "state")
         os.makedirs(state_dir)
         mgr = JobManager(state_dir=state_dir)
         for i in range(3):
-            job = Job(id=f"j{i}", name=f"run_{i}",
-                      output_dir=str(tmp_path / f"out_{i}"),
-                      status=STATUS_COMPLETED,
-                      created_at=1000.0 + i)
+            job = Job(
+                id=f"j{i}",
+                name=f"run_{i}",
+                output_dir=str(tmp_path / f"out_{i}"),
+                status=STATUS_COMPLETED,
+                created_at=1000.0 + i,
+            )
             mgr._jobs[job.id] = job
         return mgr
 
@@ -720,6 +753,7 @@ class TestJobManagerCRUD:
 # JobManager.list_compute_tasks
 # ---------------------------------------------------------------------------
 
+
 class TestListComputeTasks:
     def test_filters_by_job_id(self, tmp_path):
         state_dir = str(tmp_path / "state")
@@ -728,8 +762,11 @@ class TestListComputeTasks:
 
         for i, jid in enumerate(["j1", "j1", "j2"]):
             task = ComputeTask(
-                id=f"t{i}", job_id=jid, task_type="volume",
-                status=STATUS_COMPLETED, output_dir=str(tmp_path),
+                id=f"t{i}",
+                job_id=jid,
+                task_type="volume",
+                status=STATUS_COMPLETED,
+                output_dir=str(tmp_path),
                 created_at=1000.0 + i,
             )
             mgr._compute_tasks[task.id] = task

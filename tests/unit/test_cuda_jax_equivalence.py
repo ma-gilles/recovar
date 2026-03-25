@@ -26,6 +26,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.gpu]
 
 def _skip_if_no_cuda():
     from recovar.cuda_backproject import cuda_available
+
     if not cuda_available():
         pytest.skip("CUDA backproject not available")
 
@@ -52,11 +53,7 @@ _HALF_COMBOS = [
 ]
 
 # All (order, half_vol, half_img) combos
-_ALL_COMBOS = [
-    (order, hv, hi)
-    for order in _ORDERS
-    for hv, hi in _HALF_COMBOS
-]
+_ALL_COMBOS = [(order, hv, hi) for order in _ORDERS for hv, hi in _HALF_COMBOS]
 
 # Volume sizes to test — small for speed, large enough to exercise indexing
 _SIZES = [16, 32, 64]
@@ -66,6 +63,7 @@ _N_IMAGES = [1, 5, 20]
 
 
 # ── Forward projection (project): CUDA vs JAX ───────────────────────
+
 
 @pytest.mark.parametrize("order,half_vol,half_img", _ALL_COMBOS)
 @pytest.mark.parametrize("N", _SIZES)
@@ -92,9 +90,7 @@ def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
         vol_real = jnp.array(rng.standard_normal(volume_shape).astype(np.float32))
         vol_full = ftu.get_dft3(vol_real).ravel()
     else:
-        vol_full = jnp.array(
-            (rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64)
-        )
+        vol_full = jnp.array((rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64))
 
     with jax.default_device(gpu_device):
         rots_gpu = jax.device_put(rots)
@@ -107,8 +103,9 @@ def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
         else:
             vol_cuda = jax.device_put(vol_full)
 
-        cuda_out = project(vol_cuda, rots_gpu, image_shape, volume_shape,
-                           order=order, half_volume=half_vol, half_image=half_img)
+        cuda_out = project(
+            vol_cuda, rots_gpu, image_shape, volume_shape, order=order, half_volume=half_vol, half_image=half_img
+        )
 
         # --- JAX path (on same device, bypassing dispatch) ---
         # For half_vol, the Hermitian volume ensures CUDA's per-neighbor
@@ -116,11 +113,7 @@ def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
         # volume, so we can use the Python expansion as reference.
         if half_vol:
             half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
-            vol_jax = jax.device_put(
-                ftu.half_volume_to_full_volume(
-                    vol_cuda.reshape(half_shape), volume_shape
-                ).ravel()
-            )
+            vol_jax = jax.device_put(ftu.half_volume_to_full_volume(vol_cuda.reshape(half_shape), volume_shape).ravel())
         else:
             vol_jax = jax.device_put(vol_full)
         if half_img:
@@ -139,8 +132,10 @@ def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
         rel_err = np.linalg.norm(cuda_np - jax_np)
 
     np.testing.assert_allclose(
-        cuda_np, jax_np,
-        atol=1e-4, rtol=1e-4,
+        cuda_np,
+        jax_np,
+        atol=1e-4,
+        rtol=1e-4,
         err_msg=(
             f"CUDA project != JAX for order={order}, half_vol={half_vol}, "
             f"half_img={half_img}, N={N}. Relative error: {rel_err:.2e}"
@@ -149,6 +144,7 @@ def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
 
 
 # ── Backprojection (adjoint): CUDA vs JAX VJP ───────────────────────
+
 
 @pytest.mark.parametrize("order,half_vol,half_img", _ALL_COMBOS)
 @pytest.mark.parametrize("N", _SIZES)
@@ -169,8 +165,7 @@ def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
     # Create images (full or half)
     H, W = image_shape
     full_imgs = jnp.array(
-        (rng.standard_normal((n_images, H * W)) +
-         1j * rng.standard_normal((n_images, H * W))).astype(np.complex64)
+        (rng.standard_normal((n_images, H * W)) + 1j * rng.standard_normal((n_images, H * W))).astype(np.complex64)
     )
 
     with jax.default_device(gpu_device):
@@ -178,9 +173,7 @@ def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
 
         # --- CUDA path ---
         if half_img:
-            imgs_cuda = jax.device_put(
-                ftu.full_image_to_half_image(full_imgs, image_shape)
-            )
+            imgs_cuda = jax.device_put(ftu.full_image_to_half_image(full_imgs, image_shape))
         else:
             imgs_cuda = jax.device_put(full_imgs)
 
@@ -188,8 +181,16 @@ def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
         vol_init = jnp.zeros(int(np.prod(vol_shape_flat)), dtype=jnp.complex64)
         vol_init = jax.device_put(vol_init)
 
-        cuda_out = backproject(vol_init, imgs_cuda, rots_gpu, image_shape, volume_shape,
-                               order=order, half_volume=half_vol, half_image=half_img)
+        cuda_out = backproject(
+            vol_init,
+            imgs_cuda,
+            rots_gpu,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_vol,
+            half_image=half_img,
+        )
 
         # --- JAX path (via VJP, bypassing CUDA dispatch) ---
         # When half_img is True, CUDA scatters each half-pixel plus its
@@ -197,14 +198,13 @@ def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
         # half_image_to_full_image(imgs_half).  Use that expansion as the
         # JAX VJP cotangent so both paths see identical effective full images.
         if half_img:
-            full_imgs_gpu = jax.device_put(
-                ftu.half_image_to_full_image(imgs_cuda, image_shape)
-            )
+            full_imgs_gpu = jax.device_put(ftu.half_image_to_full_image(imgs_cuda, image_shape))
         else:
             full_imgs_gpu = jax.device_put(full_imgs)
 
         if half_vol:
             vol_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
+
             def f(v):
                 full_v = ftu.half_volume_to_full_volume(v, volume_shape)
                 return _jax_slice(full_v, rots_gpu, image_shape, volume_shape, order)
@@ -225,8 +225,10 @@ def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
         rel_err = np.linalg.norm(cuda_np - jax_np)
 
     np.testing.assert_allclose(
-        cuda_np, jax_np,
-        atol=1e-4, rtol=1e-4,
+        cuda_np,
+        jax_np,
+        atol=1e-4,
+        rtol=1e-4,
         err_msg=(
             f"CUDA backproject != JAX VJP for order={order}, half_vol={half_vol}, "
             f"half_img={half_img}, N={N}. Relative error: {rel_err:.2e}"
@@ -235,6 +237,7 @@ def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
 
 
 # ── Adjoint consistency: <Ax, y> == <x, A^T y> ──────────────────────
+
 
 @pytest.mark.parametrize("order,half_vol,half_img", _ALL_COMBOS)
 def test_adjoint_consistency_cuda(order, half_vol, half_img, gpu_device):
@@ -288,27 +291,36 @@ def test_adjoint_consistency_cuda(order, half_vol, half_img, gpu_device):
         # project_FULL (not project_half).  The correct identity is:
         #   <project_full(x), half_to_full(y)> == <x, backproject_half(y)>
         if half_img:
-            proj = project(vol_gpu, rots_gpu, image_shape, volume_shape,
-                           order=order, half_volume=half_vol, half_image=False)
-            imgs_for_ip = jax.device_put(
-                ftu.half_image_to_full_image(imgs, image_shape)
+            proj = project(
+                vol_gpu, rots_gpu, image_shape, volume_shape, order=order, half_volume=half_vol, half_image=False
             )
+            imgs_for_ip = jax.device_put(ftu.half_image_to_full_image(imgs, image_shape))
         else:
-            proj = project(vol_gpu, rots_gpu, image_shape, volume_shape,
-                           order=order, half_volume=half_vol, half_image=half_img)
+            proj = project(
+                vol_gpu, rots_gpu, image_shape, volume_shape, order=order, half_volume=half_vol, half_image=half_img
+            )
             imgs_for_ip = imgs_gpu
 
         # Backward: backproject images to volume (always with half_img flag)
         vol_zero = jnp.zeros_like(vol_gpu)
-        bp = backproject(vol_zero, imgs_gpu, rots_gpu, image_shape, volume_shape,
-                         order=order, half_volume=half_vol, half_image=half_img)
+        bp = backproject(
+            vol_zero,
+            imgs_gpu,
+            rots_gpu,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_vol,
+            half_image=half_img,
+        )
 
     # <Ax, y> and <x, A^T y>
     lhs = np.real(np.sum(np.conj(np.asarray(proj)) * np.asarray(imgs_for_ip)))
     rhs = np.real(np.sum(np.conj(np.asarray(vol_gpu)) * np.asarray(bp)))
 
     np.testing.assert_allclose(
-        lhs, rhs,
+        lhs,
+        rhs,
         rtol=1e-3,
         err_msg=(
             f"Adjoint identity violated for order={order}, half_vol={half_vol}, "
@@ -318,6 +330,7 @@ def test_adjoint_consistency_cuda(order, half_vol, half_img, gpu_device):
 
 
 # ── High-level API: slice_volume dispatch consistency ────────────────
+
 
 @pytest.mark.parametrize("half_vol,half_img", _HALF_COMBOS)
 def test_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkeypatch):
@@ -340,13 +353,9 @@ def test_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkeypatch):
     if half_vol:
         vol_real = jnp.array(rng.standard_normal(volume_shape).astype(np.float32))
         vol_full = ftu.get_dft3(vol_real).ravel()
-        vol = ftu.full_volume_to_half_volume(
-            vol_full.reshape(volume_shape), volume_shape
-        ).ravel()
+        vol = ftu.full_volume_to_half_volume(vol_full.reshape(volume_shape), volume_shape).ravel()
     else:
-        vol_full = jnp.array(
-            (rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64)
-        )
+        vol_full = jnp.array((rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64))
         vol = vol_full
 
     # GPU path (CUDA) — use max_r=None so CUDA vs JAX comparison isn't
@@ -354,25 +363,37 @@ def test_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkeypatch):
     # post-rotation clipping checks.
     with jax.default_device(gpu_device):
         gpu_result = core_slicing.slice_volume(
-            jax.device_put(vol), jax.device_put(rots),
-            image_shape, volume_shape, "linear_interp",
-            half_volume=half_vol, half_image=half_img, max_r=None,
+            jax.device_put(vol),
+            jax.device_put(rots),
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            half_volume=half_vol,
+            half_image=half_img,
+            max_r=None,
         )
 
     # CPU path (force JAX by monkeypatching _on_gpu)
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
     # Clear lru_cache
-    core_slicing._on_gpu.cache_clear() if hasattr(core_slicing._on_gpu, 'cache_clear') else None
+    core_slicing._on_gpu.cache_clear() if hasattr(core_slicing._on_gpu, "cache_clear") else None
 
     cpu_result = core_slicing.slice_volume(
-        vol, rots,
-        image_shape, volume_shape, "linear_interp",
-        half_volume=half_vol, half_image=half_img, max_r=None,
+        vol,
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        half_volume=half_vol,
+        half_image=half_img,
+        max_r=None,
     )
 
     np.testing.assert_allclose(
-        np.asarray(gpu_result), np.asarray(cpu_result),
-        atol=1e-4, rtol=1e-4,
+        np.asarray(gpu_result),
+        np.asarray(cpu_result),
+        atol=1e-4,
+        rtol=1e-4,
         err_msg=f"slice_volume GPU != CPU for half_vol={half_vol}, half_img={half_img}",
     )
 
@@ -393,8 +414,7 @@ def test_adjoint_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkey
     rots = jnp.array(_random_rotations(n_images, rng))
     H, W = image_shape
     full_imgs = jnp.array(
-        (rng.standard_normal((n_images, H * W)) +
-         1j * rng.standard_normal((n_images, H * W))).astype(np.complex64)
+        (rng.standard_normal((n_images, H * W)) + 1j * rng.standard_normal((n_images, H * W))).astype(np.complex64)
     )
 
     if half_img:
@@ -405,29 +425,42 @@ def test_adjoint_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkey
     # GPU path (CUDA) — use max_r=None to avoid FP boundary clipping differences.
     with jax.default_device(gpu_device):
         gpu_result = core_slicing.adjoint_slice_volume(
-            jax.device_put(imgs), jax.device_put(rots),
-            image_shape, volume_shape, "linear_interp",
-            half_image=half_img, half_volume=half_vol, max_r=None,
+            jax.device_put(imgs),
+            jax.device_put(rots),
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            half_image=half_img,
+            half_volume=half_vol,
+            max_r=None,
         )
 
     # CPU path (force JAX)
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
-    core_slicing._on_gpu.cache_clear() if hasattr(core_slicing._on_gpu, 'cache_clear') else None
+    core_slicing._on_gpu.cache_clear() if hasattr(core_slicing._on_gpu, "cache_clear") else None
 
     cpu_result = core_slicing.adjoint_slice_volume(
-        imgs, rots,
-        image_shape, volume_shape, "linear_interp",
-        half_image=half_img, half_volume=half_vol, max_r=None,
+        imgs,
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        half_image=half_img,
+        half_volume=half_vol,
+        max_r=None,
     )
 
     np.testing.assert_allclose(
-        np.asarray(gpu_result), np.asarray(cpu_result),
-        atol=1e-4, rtol=1e-4,
+        np.asarray(gpu_result),
+        np.asarray(cpu_result),
+        atol=1e-4,
+        rtol=1e-4,
         err_msg=f"adjoint_slice_volume GPU != CPU for half_vol={half_vol}, half_img={half_img}",
     )
 
 
 # ── Batch operations ────────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("half_vol,half_img", _HALF_COMBOS)
 def test_batch_project_matches_single(half_vol, half_img, gpu_device):
@@ -452,27 +485,30 @@ def test_batch_project_matches_single(half_vol, half_img, gpu_device):
         vol_size = N**3
 
     vols = jnp.array(
-        (rng.standard_normal((batch, vol_size)) +
-         1j * rng.standard_normal((batch, vol_size))).astype(np.complex64)
+        (rng.standard_normal((batch, vol_size)) + 1j * rng.standard_normal((batch, vol_size))).astype(np.complex64)
     )
 
     with jax.default_device(gpu_device):
         vols_gpu = jax.device_put(vols)
         rots_gpu = jax.device_put(rots)
 
-        batch_out = batch_project(vols_gpu, rots_gpu, image_shape, volume_shape,
-                                  order=1, half_volume=half_vol, half_image=half_img)
+        batch_out = batch_project(
+            vols_gpu, rots_gpu, image_shape, volume_shape, order=1, half_volume=half_vol, half_image=half_img
+        )
 
         singles = []
         for i in range(batch):
-            s = project(vols_gpu[i], rots_gpu, image_shape, volume_shape,
-                        order=1, half_volume=half_vol, half_image=half_img)
+            s = project(
+                vols_gpu[i], rots_gpu, image_shape, volume_shape, order=1, half_volume=half_vol, half_image=half_img
+            )
             singles.append(s)
         single_out = jnp.stack(singles)
 
     np.testing.assert_allclose(
-        np.asarray(batch_out), np.asarray(single_out),
-        atol=1e-5, rtol=1e-5,
+        np.asarray(batch_out),
+        np.asarray(single_out),
+        atol=1e-5,
+        rtol=1e-5,
         err_msg=f"batch_project != looped project for half_vol={half_vol}, half_img={half_img}",
     )
 
@@ -506,8 +542,9 @@ def test_batch_backproject_matches_single(half_vol, half_img, gpu_device):
         n_pix = H * W
 
     imgs = jnp.array(
-        (rng.standard_normal((batch, n_images, n_pix)) +
-         1j * rng.standard_normal((batch, n_images, n_pix))).astype(np.complex64)
+        (rng.standard_normal((batch, n_images, n_pix)) + 1j * rng.standard_normal((batch, n_images, n_pix))).astype(
+            np.complex64
+        )
     )
 
     with jax.default_device(gpu_device):
@@ -517,26 +554,31 @@ def test_batch_backproject_matches_single(half_vol, half_img, gpu_device):
         vols_init = jnp.zeros((batch, vol_size), dtype=jnp.complex64)
         vols_init = jax.device_put(vols_init)
 
-        batch_out = batch_backproject(vols_init, imgs_gpu, rots_gpu, image_shape, volume_shape,
-                                      order=1, half_volume=half_vol, half_image=half_img)
+        batch_out = batch_backproject(
+            vols_init, imgs_gpu, rots_gpu, image_shape, volume_shape, order=1, half_volume=half_vol, half_image=half_img
+        )
 
         singles = []
         for i in range(batch):
             v = jnp.zeros(vol_size, dtype=jnp.complex64)
             v = jax.device_put(v)
-            s = backproject(v, imgs_gpu[i], rots_gpu, image_shape, volume_shape,
-                            order=1, half_volume=half_vol, half_image=half_img)
+            s = backproject(
+                v, imgs_gpu[i], rots_gpu, image_shape, volume_shape, order=1, half_volume=half_vol, half_image=half_img
+            )
             singles.append(s)
         single_out = jnp.stack(singles)
 
     np.testing.assert_allclose(
-        np.asarray(batch_out), np.asarray(single_out),
-        atol=1e-5, rtol=1e-5,
+        np.asarray(batch_out),
+        np.asarray(single_out),
+        atol=1e-5,
+        rtol=1e-5,
         err_msg=f"batch_backproject != looped backproject for half_vol={half_vol}, half_img={half_img}",
     )
 
 
 # ── Edge cases ───────────────────────────────────────────────────────
+
 
 def test_identity_rotation_project_cuda_vs_jax(gpu_device):
     """Identity rotation should produce identical slices on CUDA and JAX."""
@@ -549,20 +591,18 @@ def test_identity_rotation_project_cuda_vs_jax(gpu_device):
     volume_shape = (N, N, N)
 
     rng = np.random.default_rng(0)
-    vol = jnp.array(
-        (rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64)
-    )
+    vol = jnp.array((rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64))
     rots = jnp.eye(3, dtype=jnp.float32).reshape(1, 3, 3)
 
     with jax.default_device(gpu_device):
-        cuda_out = project(jax.device_put(vol), jax.device_put(rots),
-                           image_shape, volume_shape, order=1)
-        jax_out = _jax_slice(jax.device_put(vol), jax.device_put(rots),
-                             image_shape, volume_shape, 1)
+        cuda_out = project(jax.device_put(vol), jax.device_put(rots), image_shape, volume_shape, order=1)
+        jax_out = _jax_slice(jax.device_put(vol), jax.device_put(rots), image_shape, volume_shape, 1)
 
     np.testing.assert_allclose(
-        np.asarray(cuda_out), np.asarray(jax_out),
-        atol=1e-5, rtol=1e-5,
+        np.asarray(cuda_out),
+        np.asarray(jax_out),
+        atol=1e-5,
+        rtol=1e-5,
         err_msg="Identity rotation: CUDA != JAX",
     )
 
@@ -578,9 +618,7 @@ def test_axis_rotations_project_cuda_vs_jax(gpu_device):
     volume_shape = (N, N, N)
 
     rng = np.random.default_rng(1)
-    vol = jnp.array(
-        (rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64)
-    )
+    vol = jnp.array((rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64))
 
     # 90-degree rotations around each axis
     rot_x = np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]], dtype=np.float32)
@@ -589,14 +627,14 @@ def test_axis_rotations_project_cuda_vs_jax(gpu_device):
     rots = jnp.array(np.stack([rot_x, rot_y, rot_z]))
 
     with jax.default_device(gpu_device):
-        cuda_out = project(jax.device_put(vol), jax.device_put(rots),
-                           image_shape, volume_shape, order=1)
-        jax_out = _jax_slice(jax.device_put(vol), jax.device_put(rots),
-                             image_shape, volume_shape, 1)
+        cuda_out = project(jax.device_put(vol), jax.device_put(rots), image_shape, volume_shape, order=1)
+        jax_out = _jax_slice(jax.device_put(vol), jax.device_put(rots), image_shape, volume_shape, 1)
 
     np.testing.assert_allclose(
-        np.asarray(cuda_out), np.asarray(jax_out),
-        atol=1e-5, rtol=1e-5,
+        np.asarray(cuda_out),
+        np.asarray(jax_out),
+        atol=1e-5,
+        rtol=1e-5,
         err_msg="90-degree axis rotations: CUDA != JAX",
     )
 
@@ -614,14 +652,12 @@ def test_many_random_rotations_cuda_vs_jax(gpu_device):
 
     rng = np.random.default_rng(42)
     from scipy.spatial.transform import Rotation
+
     rots_scipy = Rotation.random(n_images, random_state=42)
     rots = jnp.array(rots_scipy.as_matrix().astype(np.float32))
-    vol = jnp.array(
-        (rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64)
-    )
+    vol = jnp.array((rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64))
     imgs = jnp.array(
-        (rng.standard_normal((n_images, N * N)) +
-         1j * rng.standard_normal((n_images, N * N))).astype(np.complex64)
+        (rng.standard_normal((n_images, N * N)) + 1j * rng.standard_normal((n_images, N * N))).astype(np.complex64)
     )
 
     with jax.default_device(gpu_device):
@@ -648,8 +684,10 @@ def test_many_random_rotations_cuda_vs_jax(gpu_device):
     proj_rel = np.linalg.norm(cuda_proj_np - jax_proj_np) / np.linalg.norm(jax_proj_np)
 
     np.testing.assert_allclose(
-        cuda_proj_np, jax_proj_np,
-        atol=1e-4, rtol=1e-4,
+        cuda_proj_np,
+        jax_proj_np,
+        atol=1e-4,
+        rtol=1e-4,
         err_msg=f"Forward: N=128, 50 random rots. Relative error: {proj_rel:.2e}",
     )
 
@@ -659,13 +697,16 @@ def test_many_random_rotations_cuda_vs_jax(gpu_device):
     bp_rel = np.linalg.norm(cuda_bp_np - jax_bp_np) / np.linalg.norm(jax_bp_np)
 
     np.testing.assert_allclose(
-        cuda_bp_np, jax_bp_np,
-        atol=1e-4, rtol=1e-4,
+        cuda_bp_np,
+        jax_bp_np,
+        atol=1e-4,
+        rtol=1e-4,
         err_msg=f"Backward: N=128, 50 random rots. Relative error: {bp_rel:.2e}",
     )
 
 
 # ── Real-valued inputs ──────────────────────────────────────────────
+
 
 @pytest.mark.parametrize("half_vol,half_img", _HALF_COMBOS)
 def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
@@ -703,8 +744,9 @@ def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
         vol_init = jax.device_put(vol_init)
         imgs_gpu = jax.device_put(imgs_real)
 
-        cuda_out = backproject(vol_init, imgs_gpu, rots_gpu, image_shape, volume_shape,
-                               order=1, half_volume=half_vol, half_image=half_img)
+        cuda_out = backproject(
+            vol_init, imgs_gpu, rots_gpu, image_shape, volume_shape, order=1, half_volume=half_vol, half_image=half_img
+        )
 
         # JAX VJP with real inputs (always full volume, expand half_image)
         if half_img:
@@ -716,6 +758,7 @@ def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
 
         if half_vol:
             vol_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
+
             def f(v):
                 full_v = ftu.half_volume_to_full_volume(v, volume_shape)
                 return _jax_slice(full_v, rots_gpu, image_shape, volume_shape, 1)
@@ -727,13 +770,16 @@ def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
         jax_out = vjp_fn(full_imgs_c)[0].real
 
     np.testing.assert_allclose(
-        np.asarray(cuda_out), np.asarray(jax_out),
-        atol=1e-4, rtol=1e-4,
+        np.asarray(cuda_out),
+        np.asarray(jax_out),
+        atol=1e-4,
+        rtol=1e-4,
         err_msg=f"Real backproject CUDA != JAX for half_vol={half_vol}, half_img={half_img}",
     )
 
 
 # ── Non-square images (rectangular) ─────────────────────────────────
+
 
 @pytest.mark.skip(
     reason=(
@@ -757,9 +803,7 @@ def test_rectangular_images_cuda_vs_jax(gpu_device):
 
     rng = np.random.default_rng(88)
     rots = jnp.array(_random_rotations(n_images, rng))
-    vol = jnp.array(
-        (rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64)
-    )
+    vol = jnp.array((rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64))
 
     with jax.default_device(gpu_device):
         vol_gpu = jax.device_put(vol)
@@ -769,7 +813,9 @@ def test_rectangular_images_cuda_vs_jax(gpu_device):
         jax_out = _jax_slice(vol_gpu, rots_gpu, image_shape, volume_shape, 1)
 
     np.testing.assert_allclose(
-        np.asarray(cuda_out), np.asarray(jax_out),
-        atol=1e-4, rtol=1e-4,
+        np.asarray(cuda_out),
+        np.asarray(jax_out),
+        atol=1e-4,
+        rtol=1e-4,
         err_msg="Rectangular images (32x64): CUDA != JAX",
     )

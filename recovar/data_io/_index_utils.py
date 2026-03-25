@@ -40,9 +40,7 @@ def normalize_indices(
         if arr.ndim != 1:
             raise ValueError(f"{name} boolean mask must be 1D")
         if arr.size != int(n_total):
-            raise ValueError(
-                f"{name} boolean mask length {arr.size} must match total size {int(n_total)}"
-            )
+            raise ValueError(f"{name} boolean mask length {arr.size} must match total size {int(n_total)}")
         return np.flatnonzero(arr).astype(np.int32, copy=False)
 
     if arr.ndim == 0:
@@ -59,9 +57,7 @@ def normalize_indices(
     if np.any(arr < 0):
         raise IndexError(f"{name} contains negative values")
     if np.any(arr >= int(n_total)):
-        raise IndexError(
-            f"{name} contains out-of-range values for total size {int(n_total)}"
-        )
+        raise IndexError(f"{name} contains out-of-range values for total size {int(n_total)}")
 
     return arr.astype(np.int32, copy=False)
 
@@ -209,9 +205,7 @@ class DatasetIndexLayout:
                     name="original_group_indices",
                 )
                 if original_group_indices.shape != original_image_indices.shape:
-                    raise ValueError(
-                        "SPA layouts require original_group_indices to match original_image_indices"
-                    )
+                    raise ValueError("SPA layouts require original_group_indices to match original_image_indices")
             image_local_to_group_local = np.arange(n_images, dtype=np.int32)
             group_local_image_indices = None
         else:
@@ -228,9 +222,7 @@ class DatasetIndexLayout:
                 name="original_group_indices",
             )
             if original_group_indices.size != len(self.group_local_image_indices):
-                raise ValueError(
-                    "grouped layouts require one original_group_indices entry per group"
-                )
+                raise ValueError("grouped layouts require one original_group_indices entry per group")
 
             image_local_to_group_local = np.full(n_images, -1, dtype=np.int32)
             normalized_groups = []
@@ -240,20 +232,14 @@ class DatasetIndexLayout:
                     name=f"group_local_image_indices[{group_idx}]",
                 )
                 if local_images.size == 0:
-                    raise ValueError(
-                        f"group_local_image_indices[{group_idx}] must not be empty"
-                    )
+                    raise ValueError(f"group_local_image_indices[{group_idx}] must not be empty")
                 if local_images.size > 0 and np.any(local_images >= n_images):
-                    raise IndexError(
-                        f"group_local_image_indices[{group_idx}] contains out-of-range local images"
-                    )
+                    raise IndexError(f"group_local_image_indices[{group_idx}] contains out-of-range local images")
                 normalized_groups.append(local_images.astype(np.int32, copy=False))
                 image_local_to_group_local[local_images] = np.int32(group_idx)
 
             if n_images > 0 and np.any(image_local_to_group_local < 0):
-                raise ValueError(
-                    "group_local_image_indices must cover every local image exactly once"
-                )
+                raise ValueError("group_local_image_indices must cover every local image exactly once")
             group_local_image_indices = tuple(normalized_groups)
 
         object.__setattr__(
@@ -300,8 +286,7 @@ class DatasetIndexLayout:
             grouped=True,
             original_group_indices=np.asarray(original_group_indices, dtype=np.int32),
             group_local_image_indices=tuple(
-                np.asarray(local_images, dtype=np.int32)
-                for local_images in group_local_image_indices
+                np.asarray(local_images, dtype=np.int32) for local_images in group_local_image_indices
             ),
         )
 
@@ -328,9 +313,7 @@ class DatasetIndexLayout:
             name="local_image_indices",
         )
         if not self.grouped:
-            return DatasetIndexLayout.from_image_indices(
-                self.original_image_indices[local_image_indices]
-            )
+            return DatasetIndexLayout.from_image_indices(self.original_image_indices[local_image_indices])
 
         original_image_indices = self.original_image_indices[local_image_indices]
         old_to_new_local_image = np.full(self.n_images, -1, dtype=np.int32)
@@ -341,9 +324,9 @@ class DatasetIndexLayout:
 
         # Keep only groups touched by the subset, then remap each group's old
         # local-image list into the child's compact local-image numbering.
-        selected_old_groups = np.unique(
-            self._image_local_to_group_local[local_image_indices]
-        ).astype(np.int32, copy=False)
+        selected_old_groups = np.unique(self._image_local_to_group_local[local_image_indices]).astype(
+            np.int32, copy=False
+        )
         group_local_image_indices = []
         for old_group_idx in selected_old_groups:
             old_group_images = self.group_local_image_indices[int(old_group_idx)]
@@ -426,9 +409,7 @@ class DatasetIndexLayout:
         )
         if not self.grouped:
             return local_image_indices.astype(np.int32, copy=False)
-        return np.unique(
-            self._image_local_to_group_local[local_image_indices]
-        ).astype(np.int32, copy=False)
+        return np.unique(self._image_local_to_group_local[local_image_indices]).astype(np.int32, copy=False)
 
     def original_group_indices_from_local_images(self, local_image_indices):
         local_group_indices = self.local_group_indices_from_local_images(local_image_indices)
@@ -467,9 +448,13 @@ class TiltSeriesOriginalIndexMap:
             image_to_particle,
             name="image_to_particle",
         )
-        self.tilt_numbers = None if tilt_numbers is None else _normalize_index_array(
-            tilt_numbers,
-            name="tilt_numbers",
+        self.tilt_numbers = (
+            None
+            if tilt_numbers is None
+            else _normalize_index_array(
+                tilt_numbers,
+                name="tilt_numbers",
+            )
         )
         if self.tilt_numbers is not None and self.tilt_numbers.shape[0] != self._image_to_particle.shape[0]:
             raise ValueError("tilt_numbers must have one entry per original image")
@@ -480,9 +465,7 @@ class TiltSeriesOriginalIndexMap:
 
         # Parse the original file once and freeze the canonical
         # particle<->image relationship before any dataset subsetting/view logic.
-        particle_to_images, tilt_to_particle = image_backends.TiltSeriesDataset.parse_particle_tilt(
-            particles_file
-        )
+        particle_to_images, tilt_to_particle = image_backends.TiltSeriesDataset.parse_particle_tilt(particles_file)
         particle_to_images = tuple(
             _normalize_index_array(image_indices, name=f"particle_to_images[{idx}]")
             for idx, image_indices in enumerate(particle_to_images)
@@ -498,13 +481,11 @@ class TiltSeriesOriginalIndexMap:
         else:
             image_to_particle = np.asarray(tilt_to_particle, dtype=np.int32).reshape(-1)
 
-        inferred_n_images = (
-            max((int(np.max(imgs)) for imgs in particle_to_images if imgs.size > 0), default=-1) + 1
-        )
+        inferred_n_images = max((int(np.max(imgs)) for imgs in particle_to_images if imgs.size > 0), default=-1) + 1
         if image_to_particle.size < inferred_n_images:
             extended = np.full(inferred_n_images, -1, dtype=np.int32)
             if image_to_particle.size > 0:
-                extended[:image_to_particle.size] = image_to_particle
+                extended[: image_to_particle.size] = image_to_particle
             image_to_particle = extended
 
         tilt_numbers = None
@@ -575,9 +556,7 @@ class TiltSeriesOriginalIndexMap:
             if arr.ndim != 1:
                 raise ValueError(f"{name} boolean mask must be 1D")
             if arr.size != int(self.n_images):
-                raise ValueError(
-                    f"{name} boolean mask length {arr.size} must match total size {int(self.n_images)}"
-                )
+                raise ValueError(f"{name} boolean mask length {arr.size} must match total size {int(self.n_images)}")
             image_indices = np.flatnonzero(arr).astype(np.int32, copy=False)
         else:
             if arr.ndim == 0:

@@ -1,3 +1,5 @@
+import os
+
 import numpy as np
 import pytest
 
@@ -60,7 +62,9 @@ def test_save_covar_output_volumes_clamps_to_available_pcs(monkeypatch, tmp_path
 
     monkeypatch.setattr(output, "save_volumes", lambda vols, *args, **kwargs: calls.setdefault("saved_vols", len(vols)))
     monkeypatch.setattr(output, "save_volume", lambda *args, **kwargs: None)
-    monkeypatch.setattr(output.linalg, "batch_idft3", lambda arr, volume_shape, vol_batch_size: np.asarray(arr, dtype=np.float32))
+    monkeypatch.setattr(
+        output.linalg, "batch_idft3", lambda arr, volume_shape, vol_batch_size: np.asarray(arr, dtype=np.float32)
+    )
     monkeypatch.setattr(output.utils, "estimate_variance", lambda u_t, svals: np.ones(u_t.shape[-1], dtype=np.float32))
 
     output.save_covar_output_volumes(
@@ -70,7 +74,7 @@ def test_save_covar_output_volumes_clamps_to_available_pcs(monkeypatch, tmp_path
         s=s,
         mask=volume_mask,
         volume_shape=(d, d, d),
-        us_to_save=50,          # intentionally larger than available
+        us_to_save=50,  # intentionally larger than available
         us_to_var=[4, 10, 20],  # all <= n_pcs
         voxel_size=1.0,
     )
@@ -301,24 +305,22 @@ def test_standard_pipeline_plots_uses_embedding_component_api(monkeypatch, tmp_p
     assert ("latent_coords", 4) in calls
 
 
-def test_promote_reweighted_volume_outputs_moves_primary_files(tmp_path):
-    diag_dir = tmp_path / "diagnostics" / "state000"
-    diag_dir.mkdir(parents=True)
-    for name in ("filtered.mrc", "half1_unfil.mrc", "half2_unfil.mrc"):
-        (diag_dir / name).write_text(name)
+def test_volume_output_paths_places_primary_and_diag_correctly(tmp_path):
+    """VolumeOutputPaths should put primary outputs at root and diagnostics in subdir."""
+    from recovar.output.output_paths import VolumeOutputPaths
 
-    primary_stem = output._promote_reweighted_volume_outputs(
-        str(diag_dir),
-        str(tmp_path),
-        "state",
-        0,
-    )
+    vp = VolumeOutputPaths(str(tmp_path), "state", 0)
+    vp.ensure_dirs()
 
-    assert primary_stem.endswith("state000")
-    assert not (diag_dir / "filtered.mrc").exists()
-    assert (tmp_path / "state000.mrc").exists()
-    assert (tmp_path / "state000_half1_unfil.mrc").exists()
-    assert (tmp_path / "state000_half2_unfil.mrc").exists()
+    # Primary outputs should be in tmp_path directly
+    assert vp.filtered == str(tmp_path / "state000.mrc")
+    assert vp.half1_unfil == str(tmp_path / "state000_half1_unfil.mrc")
+    assert vp.half2_unfil == str(tmp_path / "state000_half2_unfil.mrc")
+
+    # Diagnostics should be in diagnostics/state000/
+    assert "diagnostics" in vp.params
+    assert "diagnostics" in vp.split_choice
+    assert os.path.isdir(vp.diag_dir)
 
 
 def test_make_trajectory_plots_from_results_uses_pipeline_output_helpers(monkeypatch, tmp_path):
@@ -397,6 +399,7 @@ def test_cluster_kmeans_reorder_false_skips_sort():
 
 def test_scatter_annotate_returns_figure_axes():
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -411,6 +414,7 @@ def test_scatter_annotate_returns_figure_axes():
 
 def test_scatter_annotate_with_centers_ind():
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
@@ -423,6 +427,7 @@ def test_scatter_annotate_with_centers_ind():
 
 def test_scatter_annotate_with_explicit_centers():
     import matplotlib
+
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 

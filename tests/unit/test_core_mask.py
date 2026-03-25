@@ -42,11 +42,12 @@ def _reference_make_soft_edged_kernel(r1, shape):
     else:
         boxsize = 2 * r1 + 1
 
-    volume_coords = np.asarray(
-        fourier_transform_utils.get_k_coordinate_of_each_pixel(
-            shape, voxel_size=1, scaled=False
+    volume_coords = (
+        np.asarray(fourier_transform_utils.get_k_coordinate_of_each_pixel(shape, voxel_size=1, scaled=False)).reshape(
+            list(shape) + [len(list(shape))]
         )
-    ).reshape(list(shape) + [len(list(shape))]) + 1
+        + 1
+    )
     distances = np.linalg.norm(volume_coords, axis=-1)
     half_boxsize = boxsize // 2
     r1 = half_boxsize
@@ -133,6 +134,7 @@ def _reference_make_moving_gt_mask(gt_volumes_real, volume_shape, smax=3, iter=1
 # threshold_map
 # ---------------------------------------------------------------------------
 
+
 class TestThresholdMap:
     def test_basic_threshold(self):
         arr = np.array([0.0, 0.5, 1.0, 1.5, 2.0])
@@ -164,6 +166,7 @@ class TestThresholdMap:
 # smooth_circular_mask
 # ---------------------------------------------------------------------------
 
+
 class TestSmoothCircularMask:
     def test_shape(self):
         m = mask.smooth_circular_mask(32, radius=10, thickness=5)
@@ -194,6 +197,7 @@ class TestSmoothCircularMask:
 # window_mask
 # ---------------------------------------------------------------------------
 
+
 class TestWindowMask:
     def test_shape(self):
         m = mask.window_mask(32, in_rad=0.5, out_rad=0.8)
@@ -213,6 +217,7 @@ class TestWindowMask:
 # ---------------------------------------------------------------------------
 # get_radial_mask
 # ---------------------------------------------------------------------------
+
 
 class TestGetRadialMask:
     def test_3d_shape(self):
@@ -237,6 +242,7 @@ class TestGetRadialMask:
 # ---------------------------------------------------------------------------
 # make_soft_edged_kernel
 # ---------------------------------------------------------------------------
+
 
 class TestCreateSoftEdgedKernel:
     def test_3d_kernel_shape(self):
@@ -264,6 +270,7 @@ class TestCreateSoftEdgedKernel:
 # ---------------------------------------------------------------------------
 # soften_volume_mask
 # ---------------------------------------------------------------------------
+
 
 class TestSoftenVolumeMask:
     def test_output_range(self):
@@ -293,6 +300,7 @@ class TestSoftenVolumeMask:
 # raised_cosine_mask
 # ---------------------------------------------------------------------------
 
+
 class TestRaisedCosineMask:
     def test_shape(self):
         vol_shape = (8, 8, 8)
@@ -316,6 +324,7 @@ class TestRaisedCosineMask:
 # soft_mask_outside_map
 # ---------------------------------------------------------------------------
 
+
 class TestSoftMaskOutsideMap:
     def test_shape_preserved(self):
         vol = jnp.ones((8, 8, 8))
@@ -333,6 +342,7 @@ class TestSoftMaskOutsideMap:
 # ---------------------------------------------------------------------------
 # Reference equivalence
 # ---------------------------------------------------------------------------
+
 
 class TestMakeUnionGtMask:
     """Tests for make_union_gt_mask."""
@@ -357,6 +367,7 @@ class TestMakeUnionGtMask:
     def test_union_of_two_blobs_is_superset(self):
         """Union of two non-overlapping blobs covers both regions."""
         from scipy.ndimage import gaussian_filter
+
         vol_shape = (32, 32, 32)
 
         # Create Gaussian blobs (realistic signal profile, passes threshold_map)
@@ -369,8 +380,12 @@ class TestMakeUnionGtMask:
         vol2 = gaussian_filter(vol2, sigma=2.0)
 
         soft_union, binary_union = mask.make_union_gt_mask(
-            [vol1, vol2], volume_shape=vol_shape, smax=3, iter=1,
-            dilation_iters=1, kern_rad=3,
+            [vol1, vol2],
+            volume_shape=vol_shape,
+            smax=3,
+            iter=1,
+            dilation_iters=1,
+            kern_rad=3,
         )
 
         # Each blob's core should be inside the union
@@ -378,10 +393,8 @@ class TestMakeUnionGtMask:
         assert binary_union[24, 24, 24], "Blob 2 core must be in union"
 
         # Union should be larger than either individual mask
-        _, mask1_only = mask.make_union_gt_mask(
-            [vol1], vol_shape, smax=3, iter=1, dilation_iters=1, kern_rad=3)
-        _, mask2_only = mask.make_union_gt_mask(
-            [vol2], vol_shape, smax=3, iter=1, dilation_iters=1, kern_rad=3)
+        _, mask1_only = mask.make_union_gt_mask([vol1], vol_shape, smax=3, iter=1, dilation_iters=1, kern_rad=3)
+        _, mask2_only = mask.make_union_gt_mask([vol2], vol_shape, smax=3, iter=1, dilation_iters=1, kern_rad=3)
         assert binary_union.sum() >= mask1_only.sum()
         assert binary_union.sum() >= mask2_only.sum()
 
@@ -391,10 +404,13 @@ class TestMakeUnionGtMask:
         n_voxels = 8 * 8 * 8
         rng = np.random.RandomState(0)
         vols_flat = rng.randn(3, n_voxels).astype(np.float32)
-        vols_flat[:, :n_voxels // 2] += 5.0  # signal in first half
+        vols_flat[:, : n_voxels // 2] += 5.0  # signal in first half
 
         soft, binary = mask.make_union_gt_mask(
-            vols_flat, volume_shape=vol_shape, smax=3, iter=1,
+            vols_flat,
+            volume_shape=vol_shape,
+            smax=3,
+            iter=1,
         )
         assert soft.shape == vol_shape
         assert binary.shape == vol_shape

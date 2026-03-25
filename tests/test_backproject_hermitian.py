@@ -46,6 +46,7 @@ pytestmark = pytest.mark.skipif(
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _random_rotations(n, seed=42):
     return jnp.array(
         Rotation.random(n, random_state=np.random.RandomState(seed)).as_matrix(),
@@ -145,25 +146,39 @@ def _hermitian_error_on_plane(half_vol_flat, volume_shape, kz_idx):
 def _backproject_cuda(imgs, rots, image_shape, volume_shape, order, half_image, max_r):
     """CUDA half-volume backprojection."""
     from recovar.cuda_backproject import backproject
+
     N0, N1, N2 = volume_shape
     vol_size = N0 * N1 * (N2 // 2 + 1)
     vol = jnp.zeros(vol_size, dtype=jnp.complex64)
-    return np.asarray(backproject(
-        vol, jnp.asarray(imgs), jnp.asarray(rots),
-        image_shape=image_shape, volume_shape=volume_shape,
-        order=order, half_volume=True, half_image=half_image,
-        max_r=max_r,
-    ))
+    return np.asarray(
+        backproject(
+            vol,
+            jnp.asarray(imgs),
+            jnp.asarray(rots),
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            order=order,
+            half_volume=True,
+            half_image=half_image,
+            max_r=max_r,
+        )
+    )
 
 
 def _backproject_jax(imgs, rots, image_shape, volume_shape, order, half_image, max_r):
     """JAX relion_interp half-volume backprojection."""
-    return np.asarray(relion_interp.backproject(
-        jnp.asarray(imgs), jnp.asarray(rots),
-        image_shape=image_shape, volume_shape=volume_shape,
-        order=order, half_volume=True, half_image=half_image,
-        max_r=max_r,
-    ))
+    return np.asarray(
+        relion_interp.backproject(
+            jnp.asarray(imgs),
+            jnp.asarray(rots),
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            order=order,
+            half_volume=True,
+            half_image=half_image,
+            max_r=max_r,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +208,7 @@ HERMITIAN_RTOL = 5e-6
 # Tests: single-frequency images
 # ---------------------------------------------------------------------------
 
+
 class TestHermitianSingleFreq:
     """Hermitian symmetry for single-frequency real-signal images.
 
@@ -216,18 +232,15 @@ class TestHermitianSingleFreq:
     ROTATIONS = [
         pytest.param(np.eye(3, dtype=np.float32), id="R=I"),
         pytest.param(
-            np.array([[1, 0, 0], [0, np.cos(0.1), -np.sin(0.1)],
-                       [0, np.sin(0.1), np.cos(0.1)]], dtype=np.float32),
+            np.array([[1, 0, 0], [0, np.cos(0.1), -np.sin(0.1)], [0, np.sin(0.1), np.cos(0.1)]], dtype=np.float32),
             id="Rx_0.1",
         ),
         pytest.param(
-            np.array([[np.cos(0.1), 0, np.sin(0.1)], [0, 1, 0],
-                       [-np.sin(0.1), 0, np.cos(0.1)]], dtype=np.float32),
+            np.array([[np.cos(0.1), 0, np.sin(0.1)], [0, 1, 0], [-np.sin(0.1), 0, np.cos(0.1)]], dtype=np.float32),
             id="Ry_0.1",
         ),
         pytest.param(
-            np.array([[np.cos(0.1), -np.sin(0.1), 0],
-                       [np.sin(0.1), np.cos(0.1), 0], [0, 0, 1]], dtype=np.float32),
+            np.array([[np.cos(0.1), -np.sin(0.1), 0], [np.sin(0.1), np.cos(0.1), 0], [0, 0, 1]], dtype=np.float32),
             id="Rz_0.1",
         ),
     ]
@@ -240,13 +253,10 @@ class TestHermitianSingleFreq:
         fy, fx = freq
         imgs = _single_freq_full_image(fy, fx, self.image_shape)
         rots = rotation.reshape(1, 3, 3)
-        bp = (_backproject_cuda if backend == "cuda" else _backproject_jax)
-        vol = bp(imgs, rots, self.image_shape, self.volume_shape,
-                 order=order, half_image=False, max_r=None)
+        bp = _backproject_cuda if backend == "cuda" else _backproject_jax
+        vol = bp(imgs, rots, self.image_shape, self.volume_shape, order=order, half_image=False, max_r=None)
         rel_err, max_abs, _ = _hermitian_error_on_plane(vol, self.volume_shape, 0)
-        assert max_abs < HERMITIAN_RTOL, (
-            f"kz=0 Hermitian violation: freq={freq}, max_abs={max_abs:.2e}"
-        )
+        assert max_abs < HERMITIAN_RTOL, f"kz=0 Hermitian violation: freq={freq}, max_abs={max_abs:.2e}"
 
     @pytest.mark.parametrize("freq", FREQS)
     @pytest.mark.parametrize("rotation", ROTATIONS)
@@ -256,18 +266,16 @@ class TestHermitianSingleFreq:
         fy, fx = freq
         imgs = _single_freq_half_image(fy, fx, self.image_shape)
         rots = rotation.reshape(1, 3, 3)
-        bp = (_backproject_cuda if backend == "cuda" else _backproject_jax)
-        vol = bp(imgs, rots, self.image_shape, self.volume_shape,
-                 order=order, half_image=True, max_r=None)
+        bp = _backproject_cuda if backend == "cuda" else _backproject_jax
+        vol = bp(imgs, rots, self.image_shape, self.volume_shape, order=order, half_image=True, max_r=None)
         rel_err, max_abs, _ = _hermitian_error_on_plane(vol, self.volume_shape, 0)
-        assert max_abs < HERMITIAN_RTOL, (
-            f"kz=0 Hermitian violation: freq={freq}, max_abs={max_abs:.2e}"
-        )
+        assert max_abs < HERMITIAN_RTOL, f"kz=0 Hermitian violation: freq={freq}, max_abs={max_abs:.2e}"
 
 
 # ---------------------------------------------------------------------------
 # Tests: random real-signal images (many frequencies, with max_r)
 # ---------------------------------------------------------------------------
+
 
 class TestHermitianRandomImages:
     """Hermitian symmetry with many random real-signal images and max_r.
@@ -292,13 +300,10 @@ class TestHermitianRandomImages:
             imgs = _real_signal_half_images(self.n_images, self.image_shape, seed=0)
         else:
             imgs = _real_signal_images(self.n_images, self.image_shape, seed=0)
-        bp = (_backproject_cuda if backend == "cuda" else _backproject_jax)
-        vol = bp(imgs, rots, self.image_shape, self.volume_shape,
-                 order=order, half_image=half_image, max_r=self.max_r)
+        bp = _backproject_cuda if backend == "cuda" else _backproject_jax
+        vol = bp(imgs, rots, self.image_shape, self.volume_shape, order=order, half_image=half_image, max_r=self.max_r)
         rel_err, max_abs, n_viol = _hermitian_error_on_plane(vol, self.volume_shape, 0)
-        assert rel_err < 1e-4, (
-            f"kz=0 rel_err={rel_err:.2e}, max_abs={max_abs:.2e}, violations={n_viol}"
-        )
+        assert rel_err < 1e-4, f"kz=0 rel_err={rel_err:.2e}, max_abs={max_abs:.2e}, violations={n_viol}"
 
     @pytest.mark.parametrize("order", ORDERS)
     @pytest.mark.parametrize("half_image", IMAGE_MODES)
@@ -309,19 +314,17 @@ class TestHermitianRandomImages:
             imgs = _real_signal_half_images(self.n_images, self.image_shape, seed=0)
         else:
             imgs = _real_signal_images(self.n_images, self.image_shape, seed=0)
-        bp = (_backproject_cuda if backend == "cuda" else _backproject_jax)
-        vol = bp(imgs, rots, self.image_shape, self.volume_shape,
-                 order=order, half_image=half_image, max_r=self.max_r)
+        bp = _backproject_cuda if backend == "cuda" else _backproject_jax
+        vol = bp(imgs, rots, self.image_shape, self.volume_shape, order=order, half_image=half_image, max_r=self.max_r)
         kz_nyq = self.N // 2
         rel_err, max_abs, n_viol = _hermitian_error_on_plane(vol, self.volume_shape, kz_nyq)
-        assert rel_err < 1e-4, (
-            f"kz=Nyquist rel_err={rel_err:.2e}, max_abs={max_abs:.2e}, violations={n_viol}"
-        )
+        assert rel_err < 1e-4, f"kz=Nyquist rel_err={rel_err:.2e}, max_abs={max_abs:.2e}, violations={n_viol}"
 
 
 # ---------------------------------------------------------------------------
 # Tests: full-image vs half-image agreement
 # ---------------------------------------------------------------------------
+
 
 class TestFullHalfImageAgreement:
     """Full-image and half-image backprojection should produce identical half-volumes."""
@@ -337,10 +340,8 @@ class TestFullHalfImageAgreement:
         rots = _random_rotations(self.n_images, seed=3)
         imgs_full = _real_signal_images(self.n_images, self.image_shape, seed=1)
         imgs_half = _real_signal_half_images(self.n_images, self.image_shape, seed=1)
-        bp = (_backproject_cuda if backend == "cuda" else _backproject_jax)
-        vol_full = bp(imgs_full, rots, self.image_shape, self.volume_shape,
-                      order=order, half_image=False, max_r=None)
-        vol_half = bp(imgs_half, rots, self.image_shape, self.volume_shape,
-                      order=order, half_image=True, max_r=None)
+        bp = _backproject_cuda if backend == "cuda" else _backproject_jax
+        vol_full = bp(imgs_full, rots, self.image_shape, self.volume_shape, order=order, half_image=False, max_r=None)
+        vol_half = bp(imgs_half, rots, self.image_shape, self.volume_shape, order=order, half_image=True, max_r=None)
         rel_err = np.linalg.norm(vol_full - vol_half) / (np.linalg.norm(vol_full) + 1e-30)
         assert rel_err < 1e-5, f"full vs half image mismatch: rel_err={rel_err:.2e}"

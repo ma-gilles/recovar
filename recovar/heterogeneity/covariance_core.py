@@ -23,13 +23,15 @@ NVTX_DOMAIN_COV_CORE = "covariance_core"
 
 # Covariance computation
 
-def pick_frequencies(freq, radius = 2, use_half = True):
-    if use_half:
-        return (jnp.linalg.norm(freq, axis = -1) <= radius) * (freq[...,0] >= 0) 
-    else:
-        return (jnp.linalg.norm(freq, axis = -1) <= radius)
 
-def get_picked_frequencies(volume_shape, radius = 2, use_half = True):
+def pick_frequencies(freq, radius=2, use_half=True):
+    if use_half:
+        return (jnp.linalg.norm(freq, axis=-1) <= radius) * (freq[..., 0] >= 0)
+    else:
+        return jnp.linalg.norm(freq, axis=-1) <= radius
+
+
+def get_picked_frequencies(volume_shape, radius=2, use_half=True):
     # Chose the frequency we will use to compute.
     volume_size = np.prod(volume_shape)
     three_d_freqs = core.vec_indices_to_frequencies(jnp.arange(volume_size), volume_shape)
@@ -38,18 +40,31 @@ def get_picked_frequencies(volume_shape, radius = 2, use_half = True):
     picked_frequency_indices = core.frequencies_to_vec_indices(picked_three_d_freqs, volume_shape)
     return picked_frequency_indices
 
-@functools.partial(jax.jit, static_argnums = [4,5,6,7,8,9,10])    
+
+@functools.partial(jax.jit, static_argnums=[4, 5, 6, 7, 8, 9, 10])
 @nvtx.annotate("get_per_image_tight_mask", color="green", domain=NVTX_DOMAIN_COV_CORE)
-def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_threshold, image_shape, volume_shape, grid_size, padding, disc_type, binary = True, soften = -1):
-    
-    disc_type = 'linear_interp'
-    
-    if disc_type == 'cubic':
+def get_per_image_tight_mask(
+    volume_mask,
+    rotation_matrices,
+    image_mask,
+    mask_threshold,
+    image_shape,
+    volume_shape,
+    grid_size,
+    padding,
+    disc_type,
+    binary=True,
+    soften=-1,
+):
+
+    disc_type = "linear_interp"
+
+    if disc_type == "cubic":
         extra_padding = 0
         mask_ft = volume_mask
     else:
         # if padding is already there, do nothing else double image size.
-        extra_padding = grid_size if ( padding == 0 ) else 0
+        extra_padding = grid_size if (padding == 0) else 0
         # Do this in half precision? Shouldn't matter much.
         volume_mask = volume_mask.reshape(volume_shape)
         volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
@@ -59,24 +74,23 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
     padded_volume_shape = tuple(np.array(volume_shape) + extra_padding)
     padded_grid_size = grid_size + extra_padding
 
-    proj_mask = core.slice_volume(mask_ft, rotation_matrices, padded_image_shape,
-                               padded_volume_shape, disc_type)
-    
+    proj_mask = core.slice_volume(mask_ft, rotation_matrices, padded_image_shape, padded_volume_shape, disc_type)
+
     proj_mask = fourier_transform_utils.get_idft2(proj_mask.reshape([-1] + list(padded_image_shape)))
-                             
+
     if extra_padding > 0:
         proj_mask = pad.unpad_images_spatial_domain(proj_mask, extra_padding)
-              
+
     if padding > 0:
         image_mask = pad.pad_images_spatial_domain(image_mask, padding)[0]
 
     if binary:
-        proj_mask = (proj_mask > mask_threshold)  * ( image_mask[None]  if image_mask is not None else 1)
-        
+        proj_mask = (proj_mask > mask_threshold) * (image_mask[None] if image_mask is not None else 1)
+
     if soften > 0:
         # Soft mask
         soft_edge_kernel = mask.make_soft_edged_kernel(soften, image_shape).astype(volume_mask.dtype)
-        
+
         # Convolve
         soft_edge_kernel_ft = fourier_transform_utils.get_dft2(soft_edge_kernel)
         proj_mask_ft = fourier_transform_utils.get_dft2(proj_mask.reshape([-1] + list(image_shape)))
@@ -87,7 +101,7 @@ def get_per_image_tight_mask(volume_mask, rotation_matrices, image_mask, mask_th
     return proj_mask
 
 
-@functools.partial(jax.jit, static_argnums = [2, 3])
+@functools.partial(jax.jit, static_argnums=[2, 3])
 @nvtx.annotate("apply_image_masks", color="cyan", domain=NVTX_DOMAIN_COV_CORE)
 def apply_image_masks(images, image_masks, image_shape, half_images=False):
     if half_images:
@@ -104,7 +118,7 @@ def apply_image_masks(images, image_masks, image_shape, half_images=False):
     return images
 
 
-@functools.partial(jax.jit, static_argnums = [2, 3])
+@functools.partial(jax.jit, static_argnums=[2, 3])
 @nvtx.annotate("apply_image_masks_to_eigen", color="cyan", domain=NVTX_DOMAIN_COV_CORE)
 def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape, half_images=False):
     if half_images:
@@ -120,6 +134,7 @@ def apply_image_masks_to_eigen(proj_eigen, image_masks, image_shape, half_images
         proj_eigen = fourier_transform_utils.get_dft2(proj_eigen).reshape([*proj_eigen.shape[0:2], -1])
     return proj_eigen
 
+
 def check_mask(mask):
     if mask is None:
         logger.info("no mask used")
@@ -131,17 +146,23 @@ def check_mask(mask):
         logger.info("mask is all ones; treating it as no mask")
     return no_mask
 
+
 batch_forward_model = jax.vmap(
     lambda v, ctf, gpi: v[gpi] * ctf,
     in_axes=(0, None, None),
 )
 
-@functools.partial(jax.jit, static_argnums = [3,4,5,6,7])
+
+@functools.partial(jax.jit, static_argnums=[3, 4, 5, 6, 7])
 @nvtx.annotate("batch_over_vol_forward_model", color="blue", domain=NVTX_DOMAIN_COV_CORE)
-def batch_over_vol_forward_model(mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, ctf, disc_type):
-    batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(rotation_matrices, image_shape, volume_shape )
-    batch_CTF = ctf( CTF_params, image_shape, voxel_size)
-    projected_mean =  batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images)
+def batch_over_vol_forward_model(
+    mean, CTF_params, rotation_matrices, image_shape, volume_shape, voxel_size, ctf, disc_type
+):
+    batch_grid_pt_vec_ind_of_images = core.batch_get_nearest_gridpoint_indices(
+        rotation_matrices, image_shape, volume_shape
+    )
+    batch_CTF = ctf(CTF_params, image_shape, voxel_size)
+    projected_mean = batch_forward_model(mean, batch_CTF, batch_grid_pt_vec_ind_of_images)
     return projected_mean
 
 
@@ -168,8 +189,13 @@ def batch_vol_forward_from_map(
         If True, *volumes* are rfft-packed half-volumes ``(batch, N0*N1*(N2//2+1))``.
     """
     slices = core.batch_slice_volume(
-        volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type,
-        half_volume=half_volume, half_image=half_image,
+        volumes,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        config.disc_type,
+        half_volume=half_volume,
+        half_image=half_image,
     )
     if not skip_ctf:
         ctf = config.compute_ctf(ctf_params, half_image=half_image)
@@ -180,6 +206,7 @@ def batch_vol_forward_from_map(
 # ============================================================================
 # Equinox-based API
 # ============================================================================
+
 
 @eqx.filter_jit
 @nvtx.annotate("subtract_projected_mean", color="yellow", domain=NVTX_DOMAIN_COV_CORE)
@@ -198,42 +225,39 @@ def subtract_projected_mean(
     """
     translated = core.translate_images(images, translations, config.image_shape)
     if config.premultiplied_ctf:
-        projected = core_forward.forward_model(
-            config, mean, ctf_params, rotation_matrices, skip_ctf=True
-        )
+        projected = core_forward.forward_model(config, mean, ctf_params, rotation_matrices, skip_ctf=True)
         centered = translated - projected * config.compute_ctf(ctf_params) ** 2
     else:
-        projected = core_forward.forward_model(
-            config, mean, ctf_params, rotation_matrices, skip_ctf=False
-        )
+        projected = core_forward.forward_model(config, mean, ctf_params, rotation_matrices, skip_ctf=False)
         centered = translated - projected
     return centered
 
 
-def triangular_kernel(gridpoints, gridpoint_target, kernel_width = 1):
+def triangular_kernel(gridpoints, gridpoint_target, kernel_width=1):
     diff = jnp.abs(gridpoints - gridpoint_target)
     per_dim = jnp.where(diff < kernel_width, 1 - diff / kernel_width, 0)
     return jnp.prod(per_dim, axis=-1)
 
 
-def square_kernel(gridpoints, gridpoint_target, kernel_width = 1):
+def square_kernel(gridpoints, gridpoint_target, kernel_width=1):
     diff = jnp.abs(gridpoints - gridpoint_target)
     per_dim = jnp.where(diff < kernel_width / 2, 1 / kernel_width, 0)
     return jnp.prod(per_dim, axis=-1)
 
 
 @nvtx.annotate("sum_up_over_near_grid_points", color="orange", domain=NVTX_DOMAIN_COV_CORE)
-def sum_up_over_near_grid_points(image, gridpoints, gridpoint_target, kernel = "triangular", kernel_width = 1):
-    kernel_vals = evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = kernel, kernel_width = kernel_width)
-    kernel_estimated = jnp.sum(kernel_vals * image, axis =-1)
+def sum_up_over_near_grid_points(image, gridpoints, gridpoint_target, kernel="triangular", kernel_width=1):
+    kernel_vals = evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel=kernel, kernel_width=kernel_width)
+    kernel_estimated = jnp.sum(kernel_vals * image, axis=-1)
     return kernel_estimated
 
+
 @nvtx.annotate("evaluate_kernel_on_grid", color="magenta", domain=NVTX_DOMAIN_COV_CORE)
-def evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel = "triangular", kernel_width = 1):
+def evaluate_kernel_on_grid(gridpoints, gridpoint_target, kernel="triangular", kernel_width=1):
     if kernel == "triangular":
-        kernel_vals = triangular_kernel(gridpoints, gridpoint_target, kernel_width = kernel_width)
+        kernel_vals = triangular_kernel(gridpoints, gridpoint_target, kernel_width=kernel_width)
     elif kernel == "square":
-        kernel_vals = square_kernel(gridpoints, gridpoint_target, kernel_width = kernel_width)
+        kernel_vals = square_kernel(gridpoints, gridpoint_target, kernel_width=kernel_width)
     else:
         raise ValueError("Kernel function not recognized")
     return kernel_vals

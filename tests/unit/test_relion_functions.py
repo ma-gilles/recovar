@@ -58,22 +58,20 @@ def test_adjust_regularization_relion_style_half_matches_full():
 
     cpu_device = jax.devices("cpu")[0]
     with jax.default_device(cpu_device):
-        filt_full = np.asarray(
-            ftu.half_volume_to_full_volume(jnp.array(filt_half), volume_shape)
-        ).reshape(-1).real.astype(np.float32)
+        filt_full = (
+            np.asarray(ftu.half_volume_to_full_volume(jnp.array(filt_half), volume_shape))
+            .reshape(-1)
+            .real.astype(np.float32)
+        )
         reg_full = np.asarray(
-            rf.adjust_regularization_relion_style(
-                jnp.array(filt_full), volume_shape=volume_shape, tau=jnp.array(tau)
-            )
+            rf.adjust_regularization_relion_style(jnp.array(filt_full), volume_shape=volume_shape, tau=jnp.array(tau))
         ).reshape(-1)
         reg_half = np.asarray(
             rf.adjust_regularization_relion_style(
                 jnp.array(filt_half), volume_shape=volume_shape, tau=jnp.array(tau), half_volume=True
             )
         ).reshape(-1)
-        reg_full_to_half = np.asarray(
-            ftu.full_volume_to_half_volume(jnp.array(reg_full), volume_shape)
-        ).reshape(-1)
+        reg_full_to_half = np.asarray(ftu.full_volume_to_half_volume(jnp.array(reg_full), volume_shape)).reshape(-1)
 
     np.testing.assert_allclose(reg_half, reg_full_to_half, atol=1e-5, rtol=1e-5)
 
@@ -91,41 +89,71 @@ def test_post_process_from_filter_v2_half_matches_full():
 
     cpu_device = jax.devices("cpu")[0]
     with jax.default_device(cpu_device):
-        ft_ctf_full = np.asarray(
-            ftu.half_volume_to_full_volume(jnp.array(ft_ctf_half), volume_shape)
-        ).reshape(-1).real.astype(np.float32)
+        ft_ctf_full = (
+            np.asarray(ftu.half_volume_to_full_volume(jnp.array(ft_ctf_half), volume_shape))
+            .reshape(-1)
+            .real.astype(np.float32)
+        )
         spatial_rhs = jnp.array(rng.standard_normal(volume_shape).astype(np.float32))
         f_ty_half = np.asarray(ftu.get_dft3_real(spatial_rhs)).reshape(-1).astype(np.complex64)
-        f_ty_full = np.asarray(
-            ftu.half_volume_to_full_volume(jnp.array(f_ty_half), volume_shape)
-        ).reshape(-1).astype(np.complex64)
+        f_ty_full = (
+            np.asarray(ftu.half_volume_to_full_volume(jnp.array(f_ty_half), volume_shape))
+            .reshape(-1)
+            .astype(np.complex64)
+        )
 
         out_full = np.asarray(
             rf.post_process_from_filter_v2(
-                jnp.array(ft_ctf_full), jnp.array(f_ty_full), volume_shape, 1,
-                tau=jnp.array(tau), kernel="triangular", use_spherical_mask=False, grid_correct=False,
+                jnp.array(ft_ctf_full),
+                jnp.array(f_ty_full),
+                volume_shape,
+                1,
+                tau=jnp.array(tau),
+                kernel="triangular",
+                use_spherical_mask=False,
+                grid_correct=False,
                 input_half_volume=False,
             )
         ).reshape(-1)
         out_half = np.asarray(
             rf.post_process_from_filter_v2(
-                jnp.array(ft_ctf_half), jnp.array(f_ty_half), volume_shape, 1,
-                tau=jnp.array(tau), kernel="triangular", use_spherical_mask=False, grid_correct=False,
+                jnp.array(ft_ctf_half),
+                jnp.array(f_ty_half),
+                volume_shape,
+                1,
+                tau=jnp.array(tau),
+                kernel="triangular",
+                use_spherical_mask=False,
+                grid_correct=False,
                 input_half_volume=True,
             )
         ).reshape(-1)
         out_real_full = np.asarray(
             rf.post_process_from_filter_v2(
-                jnp.array(ft_ctf_full), jnp.array(f_ty_full), volume_shape, 1,
-                tau=jnp.array(tau), kernel="triangular", use_spherical_mask=False, grid_correct=False,
-                input_half_volume=False, return_real_space=True,
+                jnp.array(ft_ctf_full),
+                jnp.array(f_ty_full),
+                volume_shape,
+                1,
+                tau=jnp.array(tau),
+                kernel="triangular",
+                use_spherical_mask=False,
+                grid_correct=False,
+                input_half_volume=False,
+                return_real_space=True,
             )
         )
         out_real_half = np.asarray(
             rf.post_process_from_filter_v2(
-                jnp.array(ft_ctf_half), jnp.array(f_ty_half), volume_shape, 1,
-                tau=jnp.array(tau), kernel="triangular", use_spherical_mask=False, grid_correct=False,
-                input_half_volume=True, return_real_space=True,
+                jnp.array(ft_ctf_half),
+                jnp.array(f_ty_half),
+                volume_shape,
+                1,
+                tau=jnp.array(tau),
+                kernel="triangular",
+                use_spherical_mask=False,
+                grid_correct=False,
+                input_half_volume=True,
+                return_real_space=True,
             )
         )
 
@@ -142,10 +170,15 @@ def test_relion_kernel_batch_normalizes_noise_variance_shapes():
         return jnp.ones((params.shape[0], image_shape[0] * w), dtype=jnp.float32)
 
     config = ForwardModelConfig(
-        image_shape=(4, 4), volume_shape=(4, 4, 4),
-        grid_size=4, voxel_size=1.5,
-        padding=0, disc_type="linear_interp", ctf=core.as_ctf_evaluator(ctf_fun),
-        premultiplied_ctf=False, volume_mask_threshold=0.0,
+        image_shape=(4, 4),
+        volume_shape=(4, 4, 4),
+        grid_size=4,
+        voxel_size=1.5,
+        padding=0,
+        disc_type="linear_interp",
+        ctf=core.as_ctf_evaluator(ctf_fun),
+        premultiplied_ctf=False,
+        volume_mask_threshold=0.0,
     )
 
     bsz = 5
@@ -164,7 +197,12 @@ def test_relion_kernel_batch_normalizes_noise_variance_shapes():
     ]
     for noise_var in candidate_noises:
         ft_y, ft_ctf = rf.relion_kernel_batch_from_fft(
-            config, images, ctf_params, rots, trans, noise_var,
+            config,
+            images,
+            ctf_params,
+            rots,
+            trans,
+            noise_var,
         )
         assert np.asarray(ft_y).shape == (half_vol_size,)
         assert np.asarray(ft_ctf).shape == (half_vol_size,)
@@ -303,19 +341,26 @@ def test_relion_kernel_batch_half_image_matches_full_reference():
     data_multiplier = -1.0
 
     config = ForwardModelConfig(
-        image_shape=image_shape, volume_shape=volume_shape,
-        grid_size=grid_size, voxel_size=voxel_size,
-        padding=pad, disc_type="linear_interp", ctf=CTFEvaluator(),
-        premultiplied_ctf=False, volume_mask_threshold=0.0,
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+        grid_size=grid_size,
+        voxel_size=voxel_size,
+        padding=pad,
+        disc_type="linear_interp",
+        ctf=CTFEvaluator(),
+        premultiplied_ctf=False,
+        volume_mask_threshold=0.0,
         data_multiplier=data_multiplier,
     )
 
     raw_images = rng.standard_normal((bsz, grid_size, grid_size)).astype(np.float32)
-    rots = np.stack([
-        np.eye(3, dtype=np.float32),
-        rng.standard_normal((3, 3)).astype(np.float32),
-        rng.standard_normal((3, 3)).astype(np.float32),
-    ])
+    rots = np.stack(
+        [
+            np.eye(3, dtype=np.float32),
+            rng.standard_normal((3, 3)).astype(np.float32),
+            rng.standard_normal((3, 3)).astype(np.float32),
+        ]
+    )
     for i in range(1, bsz):
         q, _ = np.linalg.qr(rots[i])
         rots[i] = q * np.sign(np.linalg.det(q))
@@ -336,18 +381,32 @@ def test_relion_kernel_batch_half_image_matches_full_reference():
     full_images = core.translate_images(full_images, jnp.array(trans), image_shape)
     noise_full = noise_mod.to_batched_pixel_noise(jnp.array(noise_var), image_shape, batch_size=bsz)
     full_images_normed = full_images / noise_full
-    ref_Ft_y = np.asarray(core_forward.adjoint_forward_model(
-        config, full_images_normed, jnp.array(ctf_params), jnp.array(rots),
-        skip_ctf=False, volume=None, half_image=False,
-    ))
+    ref_Ft_y = np.asarray(
+        core_forward.adjoint_forward_model(
+            config,
+            full_images_normed,
+            jnp.array(ctf_params),
+            jnp.array(rots),
+            skip_ctf=False,
+            volume=None,
+            half_image=False,
+        )
+    )
     ctf_full = config.compute_ctf(jnp.array(ctf_params)) / noise_full
-    ref_Ft_ctf = np.asarray(core_forward.adjoint_forward_model(
-        config, ctf_full, jnp.array(ctf_params), jnp.array(rots),
-        volume=None, half_image=False,
-    ))
+    ref_Ft_ctf = np.asarray(
+        core_forward.adjoint_forward_model(
+            config,
+            ctf_full,
+            jnp.array(ctf_params),
+            jnp.array(rots),
+            volume=None,
+            half_image=False,
+        )
+    )
 
     # --- New: half-image path via relion_kernel_batch (outputs half-volume) ---
     import recovar.core.fourier_transform_utils as ftu
+
     half_Ft_y, half_Ft_ctf = rf.relion_kernel_batch(
         config,
         jnp.array(raw_images),
@@ -379,10 +438,15 @@ def test_relion_kernel_batch_complex_input_matches_full_reference():
     bsz = 3
 
     config = ForwardModelConfig(
-        image_shape=image_shape, volume_shape=volume_shape,
-        grid_size=grid_size, voxel_size=1.5,
-        padding=pad, disc_type="linear_interp", ctf=CTFEvaluator(),
-        premultiplied_ctf=False, volume_mask_threshold=0.0,
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+        grid_size=grid_size,
+        voxel_size=1.5,
+        padding=pad,
+        disc_type="linear_interp",
+        ctf=CTFEvaluator(),
+        premultiplied_ctf=False,
+        volume_mask_threshold=0.0,
     )
 
     raw_images = rng.standard_normal((bsz, grid_size, grid_size)).astype(np.float32)
@@ -401,19 +465,39 @@ def test_relion_kernel_batch_complex_input_matches_full_reference():
     full_images = core.translate_images(complex_images, trans, image_shape)
     noise_full = noise_mod.to_batched_pixel_noise(jnp.array(noise_var), image_shape, batch_size=bsz)
     full_normed = full_images / noise_full
-    ref_Ft_y = np.asarray(core_forward.adjoint_forward_model(
-        config, full_normed, jnp.array(ctf_params), rots,
-        skip_ctf=False, volume=None, half_image=False,
-    ))
+    ref_Ft_y = np.asarray(
+        core_forward.adjoint_forward_model(
+            config,
+            full_normed,
+            jnp.array(ctf_params),
+            rots,
+            skip_ctf=False,
+            volume=None,
+            half_image=False,
+        )
+    )
     ctf_full = config.compute_ctf(jnp.array(ctf_params)) / noise_full
-    ref_Ft_ctf = np.asarray(core_forward.adjoint_forward_model(
-        config, ctf_full, jnp.array(ctf_params), rots, volume=None, half_image=False,
-    ))
+    ref_Ft_ctf = np.asarray(
+        core_forward.adjoint_forward_model(
+            config,
+            ctf_full,
+            jnp.array(ctf_params),
+            rots,
+            volume=None,
+            half_image=False,
+        )
+    )
 
     # --- New: half-image path (outputs half-volume) ---
     import recovar.core.fourier_transform_utils as ftu
+
     half_Ft_y, half_Ft_ctf = rf.relion_kernel_batch_from_fft(
-        config, complex_images, jnp.array(ctf_params), rots, trans, jnp.array(noise_var),
+        config,
+        complex_images,
+        jnp.array(ctf_params),
+        rots,
+        trans,
+        jnp.array(noise_var),
     )
     new_Ft_y = np.asarray(ftu.half_volume_to_full_volume(half_Ft_y, volume_shape)).reshape(-1)
     new_Ft_ctf = np.asarray(ftu.half_volume_to_full_volume(half_Ft_ctf, volume_shape)).reshape(-1)
@@ -433,10 +517,15 @@ def test_relion_kernel_batch_accumulator_matches_sequential():
     volume_shape = (grid_size + pad,) * 3
 
     config = ForwardModelConfig(
-        image_shape=image_shape, volume_shape=volume_shape,
-        grid_size=grid_size, voxel_size=1.0,
-        padding=pad, disc_type="linear_interp", ctf=CTFEvaluator(),
-        premultiplied_ctf=False, volume_mask_threshold=0.0,
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+        grid_size=grid_size,
+        voxel_size=1.0,
+        padding=pad,
+        disc_type="linear_interp",
+        ctf=CTFEvaluator(),
+        premultiplied_ctf=False,
+        volume_mask_threshold=0.0,
     )
 
     bsz = 2
@@ -476,10 +565,15 @@ def test_relion_kernel_batch_half_volume_output_on_gpu(gpu_device):
     bsz = 3
 
     config = ForwardModelConfig(
-        image_shape=image_shape, volume_shape=volume_shape,
-        grid_size=grid_size, voxel_size=1.5,
-        padding=pad, disc_type="linear_interp", ctf=CTFEvaluator(),
-        premultiplied_ctf=False, volume_mask_threshold=0.0,
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+        grid_size=grid_size,
+        voxel_size=1.5,
+        padding=pad,
+        disc_type="linear_interp",
+        ctf=CTFEvaluator(),
+        premultiplied_ctf=False,
+        volume_mask_threshold=0.0,
         data_multiplier=-1.0,
     )
 
@@ -529,15 +623,19 @@ def test_post_process_from_filter_v2_half_matches_full_gpu(gpu_device):
     ft_ctf_half = rng.random(half_size).astype(np.float32) + 0.2
     cpu_device = jax.devices("cpu")[0]
     with jax.default_device(cpu_device):
-        ft_ctf_full = np.asarray(
-            ftu.half_volume_to_full_volume(jnp.array(ft_ctf_half), volume_shape)
-        ).reshape(-1).real.astype(np.float32)
+        ft_ctf_full = (
+            np.asarray(ftu.half_volume_to_full_volume(jnp.array(ft_ctf_half), volume_shape))
+            .reshape(-1)
+            .real.astype(np.float32)
+        )
 
         spatial_rhs = jnp.array(rng.standard_normal(volume_shape).astype(np.float32))
         f_ty_half = np.asarray(ftu.get_dft3_real(spatial_rhs)).reshape(-1).astype(np.complex64)
-        f_ty_full = np.asarray(
-            ftu.half_volume_to_full_volume(jnp.array(f_ty_half), volume_shape)
-        ).reshape(-1).astype(np.complex64)
+        f_ty_full = (
+            np.asarray(ftu.half_volume_to_full_volume(jnp.array(f_ty_half), volume_shape))
+            .reshape(-1)
+            .astype(np.complex64)
+        )
 
     tau = rng.random(int(np.prod(volume_shape))).astype(np.float32) + 0.3
 
@@ -547,9 +645,12 @@ def test_post_process_from_filter_v2_half_matches_full_gpu(gpu_device):
                 rf.post_process_from_filter_v2(
                     jax.device_put(jnp.array(ft_ctf_full), gpu_device),
                     jax.device_put(jnp.array(f_ty_full), gpu_device),
-                    volume_shape, 1,
+                    volume_shape,
+                    1,
                     tau=jax.device_put(jnp.array(tau), gpu_device),
-                    kernel="triangular", use_spherical_mask=False, grid_correct=False,
+                    kernel="triangular",
+                    use_spherical_mask=False,
+                    grid_correct=False,
                     input_half_volume=False,
                 )
             )
@@ -557,9 +658,12 @@ def test_post_process_from_filter_v2_half_matches_full_gpu(gpu_device):
                 rf.post_process_from_filter_v2(
                     jax.device_put(jnp.array(ft_ctf_half), gpu_device),
                     jax.device_put(jnp.array(f_ty_half), gpu_device),
-                    volume_shape, 1,
+                    volume_shape,
+                    1,
                     tau=jax.device_put(jnp.array(tau), gpu_device),
-                    kernel="triangular", use_spherical_mask=False, grid_correct=False,
+                    kernel="triangular",
+                    use_spherical_mask=False,
+                    grid_correct=False,
                     input_half_volume=True,
                 )
             )
@@ -570,10 +674,6 @@ def test_post_process_from_filter_v2_half_matches_full_gpu(gpu_device):
 
     cpu_device = jax.devices("cpu")[0]
     with jax.default_device(cpu_device):
-        vol_full_real = np.asarray(
-            ftu.get_idft3(jnp.array(out_full.reshape(volume_shape)))
-        ).real
-        vol_half_real = np.asarray(
-            ftu.get_idft3(jnp.array(out_half.reshape(volume_shape)))
-        ).real
+        vol_full_real = np.asarray(ftu.get_idft3(jnp.array(out_full.reshape(volume_shape)))).real
+        vol_half_real = np.asarray(ftu.get_idft3(jnp.array(out_half.reshape(volume_shape)))).real
     np.testing.assert_allclose(vol_half_real, vol_full_real, atol=1e-4, rtol=1e-4)

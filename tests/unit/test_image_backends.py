@@ -124,7 +124,7 @@ def test_tiltseries_parse_particle_tilt_accepts_boolean_indices(monkeypatch):
 
     assert len(p2t) == 2
     np.testing.assert_array_equal(p2t[0], np.array([1, 3], dtype=int))  # g1
-    np.testing.assert_array_equal(p2t[1], np.array([4], dtype=int))     # g3
+    np.testing.assert_array_equal(p2t[1], np.array([4], dtype=int))  # g3
     assert t2p == {1: 0, 3: 0, 4: 1}
 
 
@@ -280,10 +280,10 @@ def test_image_count_batch_loader_skips_zero_image_particles():
     class _SparseTiltDataset:
         def __init__(self):
             self.particle_groups = {
-                "p0": np.array([], dtype=np.int32),          # 0 selected
-                "p1": np.array([10, 11], dtype=np.int32),    # 2 selected
-                "p2": np.array([], dtype=np.int32),          # 0 selected
-                "p3": np.array([30], dtype=np.int32),        # 1 selected
+                "p0": np.array([], dtype=np.int32),  # 0 selected
+                "p1": np.array([10, 11], dtype=np.int32),  # 2 selected
+                "p2": np.array([], dtype=np.int32),  # 0 selected
+                "p3": np.array([30], dtype=np.int32),  # 1 selected
             }
             self.num_tilts = None
 
@@ -340,9 +340,9 @@ def test_image_count_batch_loader_subset_wrapper_preserves_duplicate_parent_mapp
     class _ParentTiltDataset:
         def __init__(self):
             self._particle_tilts = [
-                np.array([10, 11], dtype=np.int32),          # 2 images
-                np.array([20, 21, 22], dtype=np.int32),      # 3 images
-                np.array([30], dtype=np.int32),              # 1 image
+                np.array([10, 11], dtype=np.int32),  # 2 images
+                np.array([20, 21, 22], dtype=np.int32),  # 3 images
+                np.array([30], dtype=np.int32),  # 1 image
             ]
             self.num_tilts = None
 
@@ -405,10 +405,10 @@ def test_image_count_batch_loader_nested_subset_wrapper_preserves_mapping_and_du
     class _ParentTiltDataset:
         def __init__(self):
             self._particle_tilts = [
-                np.array([0, 1], dtype=np.int32),       # 2 images
-                np.array([10], dtype=np.int32),         # 1 image
-                np.array([20, 21, 22], dtype=np.int32), # 3 images
-                np.array([30], dtype=np.int32),         # 1 image
+                np.array([0, 1], dtype=np.int32),  # 2 images
+                np.array([10], dtype=np.int32),  # 1 image
+                np.array([20, 21, 22], dtype=np.int32),  # 3 images
+                np.array([30], dtype=np.int32),  # 1 image
             ]
             self.num_tilts = None
 
@@ -421,8 +421,8 @@ def test_image_count_batch_loader_nested_subset_wrapper_preserves_mapping_and_du
             return images, int(idx), tilt_ids
 
     parent = _ParentTiltDataset()
-    subset_lvl1 = image_backends._SimpleSubset(parent, [3, 1, 0])      # maps local->[3,1,0]
-    subset_lvl2 = image_backends._SimpleSubset(subset_lvl1, [2, 0, 2]) # maps to base [0,3,0]
+    subset_lvl1 = image_backends._SimpleSubset(parent, [3, 1, 0])  # maps local->[3,1,0]
+    subset_lvl2 = image_backends._SimpleSubset(subset_lvl1, [2, 0, 2])  # maps to base [0,3,0]
 
     loader = image_backends._ImageCountBatchLoader(subset_lvl2, batch_size=3, pad_to_batch=False)
 
@@ -608,8 +608,12 @@ def test_tiltseries_dataset_negative_num_tilts_matches_all_tilts(monkeypatch):
     monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _Source())
     monkeypatch.setattr(image_backends.starfile.StarFile, "load", lambda _p: SimpleNamespace(df=df))
 
-    ds_all = image_backends.TiltSeriesDataset("dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5")
-    ds_neg = image_backends.TiltSeriesDataset("dummy.star", num_tilts=-1, random_tilts=False, tilt_file_option="relion5")
+    ds_all = image_backends.TiltSeriesDataset(
+        "dummy.star", num_tilts=None, random_tilts=False, tilt_file_option="relion5"
+    )
+    ds_neg = image_backends.TiltSeriesDataset(
+        "dummy.star", num_tilts=-1, random_tilts=False, tilt_file_option="relion5"
+    )
 
     assert ds_neg.num_tilts is None
     for pidx in range(len(ds_all)):
@@ -938,7 +942,9 @@ def test_collate_to_jax_single_numpy_batch_skips_concatenate(monkeypatch):
     monkeypatch.setattr(
         image_backends.np,
         "concatenate",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("single-item fast path should skip concatenate")),
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("single-item fast path should skip concatenate")
+        ),
     )
 
     out = image_backends._collate_batch_to_jax([arr])
@@ -1075,11 +1081,23 @@ def test_tiltseries_subset_generator_rejects_bad_particle_masks(monkeypatch):
 
     ds = image_backends.TiltSeriesDataset("dummy.star", num_tilts=1, random_tilts=False, tilt_file_option="relion5")
     with pytest.raises(ValueError, match="boolean mask must be 1D"):
-        list(ds.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([[True, False, True]], dtype=bool), mode="tilt_series"))
+        list(
+            ds.get_dataset_subset_generator(
+                batch_size=8, subset_indices=np.array([[True, False, True]], dtype=bool), mode="tilt_series"
+            )
+        )
     with pytest.raises(ValueError, match="must match total size"):
-        list(ds.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([True, False], dtype=bool), mode="tilt_series"))
+        list(
+            ds.get_dataset_subset_generator(
+                batch_size=8, subset_indices=np.array([True, False], dtype=bool), mode="tilt_series"
+            )
+        )
     with pytest.raises(IndexError, match="negative"):
-        list(ds.get_dataset_subset_generator(batch_size=8, subset_indices=np.array([-1], dtype=np.int32), mode="tilt_series"))
+        list(
+            ds.get_dataset_subset_generator(
+                batch_size=8, subset_indices=np.array([-1], dtype=np.int32), mode="tilt_series"
+            )
+        )
 
 
 def test_tiltseries_image_subset_generator_preserves_requested_image_order_and_duplicates(monkeypatch):
@@ -1219,7 +1237,9 @@ def test_tiltseries_dataset_ind_subset_preserves_image_tilt_alignment(monkeypatc
 
     # Reordered subset over original row indices.
     subset = np.array([5, 2, 4, 1], dtype=np.int32)
-    ds = image_backends.TiltSeriesDataset("dummy.star", ind=subset, num_tilts=1, random_tilts=False, tilt_file_option="relion5")
+    ds = image_backends.TiltSeriesDataset(
+        "dummy.star", ind=subset, num_tilts=1, random_tilts=False, tilt_file_option="relion5"
+    )
     assert ds.dataset_tilt_indices == [0, 1, 2]
 
     # Direct image fetch should map to subset-local order: local 0 == original 5.

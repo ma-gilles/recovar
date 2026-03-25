@@ -73,9 +73,7 @@ def _prompt_choice(label, options, default=None):
         marker = " (default)" if val == default else ""
         print(f"    {_CYAN}{i}{_RESET}) {val}  {_DIM}— {desc}{marker}{_RESET}")
     while True:
-        raw = _prompt("Choice", default=str(next(
-            (i for i, (v, _) in enumerate(options, 1) if v == default), 1
-        )))
+        raw = _prompt("Choice", default=str(next((i for i, (v, _) in enumerate(options, 1) if v == default), 1)))
         try:
             idx = int(raw)
             if 1 <= idx <= len(options):
@@ -144,12 +142,10 @@ def _pick_file(label, patterns, required=True, allow_special=None):
 
 # ── Main wizard ─────────────────────────────────────────────────────────────
 
+
 def main():
-    parser = argparse.ArgumentParser(
-        description="Interactive wizard for configuring RECOVAR pipeline runs."
-    )
-    parser.add_argument("--dry-run", action="store_true",
-                        help="Print the command but don't execute it")
+    parser = argparse.ArgumentParser(description="Interactive wizard for configuring RECOVAR pipeline runs.")
+    parser.add_argument("--dry-run", action="store_true", help="Print the command but don't execute it")
     args = parser.parse_args()
 
     print()
@@ -180,8 +176,16 @@ def main():
 
     # ── Step 2: Output directory ─────────────────────────────────────────
     _heading("Step 2: Output directory")
-    outdir = _prompt("Output directory", default="recovar_output")
-    cmd_parts.extend(["-o", outdir])
+    _info("You can use a simple output directory, or use the project system")
+    _info("for organized, auto-numbered job directories.")
+    use_project = _prompt_yesno("Use project system (recommended for multi-step workflows)?", default=False)
+    if use_project:
+        project_dir = _prompt("Project directory", default="recovar_project")
+        cmd_parts.extend(["--project", project_dir])
+        _info(f"Output will be auto-numbered under {project_dir}/Pipeline/job_NNNN/")
+    else:
+        outdir = _prompt("Output directory", default="recovar_output")
+        cmd_parts.extend(["-o", outdir])
 
     # ── Step 2b: Data directory & strip-prefix (for .star / .cs) ────────
     if is_star_or_cs:
@@ -190,8 +194,7 @@ def main():
         _info("in the .star/.cs file, specify the base directory here.")
         _info("RECOVAR auto-resolves .mrc/.mrcs extensions and flat directories.")
         _info("Run 'recovar check_paths <particles> --datadir <dir>' to diagnose.")
-        datadir = _prompt("Data directory (Enter to auto-detect from particles file)",
-                          required=False)
+        datadir = _prompt("Data directory (Enter to auto-detect from particles file)", required=False)
         if datadir:
             cmd_parts.extend(["--datadir", datadir])
 
@@ -225,7 +228,7 @@ def main():
 
     downsample = _prompt("Downsample to box size (Enter for default 256, 'no' to disable)", required=False)
     if downsample:
-        if downsample.lower() in ('no', 'none', 'off', 'false'):
+        if downsample.lower() in ("no", "none", "off", "false"):
             cmd_parts.append("--no-downsample")
         else:
             try:
@@ -281,11 +284,15 @@ def main():
     # Tilt series
     if _prompt_yesno("Is this tilt series / cryo-ET data?", default=False):
         cmd_parts.append("--tilt-series")
-        tilt_ctf = _prompt_choice("CTF model for tilt series", [
-            ("relion5", "RELION 5 per-tilt CTF (recommended)"),
-            ("cryoem", "Standard cryo-EM CTF"),
-            ("warp", "Warp (Windows)"),
-        ], default="relion5")
+        tilt_ctf = _prompt_choice(
+            "CTF model for tilt series",
+            [
+                ("relion5", "RELION 5 per-tilt CTF (recommended)"),
+                ("cryoem", "Standard cryo-EM CTF"),
+                ("warp", "Warp (Windows)"),
+            ],
+            default="relion5",
+        )
         cmd_parts.extend(["--tilt-series-ctf", tilt_ctf])
 
     # GPU memory limit

@@ -46,6 +46,7 @@ def main():
 
     # Verify recovar is importable
     import recovar
+
     recovar_path = os.path.abspath(recovar.__file__)
     logger.info("Using recovar at: %s", recovar_path)
 
@@ -65,6 +66,7 @@ def main():
 
     # Load GT volumes for metrics
     from recovar import simulator as sim_module
+
     volumes_path_root = sim_info["volumes_path_root"]
     grid_size = sim_info["grid_size"]
     trailing = sim_info.get("trailing_zero_format_in_vol_name", True)
@@ -75,10 +77,9 @@ def main():
         gt_vols *= sim_info["scale_vol"]
 
     from recovar.synthetic_dataset import HeterogeneousVolumeDistribution
+
     valid_idx = np.ones(int(grid_size**3), dtype=np.float32)
-    gt = HeterogeneousVolumeDistribution(
-        gt_vols, pa, gt_contrasts, valid_indices=valid_idx
-    )
+    gt = HeterogeneousVolumeDistribution(gt_vols, pa, gt_contrasts, valid_indices=valid_idx)
     gt_mean = gt.get_mean()
     gt_variance = gt.get_spatial_variances(contrasted=False)
     u_gt, s_gt, _ = gt.get_vol_svd(contrasted=False, real_space=True, random_svd_pcs=200)
@@ -102,9 +103,7 @@ def main():
         ctf_file=ctf_file,
         datadir=None,
     )
-    cryos = dataset.load_halfset_dataset(
-        dataset_spec, ind_split=ind_split, lazy=True
-    )
+    cryos = dataset.load_halfset_dataset(dataset_spec, ind_split=ind_split, lazy=True)
     volume_shape = cryos[0].volume_shape
     volume_size = cryos[0].volume_size
     vol_norm = np.sqrt(np.prod(volume_shape))
@@ -140,9 +139,9 @@ def main():
 
     # Metric: FSC vs GT mean
     from recovar import plot_utils as pu
+
     _, mean_fsc_score = pu.plot_fsc_new(
-        gt_mean, means.combined, np.array(volume_shape), voxel_size,
-        threshold=0.5, name="Mean FSC"
+        gt_mean, means.combined, np.array(volume_shape), voxel_size, threshold=0.5, name="Mean FSC"
     )
     scores["mean_fsc"] = float(mean_fsc_score)
     logger.info("mean_fsc: %s", mean_fsc_score)
@@ -160,17 +159,21 @@ def main():
     union_binary = np.zeros(volume_shape, dtype=bool)
     for i in range(gt_vols.shape[0]):
         per_mask = mask.make_mask_from_gt(gt_vols[i], smax=3, iter=1, from_ft=True)
-        union_binary |= (per_mask > 0.5)
+        union_binary |= per_mask > 0.5
     dilated_binary = binary_dilation(union_binary, iterations=dilation_iters)
     from recovar.mask import soften_volume_mask
+
     volume_mask = soften_volume_mask(dilated_binary, kern_rad=3).astype(np.float32)
     dilated_volume_mask = volume_mask  # same mask for both
 
     np.save(os.path.join(intermediates_dir, "volume_mask.npy"), volume_mask)
     np.save(os.path.join(intermediates_dir, "dilated_volume_mask.npy"), dilated_volume_mask)
-    logger.info("GT union mask: %d/%d voxels (%.1f%%)",
-                int(np.sum(volume_mask > 0.5)), volume_mask.size,
-                100 * np.sum(volume_mask > 0.5) / volume_mask.size)
+    logger.info(
+        "GT union mask: %d/%d voxels (%.1f%%)",
+        int(np.sum(volume_mask > 0.5)),
+        volume_mask.size,
+        100 * np.sum(volume_mask > 0.5) / volume_mask.size,
+    )
 
     # ========================================================================
     # Step 3: estimate_noise
@@ -182,9 +185,7 @@ def main():
     masked_image_PS, _, _ = noise.estimate_noise_variance_from_outside_mask_v2(
         cryos[0], dilated_volume_mask, batch_size
     )
-    white_noise_var = noise.estimate_white_noise_variance_from_mask(
-        cryos[0], dilated_volume_mask, batch_size
-    )
+    white_noise_var = noise.estimate_white_noise_variance_from_mask(cryos[0], dilated_volume_mask, batch_size)
     _, _, image_PS, _ = noise.estimate_radial_noise_statistic_from_outside_mask(
         cryos[0], dilated_volume_mask, batch_size
     )
@@ -194,10 +195,7 @@ def main():
     )
 
     # Take minimum
-    noise_var_used = np.where(
-        masked_image_PS > radial_ub_noise_var,
-        radial_ub_noise_var, masked_image_PS
-    )
+    noise_var_used = np.where(masked_image_PS > radial_ub_noise_var, radial_ub_noise_var, masked_image_PS)
     # Fix negatives
     noise_var_used = np.where(noise_var_used < 0, image_PS / 10, noise_var_used)
 
@@ -235,11 +233,9 @@ def main():
     )
 
     # Compute variance with regularization
-    variance_est, variance_prior, variance_fsc_curve, lhs, noise_p_variance = \
-        covariance_estimation.compute_variance(
-            cryos, means.combined, batch_size // 2, dilated_volume_mask,
-            use_regularization=True, disc_type="cubic"
-        )
+    variance_est, variance_prior, variance_fsc_curve, lhs, noise_p_variance = covariance_estimation.compute_variance(
+        cryos, means.combined, batch_size // 2, dilated_volume_mask, use_regularization=True, disc_type="cubic"
+    )
     t_var = time.time() - t0
     logger.info("compute_variance took %.1fs", t_var)
 
@@ -250,8 +246,12 @@ def main():
     # Metric: Fourier variance FSC (GT per-Fourier-voxel power vs estimated)
     gt_fourier_variance = np.sum(np.abs(gt.get_covariance_square_root(contrasted=False)) ** 2, axis=-1)
     _, var_fsc_score = pu.plot_fsc_new(
-        gt_fourier_variance, variance_est["combined"], np.array(volume_shape), voxel_size,
-        threshold=0.5, name="Variance Fourier FSC"
+        gt_fourier_variance,
+        variance_est["combined"],
+        np.array(volume_shape),
+        voxel_size,
+        threshold=0.5,
+        name="Variance Fourier FSC",
     )
     scores["variance_fourier_fsc"] = float(var_fsc_score)
     # Keep old key for backward compat
@@ -276,18 +276,22 @@ def main():
     valid_idx = cryos[0].get_valid_frequency_indices()
 
     # Default covariance options
-    covariance_options = covariance_estimation.get_default_covariance_computation_options(
-        cryos[0].grid_size
-    )
+    covariance_options = covariance_estimation.get_default_covariance_computation_options(cryos[0].grid_size)
 
-    u, s, covariance_cols, picked_frequencies, column_fscs = \
-        principal_components.estimate_principal_components(
-            cryos, options, means, mean_prior, volume_mask, dilated_volume_mask,
-            valid_idx, batch_size, gpu_memory_to_use=gpu_memory,
-            covariance_options=covariance_options,
-            variance_estimate=variance_est["combined"],
-            use_reg_mean_in_contrast=False
-        )
+    u, s, covariance_cols, picked_frequencies, column_fscs = principal_components.estimate_principal_components(
+        cryos,
+        options,
+        means,
+        mean_prior,
+        volume_mask,
+        dilated_volume_mask,
+        valid_idx,
+        batch_size,
+        gpu_memory_to_use=gpu_memory,
+        covariance_options=covariance_options,
+        variance_estimate=variance_est["combined"],
+        use_reg_mean_in_contrast=False,
+    )
     t_pcs = time.time() - t0
     logger.info("principal_components took %.1fs", t_pcs)
 
@@ -301,11 +305,10 @@ def main():
     # Metric: pcs_relative_variance
     from recovar import metrics
     from recovar import linalg
+
     # Convert pipeline eigenvectors to real space for comparison
     n_pcs_to_test = min(20, u["rescaled"].shape[1])
-    u_real = linalg.batch_idft3(
-        u["rescaled"][:, :n_pcs_to_test], volume_shape, batch_size=2
-    ).real
+    u_real = linalg.batch_idft3(u["rescaled"][:, :n_pcs_to_test], volume_shape, batch_size=2).real
     u_est = np.array(u_real.reshape(volume_size, n_pcs_to_test)) * vol_norm
     variance_all, rel_var, norm_var = metrics.get_all_variance_scores(u_est, u_gt, s_gt)
     if rel_var.size > 4:
@@ -326,8 +329,7 @@ def main():
         col_fscs = []
         for i in range(min(est_cov_cols.shape[1], gt_cov_cols.shape[1])):
             _, col_fsc = pu.plot_fsc_new(
-                gt_cov_cols[:, i], est_cov_cols[:, i],
-                np.array(volume_shape), voxel_size, threshold=0.5
+                gt_cov_cols[:, i], est_cov_cols[:, i], np.array(volume_shape), voxel_size, threshold=0.5
             )
             col_fscs.append(float(col_fsc))
         scores["covariance_columns_mean_fsc"] = float(np.mean(col_fscs))
@@ -344,8 +346,7 @@ def main():
     gt_basis = u_gt_fourier[:, :n_gt_pcs]  # (vol_size, n_pcs)
 
     proj_cov = covariance_estimation.compute_projected_covariance(
-        cryos, means.combined, gt_basis, volume_mask,
-        batch_size, disc_type="linear_interp", disc_type_u="linear_interp"
+        cryos, means.combined, gt_basis, volume_mask, batch_size, disc_type="linear_interp", disc_type_u="linear_interp"
     )
     # GT projected covariance = diag(s_gt_fourier[:n_gt_pcs]**2)
     gt_proj_cov = np.diag(s_gt_fourier[:n_gt_pcs] ** 2)
@@ -365,10 +366,17 @@ def main():
     for zdim in [4, 10]:
         n_pcs_to_use = zdim
         zs, cov_zs, est_contrasts_reg, _ = embedding.get_per_image_embedding(
-            means.combined, u["rescaled"], s["rescaled"], n_pcs_to_use,
-            cryos, volume_mask, gpu_memory, "linear_interp",
-            contrast_grid=None, contrast_option="contrast",
-            ignore_zero_frequency=options["ignore_zero_frequency"]
+            means.combined,
+            u["rescaled"],
+            s["rescaled"],
+            n_pcs_to_use,
+            cryos,
+            volume_mask,
+            gpu_memory,
+            "linear_interp",
+            contrast_grid=None,
+            contrast_option="contrast",
+            ignore_zero_frequency=options["ignore_zero_frequency"],
         )
         # Save embeddings
         np.save(os.path.join(intermediates_dir, f"embedding_reg_zs_{zdim}.npy"), zs)
@@ -396,10 +404,17 @@ def main():
     for zdim in [4, 10]:
         n_pcs_to_use = zdim
         zs_noreg, cov_zs_noreg, est_contrasts_noreg, _ = embedding.get_per_image_embedding(
-            means.combined, u["rescaled"], s["rescaled"] * 0 + np.inf, n_pcs_to_use,
-            cryos, volume_mask, gpu_memory, "linear_interp",
-            contrast_grid=None, contrast_option="contrast",
-            ignore_zero_frequency=options["ignore_zero_frequency"]
+            means.combined,
+            u["rescaled"],
+            s["rescaled"] * 0 + np.inf,
+            n_pcs_to_use,
+            cryos,
+            volume_mask,
+            gpu_memory,
+            "linear_interp",
+            contrast_grid=None,
+            contrast_option="contrast",
+            ignore_zero_frequency=options["ignore_zero_frequency"],
         )
         np.save(os.path.join(intermediates_dir, f"embedding_noreg_zs_{zdim}.npy"), zs_noreg)
         np.save(os.path.join(intermediates_dir, f"embedding_noreg_contrasts_{zdim}.npy"), est_contrasts_noreg)

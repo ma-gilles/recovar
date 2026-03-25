@@ -14,34 +14,51 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+
 def main():
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description="Run tests for recovar outliers pipeline")
-    parser.add_argument('--output-dir', '-o', default='/tmp/recovar_test/')
-    parser.add_argument('--no-delete', action='store_true', help='Do not delete the test dataset directory after successful tests')
-    parser.add_argument('--cpu', action='store_true', help='Run on CPU only (skip GPU check)')
-    parser.add_argument('--tilt-series', action='store_true', help='Test with tilt series dataset')
-    parser.add_argument('--n-images', type=int, default=10000, help='Number of images to generate in test dataset')
-    parser.add_argument('--k-rounds', type=int, default=2, help='Number of rounds for outlier detection pipeline')
-    parser.add_argument('--percent-outliers', type=float, default=0.15, help='Percentage of outliers to inject into dataset')
-    parser.add_argument('--percent-tilt-series-outliers', type=float, default=0.1, help='Percentage of tilt outliers to inject into tilt series dataset')
+    parser.add_argument("--output-dir", "-o", default="/tmp/recovar_test/")
+    parser.add_argument(
+        "--no-delete", action="store_true", help="Do not delete the test dataset directory after successful tests"
+    )
+    parser.add_argument("--cpu", action="store_true", help="Run on CPU only (skip GPU check)")
+    parser.add_argument("--tilt-series", action="store_true", help="Test with tilt series dataset")
+    parser.add_argument("--n-images", type=int, default=10000, help="Number of images to generate in test dataset")
+    parser.add_argument("--k-rounds", type=int, default=2, help="Number of rounds for outlier detection pipeline")
+    parser.add_argument(
+        "--percent-outliers", type=float, default=0.15, help="Percentage of outliers to inject into dataset"
+    )
+    parser.add_argument(
+        "--percent-tilt-series-outliers",
+        type=float,
+        default=0.1,
+        help="Percentage of tilt outliers to inject into tilt series dataset",
+    )
     # Selective testing flags
-    parser.add_argument('--test-basic', action='store_true', help='Test basic outlier detection pipeline')
-    parser.add_argument('--test-analyze-chain', action='store_true', help='Test chaining pipeline with analyze commands')
-    parser.add_argument('--test-trajectory-chain', action='store_true', help='Test chaining pipeline with compute_trajectory commands')
-    parser.add_argument('--test-tilt-series', action='store_true', help='Test tilt series specific functionality')
-    
+    parser.add_argument("--test-basic", action="store_true", help="Test basic outlier detection pipeline")
+    parser.add_argument(
+        "--test-analyze-chain", action="store_true", help="Test chaining pipeline with analyze commands"
+    )
+    parser.add_argument(
+        "--test-trajectory-chain", action="store_true", help="Test chaining pipeline with compute_trajectory commands"
+    )
+    parser.add_argument("--test-tilt-series", action="store_true", help="Test tilt series specific functionality")
+
     # If no specific test is selected, run all tests
-    parser.add_argument('--run-all', action='store_true', help='Run all tests (default if no specific test is selected)')
+    parser.add_argument(
+        "--run-all", action="store_true", help="Run all tests (default if no specific test is selected)"
+    )
 
     args = parser.parse_args()
 
     # Determine which tests to run
-    if not any([args.test_basic, args.test_analyze_chain, args.test_trajectory_chain,
-                args.test_tilt_series, args.run_all]):
+    if not any(
+        [args.test_basic, args.test_analyze_chain, args.test_trajectory_chain, args.test_tilt_series, args.run_all]
+    ):
         # Default: run all tests
         args.run_all = True
-    
+
     delete_everything = not args.no_delete
     run_on_cpu = args.cpu
     dataset_dir = args.output_dir
@@ -57,14 +74,16 @@ def main():
     failed_functions = []
 
     def error_message():
-        logger.error("No GPU devices found by JAX. Please ensure that JAX is properly configured "
-                     "with CUDA and a compatible GPU. See https://jax.readthedocs.io/en/latest/installation.html")
+        logger.error(
+            "No GPU devices found by JAX. Please ensure that JAX is properly configured "
+            "with CUDA and a compatible GPU. See https://jax.readthedocs.io/en/latest/installation.html"
+        )
         logger.error("If you truly want to run on CPU, please run the script with the --cpu flag.")
         sys.exit(1)
 
     def check_gpu():
         try:
-            gpu_devices = jax.devices('gpu')
+            gpu_devices = jax.devices("gpu")
             if gpu_devices:
                 logger.info("GPU devices found: %s", gpu_devices)
             else:
@@ -94,86 +113,86 @@ def main():
 
     # Create a test dataset with outliers
     test_dataset_dir = os.path.join(dataset_dir, "outliers_test")
-    
+
     # Create an outlier volume
     outlier_volume_path = f"{test_dataset_dir}/test_dataset/outlier_volume.mrc"
     create_outlier_volume(outlier_volume_path, grid_size=64)
-    
+
     # Generate test dataset
     if args.tilt_series:
         logger.info("Generating tilt series test dataset...")
         run_command(
-            f'{BASE_CMD} make_test_dataset {test_dataset_dir} --n-images {n_images} --tilt-series --outlier-file-input {outlier_volume_path} --percent-outliers {percent_outliers} --percent-tilt-series-outliers {percent_tilt_series_outliers}',
-            'Generate a test dataset with tilt series for outlier testing',
-            'make_test_dataset_tilt_outliers'
+            f"{BASE_CMD} make_test_dataset {test_dataset_dir} --n-images {n_images} --tilt-series --outlier-file-input {outlier_volume_path} --percent-outliers {percent_outliers} --percent-tilt-series-outliers {percent_tilt_series_outliers}",
+            "Generate a test dataset with tilt series for outlier testing",
+            "make_test_dataset_tilt_outliers",
         )
     else:
         logger.info("Generating regular test dataset...")
         run_command(
-            f'{BASE_CMD} make_test_dataset {test_dataset_dir} --n-images {n_images} --outlier-file-input {outlier_volume_path} --percent-outliers {percent_outliers}',
-            'Generate a test dataset for outlier testing',
-            'make_test_dataset_outliers'
+            f"{BASE_CMD} make_test_dataset {test_dataset_dir} --n-images {n_images} --outlier-file-input {outlier_volume_path} --percent-outliers {percent_outliers}",
+            "Generate a test dataset for outlier testing",
+            "make_test_dataset_outliers",
         )
 
     def run_basic_tests(test_dataset_dir, is_tilt_series, k_rounds, cpu_string):
         """Run basic outlier detection pipeline tests."""
         if is_tilt_series:
             run_command(
-                f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.star --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --tilt-series --tilt-series-ctf=relion5 --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {k_rounds} --use-contrast-detection --use-junk-detection --save-pipeline-indices {cpu_string}',
-                f'Run pipeline_with_outliers for {k_rounds} rounds with tilt series',
-                'pipeline_with_outliers_tilt'
+                f"{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.star --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --tilt-series --tilt-series-ctf=relion5 --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {k_rounds} --use-contrast-detection --use-junk-detection --save-pipeline-indices {cpu_string}",
+                f"Run pipeline_with_outliers for {k_rounds} rounds with tilt series",
+                "pipeline_with_outliers_tilt",
             )
         else:
             run_command(
-                f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {k_rounds} --use-contrast-detection --use-junk-detection --save-pipeline-indices {cpu_string}',
-                f'Run pipeline_with_outliers for {k_rounds} rounds',
-                'pipeline_with_outliers'
+                f"{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_outliers_output --mask=from_halfmaps --lazy --zdim 4 --k-rounds {k_rounds} --use-contrast-detection --use-junk-detection --save-pipeline-indices {cpu_string}",
+                f"Run pipeline_with_outliers for {k_rounds} rounds",
+                "pipeline_with_outliers",
             )
 
     def run_analyze_chain_tests(test_dataset_dir, cpu_string):
         """Test chaining pipeline with analyze command."""
         run_command(
-            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_analyze_chain --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices {cpu_string}',
-            'Run pipeline for chaining with analyze',
-            'pipeline_analyze_chain'
+            f"{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_analyze_chain --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices {cpu_string}",
+            "Run pipeline for chaining with analyze",
+            "pipeline_analyze_chain",
         )
 
         run_command(
-            f'{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output --zdim 4 {cpu_string}',
-            'Run analyze command',
-            'analyze_chain'
+            f"{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output --zdim 4 {cpu_string}",
+            "Run analyze command",
+            "analyze_chain",
         )
 
         run_command(
-            f'{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output2 --zdim 4 {cpu_string}',
-            'Run second analyze command',
-            'analyze_chain_final'
+            f"{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output2 --zdim 4 {cpu_string}",
+            "Run second analyze command",
+            "analyze_chain_final",
         )
 
     def run_trajectory_chain_tests(test_dataset_dir, cpu_string):
         """Test chaining pipeline with compute_trajectory command."""
         run_command(
-            f'{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_trajectory_chain --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices {cpu_string}',
-            'Run pipeline for chaining with compute_trajectory',
-            'pipeline_trajectory_chain'
+            f"{BASE_CMD} pipeline_with_outliers {test_dataset_dir}/test_dataset/particles.64.mrcs --poses {test_dataset_dir}/test_dataset/poses.pkl --ctf {test_dataset_dir}/test_dataset/ctf.pkl --correct-contrast -o {test_dataset_dir}/test_dataset/pipeline_trajectory_chain --mask=from_halfmaps --lazy --zdim 4 --k-rounds 1 --use-contrast-detection --save-pipeline-indices {cpu_string}",
+            "Run pipeline for chaining with compute_trajectory",
+            "pipeline_trajectory_chain",
         )
 
         run_command(
-            f'{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output --zdim 4 {cpu_string}',
-            'Run analyze command',
-            'analyze_chain'
+            f"{BASE_CMD} analyze {test_dataset_dir}/test_dataset/pipeline_analyze_chain/round_1 --outdir {test_dataset_dir}/test_dataset/analyze_chain_output --zdim 4 {cpu_string}",
+            "Run analyze command",
+            "analyze_chain",
         )
 
         run_command(
-            f'{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans/centers.txt {cpu_string}',
-            'Run compute_trajectory command',
-            'compute_trajectory_chain'
+            f"{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans/centers.txt {cpu_string}",
+            "Run compute_trajectory command",
+            "compute_trajectory_chain",
         )
 
         run_command(
-            f'{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output2 --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans/centers.txt {cpu_string}',
-            'Run second compute_trajectory command',
-            'compute_trajectory_chain_final'
+            f"{BASE_CMD} compute_trajectory {test_dataset_dir}/test_dataset/pipeline_trajectory_chain/round_1 --outdir {test_dataset_dir}/test_dataset/trajectory_chain_output2 --zdim 4 --endpts {test_dataset_dir}/test_dataset/analyze_chain_output/kmeans/centers.txt {cpu_string}",
+            "Run second compute_trajectory command",
+            "compute_trajectory_chain_final",
         )
 
     def run_tilt_series_tests(test_dataset_dir, k_rounds, cpu_string):
@@ -182,7 +201,6 @@ def main():
         # The basic tilt series tests are already covered in run_basic_tests
         # Additional tilt series specific tests can be added here if needed
         pass
-
 
     # Run selected tests
     if args.run_all or args.test_basic:
@@ -201,7 +219,7 @@ def main():
     if args.run_all or args.test_basic:
         verify_outlier_results(test_dataset_dir, args.tilt_series, k_rounds)
         analyze_outlier_detection_accuracy(test_dataset_dir, args.tilt_series, k_rounds)
-    
+
     verify_temp_cleanup(test_dataset_dir, args.tilt_series)
 
     if failed_functions:
@@ -217,13 +235,14 @@ def main():
             shutil.rmtree(test_dataset_dir, ignore_errors=True)
         return 0
 
+
 def create_outlier_volume(output_path, grid_size=64):
     """Create a random anisotropic outlier volume for testing."""
     import mrcfile
-    
+
     # Create directory if it doesn't exist
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
+
     # Vectorized generation avoids slow Python triple-loops while preserving
     # anisotropic, high-frequency content used for outlier stress tests.
     volume_shape = (grid_size, grid_size, grid_size)
@@ -257,13 +276,14 @@ def create_outlier_volume(output_path, grid_size=64):
     vmax = float(np.max(volume))
     denom = max(vmax - vmin, 1e-8)
     volume = ((volume - vmin) / denom).astype(np.float32, copy=False)
-    
+
     # Save as MRC file
     with mrcfile.new(output_path, overwrite=True) as mrc:
         mrc.set_data(volume)
         mrc.voxel_size = 4.25 * 128 / grid_size
-    
+
     logger.info("Created random anisotropic outlier volume: %s", output_path)
+
 
 def verify_outlier_results(test_dir, is_tilt_series, k_rounds):
     """Verify that outlier detection results were properly saved."""
@@ -290,13 +310,12 @@ def verify_outlier_results(test_dir, is_tilt_series, k_rounds):
 
         # Check that the files contain valid data
         try:
-            with open(inliers_file, 'rb') as f:
+            with open(inliers_file, "rb") as f:
                 inliers = pickle.load(f)
-            with open(outliers_file, 'rb') as f:
+            with open(outliers_file, "rb") as f:
                 outliers = pickle.load(f)
 
-            logger.info("Round %d: %d image inliers, %d image outliers",
-                       round_num, len(inliers), len(outliers))
+            logger.info("Round %d: %d image inliers, %d image outliers", round_num, len(inliers), len(outliers))
 
         except Exception as e:
             logger.error("Failed to load image indices for round %d: %s", round_num, e)
@@ -307,21 +326,25 @@ def verify_outlier_results(test_dir, is_tilt_series, k_rounds):
     if not os.path.exists(all_inliers_file):
         logger.error("All rounds inliers file not found: %s", all_inliers_file)
         return False
-    
+
     # For tilt series, check that particle indices were also saved
     if is_tilt_series:
         for round_num in range(1, k_rounds + 1):
             particle_inliers_file = f"{base_output_dir}/particle_inliers_round_{round_num}.pkl"
             particle_outliers_file = f"{base_output_dir}/particle_outliers_round_{round_num}.pkl"
-            
+
             if os.path.exists(particle_inliers_file) and os.path.exists(particle_outliers_file):
                 try:
-                    with open(particle_inliers_file, 'rb') as f:
+                    with open(particle_inliers_file, "rb") as f:
                         particle_inliers = pickle.load(f)
-                    with open(particle_outliers_file, 'rb') as f:
+                    with open(particle_outliers_file, "rb") as f:
                         particle_outliers = pickle.load(f)
-                    logger.info("Round %d: %d particle inliers, %d particle outliers",
-                               round_num, len(particle_inliers), len(particle_outliers))
+                    logger.info(
+                        "Round %d: %d particle inliers, %d particle outliers",
+                        round_num,
+                        len(particle_inliers),
+                        len(particle_outliers),
+                    )
                 except Exception as e:
                     logger.warning("Round %d: Particle indices saved but failed to load: %s", round_num, e)
             else:
@@ -329,6 +352,7 @@ def verify_outlier_results(test_dir, is_tilt_series, k_rounds):
 
     logger.info("Outlier detection results verification completed successfully!")
     return True
+
 
 def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
     """Analyze and report statistics about outlier detection accuracy."""
@@ -339,50 +363,55 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
     if not os.path.exists(sim_info_path):
         logger.error("Simulation info not found: %s", sim_info_path)
         return False
-    
-    with open(sim_info_path, 'rb') as f:
+
+    with open(sim_info_path, "rb") as f:
         sim_info = pickle.load(f)
-    
+
     # Get ground truth outlier assignments
-    image_assignments = sim_info['image_assignment']
+    image_assignments = sim_info["image_assignment"]
     n_images = len(image_assignments)
-    
+
     # Identify ground truth outliers
     particle_outlier_indices = np.where(image_assignments == -1)[0]  # Particle outliers
-    tilt_outlier_indices = np.where(image_assignments == -2)[0]      # Tilt outliers
+    tilt_outlier_indices = np.where(image_assignments == -2)[0]  # Tilt outliers
     all_outlier_indices = np.concatenate([particle_outlier_indices, tilt_outlier_indices])
-    
+
     logger.info("Ground truth statistics:")
     logger.info("  Total images: %d", n_images)
-    logger.info("  Total outliers: %d (%.1f%%)", len(all_outlier_indices),
-                len(all_outlier_indices) / n_images * 100)
-    
+    logger.info("  Total outliers: %d (%.1f%%)", len(all_outlier_indices), len(all_outlier_indices) / n_images * 100)
+
     # For tilt series, also analyze particle-level ground truth
     if is_tilt_series:
-        tilt_series_assignment = sim_info['tilt_series_assignment']
-        tilt_groups = sim_info['tilt_groups']
+        tilt_series_assignment = sim_info["tilt_series_assignment"]
+        tilt_groups = sim_info["tilt_groups"]
         n_particles = len(tilt_series_assignment)
-        
+
         # Identify particles with tilt outliers (entire particle is outlier)
         particle_outlier_particles = np.where(tilt_series_assignment == -1)[0]  # Particles with tilt outliers
-        
+
         logger.info("  Total particles: %d", n_particles)
-        logger.info("  Particles with tilt outliers: %d (%.1f%%)",
-                    len(particle_outlier_particles), len(particle_outlier_particles) / n_particles * 100)
-        
+        logger.info(
+            "  Particles with tilt outliers: %d (%.1f%%)",
+            len(particle_outlier_particles),
+            len(particle_outlier_particles) / n_particles * 100,
+        )
+
         # Map particle outliers to image indices for comparison
         particle_outlier_images = []
         for particle_idx in particle_outlier_particles:
             particle_images = np.where(tilt_groups == particle_idx)[0]
             particle_outlier_images.extend(particle_images)
         particle_outlier_images = np.array(particle_outlier_images)
-        
-        logger.info("  Images from particles with tilt outliers: %d (%.1f%%)",
-                    len(particle_outlier_images), len(particle_outlier_images) / n_images * 100)
-    
+
+        logger.info(
+            "  Images from particles with tilt outliers: %d (%.1f%%)",
+            len(particle_outlier_images),
+            len(particle_outlier_images) / n_images * 100,
+        )
+
     # Analyze each round
     base_output_dir = f"{test_dir}/test_dataset/pipeline_outliers_output"
-    
+
     for round_num in range(1, k_rounds + 1):
         logger.info("Round %d analysis:", round_num)
 
@@ -391,7 +420,7 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
         if not os.path.exists(inliers_file):
             logger.error("  Image inliers file not found: %s", inliers_file)
             continue
-        with open(inliers_file, 'rb') as f:
+        with open(inliers_file, "rb") as f:
             detected_image_inliers = pickle.load(f)
 
         # Compute detected image outliers as the complement of inliers
@@ -402,20 +431,20 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
             total_detected = len(detected_image_inliers) + len(detected_image_outliers)
             if total_detected != n_images:
                 logger.warning("  Inliers + outliers (%d) != total images (%d)", total_detected, n_images)
-        
+
         # Load detected particle outliers (for tilt series)
         detected_particle_outliers = None
         detected_particle_inliers = None
         if is_tilt_series:
             particle_inliers_file = f"{base_output_dir}/particle_inliers_round_{round_num}.pkl"
             if os.path.exists(particle_inliers_file):
-                with open(particle_inliers_file, 'rb') as f:
+                with open(particle_inliers_file, "rb") as f:
                     detected_particle_inliers = pickle.load(f)
                 # Compute detected particle outliers as the complement of inliers
                 detected_particle_outliers = np.setdiff1d(np.arange(n_particles), detected_particle_inliers)
             else:
                 logger.warning("  Particle inliers file not found: %s", particle_inliers_file)
-        
+
         # Report image-level statistics
         logger.info("  Image-level statistics:")
         n_detected_images = len(detected_image_outliers)
@@ -429,8 +458,18 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
         logger.info("    ┌─────────────┬───────────────┬───────────────┬─────────┐")
         logger.info("    │             │ Pred Outlier  │ Pred Inlier   │  Total  │")
         logger.info("    ├─────────────┼───────────────┼───────────────┼─────────┤")
-        logger.info("    │ GT Outlier  │ %13d │ %13d │ %7d │", n_correct_images, n_false_negatives_images, len(all_outlier_indices))
-        logger.info("    │ GT Inlier   │ %13d │ %13d │ %7d │", n_false_positives_images, n_true_negatives_images, n_images - len(all_outlier_indices))
+        logger.info(
+            "    │ GT Outlier  │ %13d │ %13d │ %7d │",
+            n_correct_images,
+            n_false_negatives_images,
+            len(all_outlier_indices),
+        )
+        logger.info(
+            "    │ GT Inlier   │ %13d │ %13d │ %7d │",
+            n_false_positives_images,
+            n_true_negatives_images,
+            n_images - len(all_outlier_indices),
+        )
         logger.info("    ├─────────────┼───────────────┼───────────────┼─────────┤")
         logger.info("    │   Total     │ %13d │ %13d │ %7d │", n_detected_images, len(detected_image_inliers), n_images)
         logger.info("    └─────────────┴───────────────┴───────────────┴─────────┘")
@@ -443,23 +482,41 @@ def analyze_outlier_detection_accuracy(test_dir, is_tilt_series, k_rounds):
             n_correct_particles = len(np.intersect1d(detected_particle_outliers, particle_outlier_particles))
             n_false_positives_particles = n_detected_particles - n_correct_particles
             n_false_negatives_particles = len(particle_outlier_particles) - n_correct_particles
-            n_true_negatives_particles = n_particles - (n_correct_particles + n_false_positives_particles + n_false_negatives_particles)
+            n_true_negatives_particles = n_particles - (
+                n_correct_particles + n_false_positives_particles + n_false_negatives_particles
+            )
 
             # 2x2 confusion matrix for particles
             logger.info("    Confusion matrix (particles):")
             logger.info("    ┌─────────────┬───────────────┬───────────────┬─────────┐")
             logger.info("    │             │ Pred Outlier  │ Pred Inlier   │  Total  │")
             logger.info("    ├─────────────┼───────────────┼───────────────┼─────────┤")
-            logger.info("    │ GT Outlier  │ %13d │ %13d │ %7d │", n_correct_particles, n_false_negatives_particles, len(particle_outlier_particles))
-            logger.info("    │ GT Inlier   │ %13d │ %13d │ %7d │", n_false_positives_particles, n_true_negatives_particles, n_particles - len(particle_outlier_particles))
+            logger.info(
+                "    │ GT Outlier  │ %13d │ %13d │ %7d │",
+                n_correct_particles,
+                n_false_negatives_particles,
+                len(particle_outlier_particles),
+            )
+            logger.info(
+                "    │ GT Inlier   │ %13d │ %13d │ %7d │",
+                n_false_positives_particles,
+                n_true_negatives_particles,
+                n_particles - len(particle_outlier_particles),
+            )
             logger.info("    ├─────────────┼───────────────┼───────────────┼─────────┤")
-            logger.info("    │   Total     │ %13d │ %13d │ %7d │", n_detected_particles, n_detected_particle_inliers, n_particles)
+            logger.info(
+                "    │   Total     │ %13d │ %13d │ %7d │",
+                n_detected_particles,
+                n_detected_particle_inliers,
+                n_particles,
+            )
             logger.info("    └─────────────┴───────────────┴───────────────┴─────────┘")
 
         elif is_tilt_series:
             logger.info("  Particle-level statistics: Not available (particle outliers file not found)")
 
     return True
+
 
 def verify_temp_cleanup(test_dir, is_tilt_series):
     """Verify that temp directories were cleaned up."""
@@ -476,4 +533,4 @@ def verify_temp_cleanup(test_dir, is_tilt_series):
 
 
 if __name__ == "__main__":
-    sys.exit(main()) 
+    sys.exit(main())

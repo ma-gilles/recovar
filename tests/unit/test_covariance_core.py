@@ -40,6 +40,7 @@ def test_check_mask_accepts_none_and_all_ones():
     assert cc.check_mask(np.ones((2, 2), dtype=np.float32)) is True
     assert cc.check_mask(np.array([[1.0, 0.0]], dtype=np.float32)) is False
 
+
 def test_evaluate_kernel_on_grid_triangular_and_square():
     grid = np.array(
         [

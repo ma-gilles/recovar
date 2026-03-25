@@ -41,39 +41,81 @@ def _compute_normalized_grid_spacing(grids, grid_ndim):
     return dx / jnp.mean(dx)
 
 
-def get_raw_density(pipeline_output, zdim=10, noreg=False, pca_dim_max=5, percentile_reject=10, num_points=50, percentile_bound=0.1):
-    coords_entry = 'latent_coords_noreg' if noreg else 'latent_coords'
-    precision_entry = 'latent_precision_noreg' if noreg else 'latent_precision'
+def get_raw_density(
+    pipeline_output, zdim=10, noreg=False, pca_dim_max=5, percentile_reject=10, num_points=50, percentile_bound=0.1
+):
+    coords_entry = "latent_coords_noreg" if noreg else "latent_coords"
+    precision_entry = "latent_precision_noreg" if noreg else "latent_precision"
 
     zs = pipeline_output.get(coords_entry)[zdim]
     cov_zs = pipeline_output.get(precision_entry)[zdim]
 
-    cov_zs_norm = np.linalg.norm(cov_zs, axis=(-1,-2), ord = 2)
-    good_zs = cov_zs_norm >np.percentile(cov_zs_norm, percentile_reject)
+    cov_zs_norm = np.linalg.norm(cov_zs, axis=(-1, -2), ord=2)
+    good_zs = cov_zs_norm > np.percentile(cov_zs_norm, percentile_reject)
     zdim = pca_dim_max
-    zs = zs[good_zs][:,:zdim]
-    cov_zs = cov_zs[good_zs][:,:zdim,:zdim]
-    gauss_kde = jax.scipy.stats.gaussian_kde(zs.T, 'silverman')
+    zs = zs[good_zs][:, :zdim]
+    cov_zs = cov_zs[good_zs][:, :zdim, :zdim]
+    gauss_kde = jax.scipy.stats.gaussian_kde(zs.T, "silverman")
     covar_data = np.mean(jnp.linalg.inv(cov_zs), axis=0)
     total_covar = covar_data + gauss_kde.covariance
 
-    density, bds = latent_density.compute_latent_space_density_kde(zs, pca_dim_max = pca_dim_max, num_points = num_points, percentile = percentile_bound)
+    density, bds = latent_density.compute_latent_space_density_kde(
+        zs, pca_dim_max=pca_dim_max, num_points=num_points, percentile=percentile_bound
+    )
     grids_flat = latent_density.make_latent_space_grid_from_bounds(bds, num_points)
     grids = grids_flat.reshape(*density.shape, grids_flat.shape[-1])
 
-    kernel = estimate_kernel_by_sampling(grids, cov_zs, gauss_kde.covariance, num_samples = 5000)
+    kernel = estimate_kernel_by_sampling(grids, cov_zs, gauss_kde.covariance, num_samples=5000)
 
     return density, kernel, total_covar, grids, bds
 
-def get_deconvolved_density(pipeline_output, zdim=4, noreg=True, pca_dim_max=4, percentile_reject=10, num_points=50, kernel_option='sampling', alphas=None, percentile_bound=1, save_to_file=None):
+
+def get_deconvolved_density(
+    pipeline_output,
+    zdim=4,
+    noreg=True,
+    pca_dim_max=4,
+    percentile_reject=10,
+    num_points=50,
+    kernel_option="sampling",
+    alphas=None,
+    percentile_bound=1,
+    save_to_file=None,
+):
     alphas = np.flip(np.logspace(-4, 1, 10)) if alphas is None else alphas
 
-    density, kernel, total_covar, grids, bounds = get_raw_density(pipeline_output, zdim=zdim, noreg=noreg, pca_dim_max=pca_dim_max, percentile_reject=percentile_reject, num_points=num_points, percentile_bound=percentile_bound)
-    lbfgsb_sols, cost, reg_cost, alphas = compute_deconvolved_density(density, kernel, total_covar, grids, kernel_option = kernel_option, alphas = alphas)
+    density, kernel, total_covar, grids, bounds = get_raw_density(
+        pipeline_output,
+        zdim=zdim,
+        noreg=noreg,
+        pca_dim_max=pca_dim_max,
+        percentile_reject=percentile_reject,
+        num_points=num_points,
+        percentile_bound=percentile_bound,
+    )
+    lbfgsb_sols, cost, reg_cost, alphas = compute_deconvolved_density(
+        density, kernel, total_covar, grids, kernel_option=kernel_option, alphas=alphas
+    )
 
     if save_to_file is not None:
         from recovar import utils
-        utils.pickle_dump({'deconv_densities': lbfgsb_sols, 'alphas': alphas, 'cost': cost, 'reg_cost': reg_cost,  'density': density, 'kernel': kernel, 'total_covar': total_covar, 'grids': grids, 'bounds': bounds, 'zdim': zdim, 'noreg': noreg}, save_to_file)
+
+        utils.pickle_dump(
+            {
+                "deconv_densities": lbfgsb_sols,
+                "alphas": alphas,
+                "cost": cost,
+                "reg_cost": reg_cost,
+                "density": density,
+                "kernel": kernel,
+                "total_covar": total_covar,
+                "grids": grids,
+                "bounds": bounds,
+                "zdim": zdim,
+                "noreg": noreg,
+            },
+            save_to_file,
+        )
 
     return lbfgsb_sols, alphas, cost, reg_cost, density, total_covar, grids, bounds
 
@@ -100,9 +142,9 @@ def estimate_kernel_by_sampling(
         batch_counts = jnp.asarray(sampled_counts[start_idx:stop_idx], dtype=jnp.float32)
         covar_data = jnp.linalg.pinv(cov_zs[batch_indices])
         total_covar = covar_data + gauss_kde_covariance
-        batch_kernel = jax.vmap(
-            lambda cov: jax.scipy.stats.multivariate_normal.pdf(grids_flat, zero_mean, cov)
-        )(total_covar)
+        batch_kernel = jax.vmap(lambda cov: jax.scipy.stats.multivariate_normal.pdf(grids_flat, zero_mean, cov))(
+            total_covar
+        )
         kernel_on_grid += jnp.sum(batch_kernel * batch_counts[:, None], axis=0)
 
     kernel_on_grid = kernel_on_grid / jnp.sum(kernel_on_grid)
@@ -114,7 +156,7 @@ def compute_deconvolved_density(
     kernel,
     total_covar,
     grids,
-    kernel_option='sampling',
+    kernel_option="sampling",
     alphas=None,
     maxiter=500,
 ):
@@ -122,13 +164,15 @@ def compute_deconvolved_density(
 
     def compute_kernel_on_grid_nd(grids_inp):
         grids_flat = _build_centered_pdf_grid(grids_inp)
-        kernel_on_grid = jax.scipy.stats.multivariate_normal.pdf(grids_flat, np.zeros(total_covar.shape[0]), total_covar)
-        kernel_on_grid = kernel_on_grid/jnp.sum(kernel_on_grid)
+        kernel_on_grid = jax.scipy.stats.multivariate_normal.pdf(
+            grids_flat, np.zeros(total_covar.shape[0]), total_covar
+        )
+        kernel_on_grid = kernel_on_grid / jnp.sum(kernel_on_grid)
         return kernel_on_grid.reshape(grids_inp.shape[:-1])
-    
-    if kernel_option == 'sampling':
+
+    if kernel_option == "sampling":
         kernel_on_grid = kernel
-    elif kernel_option == 'avg_cov':
+    elif kernel_option == "avg_cov":
         kernel_on_grid = compute_kernel_on_grid_nd(grids).astype(np.float32)
     else:
         raise NotImplementedError(f"Unknown kernel_option={kernel_option}")
@@ -136,12 +180,12 @@ def compute_deconvolved_density(
     density = jnp.array(density.astype(np.float32) / np.mean(density))
     kernel_on_grid = jnp.array(kernel_on_grid)
     normalized_dx = _compute_normalized_grid_spacing(grids, density.ndim)
-    
+
     @jax.jit
-    def ridge_reg_objective_grid(fun_on_grid, alpha = 0.0):
+    def ridge_reg_objective_grid(fun_on_grid, alpha=0.0):
         residuals = convolve_with_pad_nd(fun_on_grid, kernel_on_grid) - density
         gradients = jnp.array(jnp.gradient(fun_on_grid, *normalized_dx))
-        return 1e8 * (jnp.mean((residuals * 1e0) ** 2) + alpha * jnp.mean(gradients ** 2))
+        return 1e8 * (jnp.mean((residuals * 1e0) ** 2) + alpha * jnp.mean(gradients**2))
 
     cost = np.zeros_like(alphas)
     reg_cost = np.zeros_like(alphas)
@@ -161,143 +205,142 @@ def compute_deconvolved_density(
         cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha=0) / baseline_cost
         reg_cost[alpha_idx] = ridge_reg_objective_grid(lbfgsb_sol, alpha=alpha) / baseline_cost
         lbfgsb_sols.append(np.array(lbfgsb_sol))
-        logger.debug("  alpha[%d]=%.2e: cost=%.4e, reg_cost=%.4e",
-                     alpha_idx, alpha, cost[alpha_idx], reg_cost[alpha_idx])
+        logger.debug(
+            "  alpha[%d]=%.2e: cost=%.4e, reg_cost=%.4e", alpha_idx, alpha, cost[alpha_idx], reg_cost[alpha_idx]
+        )
 
     return lbfgsb_sols, cost, reg_cost, alphas
 
-def plot_density(lbfgsb_sols, density, alphas, function = None, cmap = 'inferno'):
+
+def plot_density(lbfgsb_sols, density, alphas, function=None, cmap="inferno"):
     from recovar.output.output import sum_over_other
 
     def half_slice_other(density, axes):
         axes = [i for i in range(density.ndim) if i not in axes]
         axes = np.sort(axes)
-        for i in range(len(axes)-1, -1, -1):
-            density = np.take(density, density.shape[0]//2, axis = axes[i])
+        for i in range(len(axes) - 1, -1, -1):
+            density = np.take(density, density.shape[0] // 2, axis=axes[i])
         return density
-    
-    function = half_slice_other if function == 'slice' else function
+
+    function = half_slice_other if function == "slice" else function
     function = sum_over_other if function is None else function
 
-
-    plt.rcParams.update({
-    })
-    font = {'weight' : 'bold',
-            'size'   : 22}
+    plt.rcParams.update({})
+    font = {"weight": "bold", "size": 22}
     import matplotlib
-    matplotlib.rc('font', **font)
 
-    n_plots = len(lbfgsb_sols)+1
-    n_cols = density.ndim +1 if density.ndim < 2 else density.ndim 
+    matplotlib.rc("font", **font)
 
-    fig, axs = plt.subplots( n_plots, n_cols, figsize = ( n_cols *5, n_plots*5 ))
+    n_plots = len(lbfgsb_sols) + 1
+    n_cols = density.ndim + 1 if density.ndim < 2 else density.ndim
+
+    fig, axs = plt.subplots(n_plots, n_cols, figsize=(n_cols * 5, n_plots * 5))
     global is_first
     is_first = True
 
-    def plot_dens(density, title, n_plot, first = False):
+    def plot_dens(density, title, n_plot, first=False):
         density = np.asarray(density)
         global is_first
-        if density.ndim ==1:
-            axs[n_plot,0].plot(density)
-            axs[n_plot,0].set_title(title)
-            axs[n_plot,0].set_xticklabels([])
-            axs[n_plot,0].set_yticklabels([])
-            if is_first:            
-                axs[n_plot,0].set_title(f"PC x={0}")
-            axs[n_plot,0].set_ylabel(title)
+        if density.ndim == 1:
+            axs[n_plot, 0].plot(density)
+            axs[n_plot, 0].set_title(title)
+            axs[n_plot, 0].set_xticklabels([])
+            axs[n_plot, 0].set_yticklabels([])
+            if is_first:
+                axs[n_plot, 0].set_title(f"PC x={0}")
+            axs[n_plot, 0].set_ylabel(title)
             return
 
         for k in range(1, density.ndim):
+            if k == 1:
+                axs[n_plot, k - 1].set_ylabel(title)
+            axs[n_plot, k - 1].set_xticklabels([])
+            axs[n_plot, k - 1].set_yticklabels([])
 
-            if k ==1:
-                axs[n_plot,k-1].set_ylabel(title)
-            axs[n_plot,k-1].set_xticklabels([])
-            axs[n_plot,k-1].set_yticklabels([])
-
-            to_plot = function(density, [0,k])
-            axs[n_plot,k-1].imshow(to_plot.T, cmap =cmap)
-            if is_first:            
-                axs[n_plot,k-1].set_title(f"PC x={0}, y={k}")
-
+            to_plot = function(density, [0, k])
+            axs[n_plot, k - 1].imshow(to_plot.T, cmap=cmap)
+            if is_first:
+                axs[n_plot, k - 1].set_title(f"PC x={0}, y={k}")
 
         if density.ndim > 2:
-            to_plot = function(density, [1,2])
-            axs[n_plot,k].imshow(to_plot.T, cmap =cmap)
-            axs[n_plot,k].set_xticklabels([])
-            axs[n_plot,k].set_yticklabels([])
-            if is_first:            
-                axs[n_plot,k].set_title(f"PC x={1}, y={2}")
+            to_plot = function(density, [1, 2])
+            axs[n_plot, k].imshow(to_plot.T, cmap=cmap)
+            axs[n_plot, k].set_xticklabels([])
+            axs[n_plot, k].set_yticklabels([])
+            if is_first:
+                axs[n_plot, k].set_title(f"PC x={1}, y={2}")
         is_first = False
 
     # axs[n_plot,0].set_ylabel(name)
 
-    plot_dens(density, 'raw density', 0)
+    plot_dens(density, "raw density", 0)
 
     for alpha_idx, alpha in enumerate(alphas):
         lbfgsb_sol = lbfgsb_sols[alpha_idx]
-        plot_dens(lbfgsb_sol, r'a'+f'[{alpha_idx}]={alpha:.1e}', alpha_idx+1)
+        plot_dens(lbfgsb_sol, r"a" + f"[{alpha_idx}]={alpha:.1e}", alpha_idx + 1)
     plt.subplots_adjust(wspace=0, hspace=0)
-
 
 
 def plot_density_centers(density, centers):
     from recovar.output.output import sum_over_other
 
-    font = {'weight' : 'bold',
-            'size'   : 22}
+    font = {"weight": "bold", "size": 22}
     import matplotlib
-    matplotlib.rc('font', **font)
+
+    matplotlib.rc("font", **font)
 
     n_plots = 1
-    fig, axs = plt.subplots( n_plots, density.ndim, figsize = ( density.ndim *10, n_plots*6 ))
+    fig, axs = plt.subplots(n_plots, density.ndim, figsize=(density.ndim * 10, n_plots * 6))
     global is_first
     is_first = True
 
     def plot_dens(density, title, n_plot):
 
-        if density.ndim ==2:
-            axs[n_plot,k].imshow(density)
+        if density.ndim == 2:
+            axs[n_plot, k].imshow(density)
         else:
-
             for k in range(1, density.ndim):
-                if k ==1:
-                    axs[n_plot,k-1].set_ylabel(title)
-                axs[n_plot,k-1].set_xticklabels([])
-                axs[n_plot,k-1].set_yticklabels([])
+                if k == 1:
+                    axs[n_plot, k - 1].set_ylabel(title)
+                axs[n_plot, k - 1].set_xticklabels([])
+                axs[n_plot, k - 1].set_yticklabels([])
 
-                to_plot = sum_over_other(density, [0,k])
-                axs[n_plot,k-1].imshow(to_plot)
-                axs[n_plot,k-1].scatter(centers[:,0], centers[:,k] )
+                to_plot = sum_over_other(density, [0, k])
+                axs[n_plot, k - 1].imshow(to_plot)
+                axs[n_plot, k - 1].scatter(centers[:, 0], centers[:, k])
                 for i in range(centers.shape[0]):
-                    axs[n_plot,k-1].annotate(str(i), centers[i, [0,k]] + np.array([0.1, 0.1]))
+                    axs[n_plot, k - 1].annotate(str(i), centers[i, [0, k]] + np.array([0.1, 0.1]))
 
-                to_plot = sum_over_other(density, [0,2])
-            axs[n_plot,k].imshow(to_plot)
-            axs[n_plot,k].scatter(centers[:,0], centers[:,2] )
+                to_plot = sum_over_other(density, [0, 2])
+            axs[n_plot, k].imshow(to_plot)
+            axs[n_plot, k].scatter(centers[:, 0], centers[:, 2])
             for i in range(centers.shape[0]):
-                axs[n_plot,k].annotate(str(i), centers[i, [0,2]] + np.array([0.1, 0.1]))
+                axs[n_plot, k].annotate(str(i), centers[i, [0, 2]] + np.array([0.1, 0.1]))
 
-            axs[n_plot,k].set_xticklabels([])
-            axs[n_plot,k].set_yticklabels([])
+            axs[n_plot, k].set_xticklabels([])
+            axs[n_plot, k].set_yticklabels([])
+
     # axs[n_plot,0].set_ylabel(name)
 
-    plot_dens(density, 'raw density', 0)
+    plot_dens(density, "raw density", 0)
     plt.subplots_adjust(wspace=0, hspace=0)
 
+
 def convolve_with_pad_nd(ar1, ar2):
-    full_shape = tuple(2*np.array(ar1.shape)-1)
-    if ar1.ndim <=3:
+    full_shape = tuple(2 * np.array(ar1.shape) - 1)
+    if ar1.ndim <= 3:
         fft, ifft = jnp.fft.fftn, jnp.fft.ifftn
     else:
         fft, ifft = fftn, ifftn
-    conv = ifft(fft(ar1, full_shape)* fft(ar2, full_shape)).real
+    conv = ifft(fft(ar1, full_shape) * fft(ar2, full_shape)).real
     return _centered(conv, ar1.shape)
 
+
 def convolve_with_pad_nd_np(ar1, ar2):
-    full_shape = tuple(2*np.array(ar1.shape)-1)
+    full_shape = tuple(2 * np.array(ar1.shape) - 1)
     fft, ifft = np.fft.fftn, np.fft.ifftn
-    
-    conv = ifft(fft(ar1, full_shape)* fft(ar2, full_shape)).real
+
+    conv = ifft(fft(ar1, full_shape) * fft(ar2, full_shape)).real
     return _centered(conv, ar1.shape)
 
 
@@ -306,8 +349,9 @@ def _centered(arr, newshape):
     startind = [(s1 - s2) // 2 for s1, s2 in zip(arr.shape, newshape)]
     return jax.lax.dynamic_slice(arr, startind, newshape)
 
+
 # Custom ifftn to handle >3D arrays (jnp.fft.ifftn limited to 3 axes)
-def ifftn(arr, s= None, axes = None):
+def ifftn(arr, s=None, axes=None):
     axes = np.arange(arr.ndim)
     s = arr.shape if s is None else s
     if len(axes) > 6:
@@ -319,7 +363,8 @@ def ifftn(arr, s= None, axes = None):
         arr = jnp.fft.ifftn(arr, s[3:], axes[3:])
     return arr
 
-def fftn(arr, s= None, axes = None):
+
+def fftn(arr, s=None, axes=None):
     axes = np.arange(arr.ndim)
     s = arr.shape if s is None else s
     if len(axes) > 6:
@@ -329,66 +374,70 @@ def fftn(arr, s= None, axes = None):
     else:
         arr = jnp.fft.fftn(arr, s[:3], axes[:3])
         arr = jnp.fft.fftn(arr, s[3:], axes[3:])
-    return arr 
+    return arr
 
 
-
-def find_local_maxs_of_density(density_deconv, latent_space_bounds, percent_top = 1, n_local_maxs = 3, plot_folder = None):
-    ## Attempts to find local maxima of the density by clustering the top percent_top of the density on the grid. 
+def find_local_maxs_of_density(density_deconv, latent_space_bounds, percent_top=1, n_local_maxs=3, plot_folder=None):
+    ## Attempts to find local maxima of the density by clustering the top percent_top of the density on the grid.
     ## Then finds the maximum within each cluster.
     ## Not a very good method, but has worked fine for a couple of datasets....
 
     zz = np.argsort(density_deconv.reshape(-1))
     large_dens_indices_raveled = np.unravel_index(zz, density_deconv.shape)
-    n_top_points = int(percent_top/100 * np.prod(density_deconv.shape))
-    large_dens_indices = (np.array(large_dens_indices_raveled)[:,-n_top_points:]).T
+    n_top_points = int(percent_top / 100 * np.prod(density_deconv.shape))
+    large_dens_indices = (np.array(large_dens_indices_raveled)[:, -n_top_points:]).T
 
     from sklearn.cluster import KMeans, AgglomerativeClustering, HDBSCAN
     import matplotlib.pyplot as plt
     # clustering = KMeans(n_clusters=n_local_maxs,  n_init=10).fit(X)
 
-
     if n_local_maxs >= 1:
-        
-        clustering = AgglomerativeClustering(n_clusters = n_local_maxs, linkage = 'complete').fit(large_dens_indices)
-        
-        if clustering == 'kmeans':
-            clustering = KMeans(n_clusters=n_local_maxs,  n_init=10).fit(large_dens_indices)
+        clustering = AgglomerativeClustering(n_clusters=n_local_maxs, linkage="complete").fit(large_dens_indices)
+
+        if clustering == "kmeans":
+            clustering = KMeans(n_clusters=n_local_maxs, n_init=10).fit(large_dens_indices)
     else:
         clustering = HDBSCAN().fit(large_dens_indices)
 
-
-
     def find_max_within_clusters(density, labels, indices):
-        n_clusters = np.max(labels)+1
+        n_clusters = np.max(labels) + 1
         best_indices = []
         for k in range(n_clusters):
-            sub_indices = indices[labels==k]
+            sub_indices = indices[labels == k]
             zz = np.argmax(density[tuple(sub_indices.T)])
             best_indices.append(sub_indices[zz])
-                                
+
         return np.array(best_indices)
+
     max_within_cluster = find_max_within_clusters(density_deconv, clustering.labels_, large_dens_indices)
 
     ndim = density_deconv.ndim
     if ndim > 2:
-        fig = plt.figure(figsize = (10,10))
-        ax = fig.add_subplot(projection='3d')
-        ax.scatter(large_dens_indices[:,0], large_dens_indices[:,1], large_dens_indices[:,2], c = clustering.labels_)
-        ax.scatter(max_within_cluster[:,0], max_within_cluster[:,1], max_within_cluster[:,2], s = 300, c = 'k', alpha = 1, marker='x', linewidths=30)
+        fig = plt.figure(figsize=(10, 10))
+        ax = fig.add_subplot(projection="3d")
+        ax.scatter(large_dens_indices[:, 0], large_dens_indices[:, 1], large_dens_indices[:, 2], c=clustering.labels_)
+        ax.scatter(
+            max_within_cluster[:, 0],
+            max_within_cluster[:, 1],
+            max_within_cluster[:, 2],
+            s=300,
+            c="k",
+            alpha=1,
+            marker="x",
+            linewidths=30,
+        )
         if plot_folder is not None:
-            plt.savefig(plot_folder + 'local_max_viz.png')
+            plt.savefig(plot_folder + "local_max_viz.png")
             plt.close()
 
     if ndim == 2:
-        fig = plt.figure(figsize = (10,10))
+        fig = plt.figure(figsize=(10, 10))
         ax = fig.add_subplot()
-        ax.scatter(large_dens_indices[:,0], large_dens_indices[:,1],  c = clustering.labels_)
-        ax.scatter(max_within_cluster[:,0], max_within_cluster[:,1], s = 300, c = 'k', alpha = 1, marker='x', linewidths=30)
+        ax.scatter(large_dens_indices[:, 0], large_dens_indices[:, 1], c=clustering.labels_)
+        ax.scatter(max_within_cluster[:, 0], max_within_cluster[:, 1], s=300, c="k", alpha=1, marker="x", linewidths=30)
         if plot_folder is not None:
-            plt.savefig(plot_folder + 'local_max_viz.png')
+            plt.savefig(plot_folder + "local_max_viz.png")
             plt.close()
-
 
     grid_to_z, _ = latent_density.get_grid_z_mappings(latent_space_bounds, density_deconv.shape[0])
     max_within_cluster_z = grid_to_z(max_within_cluster)

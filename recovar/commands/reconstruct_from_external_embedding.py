@@ -30,17 +30,17 @@ def add_args(parser: argparse.ArgumentParser):
     )
 
     def list_of_ints(arg):
-        return list(map(int, arg.split(',')))
-
-    parser.add_argument('--zdim', type=list_of_ints, default=[1, 2, 4, 10, 20],
-                        help="Dimensions of latent variable. Default=1,2,4,10,20")
+        return list(map(int, arg.split(",")))
 
     parser.add_argument(
-        "--poses", type=os.path.abspath, required=True, help="Image poses (.pkl)"
+        "--zdim",
+        type=list_of_ints,
+        default=[1, 2, 4, 10, 20],
+        help="Dimensions of latent variable. Default=1,2,4,10,20",
     )
-    parser.add_argument(
-        "--ctf", metavar="pkl", type=os.path.abspath, required=True, help="CTF parameters (.pkl)"
-    )
+
+    parser.add_argument("--poses", type=os.path.abspath, required=True, help="Image poses (.pkl)")
+    parser.add_argument("--ctf", metavar="pkl", type=os.path.abspath, required=True, help="CTF parameters (.pkl)")
 
     group = parser.add_argument_group("Dataset loading")
     group.add_argument(
@@ -103,61 +103,82 @@ def add_args(parser: argparse.ArgumentParser):
         help="Noise model: radial (default) or white",
     )
 
-    parser.add_argument(
-        "--Bfactor", type=float, default=0, help="B-factor for sharpening"
-    )
+    parser.add_argument("--Bfactor", type=float, default=0, help="B-factor for sharpening")
 
     parser.add_argument(
-        "--n-bins", type=float, default=50, dest="n_bins",
+        "--n-bins",
+        type=float,
+        default=50,
+        dest="n_bins",
         help="Number of bins for kernel regression",
     )
 
     parser.add_argument(
-        "--embedding", type=os.path.abspath, required=True,
+        "--embedding",
+        type=os.path.abspath,
+        required=True,
         help="Image embeddings (.pkl), e.g. z.24.pkl from cryoDRGN",
     )
 
     parser.add_argument(
-        "--target", type=os.path.abspath, required=True,
+        "--target",
+        type=os.path.abspath,
+        required=True,
         help="Target latent points to evaluate kernel regression (.txt)",
     )
 
     parser.add_argument(
-        "--zdim1", action="store_true",
+        "--zdim1",
+        action="store_true",
         help="Whether dimension-1 embedding is used",
     )
 
     parser.add_argument(
-        "--tilt-series", action="store_true", dest="tilt_series",
+        "--tilt-series",
+        action="store_true",
+        dest="tilt_series",
         help="Whether to use tilt series",
     )
 
     group.add_argument(
-        "--ntilts", default=None, type=int,
+        "--ntilts",
+        default=None,
+        type=int,
         help="Number of tilts to use per tilt series (default: all)",
     )
 
     group.add_argument(
-        "--tilt-series-ctf", default=None,
+        "--tilt-series-ctf",
+        default=None,
         help="CTF mode for tilt series: cryoem, relion5, warp (default: auto)",
     )
 
     group.add_argument(
-        "--angle-per-tilt", type=float, default=3.0,
+        "--angle-per-tilt",
+        type=float,
+        default=3.0,
         help="Angle per tilt in degrees (default: 3.0)",
     )
 
     group.add_argument(
-        "--dose-per-tilt", type=float, default=2.9,
+        "--dose-per-tilt",
+        type=float,
+        default=2.9,
         help="Dose per tilt in e-/A^2 (default: 2.9)",
     )
 
     group.add_argument(
-        "--premultiplied-ctf", action="store_true",
+        "--premultiplied-ctf",
+        action="store_true",
         help="Whether CTF is premultiplied in the data",
     )
 
+    from recovar.utils.parser_args import add_project_arg
+
+    add_project_arg(parser)
+
     return parser
+
 
 ##TODO: I would like to make this function much easier to use. There should be a "basic interface"
 ## That any problem cna use, but I also would like a few specialized ones to make it easy to run on the output of
@@ -167,11 +188,12 @@ def generate(args):
 
     o.mkdir_safe(args.outdir)
     from recovar.utils.helpers import RobustFileHandler
+
     logger.addHandler(RobustFileHandler(f"{args.outdir}/run.log"))
     logger.info(args)
 
     if args.tilt_series_ctf is None:
-        args.tilt_series_ctf = 'relion5' if args.tilt_series else 'cryoem'
+        args.tilt_series_ctf = "relion5" if args.tilt_series else "cryoem"
         logger.info("Setting tilt_series_ctf to %s", args.tilt_series_ctf)
 
     ind_split = halfsets.resolve_halfset_indices(args)
@@ -197,15 +219,19 @@ def generate(args):
 
     ds.set_radial_noise_model(noise_variance)
 
-    o.compute_and_save_reweighted(ds, target, zs, cov_zs, args.outdir,
-                                  args.Bfactor, args.n_bins)
+    o.compute_and_save_reweighted(ds, target, zs, cov_zs, args.outdir, args.Bfactor, args.n_bins)
 
 
 def main():
     parser = argparse.ArgumentParser()
     add_args(parser)
     args = parser.parse_args()
-    generate(args)
+
+    from recovar.project.job_context import job_context
+
+    with job_context(args, "reconstruct_from_external_embedding") as ctx:
+        args.outdir = ctx.output_dir
+        generate(args)
 
 
 if __name__ == "__main__":

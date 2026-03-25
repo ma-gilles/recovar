@@ -51,6 +51,7 @@ _N_VOLS = 12
 # Volume helper (same as in tiny metrics test)
 # ---------------------------------------------------------------------------
 
+
 def _make_volume(idx: int, n_vols: int, grid: int) -> np.ndarray:
     x = np.linspace(-1.0, 1.0, grid, dtype=np.float32)
     xx, yy, zz = np.meshgrid(x, x, x, indexing="ij")
@@ -58,11 +59,12 @@ def _make_volume(idx: int, n_vols: int, grid: int) -> np.ndarray:
     vol = (
         np.exp(
             -((xx - 0.3 * np.cos(t)) ** 2 + (yy - 0.25 * np.sin(t)) ** 2 + (zz - 0.2 * np.cos(2 * t)) ** 2)
-            / (2 * 0.18 ** 2)
+            / (2 * 0.18**2)
         )
-        + 0.7 * np.exp(
+        + 0.7
+        * np.exp(
             -((xx + 0.25 * np.sin(1.3 * t)) ** 2 + (yy - 0.2 * np.cos(1.1 * t)) ** 2 + (zz + 0.2 * np.sin(t)) ** 2)
-            / (2 * 0.16 ** 2)
+            / (2 * 0.16**2)
         )
     ).astype(np.float32)
     vol -= vol.mean()
@@ -84,6 +86,7 @@ def _write_volumes(prefix: Path, n_vols: int = _N_VOLS, grid: int = _GRID) -> No
 # Pipeline runner
 # ---------------------------------------------------------------------------
 
+
 def _run_outliers_pipeline(
     output_dir: Path,
     volumes_prefix: Path,
@@ -102,21 +105,32 @@ def _run_outliers_pipeline(
 
     # Generate dataset
     make_cmd = [
-        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "make_test_dataset",
         str(output_dir),
-        "--n-images", str(n_images),
-        "--outlier-file-input", str(outlier_vol),
-        "--percent-outliers", str(pct_outliers),
-        "--grid-size", str(grid),
-        "--volume-input", str(volumes_prefix),
+        "--n-images",
+        str(n_images),
+        "--outlier-file-input",
+        str(outlier_vol),
+        "--percent-outliers",
+        str(pct_outliers),
+        "--grid-size",
+        str(grid),
+        "--volume-input",
+        str(volumes_prefix),
     ]
     if n_tilts > 0:
         make_cmd += [
             "--tilt-series",
-            "--n-tilts", str(n_tilts),
-            "--percent-tilt-series-outliers", str(pct_tilt_outliers),
+            "--n-tilts",
+            str(n_tilts),
+            "--percent-tilt-series-outliers",
+            str(pct_tilt_outliers),
         ]
     from conftest import gpu_subprocess_env
+
     env = gpu_subprocess_env()
     subprocess.run(make_cmd, check=True, env=env)
 
@@ -146,16 +160,25 @@ def _run_outliers_pipeline(
     ctf = str(dataset_dir / "ctf.pkl")
 
     pipe_cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         particles,
-        "--poses", poses,
-        "--ctf", ctf,
+        "--poses",
+        poses,
+        "--ctf",
+        ctf,
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", gt_mask_mrc,
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        gt_mask_mrc,
         "--lazy",
-        "--zdim", "4",
-        "--k-rounds", str(k_rounds),
+        "--zdim",
+        "4",
+        "--k-rounds",
+        str(k_rounds),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
@@ -168,6 +191,7 @@ def _run_outliers_pipeline(
 # ---------------------------------------------------------------------------
 # Metric helpers
 # ---------------------------------------------------------------------------
+
 
 def _compute_metrics(pipeline_out: Path, sim_info_path: Path, k_rounds: int) -> dict:
     with open(sim_info_path, "rb") as f:
@@ -238,14 +262,13 @@ def _check_files_and_partition(pipeline_out: Path, n_total: int, k_rounds: int) 
                 n_in = len(np.asarray(pickle.load(f)))
             with open(pipeline_out / f"outliers_round_{r}.pkl", "rb") as f:
                 n_out = len(np.asarray(pickle.load(f)))
-            assert n_in + n_out == n_total, (
-                f"round 1: inliers({n_in}) + outliers({n_out}) ≠ total({n_total})"
-            )
+            assert n_in + n_out == n_total, f"round 1: inliers({n_in}) + outliers({n_out}) ≠ total({n_total})"
 
 
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_run_test_outliers_pipeline_tiny_integration_spa(tmp_path):
     """
@@ -291,7 +314,7 @@ def test_run_test_outliers_pipeline_tiny_integration_cryo_et(tmp_path):
     Requires TINY_OUTLIERS_N_TILTS > 0 (or defaults to 5 if not set).
     """
 
-    n_tilts = _N_TILTS if _N_TILTS > 0 else 5   # default 5 for cryo-ET test
+    n_tilts = _N_TILTS if _N_TILTS > 0 else 5  # default 5 for cryo-ET test
     vols_prefix = tmp_path / "vol"
     _write_volumes(vols_prefix, n_vols=_N_VOLS, grid=_GRID)
 
@@ -325,10 +348,7 @@ def test_run_test_outliers_pipeline_tiny_integration_cryo_et(tmp_path):
             print(f"  {k}: {v:.4f}")
 
     # If particle-level indices were written, check them
-    has_particle = any(
-        (pipeline_out / f"particle_inliers_round_{r}.pkl").exists()
-        for r in range(1, _K_ROUNDS + 1)
-    )
+    has_particle = any((pipeline_out / f"particle_inliers_round_{r}.pkl").exists() for r in range(1, _K_ROUNDS + 1))
     if has_particle:
         assert "total_particles" in metrics
         assert metrics.get("true_particle_outlier_count", 0) >= 0

@@ -144,7 +144,11 @@ def test_analyze_reads_particles_halfsets_once(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(analyze_cmd.o, "mkdir_safe", lambda path: os.makedirs(path, exist_ok=True))
     monkeypatch.setattr(analyze_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(analyze_cmd.o, "umap_latent_space", lambda *_args, **_kwargs: SimpleNamespace(embedding_=np.zeros((n_images, 2), dtype=np.float32)))
+    monkeypatch.setattr(
+        analyze_cmd.o,
+        "umap_latent_space",
+        lambda *_args, **_kwargs: SimpleNamespace(embedding_=np.zeros((n_images, 2), dtype=np.float32)),
+    )
     monkeypatch.setattr(analyze_cmd.o, "plot_umap", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(plt, "savefig", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(plt, "close", lambda *_args, **_kwargs: None)
@@ -305,7 +309,14 @@ def test_analyze_uses_embedding_component_api_when_available(monkeypatch, tmp_pa
         "compute_latent_space_density",
         lambda *_args, **_kwargs: (np.ones((4, 4), dtype=np.float32), {"x": [-1, 1]}),
     )
-    monkeypatch.setattr(analyze_cmd.o, "kmeans_analysis", lambda *_args, **_kwargs: (np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32), np.array([0, 1, 0, 1, 0, 1], dtype=np.int32)))
+    monkeypatch.setattr(
+        analyze_cmd.o,
+        "kmeans_analysis",
+        lambda *_args, **_kwargs: (
+            np.array([[0.0, 0.0], [1.0, 1.0]], dtype=np.float32),
+            np.array([0, 1, 0, 1, 0, 1], dtype=np.int32),
+        ),
+    )
     monkeypatch.setattr(analyze_cmd.o, "mkdir_safe", lambda path: os.makedirs(path, exist_ok=True))
     monkeypatch.setattr(
         analyze_cmd.o,
@@ -334,7 +345,6 @@ def test_analyze_uses_embedding_component_api_when_available(monkeypatch, tmp_pa
     assert component_calls.count("contrasts") == 1
     assert captured["contrast_dtype"] == np.float32
     assert captured["reweighted_calls"] == 1
-
 
 
 def test_compute_state_reads_txt_and_reweights(monkeypatch, tmp_path):
@@ -420,7 +430,6 @@ def test_compute_state_accepts_pathlike_latent_points(monkeypatch, tmp_path):
         lambda _cryos, target_zs, *_args, **_kwargs: captured.setdefault("target_zs", target_zs.copy()),
     )
 
-
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
         particles=None,
@@ -471,7 +480,6 @@ def test_compute_state_accepts_pathlike_result_and_out_dirs(monkeypatch, tmp_pat
         ),
     )
 
-
     args = SimpleNamespace(
         result_dir=tmp_path / "pipeline_out",  # Path object
         particles=None,
@@ -499,6 +507,7 @@ def test_compute_state_reads_pkl_latent_points(monkeypatch, tmp_path):
     latent_points = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
     latent_path = tmp_path / "latent.pkl"
     import pickle
+
     with open(latent_path, "wb") as f:
         pickle.dump(latent_points, f)
 
@@ -521,7 +530,6 @@ def test_compute_state_reads_pkl_latent_points(monkeypatch, tmp_path):
         "compute_and_save_reweighted",
         lambda _cryos, target_zs, *_args, **_kwargs: captured.setdefault("target_zs", target_zs.copy()),
     )
-
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -575,7 +583,6 @@ def test_compute_state_uses_noreg_key_when_requested(monkeypatch, tmp_path):
             "vals", (zs.copy(), cov_zs.copy())
         ),
     )
-
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -636,7 +643,6 @@ def test_compute_state_uses_embedding_component_api_when_available(monkeypatch, 
 
     monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
-
 
     captured = {}
     monkeypatch.setattr(
@@ -709,7 +715,6 @@ def test_compute_state_casts_embedding_arrays_to_float32(monkeypatch, tmp_path):
 
     monkeypatch.setattr(compute_state_cmd.o, "PipelineOutput", _PO)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
-
 
     captured = {}
     monkeypatch.setattr(
@@ -861,6 +866,7 @@ def test_compute_state_rejects_nonfinite_latent_points(monkeypatch, tmp_path):
 def test_compute_state_rejects_nonnumeric_latent_points(monkeypatch, tmp_path):
     latent_path = tmp_path / "latent.pkl"
     import pickle
+
     with open(latent_path, "wb") as f:
         pickle.dump([["a", "b"]], f)
 
@@ -996,7 +1002,6 @@ def test_compute_state_missing_input_args_ignores_overrides(monkeypatch, tmp_pat
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
 
-
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
         particles="override_particles",
@@ -1046,7 +1051,6 @@ def test_compute_state_params_none_ignores_overrides(monkeypatch, tmp_path):
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
 
-
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
         particles="override_particles",
@@ -1095,7 +1099,6 @@ def test_compute_state_allows_missing_override_attrs_on_args(monkeypatch, tmp_pa
     monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-
 
     # Intentionally omit particles/datadir/strip_prefix attrs.
     args = SimpleNamespace(
@@ -1151,7 +1154,6 @@ def test_compute_state_uses_defaults_when_optional_attrs_missing(monkeypatch, tm
         lambda _cryos, _target_zs, _zs, _cov_zs, _out, _bf, **kwargs: captured.setdefault("kwargs", kwargs),
     )
 
-
     # Intentionally omit many optional attributes; code should use parser defaults.
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -1200,7 +1202,6 @@ def test_compute_state_apply_global_filtering_without_volume_mask(monkeypatch, t
         "compute_and_save_reweighted",
         lambda *_args, **kwargs: captured.setdefault("kwargs", kwargs),
     )
-
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -1262,6 +1263,7 @@ def test_compute_state_updates_input_args_from_cli_overrides(monkeypatch, tmp_pa
         "volume_mask": np.ones((4, 4, 4), dtype=np.float32),
         "input_args": base_input_args,
     }
+
     class _PO(_PayloadEmbeddingAccessMixin):
         def __init__(self, _path):
             self.params = {"input_args": base_input_args}
@@ -1274,7 +1276,6 @@ def test_compute_state_updates_input_args_from_cli_overrides(monkeypatch, tmp_pa
     monkeypatch.setattr(compute_state_cmd.embedding, "set_contrasts_in_cryos", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "mkdir_safe", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(compute_state_cmd.o, "compute_and_save_reweighted", lambda *_args, **_kwargs: None)
-
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -1325,7 +1326,6 @@ def test_compute_state_zdim1_handles_scalar_txt_latent_point(monkeypatch, tmp_pa
         "compute_and_save_reweighted",
         lambda cryos, target_zs, *_args, **_kwargs: captured.setdefault("shape", target_zs.shape),
     )
-
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -1585,7 +1585,7 @@ def test_analyze_main_dispatches(monkeypatch, tmp_path):
     assert kwargs["zdim"] == 4
 
 
-def test_compute_state_add_args_requires_outdir_and_latent_points():
+def test_compute_state_add_args_requires_latent_points():
     import argparse
 
     parser = compute_state_cmd.add_args(argparse.ArgumentParser())
@@ -1602,8 +1602,13 @@ def test_compute_state_add_args_requires_outdir_and_latent_points():
     assert parsed.outdir == "/tmp/outdir"
     assert parsed.latent_points == "/tmp/latent.txt"
 
+    # --outdir is optional (auto-numbering fills in the default)
+    parsed2 = parser.parse_args(["/tmp/result_dir", "--latent-points", "/tmp/latent.txt"])
+    assert parsed2.outdir is None
+
+    # --latent-points is still required
     with pytest.raises(SystemExit):
-        parser.parse_args(["/tmp/result_dir", "--latent-points", "/tmp/latent.txt"])
+        parser.parse_args(["/tmp/result_dir"])
 
 
 def test_compute_state_1d_latent_warns_and_reshapes_to_single_point(monkeypatch, tmp_path, caplog):
@@ -1630,7 +1635,6 @@ def test_compute_state_1d_latent_warns_and_reshapes_to_single_point(monkeypatch,
         "compute_and_save_reweighted",
         lambda _cryos, target_zs, *_args, **_kwargs: captured.setdefault("target_zs", target_zs.copy()),
     )
-
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
@@ -1692,7 +1696,6 @@ def test_compute_state_uses_lazy_dataset_when_requested(monkeypatch, tmp_path):
         lambda cryos, *_args, **_kwargs: captured.setdefault("cryos", cryos),
     )
 
-
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),
         particles=None,
@@ -1751,7 +1754,6 @@ def test_compute_state_uses_nonlazy_dataset_when_lazy_false(monkeypatch, tmp_pat
         "compute_and_save_reweighted",
         lambda cryos, *_args, **_kwargs: captured.setdefault("cryos", cryos),
     )
-
 
     args = SimpleNamespace(
         result_dir=str(tmp_path / "pipeline_out"),

@@ -20,22 +20,18 @@ import numpy as np
 logger = logging.getLogger(__name__)
 
 # Regression thresholds — warn if exceeded (same hardware assumed)
-WALL_TIME_TOL = 0.10      # 10% slower
-GPU_MEMORY_TOL = 0.10     # 10% more GPU memory
-CPU_MEMORY_TOL = 0.10     # 10% more CPU memory
+WALL_TIME_TOL = 0.10  # 10% slower
+GPU_MEMORY_TOL = 0.10  # 10% more GPU memory
+CPU_MEMORY_TOL = 0.10  # 10% more CPU memory
 
 
 def get_code_version():
     """Return git commit hash and dirty flag."""
     try:
         commit = subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
-            stderr=subprocess.DEVNULL, text=True
+            ["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL, text=True
         ).strip()
-        dirty = subprocess.call(
-            ["git", "diff", "--quiet"],
-            stderr=subprocess.DEVNULL
-        ) != 0
+        dirty = subprocess.call(["git", "diff", "--quiet"], stderr=subprocess.DEVNULL) != 0
         return f"{commit}{'*' if dirty else ''}"
     except Exception:
         return "unknown"
@@ -57,6 +53,7 @@ def get_gpu_name():
     """Return GPU device name."""
     try:
         import jax
+
         devs = jax.devices("gpu")
         if devs:
             return str(devs[0].device_kind)
@@ -81,6 +78,7 @@ def perf_snapshot():
     as subprocesses via subprocess.run).
     """
     import psutil
+
     proc = psutil.Process(os.getpid())
     # Include children (subprocess.run spawns child processes)
     try:
@@ -95,6 +93,7 @@ def perf_snapshot():
     }
     try:
         import jax
+
         stats = jax.local_devices()[0].memory_stats()
         if stats:
             snap["gpu_bytes_in_use"] = stats.get("bytes_in_use", 0)
@@ -105,9 +104,12 @@ def perf_snapshot():
     if snap["gpu_bytes_in_use"] == 0:
         try:
             import subprocess as sp
+
             result = sp.run(
                 ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             if result.returncode == 0:
                 # Take max across GPUs (MiB)
@@ -244,7 +246,7 @@ def compare_perf(
             if wall_delta > wall_tol:
                 warns.append(
                     f"{stage_name}: wall_time {cur_wall:.1f}s vs {bl_wall:.1f}s "
-                    f"(+{wall_delta*100:.0f}%, threshold {wall_tol*100:.0f}%)"
+                    f"(+{wall_delta * 100:.0f}%, threshold {wall_tol * 100:.0f}%)"
                 )
 
         # GPU memory
@@ -255,7 +257,7 @@ def compare_perf(
             if gpu_delta > gpu_tol:
                 warns.append(
                     f"{stage_name}: GPU memory {cur_gpu:.1f}GB vs {bl_gpu:.1f}GB "
-                    f"(+{gpu_delta*100:.0f}%, threshold {gpu_tol*100:.0f}%)"
+                    f"(+{gpu_delta * 100:.0f}%, threshold {gpu_tol * 100:.0f}%)"
                 )
 
         # CPU memory
@@ -266,7 +268,7 @@ def compare_perf(
             if cpu_delta > cpu_tol:
                 warns.append(
                     f"{stage_name}: CPU memory {cur_cpu:.1f}GB vs {bl_cpu:.1f}GB "
-                    f"(+{cpu_delta*100:.0f}%, threshold {cpu_tol*100:.0f}%)"
+                    f"(+{cpu_delta * 100:.0f}%, threshold {cpu_tol * 100:.0f}%)"
                 )
 
     return warns
@@ -295,9 +297,11 @@ def check_perf_regression(current: dict, baseline_path: str, test_name: str = ""
     lines = [f"\n  Perf: {test_name} ({cur_gpu})"]
     for k, v in cur_stages.items():
         if isinstance(v, dict):
-            lines.append(f"    {k:30s} wall={v.get('wall_seconds',0):7.0f}s  "
-                         f"gpu={v.get('peak_gpu_memory_gb',0):5.1f}GB  "
-                         f"cpu={v.get('peak_cpu_memory_gb',0):5.1f}GB")
+            lines.append(
+                f"    {k:30s} wall={v.get('wall_seconds', 0):7.0f}s  "
+                f"gpu={v.get('peak_gpu_memory_gb', 0):5.1f}GB  "
+                f"cpu={v.get('peak_cpu_memory_gb', 0):5.1f}GB"
+            )
     print("\n".join(lines))
 
     if baseline is None:
@@ -312,4 +316,4 @@ def check_perf_regression(current: dict, baseline_path: str, test_name: str = ""
         print(f"\n  *** {msg}")
         warnings.warn(msg, stacklevel=2)
     else:
-        print(f"  Perf OK (within {WALL_TIME_TOL*100:.0f}% of baseline)")
+        print(f"  Perf OK (within {WALL_TIME_TOL * 100:.0f}% of baseline)")

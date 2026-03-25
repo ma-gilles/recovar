@@ -188,7 +188,9 @@ def test_tilt_series_half_matches_full_mapping():
     image_shape = (4, 8)
 
     evaluator_ts = core_ctf.CTFEvaluator(
-        mode=core_ctf.CTFMode.TILT_SERIES, dose_per_tilt=2.9, angle_per_tilt=3.0,
+        mode=core_ctf.CTFMode.TILT_SERIES,
+        dose_per_tilt=2.9,
+        angle_per_tilt=3.0,
     )
     full = np.asarray(evaluator_ts(ctf_params, image_shape=image_shape, voxel_size=1.0))
     half = np.asarray(evaluator_ts(ctf_params, image_shape=image_shape, voxel_size=1.0, half_image=True))
@@ -206,12 +208,21 @@ def test_tilt_series_evaluator_half_matches_internal_function():
     ctf_params = _make_standard_ctf_params(3)
     image_shape = (4, 8)
     evaluator = core_ctf.CTFEvaluator(
-        mode=core_ctf.CTFMode.TILT_SERIES, dose_per_tilt=2.9, angle_per_tilt=3.0,
+        mode=core_ctf.CTFMode.TILT_SERIES,
+        dose_per_tilt=2.9,
+        angle_per_tilt=3.0,
     )
     out_eval = np.asarray(evaluator(ctf_params, image_shape, 1.0, half_image=True))
-    out_ref = np.asarray(core_ctf._compute_tilt_series_ctf(
-        ctf_params, image_shape, 1.0, 2.9, 3.0, half_image=True,
-    ))
+    out_ref = np.asarray(
+        core_ctf._compute_tilt_series_ctf(
+            ctf_params,
+            image_shape,
+            1.0,
+            2.9,
+            3.0,
+            half_image=True,
+        )
+    )
     np.testing.assert_allclose(out_eval, out_ref, atol=1e-6, rtol=1e-6)
 
 
@@ -245,12 +256,20 @@ def test_tilt_series_evaluator_matches_internal_function():
     ctf_params[:, core_ctf.CTFParamIndex.CONTRAST] = 1.0
 
     evaluator = core_ctf.CTFEvaluator(
-        mode=core_ctf.CTFMode.TILT_SERIES, dose_per_tilt=2.9, angle_per_tilt=3.0,
+        mode=core_ctf.CTFMode.TILT_SERIES,
+        dose_per_tilt=2.9,
+        angle_per_tilt=3.0,
     )
     out_eval = np.asarray(evaluator(ctf_params, (4, 4), 1.0))
-    out_ref = np.asarray(core_ctf._compute_tilt_series_ctf(
-        ctf_params, image_shape=(4, 4), voxel_size=1.0, dose_per_tilt=2.9, angle_per_tilt=3.0,
-    ))
+    out_ref = np.asarray(
+        core_ctf._compute_tilt_series_ctf(
+            ctf_params,
+            image_shape=(4, 4),
+            voxel_size=1.0,
+            dose_per_tilt=2.9,
+            angle_per_tilt=3.0,
+        )
+    )
     np.testing.assert_allclose(out_eval, out_ref, atol=1e-6, rtol=1e-6)
 
 
@@ -266,9 +285,7 @@ def test_evaluate_ctf_on_gpu(gpu_device):
     ctf_params = np.array([[15000.0, 15000.0, 0.0, 300.0, 2.7, 0.1, 0.0, 0.0, 1.0]], dtype=np.float32)
     cpu_out = np.asarray(core_ctf.evaluate_ctf(freqs, ctf_params))
     with jax.default_device(gpu_device):
-        gpu_out = np.asarray(
-            core_ctf.evaluate_ctf(jax.device_put(freqs), jax.device_put(ctf_params))
-        )
+        gpu_out = np.asarray(core_ctf.evaluate_ctf(jax.device_put(freqs), jax.device_put(ctf_params)))
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
 
@@ -278,9 +295,7 @@ def test_batch_evaluate_ctf_on_gpu(gpu_device):
     psi = np.array([[0.0, 0.0], [0.1, -0.2], [0.05, 0.15]], dtype=np.float32)
     cpu_out = np.asarray(core_ctf.evaluate_ctf(psi, ctf_params))
     with jax.default_device(gpu_device):
-        gpu_out = np.asarray(
-            core_ctf.evaluate_ctf(jax.device_put(psi), jax.device_put(ctf_params))
-        )
+        gpu_out = np.asarray(core_ctf.evaluate_ctf(jax.device_put(psi), jax.device_put(ctf_params)))
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
 
 
@@ -302,7 +317,9 @@ def test_spa_evaluator_half_matches_full_on_gpu(gpu_device):
     evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
     with jax.default_device(gpu_device):
         full = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
-        half = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True))
+        half = np.asarray(
+            evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True)
+        )
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
 
@@ -326,7 +343,9 @@ def test_spa_evaluator_half_matches_full_mapping_on_gpu(gpu_device):
     evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.SPA)
     with jax.default_device(gpu_device):
         full = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
-        half = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True))
+        half = np.asarray(
+            evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True)
+        )
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
 
@@ -347,11 +366,15 @@ def test_tilt_series_evaluator_half_matches_full_on_gpu(gpu_device):
     ctf_params = _make_standard_ctf_params(4).astype(np.float32)
     image_shape = (4, 8)
     evaluator = core_ctf.CTFEvaluator(
-        mode=core_ctf.CTFMode.TILT_SERIES, dose_per_tilt=2.9, angle_per_tilt=3.0,
+        mode=core_ctf.CTFMode.TILT_SERIES,
+        dose_per_tilt=2.9,
+        angle_per_tilt=3.0,
     )
     with jax.default_device(gpu_device):
         full = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
-        half = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True))
+        half = np.asarray(
+            evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True)
+        )
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
 
@@ -363,7 +386,9 @@ def test_cryo_et_evaluator_half_matches_full_on_gpu(gpu_device):
     evaluator = core_ctf.CTFEvaluator(mode=core_ctf.CTFMode.CRYO_ET)
     with jax.default_device(gpu_device):
         full = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0))
-        half = np.asarray(evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True))
+        half = np.asarray(
+            evaluator(jax.device_put(ctf_params), image_shape=image_shape, voxel_size=1.0, half_image=True)
+        )
     expected = np.asarray(fourier_transform_utils.full_image_to_half_image(full, image_shape))
     np.testing.assert_allclose(half, expected, atol=1e-5, rtol=1e-5)
 
@@ -372,7 +397,8 @@ def test_cryo_et_evaluator_half_matches_full_on_gpu(gpu_device):
 def test_get_dose_filters_on_gpu(gpu_device):
     cpu_out = np.asarray(
         core_ctf.get_dose_filters(
-            Apix=1.0, image_shape=(4, 8),
+            Apix=1.0,
+            image_shape=(4, 8),
             cumulative_dose=np.array([0.0, 1.0, 3.0], dtype=np.float32),
             tilt_angles=np.array([0.0, 15.0, 30.0], dtype=np.float32),
             voltage=300.0,
@@ -381,7 +407,8 @@ def test_get_dose_filters_on_gpu(gpu_device):
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_ctf.get_dose_filters(
-                Apix=1.0, image_shape=(4, 8),
+                Apix=1.0,
+                image_shape=(4, 8),
                 cumulative_dose=jax.device_put(np.array([0.0, 1.0, 3.0], dtype=np.float32)),
                 tilt_angles=jax.device_put(np.array([0.0, 15.0, 30.0], dtype=np.float32)),
                 voltage=300.0,

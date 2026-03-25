@@ -15,10 +15,11 @@ def _make_real_volume(idx, n_vols, grid):
     x = np.linspace(-1.0, 1.0, grid, dtype=np.float32)
     xx, yy, zz = np.meshgrid(x, x, x, indexing="ij")
     t = 2.0 * np.pi * idx / max(n_vols, 1)
-    vol = (
-        np.exp(-((xx - 0.3 * np.cos(t)) ** 2 + (yy - 0.25 * np.sin(t)) ** 2 + (zz - 0.2 * np.cos(2 * t)) ** 2) / (2 * 0.18**2))
-        + 0.7
-        * np.exp(-((xx + 0.25 * np.sin(1.3 * t)) ** 2 + (yy - 0.2 * np.cos(1.1 * t)) ** 2 + (zz + 0.2 * np.sin(t)) ** 2) / (2 * 0.16**2))
+    vol = np.exp(
+        -((xx - 0.3 * np.cos(t)) ** 2 + (yy - 0.25 * np.sin(t)) ** 2 + (zz - 0.2 * np.cos(2 * t)) ** 2) / (2 * 0.18**2)
+    ) + 0.7 * np.exp(
+        -((xx + 0.25 * np.sin(1.3 * t)) ** 2 + (yy - 0.2 * np.cos(1.1 * t)) ** 2 + (zz + 0.2 * np.sin(t)) ** 2)
+        / (2 * 0.16**2)
     )
     vol = vol.astype(np.float32)
     vol -= vol.mean()
@@ -60,6 +61,7 @@ def test_run_test_all_metrics_tiny_integration(tmp_path):
         "0.1",
     ]
     from conftest import gpu_subprocess_env
+
     subprocess.run(cmd, check=True, env=gpu_subprocess_env())
 
     scores_json = out_dir / "test_dataset" / "metrics_plot" / "all_scores.json"

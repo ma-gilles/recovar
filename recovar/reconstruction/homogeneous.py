@@ -24,6 +24,7 @@ class MeanEstimate:
     lhs : ndarray — average Hermitian (CTF²) filter.
     prior : ndarray — FSC-derived regularization prior.
     """
+
     combined: np.ndarray
     corrected0: np.ndarray
     corrected1: np.ndarray
@@ -49,12 +50,17 @@ class MeanEstimate:
         """Get regularized half-map by index (0 or 1)."""
         return self.corrected0reg if idx == 0 else self.corrected1reg
 
+
 NVTX_DOMAIN_HOMO = "homogeneous"
 
 
 @nvtx.annotate("get_mean_conformation_relion", color="blue", domain=NVTX_DOMAIN_HOMO)
 def get_mean_conformation_relion(
-    dataset, batch_size, noise_variance=None, use_regularization=False, upsampling_factor=2,
+    dataset,
+    batch_size,
+    noise_variance=None,
+    use_regularization=False,
+    upsampling_factor=2,
 ):
     """Compute the mean conformation using RELION-style half-set reconstruction.
 
@@ -103,12 +109,19 @@ def get_mean_conformation_relion(
         )
 
     mean_prior, fsc, _ = regularization.compute_relion_prior(
-        halfset_datasets, noise_variance, corrected[0], corrected[1], batch_size,
+        halfset_datasets,
+        noise_variance,
+        corrected[0],
+        corrected[1],
+        batch_size,
     )
 
     corrected_reg = [
         relion_functions.post_process_from_filter_v2(
-            ft_ctfs[halfset_id], ft_ys[halfset_id], dataset.volume_shape, upsampling_factor,
+            ft_ctfs[halfset_id],
+            ft_ys[halfset_id],
+            dataset.volume_shape,
+            upsampling_factor,
             tau=mean_prior,
         )
         for halfset_id in range(2)

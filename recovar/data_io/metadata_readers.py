@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 # STAR file parsing
 # ---------------------------------------------------------------------------
 
+
 def parse_poses_from_star(
     star_path: str,
     D: int,
@@ -44,9 +45,9 @@ def parse_poses_from_star(
     n = len(sf)
 
     # --- Euler angles → rotation matrices ---
-    rot_col = sf.get_optics_values('_rlnAngleRot', dtype=np.float64)
-    tilt_col = sf.get_optics_values('_rlnAngleTilt', dtype=np.float64)
-    psi_col = sf.get_optics_values('_rlnAnglePsi', dtype=np.float64)
+    rot_col = sf.get_optics_values("_rlnAngleRot", dtype=np.float64)
+    tilt_col = sf.get_optics_values("_rlnAngleTilt", dtype=np.float64)
+    psi_col = sf.get_optics_values("_rlnAnglePsi", dtype=np.float64)
 
     if rot_col is None or tilt_col is None or psi_col is None:
         raise ValueError(
@@ -60,23 +61,22 @@ def parse_poses_from_star(
     # --- Translations ---
     # RELION 3.1: _rlnOriginXAngst / _rlnOriginYAngst (Angstroms)
     # RELION 3.0: _rlnOriginX / _rlnOriginY (pixels)
-    tx = sf.get_optics_values('_rlnOriginXAngst', dtype=np.float64)
-    ty = sf.get_optics_values('_rlnOriginYAngst', dtype=np.float64)
+    tx = sf.get_optics_values("_rlnOriginXAngst", dtype=np.float64)
+    ty = sf.get_optics_values("_rlnOriginYAngst", dtype=np.float64)
 
     if tx is not None and ty is not None:
         # Convert Angstroms → fractional via pixel size
         apix = sf.apix  # per-particle pixel sizes
         if apix is None:
             raise ValueError(
-                "STAR file has _rlnOriginXAngst but no _rlnImagePixelSize. "
-                "Cannot convert translations to pixel units."
+                "STAR file has _rlnOriginXAngst but no _rlnImagePixelSize. Cannot convert translations to pixel units."
             )
         apix = apix.astype(np.float64)
         trans_pixels = np.stack([tx / apix, ty / apix], axis=1)  # (N, 2)
     else:
         # Try RELION 3.0 pixel-unit columns
-        tx = sf.get_optics_values('_rlnOriginX', dtype=np.float64)
-        ty = sf.get_optics_values('_rlnOriginY', dtype=np.float64)
+        tx = sf.get_optics_values("_rlnOriginX", dtype=np.float64)
+        ty = sf.get_optics_values("_rlnOriginY", dtype=np.float64)
         if tx is not None and ty is not None:
             trans_pixels = np.stack([tx, ty], axis=1)
         else:
@@ -113,24 +113,26 @@ def parse_ctf_from_star(
     n = len(sf)
 
     # Required fields
-    dfu = sf.get_optics_values('_rlnDefocusU', dtype=np.float64)
-    dfv = sf.get_optics_values('_rlnDefocusV', dtype=np.float64)
-    dfang = sf.get_optics_values('_rlnDefocusAngle', dtype=np.float64)
-    volt = sf.get_optics_values('_rlnVoltage', dtype=np.float64)
-    cs = sf.get_optics_values('_rlnSphericalAberration', dtype=np.float64)
-    w = sf.get_optics_values('_rlnAmplitudeContrast', dtype=np.float64)
+    dfu = sf.get_optics_values("_rlnDefocusU", dtype=np.float64)
+    dfv = sf.get_optics_values("_rlnDefocusV", dtype=np.float64)
+    dfang = sf.get_optics_values("_rlnDefocusAngle", dtype=np.float64)
+    volt = sf.get_optics_values("_rlnVoltage", dtype=np.float64)
+    cs = sf.get_optics_values("_rlnSphericalAberration", dtype=np.float64)
+    w = sf.get_optics_values("_rlnAmplitudeContrast", dtype=np.float64)
 
-    for name, val in [('_rlnDefocusU', dfu), ('_rlnDefocusV', dfv),
-                      ('_rlnDefocusAngle', dfang), ('_rlnVoltage', volt),
-                      ('_rlnSphericalAberration', cs), ('_rlnAmplitudeContrast', w)]:
+    for name, val in [
+        ("_rlnDefocusU", dfu),
+        ("_rlnDefocusV", dfv),
+        ("_rlnDefocusAngle", dfang),
+        ("_rlnVoltage", volt),
+        ("_rlnSphericalAberration", cs),
+        ("_rlnAmplitudeContrast", w),
+    ]:
         if val is None:
-            raise ValueError(
-                f"STAR file missing required CTF field {name}. "
-                "Provide a --ctf pkl file instead."
-            )
+            raise ValueError(f"STAR file missing required CTF field {name}. Provide a --ctf pkl file instead.")
 
     # Optional: phase shift (default 0)
-    phase = sf.get_optics_values('_rlnPhaseShift', dtype=np.float64)
+    phase = sf.get_optics_values("_rlnPhaseShift", dtype=np.float64)
     if phase is None:
         phase = np.zeros(n, dtype=np.float64)
 
@@ -165,9 +167,11 @@ def parse_ctf_from_star(
     ctf = np.column_stack([new_apix, dfu, dfv, dfang, volt, cs, w, phase])
 
     logger.info(
-        "Parsed CTF from STAR: %d particles, Apix=%.4f (first), "
-        "DFU range=[%.0f, %.0f]",
-        n, ctf[0, 0], dfu.min(), dfu.max(),
+        "Parsed CTF from STAR: %d particles, Apix=%.4f (first), DFU range=[%.0f, %.0f]",
+        n,
+        ctf[0, 0],
+        dfu.min(),
+        dfu.max(),
     )
     return ctf.astype(np.float64)
 
@@ -175,6 +179,7 @@ def parse_ctf_from_star(
 # ---------------------------------------------------------------------------
 # cryoSPARC .cs file parsing
 # ---------------------------------------------------------------------------
+
 
 def _load_cs(cs_path: str) -> np.ndarray:
     """Load a cryoSPARC .cs file (NumPy structured array)."""
@@ -206,16 +211,13 @@ def parse_poses_from_cs(
 
     # --- Rotations (exponential map → rotation matrix) ---
     pose_key = None
-    for key in ('alignments3D/pose', 'alignments_class_0/pose'):
+    for key in ("alignments3D/pose", "alignments_class_0/pose"):
         if key in data.dtype.names:
             pose_key = key
             break
 
     if pose_key is None:
-        raise ValueError(
-            "CS file has no alignments3D/pose field. "
-            "Provide a --poses pkl file instead."
-        )
+        raise ValueError("CS file has no alignments3D/pose field. Provide a --poses pkl file instead.")
 
     rotvecs = data[pose_key].astype(np.float64)  # (N, 3)
     rot_matrices = SciPyRot.from_rotvec(rotvecs).as_matrix()  # (N, 3, 3)
@@ -224,7 +226,7 @@ def parse_poses_from_cs(
 
     # --- Translations ---
     shift_key = None
-    for key in ('alignments3D/shift', 'alignments_class_0/shift'):
+    for key in ("alignments3D/shift", "alignments_class_0/shift"):
         if key in data.dtype.names:
             shift_key = key
             break
@@ -259,45 +261,44 @@ def parse_ctf_from_cs(
 
     # Required CTF fields
     required = {
-        'ctf/df1_A': 'DefocusU',
-        'ctf/df2_A': 'DefocusV',
-        'ctf/df_angle_rad': 'DefocusAngle',
-        'ctf/accel_kv': 'Voltage',
-        'ctf/cs_mm': 'SphericalAberration',
-        'ctf/amp_contrast': 'AmplitudeContrast',
+        "ctf/df1_A": "DefocusU",
+        "ctf/df2_A": "DefocusV",
+        "ctf/df_angle_rad": "DefocusAngle",
+        "ctf/accel_kv": "Voltage",
+        "ctf/cs_mm": "SphericalAberration",
+        "ctf/amp_contrast": "AmplitudeContrast",
     }
     for field, desc in required.items():
         if field not in data.dtype.names:
             raise ValueError(
-                f"CS file missing required CTF field '{field}' ({desc}). "
-                "Provide a --ctf pkl file instead."
+                f"CS file missing required CTF field '{field}' ({desc}). Provide a --ctf pkl file instead."
             )
 
-    dfu = data['ctf/df1_A'].astype(np.float64)
-    dfv = data['ctf/df2_A'].astype(np.float64)
-    dfang_rad = data['ctf/df_angle_rad'].astype(np.float64)
-    volt = data['ctf/accel_kv'].astype(np.float64)
-    cs = data['ctf/cs_mm'].astype(np.float64)
-    w = data['ctf/amp_contrast'].astype(np.float64)
+    dfu = data["ctf/df1_A"].astype(np.float64)
+    dfv = data["ctf/df2_A"].astype(np.float64)
+    dfang_rad = data["ctf/df_angle_rad"].astype(np.float64)
+    volt = data["ctf/accel_kv"].astype(np.float64)
+    cs = data["ctf/cs_mm"].astype(np.float64)
+    w = data["ctf/amp_contrast"].astype(np.float64)
 
     # Convert radians → degrees
     dfang = np.degrees(dfang_rad)
 
     # Phase shift (optional, in radians)
-    if 'ctf/phase_shift_rad' in data.dtype.names:
-        phase = np.degrees(data['ctf/phase_shift_rad'].astype(np.float64))
+    if "ctf/phase_shift_rad" in data.dtype.names:
+        phase = np.degrees(data["ctf/phase_shift_rad"].astype(np.float64))
     else:
         phase = np.zeros(n, dtype=np.float64)
 
     # Pixel size
-    if 'blob/psize_A' in data.dtype.names:
-        orig_apix = data['blob/psize_A'].astype(np.float64)
+    if "blob/psize_A" in data.dtype.names:
+        orig_apix = data["blob/psize_A"].astype(np.float64)
     else:
         logger.warning("CS file has no blob/psize_A; using Apix=1.0")
         orig_apix = np.ones(n, dtype=np.float64)
 
-    if 'blob/shape' in data.dtype.names:
-        orig_D = data['blob/shape'][:, 0].astype(np.float64)
+    if "blob/shape" in data.dtype.names:
+        orig_D = data["blob/shape"][:, 0].astype(np.float64)
     else:
         orig_D = np.full(n, float(D), dtype=np.float64)
 
@@ -306,9 +307,11 @@ def parse_ctf_from_cs(
     ctf = np.column_stack([new_apix, dfu, dfv, dfang, volt, cs, w, phase])
 
     logger.info(
-        "Parsed CTF from CS: %d particles, Apix=%.4f (first), "
-        "DFU range=[%.0f, %.0f]",
-        n, ctf[0, 0], dfu.min(), dfu.max(),
+        "Parsed CTF from CS: %d particles, Apix=%.4f (first), DFU range=[%.0f, %.0f]",
+        n,
+        ctf[0, 0],
+        dfu.min(),
+        dfu.max(),
     )
     return ctf.astype(np.float64)
 
@@ -317,9 +320,10 @@ def parse_ctf_from_cs(
 # Auto-dispatch helpers
 # ---------------------------------------------------------------------------
 
+
 def can_extract_poses(filepath: str) -> bool:
     """Return True if poses can be auto-extracted from this file type."""
-    return filepath.lower().endswith(('.star', '.cs'))
+    return filepath.lower().endswith((".star", ".cs"))
 
 
 def auto_parse_poses(
@@ -328,15 +332,12 @@ def auto_parse_poses(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Auto-extract poses from STAR or CS file based on extension."""
     lower = filepath.lower()
-    if lower.endswith('.star'):
+    if lower.endswith(".star"):
         return parse_poses_from_star(filepath, D)
-    elif lower.endswith('.cs'):
+    elif lower.endswith(".cs"):
         return parse_poses_from_cs(filepath, D)
     else:
-        raise ValueError(
-            f"Cannot auto-extract poses from '{filepath}'. "
-            "Supported formats: .star, .cs"
-        )
+        raise ValueError(f"Cannot auto-extract poses from '{filepath}'. Supported formats: .star, .cs")
 
 
 def auto_parse_ctf(
@@ -345,12 +346,9 @@ def auto_parse_ctf(
 ) -> np.ndarray:
     """Auto-extract CTF parameters from STAR or CS file based on extension."""
     lower = filepath.lower()
-    if lower.endswith('.star'):
+    if lower.endswith(".star"):
         return parse_ctf_from_star(filepath, D)
-    elif lower.endswith('.cs'):
+    elif lower.endswith(".cs"):
         return parse_ctf_from_cs(filepath, D)
     else:
-        raise ValueError(
-            f"Cannot auto-extract CTF from '{filepath}'. "
-            "Supported formats: .star, .cs"
-        )
+        raise ValueError(f"Cannot auto-extract CTF from '{filepath}'. Supported formats: .star, .cs")

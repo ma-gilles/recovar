@@ -3,6 +3,7 @@ Unit tests for recovar.commands.reconstruct_from_external_embedding.
 
 Covers argument registration via add_args() only – no actual reconstruction.
 """
+
 import argparse
 import pytest
 
@@ -22,6 +23,7 @@ def _parser() -> argparse.ArgumentParser:
 # ---------------------------------------------------------------------------
 # Required arguments
 # ---------------------------------------------------------------------------
+
 
 def test_registers_particles_positional():
     positionals = [a.dest for a in _parser()._actions if not a.option_strings]
@@ -56,6 +58,7 @@ def test_registers_target_arg():
 # Optional arguments with sensible defaults
 # ---------------------------------------------------------------------------
 
+
 def test_zdim_default_is_list():
     """Default zdim must be a list (same as pipeline)."""
     action = _parser()._option_string_actions["--zdim"]
@@ -78,4 +81,4 @@ def test_tilt_series_is_boolean_flag():
     action = _parser()._option_string_actions.get("--tilt-series")
     if action is None:
         pytest.skip("--tilt-series not in parser")
-    assert action.const is True   # store_true
+    assert action.const is True  # store_true

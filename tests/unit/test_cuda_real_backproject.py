@@ -21,6 +21,7 @@ pytestmark = [pytest.mark.unit, pytest.mark.gpu]
 
 def _skip_if_no_cuda():
     from recovar.cuda_backproject import cuda_available
+
     if not cuda_available():
         pytest.skip("CUDA backproject not available")
 
@@ -82,19 +83,29 @@ def test_real_backproject_matches_complex(order, half_vol, half_img):
 
     # Real backproject
     real_vol = jnp.zeros(vol_size, dtype=jnp.float32)
-    result_real = backproject(real_vol, real_imgs, rots, image_shape, volume_shape,
-                              order=order, half_volume=half_vol, half_image=half_img)
+    result_real = backproject(
+        real_vol, real_imgs, rots, image_shape, volume_shape, order=order, half_volume=half_vol, half_image=half_img
+    )
 
     # Complex backproject
     complex_vol = jnp.zeros(vol_size, dtype=jnp.complex64)
-    result_complex = backproject(complex_vol, complex_imgs, rots, image_shape, volume_shape,
-                                 order=order, half_volume=half_vol, half_image=half_img)
+    result_complex = backproject(
+        complex_vol,
+        complex_imgs,
+        rots,
+        image_shape,
+        volume_shape,
+        order=order,
+        half_volume=half_vol,
+        half_image=half_img,
+    )
 
     # Real result should match .real of complex result
     np.testing.assert_allclose(
         np.array(result_real),
         np.array(result_complex.real),
-        atol=1e-5, rtol=1e-5,
+        atol=1e-5,
+        rtol=1e-5,
         err_msg=f"order={order}, half_vol={half_vol}, half_img={half_img}",
     )
     # Imaginary part of complex result should be zero (real input)
@@ -155,9 +166,7 @@ def test_real_batch_backproject_matches_complex(order, half_vol, half_img):
 
     iw = N // 2 + 1 if half_img else N
     n_pix = N * iw
-    real_imgs = jnp.array(
-        rng.standard_normal((batch_size, n_images, n_pix)).astype(np.float32)
-    )
+    real_imgs = jnp.array(rng.standard_normal((batch_size, n_images, n_pix)).astype(np.float32))
     complex_imgs = real_imgs.astype(jnp.complex64)
 
     if half_vol:
@@ -167,17 +176,27 @@ def test_real_batch_backproject_matches_complex(order, half_vol, half_img):
         vol_size = int(np.prod(volume_shape))
 
     real_vols = jnp.zeros((batch_size, vol_size), dtype=jnp.float32)
-    result_real = batch_backproject(real_vols, real_imgs, rots, image_shape, volume_shape,
-                                    order=order, half_volume=half_vol, half_image=half_img)
+    result_real = batch_backproject(
+        real_vols, real_imgs, rots, image_shape, volume_shape, order=order, half_volume=half_vol, half_image=half_img
+    )
 
     complex_vols = jnp.zeros((batch_size, vol_size), dtype=jnp.complex64)
-    result_complex = batch_backproject(complex_vols, complex_imgs, rots, image_shape, volume_shape,
-                                       order=order, half_volume=half_vol, half_image=half_img)
+    result_complex = batch_backproject(
+        complex_vols,
+        complex_imgs,
+        rots,
+        image_shape,
+        volume_shape,
+        order=order,
+        half_volume=half_vol,
+        half_image=half_img,
+    )
 
     np.testing.assert_allclose(
         np.array(result_real),
         np.array(result_complex.real),
-        atol=1e-5, rtol=1e-5,
+        atol=1e-5,
+        rtol=1e-5,
         err_msg=f"batch: order={order}, half_vol={half_vol}, half_img={half_img}",
     )
 
@@ -195,18 +214,15 @@ def test_real_adjoint_slice_volume():
     # Real slices (e.g. CTF^2)
     real_slices = jnp.array(rng.standard_normal((n_images, N * N)).astype(np.float32))
 
-    result = slicing.adjoint_slice_volume(
-        real_slices, rots, (N, N), (N, N, N), "linear_interp"
-    )
+    result = slicing.adjoint_slice_volume(real_slices, rots, (N, N), (N, N, N), "linear_interp")
     assert result.dtype == jnp.float32
 
     # Compare to complex path
     complex_slices = real_slices.astype(jnp.complex64)
-    result_complex = slicing.adjoint_slice_volume(
-        complex_slices, rots, (N, N), (N, N, N), "linear_interp"
-    )
+    result_complex = slicing.adjoint_slice_volume(complex_slices, rots, (N, N), (N, N, N), "linear_interp")
     np.testing.assert_allclose(
         np.array(result),
         np.array(result_complex.real),
-        atol=1e-5, rtol=1e-5,
+        atol=1e-5,
+        rtol=1e-5,
     )

@@ -15,6 +15,7 @@ Quick start::
         imgs = project(vol, rots, image_shape, volume_shape, order=1)
         return vol, imgs
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -44,11 +45,10 @@ def _build_lib():
     if _LIB_PATH.exists():
         return
     import sys
+
     logger.info("Building %s …", _LIB_PATH)
     # Pass the current Python so the Makefile finds JAX headers correctly.
-    subprocess.check_call(
-        ["make", "-C", str(_LIB_DIR), f"PYTHON={sys.executable}"]
-    )
+    subprocess.check_call(["make", "-C", str(_LIB_DIR), f"PYTHON={sys.executable}"])
     if not _LIB_PATH.exists():
         raise RuntimeError(f"Build failed — {_LIB_PATH} not found")
 
@@ -83,18 +83,10 @@ def _ensure_ffi():
         if _ffi_registered:
             return
         lib = _get_lib()
-        jax.ffi.register_ffi_target(
-            _TARGET_BACKPROJECT, jax.ffi.pycapsule(lib.Backproject), platform="CUDA"
-        )
-        jax.ffi.register_ffi_target(
-            _TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA"
-        )
-        jax.ffi.register_ffi_target(
-            _TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA"
-        )
-        jax.ffi.register_ffi_target(
-            _TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA"
-        )
+        jax.ffi.register_ffi_target(_TARGET_BACKPROJECT, jax.ffi.pycapsule(lib.Backproject), platform="CUDA")
+        jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
+        jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")
+        jax.ffi.register_ffi_target(_TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA")
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
 
@@ -111,6 +103,7 @@ def cuda_available() -> bool:
     if _cuda_ok is not None:
         return _cuda_ok
     import os
+
     if os.environ.get("RECOVAR_DISABLE_CUDA", "0") == "1":
         _cuda_ok = False
         logger.info("CUDA kernels disabled via RECOVAR_DISABLE_CUDA")
@@ -122,8 +115,7 @@ def cuda_available() -> bool:
             _ensure_ffi()
             _cuda_ok = True
             logger.info("CUDA backproject/project kernels enabled")
-    except (ImportError, OSError, RuntimeError, AttributeError,
-            subprocess.SubprocessError) as e:
+    except (ImportError, OSError, RuntimeError, AttributeError, subprocess.SubprocessError) as e:
         _cuda_ok = False
         logger.debug("CUDA backproject not available: %s", e)
     return _cuda_ok
@@ -132,6 +124,7 @@ def cuda_available() -> bool:
 # ──────────────────────────────────────────────────────────────────────
 # Public JAX API  (JIT-compatible)
 # ──────────────────────────────────────────────────────────────────────
+
 
 def _rot_to_compact(rotation_matrices: jax.Array, real_dtype=None) -> jax.Array:
     """Extract first two rows of each 3×3 rotation matrix → (n, 6).
@@ -176,9 +169,7 @@ def _validate_inputs(volume_shape, image_shape, order, half_volume, half_image):
     if order not in (0, 1, 3):
         raise ValueError(f"order must be 0, 1, or 3, got {order}")
     if N0 % ih != 0:
-        raise ValueError(
-            f"volume_shape[0] ({N0}) must be divisible by image_shape[0] ({ih})"
-        )
+        raise ValueError(f"volume_shape[0] ({N0}) must be divisible by image_shape[0] ({ih})")
 
 
 def _encode_max_r(max_r):
@@ -197,19 +188,23 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
     N0, N1, N2 = volume_shape
     ups = N0 // ih
     iw_eff = iw_full // 2 + 1 if half_image else iw_full
-    return dict(
-        image_h=np.int64(ih),
-        image_w=np.int64(iw_eff),
-        N0=np.int64(N0),
-        N1=np.int64(N1),
-        N2=np.int64(N2),
-        upsampling=np.int64(ups),
-        order=np.int64(order),
-        half_volume=np.int64(int(half_volume)),
-        half_image=np.int64(int(half_image)),
-        full_image_w=np.int64(iw_full),
-        max_r2_x4=_encode_max_r(max_r),
-    ), ih, iw_eff
+    return (
+        dict(
+            image_h=np.int64(ih),
+            image_w=np.int64(iw_eff),
+            N0=np.int64(N0),
+            N1=np.int64(N1),
+            N2=np.int64(N2),
+            upsampling=np.int64(ups),
+            order=np.int64(order),
+            half_volume=np.int64(int(half_volume)),
+            half_image=np.int64(int(half_image)),
+            full_image_w=np.int64(iw_full),
+            max_r2_x4=_encode_max_r(max_r),
+        ),
+        ih,
+        iw_eff,
+    )
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
@@ -304,6 +299,7 @@ def project(
 # Batched API  (multiple volumes, shared rotations)
 # ──────────────────────────────────────────────────────────────────────
 
+
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
 def batch_backproject(
     volumes: jax.Array,
@@ -391,9 +387,16 @@ def batch_project(
     # batches because each kernel launch processes one volume that stays
     # cache-hot for all images.
     return jax.vmap(
-        lambda v: project(v, rotation_matrices, image_shape, volume_shape,
-                          order=order, half_volume=half_volume, half_image=half_image,
-                          max_r=max_r)
+        lambda v: project(
+            v,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
+            max_r=max_r,
+        )
     )(volumes)
 
 
@@ -403,11 +406,13 @@ def batch_project(
 
 _cudart = None
 
+
 def _get_cudart():
     global _cudart
     if _cudart is not None:
         return _cudart
     import glob as _glob
+
     for name in ("libcudart.so", "libcudart.so.12", "libcudart.so.11.0"):
         try:
             _cudart = ctypes.CDLL(name)
@@ -425,22 +430,28 @@ def _get_cudart():
 
 class GpuArray:
     """Minimal GPU allocation managed via cudart."""
+
     def __init__(self, data: np.ndarray):
         self.shape, self.dtype, self.nbytes = data.shape, data.dtype, data.nbytes
         data = np.ascontiguousarray(data)
         rt = _get_cudart()
         self._ptr = ctypes.c_void_p()
         assert rt.cudaMalloc(ctypes.byref(self._ptr), ctypes.c_size_t(self.nbytes)) == 0
-        assert rt.cudaMemcpy(self._ptr, data.ctypes.data_as(ctypes.c_void_p),
-                             ctypes.c_size_t(self.nbytes), ctypes.c_int(1)) == 0
+        assert (
+            rt.cudaMemcpy(
+                self._ptr, data.ctypes.data_as(ctypes.c_void_p), ctypes.c_size_t(self.nbytes), ctypes.c_int(1)
+            )
+            == 0
+        )
 
     def as_float_ptr(self):
         return ctypes.cast(self._ptr, ctypes.POINTER(ctypes.c_float))
 
     def to_numpy(self):
         out = np.empty(self.shape, dtype=self.dtype)
-        _get_cudart().cudaMemcpy(out.ctypes.data_as(ctypes.c_void_p),
-                                 self._ptr, ctypes.c_size_t(self.nbytes), ctypes.c_int(2))
+        _get_cudart().cudaMemcpy(
+            out.ctypes.data_as(ctypes.c_void_p), self._ptr, ctypes.c_size_t(self.nbytes), ctypes.c_int(2)
+        )
         return out
 
     def free(self):
@@ -474,8 +485,7 @@ def _random_rotations_6(n, rng=None):
 class CudaBenchmarker:
     """Benchmark helper using ctypes (no JAX overhead)."""
 
-    def __init__(self, image_shape, volume_shape, order=1,
-                 half_volume=False, half_image=False):
+    def __init__(self, image_shape, volume_shape, order=1, half_volume=False, half_image=False):
         self.ih, self.iw_full = image_shape
         self.N0, self.N1, self.N2 = volume_shape
         self.order = order
@@ -504,18 +514,31 @@ class CudaBenchmarker:
         img_d = GpuArray(img_f32)
         rot_d = GpuArray(rots)
 
-        fn = (self._lib.benchmark_backproject_c if kind == "backproject"
-              else self._lib.benchmark_project_c)
+        fn = self._lib.benchmark_backproject_c if kind == "backproject" else self._lib.benchmark_project_c
         fn.restype = ctypes.c_float
         ms = fn(
-            vol_d.as_float_ptr(), img_d.as_float_ptr(), rot_d.as_float_ptr(),
-            n_images, self.n_pixels, self.ih, self.iw,
-            self.N0, self.N1, self.N2, self.ups,
-            ctypes.c_float(self.center), self.order, self.half_volume,
-            self.half_image, self.iw_full, n_iters,
+            vol_d.as_float_ptr(),
+            img_d.as_float_ptr(),
+            rot_d.as_float_ptr(),
+            n_images,
+            self.n_pixels,
+            self.ih,
+            self.iw,
+            self.N0,
+            self.N1,
+            self.N2,
+            self.ups,
+            ctypes.c_float(self.center),
+            self.order,
+            self.half_volume,
+            self.half_image,
+            self.iw_full,
+            n_iters,
         )
 
-        vol_d.free(); img_d.free(); rot_d.free()
+        vol_d.free()
+        img_d.free()
+        rot_d.free()
         return {
             "ms_total": float(ms),
             "ms_per_iter": float(ms) / n_iters,

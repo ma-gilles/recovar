@@ -49,6 +49,7 @@ _N_VOLS = 12
 # Volume helpers (same as tiny integration test)
 # ---------------------------------------------------------------------------
 
+
 def _make_volume(idx: int, n_vols: int, grid: int) -> np.ndarray:
     x = np.linspace(-1.0, 1.0, grid, dtype=np.float32)
     xx, yy, zz = np.meshgrid(x, x, x, indexing="ij")
@@ -56,11 +57,12 @@ def _make_volume(idx: int, n_vols: int, grid: int) -> np.ndarray:
     vol = (
         np.exp(
             -((xx - 0.3 * np.cos(t)) ** 2 + (yy - 0.25 * np.sin(t)) ** 2 + (zz - 0.2 * np.cos(2 * t)) ** 2)
-            / (2 * 0.18 ** 2)
+            / (2 * 0.18**2)
         )
-        + 0.7 * np.exp(
+        + 0.7
+        * np.exp(
             -((xx + 0.25 * np.sin(1.3 * t)) ** 2 + (yy - 0.2 * np.cos(1.1 * t)) ** 2 + (zz + 0.2 * np.sin(t)) ** 2)
-            / (2 * 0.16 ** 2)
+            / (2 * 0.16**2)
         )
     ).astype(np.float32)
     vol -= vol.mean()
@@ -82,6 +84,7 @@ def _write_volumes(prefix: Path, n_vols: int = _N_VOLS, grid: int = _GRID) -> No
 # Pipeline runner + metric extractor
 # ---------------------------------------------------------------------------
 
+
 def _run_and_score(
     output_dir: Path,
     volumes_prefix: Path,
@@ -96,14 +99,23 @@ def _run_and_score(
     create_outlier_volume(str(outlier_vol), grid_size=_GRID)
 
     make_cmd = [
-        sys.executable, "-m", "recovar.command_line", "make_test_dataset",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "make_test_dataset",
         str(output_dir),
-        "--n-images", str(_N_IMAGES),
-        "--outlier-file-input", str(outlier_vol),
-        "--percent-outliers", str(_PCT),
-        "--grid-size", str(_GRID),
-        "--volume-input", str(volumes_prefix),
-        "--seed", "42",
+        "--n-images",
+        str(_N_IMAGES),
+        "--outlier-file-input",
+        str(outlier_vol),
+        "--percent-outliers",
+        str(_PCT),
+        "--grid-size",
+        str(_GRID),
+        "--volume-input",
+        str(volumes_prefix),
+        "--seed",
+        "42",
     ]
     subprocess.run(make_cmd, check=True)
 
@@ -123,16 +135,25 @@ def _run_and_score(
     particles = str(dataset_dir / f"particles.{_GRID}.mrcs")
 
     pipe_cmd = [
-        sys.executable, "-m", "recovar.command_line", "pipeline_with_outliers",
+        sys.executable,
+        "-m",
+        "recovar.command_line",
+        "pipeline_with_outliers",
         particles,
-        "--poses", str(dataset_dir / "poses.pkl"),
-        "--ctf", str(dataset_dir / "ctf.pkl"),
+        "--poses",
+        str(dataset_dir / "poses.pkl"),
+        "--ctf",
+        str(dataset_dir / "ctf.pkl"),
         "--correct-contrast",
-        "-o", str(pipeline_out),
-        "--mask", gt_mask_mrc,
+        "-o",
+        str(pipeline_out),
+        "--mask",
+        gt_mask_mrc,
         "--lazy",
-        "--zdim", "4",
-        "--k-rounds", str(_K),
+        "--zdim",
+        "4",
+        "--k-rounds",
+        str(_K),
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
@@ -198,6 +219,7 @@ def _run_and_score(
 # Test
 # ---------------------------------------------------------------------------
 
+
 def test_run_test_outliers_pipeline_tiny_regression_uses_saved_baseline(tmp_path):
     """
     End-to-end outlier regression gate (same pattern as the metrics test):
@@ -232,18 +254,18 @@ def test_run_test_outliers_pipeline_tiny_regression_uses_saved_baseline(tmp_path
         baseline_json=baseline_json,
         overwrite_baseline=False,
     )
-    assert second_report.get("status") == "checked", \
-        f"expected status='checked', got: {second_report}"
-    assert int(second_report.get("checked_metrics", 0)) > 0, \
+    assert second_report.get("status") == "checked", f"expected status='checked', got: {second_report}"
+    assert int(second_report.get("checked_metrics", 0)) > 0, (
         "no numeric metrics were compared; check baseline/scores dicts"
-    assert second_report.get("failures") == [], \
-        "outlier detection regressions:\n" + "\n".join(second_report.get("failures", []))
+    )
+    assert second_report.get("failures") == [], "outlier detection regressions:\n" + "\n".join(
+        second_report.get("failures", [])
+    )
 
     # Cross-check: directional keys must be present in both runs
     directional_keys = [
-        k for k in sorted(set(first_scores) & set(second_scores))
-        if isinstance(second_scores[k], (int, float))
-        and any(tok in k for tok in ("recall", "precision", "f1"))
+        k
+        for k in sorted(set(first_scores) & set(second_scores))
+        if isinstance(second_scores[k], (int, float)) and any(tok in k for tok in ("recall", "precision", "f1"))
     ]
-    assert directional_keys, \
-        "expected at least one recall/precision/f1 metric to appear in both runs"
+    assert directional_keys, "expected at least one recall/precision/f1 metric to appear in both runs"

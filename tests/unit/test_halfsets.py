@@ -1,4 +1,5 @@
 """Tests for CryoEMDataset repr/slots and halfset splitting."""
+
 import numpy as np
 import pytest
 
@@ -28,6 +29,7 @@ def test_cryo_em_dataset_slots():
 # RELION halfset reading from star files
 # ---------------------------------------------------------------------------
 
+
 def _write_star_with_subsets(path, subsets):
     """Write a minimal star file with _rlnRandomSubset column."""
     with open(path, "w") as f:
@@ -35,7 +37,7 @@ def _write_star_with_subsets(path, subsets):
         f.write("_rlnImageName\n")
         f.write("_rlnRandomSubset\n")
         for i, s in enumerate(subsets):
-            f.write(f"{i+1:06d}@particles.mrcs {s}\n")
+            f.write(f"{i + 1:06d}@particles.mrcs {s}\n")
 
 
 def test_read_relion_halfsets_from_star(tmp_path):
@@ -67,6 +69,7 @@ def test_read_relion_halfsets_non_star():
 
 def test_read_relion_halfsets_with_ind_filter(tmp_path):
     import pickle
+
     star = tmp_path / "particles.star"
     _write_star_with_subsets(star, [1, 2, 1, 2, 1, 2])
     ind_file = tmp_path / "ind.pkl"

@@ -389,7 +389,11 @@ def test_run_test_dataset_main_uses_cpu_flag_and_skips_gpu_check(monkeypatch, tm
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
-    monkeypatch.setattr(run_test_dataset.jax, "devices", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")))
+    monkeypatch.setattr(
+        run_test_dataset.jax,
+        "devices",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")),
+    )
     monkeypatch.setattr(run_test_dataset.os.path, "exists", lambda _p: False)
     monkeypatch.setattr(
         run_test_dataset.sys,
@@ -492,10 +496,13 @@ def test_run_test_dataset_all_tests_emits_extended_commands(monkeypatch, tmp_pat
         commands.append(command)
         return SimpleNamespace(returncode=0)
 
-    embeddings_path = tmp_path / "test_dataset" / "pipeline_output" / "model" / "embeddings.pkl"
-    embeddings_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(embeddings_path, "wb") as f:
-        pickle.dump({"latent_coords": {2: np.zeros((4, 2), dtype=np.float32)}}, f)
+    # Create per-zdim embedding directory + minimal params.pkl for PipelineOutput
+    model_dir = tmp_path / "test_dataset" / "pipeline_output" / "model"
+    zdim_dir = model_dir / "zdim_2"
+    zdim_dir.mkdir(parents=True, exist_ok=True)
+    np.save(str(zdim_dir / "latent_coords.npy"), np.zeros((4, 2), dtype=np.float32))
+    with open(model_dir / "params.pkl", "wb") as f:
+        pickle.dump({"input_args": SimpleNamespace(zdim=[2])}, f)
 
     monkeypatch.setattr(run_test_dataset.subprocess, "run", fake_run)
     monkeypatch.setattr(
@@ -531,12 +538,8 @@ def test_run_test_dataset_all_tests_missing_embeddings_file_skips_reconstruct(mo
         "devices",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("GPU check should not run with --cpu")),
     )
-    # Missing embeddings file branch.
-    monkeypatch.setattr(
-        run_test_dataset.os.path,
-        "exists",
-        lambda p: not p.endswith("pipeline_output/model/embeddings.pkl"),
-    )
+    # No pipeline_output directory → reconstruct step should be skipped.
+    # (Don't create any pipeline_output dir in tmp_path)
     monkeypatch.setattr(
         run_test_dataset.sys,
         "argv",
@@ -733,10 +736,13 @@ def test_run_test_dataset_all_tests_quotes_reconstruct_paths_with_spaces(monkeyp
 
     commands = []
     outdir = tmp_path / "with space"
-    embeddings_path = outdir / "test_dataset" / "pipeline_output" / "model" / "embeddings.pkl"
-    embeddings_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(embeddings_path, "wb") as f:
-        pickle.dump({"latent_coords": {2: np.zeros((4, 2), dtype=np.float32)}}, f)
+    # Create per-zdim embedding directory + minimal params.pkl for PipelineOutput
+    model_dir = outdir / "test_dataset" / "pipeline_output" / "model"
+    zdim_dir = model_dir / "zdim_2"
+    zdim_dir.mkdir(parents=True, exist_ok=True)
+    np.save(str(zdim_dir / "latent_coords.npy"), np.zeros((4, 2), dtype=np.float32))
+    with open(model_dir / "params.pkl", "wb") as f:
+        pickle.dump({"input_args": SimpleNamespace(zdim=[2])}, f)
 
     def fake_run(command, shell):
         assert shell is True
