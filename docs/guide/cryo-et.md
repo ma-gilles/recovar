@@ -5,6 +5,9 @@ RECOVAR supports tilt-series data for cryo-ET heterogeneity analysis. One practi
 !!! warning "Experimental"
     Cryo-ET support is newer than SPA support and may be less stable. No paper has been published on this feature yet.
 
+!!! tip "Need a full worked example?"
+    For an end-to-end portal-to-RECOVAR walkthrough using the CZII phantom dataset, see [Tutorial: Cryo-ET on the CZII Phantom Dataset](tutorial-cryo-et.md).
+
 ## Importing from RELION5
 
 If your data was processed in RELION5 (tilt-series alignment + particle extraction), use `parse_relion5_tomo` to convert to RECOVAR's 2D tilt format:
@@ -17,6 +20,16 @@ recovar parse_relion5_tomo \
 ```
 
 This reads the RELION5 3D tomography metadata and produces a 2D STAR file where each row is one tilt of one particle, with per-tilt defocus, orientation, and dose information. The output is directly compatible with `recovar pipeline --tilt-series`.
+
+If you already have both the RELION5 `particles.star` and `tomograms.star`, the simpler entry point is to skip the explicit conversion step and run:
+
+```bash
+recovar pipeline Refine3D/job001/run_data.star \
+    --tomograms input/tiltSeries/aligned_tilt_series.star \
+    --mask sphere --tilt-series -o output
+```
+
+`recovar pipeline` will call `parse_relion5_tomo` automatically when `--tomograms` is provided.
 
 **Requirements:**
 

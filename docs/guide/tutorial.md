@@ -4,6 +4,7 @@ This tutorial walks through two complete RECOVAR analyses on paper datasets with
 
 - **EMPIAR-10076** (50S ribosome): pipeline, analyze, identify an outlier cluster, extract a clean subset, re-run
 - **EMPIAR-10180** (spliceosome): pipeline with filtered particles, analyze, conformational density estimation, trajectory computation
+- **CZII phantom cryo-ET**: portal download, RELION5 tomography preprocessing, RECOVAR heterogeneity on ribosome tilt-series data. See [Cryo-ET Tutorial](tutorial-cryo-et.md).
 
 ## Overview
 

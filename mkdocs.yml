@@ -81,6 +81,7 @@ nav:
     - Test Your Installation: getting-started/testing.md
   - Guide:
     - Tutorial: guide/tutorial.md
+    - Cryo-ET Tutorial: guide/tutorial-cryo-et.md
     - Input Data: guide/input-data.md
     - Masks: guide/masks.md
     - Downsampling: guide/downsampling.md
