@@ -170,6 +170,11 @@ def test_run_test_all_metrics_regression_against_baseline(tmp_path):
     if not perf_stages:
         perf_stages = {"run_test_all_metrics_spa": stage_perf(snap_before, snap_after)}
     perf_record = build_perf_record(perf_stages)
+    # Save current perf record for extract_regression_tables.py
+    import json as _json
+    _perf_out = output_dir / "current_perf_record_spa.json"
+    _perf_out.parent.mkdir(parents=True, exist_ok=True)
+    _perf_out.write_text(_json.dumps(perf_record, indent=2))
     perf_baseline_path = str(
         _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "long_generated" / "perf_baseline_spa.json"
     )
@@ -231,6 +236,11 @@ def test_run_test_all_metrics_cryo_et_subsampling_regression_against_baseline(tm
     if not perf_stages:
         perf_stages = {"run_test_all_metrics_cryo_et": stage_perf(snap_before, snap_after)}
     perf_record = build_perf_record(perf_stages)
+    # Save current perf record for extract_regression_tables.py
+    import json as _json
+    _perf_out = output_dir / "current_perf_record_cryo_et.json"
+    _perf_out.parent.mkdir(parents=True, exist_ok=True)
+    _perf_out.write_text(_json.dumps(perf_record, indent=2))
     perf_baseline_path = str(
         _REPO_ROOT / "tests" / "baselines" / "run_test_all_metrics" / "long_generated" / "perf_baseline_cryo_et.json"
     )

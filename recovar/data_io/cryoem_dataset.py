@@ -42,6 +42,36 @@ from recovar.data_io.image_loader import ImageLoader
 _SENTINEL = object()
 
 
+def _pad_batch_iter(iterable, target_batch_size):
+    """Pad the final batch so every batch has identical shape.
+
+    Padded images are zero with CTF contrast=0, so they contribute nothing
+    to any accumulator regardless of noise model shape.
+    """
+    for batch in iterable:
+        images, rot, trans, ctf, noise_var, part_idx, img_idx = batch
+        n = images.shape[0]
+        if n < target_batch_size:
+            pad = target_batch_size - n
+            images = np.concatenate([images, np.zeros((pad, *images.shape[1:]), dtype=images.dtype)])
+            rot = np.concatenate([rot, np.repeat(rot[:1], pad, axis=0)])
+            trans = np.concatenate([trans, np.repeat(trans[:1], pad, axis=0)])
+            # CTF: copy first row but zero contrast → CTF evaluates to 0
+            ctf_pad = np.repeat(ctf[:1], pad, axis=0).copy()
+            ctf_pad[:, _CTF_CONTRAST_COL] = 0.0
+            ctf = np.concatenate([ctf, ctf_pad])
+            # Noise: expand to per-image if broadcast, then pad
+            if noise_var is not None:
+                nv = np.asarray(noise_var)
+                if nv.ndim >= 1 and nv.shape[0] == 1 and n > 1:
+                    nv = np.repeat(nv, n, axis=0)
+                noise_var = np.concatenate([nv, np.repeat(nv[:1], pad, axis=0)])
+            part_idx = np.concatenate([part_idx, np.repeat(part_idx[:1], pad)])
+            img_idx = np.concatenate([img_idx, np.repeat(img_idx[:1], pad)])
+        yield (images, rot, trans, ctf, noise_var, part_idx, img_idx)
+
+
+
 def _prefetch_iter(iterable):
     """1-lookahead prefetch: loads next batch while caller processes current."""
     from concurrent.futures import ThreadPoolExecutor
@@ -803,16 +833,21 @@ class CryoEMDataset:
         noise_model,
         noise_half,
         noise_by_particle,
+        pack_groups=False,
     ):
         """Yield explicit batch fields from the image source and metadata store."""
         if self.image_source is None:
             raise ValueError("Cannot iterate batches without an image source")
 
         use_particle_noise = noise_by_particle and batch_mode == "groups"
+        kwargs = {}
+        if pack_groups and batch_mode == "groups":
+            kwargs["mode"] = "packed_tilt_series"
         generator = self.image_source.iter_batches(
             batch_size=batch_size,
             batch_mode=batch_mode,
             subset_indices=index_subset,
+            **kwargs,
         )
 
         for images, particle_indices, image_indices in generator:
@@ -848,6 +883,8 @@ class CryoEMDataset:
         noise_by_particle=False,
         by_image=True,
         prefetch=True,
+        pad_batches=False,
+        pack_groups=False,
     ):
         """Iterate over dataset batches, yielding explicit batch fields.
 
@@ -868,6 +905,12 @@ class CryoEMDataset:
             True = flat per-image iteration; False = particle-grouped (tilt).
         prefetch : bool
             Enable 1-lookahead prefetch buffer (default True).
+        pad_batches : bool
+            Pad the final per-image batch to ``batch_size``.
+        pack_groups : bool
+            Pack multiple tilt-series particles into each batch up to
+            ``batch_size`` images.  Only applies when ``by_image=False``.
+            Padded entries get sentinel ``particle_id=-1``.
 
         Yields
         ------
@@ -887,7 +930,10 @@ class CryoEMDataset:
             noise_model=noise_model,
             noise_half=noise_half,
             noise_by_particle=noise_by_particle,
+            pack_groups=pack_groups,
         )
+        if pad_batches and by_image:
+            inner = _pad_batch_iter(inner, batch_size)
         if prefetch and not self.image_source.already_prefetches:
             return _prefetch_iter(inner)
         return inner

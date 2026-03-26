@@ -1182,7 +1182,7 @@ def _compute_projected_covariance_single(
         translations,
         ctf_params,
         noise_variance,
-        _particle_indices,
+        particle_indices,
         _image_indices,
     ) in experiment_dataset.iter_batches(
         batch_size,
@@ -1190,6 +1190,11 @@ def _compute_projected_covariance_single(
         noise_half=False,
         by_image=not experiment_dataset.tilt_series_flag,
     ):
+        tilt_labels = None
+        if experiment_dataset.tilt_series_flag:
+            tilt_labels = preprocess_tilt_labels_for_batch(
+                _expand_particle_indices_to_per_image(particle_indices, images.shape[0])
+            )
         lhs, rhs = reduce_covariance_inner(
             config,
             images,
@@ -1203,6 +1208,7 @@ def _compute_projected_covariance_single(
             hermitian_weights=hermitian_weights,
             lhs=lhs,
             rhs=rhs,
+            tilt_labels=tilt_labels,
         )
     del basis
 
@@ -1254,54 +1260,58 @@ def compute_projected_covariance(
     if disc_type_u == "cubic":
         basis = compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory=None)
 
-    for halfset_id in range(2):
-        config = ForwardModelConfig.from_dataset(
-            dataset,
-            disc_type=disc_type,
-            process_fn=dataset.process_images,
-        )
-        model = ModelState(
-            mean_estimate=mean_estimate,
-            volume_mask=volume_mask,
-            basis=basis,
-        )
-        opts = CovarianceOpts(
-            disc_type_u=disc_type_u,
-            do_mask_images=do_mask_images,
-            shared_label=dataset.tilt_series_flag,
-        )
+    config = ForwardModelConfig.from_dataset(
+        dataset,
+        disc_type=disc_type,
+        process_fn=dataset.process_images,
+    )
+    model = ModelState(
+        mean_estimate=mean_estimate,
+        volume_mask=volume_mask,
+        basis=basis,
+    )
+    opts = CovarianceOpts(
+        disc_type_u=disc_type_u,
+        do_mask_images=do_mask_images,
+        shared_label=dataset.tilt_series_flag,
+    )
 
-        hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape, dtype=dataset.dtype_real)
+    hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape, dtype=dataset.dtype_real)
 
-        for (
-            images,
-            rotation_matrices,
-            translations,
-            ctf_params,
-            noise_variance,
-            _particle_indices,
-            _image_indices,
-        ) in dataset.iter_batches(
-            batch_size,
-            noise_model=dataset.noise,
-            noise_half=False,
-            halfset_id=halfset_id,
-            by_image=not dataset.tilt_series_flag,
-        ):
-            lhs, rhs = reduce_covariance_inner(
-                config,
-                images,
-                model,
-                opts,
-                dataset.image_mask,
-                rotation_matrices=rotation_matrices,
-                translations=translations,
-                ctf_params=ctf_params,
-                noise_variance=noise_variance,
-                hermitian_weights=hermitian_weights,
-                lhs=lhs,
-                rhs=rhs,
+    for (
+        images,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        particle_indices,
+        _image_indices,
+    ) in dataset.iter_batches(
+        batch_size,
+        noise_model=dataset.noise,
+        noise_half=False,
+        by_image=not dataset.tilt_series_flag,
+    ):
+        tilt_labels = None
+        if dataset.tilt_series_flag:
+            tilt_labels = preprocess_tilt_labels_for_batch(
+                _expand_particle_indices_to_per_image(particle_indices, images.shape[0])
             )
+        lhs, rhs = reduce_covariance_inner(
+            config,
+            images,
+            model,
+            opts,
+            dataset.image_mask,
+            rotation_matrices=rotation_matrices,
+            translations=translations,
+            ctf_params=ctf_params,
+            noise_variance=noise_variance,
+            hermitian_weights=hermitian_weights,
+            lhs=lhs,
+            rhs=rhs,
+            tilt_labels=tilt_labels,
+        )
     del basis
     # Deallocate some memory?
 
@@ -1343,6 +1353,7 @@ def reduce_covariance_inner(
     hermitian_weights=None,
     lhs=None,
     rhs=None,
+    tilt_labels=None,
 ):
     """Covariance estimation inner loop — Equinox API.
 
@@ -1365,6 +1376,7 @@ def reduce_covariance_inner(
         hermitian_weights=hermitian_weights,
         lhs=lhs,
         rhs=rhs,
+        tilt_labels=tilt_labels,
     )
 
 
@@ -1382,6 +1394,7 @@ def _reduce_covariance_inner_explicit(
     hermitian_weights=None,
     lhs=None,
     rhs=None,
+    tilt_labels=None,
 ):
 
     if (config.disc_type != "linear_interp") and (config.disc_type != "cubic"):
@@ -1493,12 +1506,20 @@ def _reduce_covariance_inner_explicit(
 
     if opts.shared_label:
         # For tilt series: sum AU_t_images and AU_t_AU over tilts of each particle.
-        # The noise bias must also be summed BEFORE subtraction to match shapes.
-        # (per_image_outer has shape (1, n, n) after summing, but noise_bias
-        #  has shape (n_tilts, n, n) — broadcasting would be wrong.)
-        summed_noise_bias = jnp.sum(per_image_noise_bias, axis=0, keepdims=True)
-        AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
-        AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
+        # With packed multi-particle batches, use group_sum_by_labels to sum
+        # per-particle instead of across the entire batch.
+        if tilt_labels is not None:
+            # tilt_labels are consecutive 0..n_groups-1 from preprocess_tilt_labels_for_batch.
+            # Use shape[0] as safe upper bound for max_groups (avoids concrete-value error in JIT).
+            max_groups = tilt_labels.shape[0]
+            summed_noise_bias = group_sum_by_labels(per_image_noise_bias, tilt_labels, max_groups)
+            AU_t_images = group_sum_by_labels(AU_t_images, tilt_labels, max_groups)
+            AU_t_AU = group_sum_by_labels(AU_t_AU, tilt_labels, max_groups)
+        else:
+            # Single-particle batch (legacy path)
+            summed_noise_bias = jnp.sum(per_image_noise_bias, axis=0, keepdims=True)
+            AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
+            AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
         per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
         rhs_batch = (per_image_outer - summed_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
     else:
@@ -1704,6 +1725,14 @@ def compute_freq_batch(
         return H_acc.at[k].add(H_k), B_acc.at[k].add(B_k)
 
     return jax.lax.fori_loop(0, n_freq, body, (H_accum, B_accum))
+
+
+def _expand_particle_indices_to_per_image(particle_indices, n_images):
+    """Expand per-particle indices to per-image if needed (for packed batches)."""
+    p = jnp.asarray(particle_indices).reshape(-1)
+    if p.shape[0] != n_images and p.shape[0] == 1:
+        p = jnp.broadcast_to(p, (n_images,))
+    return p
 
 
 @nvtx.annotate("preprocess_tilt_labels_for_batch", color="brown")
