@@ -4,6 +4,8 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. I
 
 **[Full Documentation](https://ma-gilles.github.io/recovar)** | **[Paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122)** | **[Talk](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)**
 
+**License**: Princeton University Academic/Non-Commercial License (see [LICENSE](LICENSE)).
+
 ## Key features
 
 - **High resolution** — top performer on [CryoBench](https://cryobench.cs.princeton.edu)
