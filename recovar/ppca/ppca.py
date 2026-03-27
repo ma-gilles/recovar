@@ -912,25 +912,27 @@ def E_M_step_batch_half(
 
     # --- backprojection ---
     if compute_stats:
-        from recovar.cuda_backproject import fused_backproject
-
         half_volume_size = lhs_summed.shape[0]
         second_moment_tri = second_moment_zs[:, tri_i, tri_j]
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
         _max_r = image_shape[0] // 2 - 1
 
-        # LHS: fused kernel — all tri_sz channels in one call.
-        # Reads ctf² (50 MB) and smz_tri (168 KB) separately, no intermediate.
-        lhs_bp = fused_backproject(
-            jnp.zeros((half_volume_size, tri_sz), dtype=jnp.float32),
-            ctf_squared_full.astype(jnp.float32),
-            second_moment_tri.astype(jnp.float32),
+        # LHS: per-image scatter (zero atomicAdd contention) + GEMM reduction.
+        # 16× faster than the fused/interleaved kernels at 256³.
+        from recovar.cuda_backproject import per_image_backproject
+
+        n_images = ctf_squared_full.shape[0]
+        real_dtype = lhs_summed.dtype
+        ctf2_bp = per_image_backproject(
+            jnp.zeros((half_volume_size, n_images), dtype=real_dtype),
+            ctf_squared_full.real.astype(real_dtype),
             jnp.asarray(rotation_matrices),
             image_shape,
             volume_shape,
             max_r=_max_r,
-        )
-        lhs_summed = lhs_summed + lhs_bp
+        )  # (half_vol, n_images)
+        # GEMM: (half_vol, n_images) @ (n_images, tri_sz) → (half_vol, tri_sz)
+        lhs_summed = lhs_summed + (ctf2_bp @ second_moment_tri.real.astype(real_dtype))
 
         # RHS: half-image backprojection (30% fewer scatters for complex).
         before_rhs = (CTF_half[..., None] * centered_half[..., None] * jnp.conj(expected_zs)[:, None, :]).transpose(

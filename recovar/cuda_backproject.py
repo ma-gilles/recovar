@@ -75,6 +75,7 @@ _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_PROJECT = "cuda_batch_project"
 _TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
 _TARGET_FUSED_BP = "cuda_fused_bp"
+_TARGET_PER_IMAGE_BP = "cuda_per_image_bp"
 
 
 def _ensure_ffi():
@@ -93,6 +94,7 @@ def _ensure_ffi():
             _TARGET_BATCH_BP_INTERLEAVED, jax.ffi.pycapsule(lib.BatchBackprojectInterleaved), platform="CUDA"
         )
         jax.ffi.register_ffi_target(_TARGET_FUSED_BP, jax.ffi.pycapsule(lib.FusedBackproject), platform="CUDA")
+        jax.ffi.register_ffi_target(_TARGET_PER_IMAGE_BP, jax.ffi.pycapsule(lib.PerImageBackproject), platform="CUDA")
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
 
@@ -433,6 +435,48 @@ def fused_backproject(
     )(
         base_images,
         weight_matrix,
+        rot6,
+        volumes,
+        image_h=H,
+        image_w=W,
+        vol_n0=N0,
+        vol_n1=N1,
+        vol_n2=N2,
+        upsampling=ups,
+        max_r2_x4=max_r2_x4,
+    )
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def per_image_backproject(
+    volumes: jax.Array,
+    base_images: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Per-image backproject: output ``(half_vol, n_images)``.
+
+    Each image scatters to its own column — near-zero atomicAdd contention.
+    Follow with GEMM to reduce: ``result @ smz_tri → (half_vol, n_ch)``.
+    """
+    _ensure_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    base_images = base_images.astype(volumes.dtype)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_PER_IMAGE_BP,
+        out_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(
+        base_images,
         rot6,
         volumes,
         image_h=H,
