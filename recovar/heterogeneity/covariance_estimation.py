@@ -1260,58 +1260,60 @@ def compute_projected_covariance(
     if disc_type_u == "cubic":
         basis = compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory=None)
 
-    config = ForwardModelConfig.from_dataset(
-        dataset,
-        disc_type=disc_type,
-        process_fn=dataset.process_images,
-    )
-    model = ModelState(
-        mean_estimate=mean_estimate,
-        volume_mask=volume_mask,
-        basis=basis,
-    )
-    opts = CovarianceOpts(
-        disc_type_u=disc_type_u,
-        do_mask_images=do_mask_images,
-        shared_label=dataset.tilt_series_flag,
-    )
-
-    hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape, dtype=dataset.dtype_real)
-
-    for (
-        images,
-        rotation_matrices,
-        translations,
-        ctf_params,
-        noise_variance,
-        particle_indices,
-        _image_indices,
-    ) in dataset.iter_batches(
-        batch_size,
-        noise_model=dataset.noise,
-        noise_half=False,
-        by_image=not dataset.tilt_series_flag,
-    ):
-        tilt_labels = None
-        if dataset.tilt_series_flag:
-            tilt_labels = preprocess_tilt_labels_for_batch(
-                _expand_particle_indices_to_per_image(particle_indices, images.shape[0])
-            )
-        lhs, rhs = reduce_covariance_inner(
-            config,
-            images,
-            model,
-            opts,
-            dataset.image_mask,
-            rotation_matrices=rotation_matrices,
-            translations=translations,
-            ctf_params=ctf_params,
-            noise_variance=noise_variance,
-            hermitian_weights=hermitian_weights,
-            lhs=lhs,
-            rhs=rhs,
-            tilt_labels=tilt_labels,
+    for halfset_id in range(2):
+        config = ForwardModelConfig.from_dataset(
+            dataset,
+            disc_type=disc_type,
+            process_fn=dataset.process_images,
         )
+        model = ModelState(
+            mean_estimate=mean_estimate,
+            volume_mask=volume_mask,
+            basis=basis,
+        )
+        opts = CovarianceOpts(
+            disc_type_u=disc_type_u,
+            do_mask_images=do_mask_images,
+            shared_label=dataset.tilt_series_flag,
+        )
+
+        hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape, dtype=dataset.dtype_real)
+
+        for (
+            images,
+            rotation_matrices,
+            translations,
+            ctf_params,
+            noise_variance,
+            particle_indices,
+            _image_indices,
+        ) in dataset.iter_batches(
+            batch_size,
+            noise_model=dataset.noise,
+            noise_half=False,
+            halfset_id=halfset_id,
+            by_image=not dataset.tilt_series_flag,
+        ):
+            tilt_labels = None
+            if dataset.tilt_series_flag:
+                tilt_labels = preprocess_tilt_labels_for_batch(
+                    _expand_particle_indices_to_per_image(particle_indices, images.shape[0])
+                )
+            lhs, rhs = reduce_covariance_inner(
+                config,
+                images,
+                model,
+                opts,
+                dataset.image_mask,
+                rotation_matrices=rotation_matrices,
+                translations=translations,
+                ctf_params=ctf_params,
+                noise_variance=noise_variance,
+                hermitian_weights=hermitian_weights,
+                lhs=lhs,
+                rhs=rhs,
+                tilt_labels=tilt_labels,
+            )
     del basis
     # Deallocate some memory?
 
