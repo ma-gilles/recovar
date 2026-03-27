@@ -915,8 +915,7 @@ def E_M_step_batch_half(
         half_volume_size = lhs_summed.shape[0]
         second_moment_tri = second_moment_zs[:, tri_i, tri_j]
 
-        # LHS: real-valued → full-image backprojection is faster (half_image
-        # does redundant conjugate scatter for real data).
+        # LHS backprojection in chunks.
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
         lhs_acc = jnp.zeros((tri_sz, half_volume_size), dtype=jnp.float32)
         _CHUNK = 70
