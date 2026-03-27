@@ -73,6 +73,7 @@ _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_PROJECT = "cuda_batch_project"
+_TARGET_BATCH_BP_INTERLEAVED = "cuda_batch_bp_interleaved"
 
 
 def _ensure_ffi():
@@ -87,6 +88,9 @@ def _ensure_ffi():
         jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
         jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")
         jax.ffi.register_ffi_target(_TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA")
+        jax.ffi.register_ffi_target(
+            _TARGET_BATCH_BP_INTERLEAVED, jax.ffi.pycapsule(lib.BatchBackprojectInterleaved), platform="CUDA"
+        )
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
 
@@ -344,6 +348,40 @@ def batch_backproject(
         input_output_aliases={2: 0},
         vmap_method="sequential",
     )(images, rot6, volumes, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(3, 4, 5))
+def batch_backproject_interleaved(
+    volumes: jax.Array,
+    images: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    max_r: float | None = None,
+) -> jax.Array:
+    """Back-project images into interleaved volumes: output ``(half_vol, batch)``.
+
+    Like ``batch_backproject`` but output is ``(n_voxels_half, batch_size)``
+    instead of ``(batch_size, n_voxels_half)``.  All batch entries for the
+    same voxel are contiguous → ~30× better L2 cache utilization for large
+    batch sizes (e.g. 210 PPCA upper-tri channels).
+
+    Only supports: real data (float32/64), half_volume=True, trilinear, full images.
+    """
+    _ensure_ffi()
+    N0, N1, N2 = volume_shape
+    H, W = image_shape
+    ups = N0 // H
+    max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_BATCH_BP_INTERLEAVED,
+        out_type,
+        input_output_aliases={2: 0},
+        vmap_method="sequential",
+    )(images, rot6, volumes, image_h=H, image_w=W, vol_n0=N0, vol_n1=N1, vol_n2=N2, upsampling=ups, max_r2_x4=max_r2_x4)
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
