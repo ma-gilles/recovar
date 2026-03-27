@@ -1,6 +1,16 @@
 """Public PPCA compatibility surface."""
 
-from .ppca import EM, E_M_step_batch, EM_step, batch_unvec, batch_vec, check_imaginary_part
+from .ppca import (
+    EM,
+    E_M_step_batch,
+    E_M_step_batch_half,
+    EM_step,
+    _tri_size,
+    batch_unvec,
+    batch_vec,
+    check_imaginary_part,
+    unpack_tri_to_full,
+)
 from .sparse_PCA import (
     Basis,
     Identity,
@@ -21,6 +31,9 @@ __all__ = [
     "EM",
     "EM_step",
     "E_M_step_batch",
+    "E_M_step_batch_half",
+    "unpack_tri_to_full",
+    "_tri_size",
     # Basis classes
     "Basis",
     "Wavelet",

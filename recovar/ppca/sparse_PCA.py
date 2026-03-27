@@ -224,11 +224,20 @@ class Wavelet(Basis):
 
 
 class Wavelet_multilvl(Basis):
-    def __init__(self, volume_shape, wavelet_type, wavelet_mode="symmetric", mask=None):
+    def __init__(self, volume_shape, wavelet_type, wavelet_mode="symmetric", mask=None, backend=None):
         """
-        Multi-level wavelet basis using new vector conversion functions.
-        Now uses jaxwt_coeffs_to_flat_vector and flat_vector_to_jaxwt_coeffs
-        for cleaner, more robust coefficient handling.
+        Multi-level wavelet basis.
+
+        Parameters
+        ----------
+        backend : ``"jax"`` | ``"jaxwt"`` | ``"pywt"`` | None
+            Which library to use for 3-D wavelet transforms.
+            *None* (default) uses ``"jax"`` (pure JAX, no external deps).
+
+            ``"jax"`` — pure JAX implementation (``recovar.ppca.wavelets``),
+            GPU-native, JIT-compilable, handles complex data natively.
+            ``"jaxwt"`` — legacy jaxwt library.
+            ``"pywt"`` — CPU-only PyWavelets.
         """
         self.volume_shape = volume_shape
         self.wavelet_type = wavelet_type
@@ -238,14 +247,46 @@ class Wavelet_multilvl(Basis):
         self.from_ft = True
         self.mask = mask
 
+        # Resolve backend
+        if backend is None:
+            self.backend = "jax"
+        else:
+            if backend not in ("jax", "jaxwt", "pywt"):
+                raise ValueError(f"Unknown wavelet backend: {backend!r}")
+            self.backend = backend
+
         # Initialize metadata by doing a dummy transform
         dummy = np.zeros([1, *volume_shape])
-        if use_jaxwt:
-            dummy_coeffs = jaxwt.wavedec3(dummy, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3, -2, -1))
-        else:
-            dummy_coeffs = pywt.wavedecn(dummy, wavelet=wavelet_type, mode=wavelet_mode, axes=(-3, -2, -1))
-
+        dummy_coeffs = self._wavedec3(dummy)
         _, self.shapes_info = jaxwt_coeffs_to_flat_vector(dummy_coeffs)
+
+    # -- backend dispatch helpers ------------------------------------------
+
+    def _wavedec3(self, data):
+        """Forward 3-D wavelet transform dispatched by *self.backend*."""
+        wt, mode = self.wavelet_type, self.wavelet_mode
+        if self.backend == "jax":
+            from recovar.ppca.wavelets import wavedec3 as _jax_wavedec3
+
+            return _jax_wavedec3(data, wavelet=wt, mode=mode)
+        elif self.backend == "jaxwt":
+            return jaxwt.wavedec3(data, wavelet=wt, mode=mode, axes=(-3, -2, -1))
+        else:
+            return pywt.wavedecn(data, wavelet=wt, mode=mode, axes=(-3, -2, -1))
+
+    def _waverec3(self, coeffs):
+        """Inverse 3-D wavelet transform dispatched by *self.backend*."""
+        wt, mode = self.wavelet_type, self.wavelet_mode
+        if self.backend == "jax":
+            from recovar.ppca.wavelets import waverec3 as _jax_waverec3
+
+            return _jax_waverec3(coeffs, wavelet=wt)
+        elif self.backend == "jaxwt":
+            return jaxwt.waverec3(coeffs, wavelet=wt, axes=(-3, -2, -1))
+        else:
+            return pywt.waverecn(coeffs, wavelet=wt, mode=mode, axes=(-3, -2, -1))
+
+    # -- forward / inverse -------------------------------------------------
 
     def image_ft_to_basis_single(self, real_image):
         """Convert real-space images to wavelet coefficient vectors."""
@@ -262,14 +303,7 @@ class Wavelet_multilvl(Basis):
         real_image_3d = real_image.reshape([batch_size] + list(self.volume_shape))
 
         # Wavelet transform
-        if use_jaxwt:
-            wavelet_coeffs = jaxwt.wavedec3(
-                real_image_3d, wavelet=self.wavelet_type, mode=self.wavelet_mode, axes=(-3, -2, -1)
-            )
-        else:
-            wavelet_coeffs = pywt.wavedecn(
-                real_image_3d, wavelet=self.wavelet_type, mode=self.wavelet_mode, axes=(-3, -2, -1)
-            )
+        wavelet_coeffs = self._wavedec3(real_image_3d)
 
         # Convert to flat vector
         flat_vec, _ = jaxwt_coeffs_to_flat_vector(wavelet_coeffs)
@@ -315,14 +349,11 @@ class Wavelet_multilvl(Basis):
             squeeze_output = False
 
         # Convert flat vector to wavelet coefficients
-        # Use JAX arrays if using jaxwt for proper type compatibility
-        wavelet_coeffs = flat_vector_to_jaxwt_coeffs(wavelet_vec, self.shapes_info, use_jax=use_jaxwt)
+        use_jax = self.backend in ("jax", "jaxwt")
+        wavelet_coeffs = flat_vector_to_jaxwt_coeffs(wavelet_vec, self.shapes_info, use_jax=use_jax)
 
         # Inverse wavelet transform
-        if use_jaxwt:
-            image = jaxwt.waverec3(wavelet_coeffs, wavelet=self.wavelet_type, axes=(-3, -2, -1))
-        else:
-            image = pywt.waverecn(wavelet_coeffs, wavelet=self.wavelet_type, mode=self.wavelet_mode, axes=(-3, -2, -1))
+        image = self._waverec3(wavelet_coeffs)
 
         # Reshape to (batch, volume_size)
         image_flat = image.reshape(-1, np.prod(self.volume_shape))

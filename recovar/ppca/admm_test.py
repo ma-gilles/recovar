@@ -133,7 +133,7 @@ class WaveletL1(L1):
               (use wavelet_avg_square_by_level_both per basis)
     """
 
-    def __init__(self, dim, volume_shape, wavelet_type="db1", sigma=1.0):
+    def __init__(self, dim, volume_shape, wavelet_type="db1", sigma=1.0, backend=None):
         # Pass scalar to parent (for compatibility)
         super().__init__(np.mean(sigma) if hasattr(sigma, "__len__") else sigma)
         self.dim = dim
@@ -143,8 +143,8 @@ class WaveletL1(L1):
         self.sigma = sigma  # Can be scalar, 1D, or 2D array
         self.sigma_is_array = hasattr(sigma, "__len__") and len(np.array(sigma).shape) >= 1
         self.sigma_ndim = np.array(sigma).ndim if self.sigma_is_array else 0
-        # Create the wavelet transform (keep original for compatibility)
-        self.wavelet = Wavelet_multilvl(volume_shape, wavelet_type)
+        # Create the wavelet transform
+        self.wavelet = Wavelet_multilvl(volume_shape, wavelet_type, backend=backend)
 
         # JIT compile only the batch operations that don't involve wavelet transforms
         # self._jit_batch_ops = jit(self._compute_batch_operations)
