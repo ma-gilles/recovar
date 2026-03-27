@@ -854,6 +854,7 @@ def E_M_step_batch_half(
 
     # Upper-triangular indices (compile-time constant)
     tri_i, tri_j = np.triu_indices(basis_size)
+    tri_sz = len(tri_i)
 
     # --- whiten images and CTF in half-image space ---
     images_half = core.translate_images(images_half, translations, image_shape, half_image=True) / jnp.sqrt(
@@ -897,27 +898,38 @@ def E_M_step_batch_half(
         second_moment_tri = second_moment_zs[:, tri_i, tri_j]
 
         # Per-pixel, per-image:  ctf^2 * upper-tri-second-moments
-        # → (n_images, half_image_size, tri_size)
-        before_backproj_tri = ctf_squared_half[..., None] * second_moment_tri[:, None, :]
+        # Expand half-images to full for the adjoint (the half adjoint path
+        # has a severe memory bug — 50 GB scratch for 0.07 GB output).
+        # The full adjoint is memory-efficient (~0.3 GB scratch).
+        ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
 
-        # Backproject to half-volume  (adjoint handles Hermitian fold)
-        lhs_summed += batch_over_vol_adjoint_slice_volume_half(
-            before_backproj_tri,
-            rotation_matrices,
-            image_shape,
-            volume_shape,
-            disc_type,
-        )
+        # LHS backprojection: process tri channels in chunks to limit peak memory
+        _CHUNK = basis_size  # ~20 channels at a time
+        for c0 in range(0, tri_sz, _CHUNK):
+            c1 = min(c0 + _CHUNK, tri_sz)
+            before_chunk = ctf_squared_full[..., None] * second_moment_tri[:, None, c0:c1]
+            bp_full = batch_over_vol_adjoint_slice_volume(
+                before_chunk,
+                rotation_matrices,
+                image_shape,
+                volume_shape,
+                disc_type,
+            )
+            # Convert full volume → half volume per channel
+            lhs_summed = lhs_summed.at[:, c0:c1].add(ftu.full_volume_to_half_volume(bp_full.T, volume_shape).T)
 
-        # RHS: (n_images, half_image_size, basis_size)
-        before_backproj_rhs = CTF_half[..., None] * centered_half[..., None] * jnp.conj(expected_zs)[:, None, :]
-        rhs_summed += batch_over_vol_adjoint_slice_volume_half(
+        # RHS backprojection (only q channels — small, no chunking needed)
+        centered_full = ftu.half_image_to_full_image(centered_half, image_shape)
+        CTF_full = ftu.half_image_to_full_image(CTF_half, image_shape)
+        before_backproj_rhs = CTF_full[..., None] * centered_full[..., None] * jnp.conj(expected_zs)[:, None, :]
+        bp_rhs_full = batch_over_vol_adjoint_slice_volume(
             before_backproj_rhs,
             rotation_matrices,
             image_shape,
             volume_shape,
             disc_type,
         )
+        rhs_summed += ftu.full_volume_to_half_volume(bp_rhs_full.T, volume_shape).T
 
     # --- log-likelihood (optional) ---
     if compute_ll:
@@ -955,6 +967,179 @@ def unpack_tri_to_full(lhs_tri, basis_size):
 
 
 batch1_symmetrize_ft_volume = jax.vmap(utils.symmetrize_ft_volume, in_axes=(1, None), out_axes=1)
+
+
+def _iter_processed_batches_half(experiment_dataset, batch_size):
+    """Like _iter_processed_batches but yields half-spectrum images and noise."""
+    for (
+        batch,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        _noise_variance,
+        _particle_indices,
+        image_indices,
+    ) in experiment_dataset.iter_batches(
+        batch_size,
+        by_image=not getattr(experiment_dataset, "tilt_series_flag", False),
+    ):
+        yield (
+            experiment_dataset.process_images_half(batch, apply_image_mask=False),
+            ctf_params,
+            rotation_matrices,
+            translations,
+            image_indices,
+        )
+
+
+def EM_step_half(
+    experiment_datasets,
+    mean_estimate,
+    W_estimate,
+    batch_size,
+    W_prior,
+    use_whitening=False,
+    whitening_mode="cz",
+    disc_type_mean="cubic",
+    disc_type="linear_interp",
+    recompute_ll=False,
+    mean_estimate_raw=None,
+):
+    """Half-spectrum EM step for L2-regularized PPCA.
+
+    Same interface as :func:`EM_step` but uses :func:`E_M_step_batch_half`
+    internally.  All accumulation happens in half-volume / upper-triangular
+    format, and the M-step solve runs on half_volume_size voxels only.
+
+    Memory savings vs ``EM_step``:
+    * ``lhs``: ``volume_size × q²`` → ``half_vol × q(q+1)/2``  (~4× less)
+    * ``rhs``: ``volume_size × q``  → ``half_vol × q``          (~2× less)
+    * ``W``: kept in half-volume during E-step, expanded only for whitening
+    """
+    full_dataset, dataset_list = _normalize_experiment_datasets(experiment_datasets)
+    ref = full_dataset if full_dataset is not None else dataset_list[0]
+    basis_size = W_estimate.shape[-1]
+    volume_shape = ref.volume_shape
+    half_volume_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+    half_volume_size = int(np.prod(half_volume_shape))
+    tri_sz = _tri_size(basis_size)
+
+    # Convert W to half-volume for the E-step
+    # W: (volume_size, basis_size) → transpose, convert, transpose back
+    W_half = ftu.full_volume_to_half_volume(W_estimate.T, volume_shape).T
+
+    # Half-volume accumulators
+    lhs_summed = jnp.zeros((half_volume_size, tri_sz), dtype=ref.dtype_real)
+    rhs_summed = jnp.zeros((half_volume_size, basis_size), dtype=ref.dtype)
+
+    ll_sum = jnp.array(0.0, dtype=ref.dtype)
+    expected_zs = []
+    second_moment_zs = []
+
+    for experiment_dataset in dataset_list:
+        for batch_half, ctf_params, rotation_matrices, translations, batch_image_ind in _iter_processed_batches_half(
+            experiment_dataset, batch_size
+        ):
+            noise_variance_half = experiment_dataset.noise.get_half(batch_image_ind)
+            lhs_summed, rhs_summed, ez_batch, smz_batch, ll_batch, _ = E_M_step_batch_half(
+                batch_half,
+                lhs_summed,
+                rhs_summed,
+                mean_estimate,
+                W_half,
+                ctf_params,
+                rotation_matrices,
+                translations,
+                experiment_dataset.image_shape,
+                experiment_dataset.volume_shape,
+                experiment_dataset.grid_size,
+                experiment_dataset.voxel_size,
+                noise_variance_half,
+                experiment_dataset.ctf_evaluator,
+                compute_ll=True,
+                disc_type_mean=disc_type_mean,
+                disc_type=disc_type,
+                compute_stats=True,
+            )
+            expected_zs.append(np.array(ez_batch))
+            second_moment_zs.append(np.array(smz_batch))
+            ll_sum += ll_batch
+
+    expected_zs = np.concatenate(expected_zs, axis=0)
+    second_moment_zs = np.concatenate(second_moment_zs, axis=0)
+    expected_zs_mean = np.mean(expected_zs, axis=0)
+    expected_zs_var = np.var(expected_zs, axis=0)
+
+    # ------------------------------------------------------------------
+    # M-step solve in half-volume space (chunked to avoid OOM)
+    # ------------------------------------------------------------------
+    W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
+    reg_diag = 1 / (W_prior_half + 1e-16)  # (half_vol, q)
+
+    # Chunk the solve: unpack tri → full + regularize + solve, one chunk at a time.
+    # Full matrix (half_vol, q, q) would be ~13 GB at 256³ — too much.
+    # Chunks of 200K voxels use ~300 MB each.
+    _SOLVE_CHUNK = 200_000
+    W_half_parts = []
+    for i0 in range(0, half_volume_size, _SOLVE_CHUNK):
+        i1 = min(i0 + _SOLVE_CHUNK, half_volume_size)
+        lhs_chunk = unpack_tri_to_full(lhs_summed[i0:i1], basis_size)
+        lhs_chunk = lhs_chunk + jax.vmap(jnp.diag)(reg_diag[i0:i1])
+        W_half_parts.append(jnp.linalg.solve(lhs_chunk, rhs_summed[i0:i1, :, None])[..., 0])
+    W_half = jnp.concatenate(W_half_parts, axis=0)
+
+    # Expand to full volume for whitening and output
+    W = ftu.half_volume_to_full_volume(W_half.T, volume_shape).T
+
+    if jnp.any(jnp.isnan(W)):
+        logger.error("EM_step_half: NaN in W after M-step")
+        raise ValueError("NaN in W after M-step")
+
+    # ------------------------------------------------------------------
+    # Whitening
+    # ------------------------------------------------------------------
+    if use_whitening:
+        if whitening_mode == "proj_ls":
+            if mean_estimate_raw is None:
+                raise ValueError("proj_ls whitening requires mean_estimate_raw")
+            volume_mask = getattr(ref, "volume_mask", None)
+            if volume_mask is None:
+                volume_mask = np.ones(ref.volume_shape)
+            Sigma = compute_sigma_proj_ls(
+                experiment_datasets,
+                mean_estimate_raw,
+                W,
+                volume_mask,
+                batch_size,
+                disc_type_mean=disc_type_mean,
+                disc_type=disc_type,
+                do_mask_images=True,
+                parallel_analysis=False,
+            )
+            if jnp.any(jnp.isnan(Sigma)) or jnp.any(jnp.isinf(Sigma)):
+                logger.warning("EM_step_half: ill-conditioned Sigma, skipping whitening")
+                Sigma = jnp.eye(Sigma.shape[0], dtype=Sigma.dtype)
+            W = W @ sqrtm_psd(Sigma)
+        else:
+            C_z = compute_Cz_from_second_moments(second_moment_zs)
+            q = W.shape[1]
+            logger.info(f"  Before whitening: ||Ĉ_z - I|| = {float(jnp.linalg.norm(C_z - jnp.eye(q))):.4f}")
+            W, C_z_final, _ = whiten_W_iterative(W, second_moment_zs, n_iters=1, tol=1e-8, verbose=False)
+            logger.info(f"  After whitening: ||Ĉ_z - I|| ≈ {float(jnp.linalg.norm(C_z_final - jnp.eye(q))):.4f}")
+
+    # ------------------------------------------------------------------
+    # Log-likelihood
+    # ------------------------------------------------------------------
+    ll_prior = jnp.linalg.norm(W / jnp.sqrt(W_prior + 1e-16)) ** 2
+    neg_ll_total = float(-ll_sum.real + ll_prior.real)
+    neg_ll_data = float(-ll_sum.real)
+    neg_ll_prior = float(ll_prior.real)
+
+    if jnp.isnan(W).any():
+        logger.error("EM_step_half produced NaN in W")
+        raise ValueError("EM_step_half produced NaN in W")
+
+    return W, expected_zs, second_moment_zs, expected_zs_mean, expected_zs_var, neg_ll_total, neg_ll_data, neg_ll_prior
 
 
 # @functools.partial(jax.jit, static_argnums = [5])
@@ -1309,8 +1494,42 @@ def EM(
     print("-" * len(header))
 
     for iter_i in range(EM_iter):
-        W, expected_zs, second_moment_zs, expected_zs_mean, expected_zs_var, neg_ll_total, neg_ll_data, neg_ll_prior = (
-            EM_step(
+        if not sparse_PCA:
+            # L2: use half-spectrum EM step (4× less memory, ~2× faster M-step)
+            (
+                W,
+                expected_zs,
+                second_moment_zs,
+                expected_zs_mean,
+                expected_zs_var,
+                neg_ll_total,
+                neg_ll_data,
+                neg_ll_prior,
+            ) = EM_step_half(
+                experiment_dataset,
+                mean_estimate,
+                W,
+                batch_size,
+                W_prior,
+                use_whitening=use_whitening,
+                whitening_mode=whitening_mode,
+                disc_type_mean=disc_type_mean,
+                disc_type=disc_type,
+                recompute_ll=recompute_ll,
+                mean_estimate_raw=mean_estimate_raw,
+            )
+        else:
+            # L1/sparse: use full-spectrum EM step (ADMM needs full volume)
+            (
+                W,
+                expected_zs,
+                second_moment_zs,
+                expected_zs_mean,
+                expected_zs_var,
+                neg_ll_total,
+                neg_ll_data,
+                neg_ll_prior,
+            ) = EM_step(
                 experiment_dataset,
                 mean_estimate,
                 W,
@@ -1325,7 +1544,6 @@ def EM(
                 recompute_ll=recompute_ll,
                 mean_estimate_raw=mean_estimate_raw,
             )
-        )
 
         # Make real
         W = W.T.reshape(basis_size, *reference_dataset.volume_shape)

@@ -5,6 +5,7 @@ from .ppca import (
     E_M_step_batch,
     E_M_step_batch_half,
     EM_step,
+    EM_step_half,
     _tri_size,
     batch_unvec,
     batch_vec,
