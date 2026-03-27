@@ -373,6 +373,8 @@ def batch_backproject_interleaved(
     H, W = image_shape
     ups = N0 // H
     max_r2_x4 = -1 if max_r is None else int(4 * max_r * max_r)
+    # Ensure images dtype matches volumes (kernel dispatches on volume dtype)
+    images = images.astype(volumes.dtype)
     rot6 = _rot_to_compact(rotation_matrices, volumes.dtype)
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
 
