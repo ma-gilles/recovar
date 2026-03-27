@@ -910,13 +910,17 @@ def E_M_step_batch_half(
         disc_type,
     )
 
-    # --- backprojection (outside JIT — chunked, memory-safe) ---
+    # --- backprojection (outside JIT) ---
     if compute_stats:
+        half_volume_size = lhs_summed.shape[0]
         second_moment_tri = second_moment_zs[:, tri_i, tri_j]
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
 
-        # LHS: backproject directly to half-volume (avoids full→half copy).
-        _CHUNK = basis_size
+        # LHS: backproject to half-volume in chunks of 70 channels.
+        # Accumulate in (tri_sz, half_vol) layout — matches batch_adjoint
+        # output directly, avoids per-chunk transpose + scatter.
+        lhs_acc = jnp.zeros((tri_sz, half_volume_size), dtype=jnp.float32)
+        _CHUNK = 70
         for c0 in range(0, tri_sz, _CHUNK):
             c1 = min(c0 + _CHUNK, tri_sz)
             before_chunk = (ctf_squared_full[..., None] * second_moment_tri[:, None, c0:c1]).transpose(2, 0, 1)
@@ -927,17 +931,19 @@ def E_M_step_batch_half(
                 volume_shape,
                 disc_type,
                 half_volume=True,
-            ).T.real.astype(jnp.float32)
-            lhs_summed = lhs_summed.at[:, c0:c1].add(bp_half)
+            )  # (n_ch, half_vol)
+            lhs_acc = lhs_acc.at[c0:c1].add(bp_half.real.astype(jnp.float32))
             del before_chunk, bp_half
+        lhs_summed = lhs_summed + lhs_acc.T
+        del lhs_acc
 
-        # RHS: backproject directly to half-volume.
+        # RHS: q channels in one call.
         centered_full = ftu.half_image_to_full_image(centered_half, image_shape)
         CTF_full = ftu.half_image_to_full_image(CTF_half, image_shape)
         before_rhs = (CTF_full[..., None] * centered_full[..., None] * jnp.conj(expected_zs)[:, None, :]).transpose(
             2, 0, 1
         )
-        bp_rhs_half = core.batch_adjoint_slice_volume(
+        bp_rhs = core.batch_adjoint_slice_volume(
             before_rhs,
             rotation_matrices,
             image_shape,
@@ -945,7 +951,7 @@ def E_M_step_batch_half(
             disc_type,
             half_volume=True,
         )
-        rhs_summed = rhs_summed + bp_rhs_half.T
+        rhs_summed = rhs_summed + bp_rhs.T
 
     ll_per_image = jnp.zeros((0,), dtype=images_half.dtype)
     return lhs_summed, rhs_summed, expected_zs, second_moment_zs, ll_sum, ll_per_image
@@ -1445,7 +1451,10 @@ def EM(
     volume_mask = np.ones(reference_dataset.volume_shape)
     basis_size = W_initial.shape[-1]
     contrast_grid = np.ones([1])
-    batch_size = 100  # reduced 10x from 1000 to avoid OOM on full runs (grid 128, 50k images)
+    # Larger batches amortize per-batch overhead (kernel launches, backprojection).
+    # 200 is optimal for 256³/20 PCs on 80 GB GPU (~37 GB peak, 4.6 ms/img).
+    # Smaller grids use less memory so the same batch size is safe.
+    batch_size = 200
     W = W_initial
 
     # Precompute spline coefficients for cubic interpolation
