@@ -934,7 +934,8 @@ def E_M_step_batch_half(
         # GEMM: (half_vol, n_images) @ (n_images, tri_sz) → (half_vol, tri_sz)
         lhs_summed = lhs_summed + (ctf2_bp @ second_moment_tri.real.astype(real_dtype))
 
-        # RHS: half-image backprojection (30% fewer scatters for complex).
+        # RHS: standard half-image backprojection (only q=20 complex channels,
+        # fast enough that per-image trick gives <10% improvement).
         before_rhs = (CTF_half[..., None] * centered_half[..., None] * jnp.conj(expected_zs)[:, None, :]).transpose(
             2, 0, 1
         )
