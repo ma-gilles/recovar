@@ -791,7 +791,77 @@ batch_over_vol_adjoint_slice_volume_half = jax.vmap(
 )
 
 
-@functools.partial(jax.jit, static_argnums=[8, 9, 13, 14, 15, 16, 17])
+@functools.partial(jax.jit, static_argnums=[8, 9, 10, 11, 12, 13])
+def _e_step_half_inner(
+    images_half,
+    mean,
+    W_half,
+    CTF_params,
+    rotation_matrices,
+    translations,
+    voxel_size,
+    noise_variance_half,
+    image_shape,
+    volume_shape,
+    ctf_evaluator,
+    compute_ll,
+    disc_type_mean="cubic",
+    disc_type="linear_interp",
+    # NOTE: JIT boundary — backprojection is done separately to
+    # allow XLA to free memory between chunks.
+):
+    """JIT'd E-step core: computes posterior moments and log-likelihood.
+
+    Returns everything needed for the backprojection (done outside JIT).
+    """
+    basis_size = W_half.shape[1]
+
+    w_1d = linalg.half_spectrum_last_axis_weights(image_shape[1])
+    rfft_w = jnp.tile(w_1d, (image_shape[0], 1)).reshape(-1)
+
+    images_half = core.translate_images(images_half, translations, image_shape, half_image=True) / jnp.sqrt(
+        noise_variance_half
+    )
+    CTF_half = ctf_evaluator(CTF_params, image_shape, voxel_size, half_image=True) / jnp.sqrt(noise_variance_half)
+
+    projected_mean_half = core.slice_volume(
+        mean, rotation_matrices, image_shape, volume_shape, disc_type_mean, half_image=True
+    )
+    projected_mean_half = (
+        projected_mean_half
+        * ctf_evaluator(CTF_params, image_shape, voxel_size, half_image=True)
+        / jnp.sqrt(noise_variance_half)
+    )
+
+    ctf_squared_half = CTF_half**2
+
+    PW_half = batch_over_vol_slice_volume_half(W_half, rotation_matrices, image_shape, volume_shape, disc_type)
+    PW_half *= CTF_half[:, None, :]
+
+    PW_w = jnp.conj(PW_half) * rfft_w[None, None, :]
+    M_n = (PW_w @ PW_half.transpose(0, 2, 1)).real + jnp.eye(basis_size)
+
+    centered_half = images_half - projected_mean_half
+    b_n = (PW_w @ centered_half[..., None]).real
+
+    M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
+    expected_zs = (M_n_inv @ b_n).squeeze(-1)
+    second_moment_zs = M_n_inv + linalg.broadcast_outer(expected_zs, jnp.conj(expected_zs))
+
+    ll_sum = jnp.array(0.0, dtype=images_half.dtype)
+    if compute_ll:
+        u = b_n.squeeze(-1)
+        quad = jnp.real(jnp.sum(jnp.conj(u) * (M_n_inv @ u[..., None]).squeeze(-1), axis=-1))
+        r2 = jnp.sum(rfft_w * jnp.real(jnp.conj(centered_half) * centered_half), axis=-1)
+        L = jnp.linalg.cholesky(M_n)
+        logdetM = 2.0 * jnp.sum(jnp.log(jnp.real(jnp.diagonal(L, axis1=1, axis2=2))), axis=-1)
+        d_n = np.prod(image_shape)
+        ll_per_image = -0.5 * (d_n * jnp.log(2.0 * jnp.pi) + r2 - quad + logdetM)
+        ll_sum = jnp.sum(ll_per_image)
+
+    return expected_zs, second_moment_zs, ctf_squared_half, centered_half, CTF_half, ll_sum
+
+
 def E_M_step_batch_half(
     images_half,
     lhs_summed,
@@ -814,100 +884,43 @@ def E_M_step_batch_half(
 ):
     """Half-spectrum, upper-triangular-LHS variant of :func:`E_M_step_batch`.
 
-    Memory optimisations over the original:
-    * Images and CTFs are in rfft-packed half-image format.
-    * W and the accumulated sufficient statistics (``lhs_summed``, ``rhs_summed``)
-      live in half-volume format.
-    * ``lhs_summed`` stores only the upper-triangular part of the per-voxel
-      ``(basis_size, basis_size)`` matrix, with ``tri_size = q*(q+1)/2``
-      entries per voxel.
-
-    Inner products over image pixels use rfft weights (2 for interior
-    frequencies, 1 for DC/Nyquist) so that results match the full-image
-    computation exactly.
-
-    .. note::
-       The rfft-weighted inner products assume that ``noise_variance_half``
-       is Hermitian-symmetric (i.e. the same at frequency *k* and *-k*).
-       This is always true in cryo-EM practice because noise variance is
-       estimated radially.  If you pass a per-pixel noise variance that
-       is NOT symmetric, the inner products will be approximate.
-
-    Parameters
-    ----------
-    images_half : (n_images, half_image_size)  complex
-    lhs_summed  : (half_volume_size, tri_size)  real — accumulated upper-tri LHS
-    rhs_summed  : (half_volume_size, basis_size) complex — accumulated RHS
-    mean        : (volume_size,) complex — full-volume mean (needed for cubic interp)
-    W_half      : (half_volume_size, basis_size) complex — basis in half-volume
-    noise_variance_half : (n_images, half_image_size)  real — must be Hermitian-symmetric
-
-    Returns the same tuple as :func:`E_M_step_batch`:
-        ``(lhs_summed, rhs_summed, expected_zs, second_moment_zs, ll_sum, ll_per_image)``
+    The E-step inner products (M_n, b_n, posterior) are JIT'd.
+    The M-step backprojection runs outside JIT in channel-chunks so XLA
+    can free each chunk's memory before the next — critical for 256³.
     """
     basis_size = W_half.shape[1]
-
-    # Exact integer weights {1, 2} for half-spectrum inner products.
-    # Using raw weights (not sqrt) avoids float32 error from sqrt(2)^2 ≠ 2.
-    w_1d = linalg.half_spectrum_last_axis_weights(image_shape[1])
-    rfft_w = jnp.tile(w_1d, (image_shape[0], 1)).reshape(-1)
-
-    # Upper-triangular indices (compile-time constant)
     tri_i, tri_j = np.triu_indices(basis_size)
     tri_sz = len(tri_i)
 
-    # --- whiten images and CTF in half-image space ---
-    images_half = core.translate_images(images_half, translations, image_shape, half_image=True) / jnp.sqrt(
-        noise_variance_half
+    # --- JIT'd E-step ---
+    expected_zs, second_moment_zs, ctf_squared_half, centered_half, CTF_half, ll_sum = _e_step_half_inner(
+        images_half,
+        mean,
+        W_half,
+        CTF_params,
+        rotation_matrices,
+        translations,
+        voxel_size,
+        noise_variance_half,
+        image_shape,
+        volume_shape,
+        ctf_evaluator,
+        compute_ll,
+        disc_type_mean,
+        disc_type,
     )
-    CTF_half = ctf_evaluator(CTF_params, image_shape, voxel_size, half_image=True) / jnp.sqrt(noise_variance_half)
 
-    # Project mean → half image (mean stays full-volume for cubic interp)
-    projected_mean_half = core.slice_volume(
-        mean, rotation_matrices, image_shape, volume_shape, disc_type_mean, half_image=True
-    )
-    projected_mean_half = (
-        projected_mean_half
-        * ctf_evaluator(CTF_params, image_shape, voxel_size, half_image=True)
-        / jnp.sqrt(noise_variance_half)
-    )
-
-    ctf_squared_half = CTF_half**2
-
-    # --- project basis (half-vol → half-image) ---
-    PW_half = batch_over_vol_slice_volume_half(W_half, rotation_matrices, image_shape, volume_shape, disc_type)
-    PW_half *= CTF_half[:, None, :]  # (n_images, basis_size, half_image_size)
-
-    # --- E-step: posterior moments ---
-    # Apply exact integer weights {1,2} to one operand:
-    #   conj(A) @ diag(w) @ B^T  ≡  (conj(A) * w) @ B^T
-    PW_w = jnp.conj(PW_half) * rfft_w[None, None, :]
-    M_n = (PW_w @ PW_half.transpose(0, 2, 1)).real + jnp.eye(basis_size)
-
-    centered_half = images_half - projected_mean_half
-    b_n = (PW_w @ centered_half[..., None]).real
-
-    M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
-    expected_zs = (M_n_inv @ b_n).squeeze(-1)
-
-    second_moment_zs = M_n_inv + linalg.broadcast_outer(expected_zs, jnp.conj(expected_zs))
-
-    # --- M-step sufficient statistics (half-vol, upper-tri LHS) ---
+    # --- backprojection (outside JIT — chunked, memory-safe) ---
     if compute_stats:
-        # Extract upper-tri of per-image second moments → (n_images, tri_size)
+        half_volume_size = lhs_summed.shape[0]
         second_moment_tri = second_moment_zs[:, tri_i, tri_j]
-
-        # Expand half-images to full for backprojection.
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
 
-        # LHS backprojection: use batch_adjoint_slice_volume (native batch,
-        # much more memory-efficient than vmap). Process in channel-chunks
-        # of size basis_size to limit scratch to ~3 GB.
+        # Accumulate LHS on GPU.  Cast to float32 to prevent JAX dtype
+        # promotion (float32 + float64 → float64 doubles memory usage).
         _CHUNK = basis_size
         for c0 in range(0, tri_sz, _CHUNK):
             c1 = min(c0 + _CHUNK, tri_sz)
-            n_ch = c1 - c0
-            # (n_img, n_pix, n_ch) → (n_ch, n_img, n_pix) for batch_adjoint
             before_chunk = (ctf_squared_full[..., None] * second_moment_tri[:, None, c0:c1]).transpose(2, 0, 1)
             bp_full = core.batch_adjoint_slice_volume(
                 before_chunk,
@@ -915,8 +928,10 @@ def E_M_step_batch_half(
                 image_shape,
                 volume_shape,
                 disc_type,
-            )  # (n_ch, vol_size)
-            lhs_summed = lhs_summed.at[:, c0:c1].add(ftu.full_volume_to_half_volume(bp_full, volume_shape).T)
+            )
+            bp_half = ftu.full_volume_to_half_volume(bp_full, volume_shape).T.real.astype(jnp.float32)
+            lhs_summed = lhs_summed.at[:, c0:c1].add(bp_half)
+            del before_chunk, bp_full, bp_half
 
         # RHS backprojection (q channels — single call)
         centered_full = ftu.half_image_to_full_image(centered_half, image_shape)
@@ -930,27 +945,10 @@ def E_M_step_batch_half(
             image_shape,
             volume_shape,
             disc_type,
-        )  # (q, vol_size)
-        rhs_summed += ftu.full_volume_to_half_volume(bp_rhs, volume_shape).T
+        )
+        rhs_summed = rhs_summed + ftu.full_volume_to_half_volume(bp_rhs, volume_shape).T
 
-    # --- log-likelihood (optional) ---
-    if compute_ll:
-        u = b_n.squeeze(-1)
-        quad = jnp.real(jnp.sum(jnp.conj(u) * (M_n_inv @ u[..., None]).squeeze(-1), axis=-1))
-        # ||residual||^2 with rfft weights
-        r2 = jnp.sum(rfft_w * jnp.real(jnp.conj(centered_half) * centered_half), axis=-1)
-
-        L = jnp.linalg.cholesky(M_n)
-        logdetM = 2.0 * jnp.sum(jnp.log(jnp.real(jnp.diagonal(L, axis1=1, axis2=2))), axis=-1)
-
-        d_n = np.prod(image_shape)  # full image dimensionality
-        const = d_n * jnp.log(2.0 * jnp.pi)
-        ll_per_image = -0.5 * (const + r2 - quad + logdetM)
-        ll_sum = jnp.sum(ll_per_image)
-    else:
-        ll_sum = jnp.array(0.0, dtype=images_half.dtype)
-        ll_per_image = jnp.zeros((0,), dtype=images_half.dtype)
-
+    ll_per_image = jnp.zeros((0,), dtype=images_half.dtype)
     return lhs_summed, rhs_summed, expected_zs, second_moment_zs, ll_sum, ll_per_image
 
 
