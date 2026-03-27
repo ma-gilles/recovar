@@ -436,6 +436,122 @@ class TestMakeUnionGtMask:
         assert soft.shape == vol_shape
 
 
+class TestMakeMask:
+    """Tests for the standalone make_mask function."""
+
+    def _make_test_volume(self, shape=(32, 32, 32), signal_range=(10, 22), noise=0.1, seed=42):
+        rng = np.random.RandomState(seed)
+        vol = np.zeros(shape, dtype=np.float32)
+        s = signal_range
+        vol[s[0]:s[1], s[0]:s[1], s[0]:s[1]] = 5.0
+        return vol + rng.randn(*shape).astype(np.float32) * noise
+
+    def test_output_shape_and_range(self):
+        vol = self._make_test_volume()
+        result = mask.make_mask(vol)
+        assert result.shape == (32, 32, 32)
+        assert result.dtype == np.float32
+        assert result.min() >= 0.0
+        assert result.max() <= 1.0 + 1e-5
+
+    def test_signal_region_is_masked(self):
+        vol = self._make_test_volume()
+        result = mask.make_mask(vol)
+        assert result[16, 16, 16] > 0.9
+
+    def test_corner_is_zero(self):
+        vol = self._make_test_volume(signal_range=(12, 20))
+        result = mask.make_mask(vol)
+        assert result[0, 0, 0] == 0.0
+
+    def test_fixed_threshold(self):
+        """A fixed threshold should give a different result than auto."""
+        vol = self._make_test_volume()
+        m_auto = mask.make_mask(vol, threshold="auto")
+        m_fixed = mask.make_mask(vol, threshold=0.5)
+        assert not np.allclose(m_auto, m_fixed)
+
+    def test_no_lowpass(self):
+        """lowpass_sigma=0 should skip filtering."""
+        vol = self._make_test_volume(noise=0.5)
+        m_filtered = mask.make_mask(vol, lowpass_sigma=3)
+        m_unfiltered = mask.make_mask(vol, lowpass_sigma=0)
+        assert not np.allclose(m_filtered, m_unfiltered)
+
+    def test_extend_parameter(self):
+        """Larger extend should produce a larger mask."""
+        vol = self._make_test_volume()
+        m_small = mask.make_mask(vol, extend=1, soft_edge=0)
+        m_large = mask.make_mask(vol, extend=5, soft_edge=0)
+        assert m_large.sum() > m_small.sum()
+
+    def test_soft_edge_parameter(self):
+        """soft_edge=0 should give a fully binary mask."""
+        vol = self._make_test_volume()
+        result = mask.make_mask(vol, soft_edge=0)
+        unique_vals = np.unique(result)
+        np.testing.assert_array_equal(np.sort(unique_vals), [0.0, 1.0])
+
+    def test_cleanup_false(self):
+        """cleanup=False should skip hole-filling and component selection."""
+        vol = self._make_test_volume()
+        m_clean = mask.make_mask(vol, cleanup=True)
+        m_raw = mask.make_mask(vol, cleanup=False)
+        # Both should be valid masks; raw may have more components
+        assert m_clean.shape == m_raw.shape
+        assert m_raw.min() >= 0.0
+
+    def test_empty_volume(self):
+        vol = np.zeros((16, 16, 16), dtype=np.float32)
+        result = mask.make_mask(vol)
+        assert result.shape == (16, 16, 16)
+        assert result.mean() < 0.5
+
+    def test_mask_is_connected_with_cleanup(self):
+        from scipy.ndimage import label as scipy_label
+        vol = self._make_test_volume()
+        result = mask.make_mask(vol, cleanup=True)
+        binary = result > 0.5
+        _, n_components = scipy_label(binary)
+        assert n_components <= 1, f"Expected <=1 component, got {n_components}"
+
+
+class TestMakeMaskFromHalfMapsAuto:
+    """Tests for make_mask_from_half_maps (auto method wrapping make_mask)."""
+
+    def test_averages_and_delegates_to_make_mask(self):
+        """make_mask_from_half_maps(h1,h2) should equal make_mask((h1+h2)/2)."""
+        rng = np.random.RandomState(42)
+        vol = np.zeros((32, 32, 32), dtype=np.float32)
+        vol[10:22, 10:22, 10:22] = 5.0
+        h1 = vol + rng.randn(32, 32, 32).astype(np.float32) * 0.1
+        h2 = vol + rng.randn(32, 32, 32).astype(np.float32) * 0.1
+        from_halfmaps = mask.make_mask_from_half_maps(h1, h2)
+        from_avg = mask.make_mask((h1 + h2) / 2.0)
+        np.testing.assert_array_equal(from_halfmaps, from_avg)
+
+    def test_default_method_is_auto(self):
+        rng = np.random.RandomState(42)
+        vol = np.zeros((32, 32, 32), dtype=np.float32)
+        vol[10:22, 10:22, 10:22] = 5.0
+        h1 = vol + rng.randn(32, 32, 32).astype(np.float32) * 0.1
+        h2 = vol + rng.randn(32, 32, 32).astype(np.float32) * 0.1
+        auto_result = mask.make_mask_from_half_maps(h1, h2, method="auto")
+        default_result = mask.make_mask_from_half_maps(h1, h2)
+        np.testing.assert_array_equal(auto_result, default_result)
+
+    def test_kwargs_forwarded(self):
+        """Keyword args should be forwarded to make_mask."""
+        rng = np.random.RandomState(42)
+        vol = np.zeros((32, 32, 32), dtype=np.float32)
+        vol[10:22, 10:22, 10:22] = 5.0
+        h1 = vol + rng.randn(32, 32, 32).astype(np.float32) * 0.5
+        h2 = vol + rng.randn(32, 32, 32).astype(np.float32) * 0.5
+        m1 = mask.make_mask_from_half_maps(h1, h2, lowpass_sigma=1)
+        m2 = mask.make_mask_from_half_maps(h1, h2, lowpass_sigma=5)
+        assert not np.allclose(m1, m2)
+
+
 class TestReferenceEquivalence:
     def test_make_mask_from_gt_matches_reference_impl(self):
         rng = np.random.RandomState(42)
@@ -444,11 +560,11 @@ class TestReferenceEquivalence:
         expected = _reference_make_mask_from_gt(vol, smax=3, iter=2, from_ft=False)
         np.testing.assert_allclose(got, expected)
 
-    def test_make_mask_from_half_maps_matches_reference_impl(self):
+    def test_make_mask_from_half_maps_local_corr_matches_reference_impl(self):
         rng = np.random.RandomState(42)
         h1 = rng.randn(16, 16, 16).astype(np.float32)
         h2 = h1 + rng.randn(16, 16, 16).astype(np.float32) * 0.1
-        got = mask.make_mask_from_half_maps(h1, h2, smax=3)
+        got = mask.make_mask_from_half_maps(h1, h2, smax=3, method="local_correlation")
         expected = _reference_make_mask_from_half_maps(h1, h2, smax=3)
         np.testing.assert_allclose(got, expected)
 

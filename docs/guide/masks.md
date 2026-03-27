@@ -19,7 +19,7 @@ If you don't have a mask:
 
 | Option | Description |
 |--------|-------------|
-| `--mask=from_halfmaps` | Estimate mask from the two half-maps of the mean reconstruction |
+| `--mask=from_halfmaps` | Estimate mask from the mean reconstruction (averages half-maps, low-pass filters, Otsu thresholds, cleans up, and softens) |
 | `--mask=sphere` | Use a loose spherical mask |
 | `--mask=none` | No mask (not recommended) |
 
