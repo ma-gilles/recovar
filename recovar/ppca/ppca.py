@@ -897,39 +897,41 @@ def E_M_step_batch_half(
         # Extract upper-tri of per-image second moments → (n_images, tri_size)
         second_moment_tri = second_moment_zs[:, tri_i, tri_j]
 
-        # Per-pixel, per-image:  ctf^2 * upper-tri-second-moments
-        # Expand half-images to full for the adjoint (the half adjoint path
-        # has a severe memory bug — 50 GB scratch for 0.07 GB output).
-        # The full adjoint is memory-efficient (~0.3 GB scratch).
+        # Expand half-images to full for backprojection.
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
 
-        # LHS backprojection: process tri channels in chunks to limit peak memory
-        _CHUNK = basis_size  # ~20 channels at a time
+        # LHS backprojection: use batch_adjoint_slice_volume (native batch,
+        # much more memory-efficient than vmap). Process in channel-chunks
+        # of size basis_size to limit scratch to ~3 GB.
+        _CHUNK = basis_size
         for c0 in range(0, tri_sz, _CHUNK):
             c1 = min(c0 + _CHUNK, tri_sz)
-            before_chunk = ctf_squared_full[..., None] * second_moment_tri[:, None, c0:c1]
-            bp_full = batch_over_vol_adjoint_slice_volume(
+            n_ch = c1 - c0
+            # (n_img, n_pix, n_ch) → (n_ch, n_img, n_pix) for batch_adjoint
+            before_chunk = (ctf_squared_full[..., None] * second_moment_tri[:, None, c0:c1]).transpose(2, 0, 1)
+            bp_full = core.batch_adjoint_slice_volume(
                 before_chunk,
                 rotation_matrices,
                 image_shape,
                 volume_shape,
                 disc_type,
-            )
-            # Convert full volume → half volume per channel
-            lhs_summed = lhs_summed.at[:, c0:c1].add(ftu.full_volume_to_half_volume(bp_full.T, volume_shape).T)
+            )  # (n_ch, vol_size)
+            lhs_summed = lhs_summed.at[:, c0:c1].add(ftu.full_volume_to_half_volume(bp_full, volume_shape).T)
 
-        # RHS backprojection (only q channels — small, no chunking needed)
+        # RHS backprojection (q channels — single call)
         centered_full = ftu.half_image_to_full_image(centered_half, image_shape)
         CTF_full = ftu.half_image_to_full_image(CTF_half, image_shape)
-        before_backproj_rhs = CTF_full[..., None] * centered_full[..., None] * jnp.conj(expected_zs)[:, None, :]
-        bp_rhs_full = batch_over_vol_adjoint_slice_volume(
-            before_backproj_rhs,
+        before_rhs = (CTF_full[..., None] * centered_full[..., None] * jnp.conj(expected_zs)[:, None, :]).transpose(
+            2, 0, 1
+        )
+        bp_rhs = core.batch_adjoint_slice_volume(
+            before_rhs,
             rotation_matrices,
             image_shape,
             volume_shape,
             disc_type,
-        )
-        rhs_summed += ftu.full_volume_to_half_volume(bp_rhs_full.T, volume_shape).T
+        )  # (q, vol_size)
+        rhs_summed += ftu.full_volume_to_half_volume(bp_rhs, volume_shape).T
 
     # --- log-likelihood (optional) ---
     if compute_ll:
