@@ -915,26 +915,26 @@ def E_M_step_batch_half(
         half_volume_size = lhs_summed.shape[0]
         second_moment_tri = second_moment_zs[:, tri_i, tri_j]
 
-        # LHS: interleaved CUDA kernel for L2 cache locality.
-        # Output (half_vol, n_ch) matches lhs_summed layout directly.
-        from recovar.cuda_backproject import batch_backproject_interleaved
+        # LHS: fused CUDA kernel — reads ctf² and smz_tri separately,
+        # multiplies inside the kernel. Avoids the 3.4 GB before_chunk tensor.
+        from recovar.cuda_backproject import fused_backproject
 
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
-        _max_r = image_shape[0] // 2 - 1  # match core.slicing default
+        _max_r = image_shape[0] // 2 - 1
         _CHUNK = 70
         for c0 in range(0, tri_sz, _CHUNK):
             c1 = min(c0 + _CHUNK, tri_sz)
-            before_chunk = (ctf_squared_full[..., None] * second_moment_tri[:, None, c0:c1]).transpose(2, 0, 1)
-            bp_chunk = batch_backproject_interleaved(
+            bp_chunk = fused_backproject(
                 jnp.zeros((half_volume_size, c1 - c0), dtype=jnp.float32),
-                before_chunk,
+                ctf_squared_full.astype(jnp.float32),
+                second_moment_tri[:, c0:c1].astype(jnp.float32),
                 jnp.asarray(rotation_matrices),
                 image_shape,
                 volume_shape,
                 max_r=_max_r,
             )
             lhs_summed = lhs_summed.at[:, c0:c1].add(bp_chunk)
-            del before_chunk, bp_chunk
+            del bp_chunk
 
         # RHS: complex-valued → half-image backprojection is 30% faster.
         before_rhs = (CTF_half[..., None] * centered_half[..., None] * jnp.conj(expected_zs)[:, None, :]).transpose(

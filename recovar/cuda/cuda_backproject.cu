@@ -2275,6 +2275,209 @@ cudaError_t launch_batch_backproject_interleaved(
 }
 
 
+/* =========================================================================
+ * Fused backproject: reads base_images (n_images, n_pixels) and
+ * weight_matrix (n_images, n_channels) separately, computes
+ * val = base_images[n][pix] * weight_matrix[n][ch] inside the kernel.
+ *
+ * Eliminates the (n_channels, n_images, n_pixels) intermediate tensor
+ * which is ~3.4 GB at 256³ with 70ch × 200 images.
+ *
+ * Input reads:  base_images (200×65K×4 = 50 MB) + weights (200×210×4 = 168 KB)
+ * vs current:   before_chunk (70×200×65K×4 = 3.4 GB)
+ * = 68× less input bandwidth.
+ *
+ * Output: (n_voxels_half, n_channels) interleaved layout.
+ * ========================================================================= */
+
+template <typename T>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+fused_backproject_kernel(
+    T*       __restrict__ vols,          /* (vol_stride * n_channels) interleaved */
+    const T* __restrict__ base_images,   /* (n_images, n_pixels) e.g. ctf²       */
+    const T* __restrict__ weight_matrix, /* (n_images, n_channels) e.g. smz_tri  */
+    const T* __restrict__ rot,           /* (n_images, 6)                         */
+    int n_pixels, int image_h, int image_w,
+    int N0, int N1, int N2_eff,
+    T c0, T c1, T c2,
+    int upsampling,
+    int n_images,
+    int n_channels,
+    T max_r2)
+{
+    __shared__ T R[6];
+
+    const int img_idx = blockIdx.x;
+    const int pix     = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+
+    if (threadIdx.x < 6) R[threadIdx.x] = rot[img_idx * 6 + threadIdx.x];
+    __syncthreads();
+    if (pix >= n_pixels) return;
+
+    const int k0_idx = pix / image_w;
+    const int k1_idx = pix % image_w;
+    const T k0 = (T)(k0_idx - image_h / 2) * upsampling;
+    const T k1 = (T)(k1_idx - image_w / 2) * upsampling;
+
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
+
+    const T rk0 = k0 * R[0] + k1 * R[3];
+    const T rk1 = k0 * R[1] + k1 * R[4];
+    const T rk2 = k0 * R[2] + k1 * R[5];
+
+    const T g0 = rk0 + c0, g1 = rk1 + c1, g2 = rk2 + c2;
+    const int ic2 = (int)c2;
+    const int N2_full = 2 * ic2;
+
+    if (g0 < (T)-1 || g0 >= (T)N0 ||
+        g1 < (T)-1 || g1 >= (T)N1 ||
+        g2 < (T)-1 || g2 >= (T)N2_full) return;
+
+    const int b0 = floor_int(g0), b1 = floor_int(g1), b2 = floor_int(g2);
+    const T f0 = g0-(T)b0, f1 = g1-(T)b1, f2 = g2-(T)b2;
+    const T w0[2] = {(T)1-f0, f0}, w1[2] = {(T)1-f1, f1}, w2[2] = {(T)1-f2, f2};
+
+    const int spatial_stride1 = N2_eff;
+    const int spatial_stride0 = N1 * N2_eff;
+
+    /* Load base pixel value ONCE */
+    const T base_val = base_images[img_idx * n_pixels + pix];
+
+    /* Pointer to this image's weight row: weight_matrix[img_idx, :] */
+    const T* wt_row = weight_matrix + img_idx * n_channels;
+
+    #pragma unroll
+    for (int d0 = 0; d0 < 2; d0++) {
+        int j0 = b0 + d0;
+        if ((unsigned)j0 >= (unsigned)N0) continue;
+        #pragma unroll
+        for (int d1 = 0; d1 < 2; d1++) {
+            int j1 = b1 + d1;
+            if ((unsigned)j1 >= (unsigned)N1) continue;
+            const T ww = w0[d0] * w1[d1];
+            #pragma unroll
+            for (int d2 = 0; d2 < 2; d2++) {
+                const int j2 = b2 + d2;
+                if ((unsigned)j2 >= (unsigned)N2_full) continue;
+                const int kz = j2 - ic2;
+                const T trilinear_w = ww * w2[d2];
+
+                int sj0 = j0, sj1 = j1;
+                int hkz;
+                if (kz >= 0) { hkz = kz; }
+                else if (-kz == ic2) { hkz = ic2; }
+                else {
+                    sj0 = (N0 - (N0 & 1) - j0) % N0;
+                    sj1 = (N1 - (N1 & 1) - j1) % N1;
+                    hkz = -kz;
+                }
+                if (hkz > ic2) continue;
+
+                const int voxel_idx = sj0 * spatial_stride0 + sj1 * spatial_stride1 + hkz;
+                T* dst = vols + voxel_idx * n_channels;
+                const T weighted_base = trilinear_w * base_val;
+
+                /* Inner loop: multiply base by per-channel weight, scatter.
+                 * wt_row is tiny (~840 bytes for 210 channels) → L1 cached.
+                 * dst is contiguous for all channels → L2 coalesced. */
+                for (int ch = 0; ch < n_channels; ch++) {
+                    atomicAdd(&dst[ch], weighted_base * wt_row[ch]);
+                }
+            }
+        }
+    }
+}
+
+
+template <typename T>
+cudaError_t launch_fused_backproject(
+    cudaStream_t s, T* vols, const T* base_images, const T* weight_matrix,
+    const T* rot,
+    int64_t n_images, int64_t n_pixels, int64_t n_channels,
+    int64_t ih, int64_t iw,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t ups, int64_t max_r2_x4 = -1)
+{
+    const int N2_eff = (int)(N2 / 2 + 1);
+    const T c0 = (T)(N0/2), c1 = (T)(N1/2), c2 = (T)(N2/2);
+    const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
+
+    dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    dim3 block(BLOCK_SIZE);
+
+    fused_backproject_kernel<T><<<grid, block, 0, s>>>(
+        vols, base_images, weight_matrix, rot,
+        (int)n_pixels, (int)ih, (int)iw,
+        (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups,
+        (int)n_images, (int)n_channels, max_r2);
+
+    return cudaGetLastError();
+}
+
+
+/* XLA FFI handler for fused backproject */
+static ffi::Error FusedBackprojectImpl(
+    cudaStream_t stream,
+    int64_t image_h, int64_t image_w, int64_t vol_n0, int64_t vol_n1,
+    int64_t vol_n2, int64_t upsampling, int64_t max_r2_x4,
+    ffi::AnyBuffer base_images,    /* (n_images, n_pixels) */
+    ffi::AnyBuffer weight_matrix,  /* (n_images, n_channels) */
+    ffi::AnyBuffer rotations,      /* (n_images, 6) */
+    ffi::AnyBuffer /*vols_in*/,
+    ffi::Result<ffi::AnyBuffer> vols_out)
+{
+    void* out_ptr = vols_out->untyped_data();
+    auto vol_dtype = vols_out->element_type();
+
+    int64_t n_images = base_images.dimensions()[0];
+    int64_t n_pixels = base_images.dimensions()[1];
+    int64_t n_channels = weight_matrix.dimensions()[1];
+
+    cudaError_t err;
+    if (vol_dtype == ffi::F32) {
+        err = launch_fused_backproject<float>(
+            stream, (float*)out_ptr,
+            (const float*)base_images.untyped_data(),
+            (const float*)weight_matrix.untyped_data(),
+            (const float*)rotations.untyped_data(),
+            n_images, n_pixels, n_channels,
+            image_h, image_w, vol_n0, vol_n1, vol_n2,
+            upsampling, max_r2_x4);
+    } else if (vol_dtype == ffi::F64) {
+        err = launch_fused_backproject<double>(
+            stream, (double*)out_ptr,
+            (const double*)base_images.untyped_data(),
+            (const double*)weight_matrix.untyped_data(),
+            (const double*)rotations.untyped_data(),
+            n_images, n_pixels, n_channels,
+            image_h, image_w, vol_n0, vol_n1, vol_n2,
+            upsampling, max_r2_x4);
+    } else {
+        return ffi::Error::InvalidArgument("FusedBackproject: need F32 or F64");
+    }
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(FusedBackproject,
+                              FusedBackprojectImpl,
+                              ffi::Ffi::Bind()
+                                  .Ctx<ffi::PlatformStream<cudaStream_t>>()
+                                  .Attr<int64_t>("image_h")
+                                  .Attr<int64_t>("image_w")
+                                  .Attr<int64_t>("vol_n0")
+                                  .Attr<int64_t>("vol_n1")
+                                  .Attr<int64_t>("vol_n2")
+                                  .Attr<int64_t>("upsampling")
+                                  .Attr<int64_t>("max_r2_x4")
+                                  .Arg<ffi::AnyBuffer>()   /* base_images */
+                                  .Arg<ffi::AnyBuffer>()   /* weight_matrix */
+                                  .Arg<ffi::AnyBuffer>()   /* rotations */
+                                  .Arg<ffi::AnyBuffer>()   /* vols_in (aliased) */
+                                  .Ret<ffi::AnyBuffer>()); /* vols_out */
+
+
 extern "C" {
 
 /* XLA FFI handler for interleaved batch backproject */
