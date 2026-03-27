@@ -912,41 +912,40 @@ def E_M_step_batch_half(
 
     # --- backprojection (outside JIT — chunked, memory-safe) ---
     if compute_stats:
-        half_volume_size = lhs_summed.shape[0]
         second_moment_tri = second_moment_zs[:, tri_i, tri_j]
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
 
-        # Accumulate LHS on GPU.  Cast to float32 to prevent JAX dtype
-        # promotion (float32 + float64 → float64 doubles memory usage).
+        # LHS: backproject directly to half-volume (avoids full→half copy).
         _CHUNK = basis_size
         for c0 in range(0, tri_sz, _CHUNK):
             c1 = min(c0 + _CHUNK, tri_sz)
             before_chunk = (ctf_squared_full[..., None] * second_moment_tri[:, None, c0:c1]).transpose(2, 0, 1)
-            bp_full = core.batch_adjoint_slice_volume(
+            bp_half = core.batch_adjoint_slice_volume(
                 before_chunk,
                 rotation_matrices,
                 image_shape,
                 volume_shape,
                 disc_type,
-            )
-            bp_half = ftu.full_volume_to_half_volume(bp_full, volume_shape).T.real.astype(jnp.float32)
+                half_volume=True,
+            ).T.real.astype(jnp.float32)
             lhs_summed = lhs_summed.at[:, c0:c1].add(bp_half)
-            del before_chunk, bp_full, bp_half
+            del before_chunk, bp_half
 
-        # RHS backprojection (q channels — single call)
+        # RHS: backproject directly to half-volume.
         centered_full = ftu.half_image_to_full_image(centered_half, image_shape)
         CTF_full = ftu.half_image_to_full_image(CTF_half, image_shape)
         before_rhs = (CTF_full[..., None] * centered_full[..., None] * jnp.conj(expected_zs)[:, None, :]).transpose(
             2, 0, 1
         )
-        bp_rhs = core.batch_adjoint_slice_volume(
+        bp_rhs_half = core.batch_adjoint_slice_volume(
             before_rhs,
             rotation_matrices,
             image_shape,
             volume_shape,
             disc_type,
+            half_volume=True,
         )
-        rhs_summed = rhs_summed + ftu.full_volume_to_half_volume(bp_rhs, volume_shape).T
+        rhs_summed = rhs_summed + bp_rhs_half.T
 
     ll_per_image = jnp.zeros((0,), dtype=images_half.dtype)
     return lhs_summed, rhs_summed, expected_zs, second_moment_zs, ll_sum, ll_per_image
