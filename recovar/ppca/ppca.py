@@ -884,9 +884,9 @@ def E_M_step_batch_half(
 ):
     """Half-spectrum, upper-triangular-LHS variant of :func:`E_M_step_batch`.
 
-    The E-step inner products (M_n, b_n, posterior) are JIT'd.
-    The M-step backprojection runs outside JIT in channel-chunks so XLA
-    can free each chunk's memory before the next — critical for 256³.
+    E-step is JIT'd. LHS backprojection uses the fused CUDA kernel
+    (all tri_sz channels in one call — no chunking needed since the
+    fused kernel doesn't materialize the before_chunk tensor).
     """
     basis_size = W_half.shape[1]
     tri_i, tri_j = np.triu_indices(basis_size)
@@ -910,33 +910,29 @@ def E_M_step_batch_half(
         disc_type,
     )
 
-    # --- backprojection (outside JIT) ---
+    # --- backprojection ---
     if compute_stats:
-        half_volume_size = lhs_summed.shape[0]
-        second_moment_tri = second_moment_zs[:, tri_i, tri_j]
-
-        # LHS: fused CUDA kernel — reads ctf² and smz_tri separately,
-        # multiplies inside the kernel. Avoids the 3.4 GB before_chunk tensor.
         from recovar.cuda_backproject import fused_backproject
 
+        half_volume_size = lhs_summed.shape[0]
+        second_moment_tri = second_moment_zs[:, tri_i, tri_j]
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
         _max_r = image_shape[0] // 2 - 1
-        _CHUNK = 70
-        for c0 in range(0, tri_sz, _CHUNK):
-            c1 = min(c0 + _CHUNK, tri_sz)
-            bp_chunk = fused_backproject(
-                jnp.zeros((half_volume_size, c1 - c0), dtype=jnp.float32),
-                ctf_squared_full.astype(jnp.float32),
-                second_moment_tri[:, c0:c1].astype(jnp.float32),
-                jnp.asarray(rotation_matrices),
-                image_shape,
-                volume_shape,
-                max_r=_max_r,
-            )
-            lhs_summed = lhs_summed.at[:, c0:c1].add(bp_chunk)
-            del bp_chunk
 
-        # RHS: complex-valued → half-image backprojection is 30% faster.
+        # LHS: fused kernel — all tri_sz channels in one call.
+        # Reads ctf² (50 MB) and smz_tri (168 KB) separately, no intermediate.
+        lhs_bp = fused_backproject(
+            jnp.zeros((half_volume_size, tri_sz), dtype=jnp.float32),
+            ctf_squared_full.astype(jnp.float32),
+            second_moment_tri.astype(jnp.float32),
+            jnp.asarray(rotation_matrices),
+            image_shape,
+            volume_shape,
+            max_r=_max_r,
+        )
+        lhs_summed = lhs_summed + lhs_bp
+
+        # RHS: half-image backprojection (30% fewer scatters for complex).
         before_rhs = (CTF_half[..., None] * centered_half[..., None] * jnp.conj(expected_zs)[:, None, :]).transpose(
             2, 0, 1
         )
