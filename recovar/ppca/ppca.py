@@ -1089,30 +1089,22 @@ def EM_step_half(
         # LHS coupling (not diagonal approximation).
         from recovar.reconstruction.pcg_mean import pcg_mstep
 
-        # Expand half-vol upper-tri LHS → full-vol full q×q matrix
-        lhs_full_mat = unpack_tri_to_full(lhs_summed, basis_size)  # (half_vol, q, q)
-        # half→full volume for each matrix element
-        lhs_flat = lhs_full_mat.reshape(half_volume_size, basis_size * basis_size)
-        lhs_fourier = ftu.half_volume_to_full_volume(lhs_flat.T, volume_shape).T
-        lhs_fourier = lhs_fourier.real.reshape(ref.volume_size, basis_size, basis_size)
+        # Unpack upper-tri → full q×q, stays in half-volume
+        lhs_half_mat = unpack_tri_to_full(lhs_summed, basis_size)  # (half_vol, q, q)
 
-        # RHS: expand half→full
-        rhs_full = ftu.half_volume_to_full_volume(rhs_summed.T, volume_shape).T  # (vol_size, q)
-
-        # Regularization diagonal
+        # Regularization in half-volume
         W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
         reg_half = 1 / (W_prior_half + 1e-16)
-        reg_full = ftu.half_volume_to_full_volume(reg_half.T, volume_shape).T.real
 
         # Warmstart
         W0 = None
         if W_prev_real is not None:
-            W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))  # (q, D, D, D)
+            W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))
 
         W_real, res_mstep = pcg_mstep(
-            lhs_fourier,
-            rhs_full,
-            reg_full,
+            lhs_half_mat,  # (half_vol, q, q) — stays half
+            rhs_summed,  # (half_vol, q) — stays half
+            reg_half,  # (half_vol, q) — stays half
             jnp.array(volume_mask).reshape(volume_shape),
             volume_shape,
             W0_real=W0,

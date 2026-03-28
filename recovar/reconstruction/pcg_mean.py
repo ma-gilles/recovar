@@ -240,31 +240,30 @@ def _mstep_matvec(
     reg_diag: jnp.ndarray,
     mask: jnp.ndarray,
 ) -> jnp.ndarray:
-    """Apply H_Omega to W (all q columns jointly).
+    """Apply H_Omega to W (all q columns jointly). All in half-volume (rfft).
 
     Steps:
       1. PW = P * W                          — mask in real space
-      2. PW_hat = F(PW)                       — DFT each column
-      3. HPW_hat = D(xi) * PW_hat(xi)        — q×q matmul per voxel
-      4. HPW = Re[F^{-1}(HPW_hat)]           — iDFT (real because input is real)
+      2. PW_hat = rfft3(PW)                  — half-volume DFT
+      3. HPW_hat = D(xi) * PW_hat(xi)        — q×q matmul per half-voxel
+      4. HPW = irfft3(HPW_hat)               — real output guaranteed
       5. return P * HPW                       — mask again
     """
     q = W_real.shape[0]
     vs = W_real.shape[1:]
-    vol_size = vs[0] * vs[1] * vs[2]
+    half_vol_size = lhs_fourier.shape[0]
 
     # Step 1: mask
     PW = mask[None] * W_real
 
-    # Step 2: DFT each column
-    PW_ft = ftu.get_dft3(PW).reshape(q, vol_size)
+    # Step 2: rfft3 → half-volume
+    PW_half = ftu.get_dft3_real(PW).reshape(q, half_vol_size)
 
-    # Step 3: per-voxel q×q multiply  D(xi) @ PW_hat(xi)
-    #   D(xi) = lhs_fourier[xi] + diag(reg_diag[xi])
-    HPW_ft = jnp.einsum("vij,vj->vi", lhs_fourier, PW_ft.T) + reg_diag * PW_ft.T
+    # Step 3: per-voxel q×q multiply in half-volume
+    HPW_half = jnp.einsum("vij,vj->vi", lhs_fourier, PW_half.T) + reg_diag * PW_half.T
 
-    # Step 4: iDFT → real (PW is real, D is real-symmetric → HPW is real)
-    HPW = ftu.get_idft3(HPW_ft.T.reshape(q, *vs)).real
+    # Step 4: irfft3 → real (guaranteed, no .real needed)
+    HPW = ftu.get_idft3_real(HPW_half.T.reshape(q, *ftu.get_real_fft_packed_shape(vs)), vs)
 
     # Step 5: mask
     return mask[None] * HPW
@@ -290,24 +289,25 @@ def _mstep_preconditioner(
     vol_size = reg_diag.shape[0]
     vs = volume_shape
 
-    # D(xi) = LHS(xi) + diag(reg(xi))  per voxel
-    D = lhs_fourier + jnp.eye(q)[None] * reg_diag[:, :, None]  # (vol_size, q, q)
+    # D(xi) = LHS(xi) + diag(reg(xi))  per half-voxel
+    half_vol_size = lhs_fourier.shape[0]
+    D = lhs_fourier + jnp.eye(q)[None] * reg_diag[:, :, None]  # (half_vol, q, q)
 
-    # Precompute D^{-1} for all voxels (q is small, typically 2-20)
-    D_inv = jnp.linalg.inv(D)  # (vol_size, q, q)
+    # Precompute D^{-1} for all half-voxels
+    D_inv = jnp.linalg.inv(D)  # (half_vol, q, q)
+    half_vs = ftu.get_real_fft_packed_shape(vs)
 
     def apply_Minv(R_real):
-        # R_real: (q, D, D, D)
         q_ = R_real.shape[0]
 
-        # Mask → DFT
-        R_ft = ftu.get_dft3(mask[None] * R_real).reshape(q_, vol_size)
+        # Mask → rfft3 → half-volume
+        R_half = ftu.get_dft3_real(mask[None] * R_real).reshape(q_, half_vol_size)
 
-        # Per-voxel q×q solve: D^{-1} @ R_ft
-        R_solved = jnp.einsum("vij,vj->vi", D_inv, R_ft.T)  # (vol_size, q)
+        # Per-voxel q×q solve in half-volume
+        R_solved = jnp.einsum("vij,vj->vi", D_inv, R_half.T)  # (half_vol, q)
 
-        # iDFT → mask
-        return mask[None] * ftu.get_idft3(R_solved.T.reshape(q_, *vs)).real
+        # irfft3 → real → mask
+        return mask[None] * ftu.get_idft3_real(R_solved.T.reshape(q_, *half_vs), vs)
 
     return apply_Minv
 
@@ -325,19 +325,18 @@ def pcg_mstep(
 ) -> Tuple[jnp.ndarray, list]:
     """Solve the masked PPCA M-step for all q columns jointly via PCG.
 
-    Solves  H_Omega W = G  where H_Omega uses the full q×q per-voxel
-    coupling from the accumulated sufficient statistics.
+    Everything in half-volume (rfft-packed) — no full-volume expansion.
 
     Parameters
     ----------
-    lhs_fourier : (vol_size, q, q) — accumulated LHS in Fourier space
-    rhs_fourier : (vol_size, q) complex — accumulated RHS in Fourier space
-    reg_diag : (vol_size, q) real — diagonal regularization 1/W_prior
+    lhs_fourier : (half_vol, q, q) — accumulated LHS in half-volume Fourier
+    rhs_fourier : (half_vol, q) complex — accumulated RHS in half-volume
+    reg_diag : (half_vol, q) real — diagonal regularization 1/W_prior
     mask : 3D array (D, D, D) real — support mask
-    volume_shape : tuple
+    volume_shape : tuple — full real-space shape (D, D, D)
     W0_real : (q, D, D, D) real, optional — warmstart
     maxiter, tol : CG parameters
-    precondition : use diagonal preconditioner
+    precondition : use block-diagonal preconditioner
 
     Returns
     -------
@@ -345,33 +344,31 @@ def pcg_mstep(
     residuals : list of float
     """
     q = rhs_fourier.shape[1]
-    vol_size = rhs_fourier.shape[0]
+    half_vol_size = rhs_fourier.shape[0]
     vs = volume_shape
+    half_vs = ftu.get_real_fft_packed_shape(vs)
 
     mask = jnp.asarray(mask).reshape(vs)
 
-    # matvec — not JIT'd (lhs_fourier is large; inner ops are already JIT-friendly)
     def mv(W):
         return _mstep_matvec(W, lhs_fourier, reg_diag, mask)
 
-    # Preconditioner
     if precondition:
         apply_Minv = _mstep_preconditioner(lhs_fourier, reg_diag, mask, vs)
     else:
         apply_Minv = lambda r: r
 
-    # RHS in real space: P F^{-1}(rhs_fourier)
-    rhs_real = mask[None] * ftu.get_idft3(rhs_fourier.T.reshape(q, *vs)).real  # (q, D, D, D)
+    # RHS: irfft3(rhs_half) → real, masked
+    rhs_real = mask[None] * ftu.get_idft3_real(rhs_fourier.T.reshape(q, *half_vs), vs)
 
     # Initial guess
     if W0_real is not None:
         W = mask[None] * jnp.asarray(W0_real).reshape(q, *vs)
     else:
-        # Wiener-like init: per-column divide
         diag_idx = jnp.arange(q)
-        d_diag = lhs_fourier[:, diag_idx, diag_idx] + reg_diag  # (vol_size, q)
-        W_ft = rhs_fourier / jnp.maximum(d_diag, jnp.max(d_diag, axis=0, keepdims=True) * 1e-10)
-        W = mask[None] * ftu.get_idft3(W_ft.T.reshape(q, *vs)).real
+        d_diag = lhs_fourier[:, diag_idx, diag_idx] + reg_diag
+        W_half = rhs_fourier / jnp.maximum(d_diag, jnp.max(d_diag, axis=0, keepdims=True) * 1e-10)
+        W = mask[None] * ftu.get_idft3_real(W_half.T.reshape(q, *half_vs), vs)
 
     # PCG
     r = rhs_real - mv(W)
