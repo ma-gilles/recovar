@@ -5654,7 +5654,7 @@ unique canonical (<code>dataset_tilt_indices</code>) particle ids per half.</p>
 
 
 <h4 id="recovar.data_io.cryoem_dataset.CryoEMDataset.iter_batches" class="doc doc-heading">
-            <code class="highlight language-python"><span class="n">iter_batches</span><span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">halfset_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">indices</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">noise_model</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">noise_half</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">noise_by_particle</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">by_image</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">prefetch</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+            <code class="highlight language-python"><span class="n">iter_batches</span><span class="p">(</span><span class="n">batch_size</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">halfset_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">indices</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">noise_model</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">noise_half</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">noise_by_particle</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">by_image</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">prefetch</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">pad_batches</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">pack_groups</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
 
 <a href="#recovar.data_io.cryoem_dataset.CryoEMDataset.iter_batches" class="headerlink" title="Permanent link">&para;</a></h4>
 
@@ -5677,7 +5677,13 @@ noise_by_particle : bool
 by_image : bool
     True = flat per-image iteration; False = particle-grouped (tilt).
 prefetch : bool
-    Enable 1-lookahead prefetch buffer (default True).</p>
+    Enable 1-lookahead prefetch buffer (default True).
+pad_batches : bool
+    Pad the final per-image batch to <code>batch_size</code>.
+pack_groups : bool
+    Pack multiple tilt-series particles into each batch up to
+    <code>batch_size</code> images.  Only applies when <code>by_image=False</code>.
+    Padded entries get sentinel <code>particle_id=-1</code>.</p>
 <h6 id="recovar.data_io.cryoem_dataset.CryoEMDataset.iter_batches--yields">Yields<a class="headerlink" href="#recovar.data_io.cryoem_dataset.CryoEMDataset.iter_batches--yields" title="Permanent link">&para;</a></h6>
 <p>tuple
     <code>(images, rotation_matrices, translations, ctf_params,
