@@ -452,6 +452,9 @@ class TiltSeriesDataset(ParticleImageDataset):
             if batch_size < max_tilts:
                 raise ValueError(f"Batch size ({batch_size}) < max tilts ({max_tilts})")
             return _ImageCountBatchLoader(subset, batch_size, num_workers, pad_to_batch_size)
+        elif mode == "packed_tilt_series":
+            subset = _SimpleSubset(self, subset_indices)
+            return _ImageCountBatchLoader(subset, batch_size, num_workers, pad_to_batch_size)
         else:
             subset = _SimpleSubset(self, subset_indices)
             return _GrainBatchLoader(subset, batch_size=1, shuffle=False, num_workers=num_workers)
