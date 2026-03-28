@@ -1730,7 +1730,12 @@ def compute_freq_batch(
 
 
 def _expand_particle_indices_to_per_image(particle_indices, n_images):
-    """Expand per-particle indices to per-image if needed (for packed batches)."""
+    """Expand scalar/single-element particle_indices to per-image array.
+
+    Redundant when the backend already yields per-image particle_indices
+    (e.g. _ImageCountBatchLoader), but needed for the old batch_size=1
+    tilt-series path where particle_indices is a scalar.
+    """
     p = jnp.asarray(particle_indices).reshape(-1)
     if p.shape[0] != n_images and p.shape[0] == 1:
         p = jnp.broadcast_to(p, (n_images,))
