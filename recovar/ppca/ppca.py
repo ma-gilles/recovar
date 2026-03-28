@@ -1172,43 +1172,8 @@ def EM_step_half(
             logger.info(f"  After whitening: ||Ĉ_z - I|| ≈ {float(jnp.linalg.norm(C_z_final - jnp.eye(q))):.4f}")
 
     # ------------------------------------------------------------------
-    # Log-likelihood
+    # Log-likelihood (uses E-step LL with OLD W; recompute_ll is handled in EM loop)
     # ------------------------------------------------------------------
-    if recompute_ll:
-        # Recompute LL with the NEW W (after M-step) for monotonicity check
-        ll_sum = jnp.array(0.0, dtype=ref.dtype)
-        W_half_for_ll = W if W.shape[0] == half_volume_size else ftu.full_volume_to_half_volume(W.T, volume_shape).T
-        for experiment_dataset in dataset_list:
-            for (
-                batch_half,
-                ctf_params,
-                rotation_matrices,
-                translations,
-                batch_image_ind,
-            ) in _iter_processed_batches_half(experiment_dataset, batch_size):
-                noise_variance_half = experiment_dataset.noise.get_half(batch_image_ind)
-                _, _, _, _, ll_batch, _ = E_M_step_batch_half(
-                    batch_half,
-                    jnp.zeros_like(lhs_summed),
-                    jnp.zeros_like(rhs_summed),
-                    mean_estimate,
-                    W_half_for_ll,
-                    ctf_params,
-                    rotation_matrices,
-                    translations,
-                    experiment_dataset.image_shape,
-                    experiment_dataset.volume_shape,
-                    experiment_dataset.grid_size,
-                    experiment_dataset.voxel_size,
-                    noise_variance_half,
-                    experiment_dataset.ctf_evaluator,
-                    compute_ll=True,
-                    disc_type_mean=disc_type_mean,
-                    disc_type=disc_type,
-                    compute_stats=False,
-                )
-                ll_sum += ll_batch
-
     W_prior_half = (
         ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T if W_prior.shape[0] != W.shape[0] else W_prior
     )
@@ -1660,20 +1625,66 @@ def EM(
             W = W.T.reshape(basis_size, *vs)
             W = ftu.get_idft3(W).real
 
-        # Mask projection: only when NOT using PCG M-step (which handles mask internally)
+        # Mask: PCG M-step already applies mask inside CG.
+        # For standard path, apply mask as post-processing projection.
         if not use_pcg_mean:
             if volume_mask is not None and not np.all(volume_mask == 1):
                 W = W * jnp.array(volume_mask)[None]
 
-        # Save real-space W for PCG warmstart (before any post-processing)
+        # Save real-space W for PCG warmstart (before gridding — gridding
+        # is post-processing that shouldn't corrupt the CG solution space)
         if use_pcg_mean:
             _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)
 
-        # Real space → half-volume Fourier via rfft3 for next iteration
+        # Gridding correction (applied to both paths — it's part of the
+        # forward model, corrects for the interpolation kernel)
+        if use_pcg_mean:
+            from recovar.reconstruction import relion_functions
+
+            for k in range(basis_size):
+                W = W.at[k].set(relion_functions.griddingCorrect_square(W[k], vs[0], 1, order=1)[0])
+
+        # Real space → half-volume Fourier for next iteration
         if not sparse_PCA:
             W = ftu.get_dft3_real(W).reshape(basis_size, -1).T  # (half_vol, q)
         else:
             W = ftu.get_dft3(W.reshape(basis_size, *vs)).reshape(basis_size, -1).T
+
+        # Recompute LL with the FINAL W (after mask + gridding) for fair comparison
+        if recompute_ll:
+            ll_sum = jnp.array(0.0, dtype=jnp.complex64)
+            _hv = int(np.prod(ftu.volume_shape_to_half_volume_shape(vs)))
+            _tsz = _tri_size(basis_size)
+            ll_sum_r = jnp.array(0.0, dtype=jnp.complex64)
+            _, _ds_list = _normalize_experiment_datasets(experiment_dataset)
+            for _ds in _ds_list:
+                for _bh, _cp, _rm, _tr, _bi in _iter_processed_batches_half(_ds, batch_size):
+                    _nvh = _ds.noise.get_half(_bi)
+                    _, _, _, _, _llb, _ = E_M_step_batch_half(
+                        _bh,
+                        jnp.zeros((_hv, _tsz), dtype=jnp.float32),
+                        jnp.zeros((_hv, basis_size), dtype=jnp.complex64),
+                        mean_estimate,
+                        W,
+                        _cp,
+                        _rm,
+                        _tr,
+                        _ds.image_shape,
+                        _ds.volume_shape,
+                        _ds.grid_size,
+                        _ds.voxel_size,
+                        _nvh,
+                        _ds.ctf_evaluator,
+                        compute_ll=True,
+                        disc_type_mean=disc_type_mean,
+                        disc_type=disc_type,
+                        compute_stats=False,
+                    )
+                    ll_sum_r += _llb
+            _Wph = ftu.full_volume_to_half_volume(W_prior.T, vs).T if W_prior.shape[0] != W.shape[0] else W_prior
+            neg_ll_data = float(-ll_sum_r.real)
+            neg_ll_prior = float(jnp.linalg.norm(W / jnp.sqrt(_Wph + 1e-16)) ** 2)
+            neg_ll_total = neg_ll_data + neg_ll_prior
 
         # plt.figure()
         # plt.imshow(experiment_dataset[0].get_proj(W[:,0].reshape(-1)))
