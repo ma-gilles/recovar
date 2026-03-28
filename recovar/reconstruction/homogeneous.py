@@ -286,9 +286,12 @@ def get_mean_pcg(
     )
 
     # Post-process: crop to original size + gridding correction
-    from recovar.reconstruction import padding
+    from recovar.core import padding
 
-    vol = padding.unpad_volume_spatial_domain(x_pcg, up_n - N)
+    if up_n > N:
+        vol = padding.unpad_volume_spatial_domain(x_pcg, up_n - N)
+    else:
+        vol = x_pcg
     vol_corrected, _ = relion_functions.griddingCorrect_square(vol.reshape(og_shape), N, upsampling_factor, order=1)
 
     # Return as Fourier volume (flat)
