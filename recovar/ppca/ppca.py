@@ -1006,6 +1006,11 @@ def EM_step_half(
     disc_type="linear_interp",
     recompute_ll=False,
     mean_estimate_raw=None,
+    use_pcg_mstep=False,
+    volume_mask=None,
+    pcg_lam=0.0,
+    pcg_maxiter=20,
+    W_prev_real=None,
 ):
     """Half-spectrum EM step for L2-regularized PPCA.
 
@@ -1073,25 +1078,69 @@ def EM_step_half(
     expected_zs_var = np.var(expected_zs, axis=0)
 
     # ------------------------------------------------------------------
-    # M-step solve in half-volume space (chunked to avoid OOM)
+    # M-step solve
     # ------------------------------------------------------------------
-    W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
-    reg_diag = 1 / (W_prior_half + 1e-16)  # (half_vol, q)
+    if use_pcg_mstep and volume_mask is not None:
+        # PCG column-wise solve with mask constraint.
+        # For each PC column k: solve P F^{-1} diag(d_k) F P w_k = P F^{-1} c_k
+        # where d_k = lhs[:, k, k] + 1/prior_k (diagonal approximation).
+        from recovar.reconstruction.pcg_mean import pcg_mean
 
-    # Chunk the solve: unpack tri → full + regularize + solve, one chunk at a time.
-    # Full matrix (half_vol, q, q) would be ~13 GB at 256³ — too much.
-    # Chunks of 200K voxels use ~300 MB each.
-    _SOLVE_CHUNK = 200_000
-    W_half_parts = []
-    for i0 in range(0, half_volume_size, _SOLVE_CHUNK):
-        i1 = min(i0 + _SOLVE_CHUNK, half_volume_size)
-        lhs_chunk = unpack_tri_to_full(lhs_summed[i0:i1], basis_size)
-        lhs_chunk = lhs_chunk + jax.vmap(jnp.diag)(reg_diag[i0:i1])
-        W_half_parts.append(jnp.linalg.solve(lhs_chunk, rhs_summed[i0:i1, :, None])[..., 0])
-    W_half = jnp.concatenate(W_half_parts, axis=0)
+        # Extract per-column diagonal from the upper-tri LHS
+        # lhs_summed: (half_vol, tri_sz). Diagonal entries lhs[k,k] are at tri indices where i==j.
+        diag_tri_idx = [int(np.where((np.array(tri_i) == k) & (np.array(tri_j) == k))[0][0]) for k in range(basis_size)]
+        lhs_diag_half = lhs_summed[:, diag_tri_idx]  # (half_vol, q) — diagonal per column
 
-    # Expand to full volume for whitening and output
-    W = ftu.half_volume_to_full_volume(W_half.T, volume_shape).T
+        W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
+        tri_i_np, tri_j_np = np.triu_indices(basis_size)
+
+        W_cols = []
+        for k in range(basis_size):
+            # d_k in full volume (Fourier-space diagonal)
+            d_k_half = lhs_diag_half[:, k] + 1.0 / (W_prior_half[:, k] + 1e-16)
+            d_k = ftu.half_volume_to_full_volume(d_k_half, volume_shape).real.reshape(volume_shape)
+
+            # c_k in full volume (Fourier-space RHS)
+            c_k = ftu.half_volume_to_full_volume(rhs_summed[:, k], volume_shape).reshape(volume_shape)
+
+            # Warmstart from previous W column (real-space)
+            x0 = None
+            if W_prev_real is not None:
+                x0 = jnp.array(W_prev_real[:, k].reshape(volume_shape))
+
+            # PCG solve for column k
+            w_k_real, res_k = pcg_mean(
+                jnp.maximum(d_k, 1e-10),
+                c_k,
+                jnp.array(volume_mask).reshape(volume_shape),
+                lam=pcg_lam,
+                maxiter=pcg_maxiter,
+                tol=1e-4,
+                x0=x0,
+                precondition=True,
+            )
+
+            # Back to Fourier
+            w_k_ft = ftu.get_dft3(w_k_real.reshape(volume_shape)).reshape(-1)
+            W_cols.append(w_k_ft)
+            if len(res_k) > 0:
+                logger.info(f"  W col {k}: PCG {len(res_k)} iters, rr={res_k[-1]:.2e}")
+
+        W = jnp.stack(W_cols, axis=1)  # (volume_size, q)
+    else:
+        # Standard per-voxel solve (chunked)
+        W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
+        reg_diag = 1 / (W_prior_half + 1e-16)
+
+        _SOLVE_CHUNK = 200_000
+        W_half_parts = []
+        for i0 in range(0, half_volume_size, _SOLVE_CHUNK):
+            i1 = min(i0 + _SOLVE_CHUNK, half_volume_size)
+            lhs_chunk = unpack_tri_to_full(lhs_summed[i0:i1], basis_size)
+            lhs_chunk = lhs_chunk + jax.vmap(jnp.diag)(reg_diag[i0:i1])
+            W_half_parts.append(jnp.linalg.solve(lhs_chunk, rhs_summed[i0:i1, :, None])[..., 0])
+        W_half = jnp.concatenate(W_half_parts, axis=0)
+        W = ftu.half_volume_to_full_volume(W_half.T, volume_shape).T
 
     if jnp.any(jnp.isnan(W)):
         logger.error("EM_step_half: NaN in W after M-step")
@@ -1493,6 +1542,9 @@ def EM(
         else:
             print(f"L1 regularization: sigma array, range=[{np.min(l1_sigma):.6f}, {np.max(l1_sigma):.6f}]")
 
+    # PCG warmstart state
+    _W_prev_real = None
+
     # Initialize table for collecting iteration data
     iteration_data = []
 
@@ -1533,6 +1585,11 @@ def EM(
                 disc_type=disc_type,
                 recompute_ll=recompute_ll,
                 mean_estimate_raw=mean_estimate_raw,
+                use_pcg_mstep=use_pcg_mean,
+                volume_mask=volume_mask,
+                pcg_lam=pcg_lam,
+                pcg_maxiter=pcg_maxiter,
+                W_prev_real=_W_prev_real if iter_i > 0 else None,
             )
         else:
             # L1/sparse: use full-spectrum EM step (ADMM needs full volume)
@@ -1575,6 +1632,10 @@ def EM(
 
             for k in range(basis_size):
                 W = W.at[k].set(relion_functions.griddingCorrect_square(W[k], vs[0], 1, order=1)[0])
+
+        # Save real-space W for PCG warmstart next iteration
+        if use_pcg_mean:
+            _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)  # (vol_size, q)
 
         W = ftu.get_dft3(W).reshape(basis_size, -1).T
 
