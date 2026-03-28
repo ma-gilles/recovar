@@ -1087,12 +1087,11 @@ def EM_step_half(
         from recovar.reconstruction.pcg_mean import pcg_mean
 
         # Extract per-column diagonal from the upper-tri LHS
-        # lhs_summed: (half_vol, tri_sz). Diagonal entries lhs[k,k] are at tri indices where i==j.
-        diag_tri_idx = [int(np.where((np.array(tri_i) == k) & (np.array(tri_j) == k))[0][0]) for k in range(basis_size)]
+        tri_i_np, tri_j_np = np.triu_indices(basis_size)
+        diag_tri_idx = [int(np.where((tri_i_np == k) & (tri_j_np == k))[0][0]) for k in range(basis_size)]
         lhs_diag_half = lhs_summed[:, diag_tri_idx]  # (half_vol, q) — diagonal per column
 
         W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
-        tri_i_np, tri_j_np = np.triu_indices(basis_size)
 
         W_cols = []
         for k in range(basis_size):
