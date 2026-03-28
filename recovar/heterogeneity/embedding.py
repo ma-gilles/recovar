@@ -210,48 +210,30 @@ def get_per_image_embedding(
 
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory=None)
 
-    # Materialize half-sets once per embedding call. Lazy datasets use
-    # independent halfset reloads because they avoid the per-batch remap work
-    # inside SubsetImageSource while preserving the same image ordering.
-    halfset_datasets = dataset.materialize_halfset_datasets()
-    zs = [None, None]
-    cov_zs = [None, None]
-    est_contrasts = [None, None]
-    bias = [None, None]
-    for halfset_id, halfset_dataset in enumerate(halfset_datasets):
-        zs[halfset_id], cov_zs[halfset_id], est_contrasts[halfset_id], bias[halfset_id] = (
-            get_coords_in_basis_and_contrast_3(
-                halfset_dataset,
-                mean,
-                basis,
-                eigenvalues[: basis.shape[0]],
-                volume_mask,
-                contrast_grid,
-                batch_size,
-                disc_type,
-                compute_covariances=compute_covariances,
-                contrast_mean=contrast_mean,
-                contrast_variance=contrast_variance,
-                compute_bias=compute_bias,
-                image_subset_in_tilt_series=image_subset_in_tilt_series,
-                contrast_shared_across_tilt_series=contrast_shared_across_tilt_series,
-            )
-        )
-
-    zs = np.concatenate(zs, axis=0)
-    est_contrasts = np.concatenate(est_contrasts)
+    zs, cov_zs, est_contrasts, bias = get_coords_in_basis_and_contrast_3(
+        dataset,
+        mean,
+        basis,
+        eigenvalues[: basis.shape[0]],
+        volume_mask,
+        contrast_grid,
+        batch_size,
+        disc_type,
+        compute_covariances=compute_covariances,
+        contrast_mean=contrast_mean,
+        contrast_variance=contrast_variance,
+        compute_bias=compute_bias,
+        image_subset_in_tilt_series=image_subset_in_tilt_series,
+        contrast_shared_across_tilt_series=contrast_shared_across_tilt_series,
+    )
     end_time = time.time()
     logger.info("time to compute xs %s", end_time - st_time)
 
-    if compute_covariances:
-        cov_zs = np.concatenate(cov_zs, axis=0)
-        if to_real:
-            cov_zs = cov_zs.real
+    if compute_covariances and to_real:
+        cov_zs = cov_zs.real
 
-    if compute_bias:
-        bias = np.concatenate(bias, axis=0)
-        if to_real:
-            bias = bias.real
+    if compute_bias and to_real:
+        bias = bias.real
 
     if to_real:
         zs = zs.real
@@ -349,158 +331,48 @@ def get_coords_in_basis_and_contrast_3(
         batch = jnp.asarray(batch)
         batch_image_ind = np.asarray(image_indices).reshape(-1)
         particle_ids = _particle_ids_per_image(particles_ind, batch.shape[0])
-
-        # Handle tilt series image subsetting
-        if image_subset_in_tilt_series is not None:
-            subset = np.asarray(image_subset_in_tilt_series, dtype=np.int32).reshape(-1)
-            subset = subset[(subset >= 0) & (subset < batch.shape[0])]
-            if subset.size == 0:
-                continue
-            batch = batch[subset]
-            batch_image_ind = batch_image_ind[subset]
-            particle_ids = particle_ids[subset]
-            rotation_matrices = rotation_matrices[subset]
-            translations = translations[subset]
-            ctf_params = ctf_params[subset]
-
-        # Build noise_variance for the (possibly subsetted) batch
         nv = _noise_get_half_or_full(noise_model, batch_image_ind, prefer_half=prefer_half_noise)
 
         if shared_label:
-            # Some iterators may return multiple particles in one image batch.
-            # Shared-label solves must be computed per particle (tilt series).
+            # Tilt-series: group images by particle and solve per-particle.
+            # compute_grouped_shared_batch_coords handles single and multi-particle batches.
             unique_particles, particle_group_ids = np.unique(particle_ids, return_inverse=True)
-
-            # Common case with the current tilt-series loader: one particle per
-            # iterator batch. Skip boolean-mask splitting to avoid extra gathers.
-            if unique_particles.size == 1:
-                particle_ind = np.asarray(unique_particles, dtype=np.int32)
-                xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
-                    config,
-                    batch,
-                    model,
-                    opts,
-                    experiment_dataset.image_mask,
-                    contrast_grid,
-                    contrast_mean,
-                    contrast_variance,
-                    hermitian_weights,
-                    rotation_matrices=rotation_matrices,
-                    translations=translations,
-                    ctf_params=ctf_params,
-                    noise_variance=nv,
-                )
-
-                xs[particle_ind] = xs_single
-                if not contrast_shared_across_tilt_series:
-                    estimated_contrasts[batch_image_ind] = contrast_single
-                else:
-                    estimated_contrasts[particle_ind] = contrast_single
-
-                if compute_covariances:
-                    image_latent_precisions[particle_ind] = cov_batch
-                if compute_bias:
-                    image_latent_bias[particle_ind] = bias
-                continue
-
-            # Fast path: when contrast is shared across tilts and a batch contains
-            # multiple particles, solve all particle groups in one batched call.
-            if contrast_shared_across_tilt_series and unique_particles.size > 1:
-                xs_group, contrast_group, cov_group, bias_group = compute_grouped_shared_batch_coords(
-                    config,
-                    batch,
-                    model,
-                    experiment_dataset.image_mask,
-                    contrast_grid,
-                    contrast_mean,
-                    contrast_variance,
-                    jnp.asarray(particle_group_ids, dtype=jnp.int32),
-                    int(unique_particles.size),
-                    compute_covariances,
-                    compute_bias,
-                    hermitian_weights,
-                    rotation_matrices=rotation_matrices,
-                    translations=translations,
-                    ctf_params=ctf_params,
-                    noise_variance=nv,
-                )
-
-                xs[unique_particles] = np.asarray(xs_group)
-                estimated_contrasts[unique_particles] = np.asarray(contrast_group)
-
-                if compute_covariances:
-                    image_latent_precisions[unique_particles] = np.asarray(cov_group)
-                if compute_bias:
-                    image_latent_bias[unique_particles] = np.asarray(bias_group)
-                continue
-
-            for pid in unique_particles:
-                mask = particle_ids == pid
-                if not np.any(mask):
-                    continue
-
-                local_image_ind = batch_image_ind[mask]
-                local_batch = batch[mask]
-                local_particle_ind = np.asarray([pid], dtype=np.int32)
-
-                local_nv = _noise_get_half_or_full(noise_model, local_image_ind, prefer_half=prefer_half_noise)
-                xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
-                    config,
-                    local_batch,
-                    model,
-                    opts,
-                    experiment_dataset.image_mask,
-                    contrast_grid,
-                    contrast_mean,
-                    contrast_variance,
-                    hermitian_weights,
-                    rotation_matrices=rotation_matrices[mask],
-                    translations=translations[mask],
-                    ctf_params=ctf_params[mask],
-                    noise_variance=local_nv,
-                )
-
-                xs[local_particle_ind] = xs_single
-                if not contrast_shared_across_tilt_series:
-                    estimated_contrasts[local_image_ind] = contrast_single
-                else:
-                    estimated_contrasts[local_particle_ind] = contrast_single
-
-                if compute_covariances:
-                    image_latent_precisions[local_particle_ind] = cov_batch
-                if compute_bias:
-                    image_latent_bias[local_particle_ind] = bias
-            continue
-
-        xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
-            config,
-            batch,
-            model,
-            opts,
-            experiment_dataset.image_mask,
-            contrast_grid,
-            contrast_mean,
-            contrast_variance,
-            hermitian_weights,
-            rotation_matrices=rotation_matrices,
-            translations=translations,
-            ctf_params=ctf_params,
-            noise_variance=nv,
-        )
-
-        target_ind = batch_image_ind if force_not_shared_label else np.asarray(particle_ids)
-        xs[target_ind] = xs_single
-
-        if not contrast_shared_across_tilt_series:
-            estimated_contrasts[batch_image_ind] = contrast_single
+            xs_group, contrast_group, cov_group, bias_group = compute_grouped_shared_batch_coords(
+                config, batch, model,
+                experiment_dataset.image_mask, contrast_grid,
+                contrast_mean, contrast_variance,
+                jnp.asarray(particle_group_ids, dtype=jnp.int32),
+                int(unique_particles.size),
+                compute_covariances, compute_bias, hermitian_weights,
+                rotation_matrices=rotation_matrices,
+                translations=translations,
+                ctf_params=ctf_params,
+                noise_variance=nv,
+            )
+            xs[unique_particles] = np.asarray(xs_group)
+            estimated_contrasts[unique_particles] = np.asarray(contrast_group)
+            if compute_covariances:
+                image_latent_precisions[unique_particles] = np.asarray(cov_group)
+            if compute_bias:
+                image_latent_bias[unique_particles] = np.asarray(bias_group)
         else:
-            estimated_contrasts[target_ind] = contrast_single
-
-        if compute_covariances:
-            image_latent_precisions[target_ind] = cov_batch
-
-        if compute_bias:
-            image_latent_bias[target_ind] = bias
+            # SPA: one solve per batch, results indexed by image or particle.
+            xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
+                config, batch, model, opts,
+                experiment_dataset.image_mask, contrast_grid,
+                contrast_mean, contrast_variance, hermitian_weights,
+                rotation_matrices=rotation_matrices,
+                translations=translations,
+                ctf_params=ctf_params,
+                noise_variance=nv,
+            )
+            target_ind = batch_image_ind if force_not_shared_label else np.asarray(particle_ids)
+            xs[target_ind] = xs_single
+            estimated_contrasts[batch_image_ind] = contrast_single
+            if compute_covariances:
+                image_latent_precisions[target_ind] = cov_batch
+            if compute_bias:
+                image_latent_bias[target_ind] = bias
 
     return xs, image_latent_precisions, estimated_contrasts, image_latent_bias
 
