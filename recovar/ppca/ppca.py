@@ -1668,16 +1668,12 @@ def EM(
             W = W.T.reshape(basis_size, *vs)
             W = ftu.get_idft3(W).real
 
-        if volume_mask is not None and not np.all(volume_mask == 1):
-            W = W * jnp.array(volume_mask)[None]
+        # Mask projection: only when NOT using PCG M-step (which handles mask internally)
+        if not use_pcg_mean:
+            if volume_mask is not None and not np.all(volume_mask == 1):
+                W = W * jnp.array(volume_mask)[None]
 
-        if use_pcg_mean:
-            from recovar.reconstruction import relion_functions
-
-            for k in range(basis_size):
-                W = W.at[k].set(relion_functions.griddingCorrect_square(W[k], vs[0], 1, order=1)[0])
-
-        # Save real-space W for PCG warmstart
+        # Save real-space W for PCG warmstart (before any post-processing)
         if use_pcg_mean:
             _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)
 
