@@ -1031,9 +1031,12 @@ def EM_step_half(
     half_volume_size = int(np.prod(half_volume_shape))
     tri_sz = _tri_size(basis_size)
 
-    # Convert W to half-volume for the E-step
-    # W: (volume_size, basis_size) → transpose, convert, transpose back
-    W_half = ftu.full_volume_to_half_volume(W_estimate.T, volume_shape).T
+    # W_estimate can be either (volume_size, q) full Fourier or (half_vol, q) half-volume.
+    # Detect and convert if needed.
+    if W_estimate.shape[0] == half_volume_size:
+        W_half = W_estimate  # already half-volume
+    else:
+        W_half = ftu.full_volume_to_half_volume(W_estimate.T, volume_shape).T
 
     # Half-volume accumulators
     lhs_summed = jnp.zeros((half_volume_size, tri_sz), dtype=ref.dtype_real)
@@ -1117,8 +1120,8 @@ def EM_step_half(
             tol=1e-4,
             precondition=True,
         )
-        # W_real: (q, D, D, D) → DFT → (vol_size, q)
-        W = ftu.get_dft3(W_real).reshape(basis_size, -1).T
+        # W_real: (q, D, D, D) → rfft3 → half-volume (q, half_vol)
+        W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T  # (half_vol, q)
     else:
         # Standard per-voxel solve (chunked)
         W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
@@ -1132,7 +1135,9 @@ def EM_step_half(
             lhs_chunk = lhs_chunk + jax.vmap(jnp.diag)(reg_diag[i0:i1])
             W_half_parts.append(jnp.linalg.solve(lhs_chunk, rhs_summed[i0:i1, :, None])[..., 0])
         W_half = jnp.concatenate(W_half_parts, axis=0)
-        W = ftu.half_volume_to_full_volume(W_half.T, volume_shape).T
+        # Return W in half-volume format — caller uses irfft3 (get_idft3_real)
+        # to convert to real space, which is guaranteed real (no .real needed).
+        W = W_half  # (half_volume_size, q) complex, half-volume Fourier
 
     if jnp.any(jnp.isnan(W)):
         logger.error("EM_step_half: NaN in W after M-step")
@@ -1145,13 +1150,17 @@ def EM_step_half(
         if whitening_mode == "proj_ls":
             if mean_estimate_raw is None:
                 raise ValueError("proj_ls whitening requires mean_estimate_raw")
-            volume_mask = getattr(ref, "volume_mask", None)
-            if volume_mask is None:
-                volume_mask = np.ones(ref.volume_shape)
+            volume_mask_wht = getattr(ref, "volume_mask", None)
+            if volume_mask_wht is None:
+                volume_mask_wht = np.ones(ref.volume_shape)
+            # proj_ls needs full-volume W for slicing
+            W_full_for_wht = (
+                ftu.half_volume_to_full_volume(W.T, volume_shape).T if W.shape[0] == half_volume_size else W
+            )
             Sigma = compute_sigma_proj_ls(
                 experiment_datasets,
                 mean_estimate_raw,
-                W,
+                W_full_for_wht,
                 volume_mask,
                 batch_size,
                 disc_type_mean=disc_type_mean,
@@ -1171,9 +1180,12 @@ def EM_step_half(
             logger.info(f"  After whitening: ||Ĉ_z - I|| ≈ {float(jnp.linalg.norm(C_z_final - jnp.eye(q))):.4f}")
 
     # ------------------------------------------------------------------
-    # Log-likelihood
+    # Log-likelihood (W and W_prior must be in same format)
     # ------------------------------------------------------------------
-    ll_prior = jnp.linalg.norm(W / jnp.sqrt(W_prior + 1e-16)) ** 2
+    W_prior_half = (
+        ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T if W_prior.shape[0] != W.shape[0] else W_prior
+    )
+    ll_prior = jnp.linalg.norm(W / jnp.sqrt(W_prior_half + 1e-16)) ** 2
     neg_ll_total = float(-ll_sum.real + ll_prior.real)
     neg_ll_data = float(-ll_sum.real)
     neg_ll_prior = float(ll_prior.real)
@@ -1610,26 +1622,35 @@ def EM(
                 mean_estimate_raw=mean_estimate_raw,
             )
 
-        # Make real + optional mask and gridding correction
+        # Half-volume → real space via irfft3 (guaranteed real, no .real needed)
         vs = reference_dataset.volume_shape
-        W = W.T.reshape(basis_size, *vs)
-        W = ftu.get_idft3(W).real  # (basis_size, D, D, D)
+        half_vs = ftu.volume_shape_to_half_volume_shape(vs)
+        if not sparse_PCA:
+            # W is (half_vol, q) from EM_step_half
+            W = ftu.get_idft3_real(W.T.reshape(basis_size, *half_vs), vs)  # (q, D, D, D) real
+        else:
+            # W is (vol_size, q) from EM_step (full Fourier)
+            W = W.T.reshape(basis_size, *vs)
+            W = ftu.get_idft3(W).real
 
         if volume_mask is not None and not np.all(volume_mask == 1):
             W = W * jnp.array(volume_mask)[None]
 
         if use_pcg_mean:
-            # Gridding correction (same as mean post-processing)
             from recovar.reconstruction import relion_functions
 
             for k in range(basis_size):
                 W = W.at[k].set(relion_functions.griddingCorrect_square(W[k], vs[0], 1, order=1)[0])
 
-        # Save real-space W for PCG warmstart next iteration
+        # Save real-space W for PCG warmstart
         if use_pcg_mean:
-            _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)  # (vol_size, q)
+            _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)
 
-        W = ftu.get_dft3(W).reshape(basis_size, -1).T
+        # Real space → half-volume Fourier via rfft3 for next iteration
+        if not sparse_PCA:
+            W = ftu.get_dft3_real(W).reshape(basis_size, -1).T  # (half_vol, q)
+        else:
+            W = ftu.get_dft3(W.reshape(basis_size, *vs)).reshape(basis_size, -1).T
 
         # plt.figure()
         # plt.imshow(experiment_dataset[0].get_proj(W[:,0].reshape(-1)))
@@ -1754,6 +1775,10 @@ def EM(
         print(f"  tr(Ĉ_z) = {final_trace_Cz:.4f} (target: {q})")
         print(f"  ||W||_F = {final_W_norm:.4f}")
         print("=" * 130)
+
+    # Expand W to full volume for output if in half-volume format
+    if not sparse_PCA and W.shape[0] != reference_dataset.volume_size:
+        W = ftu.half_volume_to_full_volume(W.T, reference_dataset.volume_shape).T
 
     # Orthogonalize
     U, S, _ = jnp.linalg.svd(W, full_matrices=False)
