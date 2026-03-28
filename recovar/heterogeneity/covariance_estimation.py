@@ -1511,12 +1511,12 @@ def _reduce_covariance_inner_explicit(
         # With packed multi-particle batches, use group_sum_by_labels to sum
         # per-particle instead of across the entire batch.
         if tilt_labels is not None:
-            # tilt_labels are consecutive 0..n_groups-1 from preprocess_tilt_labels_for_batch.
-            # Use shape[0] as safe upper bound for max_groups (avoids concrete-value error in JIT).
-            max_groups = tilt_labels.shape[0]
-            summed_noise_bias = group_sum_by_labels(per_image_noise_bias, tilt_labels, max_groups)
-            AU_t_images = group_sum_by_labels(AU_t_images, tilt_labels, max_groups)
-            AU_t_AU = group_sum_by_labels(AU_t_AU, tilt_labels, max_groups)
+            # Per-particle segment sums (not broadcast back — avoids double-counting
+            # in the subsequent sum(axis=0)).
+            n_groups = tilt_labels.shape[0]  # safe upper bound
+            summed_noise_bias = jax.ops.segment_sum(per_image_noise_bias, tilt_labels, num_segments=n_groups)
+            AU_t_images = jax.ops.segment_sum(AU_t_images, tilt_labels, num_segments=n_groups)
+            AU_t_AU = jax.ops.segment_sum(AU_t_AU, tilt_labels, num_segments=n_groups)
         else:
             # Single-particle batch (legacy path)
             summed_noise_bias = jnp.sum(per_image_noise_bias, axis=0, keepdims=True)
