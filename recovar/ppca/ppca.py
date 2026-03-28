@@ -1561,14 +1561,22 @@ def EM(
                 mean_estimate_raw=mean_estimate_raw,
             )
 
-        # Make real
-        W = W.T.reshape(basis_size, *reference_dataset.volume_shape)
-        W = ftu.get_idft3(W).real
-        W = W.reshape(W.shape[0], -1).T
+        # Make real + optional mask and gridding correction
+        vs = reference_dataset.volume_shape
+        W = W.T.reshape(basis_size, *vs)
+        W = ftu.get_idft3(W).real  # (basis_size, D, D, D)
 
-        W = W.T
-        W = ftu.get_dft3(W.reshape(W.shape[0], *reference_dataset.volume_shape))
-        W = W.reshape(W.shape[0], -1).T
+        if volume_mask is not None and not np.all(volume_mask == 1):
+            W = W * jnp.array(volume_mask)[None]
+
+        if use_pcg_mean:
+            # Gridding correction (same as mean post-processing)
+            from recovar.reconstruction import relion_functions
+
+            for k in range(basis_size):
+                W = W.at[k].set(relion_functions.griddingCorrect_square(W[k], vs[0], 1, order=1)[0])
+
+        W = ftu.get_dft3(W).reshape(basis_size, -1).T
 
         # plt.figure()
         # plt.imshow(experiment_dataset[0].get_proj(W[:,0].reshape(-1)))
