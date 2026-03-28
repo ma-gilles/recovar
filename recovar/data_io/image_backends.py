@@ -428,6 +428,8 @@ class TiltSeriesDataset(ParticleImageDataset):
             return _ImageCountBatchLoader(self, batch_size, num_workers, pad_to_batch_size)
         elif mode == "tilt_series":
             return _GrainBatchLoader(self, batch_size=1, shuffle=False, num_workers=num_workers)
+        elif mode == "packed_tilt_series":
+            return _ImageCountBatchLoader(self, batch_size, num_workers, pad_to_batch=False)
         else:
             raise ValueError(f"Invalid mode: {mode}")
 

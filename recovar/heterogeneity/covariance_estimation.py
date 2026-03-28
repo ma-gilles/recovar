@@ -1182,7 +1182,7 @@ def _compute_projected_covariance_single(
         translations,
         ctf_params,
         noise_variance,
-        _particle_indices,
+        particle_indices,
         _image_indices,
     ) in experiment_dataset.iter_batches(
         batch_size,
@@ -1190,6 +1190,11 @@ def _compute_projected_covariance_single(
         noise_half=False,
         by_image=not experiment_dataset.tilt_series_flag,
     ):
+        tilt_labels = None
+        if experiment_dataset.tilt_series_flag:
+            tilt_labels = preprocess_tilt_labels_for_batch(
+                _expand_particle_indices_to_per_image(particle_indices, images.shape[0])
+            )
         lhs, rhs = reduce_covariance_inner(
             config,
             images,
@@ -1203,6 +1208,7 @@ def _compute_projected_covariance_single(
             hermitian_weights=hermitian_weights,
             lhs=lhs,
             rhs=rhs,
+            tilt_labels=tilt_labels,
         )
     del basis
 
@@ -1279,7 +1285,7 @@ def compute_projected_covariance(
             translations,
             ctf_params,
             noise_variance,
-            _particle_indices,
+            particle_indices,
             _image_indices,
         ) in dataset.iter_batches(
             batch_size,
@@ -1288,6 +1294,11 @@ def compute_projected_covariance(
             halfset_id=halfset_id,
             by_image=not dataset.tilt_series_flag,
         ):
+            tilt_labels = None
+            if dataset.tilt_series_flag:
+                tilt_labels = preprocess_tilt_labels_for_batch(
+                    _expand_particle_indices_to_per_image(particle_indices, images.shape[0])
+                )
             lhs, rhs = reduce_covariance_inner(
                 config,
                 images,
@@ -1301,6 +1312,7 @@ def compute_projected_covariance(
                 hermitian_weights=hermitian_weights,
                 lhs=lhs,
                 rhs=rhs,
+                tilt_labels=tilt_labels,
             )
     del basis
     # Deallocate some memory?
@@ -1343,6 +1355,7 @@ def reduce_covariance_inner(
     hermitian_weights=None,
     lhs=None,
     rhs=None,
+    tilt_labels=None,
 ):
     """Covariance estimation inner loop — Equinox API.
 
@@ -1365,6 +1378,7 @@ def reduce_covariance_inner(
         hermitian_weights=hermitian_weights,
         lhs=lhs,
         rhs=rhs,
+        tilt_labels=tilt_labels,
     )
 
 
@@ -1382,6 +1396,7 @@ def _reduce_covariance_inner_explicit(
     hermitian_weights=None,
     lhs=None,
     rhs=None,
+    tilt_labels=None,
 ):
 
     if (config.disc_type != "linear_interp") and (config.disc_type != "cubic"):
@@ -1493,12 +1508,20 @@ def _reduce_covariance_inner_explicit(
 
     if opts.shared_label:
         # For tilt series: sum AU_t_images and AU_t_AU over tilts of each particle.
-        # The noise bias must also be summed BEFORE subtraction to match shapes.
-        # (per_image_outer has shape (1, n, n) after summing, but noise_bias
-        #  has shape (n_tilts, n, n) — broadcasting would be wrong.)
-        summed_noise_bias = jnp.sum(per_image_noise_bias, axis=0, keepdims=True)
-        AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
-        AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
+        # With packed multi-particle batches, use group_sum_by_labels to sum
+        # per-particle instead of across the entire batch.
+        if tilt_labels is not None:
+            # Per-particle segment sums (not broadcast back — avoids double-counting
+            # in the subsequent sum(axis=0)).
+            n_groups = tilt_labels.shape[0]  # safe upper bound
+            summed_noise_bias = jax.ops.segment_sum(per_image_noise_bias, tilt_labels, num_segments=n_groups)
+            AU_t_images = jax.ops.segment_sum(AU_t_images, tilt_labels, num_segments=n_groups)
+            AU_t_AU = jax.ops.segment_sum(AU_t_AU, tilt_labels, num_segments=n_groups)
+        else:
+            # Single-particle batch (legacy path)
+            summed_noise_bias = jnp.sum(per_image_noise_bias, axis=0, keepdims=True)
+            AU_t_images = jnp.sum(AU_t_images, axis=0, keepdims=True)
+            AU_t_AU = jnp.sum(AU_t_AU, axis=0, keepdims=True)
         per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
         rhs_batch = (per_image_outer - summed_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
     else:
@@ -1704,6 +1727,19 @@ def compute_freq_batch(
         return H_acc.at[k].add(H_k), B_acc.at[k].add(B_k)
 
     return jax.lax.fori_loop(0, n_freq, body, (H_accum, B_accum))
+
+
+def _expand_particle_indices_to_per_image(particle_indices, n_images):
+    """Expand scalar/single-element particle_indices to per-image array.
+
+    Redundant when the backend already yields per-image particle_indices
+    (e.g. _ImageCountBatchLoader), but needed for the old batch_size=1
+    tilt-series path where particle_indices is a scalar.
+    """
+    p = jnp.asarray(particle_indices).reshape(-1)
+    if p.shape[0] != n_images and p.shape[0] == 1:
+        p = jnp.broadcast_to(p, (n_images,))
+    return p
 
 
 @nvtx.annotate("preprocess_tilt_labels_for_batch", color="brown")
