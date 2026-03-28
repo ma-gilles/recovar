@@ -1636,13 +1636,9 @@ def EM(
         if use_pcg_mean:
             _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)
 
-        # Gridding correction (applied to both paths — it's part of the
-        # forward model, corrects for the interpolation kernel)
-        if use_pcg_mean:
-            from recovar.reconstruction import relion_functions
-
-            for k in range(basis_size):
-                W = W.at[k].set(relion_functions.griddingCorrect_square(W[k], vs[0], 1, order=1)[0])
+        # Gridding correction disabled for now — it inflates the prior term
+        # and should be integrated into the forward model properly.
+        # TODO: incorporate gridding kernel into the CG operator
 
         # Real space → half-volume Fourier for next iteration
         if not sparse_PCA:
