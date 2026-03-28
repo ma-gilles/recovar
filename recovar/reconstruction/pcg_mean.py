@@ -204,3 +204,206 @@ def pcg_mean(
         logger.info("PCG maxiter=%d rr=%.2e", maxiter, residuals[-1])
 
     return x, residuals
+
+
+# =====================================================================
+# Multi-column PCG for the PPCA M-step
+# =====================================================================
+
+
+def _mstep_matvec(
+    W_real: jnp.ndarray,
+    lhs_fourier: jnp.ndarray,
+    reg_diag: jnp.ndarray,
+    mask: jnp.ndarray,
+) -> jnp.ndarray:
+    """Apply the masked PPCA M-step operator to all q columns of W jointly.
+
+    .. math::
+        (H_\\Omega W)(x) = P \\, \\mathcal F^{-1}\\!
+            \\bigl[\\mathrm{LHS}(\\xi)\\,\\mathcal F(P\\cdot W)(\\xi)\\bigr]
+
+    where LHS(ξ) is the q×q matrix at each Fourier voxel (accumulated
+    CTF² × second moments + regularization diagonal).
+
+    Parameters
+    ----------
+    W_real : (q, D, D, D) real — current W in real space
+    lhs_fourier : (vol_size, q, q) complex — per-voxel q×q LHS in Fourier
+    reg_diag : (vol_size, q) real — diagonal regularization 1/prior
+    mask : (D, D, D) real — support mask
+    """
+    q = W_real.shape[0]
+    vs = W_real.shape[1:]
+    vol_size = vs[0] * vs[1] * vs[2]
+
+    # Mask → DFT: (q, vol_size) complex
+    PW = mask[None] * W_real
+    PW_ft = ftu.get_dft3(PW).reshape(q, vol_size)  # (q, vol_size)
+
+    # Per-voxel matrix multiply: LHS(ξ) @ PW_ft(ξ) for each voxel
+    # lhs_fourier: (vol_size, q, q), PW_ft.T: (vol_size, q)
+    HPW_ft = jnp.einsum("vij,vj->vi", lhs_fourier, PW_ft.T)  # (vol_size, q)
+
+    # Add diagonal regularization: reg_diag[v, k] * PW_ft[k, v]
+    HPW_ft = HPW_ft + reg_diag * PW_ft.T
+
+    # iDFT → mask: (q, D, D, D) real
+    HPW = ftu.get_idft3(HPW_ft.T.reshape(q, *vs)).real
+    return mask[None] * HPW
+
+
+def _mstep_preconditioner(
+    lhs_fourier: jnp.ndarray,
+    reg_diag: jnp.ndarray,
+    mask: jnp.ndarray,
+    volume_shape: tuple,
+):
+    """Build a diagonal (per-column) preconditioner for the M-step.
+
+    Uses the diagonal of LHS + reg as the per-column Fourier symbol,
+    then applies the same sandwich structure as pcg_mean.
+
+    Returns apply_Minv: (q, D, D, D) → (q, D, D, D)
+    """
+    q = reg_diag.shape[1]
+    vol_size = reg_diag.shape[0]
+
+    # Per-column diagonal: d_k(ξ) = lhs[ξ, k, k] + reg[ξ, k]
+    diag_idx = jnp.arange(q)
+    d_per_col = lhs_fourier[:, diag_idx, diag_idx] + reg_diag  # (vol_size, q)
+
+    # Average for preconditioner
+    alpha = jnp.mean(d_per_col, axis=0)  # (q,) — per-column average
+
+    # M_0^{-1}: invert in Fourier per column
+    m0_inv = 1.0 / jnp.maximum(d_per_col, jnp.max(d_per_col, axis=0, keepdims=True) * 1e-10)
+    # (vol_size, q)
+
+    # M_J^{-1/2}: per-voxel diagonal in real space
+    # alpha_broadcast on support
+    mj_inv_sqrt = jnp.where(
+        (mask.reshape(-1) > 0.5)[:, None],
+        1.0 / jnp.sqrt(jnp.maximum(alpha[None, :], 1e-12)),
+        0.0,
+    )  # (vol_size, q)
+
+    @jax.jit
+    def apply_Minv(R_real):
+        # R_real: (q, D, D, D)
+        q_ = R_real.shape[0]
+        vs = R_real.shape[1:]
+
+        # Step 1: M_J^{-1/2}
+        T = R_real * mj_inv_sqrt.T.reshape(q_, *vs)
+
+        # Step 2: M_0^{-1} per column — FFT, divide, iFFT
+        T_ft = ftu.get_dft3(mask[None] * T).reshape(q_, vol_size)
+        T_ft = T_ft * m0_inv.T  # (q, vol_size) element-wise per column
+        T = ftu.get_idft3(T_ft.reshape(q_, *vs)).real
+        T = mask[None] * T
+
+        # Step 3: M_J^{-1/2} again
+        return T * mj_inv_sqrt.T.reshape(q_, *vs)
+
+    return apply_Minv
+
+
+def pcg_mstep(
+    lhs_fourier: jnp.ndarray,
+    rhs_fourier: jnp.ndarray,
+    reg_diag: jnp.ndarray,
+    mask: jnp.ndarray,
+    volume_shape: tuple,
+    W0_real: Optional[jnp.ndarray] = None,
+    maxiter: int = 20,
+    tol: float = 1e-4,
+    precondition: bool = True,
+) -> Tuple[jnp.ndarray, list]:
+    """Solve the masked PPCA M-step for all q columns jointly via PCG.
+
+    Solves  H_Omega W = G  where H_Omega uses the full q×q per-voxel
+    coupling from the accumulated sufficient statistics.
+
+    Parameters
+    ----------
+    lhs_fourier : (vol_size, q, q) — accumulated LHS in Fourier space
+    rhs_fourier : (vol_size, q) complex — accumulated RHS in Fourier space
+    reg_diag : (vol_size, q) real — diagonal regularization 1/W_prior
+    mask : 3D array (D, D, D) real — support mask
+    volume_shape : tuple
+    W0_real : (q, D, D, D) real, optional — warmstart
+    maxiter, tol : CG parameters
+    precondition : use diagonal preconditioner
+
+    Returns
+    -------
+    W_real : (q, D, D, D) real — solution
+    residuals : list of float
+    """
+    q = rhs_fourier.shape[1]
+    vol_size = rhs_fourier.shape[0]
+    vs = volume_shape
+
+    mask = jnp.asarray(mask).reshape(vs)
+
+    # matvec — not JIT'd (lhs_fourier is large; inner ops are already JIT-friendly)
+    def mv(W):
+        return _mstep_matvec(W, lhs_fourier, reg_diag, mask)
+
+    # Preconditioner
+    if precondition:
+        apply_Minv = _mstep_preconditioner(lhs_fourier, reg_diag, mask, vs)
+    else:
+        apply_Minv = lambda r: r
+
+    # RHS in real space: P F^{-1}(rhs_fourier)
+    rhs_real = mask[None] * ftu.get_idft3(rhs_fourier.T.reshape(q, *vs)).real  # (q, D, D, D)
+
+    # Initial guess
+    if W0_real is not None:
+        W = mask[None] * jnp.asarray(W0_real).reshape(q, *vs)
+    else:
+        # Wiener-like init: per-column divide
+        diag_idx = jnp.arange(q)
+        d_diag = lhs_fourier[:, diag_idx, diag_idx] + reg_diag  # (vol_size, q)
+        W_ft = rhs_fourier / jnp.maximum(d_diag, jnp.max(d_diag, axis=0, keepdims=True) * 1e-10)
+        W = mask[None] * ftu.get_idft3(W_ft.T.reshape(q, *vs)).real
+
+    # PCG
+    r = rhs_real - mv(W)
+    z = apply_Minv(r)
+    p = z.copy()
+    rz = float(jnp.sum(r * z))
+    b_norm = float(jnp.sqrt(jnp.sum(rhs_real**2)))
+    residuals = []
+
+    for it in range(maxiter):
+        Ap = mv(p)
+        pAp = float(jnp.sum(p * Ap))
+        if pAp < 1e-30:
+            break
+        alpha_cg = rz / pAp
+        W = W + alpha_cg * p
+        r = r - alpha_cg * Ap
+
+        rr = float(jnp.sqrt(jnp.sum(r**2))) / max(b_norm, 1e-30)
+        residuals.append(rr)
+
+        if rr < tol:
+            logger.info("PCG M-step converged iter %d  rr=%.2e", it + 1, rr)
+            break
+
+        z = apply_Minv(r)
+        rz_new = float(jnp.sum(r * z))
+        beta = rz_new / max(abs(rz), 1e-30)
+        p = z + beta * p
+        rz = rz_new
+
+        if (it + 1) % 5 == 0:
+            logger.info("PCG M-step iter %3d: rr=%.2e", it + 1, rr)
+
+    if residuals and residuals[-1] >= tol:
+        logger.info("PCG M-step maxiter=%d rr=%.2e", maxiter, residuals[-1])
+
+    return W, residuals

@@ -1081,51 +1081,44 @@ def EM_step_half(
     # M-step solve
     # ------------------------------------------------------------------
     if use_pcg_mstep and volume_mask is not None:
-        # PCG column-wise solve with mask constraint.
-        # For each PC column k: solve P F^{-1} diag(d_k) F P w_k = P F^{-1} c_k
-        # where d_k = lhs[:, k, k] + 1/prior_k (diagonal approximation).
-        from recovar.reconstruction.pcg_mean import pcg_mean
+        # Full q×q PCG M-step with mask constraint.
+        # Solves H_Omega W = G with H_Omega using the full per-voxel q×q
+        # LHS coupling (not diagonal approximation).
+        from recovar.reconstruction.pcg_mean import pcg_mstep
 
-        # Extract per-column diagonal from the upper-tri LHS
-        tri_i_np, tri_j_np = np.triu_indices(basis_size)
-        diag_tri_idx = [int(np.where((tri_i_np == k) & (tri_j_np == k))[0][0]) for k in range(basis_size)]
-        lhs_diag_half = lhs_summed[:, diag_tri_idx]  # (half_vol, q) — diagonal per column
+        # Expand half-vol upper-tri LHS → full-vol full q×q matrix
+        lhs_full_mat = unpack_tri_to_full(lhs_summed, basis_size)  # (half_vol, q, q)
+        # half→full volume for each matrix element
+        lhs_flat = lhs_full_mat.reshape(half_volume_size, basis_size * basis_size)
+        lhs_fourier = ftu.half_volume_to_full_volume(lhs_flat.T, volume_shape).T
+        lhs_fourier = lhs_fourier.real.reshape(ref.volume_size, basis_size, basis_size)
 
+        # RHS: expand half→full
+        rhs_full = ftu.half_volume_to_full_volume(rhs_summed.T, volume_shape).T  # (vol_size, q)
+
+        # Regularization diagonal
         W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
+        reg_half = 1 / (W_prior_half + 1e-16)
+        reg_full = ftu.half_volume_to_full_volume(reg_half.T, volume_shape).T.real
 
-        W_cols = []
-        for k in range(basis_size):
-            # d_k in full volume (Fourier-space diagonal)
-            d_k_half = lhs_diag_half[:, k] + 1.0 / (W_prior_half[:, k] + 1e-16)
-            d_k = ftu.half_volume_to_full_volume(d_k_half, volume_shape).real.reshape(volume_shape)
+        # Warmstart
+        W0 = None
+        if W_prev_real is not None:
+            W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))  # (q, D, D, D)
 
-            # c_k in full volume (Fourier-space RHS)
-            c_k = ftu.half_volume_to_full_volume(rhs_summed[:, k], volume_shape).reshape(volume_shape)
-
-            # Warmstart from previous W column (real-space)
-            x0 = None
-            if W_prev_real is not None:
-                x0 = jnp.array(W_prev_real[:, k].reshape(volume_shape))
-
-            # PCG solve for column k
-            w_k_real, res_k = pcg_mean(
-                jnp.maximum(d_k, 1e-10),
-                c_k,
-                jnp.array(volume_mask).reshape(volume_shape),
-                lam=pcg_lam,
-                maxiter=pcg_maxiter,
-                tol=1e-4,
-                x0=x0,
-                precondition=True,
-            )
-
-            # Back to Fourier
-            w_k_ft = ftu.get_dft3(w_k_real.reshape(volume_shape)).reshape(-1)
-            W_cols.append(w_k_ft)
-            if len(res_k) > 0:
-                logger.info(f"  W col {k}: PCG {len(res_k)} iters, rr={res_k[-1]:.2e}")
-
-        W = jnp.stack(W_cols, axis=1)  # (volume_size, q)
+        W_real, res_mstep = pcg_mstep(
+            lhs_fourier,
+            rhs_full,
+            reg_full,
+            jnp.array(volume_mask).reshape(volume_shape),
+            volume_shape,
+            W0_real=W0,
+            maxiter=pcg_maxiter,
+            tol=1e-4,
+            precondition=True,
+        )
+        # W_real: (q, D, D, D) → DFT → (vol_size, q)
+        W = ftu.get_dft3(W_real).reshape(basis_size, -1).T
     else:
         # Standard per-voxel solve (chunked)
         W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
@@ -1584,7 +1577,7 @@ def EM(
                 disc_type=disc_type,
                 recompute_ll=recompute_ll,
                 mean_estimate_raw=mean_estimate_raw,
-                use_pcg_mstep=False,  # PCG M-step disabled — mask applied as post-processing instead
+                use_pcg_mstep=use_pcg_mean,
                 volume_mask=volume_mask,
                 pcg_lam=pcg_lam,
                 pcg_maxiter=pcg_maxiter,
