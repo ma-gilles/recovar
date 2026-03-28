@@ -1584,7 +1584,7 @@ def EM(
                 disc_type=disc_type,
                 recompute_ll=recompute_ll,
                 mean_estimate_raw=mean_estimate_raw,
-                use_pcg_mstep=use_pcg_mean,
+                use_pcg_mstep=False,  # PCG M-step disabled — mask applied as post-processing instead
                 volume_mask=volume_mask,
                 pcg_lam=pcg_lam,
                 pcg_maxiter=pcg_maxiter,
