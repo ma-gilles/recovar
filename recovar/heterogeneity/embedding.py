@@ -344,6 +344,7 @@ def get_coords_in_basis_and_contrast_3(
         by_image=False,
         noise_model=noise_model,
         noise_half=prefer_half_noise,
+        pack_groups=experiment_dataset.tilt_series_flag,
     ):
         batch = jnp.asarray(batch)
         batch_image_ind = np.asarray(image_indices).reshape(-1)
@@ -1520,6 +1521,7 @@ def get_per_image_embedding_multi_zdim(
             by_image=False,
             noise_model=noise_model,
             noise_half=prefer_half_noise,
+            pack_groups=halfset_dataset.tilt_series_flag,
         ):
             batch_image_ind = np.asarray(image_indices).reshape(-1)
 
