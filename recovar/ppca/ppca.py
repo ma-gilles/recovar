@@ -1180,8 +1180,43 @@ def EM_step_half(
             logger.info(f"  After whitening: ||Ĉ_z - I|| ≈ {float(jnp.linalg.norm(C_z_final - jnp.eye(q))):.4f}")
 
     # ------------------------------------------------------------------
-    # Log-likelihood (W and W_prior must be in same format)
+    # Log-likelihood
     # ------------------------------------------------------------------
+    if recompute_ll:
+        # Recompute LL with the NEW W (after M-step) for monotonicity check
+        ll_sum = jnp.array(0.0, dtype=ref.dtype)
+        W_half_for_ll = W if W.shape[0] == half_volume_size else ftu.full_volume_to_half_volume(W.T, volume_shape).T
+        for experiment_dataset in dataset_list:
+            for (
+                batch_half,
+                ctf_params,
+                rotation_matrices,
+                translations,
+                batch_image_ind,
+            ) in _iter_processed_batches_half(experiment_dataset, batch_size):
+                noise_variance_half = experiment_dataset.noise.get_half(batch_image_ind)
+                _, _, _, _, ll_batch, _ = E_M_step_batch_half(
+                    batch_half,
+                    jnp.zeros_like(lhs_summed),
+                    jnp.zeros_like(rhs_summed),
+                    mean_estimate,
+                    W_half_for_ll,
+                    ctf_params,
+                    rotation_matrices,
+                    translations,
+                    experiment_dataset.image_shape,
+                    experiment_dataset.volume_shape,
+                    experiment_dataset.grid_size,
+                    experiment_dataset.voxel_size,
+                    noise_variance_half,
+                    experiment_dataset.ctf_evaluator,
+                    compute_ll=True,
+                    disc_type_mean=disc_type_mean,
+                    disc_type=disc_type,
+                    compute_stats=False,
+                )
+                ll_sum += ll_batch
+
     W_prior_half = (
         ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T if W_prior.shape[0] != W.shape[0] else W_prior
     )
