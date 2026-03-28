@@ -1397,6 +1397,11 @@ def EM(
     disc_type="linear_interp",
     return_iteration_data=False,
     recompute_ll=False,
+    use_pcg_mean=False,
+    volume_mask=None,
+    pcg_lam=0.0,
+    pcg_maxiter=20,
+    noise_variance=None,
 ):
     """
     Run EM algorithm for PPCA.
@@ -1424,6 +1429,11 @@ def EM(
                         'cubic' requires precomputing spline coefficients (done automatically).
         return_iteration_data: If True, return per-iteration diagnostics.
         recompute_ll: If True, recompute data log-likelihood using updated W each iter.
+        use_pcg_mean: If True, re-estimate mean via PCG with support mask each iteration.
+        volume_mask: Real-space support mask for PCG mean (required if use_pcg_mean=True).
+        pcg_lam: Spatial regularization strength for PCG.
+        pcg_maxiter: Max CG iterations per mean update (10-20 with warmstart).
+        noise_variance: Noise variance for PCG mean accumulation.
 
     Regularization summary:
         L2 (sparse_PCA=False): min ||Y - XW||² + ||W||²/W_prior
@@ -1445,7 +1455,8 @@ def EM(
     # eigenvalue = np.ones(basis_size)
     full_dataset, dataset_list = _normalize_experiment_datasets(experiment_dataset)
     reference_dataset = full_dataset if full_dataset is not None else dataset_list[0]
-    volume_mask = np.ones(reference_dataset.volume_shape)
+    if volume_mask is None:
+        volume_mask = np.ones(reference_dataset.volume_shape)
     basis_size = W_initial.shape[-1]
     contrast_grid = np.ones([1])
     # Larger batches amortize per-batch overhead (kernel launches, backprojection).
@@ -1561,6 +1572,33 @@ def EM(
 
         # plt.figure()
         # plt.imshow(experiment_dataset[0].get_proj(W[:,0].reshape(-1)))
+
+        # ── PCG mean re-estimation (optional) ──────────────────────────
+        if use_pcg_mean:
+            from recovar.reconstruction.homogeneous import get_mean_pcg
+
+            # Convert current mean from Fourier to real for warmstart
+            mean_real = np.asarray(
+                ftu.get_idft3(jnp.array(mean_estimate_raw).reshape(reference_dataset.volume_shape)).real
+            )
+
+            means_pcg, _, _ = get_mean_pcg(
+                experiment_dataset,
+                batch_size=batch_size,
+                noise_variance=noise_variance,
+                volume_mask=volume_mask,
+                upsampling_factor=1,  # no upsampling for now
+                lam=pcg_lam,
+                pcg_maxiter=pcg_maxiter,
+                pcg_tol=1e-4,
+                x0_real=mean_real,
+            )
+            mean_estimate_raw = jnp.array(means_pcg.combined)
+            if disc_type_mean == "cubic":
+                mean_estimate = core.precompute_cubic_coefficients(mean_estimate_raw, reference_dataset.volume_shape)
+            else:
+                mean_estimate = mean_estimate_raw
+            logger.info(f"  PCG mean updated (iter {iter_i})")
 
         logger.info(f"Done with EM step {iter_i}")
 
