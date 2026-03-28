@@ -361,14 +361,14 @@ def pcg_mstep(
     # RHS: irfft3(rhs_half) → real, masked
     rhs_real = mask[None] * ftu.get_idft3_real(rhs_fourier.T.reshape(q, *half_vs), vs)
 
-    # Initial guess
+    # Initial guess: mask-projected per-voxel solve (best unmasked solution, then project)
     if W0_real is not None:
         W = mask[None] * jnp.asarray(W0_real).reshape(q, *vs)
     else:
-        diag_idx = jnp.arange(q)
-        d_diag = lhs_fourier[:, diag_idx, diag_idx] + reg_diag
-        W_half = rhs_fourier / jnp.maximum(d_diag, jnp.max(d_diag, axis=0, keepdims=True) * 1e-10)
-        W = mask[None] * ftu.get_idft3_real(W_half.T.reshape(q, *half_vs), vs)
+        # Full q×q per-voxel solve, then mask — same as mask projection
+        D = lhs_fourier + jnp.eye(q)[None] * reg_diag[:, :, None]
+        W_solved = jnp.linalg.solve(D, rhs_fourier[..., None])[..., 0]  # (half_vol, q)
+        W = mask[None] * ftu.get_idft3_real(W_solved.T.reshape(q, *half_vs), vs)
 
     # PCG
     r = rhs_real - mv(W)
