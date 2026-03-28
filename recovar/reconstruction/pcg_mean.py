@@ -208,6 +208,29 @@ def pcg_mean(
 
 # =====================================================================
 # Multi-column PCG for the PPCA M-step
+#
+# Problem:
+#   Minimize over W supported on Omega:
+#     Q(W) = sum_xi  hat{W}(xi)^H  D(xi)  hat{W}(xi)  -  2 Re tr[ hat{W}(xi)^H hat{R}(xi) ]
+#   where D(xi) = L(xi) + Lambda(xi) is the q×q regularized LHS per Fourier voxel.
+#
+# Variables:
+#   W = [w_1 | ... | w_q]  in R^{N x q},  N = D^3 voxels
+#   hat{W}(xi) = DFT(W)(xi) in C^q  per Fourier voxel xi
+#   L(xi) = sum_n |CTF_n(xi)|^2 E[z_n z_n^T | y_n]   (q×q, real symmetric, >=0)
+#   Lambda(xi) = diag(1/prior(xi))                      (q×q, real diagonal, >0)
+#   hat{R}(xi) = sum_n CTF_n(xi) y_centered_n(xi) E[z_n|y_n]^*   (q-vector, complex)
+#   P = diag(mask)   (N×N real diagonal, the support projection)
+#
+# Normal equations (support-constrained):
+#   H_Omega W = G
+#   where:
+#     H_Omega W  =  P  F^{-1}[ D(xi) . F(P W)(xi) ]       (operator)
+#     G          =  P  F^{-1}[ hat{R} ]                     (RHS)
+#
+# H_Omega is SPD on the support (proven: D(xi) SPD for all xi, P is a projection).
+#
+# Matvec cost: one FFT pair + one per-voxel q×q matmul per CG iteration.
 # =====================================================================
 
 
@@ -217,39 +240,33 @@ def _mstep_matvec(
     reg_diag: jnp.ndarray,
     mask: jnp.ndarray,
 ) -> jnp.ndarray:
-    """Apply the masked PPCA M-step operator to all q columns of W jointly.
+    """Apply H_Omega to W (all q columns jointly).
 
-    .. math::
-        (H_\\Omega W)(x) = P \\, \\mathcal F^{-1}\\!
-            \\bigl[\\mathrm{LHS}(\\xi)\\,\\mathcal F(P\\cdot W)(\\xi)\\bigr]
-
-    where LHS(ξ) is the q×q matrix at each Fourier voxel (accumulated
-    CTF² × second moments + regularization diagonal).
-
-    Parameters
-    ----------
-    W_real : (q, D, D, D) real — current W in real space
-    lhs_fourier : (vol_size, q, q) complex — per-voxel q×q LHS in Fourier
-    reg_diag : (vol_size, q) real — diagonal regularization 1/prior
-    mask : (D, D, D) real — support mask
+    Steps:
+      1. PW = P * W                          — mask in real space
+      2. PW_hat = F(PW)                       — DFT each column
+      3. HPW_hat = D(xi) * PW_hat(xi)        — q×q matmul per voxel
+      4. HPW = Re[F^{-1}(HPW_hat)]           — iDFT (real because input is real)
+      5. return P * HPW                       — mask again
     """
     q = W_real.shape[0]
     vs = W_real.shape[1:]
     vol_size = vs[0] * vs[1] * vs[2]
 
-    # Mask → DFT: (q, vol_size) complex
+    # Step 1: mask
     PW = mask[None] * W_real
-    PW_ft = ftu.get_dft3(PW).reshape(q, vol_size)  # (q, vol_size)
 
-    # Per-voxel matrix multiply: LHS(ξ) @ PW_ft(ξ) for each voxel
-    # lhs_fourier: (vol_size, q, q), PW_ft.T: (vol_size, q)
-    HPW_ft = jnp.einsum("vij,vj->vi", lhs_fourier, PW_ft.T)  # (vol_size, q)
+    # Step 2: DFT each column
+    PW_ft = ftu.get_dft3(PW).reshape(q, vol_size)
 
-    # Add diagonal regularization: reg_diag[v, k] * PW_ft[k, v]
-    HPW_ft = HPW_ft + reg_diag * PW_ft.T
+    # Step 3: per-voxel q×q multiply  D(xi) @ PW_hat(xi)
+    #   D(xi) = lhs_fourier[xi] + diag(reg_diag[xi])
+    HPW_ft = jnp.einsum("vij,vj->vi", lhs_fourier, PW_ft.T) + reg_diag * PW_ft.T
 
-    # iDFT → mask: (q, D, D, D) real
+    # Step 4: iDFT → real (PW is real, D is real-symmetric → HPW is real)
     HPW = ftu.get_idft3(HPW_ft.T.reshape(q, *vs)).real
+
+    # Step 5: mask
     return mask[None] * HPW
 
 
@@ -259,52 +276,38 @@ def _mstep_preconditioner(
     mask: jnp.ndarray,
     volume_shape: tuple,
 ):
-    """Build a diagonal (per-column) preconditioner for the M-step.
+    """Preconditioner: unmasked q×q solve per Fourier voxel.
 
-    Uses the diagonal of LHS + reg as the per-column Fourier symbol,
-    then applies the same sandwich structure as pcg_mean.
+    M_0^{-1} r = P F^{-1}[ D(xi)^{-1} F(P r)(xi) ]
 
-    Returns apply_Minv: (q, D, D, D) → (q, D, D, D)
+    where D(xi) = L(xi) + Lambda(xi) is the q×q regularized LHS.
+    This is the exact inverse of the unmasked operator — the best
+    circulant preconditioner for the masked problem.
+
+    Cost: one FFT pair + one q×q solve per voxel per CG iteration.
     """
     q = reg_diag.shape[1]
     vol_size = reg_diag.shape[0]
+    vs = volume_shape
 
-    # Per-column diagonal: d_k(ξ) = lhs[ξ, k, k] + reg[ξ, k]
-    diag_idx = jnp.arange(q)
-    d_per_col = lhs_fourier[:, diag_idx, diag_idx] + reg_diag  # (vol_size, q)
+    # D(xi) = LHS(xi) + diag(reg(xi))  per voxel
+    D = lhs_fourier + jnp.eye(q)[None] * reg_diag[:, :, None]  # (vol_size, q, q)
 
-    # Average for preconditioner
-    alpha = jnp.mean(d_per_col, axis=0)  # (q,) — per-column average
+    # Precompute D^{-1} for all voxels (q is small, typically 2-20)
+    D_inv = jnp.linalg.inv(D)  # (vol_size, q, q)
 
-    # M_0^{-1}: invert in Fourier per column
-    m0_inv = 1.0 / jnp.maximum(d_per_col, jnp.max(d_per_col, axis=0, keepdims=True) * 1e-10)
-    # (vol_size, q)
-
-    # M_J^{-1/2}: per-voxel diagonal in real space
-    # alpha_broadcast on support
-    mj_inv_sqrt = jnp.where(
-        (mask.reshape(-1) > 0.5)[:, None],
-        1.0 / jnp.sqrt(jnp.maximum(alpha[None, :], 1e-12)),
-        0.0,
-    )  # (vol_size, q)
-
-    @jax.jit
     def apply_Minv(R_real):
         # R_real: (q, D, D, D)
         q_ = R_real.shape[0]
-        vs = R_real.shape[1:]
 
-        # Step 1: M_J^{-1/2}
-        T = R_real * mj_inv_sqrt.T.reshape(q_, *vs)
+        # Mask → DFT
+        R_ft = ftu.get_dft3(mask[None] * R_real).reshape(q_, vol_size)
 
-        # Step 2: M_0^{-1} per column — FFT, divide, iFFT
-        T_ft = ftu.get_dft3(mask[None] * T).reshape(q_, vol_size)
-        T_ft = T_ft * m0_inv.T  # (q, vol_size) element-wise per column
-        T = ftu.get_idft3(T_ft.reshape(q_, *vs)).real
-        T = mask[None] * T
+        # Per-voxel q×q solve: D^{-1} @ R_ft
+        R_solved = jnp.einsum("vij,vj->vi", D_inv, R_ft.T)  # (vol_size, q)
 
-        # Step 3: M_J^{-1/2} again
-        return T * mj_inv_sqrt.T.reshape(q_, *vs)
+        # iDFT → mask
+        return mask[None] * ftu.get_idft3(R_solved.T.reshape(q_, *vs)).real
 
     return apply_Minv
 
