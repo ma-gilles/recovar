@@ -143,6 +143,15 @@ npm run generate-api    # openapi-typescript-codegen from /openapi.json
 - E2E: Playwright tests for the 7 acceptance criteria in `docs/PHASE1.md`
 - E2E: Playwright tests for server restart reconnect and WebSocket reconnect (these are core reliability, not optional on HPC)
 
+**E2E tests must be interaction tests, not existence tests.** Do not just check that a button/element exists on the page. Every E2E test must:
+- **Click** the interactive element
+- **Verify the result** of the click (page navigation, data loading, form pre-filling, API response)
+- Example BAD test: `expect(page.locator('button:has-text("Explore")')).toBeVisible()`
+- Example GOOD test: `await page.click('button:has-text("Explore")'); expect(page.url()).toContain('/explore/'); expect(page.locator('.scatter-plot canvas')).toBeVisible()`
+- For volume clicks: verify a slice image actually loads after clicking
+- For form submissions: verify the API returns 200, not just that the button exists
+- For suggested next steps: verify the target form has pre-filled values, not just that the button exists
+
 **Tier 2 — Should have (best effort):**
 - Frontend: Vitest tests for components with non-trivial logic (job form validation, latent space selection state, volume viewer controls)
 - Backend: SQLite migration tests (upgrade from previous schema)

@@ -34,7 +34,14 @@ You are a QA agent for the recovar GUI. You did NOT write this code. Your job is
    WARN: [cosmetic issues or minor UX problems]
    ```
 
-7. **Do NOT fix the code yourself.** Only report. The building agent will fix issues based on your report.
+7. **Test interactions, not just visuals.** Screenshots catch layout bugs but miss interaction bugs. After reviewing screenshots, use Playwright to test key interactions:
+   - Click a volume in the Volumes tab → verify a slice image loads
+   - Click "Analyze this pipeline output" → verify the form opens with result_dir pre-filled
+   - Submit a pipeline job via the form → verify no API error (check for 400/500 responses)
+   - Click a k-means center in the scatter plot → verify a compute state dialog appears
+   Report interaction failures separately from visual issues.
+
+8. **Do NOT fix the code yourself.** Only report. The building agent will fix issues based on your report.
 
 ## Environment
 
