@@ -172,7 +172,7 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
 
   if (collapsed) {
     return (
-      <aside className="flex w-12 flex-col items-center border-r border-zinc-800 bg-zinc-900 py-2">
+      <aside className="flex w-12 shrink-0 flex-col items-center border-r border-zinc-800 bg-zinc-900 py-2">
         <button
           onClick={() => setCollapsed(false)}
           className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
@@ -202,7 +202,7 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
   }
 
   return (
-    <aside className="flex w-60 flex-col border-r border-zinc-800 bg-zinc-900">
+    <aside className="flex w-60 shrink-0 flex-col overflow-x-hidden border-r border-zinc-800 bg-zinc-900">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-3">
         <Link to="/" className="flex items-center gap-2 text-sm font-medium text-zinc-50">

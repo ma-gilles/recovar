@@ -77,7 +77,7 @@ export function NewJobPage(): React.JSX.Element {
           </Select>
         </div>
 
-        <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+        <div key={jobType} className="rounded-lg border border-zinc-800 bg-zinc-900 p-6">
           {jobType === "pipeline" && (
             <PipelineForm
               projectId={project.id}

@@ -18,7 +18,7 @@ export function RootLayout(): React.JSX.Element {
         onProjectCreated={(p) => setProject(p)}
         onProjectNotFound={handleProjectNotFound}
       />
-      <main className="flex-1 overflow-auto p-6">
+      <main className="relative z-0 flex-1 overflow-auto p-6">
         <div className="mx-auto max-w-[1400px]">
           {staleProjectMessage && (
             <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-600/50 bg-amber-950/50 px-4 py-3 text-sm text-amber-200">
