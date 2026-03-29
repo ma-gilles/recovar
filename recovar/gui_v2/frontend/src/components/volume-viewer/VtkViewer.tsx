@@ -264,14 +264,46 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
     setError(null);
 
     try {
-      // Step 1: Fetch the raw MRC bytes
+      // Step 1: Fetch the raw MRC bytes.
+      //
+      // We read via response.body (ReadableStream) and manually accumulate
+      // chunks instead of using resp.arrayBuffer().  The single-shot
+      // arrayBuffer() call can fail with ERR_INSUFFICIENT_RESOURCES on
+      // Chromium when the response is large (>~4 MB) and served over an
+      // SSH tunnel, because the browser tries to allocate the full buffer
+      // before the Content-Length is known.  Streaming avoids this.
       console.log(`VtkViewer: fetching volume: ${path}`);
-      const resp = await fetch(`/api/volumes/raw?path=${encodeURIComponent(path)}`);
+      const resp = await fetch(`/api/volumes/raw?path=${encodeURIComponent(path)}`, {
+        cache: "force-cache",
+      });
       if (!resp.ok) {
         const body = await resp.text().catch(() => "");
         throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${body || "Failed to fetch volume"}`);
       }
-      const buffer = await resp.arrayBuffer();
+
+      let buffer: ArrayBuffer;
+      if (resp.body) {
+        // Stream-based read: accumulate chunks to avoid single large allocation
+        const reader = resp.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let totalLength = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+          totalLength += value.byteLength;
+        }
+        const merged = new Uint8Array(totalLength);
+        let offset = 0;
+        for (const chunk of chunks) {
+          merged.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        buffer = merged.buffer;
+      } else {
+        // Fallback for browsers without ReadableStream support
+        buffer = await resp.arrayBuffer();
+      }
       console.log(`VtkViewer: received ${buffer.byteLength} bytes`);
 
       if (buffer.byteLength === 0) {

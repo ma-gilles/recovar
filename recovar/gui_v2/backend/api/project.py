@@ -99,6 +99,7 @@ class ImportedJobResponse(BaseModel):
 
 class ScanResponse(BaseModel):
     imported: list[ImportedJobResponse]
+    hint: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +282,23 @@ async def scan_project(project_id: str, req: ScanRequest) -> ScanResponse:
             scanned_jobs = scan_arbitrary_directory(scan_path)
 
         if not scanned_jobs:
-            return ScanResponse(imported=[])
+            # If the scan found nothing, check if the scanned directory
+            # itself looks like a pipeline output.  Users commonly point
+            # to the pipeline_output directory rather than its parent.
+            hint: str | None = None
+            looks_like_output = (
+                os.path.isfile(os.path.join(scan_path, "model", "params.pkl"))
+                or os.path.isfile(
+                    os.path.join(scan_path, "model", "metadata.json")
+                )
+            )
+            if looks_like_output:
+                parent = os.path.dirname(scan_path)
+                hint = (
+                    f"This directory itself looks like a pipeline output. "
+                    f"Try scanning its parent directory instead: {parent}"
+                )
+            return ScanResponse(imported=[], hint=hint)
 
         # Check which output_dirs are already in the DB
         existing_dirs_stmt = select(Job.output_dir).where(

@@ -145,7 +145,7 @@ export function getProject(id: string): Promise<ProjectDetail> {
 export function scanProject(
   projectId: string,
   scanPath: string
-): Promise<{ imported: { id: string; type: string; status: string; output_dir: string; legacy: boolean }[] }> {
+): Promise<{ imported: { id: string; type: string; status: string; output_dir: string; legacy: boolean }[]; hint?: string | null }> {
   return request(`/projects/${projectId}/scan`, {
     method: "POST",
     body: JSON.stringify({ scan_path: scanPath }),

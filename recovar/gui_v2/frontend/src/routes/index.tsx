@@ -278,7 +278,7 @@ interface ProjectDashboardProps {
   setScanPath: (v: string) => void;
   showScanBrowser: boolean;
   setShowScanBrowser: (v: boolean) => void;
-  scanMutation: UseMutationResult<{ imported: { id: string; type: string; status: string; output_dir: string; legacy: boolean }[] }, Error, void, unknown>;
+  scanMutation: UseMutationResult<{ imported: { id: string; type: string; status: string; output_dir: string; legacy: boolean }[]; hint?: string | null }, Error, void, unknown>;
 }
 
 function ProjectDashboard({
@@ -414,7 +414,9 @@ function ProjectDashboard({
         <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-4 space-y-3">
           <h3 className="text-sm font-medium">Scan Directory for Pipeline Outputs</h3>
           <p className="text-xs text-zinc-400">
-            Point to a directory containing existing recovar pipeline outputs. They will be imported into this project.
+            Point to the directory <em>containing</em> your pipeline outputs, not the pipeline output directory itself.
+            For example, if your output is at <code className="text-zinc-300">/scratch/.../my_project/Pipeline/job_0001/</code>,
+            scan <code className="text-zinc-300">/scratch/.../my_project/</code>.
           </p>
           <div className="space-y-1">
             <Label>Scan Path</Label>
@@ -445,9 +447,16 @@ function ProjectDashboard({
             <p className="text-sm text-red-400">{(scanMutation.error as Error).message}</p>
           )}
           {scanMutation.isSuccess && (
-            <p className="text-sm text-emerald-400">
-              Imported {(scanMutation.data as { imported: unknown[] }).imported.length} job(s).
-            </p>
+            <>
+              <p className="text-sm text-emerald-400">
+                Imported {scanMutation.data.imported.length} job(s).
+              </p>
+              {scanMutation.data.hint && (
+                <p className="text-sm text-amber-400">
+                  {scanMutation.data.hint}
+                </p>
+              )}
+            </>
           )}
           <div className="flex justify-end gap-2">
             <Button variant="outline" size="sm" onClick={() => setShowScan(false)}>

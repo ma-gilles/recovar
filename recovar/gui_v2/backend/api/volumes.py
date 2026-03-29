@@ -138,13 +138,26 @@ async def volume_raw(
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
 
+    # Common headers that help the browser handle large binary responses,
+    # especially over SSH tunnels where ERR_INSUFFICIENT_RESOURCES can occur
+    # if Content-Length is missing or caching is disabled.
+    cache_headers = {
+        "Cache-Control": "private, max-age=3600, immutable",
+        "Access-Control-Expose-Headers": "Content-Length, X-Original-Shape",
+    }
+
     # Fast path: serve the original file directly when no downsampling needed.
     needs_downsample = await asyncio.to_thread(_volume_needs_downsample, path)
     if full or not needs_downsample:
+        file_size = os.path.getsize(path)
         return FileResponse(
             path,
             media_type="application/octet-stream",
             filename=os.path.basename(path),
+            headers={
+                **cache_headers,
+                "Content-Length": str(file_size),
+            },
         )
 
     # Slow path: read, downsample, serialize via temp file.
@@ -155,7 +168,11 @@ async def volume_raw(
     return Response(
         content=mrc_bytes,
         media_type="application/octet-stream",
-        headers={"X-Original-Shape": original_shape},
+        headers={
+            **cache_headers,
+            "Content-Length": str(len(mrc_bytes)),
+            "X-Original-Shape": original_shape,
+        },
     )
 
 
