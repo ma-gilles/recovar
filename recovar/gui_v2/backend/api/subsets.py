@@ -69,6 +69,15 @@ class SubsetListEntry(BaseModel):
     created: str
 
 
+class ExportStarRequest(BaseModel):
+    particles_star: str
+
+
+class ExportStarResponse(BaseModel):
+    path: str
+    n_particles: int
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -199,3 +208,88 @@ async def delete_subset(subset_id: str) -> None:
                 return
 
     raise HTTPException(status_code=404, detail="Subset not found")
+
+
+@router.post("/{subset_id}/export-star", response_model=ExportStarResponse)
+async def export_star(
+    subset_id: str, req: ExportStarRequest,
+) -> ExportStarResponse:
+    """Export a subset as a filtered .star file."""
+    from recovar.gui_v2.backend.api.project import _project_registry
+
+    subset_obj = None
+    project_path = None
+    for pid, ppath in _project_registry.items():
+        db_path = get_db_path(ppath)
+        session_factory = await init_db(db_path)
+        async with session_factory() as session:
+            stmt = select(Subset).where(Subset.id == subset_id)
+            result = await session.execute(stmt)
+            subset_obj = result.scalar_one_or_none()
+            if subset_obj:
+                project_path = ppath
+                break
+
+    if subset_obj is None:
+        raise HTTPException(status_code=404, detail="Subset not found")
+
+    if not os.path.isfile(req.particles_star):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Particles star file not found: {req.particles_star}",
+        )
+    if not req.particles_star.endswith(".star"):
+        raise HTTPException(
+            status_code=400, detail="particles_star must be a .star file",
+        )
+
+    if not os.path.isfile(subset_obj.ind_path):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Subset .ind file not found: {subset_obj.ind_path}",
+        )
+    with open(subset_obj.ind_path, "rb") as f:
+        indices = pickle.load(f)
+    indices = np.asarray(indices, dtype=np.int64)
+
+    try:
+        from recovar.data_io.starfile import read_star, write_star
+    except ImportError:
+        raise HTTPException(
+            status_code=500, detail="recovar.data_io.starfile not available",
+        )
+
+    try:
+        particles_df, optics_df = read_star(req.particles_star)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Failed to parse star file: {exc}",
+        )
+
+    if indices.max() >= len(particles_df):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Subset index {indices.max()} out of range "
+                f"(star file has {len(particles_df)} particles)"
+            ),
+        )
+    filtered_df = particles_df.iloc[indices].reset_index(drop=True)
+
+    subsets_dir = os.path.join(project_path, "subsets")
+    os.makedirs(subsets_dir, exist_ok=True)
+    safe_name = "".join(
+        c if c.isalnum() or c in "-_" else "_" for c in subset_obj.name
+    )
+    star_path = os.path.join(subsets_dir, f"{safe_name}.star")
+    counter = 1
+    while os.path.exists(star_path):
+        star_path = os.path.join(subsets_dir, f"{safe_name}_{counter}.star")
+        counter += 1
+
+    write_star(star_path, filtered_df, optics_df)
+    logger.info(
+        "Exported subset %s as .star: %s (%d particles)",
+        subset_id, star_path, len(filtered_df),
+    )
+    return ExportStarResponse(path=star_path, n_particles=len(filtered_df))

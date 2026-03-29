@@ -31,7 +31,11 @@ from recovar.gui_v2.backend.services.command_builder import (
     build_analyze_command,
     build_compute_state_command,
     build_compute_trajectory_command,
+    build_density_command,
+    build_downsample_command,
     build_pipeline_command,
+    build_postprocess_command,
+    build_stable_states_command,
 )
 from recovar.gui_v2.backend.services.executor import (
     Executor,
@@ -241,6 +245,13 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         "computestate": "ComputeState",
         "compute_trajectory": "ComputeTrajectory",
         "computetrajectory": "ComputeTrajectory",
+        "density": "Density",
+        "estimate_conformational_density": "Density",
+        "stable_states": "StableStates",
+        "stablestates": "StableStates",
+        "estimate_stable_states": "StableStates",
+        "postprocess": "Postprocess",
+        "downsample": "Downsample",
     }
     job_type = _type_aliases.get(req.type.lower().replace("-", "_"), req.type)
 
@@ -250,6 +261,10 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         "Analyze": "Analyze",
         "ComputeState": "ReconstructState",
         "ComputeTrajectory": "ReconstructTrajectory",
+        "Density": "Density",
+        "StableStates": "StableStates",
+        "Postprocess": "Postprocess",
+        "Downsample": "Downsample",
     }
     dir_name = type_dir_map.get(job_type)
     if dir_name is None:
@@ -284,6 +299,14 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         _write_coords_file(z_start_file, params.get("z_start", []))
         _write_coords_file(z_end_file, params.get("z_end", []))
         command = build_compute_trajectory_command(params, z_start_file, z_end_file)
+    elif job_type == "Density":
+        command = build_density_command(params)
+    elif job_type == "StableStates":
+        command = build_stable_states_command(params)
+    elif job_type == "Postprocess":
+        command = build_postprocess_command(params)
+    elif job_type == "Downsample":
+        command = build_downsample_command(params)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown job type: {job_type}")
 
@@ -481,6 +504,11 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
             label="Analyze this pipeline output",
             prefilled_params={"result_dir": job.output_dir},
         ))
+        suggestions.append(SuggestedNext(
+            type="Density",
+            label="Estimate conformational density",
+            prefilled_params={"result_dir": job.output_dir},
+        ))
     elif job.type == "Analyze":
         suggestions.append(SuggestedNext(
             type="ComputeState",
@@ -491,6 +519,15 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
             type="ComputeTrajectory",
             label="Compute trajectory between two points",
             prefilled_params={"result_dir": job.params.get("result_dir", "")},
+        ))
+    elif job.type == "Density":
+        density_pkl = os.path.join(
+            job.output_dir, "data", "deconv_density_knee.pkl"
+        )
+        suggestions.append(SuggestedNext(
+            type="StableStates",
+            label="Find stable states from density",
+            prefilled_params={"density": density_pkl},
         ))
 
     return suggestions

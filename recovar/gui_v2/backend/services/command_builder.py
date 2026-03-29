@@ -153,10 +153,69 @@ def build_compute_trajectory_command(
     return cmd
 
 
+def build_density_command(params: dict[str, Any]) -> list[str]:
+    """Build ``recovar estimate_conformational_density`` command."""
+    cmd = [_recovar_cmd(), "estimate_conformational_density"]
+    cmd.append(params["result_dir"])
+    _add_optional(cmd, "--output_dir", params.get("outdir"))
+    _add_optional(cmd, "--pca_dim", params.get("pca_dim"))
+    _add_optional(cmd, "--z_dim_used", params.get("z_dim_used"))
+    _add_optional(cmd, "--percentile_reject", params.get("percentile_reject"))
+    _add_optional(cmd, "--num_disc_points", params.get("num_disc_points"))
+    _add_optional(cmd, "--percentile_bound", params.get("percentile_bound"))
+    return cmd
+
+
+def build_stable_states_command(params: dict[str, Any]) -> list[str]:
+    """Build ``recovar estimate_stable_states`` command."""
+    cmd = [_recovar_cmd(), "estimate_stable_states"]
+    cmd.append(params["density"])
+    _add_optional(cmd, "-o", params.get("outdir"))
+    _add_optional(cmd, "--percent_top", params.get("percent_top"))
+    _add_optional(cmd, "--n_local_maxs", params.get("n_local_maxs"))
+    return cmd
+
+
+def build_postprocess_command(params: dict[str, Any]) -> list[str]:
+    """Build ``recovar postprocess`` command."""
+    cmd = [_recovar_cmd(), "postprocess"]
+    cmd.append(params["input"])
+    _add_optional(cmd, "--output", params.get("outdir"))
+    _add_optional(cmd, "--halfmap2", params.get("halfmap2"))
+    _add_optional(cmd, "--voxel-size", params.get("voxel_size"))
+    _add_optional(cmd, "--B-factor", params.get("B_factor"))
+    _add_optional(cmd, "--mask-radius", params.get("mask_radius"))
+    _add_optional(cmd, "--fsc-mask", params.get("fsc_mask"))
+    _add_optional(cmd, "--apply-mask", params.get("apply_mask"))
+    _add_flag(cmd, "--batch", params.get("batch"))
+    _add_flag(cmd, "--estimate-B-factor", params.get("estimate_B_factor"))
+    _add_flag(cmd, "--local", params.get("local"))
+    _add_optional(cmd, "--locres-sampling", params.get("locres_sampling"))
+    _add_optional(cmd, "--locres-maskrad", params.get("locres_maskrad"))
+    _add_optional(cmd, "--locres-edgwidth", params.get("locres_edgwidth"))
+    return cmd
+
+
+def build_downsample_command(params: dict[str, Any]) -> list[str]:
+    """Build ``recovar downsample`` command."""
+    cmd = [_recovar_cmd(), "downsample"]
+    cmd.append(params["particles"])
+    cmd.extend(["-D", str(params["target_D"])])
+    _add_optional(cmd, "-o", params.get("outdir"))
+    _add_optional(cmd, "--datadir", params.get("datadir"))
+    _add_optional(cmd, "--strip-prefix", params.get("strip_prefix"))
+    _add_optional(cmd, "--batch-size", params.get("batch_size"))
+    return cmd
+
+
 # Map job type names to their command builders.
 # ComputeState and ComputeTrajectory need special handling (coord files),
 # so they are not included here.
 COMMAND_BUILDERS: dict[str, Any] = {
     "Pipeline": build_pipeline_command,
     "Analyze": build_analyze_command,
+    "Density": build_density_command,
+    "StableStates": build_stable_states_command,
+    "Postprocess": build_postprocess_command,
+    "Downsample": build_downsample_command,
 }

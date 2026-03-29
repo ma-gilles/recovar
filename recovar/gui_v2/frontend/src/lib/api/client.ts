@@ -216,6 +216,16 @@ export function deleteSubset(id: string): Promise<void> {
   return request(`/subsets/${id}`, { method: "DELETE" });
 }
 
+export function exportSubsetStar(
+  subsetId: string,
+  particlesStar: string
+): Promise<{ path: string; n_particles: number }> {
+  return request(`/subsets/${subsetId}/export-star`, {
+    method: "POST",
+    body: JSON.stringify({ particles_star: particlesStar }),
+  });
+}
+
 // --- System ---
 
 export function getSystemInfo(): Promise<SystemInfo> {

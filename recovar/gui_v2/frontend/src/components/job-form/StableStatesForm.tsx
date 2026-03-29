@@ -1,0 +1,116 @@
+import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Label } from "../ui/label";
+import { TooltipIcon } from "../ui/tooltip-icon";
+import { tooltips } from "../../lib/tooltips";
+import { submitJob } from "../../lib/api/client";
+
+interface StableStatesFormProps {
+  projectId: string;
+  prefilledDensity?: string;
+  onSubmitted?: (jobId: string) => void;
+}
+
+export function StableStatesForm({
+  projectId,
+  prefilledDensity,
+  onSubmitted,
+}: StableStatesFormProps): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const [density, setDensity] = useState(prefilledDensity ?? "");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Advanced fields
+  const [percentTop, setPercentTop] = useState("1");
+  const [nLocalMaxs, setNLocalMaxs] = useState("3");
+
+  const mutation = useMutation({
+    mutationFn: () => {
+      const params: Record<string, unknown> = {
+        density,
+      };
+      if (percentTop) params.percent_top = parseFloat(percentTop);
+      if (nLocalMaxs) params.n_local_maxs = parseInt(nLocalMaxs);
+      return submitJob(projectId, "stable_states", params);
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["project", projectId] });
+      onSubmitted?.(data.id);
+    },
+  });
+
+  return (
+    <div className="space-y-4">
+      <div className="space-y-1">
+        <div className="flex items-center gap-1">
+          <Label>Density File</Label>
+          <TooltipIcon text={tooltips["stable_states.density"]} />
+        </div>
+        <Input
+          value={density}
+          onChange={(e) => setDensity(e.target.value)}
+          placeholder="/path/to/deconv_density_knee.pkl"
+          className="font-mono"
+        />
+      </div>
+
+      {/* Advanced Section */}
+      <button
+        onClick={() => setShowAdvanced(!showAdvanced)}
+        className="flex items-center gap-1 text-sm text-zinc-500 hover:text-zinc-300"
+      >
+        {showAdvanced ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        Advanced
+      </button>
+
+      {showAdvanced && (
+        <div className="ml-4 space-y-3 border-l border-zinc-800 pl-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-1">
+              <Label>Percent Top</Label>
+              <TooltipIcon text={tooltips["stable_states.percent_top"]} />
+            </div>
+            <Input
+              type="number"
+              value={percentTop}
+              onChange={(e) => setPercentTop(e.target.value)}
+              placeholder="1"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <div className="flex items-center gap-1">
+              <Label>Number of Local Maxima</Label>
+              <TooltipIcon text={tooltips["stable_states.n_local_maxs"]} />
+            </div>
+            <Input
+              type="number"
+              value={nLocalMaxs}
+              onChange={(e) => setNLocalMaxs(e.target.value)}
+              placeholder="3"
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Submit */}
+      <div className="flex items-center justify-between pt-2">
+        {mutation.isError && (
+          <span className="text-sm text-red-400">{(mutation.error as Error).message}</span>
+        )}
+        <div className="ml-auto">
+          <Button
+            onClick={() => mutation.mutate()}
+            disabled={!density}
+            loading={mutation.isPending}
+          >
+            {mutation.isPending ? "Submitting..." : "Find Stable States"}
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}

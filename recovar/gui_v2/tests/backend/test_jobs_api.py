@@ -29,7 +29,11 @@ from recovar.gui_v2.backend.services.command_builder import (
     build_analyze_command,
     build_compute_state_command,
     build_compute_trajectory_command,
+    build_density_command,
+    build_downsample_command,
     build_pipeline_command,
+    build_postprocess_command,
+    build_stable_states_command,
 )
 
 
@@ -123,6 +127,62 @@ class TestCommandBuilders:
         assert "--z_st" in cmd
         assert "--z_end" in cmd
         assert "--n-vols-along-path" in cmd
+
+    def test_density_command(self):
+        cmd = build_density_command({
+            "result_dir": "/out/Pipeline/job_0001",
+            "outdir": "/out/density",
+            "pca_dim": 3,
+            "z_dim_used": 4,
+        })
+        assert "estimate_conformational_density" in cmd
+        assert "/out/Pipeline/job_0001" in cmd
+        assert "--output_dir" in cmd
+        assert "--pca_dim" in cmd
+
+    def test_stable_states_command(self):
+        cmd = build_stable_states_command({
+            "density": "/out/density/data/deconv_density_knee.pkl",
+            "outdir": "/out/stable",
+            "percent_top": 2.0,
+            "n_local_maxs": 5,
+        })
+        assert "estimate_stable_states" in cmd
+        assert "/out/density/data/deconv_density_knee.pkl" in cmd
+        assert "-o" in cmd
+        assert "--percent_top" in cmd
+        assert "--n_local_maxs" in cmd
+
+    def test_postprocess_command(self):
+        cmd = build_postprocess_command({
+            "input": "/data/halfmap1.mrc",
+            "outdir": "/out/pp",
+            "B_factor": -50.0,
+            "batch": True,
+            "estimate_B_factor": True,
+            "local": True,
+        })
+        assert "postprocess" in cmd
+        assert "/data/halfmap1.mrc" in cmd
+        assert "--output" in cmd
+        assert "--B-factor" in cmd
+        assert "--batch" in cmd
+        assert "--estimate-B-factor" in cmd
+        assert "--local" in cmd
+
+    def test_downsample_command(self):
+        cmd = build_downsample_command({
+            "particles": "/data/particles.star",
+            "target_D": 128,
+            "outdir": "/out/ds",
+            "batch_size": 500,
+        })
+        assert "downsample" in cmd
+        assert "/data/particles.star" in cmd
+        assert "-D" in cmd
+        assert "128" in cmd
+        assert "--batch-size" in cmd
+        assert "500" in cmd
 
 
 # ------------------------------------------------------------------
@@ -325,4 +385,94 @@ class TestJobsAPI:
         assert resp.status_code == 200
         suggestions = resp.json()
         assert len(suggestions) >= 1
-        assert suggestions[0]["type"] == "Analyze"
+        types = [s["type"] for s in suggestions]
+        assert "Analyze" in types
+        assert "Density" in types
+
+    @pytest.mark.asyncio
+    async def test_submit_density_job(self, client: AsyncClient, tmp_path: Path):
+        project_dir = str(tmp_path / "density_project")
+        resp = await client.post(
+            "/api/projects",
+            json={"path": project_dir, "name": "Density Test"},
+        )
+        project_id = resp.json()["id"]
+        mock_executor = AsyncMock()
+        mock_executor.submit = AsyncMock(return_value="density-handle")
+        with patch("recovar.gui_v2.backend.api.jobs.get_executor", return_value=mock_executor):
+            resp = await client.post(
+                "/api/jobs",
+                json={
+                    "project_id": project_id,
+                    "type": "density",
+                    "params": {"result_dir": "/data/pipeline_output", "pca_dim": 3},
+                },
+            )
+        assert resp.status_code == 201
+        assert resp.json()["type"] == "Density"
+
+    @pytest.mark.asyncio
+    async def test_submit_downsample_job(self, client: AsyncClient, tmp_path: Path):
+        project_dir = str(tmp_path / "ds_project")
+        resp = await client.post(
+            "/api/projects",
+            json={"path": project_dir, "name": "Downsample Test"},
+        )
+        project_id = resp.json()["id"]
+        mock_executor = AsyncMock()
+        mock_executor.submit = AsyncMock(return_value="ds-handle")
+        with patch("recovar.gui_v2.backend.api.jobs.get_executor", return_value=mock_executor):
+            resp = await client.post(
+                "/api/jobs",
+                json={
+                    "project_id": project_id,
+                    "type": "downsample",
+                    "params": {"particles": "/data/particles.star", "target_D": 128},
+                },
+            )
+        assert resp.status_code == 201
+        assert resp.json()["type"] == "Downsample"
+
+    @pytest.mark.asyncio
+    async def test_submit_postprocess_job(self, client: AsyncClient, tmp_path: Path):
+        project_dir = str(tmp_path / "pp_project")
+        resp = await client.post(
+            "/api/projects",
+            json={"path": project_dir, "name": "Postprocess Test"},
+        )
+        project_id = resp.json()["id"]
+        mock_executor = AsyncMock()
+        mock_executor.submit = AsyncMock(return_value="pp-handle")
+        with patch("recovar.gui_v2.backend.api.jobs.get_executor", return_value=mock_executor):
+            resp = await client.post(
+                "/api/jobs",
+                json={
+                    "project_id": project_id,
+                    "type": "postprocess",
+                    "params": {"input": "/data/halfmap1.mrc"},
+                },
+            )
+        assert resp.status_code == 201
+        assert resp.json()["type"] == "Postprocess"
+
+    @pytest.mark.asyncio
+    async def test_submit_stable_states_job(self, client: AsyncClient, tmp_path: Path):
+        project_dir = str(tmp_path / "ss_project")
+        resp = await client.post(
+            "/api/projects",
+            json={"path": project_dir, "name": "StableStates Test"},
+        )
+        project_id = resp.json()["id"]
+        mock_executor = AsyncMock()
+        mock_executor.submit = AsyncMock(return_value="ss-handle")
+        with patch("recovar.gui_v2.backend.api.jobs.get_executor", return_value=mock_executor):
+            resp = await client.post(
+                "/api/jobs",
+                json={
+                    "project_id": project_id,
+                    "type": "stable_states",
+                    "params": {"density": "/data/density.pkl"},
+                },
+            )
+        assert resp.status_code == 201
+        assert resp.json()["type"] == "StableStates"

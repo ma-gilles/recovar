@@ -111,6 +111,10 @@ function OverviewTab({ job, suggestions }: { job: JobDetail; suggestions?: Sugge
                 search={{
                   type: s.type.toLowerCase().replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase(),
                   result_dir: (s.prefilled_params?.result_dir as string) || undefined,
+                  density: (s.prefilled_params?.density as string) || undefined,
+                  input: (s.prefilled_params?.input as string) || undefined,
+                  particles: (s.prefilled_params?.particles as string) || undefined,
+                  params: undefined,
                 }}
                 className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-800"
               >
@@ -123,6 +127,36 @@ function OverviewTab({ job, suggestions }: { job: JobDetail; suggestions?: Sugge
       )}
     </div>
   );
+}
+
+function buildCloneSearchParams(job: JobDetail): {
+  type: string | undefined;
+  result_dir: string | undefined;
+  density: string | undefined;
+  input: string | undefined;
+  particles: string | undefined;
+  params: string | undefined;
+} {
+  const typeMap: Record<string, string> = {
+    Pipeline: "pipeline",
+    Analyze: "analyze",
+    ComputeState: "compute_state",
+    ComputeTrajectory: "compute_trajectory",
+    Density: "density",
+    StableStates: "stable_states",
+    Postprocess: "postprocess",
+    Downsample: "downsample",
+  };
+  const type = typeMap[job.type] ?? job.type.toLowerCase().replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
+  const p = job.params ?? {};
+  return {
+    type,
+    result_dir: p.result_dir ? String(p.result_dir) : undefined,
+    density: p.density ? String(p.density) : undefined,
+    input: p.input ? String(p.input) : undefined,
+    particles: p.particles ? String(p.particles) : undefined,
+    params: JSON.stringify(p),
+  };
 }
 
 function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
@@ -157,7 +191,7 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
         <Button variant="outline" size="sm" onClick={() => setShowCli(!showCli)}>
           {showCli ? "Hide" : "Show"} CLI Command
         </Button>
-        <Link to="/jobs/new" search={{ type: undefined, result_dir: undefined }}>
+        <Link to="/jobs/new" search={buildCloneSearchParams(job)}>
           <Button variant="outline" size="sm">
             <Copy className="h-3.5 w-3.5" />
             Clone Job

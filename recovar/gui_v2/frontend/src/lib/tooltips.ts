@@ -54,4 +54,52 @@ export const tooltips: Record<string, string> = {
     "Comma-separated latent coordinates for the trajectory end point.",
   "compute_trajectory.n_vols":
     "Number of volumes to compute along the trajectory path. Default 6.",
+  "density.result_dir":
+    "Pipeline output directory containing results to estimate density from.",
+  "density.pca_dim":
+    "Dimension of PCA space for density estimation (default 4). Runtime increases exponentially; keep at 5 or below.",
+  "density.z_dim_used":
+    "Latent dimension to use (default: smallest zdim >= pca_dim). Must be at least as large as pca_dim.",
+  "density.percentile_reject":
+    "Percentile of particles to reject due to large covariance (default 10%).",
+  "density.num_disc_points":
+    "Number of grid discretization points per dimension. Default: 50 for dim>3, 100 for dim=3, 200 for dim=2.",
+  "density.percentile_bound":
+    "Percentile bound for grid extent (default 1%). Rejects coordinates above this percentile when setting grid bounds.",
+  "stable_states.density":
+    "Path to the density .pkl file output by density estimation (e.g. deconv_density_knee.pkl).",
+  "stable_states.percent_top":
+    "Percentage of top density points to consider when finding stable states (default 1%).",
+  "stable_states.n_local_maxs":
+    "Number of local maxima (stable states) to find. If <1, uses automatic detection via HDBSCAN.",
+  "postprocess.input":
+    "Path to first halfmap (.mrc file) or a directory containing volume subdirectories for batch processing.",
+  "postprocess.halfmap2":
+    "Path to second halfmap. If not provided, auto-detected from input filename.",
+  "postprocess.voxel_size":
+    "Voxel size in Angstroms. If not provided, read from the MRC file header.",
+  "postprocess.B_factor":
+    "B-factor for sharpening in Angstroms^2. Default: no B-factor applied.",
+  "postprocess.mask_radius":
+    "Radius of spherical mask in Angstroms. Default: no mask.",
+  "postprocess.fsc_mask":
+    "Path to a mask .mrc file for FSC calculation (optional).",
+  "postprocess.batch":
+    "Process all volumes in a directory. Input should be a volumes directory.",
+  "postprocess.estimate_B_factor":
+    "Estimate B-factor from power spectrum decay instead of using a fixed value.",
+  "postprocess.local":
+    "Use local resolution filtering instead of global filtering.",
+  "postprocess.apply_mask":
+    "Path to a mask .mrc file to apply to the final filtered map.",
+  "downsample.particles":
+    "Input particle images (.mrcs, .star, .cs, or .txt file).",
+  "downsample.target_D":
+    "Target box size in pixels (must be even). Particles will be Fourier-cropped to this size.",
+  "downsample.datadir":
+    "Path prefix for resolving relative image paths in the input file.",
+  "downsample.strip_prefix":
+    "Prefix to strip from particle image paths in the star/cs file.",
+  "downsample.batch_size":
+    "Number of images to process per batch (default 1000).",
 };

@@ -27,6 +27,10 @@ const newJobRoute = createRoute({
   validateSearch: (search: Record<string, unknown>) => ({
     type: (search.type as string) || undefined,
     result_dir: (search.result_dir as string) || undefined,
+    density: (search.density as string) || undefined,
+    input: (search.input as string) || undefined,
+    particles: (search.particles as string) || undefined,
+    params: (search.params as string) || undefined,
   }),
 });
 
