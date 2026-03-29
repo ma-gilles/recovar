@@ -169,6 +169,34 @@ cd recovar/gui_v2/frontend && npm run test:e2e      # E2E
 pixi run test-gui                                   # All
 ```
 
+### Visual Verification (mandatory after any frontend change)
+
+After modifying any frontend code, you MUST verify the UI works in a real browser before pushing:
+
+1. **Build the frontend:** `cd recovar/gui_v2/frontend && npm run build`
+2. **Start the server:** `pixi run python -m recovar.gui_v2.backend.main --port 8090 &`
+3. **Take screenshots of key pages:**
+   ```bash
+   npx playwright install firefox  # first time only
+   npx playwright screenshot --browser=firefox http://localhost:8090 /tmp/gui_home.png
+   # After creating a project and importing data:
+   npx playwright screenshot --browser=firefox http://localhost:8090/jobs/<id> /tmp/gui_job.png
+   ```
+4. **Read the screenshots** to verify:
+   - All expected buttons, forms, and navigation elements are visible
+   - Layout is correct (sidebar, main panel, tabs)
+   - Empty states show helpful messages with actionable buttons
+   - Status indicators render correctly
+5. **Run Playwright E2E tests** against the running server:
+   ```bash
+   cd recovar/gui_v2/frontend && npx playwright test --browser=firefox
+   ```
+6. **Kill the server** when done: `kill %1`
+
+If screenshots show UI problems or E2E tests fail, fix the code before pushing. Do not push frontend changes that have not been visually verified.
+
+**Environment note:** This cluster has Firefox and Xvfb available. Use `--browser=firefox` with Playwright. Chromium may not be installed.
+
 ## Key Patterns
 
 ### Job Execution
