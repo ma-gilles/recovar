@@ -203,6 +203,12 @@ This script is **self-contained** — it handles its own server lifecycle, build
 
 **Do not push code that fails `gui_qa.sh`.** The git pre-push hook runs TypeScript + pytest; `gui_qa.sh` covers the browser interaction layer on top.
 
+**After pushing, spawn the QA agent for independent review:**
+```
+Spawn the gui-qa agent to review my changes. It will run functional tests AND a UX review with fresh eyes.
+```
+The QA agent (`.claude/agents/gui-qa.md`) runs `gui_qa.sh`, reads all screenshots, walks through the full user journey with Playwright, and reports both bugs and UX issues. It does NOT fix code — it only reports. You fix issues based on its report. This is mandatory, not optional. The QA agent catches problems you can't see in your own work.
+
 **Environment:** Firefox + Xvfb on Della. Playwright uses Firefox headless.
 
 ## Key Patterns
