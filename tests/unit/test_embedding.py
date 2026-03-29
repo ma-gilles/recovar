@@ -199,7 +199,6 @@ def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
         gpu_memory=1,
         disc_type="linear_interp",
         contrast_option="none",
-        to_real=True,
         compute_covariances=True,
         compute_bias=True,
     )
@@ -263,7 +262,6 @@ def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(mon
         disc_type="linear_interp",
         contrast_option="none",
         ignore_zero_frequency=True,
-        to_real=True,
         compute_covariances=False,
         compute_bias=False,
     )
@@ -328,7 +326,6 @@ def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_seri
         gpu_memory=1,
         disc_type="linear_interp",
         contrast_option="none",
-        to_real=True,
         compute_covariances=True,
         compute_bias=True,
     )
@@ -371,7 +368,6 @@ def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
         gpu_memory=1,
         disc_type="linear_interp",
         contrast_option="none",
-        to_real=True,
         compute_covariances=True,
         compute_bias=True,
     )
