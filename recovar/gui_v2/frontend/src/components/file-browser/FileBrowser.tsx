@@ -22,11 +22,13 @@ const typeIcons: Record<string, typeof File> = {
 interface FileBrowserProps {
   initialPath: string;
   accept?: string[];
+  /** If true, the browser is for selecting a directory, not a file. */
+  selectDirectory?: boolean;
   onSelect: (path: string) => void;
   onValidation?: (result: { valid: boolean | null; n_particles?: number; box_size?: number; error?: string }) => void;
 }
 
-export function FileBrowser({ initialPath, accept, onSelect, onValidation }: FileBrowserProps): React.JSX.Element {
+export function FileBrowser({ initialPath, accept, selectDirectory, onSelect, onValidation }: FileBrowserProps): React.JSX.Element {
   const [currentPath, setCurrentPath] = useState(initialPath);
 
   const { data: entries, isLoading, error } = useQuery({
@@ -101,6 +103,18 @@ export function FileBrowser({ initialPath, accept, onSelect, onValidation }: Fil
         >
           <ArrowUp className="h-3.5 w-3.5" />
           Parent directory
+        </button>
+      )}
+
+      {/* Select current directory button */}
+      {selectDirectory && (
+        <button
+          onClick={() => onSelect(currentPath)}
+          className="flex w-full items-center gap-2 border-b border-zinc-800 bg-blue-600/10 px-3 py-2 text-sm text-blue-400 hover:bg-blue-600/20"
+        >
+          <Folder className="h-3.5 w-3.5" />
+          Select this directory
+          <span className="ml-auto font-mono text-xs text-zinc-500">{currentPath}</span>
         </button>
       )}
 

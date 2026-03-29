@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
   Plus,
@@ -14,9 +14,14 @@ import {
   HardDrive,
   Beaker,
   FolderOpen,
+  FolderPlus,
 } from "lucide-react";
 import { clsx } from "clsx";
-import { getProject, type ProjectDetail, type JobSummary } from "../../lib/api/client";
+import { getProject, createProject, type ProjectDetail, type JobSummary } from "../../lib/api/client";
+import { Button } from "../ui/button";
+import { Input } from "../ui/input";
+import { Label } from "../ui/label";
+import { FileBrowser } from "../file-browser/FileBrowser";
 
 // Status icon mapping per DESIGN-SYSTEM.md
 function StatusIcon({ status }: { status: string }): React.JSX.Element {
@@ -113,10 +118,13 @@ function DiskUsage({ bytes, total }: { bytes: number; total: number }): React.JS
 
 interface SidebarProps {
   projectId?: string;
+  onProjectCreated?: (project: { id: string; path: string; name: string }) => void;
 }
 
-export function Sidebar({ projectId }: SidebarProps = {}): React.JSX.Element {
+export function Sidebar({ projectId, onProjectCreated }: SidebarProps): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(false);
+  const [showCreateForm, setShowCreateForm] = useState(false);
+  const [showOpenForm, setShowOpenForm] = useState(false);
 
   const { data: project } = useQuery<ProjectDetail>({
     queryKey: ["project", projectId],
@@ -130,6 +138,12 @@ export function Sidebar({ projectId }: SidebarProps = {}): React.JSX.Element {
   const otherJobs =
     project?.jobs.filter((j) => j.type !== "pipeline" && j.type !== "analyze") ?? [];
 
+  const handleProjectCreated = (p: { id: string; path: string; name: string }) => {
+    setShowCreateForm(false);
+    setShowOpenForm(false);
+    onProjectCreated?.(p);
+  };
+
   if (collapsed) {
     return (
       <aside className="flex w-12 flex-col items-center border-r border-zinc-800 bg-zinc-900 py-2">
@@ -140,13 +154,23 @@ export function Sidebar({ projectId }: SidebarProps = {}): React.JSX.Element {
         >
           <Menu className="h-4 w-4" />
         </button>
-        <Link
-          to="/jobs/new"
-          className="mt-4 rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
-          aria-label="New job"
-        >
-          <Plus className="h-4 w-4" />
-        </Link>
+        {projectId ? (
+          <Link
+            to="/jobs/new"
+            className="mt-4 rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
+            aria-label="New job"
+          >
+            <Plus className="h-4 w-4" />
+          </Link>
+        ) : (
+          <button
+            onClick={() => { setCollapsed(false); setShowCreateForm(true); }}
+            className="mt-4 rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
+            aria-label="Create project"
+          >
+            <FolderPlus className="h-4 w-4" />
+          </button>
+        )}
       </aside>
     );
   }
@@ -168,46 +192,198 @@ export function Sidebar({ projectId }: SidebarProps = {}): React.JSX.Element {
         </button>
       </div>
 
-      {/* New Job button */}
-      <div className="border-b border-zinc-800 p-2">
-        <Link
-          to="/jobs/new"
-          className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"
-        >
-          <Plus className="h-4 w-4" />
-          New Job
-        </Link>
-      </div>
-
-      {/* Job tree */}
-      <nav className="flex-1 overflow-y-auto py-2">
-        {project ? (
-          <div className="space-y-1">
-            <div className="flex items-center gap-2 px-3 py-1 text-xs text-zinc-500">
-              <FolderOpen className="h-3 w-3" />
-              <span className="truncate">{project.name}</span>
-            </div>
-            <div className="border-t border-zinc-800 pt-1">
-              <JobSection title="Pipeline" jobs={pipelineJobs} />
-              <JobSection title="Analyze" jobs={analyzeJobs} />
-              <JobSection title="Other" jobs={otherJobs} defaultOpen={false} />
-            </div>
+      {projectId ? (
+        <>
+          {/* New Job button — only when project is open */}
+          <div className="border-b border-zinc-800 p-2">
+            <Link
+              to="/jobs/new"
+              className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"
+            >
+              <Plus className="h-4 w-4" />
+              New Job
+            </Link>
           </div>
-        ) : (
-          <div className="px-3 py-4 text-center text-xs text-zinc-500">
-            No project open.
-            <br />
-            Create or open a project to start.
-          </div>
-        )}
-      </nav>
 
-      {/* Disk usage */}
-      {project && project.disk_usage_bytes > 0 && (
-        <div className="border-t border-zinc-800">
-          <DiskUsage bytes={project.disk_usage_bytes} total={100e9} />
-        </div>
+          {/* Job tree */}
+          <nav className="flex-1 overflow-y-auto py-2">
+            {project ? (
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 px-3 py-1 text-xs text-zinc-500">
+                  <FolderOpen className="h-3 w-3" />
+                  <span className="truncate">{project.name}</span>
+                </div>
+                <div className="border-t border-zinc-800 pt-1">
+                  <JobSection title="Pipeline" jobs={pipelineJobs} />
+                  <JobSection title="Analyze" jobs={analyzeJobs} />
+                  <JobSection title="Other" jobs={otherJobs} defaultOpen={false} />
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />
+              </div>
+            )}
+          </nav>
+
+          {/* Disk usage */}
+          {project && project.disk_usage_bytes > 0 && (
+            <div className="border-t border-zinc-800">
+              <DiskUsage bytes={project.disk_usage_bytes} total={100e9} />
+            </div>
+          )}
+        </>
+      ) : (
+        <>
+          {/* No project — show Create/Open buttons */}
+          <div className="border-b border-zinc-800 p-2 space-y-1.5">
+            <button
+              onClick={() => { setShowCreateForm(true); setShowOpenForm(false); }}
+              className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"
+            >
+              <FolderPlus className="h-4 w-4" />
+              Create Project
+            </button>
+            <button
+              onClick={() => { setShowOpenForm(true); setShowCreateForm(false); }}
+              className="flex w-full items-center justify-center gap-2 rounded-md border border-zinc-700 px-3 py-2 text-sm font-medium text-zinc-300 hover:bg-zinc-800"
+            >
+              <FolderOpen className="h-4 w-4" />
+              Open Project
+            </button>
+          </div>
+          <nav className="flex-1 overflow-y-auto py-4">
+            <div className="px-3 text-center text-xs text-zinc-500">
+              No project open.
+              <br />
+              Create or open a project to start.
+            </div>
+          </nav>
+        </>
+      )}
+
+      {/* Create/Open project modals rendered outside the aside */}
+      {(showCreateForm || showOpenForm) && (
+        <ProjectFormOverlay
+          mode={showCreateForm ? "create" : "open"}
+          onDone={handleProjectCreated}
+          onCancel={() => { setShowCreateForm(false); setShowOpenForm(false); }}
+        />
       )}
     </aside>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Overlay for Create / Open project
+// ---------------------------------------------------------------------------
+
+function ProjectFormOverlay({
+  mode,
+  onDone,
+  onCancel,
+}: {
+  mode: "create" | "open";
+  onDone: (project: { id: string; path: string; name: string }) => void;
+  onCancel: () => void;
+}): React.JSX.Element {
+  const queryClient = useQueryClient();
+  const [path, setPath] = useState("");
+  const [name, setName] = useState("");
+  const [showBrowser, setShowBrowser] = useState(true);
+
+  const mutation = useMutation({
+    mutationFn: () => {
+      const projectName = mode === "create" ? name || path.split("/").pop() || "Project" : path.split("/").pop() || "Project";
+      return createProject(path, projectName);
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ["project"] });
+      onDone({ id: data.id, path: data.path, name: data.name });
+    },
+  });
+
+  const isCreate = mode === "create";
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+      <div className="w-full max-w-lg rounded-lg border border-zinc-700 bg-zinc-900 p-6 shadow-xl">
+        <h2 className="text-lg font-medium">
+          {isCreate ? "Create Project" : "Open Project"}
+        </h2>
+        <p className="mt-1 text-sm text-zinc-400">
+          {isCreate
+            ? "Choose a directory for the new project. A recovar_project.db will be created there."
+            : "Select a directory that contains an existing recovar project."}
+        </p>
+
+        <div className="mt-4 space-y-3">
+          {/* Path */}
+          <div className="space-y-1">
+            <Label>Directory</Label>
+            <div className="flex gap-2">
+              <Input
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder="/scratch/gpfs/..."
+                className="font-mono"
+              />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowBrowser(!showBrowser)}
+              >
+                {showBrowser ? "Hide" : "Browse"}
+              </Button>
+            </div>
+          </div>
+
+          {showBrowser && (
+            <FileBrowser
+              initialPath="/scratch/gpfs/GILLES/mg6942"
+              selectDirectory
+              onSelect={(selectedPath) => {
+                setPath(selectedPath);
+                // Auto-fill the name from directory
+                if (!name) {
+                  setName(selectedPath.split("/").pop() || "");
+                }
+              }}
+            />
+          )}
+
+          {/* Name — only for Create */}
+          {isCreate && (
+            <div className="space-y-1">
+              <Label>Project Name</Label>
+              <Input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder={path.split("/").pop() || "My Project"}
+              />
+            </div>
+          )}
+
+          {mutation.isError && (
+            <p className="text-sm text-red-400">{(mutation.error as Error).message}</p>
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => mutation.mutate()}
+              disabled={!path}
+              loading={mutation.isPending}
+            >
+              {mutation.isPending
+                ? isCreate ? "Creating..." : "Opening..."
+                : isCreate ? "Create Project" : "Open Project"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

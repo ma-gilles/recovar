@@ -1,5 +1,7 @@
 import { useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, Link } from "@tanstack/react-router";
+import { FolderOpen } from "lucide-react";
+import { useProject } from "../../lib/project-context";
 import { Select } from "../../components/ui/select";
 import { Label } from "../../components/ui/label";
 import { PipelineForm } from "../../components/job-form/PipelineForm";
@@ -16,11 +18,28 @@ const JOB_TYPES = [
 
 export function NewJobPage(): React.JSX.Element {
   const navigate = useNavigate();
+  const { project } = useProject();
   const [jobType, setJobType] = useState<string>("pipeline");
 
-  // TODO: Get from project context or URL params
-  const projectId = "default";
-  const projectPath = "/";
+  if (!project) {
+    return (
+      <div className="space-y-6">
+        <h1 className="text-xl font-semibold">New Job</h1>
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
+          <FolderOpen className="mx-auto h-10 w-10 text-zinc-600" />
+          <p className="mt-3 text-zinc-400">
+            You need to create or open a project before submitting jobs.
+          </p>
+          <Link
+            to="/"
+            className="mt-4 inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500"
+          >
+            Go to Dashboard
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   const handleSubmitted = (jobId: string) => {
     navigate({ to: "/jobs/$jobId", params: { jobId } });
@@ -45,19 +64,19 @@ export function NewJobPage(): React.JSX.Element {
         <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-6">
           {jobType === "pipeline" && (
             <PipelineForm
-              projectId={projectId}
-              projectPath={projectPath}
+              projectId={project.id}
+              projectPath={project.path}
               onSubmitted={handleSubmitted}
             />
           )}
           {jobType === "analyze" && (
-            <AnalyzeForm projectId={projectId} onSubmitted={handleSubmitted} />
+            <AnalyzeForm projectId={project.id} onSubmitted={handleSubmitted} />
           )}
           {jobType === "compute_state" && (
-            <ComputeStateForm projectId={projectId} onSubmitted={handleSubmitted} />
+            <ComputeStateForm projectId={project.id} onSubmitted={handleSubmitted} />
           )}
           {jobType === "compute_trajectory" && (
-            <ComputeTrajectoryForm projectId={projectId} onSubmitted={handleSubmitted} />
+            <ComputeTrajectoryForm projectId={project.id} onSubmitted={handleSubmitted} />
           )}
         </div>
       </div>

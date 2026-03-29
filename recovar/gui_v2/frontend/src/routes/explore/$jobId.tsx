@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Box } from "lucide-react";
 import { clsx } from "clsx";
 import { getJob, getJobVolumes, type JobDetail, type VolumeEntry } from "../../lib/api/client";
+import { useProject } from "../../lib/project-context";
 import { Spinner } from "../../components/ui/spinner";
 import { LatentExplorer } from "../../components/latent-explorer/LatentExplorer";
 import { VolumeViewer } from "../../components/volume-viewer/VolumeViewer";
@@ -44,8 +45,8 @@ export function ExplorePage(): React.JSX.Element {
     );
   }
 
-  // TODO: resolve project ID from job context
-  const projectId = "default";
+  const { project: activeProject } = useProject();
+  const projectId = activeProject?.id ?? "";
 
   return (
     <div className="space-y-4">

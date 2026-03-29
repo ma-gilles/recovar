@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import { RouterProvider, createRouter, createRootRoute, createRoute } from "@tanstack/react-router";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "./styles/globals.css";
+import { ProjectProvider } from "./lib/project-context";
 
 import { RootLayout } from "./routes/__root";
 import { DashboardPage } from "./routes/index";
@@ -64,7 +65,9 @@ const queryClient = new QueryClient({
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <RouterProvider router={router} />
+      <ProjectProvider>
+        <RouterProvider router={router} />
+      </ProjectProvider>
     </QueryClientProvider>
   </React.StrictMode>
 );

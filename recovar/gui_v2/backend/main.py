@@ -26,6 +26,7 @@ from recovar.gui_v2.backend.api.subsets import router as subsets_router
 from recovar.gui_v2.backend.api.system import router as system_router
 from recovar.gui_v2.backend.api.volumes import router as volumes_router
 from recovar.gui_v2.backend.api.ws import router as ws_router
+from recovar.gui_v2.backend.api.files import configure_allowed_roots
 from recovar.gui_v2.backend.config import DEFAULT_HOST, DEFAULT_PORT
 from recovar.gui_v2.backend.db import close_all
 
@@ -36,6 +37,21 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Startup / shutdown lifecycle."""
     logger.info("recovar GUI v2 backend starting")
+
+    # Configure file browser allowed roots.
+    # Default: user home, /scratch, /tmp, and common HPC paths.
+    import os
+    default_roots = [
+        os.path.expanduser("~"),
+        "/tmp",
+    ]
+    # Add common HPC scratch paths if they exist
+    for candidate in ["/scratch", "/gpfs", "/projects", "/data"]:
+        if os.path.isdir(candidate):
+            default_roots.append(candidate)
+    configure_allowed_roots(default_roots)
+    logger.info("File browser allowed roots: %s", default_roots)
+
     yield
     logger.info("Shutting down — closing database connections")
     await close_all()
