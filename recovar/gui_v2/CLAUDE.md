@@ -178,33 +178,26 @@ cd recovar/gui_v2/frontend && npm run test:e2e      # E2E
 pixi run test-gui                                   # All
 ```
 
-### Visual Verification (mandatory after any frontend change)
+### Mandatory QA (after any frontend or backend change)
 
-After modifying any frontend code, you MUST verify the UI works in a real browser before pushing:
+After modifying any code, you MUST run the QA suite before pushing:
 
-1. **Build the frontend:** `cd recovar/gui_v2/frontend && npm run build`
-2. **Start the server:** `pixi run python -m recovar.gui_v2.backend.main --port 8090 &`
-3. **Take screenshots of key pages:**
-   ```bash
-   npx playwright install firefox  # first time only
-   npx playwright screenshot --browser=firefox http://localhost:8090 /tmp/gui_home.png
-   # After creating a project and importing data:
-   npx playwright screenshot --browser=firefox http://localhost:8090/jobs/<id> /tmp/gui_job.png
-   ```
-4. **Read the screenshots** to verify:
-   - All expected buttons, forms, and navigation elements are visible
-   - Layout is correct (sidebar, main panel, tabs)
-   - Empty states show helpful messages with actionable buttons
-   - Status indicators render correctly
-5. **Run Playwright E2E tests** against the running server:
-   ```bash
-   cd recovar/gui_v2/frontend && npx playwright test --browser=firefox
-   ```
-6. **Kill the server** when done: `kill %1`
+```bash
+./scripts/gui_qa.sh
+```
 
-If screenshots show UI problems or E2E tests fail, fix the code before pushing. Do not push frontend changes that have not been visually verified.
+This single script: builds the frontend, starts the server, creates a test project, scans real pipeline output, runs Playwright interaction tests (not just existence checks), takes screenshots, and reports pass/fail. It exits with code 1 if any test fails.
 
-**Environment note:** This cluster has Firefox and Xvfb available. Use `--browser=firefox` with Playwright. Chromium may not be installed.
+**After `gui_qa.sh` runs:**
+1. Check the exit code. If non-zero, read the FAILURES section and fix before pushing.
+2. Read every screenshot in `/tmp/gui_qa/screenshots/` to check for visual issues the automated tests can't catch.
+3. Read `/tmp/gui_qa/results.json` for machine-readable results.
+
+**If you cannot fix a failure**, report it clearly: what the test expected, what actually happened, and which file likely needs changing.
+
+**Do not push code that fails `gui_qa.sh`.** This is the equivalent of "tests must pass before push."
+
+**Environment note:** This cluster has Firefox and Xvfb available. Playwright uses Firefox headless. Chromium may not be installed.
 
 ## Key Patterns
 
