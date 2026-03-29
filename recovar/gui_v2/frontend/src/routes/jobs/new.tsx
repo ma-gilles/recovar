@@ -1,0 +1,66 @@
+import { useState } from "react";
+import { useNavigate } from "@tanstack/react-router";
+import { Select } from "../../components/ui/select";
+import { Label } from "../../components/ui/label";
+import { PipelineForm } from "../../components/job-form/PipelineForm";
+import { AnalyzeForm } from "../../components/job-form/AnalyzeForm";
+import { ComputeStateForm } from "../../components/job-form/ComputeStateForm";
+import { ComputeTrajectoryForm } from "../../components/job-form/ComputeTrajectoryForm";
+
+const JOB_TYPES = [
+  { value: "pipeline", label: "Pipeline" },
+  { value: "analyze", label: "Analyze" },
+  { value: "compute_state", label: "Compute State" },
+  { value: "compute_trajectory", label: "Compute Trajectory" },
+] as const;
+
+export function NewJobPage(): React.JSX.Element {
+  const navigate = useNavigate();
+  const [jobType, setJobType] = useState<string>("pipeline");
+
+  // TODO: Get from project context or URL params
+  const projectId = "default";
+  const projectPath = "/";
+
+  const handleSubmitted = (jobId: string) => {
+    navigate({ to: "/jobs/$jobId", params: { jobId } });
+  };
+
+  return (
+    <div className="space-y-6">
+      <h1 className="text-xl font-semibold">New Job</h1>
+
+      <div className="max-w-2xl space-y-6">
+        <div className="space-y-1">
+          <Label>Job Type</Label>
+          <Select value={jobType} onChange={(e) => setJobType(e.target.value)}>
+            {JOB_TYPES.map((t) => (
+              <option key={t.value} value={t.value}>
+                {t.label}
+              </option>
+            ))}
+          </Select>
+        </div>
+
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-6">
+          {jobType === "pipeline" && (
+            <PipelineForm
+              projectId={projectId}
+              projectPath={projectPath}
+              onSubmitted={handleSubmitted}
+            />
+          )}
+          {jobType === "analyze" && (
+            <AnalyzeForm projectId={projectId} onSubmitted={handleSubmitted} />
+          )}
+          {jobType === "compute_state" && (
+            <ComputeStateForm projectId={projectId} onSubmitted={handleSubmitted} />
+          )}
+          {jobType === "compute_trajectory" && (
+            <ComputeTrajectoryForm projectId={projectId} onSubmitted={handleSubmitted} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

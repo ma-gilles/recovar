@@ -1,0 +1,213 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import {
+  Plus,
+  ChevronDown,
+  ChevronRight,
+  Menu,
+  CheckCircle,
+  XCircle,
+  Clock,
+  Loader2,
+  MinusCircle,
+  HardDrive,
+  Beaker,
+  FolderOpen,
+} from "lucide-react";
+import { clsx } from "clsx";
+import { getProject, type ProjectDetail, type JobSummary } from "../../lib/api/client";
+
+// Status icon mapping per DESIGN-SYSTEM.md
+function StatusIcon({ status }: { status: string }): React.JSX.Element {
+  switch (status) {
+    case "running":
+      return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />;
+    case "completed":
+      return <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />;
+    case "failed":
+      return <XCircle className="h-3.5 w-3.5 text-red-500" />;
+    case "queued":
+      return <Clock className="h-3.5 w-3.5 text-amber-500" />;
+    case "cancelled":
+      return <MinusCircle className="h-3.5 w-3.5 text-zinc-500" />;
+    default:
+      return <MinusCircle className="h-3.5 w-3.5 text-zinc-500" />;
+  }
+}
+
+function JobItem({ job }: { job: JobSummary }): React.JSX.Element {
+  const dirName = job.output_dir.split("/").pop() ?? job.id.slice(0, 8);
+  return (
+    <Link
+      to="/jobs/$jobId"
+      params={{ jobId: job.id }}
+      className={clsx(
+        "flex items-center gap-2 rounded-md px-3 py-1.5 text-sm text-zinc-400",
+        "hover:bg-zinc-800 hover:text-zinc-50",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+      )}
+      activeProps={{ className: "bg-zinc-700 text-zinc-50" }}
+    >
+      <StatusIcon status={job.status} />
+      <span className="truncate">{dirName}</span>
+    </Link>
+  );
+}
+
+function JobSection({
+  title,
+  jobs,
+  defaultOpen = true,
+}: {
+  title: string;
+  jobs: JobSummary[];
+  defaultOpen?: boolean;
+}): React.JSX.Element | null {
+  const [open, setOpen] = useState(defaultOpen);
+  if (jobs.length === 0) return null;
+
+  return (
+    <div>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-1 px-3 py-1.5 text-xs font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
+      >
+        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {title} ({jobs.length})
+      </button>
+      {open && (
+        <div className="ml-2 space-y-0.5">
+          {jobs.map((job) => (
+            <JobItem key={job.id} job={job} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DiskUsage({ bytes, total }: { bytes: number; total: number }): React.JSX.Element {
+  const usedGB = (bytes / 1e9).toFixed(1);
+  const totalGB = (total / 1e9).toFixed(0);
+  const pct = total > 0 ? (bytes / total) * 100 : 0;
+  const color = pct > 95 ? "text-red-500" : pct > 80 ? "text-amber-500" : "text-emerald-500";
+
+  return (
+    <div className="px-3 py-2 text-xs text-zinc-500">
+      <div className="flex items-center gap-1">
+        <HardDrive className="h-3 w-3" />
+        <span className={color}>
+          {usedGB} GB / {totalGB} GB
+        </span>
+      </div>
+      <div className="mt-1 h-1 w-full rounded-full bg-zinc-800">
+        <div
+          className={clsx("h-1 rounded-full", pct > 95 ? "bg-red-500" : pct > 80 ? "bg-amber-500" : "bg-emerald-500")}
+          style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
+interface SidebarProps {
+  projectId?: string;
+}
+
+export function Sidebar({ projectId }: SidebarProps = {}): React.JSX.Element {
+  const [collapsed, setCollapsed] = useState(false);
+
+  const { data: project } = useQuery<ProjectDetail>({
+    queryKey: ["project", projectId],
+    queryFn: () => getProject(projectId!),
+    enabled: !!projectId,
+    refetchInterval: 5000,
+  });
+
+  const pipelineJobs = project?.jobs.filter((j) => j.type === "pipeline") ?? [];
+  const analyzeJobs = project?.jobs.filter((j) => j.type === "analyze") ?? [];
+  const otherJobs =
+    project?.jobs.filter((j) => j.type !== "pipeline" && j.type !== "analyze") ?? [];
+
+  if (collapsed) {
+    return (
+      <aside className="flex w-12 flex-col items-center border-r border-zinc-800 bg-zinc-900 py-2">
+        <button
+          onClick={() => setCollapsed(false)}
+          className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
+          aria-label="Expand sidebar"
+        >
+          <Menu className="h-4 w-4" />
+        </button>
+        <Link
+          to="/jobs/new"
+          className="mt-4 rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
+          aria-label="New job"
+        >
+          <Plus className="h-4 w-4" />
+        </Link>
+      </aside>
+    );
+  }
+
+  return (
+    <aside className="flex w-60 flex-col border-r border-zinc-800 bg-zinc-900">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-3">
+        <Link to="/" className="flex items-center gap-2 text-sm font-medium text-zinc-50">
+          <Beaker className="h-4 w-4 text-blue-500" />
+          recovar
+        </Link>
+        <button
+          onClick={() => setCollapsed(true)}
+          className="rounded p-1 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
+          aria-label="Collapse sidebar"
+        >
+          <Menu className="h-4 w-4" />
+        </button>
+      </div>
+
+      {/* New Job button */}
+      <div className="border-b border-zinc-800 p-2">
+        <Link
+          to="/jobs/new"
+          className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"
+        >
+          <Plus className="h-4 w-4" />
+          New Job
+        </Link>
+      </div>
+
+      {/* Job tree */}
+      <nav className="flex-1 overflow-y-auto py-2">
+        {project ? (
+          <div className="space-y-1">
+            <div className="flex items-center gap-2 px-3 py-1 text-xs text-zinc-500">
+              <FolderOpen className="h-3 w-3" />
+              <span className="truncate">{project.name}</span>
+            </div>
+            <div className="border-t border-zinc-800 pt-1">
+              <JobSection title="Pipeline" jobs={pipelineJobs} />
+              <JobSection title="Analyze" jobs={analyzeJobs} />
+              <JobSection title="Other" jobs={otherJobs} defaultOpen={false} />
+            </div>
+          </div>
+        ) : (
+          <div className="px-3 py-4 text-center text-xs text-zinc-500">
+            No project open.
+            <br />
+            Create or open a project to start.
+          </div>
+        )}
+      </nav>
+
+      {/* Disk usage */}
+      {project && project.disk_usage_bytes > 0 && (
+        <div className="border-t border-zinc-800">
+          <DiskUsage bytes={project.disk_usage_bytes} total={100e9} />
+        </div>
+      )}
+    </aside>
+  );
+}
