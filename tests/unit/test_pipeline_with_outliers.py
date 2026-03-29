@@ -80,7 +80,6 @@ def _make_args(tmp_path, *, tilt_series=False):
         padding=0,
         new_noise_est=False,
         use_reg_mean_in_contrast=True,
-        multi_zdim_embedding=False,
         keep_intermediate=False,
         test_covar_options=False,
     )
