@@ -83,10 +83,22 @@ def create_app() -> FastAPI:
     app.include_router(system_router)
     app.include_router(ws_router)
 
-    # Serve prebuilt frontend assets if the static directory exists
+    # Serve prebuilt frontend assets if the static directory exists.
+    # Static assets first, then a catch-all for SPA client-side routing.
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
-        app.mount("/", StaticFiles(directory=str(static_dir), html=True))
+        app.mount("/assets", StaticFiles(directory=str(static_dir / "assets")), name="assets")
+
+        from fastapi.responses import FileResponse
+
+        @app.get("/{full_path:path}")
+        async def serve_spa(full_path: str):
+            """Serve index.html for all non-API paths (SPA catch-all)."""
+            # Try to serve an actual static file first
+            file_path = static_dir / full_path
+            if full_path and file_path.is_file():
+                return FileResponse(file_path)
+            return FileResponse(static_dir / "index.html")
 
     return app
 

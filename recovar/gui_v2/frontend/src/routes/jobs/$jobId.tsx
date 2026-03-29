@@ -338,7 +338,7 @@ export function JobDetailPage(): React.JSX.Element {
               Cancel
             </Button>
           )}
-          {isTerminal && job.type === "pipeline" && (
+          {isTerminal && job.type.toLowerCase() === "pipeline" && (
             <Link to="/explore/$jobId" params={{ jobId }}>
               <Button variant="outline" size="sm">
                 Explore
