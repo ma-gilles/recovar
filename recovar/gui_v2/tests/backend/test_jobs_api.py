@@ -4,10 +4,12 @@ Covers:
     - POST /api/jobs (submit)
     - GET /api/jobs/:id (detail)
     - POST /api/jobs/:id/cancel
+    - POST /api/jobs/:id/reconcile
     - GET /api/jobs/:id/volumes
     - GET /api/jobs/:id/plots
     - GET /api/jobs/:id/suggested-next
     - Command builder unit tests
+    - Startup reconciliation
 """
 
 from __future__ import annotations
@@ -476,3 +478,354 @@ class TestJobsAPI:
             )
         assert resp.status_code == 201
         assert resp.json()["type"] == "StableStates"
+
+
+# ------------------------------------------------------------------
+# Reconcile endpoint tests
+# ------------------------------------------------------------------
+
+
+class TestReconcileEndpoint:
+    """Tests for POST /api/jobs/:id/reconcile."""
+
+    async def _create_running_job(
+        self, client: AsyncClient, tmp_path: Path
+    ) -> tuple[str, str]:
+        """Helper: create a project + submit a running job.  Returns (project_id, job_id)."""
+        project_dir = str(tmp_path / "reconcile_project")
+        resp = await client.post(
+            "/api/projects",
+            json={"path": project_dir, "name": "Reconcile Test"},
+        )
+        project_id = resp.json()["id"]
+
+        mock_executor = AsyncMock()
+        mock_executor.submit = AsyncMock(return_value="slurm-42")
+
+        with patch(
+            "recovar.gui_v2.backend.api.jobs.get_executor",
+            return_value=mock_executor,
+        ):
+            resp = await client.post(
+                "/api/jobs",
+                json={
+                    "project_id": project_id,
+                    "type": "Pipeline",
+                    "params": {
+                        "particles": "/data/test.star",
+                        "mask": "sphere",
+                    },
+                },
+            )
+        assert resp.status_code == 201
+        job_id = resp.json()["id"]
+        return project_id, job_id
+
+    @pytest.mark.asyncio
+    async def test_reconcile_running_to_completed(
+        self, client: AsyncClient, tmp_path: Path
+    ):
+        """Job is running in DB but SLURM says COMPLETED -> should update."""
+        _, job_id = await self._create_running_job(client, tmp_path)
+
+        # Verify it's running
+        resp = await client.get(f"/api/jobs/{job_id}")
+        assert resp.json()["status"] == "running"
+
+        # Mock executor.status to return COMPLETED
+        from recovar.gui_v2.backend.services.executor import (
+            JobStatus as ExecJobStatus,
+        )
+
+        mock_executor = AsyncMock()
+        mock_executor.status = AsyncMock(return_value=ExecJobStatus.COMPLETED)
+
+        with patch(
+            "recovar.gui_v2.backend.api.jobs.get_executor",
+            return_value=mock_executor,
+        ):
+            resp = await client.post(f"/api/jobs/{job_id}/reconcile")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["previous_status"] == "running"
+        assert data["new_status"] == "completed"
+        assert data["changed"] is True
+
+        # Verify the DB was updated
+        resp = await client.get(f"/api/jobs/{job_id}")
+        assert resp.json()["status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_reconcile_running_to_failed(
+        self, client: AsyncClient, tmp_path: Path
+    ):
+        """Job is running in DB but SLURM says FAILED -> should update."""
+        _, job_id = await self._create_running_job(client, tmp_path)
+
+        from recovar.gui_v2.backend.services.executor import (
+            JobStatus as ExecJobStatus,
+        )
+
+        mock_executor = AsyncMock()
+        mock_executor.status = AsyncMock(return_value=ExecJobStatus.FAILED)
+
+        with patch(
+            "recovar.gui_v2.backend.api.jobs.get_executor",
+            return_value=mock_executor,
+        ):
+            resp = await client.post(f"/api/jobs/{job_id}/reconcile")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["new_status"] == "failed"
+        assert data["changed"] is True
+        assert data["error"] is not None
+
+    @pytest.mark.asyncio
+    async def test_reconcile_still_running(
+        self, client: AsyncClient, tmp_path: Path
+    ):
+        """Job is running in both DB and SLURM -> no change."""
+        _, job_id = await self._create_running_job(client, tmp_path)
+
+        from recovar.gui_v2.backend.services.executor import (
+            JobStatus as ExecJobStatus,
+        )
+
+        mock_executor = AsyncMock()
+        mock_executor.status = AsyncMock(return_value=ExecJobStatus.RUNNING)
+
+        with patch(
+            "recovar.gui_v2.backend.api.jobs.get_executor",
+            return_value=mock_executor,
+        ):
+            resp = await client.post(f"/api/jobs/{job_id}/reconcile")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["changed"] is False
+        assert data["new_status"] == "running"
+
+    @pytest.mark.asyncio
+    async def test_reconcile_already_terminal(
+        self, client: AsyncClient, tmp_path: Path
+    ):
+        """Job already completed -> reconcile is a no-op."""
+        _, job_id = await self._create_running_job(client, tmp_path)
+
+        # Force the job to completed state
+        from recovar.gui_v2.backend.config import get_db_path
+        from recovar.gui_v2.backend.db import init_db
+        from recovar.gui_v2.backend.models.job import Job
+        from sqlalchemy import select
+
+        project_dir = str(tmp_path / "reconcile_project")
+        db_path = get_db_path(project_dir)
+        sf = await init_db(db_path)
+        async with sf() as session:
+            stmt = select(Job).where(Job.id == job_id)
+            result = await session.execute(stmt)
+            job = result.scalar_one()
+            job.status = "completed"
+            await session.commit()
+
+        resp = await client.post(f"/api/jobs/{job_id}/reconcile")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["changed"] is False
+        assert data["new_status"] == "completed"
+
+    @pytest.mark.asyncio
+    async def test_reconcile_unknown_becomes_failed(
+        self, client: AsyncClient, tmp_path: Path
+    ):
+        """SLURM returns UNKNOWN -> should mark as failed."""
+        _, job_id = await self._create_running_job(client, tmp_path)
+
+        from recovar.gui_v2.backend.services.executor import (
+            JobStatus as ExecJobStatus,
+        )
+
+        mock_executor = AsyncMock()
+        mock_executor.status = AsyncMock(return_value=ExecJobStatus.UNKNOWN)
+
+        with patch(
+            "recovar.gui_v2.backend.api.jobs.get_executor",
+            return_value=mock_executor,
+        ):
+            resp = await client.post(f"/api/jobs/{job_id}/reconcile")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["new_status"] == "failed"
+        assert data["changed"] is True
+        assert "unknown" in data["error"].lower()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_not_found(self, client: AsyncClient):
+        resp = await client.post("/api/jobs/nonexistent/reconcile")
+        assert resp.status_code == 404
+
+
+# ------------------------------------------------------------------
+# Startup reconciliation tests
+# ------------------------------------------------------------------
+
+
+class TestStartupReconcile:
+    """Tests for _reconcile_on_startup in main.py."""
+
+    @pytest.mark.asyncio
+    async def test_reconcile_on_startup_updates_completed_job(
+        self, tmp_path: Path
+    ):
+        """Simulate a job that completed while server was down."""
+        from recovar.gui_v2.backend.api.jobs import _poll_tasks
+        from recovar.gui_v2.backend.api.project import _project_registry
+        from recovar.gui_v2.backend.config import get_db_path
+        from recovar.gui_v2.backend.db import init_db
+        from recovar.gui_v2.backend.main import _reconcile_on_startup
+        from recovar.gui_v2.backend.models.job import Job, JobStatus
+        from recovar.gui_v2.backend.models.project import Project
+        from recovar.gui_v2.backend.services.executor import (
+            JobStatus as ExecJobStatus,
+        )
+        from sqlalchemy import select
+
+        # Clear state
+        _project_registry.clear()
+        for t in _poll_tasks.values():
+            t.cancel()
+        _poll_tasks.clear()
+
+        # Create project DB with a "running" job
+        project_dir = str(tmp_path / "startup_project")
+        os.makedirs(project_dir, exist_ok=True)
+        db_path = get_db_path(project_dir)
+        sf = await init_db(db_path)
+
+        async with sf() as session:
+            project = Project(name="Startup Test", path=project_dir)
+            session.add(project)
+            await session.flush()
+
+            job = Job(
+                project_id=project.id,
+                type="Pipeline",
+                status=JobStatus.RUNNING.value,
+                output_dir=str(tmp_path / "startup_project" / "Pipeline" / "job_0001"),
+                executor_handle="slurm-999",
+                slurm_id="999",
+            )
+            session.add(job)
+            await session.commit()
+            job_id = job.id
+            project_id = project.id
+
+        # Register the project
+        _project_registry[project_id] = project_dir
+
+        # Mock executor to return COMPLETED
+        mock_executor = AsyncMock()
+        mock_executor.status = AsyncMock(return_value=ExecJobStatus.COMPLETED)
+
+        with patch(
+            "recovar.gui_v2.backend.api.jobs.get_executor",
+            return_value=mock_executor,
+        ):
+            await _reconcile_on_startup()
+
+        # Verify the job was updated
+        async with sf() as session:
+            stmt = select(Job).where(Job.id == job_id)
+            result = await session.execute(stmt)
+            job = result.scalar_one()
+            assert job.status == "completed"
+            assert job.completed_at is not None
+
+        # Clean up
+        _project_registry.clear()
+        await close_all()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_on_startup_restarts_poller_for_running(
+        self, tmp_path: Path
+    ):
+        """Job that is still running should get a new background poller."""
+        from recovar.gui_v2.backend.api.jobs import _poll_tasks
+        from recovar.gui_v2.backend.api.project import _project_registry
+        from recovar.gui_v2.backend.config import get_db_path
+        from recovar.gui_v2.backend.db import init_db
+        from recovar.gui_v2.backend.main import _reconcile_on_startup
+        from recovar.gui_v2.backend.models.job import Job, JobStatus
+        from recovar.gui_v2.backend.models.project import Project
+        from recovar.gui_v2.backend.services.executor import (
+            JobStatus as ExecJobStatus,
+        )
+
+        # Clear state
+        _project_registry.clear()
+        for t in _poll_tasks.values():
+            t.cancel()
+        _poll_tasks.clear()
+
+        project_dir = str(tmp_path / "poller_project")
+        os.makedirs(project_dir, exist_ok=True)
+        db_path = get_db_path(project_dir)
+        sf = await init_db(db_path)
+
+        async with sf() as session:
+            project = Project(name="Poller Test", path=project_dir)
+            session.add(project)
+            await session.flush()
+
+            job = Job(
+                project_id=project.id,
+                type="Pipeline",
+                status=JobStatus.RUNNING.value,
+                output_dir=str(tmp_path / "poller_project" / "Pipeline" / "job_0001"),
+                executor_handle="slurm-888",
+                slurm_id="888",
+            )
+            session.add(job)
+            await session.commit()
+            job_id = job.id
+            project_id = project.id
+
+        _project_registry[project_id] = project_dir
+
+        # Mock executor to return RUNNING (job is still active)
+        mock_executor = AsyncMock()
+        mock_executor.status = AsyncMock(return_value=ExecJobStatus.RUNNING)
+
+        with patch(
+            "recovar.gui_v2.backend.api.jobs.get_executor",
+            return_value=mock_executor,
+        ):
+            # Also patch _poll_job_status so the spawned task doesn't actually loop
+            with patch(
+                "recovar.gui_v2.backend.api.jobs._poll_job_status",
+                new_callable=AsyncMock,
+            ) as mock_poll:
+                await _reconcile_on_startup()
+
+                # A poller should have been created
+                assert job_id in _poll_tasks
+
+        # Clean up
+        for t in _poll_tasks.values():
+            t.cancel()
+        _poll_tasks.clear()
+        _project_registry.clear()
+        await close_all()
+
+    @pytest.mark.asyncio
+    async def test_reconcile_on_startup_no_projects(self):
+        """No registered projects -> reconcile is a no-op."""
+        from recovar.gui_v2.backend.api.project import _project_registry
+        from recovar.gui_v2.backend.main import _reconcile_on_startup
+
+        _project_registry.clear()
+        # Should not raise
+        await _reconcile_on_startup()

@@ -173,6 +173,18 @@ export function cancelJob(id: string): Promise<{ status: string }> {
   return request(`/jobs/${id}/cancel`, { method: "POST" });
 }
 
+export interface ReconcileResult {
+  id: string;
+  previous_status: string;
+  new_status: string;
+  changed: boolean;
+  error?: string | null;
+}
+
+export function reconcileJob(id: string): Promise<ReconcileResult> {
+  return request(`/jobs/${id}/reconcile`, { method: "POST" });
+}
+
 export function deleteJob(id: string): Promise<void> {
   return request(`/jobs/${id}`, { method: "DELETE" });
 }

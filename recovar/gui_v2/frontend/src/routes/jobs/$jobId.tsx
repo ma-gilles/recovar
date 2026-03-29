@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from "react";
 import { useParams, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Clock,
@@ -14,6 +14,7 @@ import {
   XCircle,
   Eye,
   EyeOff,
+  RefreshCw,
 } from "lucide-react";
 import { clsx } from "clsx";
 import {
@@ -23,6 +24,7 @@ import {
   getSuggestedNext,
   getJobSbatchScript,
   cancelJob,
+  reconcileJob,
   type JobDetail,
   type VolumeEntry,
   type PlotEntry,
@@ -45,7 +47,17 @@ const tabs = [
 
 type TabId = (typeof tabs)[number]["id"];
 
-function OverviewTab({ job, suggestions }: { job: JobDetail; suggestions?: SuggestedNext[] }): React.JSX.Element {
+function OverviewTab({
+  job,
+  suggestions,
+  onReconcile,
+  isReconciling,
+}: {
+  job: JobDetail;
+  suggestions?: SuggestedNext[];
+  onReconcile?: () => void;
+  isReconciling?: boolean;
+}): React.JSX.Element {
   const duration =
     job.completed && job.created
       ? Math.round(
@@ -53,13 +65,26 @@ function OverviewTab({ job, suggestions }: { job: JobDetail; suggestions?: Sugge
         )
       : null;
 
+  const isActive = job.status === "running" || job.status === "queued";
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
         <div className="space-y-1">
           <span className="text-xs text-zinc-500">Status</span>
-          <div>
+          <div className="flex items-center gap-2">
             <StatusBadge status={job.status} />
+            {isActive && onReconcile && (
+              <button
+                onClick={onReconcile}
+                disabled={isReconciling}
+                className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
+                title="Check actual SLURM status"
+              >
+                <RefreshCw className={clsx("h-3 w-3", isReconciling && "animate-spin")} />
+                Refresh
+              </button>
+            )}
           </div>
         </div>
         <div className="space-y-1">
@@ -475,6 +500,7 @@ function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
 export function JobDetailPage(): React.JSX.Element {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
   const [activeTab, setActiveTab] = useState<TabId>("overview");
+  const queryClient = useQueryClient();
 
   const { data: job, isLoading, refetch } = useQuery<JobDetail>({
     queryKey: ["job", jobId],
@@ -491,6 +517,19 @@ export function JobDetailPage(): React.JSX.Element {
     queryFn: () => getSuggestedNext(jobId),
     enabled: job?.status === "completed",
   });
+
+  const reconcileMutation = useMutation({
+    mutationFn: () => reconcileJob(jobId),
+    onSuccess: () => {
+      // Refresh the job detail and the project sidebar
+      refetch();
+      queryClient.invalidateQueries({ queryKey: ["project"] });
+    },
+  });
+
+  const handleReconcile = useCallback(() => {
+    reconcileMutation.mutate();
+  }, [reconcileMutation]);
 
   const handleStatusChange = useCallback(
     (_status: string) => {
@@ -580,7 +619,14 @@ export function JobDetailPage(): React.JSX.Element {
 
       {/* Tab content */}
       <div>
-        {activeTab === "overview" && <OverviewTab job={job} suggestions={suggestions} />}
+        {activeTab === "overview" && (
+          <OverviewTab
+            job={job}
+            suggestions={suggestions}
+            onReconcile={handleReconcile}
+            isReconciling={reconcileMutation.isPending}
+          />
+        )}
         {activeTab === "logs" && (
           <LogViewer jobId={jobId} jobStatus={job.status} onStatusChange={handleStatusChange} />
         )}

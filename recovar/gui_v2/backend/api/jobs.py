@@ -565,6 +565,113 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
     return suggestions
 
 
+class ReconcileResponse(BaseModel):
+    id: str
+    previous_status: str
+    new_status: str
+    changed: bool
+    error: str | None = None
+
+
+@router.post("/{job_id}/reconcile", response_model=ReconcileResponse)
+async def reconcile_job(job_id: str) -> ReconcileResponse:
+    """Force a status check for a specific job against the executor.
+
+    Useful when a job appears stuck (e.g. SLURM says COMPLETED but the
+    GUI still shows running).  Queries the actual executor status, updates
+    the DB, and cancels/restarts the background poller as needed.
+    """
+    job, session = await _get_job(job_id)
+    try:
+        previous_status = job.status
+
+        # Already terminal — nothing to do
+        if previous_status in (
+            JobStatus.COMPLETED.value,
+            JobStatus.FAILED.value,
+            JobStatus.CANCELLED.value,
+        ):
+            return ReconcileResponse(
+                id=job_id,
+                previous_status=previous_status,
+                new_status=previous_status,
+                changed=False,
+            )
+
+        # No executor handle — cannot query SLURM
+        if not job.executor_handle:
+            job.status = JobStatus.FAILED.value
+            job.error = "No executor handle — cannot check status."
+            job.completed_at = datetime.datetime.utcnow()
+            await session.commit()
+            return ReconcileResponse(
+                id=job_id,
+                previous_status=previous_status,
+                new_status=job.status,
+                changed=True,
+                error=job.error,
+            )
+
+        # Query the real executor status
+        executor = get_executor()
+        actual = await executor.status(job.executor_handle)
+
+        is_terminal = actual in (
+            ExecJobStatus.COMPLETED,
+            ExecJobStatus.FAILED,
+            ExecJobStatus.CANCELLED,
+        )
+
+        error_msg: str | None = None
+        if actual == ExecJobStatus.UNKNOWN:
+            actual = ExecJobStatus.FAILED
+            error_msg = "Job status unknown — SLURM may have purged the record."
+        elif actual == ExecJobStatus.FAILED:
+            error_msg = "Job failed (detected on manual reconcile)."
+
+        new_status = actual.value
+        changed = new_status != previous_status
+
+        if changed:
+            job.status = new_status
+            if error_msg:
+                job.error = error_msg
+            if is_terminal or actual == ExecJobStatus.FAILED:
+                job.completed_at = datetime.datetime.utcnow()
+            await session.commit()
+
+            # If the job reached a terminal state, cancel any running poller
+            if is_terminal:
+                poll_task = _poll_tasks.pop(job_id, None)
+                if poll_task:
+                    poll_task.cancel()
+            else:
+                # Still active — ensure a poller is running
+                if job_id not in _poll_tasks:
+                    # Find the project path for this job
+                    from recovar.gui_v2.backend.api.project import (
+                        _project_registry,
+                    )
+                    project_path = _project_registry.get(job.project_id)
+                    if project_path:
+                        task = asyncio.create_task(
+                            _poll_job_status(
+                                job_id, job.executor_handle, project_path
+                            )
+                        )
+                        _poll_tasks[job_id] = task
+
+        return ReconcileResponse(
+            id=job_id,
+            previous_status=previous_status,
+            new_status=new_status,
+            changed=changed,
+            error=error_msg,
+        )
+    finally:
+        await session.close()
+
+
 class SbatchScriptResponse(BaseModel):
     script: str
     source: str  # "file" (read from submit.sh) or "preview" (rendered)
