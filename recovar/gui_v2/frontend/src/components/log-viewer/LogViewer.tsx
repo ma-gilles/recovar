@@ -7,10 +7,12 @@ import { Button } from "../ui/button";
 
 interface LogViewerProps {
   jobId: string;
+  /** Current job status — used to suppress misleading "Reconnecting..." for terminal jobs */
+  jobStatus?: string;
   onStatusChange?: (status: string) => void;
 }
 
-export function LogViewer({ jobId, onStatusChange }: LogViewerProps): React.JSX.Element {
+export function LogViewer({ jobId, jobStatus, onStatusChange }: LogViewerProps): React.JSX.Element {
   const [lines, setLines] = useState<string[]>([]);
   const [connected, setConnected] = useState(false);
   const [progress, setProgress] = useState<{ step: number; total: number; label: string } | null>(null);
@@ -77,13 +79,28 @@ export function LogViewer({ jobId, onStatusChange }: LogViewerProps): React.JSX.
       {/* Header */}
       <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2">
         <div className="flex items-center gap-2 text-xs text-zinc-400">
-          <span
-            className={clsx(
-              "h-2 w-2 rounded-full",
-              connected ? "bg-emerald-500" : "bg-red-500"
-            )}
-          />
-          {connected ? "Connected" : "Reconnecting..."}
+          {(() => {
+            const isTerminal = jobStatus === "completed" || jobStatus === "failed" || jobStatus === "cancelled";
+            if (isTerminal) {
+              return (
+                <>
+                  <span className="h-2 w-2 rounded-full bg-zinc-500" />
+                  <span>Log complete</span>
+                </>
+              );
+            }
+            return (
+              <>
+                <span
+                  className={clsx(
+                    "h-2 w-2 rounded-full",
+                    connected ? "bg-emerald-500" : "bg-red-500"
+                  )}
+                />
+                {connected ? "Connected" : "Reconnecting..."}
+              </>
+            );
+          })()}
           {progress && (
             <span className="ml-2">
               {progress.label} ({progress.step}/{progress.total})

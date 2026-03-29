@@ -1,5 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { clsx } from "clsx";
+import { MousePointerClick } from "lucide-react";
 
 // D3 categorical 10 colors for k-means clusters
 const CLUSTER_COLORS = [
@@ -242,6 +243,10 @@ export function ScatterPanel({
   return (
     <div className="flex flex-col">
       <div className="mb-1 text-xs font-medium text-zinc-400">{title}</div>
+      <div className="mb-1 flex items-center gap-1.5 rounded-md bg-blue-500/10 px-2.5 py-1.5 text-xs text-blue-400">
+        <MousePointerClick className="h-3.5 w-3.5 shrink-0" />
+        <span>Shift+drag to lasso select</span>
+      </div>
       <div
         className="relative rounded-md border border-zinc-800 bg-black"
         style={{ height: 350 }}
@@ -263,9 +268,6 @@ export function ScatterPanel({
         >
           {yLabel}
         </div>
-      </div>
-      <div className="mt-0.5 text-[10px] text-zinc-600">
-        Shift+drag to lasso select
       </div>
     </div>
   );

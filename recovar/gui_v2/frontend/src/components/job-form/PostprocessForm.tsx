@@ -5,6 +5,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
+import { FileBrowser } from "../file-browser/FileBrowser";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -21,6 +22,7 @@ export function PostprocessForm({
 }: PostprocessFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
   const [input, setInput] = useState(prefilledInput ?? "");
+  const [showInputBrowser, setShowInputBrowser] = useState(false);
   const [bFactor, setBFactor] = useState("");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -63,12 +65,28 @@ export function PostprocessForm({
           <Label>Input Volume / Halfmap</Label>
           <TooltipIcon text={tooltips["postprocess.input"]} />
         </div>
-        <Input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          placeholder="/path/to/halfmap1.mrc or volume directory"
-          className="font-mono"
-        />
+        <div className="flex gap-2">
+          <Input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="/path/to/halfmap1.mrc or volume directory"
+            className="font-mono"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowInputBrowser(!showInputBrowser)}
+          >
+            Browse
+          </Button>
+        </div>
+        {showInputBrowser && (
+          <FileBrowser
+            initialPath={input ? input.split("/").slice(0, -1).join("/") || "/" : "/scratch/gpfs"}
+            accept={[".mrc"]}
+            onSelect={(path) => { setInput(path); setShowInputBrowser(false); }}
+          />
+        )}
       </div>
 
       <div className="space-y-1">

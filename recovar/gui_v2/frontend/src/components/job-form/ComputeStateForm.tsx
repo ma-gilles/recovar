@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
+import { Crosshair } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
@@ -12,6 +14,8 @@ interface ComputeStateFormProps {
   prefilledResultDir?: string;
   prefilledZdim?: number;
   prefilledCoords?: number[];
+  /** Job ID for linking to the Explore view to pick coordinates interactively */
+  exploreJobId?: string;
   onSubmitted?: (jobId: string) => void;
 }
 
@@ -20,6 +24,7 @@ export function ComputeStateForm({
   prefilledResultDir,
   prefilledZdim,
   prefilledCoords,
+  exploreJobId,
   onSubmitted,
 }: ComputeStateFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
@@ -85,6 +90,16 @@ export function ComputeStateForm({
         />
         {coords.length > 0 && !coordsValid && (
           <p className="text-xs text-red-400">Enter comma-separated numbers</p>
+        )}
+        {exploreJobId && (
+          <Link
+            to="/explore/$jobId"
+            params={{ jobId: exploreJobId }}
+            className="inline-flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300"
+          >
+            <Crosshair className="h-3.5 w-3.5" />
+            Select point in Explore view
+          </Link>
         )}
       </div>
 

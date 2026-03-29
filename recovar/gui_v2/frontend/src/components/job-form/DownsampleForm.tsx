@@ -5,6 +5,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
+import { FileBrowser } from "../file-browser/FileBrowser";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -21,6 +22,7 @@ export function DownsampleForm({
 }: DownsampleFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
   const [particles, setParticles] = useState(prefilledParticles ?? "");
+  const [showParticlesBrowser, setShowParticlesBrowser] = useState(false);
   const [targetD, setTargetD] = useState("128");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -57,12 +59,28 @@ export function DownsampleForm({
           <Label>Particles</Label>
           <TooltipIcon text={tooltips["downsample.particles"]} />
         </div>
-        <Input
-          value={particles}
-          onChange={(e) => setParticles(e.target.value)}
-          placeholder="/path/to/particles.star"
-          className="font-mono"
-        />
+        <div className="flex gap-2">
+          <Input
+            value={particles}
+            onChange={(e) => setParticles(e.target.value)}
+            placeholder="/path/to/particles.star"
+            className="font-mono"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowParticlesBrowser(!showParticlesBrowser)}
+          >
+            Browse
+          </Button>
+        </div>
+        {showParticlesBrowser && (
+          <FileBrowser
+            initialPath={particles ? particles.split("/").slice(0, -1).join("/") || "/" : "/scratch/gpfs"}
+            accept={[".star", ".cs", ".mrcs", ".txt"]}
+            onSelect={(path) => { setParticles(path); setShowParticlesBrowser(false); }}
+          />
+        )}
       </div>
 
       <div className="space-y-1">

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
@@ -122,9 +122,19 @@ interface SidebarProps {
 }
 
 export function Sidebar({ projectId, onProjectCreated }: SidebarProps): React.JSX.Element {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => window.innerWidth < 768);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showOpenForm, setShowOpenForm] = useState(false);
+
+  // Auto-collapse on narrow viewports
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const handler = (e: MediaQueryListEvent): void => {
+      setCollapsed(e.matches);
+    };
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
 
   const { data: project } = useQuery<ProjectDetail>({
     queryKey: ["project", projectId],

@@ -5,6 +5,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
+import { FileBrowser } from "../file-browser/FileBrowser";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -21,6 +22,7 @@ export function StableStatesForm({
 }: StableStatesFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
   const [density, setDensity] = useState(prefilledDensity ?? "");
+  const [showDensityBrowser, setShowDensityBrowser] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   // Advanced fields
@@ -49,12 +51,28 @@ export function StableStatesForm({
           <Label>Density File</Label>
           <TooltipIcon text={tooltips["stable_states.density"]} />
         </div>
-        <Input
-          value={density}
-          onChange={(e) => setDensity(e.target.value)}
-          placeholder="/path/to/deconv_density_knee.pkl"
-          className="font-mono"
-        />
+        <div className="flex gap-2">
+          <Input
+            value={density}
+            onChange={(e) => setDensity(e.target.value)}
+            placeholder="/path/to/deconv_density_knee.pkl"
+            className="font-mono"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowDensityBrowser(!showDensityBrowser)}
+          >
+            Browse
+          </Button>
+        </div>
+        {showDensityBrowser && (
+          <FileBrowser
+            initialPath={density ? density.split("/").slice(0, -1).join("/") || "/" : "/scratch/gpfs"}
+            accept={[".pkl"]}
+            onSelect={(path) => { setDensity(path); setShowDensityBrowser(false); }}
+          />
+        )}
       </div>
 
       {/* Advanced Section */}

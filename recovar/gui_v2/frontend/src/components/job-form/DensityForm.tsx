@@ -5,6 +5,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
+import { FileBrowser } from "../file-browser/FileBrowser";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -21,6 +22,7 @@ export function DensityForm({
 }: DensityFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
   const [resultDir, setResultDir] = useState(prefilledResultDir ?? "");
+  const [showResultDirBrowser, setShowResultDirBrowser] = useState(false);
   const [pcaDim, setPcaDim] = useState("4");
   const [showAdvanced, setShowAdvanced] = useState(false);
 
@@ -55,12 +57,28 @@ export function DensityForm({
           <Label>Result Directory</Label>
           <TooltipIcon text={tooltips["density.result_dir"]} />
         </div>
-        <Input
-          value={resultDir}
-          onChange={(e) => setResultDir(e.target.value)}
-          placeholder="/path/to/pipeline/output"
-          className="font-mono"
-        />
+        <div className="flex gap-2">
+          <Input
+            value={resultDir}
+            onChange={(e) => setResultDir(e.target.value)}
+            placeholder="/path/to/pipeline/output"
+            className="font-mono"
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowResultDirBrowser(!showResultDirBrowser)}
+          >
+            Browse
+          </Button>
+        </div>
+        {showResultDirBrowser && (
+          <FileBrowser
+            initialPath={resultDir || "/scratch/gpfs"}
+            selectDirectory
+            onSelect={(path) => { setResultDir(path); setShowResultDirBrowser(false); }}
+          />
+        )}
       </div>
 
       <div className="space-y-1">

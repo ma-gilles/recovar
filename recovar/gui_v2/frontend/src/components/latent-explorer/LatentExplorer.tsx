@@ -11,6 +11,7 @@ import { Button } from "../ui/button";
 import { Select } from "../ui/select";
 import { Spinner } from "../ui/spinner";
 import { ScatterPanel } from "./ScatterPanel";
+import { HistogramPanel } from "./HistogramPanel";
 import { SUBSAMPLE_THRESHOLD, DISPLAY_SUBSAMPLE_SIZE } from "../../lib/constants";
 
 interface LatentExplorerProps {
@@ -288,20 +289,31 @@ export function LatentExplorer({ jobId, projectId, resultDir }: LatentExplorerPr
         </div>
       ) : embeddings ? (
         <>
-          {/* Dual scatter panels */}
+          {/* Scatter or histogram panels */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <ScatterPanel
-              points={pcaPoints}
-              labels={labels}
-              markers={markerPositions}
-              xLabel={`PC${pcaAxisX + 1}`}
-              yLabel={`PC${pcaAxisY + 1}`}
-              title="PCA"
-              onLasso={handleLasso}
-              onPointClick={handlePointClick}
-              selectedIndices={selectedIndices}
-              panelId="pca"
-            />
+            {effectiveZdim === 1 ? (
+              <HistogramPanel
+                values={pcaPoints}
+                labels={labels}
+                xLabel="PC1"
+                title="PCA (1D)"
+                selectedIndices={selectedIndices}
+                onPointClick={handlePointClick}
+              />
+            ) : (
+              <ScatterPanel
+                points={pcaPoints}
+                labels={labels}
+                markers={markerPositions}
+                xLabel={`PC${pcaAxisX + 1}`}
+                yLabel={`PC${pcaAxisY + 1}`}
+                title="PCA"
+                onLasso={handleLasso}
+                onPointClick={handlePointClick}
+                selectedIndices={selectedIndices}
+                panelId="pca"
+              />
+            )}
             {umapPoints.length > 0 && (
               <ScatterPanel
                 points={umapPoints}

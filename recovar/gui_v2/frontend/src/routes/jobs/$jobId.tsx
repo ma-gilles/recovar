@@ -164,29 +164,7 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
 
   return (
     <div className="space-y-4">
-      {job.params && Object.keys(job.params).length > 0 ? (
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500">
-              <th className="pb-2 pr-4">Parameter</th>
-              <th className="pb-2">Value</th>
-            </tr>
-          </thead>
-          <tbody>
-            {Object.entries(job.params).map(([key, value]) => (
-              <tr key={key} className="border-b border-zinc-800/50">
-                <td className="py-2 pr-4 font-mono text-zinc-300">{key}</td>
-                <td className="py-2 font-mono text-zinc-400">
-                  {typeof value === "object" ? JSON.stringify(value) : String(value)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      ) : (
-        <p className="text-sm text-zinc-500">No parameters recorded.</p>
-      )}
-
+      {/* Clone/CLI buttons at the top for easy access */}
       <div className="flex gap-2">
         <Button variant="outline" size="sm" onClick={() => setShowCli(!showCli)}>
           {showCli ? "Hide" : "Show"} CLI Command
@@ -207,6 +185,43 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
             .join(" ")}
         </pre>
       )}
+
+      {job.params && Object.keys(job.params).length > 0 ? (
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-zinc-800 text-left text-xs text-zinc-500">
+              <th className="pb-2 pr-4">Parameter</th>
+              <th className="pb-2">Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            {Object.entries(job.params).map(([key, value]) => {
+              const display = typeof value === "object" ? JSON.stringify(value) : String(value);
+              const isLong = display.length > 60;
+              return (
+                <tr key={key} className="border-b border-zinc-800/50">
+                  <td className="py-2 pr-4 font-mono text-zinc-300 align-top">{key}</td>
+                  <td className="py-2 font-mono text-zinc-400" style={{ wordBreak: "break-all", overflowWrap: "anywhere" }}>
+                    <span>{display}</span>
+                    {isLong && (
+                      <button
+                        className="ml-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+                        onClick={() => navigator.clipboard.writeText(display)}
+                        title="Copy value"
+                      >
+                        <Copy className="h-3 w-3" />
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      ) : (
+        <p className="text-sm text-zinc-500">No parameters recorded.</p>
+      )}
+
     </div>
   );
 }
@@ -237,22 +252,29 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
             {cat} ({vols.length})
           </h4>
           <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
-            {vols.map((v) => (
-              <button
-                key={v.path}
-                onClick={() => setSelectedVolume(selectedVolume === v.path ? null : v.path)}
-                className={clsx(
-                  "rounded-md border bg-zinc-900 p-3 text-left hover:border-blue-500/50 hover:bg-zinc-800",
-                  selectedVolume === v.path ? "border-blue-500" : "border-zinc-800"
-                )}
-              >
-                <Box className="mb-1 h-8 w-8 text-sky-400" />
-                <p className="truncate text-sm">{v.name}</p>
-                <p className="text-xs text-zinc-500">
-                  {(v.size_bytes / 1e6).toFixed(1)} MB
-                </p>
-              </button>
-            ))}
+            {vols.map((v) => {
+              // Show parent directory for disambiguation (e.g., "diagnostics/mask.mrc")
+              const pathParts = v.path.replace(/\\/g, "/").split("/");
+              const displayName = pathParts.length >= 2
+                ? `${pathParts[pathParts.length - 2]}/${v.name}`
+                : v.name;
+              return (
+                <button
+                  key={v.path}
+                  onClick={() => setSelectedVolume(selectedVolume === v.path ? null : v.path)}
+                  className={clsx(
+                    "rounded-md border bg-zinc-900 p-3 text-left hover:border-blue-500/50 hover:bg-zinc-800",
+                    selectedVolume === v.path ? "border-blue-500" : "border-zinc-800"
+                  )}
+                >
+                  <Box className="mb-1 h-8 w-8 text-sky-400" />
+                  <p className="truncate text-sm" title={v.path}>{displayName}</p>
+                  <p className="text-xs text-zinc-500">
+                    {(v.size_bytes / 1e6).toFixed(1)} MB
+                  </p>
+                </button>
+              );
+            })}
           </div>
         </div>
       ))}
@@ -426,7 +448,7 @@ export function JobDetailPage(): React.JSX.Element {
       <div>
         {activeTab === "overview" && <OverviewTab job={job} suggestions={suggestions} />}
         {activeTab === "logs" && (
-          <LogViewer jobId={jobId} onStatusChange={handleStatusChange} />
+          <LogViewer jobId={jobId} jobStatus={job.status} onStatusChange={handleStatusChange} />
         )}
         {activeTab === "params" && <ParamsTab job={job} />}
         {activeTab === "volumes" && <VolumesTab jobId={jobId} />}
