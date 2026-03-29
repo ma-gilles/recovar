@@ -203,7 +203,8 @@ def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
         compute_bias=True,
     )
 
-    assert captured["batch_sizes"] == [1, 1]
+    # Single call with full dataset (no halfset splitting)
+    assert captured["batch_sizes"] == [1]
     assert zs.shape == (5, 2)
     assert cov_zs.shape == (5, 2, 2)
     assert est_contrasts.shape == (5,)
@@ -266,10 +267,10 @@ def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(mon
         compute_bias=False,
     )
 
-    assert len(captured["masks"]) == 2
+    # Single call with full dataset (no halfset splitting)
+    assert len(captured["masks"]) == 1
     np.testing.assert_allclose(captured["masks"][0], np.ones((4,), dtype=np.float32))
-    np.testing.assert_allclose(captured["masks"][1], np.ones((4,), dtype=np.float32))
-    assert captured["contrast_grid_size"] == [1, 1]
+    assert captured["contrast_grid_size"] == [1]
 
 
 def test_get_per_image_embedding_iterates_full_dataset_for_tilt_series(monkeypatch):
