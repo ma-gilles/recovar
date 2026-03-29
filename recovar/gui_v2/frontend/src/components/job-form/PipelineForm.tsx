@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { Select } from "../ui/select";
 import { TooltipIcon } from "../ui/tooltip-icon";
@@ -87,9 +88,10 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
           <TooltipIcon text={tooltips["pipeline.particles"]} />
         </div>
         <div className="flex gap-2">
-          <Input
+          <PathInput
             value={particles}
-            onChange={(e) => setParticles(e.target.value)}
+            onChange={setParticles}
+            accept={[".star", ".cs", ".mrcs", ".txt"]}
             placeholder="/path/to/particles.star"
             className="font-mono"
           />
@@ -142,9 +144,10 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
         {mask === "file" && (
           <div className="mt-1 space-y-1">
             <div className="flex gap-2">
-              <Input
+              <PathInput
                 value={maskPath}
-                onChange={(e) => setMaskPath(e.target.value)}
+                onChange={setMaskPath}
+                accept={[".mrc"]}
                 placeholder="/path/to/mask.mrc"
                 className="font-mono"
               />
@@ -248,7 +251,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
               <Label>Focus Mask</Label>
               <TooltipIcon text={tooltips["pipeline.focus_mask"]} />
             </div>
-            <Input value={focusMask} onChange={(e) => setFocusMask(e.target.value)} placeholder="Optional .mrc path" className="font-mono" />
+            <PathInput value={focusMask} onChange={setFocusMask} accept={[".mrc"]} placeholder="Optional .mrc path" className="font-mono" />
           </div>
 
           <div className="space-y-1">
@@ -256,7 +259,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
               <Label>Data Directory</Label>
               <TooltipIcon text={tooltips["pipeline.datadir"]} />
             </div>
-            <Input value={datadir} onChange={(e) => setDatadir(e.target.value)} placeholder="Override data dir" className="font-mono" />
+            <PathInput value={datadir} onChange={setDatadir} directoryOnly placeholder="Override data dir" className="font-mono" />
           </div>
 
           <div className="space-y-1">

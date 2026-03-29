@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
@@ -69,9 +70,10 @@ export function ComputeTrajectoryForm({
           <Label>Result Directory</Label>
           <TooltipIcon text={tooltips["compute_trajectory.result_dir"]} />
         </div>
-        <Input
+        <PathInput
           value={resultDir}
-          onChange={(e) => setResultDir(e.target.value)}
+          onChange={setResultDir}
+          directoryOnly
           placeholder="/path/to/pipeline/output"
           className="font-mono"
         />

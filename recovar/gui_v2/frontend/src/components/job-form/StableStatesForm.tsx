@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
@@ -56,9 +57,10 @@ export function StableStatesForm({
           <TooltipIcon text={tooltips["stable_states.density"]} />
         </div>
         <div className="flex gap-2">
-          <Input
+          <PathInput
             value={density}
-            onChange={(e) => setDensity(e.target.value)}
+            onChange={setDensity}
+            accept={[".pkl"]}
             placeholder="/path/to/deconv_density_knee.pkl"
             className="font-mono"
           />

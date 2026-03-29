@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useParams, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import {
@@ -9,8 +9,11 @@ import {
   Box,
   Image,
   ChevronRight,
+  ChevronDown,
   Copy,
   XCircle,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { clsx } from "clsx";
 import {
@@ -235,64 +238,186 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Volume filtering & display helpers
+// ---------------------------------------------------------------------------
+
+/** Patterns matching "uninteresting" volumes hidden by default. */
+const HIDDEN_PATTERNS = [/_half[0-9]/, /_unfil/, /halfmap/, /unfiltered/i];
+
+/** Returns true if a volume name matches the hidden-by-default patterns. */
+function isHiddenVolume(name: string): boolean {
+  const lower = name.toLowerCase();
+  return HIDDEN_PATTERNS.some((pat) => pat.test(lower));
+}
+
+/**
+ * Build a display name for a volume.  If `needsDisambiguation` is true
+ * (i.e. another volume in the same list has an identical filename),
+ * prepend the parent directory.
+ */
+function volumeDisplayName(v: VolumeEntry, needsDisambiguation: boolean): string {
+  if (!needsDisambiguation) return v.name;
+  const parts = v.path.replace(/\\/g, "/").split("/");
+  if (parts.length >= 2) {
+    return `${parts[parts.length - 2]}/${v.name}`;
+  }
+  return v.name;
+}
+
+/** Default number of items shown in a collapsed category. */
+const COLLAPSED_LIMIT = 5;
+
+function VolumeCategoryGroup({
+  cat,
+  vols,
+  selectedVolume,
+  onSelect,
+  ambiguousNames,
+}: {
+  cat: string;
+  vols: VolumeEntry[];
+  selectedVolume: string | null;
+  onSelect: (path: string) => void;
+  ambiguousNames: Set<string>;
+}): React.JSX.Element {
+  const [expanded, setExpanded] = useState(vols.length <= COLLAPSED_LIMIT);
+  const visible = expanded ? vols : vols.slice(0, COLLAPSED_LIMIT);
+  const remaining = vols.length - COLLAPSED_LIMIT;
+
+  return (
+    <div>
+      <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-zinc-500">
+        {cat} ({vols.length})
+      </h4>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
+        {visible.map((v) => {
+          const displayName = volumeDisplayName(v, ambiguousNames.has(v.name));
+          return (
+            <button
+              key={v.path}
+              onClick={() => onSelect(v.path)}
+              className={clsx(
+                "rounded-md border bg-zinc-900 p-3 text-left hover:border-blue-500/50 hover:bg-zinc-800",
+                selectedVolume === v.path ? "border-blue-500" : "border-zinc-800"
+              )}
+            >
+              <Box className="mb-1 h-8 w-8 text-sky-400" />
+              <p className="truncate text-sm" title={v.path}>{displayName}</p>
+              <p className="text-xs text-zinc-500">
+                {(v.size_bytes / 1e6).toFixed(1)} MB
+              </p>
+            </button>
+          );
+        })}
+      </div>
+      {!expanded && remaining > 0 && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="mt-2 flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
+        >
+          <ChevronDown className="h-3 w-3" />
+          Show all {vols.length} volumes
+        </button>
+      )}
+      {expanded && vols.length > COLLAPSED_LIMIT && (
+        <button
+          onClick={() => setExpanded(false)}
+          className="mt-2 flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300"
+        >
+          <ChevronRight className="h-3 w-3" />
+          Collapse
+        </button>
+      )}
+    </div>
+  );
+}
+
 function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
   const [selectedVolume, setSelectedVolume] = useState<string | null>(null);
+  const [showAll, setShowAll] = useState(false);
   const { data: volumes, isLoading } = useQuery<VolumeEntry[]>({
     queryKey: ["job-volumes", jobId],
     queryFn: () => getJobVolumes(jobId),
   });
+
+  // Compute filtered volumes and groups
+  const { filteredVolumes, groups, hiddenCount, ambiguousNames } = useMemo(() => {
+    if (!volumes) return { filteredVolumes: [], groups: {} as Record<string, VolumeEntry[]>, hiddenCount: 0, ambiguousNames: new Set<string>() };
+
+    const hidden = volumes.filter((v) => isHiddenVolume(v.name));
+    const filtered = showAll ? volumes : volumes.filter((v) => !isHiddenVolume(v.name));
+
+    // Detect duplicate filenames for disambiguation
+    const nameCounts = new Map<string, number>();
+    for (const v of filtered) {
+      nameCounts.set(v.name, (nameCounts.get(v.name) ?? 0) + 1);
+    }
+    const ambiguous = new Set<string>();
+    for (const [name, count] of nameCounts) {
+      if (count > 1) ambiguous.add(name);
+    }
+
+    // Group by category
+    const grps: Record<string, VolumeEntry[]> = {};
+    for (const v of filtered) {
+      (grps[v.category] ??= []).push(v);
+    }
+
+    return { filteredVolumes: filtered, groups: grps, hiddenCount: hidden.length, ambiguousNames: ambiguous };
+  }, [volumes, showAll]);
+
+  const handleSelect = useCallback((path: string) => {
+    setSelectedVolume((prev) => (prev === path ? null : path));
+  }, []);
 
   if (isLoading) return <Spinner label="Loading volumes..." />;
   if (!volumes || volumes.length === 0) {
     return <p className="text-sm text-zinc-500">No volumes in this job output.</p>;
   }
 
-  // Group by category
-  const groups: Record<string, VolumeEntry[]> = {};
-  for (const v of volumes) {
-    (groups[v.category] ??= []).push(v);
-  }
-
   return (
-    <div className="space-y-4">
-      {Object.entries(groups).map(([cat, vols]) => (
-        <div key={cat}>
-          <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-zinc-500">
-            {cat} ({vols.length})
-          </h4>
-          <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
-            {vols.map((v) => {
-              // Show parent directory for disambiguation (e.g., "diagnostics/mask.mrc")
-              const pathParts = v.path.replace(/\\/g, "/").split("/");
-              const displayName = pathParts.length >= 2
-                ? `${pathParts[pathParts.length - 2]}/${v.name}`
-                : v.name;
-              return (
-                <button
-                  key={v.path}
-                  onClick={() => setSelectedVolume(selectedVolume === v.path ? null : v.path)}
-                  className={clsx(
-                    "rounded-md border bg-zinc-900 p-3 text-left hover:border-blue-500/50 hover:bg-zinc-800",
-                    selectedVolume === v.path ? "border-blue-500" : "border-zinc-800"
-                  )}
-                >
-                  <Box className="mb-1 h-8 w-8 text-sky-400" />
-                  <p className="truncate text-sm" title={v.path}>{displayName}</p>
-                  <p className="text-xs text-zinc-500">
-                    {(v.size_bytes / 1e6).toFixed(1)} MB
-                  </p>
-                </button>
-              );
-            })}
+    <div className="flex flex-col" style={{ height: "calc(100vh - 200px)", minHeight: 600 }}>
+      {/* TOP HALF: Volume viewer (fixed) */}
+      <div className="shrink-0 rounded-lg border border-zinc-800 bg-zinc-950 p-4" style={{ minHeight: 480 }}>
+        {selectedVolume ? (
+          <VolumeViewer volumes={filteredVolumes} initialVolumePath={selectedVolume} />
+        ) : (
+          <div className="flex items-center justify-center" style={{ height: 400 }}>
+            <p className="text-sm text-zinc-500">Click a volume below to view it</p>
           </div>
-        </div>
-      ))}
+        )}
+      </div>
 
-      {selectedVolume && (
-        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
-          <VolumeViewer volumes={volumes} initialVolumePath={selectedVolume} />
-        </div>
-      )}
+      {/* Show all / hide toggle */}
+      <div className="flex items-center gap-3 py-3">
+        <span className="text-xs text-zinc-500">
+          {filteredVolumes.length} volume{filteredVolumes.length !== 1 ? "s" : ""}
+        </span>
+        {hiddenCount > 0 && (
+          <button
+            onClick={() => setShowAll(!showAll)}
+            className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200"
+          >
+            {showAll ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+            {showAll ? "Hide" : "Show"} {hiddenCount} halfmap/unfiltered volume{hiddenCount !== 1 ? "s" : ""}
+          </button>
+        )}
+      </div>
+
+      {/* BOTTOM HALF: Scrollable volume grid */}
+      <div className="flex-1 overflow-auto space-y-4 pr-1">
+        {Object.entries(groups).map(([cat, vols]) => (
+          <VolumeCategoryGroup
+            key={cat}
+            cat={cat}
+            vols={vols}
+            selectedVolume={selectedVolume}
+            onSelect={handleSelect}
+            ambiguousNames={ambiguousNames}
+          />
+        ))}
+      </div>
     </div>
   );
 }

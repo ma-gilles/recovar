@@ -81,35 +81,79 @@ const BG_COLOR: [number, number, number, number] = [0.09, 0.09, 0.11, 1.0]; // z
 // ---- MRC parsing ----
 
 function parseMrc(buffer: ArrayBuffer): VolumeData {
+  if (buffer.byteLength < 1024) {
+    throw new Error(
+      `MRC file too small: got ${buffer.byteLength} bytes, need at least 1024 for the header`
+    );
+  }
+
   const headerView = new DataView(buffer);
   // NX, NY, NZ are the first 3 int32 values (bytes 0-11)
   const nx = headerView.getInt32(0, true);
   const ny = headerView.getInt32(4, true);
   const nz = headerView.getInt32(8, true);
+  // MODE at bytes 12-15: 2 = float32
+  const mode = headerView.getInt32(12, true);
 
-  const headerSize = 1024;
+  // Validate header sanity
+  if (nx <= 0 || ny <= 0 || nz <= 0 || nx > 4096 || ny > 4096 || nz > 4096) {
+    throw new Error(
+      `MRC header dimensions look invalid: NX=${nx}, NY=${ny}, NZ=${nz}. ` +
+      `Expected positive values <= 4096.`
+    );
+  }
+
+  if (mode !== 2) {
+    throw new Error(
+      `MRC MODE=${mode} is not supported. Only MODE=2 (float32) is supported for 3D viewing. ` +
+      `MODE values: 0=int8, 1=int16, 2=float32, 6=uint16, 12=float16.`
+    );
+  }
+
+  // Check for extended header (NSYMBT at bytes 92-95)
+  const nsymbt = headerView.getInt32(92, true);
+  const headerSize = 1024 + Math.max(0, nsymbt);
+
+  if (buffer.byteLength < headerSize + nx * ny * nz * 4) {
+    throw new Error(
+      `MRC file truncated: expected ${headerSize + nx * ny * nz * 4} bytes ` +
+      `(header=${headerSize}, data=${nx}x${ny}x${nz} float32), got ${buffer.byteLength}`
+    );
+  }
+
   const dataBytes = buffer.slice(headerSize);
   // MRC stores float32 data in column-major (Fortran) order: X varies fastest
   const scalars = new Float32Array(dataBytes);
 
-  if (scalars.length !== nx * ny * nz) {
+  if (scalars.length < nx * ny * nz) {
     throw new Error(
       `MRC data size mismatch: expected ${nx * ny * nz} floats, got ${scalars.length}`
     );
   }
 
+  // If there's extra data beyond NX*NY*NZ (e.g. symmetry records), take only what we need
+  const trimmedScalars = scalars.length > nx * ny * nz
+    ? scalars.slice(0, nx * ny * nz)
+    : scalars;
+
   // Compute mean and std for sigma-based thresholding
   let sum = 0;
   let sum2 = 0;
-  for (let i = 0; i < scalars.length; i++) {
-    sum += scalars[i];
-    sum2 += scalars[i] * scalars[i];
+  for (let i = 0; i < trimmedScalars.length; i++) {
+    sum += trimmedScalars[i];
+    sum2 += trimmedScalars[i] * trimmedScalars[i];
   }
-  const mean = sum / scalars.length;
-  const variance = sum2 / scalars.length - mean * mean;
+  const mean = sum / trimmedScalars.length;
+  const variance = sum2 / trimmedScalars.length - mean * mean;
   const std = Math.sqrt(Math.max(0, variance));
 
-  return { nx, ny, nz, scalars, mean, std };
+  console.log(
+    `MRC parsed: ${nx}x${ny}x${nz}, mode=${mode}, ` +
+    `mean=${mean.toFixed(4)}, std=${std.toFixed(4)}, ` +
+    `header=${headerSize}B, total=${buffer.byteLength}B`
+  );
+
+  return { nx, ny, nz, scalars: trimmedScalars, mean, std };
 }
 
 function buildVtkImageData(vol: VolumeData): ReturnType<typeof vtkImageData.newInstance> {
@@ -220,14 +264,39 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
     setError(null);
 
     try {
+      // Step 1: Fetch the raw MRC bytes
+      console.log(`VtkViewer: fetching volume: ${path}`);
       const resp = await fetch(`/api/volumes/raw?path=${encodeURIComponent(path)}`);
       if (!resp.ok) {
-        throw new Error(`Failed to fetch volume: ${resp.status} ${resp.statusText}`);
+        const body = await resp.text().catch(() => "");
+        throw new Error(`HTTP ${resp.status} ${resp.statusText}: ${body || "Failed to fetch volume"}`);
       }
       const buffer = await resp.arrayBuffer();
-      const volumeData = parseMrc(buffer);
-      const imageData = buildVtkImageData(volumeData);
+      console.log(`VtkViewer: received ${buffer.byteLength} bytes`);
 
+      if (buffer.byteLength === 0) {
+        throw new Error("Server returned empty response (0 bytes)");
+      }
+
+      // Step 2: Parse the MRC header and data
+      let volumeData: VolumeData;
+      try {
+        volumeData = parseMrc(buffer);
+      } catch (parseErr) {
+        const parseMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+        throw new Error(`MRC parsing failed: ${parseMsg}`);
+      }
+
+      // Step 3: Build vtk.js image data
+      let imageData: ReturnType<typeof vtkImageData.newInstance>;
+      try {
+        imageData = buildVtkImageData(volumeData);
+      } catch (vtkErr) {
+        const vtkMsg = vtkErr instanceof Error ? vtkErr.message : String(vtkErr);
+        throw new Error(`vtk.js image data creation failed: ${vtkMsg}`);
+      }
+
+      // Step 4: Build the marching cubes pipeline
       const marchingCubes = vtkImageMarchingCubes.newInstance({
         contourValue: volumeData.mean + 3.0 * volumeData.std,
         computeNormals: true,
@@ -250,9 +319,11 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
       };
 
       pipelinesRef.current.set(path, pipeline);
+      console.log(`VtkViewer: pipeline ready for ${path} (${volumeData.nx}x${volumeData.ny}x${volumeData.nz})`);
       return pipeline;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
+      console.error("VtkViewer: pipeline error:", msg, err);
       setError(msg);
       return null;
     } finally {
@@ -320,7 +391,14 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
       }
 
       renderer.resetCamera();
-      grw.getRenderWindow().render();
+      try {
+        grw.getRenderWindow().render();
+      } catch (renderErr) {
+        const renderMsg = renderErr instanceof Error ? renderErr.message : String(renderErr);
+        console.error("VtkViewer: render() failed:", renderMsg, renderErr);
+        setError(`3D render failed: ${renderMsg}`);
+        return;
+      }
       renderedStateRef.current = stateKey;
     }
 

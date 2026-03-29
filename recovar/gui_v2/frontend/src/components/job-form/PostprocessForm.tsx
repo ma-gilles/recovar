@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
@@ -70,9 +71,10 @@ export function PostprocessForm({
           <TooltipIcon text={tooltips["postprocess.input"]} />
         </div>
         <div className="flex gap-2">
-          <Input
+          <PathInput
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={setInput}
+            accept={[".mrc"]}
             placeholder="/path/to/halfmap1.mrc or volume directory"
             className="font-mono"
           />
@@ -122,9 +124,10 @@ export function PostprocessForm({
               <Label>Second Halfmap</Label>
               <TooltipIcon text={tooltips["postprocess.halfmap2"]} />
             </div>
-            <Input
+            <PathInput
               value={halfmap2}
-              onChange={(e) => setHalfmap2(e.target.value)}
+              onChange={setHalfmap2}
+              accept={[".mrc"]}
               placeholder="Auto-detected"
               className="font-mono"
             />
@@ -161,9 +164,10 @@ export function PostprocessForm({
               <Label>FSC Mask</Label>
               <TooltipIcon text={tooltips["postprocess.fsc_mask"]} />
             </div>
-            <Input
+            <PathInput
               value={fscMask}
-              onChange={(e) => setFscMask(e.target.value)}
+              onChange={setFscMask}
+              accept={[".mrc"]}
               placeholder="Optional .mrc path"
               className="font-mono"
             />
@@ -174,9 +178,10 @@ export function PostprocessForm({
               <Label>Apply Mask</Label>
               <TooltipIcon text={tooltips["postprocess.apply_mask"]} />
             </div>
-            <Input
+            <PathInput
               value={applyMask}
-              onChange={(e) => setApplyMask(e.target.value)}
+              onChange={setApplyMask}
+              accept={[".mrc"]}
               placeholder="Optional .mrc path"
               className="font-mono"
             />

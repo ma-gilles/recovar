@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
@@ -62,9 +63,10 @@ export function DensityForm({
           <TooltipIcon text={tooltips["density.result_dir"]} />
         </div>
         <div className="flex gap-2">
-          <Input
+          <PathInput
             value={resultDir}
-            onChange={(e) => setResultDir(e.target.value)}
+            onChange={setResultDir}
+            directoryOnly
             placeholder="/path/to/pipeline/output"
             className="font-mono"
           />

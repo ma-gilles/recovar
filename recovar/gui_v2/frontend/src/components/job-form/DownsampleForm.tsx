@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
@@ -64,9 +65,10 @@ export function DownsampleForm({
           <TooltipIcon text={tooltips["downsample.particles"]} />
         </div>
         <div className="flex gap-2">
-          <Input
+          <PathInput
             value={particles}
-            onChange={(e) => setParticles(e.target.value)}
+            onChange={setParticles}
+            accept={[".star", ".cs", ".mrcs", ".txt"]}
             placeholder="/path/to/particles.star"
             className="font-mono"
           />
@@ -119,9 +121,10 @@ export function DownsampleForm({
               <Label>Data Directory</Label>
               <TooltipIcon text={tooltips["downsample.datadir"]} />
             </div>
-            <Input
+            <PathInput
               value={datadir}
-              onChange={(e) => setDatadir(e.target.value)}
+              onChange={setDatadir}
+              directoryOnly
               placeholder="Override data dir"
               className="font-mono"
             />

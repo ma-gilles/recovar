@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { PathInput } from "../ui/PathInput";
 import { Label } from "../ui/label";
 import { Select } from "../ui/select";
 import { TooltipIcon } from "../ui/tooltip-icon";
@@ -59,9 +60,10 @@ export function AnalyzeForm({
           <TooltipIcon text={tooltips["analyze.result_dir"]} />
         </div>
         <div className="flex gap-2">
-          <Input
+          <PathInput
             value={resultDir}
-            onChange={(e) => setResultDir(e.target.value)}
+            onChange={setResultDir}
+            directoryOnly
             placeholder="/path/to/pipeline/output"
             className="font-mono"
           />
