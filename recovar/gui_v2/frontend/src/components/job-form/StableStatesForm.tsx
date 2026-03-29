@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
@@ -6,6 +6,7 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
+import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -28,6 +29,8 @@ export function StableStatesForm({
   // Advanced fields
   const [percentTop, setPercentTop] = useState("1");
   const [nLocalMaxs, setNLocalMaxs] = useState("3");
+  const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -36,6 +39,7 @@ export function StableStatesForm({
       };
       if (percentTop) params.percent_top = parseFloat(percentTop);
       if (nLocalMaxs) params.n_local_maxs = parseInt(nLocalMaxs);
+      if (slurmOpts) params.slurm_opts = slurmOpts;
       return submitJob(projectId, "stable_states", params);
     },
     onSuccess: (data) => {
@@ -113,6 +117,9 @@ export function StableStatesForm({
           </div>
         </div>
       )}
+
+      {/* SLURM Settings */}
+      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
 
       {/* Submit */}
       <div className="flex items-center justify-between pt-2">

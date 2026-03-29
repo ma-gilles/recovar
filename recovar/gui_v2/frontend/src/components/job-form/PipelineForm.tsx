@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
@@ -7,6 +7,7 @@ import { Label } from "../ui/label";
 import { Select } from "../ui/select";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
+import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -32,7 +33,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
 
   // Advanced fields
   const [zdim, setZdim] = useState("1,2,4,10,20");
-  const [downsample, setDownsample] = useState("128");
+  const [downsample, setDownsample] = useState("256");
   const [lazy, setLazy] = useState(false);
   const [correctContrast, setCorrectContrast] = useState(false);
   const [focusMask, setFocusMask] = useState("");
@@ -44,6 +45,8 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
   const [tiltSeries, setTiltSeries] = useState(false);
   const [stripPrefix, setStripPrefix] = useState("");
   const [outputName, setOutputName] = useState("");
+  const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -64,6 +67,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
       if (tiltSeries) params.tilt_series = true;
       if (stripPrefix) params.strip_prefix = stripPrefix;
       if (outputName) params.output_name = outputName;
+      if (slurmOpts) params.slurm_opts = slurmOpts;
       return submitJob(projectId, "pipeline", params);
     },
     onSuccess: (data) => {
@@ -202,7 +206,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
               type="number"
               value={downsample}
               onChange={(e) => setDownsample(e.target.value)}
-              placeholder="128"
+              placeholder="256"
             />
           </div>
 
@@ -296,6 +300,9 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
           </div>
         </div>
       )}
+
+      {/* SLURM Settings */}
+      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
 
       {/* Submit */}
       <div className="flex items-center justify-between pt-2">

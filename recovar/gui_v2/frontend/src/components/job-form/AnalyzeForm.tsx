@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -6,6 +6,7 @@ import { Label } from "../ui/label";
 import { Select } from "../ui/select";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
+import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -29,6 +30,8 @@ export function AnalyzeForm({
   const [nClusters, setNClusters] = useState("40");
   const [nTrajectories, setNTrajectories] = useState("0");
   const [outputName, setOutputName] = useState("");
+  const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -39,6 +42,7 @@ export function AnalyzeForm({
       if (nClusters) params.n_clusters = parseInt(nClusters);
       if (nTrajectories) params.n_trajectories = parseInt(nTrajectories);
       if (outputName) params.output_name = outputName;
+      if (slurmOpts) params.slurm_opts = slurmOpts;
       return submitJob(projectId, "analyze", params);
     },
     onSuccess: (data) => {
@@ -131,6 +135,9 @@ export function AnalyzeForm({
         <Label>Output Name</Label>
         <Input value={outputName} onChange={(e) => setOutputName(e.target.value)} placeholder="Auto-generated" />
       </div>
+
+      {/* SLURM Settings */}
+      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
 
       <div className="flex items-center justify-between pt-2">
         {mutation.isError && (

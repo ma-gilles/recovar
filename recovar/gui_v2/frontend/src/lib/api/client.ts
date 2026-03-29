@@ -53,6 +53,8 @@ export interface JobDetail extends JobSummary {
   params?: Record<string, unknown> | null;
   handle?: string | null;
   parent_jobs?: string[] | null;
+  execution_mode: string;
+  execution_summary: string;
 }
 
 export interface VolumeEntry {
@@ -98,6 +100,20 @@ export interface SystemInfo {
   gpu_count: number;
   hostname: string;
   disk?: { path: string; total: number; used: number; free: number } | null;
+}
+
+export interface SlurmDefaults {
+  partition: string;
+  account: string;
+  gpus: number;
+  cpus: number;
+  memory: string;
+  time: string;
+}
+
+export interface SbatchScript {
+  script: string;
+  source: string;
 }
 
 // --- Projects ---
@@ -230,4 +246,14 @@ export function exportSubsetStar(
 
 export function getSystemInfo(): Promise<SystemInfo> {
   return request("/system/info");
+}
+
+export function getSlurmDefaults(): Promise<SlurmDefaults> {
+  return request("/system/slurm-defaults");
+}
+
+// --- Jobs (extended) ---
+
+export function getJobSbatchScript(id: string): Promise<SbatchScript> {
+  return request(`/jobs/${id}/sbatch-script`);
 }

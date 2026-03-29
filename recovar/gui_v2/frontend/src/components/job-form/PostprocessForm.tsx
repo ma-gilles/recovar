@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Button } from "../ui/button";
@@ -6,6 +6,7 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
+import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -35,6 +36,8 @@ export function PostprocessForm({
   const [batch, setBatch] = useState(false);
   const [estimateBFactor, setEstimateBFactor] = useState(false);
   const [local, setLocal] = useState(false);
+  const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const mutation = useMutation({
     mutationFn: () => {
@@ -50,6 +53,7 @@ export function PostprocessForm({
       if (batch) params.batch = true;
       if (estimateBFactor) params.estimate_B_factor = true;
       if (local) params.local = true;
+      if (slurmOpts) params.slurm_opts = slurmOpts;
       return submitJob(projectId, "postprocess", params);
     },
     onSuccess: (data) => {
@@ -212,6 +216,9 @@ export function PostprocessForm({
           </div>
         </div>
       )}
+
+      {/* SLURM Settings */}
+      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
 
       {/* Submit */}
       <div className="flex items-center justify-between pt-2">

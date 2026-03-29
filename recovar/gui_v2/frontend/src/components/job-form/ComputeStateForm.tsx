@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { Crosshair } from "lucide-react";
@@ -6,6 +6,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
+import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -31,15 +32,19 @@ export function ComputeStateForm({
   const [resultDir, setResultDir] = useState(prefilledResultDir ?? "");
   const [zdim, setZdim] = useState(prefilledZdim?.toString() ?? "");
   const [coords, setCoords] = useState(prefilledCoords?.join(", ") ?? "");
+  const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const mutation = useMutation({
     mutationFn: () => {
       const latentPoints = coords.split(",").map((s) => parseFloat(s.trim()));
-      return submitJob(projectId, "compute_state", {
+      const params: Record<string, unknown> = {
         result_dir: resultDir,
         zdim: parseInt(zdim),
         latent_points: latentPoints,
-      });
+      };
+      if (slurmOpts) params.slurm_opts = slurmOpts;
+      return submitJob(projectId, "compute_state", params);
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
@@ -102,6 +107,9 @@ export function ComputeStateForm({
           </Link>
         )}
       </div>
+
+      {/* SLURM Settings */}
+      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
 
       <div className="flex justify-end pt-2">
         <Button

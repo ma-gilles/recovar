@@ -1,7 +1,8 @@
 """System info API.
 
 Endpoints:
-    GET /api/system/info — Server environment details
+    GET /api/system/info            — Server environment details
+    GET /api/system/slurm-defaults  — Default SLURM settings for job forms
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import shutil
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from recovar.gui_v2.backend.config import DEFAULT_SLURM
 from recovar.gui_v2.backend.services.executor import slurm_available
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -85,4 +87,26 @@ async def system_info() -> SystemInfoResponse:
         gpu_count=_gpu_count(),
         hostname=platform.node(),
         disk=disk,
+    )
+
+
+class SlurmDefaultsResponse(BaseModel):
+    partition: str
+    account: str
+    gpus: int
+    cpus: int
+    memory: str
+    time: str
+
+
+@router.get("/slurm-defaults", response_model=SlurmDefaultsResponse)
+async def slurm_defaults() -> SlurmDefaultsResponse:
+    """Return default SLURM settings for pre-filling job submission forms."""
+    return SlurmDefaultsResponse(
+        partition=DEFAULT_SLURM["partition"],
+        account=DEFAULT_SLURM["account"],
+        gpus=DEFAULT_SLURM["gpus"],
+        cpus=DEFAULT_SLURM["cpus"],
+        memory=DEFAULT_SLURM["memory"],
+        time=DEFAULT_SLURM["time"],
     )

@@ -155,6 +155,8 @@ class JobDetailResponse(BaseModel):
     error: str | None = None
     parent_jobs: list[str] | None = None
     output_dir: str
+    execution_mode: str  # "slurm" or "local"
+    execution_summary: str  # Human-readable, e.g. "SLURM (job 123, partition: cryoem)"
 
 
 class VolumeEntry(BaseModel):
@@ -382,6 +384,34 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
 async def get_job(job_id: str) -> JobDetailResponse:
     job, session = await _get_job(job_id)
     try:
+        # Build human-readable execution summary
+        if job.slurm_id:
+            exec_mode = "slurm"
+            # Try to read partition/account from the submit.sh if available
+            slurm_partition = None
+            slurm_account = None
+            submit_sh = os.path.join(job.output_dir, "submit.sh")
+            if os.path.isfile(submit_sh):
+                try:
+                    with open(submit_sh) as f:
+                        for line in f:
+                            if line.startswith("#SBATCH --partition="):
+                                slurm_partition = line.strip().split("=", 1)[1]
+                            elif line.startswith("#SBATCH --account="):
+                                slurm_account = line.strip().split("=", 1)[1]
+                except OSError:
+                    pass
+            parts = [f"job {job.slurm_id}"]
+            if slurm_partition:
+                parts.append(f"partition: {slurm_partition}")
+            if slurm_account:
+                parts.append(f"account: {slurm_account}")
+            exec_summary = f"SLURM ({', '.join(parts)})"
+        else:
+            exec_mode = "local"
+            pid_str = job.executor_handle or "unknown"
+            exec_summary = f"Local (PID {pid_str})"
+
         return JobDetailResponse(
             id=job.id,
             type=job.type,
@@ -394,6 +424,8 @@ async def get_job(job_id: str) -> JobDetailResponse:
             error=job.error,
             parent_jobs=job.parent_job_ids,
             output_dir=job.output_dir,
+            execution_mode=exec_mode,
+            execution_summary=exec_summary,
         )
     finally:
         await session.close()
@@ -531,3 +563,65 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
         ))
 
     return suggestions
+
+
+class SbatchScriptResponse(BaseModel):
+    script: str
+    source: str  # "file" (read from submit.sh) or "preview" (rendered)
+
+
+@router.get("/{job_id}/sbatch-script", response_model=SbatchScriptResponse)
+async def get_sbatch_script(job_id: str) -> SbatchScriptResponse:
+    """Return the sbatch script for a job.
+
+    For completed/running SLURM jobs, reads the actual ``submit.sh`` file.
+    For local jobs, returns the CLI command with a note.
+    """
+    job, session = await _get_job(job_id)
+    await session.close()
+
+    submit_sh = os.path.join(job.output_dir, "submit.sh")
+
+    if os.path.isfile(submit_sh):
+        try:
+            with open(submit_sh) as f:
+                content = f.read()
+            return SbatchScriptResponse(script=content, source="file")
+        except OSError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Cannot read submit.sh: {exc}",
+            )
+
+    # No submit.sh — this was a local job
+    if job.slurm_id is None:
+        cmd_line = _format_cli_command(job)
+        return SbatchScriptResponse(
+            script=f"# This job ran locally (not via SLURM).\n"
+                   f"# PID: {job.executor_handle or 'unknown'}\n\n"
+                   f"{cmd_line}\n",
+            source="preview",
+        )
+
+    # SLURM job but submit.sh was deleted
+    raise HTTPException(
+        status_code=404,
+        detail="submit.sh not found in job output directory.",
+    )
+
+
+def _format_cli_command(job: Job) -> str:
+    """Format a reconstructed CLI command from job params for display."""
+    if not job.params:
+        return f"# No parameters recorded for {job.type} job."
+    parts = [f"recovar {job.type.lower()}"]
+    for key, val in job.params.items():
+        if key in ("outdir", "slurm_opts"):
+            continue
+        flag = f"--{key.replace('_', '-')}"
+        if isinstance(val, bool):
+            if val:
+                parts.append(flag)
+        else:
+            parts.append(f"{flag} {val}")
+    return " ".join(parts)

@@ -18,11 +18,13 @@ import {
   getJobVolumes,
   getJobPlots,
   getSuggestedNext,
+  getJobSbatchScript,
   cancelJob,
   type JobDetail,
   type VolumeEntry,
   type PlotEntry,
   type SuggestedNext,
+  type SbatchScript,
 } from "../../lib/api/client";
 import { VolumeViewer } from "../../components/volume-viewer/VolumeViewer";
 import { StatusBadge } from "../../components/ui/badge";
@@ -79,12 +81,10 @@ function OverviewTab({ job, suggestions }: { job: JobDetail; suggestions?: Sugge
         )}
       </div>
 
-      {job.slurm_id && (
-        <div className="space-y-1">
-          <span className="text-xs text-zinc-500">SLURM Job ID</span>
-          <p className="font-mono text-sm">{job.slurm_id}</p>
-        </div>
-      )}
+      <div className="space-y-1">
+        <span className="text-xs text-zinc-500">Execution</span>
+        <p className="text-sm">{job.execution_summary}</p>
+      </div>
 
       {job.error && (
         <div className="rounded-md border border-red-500/30 bg-red-500/10 p-4">
@@ -161,6 +161,11 @@ function buildCloneSearchParams(job: JobDetail): {
 
 function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
   const [showCli, setShowCli] = useState(false);
+  const { data: sbatchData } = useQuery<SbatchScript>({
+    queryKey: ["job-sbatch", job.id],
+    queryFn: () => getJobSbatchScript(job.id),
+    enabled: showCli,
+  });
 
   return (
     <div className="space-y-4">
@@ -177,13 +182,17 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
         </Link>
       </div>
 
-      {showCli && job.params && (
-        <pre className="rounded-md bg-zinc-900 p-3 font-mono text-xs text-zinc-300">
-          recovar {job.type}{" "}
-          {Object.entries(job.params)
-            .map(([k, v]) => `--${k.replace(/_/g, "-")} ${typeof v === "boolean" ? "" : String(v)}`)
-            .join(" ")}
-        </pre>
+      {showCli && (
+        <div className="space-y-1">
+          {sbatchData?.source === "file" && (
+            <p className="text-xs text-zinc-500">
+              From submit.sh (actual sbatch script used)
+            </p>
+          )}
+          <pre className="max-h-96 overflow-auto rounded-md bg-zinc-900 p-3 font-mono text-xs text-zinc-300">
+            {sbatchData?.script ?? "Loading..."}
+          </pre>
+        </div>
       )}
 
       {job.params && Object.keys(job.params).length > 0 ? (

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
+import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -30,20 +31,25 @@ export function ComputeTrajectoryForm({
   const [zStart, setZStart] = useState(prefilledStart?.join(", ") ?? "");
   const [zEnd, setZEnd] = useState(prefilledEnd?.join(", ") ?? "");
   const [nVols, setNVols] = useState("6");
+  const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const parseCoords = (s: string) => s.split(",").map((v) => parseFloat(v.trim()));
   const isValidCoords = (s: string) =>
     s.length > 0 && s.split(",").every((v) => !isNaN(parseFloat(v.trim())));
 
   const mutation = useMutation({
-    mutationFn: () =>
-      submitJob(projectId, "compute_trajectory", {
+    mutationFn: () => {
+      const params: Record<string, unknown> = {
         result_dir: resultDir,
         zdim: parseInt(zdim),
         z_start: parseCoords(zStart),
         z_end: parseCoords(zEnd),
         n_vols_along_path: parseInt(nVols),
-      }),
+      };
+      if (slurmOpts) params.slurm_opts = slurmOpts;
+      return submitJob(projectId, "compute_trajectory", params);
+    },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       onSubmitted?.(data.id);
@@ -118,6 +124,9 @@ export function ComputeTrajectoryForm({
         </div>
         <Input type="number" value={nVols} onChange={(e) => setNVols(e.target.value)} placeholder="6" />
       </div>
+
+      {/* SLURM Settings */}
+      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
 
       <div className="flex justify-end pt-2">
         <Button onClick={() => mutation.mutate()} disabled={!canSubmit} loading={mutation.isPending}>
