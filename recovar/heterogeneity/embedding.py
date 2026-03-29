@@ -210,47 +210,31 @@ def get_per_image_embedding(
 
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory=None)
 
-    halfset_datasets = dataset.materialize_halfset_datasets()
-    zs = [None, None]
-    cov_zs = [None, None]
-    est_contrasts = [None, None]
-    bias = [None, None]
-    for halfset_id, halfset_dataset in enumerate(halfset_datasets):
-        zs[halfset_id], cov_zs[halfset_id], est_contrasts[halfset_id], bias[halfset_id] = (
-            get_coords_in_basis_and_contrast_3(
-                halfset_dataset,
-                mean,
-                basis,
-                eigenvalues[: basis.shape[0]],
-                volume_mask,
-                contrast_grid,
-                batch_size,
-                disc_type,
-                compute_covariances=compute_covariances,
-                contrast_mean=contrast_mean,
-                contrast_variance=contrast_variance,
-                compute_bias=compute_bias,
-                image_subset_in_tilt_series=image_subset_in_tilt_series,
-                contrast_shared_across_tilt_series=contrast_shared_across_tilt_series,
-            )
-        )
-    zs = np.concatenate(zs, axis=0)
-    est_contrasts = np.concatenate(est_contrasts)
+    zs, cov_zs, est_contrasts, bias = get_coords_in_basis_and_contrast_3(
+        dataset,
+        mean,
+        basis,
+        eigenvalues[: basis.shape[0]],
+        volume_mask,
+        contrast_grid,
+        batch_size,
+        disc_type,
+        compute_covariances=compute_covariances,
+        contrast_mean=contrast_mean,
+        contrast_variance=contrast_variance,
+        compute_bias=compute_bias,
+        image_subset_in_tilt_series=image_subset_in_tilt_series,
+        contrast_shared_across_tilt_series=contrast_shared_across_tilt_series,
+    )
     end_time = time.time()
     logger.info("time to compute xs %s", end_time - st_time)
 
-    if compute_covariances:
-        cov_zs = np.concatenate(cov_zs, axis=0)
-        if to_real:
-            cov_zs = cov_zs.real
-
-    if compute_bias:
-        bias = np.concatenate(bias, axis=0)
-        if to_real:
-            bias = bias.real
-
     if to_real:
         zs = zs.real
+        if cov_zs is not None:
+            cov_zs = cov_zs.real
+        if bias is not None:
+            bias = bias.real
 
     return zs, cov_zs, est_contrasts, bias
 
