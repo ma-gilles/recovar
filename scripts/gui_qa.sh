@@ -321,10 +321,11 @@ async function main() {
     else
         log(7, 'FAIL', 'System info not visible');
 
-    if (body7.includes('PIPELINE'))
-        log(7, 'PASS', 'Sidebar shows PIPELINE category');
-    else if (body7.includes('OTHER'))
-        log(7, 'FAIL', 'Sidebar shows OTHER instead of PIPELINE');
+    // Note: the sidebar uses CSS text-transform: uppercase, so DOM text is "Pipeline" not "PIPELINE"
+    if (body7.includes('Pipeline') || body7.includes('PIPELINE'))
+        log(7, 'PASS', 'Sidebar shows Pipeline category');
+    else if (body7.includes('OTHER') || body7.includes('Other'))
+        log(7, 'FAIL', 'Sidebar shows OTHER instead of Pipeline');
     else
         log(7, 'WARN', 'Sidebar category unclear');
 
