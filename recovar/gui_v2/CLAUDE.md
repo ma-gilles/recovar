@@ -180,24 +180,30 @@ pixi run test-gui                                   # All
 
 ### Mandatory QA (after any frontend or backend change)
 
-After modifying any code, you MUST run the QA suite before pushing:
+After modifying any code, you MUST run the acceptance criteria test suite before pushing:
 
 ```bash
 ./scripts/gui_qa.sh
 ```
 
-This single script: builds the frontend, starts the server, creates a test project, scans real pipeline output, runs Playwright interaction tests (not just existence checks), takes screenshots, and reports pass/fail. It exits with code 1 if any test fails.
+This script is **self-contained** — it handles its own server lifecycle, builds the frontend, scans real data (both pipeline-only AND pipeline-with-analyze-results), runs API tests, runs Playwright interaction tests for all 7 acceptance criteria, takes screenshots, and reports per-AC pass/fail. It exits with code 1 if any AC fails.
+
+**What it tests:**
+- AC-1: Dashboard, job forms
+- AC-3: Volume click → slice viewer loads, plots render
+- AC-4: Suggested next → pre-fills Analyze form with result_dir
+- AC-5: Scatter plot renders with REAL particle data (50K+ points)
+- AC-6: Lasso selection → export button
+- AC-7: System info, sidebar categories
 
 **After `gui_qa.sh` runs:**
-1. Check the exit code. If non-zero, read the FAILURES section and fix before pushing.
-2. Read every screenshot in `/tmp/gui_qa/screenshots/` to check for visual issues the automated tests can't catch.
-3. Read `/tmp/gui_qa/results.json` for machine-readable results.
+1. If exit code is non-zero, read the FAILURES and fix before pushing.
+2. Read screenshots in `/tmp/gui_qa/screenshots/` for visual issues the automated tests can't catch.
+3. Machine-readable results: `/tmp/gui_qa/results.json`
 
-**If you cannot fix a failure**, report it clearly: what the test expected, what actually happened, and which file likely needs changing.
+**Do not push code that fails `gui_qa.sh`.** The git pre-push hook runs TypeScript + pytest; `gui_qa.sh` covers the browser interaction layer on top.
 
-**Do not push code that fails `gui_qa.sh`.** This is the equivalent of "tests must pass before push."
-
-**Environment note:** This cluster has Firefox and Xvfb available. Playwright uses Firefox headless. Chromium may not be installed.
+**Environment:** Firefox + Xvfb on Della. Playwright uses Firefox headless.
 
 ## Key Patterns
 
