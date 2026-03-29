@@ -23,13 +23,14 @@ import vtkImageData from "@kitware/vtk.js/Common/DataModel/ImageData";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
 
-// Side-effect imports: register OpenGL view-node factories.
-// Without these, vtkGenericRenderWindow cannot create the scene-graph nodes
-// needed to render (Renderer, Actor, Mapper), and traverseAllPasses() fails
-// with "Cannot read properties of undefined (reading 'traverse')".
-import "@kitware/vtk.js/Rendering/OpenGL/Renderer";
-import "@kitware/vtk.js/Rendering/OpenGL/Actor";
-import "@kitware/vtk.js/Rendering/OpenGL/PolyDataMapper";
+// Side-effect import: register ALL OpenGL view-node factories needed for
+// geometry rendering.  The Geometry profile registers Camera, Renderer,
+// Actor, PolyDataMapper, Texture, and others.  Without Camera in particular,
+// the PolyDataMapper's render pass fails with "Cannot read properties of
+// undefined (reading 'getKeyMatrices')" because the OpenGL camera view-node
+// is never created.  Without Renderer/Actor/Mapper the traversal fails with
+// "Cannot read properties of undefined (reading 'traverse')".
+import "@kitware/vtk.js/Rendering/OpenGL/Profiles/Geometry";
 
 import { Spinner } from "../ui/spinner";
 
