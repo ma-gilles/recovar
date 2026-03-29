@@ -272,10 +272,8 @@ def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(mon
     assert captured["contrast_grid_size"] == [1, 1]
 
 
-def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_series(monkeypatch):
-    class _HalfsetCryo:
-        def __init__(self, n_images):
-            self.n_images = n_images
+def test_get_per_image_embedding_iterates_full_dataset_for_tilt_series(monkeypatch):
+    """get_per_image_embedding passes full dataset to get_coords_in_basis_and_contrast_3."""
 
     class _TiltCryo:
         def __init__(self):
@@ -288,14 +286,6 @@ def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_seri
                 np.array([0, 2, 4], dtype=np.int32),
                 np.array([1, 3], dtype=np.int32),
             ]
-            self.calls = []
-
-        def get_halfset_dataset(self, halfset_id, *, independent=False, lazy=None):
-            self.calls.append((halfset_id, independent, lazy))
-            return _HalfsetCryo(len(self.halfset_indices[halfset_id]))
-
-        def materialize_halfset_datasets(self):
-            return tuple(self.get_halfset_dataset(halfset_id, independent=True, lazy=True) for halfset_id in range(2))
 
     ds = _TiltCryo()
     mean = np.zeros((4,), dtype=np.complex64)
@@ -303,16 +293,20 @@ def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_seri
     s = np.ones((2,), dtype=np.float32)
     volume_mask = np.ones((4,), dtype=np.float32)
 
+    calls = []
     monkeypatch.setattr(embedding, "USE_CUBIC", False)
     monkeypatch.setattr(embedding.utils, "get_embedding_batch_size", lambda *_args, **_kwargs: 10)
     monkeypatch.setattr(
         embedding,
         "get_coords_in_basis_and_contrast_3",
         lambda experiment_dataset, _mean_estimate, basis, _eigenvalues, _volume_mask_in, _contrast_grid, _batch_size, _disc_type, **_kwargs: (
-            np.zeros((experiment_dataset.n_images, basis.shape[0]), dtype=np.complex64),
-            np.zeros((experiment_dataset.n_images, basis.shape[0], basis.shape[0]), dtype=np.complex64),
-            np.ones((experiment_dataset.n_images,), dtype=np.float32),
-            np.zeros((experiment_dataset.n_images, basis.shape[0], basis.shape[0]), dtype=np.complex64),
+            calls.append(experiment_dataset)
+            or (
+                np.zeros((experiment_dataset.n_images, basis.shape[0]), dtype=np.complex64),
+                np.zeros((experiment_dataset.n_images, basis.shape[0], basis.shape[0]), dtype=np.complex64),
+                np.ones((experiment_dataset.n_images,), dtype=np.float32),
+                np.zeros((experiment_dataset.n_images, basis.shape[0], basis.shape[0]), dtype=np.complex64),
+            )
         ),
     )
 
@@ -330,7 +324,9 @@ def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_seri
         compute_bias=True,
     )
 
-    assert ds.calls == [(0, True, True), (1, True, True)]
+    # Called once with the full dataset (no halfset splitting)
+    assert len(calls) == 1
+    assert calls[0] is ds
     assert zs.shape == (5, 2)
     assert cov_zs.shape == (5, 2, 2)
     assert est_contrasts.shape == (5,)
