@@ -12,10 +12,11 @@ import asyncio
 import io
 import logging
 import os
+import tempfile
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 
 from recovar.gui_v2.backend.api.files import _check_path_allowed
 from recovar.gui_v2.backend.config import MAX_SERVE_DIM
@@ -49,15 +50,44 @@ def _downsample_volume(data, target_dim: int):
     return zoom(data, factors, order=1).astype(np.float32)
 
 
+def _volume_needs_downsample(path: str) -> bool:
+    """Check if a volume exceeds MAX_SERVE_DIM without loading full data."""
+    import mrcfile
+    with mrcfile.open(path, mode="r") as mrc:
+        shape = mrc.data.shape
+    return any(d > MAX_SERVE_DIM for d in shape)
+
+
 def _volume_to_mrc_bytes(data, voxel_size: float = 1.0) -> bytes:
-    """Serialize a numpy array to MRC format in memory."""
+    """Serialize a numpy array to MRC format via a temporary file.
+
+    mrcfile 1.5.x does not reliably write to BytesIO objects, so we
+    write to a NamedTemporaryFile and read the bytes back.
+    """
     import mrcfile
     import numpy as np
-    buf = io.BytesIO()
-    with mrcfile.new(buf, overwrite=True) as mrc:
-        mrc.set_data(data.astype(np.float32))
-        mrc.voxel_size = voxel_size
-    return buf.getvalue()
+    fd = None
+    tmp_path = None
+    try:
+        fd, tmp_path = tempfile.mkstemp(suffix=".mrc")
+        os.close(fd)
+        fd = None
+        with mrcfile.new(tmp_path, overwrite=True) as mrc:
+            mrc.set_data(data.astype(np.float32))
+            mrc.voxel_size = voxel_size
+        with open(tmp_path, "rb") as f:
+            return f.read()
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if tmp_path is not None:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
 
 
 def _render_slice_png(data, axis: int, idx: int) -> bytes:
@@ -100,24 +130,32 @@ async def volume_raw(
 
     Volumes exceeding MAX_SERVE_DIM in any dimension are downsampled
     to MAX_SERVE_DIM^3 unless ``full=true``.
+
+    When no downsampling is needed, the original file is served directly
+    via FileResponse (zero-copy, no serialization overhead).
     """
     _check_path_allowed(path)
     if not os.path.isfile(path):
         raise HTTPException(status_code=404, detail=f"File not found: {path}")
 
+    # Fast path: serve the original file directly when no downsampling needed.
+    needs_downsample = await asyncio.to_thread(_volume_needs_downsample, path)
+    if full or not needs_downsample:
+        return FileResponse(
+            path,
+            media_type="application/octet-stream",
+            filename=os.path.basename(path),
+        )
+
+    # Slow path: read, downsample, serialize via temp file.
     data, voxel_size = await asyncio.to_thread(_read_mrc_sync, path)
-
-    headers = {}
-    if not full and any(d > MAX_SERVE_DIM for d in data.shape):
-        original_shape = ",".join(str(d) for d in data.shape)
-        headers["X-Original-Shape"] = original_shape
-        data = await asyncio.to_thread(_downsample_volume, data, MAX_SERVE_DIM)
-
+    original_shape = ",".join(str(d) for d in data.shape)
+    data = await asyncio.to_thread(_downsample_volume, data, MAX_SERVE_DIM)
     mrc_bytes = await asyncio.to_thread(_volume_to_mrc_bytes, data, voxel_size)
     return Response(
         content=mrc_bytes,
         media_type="application/octet-stream",
-        headers=headers,
+        headers={"X-Original-Shape": original_shape},
     )
 
 

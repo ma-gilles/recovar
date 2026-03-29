@@ -12,7 +12,7 @@ import { getVolumeInfo, type VolumeEntry } from "../../lib/api/client";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { MAX_PINNED_VOLUMES } from "../../lib/constants";
-import { VtkViewer } from "./VtkViewer";
+import { VtkViewer, VtkErrorBoundary } from "./VtkViewer";
 
 const VOLUME_COLOR_HEX = ["#38bdf8", "#fb7185", "#34d399", "#fbbf24"];
 
@@ -183,10 +183,12 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
               style={{ imageRendering: "pixelated" }}
             />
           ) : viewMode === "3d" ? (
-            <VtkViewer
-              activeVolume={activeVolume}
-              pinnedVolumes={pinnedVolumes}
-            />
+            <VtkErrorBoundary onWebGLFail={() => setViewMode("slice")}>
+              <VtkViewer
+                activeVolume={activeVolume}
+                pinnedVolumes={pinnedVolumes}
+              />
+            </VtkErrorBoundary>
           ) : (
             <Spinner label="Loading..." />
           )}

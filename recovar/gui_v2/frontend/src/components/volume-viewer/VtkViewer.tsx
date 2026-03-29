@@ -7,7 +7,7 @@
  * Supports up to 4 simultaneous volumes (pinned) with distinct colors.
  */
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import React, { useEffect, useRef, useCallback, useState } from "react";
 
 // vtk.js imports — use deep paths for tree-shaking
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -133,6 +133,7 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
   const pipelinesRef = useRef<Map<string, VtkPipelineEntry>>(new Map());
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [webglFailed, setWebglFailed] = useState(false);
   // Track the last rendered state to avoid redundant re-renders
   const renderedStateRef = useRef<string>("");
 
@@ -140,44 +141,54 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
   useEffect(() => {
     if (!containerRef.current) return;
 
-    const grw = vtkGenericRenderWindow.newInstance({
-      background: BG_COLOR as unknown as [number, number, number],
-    });
-    grw.setContainer(containerRef.current);
+    try {
+      const grw = vtkGenericRenderWindow.newInstance({
+        background: BG_COLOR as unknown as [number, number, number],
+      });
+      grw.setContainer(containerRef.current);
 
-    // Size the render window to fill the container
-    const rect = containerRef.current.getBoundingClientRect();
-    const apiRW = grw.getApiSpecificRenderWindow();
-    apiRW.setSize(Math.round(rect.width), Math.round(rect.height));
+      // Size the render window to fill the container
+      const rect = containerRef.current.getBoundingClientRect();
+      const apiRW = grw.getApiSpecificRenderWindow();
+      apiRW.setSize(Math.round(rect.width), Math.round(rect.height));
 
-    renderContextRef.current = grw;
+      renderContextRef.current = grw;
 
-    // Handle resize
-    const observer = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const { width, height } = entry.contentRect;
-        if (width > 0 && height > 0) {
-          apiRW.setSize(Math.round(width), Math.round(height));
-          grw.resize();
-          grw.getRenderWindow().render();
+      // Handle resize
+      const observer = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          if (width > 0 && height > 0) {
+            apiRW.setSize(Math.round(width), Math.round(height));
+            grw.resize();
+            grw.getRenderWindow().render();
+          }
         }
-      }
-    });
-    observer.observe(containerRef.current);
+      });
+      observer.observe(containerRef.current);
 
-    return () => {
-      observer.disconnect();
-      // Clean up all pipelines
-      for (const pipeline of pipelinesRef.current.values()) {
-        pipeline.actor.delete();
-        pipeline.mapper.delete();
-        pipeline.marchingCubes.delete();
-        pipeline.imageData.delete();
-      }
-      pipelinesRef.current.clear();
-      grw.delete();
-      renderContextRef.current = null;
-    };
+      return () => {
+        observer.disconnect();
+        // Clean up all pipelines
+        for (const pipeline of pipelinesRef.current.values()) {
+          pipeline.actor.delete();
+          pipeline.mapper.delete();
+          pipeline.marchingCubes.delete();
+          pipeline.imageData.delete();
+        }
+        pipelinesRef.current.clear();
+        grw.delete();
+        renderContextRef.current = null;
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error("VtkViewer: WebGL initialization failed:", msg);
+      setWebglFailed(true);
+      setError(
+        "3D rendering requires WebGL. Your browser does not support it. Using slice view instead."
+      );
+      return undefined;
+    }
   }, []);
 
   // Fetch and create pipeline for a volume
@@ -306,6 +317,17 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
   const isLoading = loading.size > 0;
   const hasVolumes = volumesToShow.length > 0;
 
+  // If WebGL failed, show a user-friendly message instead of the canvas.
+  if (webglFailed) {
+    return (
+      <div className="flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 p-8" style={{ minHeight: 400 }}>
+        <p className="text-sm text-amber-400">
+          3D rendering requires WebGL. Your browser does not support it. Using slice view instead.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="relative w-full" style={{ minHeight: 400 }}>
       {/* VTK render container */}
@@ -337,4 +359,47 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
       )}
     </div>
   );
+}
+
+
+// ---------------------------------------------------------------------------
+// ErrorBoundary — safety net around VtkViewer for unhandled render errors.
+// ---------------------------------------------------------------------------
+
+interface VtkErrorBoundaryProps {
+  onWebGLFail: () => void;
+  children: React.ReactNode;
+}
+
+interface VtkErrorBoundaryState {
+  hasError: boolean;
+}
+
+export class VtkErrorBoundary extends React.Component<VtkErrorBoundaryProps, VtkErrorBoundaryState> {
+  constructor(props: VtkErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(_error: Error): VtkErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: React.ErrorInfo): void {
+    console.error("VtkErrorBoundary caught error:", error, info);
+    this.props.onWebGLFail();
+  }
+
+  render(): React.ReactNode {
+    if (this.state.hasError) {
+      return (
+        <div className="flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 p-8" style={{ minHeight: 400 }}>
+          <p className="text-sm text-amber-400">
+            3D rendering requires WebGL. Your browser does not support it. Using slice view instead.
+          </p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
