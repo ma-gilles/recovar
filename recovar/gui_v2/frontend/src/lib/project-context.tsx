@@ -52,8 +52,11 @@ export function ProjectProvider({ children }: { children: ReactNode }): React.JS
 
   // On mount: validate the stored project against the server.
   // If it returns 404, clear it immediately (no retry, no loop).
+  // Only validate if localStorage actually had a stored project — don't
+  // show a stale warning on first visit when nothing was ever saved.
   useEffect(() => {
-    if (!project) return;
+    const storedRaw = localStorage.getItem(STORAGE_KEY);
+    if (!storedRaw || !project?.id) return;
 
     let cancelled = false;
 

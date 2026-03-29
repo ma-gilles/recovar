@@ -1,7 +1,7 @@
 /** Tooltip text for job form parameters. Single source of truth per PHASE1.md. */
 export const tooltips: Record<string, string> = {
   "pipeline.particles":
-    "Input particle images. Accepts .star (RELION), .cs (cryoSPARC), .mrcs (MRC stack), or .txt (list of .mrcs paths).",
+    "Input particle images. Accepts .star (RELION), .cs (cryoSPARC), .mrcs/.mrc (cryoDRGN format \u2014 requires passing CTF and Poses .pkl files separately), or .txt (list of .mrcs paths).",
   "pipeline.mask":
     "Solvent mask defining the molecular envelope. Use 'from_halfmaps' to auto-generate from consensus reconstruction, 'sphere' for a spherical mask, or provide a .mrc file.",
   "pipeline.zdim":
@@ -11,7 +11,7 @@ export const tooltips: Record<string, string> = {
   "pipeline.lazy":
     "Enable lazy loading. Required when particle images are too large to fit in memory. Slower due to repeated disk reads.",
   "pipeline.correct_contrast":
-    "Correct per-particle contrast variation (amplitude scaling). Recommended for datasets with heterogeneous ice thickness or variable defocus.",
+    "Correct per-image scale (amplitude scaling). Recommended for most datasets. Accounts for heterogeneous ice thickness and variable defocus.",
   "pipeline.output_name":
     "Name for the output directory. Will be created under Pipeline/ in the project directory.",
   "pipeline.focus_mask":
@@ -23,9 +23,9 @@ export const tooltips: Record<string, string> = {
   "pipeline.halfsets":
     "Column name for halfset assignment in the .star file.",
   "pipeline.poses":
-    "Column name prefix for poses in the .star file.",
+    "Pre-computed poses in .pkl format (legacy). Usually auto-extracted from .star/.cs files.",
   "pipeline.ctf":
-    "Column name prefix for CTF parameters in the .star file.",
+    "Pre-computed CTF parameters in .pkl format (legacy). Usually auto-extracted from .star/.cs files.",
   "pipeline.tilt_series":
     "Enable tilt-series mode for cryo-ET data.",
   "pipeline.strip_prefix":

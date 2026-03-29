@@ -26,6 +26,8 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
   const [showParticleBrowser, setShowParticleBrowser] = useState(false);
   const [showMaskBrowser, setShowMaskBrowser] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showRarelyUsed, setShowRarelyUsed] = useState(false);
+  const [showFocusMaskBrowser, setShowFocusMaskBrowser] = useState(false);
   const [validationInfo, setValidationInfo] = useState<{
     n_particles?: number;
     box_size?: number;
@@ -36,7 +38,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
   const [zdim, setZdim] = useState("1,2,4,10,20");
   const [downsample, setDownsample] = useState("256");
   const [lazy, setLazy] = useState(false);
-  const [correctContrast, setCorrectContrast] = useState(false);
+  const [correctContrast, setCorrectContrast] = useState(true);
   const [focusMask, setFocusMask] = useState("");
   const [datadir, setDatadir] = useState("");
   const [nImages, setNImages] = useState("");
@@ -91,7 +93,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
           <PathInput
             value={particles}
             onChange={setParticles}
-            accept={[".star", ".cs", ".mrcs", ".txt"]}
+            accept={[".star", ".cs", ".mrcs", ".mrc", ".txt"]}
             placeholder="/path/to/particles.star"
             className="font-mono"
           />
@@ -106,7 +108,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
         {showParticleBrowser && (
           <FileBrowser
             initialPath={projectPath}
-            accept={[".star", ".cs", ".mrcs", ".txt"]}
+            accept={[".star", ".cs", ".mrcs", ".mrc", ".txt"]}
             onSelect={(path) => {
               setParticles(path);
               setShowParticleBrowser(false);
@@ -129,10 +131,10 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
         )}
       </div>
 
-      {/* Mask */}
+      {/* Solvent Mask */}
       <div className="space-y-1">
         <div className="flex items-center gap-1">
-          <Label>Mask</Label>
+          <Label>Solvent Mask</Label>
           <TooltipIcon text={tooltips["pipeline.mask"]} />
         </div>
         <Select value={mask} onChange={(e) => setMask(e.target.value)}>
@@ -170,6 +172,34 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
               />
             )}
           </div>
+        )}
+      </div>
+
+      {/* Focus Mask */}
+      <div className="space-y-1">
+        <div className="flex items-center gap-1">
+          <Label>Focus Mask</Label>
+          <TooltipIcon text={tooltips["pipeline.focus_mask"]} />
+        </div>
+        <div className="flex gap-2">
+          <PathInput value={focusMask} onChange={setFocusMask} accept={[".mrc"]} placeholder="Optional .mrc path" className="font-mono" />
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowFocusMaskBrowser(!showFocusMaskBrowser)}
+          >
+            Browse
+          </Button>
+        </div>
+        {showFocusMaskBrowser && (
+          <FileBrowser
+            initialPath={projectPath}
+            accept={[".mrc"]}
+            onSelect={(path) => {
+              setFocusMask(path);
+              setShowFocusMaskBrowser(false);
+            }}
+          />
         )}
       </div>
 
@@ -231,7 +261,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
                 onChange={(e) => setCorrectContrast(e.target.checked)}
                 className="rounded border-zinc-600 bg-zinc-800"
               />
-              Correct contrast
+              Correct image scale
               <TooltipIcon text={tooltips["pipeline.correct_contrast"]} />
             </label>
             <label className="flex items-center gap-2 text-sm text-zinc-400">
@@ -248,50 +278,10 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
 
           <div className="space-y-1">
             <div className="flex items-center gap-1">
-              <Label>Focus Mask</Label>
-              <TooltipIcon text={tooltips["pipeline.focus_mask"]} />
-            </div>
-            <PathInput value={focusMask} onChange={setFocusMask} accept={[".mrc"]} placeholder="Optional .mrc path" className="font-mono" />
-          </div>
-
-          <div className="space-y-1">
-            <div className="flex items-center gap-1">
               <Label>Data Directory</Label>
               <TooltipIcon text={tooltips["pipeline.datadir"]} />
             </div>
             <PathInput value={datadir} onChange={setDatadir} directoryOnly placeholder="Override data dir" className="font-mono" />
-          </div>
-
-          <div className="space-y-1">
-            <div className="flex items-center gap-1">
-              <Label>N Images</Label>
-              <TooltipIcon text={tooltips["pipeline.n_images"]} />
-            </div>
-            <Input type="number" value={nImages} onChange={(e) => setNImages(e.target.value)} placeholder="All" />
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1">
-              <div className="flex items-center gap-1">
-                <Label>Halfsets</Label>
-                <TooltipIcon text={tooltips["pipeline.halfsets"]} />
-              </div>
-              <Input value={halfsets} onChange={(e) => setHalfsets(e.target.value)} placeholder="Column name" />
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-1">
-                <Label>Poses</Label>
-                <TooltipIcon text={tooltips["pipeline.poses"]} />
-              </div>
-              <Input value={poses} onChange={(e) => setPoses(e.target.value)} placeholder="Column prefix" />
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-1">
-                <Label>CTF</Label>
-                <TooltipIcon text={tooltips["pipeline.ctf"]} />
-              </div>
-              <Input value={ctf} onChange={(e) => setCtf(e.target.value)} placeholder="Column prefix" />
-            </div>
           </div>
 
           <div className="space-y-1">
@@ -301,6 +291,51 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
             </div>
             <Input value={stripPrefix} onChange={(e) => setStripPrefix(e.target.value)} placeholder="Prefix to strip" />
           </div>
+
+          {/* Rarely Used */}
+          <button
+            onClick={() => setShowRarelyUsed(!showRarelyUsed)}
+            className="flex items-center gap-1 text-xs text-zinc-600 hover:text-zinc-400"
+          >
+            {showRarelyUsed ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+            Rarely Used
+          </button>
+
+          {showRarelyUsed && (
+            <div className="ml-4 space-y-3 border-l border-zinc-800 pl-4">
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label>Halfsets</Label>
+                  <TooltipIcon text={tooltips["pipeline.halfsets"]} />
+                </div>
+                <Input value={halfsets} onChange={(e) => setHalfsets(e.target.value)} placeholder="Column name" />
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label>N Images</Label>
+                  <TooltipIcon text={tooltips["pipeline.n_images"]} />
+                </div>
+                <Input type="number" value={nImages} onChange={(e) => setNImages(e.target.value)} placeholder="All" />
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label>Poses</Label>
+                  <TooltipIcon text={tooltips["pipeline.poses"]} />
+                </div>
+                <PathInput value={poses} onChange={setPoses} accept={[".pkl"]} placeholder="Optional .pkl path" className="font-mono" />
+              </div>
+
+              <div className="space-y-1">
+                <div className="flex items-center gap-1">
+                  <Label>CTF</Label>
+                  <TooltipIcon text={tooltips["pipeline.ctf"]} />
+                </div>
+                <PathInput value={ctf} onChange={setCtf} accept={[".pkl"]} placeholder="Optional .pkl path" className="font-mono" />
+              </div>
+            </div>
+          )}
         </div>
       )}
 
