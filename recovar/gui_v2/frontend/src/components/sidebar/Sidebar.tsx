@@ -15,13 +15,15 @@ import {
   Beaker,
   FolderOpen,
   FolderPlus,
+  AlertTriangle,
 } from "lucide-react";
 import { clsx } from "clsx";
-import { getProject, createProject, type ProjectDetail, type JobSummary } from "../../lib/api/client";
+import { getProject, createProject, ApiError, type ProjectDetail, type JobSummary } from "../../lib/api/client";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { FileBrowser } from "../file-browser/FileBrowser";
+import { isEphemeralPath, EPHEMERAL_PATH_WARNING } from "../../lib/constants";
 
 // Status icon mapping per DESIGN-SYSTEM.md
 function StatusIcon({ status }: { status: string }): React.JSX.Element {
@@ -119,9 +121,10 @@ function DiskUsage({ bytes, total }: { bytes: number; total: number }): React.JS
 interface SidebarProps {
   projectId?: string;
   onProjectCreated?: (project: { id: string; path: string; name: string }) => void;
+  onProjectNotFound?: () => void;
 }
 
-export function Sidebar({ projectId, onProjectCreated }: SidebarProps): React.JSX.Element {
+export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: SidebarProps): React.JSX.Element {
   const [collapsed, setCollapsed] = useState(() => window.innerWidth < 768);
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [showOpenForm, setShowOpenForm] = useState(false);
@@ -136,12 +139,25 @@ export function Sidebar({ projectId, onProjectCreated }: SidebarProps): React.JS
     return () => mq.removeEventListener("change", handler);
   }, []);
 
-  const { data: project } = useQuery<ProjectDetail>({
+  const { data: project, error: projectError } = useQuery<ProjectDetail>({
     queryKey: ["project", projectId],
     queryFn: () => getProject(projectId!),
     enabled: !!projectId,
-    refetchInterval: 5000,
+    // Stop polling when the project is gone (404).
+    refetchInterval: (query) => {
+      if (query.state.error instanceof ApiError && query.state.error.status === 404) {
+        return false;
+      }
+      return 5000;
+    },
   });
+
+  // If the project query returns 404, notify the parent to clear state.
+  useEffect(() => {
+    if (projectError instanceof ApiError && projectError.status === 404) {
+      onProjectNotFound?.();
+    }
+  }, [projectError, onProjectNotFound]);
 
   const pipelineJobs = project?.jobs.filter((j) => j.type.toLowerCase() === "pipeline") ?? [];
   const analyzeJobs = project?.jobs.filter((j) => j.type.toLowerCase() === "analyze") ?? [];
@@ -360,6 +376,14 @@ function ProjectFormOverlay({
                 }
               }}
             />
+          )}
+
+          {/* Ephemeral path warning */}
+          {path && isEphemeralPath(path) && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-600/50 bg-amber-950/50 px-3 py-2 text-xs text-amber-200">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+              <span>{EPHEMERAL_PATH_WARNING}</span>
+            </div>
           )}
 
           {/* Name — only for Create */}

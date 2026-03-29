@@ -6,16 +6,18 @@ import {
   scanProject,
   getProject,
   getSystemInfo,
+  ApiError,
   type SystemInfo,
   type ProjectDetail,
 } from "../lib/api/client";
 import { useProject } from "../lib/project-context";
 import type { UseMutationResult } from "@tanstack/react-query";
-import { Plus, Server, FolderPlus, FolderOpen, Search, Beaker, BarChart3, Play, ScanSearch } from "lucide-react";
+import { Plus, Server, FolderPlus, FolderOpen, Search, Beaker, BarChart3, Play, ScanSearch, AlertTriangle } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { FileBrowser } from "../components/file-browser/FileBrowser";
+import { isEphemeralPath, EPHEMERAL_PATH_WARNING } from "../lib/constants";
 
 export function DashboardPage(): React.JSX.Element {
   const { project, setProject } = useProject();
@@ -175,6 +177,12 @@ export function DashboardPage(): React.JSX.Element {
                   }}
                 />
               )}
+              {createPath && isEphemeralPath(createPath) && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-600/50 bg-amber-950/50 px-3 py-2 text-xs text-amber-200">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                  <span>{EPHEMERAL_PATH_WARNING}</span>
+                </div>
+              )}
               <div className="space-y-1">
                 <Label>Project Name</Label>
                 <Input
@@ -231,6 +239,12 @@ export function DashboardPage(): React.JSX.Element {
                   onSelect={(p) => { setOpenPath(p); setShowOpenBrowser(false); }}
                 />
               )}
+              {openPath && isEphemeralPath(openPath) && (
+                <div className="flex items-start gap-2 rounded-md border border-amber-600/50 bg-amber-950/50 px-3 py-2 text-xs text-amber-200">
+                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
+                  <span>{EPHEMERAL_PATH_WARNING}</span>
+                </div>
+              )}
               {openMutation.isError && (
                 <p className="text-sm text-red-400">{(openMutation.error as Error).message}</p>
               )}
@@ -280,7 +294,13 @@ function ProjectDashboard({
   const { data: projectDetail } = useQuery<ProjectDetail>({
     queryKey: ["project", project.id],
     queryFn: () => getProject(project.id),
-    refetchInterval: 10000,
+    // Stop polling if the project was deleted (404).
+    refetchInterval: (query) => {
+      if (query.state.error instanceof ApiError && query.state.error.status === 404) {
+        return false;
+      }
+      return 10000;
+    },
   });
 
   const jobs = projectDetail?.jobs ?? [];

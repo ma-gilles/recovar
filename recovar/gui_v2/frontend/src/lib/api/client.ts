@@ -7,6 +7,19 @@
 
 const BASE = "/api";
 
+/**
+ * Custom error class that preserves the HTTP status code so callers
+ * (e.g. TanStack Query retry logic) can distinguish 4xx from 5xx.
+ */
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, body: string) {
+    super(`${status}: ${body}`);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
 async function request<T>(
   path: string,
   options?: RequestInit
@@ -17,7 +30,7 @@ async function request<T>(
   });
   if (!resp.ok) {
     const body = await resp.text();
-    throw new Error(`${resp.status}: ${body}`);
+    throw new ApiError(resp.status, body);
   }
   if (resp.status === 204) return undefined as T;
   return resp.json();

@@ -4,6 +4,7 @@ import { RouterProvider, createRouter, createRootRoute, createRoute } from "@tan
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import "./styles/globals.css";
 import { ProjectProvider } from "./lib/project-context";
+import { ApiError } from "./lib/api/client";
 
 import { RootLayout } from "./routes/__root";
 import { DashboardPage } from "./routes/index";
@@ -65,7 +66,14 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       refetchOnWindowFocus: false,
-      retry: 1,
+      retry: (failureCount, error) => {
+        // Never retry 4xx errors (client errors like 404 Not Found).
+        // Only retry 5xx / network errors, and only once.
+        if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
+          return false;
+        }
+        return failureCount < 1;
+      },
     },
   },
 });
