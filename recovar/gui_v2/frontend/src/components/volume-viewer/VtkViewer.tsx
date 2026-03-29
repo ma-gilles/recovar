@@ -23,6 +23,14 @@ import vtkImageData from "@kitware/vtk.js/Common/DataModel/ImageData";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import vtkDataArray from "@kitware/vtk.js/Common/Core/DataArray";
 
+// Side-effect imports: register OpenGL view-node factories.
+// Without these, vtkGenericRenderWindow cannot create the scene-graph nodes
+// needed to render (Renderer, Actor, Mapper), and traverseAllPasses() fails
+// with "Cannot read properties of undefined (reading 'traverse')".
+import "@kitware/vtk.js/Rendering/OpenGL/Renderer";
+import "@kitware/vtk.js/Rendering/OpenGL/Actor";
+import "@kitware/vtk.js/Rendering/OpenGL/PolyDataMapper";
+
 import { Spinner } from "../ui/spinner";
 
 // ---- Types ----
@@ -137,20 +145,32 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
   // Track the last rendered state to avoid redundant re-renders
   const renderedStateRef = useRef<string>("");
 
-  // Initialize vtk.js render window
+  // Initialize vtk.js render window.
+  //
+  // IMPORTANT: vtkGenericRenderWindow.newInstance() internally calls
+  // interactor.initialize() which triggers a render pass (traverseAllPasses).
+  // That render pass requires the OpenGL scene-graph view-node factories to
+  // be registered (via side-effect imports above).  Without those imports the
+  // factory cannot create view nodes for Renderer/Actor/Mapper and the
+  // traversal fails with "Cannot read properties of undefined".
   useEffect(() => {
     if (!containerRef.current) return;
 
     try {
+      // Create the generic render window.  The constructor triggers an
+      // internal render on a detached canvas — that is harmless as long as
+      // the OpenGL view-node factories have been registered (see imports).
       const grw = vtkGenericRenderWindow.newInstance({
         background: BG_COLOR as unknown as [number, number, number],
+        listenWindowResize: false, // we use ResizeObserver instead
       });
+
+      // Attach the vtk.js canvas to the DOM container.
       grw.setContainer(containerRef.current);
 
-      // Size the render window to fill the container
-      const rect = containerRef.current.getBoundingClientRect();
-      const apiRW = grw.getApiSpecificRenderWindow();
-      apiRW.setSize(Math.round(rect.width), Math.round(rect.height));
+      // Size the render window to fill the container.  grw.resize() reads
+      // the container bounding rect and accounts for devicePixelRatio.
+      grw.resize();
 
       renderContextRef.current = grw;
 
@@ -159,9 +179,7 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
         for (const entry of entries) {
           const { width, height } = entry.contentRect;
           if (width > 0 && height > 0) {
-            apiRW.setSize(Math.round(width), Math.round(height));
             grw.resize();
-            grw.getRenderWindow().render();
           }
         }
       });
