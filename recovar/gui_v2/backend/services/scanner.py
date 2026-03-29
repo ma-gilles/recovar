@@ -65,6 +65,63 @@ def _read_metadata_json(job_dir: str) -> dict | None:
         return None
 
 
+def _extract_params_from_pkl(job_dir: str) -> dict:
+    """Extract pipeline parameters from model/params.pkl for legacy imports.
+
+    Reads the pickled params dict and extracts the ``input_args`` Namespace
+    to recover the original command-line parameters (particles, mask, zdim, etc.).
+    Also extracts volume_shape and voxel_size from the params dict itself.
+    """
+    pkl_path = os.path.join(job_dir, "model", "params.pkl")
+    if not os.path.isfile(pkl_path):
+        return {}
+
+    try:
+        import pickle
+        with open(pkl_path, "rb") as f:
+            data = pickle.load(f)
+    except Exception as exc:
+        logger.warning("Could not load %s: %s", pkl_path, exc)
+        return {}
+
+    params: dict = {}
+
+    # Extract input_args (argparse Namespace stored as numpy 0-d array)
+    input_args = data.get("input_args")
+    if input_args is not None:
+        # May be wrapped in a numpy 0-d array
+        if hasattr(input_args, "item"):
+            input_args = input_args.item()
+        if hasattr(input_args, "__dict__"):
+            args_dict = vars(input_args)
+            # Extract the most useful parameters
+            _keys = [
+                "particles", "outdir", "zdim", "mask", "poses", "ctf",
+                "ind", "halfsets", "downsample", "lazy", "correct_contrast",
+                "focus_mask", "n_images", "datadir", "tilt_series",
+                "premultiplied_ctf",
+            ]
+            for k in _keys:
+                if k in args_dict and args_dict[k] is not None:
+                    v = args_dict[k]
+                    # Convert numpy types to plain Python
+                    if hasattr(v, "tolist"):
+                        v = v.tolist()
+                    params[k] = v
+
+    # Extract top-level metadata
+    if "volume_shape" in data:
+        vs = data["volume_shape"]
+        params["volume_shape"] = vs.tolist() if hasattr(vs, "tolist") else list(vs)
+    if "voxel_size" in data:
+        vx = data["voxel_size"]
+        params["voxel_size"] = float(vx.item()) if hasattr(vx, "item") else float(vx)
+    if "version" in data:
+        params["recovar_version"] = str(data["version"])
+
+    return params
+
+
 def _is_pipeline_output(job_dir: str) -> bool:
     """Check if a directory looks like a pipeline output."""
     # Primary check: model/metadata.json
@@ -163,6 +220,14 @@ def _scan_job_dir(type_name: str, job_dir: str) -> ScannedJob:
             created_at = datetime.datetime.fromtimestamp(mtime)
         except OSError:
             pass
+        # Extract params from metadata.json or params.pkl
+        meta = _read_metadata_json(job_dir)
+        if meta:
+            params = meta
+        if type_name == "Pipeline":
+            pkl_params = _extract_params_from_pkl(job_dir)
+            if pkl_params:
+                params.update(pkl_params)
 
     return ScannedJob(
         type=type_name,

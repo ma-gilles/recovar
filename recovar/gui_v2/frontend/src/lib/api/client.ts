@@ -35,6 +35,7 @@ export interface Project {
 export interface ProjectDetail extends Project {
   jobs: JobSummary[];
   disk_usage_bytes: number;
+  disk_usage_total: number;
 }
 
 export interface JobSummary {

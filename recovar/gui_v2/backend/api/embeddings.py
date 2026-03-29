@@ -40,8 +40,23 @@ def _find_analysis_dir(job_output_dir: str, zdim: int) -> str | None:
     return None
 
 
-def _load_embeddings_sync(job_output_dir: str, zdim: int) -> dict:
-    """Load embedding data for a specific zdim (sync, for thread pool)."""
+def _load_embeddings_sync(
+    pipeline_dir: str,
+    zdim: int,
+    analyze_dir: str | None = None,
+) -> dict:
+    """Load embedding data for a specific zdim (sync, for thread pool).
+
+    Parameters
+    ----------
+    pipeline_dir : str
+        Path to the pipeline output (contains ``model/``).
+    zdim : int
+        Latent dimensionality to load.
+    analyze_dir : str | None
+        Path to the analyze job output (contains ``data/``, ``plots/``).
+        If None, falls back to ``{pipeline_dir}/analysis_{zdim}/``.
+    """
     result: dict[str, Any] = {
         "pca_coords": None,
         "umap_coords": None,
@@ -52,58 +67,92 @@ def _load_embeddings_sync(job_output_dir: str, zdim: int) -> dict:
     }
 
     # PCA coords: model/zdim_N/latent_coords.npy (new) or embeddings.pkl (legacy)
-    zdim_dir = os.path.join(job_output_dir, "model", f"zdim_{zdim}")
+    zdim_dir = os.path.join(pipeline_dir, "model", f"zdim_{zdim}")
     latent_path = os.path.join(zdim_dir, "latent_coords.npy")
     if os.path.isfile(latent_path):
         result["pca_coords"] = np.load(latent_path).astype(np.float32)
     else:
-        # Legacy: embeddings.pkl
-        emb_path = os.path.join(job_output_dir, "model", "embeddings.pkl")
+        # Legacy: embeddings.pkl — may use 'zs' key (old format) or integer keys
+        emb_path = os.path.join(pipeline_dir, "model", "embeddings.pkl")
         if os.path.isfile(emb_path):
             with open(emb_path, "rb") as f:
                 emb = pickle.load(f)
-            if isinstance(emb, dict) and zdim in emb:
-                result["pca_coords"] = np.array(emb[zdim], dtype=np.float32)
+            if isinstance(emb, dict):
+                # New format: latent_coords[zdim]
+                if "latent_coords" in emb and zdim in emb["latent_coords"]:
+                    result["pca_coords"] = np.array(
+                        emb["latent_coords"][zdim], dtype=np.float32
+                    )
+                # Old format: zs[zdim]
+                elif "zs" in emb and zdim in emb["zs"]:
+                    result["pca_coords"] = np.array(
+                        emb["zs"][zdim], dtype=np.float32
+                    )
+                # Direct dict: {zdim: array}
+                elif zdim in emb:
+                    result["pca_coords"] = np.array(emb[zdim], dtype=np.float32)
             elif isinstance(emb, np.ndarray):
                 result["pca_coords"] = emb.astype(np.float32)
 
     if result["pca_coords"] is not None:
         result["n_particles"] = result["pca_coords"].shape[0]
 
-    # Analysis outputs
-    analysis_dir = _find_analysis_dir(job_output_dir, zdim)
-    if analysis_dir is None:
-        return result
+    # Resolve analysis directory.  Priority:
+    # 1. Explicit analyze_dir (from an Analyze job's output_dir)
+    # 2. {pipeline_dir}/analysis_{zdim}/  (inline analysis, legacy)
+    candidates: list[str] = []
+    if analyze_dir and os.path.isdir(analyze_dir):
+        candidates.append(analyze_dir)
+    inline = os.path.join(pipeline_dir, f"analysis_{zdim}")
+    if os.path.isdir(inline):
+        candidates.append(inline)
 
-    # UMAP coords
-    umap_path = os.path.join(analysis_dir, "plots", "umap", "umap_embedding.pkl")
-    if os.path.isfile(umap_path):
-        with open(umap_path, "rb") as f:
-            umap_data = pickle.load(f)
-        if isinstance(umap_data, np.ndarray):
-            result["umap_coords"] = umap_data.astype(np.float32)
+    for a_dir in candidates:
+        # UMAP coords
+        if result["umap_coords"] is None:
+            umap_path = os.path.join(a_dir, "plots", "umap", "umap_embedding.pkl")
+            if os.path.isfile(umap_path):
+                with open(umap_path, "rb") as f:
+                    umap_data = pickle.load(f)
+                if isinstance(umap_data, np.ndarray):
+                    result["umap_coords"] = umap_data.astype(np.float32)
 
-    # K-means
-    kmeans_path = os.path.join(analysis_dir, "data", "kmeans_result.pkl")
-    if os.path.isfile(kmeans_path):
-        with open(kmeans_path, "rb") as f:
-            km = pickle.load(f)
-        if isinstance(km, dict):
-            if "labels" in km:
-                result["kmeans_labels"] = np.array(km["labels"], dtype=np.int32)
-            if "centers" in km:
-                result["kmeans_centers"] = np.array(km["centers"], dtype=np.float32)
+        # K-means
+        if result["kmeans_labels"] is None:
+            kmeans_path = os.path.join(a_dir, "data", "kmeans_result.pkl")
+            if os.path.isfile(kmeans_path):
+                with open(kmeans_path, "rb") as f:
+                    km = pickle.load(f)
+                if isinstance(km, dict):
+                    if "labels" in km:
+                        result["kmeans_labels"] = np.array(
+                            km["labels"], dtype=np.int32
+                        )
+                    if "centers" in km:
+                        result["kmeans_centers"] = np.array(
+                            km["centers"], dtype=np.float32
+                        )
 
     return result
 
 
-def _discover_zdims(job_output_dir: str) -> dict:
-    """Discover which zdim values and analyses are available."""
+def _discover_zdims(
+    pipeline_dir: str, analyze_dir: str | None = None
+) -> dict:
+    """Discover which zdim values and analyses are available.
+
+    Parameters
+    ----------
+    pipeline_dir : str
+        Path to the pipeline output (contains ``model/``).
+    analyze_dir : str | None
+        Path to the analyze job output (contains ``data/``, ``plots/``).
+    """
     zdims: list[int] = []
     has_umap: dict[int, bool] = {}
 
     # Check model/zdim_* directories
-    model_dir = os.path.join(job_output_dir, "model")
+    model_dir = os.path.join(pipeline_dir, "model")
     if os.path.isdir(model_dir):
         for name in sorted(os.listdir(model_dir)):
             if name.startswith("zdim_"):
@@ -123,15 +172,48 @@ def _discover_zdims(job_output_dir: str) -> dict:
                 with open(emb_path, "rb") as f:
                     emb = pickle.load(f)
                 if isinstance(emb, dict):
-                    zdims = sorted(int(k) for k in emb.keys() if isinstance(k, (int, str)) and str(k).isdigit())
+                    # New format: latent_coords dict
+                    if "latent_coords" in emb:
+                        zdims = sorted(
+                            int(k)
+                            for k in emb["latent_coords"].keys()
+                            if isinstance(k, int)
+                        )
+                    # Old format: zs dict
+                    elif "zs" in emb:
+                        zdims = sorted(
+                            int(k)
+                            for k in emb["zs"].keys()
+                            if isinstance(k, int)
+                        )
+                    else:
+                        zdims = sorted(
+                            int(k)
+                            for k in emb.keys()
+                            if isinstance(k, (int, str)) and str(k).isdigit()
+                        )
             except Exception:
                 pass
 
     # Check which zdims have UMAP
     for z in zdims:
-        analysis = os.path.join(job_output_dir, f"analysis_{z}")
-        umap_file = os.path.join(analysis, "plots", "umap", "umap_embedding.pkl")
-        has_umap[z] = os.path.isfile(umap_file)
+        found = False
+        # Check analyze dir first (Analyze job output)
+        if analyze_dir:
+            umap_file = os.path.join(
+                analyze_dir, "plots", "umap", "umap_embedding.pkl"
+            )
+            if os.path.isfile(umap_file):
+                found = True
+        # Also check inline analysis dir (legacy)
+        if not found:
+            analysis = os.path.join(pipeline_dir, f"analysis_{z}")
+            umap_file = os.path.join(
+                analysis, "plots", "umap", "umap_embedding.pkl"
+            )
+            if os.path.isfile(umap_file):
+                found = True
+        has_umap[z] = found
 
     return {"zdims": zdims, "has_umap": has_umap}
 
@@ -156,13 +238,22 @@ async def get_embeddings(
     job, session = await _get_job(job_id)
     await session.close()
 
-    # Resolve the pipeline output directory
-    # For Analyze jobs, result_dir param points to the pipeline output
-    output_dir = job.output_dir
+    # Resolve the pipeline output directory and optional analyze dir.
+    # For Analyze jobs:
+    #   - pipeline_dir = params["result_dir"] (where model/ lives)
+    #   - analyze_dir  = job.output_dir (where data/, plots/ live)
+    # For Pipeline jobs:
+    #   - pipeline_dir = job.output_dir
+    #   - analyze_dir  = None (falls back to analysis_N/ inside pipeline_dir)
+    pipeline_dir = job.output_dir
+    analyze_dir: str | None = None
     if job.type == "Analyze" and job.params and job.params.get("result_dir"):
-        output_dir = job.params["result_dir"]
+        pipeline_dir = job.params["result_dir"]
+        analyze_dir = job.output_dir
 
-    data = await asyncio.to_thread(_load_embeddings_sync, output_dir, zdim)
+    data = await asyncio.to_thread(
+        _load_embeddings_sync, pipeline_dir, zdim, analyze_dir
+    )
 
     if data["pca_coords"] is None:
         raise HTTPException(
@@ -220,8 +311,10 @@ async def embeddings_available(job_id: str) -> dict:
     job, session = await _get_job(job_id)
     await session.close()
 
-    output_dir = job.output_dir
+    pipeline_dir = job.output_dir
+    analyze_dir: str | None = None
     if job.type == "Analyze" and job.params and job.params.get("result_dir"):
-        output_dir = job.params["result_dir"]
+        pipeline_dir = job.params["result_dir"]
+        analyze_dir = job.output_dir
 
-    return await asyncio.to_thread(_discover_zdims, output_dir)
+    return await asyncio.to_thread(_discover_zdims, pipeline_dir, analyze_dir)

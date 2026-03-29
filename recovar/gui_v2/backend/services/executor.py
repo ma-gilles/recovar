@@ -372,6 +372,8 @@ export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TMPDIR=/scratch/gpfs/GILLES/mg6942/tmp
 mkdir -p "$TMPDIR"
+# Add pixi bin to PATH so the recovar entry point (with its shebang) works
+export PATH="{pixi_bin_dir}:$PATH"
 {extra_exports}
 
 # ── Staging cleanup trap ──
@@ -404,6 +406,8 @@ def _render_sbatch_script(
     extra_exports = "\n".join(
         f"export {k}={v}" for k, v in env_vars.items()
     )
+    # Derive pixi bin dir from the running Python executable
+    pixi_bin_dir = str(Path(sys.executable).parent)
 
     if cache_dir:
         cache_setup = (
@@ -428,6 +432,7 @@ def _render_sbatch_script(
         memory=memory,
         time=time,
         output_path=output_path,
+        pixi_bin_dir=pixi_bin_dir,
         extra_exports=extra_exports,
         cache_setup=cache_setup,
         command=command,

@@ -187,6 +187,22 @@ export function LatentExplorer({ jobId, projectId, resultDir }: LatentExplorerPr
     );
   }
 
+  if (available.zdims.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 py-20 text-center">
+        <p className="text-zinc-400">
+          No analysis results found. Run <strong>Analyze</strong> on this pipeline output first.
+        </p>
+        <a
+          href="/jobs/new"
+          className="inline-flex items-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-500"
+        >
+          Run Analyze
+        </a>
+      </div>
+    );
+  }
+
   const axisOptions = Array.from(
     { length: effectiveZdim ?? 0 },
     (_, i) => i

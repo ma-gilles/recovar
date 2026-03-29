@@ -133,10 +133,10 @@ export function Sidebar({ projectId, onProjectCreated }: SidebarProps): React.JS
     refetchInterval: 5000,
   });
 
-  const pipelineJobs = project?.jobs.filter((j) => j.type === "pipeline") ?? [];
-  const analyzeJobs = project?.jobs.filter((j) => j.type === "analyze") ?? [];
+  const pipelineJobs = project?.jobs.filter((j) => j.type.toLowerCase() === "pipeline") ?? [];
+  const analyzeJobs = project?.jobs.filter((j) => j.type.toLowerCase() === "analyze") ?? [];
   const otherJobs =
-    project?.jobs.filter((j) => j.type !== "pipeline" && j.type !== "analyze") ?? [];
+    project?.jobs.filter((j) => j.type.toLowerCase() !== "pipeline" && j.type.toLowerCase() !== "analyze") ?? [];
 
   const handleProjectCreated = (p: { id: string; path: string; name: string }) => {
     setShowCreateForm(false);
@@ -229,7 +229,7 @@ export function Sidebar({ projectId, onProjectCreated }: SidebarProps): React.JS
           {/* Disk usage */}
           {project && project.disk_usage_bytes > 0 && (
             <div className="border-t border-zinc-800">
-              <DiskUsage bytes={project.disk_usage_bytes} total={100e9} />
+              <DiskUsage bytes={project.disk_usage_bytes} total={project.disk_usage_total} />
             </div>
           )}
         </>

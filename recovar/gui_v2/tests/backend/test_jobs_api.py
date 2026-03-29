@@ -65,9 +65,8 @@ class TestCommandBuilders:
             "particles": "/data/test.star",
             "mask": "from_halfmaps",
         })
-        assert cmd[0] == sys.executable
-        assert "-m" in cmd
-        assert "recovar" in cmd
+        # cmd[0] is the recovar entry-point script (not python -m recovar)
+        assert cmd[0].endswith("recovar") or "recovar" in cmd[0]
         assert "pipeline" in cmd
         assert "/data/test.star" in cmd
         assert "--mask" in cmd

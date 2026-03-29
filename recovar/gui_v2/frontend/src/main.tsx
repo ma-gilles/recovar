@@ -24,6 +24,10 @@ const newJobRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/jobs/new",
   component: NewJobPage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    type: (search.type as string) || undefined,
+    result_dir: (search.result_dir as string) || undefined,
+  }),
 });
 
 const jobDetailRoute = createRoute({

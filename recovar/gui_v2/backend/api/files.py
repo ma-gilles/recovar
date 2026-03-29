@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,18 @@ def _file_type(name: str, is_dir: bool) -> str:
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get("/serve")
+async def serve_file(path: str) -> FileResponse:
+    """Serve a single file with the correct MIME type."""
+    abs_path = os.path.abspath(path)
+    _check_path_allowed(abs_path)
+
+    if not os.path.isfile(abs_path):
+        raise HTTPException(status_code=404, detail=f"File not found: {abs_path}")
+
+    return FileResponse(abs_path)
 
 
 @router.get("/browse", response_model=list[FileEntry])

@@ -231,8 +231,18 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         raise HTTPException(status_code=404, detail="Project not found")
 
     # Build command
-    job_type = req.type
     params = req.params
+
+    # Normalize job type: accept lowercase/underscore forms from the frontend
+    _type_aliases = {
+        "pipeline": "Pipeline",
+        "analyze": "Analyze",
+        "compute_state": "ComputeState",
+        "computestate": "ComputeState",
+        "compute_trajectory": "ComputeTrajectory",
+        "computetrajectory": "ComputeTrajectory",
+    }
+    job_type = _type_aliases.get(req.type.lower().replace("-", "_"), req.type)
 
     # Allocate output directory
     type_dir_map = {

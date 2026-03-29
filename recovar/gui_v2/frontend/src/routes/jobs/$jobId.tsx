@@ -24,6 +24,7 @@ import {
   type PlotEntry,
   type SuggestedNext,
 } from "../../lib/api/client";
+import { VolumeViewer } from "../../components/volume-viewer/VolumeViewer";
 import { StatusBadge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Spinner } from "../../components/ui/spinner";
@@ -107,6 +108,10 @@ function OverviewTab({ job, suggestions }: { job: JobDetail; suggestions?: Sugge
               <Link
                 key={s.type}
                 to="/jobs/new"
+                search={{
+                  type: s.type.toLowerCase().replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase(),
+                  ...s.prefilled_params,
+                }}
                 className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-800"
               >
                 {s.label}
@@ -173,6 +178,7 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
 }
 
 function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
+  const [selectedVolume, setSelectedVolume] = useState<string | null>(null);
   const { data: volumes, isLoading } = useQuery<VolumeEntry[]>({
     queryKey: ["job-volumes", jobId],
     queryFn: () => getJobVolumes(jobId),
@@ -200,7 +206,11 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
             {vols.map((v) => (
               <button
                 key={v.path}
-                className="rounded-md border border-zinc-800 bg-zinc-900 p-3 text-left hover:border-blue-500/50 hover:bg-zinc-800"
+                onClick={() => setSelectedVolume(selectedVolume === v.path ? null : v.path)}
+                className={clsx(
+                  "rounded-md border bg-zinc-900 p-3 text-left hover:border-blue-500/50 hover:bg-zinc-800",
+                  selectedVolume === v.path ? "border-blue-500" : "border-zinc-800"
+                )}
               >
                 <Box className="mb-1 h-8 w-8 text-sky-400" />
                 <p className="truncate text-sm">{v.name}</p>
@@ -212,6 +222,12 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
           </div>
         </div>
       ))}
+
+      {selectedVolume && (
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-4">
+          <VolumeViewer volumes={volumes} initialVolumePath={selectedVolume} />
+        </div>
+      )}
     </div>
   );
 }
@@ -239,7 +255,7 @@ function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
             className="rounded-md border border-zinc-800 bg-zinc-900 p-2 hover:border-blue-500/50"
           >
             <img
-              src={`/api/files/browse?path=${encodeURIComponent(p.path)}`}
+              src={`/api/files/serve?path=${encodeURIComponent(p.path)}`}
               alt={p.name}
               className="w-full rounded"
               loading="lazy"
@@ -256,7 +272,7 @@ function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
           onClick={() => setEnlarged(null)}
         >
           <img
-            src={`/api/files/browse?path=${encodeURIComponent(enlarged)}`}
+            src={`/api/files/serve?path=${encodeURIComponent(enlarged)}`}
             alt="Enlarged plot"
             className="max-h-[90vh] max-w-[90vw] rounded-lg"
           />

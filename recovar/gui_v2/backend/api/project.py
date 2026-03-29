@@ -75,6 +75,7 @@ class ProjectDetailResponse(BaseModel):
     created: str
     jobs: list[JobSummary]
     disk_usage_bytes: int
+    disk_usage_total: int
 
 
 class ScanRequest(BaseModel):
@@ -221,9 +222,11 @@ async def get_project(project_id: str) -> ProjectDetailResponse:
 
         # Compute disk usage
         disk_usage_bytes = 0
+        disk_usage_total = 0
         try:
             usage = shutil.disk_usage(project.path)
             disk_usage_bytes = usage.used
+            disk_usage_total = usage.total
         except OSError:
             pass
 
@@ -248,6 +251,7 @@ async def get_project(project_id: str) -> ProjectDetailResponse:
             created=project.created_at.isoformat(),
             jobs=jobs,
             disk_usage_bytes=disk_usage_bytes,
+            disk_usage_total=disk_usage_total,
         )
     finally:
         await session.close()

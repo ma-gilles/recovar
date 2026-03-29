@@ -9,13 +9,31 @@ argv elements.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
+from pathlib import Path
 from typing import Any
 
 
-def _python() -> str:
-    """Return the Python interpreter path."""
-    return sys.executable
+def _recovar_cmd() -> str:
+    """Return the path to the ``recovar`` entry-point script.
+
+    The ``recovar`` package uses a ``[project.scripts]`` entry point,
+    not ``__main__.py``, so ``python -m recovar`` does not work.
+    Instead we locate the ``recovar`` script installed alongside the
+    running Python interpreter.
+    """
+    # Look for 'recovar' next to the current Python executable
+    python_dir = Path(sys.executable).parent
+    candidate = python_dir / "recovar"
+    if candidate.is_file():
+        return str(candidate)
+    # Fallback: hope it's on PATH
+    found = shutil.which("recovar")
+    if found:
+        return found
+    # Last resort: use python -m (will fail if no __main__.py)
+    return f"{sys.executable} -m recovar"
 
 
 def _add_optional(cmd: list[str], flag: str, value: Any) -> None:
@@ -36,7 +54,7 @@ def build_pipeline_command(params: dict[str, Any]) -> list[str]:
     Required params: particles, mask
     Optional params: all other pipeline CLI flags
     """
-    cmd = [_python(), "-m", "recovar", "pipeline"]
+    cmd = [_recovar_cmd(), "pipeline"]
 
     # Positional: particles
     cmd.append(params["particles"])
@@ -78,7 +96,7 @@ def build_pipeline_command(params: dict[str, Any]) -> list[str]:
 
 def build_analyze_command(params: dict[str, Any]) -> list[str]:
     """Build ``recovar analyze`` command."""
-    cmd = [_python(), "-m", "recovar", "analyze"]
+    cmd = [_recovar_cmd(), "analyze"]
 
     # Positional: result_dir
     cmd.append(params["result_dir"])
@@ -105,11 +123,12 @@ def build_compute_state_command(
     *latent_points_file* is the path to a text file containing the
     latent coordinate vector, written by the API before submission.
     """
-    cmd = [_python(), "-m", "recovar", "compute_state"]
+    cmd = [_recovar_cmd(), "compute_state"]
 
     cmd.append(params["result_dir"])
 
-    _add_optional(cmd, "--zdim", params.get("zdim"))
+    # Note: compute_state does not accept --zdim; zdim is inferred from
+    # the dimensionality of the latent_points file.
     _add_optional(cmd, "-o", params.get("outdir"))
     cmd.extend(["--latent-points", latent_points_file])
 
@@ -122,11 +141,10 @@ def build_compute_trajectory_command(
     z_end_file: str,
 ) -> list[str]:
     """Build ``recovar compute_trajectory`` command."""
-    cmd = [_python(), "-m", "recovar", "compute_trajectory"]
+    cmd = [_recovar_cmd(), "compute_trajectory"]
 
     cmd.append(params["result_dir"])
 
-    _add_optional(cmd, "--zdim", params.get("zdim"))
     _add_optional(cmd, "-o", params.get("outdir"))
     cmd.extend(["--z_st", z_start_file])
     cmd.extend(["--z_end", z_end_file])

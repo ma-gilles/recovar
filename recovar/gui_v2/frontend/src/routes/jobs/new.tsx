@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, Link } from "@tanstack/react-router";
+import { useNavigate, useSearch, Link } from "@tanstack/react-router";
 import { FolderOpen } from "lucide-react";
 import { useProject } from "../../lib/project-context";
 import { Select } from "../../components/ui/select";
@@ -19,7 +19,11 @@ const JOB_TYPES = [
 export function NewJobPage(): React.JSX.Element {
   const navigate = useNavigate();
   const { project } = useProject();
-  const [jobType, setJobType] = useState<string>("pipeline");
+  const searchParams = useSearch({ from: "/jobs/new" }) as {
+    type?: string;
+    result_dir?: string;
+  };
+  const [jobType, setJobType] = useState<string>(searchParams.type ?? "pipeline");
 
   if (!project) {
     return (
@@ -70,13 +74,25 @@ export function NewJobPage(): React.JSX.Element {
             />
           )}
           {jobType === "analyze" && (
-            <AnalyzeForm projectId={project.id} onSubmitted={handleSubmitted} />
+            <AnalyzeForm
+              projectId={project.id}
+              prefilledResultDir={searchParams.result_dir}
+              onSubmitted={handleSubmitted}
+            />
           )}
           {jobType === "compute_state" && (
-            <ComputeStateForm projectId={project.id} onSubmitted={handleSubmitted} />
+            <ComputeStateForm
+              projectId={project.id}
+              prefilledResultDir={searchParams.result_dir}
+              onSubmitted={handleSubmitted}
+            />
           )}
           {jobType === "compute_trajectory" && (
-            <ComputeTrajectoryForm projectId={project.id} onSubmitted={handleSubmitted} />
+            <ComputeTrajectoryForm
+              projectId={project.id}
+              prefilledResultDir={searchParams.result_dir}
+              onSubmitted={handleSubmitted}
+            />
           )}
         </div>
       </div>
