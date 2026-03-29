@@ -156,7 +156,7 @@ export function Sidebar({ projectId, onProjectCreated }: SidebarProps): React.JS
         </button>
         {projectId ? (
           <Link
-            to="/jobs/new"
+            to="/jobs/new" search={{ type: undefined, result_dir: undefined }}
             className="mt-4 rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
             aria-label="New job"
           >
@@ -197,7 +197,7 @@ export function Sidebar({ projectId, onProjectCreated }: SidebarProps): React.JS
           {/* New Job button — only when project is open */}
           <div className="border-b border-zinc-800 p-2">
             <Link
-              to="/jobs/new"
+              to="/jobs/new" search={{ type: undefined, result_dir: undefined }}
               className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500"
             >
               <Plus className="h-4 w-4" />

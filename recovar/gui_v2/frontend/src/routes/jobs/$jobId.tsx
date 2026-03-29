@@ -110,7 +110,7 @@ function OverviewTab({ job, suggestions }: { job: JobDetail; suggestions?: Sugge
                 to="/jobs/new"
                 search={{
                   type: s.type.toLowerCase().replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase(),
-                  ...s.prefilled_params,
+                  result_dir: (s.prefilled_params?.result_dir as string) || undefined,
                 }}
                 className="inline-flex items-center gap-1 rounded-md border border-zinc-700 px-3 py-1.5 text-sm hover:bg-zinc-800"
               >
@@ -157,7 +157,7 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
         <Button variant="outline" size="sm" onClick={() => setShowCli(!showCli)}>
           {showCli ? "Hide" : "Show"} CLI Command
         </Button>
-        <Link to="/jobs/new">
+        <Link to="/jobs/new" search={{ type: undefined, result_dir: undefined }}>
           <Button variant="outline" size="sm">
             <Copy className="h-3.5 w-3.5" />
             Clone Job
