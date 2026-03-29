@@ -11,6 +11,7 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@kitware/vtk.js": "^35.5.1",
     "@tanstack/react-query": "^5.95.2",
     "@tanstack/react-router": "^1.168.8",
     "react": "^18.3.1",

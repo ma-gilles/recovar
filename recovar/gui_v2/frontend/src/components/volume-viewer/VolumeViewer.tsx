@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   RotateCcw,
@@ -12,6 +12,7 @@ import { getVolumeInfo, type VolumeEntry } from "../../lib/api/client";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { MAX_PINNED_VOLUMES } from "../../lib/constants";
+import { VtkViewer } from "./VtkViewer";
 
 const VOLUME_COLOR_HEX = ["#38bdf8", "#fb7185", "#34d399", "#fbbf24"];
 
@@ -35,7 +36,6 @@ interface VolumeViewerProps {
  * This provides the slice view mode and controls as a fallback/default.
  */
 export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps): React.JSX.Element {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [pinnedVolumes, setPinnedVolumes] = useState<PinnedVolume[]>([]);
   const [activeVolume, setActiveVolume] = useState<string | null>(initialVolumePath ?? null);
   const [axis, setAxis] = useState<0 | 1 | 2>(2); // Z axis default
@@ -183,11 +183,10 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
               style={{ imageRendering: "pixelated" }}
             />
           ) : viewMode === "3d" ? (
-            <div className="text-center text-sm text-zinc-500">
-              <p>3D isosurface rendering</p>
-              <p className="text-xs text-zinc-600 mt-1">Requires vtk.js (install with npm)</p>
-              <canvas ref={canvasRef} className="hidden" />
-            </div>
+            <VtkViewer
+              activeVolume={activeVolume}
+              pinnedVolumes={pinnedVolumes}
+            />
           ) : (
             <Spinner label="Loading..." />
           )}
