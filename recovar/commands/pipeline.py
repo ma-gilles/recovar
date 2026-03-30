@@ -1203,6 +1203,27 @@ def standard_recovar_pipeline(args):
         latent_coords, latent_coords_noreg, latent_precision, latent_precision_noreg, est_contrasts, est_contrasts_noreg
     )
 
+    # Convert embeddings from dataset-local order to NaN-padded original-file
+    # space (version 0.7 storage format).  Embedding results are in sorted
+    # original order; we scatter them into a full-size array at the positions
+    # given by the sorted halfset indices.
+    def _to_nan_padded(arr, sorted_indices):
+        n_original = int(np.max(sorted_indices)) + 1 if sorted_indices.size else 0
+        out = np.full((n_original, *arr.shape[1:]), np.nan, dtype=arr.dtype)
+        out[sorted_indices] = arr
+        return out
+
+    for entry in embedding_dict:
+        for key in embedding_dict[entry]:
+            if entry.startswith("contrasts") and args.tilt_series and ("shared" not in options.contrast):
+                embedding_dict[entry][key] = _to_nan_padded(
+                    embedding_dict[entry][key], np.sort(np.concatenate(ind_split))
+                )
+            else:
+                embedding_dict[entry][key] = _to_nan_padded(
+                    embedding_dict[entry][key], np.sort(np.concatenate(particles_ind_split))
+                )
+
     args.halfsets = paths.particles_halfsets
 
     result = output.build_params_dict(

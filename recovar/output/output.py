@@ -344,7 +344,7 @@ def build_params_dict(
         The full command-line arguments used to run the pipeline.
     """
     return {
-        'version': '0.8',
+        'version': '0.7',
         'volume_shape': volume_shape,
         'voxel_size': voxel_size,
         's': s_rescaled,
@@ -846,17 +846,14 @@ class PipelineOutput:
     def has_embedding_key(self, entry, key):
         return key in self.get_embedding_keys(entry)
 
-    def _needs_halfset_reindex(self):
-        """Whether saved embeddings need halfset reindexing on load.
-
-        Versions < 0.8 stored embeddings in NaN-padded original-file space
-        and required reindexing via halfset indices.  Version 0.8+ stores
-        embeddings directly in dataset-local order.
-        """
-        return self.version not in ('0', '0.8') and not self.version.startswith('0.8')
-
     def get_embedding_component(self, entry, key):
-        """Return one embedding array in **dataset-local order**."""
+        """Return one embedding array in **dataset-local order**.
+
+        The stored embeddings are NaN-padded in original-file space.
+        This method selects only computed entries (identified by
+        ``particles_halfsets``) and returns them in sorted original-index
+        order, which matches the unified dataset's local ordering.
+        """
         if self.embedding_loaded:
             return self.embedding[entry][key]
         cache_key = (entry, key)
@@ -868,7 +865,7 @@ class PipelineOutput:
             raise KeyError(f"Embedding key {key} not found in {entry}.")
 
         values = self.embedding[entry][key]
-        if self._needs_halfset_reindex():
+        if self.version != '0':
             particle_halfsets, image_halfsets = self._get_embedding_halfsets()
             if entry.startswith('contrasts') and self._use_image_halfsets_for_unshared_tilt_contrast():
                 values = values[np.sort(image_halfsets)]
@@ -885,10 +882,14 @@ class PipelineOutput:
         return np.asarray(self.embedding[entry][key])
 
     def load_embedding(self):
-        """Load all embedding arrays into dataset-local order."""
+        """Load all embedding arrays into dataset-local order.
+
+        Selects only computed entries (no NaN) and sorts by original
+        index, matching the unified dataset's local ordering.
+        """
         self._ensure_embedding_raw_loaded()
 
-        if self._needs_halfset_reindex():
+        if self.version != '0':
             halfsets, image_halfsets = self._get_embedding_halfsets()
             sorted_halfsets = np.sort(halfsets)
             sorted_image_halfsets = np.sort(image_halfsets)
@@ -1231,7 +1232,7 @@ def umap_latent_space(zs):
     import umap
     st_time = time.time()
     n_components = np.min([zs.shape[1], 2])
-    mapper = umap.UMAP(n_components = n_components).fit(zs)
+    mapper = umap.UMAP(n_components=n_components, random_state=42).fit(zs)
     logger.info("time to umap: %.1fs", time.time() - st_time)
     return mapper
 
