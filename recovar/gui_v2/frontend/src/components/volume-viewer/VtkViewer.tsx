@@ -260,6 +260,11 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
   // fetch retries thousands of times until the browser runs out of resources.
   const failedPathsRef = useRef(new Set<string>());
 
+  // Track in-flight fetches to prevent concurrent duplicate requests.
+  // Multiple effect invocations can call ensurePipeline before the first
+  // fetch completes, bypassing the failedPathsRef check.
+  const inflightRef = useRef(new Map<string, Promise<VtkPipelineEntry | null>>());
+
   // Fetch and create pipeline for a volume
   const ensurePipeline = useCallback(async (path: string): Promise<VtkPipelineEntry | null> => {
     // Already loaded
@@ -272,6 +277,14 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
       return null;
     }
 
+    // Already being fetched — wait for the existing request
+    if (inflightRef.current.has(path)) {
+      return inflightRef.current.get(path)!;
+    }
+
+    // Wrap the fetch in a promise tracked by inflightRef BEFORE any async
+    // work starts, so concurrent callers see it immediately.
+    const doFetch = async (): Promise<VtkPipelineEntry | null> => {
     setLoading((prev) => new Set(prev).add(path));
     setError(null);
 
@@ -377,6 +390,16 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
         next.delete(path);
         return next;
       });
+    }
+
+    };
+
+    const promise = doFetch();
+    inflightRef.current.set(path, promise);
+    try {
+      return await promise;
+    } finally {
+      inflightRef.current.delete(path);
     }
   }, []);
 
