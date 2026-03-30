@@ -148,16 +148,36 @@ Integration: `recovar/ppca/ppca.py`
 - The EM applies `volume_mask` as a safety projection after each M-step;
   pass the outer support as `volume_mask` to preserve the collar
 
-## Results (128^3, q=10, 50k images, 20 EM iterations)
+## Results (q=10, 50k images, 20 EM iterations)
 
-| Method | RelVar |
-|--------|--------|
-| soft-alpha λ=10 c=8 + post-gridding | 0.9585 |
-| soft-alpha λ=100 c=5 + post-gridding | 0.9581 |
-| mask projection + gridding | 0.9496 |
-| unpreconditioned CG 50it + gridding | 0.9490 |
-| PCG baseline + gridding | 0.9347 |
-| PCG baseline (no gridding) | 0.9186 |
+All soft-alpha results below use gridding as post-processing.
+Gridding-in-the-objective results pending.
 
-Note: these used gridding as post-processing. Results with gridding
-in the objective (correct formulation) are pending.
+### 128^3
+
+| Method | RelVar | Δ vs baseline |
+|--------|--------|---------------|
+| soft-alpha λ=10 c=8 | 0.9585 | +0.9% |
+| soft-alpha λ=100 c=5 | 0.9581 | +0.9% |
+| mask projection + gridding | 0.9496 | baseline |
+| unpreconditioned CG 50it + gridding | 0.9490 | -0.1% |
+| PCG baseline + gridding | 0.9347 | -1.5% |
+
+### 256^3
+
+| Method | RelVar | Δ vs baseline |
+|--------|--------|---------------|
+| soft-alpha λ=10 c=10 (4% of grid) | 0.8270 | +4.5% |
+| soft-alpha λ=10 c=8 | 0.8186 | +3.7% |
+| soft-alpha λ=100 c=6 | 0.8123 | +3.1% |
+| soft-alpha λ=10 c=6 | 0.8103 | +2.9% |
+| soft-alpha λ=10 c=5 | 0.8059 | +2.4% |
+| soft-alpha λ=10 c=3 | 0.7963 | +1.5% |
+| noprecond CG 50it + gridding | 0.7835 | +0.2% |
+| mask projection + gridding | 0.7816 | baseline |
+
+Observations:
+- Collar ≈ 4% of grid size is optimal (c=5 at 128, c=10 at 256)
+- λ insensitive in range 10–500
+- Improvement scales with resolution: +0.9% at 128, +4.5% at 256
+- Circulant preconditioner hurts in float32; plain CG is better
