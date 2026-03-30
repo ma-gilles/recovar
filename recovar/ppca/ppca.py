@@ -1664,9 +1664,10 @@ def EM(
             W = W.T.reshape(basis_size, *vs)
             W = ftu.get_idft3(W).real
 
-        # Mask: PCG M-step and mstep_solver_fn already apply mask inside CG.
-        # For standard path, apply mask as post-processing projection.
-        if not use_pcg_mean and mstep_solver_fn is None:
+        # Mask: PCG M-step already applies mask inside CG.
+        # For standard path and mstep_solver_fn, apply mask as safety projection.
+        # (CG solvers may have float32 leakage outside the mask.)
+        if not use_pcg_mean:
             if volume_mask is not None and not np.all(volume_mask == 1):
                 W = W * jnp.array(volume_mask)[None]
 

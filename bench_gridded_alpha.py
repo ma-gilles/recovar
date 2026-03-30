@@ -157,9 +157,21 @@ def benchmark_grid_size(gs):
     collar = max(3, round(COLLAR_FRAC * gs))  # resolution-scaled
     logger.info("Using collar=%d (%.1f%% of grid)", collar, 100*collar/gs)
 
+    # Build outer support for soft-alpha solver
+    # The EM applies volume_mask as safety projection after each M-step.
+    # For soft-alpha, pass the outer_support so the collar is not clipped.
+    alpha, outer_support_arr = pv.build_alpha_weight(
+        np.asarray(mov_bin > 0.5, dtype=bool),
+        collar_width=collar, outer_dilate=3,
+    )
+    outer_support_f32 = np.array(outer_support_arr, dtype=np.float32)
+    n_outer = np.sum(outer_support_f32 > 0.5)
+    logger.info("Outer support: %d voxels (%.1f%% of grid)",
+                n_outer, 100 * n_outer / np.prod(vs))
+
     results = []
 
-    # Baselines
+    # Baselines (use appropriate mask for EM's safety projection)
     configs = [
         ("mask_proj", mask_soft, False, None, 20, False),
         ("mask_proj+grid", mask_soft, False, None, 20, True),
@@ -169,10 +181,11 @@ def benchmark_grid_size(gs):
     ]
 
     # Soft-alpha: gridding in objective (no post-processing gridding)
+    # Pass outer_support as volume_mask so EM doesn't clip collar
     for lam in [10, 100, 500]:
         configs.append((
             f"sa_grid_l{lam}_c{collar}_50it",
-            mask_bin, False,
+            outer_support_f32, False,
             make_gridded_solver(lam, collar, use_gridding=True), 50, False,
         ))
 
@@ -180,7 +193,7 @@ def benchmark_grid_size(gs):
     for lam in [10, 100]:
         configs.append((
             f"sa_nogrid_l{lam}_c{collar}_50it",
-            mask_bin, False,
+            outer_support_f32, False,
             make_gridded_solver(lam, collar, use_gridding=False), 50, False,
         ))
 
@@ -188,7 +201,7 @@ def benchmark_grid_size(gs):
     for lam in [10, 100]:
         configs.append((
             f"sa_postGrid_l{lam}_c{collar}_50it",
-            mask_bin, False,
+            outer_support_f32, False,
             make_gridded_solver(lam, collar, use_gridding=False), 50, True,
         ))
 
@@ -196,7 +209,7 @@ def benchmark_grid_size(gs):
     for maxiter in [20, 100]:
         configs.append((
             f"sa_grid_l100_c{collar}_{maxiter}it",
-            mask_bin, False,
+            outer_support_f32, False,
             make_gridded_solver(100, collar, use_gridding=True), maxiter, False,
         ))
 
