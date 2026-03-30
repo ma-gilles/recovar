@@ -390,6 +390,21 @@ _CHART_BUILDERS = {
 
 def _read_available_zdims(result_dir: str) -> list[int] | None:
     """Read available zdims from pipeline output."""
+    # Primary: read embeddings.pkl which stores zs as {zdim: array, ...}
+    embeddings_path = os.path.join(result_dir, "model", "embeddings.pkl")
+    if os.path.isfile(embeddings_path):
+        try:
+            with open(embeddings_path, "rb") as f:
+                emb = pickle.load(f)
+            zs = emb.get("zs", {})
+            if isinstance(zs, dict):
+                zdims = [int(k) for k in zs.keys() if isinstance(k, (int, float))]
+                if zdims:
+                    return sorted(zdims)
+        except Exception:
+            pass
+
+    # Secondary: check params.pkl for zdims_computed
     params_path = os.path.join(result_dir, "model", "params.pkl")
     if os.path.isfile(params_path):
         try:
