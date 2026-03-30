@@ -1692,7 +1692,8 @@ def create_outlier_visualizations(
             else:
                 # Randomly sample max_points from the masked data
                 indices = np.where(mask)[0]
-                sampled_indices = np.random.choice(indices, size=max_points, replace=False)
+                rng = np.random.default_rng(42)
+                sampled_indices = rng.choice(indices, size=max_points, replace=False)
                 return points[sampled_indices]
 
         # Plot 1: UMAP visualization with improved styling for large datasets

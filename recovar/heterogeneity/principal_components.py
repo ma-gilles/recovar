@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 def _principal_component_random_seed(dataset):
-    return None if getattr(dataset, "tilt_series_flag", False) else 0
+    return 0
 
 
 # NVTX domain for principal components operations
