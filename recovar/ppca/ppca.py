@@ -1026,6 +1026,7 @@ def EM_step_half(
     pcg_maxiter=20,
     W_prev_real=None,
     soft_penalty_lam=0.0,
+    mstep_solver_fn=None,
 ):
     """Half-spectrum EM step for L2-regularized PPCA.
 
@@ -1098,7 +1099,23 @@ def EM_step_half(
     # ------------------------------------------------------------------
     # M-step solve
     # ------------------------------------------------------------------
-    if use_pcg_mstep and volume_mask is not None:
+    if mstep_solver_fn is not None and volume_mask is not None:
+        # Custom solver variant (for benchmarking)
+        W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
+        reg_half = 1 / (W_prior_half + 1e-16)
+        W0 = None
+        if W_prev_real is not None:
+            W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))
+
+        W_real, _solver_info = mstep_solver_fn(
+            lhs_summed, rhs_summed, reg_half,
+            jnp.array(volume_mask).reshape(volume_shape),
+            volume_shape, W0_real=W0,
+            maxiter=pcg_maxiter, tol=1e-4,
+            unpack_fn=unpack_tri_to_full,
+        )
+        W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T
+    elif use_pcg_mstep and volume_mask is not None:
         # Full q×q PCG M-step with mask constraint.
         # Passes upper-tri LHS directly — unpacked in chunks inside pcg_mstep.
         from recovar.reconstruction.pcg_mean import pcg_mstep
@@ -1462,6 +1479,7 @@ def EM(
     noise_variance=None,
     soft_penalty_lam=0.0,
     use_gridding_correction=False,
+    mstep_solver_fn=None,
 ):
     """
     Run EM algorithm for PPCA.
@@ -1606,6 +1624,7 @@ def EM(
                 pcg_maxiter=pcg_maxiter,
                 W_prev_real=_W_prev_real if iter_i > 0 else None,
                 soft_penalty_lam=soft_penalty_lam,
+                mstep_solver_fn=mstep_solver_fn,
             )
         else:
             # L1/sparse: use full-spectrum EM step (ADMM needs full volume)
