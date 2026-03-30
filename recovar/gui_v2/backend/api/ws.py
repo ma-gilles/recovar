@@ -117,6 +117,12 @@ async def job_stream(
     executor = get_executor()
     if job.executor_handle:
         log_path = await executor.log_path(job.executor_handle)
+    if log_path is None and job.executor_handle:
+        # After server restart, executor loses in-memory log paths.
+        # Try the standard SLURM output pattern.
+        candidate = Path(job.output_dir) / f"slurm-{job.executor_handle}.out"
+        if candidate.exists():
+            log_path = candidate
     if log_path is None:
         log_path = Path(job.output_dir) / "run.log"
 

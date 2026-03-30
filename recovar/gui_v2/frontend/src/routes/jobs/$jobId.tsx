@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import { useParams, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -19,6 +19,7 @@ import {
 import { clsx } from "clsx";
 import {
   getJob,
+  getProject,
   getJobVolumes,
   getJobPlots,
   getSuggestedNext,
@@ -31,6 +32,7 @@ import {
   type SuggestedNext,
   type SbatchScript,
 } from "../../lib/api/client";
+import { useProject } from "../../lib/project-context";
 import { VolumeViewer } from "../../components/volume-viewer/VolumeViewer";
 import { StatusBadge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -517,6 +519,22 @@ export function JobDetailPage(): React.JSX.Element {
     queryFn: () => getSuggestedNext(jobId),
     enabled: job?.status === "completed",
   });
+
+  const { project, setProject } = useProject();
+
+  // Auto-restore project context when navigating directly to a job page
+  useEffect(() => {
+    if (project || !job?.project_id) return;
+    let cancelled = false;
+    getProject(job.project_id).then((projectData) => {
+      if (!cancelled) {
+        setProject({ id: projectData.id, path: projectData.path, name: projectData.name });
+      }
+    }).catch(() => {
+      // Ignore errors — project may have been deleted
+    });
+    return () => { cancelled = true; };
+  }, [project, job?.project_id, setProject]);
 
   const reconcileMutation = useMutation({
     mutationFn: () => reconcileJob(jobId),

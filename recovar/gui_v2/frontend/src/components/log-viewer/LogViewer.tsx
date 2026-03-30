@@ -26,6 +26,22 @@ export function LogViewer({ jobId, jobStatus, onStatusChange }: LogViewerProps):
     }
   }, [autoScroll]);
 
+  // For terminal jobs, fetch logs via REST as fallback
+  useEffect(() => {
+    const isTerminal = jobStatus === "completed" || jobStatus === "failed" || jobStatus === "cancelled";
+    if (!isTerminal) return;
+
+    fetch(`/api/jobs/${jobId}/logs`)
+      .then((r) => r.json())
+      .then((data: { log: string; path?: string; error?: string }) => {
+        if (data.log) {
+          const logLines = data.log.split("\n");
+          setLines((prev) => (prev.length > 0 ? prev : logLines));
+        }
+      })
+      .catch(() => {});
+  }, [jobId, jobStatus]);
+
   useEffect(() => {
     const callbacks: JobStreamCallbacks = {
       onLogLine: (data: LogLineData) => {
@@ -38,7 +54,9 @@ export function LogViewer({ jobId, jobStatus, onStatusChange }: LogViewerProps):
         setProgress(data);
       },
       onReconnectSync: (data) => {
-        setLines(data.log_tail);
+        if (data.log_tail.length > 0) {
+          setLines(data.log_tail);
+        }
         onStatusChange?.(data.status);
       },
       onConnectionChange: (isConnected: boolean) => {

@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useParams, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Box } from "lucide-react";
 import { clsx } from "clsx";
-import { getJob, getJobVolumes, type JobDetail, type VolumeEntry } from "../../lib/api/client";
+import { getJob, getProject, getJobVolumes, type JobDetail, type VolumeEntry } from "../../lib/api/client";
 import { useProject } from "../../lib/project-context";
 import { Spinner } from "../../components/ui/spinner";
 import { LatentExplorer } from "../../components/latent-explorer/LatentExplorer";
@@ -26,6 +26,24 @@ export function ExplorePage(): React.JSX.Element {
     enabled: !!job,
   });
 
+  const { project: activeProject, setProject } = useProject();
+
+  // Auto-restore project context when navigating directly to an explore page
+  useEffect(() => {
+    if (activeProject || !job?.project_id) return;
+    let cancelled = false;
+    getProject(job.project_id).then((projectData) => {
+      if (!cancelled) {
+        setProject({ id: projectData.id, path: projectData.path, name: projectData.name });
+      }
+    }).catch(() => {
+      // Ignore errors — project may have been deleted
+    });
+    return () => { cancelled = true; };
+  }, [activeProject, job?.project_id, setProject]);
+
+  const projectId = activeProject?.id ?? "";
+
   if (jobLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -44,9 +62,6 @@ export function ExplorePage(): React.JSX.Element {
       </div>
     );
   }
-
-  const { project: activeProject } = useProject();
-  const projectId = activeProject?.id ?? "";
 
   return (
     <div className="space-y-4">

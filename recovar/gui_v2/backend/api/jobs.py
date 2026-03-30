@@ -103,7 +103,8 @@ async def _poll_job_status(job_id: str, handle: str, project_path: str) -> None:
                     job.status = status.value
                     job.completed_at = datetime.datetime.utcnow()
                     if status == ExecJobStatus.FAILED:
-                        job.error = "Job failed (detected by status poller)."
+                        reason = await executor.failure_reason(handle)
+                        job.error = reason or "Job failed (detected by status poller)."
                     await session.commit()
             _poll_tasks.pop(job_id, None)
             logger.info("Job %s reached terminal state: %s", job_id, status.value)
@@ -141,10 +142,13 @@ class SubmitJobResponse(BaseModel):
     status: str
     created: str
     handle: str | None = None
+    slurm_id: str | None = None
+    warnings: list[str] = []
 
 
 class JobDetailResponse(BaseModel):
     id: str
+    project_id: str
     type: str
     status: str
     params: dict | None = None
@@ -286,6 +290,32 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
     # Set outdir in params
     params["outdir"] = job_dir
 
+    # Validate key inputs before submission
+    warnings: list[str] = []
+    if job_type == "Pipeline":
+        particles = params.get("particles", "")
+        if particles and not os.path.isfile(particles):
+            raise HTTPException(status_code=400, detail=f"Particles file not found: {particles}")
+        mask = params.get("mask", "from_halfmaps")
+        if mask not in ("from_halfmaps", "sphere", "none", "") and not os.path.isfile(mask):
+            raise HTTPException(status_code=400, detail=f"Mask file not found: {mask}")
+    elif job_type in ("Analyze", "ComputeState", "ComputeTrajectory", "Density", "StableStates"):
+        result_dir = params.get("result_dir", "")
+        if result_dir and not os.path.isdir(result_dir):
+            raise HTTPException(status_code=400, detail=f"Result directory not found: {result_dir}")
+        metadata = os.path.join(result_dir, "model", "params.pkl") if result_dir else ""
+        if result_dir and not os.path.isfile(metadata) and not os.path.isfile(os.path.join(result_dir, "model", "metadata.json")):
+            raise HTTPException(status_code=400, detail=f"Not a valid pipeline output: {result_dir}")
+
+    # Check disk space
+    try:
+        usage = os.statvfs(project_path)
+        free_gb = (usage.f_frsize * usage.f_bavail) / (1024**3)
+        if free_gb < 50:
+            warnings.append(f"Less than {free_gb:.0f} GB free on disk. Jobs may fail if space runs out.")
+    except OSError:
+        pass
+
     # Build command based on type
     if job_type == "Pipeline":
         command = build_pipeline_command(params)
@@ -377,6 +407,8 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         status=JobStatus.RUNNING.value,
         created=job.created_at.isoformat(),
         handle=handle,
+        slurm_id=handle if isinstance(executor, SlurmExecutor) else None,
+        warnings=warnings,
     )
 
 
@@ -414,6 +446,7 @@ async def get_job(job_id: str) -> JobDetailResponse:
 
         return JobDetailResponse(
             id=job.id,
+            project_id=job.project_id,
             type=job.type,
             status=job.status,
             params=job.params,
@@ -563,6 +596,44 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
         ))
 
     return suggestions
+
+
+class LogResponse(BaseModel):
+    log: str
+    path: str | None = None
+    error: str | None = None
+
+
+@router.get("/{job_id}/logs")
+async def get_job_logs(job_id: str) -> LogResponse:
+    """Get log file content for a completed/failed job."""
+    job, session = await _get_job(job_id)
+    await session.close()
+
+    # Try executor log path first
+    executor = get_executor()
+    log_path = None
+    if job.executor_handle:
+        log_path = await executor.log_path(job.executor_handle)
+    # SLURM fallback: slurm-{id}.out
+    if log_path is None and job.executor_handle and job.output_dir:
+        candidate = Path(job.output_dir) / f"slurm-{job.executor_handle}.out"
+        if candidate.exists():
+            log_path = candidate
+    # Generic fallback
+    if log_path is None and job.output_dir:
+        candidate = Path(job.output_dir) / "run.log"
+        if candidate.exists():
+            log_path = candidate
+
+    if log_path and log_path.exists():
+        try:
+            text = log_path.read_text(errors="replace")
+            return LogResponse(log=text, path=str(log_path))
+        except OSError as e:
+            return LogResponse(log="", error=f"Failed to read log: {e}")
+
+    return LogResponse(log="", error="Log file not found")
 
 
 class ReconcileResponse(BaseModel):

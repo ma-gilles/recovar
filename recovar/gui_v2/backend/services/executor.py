@@ -85,6 +85,10 @@ class Executor(ABC):
     async def cleanup(self, handle: str) -> None:
         """Clean up resources after job completion."""
 
+    async def failure_reason(self, handle: str) -> str | None:
+        """Return a human-readable failure reason, or None if unknown."""
+        return None
+
 
 # ---------------------------------------------------------------------------
 # SLURM state mapping
@@ -191,8 +195,22 @@ class SlurmExecutor(Executor):
         path = self._log_paths.get(handle)
         if path and path.exists():
             return path
-        # Try to find it by glob in the working dir
         return None
+
+    async def failure_reason(self, handle: str) -> str | None:
+        """Query sacct for the specific SLURM failure state."""
+        state = await self._sacct_state(handle)
+        if state is None:
+            return None
+        _SLURM_FAILURE_MESSAGES = {
+            "TIMEOUT": "Job exceeded the time limit. Increase the time limit in SLURM settings and resubmit.",
+            "OUT_OF_MEMORY": "Job exceeded the memory limit. Try increasing memory or enabling lazy loading.",
+            "NODE_FAIL": "The compute node failed during execution. This is not a bug in your job. Resubmit to try again.",
+            "PREEMPTED": "Job was preempted by a higher-priority job. Resubmit to try again.",
+            "CANCELLED": "Job was cancelled.",
+            "CANCELLED+": "Job was cancelled.",
+        }
+        return _SLURM_FAILURE_MESSAGES.get(state)
 
     async def cleanup(self, handle: str) -> None:
         self._log_paths.pop(handle, None)

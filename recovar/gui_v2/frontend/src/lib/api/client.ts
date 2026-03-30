@@ -63,6 +63,7 @@ export interface JobSummary {
 }
 
 export interface JobDetail extends JobSummary {
+  project_id: string;
   params?: Record<string, unknown> | null;
   handle?: string | null;
   parent_jobs?: string[] | null;
