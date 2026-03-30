@@ -1664,15 +1664,15 @@ def EM(
             W = W.T.reshape(basis_size, *vs)
             W = ftu.get_idft3(W).real
 
-        # Mask: PCG M-step already applies mask inside CG.
+        # Mask: PCG M-step and mstep_solver_fn already apply mask inside CG.
         # For standard path, apply mask as post-processing projection.
-        if not use_pcg_mean:
+        if not use_pcg_mean and mstep_solver_fn is None:
             if volume_mask is not None and not np.all(volume_mask == 1):
                 W = W * jnp.array(volume_mask)[None]
 
-        # Save real-space W for PCG warmstart (before gridding — gridding
+        # Save real-space W for warmstart (before gridding — gridding
         # is post-processing that shouldn't corrupt the CG solution space)
-        if use_pcg_mean:
+        if use_pcg_mean or mstep_solver_fn is not None:
             _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)
 
         # Gridding correction: divide by sinc² to undo trilinear blurring

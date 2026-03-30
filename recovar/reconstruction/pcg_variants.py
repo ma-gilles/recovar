@@ -36,6 +36,53 @@ _PC_BATCH = 4
 
 
 # =====================================================================
+# Gridding kernel utilities
+# =====================================================================
+
+def compute_gridding_kernel_half(volume_shape, order=1):
+    """Compute the trilinear interpolation kernel H(ξ) in half-volume.
+
+    For order=1 (linear_interp): H(ξ) = sinc²(ξ_x/D) sinc²(ξ_y/D) sinc²(ξ_z/D)
+    where sinc(t) = sin(πt)/(πt).
+
+    Returns: (half_vol,) real array — H(ξ) at each half-volume Fourier voxel.
+    """
+    D = volume_shape[0]
+    half_vs = ftu.get_real_fft_packed_shape(volume_shape)
+
+    # Frequency coordinates (centered, then rfft-packed)
+    # For a grid of size D: freq indices go from -D/2 to D/2-1
+    # After rfft: axes 0,1 are full (-D/2..D/2-1), axis 2 is 0..D/2
+    kx = np.fft.fftshift(np.arange(D)) - D // 2  # full axis
+    ky = kx.copy()
+    kz = np.arange(D // 2 + 1)  # half axis (rfft)
+
+    # Normalized frequencies: ξ / D (so sinc argument is ξ/D)
+    def sinc(ar):
+        ar = np.asarray(ar, dtype=np.float32)
+        return np.where(np.abs(ar) < 1e-8, 1.0,
+                       np.sin(np.pi * ar) / (np.pi * ar))
+
+    if order == 0:
+        kern_fn = sinc
+    else:
+        kern_fn = lambda x: sinc(x) ** 2
+
+    # Build 3D kernel via outer products
+    # kx, ky need ifftshift to match rfft packing convention
+    kx_norm = np.fft.ifftshift(kx) / D  # match rfft convention
+    ky_norm = np.fft.ifftshift(ky) / D
+    kz_norm = kz / D
+
+    Hx = kern_fn(kx_norm)  # (D,)
+    Hy = kern_fn(ky_norm)  # (D,)
+    Hz = kern_fn(kz_norm)  # (D//2+1,)
+
+    H = Hx[:, None, None] * Hy[None, :, None] * Hz[None, None, :]  # (*half_vs)
+    return jnp.array(H.reshape(-1).astype(np.float32))  # (half_vol,)
+
+
+# =====================================================================
 # Shared utilities
 # =====================================================================
 
@@ -1202,4 +1249,177 @@ def solve_soft_alpha_noprecond(lhs_tri, rhs_fourier, reg_diag, mask,
     info["label"] = f"soft_alpha_np_lam{lam}_c{collar_width}"
     info["n_support"] = int(n_support)
     info["n_mask"] = n_mask
+    return W_real, info
+
+
+# =====================================================================
+# Gridding-in-the-objective formulation
+# =====================================================================
+
+def _matvec_gridded_alpha_reduced(x_support, lhs_tri, reg_diag,
+                                   alpha_support, support_idx, volume_shape,
+                                   lam, q, H_half, unpack_fn=None):
+    """Matvec with gridding kernel H(ξ) in the objective.
+
+    The correct normal equations with trilinear interpolation kernel H:
+      H_op w = scatter → FFT → |H|² (LHS+reg) → iFFT → gather  +  λ α(x) w(x)
+
+    The |H|² factor accounts for the interpolation kernel in both the
+    forward and adjoint operators.
+
+    H_half: (half_vol,) — gridding kernel values at half-volume Fourier voxels.
+    """
+    vol_size = int(np.prod(volume_shape))
+    half_vs = ftu.get_real_fft_packed_shape(volume_shape)
+    half_vol_size = int(np.prod(half_vs))
+
+    # Step 1-2: scatter + rfft (batched over PCs)
+    X_half_parts = []
+    for j0 in range(0, q, _PC_BATCH):
+        j1 = min(j0 + _PC_BATCH, q)
+        nb = j1 - j0
+        X_full = jnp.zeros((nb, vol_size), dtype=jnp.float32)
+        X_full = X_full.at[:, support_idx].set(
+            jnp.asarray(x_support[:, j0:j1].T, dtype=jnp.float32)
+        )
+        X_full = X_full.reshape(nb, *volume_shape)
+        X_half_parts.append(
+            ftu.get_dft3_real(X_full).reshape(nb, half_vol_size).T
+        )
+    X_half = jnp.concatenate(X_half_parts, axis=1)  # (half_vol, q)
+
+    # Step 3: |H|² * (LHS+reg) @ X_half
+    # First apply (LHS+reg), then multiply by |H|²
+    HX_half = _half_vol_lhs_matvec(X_half, lhs_tri, reg_diag, q, unpack_fn)
+    H2 = H_half[:, None] ** 2  # (half_vol, 1)
+    HX_half = H2 * HX_half
+
+    # Step 4-5: irfft + gather
+    result_parts = []
+    for j0 in range(0, q, _PC_BATCH):
+        j1 = min(j0 + _PC_BATCH, q)
+        nb = j1 - j0
+        HX_real = ftu.get_idft3_real(
+            HX_half[:, j0:j1].T.reshape(nb, *half_vs), volume_shape
+        )
+        HX_flat = HX_real.reshape(nb, vol_size)
+        result_parts.append(HX_flat[:, support_idx].T)
+    Hw = jnp.concatenate(result_parts, axis=1)
+
+    # Add penalty
+    Hw = Hw + lam * alpha_support[:, None] * x_support
+    return Hw
+
+
+def solve_soft_alpha_gridded(lhs_tri, rhs_fourier, reg_diag, mask,
+                              volume_shape, lam=100.0, collar_width=5,
+                              outer_dilate=3, W0_real=None, maxiter=50,
+                              tol=1e-6, unpack_fn=None, use_gridding=True):
+    """Soft-alpha with gridding kernel in the objective (not post-processing).
+
+    min_w  Σ_ξ |H(ξ)|² w^H(ξ) D(ξ) w(ξ) - 2 Re(H(ξ) w^H(ξ) r(ξ))
+         + (λ/2) Σ_x α(x) |w(x)|²
+
+    The solution w directly gives the deconvolved volume — no gridding
+    correction needed after the solve.
+
+    use_gridding: if True, include H²/H in operator/RHS. If False, same as
+                  solve_soft_alpha_noprecond (for A/B comparison).
+    """
+    q = rhs_fourier.shape[1]
+    half_vs = ftu.get_real_fft_packed_shape(volume_shape)
+    half_vol_size = int(np.prod(half_vs))
+    vol_size = int(np.prod(volume_shape))
+
+    mask_np = np.asarray(mask).reshape(volume_shape)
+    alpha, outer_support = build_alpha_weight(
+        mask_np, collar_width=collar_width, outer_dilate=outer_dilate,
+    )
+    alpha = jnp.array(alpha)
+    outer_support = jnp.array(outer_support)
+
+    support_flat = outer_support.reshape(-1)
+    support_idx = jnp.where(support_flat > 0.5)[0]
+    n_support = support_idx.shape[0]
+    alpha_support = alpha.reshape(-1)[support_idx]
+    n_mask = int(jnp.sum(jnp.array(mask_np).reshape(-1) > 0.5))
+
+    # Gridding kernel
+    if use_gridding:
+        H_half = compute_gridding_kernel_half(volume_shape, order=1)
+    else:
+        H_half = jnp.ones(half_vol_size, dtype=jnp.float32)
+
+    logger.info(
+        "Soft-alpha-gridded: n_mask=%d, n_support=%d (%.1f%%), collar=%d, "
+        "λ=%.0f, gridding=%s",
+        n_mask, n_support, 100 * n_support / vol_size, collar_width, lam,
+        use_gridding,
+    )
+
+    def mv(x_sup):
+        return _matvec_gridded_alpha_reduced(
+            x_sup, lhs_tri, reg_diag, alpha_support, support_idx,
+            volume_shape, lam, q, H_half, unpack_fn,
+        )
+
+    identity = lambda r: r
+
+    # RHS: H(ξ) * rhs_fourier(ξ) → irfft → gather at support
+    rhs_modified = rhs_fourier * H_half[:, None] if use_gridding else rhs_fourier
+    rhs_parts = []
+    for j0 in range(0, q, _PC_BATCH):
+        j1 = min(j0 + _PC_BATCH, q)
+        nb = j1 - j0
+        rhs_r = ftu.get_idft3_real(
+            rhs_modified[:, j0:j1].T.reshape(nb, *half_vs), volume_shape
+        )
+        rhs_parts.append(rhs_r.reshape(nb, vol_size)[:, support_idx].T)
+    rhs_sup = jnp.concatenate(rhs_parts, axis=1)
+
+    # Initial guess
+    if W0_real is not None:
+        W0 = jnp.asarray(W0_real).reshape(q, *volume_shape)
+        x0 = W0.reshape(q, vol_size)[:, support_idx].T
+    else:
+        # Per-voxel solve with |H|² D → gather at support
+        W_solved_parts = []
+        for i0 in range(0, half_vol_size, _MATVEC_CHUNK):
+            i1 = min(i0 + _MATVEC_CHUNK, half_vol_size)
+            is_tri = lhs_tri.ndim == 2 and lhs_tri.shape[1] != q
+            if is_tri:
+                lhs_chunk = unpack_fn(lhs_tri[i0:i1], q)
+            else:
+                lhs_chunk = lhs_tri[i0:i1]
+            H2_chunk = (H_half[i0:i1, None] ** 2) if use_gridding else 1.0
+            D_chunk = H2_chunk * lhs_chunk
+            D_chunk = D_chunk.at[:, jnp.arange(q), jnp.arange(q)].add(
+                H2_chunk * reg_diag[i0:i1] if isinstance(H2_chunk, jnp.ndarray)
+                else reg_diag[i0:i1]
+            )
+            W_solved_parts.append(
+                jnp.linalg.solve(D_chunk, rhs_modified[i0:i1, :, None])[..., 0]
+            )
+        W_solved = jnp.concatenate(W_solved_parts, axis=0)
+        W_real_init = ftu.get_idft3_real(
+            W_solved.T.reshape(q, *half_vs), volume_shape
+        )
+        x0 = W_real_init.reshape(q, vol_size)[:, support_idx].T
+
+    ip = lambda a, b: float(jnp.sum(a * b))
+    lbl = f"Soft-Alpha-Grid(λ={lam},c={collar_width})" if use_gridding \
+        else f"Soft-Alpha-NoGrid(λ={lam},c={collar_width})"
+    x_sup, info = _cg_solve(mv, identity, rhs_sup, x0, maxiter, tol, ip, lbl)
+
+    W_real = jnp.zeros((q, vol_size), dtype=jnp.float32)
+    W_real = W_real.at[:, support_idx].set(
+        jnp.asarray(x_sup.T, dtype=jnp.float32)
+    )
+    W_real = W_real.reshape(q, *volume_shape)
+
+    sfx = "grid" if use_gridding else "nogrid"
+    info["label"] = f"soft_alpha_{sfx}_lam{lam}_c{collar_width}"
+    info["n_support"] = int(n_support)
+    info["n_mask"] = n_mask
+    info["use_gridding"] = use_gridding
     return W_real, info
