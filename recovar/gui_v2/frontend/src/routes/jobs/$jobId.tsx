@@ -142,7 +142,7 @@ function OverviewTab({
                 key={s.type}
                 to="/jobs/new"
                 search={{
-                  type: s.type.toLowerCase().replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase(),
+                  type: s.type.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase(),
                   result_dir: (s.prefilled_params?.result_dir as string) || undefined,
                   density: (s.prefilled_params?.density as string) || undefined,
                   input: (s.prefilled_params?.input as string) || undefined,
@@ -180,7 +180,7 @@ function buildCloneSearchParams(job: JobDetail): {
     Postprocess: "postprocess",
     Downsample: "downsample",
   };
-  const type = typeMap[job.type] ?? job.type.toLowerCase().replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
+  const type = typeMap[job.type] ?? job.type.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase();
   const p = job.params ?? {};
   return {
     type,
@@ -297,20 +297,56 @@ function volumeDisplayName(v: VolumeEntry, needsDisambiguation: boolean): string
 
 /** Human-readable labels for volume categories. */
 const CATEGORY_LABELS: Record<string, string> = {
-  mean: "Mean Volume",
+  mean: "Mean Reconstruction",
   eigen: "Eigenvolumes",
-  variance: "Variance",
-  halfmap: "Half-maps (Unfiltered)",
+  variance: "Variance Map",
+  halfmap: "Half-maps (raw)",
   mask: "Masks",
   kmeans_center: "K-means Centers",
   trajectory: "Trajectory Volumes",
-  reconstruction: "Reconstructions",
-  density: "Density",
+  reconstruction: "Reconstructed States",
+  density: "Density / Deconvolved",
   other: "Other",
 };
 
-/** Default number of items shown in a collapsed category. */
-const COLLAPSED_LIMIT = 5;
+/** Canonical ordering for category groups. */
+const CATEGORY_ORDER: string[] = [
+  "mean",
+  "eigen",
+  "variance",
+  "kmeans_center",
+  "trajectory",
+  "reconstruction",
+  "density",
+  "mask",
+  "other",
+  "halfmap",
+];
+
+/** Categories collapsed by default. */
+const COLLAPSED_BY_DEFAULT = new Set(["halfmap", "other"]);
+
+/**
+ * Natural sort comparator: splits on numeric boundaries so that
+ * "vol_2" sorts before "vol_10".
+ */
+function naturalCompare(a: string, b: string): number {
+  const re = /(\d+)/g;
+  const aParts = a.split(re);
+  const bParts = b.split(re);
+  const len = Math.min(aParts.length, bParts.length);
+  for (let i = 0; i < len; i++) {
+    const aNum = Number(aParts[i]);
+    const bNum = Number(bParts[i]);
+    if (!isNaN(aNum) && !isNaN(bNum)) {
+      if (aNum !== bNum) return aNum - bNum;
+    } else {
+      const cmp = (aParts[i] ?? "").localeCompare(bParts[i] ?? "");
+      if (cmp !== 0) return cmp;
+    }
+  }
+  return aParts.length - bParts.length;
+}
 
 function VolumeCategoryGroup({
   cat,
@@ -318,60 +354,59 @@ function VolumeCategoryGroup({
   selectedVolume,
   onSelect,
   ambiguousNames,
+  defaultCollapsed,
 }: {
   cat: string;
   vols: VolumeEntry[];
   selectedVolume: string | null;
   onSelect: (path: string) => void;
   ambiguousNames: Set<string>;
+  defaultCollapsed: boolean;
 }): React.JSX.Element {
-  const [expanded, setExpanded] = useState(vols.length <= COLLAPSED_LIMIT);
-  const visible = expanded ? vols : vols.slice(0, COLLAPSED_LIMIT);
-  const remaining = vols.length - COLLAPSED_LIMIT;
+  const [open, setOpen] = useState(!defaultCollapsed);
 
   return (
     <div>
-      <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-zinc-500">
-        {CATEGORY_LABELS[cat] ?? cat} ({vols.length})
-      </h4>
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
-        {visible.map((v) => {
-          const displayName = volumeDisplayName(v, ambiguousNames.has(v.name));
-          return (
-            <button
-              key={v.path}
-              onClick={() => onSelect(v.path)}
-              className={clsx(
-                "rounded-md border bg-zinc-900 p-3 text-left hover:border-blue-500/50 hover:bg-zinc-800",
-                selectedVolume === v.path ? "border-blue-500" : "border-zinc-800"
-              )}
-            >
-              <Box className="mb-1 h-8 w-8 text-sky-400" />
-              <p className="truncate text-sm" title={v.path}>{displayName}</p>
-              <p className="text-xs text-zinc-500">
-                {(v.size_bytes / 1e6).toFixed(1)} MB
-              </p>
-            </button>
-          );
-        })}
-      </div>
-      {!expanded && remaining > 0 && (
-        <button
-          onClick={() => setExpanded(true)}
-          className="mt-2 flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
-        >
-          <ChevronDown className="h-3 w-3" />
-          Show all {vols.length} volumes
-        </button>
-      )}
-      {expanded && vols.length > COLLAPSED_LIMIT && (
-        <button
-          onClick={() => setExpanded(false)}
-          className="mt-2 flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300"
-        >
-          <ChevronRight className="h-3 w-3" />
-          Collapse
-        </button>
+      <button
+        onClick={() => setOpen(!open)}
+        className="flex w-full items-center gap-1.5 py-1.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
+      >
+        {open ? (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+        )}
+        {CATEGORY_LABELS[cat] ?? cat}
+        <span className="font-normal normal-case tracking-normal text-zinc-600">
+          ({vols.length})
+        </span>
+      </button>
+      {open && (
+        <div className="ml-5 space-y-px">
+          {vols.map((v) => {
+            const displayName = volumeDisplayName(v, ambiguousNames.has(v.name));
+            const active = selectedVolume === v.path;
+            return (
+              <button
+                key={v.path}
+                onClick={() => onSelect(v.path)}
+                className={clsx(
+                  "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm",
+                  active
+                    ? "bg-blue-500/15 text-blue-300"
+                    : "text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
+                )}
+                title={v.path}
+              >
+                <Box className="h-3.5 w-3.5 shrink-0 text-sky-400" />
+                <span className="truncate">{displayName}</span>
+                <span className="ml-auto shrink-0 text-xs text-zinc-600">
+                  {(v.size_bytes / 1e6).toFixed(1)} MB
+                </span>
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -385,9 +420,9 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
     queryFn: () => getJobVolumes(jobId),
   });
 
-  // Compute filtered volumes and groups
-  const { filteredVolumes, groups, hiddenCount, ambiguousNames } = useMemo(() => {
-    if (!volumes) return { filteredVolumes: [], groups: {} as Record<string, VolumeEntry[]>, hiddenCount: 0, ambiguousNames: new Set<string>() };
+  // Compute filtered volumes and ordered groups
+  const { filteredVolumes, orderedGroups, hiddenCount, ambiguousNames } = useMemo(() => {
+    if (!volumes) return { filteredVolumes: [], orderedGroups: [] as Array<[string, VolumeEntry[]]>, hiddenCount: 0, ambiguousNames: new Set<string>() };
 
     const hidden = volumes.filter((v) => isHiddenVolume(v.name));
     const filtered = showAll ? volumes : volumes.filter((v) => !isHiddenVolume(v.name));
@@ -408,7 +443,23 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
       (grps[v.category] ??= []).push(v);
     }
 
-    return { filteredVolumes: filtered, groups: grps, hiddenCount: hidden.length, ambiguousNames: ambiguous };
+    // Natural sort within each category
+    for (const vols of Object.values(grps)) {
+      vols.sort((a, b) => naturalCompare(a.name, b.name));
+    }
+
+    // Order groups by CATEGORY_ORDER, then any unknown categories alphabetically
+    const ordered: Array<[string, VolumeEntry[]]> = [];
+    for (const cat of CATEGORY_ORDER) {
+      if (grps[cat]) ordered.push([cat, grps[cat]]);
+    }
+    for (const cat of Object.keys(grps).sort()) {
+      if (!CATEGORY_ORDER.includes(cat)) {
+        ordered.push([cat, grps[cat]]);
+      }
+    }
+
+    return { filteredVolumes: filtered, orderedGroups: ordered, hiddenCount: hidden.length, ambiguousNames: ambiguous };
   }, [volumes, showAll]);
 
   const handleSelect = useCallback((path: string) => {
@@ -449,9 +500,9 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
         )}
       </div>
 
-      {/* BOTTOM HALF: Scrollable volume grid */}
-      <div className="flex-1 overflow-auto space-y-4 pr-1">
-        {Object.entries(groups).map(([cat, vols]) => (
+      {/* BOTTOM HALF: Scrollable volume list */}
+      <div className="flex-1 overflow-auto space-y-1 pr-1">
+        {orderedGroups.map(([cat, vols]) => (
           <VolumeCategoryGroup
             key={cat}
             cat={cat}
@@ -459,6 +510,7 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
             selectedVolume={selectedVolume}
             onSelect={handleSelect}
             ambiguousNames={ambiguousNames}
+            defaultCollapsed={COLLAPSED_BY_DEFAULT.has(cat)}
           />
         ))}
       </div>

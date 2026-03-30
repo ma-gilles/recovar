@@ -23,6 +23,7 @@ interface PinnedVolume {
   opacity: number;
   visible: boolean;
   colorIndex: number;
+  category?: string;
 }
 
 interface VolumeViewerProps {
@@ -43,6 +44,8 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
   const [viewMode, setViewMode] = useState<"slice" | "3d">("3d");
   const [activeSigma, setActiveSigma] = useState(3.0);
   const [maxSlice, setMaxSlice] = useState(128);
+
+  const activeCategory = volumes?.find((v) => v.path === activeVolume)?.category;
 
   // Load volume info for the active volume
   const { data: volInfo } = useQuery({
@@ -75,6 +78,7 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
     (path: string, name: string) => {
       if (pinnedVolumes.length >= MAX_PINNED_VOLUMES) return;
       if (pinnedVolumes.some((v) => v.path === path)) return;
+      const category = volumes?.find((v) => v.path === path)?.category;
       setPinnedVolumes((prev) => [
         ...prev,
         {
@@ -84,10 +88,11 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
           opacity: 0.8,
           visible: true,
           colorIndex: prev.length,
+          category,
         },
       ]);
     },
-    [pinnedVolumes]
+    [pinnedVolumes, volumes]
   );
 
   const unpinVolume = useCallback((path: string) => {
@@ -205,6 +210,7 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
                 activeVolume={activeVolume}
                 pinnedVolumes={pinnedVolumes}
                 activeSigma={activeSigma}
+                activeCategory={activeCategory}
               />
             </VtkErrorBoundary>
           ) : (

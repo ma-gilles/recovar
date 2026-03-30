@@ -60,6 +60,7 @@ export interface PinnedVolumeState {
   opacity: number;
   visible: boolean;
   colorIndex: number;
+  category?: string;
 }
 
 interface VtkViewerProps {
@@ -69,6 +70,8 @@ interface VtkViewerProps {
   activeSigma?: number;
   /** Pinned volumes with per-volume controls. */
   pinnedVolumes: PinnedVolumeState[];
+  /** Category of the active volume (e.g. "eigen" for eigenvolumes). */
+  activeCategory?: string;
 }
 
 // Design system palette: sky-400, rose-400, emerald-400, amber-400
@@ -80,6 +83,10 @@ const VOLUME_COLORS: [number, number, number][] = [
 ];
 
 const BG_COLOR: [number, number, number, number] = [0.09, 0.09, 0.11, 1.0]; // zinc-950-ish
+
+// Dual-surface colors for eigenvolumes (positive/negative lobes)
+const EIGEN_POSITIVE_COLOR: [number, number, number] = [0.3, 0.5, 1.0]; // blue
+const EIGEN_NEGATIVE_COLOR: [number, number, number] = [1.0, 0.3, 0.3]; // red
 
 // ---- MRC parsing ----
 
@@ -181,7 +188,7 @@ function nx_ny_nz(vol: VolumeData): [number, number, number] {
 
 // ---- Component ----
 
-export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes }: VtkViewerProps): React.JSX.Element {
+export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory }: VtkViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const renderContextRef = useRef<any>(null);
@@ -409,8 +416,10 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes }: Vt
   const volumesToShow = pinnedVolumes.length > 0
     ? pinnedVolumes
     : activeVolume
-      ? [{ path: activeVolume, name: "", threshold: activeSigma, opacity: 0.8, visible: true, colorIndex: 0 }]
+      ? [{ path: activeVolume, name: "", threshold: activeSigma, opacity: 0.8, visible: true, colorIndex: 0, category: activeCategory }]
       : [];
+
+  const hasEigenVolume = volumesToShow.some((v) => v.visible && v.category === "eigen");
 
   // Sync pipelines with volumesToShow
   useEffect(() => {
@@ -421,7 +430,7 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes }: Vt
 
     // Build a state key to avoid redundant updates
     const stateKey = volumesToShow.map(
-      (v) => `${v.path}|${v.threshold}|${v.opacity}|${v.visible}|${v.colorIndex}`
+      (v) => `${v.path}|${v.threshold}|${v.opacity}|${v.visible}|${v.colorIndex}|${v.category ?? ""}`
     ).join(";");
     if (stateKey === renderedStateRef.current) return;
 
@@ -443,21 +452,59 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes }: Vt
         const pipeline = entries[i];
         if (!pipeline || !v.visible) continue;
 
-        // Update contour value from sigma threshold
-        const contourValue = pipeline.volumeData.mean + v.threshold * pipeline.volumeData.std;
-        pipeline.marchingCubes.setContourValue(contourValue);
+        if (v.category === "eigen") {
+          // Eigenvolume: render dual surfaces (positive blue, negative red)
+          const posContour = pipeline.volumeData.mean + v.threshold * pipeline.volumeData.std;
+          const negContour = pipeline.volumeData.mean - v.threshold * pipeline.volumeData.std;
 
-        // Set color and lighting
-        const color = VOLUME_COLORS[v.colorIndex % VOLUME_COLORS.length];
-        const prop = pipeline.actor.getProperty();
-        prop.setColor(...color);
-        prop.setOpacity(v.opacity);
-        prop.setAmbient(0.2);
-        prop.setDiffuse(0.7);
-        prop.setSpecular(0.3);
-        prop.setSpecularPower(20);
+          // Positive surface (blue)
+          pipeline.marchingCubes.setContourValue(posContour);
+          const posProp = pipeline.actor.getProperty();
+          posProp.setColor(...EIGEN_POSITIVE_COLOR);
+          posProp.setOpacity(v.opacity);
+          posProp.setAmbient(0.2);
+          posProp.setDiffuse(0.7);
+          posProp.setSpecular(0.3);
+          posProp.setSpecularPower(20);
+          renderer.addActor(pipeline.actor);
 
-        renderer.addActor(pipeline.actor);
+          // Negative surface (red) — separate pipeline
+          const negMC = vtkImageMarchingCubes.newInstance({
+            contourValue: negContour,
+            computeNormals: true,
+            mergePoints: true,
+          });
+          negMC.setInputData(pipeline.imageData);
+
+          const negMapper = vtkMapper.newInstance();
+          negMapper.setInputConnection(negMC.getOutputPort());
+
+          const negActor = vtkActor.newInstance();
+          negActor.setMapper(negMapper);
+          const negProp = negActor.getProperty();
+          negProp.setColor(...EIGEN_NEGATIVE_COLOR);
+          negProp.setOpacity(v.opacity);
+          negProp.setAmbient(0.2);
+          negProp.setDiffuse(0.7);
+          negProp.setSpecular(0.3);
+          negProp.setSpecularPower(20);
+          renderer.addActor(negActor);
+        } else {
+          // Standard volume: single isosurface
+          const contourValue = pipeline.volumeData.mean + v.threshold * pipeline.volumeData.std;
+          pipeline.marchingCubes.setContourValue(contourValue);
+
+          const color = VOLUME_COLORS[v.colorIndex % VOLUME_COLORS.length];
+          const prop = pipeline.actor.getProperty();
+          prop.setColor(...color);
+          prop.setOpacity(v.opacity);
+          prop.setAmbient(0.2);
+          prop.setDiffuse(0.7);
+          prop.setSpecular(0.3);
+          prop.setSpecularPower(20);
+
+          renderer.addActor(pipeline.actor);
+        }
       }
 
       renderer.resetCamera();
@@ -514,6 +561,20 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes }: Vt
       {!hasVolumes && !isLoading && (
         <div className="absolute inset-0 flex items-center justify-center rounded-lg">
           <p className="text-sm text-zinc-500">Select a volume to view in 3D</p>
+        </div>
+      )}
+
+      {/* Overlay: eigen legend */}
+      {hasEigenVolume && !isLoading && (
+        <div className="absolute bottom-2 left-2 flex gap-3 rounded bg-black/70 px-3 py-1.5 text-xs text-zinc-300">
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: `rgb(${EIGEN_POSITIVE_COLOR.map((c) => Math.round(c * 255)).join(",")})` }} />
+            Positive
+          </span>
+          <span className="flex items-center gap-1">
+            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: `rgb(${EIGEN_NEGATIVE_COLOR.map((c) => Math.round(c * 255)).join(",")})` }} />
+            Negative
+          </span>
         </div>
       )}
 
