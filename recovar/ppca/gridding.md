@@ -1,111 +1,120 @@
-# Gridding correction in cryo-EM reconstruction
+# Gridding correction: from post-processing to the objective
 
-## The problem
+## Setup
 
-We represent the 3D Fourier transform of a volume on a discrete grid $\hat{v}[\xi]$, $\xi \in \mathbb{Z}^3$.
-An image $n$ gives a 2D central slice of the continuous Fourier transform at orientation $R_n$.
-The slice passes through non-integer 3D coordinates, so we need interpolation.
+The 3D volume is represented on a discrete grid. Extracting a 2D Fourier
+slice at non-integer coordinates requires interpolation. Let $K$ denote
+the interpolation operator (convolution with the interpolation kernel —
+triangle for trilinear, sinc² in real space).
 
-## Forward model with interpolation
+## Gridded vs deconvolved variable
 
-The forward model (projection) for image pixel $\eta$:
+Let $V$ be the true volume and $U = KV$ the kernel-smoothed (gridded) version.
+The standard reconstruction works in the gridded variable:
 
-$$\hat{y}_n(\eta) = C_n(\eta) \sum_{\xi} w(\eta, \xi)\;\hat{v}[\xi]$$
+$$\widehat{U} = \arg\min_U F(U), \qquad F(U) = \|AU - b\|^2$$
 
-where $w(\eta, \xi)$ is the interpolation weight from 3D grid point $\xi$ to
-2D slice point $\eta$. For trilinear interpolation, $w$ is a product of
-triangle functions in each coordinate, nonzero only for the 8 nearest grid points.
+where $A$ is the measurement operator (slice extraction + CTF). One can show
+that, in expectation, $\widehat{U} \approx KV_\star$ — the result is biased
+by the interpolation kernel.
 
-## Adjoint (backprojection)
+The standard post-processing step then deconvolves:
 
-The adjoint scatters each image pixel back to the 3D grid with the same weights:
+$$\widehat{V} = K^{-1} \widehat{U}$$
 
-$$[\text{backproject}(y)]_\xi = \sum_n \sum_\eta w(\eta, \xi)\;C_n^*(\eta)\;y_n(\eta) / \sigma_n^2$$
+Since $K$ corresponds to multiplication by $G(x) = \text{sinc}^2(x/D)$ per
+axis in real space, deconvolution is just dividing by $G$.
 
-This is what `Ft_y` accumulates. Similarly `Ft_ctf` accumulates:
+## Change of variables: $K$ in the objective
 
-$$d[\xi] = \sum_n \sum_\eta w(\eta, \xi)\;|C_n(\eta)|^2 / \sigma_n^2$$
+Rather than deconvolving after the fact, substitute $U = KV$ directly:
 
-Note: each $w(\eta,\xi)$ appears **once** — from the adjoint (backprojection).
-The forward interpolation weights do not appear in $d$ or $\hat{r}$ because
-the forward model is not applied during accumulation.
+$$\widehat{V} = \arg\min_V F(KV) = \arg\min_V \|AKV - b\|^2$$
 
-## Normal equations
+Normal equations:
 
-If we used the exact forward–adjoint pair, the normal equations operator
-$A^H A$ would involve $w$ twice (once from forward, once from adjoint):
+$$K^* A^* A K\, \widehat{V} = K^* A^* b$$
 
-$$[A^H A\;\hat{v}]_\xi = \sum_\eta w(\eta,\xi) \;|C(\eta)|^2 \sum_{\xi'} w(\eta,\xi')\;\hat{v}[\xi']$$
+Since $K$ is invertible:
 
-This couples different 3D voxels $\xi$ and $\xi'$ through shared image pixels.
-It is not diagonal per voxel.
+$$\widehat{V} = K^{-1}(A^*A)^{-1} A^* b = K^{-1}\widehat{U}$$
 
-## The RELION approximation
+**Without regularization, the two approaches are identical.** Solving in $V$
+and post-processing deconvolution give the same answer.
 
-RELION (and recovar) ignores the off-diagonal coupling and approximates:
+## The regularized case
 
-$$[A^H A\;\hat{v}]_\xi \approx d[\xi]\;\hat{v}[\xi]$$
+With Tikhonov regularization on the deconvolved volume:
 
-where $d[\xi]$ is the accumulated weight (one factor of $w$, from the adjoint only).
-This makes the system diagonal per voxel, giving the Wiener filter:
+$$\widehat{V}_\lambda = \arg\min_V \|AKV - b\|^2 + \lambda\|V\|^2$$
 
-$$\hat{v}[\xi] = \hat{r}[\xi] \;/\; d[\xi]$$
+Normal equations:
 
-## What's missing
+$$(K^*A^*AK + \lambda I)\,\widehat{V}_\lambda = K^*A^*b$$
 
-The true normal equations have $w^2$ (forward × adjoint) per voxel on the diagonal.
-The RELION approximation uses $d$ which has only $w^1$ (adjoint only).
-This means the Wiener solution is off by a factor of $w$ — the solution has too
-much weight at voxels that are frequently visited by interpolation (grid centers)
-and too little at voxels that are rarely visited (grid corners/edges).
+This gives:
 
-## The gridding correction
+$$\widehat{V}_\lambda = (K^*A^*AK + \lambda I)^{-1} K^*A^*b
+= K^{-1}\bigl(A^*A + \lambda(KK^*)^{-1}\bigr)^{-1} A^*b$$
 
-When many images cover Fourier space uniformly, the interpolation weights
-averaged over all orientations become a smooth function of position on the 3D grid.
-For trilinear interpolation, this average weight is:
+Compare with the standard approach (regularize in $U$, then deconvolve):
 
-$$\bar{w}[\xi] \approx \text{sinc}^2(\xi_1/D)\;\text{sinc}^2(\xi_2/D)\;\text{sinc}^2(\xi_3/D) = G(\xi)$$
+$$K^{-1}\widehat{U}_\lambda = K^{-1}(A^*A + \lambda I)^{-1} A^*b$$
 
-evaluated in **real space** after iDFT (because the interpolation kernel is
-a triangle in Fourier, whose DFT is sinc²).
+**These are different.** The correct version has $\lambda(KK^*)^{-1}$ instead
+of $\lambda I$. Since $K$ attenuates high frequencies, $(KK^*)^{-1}$ amplifies
+them — the correct regularization penalizes high-frequency components of $V$
+less than the naive approach (because $K$ already damps them in the data term).
 
-The gridding correction divides the real-space volume by $G$:
+## With the soft mask penalty
 
-$$v_{\text{corrected}}(x) = v_{\text{Wiener}}(x) \;/\; G(x)$$
+The full objective for the deconvolved, mask-regularized volume:
 
-This compensates for the missing factor of $w$ in $d$.
+$$\widehat{V} = \arg\min_V \|AKV - b\|^2 + \lambda \sum_x \alpha(x)|V(x)|^2$$
 
-## Relationship to the masked solve
+Normal equations:
 
-For the unmasked diagonal solve, gridding correction as post-processing is
-fine — it's just dividing by a known smooth function.
+$$(K^*A^*AK + \lambda\,\text{diag}(\alpha))\,V = K^*A^*b$$
 
-For the masked solve (CG on a coupled system), the situation is more subtle.
-The CG solves:
+In the RELION diagonal approximation ($A^*A \approx \text{diag}(d)$):
 
-$$\text{operator}(v) = \text{rhs}$$
+$$K\,\text{diag}(d)\,K\,V + \lambda\,\alpha\,V = K\,\mathcal{F}^{-1}[\hat{r}]$$
 
-The operator is $P \mathcal{F}^{-1}[d \cdot \mathcal{F}[P\,v]] + \lambda\alpha v$,
-using the accumulated $d$ (with one factor of $w$). The gridding correction
-is then applied to the CG output as post-processing, same as the unmasked case.
+where $K$ acts as multiplication by $G(x) = \text{sinc}^2(x/D)$ in real space,
+and $d$, $\hat{r}$ are the accumulated Fourier-space weights and data.
 
-**Alternative**: incorporate the missing $w$ factor into the CG operator.
-This requires multiplying $d$ by an additional factor of $\bar{w}$ in
-the matvec, and the RHS by $\bar{w}$. The CG then directly produces the
-corrected volume. However, this only makes sense if $d$ was accumulated
-without the orientation-averaged $\bar{w}$ — which is NOT the case in the
-current code (the trilinear scatter naturally produces $d$ with one $w$ factor).
+The CG matvec is:
+
+$$\text{operator}(V) = G \cdot \mathcal{F}^{-1}[d \cdot \mathcal{F}[G \cdot V]] + \lambda\,\alpha\,V$$
+
+The RHS is:
+
+$$b = G \cdot \mathcal{F}^{-1}[\hat{r}]$$
+
+## What $d$ and $\hat{r}$ contain
+
+The accumulated quantities from the backprojection pipeline:
+
+$$d[\xi] = \sum_n \sum_\eta w_n(\eta,\xi)\;|C_n(\eta)|^2/\sigma_n^2$$
+
+$$\hat{r}[\xi] = \sum_n \sum_\eta w_n(\eta,\xi)\;C_n^*(\eta)\,y_n(\eta)/\sigma_n^2$$
+
+where $w_n(\eta,\xi)$ is the interpolation weight (trilinear scatter from
+image pixel $\eta$ to grid point $\xi$).
+
+In the RELION diagonal approximation, $d$ plays the role of $A^*A$ restricted
+to the diagonal. The scatter weight $w$ in $d$ and $\hat{r}$ comes from the
+adjoint operation only. The $K$ factors in the operator $K\,\text{diag}(d)\,K$
+come from the change of variables $U = KV$.
 
 ## Summary
 
-| Quantity | What it contains |
-|----------|-----------------|
-| $d[\xi]$ (Ft_ctf) | $\sum w(\eta,\xi) |C|^2/\sigma^2$ — one interpolation weight |
-| $\hat{r}[\xi]$ (Ft_y) | $\sum w(\eta,\xi) C^* y/\sigma^2$ — one interpolation weight |
-| Wiener solution | $\hat{r}/d$ — ratio cancels the one $w$, but missing the second $w$ from forward |
-| Gridding correction | Divides real-space by $G(x) = \text{sinc}^2(x/D)$ per axis — compensates for the missing second $w$ |
+| Approach | Operator | Post-processing |
+|----------|----------|-----------------|
+| Standard (regularize $U$) | $\text{diag}(d) + \lambda I$ | deconvolve by $K^{-1}$ |
+| Correct (regularize $V$) | $K\,\text{diag}(d)\,K + \lambda I$ | none |
+| Standard + mask | $P\,\text{diag}(d)\,P + \lambda\alpha$ | deconvolve by $K^{-1}$ |
+| Correct + mask | $K\,P\,\text{diag}(d)\,P\,K + \lambda\alpha$ | none |
 
-The gridding correction is **not** about the forward model being wrong.
-It's about the diagonal approximation dropping one of the two interpolation
-weight factors from $A^H A$.
+The difference matters when regularization is nontrivial (large $\lambda$,
+tight mask, or both).
