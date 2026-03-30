@@ -249,7 +249,8 @@ def solve(lhs_tri, rhs_fourier, reg_diag, mask, volume_shape,
         x0 = _gather_from_real(jnp.asarray(W0_real).reshape(q, *volume_shape),
                                sup_idx, q)
     else:
-        # Per-voxel Fourier solve → iFFT → gather
+        # Per-voxel Wiener solve D^{-1}r → iFFT gives gridded variable U.
+        # When use_gridding=True, we solve for V = K^{-1}U, so deconvolve.
         parts = []
         for i0 in range(0, hv, _MATVEC_CHUNK):
             i1 = min(i0 + _MATVEC_CHUNK, hv)
@@ -260,6 +261,9 @@ def solve(lhs_tri, rhs_fourier, reg_diag, mask, volume_shape,
                 jnp.linalg.solve(Dc, rhs_fourier[i0:i1, :, None])[..., 0])
         W0h = jnp.concatenate(parts, axis=0)
         W0r = ftu.get_idft3_real(W0h.T.reshape(q, *hvs), volume_shape)
+        if G_real is not None:
+            # Deconvolve: V_0 = U / G  (cold start in the V space)
+            W0r = W0r / jnp.maximum(G_real[None], 0.01)
         x0 = _gather_from_real(W0r, sup_idx, q)
 
     x, info = _cg(mv, rhs_sup, x0, maxiter, tol,
