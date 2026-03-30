@@ -254,11 +254,22 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
     }
   }, []);
 
+  // Track paths that failed to load to prevent infinite retry loops.
+  // When a fetch fails, setError() triggers re-render which creates a new
+  // volumesToShow array, firing the effect again.  Without this guard, the
+  // fetch retries thousands of times until the browser runs out of resources.
+  const failedPathsRef = useRef(new Set<string>());
+
   // Fetch and create pipeline for a volume
   const ensurePipeline = useCallback(async (path: string): Promise<VtkPipelineEntry | null> => {
     // Already loaded
     if (pipelinesRef.current.has(path)) {
       return pipelinesRef.current.get(path)!;
+    }
+
+    // Already failed — don't retry (avoids infinite loop)
+    if (failedPathsRef.current.has(path)) {
+      return null;
     }
 
     setLoading((prev) => new Set(prev).add(path));
@@ -357,6 +368,7 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error("VtkViewer: pipeline error:", msg, err);
+      failedPathsRef.current.add(path);
       setError(msg);
       return null;
     } finally {

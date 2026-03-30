@@ -35,7 +35,12 @@ export function NewJobPage(): React.JSX.Element {
     particles?: string;
     params?: string;
   };
-  const [jobType, setJobType] = useState<string>(searchParams.type ?? "pipeline");
+  const [jobType, setJobType] = useState<string>(() => {
+    const raw = searchParams.type ?? "pipeline";
+    // Normalize: URL may use "Pipeline" but option values are lowercase
+    const found = JOB_TYPES.find((t) => t.value === raw.toLowerCase() || t.label === raw);
+    return found ? found.value : raw.toLowerCase();
+  });
 
   if (!project) {
     return (
