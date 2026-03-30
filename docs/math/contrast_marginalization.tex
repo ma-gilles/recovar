@@ -1,0 +1,478 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{bm}
+\usepackage{mathtools}
+\usepackage{hyperref}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{booktabs}
+
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Cov}{\mathrm{Cov}}
+\newcommand{\Var}{\mathrm{Var}}
+\newcommand{\tr}{\mathrm{tr}}
+\newcommand{\diag}{\mathrm{diag}}
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+\title{Contrast Marginalization in RECOVAR's Latent Posterior Solver}
+\author{RECOVAR Development Notes}
+\date{March 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note derives the exact contrast-marginalized posterior over latent
+coordinates used in RECOVAR's embedding stage.  We describe three inference
+modes---no contrast, profile-MAP, and marginalized contrast---and show how a
+single eigendecomposition of $\Lambda^{1/2} H \Lambda^{1/2}$ reduces the
+entire contrast quadrature to elementwise arithmetic over
+$[\text{batch}, \text{contrast}, \text{latent}]$ tensors.  We give the full
+set of posterior moments needed by PPCA/EM with latent contrast, and discuss
+quadrature design.
+\end{abstract}
+
+\tableofcontents
+
+%% ========================================================================
+\section{Statistical Model}
+\label{sec:model}
+%% ========================================================================
+
+Work in whitened image coordinates for a single image (or a shared-contrast
+group).  The generative model is:
+\begin{align}
+  z &\sim \mathcal{N}(0, \Lambda), &
+  \Lambda &= \diag(\lambda_1, \dots, \lambda_k), \label{eq:prior} \\
+  y \mid z, c &\sim \mathcal{N}\bigl(c(m + Bz),\; I\bigr), \label{eq:likelihood}
+\end{align}
+where $y \in \R^p$ is the whitened image, $m \in \R^p$ is the whitened
+projected mean volume, $B \in \R^{p \times k}$ is the whitened projected
+basis, and $c > 0$ is the per-image contrast scalar.
+
+\paragraph{Sufficient statistics.}
+All image-space information enters through six inner products computed once
+in RECOVAR's phase-1 forward pass:
+\begin{equation}
+  \label{eq:stats}
+  H = B^\top B, \quad
+  g = B^\top y, \quad
+  h = B^\top m, \quad
+  t = y^\top m, \quad
+  \nu = m^\top m, \quad
+  \|y\|^2 = y^\top y.
+\end{equation}
+These have shapes
+$(k \times k)$, $(k)$, $(k)$, scalar, scalar, scalar
+per image (with a leading batch dimension in practice).
+
+%% ========================================================================
+\section{Conditional Posterior for Fixed Contrast}
+\label{sec:fixed-contrast}
+%% ========================================================================
+
+For fixed $c$, the negative log joint (up to constants independent of $z$
+and $c$) is
+\begin{equation}
+  \Phi(z, c)
+  = \tfrac{1}{2}\|y - c(m + Bz)\|^2 + \tfrac{1}{2} z^\top \Lambda^{-1} z
+    - \log p(c).
+\end{equation}
+Expanding and collecting terms quadratic in $z$:
+\begin{equation}
+  \Phi(z, c) = \tfrac{1}{2} z^\top A(c)\, z - q(c)^\top z
+               + \tfrac{1}{2} r(c) - \log p(c),
+\end{equation}
+where
+\begin{align}
+  A(c) &= \Lambda^{-1} + c^2 H, \label{eq:Ac} \\
+  q(c) &= c\,(g - c\,h), \label{eq:qc} \\
+  r(c) &= \|y\|^2 - 2c\,t + c^2\,\nu. \label{eq:rc}
+\end{align}
+
+The conditional posterior is Gaussian:
+\begin{equation}
+  \label{eq:conditional}
+  p(z \mid y, c) = \mathcal{N}(\mu_c, \Sigma_c),
+  \qquad
+  \mu_c = A(c)^{-1} q(c),
+  \qquad
+  \Sigma_c = A(c)^{-1}.
+\end{equation}
+
+%% ========================================================================
+\section{Three Inference Modes}
+\label{sec:modes}
+%% ========================================================================
+
+%% -----------------------------------------------------------------------
+\subsection{Mode 1: No Contrast ($c = 1$)}
+\label{sec:no-contrast}
+%% -----------------------------------------------------------------------
+
+Set $c = 1$ deterministically:
+\begin{equation}
+  A = \Lambda^{-1} + H, \qquad
+  q = g - h, \qquad
+  \mu = A^{-1} q, \qquad
+  \Sigma = A^{-1}.
+\end{equation}
+This is the fastest path and the correct default when contrast estimation
+is disabled.
+
+%% -----------------------------------------------------------------------
+\subsection{Mode 2: Profile-MAP Contrast}
+\label{sec:profile}
+%% -----------------------------------------------------------------------
+
+RECOVAR's existing estimator jointly optimizes over $(z, c)$:
+\begin{equation}
+  \hat{c} = \argmin_c \min_z \Phi(z, c).
+\end{equation}
+After analytically minimizing over $z$, the profile objective is
+\begin{equation}
+  \label{eq:profile}
+  \mathcal{J}_{\text{prof}}(c)
+  = r(c) - q(c)^\top A(c)^{-1} q(c) - 2\log p(c).
+\end{equation}
+
+\textbf{There is no $\log\det A(c)$ term.}  This is because optimizing
+$\min_z \Phi(z, c)$ for fixed $c$ yields $\Phi(\mu_c, c)$, which does not
+involve the determinant---the determinant only appears when integrating
+$z$ out.
+
+%% -----------------------------------------------------------------------
+\subsection{Mode 3: Marginalized Contrast}
+\label{sec:marginalize}
+%% -----------------------------------------------------------------------
+
+For exact contrast marginalization we integrate out $z$:
+\begin{equation}
+  p(c \mid y) \propto p(c) \int p(y \mid z, c)\, p(z)\, dz.
+\end{equation}
+The Gaussian integral gives
+\begin{equation}
+  p(y \mid c) \propto |A(c)|^{-1/2}
+  \exp\!\Bigl(-\tfrac{1}{2}\bigl[r(c) - q(c)^\top A(c)^{-1} q(c)\bigr]\Bigr),
+\end{equation}
+so the collapsed negative log marginal score is
+\begin{equation}
+  \label{eq:marginal}
+  \boxed{
+    \mathcal{J}_{\text{marg}}(c)
+    = r(c) - q(c)^\top A(c)^{-1} q(c) + \log\det A(c) - 2\log p(c).
+  }
+\end{equation}
+
+\paragraph{Why $\log\det$ matters.}
+Different contrast values $c$ yield different posterior covariance volumes
+$|\Sigma_c| = |A(c)|^{-1}$.  When comparing marginal likelihoods across
+$c$, this volume factor is essential.  It is:
+\begin{itemize}
+  \item irrelevant when $c$ is fixed (Section~\ref{sec:no-contrast}),
+  \item absent in profile-MAP (Section~\ref{sec:profile}),
+  \item required for marginalization (this section).
+\end{itemize}
+The old RECOVAR code is \emph{not} wrong---it targets a different
+estimator.
+
+%% ========================================================================
+\section{Quadrature for Contrast Marginalization}
+\label{sec:quadrature}
+%% ========================================================================
+
+Let $\{(c_j, w_j)\}_{j=1}^C$ be a positive quadrature rule on
+$[c_{\min}, c_{\max}]$.  The unnormalized posterior contrast weight is
+\begin{equation}
+  \tilde{\omega}_j
+  = w_j \, p(c_j) \, |A(c_j)|^{-1/2}
+    \exp\!\Bigl(-\tfrac{1}{2}\bigl[r(c_j) - q(c_j)^\top A(c_j)^{-1} q(c_j)
+    \bigr]\Bigr),
+\end{equation}
+normalized as $\omega_j = \tilde{\omega}_j / \sum_\ell \tilde{\omega}_\ell$.
+
+\paragraph{Default rule.}
+We use \textbf{16-point Gauss--Legendre on $[0, 3]$}:
+\begin{itemize}
+  \item The integrand is smooth in $c$.
+  \item 16 nodes achieve spectral convergence (errors
+        $< 10^{-3}$ vs.\ 64-node reference, verified empirically).
+  \item Far fewer nodes than a uniform 50-point search grid.
+\end{itemize}
+
+\paragraph{Compatibility.}  If the user passes explicit nodes without
+weights, trapezoid weights are computed automatically.
+
+\paragraph{Contrast prior.}
+If $\sigma_c^2 = \infty$, use a flat prior on $[c_{\min}, c_{\max}]$.
+If finite:
+\begin{equation}
+  \log p(c) = -\frac{(c - \mu_c)^2}{2\sigma_c^2} + \text{const}.
+\end{equation}
+
+%% ========================================================================
+\section{Spectral Reduction}
+\label{sec:spectral}
+%% ========================================================================
+
+The key computational insight: the one-parameter family
+$A(c) = \Lambda^{-1} + c^2 H$ can be simultaneously diagonalized for
+\emph{all} $c$ by a single eigendecomposition.
+
+\subsection{Setup}
+
+Let $L = \Lambda^{1/2}$ and define the whitened Gram matrix
+\begin{equation}
+  G = L\, H\, L = Q\, \diag(d_1, \dots, d_k)\, Q^\top,
+  \qquad d_\ell \geq 0,
+\end{equation}
+where $Q$ is orthogonal.  Precompute:
+\begin{equation}
+  \alpha = Q^\top L\, g, \qquad
+  \beta = Q^\top L\, h, \qquad
+  T = L\, Q.
+\end{equation}
+
+\subsection{Per-Node Quantities}
+
+For each contrast node $c_j$, define the spectral inverse and
+transformed right-hand side:
+\begin{align}
+  s_\ell(c) &= \frac{1}{1 + c^2 d_\ell}, \label{eq:s} \\
+  v_\ell(c) &= c\,\alpha_\ell - c^2\,\beta_\ell, \label{eq:v} \\
+  \rho_\ell(c) &= s_\ell(c)\, v_\ell(c). \label{eq:rho}
+\end{align}
+
+Then:
+\begin{align}
+  \mu_c &= T\, \rho(c), \label{eq:mu-spectral} \\
+  q(c)^\top A(c)^{-1} q(c) &= \sum_{\ell=1}^k s_\ell(c)\, v_\ell(c)^2,
+  \label{eq:quad-spectral} \\
+  \log\det A(c) &= \text{const} + \sum_{\ell=1}^k \log(1 + c^2 d_\ell).
+  \label{eq:logdet-spectral}
+\end{align}
+
+\paragraph{Complexity.}
+After the one-time $O(Bk^3)$ eigendecomposition, the entire contrast
+pass over $C$ nodes is $O(BCk)$ elementwise arithmetic and reductions
+over $[\text{batch}, C, k]$ arrays.  No $[B, C, k, k]$ tensors are
+materialized.
+
+\subsection{Why This Is an Optimization, Not a Requirement}
+
+Without the spectral trick, exact marginalization is still possible by
+computing a Cholesky factorization of $A(c_j)$ at each node and
+evaluating the solve, log-determinant, and weight.  That is
+mathematically correct.
+
+The eigendecomposition avoids $C$ repeated factorizations and is the
+best way to evaluate \emph{all} nodes and \emph{all} moments
+efficiently on GPU.  Empirically this gives 8--26$\times$ speedup
+over per-node Cholesky (Table~\ref{tab:benchmark}).
+
+\begin{table}[h]
+\centering
+\caption{GPU benchmark: spectral vs.\ direct Cholesky
+         (single H100, median of 10 runs after warmup).}
+\label{tab:benchmark}
+\begin{tabular}{rrr rr r}
+\toprule
+$B$ & $k$ & $C$ & Spectral (ms) & Cholesky (ms) & Speedup \\
+\midrule
+1\,000 & 4  & 16  & 0.20 & 1.56  &  8$\times$ \\
+1\,000 & 10 & 50  & 0.28 & 7.32  & 26$\times$ \\
+5\,000 & 20 & 16  & 2.43 & 32.05 & 13$\times$ \\
+10\,000& 10 & 16  & 1.05 & 10.08 & 10$\times$ \\
+50\,000& 10 & 128 & 8.11 & ---   & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%% ========================================================================
+\section{Posterior Moments}
+\label{sec:moments}
+%% ========================================================================
+
+\subsection{Latent Moments}
+
+The marginalized posterior moments are computed as weighted sums over
+contrast nodes:
+\begin{align}
+  \E[z \mid y] &= \sum_j \omega_j\, \mu_j, \label{eq:Ez} \\
+  \E[zz^\top \mid y] &= \sum_j \omega_j\, (\Sigma_j + \mu_j \mu_j^\top),
+  \label{eq:Ezz} \\
+  \Cov[z \mid y] &= \E[zz^\top \mid y] - \E[z \mid y]\,\E[z \mid y]^\top.
+  \label{eq:Covz}
+\end{align}
+
+In the spectral basis, $\Sigma_j = T\,\diag(s(c_j))\,T^\top$ and
+$\mu_j = T\,\rho(c_j)$, so:
+\begin{equation}
+  \E[zz^\top \mid y]
+  = T \Bigl[\diag\Bigl(\sum_j \omega_j\, s(c_j)\Bigr)
+    + \sum_j \omega_j\, \rho(c_j)\,\rho(c_j)^\top \Bigr] T^\top.
+\end{equation}
+The matrix in brackets is $k \times k$ and built from
+$[B, C, k]$ reductions---no $[B, C, k, k]$ materialization.
+
+\subsection{Contrast Moments}
+\begin{align}
+  \E[c \mid y] &= \sum_j \omega_j\, c_j, \\
+  \E[c^2 \mid y] &= \sum_j \omega_j\, c_j^2.
+\end{align}
+
+\subsection{Cross Moments for PPCA M-Step}
+\label{sec:cross-moments}
+
+When the PPCA model includes contrast multiplicatively
+\begin{equation}
+  \tilde{y}_n(\xi) = C_n(\xi)\, c_n\, \bigl(\mu(\xi) + W(\xi,:)\, z_n\bigr)
+  + \varepsilon_n(\xi),
+\end{equation}
+the M-step normal equations for row $w_\xi = W(\xi,:)$ are
+\begin{equation}
+  \Bigl[\sum_n |C_n(\xi)|^2\, \E[c_n^2\, z_n z_n^* \mid y_n]
+  + \diag(\text{Reg}(\xi))\Bigr] w_\xi^*
+  = \sum_n C_n(\xi)^*\, \tilde{y}_n(\xi)\, \E[c_n\, z_n^* \mid y_n]
+  - \mu(\xi) \sum_n |C_n(\xi)|^2\, \E[c_n^2\, z_n^* \mid y_n].
+\end{equation}
+This requires the following contrast-weighted moments from the E-step:
+\begin{align}
+  \E[c\, z \mid y] &= \sum_j \omega_j\, c_j\, \mu_j,
+  \label{eq:Ecz} \\
+  \E[c^2\, z \mid y] &= \sum_j \omega_j\, c_j^2\, \mu_j,
+  \label{eq:Ec2z} \\
+  \E[c^2\, z z^\top \mid y]
+  &= \sum_j \omega_j\, c_j^2\, (\Sigma_j + \mu_j \mu_j^\top).
+  \label{eq:Ec2zz}
+\end{align}
+
+\paragraph{Summary of returned moments.}
+The solver returns a structured result with all of the above:
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Field & Expression \\
+\midrule
+\texttt{mean\_z}              & $\E[z \mid y]$ \\
+\texttt{cov\_z}               & $\Cov[z \mid y]$ \\
+\texttt{second\_moment\_z}    & $\E[zz^\top \mid y]$ \\
+\texttt{mean\_c}              & $\E[c \mid y]$ \\
+\texttt{second\_moment\_c}    & $\E[c^2 \mid y]$ \\
+\texttt{mean\_cz}             & $\E[cz \mid y]$ \\
+\texttt{mean\_c2z}            & $\E[c^2 z \mid y]$ \\
+\texttt{second\_moment\_czz}  & $\E[c^2 zz^\top \mid y]$ \\
+\texttt{contrast\_weights\_posterior} & $\omega_j$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%% ========================================================================
+\section{Numerical Stability}
+\label{sec:stability}
+%% ========================================================================
+
+\begin{enumerate}
+  \item \textbf{Symmetrize $G$} before \texttt{eigh}:
+    $G \leftarrow \tfrac{1}{2}(G + G^\top)$.
+  \item \textbf{Clip eigenvalues}: $d_\ell \leftarrow \max(d_\ell, 0)$
+    to handle small negative values from float32 rounding.
+  \item \textbf{Log-determinant via \texttt{log1p}}:
+    $\log\det A(c) = \text{const} + \sum_\ell \log(1 + c^2 d_\ell)$
+    avoids catastrophic cancellation when $c^2 d_\ell \ll 1$.
+  \item \textbf{Logsumexp for weights}:
+    $\omega_j = \mathrm{softmax}(\log\tilde{\omega}_j)$ rather than
+    direct exponentiation.
+  \item \textbf{Symmetrize output}: $\E[zz^\top]$ and $\Cov[z]$ are
+    explicitly symmetrized after the $T M T^\top$ transform to correct
+    float32 asymmetry.
+\end{enumerate}
+
+%% ========================================================================
+\section{Scope Restriction}
+\label{sec:scope}
+%% ========================================================================
+
+The current implementation supports exact marginalization only when there
+is \textbf{one contrast scalar per solve}.  This covers:
+\begin{itemize}
+  \item SPA per-image solves (one $c$ per image),
+  \item Grouped shared-label solves with one shared $c$ across the group.
+\end{itemize}
+
+The case of one shared $z$ with multiple independent per-image contrasts
+inside a group is \textbf{not supported} and will raise
+\texttt{NotImplementedError}.
+
+%% ========================================================================
+\section{Implementation Map}
+\label{sec:code}
+%% ========================================================================
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+Module / Function & Role \\
+\midrule
+\texttt{contrast\_posterior.py} & Standalone solver module \\
+\quad \texttt{make\_contrast\_quadrature} & Gauss--Legendre / trapezoid / custom \\
+\quad \texttt{solve\_no\_contrast} & $c=1$ fast path \\
+\quad \texttt{solve\_profile\_contrast} & Profile-MAP (no log-det) \\
+\quad \texttt{solve\_marginalized\_contrast} & Full marginalization \\
+\quad \texttt{solve\_latent\_posterior} & Dispatch wrapper \\
+\midrule
+\texttt{embedding.py} & Integration layer \\
+\quad \texttt{\_solve\_batch\_from\_stats\_v2} & Routes to solver by mode \\
+\quad \texttt{get\_per\_image\_embedding\_multi\_zdim} & Accepts \texttt{contrast\_mode} \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+%% ========================================================================
+\appendix
+\section{Pseudocode}
+\label{app:pseudocode}
+%% ========================================================================
+
+\begin{algorithm}[H]
+\caption{Marginalized contrast posterior (spectral form)}
+\label{alg:marginalized}
+\begin{algorithmic}[1]
+\Require $H_{b,k,k'},\; g_{b,k},\; h_{b,k},\; t_b,\; \nu_b,\;
+  \|y\|^2_b,\; \lambda_k,\; c_j,\; w_j$
+\State $L_k \gets \sqrt{\lambda_k}$
+\Comment{$[K]$}
+\State $G_{b} \gets L \, H_b \, L$; symmetrize
+\Comment{$[B,K,K]$}
+\State $d_b, Q_b \gets \mathrm{eigh}(G_b)$; $d \gets \max(d, 0)$
+\Comment{one batched eigh}
+\State $\alpha_b \gets Q_b^\top (L \odot g_b)$,\quad
+       $\beta_b \gets Q_b^\top (L \odot h_b)$,\quad
+       $T_b \gets L \, Q_b$
+\For{each node $c_j$}
+  \Comment{vectorized over $[B, C, K]$}
+  \State $s_{b,j,\ell} \gets 1/(1 + c_j^2\, d_{b,\ell})$
+  \State $v_{b,j,\ell} \gets c_j \alpha_{b,\ell} - c_j^2 \beta_{b,\ell}$
+  \State $\rho_{b,j,\ell} \gets s_{b,j,\ell}\, v_{b,j,\ell}$
+\EndFor
+\State \textit{quad}$_{b,j} \gets \sum_\ell v \cdot \rho$
+\State \textit{logdet}$_{b,j} \gets \sum_\ell \log(1 + c_j^2 d_{b,\ell})$
+\State $r_{b,j} \gets \|y\|^2_b - 2c_j t_b + c_j^2 \nu_b$
+\State $\omega_{b,j} \gets \mathrm{softmax}_j\bigl(
+  \log w_j + \log p(c_j) - \tfrac{1}{2}(r - \textit{quad} + \textit{logdet})
+  \bigr)$
+\State $\E[z]_b \gets T_b \sum_j \omega_{b,j}\, \rho_{b,j}$
+\State $M_b \gets \diag(\sum_j \omega_{b,j}\, s_{b,j})
+  + \sum_j \omega_{b,j}\, \rho_{b,j}\,\rho_{b,j}^\top$
+\Comment{$[B,K,K]$}
+\State $\E[zz^\top]_b \gets T_b\, M_b\, T_b^\top$; symmetrize
+\State \textit{(analogous for cross moments $\E[cz]$, $\E[c^2 zz^\top]$,
+  etc.)}
+\end{algorithmic}
+\end{algorithm}
+
+\end{document}
