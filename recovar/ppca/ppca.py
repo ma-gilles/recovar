@@ -917,22 +917,36 @@ def E_M_step_batch_half(
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
         _max_r = image_shape[0] // 2 - 1
 
-        # LHS: per-image scatter (zero atomicAdd contention) + GEMM reduction.
-        # 16× faster than the fused/interleaved kernels at 256³.
-        from recovar.cuda_backproject import per_image_backproject
-
+        # LHS: per-image scatter + GEMM when CUDA kernel available, else JAX fallback.
         n_images = ctf_squared_full.shape[0]
         real_dtype = lhs_summed.dtype
-        ctf2_bp = per_image_backproject(
-            jnp.zeros((half_volume_size, n_images), dtype=real_dtype),
-            ctf_squared_full.real.astype(real_dtype),
-            jnp.asarray(rotation_matrices),
-            image_shape,
-            volume_shape,
-            max_r=_max_r,
-        )  # (half_vol, n_images)
-        # GEMM: (half_vol, n_images) @ (n_images, tri_sz) → (half_vol, tri_sz)
-        lhs_summed = lhs_summed + (ctf2_bp @ second_moment_tri.real.astype(real_dtype))
+        try:
+            from recovar.cuda_backproject import per_image_backproject
+
+            ctf2_bp = per_image_backproject(
+                jnp.zeros((half_volume_size, n_images), dtype=real_dtype),
+                ctf_squared_full.real.astype(real_dtype),
+                jnp.asarray(rotation_matrices),
+                image_shape,
+                volume_shape,
+                max_r=_max_r,
+            )  # (half_vol, n_images)
+            lhs_summed = lhs_summed + (ctf2_bp @ second_moment_tri.real.astype(real_dtype))
+        except Exception:
+            # Fallback: standard per-column backprojection (slower but works on CPU)
+            tri_sz = second_moment_tri.shape[1]
+            for k in range(tri_sz):
+                w = ctf_squared_full.real.astype(real_dtype) * second_moment_tri[:, k : k + 1].real.astype(real_dtype)
+                bp_col = core.batch_adjoint_slice_volume(
+                    w[:, :, None].transpose(2, 0, 1),
+                    rotation_matrices,
+                    image_shape,
+                    volume_shape,
+                    disc_type,
+                    half_image=False,
+                    half_volume=True,
+                )
+                lhs_summed = lhs_summed.at[:, k].add(bp_col.reshape(-1).real)
 
         # RHS: standard half-image backprojection (only q=20 complex channels,
         # fast enough that per-image trick gives <10% improvement).
@@ -1011,6 +1025,7 @@ def EM_step_half(
     pcg_lam=0.0,
     pcg_maxiter=20,
     W_prev_real=None,
+    soft_penalty_lam=0.0,
 ):
     """Half-spectrum EM step for L2-regularized PPCA.
 
@@ -1085,12 +1100,8 @@ def EM_step_half(
     # ------------------------------------------------------------------
     if use_pcg_mstep and volume_mask is not None:
         # Full q×q PCG M-step with mask constraint.
-        # Solves H_Omega W = G with H_Omega using the full per-voxel q×q
-        # LHS coupling (not diagonal approximation).
+        # Passes upper-tri LHS directly — unpacked in chunks inside pcg_mstep.
         from recovar.reconstruction.pcg_mean import pcg_mstep
-
-        # Unpack upper-tri → full q×q, stays in half-volume
-        lhs_half_mat = unpack_tri_to_full(lhs_summed, basis_size)  # (half_vol, q, q)
 
         # Regularization in half-volume
         W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
@@ -1102,7 +1113,7 @@ def EM_step_half(
             W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))
 
         W_real, res_mstep = pcg_mstep(
-            lhs_half_mat,  # (half_vol, q, q) — stays half
+            lhs_summed,  # (half_vol, tri_sz) — upper-tri, memory-efficient
             rhs_summed,  # (half_vol, q) — stays half
             reg_half,  # (half_vol, q) — stays half
             jnp.array(volume_mask).reshape(volume_shape),
@@ -1111,6 +1122,8 @@ def EM_step_half(
             maxiter=pcg_maxiter,
             tol=1e-4,
             precondition=True,
+            soft_penalty_lam=soft_penalty_lam,
+            unpack_fn=unpack_tri_to_full,
         )
         # W_real: (q, D, D, D) → rfft3 → half-volume (q, half_vol)
         W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T  # (half_vol, q)
@@ -1447,6 +1460,8 @@ def EM(
     pcg_lam=0.0,
     pcg_maxiter=20,
     noise_variance=None,
+    soft_penalty_lam=0.0,
+    use_gridding_correction=False,
 ):
     """
     Run EM algorithm for PPCA.
@@ -1479,6 +1494,10 @@ def EM(
         pcg_lam: Spatial regularization strength for PCG.
         pcg_maxiter: Max CG iterations per mean update (10-20 with warmstart).
         noise_variance: Noise variance for PCG mean accumulation.
+        soft_penalty_lam: If >0 and use_pcg_mean=True, use soft mask penalty
+            λ||(1-mask)*W||² instead of hard mask projection in PCG M-step.
+            The mask can be soft (0-1 values). Larger values → stronger suppression
+            of signal outside the support mask.
 
     Regularization summary:
         L2 (sparse_PCA=False): min ||Y - XW||² + ||W||²/W_prior
@@ -1586,6 +1605,7 @@ def EM(
                 pcg_lam=pcg_lam,
                 pcg_maxiter=pcg_maxiter,
                 W_prev_real=_W_prev_real if iter_i > 0 else None,
+                soft_penalty_lam=soft_penalty_lam,
             )
         else:
             # L1/sparse: use full-spectrum EM step (ADMM needs full volume)
@@ -1636,9 +1656,12 @@ def EM(
         if use_pcg_mean:
             _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)
 
-        # Gridding correction disabled for now — it inflates the prior term
-        # and should be integrated into the forward model properly.
-        # TODO: incorporate gridding kernel into the CG operator
+        # Gridding correction: divide by sinc² to undo trilinear blurring
+        if use_gridding_correction:
+            from recovar.reconstruction.relion_functions import griddingCorrect_square
+
+            for k in range(basis_size):
+                W = W.at[k].set(griddingCorrect_square(W[k], vs[0], 1, order=1)[0])
 
         # Real space → half-volume Fourier for next iteration
         if not sparse_PCA:
@@ -1685,8 +1708,8 @@ def EM(
         # plt.figure()
         # plt.imshow(experiment_dataset[0].get_proj(W[:,0].reshape(-1)))
 
-        # ── PCG mean re-estimation (optional) ──────────────────────────
-        if use_pcg_mean:
+        # ── PCG mean re-estimation (optional, needs noise_variance) ────
+        if use_pcg_mean and noise_variance is not None:
             from recovar.reconstruction.homogeneous import get_mean_pcg
 
             # Convert current mean from Fourier to real for warmstart
@@ -1746,7 +1769,10 @@ def EM(
         }
 
         if U_gt is not None:
-            U, S, _ = jnp.linalg.svd(W, full_matrices=False)
+            # SVD on full-volume W to get properly orthonormal U.
+            # Half-volume SVD + expand gives non-orthonormal U (rfft weight mismatch).
+            W_full = ftu.half_volume_to_full_volume(W.T, vs).T if W.shape[0] != U_gt.shape[0] else W
+            U, S, _ = jnp.linalg.svd(W_full, full_matrices=False)
             variance, rel_var, norm_var = metrics.get_all_variance_scores(U, U_gt, S_gt)
             iter_info["Rel_Var_Explained"] = float(rel_var[-1])
             iter_info["Top_5_Rel_Var"] = rel_var[:5]

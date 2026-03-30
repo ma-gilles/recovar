@@ -234,39 +234,98 @@ def pcg_mean(
 # =====================================================================
 
 
-def _mstep_matvec(
-    W_real: jnp.ndarray,
-    lhs_fourier: jnp.ndarray,
+_MATVEC_CHUNK = 100_000  # voxels per chunk for memory-bounded matvec
+
+
+def _half_vol_lhs_matvec(
+    W_half: jnp.ndarray,
+    lhs_tri: jnp.ndarray,
+    reg_diag: jnp.ndarray,
+    q: int,
+    unpack_fn=None,
+) -> jnp.ndarray:
+    """Chunked LHS multiply in half-volume: result = (LHS + diag(reg)) @ W.
+
+    W_half: (half_vol, q) complex
+    Returns: (half_vol, q) complex
+    """
+    half_vol_size = lhs_tri.shape[0]
+    is_tri = lhs_tri.ndim == 2 and lhs_tri.shape[1] != q
+    result = reg_diag * W_half  # (half_vol, q) — reg term
+
+    for i0 in range(0, half_vol_size, _MATVEC_CHUNK):
+        i1 = min(i0 + _MATVEC_CHUNK, half_vol_size)
+        if is_tri:
+            lhs_chunk = unpack_fn(lhs_tri[i0:i1], q)
+        else:
+            lhs_chunk = lhs_tri[i0:i1]
+        result = result.at[i0:i1].add(jnp.einsum("vij,vj->vi", lhs_chunk, W_half[i0:i1]))
+    return result
+
+
+_PC_BATCH = 4  # PCs per batch for irfft/rfft to limit memory
+
+
+def _batched_mask_irfft_rfft(W_half, mask, volume_shape):
+    """irfft → mask → rfft, batched over PCs to limit memory.
+
+    W_half: (half_vol, q) complex
+    Returns: (half_vol, q) complex
+    """
+    q = W_half.shape[1]
+    half_vs = ftu.get_real_fft_packed_shape(volume_shape)
+    parts = []
+    for j0 in range(0, q, _PC_BATCH):
+        j1 = min(j0 + _PC_BATCH, q)
+        batch = W_half[:, j0:j1].T.reshape(j1 - j0, *half_vs)
+        real_batch = ftu.get_idft3_real(batch, volume_shape)
+        masked = mask[None] * real_batch
+        parts.append(ftu.get_dft3_real(masked).reshape(j1 - j0, -1).T)
+    return jnp.concatenate(parts, axis=1)
+
+
+def _mstep_matvec_half(
+    W_half: jnp.ndarray,
+    lhs_tri: jnp.ndarray,
     reg_diag: jnp.ndarray,
     mask: jnp.ndarray,
+    volume_shape: tuple,
+    soft_penalty_weight: Optional[jnp.ndarray] = None,
+    soft_penalty_lam: float = 0.0,
+    unpack_fn=None,
 ) -> jnp.ndarray:
-    """Apply H_Omega to W (all q columns jointly). All in half-volume (rfft).
+    """Apply H_Omega: input/output are (half_vol, q) complex.
 
-    Steps:
-      1. PW = P * W                          — mask in real space
-      2. PW_hat = rfft3(PW)                  — half-volume DFT
-      3. HPW_hat = D(xi) * PW_hat(xi)        — q×q matmul per half-voxel
-      4. HPW = irfft3(HPW_hat)               — real output guaranteed
-      5. return P * HPW                       — mask again
+    Converts to real for mask (batched over PCs), LHS multiply in half-vol.
+    H W = rfft(P * irfft((LHS + reg) * rfft(P * irfft(W))))
     """
-    q = W_real.shape[0]
-    vs = W_real.shape[1:]
-    half_vol_size = lhs_fourier.shape[0]
+    q = W_half.shape[1]
+    use_soft = soft_penalty_weight is not None and soft_penalty_lam > 0
 
-    # Step 1: mask
-    PW = mask[None] * W_real
+    # Step 1: irfft → mask → rfft (batched over PCs)
+    if use_soft:
+        PW_half = W_half
+    else:
+        PW_half = _batched_mask_irfft_rfft(W_half, mask, volume_shape)
 
-    # Step 2: rfft3 → half-volume
-    PW_half = ftu.get_dft3_real(PW).reshape(q, half_vol_size)
+    # Step 2: LHS multiply in half-volume (chunked over voxels)
+    HPW_half = _half_vol_lhs_matvec(PW_half, lhs_tri, reg_diag, q, unpack_fn)
 
-    # Step 3: per-voxel q×q multiply in half-volume
-    HPW_half = jnp.einsum("vij,vj->vi", lhs_fourier, PW_half.T) + reg_diag * PW_half.T
-
-    # Step 4: irfft3 → real (guaranteed, no .real needed)
-    HPW = ftu.get_idft3_real(HPW_half.T.reshape(q, *ftu.get_real_fft_packed_shape(vs)), vs)
-
-    # Step 5: mask
-    return mask[None] * HPW
+    # Step 3: irfft → mask → rfft (batched over PCs)
+    if use_soft:
+        # Need W_real for penalty — batch it
+        half_vs = ftu.get_real_fft_packed_shape(volume_shape)
+        result = jnp.empty_like(HPW_half)
+        for j0 in range(0, q, _PC_BATCH):
+            j1 = min(j0 + _PC_BATCH, q)
+            nb = j1 - j0
+            hpw_r = ftu.get_idft3_real(HPW_half[:, j0:j1].T.reshape(nb, *half_vs), volume_shape)
+            w_r = ftu.get_idft3_real(W_half[:, j0:j1].T.reshape(nb, *half_vs), volume_shape)
+            out_r = hpw_r + soft_penalty_lam * soft_penalty_weight[None] * w_r
+            result = result.at[:, j0:j1].set(ftu.get_dft3_real(out_r).reshape(nb, -1).T)
+        return result
+    else:
+        return _batched_mask_irfft_rfft(HPW_half, mask, volume_shape)
 
 
 def _mstep_preconditioner(
@@ -274,24 +333,32 @@ def _mstep_preconditioner(
     reg_diag: jnp.ndarray,
     mask: jnp.ndarray,
     volume_shape: tuple,
+    soft_penalty_weight: Optional[jnp.ndarray] = None,
+    soft_penalty_lam: float = 0.0,
 ):
     """Preconditioner: unmasked q×q solve per Fourier voxel.
 
-    M_0^{-1} r = P F^{-1}[ D(xi)^{-1} F(P r)(xi) ]
-
-    where D(xi) = L(xi) + Lambda(xi) is the q×q regularized LHS.
-    This is the exact inverse of the unmasked operator — the best
-    circulant preconditioner for the masked problem.
+    Hard mask mode:
+      M_0^{-1} r = P F^{-1}[ D(xi)^{-1} F(P r)(xi) ]
+    Soft penalty mode:
+      M_0^{-1} r = F^{-1}[ (D(xi) + λ_avg I)^{-1} F(r)(xi) ]
+      where λ_avg = λ * mean(w) averages the spatially-varying penalty.
 
     Cost: one FFT pair + one q×q solve per voxel per CG iteration.
     """
     q = reg_diag.shape[1]
-    vol_size = reg_diag.shape[0]
     vs = volume_shape
+    use_soft = soft_penalty_weight is not None and soft_penalty_lam > 0
+
+    half_vol_size = lhs_fourier.shape[0]
 
     # D(xi) = LHS(xi) + diag(reg(xi))  per half-voxel
-    half_vol_size = lhs_fourier.shape[0]
     D = lhs_fourier + jnp.eye(q)[None] * reg_diag[:, :, None]  # (half_vol, q, q)
+
+    if use_soft:
+        # Average penalty strength across volume for circulant approximation
+        lam_avg = soft_penalty_lam * float(jnp.mean(soft_penalty_weight))
+        D = D + lam_avg * jnp.eye(q)[None]
 
     # Precompute D^{-1} for all half-voxels
     D_inv = jnp.linalg.inv(D)  # (half_vol, q, q)
@@ -300,14 +367,20 @@ def _mstep_preconditioner(
     def apply_Minv(R_real):
         q_ = R_real.shape[0]
 
-        # Mask → rfft3 → half-volume
-        R_half = ftu.get_dft3_real(mask[None] * R_real).reshape(q_, half_vol_size)
+        if use_soft:
+            R_half = ftu.get_dft3_real(R_real).reshape(q_, half_vol_size)
+        else:
+            R_half = ftu.get_dft3_real(mask[None] * R_real).reshape(q_, half_vol_size)
 
         # Per-voxel q×q solve in half-volume
         R_solved = jnp.einsum("vij,vj->vi", D_inv, R_half.T)  # (half_vol, q)
 
-        # irfft3 → real → mask
-        return mask[None] * ftu.get_idft3_real(R_solved.T.reshape(q_, *half_vs), vs)
+        # irfft3 → real
+        result = ftu.get_idft3_real(R_solved.T.reshape(q_, *half_vs), vs)
+        if use_soft:
+            return result
+        else:
+            return mask[None] * result
 
     return apply_Minv
 
@@ -322,14 +395,18 @@ def pcg_mstep(
     maxiter: int = 20,
     tol: float = 1e-4,
     precondition: bool = True,
+    soft_penalty_lam: float = 0.0,
+    unpack_fn=None,
 ) -> Tuple[jnp.ndarray, list]:
     """Solve the masked PPCA M-step for all q columns jointly via PCG.
 
-    Everything in half-volume (rfft-packed) — no full-volume expansion.
+    Memory-efficient: LHS can be upper-tri packed (half_vol, tri_sz) and is
+    unpacked in chunks during matvec.  No full (half_vol, q, q) materialized.
 
     Parameters
     ----------
-    lhs_fourier : (half_vol, q, q) — accumulated LHS in half-volume Fourier
+    lhs_fourier : (half_vol, q, q) or (half_vol, tri_sz) — accumulated LHS.
+        If tri_sz, pass ``unpack_fn`` to convert chunks to full q×q.
     rhs_fourier : (half_vol, q) complex — accumulated RHS in half-volume
     reg_diag : (half_vol, q) real — diagonal regularization 1/W_prior
     mask : 3D array (D, D, D) real — support mask
@@ -337,6 +414,8 @@ def pcg_mstep(
     W0_real : (q, D, D, D) real, optional — warmstart
     maxiter, tol : CG parameters
     precondition : use block-diagonal preconditioner
+    soft_penalty_lam : float — if >0, use soft penalty instead of hard mask
+    unpack_fn : callable(tri_chunk, q) -> full_chunk, for upper-tri LHS
 
     Returns
     -------
@@ -349,53 +428,115 @@ def pcg_mstep(
     half_vs = ftu.get_real_fft_packed_shape(vs)
 
     mask = jnp.asarray(mask).reshape(vs)
+    use_soft = soft_penalty_lam > 0
+    soft_penalty_weight = (1.0 - mask) ** 2 if use_soft else None
 
-    def mv(W):
-        return _mstep_matvec(W, lhs_fourier, reg_diag, mask)
+    is_tri = lhs_fourier.ndim == 2 and lhs_fourier.shape[1] != q
 
+    # --- All CG state in half-volume (half_vol, q) complex ---
+    # Saves ~2× memory vs full real-space (q, D, D, D).
+    #
+    # rfft inner product weights: DC/Nyquist cols weight 1, rest weight 2.
+    # <x,y>_real = sum_ξ w(ξ) Re(conj(x_h(ξ)) y_h(ξ)) / N³
+    rfft_w = 2 * jnp.ones(half_vs, dtype=jnp.float32)
+    rfft_w = rfft_w.at[:, :, 0].set(1)
+    N = vs[0]
+    if N % 2 == 0:
+        rfft_w = rfft_w.at[:, :, -1].set(1)
+    rfft_w = rfft_w.reshape(-1) / (N**3)  # (half_vol,)
+
+    def _ip(a, b):
+        """Weighted inner product in half-volume = real-space inner product."""
+        return float(jnp.sum(rfft_w[:, None] * jnp.real(jnp.conj(a) * b)))
+
+    def mv_half(W_h):
+        """Matvec in half-volume."""
+        return _mstep_matvec_half(
+            W_h,
+            lhs_fourier,
+            reg_diag,
+            mask,
+            vs,
+            soft_penalty_weight=soft_penalty_weight,
+            soft_penalty_lam=soft_penalty_lam,
+            unpack_fn=unpack_fn,
+        )
+
+    # Chunked preconditioner in half-volume
     if precondition:
-        apply_Minv = _mstep_preconditioner(lhs_fourier, reg_diag, mask, vs)
+
+        def apply_Minv_half(R_h):
+            """Preconditioner: D^{-1} R in half-volume, chunked."""
+            if not use_soft:
+                R_h_masked = _batched_mask_irfft_rfft(R_h, mask, vs)
+            else:
+                R_h_masked = R_h
+            R_solved = jnp.empty((half_vol_size, q), dtype=R_h.dtype)
+            for i0 in range(0, half_vol_size, _MATVEC_CHUNK):
+                i1 = min(i0 + _MATVEC_CHUNK, half_vol_size)
+                if is_tri:
+                    lc = unpack_fn(lhs_fourier[i0:i1], q)
+                else:
+                    lc = lhs_fourier[i0:i1]
+                Dc = lc.at[:, jnp.arange(q), jnp.arange(q)].add(reg_diag[i0:i1])
+                R_solved = R_solved.at[i0:i1].set(jnp.linalg.solve(Dc, R_h_masked[i0:i1, :, None])[..., 0])
+            if not use_soft:
+                return _batched_mask_irfft_rfft(R_solved, mask, vs)
+            return R_solved
     else:
-        apply_Minv = lambda r: r
+        apply_Minv_half = lambda r: r
 
-    # RHS: irfft3(rhs_half) → real, masked
-    rhs_real = mask[None] * ftu.get_idft3_real(rhs_fourier.T.reshape(q, *half_vs), vs)
+    # RHS in half-volume
+    if use_soft:
+        rhs_half = rhs_fourier
+    else:
+        rhs_half = _batched_mask_irfft_rfft(rhs_fourier, mask, vs)
 
-    # Initial guess: mask-projected per-voxel solve (best unmasked solution, then project)
+    # Initial guess in half-volume (chunked per-voxel solve + mask)
     if W0_real is not None:
-        W = mask[None] * jnp.asarray(W0_real).reshape(q, *vs)
+        W0 = jnp.asarray(W0_real).reshape(q, *vs)
+        if not use_soft:
+            W0 = mask[None] * W0
+        W_h = ftu.get_dft3_real(W0).reshape(q, -1).T
     else:
-        # Full q×q per-voxel solve, then mask — same as mask projection
-        D = lhs_fourier + jnp.eye(q)[None] * reg_diag[:, :, None]
-        W_solved = jnp.linalg.solve(D, rhs_fourier[..., None])[..., 0]  # (half_vol, q)
-        W = mask[None] * ftu.get_idft3_real(W_solved.T.reshape(q, *half_vs), vs)
+        W_solved_parts = []
+        for i0 in range(0, half_vol_size, _MATVEC_CHUNK):
+            i1 = min(i0 + _MATVEC_CHUNK, half_vol_size)
+            if is_tri:
+                lhs_chunk = unpack_fn(lhs_fourier[i0:i1], q)
+            else:
+                lhs_chunk = lhs_fourier[i0:i1]
+            D_chunk = lhs_chunk.at[:, jnp.arange(q), jnp.arange(q)].add(reg_diag[i0:i1])
+            W_solved_parts.append(jnp.linalg.solve(D_chunk, rhs_fourier[i0:i1, :, None])[..., 0])
+        W_solved = jnp.concatenate(W_solved_parts, axis=0)
+        W_h = _batched_mask_irfft_rfft(W_solved, mask, vs)
 
-    # PCG
-    r = rhs_real - mv(W)
-    z = apply_Minv(r)
+    # PCG in half-volume with weighted inner products
+    r = rhs_half - mv_half(W_h)
+    z = apply_Minv_half(r)
     p = z.copy()
-    rz = float(jnp.sum(r * z))
-    b_norm = float(jnp.sqrt(jnp.sum(rhs_real**2)))
+    rz = _ip(r, z)
+    b_norm = float(jnp.sqrt(_ip(rhs_half, rhs_half)))
     residuals = []
 
     for it in range(maxiter):
-        Ap = mv(p)
-        pAp = float(jnp.sum(p * Ap))
+        Ap = mv_half(p)
+        pAp = _ip(p, Ap)
         if pAp < 1e-30:
             break
         alpha_cg = rz / pAp
-        W = W + alpha_cg * p
+        W_h = W_h + alpha_cg * p
         r = r - alpha_cg * Ap
 
-        rr = float(jnp.sqrt(jnp.sum(r**2))) / max(b_norm, 1e-30)
+        rr = float(jnp.sqrt(_ip(r, r))) / max(b_norm, 1e-30)
         residuals.append(rr)
 
         if rr < tol:
             logger.info("PCG M-step converged iter %d  rr=%.2e", it + 1, rr)
             break
 
-        z = apply_Minv(r)
-        rz_new = float(jnp.sum(r * z))
+        z = apply_Minv_half(r)
+        rz_new = _ip(r, z)
         beta = rz_new / max(abs(rz), 1e-30)
         p = z + beta * p
         rz = rz_new
@@ -406,4 +547,6 @@ def pcg_mstep(
     if residuals and residuals[-1] >= tol:
         logger.info("PCG M-step maxiter=%d rr=%.2e", maxiter, residuals[-1])
 
-    return W, residuals
+    # Convert back to real space
+    W_real = ftu.get_idft3_real(W_h.T.reshape(q, *half_vs), vs)
+    return W_real, residuals
