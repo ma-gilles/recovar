@@ -16,6 +16,7 @@ from recovar import core, jax_config, utils
 from recovar.core import linalg
 from recovar.core.configs import ForwardModelConfig, ModelState, EmbeddingOpts
 from recovar.heterogeneity import covariance_core
+from recovar.heterogeneity import contrast_posterior
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,7 @@ def get_per_image_embedding(
     contrast_variance=np.inf,
     compute_bias=False,
     image_subset_in_tilt_series=None,
+    contrast_mode=None,
 ):
     """Compute per-image latent coordinates by projecting onto principal components.
 
@@ -1370,6 +1372,61 @@ def _solve_batch_from_stats(
     return xs_single, contrast_single, cov_batch
 
 
+def _solve_batch_from_stats_v2(
+    AU_t_images,
+    AU_t_Amean,
+    AU_t_AU,
+    image_norms_sq,
+    image_T_A_mean,
+    A_mean_norm_sq,
+    eigenvalues,
+    contrast_grid,
+    contrast_mean,
+    contrast_variance,
+    contrast_mode="profile",
+    contrast_weights=None,
+):
+    """Dispatch solver supporting none/profile/marginalize contrast modes.
+
+    Returns the same ``(xs, contrasts, precision)`` triple as
+    :func:`_solve_batch_from_stats` for backward compatibility.
+
+    Parameters
+    ----------
+    contrast_mode : str
+        ``"none"``, ``"profile"``, or ``"marginalize"``.
+    contrast_weights : (n_contrasts,) or None
+        Quadrature weights for ``"marginalize"`` mode.  If ``None`` and
+        ``contrast_mode == "marginalize"``, trapezoid weights are computed
+        from ``contrast_grid``.
+    """
+    if contrast_mode == "profile":
+        # Fast path: use original implementation (no overhead)
+        return _solve_batch_from_stats(
+            AU_t_images, AU_t_Amean, AU_t_AU,
+            image_norms_sq, image_T_A_mean, A_mean_norm_sq,
+            eigenvalues, contrast_grid, contrast_mean, contrast_variance,
+        )
+
+    # Map RECOVAR stat names to the solver's generic names
+    result, legacy = contrast_posterior.solve_latent_posterior(
+        H=AU_t_AU,
+        g=AU_t_images,
+        h=AU_t_Amean,
+        t=image_T_A_mean,
+        nu=A_mean_norm_sq,
+        y_norm_sq=image_norms_sq,
+        lambdas=eigenvalues,
+        contrast_mode=contrast_mode,
+        contrast_nodes=contrast_grid if contrast_mode != "none" else None,
+        contrast_weights=contrast_weights,
+        contrast_mean=float(contrast_mean),
+        contrast_variance=float(contrast_variance),
+        return_legacy=True,
+    )
+    return legacy.xs, legacy.contrasts, legacy.precision
+
+
 def get_per_image_embedding_multi_zdim(
     mean,
     u,
@@ -1384,6 +1441,7 @@ def get_per_image_embedding_multi_zdim(
     ignore_zero_frequency=False,
     contrast_mean=1,
     contrast_variance=np.inf,
+    contrast_mode=None,
 ):
     """Compute per-image embeddings for multiple n_pcs values in a single data pass.
 
@@ -1437,6 +1495,17 @@ def get_per_image_embedding_multi_zdim(
     cg_jax = jnp.array(cg)
     contrast_mean_jax = jnp.array(contrast_mean, dtype=jnp.float32)
     contrast_variance_jax = jnp.array(contrast_variance, dtype=jnp.float32)
+
+    # Resolve contrast_mode from contrast_option if not explicitly set
+    if contrast_mode is None:
+        contrast_mode = "profile" if use_contrast else "none"
+
+    # Precompute quadrature weights for marginalize mode
+    contrast_weights_jax = None
+    if contrast_mode == "marginalize":
+        _, contrast_weights_jax = contrast_posterior.make_contrast_quadrature(
+            rule="trapezoid", nodes=np.asarray(cg),
+        )
 
     # Cubic spline precompute — ONCE for max_n_pcs, not once per zdim.
     actual_disc_type = disc_type
@@ -1541,7 +1610,7 @@ def get_per_image_embedding_multi_zdim(
                 sub_AM = AU_t_Am[:, :n_pcs]
                 sub_AAU = AU_t_AU[:, :n_pcs, :n_pcs]
 
-                xs_r, c_r, cov_r = _solve_batch_from_stats(
+                xs_r, c_r, cov_r = _solve_batch_from_stats_v2(
                     sub_AI,
                     sub_AM,
                     sub_AAU,
@@ -1552,12 +1621,14 @@ def get_per_image_embedding_multi_zdim(
                     cg_jax,
                     contrast_mean_jax,
                     contrast_variance_jax,
+                    contrast_mode=contrast_mode,
+                    contrast_weights=contrast_weights_jax,
                 )
                 embeddings_reg[n_pcs]["latent_coords"][halfset_id][particles_ind] = np.asarray(xs_r).real
                 embeddings_reg[n_pcs]["latent_precision"][halfset_id][particles_ind] = np.asarray(cov_r).real
                 embeddings_reg[n_pcs]["contrasts"][halfset_id][batch_image_ind] = np.asarray(c_r)
 
-                xs_n, c_n, cov_n = _solve_batch_from_stats(
+                xs_n, c_n, cov_n = _solve_batch_from_stats_v2(
                     sub_AI,
                     sub_AM,
                     sub_AAU,
@@ -1568,6 +1639,8 @@ def get_per_image_embedding_multi_zdim(
                     cg_jax,
                     contrast_mean_jax,
                     contrast_variance_jax,
+                    contrast_mode=contrast_mode,
+                    contrast_weights=contrast_weights_jax,
                 )
                 embeddings_noreg[n_pcs]["latent_coords"][halfset_id][particles_ind] = np.asarray(xs_n).real
                 embeddings_noreg[n_pcs]["latent_precision"][halfset_id][particles_ind] = np.asarray(cov_n).real
