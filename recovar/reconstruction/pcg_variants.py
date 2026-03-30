@@ -134,59 +134,6 @@ def _matvec_half_vol(W_half, lhs_tri, reg_diag, mask, volume_shape,
     return _batched_mask_irfft_rfft(HPW_half, mask, volume_shape)
 
 
-def _matvec_reduced(x_mask, lhs_tri, reg_diag, mask_idx, volume_shape,
-                    q, unpack_fn=None):
-    """Reduced-coordinate matvec: gather → scatter → FFT → D → iFFT → gather.
-
-    x_mask: (n_mask, q) real — unknowns on masked voxels only.
-    mask_idx: (n_mask,) int — flat indices of masked voxels in (D,D,D).
-    Returns: (n_mask, q) real.
-    """
-    vol_size = int(np.prod(volume_shape))
-    half_vs = ftu.get_real_fft_packed_shape(volume_shape)
-    half_vol_size = int(np.prod(half_vs))
-
-    # Scatter to full grid
-    parts = []
-    for j0 in range(0, q, _PC_BATCH):
-        j1 = min(j0 + _PC_BATCH, q)
-        nb = j1 - j0
-        X_full = jnp.zeros((nb, vol_size), dtype=jnp.float32)
-        X_full = X_full.at[:, mask_idx].set(x_mask[:, j0:j1].T)
-        X_full = X_full.reshape(nb, *volume_shape)
-
-        # FFT
-        X_half = ftu.get_dft3_real(X_full).reshape(nb, half_vol_size)
-
-        # LHS multiply in half-volume
-        # D @ X for each voxel
-        is_tri = lhs_tri.ndim == 2 and lhs_tri.shape[1] != q
-        HX = reg_diag * X_half.T  # (half_vol, nb) — but reg is (half_vol, q)
-        # Need to handle the column subset: reg_diag[:, j0:j1]
-        HX = reg_diag[:, j0:j1] * X_half.T
-
-        for i0 in range(0, half_vol_size, _MATVEC_CHUNK):
-            i1 = min(i0 + _MATVEC_CHUNK, half_vol_size)
-            if is_tri:
-                lhs_chunk = unpack_fn(lhs_tri[i0:i1], q)
-            else:
-                lhs_chunk = lhs_tri[i0:i1]
-            # Full q×q matmul but only columns j0:j1 of input
-            # Need: sum_k lhs[v,j,k] * X[v,k] for j=0..q-1, k=j0..j1
-            # But we want output for all q rows, not just j0:j1
-            # Actually for the reduced matvec, we need the FULL operator
-            # applied to the scattered vector, then gathered back.
-            # The LHS is q×q per voxel and the input has all q components.
-            pass
-
-        parts.append(X_half)
-
-    # Actually, the reduced-coord matvec needs the FULL q-column vector
-    # scattered, not batched by PC. Let me redo this properly.
-    # This is a placeholder — the real implementation is below.
-    raise NotImplementedError("Use _matvec_reduced_v2")
-
-
 def _matvec_reduced_v2(x_mask, lhs_tri, reg_diag, mask_idx, volume_shape,
                        q, unpack_fn=None):
     """Reduced-coordinate matvec (correct version).
@@ -211,7 +158,9 @@ def _matvec_reduced_v2(x_mask, lhs_tri, reg_diag, mask_idx, volume_shape,
         j1 = min(j0 + _PC_BATCH, q)
         nb = j1 - j0
         X_full = jnp.zeros((nb, vol_size), dtype=jnp.float32)
-        X_full = X_full.at[:, mask_idx].set(x_mask[:, j0:j1].T)
+        X_full = X_full.at[:, mask_idx].set(
+            jnp.asarray(x_mask[:, j0:j1].T, dtype=jnp.float32)
+        )
         X_full = X_full.reshape(nb, *volume_shape)
         X_half_parts.append(
             ftu.get_dft3_real(X_full).reshape(nb, half_vol_size).T
@@ -286,7 +235,9 @@ def _precond_circulant_reduced(D_inv, mask_idx, volume_shape, q):
             j1 = min(j0 + _PC_BATCH, q)
             nb = j1 - j0
             R_full = jnp.zeros((nb, vol_size), dtype=jnp.float32)
-            R_full = R_full.at[:, mask_idx].set(r_mask[:, j0:j1].T)
+            R_full = R_full.at[:, mask_idx].set(
+                jnp.asarray(r_mask[:, j0:j1].T, dtype=jnp.float32)
+            )
             R_full = R_full.reshape(nb, *volume_shape)
             parts_half.append(
                 ftu.get_dft3_real(R_full).reshape(nb, half_vol_size).T
@@ -753,7 +704,7 @@ def solve_reduced_coord(lhs_tri, rhs_fourier, reg_diag, mask, volume_shape,
 
     # Scatter back to full volume
     W_real = jnp.zeros((q, vol_size), dtype=jnp.float32)
-    W_real = W_real.at[:, mask_idx].set(x_mask.T)
+    W_real = W_real.at[:, mask_idx].set(jnp.asarray(x_mask.T, dtype=jnp.float32))
     W_real = W_real.reshape(q, *volume_shape)
     info["label"] = "reduced_coord"
     info["n_mask"] = int(n_mask)
@@ -812,7 +763,7 @@ def solve_reduced_circulant(lhs_tri, rhs_fourier, reg_diag, mask,
                               ip, "Reduced-Circulant")
 
     W_real = jnp.zeros((q, vol_size), dtype=jnp.float32)
-    W_real = W_real.at[:, mask_idx].set(x_mask.T)
+    W_real = W_real.at[:, mask_idx].set(jnp.asarray(x_mask.T, dtype=jnp.float32))
     W_real = W_real.reshape(q, *volume_shape)
     info["label"] = "reduced_circulant"
     info["n_mask"] = int(n_mask)
@@ -872,7 +823,7 @@ def solve_reduced_jacobi(lhs_tri, rhs_fourier, reg_diag, mask, volume_shape,
                               ip, lbl)
 
     W_real = jnp.zeros((q, vol_size), dtype=jnp.float32)
-    W_real = W_real.at[:, mask_idx].set(x_mask.T)
+    W_real = W_real.at[:, mask_idx].set(jnp.asarray(x_mask.T, dtype=jnp.float32))
     W_real = W_real.reshape(q, *volume_shape)
     info["label"] = "reduced_block_jacobi" if block else "reduced_diag_jacobi"
     info["n_mask"] = int(n_mask)
@@ -993,7 +944,7 @@ def solve_reduced_two_level(lhs_tri, rhs_fourier, reg_diag, mask,
                               ip, "Two-Level")
 
     W_real = jnp.zeros((q, vol_size), dtype=jnp.float32)
-    W_real = W_real.at[:, mask_idx].set(x_mask.T)
+    W_real = W_real.at[:, mask_idx].set(jnp.asarray(x_mask.T, dtype=jnp.float32))
     W_real = W_real.reshape(q, *volume_shape)
     info["label"] = "two_level"
     info["n_mask"] = int(n_mask)
