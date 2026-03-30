@@ -83,52 +83,94 @@ $$c = \lfloor 0.04 \times D \rceil$$
 - 128^3: $c = 5$
 - 256^3: $c = 10$
 
-## Solver: unpreconditioned CG in reduced coordinates
+## Numerical scheme
 
-### Normal equations
+### Variables
 
-$$\big[\underbrace{P_\Omega\,G\,\mathcal{F}^{-1}[D\,\mathcal{F}[G\,\cdot\,]]
-  \,P_\Omega}_{\text{data operator}} + \underbrace{\lambda\,\text{diag}(\alpha)}_{\text{penalty}}\big]\,W
-  = P_\Omega\,G\,\mathcal{F}^{-1}[\hat{r}]$$
+Let $\Omega_S$ denote the outer support (mask dilated by $c + 3$),
+$n_S = |\Omega_S|$ its cardinality.
 
-where $P_\Omega$ is gather/scatter to the outer support.
+The unknown is $w \in \mathbb{R}^{n_S \times q}$ — the $q$ loading
+columns restricted to the support voxels.
 
-### Matvec (one CG iteration)
+### Operator
 
-For input $w$ on support voxels ($n_{\text{sup}} \times q$ reals):
+Define the linear operator $A : \mathbb{R}^{n_S \times q} \to \mathbb{R}^{n_S \times q}$:
 
-1. **Scatter** to full grid: $(n_\text{sup}, q) \to (q, D, D, D)$
-2. **Multiply by $G$** in real space: $w \gets G \cdot w$
-3. **rfft3** to half-volume Fourier: $(q, D, D, D/2+1)$ complex
-4. **$D \cdot$** per Fourier voxel: $q \times q$ matrix-vector, chunked
-5. **irfft3** back to real space
-6. **Multiply by $G$** again in real space
-7. **Gather** at support voxels
-8. **Add penalty**: $+ \lambda\,\alpha(x)\,w(x)$
+$$A\,w = P_S\,G\,\mathcal{F}^{-1}\!\big[D\;\mathcal{F}[G\,E_S\,w]\big]
+  + \lambda\,\text{diag}(\alpha_{|S})\,w$$
 
-Cost per CG iteration: 2 FFT pairs + 2 real-space pointwise + 1 chunked LHS multiply.
+where:
+- $E_S : \mathbb{R}^{n_S} \to \mathbb{R}^{D^3}$ scatters support values to the full grid (zero-fill)
+- $P_S : \mathbb{R}^{D^3} \to \mathbb{R}^{n_S}$ gathers from the full grid at support voxels
+- $G = \text{diag}(g)$ with $g(x) = \text{sinc}^2(x_1/D)\,\text{sinc}^2(x_2/D)\,\text{sinc}^2(x_3/D)$
+- $\mathcal{F}$ and $\mathcal{F}^{-1}$ are the 3D DFT and inverse DFT
+- $D(\xi) \in \mathbb{R}^{q \times q}$ is the per-voxel normal-equations matrix (SPD)
+- $\alpha_{|S}$ is the penalty weight restricted to the support
 
-### Warmstart
+The right-hand side is:
 
-At EM iteration $k > 0$, initialize CG from $W_{k-1}$ (previous M-step
-output, already deconvolved when gridding is in the objective).
+$$b = P_S\,G\,\mathcal{F}^{-1}[\hat{r}]$$
 
-At EM iteration 0 (cold start): per-voxel Fourier solve $D^{-1} r$, then
-iFFT and gather at support.
+where $\hat{r}(\xi) \in \mathbb{C}^q$ is the accumulated RHS from the E-step.
 
-### Convergence
+$A$ is SPD on $\mathbb{R}^{n_S \times q}$ (proof: $D \succ 0$, $G \geq 0$,
+$\alpha \geq 0$, and $G E_S P_S G$ is positive semidefinite).
 
-In float32, CG residuals are unreliable (oscillate due to rounding in the
-recurrence $r \gets r - \alpha Ap$). Periodic recomputation from scratch
-($r = b - Ax$ every 10 iterations) stabilizes tracking but does not fix
-the underlying float32 limitation.
+### CG algorithm
 
-Despite unreliable residuals, the CG **iterates** are still meaningful:
-RelVar improves steadily over EM iterations. The tolerance criterion
-(default $10^{-4}$) is effectively never reached; the solver always runs
-to maxiter.
+Standard unpreconditioned CG on $Aw = b$:
 
-Typical budget: 50 CG iterations per M-step, 20 EM iterations total.
+```
+r₀ = b - A w₀
+p₀ = r₀
+for k = 0, 1, ..., maxiter-1:
+    αₖ = (rₖ, rₖ) / (pₖ, A pₖ)
+    wₖ₊₁ = wₖ + αₖ pₖ
+    rₖ₊₁ = rₖ - αₖ A pₖ
+    if (k+1) mod 10 == 0:  rₖ₊₁ = b - A wₖ₊₁    # float32 stability
+    βₖ = (rₖ₊₁, rₖ₊₁) / (rₖ, rₖ)
+    pₖ₊₁ = rₖ₊₁ + βₖ pₖ
+```
+
+Inner product: standard Euclidean $(u, v) = \sum_{i,j} u_{ij} v_{ij}$.
+
+### Matvec evaluation
+
+Each application of $A w$ costs:
+
+| Step | Operation | Complexity |
+|------|-----------|------------|
+| 1 | $E_S w$: scatter to $(q, D^3)$ | $O(q \cdot n_S)$ |
+| 2 | $G \cdot$: pointwise multiply in real space | $O(q \cdot D^3)$ |
+| 3 | $\mathcal{F}$: rfft3 (batched over $q$) | $O(q \cdot D^3 \log D)$ |
+| 4 | $D(\xi) \cdot$: per-voxel $q \times q$ matvec | $O(q^2 \cdot D^3/2)$ |
+| 5 | $\mathcal{F}^{-1}$: irfft3 | $O(q \cdot D^3 \log D)$ |
+| 6 | $G \cdot$: pointwise multiply | $O(q \cdot D^3)$ |
+| 7 | $P_S$: gather at support | $O(q \cdot n_S)$ |
+| 8 | $+\lambda \alpha w$: penalty | $O(q \cdot n_S)$ |
+
+Total: $O(q \cdot D^3 \log D + q^2 \cdot D^3)$ per CG iteration.
+
+### Initialisation
+
+- **EM iteration $k > 0$**: warmstart from $w_{k-1}$ (previous M-step output)
+- **EM iteration 0**: cold start from per-voxel Fourier solve
+  $\hat{w}_0(\xi) = D(\xi)^{-1} \hat{r}(\xi)$, then iFFT + gather at support
+
+### Float32 considerations
+
+CG residuals in float32 are unreliable due to rounding in the recurrence
+$r \gets r - \alpha A p$. The true residual $||b - Aw||$ diverges from
+the tracked residual after ~5–10 iterations.
+
+Mitigation: recompute $r = b - Aw$ from scratch every 10 iterations.
+This stabilizes residual tracking but does not eliminate float32 error.
+
+Despite unreliable residuals, CG iterates are meaningful (RelVar improves
+steadily). Tolerance $10^{-4}$ is never reached; solver runs to maxiter.
+
+Budget: 50 CG iterations per M-step × 20 EM iterations = 1000 total.
 
 ## Implementation
 
