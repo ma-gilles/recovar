@@ -985,3 +985,221 @@ def solve_mask_projection(lhs_tri, rhs_fourier, reg_diag, mask,
         "n_iters": 0,
     }
     return W_real, info
+
+
+# =====================================================================
+# Clean soft-penalty formulation with smooth α(x)
+# =====================================================================
+
+def build_alpha_weight(binary_mask, collar_width=5, outer_dilate=3,
+                       alpha_max=1.0):
+    """Build a smooth penalty weight α(x) from a binary mask.
+
+    α(x) = 0            inside the core (far from boundary)
+    α(x) = smooth ramp  in the collar (near boundary, inside mask)
+    α(x) = alpha_max    outside the mask
+    α(x) = infinity     outside the hard outer support (handled separately)
+
+    Returns:
+      alpha: (D,D,D) float32 — penalty weight
+      outer_support: (D,D,D) float32 — generous hard outer support (binary)
+    """
+    from scipy.ndimage import binary_dilation, distance_transform_edt
+
+    binary_mask = np.asarray(binary_mask > 0.5, dtype=bool)
+
+    # distance_inside: distance to nearest boundary voxel, measured from inside
+    dist_inside = distance_transform_edt(binary_mask).astype(np.float32)
+    # distance_outside: distance from outside to nearest mask voxel
+    dist_outside = distance_transform_edt(~binary_mask).astype(np.float32)
+
+    # Signed distance: negative inside, positive outside
+    signed_dist = dist_outside - dist_inside
+
+    # Alpha weight:
+    # - Core (signed_dist < -collar_width): α = 0
+    # - Collar (-collar_width < signed_dist < 0): smooth ramp 0 → alpha_max
+    # - Outside (signed_dist > 0): α = alpha_max
+    alpha = np.zeros_like(signed_dist)
+    in_collar = (signed_dist > -collar_width) & (signed_dist <= 0)
+    alpha[in_collar] = alpha_max * 0.5 * (
+        1 + np.cos(np.pi * signed_dist[in_collar] / collar_width)
+    )
+    alpha[signed_dist > 0] = alpha_max
+
+    # Hard outer support: dilated mask beyond the collar
+    outer_support = binary_dilation(
+        binary_mask, iterations=outer_dilate + collar_width
+    ).astype(np.float32)
+
+    return alpha.astype(np.float32), outer_support
+
+
+def _matvec_soft_alpha_reduced(x_support, lhs_tri, reg_diag, alpha_support,
+                                support_idx, volume_shape, lam, q,
+                                unpack_fn=None):
+    """Matvec for soft-alpha-penalty on reduced support coordinates.
+
+    H w = [scatter → FFT → (LHS+reg) → iFFT → gather] + λ α(x) w(x)
+    """
+    Hw = _matvec_reduced_v2(x_support, lhs_tri, reg_diag, support_idx,
+                            volume_shape, q, unpack_fn)
+    Hw = Hw + lam * alpha_support[:, None] * x_support
+    return Hw
+
+
+def solve_soft_alpha(lhs_tri, rhs_fourier, reg_diag, mask, volume_shape,
+                     lam=100.0, collar_width=5, outer_dilate=3,
+                     W0_real=None, maxiter=50, tol=1e-6, unpack_fn=None):
+    """Soft-penalty-in-the-objective with smooth α(x).
+
+    min_w  Φ(w) + (λ/2) Σ_x α(x) |w(x)|²
+
+    α(x) = 0 in core, smooth ramp in collar, 1 outside.
+    Hard outer support for efficiency. Reduced coordinates on support.
+    """
+    q = rhs_fourier.shape[1]
+    half_vs = ftu.get_real_fft_packed_shape(volume_shape)
+    vol_size = int(np.prod(volume_shape))
+
+    mask_np = np.asarray(mask).reshape(volume_shape)
+    alpha, outer_support = build_alpha_weight(
+        mask_np, collar_width=collar_width, outer_dilate=outer_dilate,
+    )
+    alpha = jnp.array(alpha)
+    outer_support = jnp.array(outer_support)
+
+    support_flat = outer_support.reshape(-1)
+    support_idx = jnp.where(support_flat > 0.5)[0]
+    n_support = support_idx.shape[0]
+    alpha_support = alpha.reshape(-1)[support_idx]
+
+    n_mask = int(jnp.sum(jnp.array(mask_np).reshape(-1) > 0.5))
+
+    logger.info(
+        "Soft-alpha: n_mask=%d, n_support=%d (%.1f%%), collar=%d, λ=%.0f",
+        n_mask, n_support, 100 * n_support / vol_size, collar_width, lam,
+    )
+
+    def mv(x_sup):
+        return _matvec_soft_alpha_reduced(
+            x_sup, lhs_tri, reg_diag, alpha_support, support_idx,
+            volume_shape, lam, q, unpack_fn,
+        )
+
+    # Preconditioner: circulant D^{-1} on the support
+    _, D_inv = _precond_circulant_half(
+        lhs_tri, reg_diag, outer_support, volume_shape, q, unpack_fn
+    )
+    precond_apply = _precond_circulant_reduced(
+        D_inv, support_idx, volume_shape, q
+    )
+
+    # RHS gathered at support
+    rhs_parts = []
+    for j0 in range(0, q, _PC_BATCH):
+        j1 = min(j0 + _PC_BATCH, q)
+        nb = j1 - j0
+        rhs_r = ftu.get_idft3_real(
+            rhs_fourier[:, j0:j1].T.reshape(nb, *half_vs), volume_shape
+        )
+        rhs_parts.append(rhs_r.reshape(nb, vol_size)[:, support_idx].T)
+    rhs_sup = jnp.concatenate(rhs_parts, axis=1)
+
+    # Initial guess
+    if W0_real is not None:
+        W0 = jnp.asarray(W0_real).reshape(q, *volume_shape)
+        x0 = W0.reshape(q, vol_size)[:, support_idx].T
+    else:
+        W_init = _initial_guess_mask_projected(
+            lhs_tri, rhs_fourier, reg_diag, outer_support, volume_shape,
+            q, unpack_fn,
+        )
+        x0 = W_init.reshape(q, vol_size)[:, support_idx].T
+
+    ip = lambda a, b: float(jnp.sum(a * b))
+    x_sup, info = _cg_solve(mv, precond_apply, rhs_sup, x0, maxiter, tol,
+                             ip, f"Soft-Alpha(λ={lam},c={collar_width})")
+
+    W_real = jnp.zeros((q, vol_size), dtype=jnp.float32)
+    W_real = W_real.at[:, support_idx].set(
+        jnp.asarray(x_sup.T, dtype=jnp.float32)
+    )
+    W_real = W_real.reshape(q, *volume_shape)
+
+    info["label"] = f"soft_alpha_lam{lam}_c{collar_width}"
+    info["n_support"] = int(n_support)
+    info["n_mask"] = n_mask
+    info["collar_width"] = collar_width
+    info["lam"] = lam
+    return W_real, info
+
+
+def solve_soft_alpha_noprecond(lhs_tri, rhs_fourier, reg_diag, mask,
+                                volume_shape, lam=100.0, collar_width=5,
+                                outer_dilate=3, W0_real=None, maxiter=50,
+                                tol=1e-6, unpack_fn=None):
+    """Same as solve_soft_alpha but plain CG (no preconditioner)."""
+    q = rhs_fourier.shape[1]
+    half_vs = ftu.get_real_fft_packed_shape(volume_shape)
+    vol_size = int(np.prod(volume_shape))
+
+    mask_np = np.asarray(mask).reshape(volume_shape)
+    alpha, outer_support = build_alpha_weight(
+        mask_np, collar_width=collar_width, outer_dilate=outer_dilate,
+    )
+    alpha = jnp.array(alpha)
+    outer_support = jnp.array(outer_support)
+
+    support_flat = outer_support.reshape(-1)
+    support_idx = jnp.where(support_flat > 0.5)[0]
+    n_support = support_idx.shape[0]
+    alpha_support = alpha.reshape(-1)[support_idx]
+    n_mask = int(jnp.sum(jnp.array(mask_np).reshape(-1) > 0.5))
+
+    logger.info(
+        "Soft-alpha-NP: n_mask=%d, n_support=%d, collar=%d, λ=%.0f",
+        n_mask, n_support, collar_width, lam,
+    )
+
+    def mv(x_sup):
+        return _matvec_soft_alpha_reduced(
+            x_sup, lhs_tri, reg_diag, alpha_support, support_idx,
+            volume_shape, lam, q, unpack_fn,
+        )
+
+    # RHS
+    rhs_parts = []
+    for j0 in range(0, q, _PC_BATCH):
+        j1 = min(j0 + _PC_BATCH, q)
+        nb = j1 - j0
+        rhs_r = ftu.get_idft3_real(
+            rhs_fourier[:, j0:j1].T.reshape(nb, *half_vs), volume_shape
+        )
+        rhs_parts.append(rhs_r.reshape(nb, vol_size)[:, support_idx].T)
+    rhs_sup = jnp.concatenate(rhs_parts, axis=1)
+
+    if W0_real is not None:
+        W0 = jnp.asarray(W0_real).reshape(q, *volume_shape)
+        x0 = W0.reshape(q, vol_size)[:, support_idx].T
+    else:
+        W_init = _initial_guess_mask_projected(
+            lhs_tri, rhs_fourier, reg_diag, outer_support, volume_shape,
+            q, unpack_fn,
+        )
+        x0 = W_init.reshape(q, vol_size)[:, support_idx].T
+
+    ip = lambda a, b: float(jnp.sum(a * b))
+    x_sup, info = _cg_solve(mv, lambda r: r, rhs_sup, x0, maxiter, tol,
+                             ip, f"Soft-Alpha-NP(λ={lam},c={collar_width})")
+
+    W_real = jnp.zeros((q, vol_size), dtype=jnp.float32)
+    W_real = W_real.at[:, support_idx].set(
+        jnp.asarray(x_sup.T, dtype=jnp.float32)
+    )
+    W_real = W_real.reshape(q, *volume_shape)
+
+    info["label"] = f"soft_alpha_np_lam{lam}_c{collar_width}"
+    info["n_support"] = int(n_support)
+    info["n_mask"] = n_mask
+    return W_real, info
