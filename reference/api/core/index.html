@@ -2035,6 +2035,17 @@
 </li>
         
           <li class="md-nav__item">
+  <a href="#recovar.core.mask.make_mask" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_mask
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
   <a href="#recovar.core.mask.make_mask_from_half_maps" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3704,6 +3715,17 @@
     <span class="md-ellipsis">
       
         masking_options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#recovar.core.mask.make_mask" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        make_mask
       
     </span>
   </a>
@@ -5855,7 +5877,9 @@ half_image : if True, output images are rfft-packed <code>(n, H*(W//2+1))</code>
         <p>Real-space and Fourier-space mask generation and manipulation.</p>
 <p>Provides masks for the reconstruction pipeline:</p>
 <ul>
-<li><strong>Volume masks</strong>: <code>masking_options</code> (pipeline entry point), <code>make_mask_from_half_maps</code>,
+<li><strong>Volume masks</strong>: <code>make_mask</code> (standalone, RELION-style),
+  <code>make_mask_from_half_maps</code> (averages half-maps then calls <code>make_mask</code>),
+  <code>masking_options</code> (pipeline entry point),
   <code>make_mask_from_gt</code>, <code>make_union_gt_mask</code></li>
 <li><strong>Radial / spherical masks</strong>: <code>get_radial_mask</code>, <code>raised_cosine_mask</code>,
   <code>soft_mask_outside_map</code></li>
@@ -6049,17 +6073,209 @@ Defaults to <code>ceil(6 * N / 128)</code> where N is the grid size.</p>
 <div class="doc doc-object doc-function">
 
 
+<h3 id="recovar.core.mask.make_mask" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">make_mask</span><span class="p">(</span><span class="n">volume</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="s1">&#39;auto&#39;</span><span class="p">,</span> <span class="n">lowpass_sigma</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">extend</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">soft_edge</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">cleanup</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span></code>
+
+<a href="#recovar.core.mask.make_mask" class="headerlink" title="Permanent link">&para;</a></h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Create a solvent mask from a 3-D real-space volume.</p>
+<p>Follows the same conceptual pipeline as RELION's <code>relion_mask_create</code>:
+low-pass filter → threshold → (optional cleanup) → extend → soft cosine edge.</p>
+<p>Key differences from RELION:</p>
+<ul>
+<li>Gaussian low-pass in real space (RELION uses a Fourier-space raised-cosine).</li>
+<li><code>"auto"</code> threshold via Otsu's method (RELION requires a user-specified
+  density threshold, default 0.02 in postprocessing).</li>
+<li>Optional morphological cleanup (fill holes, keep largest connected
+  component) — RELION does not do this.</li>
+<li>Extension uses <code>distance_transform_edt</code> for spherical (Euclidean)
+  dilation, matching RELION's brute-force Euclidean approach.</li>
+<li>Soft edge uses <code>distance_transform_edt</code> + cosine (RELION computes
+  min-Euclidean-distance per voxel — mathematically equivalent).</li>
+</ul>
+<p>This function is the building block for :func:<code>make_mask_from_half_maps</code>
+and can also be called directly on any volume (e.g. a consensus
+reconstruction loaded from MRC).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>volume</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>3-D real-space array (e.g. averaged half-maps, or a single
+reconstruction).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>threshold</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>How to binarize.</p>
+<ul>
+<li><code>"auto"</code> (default): Otsu's method on voxels inside the radial
+  mask.</li>
+<li>A <code>float</code>: fixed density threshold (like RELION's
+  <code>--ini_threshold</code>, default 0.02 in postprocessing).</li>
+</ul>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;auto&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>lowpass_sigma</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Gaussian sigma in <strong>voxels</strong> for low-pass smoothing
+before thresholding.  <code>None</code> = auto (<code>max(2, N // 64)</code>).
+Set to <code>0</code> to disable.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>extend</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Extension (dilation) of the binary mask in <strong>voxels</strong>.
+<code>None</code> = auto (<code>ceil(6 * N / 128)</code>).
+(RELION postprocessing default: 3 pixels.)</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>soft_edge</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Width of the cosine soft edge in <strong>voxels</strong>.
+(RELION postprocessing default: 6 pixels.)</p>
+              </div>
+            </td>
+            <td>
+                  <code>3</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>cleanup</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If <code>True</code>, fill holes and keep only the largest connected
+component after thresholding (RELION does not do this).</p>
+              </div>
+            </td>
+            <td>
+                  <code>True</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Soft mask as a float32 array in [0, 1].</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+        <p>Example::</p>
+<div class="highlight"><pre><span></span><code>import mrcfile
+from recovar.core.mask import make_mask
+
+h1 = mrcfile.open(&quot;half1.mrc&quot;).data
+h2 = mrcfile.open(&quot;half2.mrc&quot;).data
+avg = (h1 + h2) / 2.0
+
+# Automatic (recommended)
+mask = make_mask(avg)
+
+# RELION-like with manual parameters
+mask = make_mask(avg, threshold=0.02, extend=3, soft_edge=6,
+                 lowpass_sigma=3, cleanup=False)
+</code></pre></div>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
 <h3 id="recovar.core.mask.make_mask_from_half_maps" class="doc doc-heading">
-            <code class="highlight language-python"><span class="n">make_mask_from_half_maps</span><span class="p">(</span><span class="n">halfmap1</span><span class="p">,</span> <span class="n">halfmap2</span><span class="p">,</span> <span class="n">smax</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span></code>
+            <code class="highlight language-python"><span class="n">make_mask_from_half_maps</span><span class="p">(</span><span class="n">halfmap1</span><span class="p">,</span> <span class="n">halfmap2</span><span class="p">,</span> <span class="n">smax</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span> <span class="n">method</span><span class="o">=</span><span class="s1">&#39;auto&#39;</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span></code>
 
 <a href="#recovar.core.mask.make_mask_from_half_maps" class="headerlink" title="Permanent link">&para;</a></h3>
 
 
     <div class="doc doc-contents ">
 
-        <p>Generate a binary mask from two real-space half-maps via local correlation.</p>
-<p>Computes a 3D local cross-correlation, thresholds it, dilates, and softens.
-Adapted from EMDA (https://emda.readthedocs.io/).</p>
+        <p>Generate a solvent mask from two real-space half-map volumes.</p>
+<p>Averages the two half-maps and delegates to :func:<code>make_mask</code>.
+All keyword arguments are forwarded to <code>make_mask</code>.</p>
+<p>For the legacy EMDA local-correlation method, pass
+<code>method="local_correlation"</code>.</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -6096,11 +6312,42 @@ Adapted from EMDA (https://emda.readthedocs.io/).</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Kernel radius in pixels for the local correlation.</p>
+                <p>Kernel radius in pixels (only for <code>method="local_correlation"</code>).</p>
               </div>
             </td>
             <td>
                   <code>3</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>method</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>"auto"</code> or <code>"local_correlation"</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;auto&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>**kwargs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Forwarded to :func:<code>make_mask</code> (<code>threshold</code>,
+<code>lowpass_sigma</code>, <code>extend</code>, <code>soft_edge</code>, <code>cleanup</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>{}</code>
             </td>
           </tr>
       </tbody>
