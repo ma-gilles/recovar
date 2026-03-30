@@ -103,8 +103,22 @@ export interface SubsetEntry {
   name: string;
   n_particles: number;
   source_job_id?: string | null;
+  zdim?: number | null;
   method?: Record<string, unknown> | null;
   created: string;
+}
+
+export interface SubsetProvenance {
+  id: string;
+  name: string;
+  n_particles: number;
+  source_job_id?: string | null;
+  source_job_name?: string | null;
+  zdim?: number | null;
+  method?: Record<string, unknown> | null;
+  created: string;
+  ind_path: string;
+  star_exports: string[];
 }
 
 export interface SystemInfo {
@@ -276,6 +290,10 @@ export function listSubsets(projectId: string): Promise<SubsetEntry[]> {
 
 export function deleteSubset(id: string): Promise<void> {
   return request(`/subsets/${id}`, { method: "DELETE" });
+}
+
+export function getSubsetProvenance(id: string): Promise<SubsetProvenance> {
+  return request(`/subsets/${id}/provenance`);
 }
 
 export function exportSubsetStar(

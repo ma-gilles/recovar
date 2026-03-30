@@ -2,6 +2,10 @@ import { useEffect, useRef, useCallback, useState } from "react";
 import { clsx } from "clsx";
 import type { SelectionTool } from "./SelectionToolbar";
 
+/** Crosshair marker size (radius in px) and style */
+const CROSSHAIR_SIZE = 8;
+const CROSSHAIR_COLOR = "#facc15"; // yellow-400
+
 // D3 categorical 10 colors for k-means clusters
 const CLUSTER_COLORS = [
   [31, 119, 180], [255, 127, 14], [44, 160, 44], [214, 39, 40],
@@ -31,6 +35,10 @@ interface ScatterPanelProps {
   panelId: string;
   /** Active selection tool (null = no selection mode, just click) */
   activeTool?: SelectionTool | null;
+  /** Index of the point being hovered (from this or another panel) */
+  hoveredIndex?: number | null;
+  /** Called when mouse hovers over a point (-1 or null = no point) */
+  onHover?: (index: number | null) => void;
 }
 
 /**
@@ -48,12 +56,17 @@ export function ScatterPanel({
   selectedIndices,
   panelId: _panelId,
   activeTool = null,
+  hoveredIndex = null,
+  onHover,
 }: ScatterPanelProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
   // Lasso: freehand path; Rectangle: [start, current]; Polygon: vertices
   const shapePointsRef = useRef<[number, number][]>([]);
   const transformRef = useRef({ scaleX: 1, scaleY: 1, offsetX: 0, offsetY: 0 });
+  const hoverRafRef = useRef<number>(0);
+  const lastHoverIndexRef = useRef<number | null>(null);
 
   const n = points.length / 2;
 
@@ -173,9 +186,51 @@ export function ScatterPanel({
     }
   }, [points, n, labels, markers, selectedIndices, getBounds, activeTool]);
 
+  /** Draw crosshair on the overlay canvas for the hovered point */
+  const drawCrosshair = useCallback(() => {
+    const overlay = overlayRef.current;
+    if (!overlay) return;
+    const ctx = overlay.getContext("2d");
+    if (!ctx) return;
+    const w = overlay.width;
+    const h = overlay.height;
+    ctx.clearRect(0, 0, w, h);
+
+    if (hoveredIndex == null || hoveredIndex < 0 || hoveredIndex >= n) return;
+
+    const t = transformRef.current;
+    const cx = (points[hoveredIndex * 2] - t.offsetX) * t.scaleX;
+    const cy = h - (points[hoveredIndex * 2 + 1] - t.offsetY) * t.scaleY;
+
+    // Draw crosshair
+    ctx.strokeStyle = CROSSHAIR_COLOR;
+    ctx.lineWidth = 1.5;
+
+    // Horizontal line
+    ctx.beginPath();
+    ctx.moveTo(cx - CROSSHAIR_SIZE, cy);
+    ctx.lineTo(cx + CROSSHAIR_SIZE, cy);
+    ctx.stroke();
+
+    // Vertical line
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - CROSSHAIR_SIZE);
+    ctx.lineTo(cx, cy + CROSSHAIR_SIZE);
+    ctx.stroke();
+
+    // Ring
+    ctx.beginPath();
+    ctx.arc(cx, cy, CROSSHAIR_SIZE * 0.6, 0, Math.PI * 2);
+    ctx.stroke();
+  }, [hoveredIndex, points, n]);
+
   useEffect(() => {
     draw();
   }, [draw]);
+
+  useEffect(() => {
+    drawCrosshair();
+  }, [drawCrosshair]);
 
   // Resize observer
   useEffect(() => {
@@ -187,11 +242,16 @@ export function ScatterPanel({
     const ro = new ResizeObserver(() => {
       canvas.width = parent.clientWidth;
       canvas.height = parent.clientHeight;
+      if (overlayRef.current) {
+        overlayRef.current.width = parent.clientWidth;
+        overlayRef.current.height = parent.clientHeight;
+      }
       draw();
+      drawCrosshair();
     });
     ro.observe(parent);
     return () => ro.disconnect();
-  }, [draw]);
+  }, [draw, drawCrosshair]);
 
   // Clear shape when tool changes
   useEffect(() => {
@@ -264,21 +324,52 @@ export function ScatterPanel({
   }, [onSelect, activeTool]);
 
   const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isDrawing) return;
     const rect = canvasRef.current!.getBoundingClientRect();
     const px = e.clientX - rect.left;
     const py = e.clientY - rect.top;
 
-    const currentTool = activeTool ?? (e.shiftKey ? "lasso" : null);
+    // Selection drawing
+    if (isDrawing) {
+      const currentTool = activeTool ?? (e.shiftKey ? "lasso" : null);
 
-    if (currentTool === "lasso") {
-      shapePointsRef.current.push([px, py]);
-      draw();
-    } else if (currentTool === "rectangle") {
-      shapePointsRef.current[1] = [px, py];
-      draw();
+      if (currentTool === "lasso") {
+        shapePointsRef.current.push([px, py]);
+        draw();
+      } else if (currentTool === "rectangle") {
+        shapePointsRef.current[1] = [px, py];
+        draw();
+      }
+      return;
     }
-  }, [isDrawing, activeTool, draw]);
+
+    // Hover detection (throttled via rAF)
+    if (!onHover) return;
+    if (hoverRafRef.current) return; // already scheduled
+    hoverRafRef.current = requestAnimationFrame(() => {
+      hoverRafRef.current = 0;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const h = canvas.height;
+      const t = transformRef.current;
+
+      let bestDist = 20; // max pixel distance for hover
+      let bestIdx: number | null = null;
+      for (let i = 0; i < n; i++) {
+        const cx = (points[i * 2] - t.offsetX) * t.scaleX;
+        const cy = h - (points[i * 2 + 1] - t.offsetY) * t.scaleY;
+        const d = Math.sqrt((px - cx) ** 2 + (py - cy) ** 2);
+        if (d < bestDist) {
+          bestDist = d;
+          bestIdx = i;
+        }
+      }
+
+      if (bestIdx !== lastHoverIndexRef.current) {
+        lastHoverIndexRef.current = bestIdx;
+        onHover(bestIdx);
+      }
+    });
+  }, [isDrawing, activeTool, draw, onHover, points, n]);
 
   const handleMouseUp = useCallback(() => {
     if (!isDrawing || !onSelect) {
@@ -385,6 +476,22 @@ export function ScatterPanel({
     [activeTool, onSelect, draw, selectPointsInPolygon]
   );
 
+  const handleMouseLeave = useCallback(() => {
+    if (onHover && lastHoverIndexRef.current !== null) {
+      lastHoverIndexRef.current = null;
+      onHover(null);
+    }
+  }, [onHover]);
+
+  // Clean up rAF on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverRafRef.current) {
+        cancelAnimationFrame(hoverRafRef.current);
+      }
+    };
+  }, []);
+
   const isSelecting = activeTool !== null || isDrawing;
 
   return (
@@ -396,10 +503,18 @@ export function ScatterPanel({
       >
         <canvas
           ref={canvasRef}
-          className={clsx("w-full h-full", isSelecting && "cursor-crosshair")}
+          className="w-full h-full"
+        />
+        <canvas
+          ref={overlayRef}
+          className={clsx(
+            "absolute inset-0 w-full h-full",
+            isSelecting && "cursor-crosshair"
+          )}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseLeave}
           onClick={handleCanvasClick}
           onDoubleClick={handleDoubleClick}
         />

@@ -13,6 +13,7 @@ import { Spinner } from "../ui/spinner";
 import { ScatterPanel } from "./ScatterPanel";
 import { HistogramPanel } from "./HistogramPanel";
 import { SelectionToolbar, type SelectionTool } from "./SelectionToolbar";
+import { SubsetProvenanceButton, SubsetProvenanceSummary } from "./SubsetProvenance";
 import { SUBSAMPLE_THRESHOLD, DISPLAY_SUBSAMPLE_SIZE } from "../../lib/constants";
 
 interface LatentExplorerProps {
@@ -38,6 +39,7 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: L
   const [selectionTool, setSelectionTool] = useState<SelectionTool | null>(null);
   const [markers, setMarkers] = useState<MarkerPoint[]>([]);
   const [showComputeDialog, setShowComputeDialog] = useState(false);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
   // Available zdims
   const { data: available } = useQuery({
@@ -337,6 +339,8 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: L
                 selectedIndices={selectedIndices}
                 panelId="pca"
                 activeTool={selectionTool}
+                hoveredIndex={hoveredIndex}
+                onHover={setHoveredIndex}
               />
             )}
             {umapPoints.length > 0 && (
@@ -352,6 +356,8 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: L
                 selectedIndices={selectedIndices}
                 panelId="umap"
                 activeTool={selectionTool}
+                hoveredIndex={hoveredIndex}
+                onHover={setHoveredIndex}
               />
             )}
           </div>
@@ -407,28 +413,37 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: L
           {subsetMutation.isSuccess && (
             <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-400">
               <div className="flex items-center justify-between">
-                <span>
-                  Subset exported: {(subsetMutation.data as { name: string; path: string }).name} (
-                  {(subsetMutation.data as { n_particles: number }).n_particles.toLocaleString()}{" "}
-                  particles) — {(subsetMutation.data as { path: string }).path}
-                </span>
-                {particlesStar && particlesStar.endsWith(".star") && (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="ml-3 shrink-0"
-                    onClick={() => {
-                      starExportMutation.mutate({
-                        subsetId: (subsetMutation.data as { id: string }).id,
-                        particlesStar: particlesStar,
-                      });
-                    }}
-                    loading={starExportMutation.isPending}
-                  >
-                    <FileSpreadsheet className="h-3.5 w-3.5" />
-                    Export .star
-                  </Button>
-                )}
+                <div className="flex items-center gap-2">
+                  <SubsetProvenanceSummary
+                    name={(subsetMutation.data as { name: string }).name}
+                    nParticles={(subsetMutation.data as { n_particles: number }).n_particles}
+                    zdim={effectiveZdim}
+                    selectionTool={selectionTool}
+                    sourceJobId={jobId}
+                  />
+                  <SubsetProvenanceButton
+                    subsetId={(subsetMutation.data as { id: string }).id}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  {particlesStar && particlesStar.endsWith(".star") && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="shrink-0"
+                      onClick={() => {
+                        starExportMutation.mutate({
+                          subsetId: (subsetMutation.data as { id: string }).id,
+                          particlesStar: particlesStar,
+                        });
+                      }}
+                      loading={starExportMutation.isPending}
+                    >
+                      <FileSpreadsheet className="h-3.5 w-3.5" />
+                      Export .star
+                    </Button>
+                  )}
+                </div>
               </div>
               {starExportMutation.isSuccess && (
                 <div className="mt-1 text-emerald-400">

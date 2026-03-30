@@ -55,6 +55,7 @@ class SubsetDetailResponse(BaseModel):
     name: str
     n_particles: int
     source_job_id: str | None = None
+    zdim: int | None = None
     method: dict | None = None
     created: str
     ind_path: str
@@ -65,8 +66,22 @@ class SubsetListEntry(BaseModel):
     name: str
     n_particles: int
     source_job_id: str | None = None
+    zdim: int | None = None
     method: dict | None = None
     created: str
+
+
+class SubsetProvenanceResponse(BaseModel):
+    id: str
+    name: str
+    n_particles: int
+    source_job_id: str | None = None
+    source_job_name: str | None = None
+    zdim: int | None = None
+    method: dict | None = None
+    created: str
+    ind_path: str
+    star_exports: list[str]
 
 
 class ExportStarRequest(BaseModel):
@@ -159,6 +174,7 @@ async def list_subsets(project_id: str = Query(...)) -> list[SubsetListEntry]:
                 name=s.name,
                 n_particles=s.n_particles,
                 source_job_id=s.source_job_id,
+                zdim=s.zdim,
                 method=s.method,
                 created=s.created_at.isoformat(),
             )
@@ -183,6 +199,7 @@ async def get_subset(subset_id: str) -> SubsetDetailResponse:
                     name=subset.name,
                     n_particles=subset.n_particles,
                     source_job_id=subset.source_job_id,
+                    zdim=subset.zdim,
                     method=subset.method,
                     created=subset.created_at.isoformat(),
                     ind_path=subset.ind_path,
@@ -206,6 +223,54 @@ async def delete_subset(subset_id: str) -> None:
                 await session.delete(subset)
                 await session.commit()
                 return
+
+    raise HTTPException(status_code=404, detail="Subset not found")
+
+
+@router.get("/{subset_id}/provenance", response_model=SubsetProvenanceResponse)
+async def get_subset_provenance(subset_id: str) -> SubsetProvenanceResponse:
+    """Return full creation provenance for a subset."""
+    from recovar.gui_v2.backend.api.project import _project_registry
+    from recovar.gui_v2.backend.models.job import Job
+
+    for _pid, ppath in _project_registry.items():
+        db_path = get_db_path(ppath)
+        session_factory = await init_db(db_path)
+        async with session_factory() as session:
+            stmt = select(Subset).where(Subset.id == subset_id)
+            result = await session.execute(stmt)
+            subset = result.scalar_one_or_none()
+            if subset:
+                # Look up source job name if available
+                source_job_name: str | None = None
+                if subset.source_job_id:
+                    job_stmt = select(Job).where(Job.id == subset.source_job_id)
+                    job_result = await session.execute(job_stmt)
+                    job = job_result.scalar_one_or_none()
+                    if job:
+                        source_job_name = f"{job.type} ({job.output_dir})"
+
+                # Find .star exports (files with same base name in subsets dir)
+                star_exports: list[str] = []
+                subsets_dir = os.path.dirname(subset.ind_path)
+                if os.path.isdir(subsets_dir):
+                    safe_name = os.path.splitext(os.path.basename(subset.ind_path))[0]
+                    for fname in os.listdir(subsets_dir):
+                        if fname.endswith(".star") and fname.startswith(safe_name):
+                            star_exports.append(os.path.join(subsets_dir, fname))
+
+                return SubsetProvenanceResponse(
+                    id=subset.id,
+                    name=subset.name,
+                    n_particles=subset.n_particles,
+                    source_job_id=subset.source_job_id,
+                    source_job_name=source_job_name,
+                    zdim=subset.zdim,
+                    method=subset.method,
+                    created=subset.created_at.isoformat(),
+                    ind_path=subset.ind_path,
+                    star_exports=star_exports,
+                )
 
     raise HTTPException(status_code=404, detail="Subset not found")
 
