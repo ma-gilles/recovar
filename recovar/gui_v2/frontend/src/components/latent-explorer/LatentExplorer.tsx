@@ -1,23 +1,26 @@
 import { useState, useCallback, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { Download, Target, Route, Crosshair } from "lucide-react";
+import { Download, Target, Route, Crosshair, FileSpreadsheet } from "lucide-react";
 import {
   fetchEmbeddings,
   fetchAvailableEmbeddings,
   projectPCA,
 } from "../../lib/api/embeddings";
-import { createSubset, submitJob } from "../../lib/api/client";
+import { createSubset, exportSubsetStar, submitJob } from "../../lib/api/client";
 import { Button } from "../ui/button";
 import { Select } from "../ui/select";
 import { Spinner } from "../ui/spinner";
 import { ScatterPanel } from "./ScatterPanel";
 import { HistogramPanel } from "./HistogramPanel";
+import { SelectionToolbar, type SelectionTool } from "./SelectionToolbar";
 import { SUBSAMPLE_THRESHOLD, DISPLAY_SUBSAMPLE_SIZE } from "../../lib/constants";
 
 interface LatentExplorerProps {
   jobId: string;
   projectId: string;
   resultDir: string;
+  /** Path to the original particles .star file (from the pipeline job params). */
+  particlesStar?: string | null;
 }
 
 interface MarkerPoint {
@@ -26,12 +29,13 @@ interface MarkerPoint {
   label: string;
 }
 
-export function LatentExplorer({ jobId, projectId, resultDir }: LatentExplorerProps): React.JSX.Element {
+export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: LatentExplorerProps): React.JSX.Element {
   const [zdim, setZdim] = useState<number | null>(null);
   const [pcaAxisX, setPcaAxisX] = useState(0);
   const [pcaAxisY, setPcaAxisY] = useState(1);
   const [colorBy, setColorBy] = useState<"none" | "kmeans">("kmeans");
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [selectionTool, setSelectionTool] = useState<SelectionTool | null>(null);
   const [markers, setMarkers] = useState<MarkerPoint[]>([]);
   const [showComputeDialog, setShowComputeDialog] = useState(false);
 
@@ -146,9 +150,13 @@ export function LatentExplorer({ jobId, projectId, resultDir }: LatentExplorerPr
     [embeddings, markers]
   );
 
-  // Lasso handler
-  const handleLasso = useCallback((indices: number[]) => {
+  // Selection handler (lasso, rectangle, polygon all produce the same output)
+  const handleSelect = useCallback((indices: number[]) => {
     setSelectedIndices(new Set(indices));
+  }, []);
+
+  const handleClearSelection = useCallback(() => {
+    setSelectedIndices(new Set());
   }, []);
 
   // Subset export mutation
@@ -164,10 +172,16 @@ export function LatentExplorer({ jobId, projectId, resultDir }: LatentExplorerPr
         name: params.name,
         source_job_id: jobId,
         zdim: effectiveZdim ?? undefined,
-        method: { type: "lasso" as const, plot: "pca", axes: [pcaAxisX, pcaAxisY], vertices: [] },
+        method: { type: selectionTool ?? "lasso", plot: "pca", axes: [pcaAxisX, pcaAxisY], vertices: [] },
         indices: finalIndices,
       });
     },
+  });
+
+  // Star export mutation — exports a previously created subset as a filtered .star file
+  const starExportMutation = useMutation({
+    mutationFn: (params: { subsetId: string; particlesStar: string }) =>
+      exportSubsetStar(params.subsetId, params.particlesStar),
   });
 
   // Compute state/trajectory
@@ -289,6 +303,16 @@ export function LatentExplorer({ jobId, projectId, resultDir }: LatentExplorerPr
         </div>
       ) : embeddings ? (
         <>
+          {/* Selection toolbar */}
+          {effectiveZdim !== 1 && (
+            <SelectionToolbar
+              activeTool={selectionTool}
+              onToolChange={setSelectionTool}
+              onClearSelection={handleClearSelection}
+              hasSelection={selectedIndices.size > 0}
+            />
+          )}
+
           {/* Scatter or histogram panels */}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {effectiveZdim === 1 ? (
@@ -308,10 +332,11 @@ export function LatentExplorer({ jobId, projectId, resultDir }: LatentExplorerPr
                 xLabel={`PC${pcaAxisX + 1}`}
                 yLabel={`PC${pcaAxisY + 1}`}
                 title="PCA"
-                onLasso={handleLasso}
+                onSelect={handleSelect}
                 onPointClick={handlePointClick}
                 selectedIndices={selectedIndices}
                 panelId="pca"
+                activeTool={selectionTool}
               />
             )}
             {umapPoints.length > 0 && (
@@ -322,10 +347,11 @@ export function LatentExplorer({ jobId, projectId, resultDir }: LatentExplorerPr
                 xLabel="UMAP 1"
                 yLabel="UMAP 2"
                 title="UMAP"
-                onLasso={handleLasso}
+                onSelect={handleSelect}
                 onPointClick={handlePointClick}
                 selectedIndices={selectedIndices}
                 panelId="umap"
+                activeTool={selectionTool}
               />
             )}
           </div>
@@ -379,10 +405,42 @@ export function LatentExplorer({ jobId, projectId, resultDir }: LatentExplorerPr
           )}
 
           {subsetMutation.isSuccess && (
-            <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-400">
-              Subset exported: {(subsetMutation.data as { name: string }).name} (
-              {(subsetMutation.data as { n_particles: number }).n_particles.toLocaleString()}{" "}
-              particles)
+            <div className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-400">
+              <div className="flex items-center justify-between">
+                <span>
+                  Subset exported: {(subsetMutation.data as { name: string; path: string }).name} (
+                  {(subsetMutation.data as { n_particles: number }).n_particles.toLocaleString()}{" "}
+                  particles) — {(subsetMutation.data as { path: string }).path}
+                </span>
+                {particlesStar && particlesStar.endsWith(".star") && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="ml-3 shrink-0"
+                    onClick={() => {
+                      starExportMutation.mutate({
+                        subsetId: (subsetMutation.data as { id: string }).id,
+                        particlesStar: particlesStar,
+                      });
+                    }}
+                    loading={starExportMutation.isPending}
+                  >
+                    <FileSpreadsheet className="h-3.5 w-3.5" />
+                    Export .star
+                  </Button>
+                )}
+              </div>
+              {starExportMutation.isSuccess && (
+                <div className="mt-1 text-emerald-400">
+                  RELION .star exported: {starExportMutation.data.path} (
+                  {starExportMutation.data.n_particles.toLocaleString()} particles)
+                </div>
+              )}
+              {starExportMutation.isError && (
+                <div className="mt-1 text-red-400">
+                  .star export failed: {(starExportMutation.error as Error).message}
+                </div>
+              )}
             </div>
           )}
 

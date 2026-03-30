@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   RotateCcw,
@@ -13,6 +13,11 @@ import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { MAX_PINNED_VOLUMES } from "../../lib/constants";
 import { VtkViewer, VtkErrorBoundary } from "./VtkViewer";
+import {
+  TrajectoryPlayer,
+  getTrajectoryVolumes,
+  isTrajectoryVolume,
+} from "./TrajectoryPlayer";
 
 const VOLUME_COLOR_HEX = ["#38bdf8", "#fb7185", "#34d399", "#fbbf24"];
 
@@ -47,6 +52,36 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
 
   const activeCategory = volumes?.find((v) => v.path === activeVolume)?.category;
 
+  // Trajectory detection
+  const trajectoryVolumes = useMemo(
+    () => (volumes ? getTrajectoryVolumes(volumes) : []),
+    [volumes]
+  );
+  const [trajectoryActive, setTrajectoryActive] = useState(false);
+  const isInTrajectory =
+    !!activeVolume && isTrajectoryVolume(activeVolume, trajectoryVolumes);
+  const showTrajectory = isInTrajectory && trajectoryVolumes.length >= 2;
+
+  // Compute prefetch paths: the next few frames in the trajectory
+  const prefetchPaths = useMemo(() => {
+    if (!showTrajectory || !activeVolume) return undefined;
+    const idx = trajectoryVolumes.findIndex((v) => v.path === activeVolume);
+    if (idx < 0) return undefined;
+    const ahead: string[] = [];
+    // Prefetch next 3 frames
+    for (let i = 1; i <= 3; i++) {
+      const nextIdx = (idx + i) % trajectoryVolumes.length;
+      ahead.push(trajectoryVolumes[nextIdx].path);
+    }
+    return ahead;
+  }, [showTrajectory, activeVolume, trajectoryVolumes]);
+
+  // Handle trajectory frame changes
+  const handleTrajectoryFrame = useCallback((path: string) => {
+    setActiveVolume(path);
+    setTrajectoryActive(true);
+  }, []);
+
   // Load volume info for the active volume
   const { data: volInfo } = useQuery({
     queryKey: ["volume-info", activeVolume],
@@ -70,6 +105,7 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
     (path: string, _name: string) => {
       setActiveVolume(path);
       setSliceIdx(0);
+      setTrajectoryActive(false);
     },
     []
   );
@@ -211,12 +247,23 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
                 pinnedVolumes={pinnedVolumes}
                 activeSigma={activeSigma}
                 activeCategory={activeCategory}
+                preserveCamera={trajectoryActive}
+                prefetchPaths={prefetchPaths}
               />
             </VtkErrorBoundary>
           ) : (
             <Spinner label="Loading..." />
           )}
         </div>
+
+        {/* Trajectory playback bar */}
+        {showTrajectory && viewMode === "3d" && activeVolume && (
+          <TrajectoryPlayer
+            volumes={trajectoryVolumes}
+            currentFrame={activeVolume}
+            onFrameChange={handleTrajectoryFrame}
+          />
+        )}
 
         {/* Volume info */}
         {volInfo && (

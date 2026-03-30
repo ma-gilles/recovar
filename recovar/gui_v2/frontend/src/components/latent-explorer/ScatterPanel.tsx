@@ -1,6 +1,6 @@
 import { useEffect, useRef, useCallback, useState } from "react";
 import { clsx } from "clsx";
-import { MousePointerClick } from "lucide-react";
+import type { SelectionTool } from "./SelectionToolbar";
 
 // D3 categorical 10 colors for k-means clusters
 const CLUSTER_COLORS = [
@@ -21,20 +21,20 @@ interface ScatterPanelProps {
   yLabel: string;
   /** Title */
   title: string;
-  /** Lasso selection callback */
-  onLasso?: (indices: number[]) => void;
+  /** Selection callback (from any tool: lasso, rectangle, polygon) */
+  onSelect?: (indices: number[]) => void;
   /** Point click callback */
   onPointClick?: (index: number, coords: [number, number]) => void;
   /** Currently selected indices */
   selectedIndices?: Set<number>;
   /** Panel ID for cross-linking */
   panelId: string;
+  /** Active selection tool (null = no selection mode, just click) */
+  activeTool?: SelectionTool | null;
 }
 
 /**
- * Canvas-based scatter plot panel.
- * Uses 2D canvas for broad compatibility; regl-scatterplot can be swapped in
- * when the npm package is installed.
+ * Canvas-based scatter plot panel with lasso, rectangle, and polygon selection.
  */
 export function ScatterPanel({
   points,
@@ -43,14 +43,16 @@ export function ScatterPanel({
   xLabel,
   yLabel,
   title,
-  onLasso,
+  onSelect,
   onPointClick,
   selectedIndices,
   panelId: _panelId,
+  activeTool = null,
 }: ScatterPanelProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [isLassoing, setIsLassoing] = useState(false);
-  const lassoPointsRef = useRef<[number, number][]>([]);
+  const [isDrawing, setIsDrawing] = useState(false);
+  // Lasso: freehand path; Rectangle: [start, current]; Polygon: vertices
+  const shapePointsRef = useRef<[number, number][]>([]);
   const transformRef = useRef({ scaleX: 1, scaleY: 1, offsetX: 0, offsetY: 0 });
 
   const n = points.length / 2;
@@ -126,20 +128,50 @@ export function ScatterPanel({
       }
     }
 
-    // Draw lasso path
-    if (lassoPointsRef.current.length > 1) {
-      ctx.beginPath();
-      ctx.moveTo(lassoPointsRef.current[0][0], lassoPointsRef.current[0][1]);
-      for (let i = 1; i < lassoPointsRef.current.length; i++) {
-        ctx.lineTo(lassoPointsRef.current[i][0], lassoPointsRef.current[i][1]);
-      }
+    // Draw selection shape overlay
+    const pts = shapePointsRef.current;
+    if (pts.length > 0) {
       ctx.strokeStyle = "rgba(59, 130, 246, 0.8)";
       ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 4]);
-      ctx.stroke();
+
+      if (activeTool === "lasso" && pts.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i][0], pts[i][1]);
+        }
+        ctx.stroke();
+      } else if (activeTool === "rectangle" && pts.length === 2) {
+        const [start, end] = pts;
+        const rx = Math.min(start[0], end[0]);
+        const ry = Math.min(start[1], end[1]);
+        const rw = Math.abs(end[0] - start[0]);
+        const rh = Math.abs(end[1] - start[1]);
+        ctx.strokeRect(rx, ry, rw, rh);
+        // Semi-transparent fill
+        ctx.fillStyle = "rgba(59, 130, 246, 0.08)";
+        ctx.fillRect(rx, ry, rw, rh);
+      } else if (activeTool === "polygon" && pts.length > 0) {
+        ctx.beginPath();
+        ctx.moveTo(pts[0][0], pts[0][1]);
+        for (let i = 1; i < pts.length; i++) {
+          ctx.lineTo(pts[i][0], pts[i][1]);
+        }
+        ctx.stroke();
+        // Draw vertices as small circles
+        ctx.setLineDash([]);
+        for (const pt of pts) {
+          ctx.beginPath();
+          ctx.arc(pt[0], pt[1], 3, 0, Math.PI * 2);
+          ctx.fillStyle = "rgba(59, 130, 246, 0.9)";
+          ctx.fill();
+        }
+      }
+
       ctx.setLineDash([]);
     }
-  }, [points, n, labels, markers, selectedIndices, getBounds]);
+  }, [points, n, labels, markers, selectedIndices, getBounds, activeTool]);
 
   useEffect(() => {
     draw();
@@ -161,37 +193,14 @@ export function ScatterPanel({
     return () => ro.disconnect();
   }, [draw]);
 
-  // Mouse handlers for lasso and click
-  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (e.shiftKey && onLasso) {
-      setIsLassoing(true);
-      const rect = canvasRef.current!.getBoundingClientRect();
-      lassoPointsRef.current = [[e.clientX - rect.left, e.clientY - rect.top]];
-    }
-  }, [onLasso]);
+  // Clear shape when tool changes
+  useEffect(() => {
+    shapePointsRef.current = [];
+    setIsDrawing(false);
+  }, [activeTool]);
 
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-    if (!isLassoing) return;
-    const rect = canvasRef.current!.getBoundingClientRect();
-    lassoPointsRef.current.push([e.clientX - rect.left, e.clientY - rect.top]);
-    draw();
-  }, [isLassoing, draw]);
-
-  const handleMouseUp = useCallback(() => {
-    if (!isLassoing || !onLasso) {
-      setIsLassoing(false);
-      return;
-    }
-    setIsLassoing(false);
-
-    const lasso = lassoPointsRef.current;
-    if (lasso.length < 3) {
-      lassoPointsRef.current = [];
-      draw();
-      return;
-    }
-
-    // Point-in-polygon test for all particles
+  /** Find all point indices inside the given polygon (canvas coords) */
+  const selectPointsInPolygon = useCallback((polygon: [number, number][]): number[] => {
     const canvas = canvasRef.current!;
     const h = canvas.height;
     const t = transformRef.current;
@@ -200,19 +209,134 @@ export function ScatterPanel({
     for (let i = 0; i < n; i++) {
       const cx = (points[i * 2] - t.offsetX) * t.scaleX;
       const cy = h - (points[i * 2 + 1] - t.offsetY) * t.scaleY;
-      if (pointInPolygon(cx, cy, lasso)) {
+      if (pointInPolygon(cx, cy, polygon)) {
         selected.push(i);
       }
     }
+    return selected;
+  }, [points, n]);
 
-    onLasso(selected);
-    lassoPointsRef.current = [];
-    draw();
-  }, [isLassoing, onLasso, points, n, draw]);
+  /** Find all point indices inside the given rectangle (canvas coords) */
+  const selectPointsInRect = useCallback((start: [number, number], end: [number, number]): number[] => {
+    const canvas = canvasRef.current!;
+    const h = canvas.height;
+    const t = transformRef.current;
+    const selected: number[] = [];
 
-  const handleClick = useCallback(
+    const minCx = Math.min(start[0], end[0]);
+    const maxCx = Math.max(start[0], end[0]);
+    const minCy = Math.min(start[1], end[1]);
+    const maxCy = Math.max(start[1], end[1]);
+
+    for (let i = 0; i < n; i++) {
+      const cx = (points[i * 2] - t.offsetX) * t.scaleX;
+      const cy = h - (points[i * 2 + 1] - t.offsetY) * t.scaleY;
+      if (cx >= minCx && cx <= maxCx && cy >= minCy && cy <= maxCy) {
+        selected.push(i);
+      }
+    }
+    return selected;
+  }, [points, n]);
+
+  // --- Lasso handlers ---
+  const handleMouseDown = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Legacy shift+drag lasso support (backwards compatible)
+    if (e.shiftKey && onSelect && !activeTool) {
+      setIsDrawing(true);
+      const rect = canvasRef.current!.getBoundingClientRect();
+      shapePointsRef.current = [[e.clientX - rect.left, e.clientY - rect.top]];
+      return;
+    }
+
+    if (!activeTool || !onSelect) return;
+    const rect = canvasRef.current!.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+
+    if (activeTool === "lasso") {
+      setIsDrawing(true);
+      shapePointsRef.current = [[px, py]];
+    } else if (activeTool === "rectangle") {
+      setIsDrawing(true);
+      shapePointsRef.current = [[px, py], [px, py]];
+    }
+    // Polygon uses click (not mousedown) — handled in handleCanvasClick
+  }, [onSelect, activeTool]);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!isDrawing) return;
+    const rect = canvasRef.current!.getBoundingClientRect();
+    const px = e.clientX - rect.left;
+    const py = e.clientY - rect.top;
+
+    const currentTool = activeTool ?? (e.shiftKey ? "lasso" : null);
+
+    if (currentTool === "lasso") {
+      shapePointsRef.current.push([px, py]);
+      draw();
+    } else if (currentTool === "rectangle") {
+      shapePointsRef.current[1] = [px, py];
+      draw();
+    }
+  }, [isDrawing, activeTool, draw]);
+
+  const handleMouseUp = useCallback(() => {
+    if (!isDrawing || !onSelect) {
+      setIsDrawing(false);
+      return;
+    }
+
+    const currentTool = activeTool ?? "lasso"; // shift+drag fallback
+    setIsDrawing(false);
+
+    if (currentTool === "lasso") {
+      const pts = shapePointsRef.current;
+      if (pts.length < 3) {
+        shapePointsRef.current = [];
+        draw();
+        return;
+      }
+      const selected = selectPointsInPolygon(pts);
+      onSelect(selected);
+      shapePointsRef.current = [];
+      draw();
+    } else if (currentTool === "rectangle") {
+      const pts = shapePointsRef.current;
+      if (pts.length < 2) {
+        shapePointsRef.current = [];
+        draw();
+        return;
+      }
+      const [start, end] = pts;
+      // Ignore tiny drags (< 4px)
+      if (Math.abs(end[0] - start[0]) < 4 && Math.abs(end[1] - start[1]) < 4) {
+        shapePointsRef.current = [];
+        draw();
+        return;
+      }
+      const selected = selectPointsInRect(start, end);
+      onSelect(selected);
+      shapePointsRef.current = [];
+      draw();
+    }
+  }, [isDrawing, onSelect, activeTool, draw, selectPointsInPolygon, selectPointsInRect]);
+
+  // --- Polygon + point click handler ---
+  const handleCanvasClick = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (!onPointClick || isLassoing) return;
+      if (isDrawing) return;
+
+      if (activeTool === "polygon" && onSelect) {
+        const rect = canvasRef.current!.getBoundingClientRect();
+        const px = e.clientX - rect.left;
+        const py = e.clientY - rect.top;
+        shapePointsRef.current = [...shapePointsRef.current, [px, py]];
+        draw();
+        return;
+      }
+
+      // Default: point click
+      if (!onPointClick || activeTool === "lasso" || activeTool === "rectangle") return;
       const canvas = canvasRef.current!;
       const rect = canvas.getBoundingClientRect();
       const cx = e.clientX - rect.left;
@@ -237,27 +361,47 @@ export function ScatterPanel({
         onPointClick(bestIdx, [points[bestIdx * 2], points[bestIdx * 2 + 1]]);
       }
     },
-    [onPointClick, points, n, isLassoing]
+    [onPointClick, onSelect, points, n, isDrawing, activeTool, draw]
   );
+
+  // --- Polygon double-click to close ---
+  const handleDoubleClick = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (activeTool !== "polygon" || !onSelect) return;
+      e.preventDefault();
+
+      const pts = shapePointsRef.current;
+      if (pts.length < 3) {
+        shapePointsRef.current = [];
+        draw();
+        return;
+      }
+
+      const selected = selectPointsInPolygon(pts);
+      onSelect(selected);
+      shapePointsRef.current = [];
+      draw();
+    },
+    [activeTool, onSelect, draw, selectPointsInPolygon]
+  );
+
+  const isSelecting = activeTool !== null || isDrawing;
 
   return (
     <div className="flex flex-col">
       <div className="mb-1 text-xs font-medium text-zinc-400">{title}</div>
-      <div className="mb-1 flex items-center gap-1.5 rounded-md bg-blue-500/10 px-2.5 py-1.5 text-xs text-blue-400">
-        <MousePointerClick className="h-3.5 w-3.5 shrink-0" />
-        <span>Shift+drag to lasso select</span>
-      </div>
       <div
         className="relative rounded-md border border-zinc-800 bg-black"
         style={{ height: 350 }}
       >
         <canvas
           ref={canvasRef}
-          className={clsx("w-full h-full", isLassoing && "cursor-crosshair")}
+          className={clsx("w-full h-full", isSelecting && "cursor-crosshair")}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
-          onClick={handleClick}
+          onClick={handleCanvasClick}
+          onDoubleClick={handleDoubleClick}
         />
         {/* Axis labels */}
         <div className="absolute bottom-1 left-1/2 -translate-x-1/2 text-[10px] text-zinc-600">

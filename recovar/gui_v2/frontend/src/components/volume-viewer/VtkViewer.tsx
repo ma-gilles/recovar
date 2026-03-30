@@ -72,6 +72,16 @@ interface VtkViewerProps {
   pinnedVolumes: PinnedVolumeState[];
   /** Category of the active volume (e.g. "eigen" for eigenvolumes). */
   activeCategory?: string;
+  /**
+   * When true, the camera is NOT reset when the volume changes.
+   * Used during trajectory playback so the view stays stable.
+   */
+  preserveCamera?: boolean;
+  /**
+   * Paths to pre-fetch (e.g. upcoming trajectory frames).
+   * These are fetched in the background and cached for instant display.
+   */
+  prefetchPaths?: string[];
 }
 
 // Design system palette: sky-400, rose-400, emerald-400, amber-400
@@ -188,7 +198,7 @@ function nx_ny_nz(vol: VolumeData): [number, number, number] {
 
 // ---- Component ----
 
-export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory }: VtkViewerProps): React.JSX.Element {
+export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory, preserveCamera = false, prefetchPaths }: VtkViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const renderContextRef = useRef<any>(null);
@@ -198,6 +208,8 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
   const [webglFailed, setWebglFailed] = useState(false);
   // Track the last rendered state to avoid redundant re-renders
   const renderedStateRef = useRef<string>("");
+  // Track whether the camera has been initialized at least once
+  const cameraInitializedRef = useRef(false);
 
   // Initialize vtk.js render window.
   //
@@ -507,7 +519,13 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
         }
       }
 
-      renderer.resetCamera();
+      // Only reset the camera on first load or when not in trajectory mode.
+      // During trajectory playback (preserveCamera=true), keep the user's
+      // current camera orientation so the animation feels stable.
+      if (!preserveCamera || !cameraInitializedRef.current) {
+        renderer.resetCamera();
+        cameraInitializedRef.current = true;
+      }
       try {
         grw.getRenderWindow().render();
       } catch (renderErr) {
@@ -525,7 +543,16 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [volumesToShow, ensurePipeline]);
+  }, [volumesToShow, ensurePipeline, preserveCamera]);
+
+  // Pre-fetch upcoming trajectory frames in the background
+  useEffect(() => {
+    if (!prefetchPaths || prefetchPaths.length === 0) return;
+    for (const path of prefetchPaths) {
+      // Fire-and-forget: ensurePipeline caches internally
+      ensurePipeline(path);
+    }
+  }, [prefetchPaths, ensurePipeline]);
 
   const isLoading = loading.size > 0;
   const hasVolumes = volumesToShow.length > 0;

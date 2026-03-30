@@ -9,6 +9,32 @@ import { Spinner } from "../../components/ui/spinner";
 import { LatentExplorer } from "../../components/latent-explorer/LatentExplorer";
 import { VolumeViewer } from "../../components/volume-viewer/VolumeViewer";
 
+/**
+ * Resolve the particles .star file path from the job's parent pipeline job.
+ * The analyze job's parent_jobs[0] is the pipeline job, whose params.particles
+ * contains the original .star file path.
+ */
+async function resolveParticlesStar(job: JobDetail): Promise<string | null> {
+  // If this job itself has particles (unlikely for analyze, but check)
+  const directParticles = (job.params as Record<string, unknown> | null)?.particles;
+  if (typeof directParticles === "string" && directParticles.endsWith(".star")) {
+    return directParticles;
+  }
+  // Look up parent pipeline job
+  if (job.parent_jobs && job.parent_jobs.length > 0) {
+    try {
+      const parentJob = await getJob(job.parent_jobs[0]);
+      const parentParticles = (parentJob.params as Record<string, unknown> | null)?.particles;
+      if (typeof parentParticles === "string" && parentParticles.endsWith(".star")) {
+        return parentParticles;
+      }
+    } catch {
+      // Ignore — parent job may not exist
+    }
+  }
+  return null;
+}
+
 type ViewMode = "explorer" | "volumes";
 
 export function ExplorePage(): React.JSX.Element {
@@ -23,6 +49,13 @@ export function ExplorePage(): React.JSX.Element {
   const { data: volumes } = useQuery<VolumeEntry[]>({
     queryKey: ["job-volumes", jobId],
     queryFn: () => getJobVolumes(jobId),
+    enabled: !!job,
+  });
+
+  // Resolve the original particles .star file path from the parent pipeline job
+  const { data: particlesStar } = useQuery<string | null>({
+    queryKey: ["particles-star", jobId],
+    queryFn: () => resolveParticlesStar(job!),
     enabled: !!job,
   });
 
@@ -114,6 +147,7 @@ export function ExplorePage(): React.JSX.Element {
           jobId={jobId}
           projectId={projectId}
           resultDir={job.output_dir ?? ""}
+          particlesStar={particlesStar}
         />
       ) : (
         <VolumeViewer volumes={volumes} />
