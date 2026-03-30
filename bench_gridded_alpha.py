@@ -122,25 +122,14 @@ def run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt, mask_arr,
             "time": dt, "iter_rvs": iter_rvs}
 
 
-def make_gridded_solver(lam, collar, use_gridding=True):
-    """Soft-alpha with gridding in the objective."""
+def make_solver(lam, collar, use_gridding=True):
+    """Soft-alpha solver with optional gridding in objective."""
     def solver_fn(lhs, rhs, reg, mask, vol_shape, W0_real=None,
                  maxiter=20, tol=1e-4, unpack_fn=None):
-        return pv.solve_soft_alpha_gridded(
-            lhs, rhs, reg, mask, vol_shape,
-            lam=lam, collar_width=collar, outer_dilate=3,
-            W0_real=W0_real, maxiter=maxiter, tol=tol,
-            unpack_fn=unpack_fn, use_gridding=use_gridding,
-        )
-    return solver_fn
-
-
-def make_noprecond_solver():
-    def solver_fn(lhs, rhs, reg, mask, vol_shape, W0_real=None,
-                 maxiter=20, tol=1e-4, unpack_fn=None):
-        return pv.solve_no_precond(lhs, rhs, reg, mask, vol_shape,
-                                   W0_real=W0_real, maxiter=maxiter,
-                                   tol=tol, unpack_fn=unpack_fn)
+        return pv.solve(lhs, rhs, reg, mask, vol_shape,
+                        lam=lam, collar_width=collar, outer_dilate=3,
+                        W0_real=W0_real, maxiter=maxiter, tol=tol,
+                        unpack_fn=unpack_fn, use_gridding=use_gridding)
     return solver_fn
 
 
