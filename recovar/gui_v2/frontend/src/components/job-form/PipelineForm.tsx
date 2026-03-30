@@ -10,7 +10,7 @@ import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { tooltips } from "../../lib/tooltips";
-import { submitJob } from "../../lib/api/client";
+import { submitJob, validateJob, type ValidationResult } from "../../lib/api/client";
 
 interface PipelineFormProps {
   projectId: string;
@@ -50,34 +50,60 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
   const [outputName, setOutputName] = useState("");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
+  const [validating, setValidating] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
+
+  const buildParams = useCallback((): Record<string, unknown> => {
+    const params: Record<string, unknown> = {
+      particles,
+      mask: mask === "file" ? maskPath : mask,
+    };
+    if (zdim) params.zdim = zdim;
+    if (downsample) params.downsample = parseInt(downsample);
+    if (lazy) params.lazy = true;
+    if (correctContrast) params.correct_contrast = true;
+    if (focusMask) params.focus_mask = focusMask;
+    if (datadir) params.datadir = datadir;
+    if (nImages) params.n_images = parseInt(nImages);
+    if (halfsets) params.halfsets = halfsets;
+    if (poses) params.poses = poses;
+    if (ctf) params.ctf = ctf;
+    if (tiltSeries) params.tilt_series = true;
+    if (stripPrefix) params.strip_prefix = stripPrefix;
+    if (outputName) params.output_name = outputName;
+    if (slurmOpts) params.slurm_opts = slurmOpts;
+    return params;
+  }, [particles, mask, maskPath, zdim, downsample, lazy, correctContrast, focusMask, datadir, nImages, halfsets, poses, ctf, tiltSeries, stripPrefix, outputName, slurmOpts]);
 
   const mutation = useMutation({
-    mutationFn: () => {
-      const params: Record<string, unknown> = {
-        particles,
-        mask: mask === "file" ? maskPath : mask,
-      };
-      if (zdim) params.zdim = zdim;
-      if (downsample) params.downsample = parseInt(downsample);
-      if (lazy) params.lazy = true;
-      if (correctContrast) params.correct_contrast = true;
-      if (focusMask) params.focus_mask = focusMask;
-      if (datadir) params.datadir = datadir;
-      if (nImages) params.n_images = parseInt(nImages);
-      if (halfsets) params.halfsets = halfsets;
-      if (poses) params.poses = poses;
-      if (ctf) params.ctf = ctf;
-      if (tiltSeries) params.tilt_series = true;
-      if (stripPrefix) params.strip_prefix = stripPrefix;
-      if (outputName) params.output_name = outputName;
-      if (slurmOpts) params.slurm_opts = slurmOpts;
-      return submitJob(projectId, "pipeline", params);
-    },
+    mutationFn: () => submitJob(projectId, "pipeline", buildParams()),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       onSubmitted?.(data.id);
     },
   });
+
+  const handleSubmit = useCallback(async () => {
+    setValidationErrors([]);
+    setValidationWarnings([]);
+    setValidating(true);
+    try {
+      const result: ValidationResult = await validateJob(projectId, "pipeline", buildParams());
+      if (!result.valid) {
+        setValidationErrors(result.errors);
+        setValidationWarnings(result.warnings);
+        return;
+      }
+      setValidationWarnings(result.warnings);
+      mutation.mutate();
+    } catch {
+      // If validation endpoint fails, proceed with submission (fail-open)
+      mutation.mutate();
+    } finally {
+      setValidating(false);
+    }
+  }, [projectId, buildParams, mutation]);
 
   const canSubmit = particles.length > 0 && (mask !== "file" || maskPath.length > 0);
 
@@ -342,6 +368,22 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
       {/* SLURM Settings */}
       <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
 
+      {/* Validation feedback */}
+      {validationErrors.length > 0 && (
+        <div className="space-y-1 rounded border border-red-800 bg-red-950/30 p-3">
+          {validationErrors.map((err, i) => (
+            <div key={i} className="text-sm text-red-400">{err}</div>
+          ))}
+        </div>
+      )}
+      {validationWarnings.length > 0 && (
+        <div className="space-y-1 rounded border border-amber-800 bg-amber-950/30 p-3">
+          {validationWarnings.map((warn, i) => (
+            <div key={i} className="text-sm text-amber-400">{warn}</div>
+          ))}
+        </div>
+      )}
+
       {/* Submit */}
       <div className="flex items-center justify-between pt-2">
         <div>
@@ -352,11 +394,11 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
           )}
         </div>
         <Button
-          onClick={() => mutation.mutate()}
+          onClick={handleSubmit}
           disabled={!canSubmit}
-          loading={mutation.isPending}
+          loading={validating || mutation.isPending}
         >
-          {mutation.isPending ? "Submitting..." : "Submit Pipeline Job"}
+          {validating ? "Validating inputs..." : mutation.isPending ? "Submitting..." : "Submit Pipeline Job"}
         </Button>
       </div>
     </div>

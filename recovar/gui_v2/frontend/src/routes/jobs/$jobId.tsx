@@ -26,12 +26,15 @@ import {
   getJobSbatchScript,
   cancelJob,
   reconcileJob,
+  getChartData,
   type JobDetail,
   type VolumeEntry,
   type PlotEntry,
   type SuggestedNext,
   type SbatchScript,
+  type ChartData,
 } from "../../lib/api/client";
+import Plot from "react-plotly.js";
 import { useProject } from "../../lib/project-context";
 import { VolumeViewer } from "../../components/volume-viewer/VolumeViewer";
 import { StatusBadge } from "../../components/ui/badge";
@@ -463,6 +466,121 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Interactive Plotly charts for diagnostic plots
+// ---------------------------------------------------------------------------
+
+const DARK_LAYOUT: Record<string, unknown> = {
+  paper_bgcolor: "rgba(0,0,0,0)",
+  plot_bgcolor: "rgba(24,24,27,1)", // zinc-900
+  font: { color: "#a1a1aa", size: 12 }, // zinc-400
+  xaxis: { gridcolor: "#3f3f46", zerolinecolor: "#52525b" }, // zinc-700, zinc-600
+  yaxis: { gridcolor: "#3f3f46", zerolinecolor: "#52525b" },
+  margin: { t: 30, r: 20, b: 40, l: 50 },
+  autosize: true,
+};
+
+/** Map plot filenames to chart data endpoint names. */
+function detectChartName(filename: string): string | null {
+  const lower = filename.toLowerCase();
+  if (lower.includes("fsc")) return "fsc";
+  if (lower.includes("eigenvalue")) return "eigenvalues";
+  if (lower.includes("histogram")) return "histogram";
+  return null;
+}
+
+function PlotCell({
+  plot,
+  jobId,
+  onEnlarge,
+}: {
+  plot: PlotEntry;
+  jobId: string;
+  onEnlarge: (path: string) => void;
+}): React.JSX.Element {
+  const chartName = detectChartName(plot.name);
+  const [chartFailed, setChartFailed] = useState(false);
+
+  const showInteractive = chartName !== null && !chartFailed;
+
+  return (
+    <div className="rounded-md border border-zinc-800 bg-zinc-900 p-2">
+      {showInteractive ? (
+        <div className="min-h-[250px]">
+          <InteractiveChartWithFallback
+            jobId={jobId}
+            chartName={chartName}
+            onFallback={() => setChartFailed(true)}
+          />
+        </div>
+      ) : (
+        <button
+          onClick={() => onEnlarge(plot.path)}
+          className="w-full hover:opacity-80"
+        >
+          <img
+            src={`/api/files/serve?path=${encodeURIComponent(plot.path)}`}
+            alt={plot.name}
+            className="w-full rounded"
+            loading="lazy"
+          />
+        </button>
+      )}
+      <p className="mt-1 truncate text-xs text-zinc-400">{plot.name}</p>
+    </div>
+  );
+}
+
+function InteractiveChartWithFallback({
+  jobId,
+  chartName,
+  onFallback,
+}: {
+  jobId: string;
+  chartName: string;
+  onFallback: () => void;
+}): React.JSX.Element | null {
+  const { data, isLoading, isError } = useQuery<ChartData>({
+    queryKey: ["chart-data", jobId, chartName],
+    queryFn: () => getChartData(jobId, chartName),
+    retry: false,
+    staleTime: Infinity,
+  });
+
+  useEffect(() => {
+    if (isError || (data !== undefined && data.traces.length === 0)) {
+      onFallback();
+    }
+  }, [isError, data, onFallback]);
+
+  if (isLoading) {
+    return (
+      <div className="flex h-64 items-center justify-center">
+        <Spinner label="Loading chart..." />
+      </div>
+    );
+  }
+
+  if (isError || !data || data.traces.length === 0) {
+    return null;
+  }
+
+  const mergedLayout = {
+    ...DARK_LAYOUT,
+    ...(data.layout ?? {}),
+  };
+
+  return (
+    <Plot
+      data={data.traces as Plotly.Data[]}
+      layout={mergedLayout as Partial<Plotly.Layout>}
+      config={{ responsive: true, displaylogo: false }}
+      useResizeHandler
+      style={{ width: "100%", height: "100%" }}
+    />
+  );
+}
+
 function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
   const { data: plots, isLoading } = useQuery<PlotEntry[]>({
     queryKey: ["job-plots", jobId],
@@ -480,19 +598,12 @@ function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
     <>
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
         {plots.map((p) => (
-          <button
+          <PlotCell
             key={p.path}
-            onClick={() => setEnlarged(p.path)}
-            className="rounded-md border border-zinc-800 bg-zinc-900 p-2 hover:border-blue-500/50"
-          >
-            <img
-              src={`/api/files/serve?path=${encodeURIComponent(p.path)}`}
-              alt={p.name}
-              className="w-full rounded"
-              loading="lazy"
-            />
-            <p className="mt-1 truncate text-xs text-zinc-400">{p.name}</p>
-          </button>
+            plot={p}
+            jobId={jobId}
+            onEnlarge={setEnlarged}
+          />
         ))}
       </div>
 

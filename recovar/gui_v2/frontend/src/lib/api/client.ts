@@ -153,6 +153,26 @@ export function scanProject(
   });
 }
 
+// --- Job Validation ---
+
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  warnings: string[];
+  info: Record<string, unknown>;
+}
+
+export function validateJob(
+  projectId: string,
+  type: string,
+  params: Record<string, unknown>
+): Promise<ValidationResult> {
+  return request("/jobs/validate", {
+    method: "POST",
+    body: JSON.stringify({ project_id: projectId, type, params }),
+  });
+}
+
 // --- Jobs ---
 
 export function submitJob(
@@ -282,4 +302,16 @@ export function getSlurmDefaults(): Promise<SlurmDefaults> {
 
 export function getJobSbatchScript(id: string): Promise<SbatchScript> {
   return request(`/jobs/${id}/sbatch-script`);
+}
+
+// --- Charts ---
+
+export interface ChartData {
+  chart_type: string;
+  traces: Array<Record<string, unknown>>;
+  layout?: Record<string, unknown> | null;
+}
+
+export function getChartData(jobId: string, name: string): Promise<ChartData> {
+  return request(`/jobs/${jobId}/chart-data?name=${encodeURIComponent(name)}`);
 }

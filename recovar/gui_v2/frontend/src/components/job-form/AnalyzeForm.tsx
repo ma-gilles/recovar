@@ -9,7 +9,7 @@ import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { tooltips } from "../../lib/tooltips";
-import { submitJob } from "../../lib/api/client";
+import { submitJob, validateJob, type ValidationResult } from "../../lib/api/client";
 
 interface AnalyzeFormProps {
   projectId: string;
@@ -33,24 +33,49 @@ export function AnalyzeForm({
   const [outputName, setOutputName] = useState("");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
+  const [validating, setValidating] = useState(false);
+  const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
+
+  const buildParams = useCallback((): Record<string, unknown> => {
+    const params: Record<string, unknown> = {
+      result_dir: resultDir,
+      zdim: parseInt(zdim),
+    };
+    if (nClusters) params.n_clusters = parseInt(nClusters);
+    if (nTrajectories) params.n_trajectories = parseInt(nTrajectories);
+    if (outputName) params.output_name = outputName;
+    if (slurmOpts) params.slurm_opts = slurmOpts;
+    return params;
+  }, [resultDir, zdim, nClusters, nTrajectories, outputName, slurmOpts]);
 
   const mutation = useMutation({
-    mutationFn: () => {
-      const params: Record<string, unknown> = {
-        result_dir: resultDir,
-        zdim: parseInt(zdim),
-      };
-      if (nClusters) params.n_clusters = parseInt(nClusters);
-      if (nTrajectories) params.n_trajectories = parseInt(nTrajectories);
-      if (outputName) params.output_name = outputName;
-      if (slurmOpts) params.slurm_opts = slurmOpts;
-      return submitJob(projectId, "analyze", params);
-    },
+    mutationFn: () => submitJob(projectId, "analyze", buildParams()),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       onSubmitted?.(data.id);
     },
   });
+
+  const handleSubmit = useCallback(async () => {
+    setValidationErrors([]);
+    setValidationWarnings([]);
+    setValidating(true);
+    try {
+      const result: ValidationResult = await validateJob(projectId, "analyze", buildParams());
+      if (!result.valid) {
+        setValidationErrors(result.errors);
+        setValidationWarnings(result.warnings);
+        return;
+      }
+      setValidationWarnings(result.warnings);
+      mutation.mutate();
+    } catch {
+      mutation.mutate();
+    } finally {
+      setValidating(false);
+    }
+  }, [projectId, buildParams, mutation]);
 
   return (
     <div className="space-y-4">
@@ -141,17 +166,33 @@ export function AnalyzeForm({
       {/* SLURM Settings */}
       <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
 
+      {/* Validation feedback */}
+      {validationErrors.length > 0 && (
+        <div className="space-y-1 rounded border border-red-800 bg-red-950/30 p-3">
+          {validationErrors.map((err, i) => (
+            <div key={i} className="text-sm text-red-400">{err}</div>
+          ))}
+        </div>
+      )}
+      {validationWarnings.length > 0 && (
+        <div className="space-y-1 rounded border border-amber-800 bg-amber-950/30 p-3">
+          {validationWarnings.map((warn, i) => (
+            <div key={i} className="text-sm text-amber-400">{warn}</div>
+          ))}
+        </div>
+      )}
+
       <div className="flex items-center justify-between pt-2">
         {mutation.isError && (
           <span className="text-sm text-red-400">{(mutation.error as Error).message}</span>
         )}
         <div className="ml-auto">
           <Button
-            onClick={() => mutation.mutate()}
+            onClick={handleSubmit}
             disabled={!resultDir || !zdim}
-            loading={mutation.isPending}
+            loading={validating || mutation.isPending}
           >
-            {mutation.isPending ? "Submitting..." : "Submit Analyze Job"}
+            {validating ? "Validating inputs..." : mutation.isPending ? "Submitting..." : "Submit Analyze Job"}
           </Button>
         </div>
       </div>

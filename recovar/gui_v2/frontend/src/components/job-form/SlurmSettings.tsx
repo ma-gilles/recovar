@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { TooltipIcon } from "../ui/tooltip-icon";
+import { tooltips } from "../../lib/tooltips";
 import { getSlurmDefaults, getSystemInfo, type SlurmDefaults } from "../../lib/api/client";
 
 export interface SlurmOpts {
@@ -87,14 +89,20 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
         <div className="ml-4 mt-2 space-y-3 border-l border-zinc-800 pl-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <Label>Partition</Label>
+              <div className="flex items-center gap-1">
+                <Label>Partition</Label>
+                <TooltipIcon text={tooltips["slurm.partition"]} />
+              </div>
               <Input
                 value={current.partition}
                 onChange={(e) => update("partition", e.target.value)}
               />
             </div>
             <div className="space-y-1">
-              <Label>Account</Label>
+              <div className="flex items-center gap-1">
+                <Label>Account</Label>
+                <TooltipIcon text={tooltips["slurm.account"]} />
+              </div>
               <Input
                 value={current.account}
                 onChange={(e) => update("account", e.target.value)}
@@ -104,7 +112,10 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
 
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-1">
-              <Label>GPUs</Label>
+              <div className="flex items-center gap-1">
+                <Label>GPUs</Label>
+                <TooltipIcon text={tooltips["slurm.gpus"]} />
+              </div>
               <Input
                 type="number"
                 min={0}
@@ -113,7 +124,10 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
               />
             </div>
             <div className="space-y-1">
-              <Label>CPUs</Label>
+              <div className="flex items-center gap-1">
+                <Label>CPUs</Label>
+                <TooltipIcon text={tooltips["slurm.cpus"]} />
+              </div>
               <Input
                 type="number"
                 min={1}
@@ -122,7 +136,10 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
               />
             </div>
             <div className="space-y-1">
-              <Label>Memory</Label>
+              <div className="flex items-center gap-1">
+                <Label>Memory</Label>
+                <TooltipIcon text={tooltips["slurm.memory"]} />
+              </div>
               <Input
                 value={current.memory}
                 onChange={(e) => update("memory", e.target.value)}
@@ -132,7 +149,10 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
           </div>
 
           <div className="space-y-1">
-            <Label>Time Limit</Label>
+            <div className="flex items-center gap-1">
+              <Label>Time Limit</Label>
+              <TooltipIcon text={tooltips["slurm.time"]} />
+            </div>
             <Input
               value={current.time}
               onChange={(e) => update("time", e.target.value)}

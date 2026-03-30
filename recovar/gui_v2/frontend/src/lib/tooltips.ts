@@ -102,4 +102,16 @@ export const tooltips: Record<string, string> = {
     "Prefix to strip from particle image paths in the star/cs file.",
   "downsample.batch_size":
     "Number of images to process per batch (default 1000).",
+  "slurm.partition":
+    "SLURM partition to submit the job to. Common options: 'cryoem' (GPU nodes), 'gpu' (general GPU), 'cpu' (CPU-only). Check your cluster documentation for available partitions.",
+  "slurm.account":
+    "SLURM account/allocation for billing compute time. Required on most HPC clusters.",
+  "slurm.gpus":
+    "Number of GPUs to request. Most recovar jobs use 1 GPU. Pipeline jobs on large datasets may benefit from multiple GPUs.",
+  "slurm.cpus":
+    "Number of CPU cores to request. Default 4 is sufficient for most jobs. Increase for large lazy-loading jobs.",
+  "slurm.memory":
+    "Memory to request (e.g., '300G', '64G'). Pipeline jobs on large datasets may need 300G+. Analyze jobs typically need less.",
+  "slurm.time":
+    "Wall-time limit in HH:MM:SS format. Job is killed if it exceeds this. Pipeline: 6-12h typical. Analyze: 1-4h typical.",
 };

@@ -16,8 +16,11 @@
     "@kitware/vtk.js": "^35.5.1",
     "@tanstack/react-query": "^5.95.2",
     "@tanstack/react-router": "^1.168.8",
+    "@types/react-plotly.js": "^2.6.4",
+    "plotly.js-dist-min": "^3.4.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "react-plotly.js": "^2.6.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",

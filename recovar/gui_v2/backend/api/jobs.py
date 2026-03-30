@@ -7,6 +7,8 @@ Endpoints:
     DELETE /api/jobs/:id                — Delete job record
     GET    /api/jobs/:id/volumes        — List MRC volumes in job output
     GET    /api/jobs/:id/plots          — List diagnostic PNGs
+    GET    /api/jobs/:id/chart-data     — Get interactive chart data for a plot
+    POST   /api/jobs/validate           — Validate job params without submitting
     GET    /api/jobs/:id/suggested-next — Suggest next steps
 """
 
@@ -14,10 +16,14 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import glob
 import logging
 import os
+import pickle
 from pathlib import Path
 from typing import Any
+
+import numpy as np
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -181,6 +187,25 @@ class SuggestedNext(BaseModel):
     prefilled_params: dict[str, Any]
 
 
+class ChartDataResponse(BaseModel):
+    chart_type: str
+    traces: list[dict[str, Any]]  # Each trace is a Plotly-compatible dict
+    layout: dict[str, Any] | None = None  # Optional layout overrides
+
+
+class ValidateJobRequest(BaseModel):
+    project_id: str
+    type: str
+    params: dict[str, Any]
+
+
+class ValidationResult(BaseModel):
+    valid: bool
+    errors: list[str] = []
+    warnings: list[str] = []
+    info: dict[str, Any] = {}
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -249,8 +274,325 @@ def _write_coords_file(path: str, coords: list[float]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Chart data helpers (Plotly interactive charts)
+# ---------------------------------------------------------------------------
+
+
+def _find_data_files(output_dir: str, chart_name: str) -> list[str]:
+    """Find .pkl or .npy files matching a chart name pattern in the output dir."""
+    matches: list[str] = []
+    for ext in ("pkl", "npy"):
+        pattern = os.path.join(output_dir, "**", f"*{chart_name}*.{ext}")
+        matches.extend(glob.glob(pattern, recursive=True))
+    return sorted(matches)
+
+
+def _load_data_file(path: str) -> Any:
+    """Load a .pkl or .npy file and return its contents."""
+    if path.endswith(".npy"):
+        return np.load(path, allow_pickle=True)
+    with open(path, "rb") as f:
+        return pickle.load(f)  # noqa: S301
+
+
+def _numpy_to_list(obj: Any) -> Any:
+    """Recursively convert numpy arrays to Python lists for JSON serialization."""
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, dict):
+        return {k: _numpy_to_list(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_numpy_to_list(v) for v in obj]
+    return obj
+
+
+def _build_fsc_response(data: Any) -> ChartDataResponse:
+    """Build a ChartDataResponse for FSC data."""
+    traces: list[dict[str, Any]] = []
+    if isinstance(data, dict):
+        fsc_vals = _numpy_to_list(data.get("fsc", data.get("FSC", [])))
+        resolution = _numpy_to_list(data.get("resolution", data.get("Resolution", [])))
+        if isinstance(fsc_vals, list) and len(fsc_vals) > 0:
+            if isinstance(fsc_vals[0], list):
+                for i, curve in enumerate(fsc_vals):
+                    trace: dict[str, Any] = {"y": curve, "type": "scatter", "mode": "lines",
+                            "name": f"FSC {i}"}
+                    if resolution:
+                        trace["x"] = resolution
+                    traces.append(trace)
+            else:
+                trace = {"y": fsc_vals, "type": "scatter", "mode": "lines", "name": "FSC"}
+                if resolution:
+                    trace["x"] = resolution
+                traces.append(trace)
+    elif isinstance(data, np.ndarray):
+        arr = _numpy_to_list(data)
+        if isinstance(arr, list):
+            if isinstance(arr[0], list):
+                for i, curve in enumerate(arr):
+                    traces.append({"y": curve, "type": "scatter", "mode": "lines",
+                                   "name": f"FSC {i}"})
+            else:
+                traces.append({"y": arr, "type": "scatter", "mode": "lines", "name": "FSC"})
+
+    layout: dict[str, Any] = {"xaxis": {"title": "Spatial Frequency"},
+                               "yaxis": {"title": "FSC", "range": [0, 1]}}
+    return ChartDataResponse(chart_type="fsc", traces=traces, layout=layout)
+
+
+def _build_eigenvalue_response(data: Any) -> ChartDataResponse:
+    """Build a ChartDataResponse for eigenvalue spectrum data."""
+    values = _numpy_to_list(data)
+    if isinstance(values, dict):
+        values = _numpy_to_list(values.get("eigenvalues", values.get("values", [])))
+    if isinstance(values, list) and len(values) > 0:
+        indices = list(range(1, len(values) + 1))
+        traces: list[dict[str, Any]] = [
+            {"x": indices, "y": values, "type": "bar", "name": "Eigenvalues"}
+        ]
+    else:
+        traces = []
+    layout: dict[str, Any] = {"xaxis": {"title": "Component"},
+                               "yaxis": {"title": "Eigenvalue"}}
+    return ChartDataResponse(chart_type="eigenvalues", traces=traces, layout=layout)
+
+
+def _build_histogram_response(data: Any) -> ChartDataResponse:
+    """Build a ChartDataResponse for histogram data."""
+    values = _numpy_to_list(data)
+    if isinstance(values, dict):
+        bins = values.get("bins", [])
+        counts = values.get("counts", values.get("values", []))
+        traces: list[dict[str, Any]] = [{"x": bins, "y": counts, "type": "bar", "name": "Histogram"}]
+    elif isinstance(values, list):
+        traces = [{"x": values, "type": "histogram", "name": "Histogram"}]
+    else:
+        traces = []
+    return ChartDataResponse(chart_type="histogram", traces=traces)
+
+
+_CHART_BUILDERS = {
+    "fsc": _build_fsc_response,
+    "eigenvalue": _build_eigenvalue_response,
+    "eigenvalues": _build_eigenvalue_response,
+    "histogram": _build_histogram_response,
+}
+
+
+# ---------------------------------------------------------------------------
+# Validation helpers
+# ---------------------------------------------------------------------------
+
+
+def _read_available_zdims(result_dir: str) -> list[int] | None:
+    """Read available zdims from pipeline output."""
+    params_path = os.path.join(result_dir, "model", "params.pkl")
+    if os.path.isfile(params_path):
+        try:
+            with open(params_path, "rb") as f:
+                params = pickle.load(f)
+            zdims = params.get("zdims_computed") or params.get("zdim")
+            if zdims is not None:
+                if isinstance(zdims, (list, tuple)):
+                    return sorted(int(z) for z in zdims)
+                return [int(zdims)]
+        except Exception:
+            pass
+
+    # Fallback: scan for analysis directories
+    output_dir = os.path.join(result_dir, "output")
+    if os.path.isdir(output_dir):
+        zdims = []
+        for name in os.listdir(output_dir):
+            if name.startswith("analysis_") and os.path.isdir(
+                os.path.join(output_dir, name)
+            ):
+                try:
+                    z = int(name.split("_")[1])
+                    zdims.append(z)
+                except (IndexError, ValueError):
+                    pass
+        if zdims:
+            return sorted(zdims)
+    return None
+
+
+def _check_mask_dims(mask_path: str, expected_box_size: int) -> str | None:
+    """Check mask .mrc dimensions match particle box size. Returns error or None."""
+    try:
+        import mrcfile
+
+        with mrcfile.open(mask_path, mode="r", header_only=True) as mrc:
+            nx, ny, nz = (
+                int(mrc.header.nx),
+                int(mrc.header.ny),
+                int(mrc.header.nz),
+            )
+            if (
+                nx != expected_box_size
+                or ny != expected_box_size
+                or nz != expected_box_size
+            ):
+                return (
+                    f"Mask box size ({nx}x{ny}x{nz}) does not match "
+                    f"particle box size {expected_box_size}"
+                )
+    except Exception as e:
+        return f"Cannot read mask file: {e}"
+    return None
+
+
+_VALIDATION_TIMEOUT = 10  # seconds for filesystem operations
+
+
+async def _validate_job_params(
+    project_path: str,
+    job_type: str,
+    params: dict[str, Any],
+) -> ValidationResult:
+    """Run all validation checks for a job without submitting it."""
+    from recovar.gui_v2.backend.api.files import _parse_star_sync
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    info: dict[str, Any] = {}
+
+    if job_type == "Pipeline":
+        particles = params.get("particles", "")
+        if particles and not os.path.isfile(particles):
+            errors.append(f"Particles file not found: {particles}")
+        mask = params.get("mask", "from_halfmaps")
+        if mask not in ("from_halfmaps", "sphere", "none", "") and not os.path.isfile(
+            mask
+        ):
+            errors.append(f"Mask file not found: {mask}")
+
+        # Mask dimension validation
+        if (
+            particles
+            and os.path.isfile(particles)
+            and mask not in ("from_halfmaps", "sphere", "none", "")
+            and os.path.isfile(mask)
+        ):
+            try:
+                star_result = await asyncio.wait_for(
+                    asyncio.to_thread(_parse_star_sync, particles),
+                    timeout=_VALIDATION_TIMEOUT,
+                )
+                box_size = star_result.box_size
+                if box_size is not None:
+                    info["box_size"] = box_size
+                    mask_err = await asyncio.wait_for(
+                        asyncio.to_thread(_check_mask_dims, mask, box_size),
+                        timeout=_VALIDATION_TIMEOUT,
+                    )
+                    if mask_err:
+                        errors.append(mask_err)
+                if star_result.n_particles is not None:
+                    info["particle_count"] = star_result.n_particles
+            except asyncio.TimeoutError:
+                warnings.append(
+                    "Mask validation timed out (filesystem may be slow)."
+                )
+            except Exception as exc:
+                warnings.append(f"Could not validate mask dimensions: {exc}")
+
+    elif job_type in (
+        "Analyze",
+        "ComputeState",
+        "ComputeTrajectory",
+        "Density",
+        "StableStates",
+    ):
+        result_dir = params.get("result_dir", "")
+        if result_dir and not os.path.isdir(result_dir):
+            errors.append(f"Result directory not found: {result_dir}")
+        elif result_dir:
+            metadata = os.path.join(result_dir, "model", "params.pkl")
+            metadata_json = os.path.join(result_dir, "model", "metadata.json")
+            if not os.path.isfile(metadata) and not os.path.isfile(metadata_json):
+                errors.append(f"Not a valid pipeline output: {result_dir}")
+
+        # zdim validation for Analyze jobs
+        if job_type == "Analyze" and result_dir and os.path.isdir(result_dir):
+            requested_zdim = params.get("zdim")
+            if requested_zdim is not None:
+                try:
+                    available = await asyncio.wait_for(
+                        asyncio.to_thread(_read_available_zdims, result_dir),
+                        timeout=_VALIDATION_TIMEOUT,
+                    )
+                    if available is not None:
+                        info["available_zdims"] = available
+                        if int(requested_zdim) not in available:
+                            errors.append(
+                                f"zdim={requested_zdim} not found in pipeline "
+                                f"output. Available: {available}"
+                            )
+                except asyncio.TimeoutError:
+                    warnings.append(
+                        "zdim validation timed out (filesystem may be slow)."
+                    )
+                except Exception as exc:
+                    warnings.append(f"Could not validate zdim: {exc}")
+
+    # Check disk space
+    try:
+        usage = os.statvfs(project_path)
+        free_gb = (usage.f_frsize * usage.f_bavail) / (1024**3)
+        if free_gb < 50:
+            warnings.append(
+                f"Less than {free_gb:.0f} GB free on disk. "
+                f"Jobs may fail if space runs out."
+            )
+    except OSError:
+        pass
+
+    return ValidationResult(
+        valid=len(errors) == 0,
+        errors=errors,
+        warnings=warnings,
+        info=info,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.post("/validate", response_model=ValidationResult)
+async def validate_job(req: ValidateJobRequest) -> ValidationResult:
+    """Validate job parameters without submitting. Returns errors/warnings."""
+    project_path = get_project_path(req.project_id)
+    if project_path is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Normalize job type
+    _type_aliases_local = {
+        "pipeline": "Pipeline",
+        "analyze": "Analyze",
+        "compute_state": "ComputeState",
+        "computestate": "ComputeState",
+        "compute_trajectory": "ComputeTrajectory",
+        "computetrajectory": "ComputeTrajectory",
+        "density": "Density",
+        "estimate_conformational_density": "Density",
+        "stable_states": "StableStates",
+        "stablestates": "StableStates",
+        "estimate_stable_states": "StableStates",
+        "postprocess": "Postprocess",
+        "downsample": "Downsample",
+    }
+    job_type = _type_aliases_local.get(
+        req.type.lower().replace("-", "_"), req.type
+    )
+
+    return await _validate_job_params(project_path, job_type, req.params)
 
 
 @router.post("", response_model=SubmitJobResponse, status_code=201)
@@ -831,3 +1173,44 @@ def _format_cli_command(job: Job) -> str:
         else:
             parts.append(f"{flag} {val}")
     return " ".join(parts)
+
+
+@router.get("/{job_id}/chart-data", response_model=ChartDataResponse)
+async def get_chart_data(job_id: str, name: str) -> ChartDataResponse:
+    """Return structured chart data suitable for Plotly rendering.
+
+    Query parameter *name* should be one of: fsc, eigenvalue(s), histogram.
+    The endpoint searches the job output directory for matching data files.
+    """
+    job, session = await _get_job(job_id)
+    await session.close()
+
+    output_dir = job.output_dir
+    if not output_dir or not os.path.isdir(output_dir):
+        raise HTTPException(status_code=404, detail="Job output directory not found")
+
+    # Normalize the chart name for matching
+    chart_key = name.lower().rstrip("s")  # eigenvalues -> eigenvalue
+    if chart_key not in ("fsc", "eigenvalue", "histogram"):
+        raise HTTPException(status_code=400, detail=f"Unknown chart name: {name}")
+
+    # Search for data files
+    files = await asyncio.to_thread(_find_data_files, output_dir, chart_key)
+    # Also try the plural form for eigenvalues
+    if not files and chart_key == "eigenvalue":
+        files = await asyncio.to_thread(_find_data_files, output_dir, "eigenvalues")
+    if not files:
+        raise HTTPException(status_code=404, detail=f"No data file found for chart: {name}")
+
+    # Load the first matching file
+    try:
+        data = await asyncio.to_thread(_load_data_file, files[0])
+    except Exception as exc:
+        logger.warning("Failed to load chart data from %s: %s", files[0], exc)
+        raise HTTPException(status_code=500, detail=f"Failed to load data: {exc}")
+
+    builder = _CHART_BUILDERS.get(chart_key, _CHART_BUILDERS.get(name.lower()))
+    if builder is None:
+        raise HTTPException(status_code=400, detail=f"Unknown chart type: {name}")
+
+    return builder(data)
