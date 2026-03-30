@@ -2,7 +2,9 @@
 
 Provides masks for the reconstruction pipeline:
 
-- **Volume masks**: ``masking_options`` (pipeline entry point), ``make_mask_from_half_maps``,
+- **Volume masks**: ``make_mask`` (standalone, RELION-style),
+  ``make_mask_from_half_maps`` (averages half-maps then calls ``make_mask``),
+  ``masking_options`` (pipeline entry point),
   ``make_mask_from_gt``, ``make_union_gt_mask``
 - **Radial / spherical masks**: ``get_radial_mask``, ``raised_cosine_mask``,
   ``soft_mask_outside_map``
@@ -15,7 +17,7 @@ import logging
 import jax.numpy as jnp
 import numpy as np
 import skimage
-from scipy.ndimage import binary_dilation, distance_transform_edt
+from scipy.ndimage import binary_dilation, binary_fill_holes, distance_transform_edt, label
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.utils as utils
@@ -114,18 +116,162 @@ def masking_options(
 # ---------------------------------------------------------------------------
 
 
-def make_mask_from_half_maps(halfmap1, halfmap2, smax=3):
-    """Generate a binary mask from two real-space half-maps via local correlation.
+def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None,
+              soft_edge=3, cleanup=True):
+    """Create a solvent mask from a 3-D real-space volume.
 
-    Computes a 3D local cross-correlation, thresholds it, dilates, and softens.
-    Adapted from EMDA (https://emda.readthedocs.io/).
+    Follows the same conceptual pipeline as RELION's ``relion_mask_create``:
+    low-pass filter → threshold → (optional cleanup) → extend → soft cosine edge.
+
+    Key differences from RELION:
+
+    * Gaussian low-pass in real space (RELION uses a Fourier-space raised-cosine).
+    * ``"auto"`` threshold via Otsu's method (RELION requires a user-specified
+      density threshold, default 0.02 in postprocessing).
+    * Optional morphological cleanup (fill holes, keep largest connected
+      component) — RELION does not do this.
+    * Extension uses ``distance_transform_edt`` for spherical (Euclidean)
+      dilation, matching RELION's brute-force Euclidean approach.
+    * Soft edge uses ``distance_transform_edt`` + cosine (RELION computes
+      min-Euclidean-distance per voxel — mathematically equivalent).
+
+    This function is the building block for :func:`make_mask_from_half_maps`
+    and can also be called directly on any volume (e.g. a consensus
+    reconstruction loaded from MRC).
+
+    Args:
+        volume: 3-D real-space array (e.g. averaged half-maps, or a single
+            reconstruction).
+        threshold: How to binarize.
+
+            * ``"auto"`` (default): Otsu's method on voxels inside the radial
+              mask.
+            * A ``float``: fixed density threshold (like RELION's
+              ``--ini_threshold``, default 0.02 in postprocessing).
+        lowpass_sigma: Gaussian sigma in **voxels** for low-pass smoothing
+            before thresholding.  ``None`` = auto (``max(2, N // 64)``).
+            Set to ``0`` to disable.
+        extend: Extension (dilation) of the binary mask in **voxels**.
+            ``None`` = auto (``ceil(6 * N / 128)``).
+            (RELION postprocessing default: 3 pixels.)
+        soft_edge: Width of the cosine soft edge in **voxels**.
+            (RELION postprocessing default: 6 pixels.)
+        cleanup: If ``True``, fill holes and keep only the largest connected
+            component after thresholding (RELION does not do this).
+
+    Returns:
+        Soft mask as a float32 array in [0, 1].
+
+    Example::
+
+        import mrcfile
+        from recovar.core.mask import make_mask
+
+        h1 = mrcfile.open("half1.mrc").data
+        h2 = mrcfile.open("half2.mrc").data
+        avg = (h1 + h2) / 2.0
+
+        # Automatic (recommended)
+        mask = make_mask(avg)
+
+        # RELION-like with manual parameters
+        mask = make_mask(avg, threshold=0.02, extend=3, soft_edge=6,
+                         lowpass_sigma=3, cleanup=False)
+    """
+    from scipy.ndimage import gaussian_filter
+    from skimage.filters import threshold_otsu
+
+    volume = np.asarray(volume, dtype=np.float64)
+    N = volume.shape[0]
+
+    # --- 1. Low-pass filter ---
+    if lowpass_sigma is None:
+        lowpass_sigma = max(2, N // 64)
+    if lowpass_sigma > 0:
+        filtered = gaussian_filter(volume, sigma=lowpass_sigma)
+    else:
+        filtered = volume
+
+    # --- 2. Threshold ---
+    radial = np.asarray(get_radial_mask(volume.shape)) > 0.5
+
+    if threshold == "auto":
+        vals_inside = filtered[radial]
+        try:
+            thresh_val = threshold_otsu(vals_inside)
+        except ValueError:
+            logger.warning("Otsu threshold failed, falling back to 99th percentile")
+            thresh_val = np.percentile(vals_inside, 99)
+    else:
+        thresh_val = float(threshold)
+
+    binary = (filtered > thresh_val) & radial
+    logger.info("Mask threshold: %.4g  (%.1f%% of voxels inside radial mask)",
+                thresh_val, 100.0 * binary.sum() / radial.sum())
+
+    # --- 3. Morphological cleanup ---
+    if cleanup:
+        filled = binary_fill_holes(binary)
+        labeled, n_components = label(filled)
+        if n_components > 1:
+            component_sizes = np.bincount(labeled.ravel())[1:]
+            largest = np.argmax(component_sizes) + 1
+            filled = labeled == largest
+            logger.info("Mask cleanup: kept largest of %d components", n_components)
+        elif n_components == 0:
+            logger.warning("No mask voxels found, returning empty mask")
+            return np.zeros(volume.shape, dtype=np.float32)
+        binary = filled
+
+    # --- 4. Extend (dilate) via Euclidean distance (spherical, like RELION) ---
+    if extend is None:
+        extend = int(np.ceil(6 * N / 128))
+    if extend > 0:
+        dist = distance_transform_edt(~np.asarray(binary, dtype=bool))
+        binary = dist <= extend
+
+    # --- 5. Soft cosine edge ---
+    if soft_edge > 0:
+        result = soften_volume_mask(binary, kern_rad=soft_edge)
+    else:
+        result = np.asarray(binary, dtype=np.float32)
+
+    return np.asarray(result * (result >= 1e-3), dtype=np.float32)
+
+
+def make_mask_from_half_maps(halfmap1, halfmap2, smax=3, method="auto", **kwargs):
+    """Generate a solvent mask from two real-space half-map volumes.
+
+    Averages the two half-maps and delegates to :func:`make_mask`.
+    All keyword arguments are forwarded to ``make_mask``.
+
+    For the legacy EMDA local-correlation method, pass
+    ``method="local_correlation"``.
 
     Args:
         halfmap1, halfmap2: Real-space half-map volumes (same shape).
-        smax: Kernel radius in pixels for the local correlation.
+        smax: Kernel radius in pixels (only for ``method="local_correlation"``).
+        method: ``"auto"`` or ``"local_correlation"``.
+        **kwargs: Forwarded to :func:`make_mask` (``threshold``,
+            ``lowpass_sigma``, ``extend``, ``soft_edge``, ``cleanup``).
 
     Returns:
         Soft mask as a float array in [0, 1].
+    """
+    if method == "local_correlation":
+        soft_edge = kwargs.get("soft_edge", 2)
+        return _make_mask_from_half_maps_local_corr(halfmap1, halfmap2, smax=smax,
+                                                     soft_edge=soft_edge)
+
+    avg = (np.asarray(halfmap1) + np.asarray(halfmap2)) / 2.0
+    return make_mask(avg, **kwargs)
+
+
+def _make_mask_from_half_maps_local_corr(halfmap1, halfmap2, smax=3, soft_edge=2):
+    """Original EMDA-style mask from half-maps via local cross-correlation.
+
+    Kept for backward compatibility and comparison.  See
+    ``make_mask_from_half_maps`` with ``method="local_correlation"``.
     """
     dilation_iters = int(6 * halfmap1.shape[0] // 128)
     kern = make_soft_edged_kernel(smax, halfmap1.shape)
@@ -137,8 +283,8 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax=3):
 
     ccmap_binary = (halfcc3d >= 1e-3).astype(int)
     dilated = binary_dilation(ccmap_binary, iterations=dilation_iters)
-    mask = soften_volume_mask(dilated, kern_rad=2)
-    return mask * (mask >= 1e-3)
+    result = soften_volume_mask(dilated, kern_rad=soft_edge)
+    return result * (result >= 1e-3)
 
 
 def make_mask_from_gt(gt_map, smax=3, iter=10, from_ft=True):
@@ -398,12 +544,12 @@ def smooth_circular_mask(image_size, radius, thickness):
 # ---------------------------------------------------------------------------
 
 
-def _mask_from_halfmaps(means, smax=3):
+def _mask_from_halfmaps(means, smax=3, method="auto"):
     """Generate mask from pipeline means object (Fourier-space half-maps)."""
     vol_shape = utils.guess_vol_shape_from_vol_size(means.corrected0.size)
     halfmap1 = fourier_transform_utils.get_idft3(means.corrected0reg.reshape(vol_shape)).real
     halfmap2 = fourier_transform_utils.get_idft3(means.corrected1reg.reshape(vol_shape)).real
-    return make_mask_from_half_maps(halfmap1, halfmap2, smax=smax)
+    return make_mask_from_half_maps(halfmap1, halfmap2, smax=smax, method=method)
 
 
 def make_soft_edged_kernel(r1, shape):
