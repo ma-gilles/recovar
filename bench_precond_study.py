@@ -166,8 +166,8 @@ def run_single_mstep_comparison(cryos, gt_mean, W_init, W_prior, U_gt,
     W_half = ftu.full_volume_to_half_volume(W_full.T, volume_shape).T
 
     # Precompute cubic mean
-    from recovar.core import core
-    mean_est_cubic = core.precompute_cubic_coefficients(gt_mean, volume_shape)
+    from recovar.core import precompute_cubic_coefficients
+    mean_est_cubic = precompute_cubic_coefficients(gt_mean, volume_shape)
 
     lhs_summed = jnp.zeros((half_volume_size, tri_sz), dtype=ref.dtype_real)
     rhs_summed = jnp.zeros((half_volume_size, NPC), dtype=ref.dtype)
