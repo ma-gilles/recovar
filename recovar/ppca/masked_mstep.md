@@ -1,55 +1,104 @@
 # Masked PPCA M-step: Formulation and Solver
 
-## Problem
+## Forward model and interpolation
 
-At each EM iteration we solve the M-step: given accumulated data statistics
-$D(\xi)$ (q x q, SPD) and right-hand side $r(\xi)$ (q-vector) at each Fourier
-voxel $\xi$, find the loading matrix $W$ (q columns of a D^3 volume).
+The cryo-EM forward model for image $n$ at 2D Fourier pixel $\eta$:
 
-### Standard (unmasked) M-step
+$$\hat{y}_n(\eta) = C_n(\eta) \cdot \hat{v}_n(R_n^{-1}\eta) + \text{noise}$$
 
-Per-voxel solve in Fourier:
+where $v_n(x) = \mu(x) + \sum_k z_{nk}\,w_k(x)$ is the heterogeneous volume,
+$C_n$ is the CTF, and $R_n$ is the orientation.
 
-$$\hat{W}(\xi) = D(\xi)^{-1} \hat{r}(\xi) \quad \forall \xi$$
+The 3D volume is known on a discrete grid of size $D^3$. Evaluating
+$\hat{v}(R_n^{-1}\eta)$ at off-grid Fourier coordinates requires interpolation.
 
-where $D(\xi) = L(\xi) + \Lambda(\xi)$:
-- $L(\xi) = \sum_n |C_n(\xi)|^2\, \mathbb{E}[z_n z_n^T \mid y_n]$ — data term
-- $\Lambda(\xi) = \text{diag}(1/\tau(\xi))$ — Tikhonov regularization (prior)
+### Trilinear interpolation and the gridding kernel
 
-This decouples across Fourier voxels. Cost: one q x q solve per voxel.
+Trilinear interpolation in 3D Fourier space convolves the discrete spectrum
+with a triangle kernel $K$ of width 1 voxel per axis. Convolution in
+Fourier space is multiplication in real space by $\mathcal{F}(K)$:
 
-### Masked M-step
+$$G(x) = \mathcal{F}(K)(x) = \operatorname{sinc}^2\!\Big(\frac{x_1}{D}\Big)\,
+  \operatorname{sinc}^2\!\Big(\frac{x_2}{D}\Big)\,
+  \operatorname{sinc}^2\!\Big(\frac{x_3}{D}\Big)$$
 
-We want $W(x) \approx 0$ outside a molecular support mask $\Omega$.
-This couples all Fourier voxels.
+So the effective forward model is not "slice $\hat{w}$" but
+"slice $\mathcal{F}[G \cdot w]$":
 
-## Formulation: soft penalty + gridding in the objective
+$$\hat{y}_n(\eta) \approx C_n(\eta)\;\widehat{G\,v_n}(R_n^{-1}\eta)$$
 
-$$\min_W \;\underbrace{\sum_\xi \hat{W}(\xi)^H D(\xi)\, \hat{W}(\xi)
-  - 2\,\text{Re}\,\hat{W}(\xi)^H \hat{r}(\xi)}_{\Phi(W)\text{: data fidelity + regularization}}
-  + \underbrace{\frac{\lambda}{2} \sum_x \alpha(x)\, |W(x)|^2}_{\text{soft boundary penalty}}$$
+The volume that gets projected is $G \cdot w$, not $w$.
 
-### Gridding correction
+### Consequence for reconstruction
 
-The forward model uses trilinear interpolation for Fourier-slice extraction.
-The interpolation kernel $G(x)$ acts in **real space** as a blurring:
+The adjoint (backprojection) of this forward model is:
 
-$$G(x) = \text{sinc}^2(x_1/D)\;\text{sinc}^2(x_2/D)\;\text{sinc}^2(x_3/D)$$
+$$A^H y = G \cdot \mathcal{F}^{-1}\!\Big[\sum_n C_n^*\,\hat{y}_n\;\text{(inserted)}\Big]$$
 
-where $\text{sinc}(t) = \sin(\pi t)/(\pi t)$.
+The factor of $G$ appears because the adjoint of "multiply by $G$ then project"
+is "backproject then multiply by $G$". The normal equations operator $A^H\!A$ is:
 
-Including $G$ in the forward model, the true normal equations are:
+$$A^H\!A\;w = G\;\mathcal{F}^{-1}\!\big[D\;\mathcal{F}[G\,w]\big]$$
 
-$$G\,\mathcal{F}^{-1}\!\big[D\;\mathcal{F}[G\,W]\big] = G\,\mathcal{F}^{-1}[\hat{r}]$$
+where $D(\xi) = \sum_n |C_n(\xi)|^2 \mathbb{E}[z_n z_n^T]$ is the per-voxel
+$q \times q$ data matrix accumulated during the E-step (without interpolation
+weights — those are handled by $G$).
 
-The full objective with gridding becomes:
+**Standard approach (gridding as post-processing):** ignore $G$ in the solve,
+get $\tilde{w} = (D + \Lambda)^{-1} r$ per Fourier voxel, then correct:
+$w = \tilde{w} / G$. This is the RELION-style gridding correction.
 
-$$\min_W \;\sum_\xi \widehat{GW}(\xi)^H D(\xi)\,\widehat{GW}(\xi)
-  - 2\,\text{Re}\,\widehat{GW}(\xi)^H \hat{r}(\xi)
-  + \frac{\lambda}{2} \sum_x \alpha(x)\,|W(x)|^2$$
+**Correct approach (gridding in objective):** solve the true normal equations
+directly, getting the deconvolved $w$ without post-processing.
 
-The solution $W$ is the **deconvolved** volume — no post-processing gridding
-correction is needed.
+## PPCA M-step with soft mask penalty
+
+### PPCA model
+
+Each image $y_n$ is generated from a latent variable $z_n \in \mathbb{R}^q$:
+
+$$y_n = A_n(\mu + W z_n) + \varepsilon_n, \qquad z_n \sim \mathcal{N}(0, I_q)$$
+
+where $A_n$ is the forward operator (project, CTF, interpolation) for image $n$,
+$\mu$ is the mean volume, $W = [w_1 \mid \cdots \mid w_q]$ is the loading matrix
+($q$ principal component volumes), and $\varepsilon_n$ is noise.
+
+### M-step least squares
+
+Given posterior statistics from the E-step:
+- $\bar{z}_n = \mathbb{E}[z_n \mid y_n]$
+- $\Sigma_n = \mathbb{E}[z_n z_n^T \mid y_n]$
+
+The M-step minimizes over $W$:
+
+$$\mathcal{L}(W) = \sum_n \mathbb{E}_{z_n|y_n}\!\big[\|y_n - A_n(\mu + Wz_n)\|^2\big]
+  + \sum_\xi \hat{W}(\xi)^H \Lambda(\xi)\,\hat{W}(\xi)$$
+
+where $\Lambda(\xi) = \operatorname{diag}(1/\tau(\xi))$ is the Tikhonov prior.
+
+Expanding the quadratic and using $A_n = C_n \cdot \mathcal{S}_{R_n} \cdot \mathcal{F} \cdot G$
+(CTF $\times$ slice extraction $\times$ DFT $\times$ gridding), the per-Fourier-voxel
+normal equations are:
+
+$$D(\xi)\,\hat{W}(\xi) = \hat{r}(\xi)$$
+
+where:
+- $D(\xi) = \sum_n |C_n(\xi)|^2\,\Sigma_n + \Lambda(\xi)$ — $q \times q$, SPD
+- $\hat{r}(\xi) = \sum_n C_n^*(\xi)\,\hat{y}_n^{\text{centered}}(\xi)\,\bar{z}_n^T$ — $q$-vector
+
+Without a mask, this decouples per Fourier voxel: $\hat{W}(\xi) = D(\xi)^{-1}\hat{r}(\xi)$.
+
+### Adding the mask
+
+We want $w(x) \approx 0$ outside the molecular support.
+A hard constraint couples all Fourier voxels.
+Instead, we add a soft penalty to the M-step objective:
+
+$$\min_W \;\underbrace{\sum_\xi \widehat{GW}(\xi)^H D(\xi)\,\widehat{GW}(\xi)
+  - 2\operatorname{Re}\,\widehat{GW}(\xi)^H\hat{r}(\xi)}_{\text{data fidelity + Tikhonov, with gridding}}
+  \;+\;\underbrace{\frac{\lambda}{2}\sum_x \alpha(x)\,|W(x)|^2}_{\text{soft boundary penalty}}$$
+
+The solution $W$ is the deconvolved, boundary-regularized loading matrix.
 
 ### Penalty weight $\alpha(x)$
 
