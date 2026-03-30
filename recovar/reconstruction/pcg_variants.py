@@ -521,13 +521,15 @@ def _precond_two_level_reduced(fine_precond_apply, matvec_reduced_fn,
 # CG solver (generic)
 # =====================================================================
 
-def _cg_solve(matvec, precond, rhs, x0, maxiter, tol, ip_fn, label="CG"):
-    """Generic preconditioned CG.
+def _cg_solve(matvec, precond, rhs, x0, maxiter, tol, ip_fn, label="CG",
+              recompute_interval=10):
+    """Generic preconditioned CG with periodic residual recomputation.
 
     All arguments operate on the same vector space (whatever shape).
     matvec(x) → Ax
     precond(r) → M^{-1} r
     ip_fn(a, b) → float (inner product)
+    recompute_interval: recompute r = rhs - A x every N iters (float32 stability)
     """
     t_start = time.time()
 
@@ -545,10 +547,15 @@ def _cg_solve(matvec, precond, rhs, x0, maxiter, tol, ip_fn, label="CG"):
         Ap = matvec(p)
         pAp = ip_fn(p, Ap)
         if pAp < 1e-30:
+            logger.info("%s: pAp=%.2e < 1e-30 at iter %d, stopping", label, pAp, it)
             break
         alpha = rz / pAp
         x = x + alpha * p
         r = r - alpha * Ap
+
+        # Periodically recompute residual from scratch for float32 stability
+        if (it + 1) % recompute_interval == 0:
+            r = rhs - matvec(x)
 
         rr = float(jnp.sqrt(ip_fn(r, r))) / max(b_norm, 1e-30)
         residuals.append(rr)
@@ -560,6 +567,10 @@ def _cg_solve(matvec, precond, rhs, x0, maxiter, tol, ip_fn, label="CG"):
 
         z = precond(r)
         rz_new = ip_fn(r, z)
+        if abs(rz_new) < 1e-30:
+            logger.info("%s: rz_new=%.2e < 1e-30 at iter %d, stopping",
+                       label, rz_new, it + 1)
+            break
         beta = rz_new / max(abs(rz), 1e-30)
         p = z + beta * p
         rz = rz_new

@@ -254,12 +254,12 @@ def run_single_mstep_comparison(cryos, gt_mean, W_init, W_prior, U_gt,
             unpack_fn=unpack_tri_to_full, block=False)),
         ("soft_penalty_100", lambda: pv.solve_soft_penalty(
             lhs_summed, rhs_summed, reg_half, mask_jnp, volume_shape,
-            soft_lam=100.0, W0_real=None, maxiter=CG_MAXITER, tol=CG_TOL,
-            unpack_fn=unpack_tri_to_full)),
+            soft_lam=100.0, W0_real=W_real_warmstart, maxiter=CG_MAXITER,
+            tol=CG_TOL, unpack_fn=unpack_tri_to_full)),
         ("soft_penalty_1000", lambda: pv.solve_soft_penalty(
             lhs_summed, rhs_summed, reg_half, mask_jnp, volume_shape,
-            soft_lam=1000.0, W0_real=None, maxiter=CG_MAXITER, tol=CG_TOL,
-            unpack_fn=unpack_tri_to_full)),
+            soft_lam=1000.0, W0_real=W_real_warmstart, maxiter=CG_MAXITER,
+            tol=CG_TOL, unpack_fn=unpack_tri_to_full)),
         ("two_level", lambda: pv.solve_reduced_two_level(
             lhs_summed, rhs_summed, reg_half, mask_jnp, volume_shape,
             W0_real=W_real_warmstart, maxiter=CG_MAXITER, tol=CG_TOL,
@@ -273,12 +273,18 @@ def run_single_mstep_comparison(cryos, gt_mean, W_init, W_prior, U_gt,
             W_real, info = solver_fn()
             dt = time.time() - t0
 
-            # Compute quality metric (RelVar)
-            W_full_test = ftu.get_dft3(
+            # Compute quality metric (RelVar) — same conversion as EM code
+            W_half = ftu.get_dft3_real(
                 W_real.reshape(NPC, *volume_shape)
-            ).reshape(NPC, -1).T
+            )  # (q, *half_vs) complex
+            W_full_test = ftu.half_volume_to_full_volume(
+                W_half.reshape(NPC, -1), volume_shape
+            ).T  # (vol_size, q)
             U_test, S_test, _ = jnp.linalg.svd(W_full_test, full_matrices=False)
             _, rv, _ = metrics.get_all_variance_scores(U_test, U_gt, s_gt**2)
+            W_norm = float(jnp.linalg.norm(W_real))
+            logger.info("  ||W_real||=%.4f, ||W_full||=%.4f",
+                       W_norm, float(jnp.linalg.norm(W_full_test)))
 
             mem_bytes = 0
             try:
