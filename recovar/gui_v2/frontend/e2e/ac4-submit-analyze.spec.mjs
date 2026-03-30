@@ -76,7 +76,7 @@ test.describe("AC-4: Submit analyze job (suggested next)", () => {
     await waitForApp(page);
 
     // Select Analyze from the job type dropdown
-    await page.getByLabel(/Job Type/i).selectOption("analyze");
+    await page.locator("select").first().selectOption("analyze");
 
     // Should see Analyze form fields
     await expect(page.getByText(/Result Directory/i).first()).toBeVisible({

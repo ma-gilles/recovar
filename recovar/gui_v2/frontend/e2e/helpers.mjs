@@ -36,7 +36,12 @@ export async function apiGet(path) {
   return resp.json();
 }
 
-/** Create a project via API and scan pipeline_output_old into it. */
+/** Create a project via API and scan pipeline_output_old into it.
+ *
+ *  Idempotent: if the pipeline output was already imported in a previous
+ *  test run (same project path), we look up the existing Pipeline job
+ *  from the project's job list instead of failing.
+ */
 export async function setupProjectWithPipelineJob() {
   const project = await apiPost(
     "/projects",
@@ -47,8 +52,18 @@ export async function setupProjectWithPipelineJob() {
     `/projects/${project.id}/scan`, { scan_path: PIPELINE_OUTPUT }
   );
 
-  const pipelineJob = scan.imported.find((j) => j.type === "Pipeline");
-  if (!pipelineJob) throw new Error("No pipeline job imported from scan");
+  // Try newly imported jobs first
+  let pipelineJob = scan.imported.find((j) => j.type === "Pipeline");
+
+  if (!pipelineJob) {
+    // Scan imported nothing new — the job may already exist from a
+    // previous run.  Look it up from the project's job list.
+    const projectData = await apiGet(`/projects/${project.id}`);
+    const jobs = projectData.jobs || [];
+    pipelineJob = jobs.find((j) => j.type === "Pipeline");
+  }
+
+  if (!pipelineJob) throw new Error("No pipeline job found after scan");
 
   return {
     projectId: project.id,

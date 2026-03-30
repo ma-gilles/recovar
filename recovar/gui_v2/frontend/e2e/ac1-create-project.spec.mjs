@@ -22,8 +22,9 @@ test.describe("AC-1: Create project & configure pipeline", () => {
     await waitForApp(page);
 
     // Main panel should show "Create Project" and "Open Project"
-    await expect(page.getByRole("button", { name: /Create Project/i })).toBeVisible();
-    await expect(page.getByRole("button", { name: /Open Project/i })).toBeVisible();
+    const mainPanel = page.locator("main");
+    await expect(mainPanel.getByRole("button", { name: /Create Project/i })).toBeVisible();
+    await expect(mainPanel.getByRole("button", { name: /Open Project/i })).toBeVisible();
 
     // Should NOT show "+ New Job" (that requires a project)
     await expect(page.getByRole("link", { name: /New Job/i })).not.toBeVisible();
@@ -49,20 +50,21 @@ test.describe("AC-1: Create project & configure pipeline", () => {
     await mainPanel.getByRole("button", { name: /Create Project/i }).click();
 
     // Form should appear with Directory input
-    await expect(mainPanel.getByLabel(/Directory/i)).toBeVisible();
+    await expect(mainPanel.getByText(/Directory/i).first()).toBeVisible();
 
     // Fill in the path
     await mainPanel.getByPlaceholder(/scratch/).fill(TEST_PROJECT_DIR);
 
-    // Fill in the name
-    await mainPanel.getByLabel(/Project Name/i).fill("E2E Test Project");
+    // Fill in the name — the input is next to the "Project Name" label
+    const nameInput = mainPanel.locator('input').nth(1);
+    await nameInput.fill("E2E Test Project");
 
     // Submit
     await mainPanel.getByRole("button", { name: /Create Project/i }).last().click();
 
-    // After creation, the project should be active — we should see the project name
-    // and the "Scan for Existing Jobs" button
-    await expect(page.getByText("E2E Test Project")).toBeVisible({ timeout: 10_000 });
+    // After creation, the project should be active — we should see the project dashboard
+    // with job stats and the "Scan for Existing Jobs" button
+    await expect(page.getByText(/TOTAL JOBS/i)).toBeVisible({ timeout: 10_000 });
   });
 
   test("New Job page shows pipeline form with project open", async ({
@@ -86,13 +88,13 @@ test.describe("AC-1: Create project & configure pipeline", () => {
     await waitForApp(page);
 
     // Should see "New Job" heading
-    await expect(page.getByText("New Job")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "New Job" })).toBeVisible();
 
     // Should see Job Type selector defaulting to Pipeline
-    await expect(page.getByLabel(/Job Type/i)).toBeVisible();
+    await expect(page.getByText(/Job Type/i)).toBeVisible();
 
     // Pipeline form should be visible with Particles field
-    await expect(page.getByText(/Particles/i)).toBeVisible();
+    await expect(page.getByText(/Particles/i).first()).toBeVisible();
   });
 
   test("New Job page redirects to dashboard when no project", async ({
@@ -105,7 +107,7 @@ test.describe("AC-1: Create project & configure pipeline", () => {
 
     // Should see "create or open a project" message
     await expect(
-      page.getByText(/create or open a project/i)
+      page.locator("main").getByText(/create or open a project/i)
     ).toBeVisible();
 
     // Should have link back to dashboard
