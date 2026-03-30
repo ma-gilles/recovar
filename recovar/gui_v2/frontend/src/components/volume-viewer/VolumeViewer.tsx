@@ -40,7 +40,8 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
   const [activeVolume, setActiveVolume] = useState<string | null>(initialVolumePath ?? null);
   const [axis, setAxis] = useState<0 | 1 | 2>(2); // Z axis default
   const [sliceIdx, setSliceIdx] = useState(0);
-  const [viewMode, setViewMode] = useState<"slice" | "3d">("slice");
+  const [viewMode, setViewMode] = useState<"slice" | "3d">("3d");
+  const [activeSigma, setActiveSigma] = useState(3.0);
   const [maxSlice, setMaxSlice] = useState(128);
 
   // Load volume info for the active volume
@@ -159,6 +160,22 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
             </>
           )}
 
+          {viewMode === "3d" && activeVolume && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-400">Threshold</span>
+              <input
+                type="range"
+                min={0}
+                max={10}
+                step={0.1}
+                value={activeSigma}
+                onChange={(e) => setActiveSigma(parseFloat(e.target.value))}
+                className="w-40"
+              />
+              <span className="text-xs text-zinc-300 w-10">{activeSigma.toFixed(1)}σ</span>
+            </div>
+          )}
+
           <div className="ml-auto">
             <Button
               variant="ghost"
@@ -187,6 +204,7 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
               <VtkViewer
                 activeVolume={activeVolume}
                 pinnedVolumes={pinnedVolumes}
+                activeSigma={activeSigma}
               />
             </VtkErrorBoundary>
           ) : (

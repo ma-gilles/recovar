@@ -292,6 +292,20 @@ function volumeDisplayName(v: VolumeEntry, needsDisambiguation: boolean): string
   return v.name;
 }
 
+/** Human-readable labels for volume categories. */
+const CATEGORY_LABELS: Record<string, string> = {
+  mean: "Mean Volume",
+  eigen: "Eigenvolumes",
+  variance: "Variance",
+  halfmap: "Half-maps (Unfiltered)",
+  mask: "Masks",
+  kmeans_center: "K-means Centers",
+  trajectory: "Trajectory Volumes",
+  reconstruction: "Reconstructions",
+  density: "Density",
+  other: "Other",
+};
+
 /** Default number of items shown in a collapsed category. */
 const COLLAPSED_LIMIT = 5;
 
@@ -315,7 +329,7 @@ function VolumeCategoryGroup({
   return (
     <div>
       <h4 className="mb-2 text-xs font-medium uppercase tracking-wider text-zinc-500">
-        {cat} ({vols.length})
+        {CATEGORY_LABELS[cat] ?? cat} ({vols.length})
       </h4>
       <div className="grid grid-cols-2 gap-2 md:grid-cols-3 lg:grid-cols-4">
         {visible.map((v) => {

@@ -65,6 +65,8 @@ export interface PinnedVolumeState {
 interface VtkViewerProps {
   /** Active single-volume path (used when no pinned volumes). */
   activeVolume: string | null;
+  /** Sigma threshold for the active volume (when no pinned volumes). */
+  activeSigma?: number;
   /** Pinned volumes with per-volume controls. */
   pinnedVolumes: PinnedVolumeState[];
 }
@@ -179,7 +181,7 @@ function nx_ny_nz(vol: VolumeData): [number, number, number] {
 
 // ---- Component ----
 
-export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): React.JSX.Element {
+export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes }: VtkViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const renderContextRef = useRef<any>(null);
@@ -407,7 +409,7 @@ export function VtkViewer({ activeVolume, pinnedVolumes }: VtkViewerProps): Reac
   const volumesToShow = pinnedVolumes.length > 0
     ? pinnedVolumes
     : activeVolume
-      ? [{ path: activeVolume, name: "", threshold: 3.0, opacity: 0.8, visible: true, colorIndex: 0 }]
+      ? [{ path: activeVolume, name: "", threshold: activeSigma, opacity: 0.8, visible: true, colorIndex: 0 }]
       : [];
 
   // Sync pipelines with volumesToShow

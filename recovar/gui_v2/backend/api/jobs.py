@@ -204,9 +204,19 @@ async def _get_job(job_id: str) -> tuple[Job, Any]:
     raise HTTPException(status_code=404, detail="Job not found")
 
 
-def _categorize_volume(name: str) -> str:
-    """Assign a display category to an MRC filename."""
+def _categorize_volume(name: str, rel_path: str = "") -> str:
+    """Assign a display category to an MRC filename.
+
+    *rel_path* is the path relative to the job output directory,
+    used to detect subfolder structure (e.g. kmeans/, trajectories/).
+    """
     lower = name.lower()
+    rel_lower = rel_path.lower()
+
+    # Local resolution files are shading overlays, not standalone volumes
+    if "locres" in lower or "local_res" in lower or "local_resolution" in lower:
+        return "locres"
+
     if "mean" in lower:
         return "mean"
     if "eigen" in lower:
@@ -217,8 +227,18 @@ def _categorize_volume(name: str) -> str:
         return "halfmap"
     if "mask" in lower:
         return "mask"
-    if "center" in lower or "state" in lower:
+
+    # Analyze job subfolder detection
+    if "kmeans" in rel_lower or "center" in lower:
+        return "kmeans_center"
+    if "trajectory" in rel_lower or "traj" in lower:
+        return "trajectory"
+
+    if "state" in lower:
         return "reconstruction"
+    if "density" in lower or "deconv" in lower:
+        return "density"
+
     return "other"
 
 
@@ -515,18 +535,26 @@ async def list_volumes(job_id: str) -> list[VolumeEntry]:
         return volumes
 
     for dirpath, _, filenames in os.walk(output_dir):
+        rel_dir = os.path.relpath(dirpath, output_dir)
         for fname in sorted(filenames):
             if not fname.endswith(".mrc"):
                 continue
             full = os.path.join(dirpath, fname)
+            rel_path = os.path.join(rel_dir, fname)
+            category = _categorize_volume(fname, rel_path)
+            # Skip local resolution files (they are volume shading, not standalone)
+            if category == "locres":
+                continue
             try:
                 size = os.path.getsize(full)
             except OSError:
                 size = 0
+            # Use subfolder in display name for clarity
+            display_name = fname if rel_dir == "." else os.path.join(rel_dir, fname)
             volumes.append(VolumeEntry(
-                name=fname,
+                name=display_name,
                 path=full,
-                category=_categorize_volume(fname),
+                category=category,
                 size_bytes=size,
             ))
 
