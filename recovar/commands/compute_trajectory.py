@@ -109,6 +109,38 @@ def compute_trajectory(
     precision_entry = "latent_precision_noreg" if no_z_reg else "latent_precision"
     contrast_entry = "contrasts_noreg" if no_z_reg else "contrasts"
 
+    # Fallback pairs: if the preferred entry doesn't exist, try the other variant
+    _coords_fallbacks = {"latent_coords_noreg": "latent_coords", "latent_coords": "latent_coords_noreg"}
+    _precision_fallbacks = {"latent_precision_noreg": "latent_precision", "latent_precision": "latent_precision_noreg"}
+    _contrast_fallbacks = {"contrasts_noreg": "contrasts", "contrasts": "contrasts_noreg"}
+
+    def _resolve_entry(po, entry, fallback_map, label):
+        """Check if the embedding entry exists; if not, try the fallback."""
+        has_check = hasattr(po, "has_embedding_entry")
+        if has_check and po.has_embedding_entry(entry):
+            return entry
+        alt = fallback_map.get(entry)
+        if alt and has_check and po.has_embedding_entry(alt):
+            logger.warning(
+                "Embedding entry '%s' not found, falling back to '%s'", entry, alt
+            )
+            return alt
+        # If has_embedding_entry is not available, just return the original
+        # and let downstream code raise its own error.
+        if not has_check:
+            return entry
+        # Neither exists -- build a helpful error message
+        po._ensure_embedding_raw_loaded()
+        available = list(po.embedding.keys()) if po.embedding else []
+        raise KeyError(
+            f"{label} embedding entry '{entry}' (and fallback '{alt}') not found. "
+            f"Available embedding entries: {available}"
+        )
+
+    coords_entry = _resolve_entry(po, coords_entry, _coords_fallbacks, "coords")
+    precision_entry = _resolve_entry(po, precision_entry, _precision_fallbacks, "precision")
+    contrast_entry = _resolve_entry(po, contrast_entry, _contrast_fallbacks, "contrast")
+
     if hasattr(po, "get_embedding_keys"):
         zs_keys = list(po.get_embedding_keys(coords_entry))
     else:

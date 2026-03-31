@@ -73,7 +73,7 @@ recovar pipeline particles.star -o output --mask mask.mrc
 recovar analyze output --zdim=10
 
 # 3. Explore results interactively
-recovar gui --scan-dir output
+recovar gui
 # Or view volumes in ChimeraX:
 # chimerax output/analysis_10/kmeans/center000.mrc
 ```

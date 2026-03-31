@@ -8,7 +8,7 @@ All RECOVAR commands follow the pattern `recovar <command> [arguments]`.
 |---------|-------------|
 | `pipeline` | Run the full heterogeneity analysis pipeline |
 | `analyze` | Post-pipeline analysis (k-means, volumes, UMAP) |
-| `gui` | Launch the web GUI for interactive job management and analysis |
+| `gui` | Launch the web GUI (default: `http://localhost:8080`) |
 | `quickstart` | Interactive wizard for pipeline setup |
 | `init_project` | Initialize a project directory with auto-numbered jobs |
 | `project_status` | Show status of all jobs in a project |
@@ -278,11 +278,9 @@ recovar gui [options]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--port` | 5000 | Port to bind to |
+| `--port` | 8080 | Port to bind to |
 | `--host` | 127.0.0.1 | Bind address (`0.0.0.0` for remote access) |
-| `--scan-dir` | None | Discover existing pipeline outputs (repeatable) |
-| `--debug` | False | Debug mode with auto-reload |
-| `--python-path` | Current | Python interpreter for job execution |
+| `--reload` | False | Auto-reload for development |
 
 See the [GUI Guide](../guide/gui.md) for full documentation.
 
