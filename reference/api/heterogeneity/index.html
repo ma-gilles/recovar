@@ -1611,17 +1611,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#recovar.heterogeneity.embedding.get_per_image_embedding_multi_zdim" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        get_per_image_embedding_multi_zdim
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#recovar.heterogeneity.embedding.set_contrasts_in_cryos" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2480,17 +2469,6 @@
     <span class="md-ellipsis">
       
         compute_grouped_shared_batch_coords
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#recovar.heterogeneity.embedding.get_per_image_embedding_multi_zdim" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        get_per_image_embedding_multi_zdim
       
     </span>
   </a>
@@ -3985,7 +3963,7 @@ lower peak memory on large arrays.</p>
 
 
 <h3 id="recovar.heterogeneity.embedding.get_per_image_embedding" class="doc doc-heading">
-            <code class="highlight language-python"><span class="n">get_per_image_embedding</span><span class="p">(</span><span class="n">mean</span><span class="p">,</span> <span class="n">u</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">basis_size</span><span class="p">,</span> <span class="n">dataset</span><span class="p">,</span> <span class="n">volume_mask</span><span class="p">,</span> <span class="n">gpu_memory</span><span class="p">,</span> <span class="n">disc_type</span><span class="o">=</span><span class="s1">&#39;linear_interp&#39;</span><span class="p">,</span> <span class="n">contrast_grid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">contrast_option</span><span class="o">=</span><span class="s1">&#39;contrast&#39;</span><span class="p">,</span> <span class="n">to_real</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">compute_covariances</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">ignore_zero_frequency</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">contrast_mean</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">contrast_variance</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">,</span> <span class="n">compute_bias</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">image_subset_in_tilt_series</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+            <code class="highlight language-python"><span class="n">get_per_image_embedding</span><span class="p">(</span><span class="n">mean</span><span class="p">,</span> <span class="n">u</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">basis_size</span><span class="p">,</span> <span class="n">dataset</span><span class="p">,</span> <span class="n">volume_mask</span><span class="p">,</span> <span class="n">gpu_memory</span><span class="p">,</span> <span class="n">disc_type</span><span class="o">=</span><span class="s1">&#39;linear_interp&#39;</span><span class="p">,</span> <span class="n">contrast_grid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">contrast_option</span><span class="o">=</span><span class="s1">&#39;contrast&#39;</span><span class="p">,</span> <span class="n">compute_covariances</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">ignore_zero_frequency</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">contrast_mean</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">contrast_variance</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">,</span> <span class="n">compute_bias</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">image_subset_in_tilt_series</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
 
 <a href="#recovar.heterogeneity.embedding.get_per_image_embedding" class="headerlink" title="Permanent link">&para;</a></h3>
 
@@ -4159,21 +4137,6 @@ a list of two half-set <code>CryoEMDataset</code> instances.</p>
             </td>
             <td>
                   <code>&#39;contrast&#39;</code>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>to_real</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Convert output to real-valued coordinates.</p>
-              </div>
-            </td>
-            <td>
-                  <code>True</code>
             </td>
           </tr>
           <tr class="doc-section-item">
@@ -4392,299 +4355,6 @@ preserving shared-label semantics.</p>
 <div class="doc doc-object doc-function">
 
 
-<h3 id="recovar.heterogeneity.embedding.get_per_image_embedding_multi_zdim" class="doc doc-heading">
-            <code class="highlight language-python"><span class="n">get_per_image_embedding_multi_zdim</span><span class="p">(</span><span class="n">mean</span><span class="p">,</span> <span class="n">u</span><span class="p">,</span> <span class="n">s</span><span class="p">,</span> <span class="n">n_pcs_list</span><span class="p">,</span> <span class="n">dataset</span><span class="p">,</span> <span class="n">volume_mask</span><span class="p">,</span> <span class="n">gpu_memory</span><span class="p">,</span> <span class="n">disc_type</span><span class="o">=</span><span class="s1">&#39;linear_interp&#39;</span><span class="p">,</span> <span class="n">contrast_grid</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">contrast_option</span><span class="o">=</span><span class="s1">&#39;none&#39;</span><span class="p">,</span> <span class="n">ignore_zero_frequency</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">contrast_mean</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">contrast_variance</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">inf</span><span class="p">)</span></code>
-
-<a href="#recovar.heterogeneity.embedding.get_per_image_embedding_multi_zdim" class="headerlink" title="Permanent link">&para;</a></h3>
-
-
-    <div class="doc doc-contents ">
-
-        <p>Compute per-image embeddings for multiple n_pcs values in a single data pass.</p>
-<p>Replaces N separate calls to :func:<code>get_per_image_embedding</code> with a single
-forward-model pass (at <code>max(n_pcs_list)</code> basis vectors) that accumulates
-sufficient statistics, then solves lightweight linear systems for each
-<code>(n_pcs, regularized/unregularized)</code> pair.  Typically 5–10× faster than
-calling :func:<code>get_per_image_embedding</code> independently for each zdim.</p>
-<p>Not supported for tilt-series data.</p>
-
-
-<p><span class="doc-section-title">Parameters:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Type</th>
-          <th>Description</th>
-          <th>Default</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td>
-                <code>mean</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Mean volume in Fourier space, shape <code>(volume_size,)</code>.</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>u</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Eigenvectors, shape <code>(volume_size, n_max_components)</code>.</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>s</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Eigenvalues, shape <code>(n_max_components,)</code>.</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>n_pcs_list</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>List of int — n_pcs values to compute (need not be sorted).</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>dataset</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>A <code>CryoEMDataset</code> with <code>halfset_indices</code> set, or
-a list of two half-set <code>CryoEMDataset</code> instances.</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>volume_mask</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Binary mask selecting valid voxels.</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>gpu_memory</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Available GPU memory in GB.</p>
-              </div>
-            </td>
-            <td>
-                <em>required</em>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>disc_type</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Discretization type (overridden to <code>'cubic'</code> when <code>USE_CUBIC</code>).</p>
-              </div>
-            </td>
-            <td>
-                  <code>&#39;linear_interp&#39;</code>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>contrast_grid</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Contrast values to search (default: 50-point grid).</p>
-              </div>
-            </td>
-            <td>
-                  <code>None</code>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>contrast_option</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Contrast mode (<code>'none'</code>, <code>'contrast'</code>, …).</p>
-              </div>
-            </td>
-            <td>
-                  <code>&#39;none&#39;</code>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>ignore_zero_frequency</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Exclude DC component.</p>
-              </div>
-            </td>
-            <td>
-                  <code>False</code>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>contrast_mean</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Prior mean for contrast estimation.</p>
-              </div>
-            </td>
-            <td>
-                  <code>1</code>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-                <code>contrast_variance</code>
-            </td>
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>Prior variance for contrast estimation.</p>
-              </div>
-            </td>
-            <td>
-                  <code><span title="numpy.inf">inf</span></code>
-            </td>
-          </tr>
-      </tbody>
-    </table>
-
-
-    <p><span class="doc-section-title">Returns:</span></p>
-    <table>
-      <thead>
-        <tr>
-          <th>Type</th>
-          <th>Description</th>
-        </tr>
-      </thead>
-      <tbody>
-          <tr class="doc-section-item">
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p><code>(zs_reg, zs_noreg)</code> — two dicts keyed by <em>n_pcs</em> (int).  Each value</p>
-              </div>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p>is a tuple <code>(xs, cov_zs, contrasts)</code> where <em>xs</em> has shape</p>
-              </div>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p><code>(n_total_images, n_pcs)</code>, <em>cov_zs</em> has shape</p>
-              </div>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p><code>(n_total_images, n_pcs, n_pcs)</code>, and <em>contrasts</em> has shape</p>
-              </div>
-            </td>
-          </tr>
-          <tr class="doc-section-item">
-            <td>
-            </td>
-            <td>
-              <div class="doc-md-description">
-                <p><code>(n_total_images,)</code>.</p>
-              </div>
-            </td>
-          </tr>
-      </tbody>
-    </table>
-
-
-    </div>
-
-</div>
-
-<div class="doc doc-object doc-function">
-
-
 <h3 id="recovar.heterogeneity.embedding.set_contrasts_in_cryos" class="doc doc-heading">
             <code class="highlight language-python"><span class="n">set_contrasts_in_cryos</span><span class="p">(</span><span class="n">dataset</span><span class="p">,</span> <span class="n">contrasts</span><span class="p">)</span></code>
 
@@ -4694,10 +4364,6 @@ a list of two half-set <code>CryoEMDataset</code> instances.</p>
     <div class="doc doc-contents ">
 
         <p>Apply per-image contrast factors to CTF parameters.</p>
-<p>The <em>contrasts</em> array must be in concatenated halfset order (half-0
-images followed by half-1 images).  For the unified single-dataset
-design, callers that need original-order contrasts should reindex
-before calling this function.</p>
 
 
     </div>

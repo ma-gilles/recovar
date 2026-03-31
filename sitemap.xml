@@ -2,114 +2,114 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
     <url>
          <loc>https://ma-gilles.github.io/recovar/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/troubleshooting/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/getting-started/docker/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/getting-started/installation/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/getting-started/quickstart/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/getting-started/testing/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/analysis/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/conformational-density/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/cryo-et/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/downsampling/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/external-embeddings/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/extracting-subsets/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/gui/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/input-data/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/masks/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/outlier-detection/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/pipeline/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/guide/tutorial/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/reference/cli/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/reference/file-formats/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/reference/api/core/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/reference/api/data_io/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/reference/api/em/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/reference/api/heterogeneity/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/reference/api/output/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/reference/api/reconstruction/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/reference/api/simulation/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
     <url>
          <loc>https://ma-gilles.github.io/recovar/reference/api/utils/</loc>
-         <lastmod>2026-03-30</lastmod>
+         <lastmod>2026-03-31</lastmod>
     </url>
 </urlset>
