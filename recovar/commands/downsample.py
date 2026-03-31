@@ -39,6 +39,7 @@ def downsample_to_disk(
     datadir: str = "",
     strip_prefix: Optional[str] = None,
     batch_size: int = 1000,
+    gpu_memory_gb: Optional[float] = None,
 ) -> Tuple[str, str]:
     """Pre-downsample particle images to disk via Fourier cropping.
 
@@ -59,6 +60,8 @@ def downsample_to_disk(
         Prefix to strip from paths in star/cs file.
     batch_size : int
         Number of images per batch.
+    gpu_memory_gb : float or None
+        Optional GPU memory budget in GB for auto batch sizing.
 
     Returns
     -------
@@ -107,7 +110,9 @@ def downsample_to_disk(
     if use_gpu:
         from recovar.utils import helpers
 
-        gpu_memory = helpers.get_gpu_memory_total()
+        gpu_memory = helpers.get_gpu_memory_total() if gpu_memory_gb is None else float(gpu_memory_gb)
+        if gpu_memory <= 0:
+            raise ValueError("gpu_memory_gb must be positive")
         batch_size = get_downsample_batch_size(orig_D, gpu_memory)
         logger.info("GPU downsampling: batch_size=%d (%.1f GB GPU)", batch_size, gpu_memory)
     else:
@@ -128,12 +133,26 @@ def downsample_to_disk(
         if new_apix:
             mrc.voxel_size = new_apix
 
-        for start in range(0, n_images, batch_size):
-            end = min(start + batch_size, n_images)
+        start = 0
+        current_batch_size = batch_size
+        while start < n_images:
+            end = min(start + current_batch_size, n_images)
             indices = np.arange(start, end)
 
             images = loader.get(indices)
-            images_ds = downsample_images(images, target_D, use_gpu=use_gpu)
+            try:
+                images_ds = downsample_images(images, target_D, use_gpu=use_gpu)
+            except Exception as exc:
+                if use_gpu and current_batch_size > 1 and _is_gpu_oom(exc):
+                    next_batch_size = max(1, current_batch_size // 2)
+                    logger.warning(
+                        "GPU OOM during downsampling at batch_size=%d; retrying with batch_size=%d",
+                        current_batch_size,
+                        next_batch_size,
+                    )
+                    current_batch_size = next_batch_size
+                    continue
+                raise
             mrc.data[start:end] = images_ds.astype(np.float32)
 
             elapsed = time.time() - t0
@@ -146,6 +165,7 @@ def downsample_to_disk(
                 rate,
                 eta,
             )
+            start = end
 
     elapsed = time.time() - t0
     logger.info("Done: %.1f seconds (%.1f images/sec)", elapsed, n_images / elapsed)
@@ -174,6 +194,14 @@ def main():
     parser.add_argument("--datadir", default=None, help="Path prefix for resolving relative image paths")
     parser.add_argument("--strip-prefix", default=None, help="Prefix to strip from paths in star file")
     parser.add_argument("--batch-size", type=int, default=1000, help="Number of images per batch (default: 1000)")
+    parser.add_argument(
+        "--gpu-gb",
+        "--gpu-memory",
+        dest="gpu_memory",
+        type=float,
+        default=None,
+        help="Cap GPU memory used for auto batch sizing during downsampling",
+    )
     parser.add_argument(
         "--chunk-size",
         type=int,
@@ -219,6 +247,7 @@ def main():
             datadir=args.datadir or "",
             strip_prefix=args.strip_prefix,
             batch_size=args.batch_size,
+            gpu_memory_gb=args.gpu_memory,
         )
 
         logger.info("")
@@ -440,6 +469,11 @@ def _write_minimal_star(star_path, mrcs_rel, target_D, new_apix, n_images):
 
     starfile.write({"optics": optics, "particles": particles}, star_path, overwrite=True)
     logger.info("Wrote minimal STAR file (no poses/CTF \u2014 use original file for pipeline)")
+
+
+def _is_gpu_oom(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "resource_exhausted" in message or "out of memory" in message or "allocator" in message
 
 
 if __name__ == "__main__":

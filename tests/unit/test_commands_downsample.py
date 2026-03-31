@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 
 from recovar.commands import downsample as ds_cmd
+from recovar.data_io import downsample as ds_io
 
 pytestmark = pytest.mark.unit
 
@@ -71,6 +72,78 @@ def test_downsample_to_disk_rejects_odd_target_D(tmp_path):
         )
 
 
+def test_downsample_to_disk_uses_explicit_gpu_memory_cap(monkeypatch, tmp_path):
+    class _FakeLoader:
+        num_images = 2
+        image_size = 64
+
+        def get(self, indices):
+            return np.zeros((len(indices), 64, 64), dtype=np.float32)
+
+    calls = {}
+
+    monkeypatch.setattr(ds_cmd, "_get_pixel_size", lambda _p: 1.5)
+    monkeypatch.setattr(ds_cmd, "_write_output_star", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ds_io, "_gpu_available", lambda: True)
+
+    def _record_batch_size(orig_D, gpu_memory_gb):
+        calls["batch_args"] = (orig_D, gpu_memory_gb)
+        return 4
+
+    monkeypatch.setattr(ds_io, "get_downsample_batch_size", _record_batch_size)
+    monkeypatch.setattr(ds_io, "downsample_images", lambda images, target_D, use_gpu=None: images[:, :target_D, :target_D])
+    monkeypatch.setattr("recovar.data_io.image_loader.load_images", lambda *args, **kwargs: _FakeLoader())
+
+    import recovar.utils.helpers as helpers
+
+    monkeypatch.setattr(helpers, "get_gpu_memory_total", lambda: (_ for _ in ()).throw(AssertionError("unexpected")))
+
+    ds_cmd.downsample_to_disk(
+        particles_file="particles.star",
+        target_D=32,
+        outdir=str(tmp_path),
+        gpu_memory_gb=12.0,
+    )
+
+    assert calls["batch_args"] == (64, 12.0)
+
+
+def test_downsample_to_disk_retries_with_smaller_batch_on_gpu_oom(monkeypatch, tmp_path):
+    class _FakeLoader:
+        num_images = 5
+        image_size = 64
+
+        def get(self, indices):
+            return np.zeros((len(indices), 64, 64), dtype=np.float32)
+
+    batch_sizes = []
+    state = {"failed": False}
+
+    monkeypatch.setattr(ds_cmd, "_get_pixel_size", lambda _p: 1.5)
+    monkeypatch.setattr(ds_cmd, "_write_output_star", lambda *args, **kwargs: None)
+    monkeypatch.setattr(ds_io, "_gpu_available", lambda: True)
+    monkeypatch.setattr(ds_io, "get_downsample_batch_size", lambda _orig_D, _gpu_memory_gb: 4)
+    monkeypatch.setattr("recovar.data_io.image_loader.load_images", lambda *args, **kwargs: _FakeLoader())
+
+    def _fake_downsample_images(images, target_D, use_gpu=None):
+        batch_sizes.append(len(images))
+        if len(images) == 4 and not state["failed"]:
+            state["failed"] = True
+            raise RuntimeError("RESOURCE_EXHAUSTED: out of memory")
+        return images[:, :target_D, :target_D]
+
+    monkeypatch.setattr(ds_io, "downsample_images", _fake_downsample_images)
+
+    ds_cmd.downsample_to_disk(
+        particles_file="particles.star",
+        target_D=32,
+        outdir=str(tmp_path),
+        gpu_memory_gb=12.0,
+    )
+
+    assert batch_sizes == [4, 2, 2, 1]
+
+
 # ---------------------------------------------------------------------------
 # main – argument parsing
 # ---------------------------------------------------------------------------
@@ -112,6 +185,16 @@ def test_main_registers_batch_size_with_default():
     parser.add_argument("--batch-size", type=int, default=1000)
     action = parser._option_string_actions["--batch-size"]
     assert action.default == 1000
+
+
+def test_main_registers_gpu_memory_cap():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("particles")
+    parser.add_argument("-D", "--target-D", type=int, required=True)
+    parser.add_argument("-o", "--outdir", required=True)
+    parser.add_argument("--gpu-gb", "--gpu-memory", dest="gpu_memory", type=float, default=None)
+    action = parser._option_string_actions["--gpu-gb"]
+    assert action.dest == "gpu_memory"
 
 
 def test_main_exits_on_odd_target_D(monkeypatch, tmp_path):
