@@ -49,7 +49,6 @@ All RECOVAR commands follow the pattern `recovar <command> [arguments]`.
 | Command | Description |
 |---------|-------------|
 | `reconstruct_from_external_embedding` | Volume generation from external latent spaces |
-| `compute_embedding` | Compute latent space embeddings |
 | `postprocess` | Post-processing and output refinement |
 
 ## Testing

@@ -4,8 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.commands import compute_embedding, estimate_conformational_density
-from recovar.reconstruction.homogeneous import MeanEstimate
+from recovar.commands import estimate_conformational_density
 
 pytestmark = pytest.mark.unit
 
@@ -95,98 +94,3 @@ def test_estimate_conformational_density_forwards_percentile_and_defaults(monkey
     assert calls["args"]["num_points"] == 200  # pca_dim=2 default
     assert calls["args"]["percentile_bound"] == 9
     assert np.allclose(calls["args"]["alphas"], np.array([1e-2, 1e-1]))
-
-
-def test_compute_embedding_uses_saved_z_keys(monkeypatch):
-    fake_results = {
-        "input_args": SimpleNamespace(zdim=[4, 10]),
-        "means": MeanEstimate(
-            combined=np.zeros(4, dtype=np.float32),
-            corrected0=np.zeros(4, dtype=np.float32),
-            corrected1=np.zeros(4, dtype=np.float32),
-            corrected0reg=np.zeros(4, dtype=np.float32),
-            corrected1reg=np.zeros(4, dtype=np.float32),
-            lhs=np.zeros(4, dtype=np.float32),
-            prior=np.zeros(4, dtype=np.float32),
-        ),
-        "u": {"rescaled": np.zeros((4, 2), dtype=np.float32)},
-        "s": {"rescaled": np.ones(2, dtype=np.float32)},
-        "cov_noise": np.ones(4, dtype=np.float32),
-        "volume_mask": np.ones(4, dtype=np.float32),
-        "latent_coords": {10: np.zeros((3, 10)), 4: np.zeros((3, 4))},
-    }
-
-    calls = []
-
-    monkeypatch.setattr(compute_embedding.o, "load_results_new", lambda _p: fake_results)
-    monkeypatch.setattr(compute_embedding.halfsets, "load_halfset_dataset_from_args", lambda _a: "cryos")
-    monkeypatch.setattr(compute_embedding.utils, "make_algorithm_options", lambda _a: SimpleNamespace(contrast="none"))
-    monkeypatch.setattr(compute_embedding.utils, "get_gpu_memory_total", lambda: 16)
-
-    def fake_get_per_image_embedding(
-        mean,
-        u,
-        s,
-        zdim,
-        cryos,
-        volume_mask,
-        gpu_memory,
-        disc_type,
-        contrast_grid,
-        contrast_option,
-    ):
-        assert cryos == "cryos"
-        calls.append(zdim)
-        n = 5
-        return np.zeros((n, zdim)), np.zeros((n, zdim, zdim)), np.ones(n), np.full(n, -1.0)
-
-    monkeypatch.setattr(compute_embedding.embedding, "get_per_image_embedding", fake_get_per_image_embedding)
-
-    latent_coords, latent_precision, contrasts = compute_embedding.compute_embedding("/tmp/fake")
-
-    assert calls == [4, 10]
-    assert set(latent_coords.keys()) == {4, 10}
-    assert latent_precision[4].shape == (5, 4, 4)
-    assert contrasts[10].shape == (5,)
-
-
-def test_compute_embedding_falls_back_to_input_args_zdim(monkeypatch):
-    fake_results = {
-        "input_args": SimpleNamespace(zdim=[6]),
-        "means": MeanEstimate(
-            combined=np.zeros(4, dtype=np.float32),
-            corrected0=np.zeros(4, dtype=np.float32),
-            corrected1=np.zeros(4, dtype=np.float32),
-            corrected0reg=np.zeros(4, dtype=np.float32),
-            corrected1reg=np.zeros(4, dtype=np.float32),
-            lhs=np.zeros(4, dtype=np.float32),
-            prior=np.zeros(4, dtype=np.float32),
-        ),
-        "u": {"rescaled": np.zeros((4, 2), dtype=np.float32)},
-        "s": {"rescaled": np.ones(2, dtype=np.float32)},
-        "cov_noise": np.ones(4, dtype=np.float32),
-        "volume_mask": np.ones(4, dtype=np.float32),
-        "latent_coords": {},
-    }
-
-    calls = []
-
-    monkeypatch.setattr(compute_embedding.o, "load_results_new", lambda _p: fake_results)
-    monkeypatch.setattr(compute_embedding.halfsets, "load_halfset_dataset_from_args", lambda _a: "cryos")
-    monkeypatch.setattr(compute_embedding.utils, "make_algorithm_options", lambda _a: SimpleNamespace(contrast="none"))
-    monkeypatch.setattr(compute_embedding.utils, "get_gpu_memory_total", lambda: 16)
-    def fake_get_per_image_embedding(mean, u, s, zdim, cryos, volume_mask, gpu_memory, disc_type, contrast_grid, contrast_option):
-        assert cryos == "cryos"
-        calls.append(zdim)
-        return np.zeros((2, zdim)), np.zeros((2, zdim, zdim)), np.zeros(2), None
-
-    monkeypatch.setattr(compute_embedding.embedding, "get_per_image_embedding", fake_get_per_image_embedding)
-
-    latent_coords, latent_precision, _ = compute_embedding.compute_embedding("/tmp/fake")
-    assert calls == [6]
-    assert 6 in latent_coords and 6 in latent_precision
-
-
-def test_compute_embedding_main_not_implemented():
-    with pytest.raises(NotImplementedError):
-        compute_embedding.main()
