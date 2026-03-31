@@ -61,9 +61,7 @@ def plan_em_iteration(
     dot_product_batch = utils.safe_batch_size(dot_base / n_translations * _DOT_MULT)
 
     # E-step: CTF norms (image batching)
-    norm_batch = utils.safe_batch_size(
-        utils.get_image_batch_size(grid_size, max(remaining_memory, 0.01)) * _NORM_MULT
-    )
+    norm_batch = utils.safe_batch_size(utils.get_image_batch_size(grid_size, max(remaining_memory, 0.01)) * _NORM_MULT)
 
     # E-step: softmax normalization (image batching)
     prob_batch = utils.safe_batch_size(projection_batch // _PROB_DIV)

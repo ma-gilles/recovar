@@ -1,6 +1,5 @@
 """Tests for the centralized dense EM memory planner."""
 
-import numpy as np
 import pytest
 
 pytest.importorskip("jax")
@@ -51,9 +50,7 @@ def test_plan_matches_original_e_step_batch_sizes(mock_gpu):
     expected_dot = rec_utils.safe_batch_size(dot_base / n_translations * _DOT_MULT)
     assert plan.dot_product_batch == expected_dot
 
-    expected_norm = rec_utils.safe_batch_size(
-        rec_utils.get_image_batch_size(grid_size, remaining) * _NORM_MULT
-    )
+    expected_norm = rec_utils.safe_batch_size(rec_utils.get_image_batch_size(grid_size, remaining) * _NORM_MULT)
     assert plan.norm_batch == expected_norm
 
     expected_prob = rec_utils.safe_batch_size(expected_proj // _PROB_DIV)

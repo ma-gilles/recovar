@@ -12,17 +12,18 @@ import jax.numpy as jnp
 
 from recovar import utils as rec_utils
 from recovar.core.configs import ForwardModelConfig
-from recovar.em import e_step, m_step, core as em_core
-from recovar.em.states import EMState
-from recovar.em.iterations import E_M_batches_2
+from recovar.em import core as em_core
+from recovar.em import e_step, m_step
 from recovar.em.dense_single_volume import (
-    compute_posterior,
+    MeanStats,
     accumulate_sufficient_statistics,
-    solve_mean,
+    compute_posterior,
     plan_em_iteration,
     run_dense_em_iteration,
-    MeanStats,
+    solve_mean,
 )
+from recovar.em.iterations import E_M_batches_2
+from recovar.em.states import EMState
 
 pytestmark = pytest.mark.unit
 
@@ -91,10 +92,9 @@ class MockDataset:
         self.process_images = staticmethod(_identity_process)
 
         # Fixed images from seed
-        self._images = (
-            rng.standard_normal((N_IMAGES, IMAGE_SIZE)).astype(np.float32)
-            + 1j * rng.standard_normal((N_IMAGES, IMAGE_SIZE)).astype(np.float32)
-        )
+        self._images = rng.standard_normal((N_IMAGES, IMAGE_SIZE)).astype(np.float32) + 1j * rng.standard_normal(
+            (N_IMAGES, IMAGE_SIZE)
+        ).astype(np.float32)
 
         class _ImageSource:
             process_images = staticmethod(_identity_process)
@@ -115,8 +115,8 @@ class MockDataset:
                 None,  # translations
                 jnp.asarray(self.CTF_params[idx]),
                 None,  # noise_variance
-                idx,   # particle_indices
-                idx,   # indices
+                idx,  # particle_indices
+                idx,  # indices
             )
 
     def get_valid_frequency_indices(self, pixel_res):
@@ -136,9 +136,8 @@ def mock_dataset(rng):
 @pytest.fixture
 def seeded_inputs(rng, mock_dataset):
     """Deterministic inputs for snapshot tests."""
-    volume = (
-        rng.standard_normal(VOLUME_SIZE).astype(np.float32)
-        + 1j * rng.standard_normal(VOLUME_SIZE).astype(np.float32)
+    volume = rng.standard_normal(VOLUME_SIZE).astype(np.float32) + 1j * rng.standard_normal(VOLUME_SIZE).astype(
+        np.float32
     )
     rotations = _make_rotations(N_ROTATIONS, rng)
     translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
@@ -153,11 +152,10 @@ def seeded_inputs(rng, mock_dataset):
 
     # Precompute projections for kernel-level tests
     from recovar import core
+
     projections = np.zeros((N_ROTATIONS, IMAGE_SIZE), dtype=np.complex64)
     for i in range(N_ROTATIONS):
-        projections[i] = core.slice_volume(
-            volume, rotations[i:i+1], IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp"
-        )
+        projections[i] = core.slice_volume(volume, rotations[i : i + 1], IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp")
     projections = jnp.asarray(projections)
 
     # Images from the dataset
@@ -186,22 +184,35 @@ def seeded_inputs(rng, mock_dataset):
 # Kernel-level snapshot tests
 # ---------------------------------------------------------------------------
 
+
 def test_compute_dot_products_eqx_snapshot(seeded_inputs):
     """Pin compute_dot_products_eqx output."""
     s = seeded_inputs
-    result = np.asarray(em_core.compute_dot_products_eqx(
-        s["config"], s["projections"], s["batch"], s["translations"],
-        s["ctf_params"], s["noise_variance"],
-    ))
+    result = np.asarray(
+        em_core.compute_dot_products_eqx(
+            s["config"],
+            s["projections"],
+            s["batch"],
+            s["translations"],
+            s["ctf_params"],
+            s["noise_variance"],
+        )
+    )
 
     assert result.shape == (N_IMAGES, N_ROTATIONS, N_TRANSLATIONS)
     assert np.all(np.isfinite(result))
 
     # Self-consistency: compute again, must be identical
-    result2 = np.asarray(em_core.compute_dot_products_eqx(
-        s["config"], s["projections"], s["batch"], s["translations"],
-        s["ctf_params"], s["noise_variance"],
-    ))
+    result2 = np.asarray(
+        em_core.compute_dot_products_eqx(
+            s["config"],
+            s["projections"],
+            s["batch"],
+            s["translations"],
+            s["ctf_params"],
+            s["noise_variance"],
+        )
+    )
     np.testing.assert_array_equal(result, result2)
 
 
@@ -209,17 +220,27 @@ def test_compute_CTFed_proj_norms_eqx_snapshot(seeded_inputs):
     """Pin compute_CTFed_proj_norms_eqx output."""
     s = seeded_inputs
     proj_abs2 = jnp.abs(s["projections"]) ** 2
-    result = np.asarray(em_core.compute_CTFed_proj_norms_eqx(
-        s["config"], proj_abs2, s["ctf_params"], s["noise_variance"],
-    ))
+    result = np.asarray(
+        em_core.compute_CTFed_proj_norms_eqx(
+            s["config"],
+            proj_abs2,
+            s["ctf_params"],
+            s["noise_variance"],
+        )
+    )
 
     assert result.shape == (N_IMAGES, N_ROTATIONS)
     assert np.all(np.isfinite(result))
     assert np.all(result >= 0)  # norms are non-negative
 
-    result2 = np.asarray(em_core.compute_CTFed_proj_norms_eqx(
-        s["config"], proj_abs2, s["ctf_params"], s["noise_variance"],
-    ))
+    result2 = np.asarray(
+        em_core.compute_CTFed_proj_norms_eqx(
+            s["config"],
+            proj_abs2,
+            s["ctf_params"],
+            s["noise_variance"],
+        )
+    )
     np.testing.assert_array_equal(result, result2)
 
 
@@ -230,9 +251,15 @@ def test_sum_up_images_fixed_rots_eqx_snapshot(seeded_inputs):
     Ft_ctf_init = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
 
     Ft_y, Ft_ctf = m_step.sum_up_images_fixed_rots_eqx(
-        s["config"], s["batch"], s["probabilities"], s["translations"],
-        s["rotations"], s["ctf_params"], s["noise_variance"],
-        Ft_y=Ft_y_init, Ft_ctf=Ft_ctf_init,
+        s["config"],
+        s["batch"],
+        s["probabilities"],
+        s["translations"],
+        s["rotations"],
+        s["ctf_params"],
+        s["noise_variance"],
+        Ft_y=Ft_y_init,
+        Ft_ctf=Ft_ctf_init,
     )
 
     Ft_y = np.asarray(Ft_y)
@@ -244,9 +271,15 @@ def test_sum_up_images_fixed_rots_eqx_snapshot(seeded_inputs):
 
     # Self-consistency (atol=1e-6: JIT FP non-determinism at ~1e-7)
     Ft_y2, Ft_ctf2 = m_step.sum_up_images_fixed_rots_eqx(
-        s["config"], s["batch"], s["probabilities"], s["translations"],
-        s["rotations"], s["ctf_params"], s["noise_variance"],
-        Ft_y=Ft_y_init, Ft_ctf=Ft_ctf_init,
+        s["config"],
+        s["batch"],
+        s["probabilities"],
+        s["translations"],
+        s["rotations"],
+        s["ctf_params"],
+        s["noise_variance"],
+        Ft_y=Ft_y_init,
+        Ft_ctf=Ft_ctf_init,
     )
     np.testing.assert_allclose(Ft_y, np.asarray(Ft_y2), atol=1e-6)
     np.testing.assert_allclose(Ft_ctf, np.asarray(Ft_ctf2), atol=1e-6)
@@ -261,9 +294,7 @@ def test_probability_normalization_snapshot(seeded_inputs):
     residuals = rng.standard_normal((N_IMAGES, N_ROTATIONS, N_TRANSLATIONS)).astype(np.float32)
     residuals = jnp.asarray(residuals)
 
-    probs = np.asarray(
-        e_step.compute_probability_from_residual_normal_squared_one_image(residuals)
-    )
+    probs = np.asarray(e_step.compute_probability_from_residual_normal_squared_one_image(residuals))
 
     assert probs.shape == (N_IMAGES, N_ROTATIONS, N_TRANSLATIONS)
     np.testing.assert_allclose(
@@ -274,15 +305,14 @@ def test_probability_normalization_snapshot(seeded_inputs):
     assert np.all(probs >= 0)
 
     # Self-consistency
-    probs2 = np.asarray(
-        e_step.compute_probability_from_residual_normal_squared_one_image(residuals)
-    )
+    probs2 = np.asarray(e_step.compute_probability_from_residual_normal_squared_one_image(residuals))
     np.testing.assert_array_equal(probs, probs2)
 
 
 # ---------------------------------------------------------------------------
 # Integration-level snapshot tests
 # ---------------------------------------------------------------------------
+
 
 def test_E_with_precompute_snapshot(monkeypatch, seeded_inputs):
     """Pin full E_with_precompute (homogeneous path, u=None)."""
@@ -294,9 +324,15 @@ def test_E_with_precompute_snapshot(monkeypatch, seeded_inputs):
     monkeypatch.setattr(rec_utils, "get_gpu_memory_total", lambda device=0: 10)
 
     probs = e_step.E_with_precompute(
-        ds, s["volume"], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp",
-        image_indices=None, u=None, s=None,
+        ds,
+        s["volume"],
+        s["rotations"],
+        s["translations"],
+        s["noise_variance"],
+        "linear_interp",
+        image_indices=None,
+        u=None,
+        s=None,
     )
     probs = np.asarray(probs)
 
@@ -310,11 +346,19 @@ def test_E_with_precompute_snapshot(monkeypatch, seeded_inputs):
     )
 
     # Run again, must be identical
-    probs2 = np.asarray(e_step.E_with_precompute(
-        ds, s["volume"], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp",
-        image_indices=None, u=None, s=None,
-    ))
+    probs2 = np.asarray(
+        e_step.E_with_precompute(
+            ds,
+            s["volume"],
+            s["rotations"],
+            s["translations"],
+            s["noise_variance"],
+            "linear_interp",
+            image_indices=None,
+            u=None,
+            s=None,
+        )
+    )
     np.testing.assert_allclose(probs, probs2, atol=1e-6)
 
 
@@ -326,8 +370,12 @@ def test_M_with_precompute_snapshot(monkeypatch, seeded_inputs):
     monkeypatch.setattr(rec_utils, "get_gpu_memory_total", lambda device=0: 10)
 
     Ft_y, Ft_ctf = m_step.M_with_precompute(
-        ds, s["probabilities"], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp",
+        ds,
+        s["probabilities"],
+        s["rotations"],
+        s["translations"],
+        s["noise_variance"],
+        "linear_interp",
         image_indices=None,
     )
     Ft_y = np.asarray(Ft_y)
@@ -340,8 +388,12 @@ def test_M_with_precompute_snapshot(monkeypatch, seeded_inputs):
 
     # Run again
     Ft_y2, Ft_ctf2 = m_step.M_with_precompute(
-        ds, s["probabilities"], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp",
+        ds,
+        s["probabilities"],
+        s["rotations"],
+        s["translations"],
+        s["noise_variance"],
+        "linear_interp",
         image_indices=None,
     )
     np.testing.assert_allclose(Ft_y, np.asarray(Ft_y2), atol=1e-6)
@@ -359,8 +411,12 @@ def test_EM_iteration_snapshot(monkeypatch, seeded_inputs):
     state = EMState(s["volume"].copy(), mean_variance, s["noise_variance"])
 
     state, hard_assignment = E_M_batches_2(
-        ds, state, s["rotations"], s["translations"],
-        "linear_interp", memory_to_use=10,
+        ds,
+        state,
+        s["rotations"],
+        s["translations"],
+        "linear_interp",
+        memory_to_use=10,
     )
     state.finish_up_M_step(ds, "linear_interp")
 
@@ -380,8 +436,12 @@ def test_EM_iteration_snapshot(monkeypatch, seeded_inputs):
     # Run again with fresh state
     state2 = EMState(s["volume"].copy(), mean_variance, s["noise_variance"])
     state2, hard_assignment2 = E_M_batches_2(
-        ds, state2, s["rotations"], s["translations"],
-        "linear_interp", memory_to_use=10,
+        ds,
+        state2,
+        s["rotations"],
+        s["translations"],
+        "linear_interp",
+        memory_to_use=10,
     )
     state2.finish_up_M_step(ds, "linear_interp")
 
@@ -395,6 +455,7 @@ def test_EM_iteration_snapshot(monkeypatch, seeded_inputs):
 # Batch partition invariance test
 # ---------------------------------------------------------------------------
 
+
 def test_batch_partition_invariance(monkeypatch, seeded_inputs):
     """Splitting images into different batch sizes should yield same Ft_y/Ft_ctf."""
     s = seeded_inputs
@@ -404,19 +465,31 @@ def test_batch_partition_invariance(monkeypatch, seeded_inputs):
 
     # Run M-step as single batch (all images at once)
     Ft_y_1, Ft_ctf_1 = m_step.M_with_precompute(
-        ds, s["probabilities"], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp",
+        ds,
+        s["probabilities"],
+        s["rotations"],
+        s["translations"],
+        s["noise_variance"],
+        "linear_interp",
     )
 
     # Run M-step as two batches (one image at a time)
     Ft_y_a, Ft_ctf_a = m_step.M_with_precompute(
-        ds, s["probabilities"][:1], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp",
+        ds,
+        s["probabilities"][:1],
+        s["rotations"],
+        s["translations"],
+        s["noise_variance"],
+        "linear_interp",
         image_indices=np.array([0]),
     )
     Ft_y_b, Ft_ctf_b = m_step.M_with_precompute(
-        ds, s["probabilities"][1:], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp",
+        ds,
+        s["probabilities"][1:],
+        s["rotations"],
+        s["translations"],
+        s["noise_variance"],
+        "linear_interp",
         image_indices=np.array([1]),
     )
 
@@ -437,6 +510,7 @@ def test_batch_partition_invariance(monkeypatch, seeded_inputs):
 # Cross-path equivalence: new package vs old functions
 # ---------------------------------------------------------------------------
 
+
 def test_compute_posterior_matches_E_with_precompute(monkeypatch, seeded_inputs):
     """New compute_posterior must match old E_with_precompute (u=None)."""
     s = seeded_inputs
@@ -445,11 +519,19 @@ def test_compute_posterior_matches_E_with_precompute(monkeypatch, seeded_inputs)
     monkeypatch.setattr(rec_utils, "get_gpu_memory_total", lambda device=0: 10)
 
     # Old path
-    old_probs = np.asarray(e_step.E_with_precompute(
-        ds, s["volume"], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp",
-        image_indices=None, u=None, s=None,
-    ))
+    old_probs = np.asarray(
+        e_step.E_with_precompute(
+            ds,
+            s["volume"],
+            s["rotations"],
+            s["translations"],
+            s["noise_variance"],
+            "linear_interp",
+            image_indices=None,
+            u=None,
+            s=None,
+        )
+    )
 
     # New path
     plan = plan_em_iteration(
@@ -458,11 +540,19 @@ def test_compute_posterior_matches_E_with_precompute(monkeypatch, seeded_inputs)
         n_translations=N_TRANSLATIONS,
         memory_to_use_gb=10,
     )
-    new_probs = np.asarray(compute_posterior(
-        s["config"], ds, s["volume"], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp", plan,
-        image_indices=None,
-    ))
+    new_probs = np.asarray(
+        compute_posterior(
+            s["config"],
+            ds,
+            s["volume"],
+            s["rotations"],
+            s["translations"],
+            s["noise_variance"],
+            "linear_interp",
+            plan,
+            image_indices=None,
+        )
+    )
 
     np.testing.assert_allclose(old_probs, new_probs, atol=1e-6)
 
@@ -476,8 +566,12 @@ def test_accumulate_matches_M_with_precompute(monkeypatch, seeded_inputs):
 
     # Old path
     old_Ft_y, old_Ft_ctf = m_step.M_with_precompute(
-        ds, s["probabilities"], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp",
+        ds,
+        s["probabilities"],
+        s["rotations"],
+        s["translations"],
+        s["noise_variance"],
+        "linear_interp",
     )
 
     # New path
@@ -488,8 +582,13 @@ def test_accumulate_matches_M_with_precompute(monkeypatch, seeded_inputs):
         memory_to_use_gb=10,
     )
     stats = accumulate_sufficient_statistics(
-        s["config"], ds, s["probabilities"], s["rotations"],
-        s["translations"], s["noise_variance"], plan,
+        s["config"],
+        ds,
+        s["probabilities"],
+        s["rotations"],
+        s["translations"],
+        s["noise_variance"],
+        plan,
     )
 
     np.testing.assert_allclose(np.asarray(old_Ft_y), np.asarray(stats.Ft_y), atol=1e-6)
@@ -505,17 +604,28 @@ def test_solve_mean_matches_EMState_finish(monkeypatch, seeded_inputs):
 
     # Get Ft_y, Ft_ctf from M-step
     Ft_y, Ft_ctf = m_step.M_with_precompute(
-        ds, s["probabilities"], s["rotations"], s["translations"],
-        s["noise_variance"], "linear_interp",
+        ds,
+        s["probabilities"],
+        s["rotations"],
+        s["translations"],
+        s["noise_variance"],
+        "linear_interp",
     )
 
     mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
     # Old path: EMState.finish_up_M_step
     from recovar.reconstruction import relion_functions
-    old_mean = np.asarray(relion_functions.post_process_from_filter(
-        ds, Ft_ctf, Ft_y, tau=mean_variance, disc_type="linear_interp",
-    ).reshape(-1))
+
+    old_mean = np.asarray(
+        relion_functions.post_process_from_filter(
+            ds,
+            Ft_ctf,
+            Ft_y,
+            tau=mean_variance,
+            disc_type="linear_interp",
+        ).reshape(-1)
+    )
 
     # New path
     stats = MeanStats(Ft_y=Ft_y, Ft_ctf=Ft_ctf)
@@ -536,8 +646,12 @@ def test_engine_matches_E_M_batches_2(monkeypatch, seeded_inputs):
     # Old path: E_M_batches_2 + finish_up_M_step
     state = EMState(s["volume"].copy(), mean_variance, s["noise_variance"])
     state, old_ha = E_M_batches_2(
-        ds, state, s["rotations"], s["translations"],
-        "linear_interp", memory_to_use=10,
+        ds,
+        state,
+        s["rotations"],
+        s["translations"],
+        "linear_interp",
+        memory_to_use=10,
     )
     state.finish_up_M_step(ds, "linear_interp")
     old_mean = np.asarray(state.mean)
@@ -546,8 +660,13 @@ def test_engine_matches_E_M_batches_2(monkeypatch, seeded_inputs):
 
     # New path: run_dense_em_iteration
     new_mean, new_ha, new_Ft_y, new_Ft_ctf = run_dense_em_iteration(
-        ds, s["volume"].copy(), mean_variance, s["noise_variance"],
-        s["rotations"], s["translations"], "linear_interp",
+        ds,
+        s["volume"].copy(),
+        mean_variance,
+        s["noise_variance"],
+        s["rotations"],
+        s["translations"],
+        "linear_interp",
         memory_to_use_gb=10,
     )
 

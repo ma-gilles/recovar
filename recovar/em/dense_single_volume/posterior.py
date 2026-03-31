@@ -106,9 +106,7 @@ def compute_posterior(
 
     # Step 5: Softmax normalization
     for array_indices, _ in utils.subset_and_indices_batch_iter(image_indices_arr, plan.prob_batch):
-        residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(
-            residuals[array_indices]
-        )
+        residuals[array_indices] = compute_probability_from_residual_normal_squared_one_image(residuals[array_indices])
 
     logger.info("done probs. Batch size %s", plan.prob_batch)
     return residuals

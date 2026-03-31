@@ -118,9 +118,7 @@ def run_dense_em_iteration(
         )
 
         # Hard assignment for convergence tracking
-        hard_assignment[big_image_batch] = np.argmax(
-            probabilities.reshape(probabilities.shape[0], -1), axis=-1
-        )
+        hard_assignment[big_image_batch] = np.argmax(probabilities.reshape(probabilities.shape[0], -1), axis=-1)
 
         if np.isnan(probabilities).any():
             logger.warning("NaNs detected in probabilities; mean norm=%s", np.linalg.norm(mean))

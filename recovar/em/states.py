@@ -1,15 +1,18 @@
 """EM state containers: EMState, SGDState, HeterogeneousEMState."""
 
 import logging
-import numpy as np
+
 import jax
-from recovar import utils, jax_config
-from recovar.reconstruction import relion_functions
+import numpy as np
+
+from recovar import jax_config, utils
 from recovar.core import mask as mask_fn
 from recovar.heterogeneity import principal_components
+from recovar.reconstruction import relion_functions
+
 from .e_step import E_with_precompute
-from .m_step import M_with_precompute
 from .heterogeneity import compute_H_B, compute_projected_covariance_rhs_lhs, solve_covariance
+from .m_step import M_with_precompute
 
 logger = logging.getLogger(__name__)
 
@@ -38,11 +41,14 @@ class EMState:
 
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
         from recovar.core.configs import ForwardModelConfig
+
         from .dense_single_volume.plan import plan_em_iteration
         from .dense_single_volume.posterior import compute_posterior
 
         config = ForwardModelConfig.from_dataset(
-            experiment_dataset, disc_type=disc_type, process_fn=experiment_dataset.process_images,
+            experiment_dataset,
+            disc_type=disc_type,
+            process_fn=experiment_dataset.process_images,
         )
         plan = plan_em_iteration(
             grid_size=experiment_dataset.grid_size,
@@ -50,18 +56,27 @@ class EMState:
             n_translations=translations.shape[0],
         )
         return compute_posterior(
-            config, experiment_dataset, self.mean,
-            rotations, translations, self.noise_variance,
-            disc_type, plan, image_indices=big_image_batch,
+            config,
+            experiment_dataset,
+            self.mean,
+            rotations,
+            translations,
+            self.noise_variance,
+            disc_type,
+            plan,
+            image_indices=big_image_batch,
         )
 
     def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch):
         from recovar.core.configs import ForwardModelConfig
-        from .dense_single_volume.plan import plan_em_iteration
+
         from .dense_single_volume.accumulate import accumulate_sufficient_statistics
+        from .dense_single_volume.plan import plan_em_iteration
 
         config = ForwardModelConfig.from_dataset(
-            experiment_dataset, disc_type=disc_type, process_fn=experiment_dataset.process_images,
+            experiment_dataset,
+            disc_type=disc_type,
+            process_fn=experiment_dataset.process_images,
         )
         plan = plan_em_iteration(
             grid_size=experiment_dataset.grid_size,
@@ -69,9 +84,14 @@ class EMState:
             n_translations=translations.shape[0],
         )
         stats = accumulate_sufficient_statistics(
-            config, experiment_dataset, probabilities,
-            rotations, translations, self.noise_variance,
-            plan, image_indices=big_image_batch,
+            config,
+            experiment_dataset,
+            probabilities,
+            rotations,
+            translations,
+            self.noise_variance,
+            plan,
+            image_indices=big_image_batch,
         )
         self.Ft_y += stats.Ft_y
         self.Ft_CTF += stats.Ft_ctf  # MeanStats.Ft_ctf -> self.Ft_CTF
