@@ -758,6 +758,10 @@ def standard_recovar_pipeline(args):
 
     logger.info(args)
 
+    if args.gpu_memory is not None:
+        utils.set_gpu_memory_limit(args.gpu_memory)
+        logger.info("GPU memory limited to %.1f GB (requested via --gpu-gb)", args.gpu_memory)
+
     # --- Resolve downsample target ---
     _resolve_downsample(args)
 
@@ -782,6 +786,7 @@ def standard_recovar_pipeline(args):
                 outdir=ds_dir,
                 datadir=getattr(args, "datadir", None) or "",
                 strip_prefix=getattr(args, "strip_prefix", None),
+                gpu_memory_gb=args.gpu_memory,
             )
 
         ds_star = os.path.join(ds_dir, f"particles.{args.downsample}.star")
@@ -814,9 +819,6 @@ def standard_recovar_pipeline(args):
 
     ## TODO: log this. Also document it better. Also I'd like a warning or something if I say "allocate this much" and peak gpu memory ends up being more than that
     ## So that it can be fixed in the future
-    if args.gpu_memory is not None:
-        utils.set_gpu_memory_limit(args.gpu_memory)
-        logger.info("GPU memory limited to %.1f GB (requested via --gpu-gb)", args.gpu_memory)
     gpu_memory = utils.get_gpu_memory_total()
     volume_shape = ds.volume_shape
 

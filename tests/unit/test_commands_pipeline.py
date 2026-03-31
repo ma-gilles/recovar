@@ -5,6 +5,7 @@ Only tests argument registration via add_args() – no actual EM execution.
 """
 
 import argparse
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -190,3 +191,52 @@ def test_standard_pipeline_estimates_initial_noise_from_halfset_zero(monkeypatch
 
     with pytest.raises(RuntimeError, match="noise-estimate-stop"):
         pipeline_cmd.standard_recovar_pipeline(args)
+
+
+def test_standard_pipeline_passes_gpu_limit_to_predownsample(monkeypatch, tmp_path):
+    captured = {}
+
+    monkeypatch.setattr(pipeline_cmd, "_resolve_downsample", lambda _args: None)
+    monkeypatch.setattr(
+        pipeline_cmd.utils,
+        "set_gpu_memory_limit",
+        lambda value: captured.setdefault("limits", []).append(value),
+    )
+    monkeypatch.setattr(pipeline_cmd.os.path, "exists", lambda _path: False)
+    monkeypatch.setitem(
+        sys.modules,
+        "recovar.commands.downsample",
+        SimpleNamespace(downsample_to_disk=lambda **kwargs: captured.setdefault("downsample_kwargs", kwargs)),
+    )
+    monkeypatch.setattr(
+        pipeline_cmd.halfsets,
+        "resolve_halfset_indices",
+        lambda _args: (_ for _ in ()).throw(RuntimeError("stop-after-downsample")),
+    )
+
+    args = SimpleNamespace(
+        outdir=str(tmp_path / "pipeline_out"),
+        particles="particles.star",
+        poses="poses.pkl",
+        ctf="ctf.pkl",
+        mask="mask.mrc",
+        datadir=None,
+        strip_prefix=None,
+        downsample=128,
+        accept_cpu=False,
+        tilt_series=False,
+        tilt_series_ctf=None,
+        dose_per_tilt=None,
+        angle_per_tilt=None,
+        do_over_with_contrast=False,
+        correct_contrast=False,
+        lazy=True,
+        gpu_memory=12.0,
+        noise_model="radial",
+    )
+
+    with pytest.raises(RuntimeError, match="stop-after-downsample"):
+        pipeline_cmd.standard_recovar_pipeline(args)
+
+    assert captured["limits"] == [12.0]
+    assert captured["downsample_kwargs"]["gpu_memory_gb"] == 12.0
