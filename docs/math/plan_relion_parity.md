@@ -8,6 +8,8 @@ Bring `recovar/em/` to feature parity with RELION's `relion_refine --auto_refine
 
 **Primary execution target**: `engine_v2.py` (the optimized blockwise path), not the legacy Equinox path in `core.py`/`m_step.py`.
 
+**Scale targets**: The benchmark dataset is 5000 images at 128px, but the implementation must be designed to handle production-scale problems: **up to 512×512 images and 1M+ particles**, potentially across multiple GPUs. Every design decision (memory layout, batching strategy, data structures) should be evaluated against this target, not just the benchmark. Hardcoded sizes, in-memory probability tensors that scale with n_images × n_rot, and single-GPU assumptions are not acceptable in the final code. The benchmark is for rapid iteration; the architecture is for production. RELION handles this scale routinely (hours to days on multi-GPU clusters). We should match that capability.
+
 ---
 
 ## Critical Corrections from Critique
