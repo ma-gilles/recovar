@@ -41,6 +41,31 @@ jobs:
             echo "$FILES" | xargs ruff check
           fi
 
+  typecheck:
+    name: Type Check (changed files only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - run: pip install mypy==1.20.0
+
+      - name: Mypy (changed .py files only)
+        run: |
+          BASE=${{ github.event.pull_request.base.sha || 'HEAD~1' }}
+          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- '*.py' || true)
+          if [ -n "$FILES" ]; then
+            echo "Checking: $FILES"
+            echo "$FILES" | xargs python -m mypy --config-file pyproject.toml
+          else
+            echo "No Python files changed"
+          fi
+
   fast-tests:
     name: Unit tests
     runs-on: ubuntu-latest
