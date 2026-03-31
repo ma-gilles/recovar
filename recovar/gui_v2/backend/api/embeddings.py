@@ -177,6 +177,23 @@ def _load_embeddings_sync(
                 logger.warning("Failed to load k-means from %s: %s", kmeans_path, exc)
                 # Non-fatal: continue without k-means
 
+    # ----- Pad or trim k-means centers to match requested zdim -----
+    # The analyze job may have been run at a different zdim than the requested
+    # one, so the k-means centers may have a different dimensionality.
+    if result["kmeans_centers"] is not None and result["pca_coords"] is not None:
+        center_zdim = result["kmeans_centers"].shape[1]
+        if center_zdim < zdim:
+            # Pad with zeros for extra dimensions
+            result["kmeans_centers"] = np.pad(
+                result["kmeans_centers"],
+                ((0, 0), (0, zdim - center_zdim)),
+                mode="constant",
+                constant_values=0.0,
+            )
+        elif center_zdim > zdim:
+            # Trim to requested zdim
+            result["kmeans_centers"] = result["kmeans_centers"][:, :zdim]
+
     # ----- Subsample if dataset exceeds max_particles -----
     if (
         result["pca_coords"] is not None

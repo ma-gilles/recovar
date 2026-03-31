@@ -134,7 +134,7 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: L
   const effectiveZdim = zdim ?? (available?.zdims.includes(4) ? 4 : available?.zdims[0]) ?? null;
 
   // Load embedding data
-  const { data: embeddings, isLoading } = useQuery({
+  const { data: embeddings, isLoading, error: embeddingError } = useQuery({
     queryKey: ["embeddings", jobId, effectiveZdim],
     queryFn: () => fetchEmbeddings(jobId, effectiveZdim!),
     enabled: effectiveZdim !== null,
@@ -488,6 +488,10 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: L
       {isLoading ? (
         <div className="flex items-center justify-center py-20">
           <Spinner label="Loading embedding data..." />
+        </div>
+      ) : embeddingError ? (
+        <div className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          Failed to load embedding data for zdim={effectiveZdim}: {String(embeddingError instanceof Error ? embeddingError.message : embeddingError)}
         </div>
       ) : embeddings ? (
         <>
