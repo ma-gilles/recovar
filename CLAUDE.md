@@ -64,6 +64,13 @@ See `tests/CLAUDE.md` for full testing rules (critical — read before modifying
 - Small targeted diffs. Do not commit large artifacts (checkpoints, datasets, binaries).
 - Never force-push unless explicitly asked.
 
+## Math Documentation
+
+Math docs live in `docs/math/` as Markdown with LaTeX. Rules:
+- **Docs link to code**: every doc must include a "Code references" section at the bottom listing the implementing files/functions with relative paths (e.g. `recovar/reconstruction/pcg_mean.py:pcg_mstep`).
+- **Code links to docs**: every function that implements a documented formulation must include a docstring reference back to the doc (e.g. `See docs/math/masked_mstep.md § Hard mask`).
+- Keep both directions up to date when either changes.
+
 ## End of Task
 
 Provide: summary of changes, files modified, test commands run (with Slurm job IDs if relevant), how to reproduce, `git status` and `git diff --stat`.
