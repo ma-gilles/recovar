@@ -14,3 +14,4 @@ from .projection_cache import precompute_projections
 from .posterior import compute_posterior
 from .accumulate import accumulate_sufficient_statistics
 from .solver import solve_mean
+from .engine import run_dense_em_iteration

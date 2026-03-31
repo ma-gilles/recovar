@@ -20,6 +20,7 @@ from recovar.em.dense_single_volume import (
     accumulate_sufficient_statistics,
     solve_mean,
     plan_em_iteration,
+    run_dense_em_iteration,
     MeanStats,
 )
 
@@ -521,3 +522,36 @@ def test_solve_mean_matches_EMState_finish(monkeypatch, seeded_inputs):
     new_mean = np.asarray(solve_mean(ds, stats, mean_variance, "linear_interp"))
 
     np.testing.assert_allclose(old_mean, new_mean, atol=0)
+
+
+def test_engine_matches_E_M_batches_2(monkeypatch, seeded_inputs):
+    """New run_dense_em_iteration must match old E_M_batches_2 + EMState."""
+    s = seeded_inputs
+    ds = s["dataset"]
+
+    monkeypatch.setattr(rec_utils, "get_gpu_memory_total", lambda device=0: 10)
+
+    mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+
+    # Old path: E_M_batches_2 + finish_up_M_step
+    state = EMState(s["volume"].copy(), mean_variance, s["noise_variance"])
+    state, old_ha = E_M_batches_2(
+        ds, state, s["rotations"], s["translations"],
+        "linear_interp", memory_to_use=10,
+    )
+    state.finish_up_M_step(ds, "linear_interp")
+    old_mean = np.asarray(state.mean)
+    old_Ft_y = np.asarray(state.Ft_y)
+    old_Ft_CTF = np.asarray(state.Ft_CTF)
+
+    # New path: run_dense_em_iteration
+    new_mean, new_ha, new_Ft_y, new_Ft_ctf = run_dense_em_iteration(
+        ds, s["volume"].copy(), mean_variance, s["noise_variance"],
+        s["rotations"], s["translations"], "linear_interp",
+        memory_to_use_gb=10,
+    )
+
+    np.testing.assert_allclose(old_mean, np.asarray(new_mean), atol=1e-6)
+    np.testing.assert_array_equal(old_ha, new_ha)
+    np.testing.assert_allclose(old_Ft_y, np.asarray(new_Ft_y), atol=1e-6)
+    np.testing.assert_allclose(old_Ft_CTF, np.asarray(new_Ft_ctf), atol=1e-6)
