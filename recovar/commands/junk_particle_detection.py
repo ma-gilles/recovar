@@ -1791,11 +1791,11 @@ def detect_junk_clusters(
     if method == "consensus":
         final_junk_mask = methods_results["consensus"]
     elif method == "adaptive_threshold":
-        # Combine FSC and AUC adaptive thresholds
-        fsc_junk = methods_results["fsc_adaptive"]
-        auc_junk = methods_results["auc_adaptive"]
-        final_junk_mask = fsc_junk | auc_junk  # Union of both
-        final_junk_mask = apply_fraction_constraints(final_junk_mask, combined_fsc)
+        # Combined FSC is the primary reconstruction-quality signal.
+        # Adaptive AUC masks are still reported in diagnostics, but
+        # unioning them here can overclassify nearly every cluster as
+        # junk on tight score distributions.
+        final_junk_mask = methods_results["fsc_adaptive"].copy()
     elif method == "percentile":
         # Combine FSC and AUC percentile thresholds
         fsc_junk = methods_results["fsc_percentile"]

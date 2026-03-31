@@ -137,6 +137,37 @@ def test_detect_junk_clusters_rejects_unknown_method(monkeypatch, tmp_path):
         )
 
 
+def test_detect_junk_clusters_adaptive_threshold_uses_fsc_primary_signal(monkeypatch, tmp_path):
+    monkeypatch.setattr(junk_cmd, "create_junk_detection_visualizations", lambda *_args, **_kwargs: None)
+
+    combined_fsc = [0.10, 0.50, 0.51, 0.52, 0.53]
+    combined_auc = [0.10, 0.11, 0.12, 0.13, 0.90]
+    fsc_scores = {
+        idx: {"halfmap_fsc": score, "vs_mean_fsc": score}
+        for idx, score in enumerate(combined_fsc)
+    }
+    fsc_auc_scores = {
+        idx: {"halfmap_auc": score, "vs_mean_auc": score}
+        for idx, score in enumerate(combined_auc)
+    }
+
+    junk_clusters, junk_info = junk_cmd.detect_junk_clusters(
+        fsc_scores=fsc_scores,
+        fsc_auc_scores=fsc_auc_scores,
+        output_folder=str(tmp_path),
+        zdim_key=4,
+        method="adaptive_threshold",
+        percentile_threshold=25,
+        std_threshold=2.0,
+        min_junk_fraction=0.0,
+        max_junk_fraction=1.0,
+    )
+
+    assert junk_clusters.tolist() == [0]
+    assert junk_info["methods_results"]["fsc_adaptive"] == [True, False, False, False, False]
+    assert sum(junk_info["methods_results"]["auc_adaptive"]) > sum(junk_info["methods_results"]["fsc_adaptive"])
+
+
 def test_compute_cluster_fsc_scores_uses_group_iteration_for_tilt_subsets(monkeypatch):
     volume_shape = (2, 2, 2)
     relion_calls = []

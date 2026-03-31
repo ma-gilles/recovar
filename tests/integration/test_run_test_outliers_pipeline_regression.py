@@ -62,7 +62,6 @@ import math
 import os
 import pickle
 import shlex
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -77,6 +76,7 @@ from helpers.perf_regression import (
     stage_perf,
     build_perf_record,
     check_perf_regression,
+    run_tracked_subprocess,
 )
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow]
@@ -224,7 +224,7 @@ def _run_outliers_pipeline(
         if extra_args:
             make_cmd.extend(shlex.split(extra_args))
         env = gpu_subprocess_env()
-        subprocess.run(make_cmd, check=True, env=env)
+        run_tracked_subprocess(make_cmd, check=True, env=env)
 
     # -- compute GT union mask from synthetic volumes ------------------------
     from recovar.simulation import synthetic_dataset
@@ -270,7 +270,7 @@ def _run_outliers_pipeline(
     ]
     if accept_cpu:
         pipe_cmd.append("--accept-cpu")
-    subprocess.run(pipe_cmd, check=True, env=gpu_subprocess_env())
+    run_tracked_subprocess(pipe_cmd, check=True, env=gpu_subprocess_env())
 
     return pipeline_out
 
@@ -643,7 +643,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         ]
         if volumes_prefix is not None:
             make_cmd += ["--volume-input", str(volumes_prefix)]
-        subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
+        run_tracked_subprocess(make_cmd, check=True, env=gpu_subprocess_env())
 
     # Compute GT union mask from synthetic volumes
     from recovar.simulation import synthetic_dataset
@@ -692,7 +692,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
     ]
-    subprocess.run(pipe_cmd, check=True, env=gpu_subprocess_env())
+    run_tracked_subprocess(pipe_cmd, check=True, env=gpu_subprocess_env())
     perf_stages = {"pipeline_with_outliers": stage_perf(snap_before, perf_snapshot())}
 
     with open(sim_info_path, "rb") as f:

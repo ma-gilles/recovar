@@ -1,7 +1,6 @@
 import json
 import os
 import shlex
-import subprocess
 import sys
 from pathlib import Path
 
@@ -9,7 +8,7 @@ import numpy as np
 import pytest
 
 from helpers.metrics_regression import compare_metric, metric_direction, metric_tolerance, log_comparison_table
-from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression
+from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression, run_tracked_subprocess
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.long_test]
@@ -49,7 +48,7 @@ def _run_metrics(output_dir, run_args, volumes_prefix=None, reuse_dataset=False)
         cmd.extend(shlex.split(run_args))
     from conftest import gpu_subprocess_env
 
-    subprocess.run(cmd, check=True, env=gpu_subprocess_env())
+    run_tracked_subprocess(cmd, check=True, env=gpu_subprocess_env())
     score_path = output_dir / "test_dataset" / "metrics_plot" / "all_scores.json"
     assert score_path.exists(), f"missing score file at {score_path}"
     return _load_json(score_path)

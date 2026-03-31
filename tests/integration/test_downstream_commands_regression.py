@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -27,7 +26,7 @@ import numpy as np
 import pytest
 
 from helpers.metrics_regression import log_comparison_table
-from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression
+from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression, run_tracked_subprocess
 
 pytestmark = [pytest.mark.integration, pytest.mark.gpu, pytest.mark.slow]
 
@@ -52,7 +51,7 @@ def _gpu_env():
 
 def _run(cmd, **kwargs):
     kwargs.setdefault("env", _gpu_env())
-    result = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
+    result = run_tracked_subprocess(cmd, capture_output=True, text=True, **kwargs)
     if result.returncode != 0:
         tail = "\n".join(result.stderr.splitlines()[-80:])
         pytest.fail(

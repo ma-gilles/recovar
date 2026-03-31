@@ -30,7 +30,6 @@ Environment variables:
 import json
 import os
 import shlex
-import subprocess
 import sys
 from pathlib import Path
 
@@ -38,7 +37,7 @@ import numpy as np
 import pytest
 
 from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
-from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression
+from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression, run_tracked_subprocess
 
 pytestmark = [
     pytest.mark.integration,
@@ -107,7 +106,7 @@ def _run_pdb_metrics(output_dir, run_args, reuse_dataset=False):
         cmd.extend(shlex.split(run_args))
     from conftest import gpu_subprocess_env
 
-    subprocess.run(cmd, check=True, env=gpu_subprocess_env())
+    run_tracked_subprocess(cmd, check=True, env=gpu_subprocess_env())
     score_path = output_dir / "test_dataset" / "metrics_plot" / "all_scores.json"
     assert score_path.exists(), f"missing score file at {score_path}"
     with open(score_path, "r") as f:
