@@ -9,3 +9,8 @@ See docs/math/dense_single_volume_em.md for the algorithm derivation.
 """
 
 from .types import DensePoseGrid, DenseEMPlan, MeanStats
+from .plan import plan_em_iteration
+from .projection_cache import precompute_projections
+from .posterior import compute_posterior
+from .accumulate import accumulate_sufficient_statistics
+from .solver import solve_mean

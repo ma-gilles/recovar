@@ -15,6 +15,13 @@ from recovar.core.configs import ForwardModelConfig
 from recovar.em import e_step, m_step, core as em_core
 from recovar.em.states import EMState
 from recovar.em.iterations import E_M_batches_2
+from recovar.em.dense_single_volume import (
+    compute_posterior,
+    accumulate_sufficient_statistics,
+    solve_mean,
+    plan_em_iteration,
+    MeanStats,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -423,3 +430,94 @@ def test_batch_partition_invariance(monkeypatch, seeded_inputs):
         np.asarray(Ft_ctf_a) + np.asarray(Ft_ctf_b),
         atol=1e-5,
     )
+
+
+# ---------------------------------------------------------------------------
+# Cross-path equivalence: new package vs old functions
+# ---------------------------------------------------------------------------
+
+def test_compute_posterior_matches_E_with_precompute(monkeypatch, seeded_inputs):
+    """New compute_posterior must match old E_with_precompute (u=None)."""
+    s = seeded_inputs
+    ds = s["dataset"]
+
+    monkeypatch.setattr(rec_utils, "get_gpu_memory_total", lambda device=0: 10)
+
+    # Old path
+    old_probs = np.asarray(e_step.E_with_precompute(
+        ds, s["volume"], s["rotations"], s["translations"],
+        s["noise_variance"], "linear_interp",
+        image_indices=None, u=None, s=None,
+    ))
+
+    # New path
+    plan = plan_em_iteration(
+        grid_size=ds.grid_size,
+        n_rotations=N_ROTATIONS,
+        n_translations=N_TRANSLATIONS,
+        memory_to_use_gb=10,
+    )
+    new_probs = np.asarray(compute_posterior(
+        s["config"], ds, s["volume"], s["rotations"], s["translations"],
+        s["noise_variance"], "linear_interp", plan,
+        image_indices=None,
+    ))
+
+    np.testing.assert_allclose(old_probs, new_probs, atol=1e-6)
+
+
+def test_accumulate_matches_M_with_precompute(monkeypatch, seeded_inputs):
+    """New accumulate_sufficient_statistics must match old M_with_precompute."""
+    s = seeded_inputs
+    ds = s["dataset"]
+
+    monkeypatch.setattr(rec_utils, "get_gpu_memory_total", lambda device=0: 10)
+
+    # Old path
+    old_Ft_y, old_Ft_ctf = m_step.M_with_precompute(
+        ds, s["probabilities"], s["rotations"], s["translations"],
+        s["noise_variance"], "linear_interp",
+    )
+
+    # New path
+    plan = plan_em_iteration(
+        grid_size=ds.grid_size,
+        n_rotations=N_ROTATIONS,
+        n_translations=N_TRANSLATIONS,
+        memory_to_use_gb=10,
+    )
+    stats = accumulate_sufficient_statistics(
+        s["config"], ds, s["probabilities"], s["rotations"],
+        s["translations"], s["noise_variance"], plan,
+    )
+
+    np.testing.assert_allclose(np.asarray(old_Ft_y), np.asarray(stats.Ft_y), atol=1e-6)
+    np.testing.assert_allclose(np.asarray(old_Ft_ctf), np.asarray(stats.Ft_ctf), atol=1e-6)
+
+
+def test_solve_mean_matches_EMState_finish(monkeypatch, seeded_inputs):
+    """New solve_mean must match EMState.finish_up_M_step."""
+    s = seeded_inputs
+    ds = s["dataset"]
+
+    monkeypatch.setattr(rec_utils, "get_gpu_memory_total", lambda device=0: 10)
+
+    # Get Ft_y, Ft_ctf from M-step
+    Ft_y, Ft_ctf = m_step.M_with_precompute(
+        ds, s["probabilities"], s["rotations"], s["translations"],
+        s["noise_variance"], "linear_interp",
+    )
+
+    mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+
+    # Old path: EMState.finish_up_M_step
+    from recovar.reconstruction import relion_functions
+    old_mean = np.asarray(relion_functions.post_process_from_filter(
+        ds, Ft_ctf, Ft_y, tau=mean_variance, disc_type="linear_interp",
+    ).reshape(-1))
+
+    # New path
+    stats = MeanStats(Ft_y=Ft_y, Ft_ctf=Ft_ctf)
+    new_mean = np.asarray(solve_mean(ds, stats, mean_variance, "linear_interp"))
+
+    np.testing.assert_allclose(old_mean, new_mean, atol=0)
