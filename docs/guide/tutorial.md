@@ -260,20 +260,49 @@ chimerax output/trajectory_density/state*.mrc
 
 ## Using the GUI for analysis
 
-After running `pipeline` and `analyze` (either via CLI or the GUI itself), you can launch the GUI to interactively explore results:
+After running `pipeline` and `analyze` (either via CLI or the GUI itself), you can launch the GUI to interactively explore results.
+
+### Running locally (data and browser on the same machine)
+
+If you are running recovar on your own workstation (i.e. both the data and browser are on the same machine), just launch the GUI:
 
 ```bash
-# Launch the GUI
 recovar gui
-
-# With SSH port forwarding from a remote cluster
-ssh -L 8080:localhost:8080 user@cluster
-# Then on the cluster:
-recovar gui
-# Open http://localhost:8080 in your local browser
 ```
 
-Once launched, create a project (or open an existing one) and use **Scan for Existing Jobs** to import your pipeline outputs.
+Then open **http://localhost:8080** in your browser.
+
+### Running on a remote cluster (typical case)
+
+More commonly, your data lives on a compute cluster and you want to view the GUI in a browser on your laptop/desktop. This requires two steps:
+
+**Step 1.** Set up an SSH tunnel from your local machine to the cluster. This forwards port 8080 on your laptop to port 8080 on the cluster:
+
+```bash
+# Run this on your LOCAL machine (laptop/desktop):
+ssh -L 8080:localhost:8080 user@cluster
+```
+
+For example, to connect to the Princeton della cluster:
+
+```bash
+ssh -L 8080:localhost:8080 mg6942@della.princeton.edu
+```
+
+**Step 2.** On the cluster (inside the SSH session), launch the GUI:
+
+```bash
+recovar gui
+```
+
+Now open **http://localhost:8080** in your local browser — the SSH tunnel makes it appear as if the server is running locally.
+
+!!! tip "Custom port"
+    If port 8080 is already in use, pick another port (e.g. 8085) and use it consistently in both the SSH tunnel and the GUI launch: `ssh -L 8085:localhost:8085 ...` and `recovar gui --port 8085`.
+
+### First steps in the GUI
+
+Once the GUI is open, create a project (or open an existing one) and use **Scan for Existing Jobs** to import your pipeline outputs.
 
 The GUI provides:
 

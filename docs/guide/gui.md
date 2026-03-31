@@ -20,17 +20,19 @@ This starts a local web server (default: `http://localhost:8080`). Open the URL 
 
 ### Remote access via SSH
 
-When running on a remote cluster, forward the port through SSH:
+When your data lives on a remote cluster and you want to view the GUI in a browser on your laptop, set up an SSH tunnel:
 
 ```bash
-# On your local machine:
+# Step 1: On your LOCAL machine, open an SSH tunnel:
 ssh -L 8080:localhost:8080 user@cluster
 
-# Then on the cluster:
+# Step 2: On the CLUSTER (inside the SSH session), launch the GUI:
 recovar gui
 
-# Open http://localhost:8080 in your local browser
+# Step 3: Open http://localhost:8080 in your local browser
 ```
+
+The tunnel forwards traffic so the remote server appears local. If port 8080 is taken, use a different port in both the SSH command and `recovar gui --port <port>`.
 
 ## Projects
 
