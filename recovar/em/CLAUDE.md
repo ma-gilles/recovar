@@ -1,5 +1,14 @@
 # EM Module Developer Guide
 
+## Active Development Plan
+
+**Read `docs/math/plan_relion_parity.md` before making any changes to this module.**
+
+The plan describes a 7-phase effort to bring this module to RELION feature parity.
+All new work targets `dense_single_volume/engine_v2.py`. Do not modify the legacy
+`core.py`/`m_step.py` path unless needed for shared utilities. Do not modify
+`heterogeneity.py` (separate owners).
+
 ## Architecture
 
 ```
