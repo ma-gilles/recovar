@@ -70,6 +70,6 @@ test.describe("AC-2: Real-time logs", () => {
     });
 
     // Should show output directory
-    await expect(page.getByText(/pipeline_output_old/i)).toBeVisible();
+    await expect(page.getByText(/pipeline_output_old/i).first()).toBeVisible();
   });
 });

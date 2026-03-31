@@ -38,17 +38,16 @@ export function TrajectoryPlayer({
   const frameIndex = currentIndex >= 0 ? currentIndex : 0;
   const totalFrames = volumes.length;
 
-  // Advance to next frame (wraps around)
-  const advance = useCallback(() => {
-    const nextIndex = (frameIndex + 1) % totalFrames;
-    onFrameChange(volumes[nextIndex].path);
-  }, [frameIndex, totalFrames, volumes, onFrameChange]);
+  // Keep a ref so the interval callback always sees the latest index
+  const frameIndexRef = useRef(frameIndex);
+  frameIndexRef.current = frameIndex;
 
   // Start/stop the interval timer
   useEffect(() => {
     if (playing) {
       timerRef.current = setInterval(() => {
-        advance();
+        const nextIndex = (frameIndexRef.current + 1) % volumes.length;
+        onFrameChange(volumes[nextIndex].path);
       }, 1000 / fps);
     }
     return () => {
@@ -57,7 +56,7 @@ export function TrajectoryPlayer({
         timerRef.current = null;
       }
     };
-  }, [playing, fps, advance]);
+  }, [playing, fps, volumes, onFrameChange]);
 
   const togglePlay = useCallback(() => {
     setPlaying((prev) => !prev);

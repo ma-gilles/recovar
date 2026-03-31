@@ -12,9 +12,11 @@ import {
   ChevronDown,
   Copy,
   XCircle,
+  X,
   Eye,
   EyeOff,
   RefreshCw,
+  ZoomIn,
 } from "lucide-react";
 import { clsx } from "clsx";
 import {
@@ -42,6 +44,18 @@ import { Button } from "../../components/ui/button";
 import { Spinner } from "../../components/ui/spinner";
 import { LogViewer } from "../../components/log-viewer/LogViewer";
 
+/** Maps PascalCase job type names to URL-friendly snake_case slugs. */
+const TYPE_URL_MAP: Record<string, string> = {
+  Pipeline: "pipeline",
+  Analyze: "analyze",
+  ComputeState: "compute_state",
+  ComputeTrajectory: "compute_trajectory",
+  Density: "density",
+  StableStates: "stable_states",
+  ReconstructState: "reconstruct_state",
+  ReconstructTrajectory: "reconstruct_trajectory",
+};
+
 const tabs = [
   { id: "overview", label: "Overview", icon: Clock },
   { id: "logs", label: "Logs", icon: Terminal },
@@ -57,11 +71,13 @@ function OverviewTab({
   suggestions,
   onReconcile,
   isReconciling,
+  onTabChange,
 }: {
   job: JobDetail;
   suggestions?: SuggestedNext[];
   onReconcile?: () => void;
   isReconciling?: boolean;
+  onTabChange?: (tab: TabId) => void;
 }): React.JSX.Element {
   const duration =
     job.completed && job.created
@@ -71,6 +87,22 @@ function OverviewTab({
       : null;
 
   const isActive = job.status === "running" || job.status === "queued";
+
+  const { data: plots } = useQuery<PlotEntry[]>({
+    queryKey: ["job-plots", job.id],
+    queryFn: () => getJobPlots(job.id),
+    enabled: job.status === "completed",
+  });
+
+  const { data: volumes } = useQuery<VolumeEntry[]>({
+    queryKey: ["job-volumes", job.id],
+    queryFn: () => getJobVolumes(job.id),
+    enabled: job.status === "completed",
+  });
+
+  const previewPlots = plots?.slice(0, 3) ?? [];
+  const volumeCount = volumes?.length ?? 0;
+  const hasPreview = previewPlots.length > 0 || volumeCount > 0;
 
   return (
     <div className="space-y-6">
@@ -86,7 +118,7 @@ function OverviewTab({
                 className="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-50"
                 title="Check actual SLURM status"
               >
-                <RefreshCw className={clsx("h-3 w-3", isReconciling && "animate-spin")} />
+                <RefreshCw className={clsx("h-3 w-3", isReconciling && "motion-safe:animate-spin")} />
                 Refresh
               </button>
             )}
@@ -129,7 +161,17 @@ function OverviewTab({
       {job.output_dir && (
         <div className="space-y-1">
           <span className="text-xs text-zinc-500">Output Directory</span>
-          <p className="font-mono text-sm text-zinc-300">{job.output_dir}</p>
+          <div className="flex items-center gap-1">
+            <p className="font-mono text-sm text-zinc-300">{job.output_dir}</p>
+            <button
+              className="inline-flex items-center rounded px-1.5 py-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+              onClick={() => navigator.clipboard.writeText(job.output_dir!)}
+              title="Copy path"
+              aria-label="Copy output directory path"
+            >
+              <Copy className="h-3 w-3" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -142,7 +184,7 @@ function OverviewTab({
                 key={s.type}
                 to="/jobs/new"
                 search={{
-                  type: s.type.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase(),
+                  type: TYPE_URL_MAP[s.type] ?? s.type.toLowerCase(),
                   result_dir: (s.prefilled_params?.result_dir as string) || undefined,
                   density: (s.prefilled_params?.density as string) || undefined,
                   input: (s.prefilled_params?.input as string) || undefined,
@@ -156,6 +198,43 @@ function OverviewTab({
               </Link>
             ))}
           </div>
+        </div>
+      )}
+
+      {hasPreview && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-medium text-zinc-400">Quick Preview</h3>
+          {previewPlots.length > 0 && (
+            <div className="flex gap-3">
+              {previewPlots.map((p) => (
+                <button
+                  key={p.path}
+                  onClick={() => onTabChange?.("plots")}
+                  className="group overflow-hidden rounded-md border border-zinc-800 bg-zinc-900 hover:border-zinc-600"
+                  title={`${p.name} — click to view all plots`}
+                >
+                  <img
+                    src={`/api/files/serve?path=${encodeURIComponent(p.path)}`}
+                    alt={p.name}
+                    className="h-[150px] w-auto object-contain"
+                    loading="lazy"
+                  />
+                  <p className="truncate px-2 py-1 text-xs text-zinc-500 group-hover:text-zinc-300">
+                    {p.name}
+                  </p>
+                </button>
+              ))}
+            </div>
+          )}
+          {volumeCount > 0 && (
+            <button
+              onClick={() => onTabChange?.("volumes")}
+              className="inline-flex items-center gap-2 rounded-md border border-zinc-700 bg-zinc-800/50 px-3 py-1.5 text-sm text-zinc-300 hover:bg-zinc-700 hover:text-zinc-100"
+            >
+              <Box className="h-4 w-4 text-sky-400" />
+              {volumeCount} volume{volumeCount !== 1 ? "s" : ""} available
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -222,7 +301,7 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
               From submit.sh (actual sbatch script used)
             </p>
           )}
-          <pre className="max-h-96 overflow-auto rounded-md bg-zinc-900 p-3 font-mono text-xs text-zinc-300">
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap break-all rounded-md bg-zinc-900 p-3 font-mono text-xs text-zinc-300">
             {sbatchData?.script ?? "Loading..."}
           </pre>
         </div>
@@ -250,6 +329,7 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
                         className="ml-2 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
                         onClick={() => navigator.clipboard.writeText(display)}
                         title="Copy value"
+                        aria-label={`Copy ${key} value`}
                       >
                         <Copy className="h-3 w-3" />
                       </button>
@@ -273,7 +353,7 @@ function ParamsTab({ job }: { job: JobDetail }): React.JSX.Element {
 // ---------------------------------------------------------------------------
 
 /** Patterns matching "uninteresting" volumes hidden by default. */
-const HIDDEN_PATTERNS = [/_half[0-9]/, /_unfil/, /halfmap/, /unfiltered/i];
+const HIDDEN_PATTERNS = [/_half[0-9]/, /_unfil/, /halfmap/, /unfiltered/i, /^sampling\.mrc$/i];
 
 /** Returns true if a volume name matches the hidden-by-default patterns. */
 function isHiddenVolume(name: string): boolean {
@@ -369,7 +449,8 @@ function VolumeCategoryGroup({
     <div>
       <button
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-1.5 py-1.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 py-1.5 text-left text-xs font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300 outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950 rounded"
       >
         {open ? (
           <ChevronDown className="h-3.5 w-3.5 shrink-0" />
@@ -474,11 +555,11 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 200px)", minHeight: 600 }}>
       {/* TOP HALF: Volume viewer (fixed) */}
-      <div className="shrink-0 rounded-lg border border-zinc-800 bg-zinc-950 p-4" style={{ minHeight: 480 }}>
+      <div className="shrink-0 rounded-lg border border-zinc-800 bg-zinc-950 p-4" style={selectedVolume ? { minHeight: 480 } : undefined}>
         {selectedVolume ? (
-          <VolumeViewer volumes={filteredVolumes} initialVolumePath={selectedVolume} />
+          <VolumeViewer volumes={filteredVolumes} initialVolumePath={selectedVolume} hideVolumeList />
         ) : (
-          <div className="flex items-center justify-center" style={{ height: 400 }}>
+          <div className="flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900/50" style={{ height: 120 }}>
             <p className="text-sm text-zinc-500">Click a volume below to view it</p>
           </div>
         )}
@@ -493,6 +574,7 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
           <button
             onClick={() => setShowAll(!showAll)}
             className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200"
+            aria-label={showAll ? `Hide ${hiddenCount} halfmap/unfiltered volumes` : `Show ${hiddenCount} halfmap/unfiltered volumes`}
           >
             {showAll ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
             {showAll ? "Hide" : "Show"} {hiddenCount} halfmap/unfiltered volume{hiddenCount !== 1 ? "s" : ""}
@@ -510,7 +592,7 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
             selectedVolume={selectedVolume}
             onSelect={handleSelect}
             ambiguousNames={ambiguousNames}
-            defaultCollapsed={COLLAPSED_BY_DEFAULT.has(cat)}
+            defaultCollapsed={COLLAPSED_BY_DEFAULT.has(cat) || vols.length > 10}
           />
         ))}
       </div>
@@ -541,6 +623,14 @@ function detectChartName(filename: string): string | null {
   return null;
 }
 
+/** Derive a human-readable caption from a plot filename. */
+function plotCaption(filename: string): string {
+  return filename
+    .replace(/\.[^.]+$/, "")       // strip extension
+    .replace(/[_-]+/g, " ")        // underscores/hyphens to spaces
+    .replace(/\b\w/g, (c) => c.toUpperCase()); // title-case each word
+}
+
 function PlotCell({
   plot,
   jobId,
@@ -548,7 +638,7 @@ function PlotCell({
 }: {
   plot: PlotEntry;
   jobId: string;
-  onEnlarge: (path: string) => void;
+  onEnlarge: (entry: PlotEntry) => void;
 }): React.JSX.Element {
   const chartName = detectChartName(plot.name);
   const [chartFailed, setChartFailed] = useState(false);
@@ -556,9 +646,9 @@ function PlotCell({
   const showInteractive = chartName !== null && !chartFailed;
 
   return (
-    <div className="rounded-md border border-zinc-800 bg-zinc-900 p-2">
+    <div className="group overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900 transition-all duration-200 hover:border-zinc-600 hover:shadow-lg hover:shadow-black/30">
       {showInteractive ? (
-        <div className="min-h-[250px]">
+        <div className="min-h-[300px] p-3">
           <InteractiveChartWithFallback
             jobId={jobId}
             chartName={chartName}
@@ -567,18 +657,27 @@ function PlotCell({
         </div>
       ) : (
         <button
-          onClick={() => onEnlarge(plot.path)}
-          className="w-full hover:opacity-80"
+          onClick={() => onEnlarge(plot)}
+          className="relative w-full cursor-pointer bg-zinc-950 p-4 transition-transform duration-200 group-hover:scale-[1.02]"
         >
           <img
             src={`/api/files/serve?path=${encodeURIComponent(plot.path)}`}
             alt={plot.name}
-            className="w-full rounded"
+            className="mx-auto w-full rounded-md object-contain"
+            style={{ minHeight: 200 }}
             loading="lazy"
           />
+          <div className="absolute inset-0 flex items-center justify-center bg-black/0 transition-colors duration-200 group-hover:bg-black/20">
+            <ZoomIn className="h-8 w-8 text-white opacity-0 drop-shadow-lg transition-opacity duration-200 group-hover:opacity-70" />
+          </div>
         </button>
       )}
-      <p className="mt-1 truncate text-xs text-zinc-400">{plot.name}</p>
+      <div className="border-t border-zinc-800 px-3 py-2">
+        <p className="truncate text-sm font-medium text-zinc-300" title={plot.name}>
+          {plotCaption(plot.name)}
+        </p>
+        <p className="truncate text-xs text-zinc-500">{plot.name}</p>
+      </div>
     </div>
   );
 }
@@ -592,18 +691,22 @@ function InteractiveChartWithFallback({
   chartName: string;
   onFallback: () => void;
 }): React.JSX.Element | null {
-  const { data, isLoading, isError } = useQuery<ChartData>({
+  const { data, isLoading } = useQuery<ChartData | null>({
     queryKey: ["chart-data", jobId, chartName],
     queryFn: () => getChartData(jobId, chartName),
     retry: false,
     staleTime: Infinity,
   });
 
+  // data is undefined while loading, null when endpoint returned non-OK
+  const unavailable =
+    data === null || (data !== undefined && data.traces.length === 0);
+
   useEffect(() => {
-    if (isError || (data !== undefined && data.traces.length === 0)) {
+    if (unavailable) {
       onFallback();
     }
-  }, [isError, data, onFallback]);
+  }, [unavailable, onFallback]);
 
   if (isLoading) {
     return (
@@ -613,7 +716,7 @@ function InteractiveChartWithFallback({
     );
   }
 
-  if (isError || !data || data.traces.length === 0) {
+  if (!data || data.traces.length === 0) {
     return null;
   }
 
@@ -639,7 +742,31 @@ function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
     queryFn: () => getJobPlots(jobId),
   });
 
-  const [enlarged, setEnlarged] = useState<string | null>(null);
+  const [enlarged, setEnlarged] = useState<PlotEntry | null>(null);
+  const [showAnnotationVariants, setShowAnnotationVariants] = useState(false);
+
+  // Close modal on Escape key
+  useEffect(() => {
+    if (!enlarged) return;
+    const handler = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") setEnlarged(null);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [enlarged]);
+
+  const annotationCount = useMemo(
+    () => (plots ?? []).filter((p) => /no_annot/i.test(p.name)).length,
+    [plots]
+  );
+
+  const visiblePlots = useMemo(
+    () =>
+      showAnnotationVariants
+        ? (plots ?? [])
+        : (plots ?? []).filter((p) => !/no_annot/i.test(p.name)),
+    [plots, showAnnotationVariants]
+  );
 
   if (isLoading) return <Spinner label="Loading plots..." />;
   if (!plots || plots.length === 0) {
@@ -648,8 +775,23 @@ function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
 
   return (
     <>
-      <div className="grid grid-cols-2 gap-4 md:grid-cols-3">
-        {plots.map((p) => (
+      {annotationCount > 0 && (
+        <div className="mb-4 flex items-center gap-3">
+          <span className="text-xs text-zinc-500">
+            {visiblePlots.length} plot{visiblePlots.length !== 1 ? "s" : ""}
+          </span>
+          <button
+            onClick={() => setShowAnnotationVariants(!showAnnotationVariants)}
+            className="flex items-center gap-1 text-xs text-zinc-400 hover:text-zinc-200"
+            aria-label={showAnnotationVariants ? `Hide ${annotationCount} annotation variant plots` : `Show ${annotationCount} annotation variant plots`}
+          >
+            {showAnnotationVariants ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+            {showAnnotationVariants ? "Hide" : "Show"} {annotationCount} annotation variant{annotationCount !== 1 ? "s" : ""}
+          </button>
+        </div>
+      )}
+      <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+        {visiblePlots.map((p) => (
           <PlotCell
             key={p.path}
             plot={p}
@@ -659,17 +801,43 @@ function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
         ))}
       </div>
 
-      {/* Enlarged modal */}
+      {/* Lightbox modal */}
       {enlarged && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 backdrop-blur-sm"
           onClick={() => setEnlarged(null)}
         >
-          <img
-            src={`/api/files/serve?path=${encodeURIComponent(enlarged)}`}
-            alt="Enlarged plot"
-            className="max-h-[90vh] max-w-[90vw] rounded-lg"
-          />
+          {/* Modal content - stop propagation so clicking image doesn't close */}
+          <div
+            className="relative flex max-h-[92vh] max-w-[92vw] flex-col items-center"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Close button */}
+            <button
+              onClick={() => setEnlarged(null)}
+              className="absolute -right-3 -top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-zinc-800 text-zinc-300 shadow-lg transition-colors hover:bg-zinc-700 hover:text-white"
+              aria-label="Close"
+            >
+              <X className="h-4 w-4" />
+            </button>
+
+            {/* Image */}
+            <div className="overflow-auto rounded-lg border border-zinc-700 bg-zinc-950 p-4 shadow-2xl">
+              <img
+                src={`/api/files/serve?path=${encodeURIComponent(enlarged.path)}`}
+                alt={enlarged.name}
+                className="max-h-[80vh] max-w-[85vw] object-contain"
+              />
+            </div>
+
+            {/* Caption below image */}
+            <div className="mt-3 text-center">
+              <p className="text-sm font-medium text-zinc-200">
+                {plotCaption(enlarged.name)}
+              </p>
+              <p className="mt-0.5 text-xs text-zinc-500">{enlarged.name}</p>
+            </div>
+          </div>
         </div>
       )}
     </>
@@ -778,10 +946,10 @@ export function JobDetailPage(): React.JSX.Element {
               Cancel
             </Button>
           )}
-          {isTerminal && job.type.toLowerCase() === "pipeline" && (
+          {isTerminal && (job.type.toLowerCase() === "pipeline" || job.type.toLowerCase() === "analyze") && (
             <Link to="/explore/$jobId" params={{ jobId }}>
-              <Button variant="outline" size="sm">
-                Explore
+              <Button variant="default" size="sm">
+                Explore Latent Space
               </Button>
             </Link>
           )}
@@ -798,7 +966,7 @@ export function JobDetailPage(): React.JSX.Element {
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
                 className={clsx(
-                  "flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm transition-colors",
+                  "flex items-center gap-1.5 border-b-2 px-4 py-2 text-sm transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950",
                   activeTab === tab.id
                     ? "border-blue-500 text-zinc-50"
                     : "border-transparent text-zinc-400 hover:text-zinc-200"
@@ -820,6 +988,7 @@ export function JobDetailPage(): React.JSX.Element {
             suggestions={suggestions}
             onReconcile={handleReconcile}
             isReconciling={reconcileMutation.isPending}
+            onTabChange={setActiveTab}
           />
         )}
         {activeTab === "logs" && (

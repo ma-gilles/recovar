@@ -29,7 +29,7 @@ import { isEphemeralPath, EPHEMERAL_PATH_WARNING } from "../../lib/constants";
 function StatusIcon({ status }: { status: string }): React.JSX.Element {
   switch (status) {
     case "running":
-      return <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-500" />;
+      return <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin text-blue-500" />;
     case "completed":
       return <CheckCircle className="h-3.5 w-3.5 text-emerald-500" />;
     case "failed":
@@ -66,24 +66,37 @@ function JobSection({
   title,
   jobs,
   defaultOpen = true,
+  alwaysShow = false,
 }: {
   title: string;
   jobs: JobSummary[];
   defaultOpen?: boolean;
+  /** Show section header even when empty */
+  alwaysShow?: boolean;
 }): React.JSX.Element | null {
   const [open, setOpen] = useState(defaultOpen);
-  if (jobs.length === 0) return null;
+  if (jobs.length === 0 && !alwaysShow) return null;
 
   return (
     <div>
       <button
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center gap-1 px-3 py-1.5 text-xs font-medium uppercase tracking-wider text-zinc-500 hover:text-zinc-300"
+        onClick={() => jobs.length > 0 && setOpen(!open)}
+        aria-expanded={jobs.length > 0 ? open : undefined}
+        className={clsx(
+          "flex w-full items-center gap-1 px-3 py-1.5 text-xs font-medium uppercase tracking-wider rounded outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950",
+          jobs.length > 0
+            ? "text-zinc-500 hover:text-zinc-300"
+            : "text-zinc-600 cursor-default"
+        )}
       >
-        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {jobs.length > 0 ? (
+          open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />
+        ) : (
+          <span className="inline-block w-3" />
+        )}
         {title} ({jobs.length})
       </button>
-      {open && (
+      {open && jobs.length > 0 && (
         <div className="ml-2 space-y-0.5">
           {jobs.map((job) => (
             <JobItem key={job.id} job={job} />
@@ -159,10 +172,14 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
     }
   }, [projectError, onProjectNotFound]);
 
-  const pipelineJobs = project?.jobs.filter((j) => j.type.toLowerCase() === "pipeline") ?? [];
-  const analyzeJobs = project?.jobs.filter((j) => j.type.toLowerCase() === "analyze") ?? [];
+  const knownTypes = ["Pipeline", "Analyze", "ComputeState", "ReconstructState", "StableStates", "ComputeTrajectory", "ReconstructTrajectory", "Density"];
+  const pipelineJobs = project?.jobs.filter((j) => j.type === "Pipeline") ?? [];
+  const analyzeJobs = project?.jobs.filter((j) => j.type === "Analyze") ?? [];
+  const computeStateJobs = project?.jobs.filter((j) => j.type === "ComputeState" || j.type === "ReconstructState" || j.type === "StableStates") ?? [];
+  const trajectoryJobs = project?.jobs.filter((j) => j.type === "ComputeTrajectory" || j.type === "ReconstructTrajectory") ?? [];
+  const densityJobs = project?.jobs.filter((j) => j.type === "Density") ?? [];
   const otherJobs =
-    project?.jobs.filter((j) => j.type.toLowerCase() !== "pipeline" && j.type.toLowerCase() !== "analyze") ?? [];
+    project?.jobs.filter((j) => !knownTypes.includes(j.type)) ?? [];
 
   const handleProjectCreated = (p: { id: string; path: string; name: string }) => {
     setShowCreateForm(false);
@@ -240,14 +257,17 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
                   <span className="truncate">{project.name}</span>
                 </div>
                 <div className="border-t border-zinc-800 pt-1">
-                  <JobSection title="Pipeline" jobs={pipelineJobs} />
-                  <JobSection title="Analyze" jobs={analyzeJobs} />
+                  <JobSection title="Pipeline" jobs={pipelineJobs} alwaysShow />
+                  <JobSection title="Analyze" jobs={analyzeJobs} alwaysShow />
+                  <JobSection title="Compute State" jobs={computeStateJobs} defaultOpen={false} alwaysShow />
+                  <JobSection title="Trajectory" jobs={trajectoryJobs} defaultOpen={false} alwaysShow />
+                  <JobSection title="Density" jobs={densityJobs} defaultOpen={false} alwaysShow />
                   <JobSection title="Other" jobs={otherJobs} defaultOpen={false} />
                 </div>
               </div>
             ) : (
               <div className="flex items-center justify-center py-8">
-                <Loader2 className="h-4 w-4 animate-spin text-zinc-500" />
+                <Loader2 className="h-4 w-4 motion-safe:animate-spin text-zinc-500" />
               </div>
             )}
           </nav>

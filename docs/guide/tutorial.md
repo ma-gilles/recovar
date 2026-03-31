@@ -263,15 +263,17 @@ chimerax output/trajectory_density/state*.mrc
 After running `pipeline` and `analyze` (either via CLI or the GUI itself), you can launch the GUI to interactively explore results:
 
 ```bash
-# Launch the GUI pointing to your results
-recovar gui --scan-dir output
+# Launch the GUI
+recovar gui
 
 # With SSH port forwarding from a remote cluster
-ssh -L 5000:localhost:5000 user@cluster
+ssh -L 8080:localhost:8080 user@cluster
 # Then on the cluster:
-recovar gui --scan-dir output
-# Open http://localhost:5000 in your local browser
+recovar gui
+# Open http://localhost:8080 in your local browser
 ```
+
+Once launched, create a project (or open an existing one) and use **Scan for Existing Jobs** to import your pipeline outputs.
 
 The GUI provides:
 
@@ -346,7 +348,7 @@ output/analysis_<zdim>/
 | Trajectory | `recovar compute_trajectory out -o traj --density density.pkl --endpts centers.txt` |
 | Custom volumes | `recovar compute_state out -o vols --latent-points coords.txt` |
 | Project status | `recovar project_status` |
-| Launch GUI | `recovar gui --scan-dir out` |
+| Launch GUI | `recovar gui` |
 
 ## Tips
 

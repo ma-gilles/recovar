@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   RotateCcw,
@@ -12,7 +12,15 @@ import { getVolumeInfo, type VolumeEntry } from "../../lib/api/client";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import { MAX_PINNED_VOLUMES } from "../../lib/constants";
-import { VtkViewer, VtkErrorBoundary } from "./VtkViewer";
+import { VtkErrorBoundary } from "./VtkErrorBoundary";
+import type { DownsampleInfo } from "./VtkViewer";
+
+// Lazy-load VtkViewer so vtk.js (~3-4 MB) is split into a separate chunk
+// and only fetched when the user opens the 3D view.
+const VtkViewer = React.lazy(() =>
+  import("./VtkViewer").then((m) => ({ default: m.VtkViewer }))
+);
+
 import {
   TrajectoryPlayer,
   getTrajectoryVolumes,
@@ -34,6 +42,8 @@ interface PinnedVolume {
 interface VolumeViewerProps {
   volumes?: VolumeEntry[];
   initialVolumePath?: string;
+  /** Hide the built-in volume list (when the parent already provides one) */
+  hideVolumeList?: boolean;
 }
 
 /**
@@ -41,14 +51,24 @@ interface VolumeViewerProps {
  * Full vtk.js isosurface rendering requires the vtk.js package (installed separately).
  * This provides the slice view mode and controls as a fallback/default.
  */
-export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps): React.JSX.Element {
+export function VolumeViewer({ volumes, initialVolumePath, hideVolumeList }: VolumeViewerProps): React.JSX.Element {
   const [pinnedVolumes, setPinnedVolumes] = useState<PinnedVolume[]>([]);
   const [activeVolume, setActiveVolume] = useState<string | null>(initialVolumePath ?? null);
+
+  // Sync activeVolume when the parent changes initialVolumePath (e.g. user
+  // clicks a different volume in an external list while hideVolumeList is set).
+  useEffect(() => {
+    if (initialVolumePath != null) {
+      setActiveVolume(initialVolumePath);
+    }
+  }, [initialVolumePath]);
+
   const [axis, setAxis] = useState<0 | 1 | 2>(2); // Z axis default
   const [sliceIdx, setSliceIdx] = useState(0);
   const [viewMode, setViewMode] = useState<"slice" | "3d">("3d");
   const [activeSigma, setActiveSigma] = useState(3.0);
   const [maxSlice, setMaxSlice] = useState(128);
+  const [downsampleInfo, setDownsampleInfo] = useState<DownsampleInfo | null>(null);
 
   const activeCategory = volumes?.find((v) => v.path === activeVolume)?.category;
 
@@ -101,11 +121,16 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
     ? `/api/volumes/slice?path=${encodeURIComponent(activeVolume)}&axis=${axis}&idx=${sliceIdx}`
     : null;
 
+  const handleDownsampleInfo = useCallback((info: DownsampleInfo | null) => {
+    setDownsampleInfo(info);
+  }, []);
+
   const loadVolume = useCallback(
     (path: string, _name: string) => {
       setActiveVolume(path);
       setSliceIdx(0);
       setTrajectoryActive(false);
+      setDownsampleInfo(null); // clear until new volume reports back
     },
     []
   );
@@ -153,8 +178,9 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
           <div className="flex gap-1 rounded-md border border-zinc-700 p-0.5">
             <button
               onClick={() => setViewMode("slice")}
+              aria-pressed={viewMode === "slice"}
               className={clsx(
-                "rounded px-2 py-1 text-xs",
+                "rounded px-2 py-1 text-xs focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950 outline-none",
                 viewMode === "slice" ? "bg-zinc-700 text-zinc-50" : "text-zinc-400"
               )}
             >
@@ -162,8 +188,9 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
             </button>
             <button
               onClick={() => setViewMode("3d")}
+              aria-pressed={viewMode === "3d"}
               className={clsx(
-                "rounded px-2 py-1 text-xs",
+                "rounded px-2 py-1 text-xs focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950 outline-none",
                 viewMode === "3d" ? "bg-zinc-700 text-zinc-50" : "text-zinc-400"
               )}
             >
@@ -178,8 +205,10 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
                   <button
                     key={label}
                     onClick={() => setAxis(i as 0 | 1 | 2)}
+                    aria-label={`${label} axis`}
+                    aria-pressed={axis === i}
                     className={clsx(
-                      "rounded px-2 py-1 text-xs",
+                      "rounded px-2 py-1 text-xs focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950 outline-none",
                       axis === i ? "bg-zinc-700 text-zinc-50" : "text-zinc-400"
                     )}
                   >
@@ -242,14 +271,17 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
             />
           ) : viewMode === "3d" ? (
             <VtkErrorBoundary onWebGLFail={() => setViewMode("slice")}>
-              <VtkViewer
-                activeVolume={activeVolume}
-                pinnedVolumes={pinnedVolumes}
-                activeSigma={activeSigma}
-                activeCategory={activeCategory}
-                preserveCamera={trajectoryActive}
-                prefetchPaths={prefetchPaths}
-              />
+              <Suspense fallback={<Spinner label="Loading 3D viewer..." />}>
+                <VtkViewer
+                  activeVolume={activeVolume}
+                  pinnedVolumes={pinnedVolumes}
+                  activeSigma={activeSigma}
+                  activeCategory={activeCategory}
+                  preserveCamera={trajectoryActive}
+                  prefetchPaths={prefetchPaths}
+                  onDownsampleInfo={handleDownsampleInfo}
+                />
+              </Suspense>
             </VtkErrorBoundary>
           ) : (
             <Spinner label="Loading..." />
@@ -267,120 +299,130 @@ export function VolumeViewer({ volumes, initialVolumePath }: VolumeViewerProps):
 
         {/* Volume info */}
         {volInfo && (
-          <div className="flex gap-4 text-xs text-zinc-500">
+          <div className="flex items-center gap-4 text-xs text-zinc-500">
             <span>Shape: {volInfo.shape.join(" x ")}</span>
             <span>Voxel: {volInfo.voxel_size.toFixed(2)} A</span>
             <span>
               Range: [{volInfo.min.toFixed(3)}, {volInfo.max.toFixed(3)}]
             </span>
+            {downsampleInfo && (
+              <span className="rounded bg-amber-900/40 px-1.5 py-0.5 text-amber-400">
+                Viewing at {downsampleInfo.servedDim}&sup3; (original: {downsampleInfo.originalDim}&sup3;)
+              </span>
+            )}
           </div>
         )}
       </div>
 
-      {/* Volume list / pin panel */}
-      <div className="w-56 space-y-3">
-        {/* Pinned volumes */}
-        {pinnedVolumes.length > 0 && (
-          <div className="space-y-2">
-            <h4 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-              Pinned ({pinnedVolumes.length}/{MAX_PINNED_VOLUMES})
-            </h4>
-            {pinnedVolumes.map((pv) => (
-              <div key={pv.path} className="rounded-md border border-zinc-800 bg-zinc-900 p-2 space-y-1">
-                <div className="flex items-center gap-1">
-                  <span
-                    className="h-2 w-2 rounded-full"
-                    style={{ backgroundColor: VOLUME_COLOR_HEX[pv.colorIndex] }}
-                  />
-                  <span className="flex-1 truncate text-xs">{pv.name}</span>
+      {/* Volume list / pin panel — hidden when parent provides its own list */}
+      {(!hideVolumeList || pinnedVolumes.length > 0) && (
+        <div className="w-56 space-y-3">
+          {/* Pinned volumes */}
+          {pinnedVolumes.length > 0 && (
+            <div className="space-y-2">
+              <h4 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                Pinned ({pinnedVolumes.length}/{MAX_PINNED_VOLUMES})
+              </h4>
+              {pinnedVolumes.map((pv) => (
+                <div key={pv.path} className="rounded-md border border-zinc-800 bg-zinc-900 p-2 space-y-1">
+                  <div className="flex items-center gap-1">
+                    <span
+                      className="h-2 w-2 rounded-full"
+                      style={{ backgroundColor: VOLUME_COLOR_HEX[pv.colorIndex] }}
+                    />
+                    <span className="flex-1 truncate text-xs">{pv.name}</span>
+                    <button
+                      onClick={() => updatePinned(pv.path, { visible: !pv.visible })}
+                      className="text-zinc-500 hover:text-zinc-300"
+                      aria-label={pv.visible ? `Hide ${pv.name}` : `Show ${pv.name}`}
+                    >
+                      {pv.visible ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                    </button>
+                    <button
+                      onClick={() => unpinVolume(pv.path)}
+                      className="text-zinc-500 hover:text-red-400"
+                      aria-label={`Unpin ${pv.name}`}
+                    >
+                      <Pin className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="space-y-0.5">
+                    <div className="flex items-center gap-1 text-xs text-zinc-500">
+                      <span className="w-12">Sigma</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={10}
+                        step={0.1}
+                        value={pv.threshold}
+                        onChange={(e) => updatePinned(pv.path, { threshold: parseFloat(e.target.value) })}
+                        className="flex-1"
+                      />
+                      <span className="w-8 text-right">{pv.threshold.toFixed(1)}</span>
+                    </div>
+                    <div className="flex items-center gap-1 text-xs text-zinc-500">
+                      <span className="w-12">Opacity</span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={pv.opacity}
+                        onChange={(e) => updatePinned(pv.path, { opacity: parseFloat(e.target.value) })}
+                        className="flex-1"
+                      />
+                      <span className="w-8 text-right">{pv.opacity.toFixed(2)}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Volume list — only shown when not hidden by parent */}
+          {!hideVolumeList && volumes && volumes.length > 0 && (
+            <div className="space-y-1">
+              <h4 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                Available Volumes
+              </h4>
+              {volumes.map((v) => (
+                <div
+                  key={v.path}
+                  className={clsx(
+                    "flex items-center gap-1 rounded px-2 py-1 text-xs cursor-pointer",
+                    activeVolume === v.path
+                      ? "bg-zinc-700 text-zinc-50"
+                      : "text-zinc-400 hover:bg-zinc-800"
+                  )}
+                >
                   <button
-                    onClick={() => updatePinned(pv.path, { visible: !pv.visible })}
-                    className="text-zinc-500 hover:text-zinc-300"
+                    className="flex-1 truncate text-left"
+                    onClick={() => loadVolume(v.path, v.name)}
                   >
-                    {pv.visible ? <Eye className="h-3 w-3" /> : <EyeOff className="h-3 w-3" />}
+                    {v.name}
                   </button>
                   <button
-                    onClick={() => unpinVolume(pv.path)}
-                    className="text-zinc-500 hover:text-red-400"
+                    onClick={() => pinVolume(v.path, v.name)}
+                    className={clsx(
+                      "shrink-0",
+                      pinnedVolumes.some((p) => p.path === v.path)
+                        ? "text-blue-400"
+                        : "text-zinc-600 hover:text-zinc-300"
+                    )}
+                    disabled={
+                      pinnedVolumes.length >= MAX_PINNED_VOLUMES &&
+                      !pinnedVolumes.some((p) => p.path === v.path)
+                    }
+                    aria-label={`Pin ${v.name}`}
                   >
                     <Pin className="h-3 w-3" />
                   </button>
                 </div>
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-1 text-xs text-zinc-500">
-                    <span className="w-12">Sigma</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={10}
-                      step={0.1}
-                      value={pv.threshold}
-                      onChange={(e) => updatePinned(pv.path, { threshold: parseFloat(e.target.value) })}
-                      className="flex-1"
-                    />
-                    <span className="w-8 text-right">{pv.threshold.toFixed(1)}</span>
-                  </div>
-                  <div className="flex items-center gap-1 text-xs text-zinc-500">
-                    <span className="w-12">Opacity</span>
-                    <input
-                      type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={pv.opacity}
-                      onChange={(e) => updatePinned(pv.path, { opacity: parseFloat(e.target.value) })}
-                      className="flex-1"
-                    />
-                    <span className="w-8 text-right">{pv.opacity.toFixed(2)}</span>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Volume list */}
-        {volumes && volumes.length > 0 && (
-          <div className="space-y-1">
-            <h4 className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-              Available Volumes
-            </h4>
-            {volumes.map((v) => (
-              <div
-                key={v.path}
-                className={clsx(
-                  "flex items-center gap-1 rounded px-2 py-1 text-xs cursor-pointer",
-                  activeVolume === v.path
-                    ? "bg-zinc-700 text-zinc-50"
-                    : "text-zinc-400 hover:bg-zinc-800"
-                )}
-              >
-                <button
-                  className="flex-1 truncate text-left"
-                  onClick={() => loadVolume(v.path, v.name)}
-                >
-                  {v.name}
-                </button>
-                <button
-                  onClick={() => pinVolume(v.path, v.name)}
-                  className={clsx(
-                    "shrink-0",
-                    pinnedVolumes.some((p) => p.path === v.path)
-                      ? "text-blue-400"
-                      : "text-zinc-600 hover:text-zinc-300"
-                  )}
-                  disabled={
-                    pinnedVolumes.length >= MAX_PINNED_VOLUMES &&
-                    !pinnedVolumes.some((p) => p.path === v.path)
-                  }
-                >
-                  <Pin className="h-3 w-3" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

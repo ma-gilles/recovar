@@ -9,6 +9,8 @@ interface SelectionToolbarProps {
   onToolChange: (tool: SelectionTool | null) => void;
   onClearSelection: () => void;
   hasSelection: boolean;
+  /** Live count of particles inside the in-progress selection shape (updated on mousemove). */
+  liveSelectionCount?: number | null;
 }
 
 const tools: { id: SelectionTool; label: string; Icon: typeof PenTool }[] = [
@@ -27,6 +29,7 @@ export function SelectionToolbar({
   onToolChange,
   onClearSelection,
   hasSelection,
+  liveSelectionCount,
 }: SelectionToolbarProps): React.JSX.Element {
   return (
     <div className="flex items-center gap-2">
@@ -39,7 +42,7 @@ export function SelectionToolbar({
             aria-label={`${label} selection tool`}
             aria-pressed={activeTool === id}
             className={clsx(
-              "inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors",
+              "inline-flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-1 focus-visible:ring-offset-zinc-950",
               activeTool === id
                 ? "bg-blue-600 text-white"
                 : "text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
@@ -68,6 +71,12 @@ export function SelectionToolbar({
           {activeTool === "lasso" && "Draw freehand on the scatter plot to select particles"}
           {activeTool === "rectangle" && "Click and drag to draw a rectangle selection"}
           {activeTool === "polygon" && "Click to add vertices, double-click to close and select"}
+        </span>
+      )}
+
+      {liveSelectionCount != null && liveSelectionCount > 0 && (
+        <span className="ml-auto rounded bg-blue-600/20 px-2 py-0.5 text-[11px] font-medium tabular-nums text-blue-300">
+          {liveSelectionCount.toLocaleString()} particles
         </span>
       )}
     </div>

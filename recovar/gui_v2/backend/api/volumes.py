@@ -143,7 +143,7 @@ async def volume_raw(
     # if Content-Length is missing or caching is disabled.
     cache_headers = {
         "Cache-Control": "private, max-age=3600, immutable",
-        "Access-Control-Expose-Headers": "Content-Length, X-Original-Shape",
+        "Access-Control-Expose-Headers": "Content-Length, X-Original-Shape, X-Volume-Downsampled",
     }
 
     # Fast path: serve the original file directly when no downsampling needed.
@@ -172,6 +172,7 @@ async def volume_raw(
             **cache_headers,
             "Content-Length": str(len(mrc_bytes)),
             "X-Original-Shape": original_shape,
+            "X-Volume-Downsampled": "true",
         },
     )
 

@@ -146,9 +146,11 @@ def build_compute_trajectory_command(
     cmd.append(params["result_dir"])
 
     _add_optional(cmd, "-o", params.get("outdir"))
+    _add_optional(cmd, "--zdim", params.get("zdim"))
     cmd.extend(["--z_st", z_start_file])
     cmd.extend(["--z_end", z_end_file])
     _add_optional(cmd, "--n-vols-along-path", params.get("n_vols_along_path"))
+    _add_optional(cmd, "--density", params.get("density"))
 
     return cmd
 

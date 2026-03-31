@@ -384,7 +384,7 @@ _SBATCH_TEMPLATE = """\
 #SBATCH --mem={memory}
 #SBATCH --time={time}
 #SBATCH --output={output_path}
-
+{raw_directives}
 # ── Environment ──
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
@@ -418,6 +418,7 @@ def _render_sbatch_script(
     memory: str = "300G",
     time: str = "12:00:00",
     cache_dir: str | None = None,
+    raw_directives: str | None = None,
     **_extra: Any,
 ) -> str:
     """Render an sbatch script from parameters."""
@@ -426,6 +427,23 @@ def _render_sbatch_script(
     )
     # Derive pixi bin dir from the running Python executable
     pixi_bin_dir = str(Path(sys.executable).parent)
+
+    # Format raw SBATCH directives (user-supplied extra lines)
+    raw_lines = ""
+    if raw_directives and raw_directives.strip():
+        lines = []
+        for line in raw_directives.strip().splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            # Prefix with #SBATCH if user didn't include it
+            if line.startswith("#SBATCH"):
+                lines.append(line)
+            elif line.startswith("--"):
+                lines.append(f"#SBATCH {line}")
+            else:
+                lines.append(f"#SBATCH --{line}")
+        raw_lines = "\n".join(lines)
 
     if cache_dir:
         cache_setup = (
@@ -450,6 +468,7 @@ def _render_sbatch_script(
         memory=memory,
         time=time,
         output_path=output_path,
+        raw_directives=raw_lines,
         pixi_bin_dir=pixi_bin_dir,
         extra_exports=extra_exports,
         cache_setup=cache_setup,

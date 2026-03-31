@@ -13,13 +13,48 @@ const CLUSTER_COLORS = [
   [188, 189, 34], [23, 190, 207],
 ];
 
+/**
+ * Simplified viridis-like colormap (blue -> teal -> yellow).
+ * Input t in [0, 1], returns [r, g, b] each in [0, 255].
+ */
+function viridisColor(t: number): [number, number, number] {
+  // 5-stop approximation: dark purple -> blue -> teal -> green -> yellow
+  const stops: [number, number, number, number][] = [
+    [0.0,  68,   1, 84],
+    [0.25, 59,  82, 139],
+    [0.5,  33, 145, 140],
+    [0.75, 94, 201,  98],
+    [1.0, 253, 231,  37],
+  ];
+  const tc = Math.max(0, Math.min(1, t));
+  // Find the two stops to interpolate between
+  let lo = 0;
+  for (let i = 1; i < stops.length; i++) {
+    if (stops[i][0] >= tc) { lo = i - 1; break; }
+  }
+  const hi = Math.min(lo + 1, stops.length - 1);
+  const range = stops[hi][0] - stops[lo][0];
+  const f = range > 0 ? (tc - stops[lo][0]) / range : 0;
+  return [
+    Math.round(stops[lo][1] + f * (stops[hi][1] - stops[lo][1])),
+    Math.round(stops[lo][2] + f * (stops[hi][2] - stops[lo][2])),
+    Math.round(stops[lo][3] + f * (stops[hi][3] - stops[lo][3])),
+  ];
+}
+
 interface ScatterPanelProps {
   /** Interleaved xy coords: [x0,y0,x1,y1,...] */
   points: Float32Array;
   /** Per-point cluster labels (optional) */
   labels?: Int32Array | null;
+  /** Per-point density values in [0,1] range (optional, for density coloring) */
+  densityValues?: Float32Array | null;
   /** Special marker positions: interleaved [x0,y0,x1,y1,...] */
   markers?: Float32Array | null;
+  /** K-means center positions: interleaved [x0,y0,x1,y1,...] */
+  centerPositions?: Float32Array | null;
+  /** Per-center density values from deconvolved density (optional) */
+  centerDensityValues?: Float32Array;
   /** Axis labels */
   xLabel: string;
   yLabel: string;
@@ -39,6 +74,8 @@ interface ScatterPanelProps {
   hoveredIndex?: number | null;
   /** Called when mouse hovers over a point (-1 or null = no point) */
   onHover?: (index: number | null) => void;
+  /** Called during selection drawing with the live count of points inside the shape */
+  onLiveSelectionCount?: (count: number | null) => void;
 }
 
 /**
@@ -47,7 +84,10 @@ interface ScatterPanelProps {
 export function ScatterPanel({
   points,
   labels,
+  densityValues,
   markers,
+  centerPositions,
+  centerDensityValues,
   xLabel,
   yLabel,
   title,
@@ -58,6 +98,7 @@ export function ScatterPanel({
   activeTool = null,
   hoveredIndex = null,
   onHover,
+  onLiveSelectionCount,
 }: ScatterPanelProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
@@ -107,7 +148,10 @@ export function ScatterPanel({
 
     // Draw points
     const pointSize = n > 500000 ? 0.5 : n > 100000 ? 1 : n > 10000 ? 1.5 : 2;
-    const alpha = n > 100000 ? 0.15 : n > 10000 ? 0.3 : 0.6;
+    const hasColoring = !!(labels || densityValues);
+    const alpha = hasColoring
+      ? (n > 100000 ? 0.35 : n > 10000 ? 0.5 : 0.7)
+      : (n > 100000 ? 0.15 : n > 10000 ? 0.3 : 0.6);
 
     for (let i = 0; i < n; i++) {
       const x = toCanvasX(points[i * 2]);
@@ -115,6 +159,9 @@ export function ScatterPanel({
 
       if (selectedIndices?.has(i)) {
         ctx.fillStyle = "rgba(59, 130, 246, 0.9)"; // blue highlight
+      } else if (densityValues && densityValues.length === n) {
+        const c = viridisColor(densityValues[i]);
+        ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${Math.max(alpha, 0.4)})`;
       } else if (labels) {
         const c = CLUSTER_COLORS[labels[i] % CLUSTER_COLORS.length];
         ctx.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${alpha})`;
@@ -123,6 +170,40 @@ export function ScatterPanel({
       }
 
       ctx.fillRect(x - pointSize / 2, y - pointSize / 2, pointSize, pointSize);
+    }
+
+    // Draw k-means center overlay
+    if (centerPositions && centerPositions.length >= 2) {
+      const nCenters = centerPositions.length / 2;
+      ctx.font = "bold 10px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "bottom";
+      for (let c = 0; c < nCenters; c++) {
+        const cx = toCanvasX(centerPositions[c * 2]);
+        const cy = toCanvasY(centerPositions[c * 2 + 1]);
+        const color = CLUSTER_COLORS[c % CLUSTER_COLORS.length];
+
+        // Diamond marker
+        const s = 5;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - s);
+        ctx.lineTo(cx + s, cy);
+        ctx.lineTo(cx, cy + s);
+        ctx.lineTo(cx - s, cy);
+        ctx.closePath();
+        ctx.fillStyle = `rgb(${color[0]},${color[1]},${color[2]})`;
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Label
+        const centerLabel = centerDensityValues && centerDensityValues.length > c
+          ? `K${c} (${centerDensityValues[c].toFixed(2)})`
+          : `K${c}`;
+        ctx.fillStyle = "#fff";
+        ctx.fillText(centerLabel, cx, cy - s - 2);
+      }
     }
 
     // Draw markers
@@ -184,7 +265,7 @@ export function ScatterPanel({
 
       ctx.setLineDash([]);
     }
-  }, [points, n, labels, markers, selectedIndices, getBounds, activeTool]);
+  }, [points, n, labels, densityValues, markers, centerPositions, centerDensityValues, selectedIndices, getBounds, activeTool]);
 
   /** Draw crosshair on the overlay canvas for the hovered point */
   const drawCrosshair = useCallback(() => {
@@ -335,9 +416,20 @@ export function ScatterPanel({
       if (currentTool === "lasso") {
         shapePointsRef.current.push([px, py]);
         draw();
+        // Live selection count
+        if (onLiveSelectionCount && shapePointsRef.current.length >= 3) {
+          const count = selectPointsInPolygon(shapePointsRef.current).length;
+          onLiveSelectionCount(count);
+        }
       } else if (currentTool === "rectangle") {
         shapePointsRef.current[1] = [px, py];
         draw();
+        // Live selection count
+        if (onLiveSelectionCount && shapePointsRef.current.length === 2) {
+          const [start, end] = shapePointsRef.current;
+          const count = selectPointsInRect(start, end).length;
+          onLiveSelectionCount(count);
+        }
       }
       return;
     }
@@ -369,7 +461,7 @@ export function ScatterPanel({
         onHover(bestIdx);
       }
     });
-  }, [isDrawing, activeTool, draw, onHover, points, n]);
+  }, [isDrawing, activeTool, draw, onHover, onLiveSelectionCount, points, n, selectPointsInPolygon, selectPointsInRect]);
 
   const handleMouseUp = useCallback(() => {
     if (!isDrawing || !onSelect) {
@@ -379,6 +471,7 @@ export function ScatterPanel({
 
     const currentTool = activeTool ?? "lasso"; // shift+drag fallback
     setIsDrawing(false);
+    onLiveSelectionCount?.(null);
 
     if (currentTool === "lasso") {
       const pts = shapePointsRef.current;
@@ -410,7 +503,7 @@ export function ScatterPanel({
       shapePointsRef.current = [];
       draw();
     }
-  }, [isDrawing, onSelect, activeTool, draw, selectPointsInPolygon, selectPointsInRect]);
+  }, [isDrawing, onSelect, onLiveSelectionCount, activeTool, draw, selectPointsInPolygon, selectPointsInRect]);
 
   // --- Polygon + point click handler ---
   const handleCanvasClick = useCallback(
@@ -423,6 +516,11 @@ export function ScatterPanel({
         const py = e.clientY - rect.top;
         shapePointsRef.current = [...shapePointsRef.current, [px, py]];
         draw();
+        // Live selection count for polygon (after 3+ vertices)
+        if (onLiveSelectionCount && shapePointsRef.current.length >= 3) {
+          const count = selectPointsInPolygon(shapePointsRef.current).length;
+          onLiveSelectionCount(count);
+        }
         return;
       }
 
@@ -452,7 +550,7 @@ export function ScatterPanel({
         onPointClick(bestIdx, [points[bestIdx * 2], points[bestIdx * 2 + 1]]);
       }
     },
-    [onPointClick, onSelect, points, n, isDrawing, activeTool, draw]
+    [onPointClick, onSelect, onLiveSelectionCount, points, n, isDrawing, activeTool, draw, selectPointsInPolygon]
   );
 
   // --- Polygon double-click to close ---
@@ -465,6 +563,7 @@ export function ScatterPanel({
       if (pts.length < 3) {
         shapePointsRef.current = [];
         draw();
+        onLiveSelectionCount?.(null);
         return;
       }
 
@@ -472,8 +571,9 @@ export function ScatterPanel({
       onSelect(selected);
       shapePointsRef.current = [];
       draw();
+      onLiveSelectionCount?.(null);
     },
-    [activeTool, onSelect, draw, selectPointsInPolygon]
+    [activeTool, onSelect, onLiveSelectionCount, draw, selectPointsInPolygon]
   );
 
   const handleMouseLeave = useCallback(() => {
@@ -504,6 +604,8 @@ export function ScatterPanel({
         <canvas
           ref={canvasRef}
           className="w-full h-full"
+          role="img"
+          aria-label={`${title} scatter plot with ${n} points`}
         />
         <canvas
           ref={overlayRef}

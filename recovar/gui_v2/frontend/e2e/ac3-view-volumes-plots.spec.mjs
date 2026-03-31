@@ -41,7 +41,7 @@ test.describe("AC-3: View volumes and plots", () => {
     });
 
     // Click the Volumes tab
-    await page.getByRole("button", { name: /Volumes/i }).click();
+    await page.getByRole("button", { name: "Volumes", exact: true }).click();
 
     // Should show volume categories
     await expect(page.getByText(/mean/i).first()).toBeVisible({

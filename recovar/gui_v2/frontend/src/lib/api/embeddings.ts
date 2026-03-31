@@ -89,3 +89,45 @@ export function projectPCA(
   }
   return out;
 }
+
+export interface RelatedDensityJob {
+  id: string;
+  output_dir: string;
+  pca_dim: number | null;
+  density_pkl_path: string;
+  created: string;
+}
+
+export async function fetchRelatedDensityJobs(jobId: string): Promise<RelatedDensityJob[]> {
+  const resp = await fetch(`/api/jobs/${jobId}/related-density`);
+  if (!resp.ok) return [];
+  return resp.json();
+}
+
+export interface DensityData {
+  particleDensity: Float32Array;
+  centerDensity: Float32Array | null;
+  meta: { n_particles: number; n_clusters: number; pca_dim: number; alpha: number; density_job_id: string; };
+}
+
+export async function fetchDensityValues(jobId: string, zdim: number, densityJobId: string): Promise<DensityData> {
+  const resp = await fetch(`/api/jobs/${jobId}/embeddings/density?zdim=${zdim}&density_job_id=${densityJobId}`);
+  if (!resp.ok) throw new Error(`Failed to load density: ${resp.status}`);
+
+  const metaHeader = resp.headers.get("X-Density-Meta");
+  if (!metaHeader) throw new Error("Missing X-Density-Meta header");
+  const meta = JSON.parse(metaHeader);
+
+  const buffer = await resp.arrayBuffer();
+  let offset = 0;
+
+  const particleDensity = new Float32Array(buffer, offset, meta.n_particles);
+  offset += meta.n_particles * 4;
+
+  let centerDensity: Float32Array | null = null;
+  if (meta.n_clusters > 0) {
+    centerDensity = new Float32Array(buffer, offset, meta.n_clusters);
+  }
+
+  return { particleDensity, centerDensity, meta };
+}

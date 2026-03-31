@@ -20,7 +20,7 @@ recovar/
   cuda/            # CUDA backprojection kernel (XLA FFI, auto-compiles)
   simulation/      # Synthetic data generation for testing
   em/              # EM algorithm (E-step, M-step, heterogeneous state)
-  gui/             # Flask web interface
+  gui_v2/          # Web GUI: FastAPI backend + React/TypeScript frontend
   utils/           # Helpers, NVTX profiling, multi-GPU
 ```
 

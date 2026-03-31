@@ -36,6 +36,14 @@ import { Spinner } from "../ui/spinner";
 
 // ---- Types ----
 
+/** Metadata about server-side downsampling (when the volume exceeds MAX_SERVE_DIM). */
+export interface DownsampleInfo {
+  /** The served (downsampled) dimension, e.g. 256. */
+  servedDim: number;
+  /** The original dimension before downsampling, e.g. 320. */
+  originalDim: number;
+}
+
 interface VolumeData {
   nx: number;
   ny: number;
@@ -43,6 +51,8 @@ interface VolumeData {
   scalars: Float32Array;
   mean: number;
   std: number;
+  /** Set when the volume was downsampled by the server. */
+  downsampleInfo?: DownsampleInfo;
 }
 
 interface VtkPipelineEntry {
@@ -82,6 +92,11 @@ interface VtkViewerProps {
    * These are fetched in the background and cached for instant display.
    */
   prefetchPaths?: string[];
+  /**
+   * Called when a volume is loaded, reporting whether it was downsampled.
+   * Null means the volume was served at full resolution.
+   */
+  onDownsampleInfo?: (info: DownsampleInfo | null) => void;
 }
 
 // Design system palette: sky-400, rose-400, emerald-400, amber-400
@@ -198,11 +213,13 @@ function nx_ny_nz(vol: VolumeData): [number, number, number] {
 
 // ---- Component ----
 
-export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory, preserveCamera = false, prefetchPaths }: VtkViewerProps): React.JSX.Element {
+export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, activeCategory, preserveCamera = false, prefetchPaths, onDownsampleInfo }: VtkViewerProps): React.JSX.Element {
   const containerRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const renderContextRef = useRef<any>(null);
   const pipelinesRef = useRef<Map<string, VtkPipelineEntry>>(new Map());
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const negSurfacesRef = useRef<{ actor: any; mapper: any; mc: any }[]>([]);
   const [loading, setLoading] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [webglFailed, setWebglFailed] = useState(false);
@@ -253,6 +270,13 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 
       return () => {
         observer.disconnect();
+        // Clean up negative surface actors
+        for (const neg of negSurfacesRef.current) {
+          neg.actor.delete();
+          neg.mapper.delete();
+          neg.mc.delete();
+        }
+        negSurfacesRef.current = [];
         // Clean up all pipelines
         for (const pipeline of pipelinesRef.current.values()) {
           pipeline.actor.delete();
@@ -356,6 +380,10 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
         throw new Error("Server returned empty response (0 bytes)");
       }
 
+      // Check for downsampling headers
+      const isDownsampled = resp.headers.get("X-Volume-Downsampled") === "true";
+      const originalShapeHeader = resp.headers.get("X-Original-Shape");
+
       // Step 2: Parse the MRC header and data
       let volumeData: VolumeData;
       try {
@@ -363,6 +391,14 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       } catch (parseErr) {
         const parseMsg = parseErr instanceof Error ? parseErr.message : String(parseErr);
         throw new Error(`MRC parsing failed: ${parseMsg}`);
+      }
+
+      // Attach downsampling metadata if the server downsampled this volume
+      if (isDownsampled && originalShapeHeader) {
+        const dims = originalShapeHeader.split(",").map(Number);
+        const originalDim = Math.max(...dims);
+        const servedDim = Math.max(volumeData.nx, volumeData.ny, volumeData.nz);
+        volumeData.downsampleInfo = { servedDim, originalDim };
       }
 
       // Step 3: Build vtk.js image data
@@ -455,8 +491,21 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       );
       if (cancelled) return;
 
+      // Report downsampling status for the active (first) volume
+      if (onDownsampleInfo && entries.length > 0 && entries[0]) {
+        onDownsampleInfo(entries[0].volumeData.downsampleInfo ?? null);
+      }
+
       // Remove all actors first
       renderer.removeAllViewProps();
+
+      // Clean up previous negative surface objects to prevent memory leak
+      for (const neg of negSurfacesRef.current) {
+        neg.actor.delete();
+        neg.mapper.delete();
+        neg.mc.delete();
+      }
+      negSurfacesRef.current = [];
 
       // Add actors for visible volumes
       for (let i = 0; i < volumesToShow.length; i++) {
@@ -501,6 +550,7 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
           negProp.setSpecular(0.3);
           negProp.setSpecularPower(20);
           renderer.addActor(negActor);
+          negSurfacesRef.current.push({ actor: negActor, mapper: negMapper, mc: negMC });
         } else {
           // Standard volume: single isosurface
           const contourValue = pipeline.volumeData.mean + v.threshold * pipeline.volumeData.std;
@@ -543,7 +593,7 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [volumesToShow, ensurePipeline, preserveCamera]);
+  }, [volumesToShow, ensurePipeline, preserveCamera, onDownsampleInfo]);
 
   // Pre-fetch upcoming trajectory frames in the background
   useEffect(() => {
@@ -616,44 +666,5 @@ export function VtkViewer({ activeVolume, activeSigma = 3.0, pinnedVolumes, acti
 }
 
 
-// ---------------------------------------------------------------------------
-// ErrorBoundary — safety net around VtkViewer for unhandled render errors.
-// ---------------------------------------------------------------------------
-
-interface VtkErrorBoundaryProps {
-  onWebGLFail: () => void;
-  children: React.ReactNode;
-}
-
-interface VtkErrorBoundaryState {
-  hasError: boolean;
-}
-
-export class VtkErrorBoundary extends React.Component<VtkErrorBoundaryProps, VtkErrorBoundaryState> {
-  constructor(props: VtkErrorBoundaryProps) {
-    super(props);
-    this.state = { hasError: false };
-  }
-
-  static getDerivedStateFromError(_error: Error): VtkErrorBoundaryState {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: Error, info: React.ErrorInfo): void {
-    console.error("VtkErrorBoundary caught error:", error, info);
-    this.props.onWebGLFail();
-  }
-
-  render(): React.ReactNode {
-    if (this.state.hasError) {
-      return (
-        <div className="flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900 p-8" style={{ minHeight: 400 }}>
-          <p className="text-sm text-amber-400">
-            3D rendering requires WebGL. Your browser does not support it. Using slice view instead.
-          </p>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
+// VtkErrorBoundary has been extracted to ./VtkErrorBoundary.tsx so it can
+// be imported eagerly while this file (with heavy vtk.js deps) is lazy-loaded.

@@ -22,6 +22,7 @@ export function StatusBadge({ status, className }: BadgeProps): React.JSX.Elemen
         statusColors[status] ?? statusColors.unknown,
         className
       )}
+      aria-live="polite"
     >
       {status}
     </span>

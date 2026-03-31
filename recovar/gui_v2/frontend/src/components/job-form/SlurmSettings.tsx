@@ -1,11 +1,16 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight, Save, Code2 } from "lucide-react";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { tooltips } from "../../lib/tooltips";
-import { getSlurmDefaults, getSystemInfo, type SlurmDefaults } from "../../lib/api/client";
+import { getSlurmDefaults as getServerDefaults, getSystemInfo, type SlurmDefaults } from "../../lib/api/client";
+import { useProject } from "../../lib/project-context";
+import {
+  getSlurmDefaults as getLocalDefaults,
+  saveSlurmDefaults as saveLocalDefaults,
+} from "../../lib/user-prefs";
 
 export interface SlurmOpts {
   partition: string;
@@ -14,6 +19,7 @@ export interface SlurmOpts {
   cpus: number;
   memory: string;
   time: string;
+  raw_directives?: string;
 }
 
 interface SlurmSettingsProps {
@@ -24,11 +30,20 @@ interface SlurmSettingsProps {
 /**
  * Collapsible SLURM settings section for job submission forms.
  *
- * Fetches defaults from the server and pre-fills editable fields.
- * Only shown when the backend reports SLURM is available.
+ * Priority for initial values:
+ *   1. Per-project saved defaults (localStorage)
+ *   2. Server-reported defaults
+ *   3. Hard-coded fallbacks
+ *
+ * Includes an optional raw directives editor for advanced users.
  */
 export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JSX.Element | null {
   const [expanded, setExpanded] = useState(false);
+  const [showRawEditor, setShowRawEditor] = useState(false);
+  const [savedToast, setSavedToast] = useState(false);
+
+  const { project } = useProject();
+  const projectPath = project?.path ?? "";
 
   const { data: sysInfo } = useQuery({
     queryKey: ["system-info"],
@@ -36,26 +51,46 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
     staleTime: 60_000,
   });
 
-  const { data: defaults } = useQuery<SlurmDefaults>({
+  const { data: serverDefaults } = useQuery<SlurmDefaults>({
     queryKey: ["slurm-defaults"],
-    queryFn: getSlurmDefaults,
+    queryFn: getServerDefaults,
     staleTime: 60_000,
     enabled: sysInfo?.slurm_available === true,
   });
 
-  // Initialize value from defaults once loaded
+  // Initialize from per-project localStorage, then server defaults
   useEffect(() => {
-    if (defaults && value === null) {
+    if (value !== null) return;
+
+    // Try localStorage first
+    if (projectPath) {
+      const local = getLocalDefaults(projectPath);
+      if (local) {
+        onChange(local);
+        if (local.raw_directives) setShowRawEditor(true);
+        return;
+      }
+    }
+
+    // Fall back to server defaults
+    if (serverDefaults) {
       onChange({
-        partition: defaults.partition,
-        account: defaults.account,
-        gpus: defaults.gpus,
-        cpus: defaults.cpus,
-        memory: defaults.memory,
-        time: defaults.time,
+        partition: serverDefaults.partition,
+        account: serverDefaults.account,
+        gpus: serverDefaults.gpus,
+        cpus: serverDefaults.cpus,
+        memory: serverDefaults.memory,
+        time: serverDefaults.time,
       });
     }
-  }, [defaults, value, onChange]);
+  }, [serverDefaults, value, onChange, projectPath]);
+
+  const handleSaveDefaults = useCallback(() => {
+    if (!projectPath || !value) return;
+    saveLocalDefaults(projectPath, value);
+    setSavedToast(true);
+    setTimeout(() => setSavedToast(false), 2000);
+  }, [projectPath, value]);
 
   // Don't render if SLURM is not available
   if (!sysInfo?.slurm_available) {
@@ -63,12 +98,12 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
   }
 
   const current = value ?? {
-    partition: defaults?.partition ?? "cryoem",
-    account: defaults?.account ?? "amits",
-    gpus: defaults?.gpus ?? 1,
-    cpus: defaults?.cpus ?? 4,
-    memory: defaults?.memory ?? "300G",
-    time: defaults?.time ?? "12:00:00",
+    partition: serverDefaults?.partition ?? "cryoem",
+    account: serverDefaults?.account ?? "amits",
+    gpus: serverDefaults?.gpus ?? 1,
+    cpus: serverDefaults?.cpus ?? 4,
+    memory: serverDefaults?.memory ?? "300G",
+    time: serverDefaults?.time ?? "12:00:00",
   };
 
   function update(field: keyof SlurmOpts, val: string | number): void {
@@ -159,6 +194,47 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
               placeholder="12:00:00"
             />
           </div>
+
+          {/* Raw directives editor */}
+          <div>
+            <button
+              onClick={() => setShowRawEditor(!showRawEditor)}
+              className="flex items-center gap-1 text-xs text-zinc-500 hover:text-zinc-300"
+            >
+              <Code2 className="h-3 w-3" />
+              {showRawEditor ? "Hide" : "Show"} extra SBATCH directives
+            </button>
+            {showRawEditor && (
+              <div className="mt-2 space-y-1">
+                <Label className="text-xs text-zinc-500">
+                  Additional #SBATCH lines (one per line, without the #SBATCH prefix)
+                </Label>
+                <textarea
+                  value={current.raw_directives ?? ""}
+                  onChange={(e) => update("raw_directives", e.target.value)}
+                  placeholder={"--constraint=gpu80\n--mail-type=END\n--mail-user=you@example.com"}
+                  rows={3}
+                  className="w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Save as default for this project */}
+          {projectPath && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleSaveDefaults}
+                className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              >
+                <Save className="h-3 w-3" />
+                Save as default for this project
+              </button>
+              {savedToast && (
+                <span className="text-xs text-emerald-400">Saved</span>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

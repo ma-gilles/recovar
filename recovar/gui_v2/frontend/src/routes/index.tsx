@@ -12,10 +12,11 @@ import {
 } from "../lib/api/client";
 import { useProject } from "../lib/project-context";
 import type { UseMutationResult } from "@tanstack/react-query";
-import { Plus, Server, FolderPlus, FolderOpen, Search, Beaker, BarChart3, Play, ScanSearch, AlertTriangle } from "lucide-react";
+import { Plus, Server, FolderPlus, FolderOpen, Search, Beaker, BarChart3, Play, ScanSearch, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { StatusBadge } from "../components/ui/badge";
 import { FileBrowser } from "../components/file-browser/FileBrowser";
 import { isEphemeralPath, EPHEMERAL_PATH_WARNING } from "../lib/constants";
 
@@ -304,8 +305,8 @@ function ProjectDashboard({
   });
 
   const jobs = projectDetail?.jobs ?? [];
-  const pipelineCount = jobs.filter((j) => j.type.toLowerCase() === "pipeline").length;
-  const analyzeCount = jobs.filter((j) => j.type.toLowerCase() === "analyze").length;
+  const pipelineCount = jobs.filter((j) => j.type === "Pipeline").length;
+  const analyzeCount = jobs.filter((j) => j.type === "Analyze").length;
   const otherCount = jobs.length - pipelineCount - analyzeCount;
   const runningCount = jobs.filter((j) => j.status === "running" || j.status === "queued").length;
   const lastModified = jobs.length > 0
@@ -408,6 +409,45 @@ function ProjectDashboard({
           </div>
         </button>
       </div>
+
+      {/* Recent Jobs */}
+      {jobs.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-zinc-500" />
+            <h3 className="text-sm font-medium text-zinc-400">Recent Jobs</h3>
+          </div>
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 divide-y divide-zinc-800">
+            {jobs
+              .slice()
+              .sort((a, b) => new Date(b.created).getTime() - new Date(a.created).getTime())
+              .slice(0, 5)
+              .map((j) => (
+                <Link
+                  key={j.id}
+                  to="/jobs/$jobId"
+                  params={{ jobId: j.id }}
+                  className="flex items-center gap-3 px-4 py-3 hover:bg-zinc-800 first:rounded-t-lg last:rounded-b-lg"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium capitalize">
+                        {j.type.replace(/_/g, " ")}
+                      </span>
+                      <StatusBadge status={j.status} />
+                    </div>
+                    <p className="mt-0.5 truncate text-xs text-zinc-500 font-mono">
+                      {j.output_dir}
+                    </p>
+                  </div>
+                  <span className="shrink-0 text-xs text-zinc-500">
+                    {new Date(j.created).toLocaleDateString()}
+                  </span>
+                </Link>
+              ))}
+          </div>
+        </div>
+      )}
 
       {/* Scan form */}
       {showScan && (

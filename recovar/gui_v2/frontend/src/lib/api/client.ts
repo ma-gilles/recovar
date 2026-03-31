@@ -330,6 +330,18 @@ export interface ChartData {
   layout?: Record<string, unknown> | null;
 }
 
-export function getChartData(jobId: string, name: string): Promise<ChartData> {
-  return request(`/jobs/${jobId}/chart-data?name=${encodeURIComponent(name)}`);
+export async function getChartData(
+  jobId: string,
+  name: string,
+): Promise<ChartData | null> {
+  const resp = await fetch(
+    `${BASE}/jobs/${jobId}/chart-data?name=${encodeURIComponent(name)}`,
+    { headers: { "Content-Type": "application/json" } },
+  );
+  if (!resp.ok) {
+    // Older pipeline outputs don't have chart-data endpoints — treat as
+    // "no interactive data available" rather than an error.
+    return null;
+  }
+  return resp.json();
 }

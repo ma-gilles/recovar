@@ -9,7 +9,7 @@ export function Spinner({ className, label }: SpinnerProps): React.JSX.Element {
   return (
     <div className="flex flex-col items-center gap-2">
       <svg
-        className={clsx("h-6 w-6 animate-spin text-blue-500", className)}
+        className={clsx("h-6 w-6 motion-safe:animate-spin text-blue-500", className)}
         viewBox="0 0 24 24"
         fill="none"
       >

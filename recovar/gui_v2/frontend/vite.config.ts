@@ -22,5 +22,12 @@ export default defineConfig({
   build: {
     outDir: "../backend/static",
     emptyOutDir: true,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vtk: ["@kitware/vtk.js"],
+        },
+      },
+    },
   },
 });

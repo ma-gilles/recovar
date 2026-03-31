@@ -841,7 +841,18 @@ class PipelineOutput:
 
     def get_embedding_keys(self, entry):
         self._ensure_embedding_raw_loaded()
+        if entry not in self.embedding:
+            available = [k for k in self.embedding.keys()] if self.embedding else []
+            raise KeyError(
+                f"Embedding entry '{entry}' not found. "
+                f"Available entries: {available}"
+            )
         return list(self.embedding[entry].keys())
+
+    def has_embedding_entry(self, entry):
+        """Check whether a top-level embedding entry exists."""
+        self._ensure_embedding_raw_loaded()
+        return self.embedding is not None and entry in self.embedding
 
     def has_embedding_key(self, entry, key):
         return key in self.get_embedding_keys(entry)

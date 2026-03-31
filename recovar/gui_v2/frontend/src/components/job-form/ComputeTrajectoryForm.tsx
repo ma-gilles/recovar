@@ -39,6 +39,14 @@ export function ComputeTrajectoryForm({
   const isValidCoords = (s: string) =>
     s.length > 0 && s.split(",").every((v) => !isNaN(parseFloat(v.trim())));
 
+  const countCoords = (s: string): number =>
+    s.split(",").filter((v) => v.trim().length > 0).length;
+  const zdimNum = parseInt(zdim);
+  const zStartCount = zStart.length > 0 ? countCoords(zStart) : 0;
+  const zEndCount = zEnd.length > 0 ? countCoords(zEnd) : 0;
+  const zStartMismatch = isValidCoords(zStart) && !isNaN(zdimNum) && zdimNum > 0 && zStartCount !== zdimNum;
+  const zEndMismatch = isValidCoords(zEnd) && !isNaN(zdimNum) && zdimNum > 0 && zEndCount !== zdimNum;
+
   const mutation = useMutation({
     mutationFn: () => {
       const params: Record<string, unknown> = {
@@ -61,7 +69,9 @@ export function ComputeTrajectoryForm({
     resultDir.length > 0 &&
     zdim.length > 0 &&
     isValidCoords(zStart) &&
-    isValidCoords(zEnd);
+    isValidCoords(zEnd) &&
+    !zStartMismatch &&
+    !zEndMismatch;
 
   return (
     <div className="space-y-4">
@@ -101,6 +111,9 @@ export function ComputeTrajectoryForm({
         {zStart.length > 0 && !isValidCoords(zStart) && (
           <p className="text-xs text-red-400">Enter comma-separated numbers</p>
         )}
+        {zStartMismatch && (
+          <p className="text-xs text-red-400">Expected {zdimNum} coordinates, got {zStartCount}</p>
+        )}
       </div>
 
       <div className="space-y-1">
@@ -116,6 +129,9 @@ export function ComputeTrajectoryForm({
         />
         {zEnd.length > 0 && !isValidCoords(zEnd) && (
           <p className="text-xs text-red-400">Enter comma-separated numbers</p>
+        )}
+        {zEndMismatch && (
+          <p className="text-xs text-red-400">Expected {zdimNum} coordinates, got {zEndCount}</p>
         )}
       </div>
 

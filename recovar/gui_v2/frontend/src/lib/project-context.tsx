@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from "react";
-import { getProject, ApiError } from "./api/client";
+import { getProject, createProject, ApiError } from "./api/client";
 
 interface ProjectState {
   id: string;
@@ -60,19 +60,42 @@ export function ProjectProvider({ children }: { children: ReactNode }): React.JS
 
     let cancelled = false;
 
-    getProject(project.id).catch((err: unknown) => {
-      if (cancelled) return;
-      if (err instanceof ApiError && err.status === 404) {
-        // Project no longer exists on the server.
-        localStorage.removeItem(STORAGE_KEY);
-        setProjectState(null);
-        setStaleProjectMessage(
-          "Previous project not found. It may have been moved or deleted."
-        );
-      }
-      // For non-404 errors (network blip, 500, etc.) do nothing —
-      // TanStack Query polling will handle recovery.
-    });
+    getProject(project.id)
+      .then((data) => {
+        if (cancelled) return;
+        // Sync the authoritative name (and path) from the server back to
+        // localStorage so the sidebar and dashboard always agree.
+        if (data.name !== project.name || data.path !== project.path) {
+          const synced = { id: project.id, path: data.path, name: data.name };
+          setProjectState(synced);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(synced));
+        }
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 404 && project.path) {
+          // Project ID not found — try to re-register by path (server may
+          // have restarted with a fresh DB). createProject is idempotent.
+          createProject(project.path, project.name || project.path.split("/").pop() || "Project")
+            .then((data) => {
+              if (cancelled) return;
+              const restored = { id: data.id, path: data.path, name: data.name };
+              setProjectState(restored);
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(restored));
+            })
+            .catch(() => {
+              if (cancelled) return;
+              // Path no longer valid — project was truly deleted/moved.
+              localStorage.removeItem(STORAGE_KEY);
+              setProjectState(null);
+              setStaleProjectMessage(
+                "Previous project not found. It may have been moved or deleted."
+              );
+            });
+        }
+        // For non-404 errors (network blip, 500, etc.) do nothing —
+        // TanStack Query polling will handle recovery.
+      });
 
     return () => {
       cancelled = true;

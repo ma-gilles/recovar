@@ -242,6 +242,10 @@ def _categorize_volume(name: str, rel_path: str = "") -> str:
     if "locres" in lower or "local_res" in lower or "local_resolution" in lower:
         return "locres"
 
+    # Sampling maps are diagnostic, not standalone viewable volumes
+    if lower == "sampling.mrc" or "sampling" in lower:
+        return "sampling"
+
     if "mean" in lower:
         return "mean"
     if "eigen" in lower:
@@ -899,8 +903,8 @@ async def list_volumes(job_id: str) -> list[VolumeEntry]:
             full = os.path.join(dirpath, fname)
             rel_path = os.path.join(rel_dir, fname)
             category = _categorize_volume(fname, rel_path)
-            # Skip local resolution files (they are volume shading, not standalone)
-            if category == "locres":
+            # Skip diagnostic volumes (not standalone viewable)
+            if category in ("locres", "sampling"):
                 continue
             try:
                 size = os.path.getsize(full)

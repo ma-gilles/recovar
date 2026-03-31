@@ -55,6 +55,29 @@ export function ComputeStateForm({
 
   const coordsValid = coords.length > 0 && coords.split(",").every((s) => !isNaN(parseFloat(s.trim())));
 
+  const zdimNum = parseInt(zdim);
+  // Validate coordinate count per line: single-line comma-separated, or multi-line with one point per line
+  const coordLines = coords.trim().split(/\n/).filter((line) => line.trim().length > 0);
+  const coordCountErrors: Array<{ line: number; expected: number; got: number }> = [];
+  if (coordsValid && !isNaN(zdimNum) && zdimNum > 0) {
+    if (coordLines.length > 1) {
+      // Multi-line: validate each line independently
+      coordLines.forEach((line, idx) => {
+        const count = line.split(",").filter((v) => v.trim().length > 0).length;
+        if (count !== zdimNum) {
+          coordCountErrors.push({ line: idx + 1, expected: zdimNum, got: count });
+        }
+      });
+    } else {
+      // Single line: validate total count
+      const count = coords.split(",").filter((v) => v.trim().length > 0).length;
+      if (count !== zdimNum) {
+        coordCountErrors.push({ line: 1, expected: zdimNum, got: count });
+      }
+    }
+  }
+  const hasCoordMismatch = coordCountErrors.length > 0;
+
   return (
     <div className="space-y-4">
       <div className="space-y-1">
@@ -98,6 +121,13 @@ export function ComputeStateForm({
         {coords.length > 0 && !coordsValid && (
           <p className="text-xs text-red-400">Enter comma-separated numbers</p>
         )}
+        {hasCoordMismatch && coordCountErrors.map((err) => (
+          <p key={err.line} className="text-xs text-red-400">
+            {coordLines.length > 1
+              ? `Line ${err.line}: expected ${err.expected} coordinates, got ${err.got}`
+              : `Expected ${err.expected} coordinates, got ${err.got}`}
+          </p>
+        ))}
         {exploreJobId && (
           <Link
             to="/explore/$jobId"
@@ -116,7 +146,7 @@ export function ComputeStateForm({
       <div className="flex justify-end pt-2">
         <Button
           onClick={() => mutation.mutate()}
-          disabled={!resultDir || !zdim || !coordsValid}
+          disabled={!resultDir || !zdim || !coordsValid || hasCoordMismatch}
           loading={mutation.isPending}
         >
           {mutation.isPending ? "Submitting..." : "Compute State"}
