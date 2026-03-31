@@ -37,22 +37,55 @@ class EMState:
         self.noise_variance = noise_variance
 
     def E_step(self, experiment_dataset, rotations, translations, disc_type, big_image_batch):
-        probabilities = E_with_precompute(
-            experiment_dataset, self.mean, rotations, translations, self.noise_variance, disc_type, big_image_batch
+        from recovar.core.configs import ForwardModelConfig
+        from .dense_single_volume.plan import plan_em_iteration
+        from .dense_single_volume.posterior import compute_posterior
+
+        config = ForwardModelConfig.from_dataset(
+            experiment_dataset, disc_type=disc_type, process_fn=experiment_dataset.process_images,
         )
-        return probabilities
+        plan = plan_em_iteration(
+            grid_size=experiment_dataset.grid_size,
+            n_rotations=rotations.shape[0],
+            n_translations=translations.shape[0],
+        )
+        return compute_posterior(
+            config, experiment_dataset, self.mean,
+            rotations, translations, self.noise_variance,
+            disc_type, plan, image_indices=big_image_batch,
+        )
 
     def M_step(self, experiment_dataset, probabilities, rotations, translations, disc_type, big_image_batch):
-        Ft_y_this, Ft_CTF_this = M_with_precompute(
-            experiment_dataset, probabilities, rotations, translations, self.noise_variance, disc_type, big_image_batch
+        from recovar.core.configs import ForwardModelConfig
+        from .dense_single_volume.plan import plan_em_iteration
+        from .dense_single_volume.accumulate import accumulate_sufficient_statistics
+
+        config = ForwardModelConfig.from_dataset(
+            experiment_dataset, disc_type=disc_type, process_fn=experiment_dataset.process_images,
         )
-        self.Ft_y += Ft_y_this
-        self.Ft_CTF += Ft_CTF_this
+        plan = plan_em_iteration(
+            grid_size=experiment_dataset.grid_size,
+            n_rotations=rotations.shape[0],
+            n_translations=translations.shape[0],
+        )
+        stats = accumulate_sufficient_statistics(
+            config, experiment_dataset, probabilities,
+            rotations, translations, self.noise_variance,
+            plan, image_indices=big_image_batch,
+        )
+        self.Ft_y += stats.Ft_y
+        self.Ft_CTF += stats.Ft_ctf  # MeanStats.Ft_ctf -> self.Ft_CTF
 
     def finish_up_M_step(self, experiment_dataset, disc_type):
-        self.mean = relion_functions.post_process_from_filter(
-            experiment_dataset, self.Ft_CTF, self.Ft_y, tau=self.mean_variance, disc_type=disc_type
-        ).reshape(-1)
+        from .dense_single_volume.solver import solve_mean
+        from .dense_single_volume.types import MeanStats
+
+        self.mean = solve_mean(
+            experiment_dataset,
+            MeanStats(Ft_y=self.Ft_y, Ft_ctf=self.Ft_CTF),
+            self.mean_variance,
+            disc_type,
+        )
 
 
 class SGDState:
