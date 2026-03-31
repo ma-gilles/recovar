@@ -199,12 +199,12 @@ def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
         gpu_memory=1,
         disc_type="linear_interp",
         contrast_option="none",
-        to_real=True,
         compute_covariances=True,
         compute_bias=True,
     )
 
-    assert captured["batch_sizes"] == [1, 1]
+    # Single call with full dataset (no halfset splitting)
+    assert captured["batch_sizes"] == [1]
     assert zs.shape == (5, 2)
     assert cov_zs.shape == (5, 2, 2)
     assert est_contrasts.shape == (5,)
@@ -263,21 +263,18 @@ def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(mon
         disc_type="linear_interp",
         contrast_option="none",
         ignore_zero_frequency=True,
-        to_real=True,
         compute_covariances=False,
         compute_bias=False,
     )
 
-    assert len(captured["masks"]) == 2
+    # Single call with full dataset (no halfset splitting)
+    assert len(captured["masks"]) == 1
     np.testing.assert_allclose(captured["masks"][0], np.ones((4,), dtype=np.float32))
-    np.testing.assert_allclose(captured["masks"][1], np.ones((4,), dtype=np.float32))
-    assert captured["contrast_grid_size"] == [1, 1]
+    assert captured["contrast_grid_size"] == [1]
 
 
-def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_series(monkeypatch):
-    class _HalfsetCryo:
-        def __init__(self, n_images):
-            self.n_images = n_images
+def test_get_per_image_embedding_iterates_full_dataset_for_tilt_series(monkeypatch):
+    """get_per_image_embedding passes full dataset to get_coords_in_basis_and_contrast_3."""
 
     class _TiltCryo:
         def __init__(self):
@@ -290,14 +287,6 @@ def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_seri
                 np.array([0, 2, 4], dtype=np.int32),
                 np.array([1, 3], dtype=np.int32),
             ]
-            self.calls = []
-
-        def get_halfset_dataset(self, halfset_id, *, independent=False, lazy=None):
-            self.calls.append((halfset_id, independent, lazy))
-            return _HalfsetCryo(len(self.halfset_indices[halfset_id]))
-
-        def materialize_halfset_datasets(self):
-            return tuple(self.get_halfset_dataset(halfset_id, independent=True, lazy=True) for halfset_id in range(2))
 
     ds = _TiltCryo()
     mean = np.zeros((4,), dtype=np.complex64)
@@ -305,16 +294,20 @@ def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_seri
     s = np.ones((2,), dtype=np.float32)
     volume_mask = np.ones((4,), dtype=np.float32)
 
+    calls = []
     monkeypatch.setattr(embedding, "USE_CUBIC", False)
     monkeypatch.setattr(embedding.utils, "get_embedding_batch_size", lambda *_args, **_kwargs: 10)
     monkeypatch.setattr(
         embedding,
         "get_coords_in_basis_and_contrast_3",
         lambda experiment_dataset, _mean_estimate, basis, _eigenvalues, _volume_mask_in, _contrast_grid, _batch_size, _disc_type, **_kwargs: (
-            np.zeros((experiment_dataset.n_images, basis.shape[0]), dtype=np.complex64),
-            np.zeros((experiment_dataset.n_images, basis.shape[0], basis.shape[0]), dtype=np.complex64),
-            np.ones((experiment_dataset.n_images,), dtype=np.float32),
-            np.zeros((experiment_dataset.n_images, basis.shape[0], basis.shape[0]), dtype=np.complex64),
+            calls.append(experiment_dataset)
+            or (
+                np.zeros((experiment_dataset.n_images, basis.shape[0]), dtype=np.complex64),
+                np.zeros((experiment_dataset.n_images, basis.shape[0], basis.shape[0]), dtype=np.complex64),
+                np.ones((experiment_dataset.n_images,), dtype=np.float32),
+                np.zeros((experiment_dataset.n_images, basis.shape[0], basis.shape[0]), dtype=np.complex64),
+            )
         ),
     )
 
@@ -328,12 +321,13 @@ def test_get_per_image_embedding_uses_independent_halfset_datasets_for_tilt_seri
         gpu_memory=1,
         disc_type="linear_interp",
         contrast_option="none",
-        to_real=True,
         compute_covariances=True,
         compute_bias=True,
     )
 
-    assert ds.calls == [(0, True, True), (1, True, True)]
+    # Called once with the full dataset (no halfset splitting)
+    assert len(calls) == 1
+    assert calls[0] is ds
     assert zs.shape == (5, 2)
     assert cov_zs.shape == (5, 2, 2)
     assert est_contrasts.shape == (5,)
@@ -371,7 +365,6 @@ def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
         gpu_memory=1,
         disc_type="linear_interp",
         contrast_option="none",
-        to_real=True,
         compute_covariances=True,
         compute_bias=True,
     )
@@ -1241,79 +1234,6 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
             atol=1.0,
             err_msg=f"Half vs full mismatch in '{name}': max_err={np.max(np.abs(h_np - f_np.real)):.4g}",
         )
-
-
-@pytest.mark.gpu
-def test_get_per_image_embedding_multi_zdim_matches_per_zdim(gpu_device):
-    """get_per_image_embedding_multi_zdim must produce identical results to
-    calling get_per_image_embedding separately for each n_pcs.
-
-    The multi-zdim path computes statistics once at max(n_pcs) and then solves
-    smaller linear systems; slicing AU_t_AU[:, :k, :k] is numerically identical
-    to a separate k-component forward pass, so results should be bit-exact up
-    to float32 precision.
-    """
-    from recovar.heterogeneity.embedding import (
-        get_per_image_embedding,
-        get_per_image_embedding_multi_zdim,
-    )
-
-    with jax.default_device(gpu_device):
-        # Build a tiny but real dataset
-        cryos, mean_np, volume_mask = _make_multi_zdim_test_fixtures()
-
-        n_basis = 4
-        rng = np.random.default_rng(0)
-        u = rng.standard_normal((cryos.volume_size, n_basis)).astype(np.complex64)
-        s = np.array([4.0, 2.0, 1.0, 0.5], dtype=np.float32)
-        n_pcs_list = [1, 2, 4]
-        gpu_memory = 10.0
-
-        # Reference: separate calls per n_pcs
-        zs_ref, cov_ref = {}, {}
-        for k in n_pcs_list:
-            zs, cov, _, _ = get_per_image_embedding(
-                mean_np, u, s, k, cryos, volume_mask, gpu_memory, contrast_option="none"
-            )
-            zs_ref[k] = zs
-            cov_ref[k] = cov
-
-        # New: single-pass multi-zdim
-        zs_reg, _ = get_per_image_embedding_multi_zdim(
-            mean_np, u, s, n_pcs_list, cryos, volume_mask, gpu_memory, contrast_option="none"
-        )
-
-        for k in n_pcs_list:
-            xs_m, cov_m, _ = zs_reg[k]
-            np.testing.assert_allclose(
-                xs_m,
-                zs_ref[k],
-                rtol=1e-4,
-                atol=1e-5,
-                err_msg=f"xs mismatch at n_pcs={k}: max_err={np.max(np.abs(xs_m - zs_ref[k])):.3g}",
-            )
-            np.testing.assert_allclose(
-                cov_m,
-                cov_ref[k],
-                rtol=1e-4,
-                atol=1e-5,
-                err_msg=f"cov mismatch at n_pcs={k}: max_err={np.max(np.abs(cov_m - cov_ref[k])):.3g}",
-            )
-
-
-def _make_multi_zdim_test_fixtures():
-    """Create a tiny CryoEMDataset with real images for embedding tests."""
-    from helpers import tiny_synthetic
-
-    cryo = tiny_synthetic.make_tiny_cryo_dataset_with_images(grid_size=8, n_images=12, seed=3)
-    cryo.halfset_indices = [
-        np.arange(cryo.n_images // 2, dtype=np.int32),
-        np.arange(cryo.n_images // 2, cryo.n_images, dtype=np.int32),
-    ]
-    cryos = cryo
-    volume_mask = np.ones(cryo.volume_size, dtype=np.float32)
-    mean_np = np.zeros(cryo.volume_size, dtype=np.complex64)
-    return cryos, mean_np, volume_mask
 
 
 def test_compute_batch_coords_half_vs_full_cpu(monkeypatch):

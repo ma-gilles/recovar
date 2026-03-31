@@ -130,7 +130,6 @@ def get_per_image_embedding(
     disc_type="linear_interp",
     contrast_grid=None,
     contrast_option="contrast",
-    to_real=True,
     compute_covariances=True,
     ignore_zero_frequency=False,
     contrast_mean=1,
@@ -157,7 +156,6 @@ def get_per_image_embedding(
         contrast_grid: Grid of contrast values to search over.
         contrast_option: Contrast estimation mode (``'contrast'``,
             ``'contrast_shared'``, or ``'none'``).
-        to_real: Convert output to real-valued coordinates.
         compute_covariances: Compute per-image latent covariance matrices.
         ignore_zero_frequency: Exclude the DC component.
         contrast_mean: Prior mean for contrast estimation.
@@ -229,21 +227,13 @@ def get_per_image_embedding(
     end_time = time.time()
     logger.info("time to compute xs %s", end_time - st_time)
 
-    if compute_covariances and to_real:
+    zs = zs.real
+    if cov_zs is not None:
         cov_zs = cov_zs.real
-
-    if compute_bias and to_real:
+    if bias is not None:
         bias = bias.real
 
-    if to_real:
-        zs = zs.real
-
     return zs, cov_zs, est_contrasts, bias
-
-
-## TODO: a lot of implementations of same thing. It shoudl be refactored better and the names as well.
-## Also it should be benchmarked. Is my whole "precompute matrices, then do fast contrast with precompute" make sense
-## Also these functoins have too many inputs
 @nvtx.annotate("get_coords_in_basis_and_contrast", color="blue", domain=NVTX_DOMAIN_EMBED)
 def get_coords_in_basis_and_contrast_3(
     experiment_dataset,
@@ -326,7 +316,8 @@ def get_coords_in_basis_and_contrast_3(
         by_image=False,
         noise_model=noise_model,
         noise_half=prefer_half_noise,
-        pack_groups=experiment_dataset.tilt_series_flag,
+        # TODO(#45): enable pack_groups once compute_grouped_shared_batch_coords
+        # produces identical results to per-particle compute_batch_coords.
     ):
         batch = jnp.asarray(batch)
         batch_image_ind = np.asarray(image_indices).reshape(-1)
@@ -335,26 +326,49 @@ def get_coords_in_basis_and_contrast_3(
 
         if shared_label:
             # Tilt-series: group images by particle and solve per-particle.
-            # compute_grouped_shared_batch_coords handles single and multi-particle batches.
             unique_particles, particle_group_ids = np.unique(particle_ids, return_inverse=True)
-            xs_group, contrast_group, cov_group, bias_group = compute_grouped_shared_batch_coords(
-                config, batch, model,
-                experiment_dataset.image_mask, contrast_grid,
-                contrast_mean, contrast_variance,
-                jnp.asarray(particle_group_ids, dtype=jnp.int32),
-                int(unique_particles.size),
-                compute_covariances, compute_bias, hermitian_weights,
-                rotation_matrices=rotation_matrices,
-                translations=translations,
-                ctf_params=ctf_params,
-                noise_variance=nv,
-            )
-            xs[unique_particles] = np.asarray(xs_group)
-            estimated_contrasts[unique_particles] = np.asarray(contrast_group)
-            if compute_covariances:
-                image_latent_precisions[unique_particles] = np.asarray(cov_group)
-            if compute_bias:
-                image_latent_bias[unique_particles] = np.asarray(bias_group)
+
+            if contrast_shared_across_tilt_series:
+                # Batched solve for all particles at once.
+                xs_group, contrast_group, cov_group, bias_group = compute_grouped_shared_batch_coords(
+                    config, batch, model,
+                    experiment_dataset.image_mask, contrast_grid,
+                    contrast_mean, contrast_variance,
+                    jnp.asarray(particle_group_ids, dtype=jnp.int32),
+                    int(unique_particles.size),
+                    compute_covariances, compute_bias, hermitian_weights,
+                    rotation_matrices=rotation_matrices,
+                    translations=translations,
+                    ctf_params=ctf_params,
+                    noise_variance=nv,
+                )
+                xs[unique_particles] = np.asarray(xs_group)
+                estimated_contrasts[unique_particles] = np.asarray(contrast_group)
+                if compute_covariances:
+                    image_latent_precisions[unique_particles] = np.asarray(cov_group)
+                if compute_bias:
+                    image_latent_bias[unique_particles] = np.asarray(bias_group)
+            else:
+                # Per-image contrast: solve each particle separately.
+                for pid in unique_particles:
+                    mask = particle_ids == pid
+                    local_nv = _noise_get_half_or_full(noise_model, batch_image_ind[mask], prefer_half=prefer_half_noise)
+                    xs_single, contrast_single, cov_batch, bias_val = compute_batch_coords(
+                        config, batch[mask], model, opts,
+                        experiment_dataset.image_mask, contrast_grid,
+                        contrast_mean, contrast_variance, hermitian_weights,
+                        rotation_matrices=rotation_matrices[mask],
+                        translations=translations[mask],
+                        ctf_params=ctf_params[mask],
+                        noise_variance=local_nv,
+                    )
+                    pid_arr = np.asarray([pid], dtype=np.int32)
+                    xs[pid_arr] = xs_single
+                    estimated_contrasts[batch_image_ind[mask]] = contrast_single
+                    if compute_covariances:
+                        image_latent_precisions[pid_arr] = cov_batch
+                    if compute_bias:
+                        image_latent_bias[pid_arr] = bias_val
         else:
             # SPA: one solve per batch, results indexed by image or particle.
             xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
@@ -1161,318 +1175,6 @@ batch_over_images_and_contrast_solve_contrast_linear_system = jax.vmap(
 )
 
 
-# ============================================================================
-# Multi-zdim embedding: one data pass for all n_pcs values
-# ============================================================================
-
-
-@eqx.filter_jit
-def _collect_batch_stats(
-    config, batch, rotation_matrices, translations, ctf_params, noise_variance, model, hermitian_weights
-):
-    """Forward-model pass only — no solving.
-
-    Returns the six inner-product statistics consumed by :func:`_solve_batch_from_stats`.
-    Reuses :func:`_compute_batch_coords_p1` under the equinox JIT boundary.
-    """
-    return _compute_batch_coords_p1(
-        config,
-        batch,
-        model,
-        hermitian_weights,
-        rotation_matrices=rotation_matrices,
-        translations=translations,
-        ctf_params=ctf_params,
-        noise_variance=noise_variance,
-    )
-
-
-@jax.jit
-def _solve_batch_from_stats(
-    AU_t_images,
-    AU_t_Amean,
-    AU_t_AU,
-    image_norms_sq,
-    image_T_A_mean,
-    A_mean_norm_sq,
-    eigenvalues,
-    contrast_grid,
-    contrast_mean,
-    contrast_variance,
-):
-    """Solve for xs, best contrast, and posterior covariance from precomputed statistics.
-
-    Parameters
-    ----------
-    AU_t_images : (n_images, n_pcs)
-    AU_t_Amean  : (n_images, n_pcs)
-    AU_t_AU     : (n_images, n_pcs, n_pcs)
-    image_norms_sq, image_T_A_mean, A_mean_norm_sq : (n_images,)
-    eigenvalues : (n_pcs,)  — jax array
-    contrast_grid : (n_contrasts,)  — jax array
-    contrast_mean, contrast_variance : scalar jax arrays
-
-    Returns
-    -------
-    xs_single      : (n_images, n_pcs)
-    contrast_single: (n_images,)
-    cov_batch      : (n_images, n_pcs, n_pcs)
-    """
-    xs_batch_contrast = batch_over_images_and_contrast_solve_contrast_linear_system(
-        AU_t_images, AU_t_Amean, AU_t_AU, eigenvalues, contrast_grid
-    )
-    residuals_fit, residuals_prior = batch_compute_contrast_residual_fast_2(
-        xs_batch_contrast,
-        AU_t_images,
-        image_norms_sq,
-        AU_t_Amean,
-        A_mean_norm_sq,
-        image_T_A_mean,
-        AU_t_AU,
-        eigenvalues,
-        contrast_grid,
-    )
-    contrast_prior = (contrast_grid - contrast_mean) ** 2 / contrast_variance
-    res_sum1 = residuals_fit + residuals_prior + contrast_prior
-    best_idx = jnp.argmin(res_sum1, axis=1).astype(int)
-    xs_single = batch_slice_ar(best_idx, xs_batch_contrast)
-    contrast_single = contrast_grid[best_idx]
-    gram = (contrast_single**2)[:, None, None] * AU_t_AU
-    cov_batch = gram + jnp.diag(1 / eigenvalues)
-    cov_batch = cov_batch @ jnp.linalg.pinv(gram, rcond=1e-6, hermitian=True) @ cov_batch
-    return xs_single, contrast_single, cov_batch
-
-
-def get_per_image_embedding_multi_zdim(
-    mean,
-    u,
-    s,
-    n_pcs_list,
-    dataset,
-    volume_mask,
-    gpu_memory,
-    disc_type="linear_interp",
-    contrast_grid=None,
-    contrast_option="none",
-    ignore_zero_frequency=False,
-    contrast_mean=1,
-    contrast_variance=np.inf,
-):
-    """Compute per-image embeddings for multiple n_pcs values in a single data pass.
-
-    Replaces N separate calls to :func:`get_per_image_embedding` with a single
-    forward-model pass (at ``max(n_pcs_list)`` basis vectors) that accumulates
-    sufficient statistics, then solves lightweight linear systems for each
-    ``(n_pcs, regularized/unregularized)`` pair.  Typically 5–10× faster than
-    calling :func:`get_per_image_embedding` independently for each zdim.
-
-    Not supported for tilt-series data.
-
-    Args:
-        mean: Mean volume in Fourier space, shape ``(volume_size,)``.
-        u: Eigenvectors, shape ``(volume_size, n_max_components)``.
-        s: Eigenvalues, shape ``(n_max_components,)``.
-        n_pcs_list: List of int — n_pcs values to compute (need not be sorted).
-        dataset: A ``CryoEMDataset`` with ``halfset_indices`` set, or
-            a list of two half-set ``CryoEMDataset`` instances.
-        volume_mask: Binary mask selecting valid voxels.
-        gpu_memory: Available GPU memory in GB.
-        disc_type: Discretization type (overridden to ``'cubic'`` when ``USE_CUBIC``).
-        contrast_grid: Contrast values to search (default: 50-point grid).
-        contrast_option: Contrast mode (``'none'``, ``'contrast'``, …).
-        ignore_zero_frequency: Exclude DC component.
-        contrast_mean: Prior mean for contrast estimation.
-        contrast_variance: Prior variance for contrast estimation.
-
-    Returns:
-        ``(zs_reg, zs_noreg)`` — two dicts keyed by *n_pcs* (int).  Each value
-        is a tuple ``(xs, cov_zs, contrasts)`` where *xs* has shape
-        ``(n_total_images, n_pcs)``, *cov_zs* has shape
-        ``(n_total_images, n_pcs, n_pcs)``, and *contrasts* has shape
-        ``(n_total_images,)``.
-    """
-    if dataset.tilt_series_flag:
-        raise ValueError(
-            "get_per_image_embedding_multi_zdim does not support tilt-series data. Use get_per_image_embedding instead."
-        )
-
-    n_pcs_list = sorted(set(n_pcs_list))
-    max_n_pcs = n_pcs_list[-1]
-
-    if ignore_zero_frequency:
-        volume_mask = np.ones_like(volume_mask)
-
-    use_contrast = "contrast" in contrast_option
-    if use_contrast:
-        cg = np.linspace(0, 2, 51)[1:].astype(np.float32) if contrast_grid is None else contrast_grid
-    else:
-        cg = np.ones([1], dtype=np.float32)
-    cg_jax = jnp.array(cg)
-    contrast_mean_jax = jnp.array(contrast_mean, dtype=jnp.float32)
-    contrast_variance_jax = jnp.array(contrast_variance, dtype=jnp.float32)
-
-    # Cubic spline precompute — ONCE for max_n_pcs, not once per zdim.
-    actual_disc_type = disc_type
-    full_basis = np.asarray(u[:, :max_n_pcs]).T  # (max_n_pcs, volume_size)
-    mean_out = mean
-    if USE_CUBIC:
-        actual_disc_type = "cubic"
-        from recovar.core import cubic_interpolation
-        from recovar.heterogeneity import covariance_estimation as _cov_est
-
-        mean_out = cubic_interpolation.calculate_spline_coefficients(mean.reshape(dataset.volume_shape))
-        logger.info("Computing spline coefficients for %d basis vectors (multi-zdim)", max_n_pcs)
-        full_basis = _cov_est.compute_spline_coeffs_in_batch(full_basis, dataset.volume_shape, gpu_memory=None)
-
-    dtype = full_basis.dtype
-
-    # Precompute eigenvalue arrays for each n_pcs — reg uses prior, noreg uses inf.
-    s_reg = {k: jnp.array((s[:k] + jax_config.ROOT_EPSILON).astype(dtype)) for k in n_pcs_list}
-    s_noreg = {k: jnp.full(k, jnp.inf, dtype=dtype) for k in n_pcs_list}
-
-    # Allocate per-halfset output arrays, concatenated at the end.
-    def _alloc(n_pcs):
-        return {
-            "latent_coords": [
-                np.zeros((dataset.n_halfset_images(halfset_id), n_pcs), dtype=dtype) for halfset_id in range(2)
-            ],
-            "latent_precision": [
-                np.zeros((dataset.n_halfset_images(halfset_id), n_pcs, n_pcs), dtype=dtype) for halfset_id in range(2)
-            ],
-            "contrasts": [np.zeros(dataset.n_halfset_images(halfset_id), dtype=np.float32) for halfset_id in range(2)],
-        }
-
-    embeddings_reg = {k: _alloc(k) for k in n_pcs_list}
-    embeddings_noreg = {k: _alloc(k) for k in n_pcs_list}
-
-    halfset_datasets = dataset.materialize_halfset_datasets()
-    for halfset_id, halfset_dataset in enumerate(halfset_datasets):
-        config = ForwardModelConfig.from_dataset(
-            halfset_dataset,
-            disc_type=actual_disc_type,
-            process_fn=halfset_dataset.process_images,
-        )
-        # eigenvalues field not used by _collect_batch_stats; set placeholder.
-        model = ModelState(
-            mean_estimate=jnp.asarray(mean_out, dtype=halfset_dataset.dtype),
-            volume_mask=jnp.asarray(volume_mask, dtype=halfset_dataset.dtype_real),
-            basis=jnp.asarray(full_basis, dtype=halfset_dataset.dtype),
-            eigenvalues=jnp.ones(max_n_pcs, dtype=halfset_dataset.dtype),
-        )
-        mean_hv, basis_hv = _prepare_model_half_volumes(
-            config,
-            model.mean_estimate,
-            model.basis,
-        )
-        model = ModelState(
-            mean_estimate=mean_hv,
-            volume_mask=model.volume_mask,
-            basis=basis_hv,
-            eigenvalues=model.eigenvalues,
-        )
-
-        batch_size = utils.get_embedding_batch_size(full_basis, halfset_dataset.image_size, cg, max_n_pcs, gpu_memory)
-        _EMBEDDING_BATCH_SAFETY_FACTOR = 10
-        batch_size = utils.safe_batch_size(batch_size // _EMBEDDING_BATCH_SAFETY_FACTOR)
-        logger.info("multi-zdim embedding batch size (halfset %d): %d", halfset_id, batch_size)
-
-        hermitian_weights = _embedding_hermitian_weights(config)
-        prefer_half_noise = hermitian_weights is not None
-        noise_model = halfset_dataset.noise
-
-        for (
-            batch,
-            rotation_matrices,
-            translations,
-            ctf_params,
-            noise_variance,
-            particles_ind,
-            image_indices,
-        ) in halfset_dataset.iter_batches(
-            batch_size,
-            by_image=False,
-            noise_model=noise_model,
-            noise_half=prefer_half_noise,
-            pack_groups=halfset_dataset.tilt_series_flag,
-        ):
-            batch_image_ind = np.asarray(image_indices).reshape(-1)
-
-            # ── Single forward-model pass at max_n_pcs ──────────────────
-            AU_t_im, AU_t_Am, AU_t_AU, im_norms_sq, im_T_Am, Am_norm_sq = _collect_batch_stats(
-                config,
-                batch,
-                rotation_matrices,
-                translations,
-                ctf_params,
-                noise_variance,
-                model,
-                hermitian_weights,
-            )
-
-            # ── Solve for each n_pcs (reg and noreg) ────────────────────
-            for n_pcs in n_pcs_list:
-                sub_AI = AU_t_im[:, :n_pcs]
-                sub_AM = AU_t_Am[:, :n_pcs]
-                sub_AAU = AU_t_AU[:, :n_pcs, :n_pcs]
-
-                xs_r, c_r, cov_r = _solve_batch_from_stats(
-                    sub_AI,
-                    sub_AM,
-                    sub_AAU,
-                    im_norms_sq,
-                    im_T_Am,
-                    Am_norm_sq,
-                    s_reg[n_pcs],
-                    cg_jax,
-                    contrast_mean_jax,
-                    contrast_variance_jax,
-                )
-                embeddings_reg[n_pcs]["latent_coords"][halfset_id][particles_ind] = np.asarray(xs_r).real
-                embeddings_reg[n_pcs]["latent_precision"][halfset_id][particles_ind] = np.asarray(cov_r).real
-                embeddings_reg[n_pcs]["contrasts"][halfset_id][batch_image_ind] = np.asarray(c_r)
-
-                xs_n, c_n, cov_n = _solve_batch_from_stats(
-                    sub_AI,
-                    sub_AM,
-                    sub_AAU,
-                    im_norms_sq,
-                    im_T_Am,
-                    Am_norm_sq,
-                    s_noreg[n_pcs],
-                    cg_jax,
-                    contrast_mean_jax,
-                    contrast_variance_jax,
-                )
-                embeddings_noreg[n_pcs]["latent_coords"][halfset_id][particles_ind] = np.asarray(xs_n).real
-                embeddings_noreg[n_pcs]["latent_precision"][halfset_id][particles_ind] = np.asarray(cov_n).real
-                embeddings_noreg[n_pcs]["contrasts"][halfset_id][batch_image_ind] = np.asarray(c_n)
-
-    # Concatenate across halfsets; return flat (latent_coords, latent_precision, contrasts)
-    # tuples per n_pcs.
-    result_reg = {}
-    result_noreg = {}
-    for n_pcs in n_pcs_list:
-        result_reg[n_pcs] = (
-            np.concatenate(embeddings_reg[n_pcs]["latent_coords"], axis=0),
-            np.concatenate(embeddings_reg[n_pcs]["latent_precision"], axis=0),
-            np.concatenate(embeddings_reg[n_pcs]["contrasts"], axis=0),
-        )
-        result_noreg[n_pcs] = (
-            np.concatenate(embeddings_noreg[n_pcs]["latent_coords"], axis=0),
-            np.concatenate(embeddings_noreg[n_pcs]["latent_precision"], axis=0),
-            np.concatenate(embeddings_noreg[n_pcs]["contrasts"], axis=0),
-        )
-
-    logger.info("multi-zdim embedding complete for n_pcs=%s", n_pcs_list)
-    return result_reg, result_noreg
-
-
 def set_contrasts_in_cryos(dataset, contrasts):
-    """Apply per-image contrast factors to CTF parameters.
-
-    The *contrasts* array must be in concatenated halfset order (half-0
-    images followed by half-1 images).  For the unified single-dataset
-    design, callers that need original-order contrasts should reindex
-    before calling this function.
-    """
+    """Apply per-image contrast factors to CTF parameters."""
     dataset.set_contrasts(contrasts)

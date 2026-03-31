@@ -1232,7 +1232,7 @@ def umap_latent_space(zs):
     import umap
     st_time = time.time()
     n_components = np.min([zs.shape[1], 2])
-    mapper = umap.UMAP(n_components = n_components).fit(zs)
+    mapper = umap.UMAP(n_components=n_components, random_state=42).fit(zs)
     logger.info("time to umap: %.1fs", time.time() - st_time)
     return mapper
 

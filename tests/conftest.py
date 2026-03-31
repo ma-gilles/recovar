@@ -118,7 +118,15 @@ def pytest_collection_modifyitems(config, items):
     run_long_test = config.getoption("--long-test")
     # --long-test implies all the sub-flags so long tests are not doubly skipped
     run_slow = config.getoption("--run-slow") or run_long_test
-    run_gpu = config.getoption("--run-gpu") or run_long_test
+    # Auto-detect GPU: run gpu-marked tests whenever a GPU is available,
+    # even without --run-gpu.  The flag still works as an explicit override.
+    gpu_available = False
+    try:
+        import jax
+        gpu_available = any(d.platform == "gpu" for d in jax.devices())
+    except Exception:
+        pass
+    run_gpu = config.getoption("--run-gpu") or run_long_test or gpu_available
     run_integration = config.getoption("--run-integration") or run_long_test
     run_tiny_metrics = config.getoption("--run-tiny-metrics")
 

@@ -330,13 +330,6 @@ def add_args(parser: argparse.ArgumentParser):
         default=True,
     )
     adv.add_argument(
-        "--multi-zdim-embedding",
-        dest="multi_zdim_embedding",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Experimental: single-pass embedding for all zdims (can be slower on some datasets)",
-    )
-    adv.add_argument(
         "--keep-intermediate",
         dest="keep_intermediate",
         action="store_true",
@@ -625,9 +618,7 @@ def _build_focus_masks(args, means, volume_mask, volume_shape, dataset):
 def _compute_embeddings(means, u, s, dataset, volume_mask, options, gpu_memory, focus_masks, zdim_for_rest, args):
     """Compute per-image embeddings for all requested zdim values.
 
-    By default uses the legacy per-zdim embedding loops (reg + noreg), which are
-    currently more robust performance-wise across datasets. The experimental
-    single-pass multi-zdim path can be enabled with ``--multi-zdim-embedding``.
+    Runs regularized and unregularized embedding for each zdim independently.
 
     Returns six dicts, all keyed by zdim (int):
         (latent_coords, latent_coords_noreg,
@@ -639,44 +630,34 @@ def _compute_embeddings(means, u, s, dataset, volume_mask, options, gpu_memory, 
 
     emb_time = time.time()
 
-    use_multi_zdim = (not args.tilt_series) and bool(getattr(args, "multi_zdim_embedding", False))
-    if use_multi_zdim:
-        logger.info("Embedding mode: single-pass multi-zdim (experimental)")
-        # Fast path: single data pass for all zdims
-        zs_reg, zs_noreg = embedding.get_per_image_embedding_multi_zdim(
+    latent_coords = {}
+    latent_coords_noreg = {}
+    latent_precision = {}
+    latent_precision_noreg = {}
+    contrasts = {}
+    contrasts_noreg = {}
+    for zdim, n_pcs_to_use in zip(options.zs_dim_to_test, n_pcs_list):
+        z_time = time.time()
+        latent_coords[zdim], latent_precision[zdim], contrasts[zdim], _ = embedding.get_per_image_embedding(
             means.combined,
             u["rescaled"],
             s["rescaled"],
-            n_pcs_list,
+            n_pcs_to_use,
             dataset,
             volume_mask,
             gpu_memory,
+            "linear_interp",
+            contrast_grid=None,
             contrast_option=options.contrast,
             ignore_zero_frequency=options.ignore_zero_frequency,
         )
-        latent_coords = {zdim: zs_reg[n_pcs][0] for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
-        latent_precision = {zdim: zs_reg[n_pcs][1] for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
-        contrasts = {zdim: zs_reg[n_pcs][2] for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
-        latent_coords_noreg = {zdim: zs_noreg[n_pcs][0] for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
-        latent_precision_noreg = {zdim: zs_noreg[n_pcs][1] for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
-        contrasts_noreg = {zdim: zs_noreg[n_pcs][2] for zdim, n_pcs in zip(options.zs_dim_to_test, n_pcs_list)}
-    else:
-        if args.tilt_series:
-            logger.info("Embedding mode: per-zdim loops (tilt-series)")
-        else:
-            logger.info("Embedding mode: per-zdim loops (default)")
-        latent_coords = {}
-        latent_coords_noreg = {}
-        latent_precision = {}
-        latent_precision_noreg = {}
-        contrasts = {}
-        contrasts_noreg = {}
-        for zdim, n_pcs_to_use in zip(options.zs_dim_to_test, n_pcs_list):
-            z_time = time.time()
-            latent_coords[zdim], latent_precision[zdim], contrasts[zdim], _ = embedding.get_per_image_embedding(
+        logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
+        z_time = time.time()
+        latent_coords_noreg[zdim], latent_precision_noreg[zdim], contrasts_noreg[zdim], _ = (
+            embedding.get_per_image_embedding(
                 means.combined,
                 u["rescaled"],
-                s["rescaled"],
+                s["rescaled"] * 0 + np.inf,
                 n_pcs_to_use,
                 dataset,
                 volume_mask,
@@ -686,24 +667,8 @@ def _compute_embeddings(means, u, s, dataset, volume_mask, options, gpu_memory, 
                 contrast_option=options.contrast,
                 ignore_zero_frequency=options.ignore_zero_frequency,
             )
-            logger.info("embedding time for zdim=%s: %s", zdim, time.time() - z_time)
-            z_time = time.time()
-            latent_coords_noreg[zdim], latent_precision_noreg[zdim], contrasts_noreg[zdim], _ = (
-                embedding.get_per_image_embedding(
-                    means.combined,
-                    u["rescaled"],
-                    s["rescaled"] * 0 + np.inf,
-                    n_pcs_to_use,
-                    dataset,
-                    volume_mask,
-                    gpu_memory,
-                    "linear_interp",
-                    contrast_grid=None,
-                    contrast_option=options.contrast,
-                    ignore_zero_frequency=options.ignore_zero_frequency,
-                )
-            )
-            logger.info("embedding time for zdim=%s_noreg: %s", zdim, time.time() - z_time)
+        )
+        logger.info("embedding time for zdim=%s_noreg: %s", zdim, time.time() - z_time)
 
     logger.info("total embedding time (all zdims): %s", time.time() - emb_time)
     return (latent_coords, latent_coords_noreg, latent_precision, latent_precision_noreg, contrasts, contrasts_noreg)
@@ -912,13 +877,8 @@ def standard_recovar_pipeline(args):
             logger.warning("repeating with contrast of zdim=%s", ndim)
             contrasts_for_second = est_contrasts[ndim]
             contrasts_for_second /= np.mean(contrasts_for_second)
-            # est_contrasts is in halfset-concatenated order (per-image);
-            # reindex to original dataset order before applying to the
-            # unified cryoem_dataset.  Always image-level, even for tilt-series.
-            contrasts_local = cryoem_dataset.reorder_to_dataset_indexing(
-                contrasts_for_second, ds, use_tilt_indices=False
-            )
-            ds.set_contrasts(contrasts_local)
+            # Embedding returns contrasts in original dataset order (no halfset reordering needed).
+            ds.set_contrasts(contrasts_for_second)
             options.contrast = "contrast"
 
         ##TODO: mean functions return a dict with volume sized arrays.
@@ -1143,14 +1103,9 @@ def standard_recovar_pipeline(args):
     if not args.tilt_series:
         n_pcs_to_use = (num_foc_masks - 1) * zdim_for_rest + zdim
         try:
-            # Reorder halfset-concatenated arrays (per-image) to original
-            # dataset order for iteration over the unified cryoem_dataset.
-            contrasts_local_resid = cryoem_dataset.reorder_to_dataset_indexing(
-                est_contrasts[zdim], ds, use_tilt_indices=False
-            )
-            coords_local_resid = cryoem_dataset.reorder_to_dataset_indexing(
-                latent_coords[zdim], ds, use_tilt_indices=False
-            )
+            # Embedding returns arrays in original dataset order (no reordering needed).
+            contrasts_local_resid = est_contrasts[zdim]
+            coords_local_resid = latent_coords[zdim]
             noise_var_from_het_residual, _, _ = noise.estimate_noise_from_heterogeneity_residuals_inside_mask_v2(
                 ds,
                 dilated_volume_mask,
@@ -1248,16 +1203,25 @@ def standard_recovar_pipeline(args):
         latent_coords, latent_coords_noreg, latent_precision, latent_precision_noreg, est_contrasts, est_contrasts_noreg
     )
 
-    # Reorder embeddings from halfset ordering to original particle ordering
+    # Convert embeddings from dataset-local order to NaN-padded original-file
+    # space (version 0.7 storage format).  Embedding results are in sorted
+    # original order; we scatter them into a full-size array at the positions
+    # given by the sorted halfset indices.
+    def _to_nan_padded(arr, sorted_indices):
+        n_original = int(np.max(sorted_indices)) + 1 if sorted_indices.size else 0
+        out = np.full((n_original, *arr.shape[1:]), np.nan, dtype=arr.dtype)
+        out[sorted_indices] = arr
+        return out
+
     for entry in embedding_dict:
         for key in embedding_dict[entry]:
             if entry.startswith("contrasts") and args.tilt_series and ("shared" not in options.contrast):
-                embedding_dict[entry][key] = cryoem_dataset.reorder_to_original_indexing_from_halfsets(
-                    embedding_dict[entry][key], ind_split
+                embedding_dict[entry][key] = _to_nan_padded(
+                    embedding_dict[entry][key], np.sort(np.concatenate(ind_split))
                 )
             else:
-                embedding_dict[entry][key] = cryoem_dataset.reorder_to_original_indexing_from_halfsets(
-                    embedding_dict[entry][key], particles_ind_split
+                embedding_dict[entry][key] = _to_nan_padded(
+                    embedding_dict[entry][key], np.sort(np.concatenate(particles_ind_split))
                 )
 
     args.halfsets = paths.particles_halfsets
