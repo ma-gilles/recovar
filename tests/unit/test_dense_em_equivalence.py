@@ -234,14 +234,14 @@ def test_sum_up_images_fixed_rots_eqx_snapshot(seeded_inputs):
     assert np.all(np.isfinite(Ft_y))
     assert np.all(np.isfinite(Ft_ctf))
 
-    # Self-consistency
+    # Self-consistency (atol=1e-6: JIT FP non-determinism at ~1e-7)
     Ft_y2, Ft_ctf2 = m_step.sum_up_images_fixed_rots_eqx(
         s["config"], s["batch"], s["probabilities"], s["translations"],
         s["rotations"], s["ctf_params"], s["noise_variance"],
         Ft_y=Ft_y_init, Ft_ctf=Ft_ctf_init,
     )
-    np.testing.assert_array_equal(Ft_y, np.asarray(Ft_y2))
-    np.testing.assert_array_equal(Ft_ctf, np.asarray(Ft_ctf2))
+    np.testing.assert_allclose(Ft_y, np.asarray(Ft_y2), atol=1e-6)
+    np.testing.assert_allclose(Ft_ctf, np.asarray(Ft_ctf2), atol=1e-6)
 
 
 def test_probability_normalization_snapshot(seeded_inputs):
