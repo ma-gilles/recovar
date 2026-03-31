@@ -80,12 +80,11 @@ def compute_embedding(recovar_result_dir):
 
     for zdim in zdims:
         z_time = time.time()
-        latent_coords[zdim], latent_precision[zdim], est_contrasts[zdim] = embedding.get_per_image_embedding(
+        latent_coords[zdim], latent_precision[zdim], est_contrasts[zdim], _ = embedding.get_per_image_embedding(
             results["means"].combined,
             results["u"]["rescaled"],
             results["s"]["rescaled"],
             zdim,
-            results["cov_noise"],
             ds,
             results["volume_mask"],
             gpu_memory,

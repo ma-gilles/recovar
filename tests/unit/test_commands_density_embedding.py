@@ -128,7 +128,6 @@ def test_compute_embedding_uses_saved_z_keys(monkeypatch):
         u,
         s,
         zdim,
-        cov_noise,
         cryos,
         volume_mask,
         gpu_memory,
@@ -136,9 +135,10 @@ def test_compute_embedding_uses_saved_z_keys(monkeypatch):
         contrast_grid,
         contrast_option,
     ):
+        assert cryos == "cryos"
         calls.append(zdim)
         n = 5
-        return np.zeros((n, zdim)), np.zeros((n, zdim, zdim)), np.ones(n)
+        return np.zeros((n, zdim)), np.zeros((n, zdim, zdim)), np.ones(n), np.full(n, -1.0)
 
     monkeypatch.setattr(compute_embedding.embedding, "get_per_image_embedding", fake_get_per_image_embedding)
 
@@ -175,13 +175,12 @@ def test_compute_embedding_falls_back_to_input_args_zdim(monkeypatch):
     monkeypatch.setattr(compute_embedding.halfsets, "load_halfset_dataset_from_args", lambda _a: "cryos")
     monkeypatch.setattr(compute_embedding.utils, "make_algorithm_options", lambda _a: SimpleNamespace(contrast="none"))
     monkeypatch.setattr(compute_embedding.utils, "get_gpu_memory_total", lambda: 16)
-    monkeypatch.setattr(
-        compute_embedding.embedding,
-        "get_per_image_embedding",
-        lambda *_args, **_kwargs: (
-            calls.append(_args[3]) or (np.zeros((2, _args[3])), np.zeros((2, _args[3], _args[3])), np.zeros(2))
-        ),
-    )
+    def fake_get_per_image_embedding(mean, u, s, zdim, cryos, volume_mask, gpu_memory, disc_type, contrast_grid, contrast_option):
+        assert cryos == "cryos"
+        calls.append(zdim)
+        return np.zeros((2, zdim)), np.zeros((2, zdim, zdim)), np.zeros(2), None
+
+    monkeypatch.setattr(compute_embedding.embedding, "get_per_image_embedding", fake_get_per_image_embedding)
 
     latent_coords, latent_precision, _ = compute_embedding.compute_embedding("/tmp/fake")
     assert calls == [6]

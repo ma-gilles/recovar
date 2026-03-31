@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import pickle
-import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -29,6 +28,7 @@ from helpers.perf_regression import (
     build_perf_record,
     check_perf_regression,
     perf_snapshot,
+    run_tracked_subprocess,
     stage_perf,
 )
 
@@ -78,7 +78,7 @@ def _gpu_env():
 
 def _run(cmd, **kwargs):
     kwargs.setdefault("env", _gpu_env())
-    result = subprocess.run(cmd, capture_output=True, text=True, **kwargs)
+    result = run_tracked_subprocess(cmd, capture_output=True, text=True, **kwargs)
     if result.returncode != 0:
         tail = "\n".join(result.stderr.splitlines()[-80:])
         pytest.fail(

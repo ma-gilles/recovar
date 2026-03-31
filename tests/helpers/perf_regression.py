@@ -12,6 +12,7 @@ import logging
 import os
 import platform
 import subprocess
+import threading
 import time
 import warnings
 
@@ -23,6 +24,9 @@ logger = logging.getLogger(__name__)
 WALL_TIME_TOL = 0.10  # 10% slower
 GPU_MEMORY_TOL = 0.10  # 10% more GPU memory
 CPU_MEMORY_TOL = 0.10  # 10% more CPU memory
+
+_TRACKED_GPU_PEAK_LOCK = threading.Lock()
+_TRACKED_GPU_PEAK_BYTES = 0
 
 
 def get_code_version():
@@ -71,6 +75,103 @@ def get_hardware_info():
     }
 
 
+def _parse_visible_gpu_indices(env: dict | None = None) -> list[int] | None:
+    env = os.environ if env is None else env
+    raw = env.get("CUDA_VISIBLE_DEVICES") or env.get("NVIDIA_VISIBLE_DEVICES")
+    if not raw:
+        return None
+
+    visible = []
+    for token in raw.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if token.lower() in {"none", "void"}:
+            return []
+        if not token.isdigit():
+            return None
+        visible.append(int(token))
+    return visible
+
+
+def _read_nvidia_smi_gpu_bytes(env: dict | None = None) -> int:
+    """Return max visible-GPU memory in bytes from ``nvidia-smi``."""
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except Exception:
+        return 0
+
+    if result.returncode != 0:
+        return 0
+
+    visible = _parse_visible_gpu_indices(env)
+    gpu_mib = []
+    for line in result.stdout.strip().splitlines():
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != 2:
+            continue
+        try:
+            gpu_idx = int(parts[0])
+            mem_mib = int(parts[1])
+        except ValueError:
+            continue
+        if visible is None or gpu_idx in visible:
+            gpu_mib.append(mem_mib)
+
+    if not gpu_mib:
+        return 0
+    return max(gpu_mib) * 1024 * 1024
+
+
+def _record_tracked_gpu_peak_bytes(peak_bytes: int) -> None:
+    peak_bytes = int(peak_bytes or 0)
+    with _TRACKED_GPU_PEAK_LOCK:
+        global _TRACKED_GPU_PEAK_BYTES
+        _TRACKED_GPU_PEAK_BYTES = max(_TRACKED_GPU_PEAK_BYTES, peak_bytes)
+
+
+def _consume_tracked_gpu_peak_bytes(current_bytes: int) -> int:
+    current_bytes = int(current_bytes or 0)
+    with _TRACKED_GPU_PEAK_LOCK:
+        global _TRACKED_GPU_PEAK_BYTES
+        peak_bytes = max(_TRACKED_GPU_PEAK_BYTES, current_bytes)
+        _TRACKED_GPU_PEAK_BYTES = current_bytes
+    return peak_bytes
+
+
+def run_tracked_subprocess(*popenargs, poll_interval_s: float = 0.2, **kwargs):
+    """Run ``subprocess.run`` while polling GPU memory for the child stage."""
+    env = kwargs.get("env")
+    stop_event = threading.Event()
+    peak_holder = {"bytes": _read_nvidia_smi_gpu_bytes(env)}
+
+    def _poll_gpu_usage():
+        while not stop_event.wait(poll_interval_s):
+            peak_holder["bytes"] = max(peak_holder["bytes"], _read_nvidia_smi_gpu_bytes(env))
+
+    poll_thread = threading.Thread(target=_poll_gpu_usage, daemon=True)
+    poll_thread.start()
+    try:
+        result = subprocess.run(*popenargs, **kwargs)
+    finally:
+        stop_event.set()
+        poll_thread.join(timeout=max(1.0, 2 * poll_interval_s))
+        peak_holder["bytes"] = max(peak_holder["bytes"], _read_nvidia_smi_gpu_bytes(env))
+        _record_tracked_gpu_peak_bytes(peak_holder["bytes"])
+
+    result.gpu_peak_bytes = peak_holder["bytes"]
+    return result
+
+
 def perf_snapshot():
     """Capture wall-clock + memory snapshot.
 
@@ -102,24 +203,9 @@ def perf_snapshot():
         pass
     # Also try nvidia-smi for GPU memory (works across processes)
     if snap["gpu_bytes_in_use"] == 0:
-        try:
-            import subprocess as sp
-
-            result = sp.run(
-                ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
-                capture_output=True,
-                text=True,
-                timeout=5,
-            )
-            if result.returncode == 0:
-                # Take max across GPUs (MiB)
-                vals = [int(x.strip()) for x in result.stdout.strip().split("\n") if x.strip()]
-                if vals:
-                    gpu_mib = max(vals)
-                    snap["gpu_bytes_in_use"] = gpu_mib * 1024 * 1024
-                    snap["gpu_peak_bytes"] = max(snap["gpu_peak_bytes"], snap["gpu_bytes_in_use"])
-        except Exception:
-            pass
+        snap["gpu_bytes_in_use"] = _read_nvidia_smi_gpu_bytes()
+        snap["gpu_peak_bytes"] = max(snap["gpu_peak_bytes"], snap["gpu_bytes_in_use"])
+    snap["tracked_gpu_peak_bytes"] = _consume_tracked_gpu_peak_bytes(snap["gpu_bytes_in_use"])
     return snap
 
 
@@ -131,6 +217,7 @@ def stage_perf(before, after, name=""):
         gpu_peak = after["gpu_peak_bytes"]
     else:
         gpu_peak = max(before["gpu_bytes_in_use"], after["gpu_bytes_in_use"])
+    gpu_peak = max(gpu_peak, after.get("tracked_gpu_peak_bytes", 0))
     return {
         "wall_seconds": round(wall, 2),
         "peak_cpu_memory_gb": round(cpu_peak / 1e9, 3),

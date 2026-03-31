@@ -39,7 +39,6 @@ import logging
 import os
 import pickle
 import shlex
-import subprocess
 import sys
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -49,7 +48,7 @@ import pytest
 
 from conftest import gpu_subprocess_env
 from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
-from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression
+from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression, run_tracked_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -165,7 +164,7 @@ def _make_dataset(
     ]
     if extra_args:
         make_cmd.extend(shlex.split(extra_args))
-    subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
+    run_tracked_subprocess(make_cmd, check=True, env=gpu_subprocess_env())
     return dataset_dir
 
 
@@ -210,7 +209,7 @@ def _make_tilt_dataset(
         "--seed",
         "42",
     ]
-    subprocess.run(make_cmd, check=True, env=gpu_subprocess_env())
+    run_tracked_subprocess(make_cmd, check=True, env=gpu_subprocess_env())
     return dataset_dir
 
 
@@ -254,7 +253,7 @@ def _run_pipeline_with_ind(
         "--use-junk-detection",
         "--save-pipeline-indices",
     ]
-    subprocess.run(cmd, check=True, env=gpu_subprocess_env())
+    run_tracked_subprocess(cmd, check=True, env=gpu_subprocess_env())
 
 
 def _run_pipeline_with_particle_ind(
@@ -299,7 +298,7 @@ def _run_pipeline_with_particle_ind(
         "--use-junk-detection",
         "--save-pipeline-indices",
     ]
-    subprocess.run(cmd, check=True, env=gpu_subprocess_env())
+    run_tracked_subprocess(cmd, check=True, env=gpu_subprocess_env())
 
 
 def _compute_outlier_metrics_for_ind_subset(
