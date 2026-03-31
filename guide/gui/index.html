@@ -933,11 +933,28 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#auto-discovering-existing-results" class="md-nav__link">
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#projects" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Auto-discovering existing results
+        Projects
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Projects">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#importing-existing-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Importing existing results
       
     </span>
   </a>
@@ -995,10 +1012,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#execution-modes" class="md-nav__link">
+  <a href="#other-job-types" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Execution modes
+        Other job types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#slurm-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SLURM execution
       
     </span>
   </a>
@@ -1031,13 +1059,14 @@
     </span>
   </a>
   
-</li>
+    <nav class="md-nav" aria-label="Latent space explorer">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#3d-volume-viewer" class="md-nav__link">
+  <a href="#point-clicks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3D volume viewer
+        Point clicks
       
     </span>
   </a>
@@ -1045,10 +1074,26 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#slice-viewer" class="md-nav__link">
+  <a href="#lasso-rectangle-polygon-selection" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Slice viewer
+        Lasso / rectangle / polygon selection
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3d-volume-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3D volume viewer
       
     </span>
   </a>
@@ -1772,11 +1817,28 @@
   
 </li>
         
-          <li class="md-nav__item">
-  <a href="#auto-discovering-existing-results" class="md-nav__link">
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#projects" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Auto-discovering existing results
+        Projects
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Projects">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#importing-existing-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Importing existing results
       
     </span>
   </a>
@@ -1834,10 +1896,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#execution-modes" class="md-nav__link">
+  <a href="#other-job-types" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Execution modes
+        Other job types
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#slurm-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SLURM execution
       
     </span>
   </a>
@@ -1870,13 +1943,14 @@
     </span>
   </a>
   
-</li>
+    <nav class="md-nav" aria-label="Latent space explorer">
+      <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#3d-volume-viewer" class="md-nav__link">
+  <a href="#point-clicks" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3D volume viewer
+        Point clicks
       
     </span>
   </a>
@@ -1884,10 +1958,26 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#slice-viewer" class="md-nav__link">
+  <a href="#lasso-rectangle-polygon-selection" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Slice viewer
+        Lasso / rectangle / polygon selection
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3d-volume-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3D volume viewer
       
     </span>
   </a>
@@ -1968,7 +2058,7 @@
 <h2 id="launching-the-gui">Launching the GUI<a class="headerlink" href="#launching-the-gui" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>gui
 </code></pre></div>
-<p>This starts a local web server (default: <code>http://localhost:5000</code>). Open the URL in your browser.</p>
+<p>This starts a local web server (default: <code>http://localhost:8080</code>). Open the URL in your browser.</p>
 <h3 id="options">Options<a class="headerlink" href="#options" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -1981,7 +2071,7 @@
 <tbody>
 <tr>
 <td><code>--port</code></td>
-<td>5000</td>
+<td>8080</td>
 <td>Port to bind to</td>
 </tr>
 <tr>
@@ -1990,41 +2080,28 @@
 <td>Host to bind to (<code>0.0.0.0</code> for remote access)</td>
 </tr>
 <tr>
-<td><code>--scan-dir</code></td>
-<td>None</td>
-<td>Auto-discover existing pipeline outputs in a directory (repeatable)</td>
-</tr>
-<tr>
-<td><code>--debug</code></td>
+<td><code>--reload</code></td>
 <td>False</td>
-<td>Debug mode with auto-reload</td>
-</tr>
-<tr>
-<td><code>--python-path</code></td>
-<td>Current</td>
-<td>Python interpreter for job execution</td>
+<td>Auto-reload for development</td>
 </tr>
 </tbody>
 </table>
 <h3 id="remote-access-via-ssh">Remote access via SSH<a class="headerlink" href="#remote-access-via-ssh" title="Permanent link">&para;</a></h3>
-<p>When running on a remote cluster, forward the port through SSH:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># On your local machine:</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>ssh<span class="w"> </span>-L<span class="w"> </span><span class="m">5000</span>:localhost:5000<span class="w"> </span>user@cluster
+<p>When your data lives on a remote cluster and you want to view the GUI in a browser on your laptop, set up an SSH tunnel:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Step 1: On your LOCAL machine, open an SSH tunnel:</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>ssh<span class="w"> </span>-L<span class="w"> </span><span class="m">8080</span>:localhost:8080<span class="w"> </span>user@cluster
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Then on the cluster:</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>recovar<span class="w"> </span>gui<span class="w"> </span>--scan-dir<span class="w"> </span>/path/to/results
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Step 2: On the CLUSTER (inside the SSH session), launch the GUI:</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>recovar<span class="w"> </span>gui
 <a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Open http://localhost:5000 in your local browser</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Step 3: Open http://localhost:8080 in your local browser</span>
 </code></pre></div>
-<h3 id="auto-discovering-existing-results">Auto-discovering existing results<a class="headerlink" href="#auto-discovering-existing-results" title="Permanent link">&para;</a></h3>
-<p>Use <code>--scan-dir</code> to import existing pipeline outputs into the GUI:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Discover all results under a directory</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>recovar<span class="w"> </span>gui<span class="w"> </span>--scan-dir<span class="w"> </span>/path/to/results
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># Multiple directories</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>recovar<span class="w"> </span>gui<span class="w"> </span>--scan-dir<span class="w"> </span>/path/to/project1<span class="w"> </span>--scan-dir<span class="w"> </span>/path/to/project2
-</code></pre></div>
-<p>The GUI scans for directories containing RECOVAR <code>model/</code> folders and imports them automatically.</p>
+<p>The tunnel forwards traffic so the remote server appears local. If port 8080 is taken, use a different port in both the SSH command and <code>recovar gui --port &lt;port&gt;</code>.</p>
+<h2 id="projects">Projects<a class="headerlink" href="#projects" title="Permanent link">&para;</a></h2>
+<p>The GUI organizes work into <strong>projects</strong> — directories that contain your pipeline outputs, analyses, and computed volumes. On first launch, create a project by pointing to an existing directory or choosing a new one.</p>
+<p>The GUI stores a lightweight SQLite index in each project directory (<code>recovar_project.db</code>). This database is fully rebuildable — if you delete it, use <strong>Scan for Existing Jobs</strong> to re-import everything from the filesystem.</p>
+<h3 id="importing-existing-results">Importing existing results<a class="headerlink" href="#importing-existing-results" title="Permanent link">&para;</a></h3>
+<p>Click <strong>Scan for Existing Jobs</strong> on the dashboard and point to the directory <em>containing</em> your pipeline outputs. For example, if your output is at <code>/scratch/my_project/Pipeline/job_0001/</code>, scan <code>/scratch/my_project/</code>.</p>
 <h2 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h2>
 <p>The dashboard shows all jobs with status indicators:</p>
 <ul>
@@ -2033,120 +2110,76 @@
 <li><strong>Completed</strong> — finished successfully</li>
 <li><strong>Failed</strong> — exited with an error (click to view error details)</li>
 </ul>
-<p>Sort jobs by newest, oldest, name, or status. Click any job to open its detail view.</p>
+<p>The sidebar groups jobs by type (Pipeline, Analyze, Compute State, Trajectory, Density, etc.) for quick navigation.</p>
 <h2 id="creating-jobs">Creating jobs<a class="headerlink" href="#creating-jobs" title="Permanent link">&para;</a></h2>
 <p>Click <strong>New Job</strong> to create a pipeline or analysis run.</p>
 <h3 id="pipeline-job">Pipeline job<a class="headerlink" href="#pipeline-job" title="Permanent link">&para;</a></h3>
 <p>Configure all pipeline parameters through the form:</p>
 <ul>
-<li><strong>Particles</strong> — browse to select your <code>.star</code>, <code>.cs</code>, or <code>.mrcs</code> file. The GUI validates the file and shows particle count, pixel size, and available columns.</li>
-<li><strong>Mask</strong> — select an <code>.mrc</code> mask file, or choose <code>from_halfmaps</code> / <code>sphere</code> for automatic masking.</li>
+<li><strong>Particles</strong> — browse to select your <code>.star</code>, <code>.cs</code>, or <code>.mrcs</code> file.</li>
+<li><strong>Mask</strong> — select an <code>.mrc</code> mask file.</li>
 <li><strong>Downsampling</strong> — set the target box size (e.g., 128, 256).</li>
-<li><strong>Advanced options</strong> — focus mask, contrast correction, lazy loading, tilt-series mode, and more.</li>
+<li><strong>Advanced options</strong> — focus mask, contrast correction, lazy loading, B-factor, and more.</li>
 </ul>
 <h3 id="analyze-job">Analyze job<a class="headerlink" href="#analyze-job" title="Permanent link">&para;</a></h3>
-<p>After a pipeline completes, run analysis:</p>
+<p>After a pipeline completes, the <strong>Suggested Next Steps</strong> section offers a one-click link to run analysis with the result directory pre-filled:</p>
 <ul>
-<li><strong>Z-dimension</strong> — which latent dimension to use.</li>
-<li><strong>K-means clusters</strong> — number of clusters.</li>
+<li><strong>Z-dimension</strong> — which latent dimension to use (default: 4).</li>
+<li><strong>K-means clusters</strong> — number of clusters (default: 40).</li>
 <li><strong>Trajectories</strong> — number of trajectories between most-distant cluster pairs.</li>
 </ul>
-<h3 id="execution-modes">Execution modes<a class="headerlink" href="#execution-modes" title="Permanent link">&para;</a></h3>
-<p>Jobs can run in two modes:</p>
-<table>
-<thead>
-<tr>
-<th>Mode</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Local</strong></td>
-<td>Run directly on the current machine</td>
-</tr>
-<tr>
-<td><strong>SLURM</strong></td>
-<td>Submit to a SLURM cluster with configurable partition, GPUs, memory, and time</td>
-</tr>
-</tbody>
-</table>
-<p>For SLURM jobs, configure:</p>
+<h3 id="other-job-types">Other job types<a class="headerlink" href="#other-job-types" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Compute State</strong> — generate a volume at a specific latent coordinate</li>
+<li><strong>Compute Trajectory</strong> — generate volumes along a path between two latent points (optionally density-guided)</li>
+<li><strong>Density Estimation</strong> — estimate conformational density in latent space</li>
+<li><strong>Stable States</strong> — find local maxima of the conformational density</li>
+<li><strong>Postprocess</strong> — sharpen and filter volumes</li>
+<li><strong>Downsample</strong> — pre-downsample particle images</li>
+</ul>
+<h3 id="slurm-execution">SLURM execution<a class="headerlink" href="#slurm-execution" title="Permanent link">&para;</a></h3>
+<p>On clusters with SLURM, the GUI auto-detects <code>sbatch</code> and shows SLURM settings:</p>
 <ul>
 <li>Partition and account</li>
 <li>Number of GPUs, CPUs, and memory</li>
 <li>Time limit</li>
-<li>Extra SBATCH flags</li>
+<li>Extra SBATCH directives (for advanced users)</li>
 </ul>
+<p>You can <strong>save SLURM defaults per project</strong> so they persist across sessions.</p>
 <h2 id="exploring-results">Exploring results<a class="headerlink" href="#exploring-results" title="Permanent link">&para;</a></h2>
-<p>The job detail view has several tabs for inspecting outputs.</p>
 <h3 id="latent-space-explorer">Latent space explorer<a class="headerlink" href="#latent-space-explorer" title="Permanent link">&para;</a></h3>
-<p>The interactive scatter plot shows all particles in the latent space, with options to:</p>
+<p>The <strong>Explore</strong> page shows interactive scatter plots of the full particle latent space (50K+ points at 60 fps), with:</p>
 <ul>
-<li><strong>Switch between PCA and UMAP</strong> representations</li>
-<li><strong>Color by k-means cluster</strong> assignment or use uniform coloring</li>
-<li><strong>Click a point</strong> to generate a volume at that latent coordinate (computed on demand)</li>
-<li><strong>Select two points</strong> to compute a trajectory between them</li>
+<li><strong>PCA and UMAP</strong> projections side by side</li>
+<li><strong>Color by</strong> k-means cluster, point density, or deconvolved conformational density</li>
+<li><strong>Selectable zdim</strong> — switch between latent dimensions (1, 2, 4, 10, 20, etc.)</li>
+<li>Axis selectors for PCA components</li>
 </ul>
-<p>This is the GUI equivalent of manually running <code>recovar compute_state</code> or <code>recovar compute_trajectory</code> — but interactive.</p>
+<h4 id="point-clicks">Point clicks<a class="headerlink" href="#point-clicks" title="Permanent link">&para;</a></h4>
+<p>Click a particle or k-means center to see its full latent coordinate vector and density value. From there:</p>
+<ul>
+<li><strong>Compute State</strong> — submit a job to generate a volume at that point</li>
+<li><strong>Compute Trajectory</strong> — select two points and submit a trajectory job (with optional density-guided path)</li>
+</ul>
+<h4 id="lasso-rectangle-polygon-selection">Lasso / rectangle / polygon selection<a class="headerlink" href="#lasso-rectangle-polygon-selection" title="Permanent link">&para;</a></h4>
+<p>Use the selection tools to draw a region on the scatter plot:</p>
+<ul>
+<li>See the number of selected particles</li>
+<li><strong>Export .star</strong> — one-click export of selected particles as a RELION .star file (if the original .star is available)</li>
+<li><strong>Export .ind</strong> — export particle indices as an index file</li>
+<li>A link to <strong>rerun pipeline</strong> with the exported subset appears immediately</li>
+</ul>
 <h3 id="3d-volume-viewer">3D volume viewer<a class="headerlink" href="#3d-volume-viewer" title="Permanent link">&para;</a></h3>
 <p>View isosurface renderings of any volume directly in the browser:</p>
 <ul>
 <li>Adjustable <strong>sigma threshold</strong> for isosurface level</li>
-<li><strong>Opacity</strong> controls for transparency</li>
-<li><strong>Ctrl+click</strong> on multiple volumes in the volume browser to overlay them</li>
-<li>Automatic rendering when you click a point in the latent space explorer</li>
-</ul>
-<h3 id="slice-viewer">Slice viewer<a class="headerlink" href="#slice-viewer" title="Permanent link">&para;</a></h3>
-<p>Orthogonal slices through any volume:</p>
-<ul>
-<li>Switch between <strong>X</strong> (sagittal), <strong>Y</strong> (coronal), and <strong>Z</strong> (axial) axes</li>
-<li>Navigate through slices with a slider</li>
-<li>Useful for quick inspection of internal density features</li>
+<li><strong>Slice view</strong> with axis selection and slider navigation</li>
+<li>Click volumes in the <strong>Volumes</strong> tab to load them</li>
 </ul>
 <h3 id="volume-browser">Volume browser<a class="headerlink" href="#volume-browser" title="Permanent link">&para;</a></h3>
-<p>Organized listing of all output volumes, categorized by type:</p>
-<table>
-<thead>
-<tr>
-<th>Category</th>
-<th>Contents</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Reconstruction</td>
-<td>Mean volume, filtered mean</td>
-</tr>
-<tr>
-<td>Half-maps</td>
-<td>For FSC calculation</td>
-</tr>
-<tr>
-<td>Eigenvectors</td>
-<td>Principal component volumes</td>
-</tr>
-<tr>
-<td>Variance</td>
-<td>Variance maps</td>
-</tr>
-<tr>
-<td>Masks</td>
-<td>Solvent, dilated, focus, complement</td>
-</tr>
-<tr>
-<td>K-means centers</td>
-<td>Cluster center volumes</td>
-</tr>
-<tr>
-<td>Trajectories</td>
-<td>Volumes along computed paths</td>
-</tr>
-</tbody>
-</table>
-<p>Click any volume to view it in the 3D viewer or slice viewer.</p>
+<p>Organized listing of all output volumes, categorized by type (K-means centers, trajectories, eigenvectors, half-maps, etc.). Toggle display of half-map and unfiltered volumes.</p>
 <h3 id="result-images">Result images<a class="headerlink" href="#result-images" title="Permanent link">&para;</a></h3>
-<p>Pipeline diagnostic plots (eigenvalue spectrum, mean/eigenvolume slices, FSC, contrast histogram) are displayed as a preview grid.</p>
+<p>Pipeline diagnostic plots (eigenvalue spectrum, mean FSC, contrast histogram) are displayed as a preview grid on the job detail page.</p>
 <h2 id="gui-vs-cli-workflow">GUI vs CLI workflow<a class="headerlink" href="#gui-vs-cli-workflow" title="Permanent link">&para;</a></h2>
 <p>The GUI mirrors the CLI workflow, adding interactivity:</p>
 <table>
@@ -2159,11 +2192,11 @@
 <tbody>
 <tr>
 <td><code>recovar pipeline ...</code></td>
-<td>New Job <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg></span> Pipeline form</td>
+<td>New Job → Pipeline form</td>
 </tr>
 <tr>
 <td><code>recovar analyze ...</code></td>
-<td>New Job <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg></span> Analyze form</td>
+<td>New Job → Analyze form (or click "Suggested Next Step")</td>
 </tr>
 <tr>
 <td><code>recovar compute_state ...</code></td>
@@ -2181,19 +2214,21 @@
 <td>Inspect <code>.png</code> plots</td>
 <td>Result images tab</td>
 </tr>
+<tr>
+<td><code>recovar estimate_conformational_density ...</code></td>
+<td>New Job → Density Estimation form</td>
+</tr>
 </tbody>
 </table>
 <div class="admonition tip">
 <p class="admonition-title">Use both</p>
-<p>The GUI and CLI work on the same output directories. You can run <code>pipeline</code> and <code>analyze</code> from the command line (or a SLURM script), then launch <code>recovar gui --scan-dir output</code> to explore the results interactively. Or do everything through the GUI.</p>
+<p>The GUI and CLI work on the same output directories. You can run <code>pipeline</code> and <code>analyze</code> from the command line, then launch <code>recovar gui</code> and scan the directory to explore the results interactively. Or do everything through the GUI.</p>
 </div>
 <h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
-<p>The GUI requires Flask, which is included in the default RECOVAR installation. If Flask is not installed:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>pip<span class="w"> </span>install<span class="w"> </span>flask
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># or</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>pip<span class="w"> </span>install<span class="w"> </span>recovar<span class="o">[</span>gui<span class="o">]</span>
+<p>The GUI requires FastAPI and uvicorn, which are included when you install with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>pip<span class="w"> </span>install<span class="w"> </span>recovar<span class="o">[</span>gui<span class="o">]</span>
 </code></pre></div>
-<p>No other dependencies are required — the GUI uses vendored JavaScript libraries (Plotly, Alpine.js, HTMX, Tailwind CSS) that work offline.</p>
+<p>The frontend is pre-built and bundled — no Node.js required at runtime.</p>
 
 
 

@@ -1035,6 +1035,45 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Using the GUI for analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#running-locally-data-and-browser-on-the-same-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running locally (data and browser on the same machine)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#running-on-a-remote-cluster-typical-case" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running on a remote cluster (typical case)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#first-steps-in-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        First steps in the GUI
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2204,6 +2243,45 @@
     </span>
   </a>
   
+    <nav class="md-nav" aria-label="Using the GUI for analysis">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#running-locally-data-and-browser-on-the-same-machine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running locally (data and browser on the same machine)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#running-on-a-remote-cluster-typical-case" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Running on a remote cluster (typical case)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#first-steps-in-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        First steps in the GUI
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
 </li>
       
         <li class="md-nav__item">
@@ -2559,16 +2637,31 @@
 </div>
 <hr />
 <h2 id="using-the-gui-for-analysis">Using the GUI for analysis<a class="headerlink" href="#using-the-gui-for-analysis" title="Permanent link">&para;</a></h2>
-<p>After running <code>pipeline</code> and <code>analyze</code> (either via CLI or the GUI itself), you can launch the GUI to interactively explore results:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Launch the GUI pointing to your results</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>recovar<span class="w"> </span>gui<span class="w"> </span>--scan-dir<span class="w"> </span>output
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># With SSH port forwarding from a remote cluster</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>ssh<span class="w"> </span>-L<span class="w"> </span><span class="m">5000</span>:localhost:5000<span class="w"> </span>user@cluster
-<a id="__codelineno-13-6" name="__codelineno-13-6" href="#__codelineno-13-6"></a><span class="c1"># Then on the cluster:</span>
-<a id="__codelineno-13-7" name="__codelineno-13-7" href="#__codelineno-13-7"></a>recovar<span class="w"> </span>gui<span class="w"> </span>--scan-dir<span class="w"> </span>output
-<a id="__codelineno-13-8" name="__codelineno-13-8" href="#__codelineno-13-8"></a><span class="c1"># Open http://localhost:5000 in your local browser</span>
+<p>After running <code>pipeline</code> and <code>analyze</code> (either via CLI or the GUI itself), you can launch the GUI to interactively explore results.</p>
+<h3 id="running-locally-data-and-browser-on-the-same-machine">Running locally (data and browser on the same machine)<a class="headerlink" href="#running-locally-data-and-browser-on-the-same-machine" title="Permanent link">&para;</a></h3>
+<p>If you are running recovar on your own workstation (i.e. both the data and browser are on the same machine), just launch the GUI:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>recovar<span class="w"> </span>gui
 </code></pre></div>
+<p>Then open <strong>http://localhost:8080</strong> in your browser.</p>
+<h3 id="running-on-a-remote-cluster-typical-case">Running on a remote cluster (typical case)<a class="headerlink" href="#running-on-a-remote-cluster-typical-case" title="Permanent link">&para;</a></h3>
+<p>More commonly, your data lives on a compute cluster and you want to view the GUI in a browser on your laptop/desktop. This requires two steps:</p>
+<p><strong>Step 1.</strong> Set up an SSH tunnel from your local machine to the cluster. This forwards port 8080 on your laptop to port 8080 on the cluster:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Run this on your LOCAL machine (laptop/desktop):</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>ssh<span class="w"> </span>-L<span class="w"> </span><span class="m">8080</span>:localhost:8080<span class="w"> </span>user@cluster
+</code></pre></div>
+<p>For example, to connect to the Princeton della cluster:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>ssh<span class="w"> </span>-L<span class="w"> </span><span class="m">8080</span>:localhost:8080<span class="w"> </span>mg6942@della.princeton.edu
+</code></pre></div>
+<p><strong>Step 2.</strong> On the cluster (inside the SSH session), launch the GUI:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>recovar<span class="w"> </span>gui
+</code></pre></div>
+<p>Now open <strong>http://localhost:8080</strong> in your local browser — the SSH tunnel makes it appear as if the server is running locally.</p>
+<div class="admonition tip">
+<p class="admonition-title">Custom port</p>
+<p>If port 8080 is already in use, pick another port (e.g. 8085) and use it consistently in both the SSH tunnel and the GUI launch: <code>ssh -L 8085:localhost:8085 ...</code> and <code>recovar gui --port 8085</code>.</p>
+</div>
+<h3 id="first-steps-in-the-gui">First steps in the GUI<a class="headerlink" href="#first-steps-in-the-gui" title="Permanent link">&para;</a></h3>
+<p>Once the GUI is open, create a project (or open an existing one) and use <strong>Scan for Existing Jobs</strong> to import your pipeline outputs.</p>
 <p>The GUI provides:</p>
 <ul>
 <li><strong>Dashboard</strong> — overview of all jobs with status indicators</li>
@@ -2583,42 +2676,42 @@
 <hr />
 <h2 id="output-directory-reference">Output directory reference<a class="headerlink" href="#output-directory-reference" title="Permanent link">&para;</a></h2>
 <h3 id="pipeline-output">Pipeline output<a class="headerlink" href="#pipeline-output" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>output/
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>├── job.json                       # Job metadata (version, timing, parameters)
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>├── command.txt                    # Command that was run
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>├── run.log                        # Full log
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>├── README.txt                     # Human-readable output summary
-<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>├── model/                         # Internal model
-<a id="__codelineno-14-7" name="__codelineno-14-7" href="#__codelineno-14-7"></a>│   ├── params.pkl
-<a id="__codelineno-14-8" name="__codelineno-14-8" href="#__codelineno-14-8"></a>│   ├── zdim_4/                    # Per-zdim embeddings
-<a id="__codelineno-14-9" name="__codelineno-14-9" href="#__codelineno-14-9"></a>│   │   └── latent_coords.npy
-<a id="__codelineno-14-10" name="__codelineno-14-10" href="#__codelineno-14-10"></a>│   └── zdim_10/
-<a id="__codelineno-14-11" name="__codelineno-14-11" href="#__codelineno-14-11"></a>│       └── latent_coords.npy
-<a id="__codelineno-14-12" name="__codelineno-14-12" href="#__codelineno-14-12"></a>└── output/
-<a id="__codelineno-14-13" name="__codelineno-14-13" href="#__codelineno-14-13"></a>    ├── volumes/                   # mean.mrc, half-maps, eigenvolumes, variance maps
-<a id="__codelineno-14-14" name="__codelineno-14-14" href="#__codelineno-14-14"></a>    └── plots/                     # Diagnostic plots
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>output/
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>├── job.json                       # Job metadata (version, timing, parameters)
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>├── command.txt                    # Command that was run
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>├── run.log                        # Full log
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>├── README.txt                     # Human-readable output summary
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>├── model/                         # Internal model
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>│   ├── params.pkl
+<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a>│   ├── zdim_4/                    # Per-zdim embeddings
+<a id="__codelineno-17-9" name="__codelineno-17-9" href="#__codelineno-17-9"></a>│   │   └── latent_coords.npy
+<a id="__codelineno-17-10" name="__codelineno-17-10" href="#__codelineno-17-10"></a>│   └── zdim_10/
+<a id="__codelineno-17-11" name="__codelineno-17-11" href="#__codelineno-17-11"></a>│       └── latent_coords.npy
+<a id="__codelineno-17-12" name="__codelineno-17-12" href="#__codelineno-17-12"></a>└── output/
+<a id="__codelineno-17-13" name="__codelineno-17-13" href="#__codelineno-17-13"></a>    ├── volumes/                   # mean.mrc, half-maps, eigenvolumes, variance maps
+<a id="__codelineno-17-14" name="__codelineno-17-14" href="#__codelineno-17-14"></a>    └── plots/                     # Diagnostic plots
 </code></pre></div>
 <h3 id="analyze-output">Analyze output<a class="headerlink" href="#analyze-output" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>output/analysis_&lt;zdim&gt;/
-<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>├── job.json                       # Job metadata
-<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>├── command.txt, run.log, README.txt
-<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>├── plots/                         # All visualization outputs
-<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>│   ├── contrast_histogram.png
-<a id="__codelineno-15-6" name="__codelineno-15-6" href="#__codelineno-15-6"></a>│   ├── PCA/                       # PC scatter plots with k-means centers
-<a id="__codelineno-15-7" name="__codelineno-15-7" href="#__codelineno-15-7"></a>│   ├── umap/                      # UMAP embeddings
-<a id="__codelineno-15-8" name="__codelineno-15-8" href="#__codelineno-15-8"></a>│   ├── density/                   # Density plots (if density provided)
-<a id="__codelineno-15-9" name="__codelineno-15-9" href="#__codelineno-15-9"></a>│   └── density_sliced/            # Sliced density plots
-<a id="__codelineno-15-10" name="__codelineno-15-10" href="#__codelineno-15-10"></a>├── data/                          # Non-volume data files
-<a id="__codelineno-15-11" name="__codelineno-15-11" href="#__codelineno-15-11"></a>│   ├── kmeans_result.pkl          # K-means labels and centers
-<a id="__codelineno-15-12" name="__codelineno-15-12" href="#__codelineno-15-12"></a>│   └── trajectory_endpoints.pkl
-<a id="__codelineno-15-13" name="__codelineno-15-13" href="#__codelineno-15-13"></a>├── kmeans/                        # Cluster center volumes
-<a id="__codelineno-15-14" name="__codelineno-15-14" href="#__codelineno-15-14"></a>│   ├── center000.mrc, center001.mrc, ...
-<a id="__codelineno-15-15" name="__codelineno-15-15" href="#__codelineno-15-15"></a>│   ├── center000_half1_unfil.mrc  # Half-maps
-<a id="__codelineno-15-16" name="__codelineno-15-16" href="#__codelineno-15-16"></a>│   ├── centers.txt                # Center coordinates
-<a id="__codelineno-15-17" name="__codelineno-15-17" href="#__codelineno-15-17"></a>│   └── diagnostics/center000/     # Per-volume diagnostics
-<a id="__codelineno-15-18" name="__codelineno-15-18" href="#__codelineno-15-18"></a>└── traj000/, traj001/             # Trajectory volumes
-<a id="__codelineno-15-19" name="__codelineno-15-19" href="#__codelineno-15-19"></a>    ├── state000.mrc, state001.mrc, ...
-<a id="__codelineno-15-20" name="__codelineno-15-20" href="#__codelineno-15-20"></a>    └── diagnostics/state000/      # Per-volume diagnostics
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>output/analysis_&lt;zdim&gt;/
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>├── job.json                       # Job metadata
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>├── command.txt, run.log, README.txt
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>├── plots/                         # All visualization outputs
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a>│   ├── contrast_histogram.png
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a>│   ├── PCA/                       # PC scatter plots with k-means centers
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a>│   ├── umap/                      # UMAP embeddings
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a>│   ├── density/                   # Density plots (if density provided)
+<a id="__codelineno-18-9" name="__codelineno-18-9" href="#__codelineno-18-9"></a>│   └── density_sliced/            # Sliced density plots
+<a id="__codelineno-18-10" name="__codelineno-18-10" href="#__codelineno-18-10"></a>├── data/                          # Non-volume data files
+<a id="__codelineno-18-11" name="__codelineno-18-11" href="#__codelineno-18-11"></a>│   ├── kmeans_result.pkl          # K-means labels and centers
+<a id="__codelineno-18-12" name="__codelineno-18-12" href="#__codelineno-18-12"></a>│   └── trajectory_endpoints.pkl
+<a id="__codelineno-18-13" name="__codelineno-18-13" href="#__codelineno-18-13"></a>├── kmeans/                        # Cluster center volumes
+<a id="__codelineno-18-14" name="__codelineno-18-14" href="#__codelineno-18-14"></a>│   ├── center000.mrc, center001.mrc, ...
+<a id="__codelineno-18-15" name="__codelineno-18-15" href="#__codelineno-18-15"></a>│   ├── center000_half1_unfil.mrc  # Half-maps
+<a id="__codelineno-18-16" name="__codelineno-18-16" href="#__codelineno-18-16"></a>│   ├── centers.txt                # Center coordinates
+<a id="__codelineno-18-17" name="__codelineno-18-17" href="#__codelineno-18-17"></a>│   └── diagnostics/center000/     # Per-volume diagnostics
+<a id="__codelineno-18-18" name="__codelineno-18-18" href="#__codelineno-18-18"></a>└── traj000/, traj001/             # Trajectory volumes
+<a id="__codelineno-18-19" name="__codelineno-18-19" href="#__codelineno-18-19"></a>    ├── state000.mrc, state001.mrc, ...
+<a id="__codelineno-18-20" name="__codelineno-18-20" href="#__codelineno-18-20"></a>    └── diagnostics/state000/      # Per-volume diagnostics
 </code></pre></div>
 <h2 id="command-reference">Command reference<a class="headerlink" href="#command-reference" title="Permanent link">&para;</a></h2>
 <table>
@@ -2667,7 +2760,7 @@
 </tr>
 <tr>
 <td>Launch GUI</td>
-<td><code>recovar gui --scan-dir out</code></td>
+<td><code>recovar gui</code></td>
 </tr>
 </tbody>
 </table>
@@ -2675,7 +2768,7 @@
 <div class="admonition tip">
 <p class="admonition-title">Quick test</p>
 <p>Use <code>--only-mean</code> for a fast test that only computes the mean reconstruction:
-<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--only-mean
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--only-mean
 </code></pre></div></p>
 </div>
 <div class="admonition tip">
