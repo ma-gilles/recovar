@@ -345,12 +345,6 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: L
     },
   });
 
-  // Star export mutation — exports a previously created subset as a filtered .star file
-  const starExportMutation = useMutation({
-    mutationFn: (params: { subsetId: string; particlesStar: string }) =>
-      exportSubsetStar(params.subsetId, params.particlesStar),
-  });
-
   // Combined: create subset + export .star in one click
   const oneClickStarMutation = useMutation({
     mutationFn: async (params: { indices: number[]; invert: boolean }) => {

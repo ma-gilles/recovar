@@ -88,6 +88,11 @@ function OverviewTab({
 
   const isActive = job.status === "running" || job.status === "queued";
 
+  const hoursQueued =
+    job.status === "queued" && job.created
+      ? (Date.now() - new Date(job.created).getTime()) / 3_600_000
+      : 0;
+
   const { data: plots } = useQuery<PlotEntry[]>({
     queryKey: ["job-plots", job.id],
     queryFn: () => getJobPlots(job.id),
@@ -155,6 +160,14 @@ function OverviewTab({
         <div className="rounded-md border border-red-500/30 bg-red-500/10 p-4">
           <p className="text-sm font-medium text-red-400">Error</p>
           <pre className="mt-1 whitespace-pre-wrap font-mono text-xs text-red-300">{job.error}</pre>
+        </div>
+      )}
+
+      {hoursQueued >= 1 && (
+        <div className="rounded-md border border-yellow-700 bg-yellow-900/30 p-4">
+          <p className="text-sm text-yellow-300">
+            Job has been queued for {Math.floor(hoursQueued)} {Math.floor(hoursQueued) === 1 ? "hour" : "hours"}. The cluster may be busy.
+          </p>
         </div>
       )}
 
