@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import {
@@ -43,8 +43,40 @@ function StatusIcon({ status }: { status: string }): React.JSX.Element {
   }
 }
 
-function JobItem({ job }: { job: JobSummary }): React.JSX.Element {
-  const dirName = job.output_dir.split("/").pop() ?? job.id.slice(0, 8);
+/**
+ * Build unique display names for a list of jobs by progressively adding parent
+ * path segments until all names are unique (like VS Code tab disambiguation).
+ */
+function buildJobDisplayNames(jobs: JobSummary[]): Map<string, string> {
+  const result = new Map<string, string>();
+  // Start with just the last path segment
+  const pathSegments = jobs.map((j) => j.output_dir.replace(/\\/g, "/").split("/"));
+  for (let i = 0; i < jobs.length; i++) {
+    result.set(jobs[i].id, pathSegments[i][pathSegments[i].length - 1] ?? jobs[i].id.slice(0, 8));
+  }
+  // Progressively add parent segments for colliding names (up to 3 levels)
+  for (let depth = 1; depth <= 3; depth++) {
+    const nameToIds = new Map<string, string[]>();
+    for (const [id, name] of result) {
+      nameToIds.set(name, [...(nameToIds.get(name) ?? []), id]);
+    }
+    let anyDuplicates = false;
+    for (const [, ids] of nameToIds) {
+      if (ids.length <= 1) continue;
+      anyDuplicates = true;
+      for (const id of ids) {
+        const job = jobs.find((j) => j.id === id)!;
+        const parts = job.output_dir.replace(/\\/g, "/").split("/");
+        const segCount = Math.min(depth + 1, parts.length);
+        result.set(id, parts.slice(parts.length - segCount).join("/"));
+      }
+    }
+    if (!anyDuplicates) break;
+  }
+  return result;
+}
+
+function JobItem({ job, displayName }: { job: JobSummary; displayName: string }): React.JSX.Element {
   return (
     <Link
       to="/jobs/$jobId"
@@ -55,9 +87,10 @@ function JobItem({ job }: { job: JobSummary }): React.JSX.Element {
         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
       )}
       activeProps={{ className: "bg-zinc-700 text-zinc-50" }}
+      title={job.output_dir}
     >
       <StatusIcon status={job.status} />
-      <span className="truncate">{dirName}</span>
+      <span className="truncate">{displayName}</span>
     </Link>
   );
 }
@@ -97,12 +130,19 @@ function JobSection({
         {title} ({jobs.length})
       </button>
       {open && jobs.length > 0 && (
-        <div className="ml-2 space-y-0.5">
-          {jobs.map((job) => (
-            <JobItem key={job.id} job={job} />
-          ))}
-        </div>
+        <JobList jobs={jobs} />
       )}
+    </div>
+  );
+}
+
+function JobList({ jobs }: { jobs: JobSummary[] }): React.JSX.Element {
+  const displayNames = useMemo(() => buildJobDisplayNames(jobs), [jobs]);
+  return (
+    <div className="ml-2 space-y-0.5">
+      {jobs.map((job) => (
+        <JobItem key={job.id} job={job} displayName={displayNames.get(job.id) ?? job.id.slice(0, 8)} />
+      ))}
     </div>
   );
 }
