@@ -824,7 +824,7 @@ class CryoEMDataset:
 
         for images, particle_indices, image_indices in generator:
             image_indices = np.asarray(image_indices, dtype=np.int32).reshape(-1)
-            particle_indices = np.asarray(particle_indices)
+            particle_indices = np.asarray(particle_indices, dtype=np.int32).reshape(-1)
             rotation_matrices, translations, ctf_params = self.metadata.get_batch(image_indices)
 
             if noise_model is None:
