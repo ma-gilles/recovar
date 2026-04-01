@@ -807,13 +807,24 @@ def _e_step_half_inner(
     compute_ll,
     disc_type_mean="cubic",
     disc_type="linear_interp",
+    contrast_mode="none",
+    contrast_grid=None,
+    contrast_weights=None,
+    eigenvalues=None,
+    contrast_mean=1.0,
+    contrast_variance=np.inf,
     # NOTE: JIT boundary — backprojection is done separately to
     # allow XLA to free memory between chunks.
 ):
     """JIT'd E-step core: computes posterior moments and log-likelihood.
 
+    When contrast_mode != "none", uses contrast_posterior.solve_latent_posterior
+    to compute contrast-marginalized moments E[cz], E[c²z], E[c²zz^T].
+
     Returns everything needed for the backprojection (done outside JIT).
     """
+    from recovar.ppca import contrast_posterior
+
     basis_size = W_half.shape[1]
 
     w_1d = linalg.half_spectrum_last_axis_weights(image_shape[1])
@@ -839,17 +850,56 @@ def _e_step_half_inner(
     PW_half *= CTF_half[:, None, :]
 
     PW_w = jnp.conj(PW_half) * rfft_w[None, None, :]
-    M_n = (PW_w @ PW_half.transpose(0, 2, 1)).real + jnp.eye(basis_size)
 
-    centered_half = images_half - projected_mean_half
-    b_n = (PW_w @ centered_half[..., None]).real
+    # Sufficient statistics for latent posterior
+    H = (PW_w @ PW_half.transpose(0, 2, 1)).real          # AU^T AU, (B, K, K)
+    g = (PW_w @ images_half[..., None]).real.squeeze(-1)   # AU^T y,  (B, K)
+    h = (PW_w @ projected_mean_half[..., None]).real.squeeze(-1)  # AU^T Aμ, (B, K)
+    t = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * projected_mean_half), axis=-1)  # y^T Aμ
+    nu = jnp.sum(rfft_w * jnp.real(jnp.conj(projected_mean_half) * projected_mean_half), axis=-1)  # Aμ^T Aμ
+    y_norm_sq = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * images_half), axis=-1)  # y^T y
 
-    M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
-    expected_zs = (M_n_inv @ b_n).squeeze(-1)
-    second_moment_zs = M_n_inv + linalg.broadcast_outer(expected_zs, jnp.conj(expected_zs))
+    if eigenvalues is None:
+        eigenvalues = jnp.ones(basis_size)
+
+    if contrast_mode == "none":
+        # Fast path: c=1, standard PPCA (no contrast_posterior overhead)
+        M_n = H + jnp.eye(basis_size)
+        centered_half = images_half - projected_mean_half
+        b_n = (g - h)[..., None]
+
+        M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
+        expected_zs = (M_n_inv @ b_n).squeeze(-1)
+        second_moment_zs = M_n_inv + linalg.broadcast_outer(expected_zs, jnp.conj(expected_zs))
+        # c=1: contrast-weighted moments equal standard moments
+        mean_cz = expected_zs
+        mean_c2z = expected_zs
+        second_moment_czz = second_moment_zs
+        mean_c = jnp.ones(images_half.shape[0])
+    else:
+        # Contrast marginalization via quadrature
+        result = contrast_posterior.solve_latent_posterior(
+            H=H, g=g, h=h, t=t, nu=nu, y_norm_sq=y_norm_sq,
+            lambdas=eigenvalues,
+            contrast_mode=contrast_mode,
+            contrast_nodes=contrast_grid,
+            contrast_weights=contrast_weights,
+            contrast_mean=contrast_mean,
+            contrast_variance=contrast_variance,
+        )
+        expected_zs = result.mean_z
+        mean_cz = result.mean_cz
+        mean_c2z = result.mean_c2z
+        second_moment_czz = result.second_moment_czz
+        second_moment_zs = result.second_moment_z
+        mean_c = result.mean_c
+        centered_half = images_half - projected_mean_half
 
     ll_sum = jnp.array(0.0, dtype=images_half.dtype)
     if compute_ll:
+        M_n = H + jnp.eye(basis_size)
+        b_n = (g - h)[..., None]
+        M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
         u = b_n.squeeze(-1)
         quad = jnp.real(jnp.sum(jnp.conj(u) * (M_n_inv @ u[..., None]).squeeze(-1), axis=-1))
         r2 = jnp.sum(rfft_w * jnp.real(jnp.conj(centered_half) * centered_half), axis=-1)
@@ -859,7 +909,9 @@ def _e_step_half_inner(
         ll_per_image = -0.5 * (d_n * jnp.log(2.0 * jnp.pi) + r2 - quad + logdetM)
         ll_sum = jnp.sum(ll_per_image)
 
-    return expected_zs, second_moment_zs, ctf_squared_half, centered_half, CTF_half, ll_sum
+    return (expected_zs, second_moment_czz, ctf_squared_half,
+            images_half, projected_mean_half, CTF_half, ll_sum,
+            mean_cz, mean_c2z, mean_c)
 
 
 def E_M_step_batch_half(
@@ -920,33 +972,45 @@ def E_M_step_batch_half(
         # LHS: per-image scatter + GEMM when CUDA kernel available, else JAX fallback.
         n_images = ctf_squared_full.shape[0]
         real_dtype = lhs_summed.dtype
-        try:
-            from recovar.cuda_backproject import per_image_backproject
+        # try:
+        from recovar.cuda_backproject import per_image_backproject
 
-            ctf2_bp = per_image_backproject(
-                jnp.zeros((half_volume_size, n_images), dtype=real_dtype),
-                ctf_squared_full.real.astype(real_dtype),
-                jnp.asarray(rotation_matrices),
-                image_shape,
-                volume_shape,
-                max_r=_max_r,
-            )  # (half_vol, n_images)
-            lhs_summed = lhs_summed + (ctf2_bp @ second_moment_tri.real.astype(real_dtype))
-        except Exception:
-            # Fallback: standard per-column backprojection (slower but works on CPU)
-            tri_sz = second_moment_tri.shape[1]
-            for k in range(tri_sz):
-                w = ctf_squared_full.real.astype(real_dtype) * second_moment_tri[:, k : k + 1].real.astype(real_dtype)
-                bp_col = core.batch_adjoint_slice_volume(
-                    w[:, :, None].transpose(2, 0, 1),
-                    rotation_matrices,
-                    image_shape,
-                    volume_shape,
-                    disc_type,
-                    half_image=False,
-                    half_volume=True,
-                )
-                lhs_summed = lhs_summed.at[:, k].add(bp_col.reshape(-1).real)
+
+        ctf2_bp = per_image_backproject(
+            jnp.zeros((half_volume_size, n_images), dtype=real_dtype),
+            ctf_squared_full.real.astype(real_dtype),
+            jnp.asarray(rotation_matrices),
+            image_shape,
+            volume_shape,
+            max_r=_max_r,
+        )  # (half_vol, n_images)
+
+        ## TODO: do not erase this, report it in the math document description of 
+        ## This is very memory inefficient, (it allocates n^3 x images), but somehow compute efficient, 
+        ## this is is done doing  |n_images| backproj, instead of |n_images| * q^2/2
+        ## Compute is N^3 n_images + N^3 * n_images * q^2 but the second is a big mat-mat
+        ## A more reasonable (in theory) would be N^2 * n_images * n^2, but the whole thing would be backprojects essentially.
+        ## This backprojects are the dominant cost, this is worse
+        ## Ideally, we would find a way to have much faster backprojection of this kind, using the fact that there is a lot of data locallity
+        ## Since we reprojecting to teh same voxels (in different volumes), so tehy could be continguous in memory.
+        ## I have not been able to make that work (by prompting claude/codex to write better kernel).
+
+        lhs_summed = lhs_summed + (ctf2_bp @ second_moment_tri.real.astype(real_dtype))
+        # except Exception:
+        #     # Fallback: standard per-column backprojection (slower but works on CPU)
+        #     tri_sz = second_moment_tri.shape[1]
+        #     for k in range(tri_sz):
+        #         w = ctf_squared_full.real.astype(real_dtype) * second_moment_tri[:, k : k + 1].real.astype(real_dtype)
+        #         bp_col = core.batch_adjoint_slice_volume(
+        #             w[:, :, None].transpose(2, 0, 1),
+        #             rotation_matrices,
+        #             image_shape,
+        #             volume_shape,
+        #             disc_type,
+        #             half_image=False,
+        #             half_volume=True,
+        #         )
+        #         lhs_summed = lhs_summed.at[:, k].add(bp_col.reshape(-1).real)
 
         # RHS: standard half-image backprojection (only q=20 complex channels,
         # fast enough that per-image trick gives <10% improvement).
