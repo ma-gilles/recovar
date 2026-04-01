@@ -52,6 +52,23 @@ def test_particle_image_dataset_process_images_half_matches_legacy_full_fft_path
     np.testing.assert_array_equal(processed_half, legacy_half)
 
 
+def test_particle_image_dataset_data_multiplier_and_mult_share_state(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    assert ds.data_multiplier == 1
+    assert ds.mult == 1
+    assert ds.invert_data is False
+
+    ds.mult = -1
+    assert ds.data_multiplier == -1
+    assert ds.invert_data is True
+
+    ds.data_multiplier = 1
+    assert ds.mult == 1
+    assert ds.invert_data is False
+
+
 def test_particle_image_dataset_subset_generators_preserve_order_and_duplicates(monkeypatch):
     monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
     ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)

@@ -389,12 +389,12 @@ class CryoEMDataset:
     @property
     def data_multiplier(self):
         """Sign multiplier for data inversion (±1)."""
-        return getattr(self.image_source, "mult", 1)
+        return getattr(self.image_source, "data_multiplier", 1)
 
     @data_multiplier.setter
     def data_multiplier(self, value):
         if self.image_source is not None:
-            self.image_source.mult = value
+            self.image_source.data_multiplier = value
 
     @property
     def dataset_tilt_indices(self):
@@ -478,7 +478,7 @@ class CryoEMDataset:
             ind=original_image_indices,
             lazy=lazy,
             padding=self.padding,
-            uninvert_data=info.invert_data,
+            uninvert_data=bool(self.data_multiplier < 0),
             tilt_series=self.tilt_series_flag,
             tilt_series_ctf=info.tilt_series_ctf,
             dose_per_tilt=info.dose_per_tilt,

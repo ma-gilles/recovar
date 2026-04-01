@@ -10,7 +10,7 @@ top-level dataset/view object. It provides:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal, Optional
 
 import numpy as np
@@ -143,12 +143,20 @@ class ImageSource:
         raise NotImplementedError
 
     @property
-    def mult(self):
+    def data_multiplier(self):
         raise NotImplementedError
+
+    @data_multiplier.setter
+    def data_multiplier(self, value):
+        raise NotImplementedError
+
+    @property
+    def mult(self):
+        return self.data_multiplier
 
     @mult.setter
     def mult(self, value):
-        raise NotImplementedError
+        self.data_multiplier = value
 
     @property
     def dataset_tilt_indices(self):
@@ -254,12 +262,17 @@ class BackendImageSource(ImageSource):
         return self.backend.mask
 
     @property
-    def mult(self):
-        return self.backend.mult
+    def data_multiplier(self):
+        return self.backend.data_multiplier
 
-    @mult.setter
-    def mult(self, value):
-        self.backend.mult = value
+    @data_multiplier.setter
+    def data_multiplier(self, value):
+        self.backend.data_multiplier = value
+        self.info = replace(self.info, invert_data=bool(value < 0))
+
+    @property
+    def mult(self):
+        return self.data_multiplier
 
     def __getitem__(self, index):
         return self.backend[index]
@@ -304,7 +317,6 @@ class SubsetImageSource(ImageSource):
 
     def __init__(self, parent: ImageSource, image_indices):
         self.parent = parent
-        self.info = parent.info
         self._parent_local_image_indices = _normalize_indices(
             image_indices, parent.n_images, name="image_indices"
         ).astype(np.int32, copy=False)
@@ -324,6 +336,10 @@ class SubsetImageSource(ImageSource):
     @property
     def already_prefetches(self) -> bool:
         return self.parent.already_prefetches
+
+    @property
+    def info(self) -> ImageSourceInfo:
+        return self.parent.info
 
     @property
     def n_images(self) -> int:
@@ -358,12 +374,16 @@ class SubsetImageSource(ImageSource):
         return self.parent.mask
 
     @property
-    def mult(self):
-        return self.parent.mult
+    def data_multiplier(self):
+        return self.parent.data_multiplier
 
-    @mult.setter
-    def mult(self, value):
-        self.parent.mult = value
+    @data_multiplier.setter
+    def data_multiplier(self, value):
+        self.parent.data_multiplier = value
+
+    @property
+    def mult(self):
+        return self.data_multiplier
 
     def __getitem__(self, index):
         if self.tilt_series:
