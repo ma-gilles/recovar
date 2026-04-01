@@ -823,8 +823,12 @@ class CryoEMDataset:
         )
 
         for images, particle_indices, image_indices in generator:
-            image_indices = np.asarray(image_indices, dtype=np.int32).reshape(-1)
-            particle_indices = np.asarray(particle_indices, dtype=np.int32).reshape(-1)
+            # Force a host copy with explicit dtype.  Plain np.asarray() on a
+            # JAX GPU array can return a view into device memory that becomes
+            # stale when JAX recycles buffers under memory pressure (observed
+            # as garbage index values like 22340943871744).
+            image_indices = np.array(image_indices, dtype=np.int32, copy=True).reshape(-1)
+            particle_indices = np.array(particle_indices, dtype=np.int32, copy=True).reshape(-1)
             rotation_matrices, translations, ctf_params = self.metadata.get_batch(image_indices)
 
             if noise_model is None:
