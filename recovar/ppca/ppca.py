@@ -791,7 +791,7 @@ batch_over_vol_adjoint_slice_volume_half = jax.vmap(
 )
 
 
-@functools.partial(jax.jit, static_argnums=[8, 9, 10, 11, 12, 13])
+@functools.partial(jax.jit, static_argnums=[8, 9, 10, 11, 12, 13, 14, 18, 19])
 def _e_step_half_inner(
     images_half,
     mean,
