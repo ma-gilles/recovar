@@ -54,6 +54,7 @@ pytest-cov = ">=5.0"
 [pypi-dependencies]
 # Documentation
 mkdocstrings = { extras = ["python"], version = "*" }
+mypy = "==1.20.0"
 # JAX 0.9.x with CUDA 12 support. Pin plugin/PJRT to match jaxlib exactly
 # so fresh resolutions do not pull newer incompatible CUDA wheels.
 jax = { extras = ["cuda12"], version = "==0.9.0.1" }

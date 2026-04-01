@@ -296,7 +296,10 @@ class DatasetIndexLayout:
 
     @property
     def n_groups(self) -> int:
-        return int(self.original_group_indices.size)
+        group_indices = self.original_group_indices
+        if group_indices is None:
+            return self.n_images
+        return int(group_indices.size)
 
     @property
     def image_local_to_group_local(self):
