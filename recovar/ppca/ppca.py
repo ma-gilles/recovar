@@ -791,40 +791,21 @@ batch_over_vol_adjoint_slice_volume_half = jax.vmap(
 )
 
 
-@functools.partial(jax.jit, static_argnums=[8, 9, 10, 11, 12, 13, 14, 18, 19])
+@functools.partial(jax.jit, static_argnums=[8, 9, 10, 11, 12, 13])
 def _e_step_half_inner(
-    images_half,
-    mean,
-    W_half,
-    CTF_params,
-    rotation_matrices,
-    translations,
-    voxel_size,
-    noise_variance_half,
-    image_shape,
-    volume_shape,
-    ctf_evaluator,
-    compute_ll,
-    disc_type_mean="cubic",
-    disc_type="linear_interp",
-    contrast_mode="none",
-    contrast_grid=None,
-    contrast_weights=None,
-    eigenvalues=None,
-    contrast_mean=1.0,
-    contrast_variance=np.inf,
-    # NOTE: JIT boundary — backprojection is done separately to
-    # allow XLA to free memory between chunks.
+    images_half, mean, W_half, CTF_params, rotation_matrices, translations,
+    voxel_size, noise_variance_half,
+    image_shape, volume_shape, ctf_evaluator, compute_ll,
+    disc_type_mean="cubic", disc_type="linear_interp",
 ):
-    """JIT'd E-step core: computes posterior moments and log-likelihood.
+    """JIT'd E-step core: computes sufficient stats and c=1 posterior.
 
-    When contrast_mode != "none", uses contrast_posterior.solve_latent_posterior
-    to compute contrast-marginalized moments E[cz], E[c²z], E[c²zz^T].
+    Returns sufficient statistics (H, g, h, t, nu, y_norm_sq) plus
+    noise-whitened images/mean/CTF for backprojection, and the standard
+    (c=1) posterior moments.
 
-    Returns everything needed for the backprojection (done outside JIT).
+    Contrast dispatch happens OUTSIDE JIT in E_M_step_batch_half.
     """
-    from recovar.ppca import contrast_posterior
-
     basis_size = W_half.shape[1]
 
     w_1d = linalg.half_spectrum_last_axis_weights(image_shape[1])
@@ -852,56 +833,26 @@ def _e_step_half_inner(
     PW_w = jnp.conj(PW_half) * rfft_w[None, None, :]
 
     # Sufficient statistics for latent posterior
-    H = (PW_w @ PW_half.transpose(0, 2, 1)).real          # AU^T AU, (B, K, K)
-    g = (PW_w @ images_half[..., None]).real.squeeze(-1)   # AU^T y,  (B, K)
-    h = (PW_w @ projected_mean_half[..., None]).real.squeeze(-1)  # AU^T Aμ, (B, K)
-    t = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * projected_mean_half), axis=-1)  # y^T Aμ
-    nu = jnp.sum(rfft_w * jnp.real(jnp.conj(projected_mean_half) * projected_mean_half), axis=-1)  # Aμ^T Aμ
-    y_norm_sq = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * images_half), axis=-1)  # y^T y
+    H = (PW_w @ PW_half.transpose(0, 2, 1)).real
+    g = (PW_w @ images_half[..., None]).real.squeeze(-1)
+    h = (PW_w @ projected_mean_half[..., None]).real.squeeze(-1)
+    t = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * projected_mean_half), axis=-1)
+    nu = jnp.sum(rfft_w * jnp.real(jnp.conj(projected_mean_half) * projected_mean_half), axis=-1)
+    y_norm_sq = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * images_half), axis=-1)
 
-    if eigenvalues is None:
-        eigenvalues = jnp.ones(basis_size)
-
-    if contrast_mode == "none":
-        # Fast path: c=1, standard PPCA (no contrast_posterior overhead)
-        M_n = H + jnp.eye(basis_size)
-        centered_half = images_half - projected_mean_half
-        b_n = (g - h)[..., None]
-
-        M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
-        expected_zs = (M_n_inv @ b_n).squeeze(-1)
-        second_moment_zs = M_n_inv + linalg.broadcast_outer(expected_zs, jnp.conj(expected_zs))
-        # c=1: contrast-weighted moments equal standard moments
-        mean_cz = expected_zs
-        mean_c2z = expected_zs
-        second_moment_czz = second_moment_zs
-        mean_c = jnp.ones(images_half.shape[0])
-    else:
-        # Contrast marginalization via quadrature
-        result = contrast_posterior.solve_latent_posterior(
-            H=H, g=g, h=h, t=t, nu=nu, y_norm_sq=y_norm_sq,
-            lambdas=eigenvalues,
-            contrast_mode=contrast_mode,
-            contrast_nodes=contrast_grid,
-            contrast_weights=contrast_weights,
-            contrast_mean=contrast_mean,
-            contrast_variance=contrast_variance,
-        )
-        expected_zs = result.mean_z
-        mean_cz = result.mean_cz
-        mean_c2z = result.mean_c2z
-        second_moment_czz = result.second_moment_czz
-        second_moment_zs = result.second_moment_z
-        mean_c = result.mean_c
-        centered_half = images_half - projected_mean_half
+    # Standard c=1 posterior (always computed — used for LL and as fallback)
+    M_n = H + jnp.eye(basis_size)
+    b_n = (g - h)[..., None]
+    M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
+    expected_zs = (M_n_inv @ b_n).squeeze(-1)
+    second_moment_zs = M_n_inv + linalg.broadcast_outer(expected_zs, jnp.conj(expected_zs))
 
     ll_sum = jnp.array(0.0, dtype=images_half.dtype)
     if compute_ll:
-        M_n = H + jnp.eye(basis_size)
-        b_n = (g - h)[..., None]
-        M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
         u = b_n.squeeze(-1)
         quad = jnp.real(jnp.sum(jnp.conj(u) * (M_n_inv @ u[..., None]).squeeze(-1), axis=-1))
+        r2 = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * images_half), axis=-1)
+        centered_half = images_half - projected_mean_half
         r2 = jnp.sum(rfft_w * jnp.real(jnp.conj(centered_half) * centered_half), axis=-1)
         L = jnp.linalg.cholesky(M_n)
         logdetM = 2.0 * jnp.sum(jnp.log(jnp.real(jnp.diagonal(L, axis1=1, axis2=2))), axis=-1)
@@ -909,9 +860,9 @@ def _e_step_half_inner(
         ll_per_image = -0.5 * (d_n * jnp.log(2.0 * jnp.pi) + r2 - quad + logdetM)
         ll_sum = jnp.sum(ll_per_image)
 
-    return (expected_zs, second_moment_czz, ctf_squared_half,
+    return (expected_zs, second_moment_zs, ctf_squared_half,
             images_half, projected_mean_half, CTF_half, ll_sum,
-            mean_cz, mean_c2z, mean_c)
+            H, g, h, t, nu, y_norm_sq)
 
 
 def E_M_step_batch_half(
@@ -950,17 +901,40 @@ def E_M_step_batch_half(
     tri_i, tri_j = np.triu_indices(basis_size)
     tri_sz = len(tri_i)
 
-    # --- JIT'd E-step ---
-    (expected_zs, second_moment_czz, ctf_squared_half,
+    from recovar.ppca import contrast_posterior
+
+    # --- JIT'd E-step: sufficient stats + c=1 posterior ---
+    (expected_zs, second_moment_zs, ctf_squared_half,
      images_half_w, projected_mean_half_w, CTF_half, ll_sum,
-     mean_cz, mean_c2z, mean_c) = _e_step_half_inner(
+     H, g, h, t, nu, y_norm_sq) = _e_step_half_inner(
         images_half, mean, W_half, CTF_params, rotation_matrices,
         translations, voxel_size, noise_variance_half, image_shape,
         volume_shape, ctf_evaluator, compute_ll, disc_type_mean, disc_type,
-        contrast_mode=contrast_mode, contrast_grid=contrast_grid,
-        contrast_weights=contrast_weights, eigenvalues=eigenvalues,
-        contrast_mean=contrast_mean, contrast_variance=contrast_variance,
     )
+
+    # --- Contrast dispatch (outside JIT) ---
+    if contrast_mode == "none":
+        mean_cz = expected_zs
+        mean_c2z = expected_zs
+        second_moment_czz = second_moment_zs
+        mean_c = jnp.ones(expected_zs.shape[0])
+    else:
+        if eigenvalues is None:
+            eigenvalues = jnp.ones(basis_size)
+        result = contrast_posterior.solve_latent_posterior(
+            H=H, g=g, h=h, t=t, nu=nu, y_norm_sq=y_norm_sq,
+            lambdas=eigenvalues,
+            contrast_mode=contrast_mode,
+            contrast_nodes=contrast_grid,
+            contrast_weights=contrast_weights,
+            contrast_mean=contrast_mean,
+            contrast_variance=contrast_variance,
+        )
+        expected_zs = result.mean_z
+        mean_cz = result.mean_cz
+        mean_c2z = result.mean_c2z
+        second_moment_czz = result.second_moment_czz
+        mean_c = result.mean_c
 
     # --- backprojection ---
     if compute_stats:
