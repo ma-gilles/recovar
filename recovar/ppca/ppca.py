@@ -1082,6 +1082,12 @@ def EM_step_half(
     W_prev_real=None,
     soft_penalty_lam=0.0,
     mstep_solver_fn=None,
+    contrast_mode="none",
+    contrast_grid=None,
+    contrast_weights=None,
+    eigenvalues=None,
+    contrast_mean=1.0,
+    contrast_variance=np.inf,
 ):
     """Half-spectrum EM step for L2-regularized PPCA.
 
@@ -1141,6 +1147,12 @@ def EM_step_half(
                 disc_type_mean=disc_type_mean,
                 disc_type=disc_type,
                 compute_stats=True,
+                contrast_mode=contrast_mode,
+                contrast_grid=contrast_grid,
+                contrast_weights=contrast_weights,
+                eigenvalues=eigenvalues,
+                contrast_mean=contrast_mean,
+                contrast_variance=contrast_variance,
             )
             expected_zs.append(np.array(ez_batch))
             second_moment_zs.append(np.array(smz_batch))
@@ -1535,6 +1547,10 @@ def EM(
     soft_penalty_lam=0.0,
     use_gridding_correction=False,
     mstep_solver_fn=None,
+    contrast_mode="none",
+    contrast_grid=None,
+    contrast_mean=1.0,
+    contrast_variance=np.inf,
 ):
     """
     Run EM algorithm for PPCA.
@@ -1650,6 +1666,10 @@ def EM(
     print("-" * len(header))
 
     for iter_i in range(EM_iter):
+        # Update eigenvalues from current W for contrast marginalization
+        _eigenvalues = np.array(jnp.sum(jnp.abs(W) ** 2, axis=0).real) / W.shape[0]
+        _eigenvalues = np.maximum(_eigenvalues, 1e-10).astype(np.float32)
+
         if not sparse_PCA:
             # L2: use half-spectrum EM step (4× less memory, ~2× faster M-step)
             (
@@ -1680,6 +1700,11 @@ def EM(
                 W_prev_real=_W_prev_real if iter_i > 0 else None,
                 soft_penalty_lam=soft_penalty_lam,
                 mstep_solver_fn=mstep_solver_fn,
+                contrast_mode=contrast_mode,
+                contrast_grid=jnp.array(contrast_grid) if contrast_grid is not None else None,
+                eigenvalues=_eigenvalues,
+                contrast_mean=contrast_mean,
+                contrast_variance=contrast_variance,
             )
         else:
             # L1/sparse: use full-spectrum EM step (ADMM needs full volume)
