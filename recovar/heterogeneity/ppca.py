@@ -40,12 +40,13 @@ def ppca_e_step(experiment_dataset, mean_estimate, W, eigenvalues,
     mean_c : (N,)         E[c|y]
     ll_sum : float        Sum of per-image log-likelihoods
     """
-    basis_size = W.shape[0] if W.ndim == 2 else W.shape[1]
-    # W can be (volume_size, K) or (K, volume_size) — normalize to (K, vol)
+    # W can be (volume_size, K) or (K, volume_size) — normalize to (vol, K)
     if W.shape[0] > W.shape[1]:
-        basis = jnp.asarray(W, dtype=experiment_dataset.dtype)  # (vol, K)
+        basis_size = W.shape[1]
+        basis = jnp.asarray(W, dtype=experiment_dataset.dtype)  # already (vol, K)
     else:
-        basis = jnp.asarray(W.T, dtype=experiment_dataset.dtype)  # (vol, K)
+        basis_size = W.shape[0]
+        basis = jnp.asarray(W.T, dtype=experiment_dataset.dtype)  # transpose to (vol, K)
 
     n_images = experiment_dataset.n_images
 
@@ -148,8 +149,15 @@ def M_step_batch(
     RHS(p) += sum_i CTF/σ² · y_i · E[cz]^T
     mean_corr(p) += sum_i CTF²/σ² · E[c²z]^T
     """
+    import recovar.core.fourier_transform_utils as ftu
     CTF = ctf(CTF_params, image_shape, voxel_size)
-    ctf_over_noise = CTF**2 / noise_variance
+    # Expand radial noise to full image if needed
+    nv = jnp.asarray(noise_variance)
+    if nv.ndim == 1 and nv.shape[0] != CTF.shape[-1]:
+        # Radial shells → full 2D image
+        from recovar.utils import batch_make_radial_image
+        nv = batch_make_radial_image(nv.reshape(1, -1), image_shape, True).reshape(-1)
+    ctf_over_noise = CTF**2 / nv
 
     grid_point_indices = core.batch_get_nearest_gridpoint_indices(
         rotation_matrices, image_shape, volume_shape)
@@ -161,8 +169,9 @@ def M_step_batch(
         sm_weighted.reshape(-1, sm_weighted.shape[-1]))
 
     # RHS term 1: CTF/σ² * y * E[cz]^T
+    images = images.reshape(images.shape[0], -1)
     images = core.translate_images(images, translations, image_shape)
-    weighted_images = images * CTF / noise_variance
+    weighted_images = images * CTF / nv
     rhs_term = linalg.broadcast_outer(weighted_images, mean_cz_batch)  # (B, pix, K)
     rhs_summed = rhs_summed.at[grid_point_indices.reshape(-1)].add(
         rhs_term.reshape(-1, rhs_term.shape[-1]))
@@ -213,13 +222,16 @@ def M_step(experiment_dataset, mean_estimate,
     mean_flat = jnp.asarray(mean_estimate).reshape(-1)
     rhs_final = rhs_summed - mean_flat[:, None] * mean_corr_summed
 
-    # Solve per-voxel: LHS @ W_p = RHS_p
+    # Solve per-voxel: (LHS + εI) @ W_p = RHS_p
     lhs = lhs_summed.reshape(vol_size, basis_size, basis_size)
-    W = linalg.solve_by_SVD(lhs, rhs_final, hermitian=True)
+    # Tikhonov regularization to avoid NaN from singular voxels
+    eps = 1e-6 * jnp.mean(jnp.abs(jnp.diagonal(lhs, axis1=1, axis2=2)))
+    lhs = lhs + eps * jnp.eye(basis_size, dtype=lhs.dtype)[None]
+    W = jnp.linalg.solve(lhs, rhs_final[..., None])[..., 0]
 
     # Orthogonalize
     U, S, _ = jnp.linalg.svd(W, full_matrices=False)
-    W = U @ jnp.diag(S)
+    W = U * S[None, :]  # (vol, K)
 
     return W
 
@@ -256,6 +268,12 @@ def EM(experiment_dataset, mean_estimate, noise_variance,
     eigenvalues = np.ones(basis_size, dtype=np.float32)
 
     for it in range(EM_iter):
+        # Update eigenvalues from current W: λ_k = ||W_k||² / vol_size
+        col_norms_sq = float(jnp.mean(jnp.sum(jnp.abs(W) ** 2, axis=0)))
+        if col_norms_sq > 0:
+            eigenvalues = np.array(jnp.sum(jnp.abs(W) ** 2, axis=0).real) / experiment_dataset.volume_size
+            eigenvalues = np.maximum(eigenvalues, 1e-10).astype(np.float32)
+
         # E-step
         mean_z, mean_cz, mean_c2z, sm_czz, mean_c, ll = ppca_e_step(
             experiment_dataset, mean_estimate, W, eigenvalues,
@@ -271,6 +289,13 @@ def EM(experiment_dataset, mean_estimate, noise_variance,
         W = M_step(experiment_dataset, mean_estimate,
                    mean_cz, mean_c2z, sm_czz, noise_variance, batch_size)
 
-        logger.info("EM %d: mean_c=%.3f±%.3f", it, np.mean(mean_c), np.std(mean_c))
+        logger.info("EM %d: mean_c=%.3f±%.3f eig=[%.1e..%.1e]",
+                    it, np.mean(mean_c), np.std(mean_c),
+                    float(eigenvalues.min()), float(eigenvalues.max()))
 
-    return W, mean_z, mean_c
+    # Extract eigenvectors and eigenvalues from W = U * S
+    col_norms = jnp.linalg.norm(W, axis=0, keepdims=True)
+    U_ppca = W / jnp.maximum(col_norms, 1e-30)
+    S_ppca = col_norms.squeeze(0)
+
+    return U_ppca, S_ppca, W, mean_z, mean_c
