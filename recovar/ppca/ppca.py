@@ -922,24 +922,10 @@ def E_M_step_batch_half(
         second_moment_czz = second_moment_zs
         mean_c = jnp.ones(expected_zs.shape[0])
     else:
-        # The sufficient stats H = (PW)^T(PW) use W (not unit-norm U).
-        # With W = U·S, H absorbs S² making it huge relative to Λ=I.
-        # Rescale: H_norm = S^{-1} H S^{-1} = (PU)^T(PU), lambdas = S².
-        # This is mathematically identical but numerically balanced.
         if eigenvalues is None:
-            # Compute S² from H diagonal (mean over images)
-            H_diag = jnp.mean(jnp.diagonal(H, axis1=1, axis2=2), axis=0)
-            eigenvalues = jnp.maximum(H_diag, 1e-10)
-            # Rescale stats: H_norm = D^{-1/2} H D^{-1/2}, g_norm = D^{-1/2} g, etc.
-            D_inv_sqrt = 1.0 / jnp.sqrt(eigenvalues)
-            H_norm = H * (D_inv_sqrt[None, :, None] * D_inv_sqrt[None, None, :])
-            g_norm = g * D_inv_sqrt[None, :]
-            h_norm = h * D_inv_sqrt[None, :]
-        else:
-            H_norm, g_norm, h_norm = H, g, h
-
+            eigenvalues = jnp.ones(basis_size)
         result = contrast_posterior.solve_latent_posterior(
-            H=H_norm, g=g_norm, h=h_norm, t=t, nu=nu, y_norm_sq=y_norm_sq,
+            H=H, g=g, h=h, t=t, nu=nu, y_norm_sq=y_norm_sq,
             lambdas=eigenvalues,
             contrast_mode=contrast_mode,
             contrast_nodes=contrast_grid,
@@ -947,12 +933,10 @@ def E_M_step_batch_half(
             contrast_mean=contrast_mean,
             contrast_variance=contrast_variance,
         )
-        # Rescale moments back: z_orig = D^{1/2} z_norm
-        D_sqrt = jnp.sqrt(eigenvalues)
-        expected_zs = result.mean_z * D_sqrt[None, :]
-        mean_cz = result.mean_cz * D_sqrt[None, :]
-        mean_c2z = result.mean_c2z * D_sqrt[None, :]
-        second_moment_czz = result.second_moment_czz * (D_sqrt[None, :, None] * D_sqrt[None, None, :])
+        expected_zs = result.mean_z
+        mean_cz = result.mean_cz
+        mean_c2z = result.mean_c2z
+        second_moment_czz = result.second_moment_czz
         mean_c = result.mean_c
 
     # --- backprojection ---
