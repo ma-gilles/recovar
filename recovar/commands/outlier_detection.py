@@ -1204,17 +1204,14 @@ def _run_outlier_detection(args):
             n_clusters = 100
             n_particles = len(zs)
             n_particles_per_cluster = min(100, max(10, n_particles // n_clusters))
-            max_junk_fraction = 0.55 if cryos.tilt_series_flag else 0.8
-
             # Override with user-provided value if specified
             if hasattr(args, "particles_per_cluster") and args.particles_per_cluster is not None:
                 n_particles_per_cluster = args.particles_per_cluster
 
             logger.info(
-                "Junk detection: auto batch_size=%s, auto n_particles_per_cluster=%s, max_junk_fraction=%s",
+                "Junk detection: auto batch_size=%s, auto n_particles_per_cluster=%s",
                 batch_size,
                 n_particles_per_cluster,
-                max_junk_fraction,
             )
 
             # Run junk detection
@@ -1233,7 +1230,7 @@ def _run_outlier_detection(args):
                 percentile_threshold=25.0,
                 std_threshold=args.junk_threshold,
                 min_junk_fraction=0.1,
-                max_junk_fraction=max_junk_fraction,
+                max_junk_fraction=0.8,
                 save_pipeline_indices=args.save_pipeline_indices,
                 output_format=args.output_format,
                 save_all_plots=save_all_plots,
