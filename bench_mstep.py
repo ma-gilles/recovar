@@ -501,7 +501,8 @@ def make_prior(gt, npc, vs):
 
 def run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt, mask_arr,
            use_pcg, solver_fn, pcg_maxiter, label, n_iter,
-           use_gridding_correction=True):
+           use_gridding_correction=True,
+           contrast_mode="none", contrast_grid=None):
     logger.info("=== %s ===", label)
     t0 = time.time()
     U, S, W, ez, sm, idata = ppca.EM(
@@ -511,7 +512,8 @@ def run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt, mask_arr,
         disc_type_mean="cubic", disc_type="linear_interp",
         return_iteration_data=True, use_pcg_mean=use_pcg,
         volume_mask=mask_arr, pcg_maxiter=pcg_maxiter,
-        use_gridding_correction=use_gridding_correction, mstep_solver_fn=solver_fn)
+        use_gridding_correction=use_gridding_correction, mstep_solver_fn=solver_fn,
+        contrast_mode=contrast_mode, contrast_grid=contrast_grid)
     dt = time.time() - t0
     _, rv, _ = metrics.get_all_variance_scores(U, U_gt, s_gt**2)
     logger.info("  RelVar=%.4f time=%.0fs", rv[-1], dt)
@@ -546,6 +548,9 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-grid-correction", action="store_true",
         help="Set G=1 (identity) for all methods — isolate effect of gridding kernel K")
+    parser.add_argument("--contrast-mode", type=str, default="none",
+        choices=["none", "profile", "marginalize"],
+        help="Contrast handling: none (c=1), profile (MAP), marginalize (quadrature)")
     parser.add_argument("--methods", type=str,
         default="naive,hard,hard_precond,soft,soft_precond")
     args = parser.parse_args()
@@ -593,8 +598,9 @@ def main():
         mov_soft = soften_volume_mask(mov_bin, kern_rad=3)
     mask = np.array(mov_soft, dtype=np.float32)
     n_mask = int(np.sum(mov_bin))
-    logger.info("Setup: %d³ q=%d mask=%.1f%% collar=%d μ=%g solver=%s f64=%s K=%s",
-                gs, npc, 100*n_mask/np.prod(vs), collar, args.mu, args.solver, args.float64, use_K)
+    contrast_grid = np.linspace(0.3, 1.7, 16) if args.contrast_mode != "none" else None
+    logger.info("Setup: %d³ q=%d mask=%.1f%% collar=%d μ=%g solver=%s f64=%s K=%s contrast=%s",
+                gs, npc, 100*n_mask/np.prod(vs), collar, args.mu, args.solver, args.float64, use_K, args.contrast_mode)
 
     np.random.seed(args.seed)
     W_init = jnp.array(np.random.randn(gt_mean.shape[0], npc).astype(np.float32) * 0.01)
@@ -610,7 +616,8 @@ def main():
     if "naive" in methods:
         r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
                    mask, False, None, 20, "naive", args.em_iters,
-                   use_gridding_correction=em_K_naive)
+                   use_gridding_correction=em_K_naive,
+                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid)
         r["cg_residuals"] = []
         results["naive"] = r
 
@@ -620,7 +627,8 @@ def main():
                                    use_grid_correction=use_K)
         r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
                    mask, False, fn, args.cg_maxiter, "hard", args.em_iters,
-                   use_gridding_correction=em_K_solver if use_K else False)
+                   use_gridding_correction=em_K_solver if use_K else False,
+                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid)
         r["cg_residuals"] = [list(x) for x in res]
         results["hard"] = r
 
@@ -630,7 +638,8 @@ def main():
                                    use_grid_correction=use_K)
         r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
                    mask, False, fn, args.cg_maxiter, "hard+precond", args.em_iters,
-                   use_gridding_correction=em_K_solver if use_K else False)
+                   use_gridding_correction=em_K_solver if use_K else False,
+                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid)
         r["cg_residuals"] = [list(x) for x in res]
         results["hard+precond"] = r
 
@@ -640,7 +649,8 @@ def main():
                                    override_tol=args.tol, use_grid_correction=use_K)
         r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
                    mask, False, fn, args.cg_maxiter, "soft", args.em_iters,
-                   use_gridding_correction=em_K_solver if use_K else False)
+                   use_gridding_correction=em_K_solver if use_K else False,
+                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid)
         r["cg_residuals"] = [list(x) for x in res]
         results["soft"] = r
 
@@ -650,7 +660,8 @@ def main():
                                    override_tol=args.tol, use_grid_correction=use_K)
         r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
                    mask, False, fn, args.cg_maxiter, "soft+precond", args.em_iters,
-                   use_gridding_correction=em_K_solver if use_K else False)
+                   use_gridding_correction=em_K_solver if use_K else False,
+                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid)
         r["cg_residuals"] = [list(x) for x in res]
         results["soft+precond"] = r
 
