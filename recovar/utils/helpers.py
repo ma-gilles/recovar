@@ -685,3 +685,50 @@ class DuplicateFilter:
         rv = record.msg not in self.msgs
         self.msgs.add(record.msg)
         return rv
+
+
+# ── RELION-exact Euler angle conversion (from RELION src/euler.cpp) ──────
+
+
+def relion_euler_to_matrix(rot_deg, tilt_deg, psi_deg):
+    """RELION's exact Euler angles to rotation matrix (from src/euler.cpp)."""
+    import numpy as np
+    rot, tilt, psi = np.radians(rot_deg), np.radians(tilt_deg), np.radians(psi_deg)
+    ca, sa = np.cos(rot), np.sin(rot)
+    cb, sb = np.cos(tilt), np.sin(tilt)
+    cg, sg = np.cos(psi), np.sin(psi)
+    return np.array([
+        [ca * cb * cg - sa * sg, ca * cb * sg + sa * cg, -ca * sb],
+        [-sa * cb * cg - ca * sg, -sa * cb * sg + ca * cg, sa * sb],
+        [sb * cg, sb * sg, cb],
+    ])
+
+
+def relion_matrix_to_euler(A):
+    """RELION's exact rotation matrix to Euler angles (from src/euler.cpp)."""
+    import numpy as np
+    abs_sb = np.sqrt(A[0, 2] ** 2 + A[1, 2] ** 2)
+    if abs_sb > 1e-6:
+        psi = np.degrees(np.arctan2(A[2, 1], A[2, 0]))
+        rot = np.degrees(np.arctan2(A[1, 2], -A[0, 2]))
+        if np.abs(np.sin(np.radians(rot))) > 1e-6:
+            tilt = np.degrees(np.arctan2(A[1, 2] / np.sin(np.radians(rot)), A[2, 2]))
+        else:
+            tilt = np.degrees(np.arctan2(-A[0, 2] / np.cos(np.radians(rot)), A[2, 2]))
+    else:
+        rot = 0.0
+        tilt = np.degrees(np.arctan2(abs_sb, A[2, 2]))
+        psi = np.degrees(np.arctan2(A[0, 1], A[0, 0]))
+    return np.array([rot, tilt, psi])
+
+
+def relion_volume_to_recovar(vol_relion):
+    """Convert RELION-convention volume to recovar convention: negate + transpose(2,1,0)."""
+    import numpy as np
+    return -np.transpose(vol_relion, (2, 1, 0))
+
+
+def recovar_volume_to_relion(vol_recovar):
+    """Convert recovar-convention volume to RELION convention: negate + transpose(2,1,0)."""
+    import numpy as np
+    return -np.transpose(vol_recovar, (2, 1, 0))
