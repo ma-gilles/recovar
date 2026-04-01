@@ -187,6 +187,7 @@ def _run_outliers_pipeline(
     dataset generation and reuse the existing one.
     """
     dataset_dir = output_dir / "test_dataset"
+    env = gpu_subprocess_env()
 
     if reuse_dataset and _dataset_exists_spa(output_dir, grid_size):
         pass  # skip dataset generation
@@ -223,7 +224,6 @@ def _run_outliers_pipeline(
             make_cmd += ["--volume-input", str(volumes_prefix)]
         if extra_args:
             make_cmd.extend(shlex.split(extra_args))
-        env = gpu_subprocess_env()
         run_tracked_subprocess(make_cmd, check=True, env=env)
 
     # -- compute GT union mask from synthetic volumes ------------------------
@@ -270,7 +270,7 @@ def _run_outliers_pipeline(
     ]
     if accept_cpu:
         pipe_cmd.append("--accept-cpu")
-    run_tracked_subprocess(pipe_cmd, check=True, env=gpu_subprocess_env())
+    run_tracked_subprocess(pipe_cmd, check=True, env=env)
 
     return pipeline_out
 
@@ -607,6 +607,8 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
     dataset_dir = output_dir / "test_dataset"
     reuse = _dataset_exists_et(output_dir)
 
+    env = gpu_subprocess_env()
+
     if not reuse:
         dataset_dir.mkdir(parents=True, exist_ok=True)
 
@@ -643,7 +645,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         ]
         if volumes_prefix is not None:
             make_cmd += ["--volume-input", str(volumes_prefix)]
-        run_tracked_subprocess(make_cmd, check=True, env=gpu_subprocess_env())
+        run_tracked_subprocess(make_cmd, check=True, env=env)
 
     # Compute GT union mask from synthetic volumes
     from recovar.simulation import synthetic_dataset
@@ -692,7 +694,7 @@ def test_outliers_pipeline_cryo_et_regression_against_baseline(tmp_path):
         "--use-junk-detection",
         "--save-pipeline-indices",
     ]
-    run_tracked_subprocess(pipe_cmd, check=True, env=gpu_subprocess_env())
+    run_tracked_subprocess(pipe_cmd, check=True, env=env)
     perf_stages = {"pipeline_with_outliers": stage_perf(snap_before, perf_snapshot())}
 
     with open(sim_info_path, "rb") as f:

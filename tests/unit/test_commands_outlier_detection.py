@@ -9,6 +9,7 @@ pytest.importorskip("jax")
 
 from recovar.commands import outlier_detection as outlier_cmd
 from recovar.data_io._index_utils import TiltSeriesOriginalIndexMap
+from recovar import utils as recovar_utils
 
 
 pytestmark = pytest.mark.unit
@@ -448,3 +449,81 @@ def test_create_outlier_visualizations_tilt_series_uses_image_length_contrast_ax
     stats_text = stats_path.read_text()
     assert "Outlier contrast - Mean: 0.250" in stats_text
     assert "Inlier contrast - Mean: 0.800" in stats_text
+
+
+def test_outlier_detection_main_uses_lower_junk_cap_for_tilt_series(monkeypatch, tmp_path):
+    outdir = tmp_path / "outlier_output_tilt_junk"
+    args = SimpleNamespace(
+        pipeline_output_dir=str(tmp_path / "pipeline_out"),
+        zdim_key=4,
+        no_z_regularization=False,
+        output_dir=str(outdir),
+        save_pipeline_indices=False,
+        output_format="both",
+        low_contrast_threshold=0.1,
+        high_contrast_threshold=3.5,
+        max_contrast=4.0,
+        particle_bad_fraction_threshold=0.7,
+        micrograph_bad_fraction_threshold=0.7,
+        use_junk_detection=True,
+        junk_threshold=0.5,
+        particles_per_cluster=None,
+    )
+
+    class _Parser:
+        def parse_args(self):
+            return args
+
+    monkeypatch.setattr(outlier_cmd, "add_args", lambda _parser: _Parser())
+    monkeypatch.setattr(recovar_utils, "get_gpu_memory_total", lambda: 80.0)
+    monkeypatch.setattr(recovar_utils, "get_image_batch_size", lambda _grid, _gpu_mem: 128)
+
+    dataset = SimpleNamespace(grid_size=128, tilt_series_flag=True)
+    payload = {
+        "latent_coords": {4: np.zeros((3, 2), dtype=np.float32)},
+        "input_args": SimpleNamespace(tilt_series=True, particles="particles.star", shared_contrast=False),
+        "particles_halfsets": [np.array([0, 1], dtype=np.int32), np.array([2], dtype=np.int32)],
+        "halfsets": [np.array([0, 1, 2], dtype=np.int32), np.array([3, 4, 5], dtype=np.int32)],
+        "contrasts": None,
+        "dataset": dataset,
+    }
+    monkeypatch.setattr(outlier_cmd.output, "PipelineOutput", lambda _p: _FakePipelineOutput(payload))
+
+    def fake_plot(_zs, _orig_indices, folder, **_kw):
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "inliers_consensus.pkl"), "wb") as f:
+            pickle.dump(np.array([1], dtype=np.int32), f)
+        with open(os.path.join(folder, "outliers_consensus.pkl"), "wb") as f:
+            pickle.dump(np.array([0, 2], dtype=np.int32), f)
+
+    monkeypatch.setattr(outlier_cmd, "plot_anomaly_detection_results", fake_plot)
+    monkeypatch.setattr(outlier_cmd, "create_particle_outlier_visualization", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(outlier_cmd, "create_overlap_matrix_visualization", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(outlier_cmd, "create_outlier_visualizations", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        outlier_cmd,
+        "map_particle_original_indexing_to_images_original_indexing",
+        lambda particle_indices, _image_subset, _starfile: np.asarray(particle_indices, dtype=np.int32),
+    )
+
+    from recovar.commands import junk_particle_detection as junk_cmd
+
+    captured = {}
+
+    def fake_junk_particle_detection(*, output_folder, zdim, max_junk_fraction, **kwargs):
+        captured["zdim"] = zdim
+        captured["max_junk_fraction"] = max_junk_fraction
+        captured["kwargs"] = kwargs
+        data_dir = os.path.join(output_folder, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        with open(os.path.join(data_dir, f"junk_indices_{zdim}.pkl"), "wb") as f:
+            pickle.dump(np.array([2], dtype=np.int32), f)
+        with open(os.path.join(data_dir, f"good_indices_{zdim}.pkl"), "wb") as f:
+            pickle.dump(np.array([0, 1], dtype=np.int32), f)
+
+    monkeypatch.setattr(junk_cmd, "junk_particle_detection", fake_junk_particle_detection)
+
+    outlier_cmd.main()
+
+    assert captured["zdim"] == 4
+    assert captured["max_junk_fraction"] == pytest.approx(0.55)
