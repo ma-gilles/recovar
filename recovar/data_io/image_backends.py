@@ -154,7 +154,7 @@ class ParticleImageDataset:
             images = images * self.image_mask
         import recovar.core.padding as pad
 
-        images = pad.padded_dft(images * self.data_multiplier, self.D, self.padding)
+        images = pad.padded_dft(images * self.mult, self.D, self.padding)
         return images.astype(self.dtype, copy=False)
 
     def process_images_half(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
