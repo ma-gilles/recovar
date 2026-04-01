@@ -10,7 +10,6 @@ Methods:
   3. hard+precond:   same + circulant preconditioner
   4. soft:           full grid, K + μα² penalty
   5. soft+precond:   same + block preconditioner
-  6. prox:           ADMM with per-voxel data solve + mask projection
 
 Core operator (all CG methods):
   K · iFFT[(A + Λ) · FFT[K · V]]
@@ -108,8 +107,8 @@ def _A_mul_fourier(W_h, lhs_tri, q, unpack_fn):
     return out
 
 
-def _AL_solve_fourier(W_h, lhs_tri, reg_diag, q, unpack_fn, lhs_scale=1.0, extra_diag=0.0):
-    """(scale*A(ξ) + Λ(ξ) + extra*I)^{-1} * W(ξ), chunked."""
+def _AL_solve_fourier(W_h, lhs_tri, reg_diag, q, unpack_fn, lhs_scale=1.0):
+    """(scale*A(ξ) + Λ(ξ))^{-1} * W(ξ), chunked."""
     hv = W_h.shape[0]; is_tri = lhs_tri.ndim == 2 and lhs_tri.shape[1] != q
     parts = []
     for i0 in range(0, hv, _CHUNK):
@@ -117,7 +116,7 @@ def _AL_solve_fourier(W_h, lhs_tri, reg_diag, q, unpack_fn, lhs_scale=1.0, extra
         L = unpack_fn(lhs_tri[i0:i1], q) if is_tri else lhs_tri[i0:i1]
         if lhs_scale != 1.0:
             L = lhs_scale * L
-        D = L.at[:, jnp.arange(q), jnp.arange(q)].add(reg_diag[i0:i1] + extra_diag)
+        D = L.at[:, jnp.arange(q), jnp.arange(q)].add(reg_diag[i0:i1])
         parts.append(jnp.linalg.solve(D, W_h[i0:i1, :, None])[..., 0])
     return jnp.concatenate(parts, axis=0)
 
@@ -486,101 +485,6 @@ def make_soft_solver(mu=100, collar=5, precondition=False, use_float64=False,
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# Proximal ADMM solver (per-voxel data solve + mask projection)
-# See docs/math/masked_mstep.md § Proximal ADMM
-# ═══════════════════════════════════════════════════════════════════════
-
-def solve_prox(lhs_tri, rhs_h, reg_diag, mask, vs, q, G,
-               rho, maxiter, tol, unpack_fn, W0_real, use_float64=False):
-    """ADMM: min_V J_data(V) s.t. PV = V (hard mask constraint).
-
-    Splits into V (unconstrained) and W (on mask), coupled by dual U.
-    V-step uses circulant approximation K ≈ k_eff for a cheap per-voxel solve.
-    W-step is exact mask projection.
-
-    See docs/math/masked_mstep.md § Proximal ADMM.
-    """
-    vol = int(np.prod(vs))
-    P = jnp.asarray(mask > 0.5, dtype=jnp.float32).reshape(vs)
-    k_eff_sq = float(jnp.sum(G ** 2)) / vol
-    k_eff = float(jnp.sqrt(k_eff_sq))
-
-    dt = jnp.float64 if use_float64 else jnp.float32
-    ct = jnp.complex128 if use_float64 else jnp.complex64
-    if use_float64:
-        lhs_tri = lhs_tri.astype(jnp.complex128 if jnp.iscomplexobj(lhs_tri) else jnp.float64)
-        reg_diag = reg_diag.astype(jnp.float64)
-        rhs_h = rhs_h.astype(jnp.complex128)
-        G = G.astype(jnp.float64)
-        P = P.astype(jnp.float64)
-
-    logger.info("prox: k_eff=%.4f k_eff²=%.4f ρ=%g maxiter=%d tol=%g",
-                k_eff, k_eff_sq, rho, maxiter, tol)
-
-    # Initialize W from naive: (A+Λ)^{-1}d → K^{-1} → mask
-    if W0_real is not None:
-        W = jnp.asarray(W0_real, dtype=dt).reshape(q, *vs)
-    else:
-        W0_h = _AL_solve_fourier(rhs_h, lhs_tri, reg_diag, q, unpack_fn)
-        W0_r = _batched_irfft(W0_h, vs, q) / jnp.maximum(G[None], 0.01)
-        W = (P[None] * W0_r).astype(dt)
-
-    U = jnp.zeros((q, *vs), dtype=dt)
-
-    residuals = []
-    t0 = time.time()
-    for it in range(maxiter):
-        # V-step: (k_eff²(A+Λ) + ρI)^{-1} (k_eff d + ρ FFT[W - U])
-        Z = W - U
-        Z_h = _batched_rfft(Z, vs)
-        rhs_aug = (k_eff * rhs_h + rho * Z_h).astype(ct)
-        prox_reg = k_eff_sq * reg_diag if G is not None else reg_diag
-        V_h = _AL_solve_fourier(rhs_aug, lhs_tri, prox_reg, q, unpack_fn,
-                                lhs_scale=k_eff_sq, extra_diag=rho)
-        V = _batched_irfft(V_h, vs, q).astype(dt)
-
-        # W-step: P(V + U)
-        W_new = P[None] * (V + U)
-
-        # Residuals
-        primal_r = float(jnp.sqrt(jnp.sum((V - W_new) ** 2)))
-        dual_r = rho * float(jnp.sqrt(jnp.sum((W_new - W) ** 2)))
-
-        # U-step
-        U = U + V - W_new
-        W = W_new
-
-        v_norm = max(float(jnp.sqrt(jnp.sum(V ** 2))), 1e-30)
-        rel = primal_r / v_norm
-        residuals.append(rel)
-
-        if (it + 1) % 5 == 0 or rel < tol:
-            logger.info("prox %d: primal=%.2e dual=%.2e rel=%.2e t=%.1fs",
-                        it + 1, primal_r, dual_r, rel, time.time() - t0)
-        if rel < tol:
-            break
-
-    return W.astype(jnp.float32), {"residuals": residuals, "n_iters": len(residuals),
-                                    "total_time": time.time() - t0}
-
-
-def make_prox_solver(rho=0.01, use_float64=False, override_tol=None,
-                     use_grid_correction=True):
-    all_res = []
-    def fn(lhs, rhs, reg, mask, vol_shape, W0_real=None,
-           maxiter=20, tol=1e-4, unpack_fn=None):
-        _tol = override_tol if override_tol is not None else tol
-        q = rhs.shape[1]
-        G = compute_G(vol_shape) if use_grid_correction else jnp.ones(vol_shape, dtype=jnp.float32)
-        W, info = solve_prox(lhs, rhs, reg, mask, vol_shape, q,
-                             G, rho, maxiter, _tol, unpack_fn, W0_real,
-                             use_float64=use_float64)
-        all_res.append(info.get("residuals", []))
-        return W, info
-    return fn, all_res
-
-
-# ═══════════════════════════════════════════════════════════════════════
 # Prior, EM runner, main
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -642,8 +546,6 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-grid-correction", action="store_true",
         help="Set G=1 (identity) for all methods — isolate effect of gridding kernel K")
-    parser.add_argument("--rho", type=float, default=0.01,
-        help="ADMM penalty parameter for prox method")
     parser.add_argument("--methods", type=str,
         default="naive,hard,hard_precond,soft,soft_precond")
     args = parser.parse_args()
@@ -751,15 +653,6 @@ def main():
                    use_gridding_correction=em_K_solver if use_K else False)
         r["cg_residuals"] = [list(x) for x in res]
         results["soft+precond"] = r
-
-    if "prox" in methods:
-        fn, res = make_prox_solver(rho=args.rho, use_float64=args.float64,
-                                   override_tol=args.tol, use_grid_correction=use_K)
-        r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
-                   mask, False, fn, args.cg_maxiter, "prox", args.em_iters,
-                   use_gridding_correction=em_K_solver if use_K else False)
-        r["cg_residuals"] = [list(x) for x in res]
-        results["prox"] = r
 
     # ── Summary ──
     print(f"\n{'='*70}")

@@ -281,82 +281,6 @@ block solve that captures the spatially-varying penalty.
 
 ## Proximal ADMM (data solve + mask projection)
 
-The hard mask formulation requires a Krylov solver because `K` and `E`
-make the operator non-diagonal in any single domain.  The proximal ADMM
-avoids this by splitting the data fidelity from the mask constraint and
-using a **circulant approximation** `K \approx k_{\mathrm{eff}} I` to
-make the data sub-problem a cheap per-voxel Fourier solve.
-
-### Problem
-
-$$
-\min_V \; J_0(V) \quad \text{s.t.} \quad PV = V,
-$$
-
-where `P` is the hard mask projector and `J_0(V)` is the PPCA quadratic
-with gridding kernel `K`.
-
-### ADMM splitting
-
-Introduce `W`:
-
-$$
-\min_{V, W} \; J_0(V) + I_{\{PW=W\}}(W) \quad \text{s.t.} \quad V = W.
-$$
-
-Augmented Lagrangian with penalty `\rho > 0` and dual `U`:
-
-$$
-L_\rho(V, W, U) = J_0(V) + I_{\{PW=W\}}(W) + \frac{\rho}{2}\|V - W + U\|^2.
-$$
-
-### Updates
-
-**V-step** (data solve with circulant `K \approx k_{\mathrm{eff}}`):
-
-$$
-V^{k+1}_F(\xi) = \bigl(k_{\mathrm{eff}}^2 \bigl(A(\xi) + \Lambda(\xi)\bigr) + \rho I_q\bigr)^{-1}
-\bigl(k_{\mathrm{eff}} \, d(\xi) + \rho \, (W^k - U^k)_F(\xi)\bigr).
-$$
-
-This is a `q \times q` solve per Fourier voxel — same cost as the naive per-voxel Wiener solve.
-
-**W-step** (mask projection):
-
-$$
-W^{k+1} = P\bigl(V^{k+1} + U^k\bigr).
-$$
-
-**Dual update**:
-
-$$
-U^{k+1} = U^k + V^{k+1} - W^{k+1}.
-$$
-
-### Convergence residuals
-
-- Primal: `\|V^{k+1} - W^{k+1}\|` (constraint violation)
-- Dual: `\rho \|W^{k+1} - W^k\|` (stationarity)
-
-### Connection to naive
-
-With `\rho = 0` and one iteration starting from `U=0`:
-
-$$
-V^1_F = (k_{\mathrm{eff}}^2 A + \Lambda)^{-1} k_{\mathrm{eff}} \, d, \qquad
-W^1 = P V^1.
-$$
-
-Compare with naive: `\hat V = P K^{-1} (A + \Lambda)^{-1} d`.
-Naive uses exact `K^{-1}` after the solve; ADMM uses circulant `K` inside.
-With `\rho > 0` and multiple iterations, ADMM converges to the exact
-constrained solution with `K` properly in the objective.
-
-### Penalty parameter `\rho`
-
-`\rho` should be comparable to the typical eigenvalue of the Hessian
-`k_{\mathrm{eff}}^2 A + \Lambda`.  Reasonable: `\rho \sim \mathrm{median}(A + \Lambda)`.
-
 ## Code references
 
 | Formulation | Implementation |
@@ -366,6 +290,5 @@ constrained solution with `K` properly in the objective.
 | Hard mask PCG | `recovar/reconstruction/pcg_mean.py:pcg_mstep` |
 | Hard mask with K | `bench_mstep.py:solve_hard` |
 | Soft mask with K | `bench_mstep.py:solve_soft` |
-| Proximal ADMM | `bench_mstep.py:solve_prox` |
 | Gridding kernel K | `bench_mstep.py:compute_G` |
 | Alpha weight M | `bench_mstep.py:build_alpha` |
