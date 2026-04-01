@@ -60,6 +60,18 @@ def main():
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
     parser.add_argument("--rotation_block_size", type=int, default=5000, help="Rotations per block")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for half-set split")
+    parser.add_argument(
+        "--relion_half_sets",
+        default=None,
+        help="Path to a RELION data STAR file with rlnRandomSubset column. "
+             "If given, use RELION's half-set assignments instead of random seed.",
+    )
+    parser.add_argument(
+        "--relion_current_sizes",
+        default=None,
+        help="Comma-separated list of per-iteration current_sizes from RELION "
+             "(oracle mode). Example: '0,56,30,50,70,98,98,92,88,90'",
+    )
     args = parser.parse_args()
 
     # Verify GPU
@@ -84,11 +96,48 @@ def main():
 
     # ---- Create half-sets ----
     n_images = ds.n_units
-    indices = np.arange(n_images)
-    rng = np.random.RandomState(args.seed)
-    rng.shuffle(indices)
-    half1_idx = np.sort(indices[:n_images // 2])
-    half2_idx = np.sort(indices[n_images // 2:])
+
+    if args.relion_half_sets is not None:
+        # Use RELION's half-set split from rlnRandomSubset
+        logger.info("Loading RELION half-set assignments from %s", args.relion_half_sets)
+        import re
+        import starfile as _starfile
+
+        relion_data = _starfile.read(args.relion_half_sets)
+        relion_particles = relion_data['particles']
+        relion_subsets = np.array(relion_particles['rlnRandomSubset'])
+        relion_names = list(relion_particles['rlnImageName'])
+
+        # Build mapping: particle stack index -> subset
+        def _image_name_to_stack_idx(name):
+            m = re.match(r'(\d+)@', name)
+            return int(m.group(1)) if m else -1
+
+        relion_idx_to_subset = {}
+        for i in range(len(relion_names)):
+            stack_idx = _image_name_to_stack_idx(relion_names[i])
+            relion_idx_to_subset[stack_idx] = relion_subsets[i]
+
+        # Our dataset loads in stack order 1,2,3,...
+        # Map to RELION's subset assignments
+        our_star = _starfile.read(os.path.join(args.data_dir, "particles.star"))
+        our_particles = our_star['particles'] if isinstance(our_star, dict) else our_star
+        our_names = list(our_particles['rlnImageName'])
+        our_subsets = np.array([
+            relion_idx_to_subset[_image_name_to_stack_idx(name)]
+            for name in our_names
+        ])
+
+        half1_idx = np.where(our_subsets == 1)[0]
+        half2_idx = np.where(our_subsets == 2)[0]
+        logger.info("Using RELION half-set split: %d (subset=1) + %d (subset=2)",
+                    len(half1_idx), len(half2_idx))
+    else:
+        indices = np.arange(n_images)
+        rng = np.random.RandomState(args.seed)
+        rng.shuffle(indices)
+        half1_idx = np.sort(indices[:n_images // 2])
+        half2_idx = np.sort(indices[n_images // 2:])
 
     ds_half1 = ds.subset(half1_idx)
     ds_half2 = ds.subset(half2_idx)
@@ -147,6 +196,12 @@ def main():
                 args.max_iter, args.adaptive_oversampling)
     logger.info("=" * 70)
 
+    # Parse oracle current_sizes if provided
+    oracle_current_sizes = None
+    if args.relion_current_sizes is not None:
+        oracle_current_sizes = [int(x) for x in args.relion_current_sizes.split(",")]
+        logger.info("Oracle mode: using RELION current_sizes=%s", oracle_current_sizes)
+
     t_start = time.time()
 
     result = refine_single_volume(
@@ -160,6 +215,7 @@ def main():
         max_iter=args.max_iter,
         image_batch_size=args.image_batch_size,
         rotation_block_size=args.rotation_block_size,
+        relion_current_sizes=oracle_current_sizes,
         init_current_size=init_current_size,
         fsc_threshold=1.0 / 7.0,
         adaptive_oversampling=args.adaptive_oversampling,

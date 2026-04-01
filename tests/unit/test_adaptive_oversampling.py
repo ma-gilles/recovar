@@ -779,3 +779,87 @@ class TestEStepWeightsWindowed:
             ha_1, ha_2,
             err_msg="Hard assignments differ between batch sizes",
         )
+
+
+# ===========================================================================
+# Test 7: Union cap in compute_pass2_stats
+# ===========================================================================
+
+
+class TestUnionCap:
+    """Verify that compute_pass2_stats respects max_union_pixels cap."""
+
+    def test_returns_none_when_union_exceeds_cap(self):
+        """When the union of significant rotations exceeds max_union_pixels,
+        compute_pass2_stats should return (None, None, None, None)."""
+        from recovar.em.dense_single_volume.adaptive import compute_pass2_stats
+        from recovar.em.sampling import get_rotation_grid
+
+        # Use a proper HEALPix grid so the pixel/in-plane decomposition works
+        nside_level = 1  # 48 pixels at level 1
+        rotations = get_rotation_grid(nside_level, matrices=True).astype(np.float32)
+        n_rot = rotations.shape[0]
+
+        n_images = 4
+        ds = MockDataset(n_images=n_images, seed=42)
+        volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
+        mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
+        noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+        translations = jnp.array([[0.0, 0.0]], dtype=jnp.float32)
+
+        # Mask that marks ALL rotations as significant (union covers all pixels)
+        sig_rot_mask = np.ones(n_rot, dtype=bool)
+
+        Ft_y, Ft_ctf, ha, oversampled = compute_pass2_stats(
+            ds, volume, mean_variance, noise_variance,
+            np.asarray(rotations), translations,
+            sig_rot_mask,
+            nside_level=nside_level,
+            disc_type="linear_interp",
+            oversampling_order=1,
+            current_size=None,
+            image_batch_size=n_images,
+            max_union_pixels=5,  # 48 pixels > 5, should trigger fallback
+        )
+
+        assert Ft_y is None, "Expected None when union exceeds cap"
+        assert Ft_ctf is None, "Expected None when union exceeds cap"
+        assert ha is None, "Expected None when union exceeds cap"
+        assert oversampled is None, "Expected None when union exceeds cap"
+
+    def test_proceeds_when_within_cap(self):
+        """When the union is within the cap, pass 2 should proceed normally."""
+        from recovar.em.dense_single_volume.adaptive import compute_pass2_stats
+        from recovar.em.sampling import get_rotation_grid
+
+        nside_level = 1
+        rotations = get_rotation_grid(nside_level, matrices=True).astype(np.float32)
+        n_rot = rotations.shape[0]
+
+        n_images = 4
+        ds = MockDataset(n_images=n_images, seed=42)
+        volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
+        mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
+        noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+        translations = jnp.array([[0.0, 0.0]], dtype=jnp.float32)
+
+        # Only mark a few rotations as significant
+        sig_rot_mask = np.zeros(n_rot, dtype=bool)
+        sig_rot_mask[:3] = True  # just 3 rotations
+
+        Ft_y, Ft_ctf, ha, oversampled = compute_pass2_stats(
+            ds, volume, mean_variance, noise_variance,
+            np.asarray(rotations), translations,
+            sig_rot_mask,
+            nside_level=nside_level,
+            disc_type="linear_interp",
+            oversampling_order=1,
+            current_size=None,
+            image_batch_size=n_images,
+            max_union_pixels=1000,  # high cap, should not trigger
+        )
+
+        assert Ft_y is not None, "Expected non-None when within cap"
+        assert Ft_ctf is not None, "Expected non-None when within cap"
+        assert ha is not None, "Expected non-None when within cap"
+        assert oversampled is not None, "Expected non-None when within cap"
