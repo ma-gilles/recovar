@@ -63,9 +63,8 @@ $$
 \hat \alpha
 =
 \arg\min_\alpha
-\frac12 \, {K E\alpha}^{\,*} A \, {K E\alpha}
-- \operatorname{Re}\!\left(b^{*} {K E\alpha}\right)
-+ \frac12 \, {E\alpha}^{\,*} \Lambda \, {E\alpha},
+\frac12 \, {K E\alpha}^{\,*} (A + \Lambda) \, {K E\alpha}
+- \operatorname{Re}\!\left(b^{*} {K E\alpha}\right),
 $$
 
 $$
@@ -78,7 +77,7 @@ Preconditioner:
 $$
 P_{\mathrm{hard}}^{-1}(\xi)
 =
-\bigl(k_{\mathrm{eff}}^2 A(\xi) + \Lambda(\xi)\bigr)^{-1},
+\bigl(k_{\mathrm{eff}}^2 (A(\xi) + \Lambda(\xi))\bigr)^{-1},
 $$
 applied on the full grid and then restricted back to the support.
 
@@ -88,9 +87,8 @@ $$
 \hat v_{\mathrm{soft}}
 =
 \arg\min_v
-\frac12 \, {Kv}^{\,*} A \, {Kv}
+\frac12 \, {Kv}^{\,*} (A + \Lambda) \, {Kv}
 - \operatorname{Re}\!\left(b^{*} {Kv}\right)
-+ \frac12 \, v^{*} \Lambda \, v
 + \frac{\mu}{2}\,\|Mv\|_2^2.
 $$
 
@@ -100,7 +98,7 @@ Preconditioner:
 $$
 P_{\mathrm{soft}}^{-1}(\xi)
 =
-\bigl(k_{\mathrm{eff}}^2 A(\xi) + \Lambda(\xi) + \mu \, \bar m^2\bigr)^{-1}.
+\bigl(k_{\mathrm{eff}}^2 (A(\xi) + \Lambda(\xi)) + \mu \, \bar m^2\bigr)^{-1}.
 $$
 
 # PPCA formulations with kernel correction, prior, and masking
@@ -124,8 +122,14 @@ J_0(V)
 =
 \frac12 \sum_{\xi} (KV)_F(\xi)^* A(\xi) (KV)_F(\xi)
 - \operatorname{Re}\sum_{\xi} d(\xi)^* (KV)_F(\xi)
-+ \frac12 \sum_{\xi} V_F(\xi)^* \Lambda(\xi) V_F(\xi).
++ \frac12 \sum_{\xi} (KV)_F(\xi)^* \Lambda(\xi) (KV)_F(\xi).
 $$
+
+**Both data and prior act on `KV`**, not `V`.  This ensures that the
+naive solution `V = K^{-1}(A+\Lambda)^{-1}d` is the exact unmasked
+minimiser.  An earlier version applied the prior to `V` directly
+(`V_F^*\Lambda V_F`), which broke this equivalence and caused masked
+solvers to underperform naive by ~10% RelVar.
 
 ## Naive post-processing
 
@@ -186,9 +190,8 @@ $$
 =
 \arg\min_Z
 \left[
-\frac12 \sum_{\xi} (KEZ)_F(\xi)^* A(\xi) (KEZ)_F(\xi)
+\frac12 \sum_{\xi} (KEZ)_F(\xi)^* \bigl(A(\xi)+\Lambda(\xi)\bigr) (KEZ)_F(\xi)
 - \operatorname{Re}\sum_{\xi} d(\xi)^* (KEZ)_F(\xi)
-+ \frac12 \sum_{\xi} (EZ)_F(\xi)^* \Lambda(\xi) (EZ)_F(\xi)
 \right].
 $$
 
@@ -198,7 +201,7 @@ Preconditioner:
 $$
 P_{\mathrm{hard}}^{-1}(\xi)
 =
-\bigl(k_{\mathrm{eff}}^2 A(\xi) + \Lambda(\xi)\bigr)^{-1},
+\bigl(k_{\mathrm{eff}}^2 \bigl(A(\xi) + \Lambda(\xi)\bigr)\bigr)^{-1},
 $$
 applied blockwise in the Fourier domain and then pulled back to the support.
 
@@ -222,21 +225,137 @@ $$
 =
 \arg\min_V
 \left[
-\frac12 \sum_{\xi} (KV)_F(\xi)^* A(\xi) (KV)_F(\xi)
+\frac12 \sum_{\xi} (KV)_F(\xi)^* \bigl(A(\xi)+\Lambda(\xi)\bigr) (KV)_F(\xi)
 - \operatorname{Re}\sum_{\xi} d(\xi)^* (KV)_F(\xi)
-+ \frac12 \sum_{\xi} V_F(\xi)^* \Lambda(\xi) V_F(\xi)
 + \frac{\mu}{2}\|MV\|_F^2
 \right].
 $$
 
 Solver: PCG in the full variable `V`.
 
-Preconditioner:
+### Fourier-diagonal preconditioner (baseline)
+
 $$
-P_{\mathrm{soft}}^{-1}(\xi)
+P_{\mathrm{soft,diag}}^{-1}(\xi)
 =
-\bigl(k_{\mathrm{eff}}^2 A(\xi) + \Lambda(\xi) + \mu \, \bar m^2 I_q\bigr)^{-1}.
+\bigl(k_{\mathrm{eff}}^2 \bigl(A(\xi) + \Lambda(\xi)\bigr) + \mu \, \bar m^2 I_q\bigr)^{-1}.
 $$
+
+This is geometry-blind: it does not see the mask structure. The hard
+part of the operator (interior) is already well-conditioned, but the
+exterior with its spatially-varying $\mu\alpha^2$ penalty poisons the
+spectrum of the Fourier-diagonal approximation.
+
+### Block preconditioner (geometry-aware)
+
+Split the grid into interior $I = \{x : \alpha(x) < 1 - \varepsilon\}$
+(interior + collar) and outside $O = I^c$.  Use the additive block
+preconditioner
+
+$$
+P^{-1} = E_I\, P_I^{-1}\, E_I^* \;+\; E_O\, D_O^{-1}\, E_O^*
+$$
+
+where:
+
+- $P_I^{-1}$ is the circulant hard-mask preconditioner on the enlarged
+  support $I$:
+  $$
+  P_I^{-1}(R) = E_I^*\, \mathcal{F}^{-1}\!\bigl[k_I^2 (A + \Lambda)^{-1}
+    \mathcal{F}(E_I R)\bigr],
+  \qquad k_I^2 = |I|^{-1}\sum_{x\in I} K(x)^2.
+  $$
+
+- $D_O^{-1}$ is a pointwise $q\times q$ block solve on the outside:
+  $$
+  D_O(x) = K(x)^2\,(\bar{A} + \bar\Lambda) + \mu\,\alpha(x)^2\, I_q,
+  $$
+  where $\bar{A} = N^{-1}\sum_\xi w(\xi) A(\xi)$ and
+  $\bar\Lambda = N^{-1}\sum_\xi w(\xi) \Lambda(\xi)$ are the
+  rfft-weighted Fourier means.
+
+This preconditioner is fixed, SPD, and reflects the mask geometry:
+the interior is handled by the same circulant approximation that works
+well for the hard problem, while the exterior uses a cheap pointwise
+block solve that captures the spatially-varying penalty.
+
+## Proximal ADMM (data solve + mask projection)
+
+The hard mask formulation requires a Krylov solver because `K` and `E`
+make the operator non-diagonal in any single domain.  The proximal ADMM
+avoids this by splitting the data fidelity from the mask constraint and
+using a **circulant approximation** `K \approx k_{\mathrm{eff}} I` to
+make the data sub-problem a cheap per-voxel Fourier solve.
+
+### Problem
+
+$$
+\min_V \; J_0(V) \quad \text{s.t.} \quad PV = V,
+$$
+
+where `P` is the hard mask projector and `J_0(V)` is the PPCA quadratic
+with gridding kernel `K`.
+
+### ADMM splitting
+
+Introduce `W`:
+
+$$
+\min_{V, W} \; J_0(V) + I_{\{PW=W\}}(W) \quad \text{s.t.} \quad V = W.
+$$
+
+Augmented Lagrangian with penalty `\rho > 0` and dual `U`:
+
+$$
+L_\rho(V, W, U) = J_0(V) + I_{\{PW=W\}}(W) + \frac{\rho}{2}\|V - W + U\|^2.
+$$
+
+### Updates
+
+**V-step** (data solve with circulant `K \approx k_{\mathrm{eff}}`):
+
+$$
+V^{k+1}_F(\xi) = \bigl(k_{\mathrm{eff}}^2 \bigl(A(\xi) + \Lambda(\xi)\bigr) + \rho I_q\bigr)^{-1}
+\bigl(k_{\mathrm{eff}} \, d(\xi) + \rho \, (W^k - U^k)_F(\xi)\bigr).
+$$
+
+This is a `q \times q` solve per Fourier voxel — same cost as the naive per-voxel Wiener solve.
+
+**W-step** (mask projection):
+
+$$
+W^{k+1} = P\bigl(V^{k+1} + U^k\bigr).
+$$
+
+**Dual update**:
+
+$$
+U^{k+1} = U^k + V^{k+1} - W^{k+1}.
+$$
+
+### Convergence residuals
+
+- Primal: `\|V^{k+1} - W^{k+1}\|` (constraint violation)
+- Dual: `\rho \|W^{k+1} - W^k\|` (stationarity)
+
+### Connection to naive
+
+With `\rho = 0` and one iteration starting from `U=0`:
+
+$$
+V^1_F = (k_{\mathrm{eff}}^2 A + \Lambda)^{-1} k_{\mathrm{eff}} \, d, \qquad
+W^1 = P V^1.
+$$
+
+Compare with naive: `\hat V = P K^{-1} (A + \Lambda)^{-1} d`.
+Naive uses exact `K^{-1}` after the solve; ADMM uses circulant `K` inside.
+With `\rho > 0` and multiple iterations, ADMM converges to the exact
+constrained solution with `K` properly in the objective.
+
+### Penalty parameter `\rho`
+
+`\rho` should be comparable to the typical eigenvalue of the Hessian
+`k_{\mathrm{eff}}^2 A + \Lambda`.  Reasonable: `\rho \sim \mathrm{median}(A + \Lambda)`.
 
 ## Code references
 
@@ -247,5 +366,6 @@ $$
 | Hard mask PCG | `recovar/reconstruction/pcg_mean.py:pcg_mstep` |
 | Hard mask with K | `bench_mstep.py:solve_hard` |
 | Soft mask with K | `bench_mstep.py:solve_soft` |
+| Proximal ADMM | `bench_mstep.py:solve_prox` |
 | Gridding kernel K | `bench_mstep.py:compute_G` |
 | Alpha weight M | `bench_mstep.py:build_alpha` |

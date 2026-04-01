@@ -9,10 +9,13 @@ Methods:
   2. hard:           V=EZ, reduced coords, K in operator
   3. hard+precond:   same + circulant preconditioner
   4. soft:           full grid, K + μα² penalty
-  5. soft+precond:   same + Fourier-diagonal preconditioner
+  5. soft+precond:   same + block preconditioner
+  6. prox:           ADMM with per-voxel data solve + mask projection
 
-Matvec (hard):  E^T K iFFT[A FFT[K EZ]] + E^T iFFT[Λ FFT[EZ]]
-Matvec (soft):  K iFFT[A FFT[KV]] + iFFT[Λ FFT[V]] + μ α² V
+Core operator (all CG methods):
+  K · iFFT[(A + Λ) · FFT[K · V]]
+Both data (A) and prior (Λ) act on KV.  This ensures the naive solution
+V = K^{-1}(A+Λ)^{-1}d is the exact unmasked optimum.
 
 Defaults: 128³, q=10, 50k images, 20 EM iters.
 Prior: (1/NPC) * gt.get_fourier_variances(), radially averaged.
@@ -120,21 +123,19 @@ def _AL_solve_fourier(W_h, lhs_tri, reg_diag, q, unpack_fn, lhs_scale=1.0, extra
 
 
 def _apply_fourier_op(V_real, lhs_tri, reg_diag, q, vs, unpack_fn, G=None):
-    """Apply K iFFT[A FFT[K V]] + iFFT[Λ FFT[V]] in real space.
+    """Apply K iFFT[(A+Λ) FFT[K V]] in real space.
 
     V_real: (q, D, D, D).  Returns (q, D, D, D).
-    If G is not None, applies gridding kernel K = G in the data term.
+    When G (gridding kernel K) is provided, BOTH data and prior act on KV:
+      K · iFFT[(A + Λ) · FFT[KV]]
+    Without G: iFFT[(A + Λ) · FFT[V]].
     """
-    # Data term: K iFFT[A FFT[K V]]
     KV = G[None] * V_real if G is not None else V_real
     KV_h = _batched_rfft(KV, vs)
     AKV_h = _A_mul_fourier(KV_h, lhs_tri, q, unpack_fn)
-    AKV = _batched_irfft(AKV_h, vs, q)
-    data = G[None] * AKV if G is not None else AKV
-    # Prior term: iFFT[Λ FFT[V]]
-    V_h = _batched_rfft(V_real, vs)
-    LV = _batched_irfft(reg_diag * V_h, vs, q)
-    return data + LV
+    result_h = AKV_h + reg_diag * KV_h   # (A + Λ) applied to KV
+    result = _batched_irfft(result_h, vs, q)
+    return G[None] * result if G is not None else result
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -291,12 +292,13 @@ def solve_hard(lhs_tri, rhs_h, reg_diag, mask, vs, q,
     d_real = _batched_irfft(rhs_h, vs, q)
     rhs_flat = gather(G[None] * d_real).astype(dt)
 
-    # Preconditioner: E^T iFFT[(k_eff²A + Λ)^{-1} FFT[EZ]]
+    # Preconditioner: E^T iFFT[(k_eff²(A+Λ))^{-1} FFT[EZ]]
     if precondition:
+        prec_reg = k_eff_sq * reg_diag if G is not None else reg_diag
         def precond(Z_flat):
             V = scatter(Z_flat)
             V_h = _batched_rfft(V, vs)
-            S_h = _AL_solve_fourier(V_h, lhs_tri, reg_diag, q, unpack_fn, lhs_scale=k_eff_sq)
+            S_h = _AL_solve_fourier(V_h, lhs_tri, prec_reg, q, unpack_fn, lhs_scale=k_eff_sq)
             return gather(_batched_irfft(S_h, vs, q))
     else:
         precond = None
@@ -323,12 +325,21 @@ def solve_hard(lhs_tri, rhs_h, reg_diag, mask, vs, q,
 def solve_soft(lhs_tri, rhs_h, reg_diag, alpha, vs, q,
                G, mu, maxiter, tol, unpack_fn, precondition, W0_real,
                use_float64=False, krylov_fn=None):
+    """Soft mask: min_V (KV)*A(KV) + V*ΛV + μ||αV||².  CG/MINRES in real space.
+
+    See docs/math/masked_mstep.md § Soft mask.
+
+    Preconditioner (when precondition=True):
+      Additive block preconditioner splitting interior I vs outside O:
+        P^{-1} = E_I P_I^{-1} E_I^T + E_O D_O^{-1} E_O^T
+      where P_I^{-1} is the circulant hard-mask preconditioner on I,
+      and D_O^{-1} is a pointwise q×q block solve on O using the
+      Fourier-averaged A and Λ.
+      See docs/math/masked_mstep.md § Soft mask preconditioner.
+    """
     vol = int(np.prod(vs)); N = vol
     alpha_sq = (alpha ** 2).ravel()
-    k_eff_sq = float(jnp.sum(G ** 2)) / N
-    m_bar_sq = float(jnp.sum(alpha_sq)) / N
-    logger.info("soft: mu=%g k_eff²=%.4f m̄²=%.4f precond=%s",
-                mu, k_eff_sq, m_bar_sq, precondition)
+    eps_mask = 1e-6
 
     dt = jnp.float64 if use_float64 else jnp.float32
     if use_float64:
@@ -338,10 +349,20 @@ def solve_soft(lhs_tri, rhs_h, reg_diag, alpha, vs, q,
         G = G.astype(jnp.float64)
         alpha_sq = alpha_sq.astype(jnp.float64)
 
+    # Interior/outside split
+    alpha_flat = alpha.ravel()
+    I_idx = jnp.where(alpha_flat < 1.0 - eps_mask)[0]
+    O_idx = jnp.where(alpha_flat >= 1.0 - eps_mask)[0]
+    n_I = I_idx.shape[0]; n_O = O_idx.shape[0]
+    G_flat = G.ravel()
+    kI2 = float(jnp.sum(G_flat[I_idx] ** 2)) / max(n_I, 1)
+
+    logger.info("soft: mu=%g n_I=%d (%.1f%%) n_O=%d kI²=%.4f precond=%s",
+                mu, n_I, 100*n_I/vol, n_O, kI2, precondition)
+
     def matvec(V_flat):
         V = V_flat.reshape(q, *vs)
         result = _apply_fourier_op(V, lhs_tri, reg_diag, q, vs, unpack_fn, G)
-        # Add penalty: μ α² V
         result = result + mu * alpha_sq.reshape(vs)[None] * V
         return result.ravel().astype(dt)
 
@@ -349,26 +370,76 @@ def solve_soft(lhs_tri, rhs_h, reg_diag, alpha, vs, q,
     d_real = _batched_irfft(rhs_h, vs, q)
     rhs_flat = (G[None] * d_real).ravel().astype(dt)
 
-    # Preconditioner: (k_eff²A + Λ + μ m̄² I)^{-1} in Fourier
     if precondition:
-        extra = float(mu * m_bar_sq)
-        def precond(V_flat):
-            V = V_flat.reshape(q, *vs)
+        # --- Precompute outside block diagonal D_O(x) ---
+        # Weighted Fourier mean of A and Λ
+        hvs = ftu.get_real_fft_packed_shape(vs); hv = int(np.prod(hvs))
+        rfft_w = 2 * jnp.ones(hvs, dtype=dt)
+        rfft_w = rfft_w.at[:, :, 0].set(1)
+        if vs[0] % 2 == 0:
+            rfft_w = rfft_w.at[:, :, -1].set(1)
+        rfft_w = rfft_w.reshape(-1) / N
+
+        # A_bar: weighted mean of A(ξ) over Fourier voxels → (q, q)
+        is_tri = lhs_tri.ndim == 2 and lhs_tri.shape[1] != q
+        A_bar = jnp.zeros((q, q), dtype=lhs_tri.dtype)
+        for i0 in range(0, hv, _CHUNK):
+            i1 = min(i0 + _CHUNK, hv)
+            L = unpack_fn(lhs_tri[i0:i1], q) if is_tri else lhs_tri[i0:i1]
+            A_bar = A_bar + jnp.einsum("v,vij->ij", rfft_w[i0:i1], L)
+        A_bar = A_bar.real.astype(dt)
+
+        # Λ_bar: weighted mean of diag(Λ) → (q,)
+        L_bar = jnp.sum(rfft_w[:, None] * reg_diag.real, axis=0).astype(dt)
+
+        # D_O(x) = K(x)² (A_bar + diag(Λ_bar)) + μ α(x)² I_q
+        # Prior also gets K² weighting (consistent with K·(A+Λ)·K operator)
+        K_O_sq = G_flat[O_idx] ** 2  # (n_O,)
+        alpha_O_sq = alpha_sq[O_idx]  # (n_O,)
+        # D_O: (n_O, q, q)
+        D_O = (K_O_sq[:, None, None] * (A_bar[None, :, :] + jnp.diag(L_bar)[None, :, :])
+               + mu * alpha_O_sq[:, None, None] * jnp.eye(q, dtype=dt)[None, :, :])
+        # Cholesky factorize
+        D_O_chol = jnp.linalg.cholesky(D_O)
+
+        def apply_D_O_inv(R_O):
+            """(n_O, q) → (n_O, q) via Cholesky solve."""
+            return jax.scipy.linalg.cho_solve((D_O_chol, True), R_O[:, :, None])[:, :, 0]
+
+        # --- Interior hard preconditioner: circulant on I ---
+        prec_reg_I = kI2 * reg_diag if G is not None else reg_diag
+        def apply_P_I_inv(R_I):
+            """(n_I, q) → (n_I, q): scatter → FFT → (kI²(A+Λ))^{-1} → iFFT → gather."""
+            V = jnp.zeros((q, vol), dtype=dt)
+            V = V.at[:, I_idx].set(R_I.T)
+            V = V.reshape(q, *vs)
             V_h = _batched_rfft(V, vs)
-            S_h = _AL_solve_fourier(V_h, lhs_tri, reg_diag, q, unpack_fn,
-                                     lhs_scale=k_eff_sq, extra_diag=extra)
-            return _batched_irfft(S_h, vs, q).ravel().astype(dt)
+            S_h = _AL_solve_fourier(V_h, lhs_tri, prec_reg_I, q, unpack_fn, lhs_scale=kI2)
+            S = _batched_irfft(S_h, vs, q)
+            return S.reshape(q, vol)[:, I_idx].T
+
+        # --- Additive block preconditioner ---
+        def precond(V_flat):
+            """P^{-1} = E_I P_I^{-1} E_I^T + E_O D_O^{-1} E_O^T"""
+            V = V_flat.reshape(q, vol)
+            R_I = V[:, I_idx].T  # (n_I, q)
+            R_O = V[:, O_idx].T  # (n_O, q)
+
+            Z_I = apply_P_I_inv(R_I)   # (n_I, q)
+            Z_O = apply_D_O_inv(R_O)    # (n_O, q)
+
+            out = jnp.zeros((q, vol), dtype=dt)
+            out = out.at[:, I_idx].set(Z_I.T)
+            out = out.at[:, O_idx].set(Z_O.T)
+            return out.ravel()
     else:
         precond = None
 
-    # Initial guess: Wiener → K^{-1} → mask interior
-    interior = (1 - alpha).ravel()
+    # Initial guess: zero for cold start, previous iterate for warmstart
     if W0_real is not None:
-        x0 = (interior.reshape(vs)[None] * jnp.asarray(W0_real, dtype=dt).reshape(q, *vs)).ravel()
+        x0 = jnp.asarray(W0_real, dtype=dt).reshape(q, *vs).ravel()
     else:
-        W0_h = _AL_solve_fourier(rhs_h, lhs_tri, reg_diag, q, unpack_fn)
-        W0_r = _batched_irfft(W0_h, vs, q) / jnp.maximum(G[None], 0.01)
-        x0 = (interior.reshape(vs)[None] * W0_r).ravel().astype(dt)
+        x0 = jnp.zeros(q * vol, dtype=dt)
 
     _solve = krylov_fn or _cg
     V_flat, info = _solve(matvec, rhs_flat, x0, maxiter, tol, precond, "soft")
@@ -380,12 +451,14 @@ def solve_soft(lhs_tri, rhs_h, reg_diag, alpha, vs, q,
 # Solver wrappers (mstep_solver_fn interface for ppca.EM)
 # ═══════════════════════════════════════════════════════════════════════
 
-def make_hard_solver(precondition=False, use_float64=False, krylov_fn=None, override_tol=None):
+def make_hard_solver(precondition=False, use_float64=False, krylov_fn=None,
+                     override_tol=None, use_grid_correction=True):
     all_res = []
     def fn(lhs, rhs, reg, mask, vol_shape, W0_real=None,
            maxiter=20, tol=1e-4, unpack_fn=None):
         _tol = override_tol if override_tol is not None else tol
-        q = rhs.shape[1]; G = compute_G(vol_shape)
+        q = rhs.shape[1]
+        G = compute_G(vol_shape) if use_grid_correction else jnp.ones(vol_shape, dtype=jnp.float32)
         W, info = solve_hard(lhs, rhs, reg, mask, vol_shape, q,
                              G, maxiter, _tol, unpack_fn, precondition, W0_real,
                              use_float64=use_float64, krylov_fn=krylov_fn)
@@ -395,17 +468,113 @@ def make_hard_solver(precondition=False, use_float64=False, krylov_fn=None, over
 
 
 def make_soft_solver(mu=100, collar=5, precondition=False, use_float64=False,
-                     krylov_fn=None, override_tol=None):
+                     krylov_fn=None, override_tol=None, use_grid_correction=True):
     all_res = []
     def fn(lhs, rhs, reg, mask, vol_shape, W0_real=None,
            maxiter=20, tol=1e-4, unpack_fn=None):
         _tol = override_tol if override_tol is not None else tol
-        q = rhs.shape[1]; G = compute_G(vol_shape)
+        q = rhs.shape[1]
+        G = compute_G(vol_shape) if use_grid_correction else jnp.ones(vol_shape, dtype=jnp.float32)
         mask_bin = jnp.asarray(mask) > 0.5
         alpha = build_alpha(mask_bin, collar)
         W, info = solve_soft(lhs, rhs, reg, alpha, vol_shape, q,
                              G, mu, maxiter, _tol, unpack_fn, precondition, W0_real,
                              use_float64=use_float64, krylov_fn=krylov_fn)
+        all_res.append(info.get("residuals", []))
+        return W, info
+    return fn, all_res
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Proximal ADMM solver (per-voxel data solve + mask projection)
+# See docs/math/masked_mstep.md § Proximal ADMM
+# ═══════════════════════════════════════════════════════════════════════
+
+def solve_prox(lhs_tri, rhs_h, reg_diag, mask, vs, q, G,
+               rho, maxiter, tol, unpack_fn, W0_real, use_float64=False):
+    """ADMM: min_V J_data(V) s.t. PV = V (hard mask constraint).
+
+    Splits into V (unconstrained) and W (on mask), coupled by dual U.
+    V-step uses circulant approximation K ≈ k_eff for a cheap per-voxel solve.
+    W-step is exact mask projection.
+
+    See docs/math/masked_mstep.md § Proximal ADMM.
+    """
+    vol = int(np.prod(vs))
+    P = jnp.asarray(mask > 0.5, dtype=jnp.float32).reshape(vs)
+    k_eff_sq = float(jnp.sum(G ** 2)) / vol
+    k_eff = float(jnp.sqrt(k_eff_sq))
+
+    dt = jnp.float64 if use_float64 else jnp.float32
+    ct = jnp.complex128 if use_float64 else jnp.complex64
+    if use_float64:
+        lhs_tri = lhs_tri.astype(jnp.complex128 if jnp.iscomplexobj(lhs_tri) else jnp.float64)
+        reg_diag = reg_diag.astype(jnp.float64)
+        rhs_h = rhs_h.astype(jnp.complex128)
+        G = G.astype(jnp.float64)
+        P = P.astype(jnp.float64)
+
+    logger.info("prox: k_eff=%.4f k_eff²=%.4f ρ=%g maxiter=%d tol=%g",
+                k_eff, k_eff_sq, rho, maxiter, tol)
+
+    # Initialize W from naive: (A+Λ)^{-1}d → K^{-1} → mask
+    if W0_real is not None:
+        W = jnp.asarray(W0_real, dtype=dt).reshape(q, *vs)
+    else:
+        W0_h = _AL_solve_fourier(rhs_h, lhs_tri, reg_diag, q, unpack_fn)
+        W0_r = _batched_irfft(W0_h, vs, q) / jnp.maximum(G[None], 0.01)
+        W = (P[None] * W0_r).astype(dt)
+
+    U = jnp.zeros((q, *vs), dtype=dt)
+
+    residuals = []
+    t0 = time.time()
+    for it in range(maxiter):
+        # V-step: (k_eff²(A+Λ) + ρI)^{-1} (k_eff d + ρ FFT[W - U])
+        Z = W - U
+        Z_h = _batched_rfft(Z, vs)
+        rhs_aug = (k_eff * rhs_h + rho * Z_h).astype(ct)
+        prox_reg = k_eff_sq * reg_diag if G is not None else reg_diag
+        V_h = _AL_solve_fourier(rhs_aug, lhs_tri, prox_reg, q, unpack_fn,
+                                lhs_scale=k_eff_sq, extra_diag=rho)
+        V = _batched_irfft(V_h, vs, q).astype(dt)
+
+        # W-step: P(V + U)
+        W_new = P[None] * (V + U)
+
+        # Residuals
+        primal_r = float(jnp.sqrt(jnp.sum((V - W_new) ** 2)))
+        dual_r = rho * float(jnp.sqrt(jnp.sum((W_new - W) ** 2)))
+
+        # U-step
+        U = U + V - W_new
+        W = W_new
+
+        v_norm = max(float(jnp.sqrt(jnp.sum(V ** 2))), 1e-30)
+        rel = primal_r / v_norm
+        residuals.append(rel)
+
+        if (it + 1) % 5 == 0 or rel < tol:
+            logger.info("prox %d: primal=%.2e dual=%.2e rel=%.2e t=%.1fs",
+                        it + 1, primal_r, dual_r, rel, time.time() - t0)
+        if rel < tol:
+            break
+
+    return W.astype(jnp.float32), {"residuals": residuals, "n_iters": len(residuals),
+                                    "total_time": time.time() - t0}
+
+
+def make_prox_solver(rho=0.01, use_float64=False, override_tol=None,
+                     use_grid_correction=True):
+    all_res = []
+    def fn(lhs, rhs, reg, mask, vol_shape, W0_real=None,
+           maxiter=20, tol=1e-4, unpack_fn=None):
+        _tol = override_tol if override_tol is not None else tol
+        q = rhs.shape[1]
+        G = compute_G(vol_shape) if use_grid_correction else jnp.ones(vol_shape, dtype=jnp.float32)
+        W, info = solve_prox(lhs, rhs, reg, mask, vol_shape, q,
+                             G, rho, maxiter, _tol, unpack_fn, W0_real,
+                             use_float64=use_float64)
         all_res.append(info.get("residuals", []))
         return W, info
     return fn, all_res
@@ -427,7 +596,8 @@ def make_prior(gt, npc, vs):
 
 
 def run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt, mask_arr,
-           use_pcg, solver_fn, pcg_maxiter, label, n_iter):
+           use_pcg, solver_fn, pcg_maxiter, label, n_iter,
+           use_gridding_correction=True):
     logger.info("=== %s ===", label)
     t0 = time.time()
     U, S, W, ez, sm, idata = ppca.EM(
@@ -437,7 +607,7 @@ def run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt, mask_arr,
         disc_type_mean="cubic", disc_type="linear_interp",
         return_iteration_data=True, use_pcg_mean=use_pcg,
         volume_mask=mask_arr, pcg_maxiter=pcg_maxiter,
-        use_gridding_correction=True, mstep_solver_fn=solver_fn)
+        use_gridding_correction=use_gridding_correction, mstep_solver_fn=solver_fn)
     dt = time.time() - t0
     _, rv, _ = metrics.get_all_variance_scores(U, U_gt, s_gt**2)
     logger.info("  RelVar=%.4f time=%.0fs", rv[-1], dt)
@@ -465,7 +635,15 @@ def main():
     parser.add_argument("--tol", type=float, default=1e-4)
     parser.add_argument("--float64", action="store_true")
     parser.add_argument("--solver", type=str, default="cg", choices=["cg", "minres"])
+    parser.add_argument("--mask-dilate", type=int, default=0,
+        help="Extra dilation of binary mask before passing to solvers (match soft mask ramp)")
+    parser.add_argument("--dataset-dir", type=str, default=None,
+        help="Override dataset directory (default: ppca_pcg_5nrl_{gs}/test_dataset)")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--no-grid-correction", action="store_true",
+        help="Set G=1 (identity) for all methods — isolate effect of gridding kernel K")
+    parser.add_argument("--rho", type=float, default=0.01,
+        help="ADMM penalty parameter for prox method")
     parser.add_argument("--methods", type=str,
         default="naive,hard,hard_precond,soft,soft_precond")
     args = parser.parse_args()
@@ -475,13 +653,25 @@ def main():
     methods = [m.strip() for m in args.methods.split(",")]
     krylov_fn = _minres if args.solver == "minres" else _cg
 
+    use_K = not args.no_grid_correction
     suffix = "_f64" if args.float64 else "_f32"
     if args.solver != "cg": suffix += f"_{args.solver}"
+    if args.mask_dilate > 0: suffix += f"_dil{args.mask_dilate}"
+    if not use_K: suffix += "_noK"
     base_dir = "/scratch/gpfs/GILLES/mg6942/tmp/convergence_tests"
     out_dir = f"{base_dir}/mstep_{gs}_{npc}pc{suffix}"
     os.makedirs(out_dir, exist_ok=True)
 
-    ds_dir = f"/scratch/gpfs/GILLES/mg6942/tmp/ppca_pcg_5nrl_{gs}/test_dataset"
+    # Default: B-factored dataset (noise=1, Bfac=60). Fallback to old dataset if not found.
+    default_ds = f"/scratch/gpfs/GILLES/mg6942/tmp/ppca_bfac60_n1_{gs}/test_dataset"
+    fallback_ds = f"/scratch/gpfs/GILLES/mg6942/tmp/ppca_pcg_5nrl_{gs}/test_dataset"
+    if args.dataset_dir:
+        ds_dir = args.dataset_dir
+    elif os.path.exists(os.path.join(default_ds, "particles.star")):
+        ds_dir = default_ds
+    else:
+        logger.warning("B-factored dataset not found at %s, using fallback %s", default_ds, fallback_ds)
+        ds_dir = fallback_ds
     cryos, sim_info, gt, nv = _load_simulated_dataset(
         _with_trailing_separator(ds_dir), gs, args.n_images, lazy=False)
     vs = gt.volume_shape
@@ -494,55 +684,82 @@ def main():
     real_vols = [np.asarray(ftu.get_idft3(gt.volumes[i].reshape(vs)).real)
                  for i in range(gt.volumes.shape[0])]
     mov_soft, mov_bin = make_moving_gt_mask(real_vols, vs)
+    if args.mask_dilate > 0:
+        from scipy.ndimage import binary_dilation
+        mov_bin = binary_dilation(mov_bin, iterations=args.mask_dilate)
+        from recovar.core.mask import soften_volume_mask
+        mov_soft = soften_volume_mask(mov_bin, kern_rad=3)
     mask = np.array(mov_soft, dtype=np.float32)
     n_mask = int(np.sum(mov_bin))
-    logger.info("Setup: %d³ q=%d mask=%.1f%% collar=%d μ=%g solver=%s f64=%s",
-                gs, npc, 100*n_mask/np.prod(vs), collar, args.mu, args.solver, args.float64)
+    logger.info("Setup: %d³ q=%d mask=%.1f%% collar=%d μ=%g solver=%s f64=%s K=%s",
+                gs, npc, 100*n_mask/np.prod(vs), collar, args.mu, args.solver, args.float64, use_K)
 
     np.random.seed(args.seed)
     W_init = jnp.array(np.random.randn(gt_mean.shape[0], npc).astype(np.float32) * 0.01)
 
     results = {}
 
+    # When a CG solver has K inside its operator, the solution is already
+    # deblurred — the EM must NOT apply griddingCorrect again (double correction).
+    # Naive doesn't have K in its solve, so it needs the EM's K^{-1} post-processing.
+    em_K_naive = use_K          # naive needs EM to apply K^{-1}
+    em_K_solver = False         # CG/ADMM with K handle it internally
+
     if "naive" in methods:
         r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
-                   mask, False, None, 20, "naive", args.em_iters)
+                   mask, False, None, 20, "naive", args.em_iters,
+                   use_gridding_correction=em_K_naive)
         r["cg_residuals"] = []
         results["naive"] = r
 
     if "hard" in methods:
         fn, res = make_hard_solver(precondition=False, use_float64=args.float64,
-                                   krylov_fn=krylov_fn, override_tol=args.tol)
+                                   krylov_fn=krylov_fn, override_tol=args.tol,
+                                   use_grid_correction=use_K)
         r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
-                   mask, False, fn, args.cg_maxiter, "hard", args.em_iters)
+                   mask, False, fn, args.cg_maxiter, "hard", args.em_iters,
+                   use_gridding_correction=em_K_solver if use_K else False)
         r["cg_residuals"] = [list(x) for x in res]
         results["hard"] = r
 
     if "hard_precond" in methods:
         fn, res = make_hard_solver(precondition=True, use_float64=args.float64,
-                                   krylov_fn=krylov_fn, override_tol=args.tol)
+                                   krylov_fn=krylov_fn, override_tol=args.tol,
+                                   use_grid_correction=use_K)
         r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
-                   mask, False, fn, args.cg_maxiter, "hard+precond", args.em_iters)
+                   mask, False, fn, args.cg_maxiter, "hard+precond", args.em_iters,
+                   use_gridding_correction=em_K_solver if use_K else False)
         r["cg_residuals"] = [list(x) for x in res]
         results["hard+precond"] = r
 
     if "soft" in methods:
         fn, res = make_soft_solver(mu=args.mu, collar=collar, precondition=False,
                                    use_float64=args.float64, krylov_fn=krylov_fn,
-                                   override_tol=args.tol)
+                                   override_tol=args.tol, use_grid_correction=use_K)
         r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
-                   mask, False, fn, args.cg_maxiter, "soft", args.em_iters)
+                   mask, False, fn, args.cg_maxiter, "soft", args.em_iters,
+                   use_gridding_correction=em_K_solver if use_K else False)
         r["cg_residuals"] = [list(x) for x in res]
         results["soft"] = r
 
     if "soft_precond" in methods:
         fn, res = make_soft_solver(mu=args.mu, collar=collar, precondition=True,
                                    use_float64=args.float64, krylov_fn=krylov_fn,
-                                   override_tol=args.tol)
+                                   override_tol=args.tol, use_grid_correction=use_K)
         r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
-                   mask, False, fn, args.cg_maxiter, "soft+precond", args.em_iters)
+                   mask, False, fn, args.cg_maxiter, "soft+precond", args.em_iters,
+                   use_gridding_correction=em_K_solver if use_K else False)
         r["cg_residuals"] = [list(x) for x in res]
         results["soft+precond"] = r
+
+    if "prox" in methods:
+        fn, res = make_prox_solver(rho=args.rho, use_float64=args.float64,
+                                   override_tol=args.tol, use_grid_correction=use_K)
+        r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
+                   mask, False, fn, args.cg_maxiter, "prox", args.em_iters,
+                   use_gridding_correction=em_K_solver if use_K else False)
+        r["cg_residuals"] = [list(x) for x in res]
+        results["prox"] = r
 
     # ── Summary ──
     print(f"\n{'='*70}")
