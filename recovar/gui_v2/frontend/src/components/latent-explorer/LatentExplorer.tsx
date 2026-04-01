@@ -103,6 +103,8 @@ interface LatentExplorerProps {
   resultDir: string;
   /** Path to the original particles .star file (from the pipeline job params). */
   particlesStar?: string | null;
+  /** The zdim the analyze job was run with (for accurate UMAP title). */
+  analyzeZdim?: number | null;
 }
 
 interface MarkerPoint {
@@ -111,7 +113,7 @@ interface MarkerPoint {
   label: string;
 }
 
-export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: LatentExplorerProps): React.JSX.Element {
+export function LatentExplorer({ jobId, projectId, resultDir, particlesStar, analyzeZdim }: LatentExplorerProps): React.JSX.Element {
   const [zdim, setZdim] = useState<number | null>(null);
   const [pcaAxisX, setPcaAxisX] = useState(0);
   const [pcaAxisY, setPcaAxisY] = useState(1);
@@ -132,6 +134,9 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: L
 
   // Auto-select zdim: prefer 4 if available, otherwise first
   const effectiveZdim = zdim ?? (available?.zdims.includes(4) ? 4 : available?.zdims[0]) ?? null;
+
+  // The zdim at which UMAP/k-means were computed (from the analyze job)
+  const umapSourceZdim = analyzeZdim ?? null;
 
   // Load embedding data
   const { data: embeddings, isLoading, error: embeddingError } = useQuery({
@@ -551,7 +556,9 @@ export function LatentExplorer({ jobId, projectId, resultDir, particlesStar }: L
                 centerDensityValues={colorBy === "deconvolved" ? deconvolvedDensity?.centerDensity ?? undefined : undefined}
                 xLabel="UMAP 1"
                 yLabel="UMAP 2"
-                title={`UMAP Projection (zdim=${effectiveZdim})`}
+                title={umapSourceZdim != null && umapSourceZdim !== effectiveZdim
+                  ? `UMAP Projection (from zdim=${umapSourceZdim} analysis)`
+                  : `UMAP Projection (zdim=${effectiveZdim})`}
                 onSelect={handleSelect}
                 onPointClick={handlePointClick}
                 selectedIndices={selectedIndices}
