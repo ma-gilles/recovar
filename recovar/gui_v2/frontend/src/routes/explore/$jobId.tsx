@@ -362,6 +362,7 @@ export function ExplorePage(): React.JSX.Element {
           projectId={projectId}
           resultDir={((job.params as Record<string, unknown> | null)?.result_dir as string) ?? job.output_dir ?? ""}
           particlesStar={particlesStar}
+          analyzeZdim={((job.params as Record<string, unknown> | null)?.zdim as number) ?? null}
         />
       ) : (
         <CategorizedVolumesView volumes={volumes} />

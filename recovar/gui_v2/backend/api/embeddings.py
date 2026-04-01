@@ -14,7 +14,6 @@ import json
 import logging
 import os
 import pickle
-import struct
 from pathlib import Path
 from typing import Any
 
@@ -109,14 +108,10 @@ def _load_embeddings_sync(
                 if isinstance(emb, dict):
                     # New format: latent_coords[zdim]
                     if "latent_coords" in emb and zdim in emb["latent_coords"]:
-                        result["pca_coords"] = np.array(
-                            emb["latent_coords"][zdim], dtype=np.float32
-                        )
+                        result["pca_coords"] = np.array(emb["latent_coords"][zdim], dtype=np.float32)
                     # Old format: zs[zdim]
                     elif "zs" in emb and zdim in emb["zs"]:
-                        result["pca_coords"] = np.array(
-                            emb["zs"][zdim], dtype=np.float32
-                        )
+                        result["pca_coords"] = np.array(emb["zs"][zdim], dtype=np.float32)
                     # Direct dict: {zdim: array}
                     elif zdim in emb:
                         result["pca_coords"] = np.array(emb[zdim], dtype=np.float32)
@@ -124,9 +119,7 @@ def _load_embeddings_sync(
                     result["pca_coords"] = emb.astype(np.float32)
     except (OSError, pickle.UnpicklingError, ValueError, EOFError) as exc:
         logger.error("Failed to load embedding coords from %s: %s", pipeline_dir, exc)
-        raise _EmbeddingLoadError(
-            f"Corrupted or unreadable embedding file: {exc}"
-        ) from exc
+        raise _EmbeddingLoadError(f"Corrupted or unreadable embedding file: {exc}") from exc
 
     if result["pca_coords"] is not None:
         n_total = result["pca_coords"].shape[0]
@@ -166,26 +159,38 @@ def _load_embeddings_sync(
                         km = pickle.load(f)
                     if isinstance(km, dict):
                         if "labels" in km:
-                            result["kmeans_labels"] = np.array(
-                                km["labels"], dtype=np.int32
-                            )
+                            result["kmeans_labels"] = np.array(km["labels"], dtype=np.int32)
                         if "centers" in km:
-                            result["kmeans_centers"] = np.array(
-                                km["centers"], dtype=np.float32
-                            )
+                            result["kmeans_centers"] = np.array(km["centers"], dtype=np.float32)
             except (OSError, pickle.UnpicklingError, ValueError, EOFError) as exc:
                 logger.warning("Failed to load k-means from %s: %s", kmeans_path, exc)
                 # Non-fatal: continue without k-means
 
+    # ----- Pad or trim k-means centers to match requested zdim -----
+    # The analyze job may have been run at a different zdim than the requested
+    # one, so the k-means centers may have a different dimensionality.
+    if result["kmeans_centers"] is not None and result["pca_coords"] is not None:
+        center_zdim = result["kmeans_centers"].shape[1]
+        if center_zdim < zdim:
+            # Pad with zeros for extra dimensions
+            result["kmeans_centers"] = np.pad(
+                result["kmeans_centers"],
+                ((0, 0), (0, zdim - center_zdim)),
+                mode="constant",
+                constant_values=0.0,
+            )
+        elif center_zdim > zdim:
+            # Trim to requested zdim
+            result["kmeans_centers"] = result["kmeans_centers"][:, :zdim]
+
     # ----- Subsample if dataset exceeds max_particles -----
-    if (
-        result["pca_coords"] is not None
-        and result["n_particles_total"] > max_particles
-    ):
+    if result["pca_coords"] is not None and result["n_particles_total"] > max_particles:
         n_total = result["n_particles_total"]
         logger.info(
             "Subsampling embeddings: %d -> %d particles (zdim=%d)",
-            n_total, max_particles, zdim,
+            n_total,
+            max_particles,
+            zdim,
         )
         indices = _subsample_indices(n_total, max_particles)
         result["pca_coords"] = result["pca_coords"][indices]
@@ -204,9 +209,7 @@ class _EmbeddingLoadError(Exception):
     """Raised when an embedding file cannot be loaded (corrupt, unreadable)."""
 
 
-def _discover_zdims(
-    pipeline_dir: str, analyze_dir: str | None = None
-) -> dict:
+def _discover_zdims(pipeline_dir: str, analyze_dir: str | None = None) -> dict:
     """Discover which zdim values and analyses are available.
 
     Parameters
@@ -242,24 +245,12 @@ def _discover_zdims(
                 if isinstance(emb, dict):
                     # New format: latent_coords dict
                     if "latent_coords" in emb:
-                        zdims = sorted(
-                            int(k)
-                            for k in emb["latent_coords"].keys()
-                            if isinstance(k, int)
-                        )
+                        zdims = sorted(int(k) for k in emb["latent_coords"].keys() if isinstance(k, int))
                     # Old format: zs dict
                     elif "zs" in emb:
-                        zdims = sorted(
-                            int(k)
-                            for k in emb["zs"].keys()
-                            if isinstance(k, int)
-                        )
+                        zdims = sorted(int(k) for k in emb["zs"].keys() if isinstance(k, int))
                     else:
-                        zdims = sorted(
-                            int(k)
-                            for k in emb.keys()
-                            if isinstance(k, (int, str)) and str(k).isdigit()
-                        )
+                        zdims = sorted(int(k) for k in emb.keys() if isinstance(k, (int, str)) and str(k).isdigit())
             except Exception:
                 pass
 
@@ -268,17 +259,13 @@ def _discover_zdims(
         found = False
         # Check analyze dir first (Analyze job output)
         if analyze_dir:
-            umap_file = os.path.join(
-                analyze_dir, "plots", "umap", "umap_embedding.pkl"
-            )
+            umap_file = os.path.join(analyze_dir, "plots", "umap", "umap_embedding.pkl")
             if os.path.isfile(umap_file):
                 found = True
         # Also check inline analysis dir (legacy)
         if not found:
             analysis = os.path.join(pipeline_dir, f"analysis_{z}")
-            umap_file = os.path.join(
-                analysis, "plots", "umap", "umap_embedding.pkl"
-            )
+            umap_file = os.path.join(analysis, "plots", "umap", "umap_embedding.pkl")
             if os.path.isfile(umap_file):
                 found = True
         has_umap[z] = found
@@ -325,9 +312,7 @@ async def get_embeddings(
         analyze_dir = job.output_dir
 
     try:
-        data = await asyncio.to_thread(
-            _load_embeddings_sync, pipeline_dir, zdim, analyze_dir
-        )
+        data = await asyncio.to_thread(_load_embeddings_sync, pipeline_dir, zdim, analyze_dir)
     except _EmbeddingLoadError as exc:
         raise HTTPException(
             status_code=422,
@@ -348,37 +333,17 @@ async def get_embeddings(
         "zdim": zdim,
         "has_umap": data["umap_coords"] is not None,
         "has_kmeans": data["kmeans_labels"] is not None,
-        "n_clusters": (
-            int(data["kmeans_centers"].shape[0])
-            if data["kmeans_centers"] is not None
-            else 0
-        ),
+        "n_clusters": (int(data["kmeans_centers"].shape[0]) if data["kmeans_centers"] is not None else 0),
     }
 
     if format == "json":
         # Debug-only JSON fallback.  Still respects subsampling.
         json_data = {
             **meta,
-            "pca_coords": (
-                data["pca_coords"].tolist()
-                if data["pca_coords"] is not None
-                else None
-            ),
-            "umap_coords": (
-                data["umap_coords"].tolist()
-                if data["umap_coords"] is not None
-                else None
-            ),
-            "kmeans_labels": (
-                data["kmeans_labels"].tolist()
-                if data["kmeans_labels"] is not None
-                else None
-            ),
-            "kmeans_centers": (
-                data["kmeans_centers"].tolist()
-                if data["kmeans_centers"] is not None
-                else None
-            ),
+            "pca_coords": (data["pca_coords"].tolist() if data["pca_coords"] is not None else None),
+            "umap_coords": (data["umap_coords"].tolist() if data["umap_coords"] is not None else None),
+            "kmeans_labels": (data["kmeans_labels"].tolist() if data["kmeans_labels"] is not None else None),
+            "kmeans_centers": (data["kmeans_centers"].tolist() if data["kmeans_centers"] is not None else None),
         }
         return Response(
             content=json.dumps(json_data),
@@ -473,24 +438,16 @@ async def get_related_density(job_id: str) -> list[dict]:
     related: list[dict] = []
     for dj in density_jobs:
         dj_params = dj.params or {}
-        dj_result_dir = (
-            dj_params.get("result_dir")
-            or dj_params.get("recovar_result_dir")
-            or ""
-        )
+        dj_result_dir = dj_params.get("result_dir") or dj_params.get("recovar_result_dir") or ""
         if str(Path(dj_result_dir).resolve()) != pipeline_dir_resolved:
             continue
 
-        density_pkl_path = os.path.join(
-            dj.output_dir, "data", "deconv_density_knee.pkl"
-        )
+        density_pkl_path = os.path.join(dj.output_dir, "data", "deconv_density_knee.pkl")
         entry: dict[str, Any] = {
             "id": dj.id,
             "output_dir": dj.output_dir,
             "pca_dim": (dj.params or {}).get("pca_dim"),
-            "created": (
-                dj.created_at.isoformat() if dj.created_at else None
-            ),
+            "created": (dj.created_at.isoformat() if dj.created_at else None),
         }
         if os.path.isfile(density_pkl_path):
             entry["density_pkl_path"] = density_pkl_path
@@ -512,40 +469,28 @@ def _evaluate_density_sync(
     (called via ``asyncio.to_thread``).
     """
     if RegularGridInterpolator is None:
-        raise _EmbeddingLoadError(
-            "scipy is required for density evaluation but is not installed"
-        )
+        raise _EmbeddingLoadError("scipy is required for density evaluation but is not installed")
 
     # Load density pkl.
-    density_pkl_path = os.path.join(
-        density_output_dir, "data", "deconv_density_knee.pkl"
-    )
+    density_pkl_path = os.path.join(density_output_dir, "data", "deconv_density_knee.pkl")
     if not os.path.isfile(density_pkl_path):
-        raise _EmbeddingLoadError(
-            f"Density file not found: {density_pkl_path}"
-        )
+        raise _EmbeddingLoadError(f"Density file not found: {density_pkl_path}")
 
     try:
         with open(density_pkl_path, "rb") as f:
             density_data = pickle.load(f)
     except (OSError, pickle.UnpicklingError, ValueError, EOFError) as exc:
-        raise _EmbeddingLoadError(
-            f"Failed to load density file: {exc}"
-        ) from exc
+        raise _EmbeddingLoadError(f"Failed to load density file: {exc}") from exc
 
     density_grid = density_data["density"]  # ndarray, shape varies by pca_dim
     bounds = density_data["latent_space_bounds"]  # (pca_dim, 2)
     alpha = float(density_data.get("alpha", 0.0))
 
     # Load PCA coords using the same logic as _load_embeddings_sync.
-    embeddings = _load_embeddings_sync(
-        pipeline_dir, zdim, analyze_dir=None, max_particles=max_particles
-    )
+    embeddings = _load_embeddings_sync(pipeline_dir, zdim, analyze_dir=None, max_particles=max_particles)
     pca_coords = embeddings["pca_coords"]
     if pca_coords is None:
-        raise _EmbeddingLoadError(
-            f"No PCA coordinates found for zdim={zdim}"
-        )
+        raise _EmbeddingLoadError(f"No PCA coordinates found for zdim={zdim}")
 
     n_total = embeddings["n_particles_total"]
     n_particles = embeddings["n_particles"]
@@ -556,13 +501,9 @@ def _evaluate_density_sync(
     # Axis arrays: for each dim i, linspace(bounds[i,0], bounds[i,1], density.shape[i])
     axes = []
     for i in range(pca_dim):
-        axes.append(
-            np.linspace(bounds[i, 0], bounds[i, 1], density_grid.shape[i])
-        )
+        axes.append(np.linspace(bounds[i, 0], bounds[i, 1], density_grid.shape[i]))
 
-    interpolator = RegularGridInterpolator(
-        tuple(axes), density_grid, bounds_error=False, fill_value=0.0
-    )
+    interpolator = RegularGridInterpolator(tuple(axes), density_grid, bounds_error=False, fill_value=0.0)
 
     # Evaluate density at particle positions (first pca_dim columns).
     # If zdim < pca_dim, pad with zeros for the missing dimensions.
@@ -621,9 +562,7 @@ def _evaluate_density_sync(
 async def get_embeddings_density(
     job_id: str,
     zdim: int = Query(..., description="Latent dimension for PCA coords"),
-    density_job_id: str = Query(
-        ..., description="ID of the completed Density job"
-    ),
+    density_job_id: str = Query(..., description="ID of the completed Density job"),
 ) -> Response:
     """Evaluate the deconvolved density grid at each particle's PCA coords.
 
