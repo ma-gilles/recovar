@@ -23,8 +23,16 @@ import numpy as np
 import recovar.core.fourier_transform_utils as ftu
 
 # Allowed current_size values for 128px images.
-# These are divisors of 128 that keep the CUDA kernel's upsampling factor valid.
-ALLOWED_CURRENT_SIZES = [32, 64, 128]
+#
+# The CUDA kernel divisibility concern only applies to volume_shape[0] //
+# image_shape[0] (the upsampling factor), NOT to the Fourier window radius.
+# Our windowing approach uses gather/scatter on the original grid, so any
+# current_size is safe.  We include sizes that are composites of small primes
+# (good for FFT) to better match RELION's fine-grained resolution ramp.
+#
+# More JIT compilations (7 vs 3) but each only happens once -- budget ~3
+# minutes total extra compile time across a full run.
+ALLOWED_CURRENT_SIZES = [16, 24, 32, 48, 64, 96, 128]
 
 
 def make_frequency_radius_map_half(image_shape):

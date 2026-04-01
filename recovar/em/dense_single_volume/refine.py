@@ -497,11 +497,32 @@ def refine_single_volume(
                     image_batch_size=image_batch_size,
                 )
 
-                # Solve for this half-set using pass 2 statistics
-                new_mean_k = relion_functions.post_process_from_filter(
-                    experiment_datasets[k], Ft_ctf_k, Ft_y_k,
-                    tau=mean_variance, disc_type=disc_type,
-                ).reshape(-1)
+                if Ft_y_k is None:
+                    # Pass 2 was skipped (union too large); fall back to
+                    # pass-1-only mode using the coarse grid.
+                    logger.info(
+                        "Half %d: pass 2 skipped, running pass-1-only E+M",
+                        k,
+                    )
+                    new_mean_k, ha_k, Ft_y_k, Ft_ctf_k = run_em_v2(
+                        experiment_datasets[k],
+                        means[k],
+                        mean_variance,
+                        noise_variance,
+                        rotations,
+                        translations,
+                        disc_type,
+                        image_batch_size=image_batch_size,
+                        rotation_block_size=rotation_block_size,
+                        current_size=cs_for_engine,
+                    )
+                    oversampled_rots = None
+                else:
+                    # Solve for this half-set using pass 2 statistics
+                    new_mean_k = relion_functions.post_process_from_filter(
+                        experiment_datasets[k], Ft_ctf_k, Ft_y_k,
+                        tau=mean_variance, disc_type=disc_type,
+                    ).reshape(-1)
 
             means[k] = new_mean_k
             hard_assignments[k] = ha_k

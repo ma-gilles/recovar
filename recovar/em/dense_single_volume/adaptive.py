@@ -149,6 +149,7 @@ def compute_pass2_stats(
     oversampling_order=1,
     current_size=None,
     image_batch_size=500,
+    max_union_pixels=200,
 ):
     """Pass 2: evaluate oversampled children of significant coarse rotations.
 
@@ -187,18 +188,27 @@ def compute_pass2_stats(
         Fourier window size for pass 2 (can be larger than pass 1).
     image_batch_size : int
         Images per GPU batch.
+    max_union_pixels : int
+        Maximum number of unique parent HEALPix pixels allowed in the
+        union of significant rotations.  If the union exceeds this cap,
+        pass 2 is skipped and ``None`` is returned to signal the caller
+        to fall back to pass-1-only mode.  Default 200, which yields at
+        most 200 * 4^oversampling_order oversampled children (800 for
+        oversampling_order=1).  This prevents pass 2 from becoming more
+        expensive than pass 1 when the posterior is nearly flat.
 
     Returns
     -------
-    Ft_y : jnp.ndarray, shape (volume_size,)
-        Accumulated weighted image sums.
-    Ft_ctf : jnp.ndarray, shape (volume_size,)
-        Accumulated CTF^2 weights.
-    hard_assignments : np.ndarray, shape (n_images,)
+    Ft_y : jnp.ndarray, shape (volume_size,), or None
+        Accumulated weighted image sums.  ``None`` if pass 2 was skipped.
+    Ft_ctf : jnp.ndarray, shape (volume_size,), or None
+        Accumulated CTF^2 weights.  ``None`` if pass 2 was skipped.
+    hard_assignments : np.ndarray, shape (n_images,), or None
         Best (rotation_idx * n_trans + trans_idx) indices into the
-        OVERSAMPLED grid.
-    oversampled_rotations : np.ndarray, shape (n_oversampled, 3, 3)
-        The oversampled rotation matrices used.
+        OVERSAMPLED grid.  ``None`` if pass 2 was skipped.
+    oversampled_rotations : np.ndarray, shape (n_oversampled, 3, 3), or None
+        The oversampled rotation matrices used.  ``None`` if pass 2 was
+        skipped.
     """
     from recovar.em.sampling import get_oversampled_rotation_grid
     from .engine_v2 import run_em_v2
@@ -236,6 +246,17 @@ def compute_pass2_stats(
     # Get unique parent healpix pixels
     sig_pixel_indices = sig_rot_indices // n_in_planes
     unique_pixels = np.unique(sig_pixel_indices)
+
+    # Cap the union to prevent pass 2 from becoming more expensive than pass 1
+    if len(unique_pixels) > max_union_pixels:
+        n_oversampled_would_be = len(unique_pixels) * (4 ** oversampling_order)
+        logger.warning(
+            "Pass 2: union has %d unique healpix pixels (> cap %d), "
+            "which would produce %d oversampled rotations. "
+            "Falling back to pass-1-only mode.",
+            len(unique_pixels), max_union_pixels, n_oversampled_would_be,
+        )
+        return None, None, None, None
 
     logger.info(
         "Pass 2: %d significant coarse rotations -> %d unique healpix pixels "

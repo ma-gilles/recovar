@@ -415,7 +415,7 @@ class TestOneIterationWithWindowing:
         )
 
         assert np.all(np.isfinite(np.array(result["mean"])))
-        assert result["current_sizes"] == [32]  # quantized from 4 -> 32
+        assert result["current_sizes"] == [16]  # quantized from 4 -> 16 (new minimum)
 
     def test_single_iteration_no_window(self, half_datasets, init_volume, rotations, translations):
         """One EM iteration at current_size=None (full res) produces valid output."""

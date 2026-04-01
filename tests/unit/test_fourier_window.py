@@ -621,14 +621,17 @@ class TestQuantizeCurrentSize:
     """Test the quantize_current_size helper."""
 
     def test_exact_match(self):
-        assert quantize_current_size(32) == 32
-        assert quantize_current_size(64) == 64
-        assert quantize_current_size(128) == 128
+        for s in ALLOWED_CURRENT_SIZES:
+            assert quantize_current_size(s) == s
 
     def test_round_up(self):
-        assert quantize_current_size(20) == 32
-        assert quantize_current_size(33) == 64
-        assert quantize_current_size(65) == 128
+        assert quantize_current_size(10) == 16
+        assert quantize_current_size(17) == 24
+        assert quantize_current_size(25) == 32
+        assert quantize_current_size(33) == 48
+        assert quantize_current_size(49) == 64
+        assert quantize_current_size(65) == 96
+        assert quantize_current_size(97) == 128
 
     def test_above_max(self):
         assert quantize_current_size(200) == 128
@@ -636,6 +639,14 @@ class TestQuantizeCurrentSize:
     def test_custom_allowed(self):
         assert quantize_current_size(10, allowed=[8, 16, 32]) == 16
         assert quantize_current_size(8, allowed=[8, 16, 32]) == 8
+
+    def test_allowed_sizes_sorted(self):
+        """ALLOWED_CURRENT_SIZES must be sorted in ascending order."""
+        assert ALLOWED_CURRENT_SIZES == sorted(ALLOWED_CURRENT_SIZES)
+
+    def test_allowed_sizes_match_module(self):
+        """Sanity: module constant matches expected set."""
+        assert ALLOWED_CURRENT_SIZES == [16, 24, 32, 48, 64, 96, 128]
 
 
 # ===========================================================================
