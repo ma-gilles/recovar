@@ -583,6 +583,125 @@ def test_get_coords_shared_label_grouped_shared_contrast(monkeypatch):
     assert bias is None
 
 
+def test_get_coords_spa_indexes_outputs_by_image_id_not_particle_id(monkeypatch):
+    class _DummyNoise:
+        def get_half(self, idx):
+            return np.ones((len(np.asarray(idx).reshape(-1)), 16), dtype=np.float32)
+
+    class _DummyImageStack:
+        def __init__(self):
+            self.mask = np.ones((16,), dtype=np.float32)
+
+        def process_images(self, batch, apply_image_mask=False):
+            _ = apply_image_mask
+            return batch
+
+    class _DummySpaCryo:
+        def __init__(self):
+            self.tilt_series_flag = False
+            self.n_units = 3
+            self.n_images = 3
+            self.dtype = np.complex64
+            self.dtype_real = np.float32
+            self.image_shape = (4, 4)
+            self.volume_shape = (4, 4, 4)
+            self.grid_size = 4
+            self.voxel_size = 1.0
+            self.padding = 0
+            self.premultiplied_ctf = False
+            self._ctf_evaluator = embedding.core.CTFEvaluator()
+            self.ctf_evaluator = self._ctf_evaluator
+            self.image_source = _DummyImageStack()
+            self.image_mask = self.image_source.mask
+            self.noise = _DummyNoise()
+            self.CTF_params = np.zeros((3, 9), dtype=np.float32)
+            self.rotation_matrices = np.zeros((3, 3, 3), dtype=np.float32)
+            self.translations = np.zeros((3, 2), dtype=np.float32)
+
+        def process_images(self, batch, apply_image_mask=False):
+            return self.image_source.process_images(batch, apply_image_mask=apply_image_mask)
+
+        def set_contrasts(self, contrasts):
+            _ = contrasts
+
+        def iter_batches(self, batch_size, **kwargs):
+            _ = (batch_size, kwargs)
+            batch = np.zeros((3, 16), dtype=np.complex64)
+            # Regression guard for issue #81: old SPA code used particle ids
+            # here and crashed with huge garbage-like indices during the
+            # contrast do-over pass.
+            particles_ind = np.array([22340943871744, 22340943871745, 22340943871746], dtype=np.int64)
+            batch_image_ind = np.array([0, 1, 2], dtype=np.int32)
+            nv = self.noise.get_half(batch_image_ind)
+            yield (
+                batch,
+                self.rotation_matrices[batch_image_ind],
+                self.translations[batch_image_ind],
+                self.CTF_params[batch_image_ind],
+                nv,
+                particles_ind,
+                batch_image_ind,
+            )
+
+    def fake_compute_batch_coords(
+        config,
+        images,
+        model,
+        opts,
+        image_mask,
+        contrast_grid,
+        contrast_mean,
+        contrast_variance,
+        hermitian_weights,
+        *,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+    ):
+        _ = (
+            config,
+            model,
+            opts,
+            image_mask,
+            contrast_grid,
+            contrast_mean,
+            contrast_variance,
+            hermitian_weights,
+            rotation_matrices,
+            translations,
+            ctf_params,
+            noise_variance,
+        )
+        basis_size = model.eigenvalues.shape[0]
+        xs = np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]], dtype=np.float32)[:, :basis_size]
+        contrast = np.array([0.5, 0.6, 0.7], dtype=np.float32)
+        cov = np.stack([np.eye(basis_size, dtype=np.float32) for _ in range(images.shape[0])], axis=0)
+        return xs, contrast, cov, None
+
+    monkeypatch.setattr(embedding, "compute_batch_coords", fake_compute_batch_coords)
+
+    cryo = _DummySpaCryo()
+    cryo.set_contrasts(np.ones((3,), dtype=np.float32))
+    xs, cov, contrasts, bias = embedding.get_coords_in_basis_and_contrast_3(
+        experiment_dataset=cryo,
+        mean_estimate=np.zeros((4**3,), dtype=np.complex64),
+        basis=np.zeros((2, 4**3), dtype=np.complex64),
+        eigenvalues=np.ones((2,), dtype=np.float32),
+        volume_mask=np.ones((4**3,), dtype=np.float32),
+        contrast_grid=np.array([1.0], dtype=np.float32),
+        batch_size=8,
+        disc_type="linear_interp",
+        compute_covariances=True,
+        compute_bias=False,
+    )
+
+    np.testing.assert_allclose(xs, np.array([[1.0, 10.0], [2.0, 20.0], [3.0, 30.0]], dtype=np.float32))
+    np.testing.assert_allclose(contrasts, np.array([0.5, 0.6, 0.7], dtype=np.float32))
+    np.testing.assert_allclose(cov, np.stack([np.eye(2), np.eye(2), np.eye(2)], axis=0))
+    assert bias is None
+
+
 # ---------------------------------------------------------------------------
 # Tests for solve_contrast_linear_system
 # ---------------------------------------------------------------------------

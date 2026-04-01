@@ -380,10 +380,9 @@ def get_coords_in_basis_and_contrast_3(
                 ctf_params=ctf_params,
                 noise_variance=nv,
             )
-            # For SPA (shared_label=False) use batch_image_ind which is
-            # already a validated int32 host copy.  particle_ids should be
-            # identical but went through an extra JAX-to-numpy path that
-            # proved unreliable under GPU memory pressure (see #71).
+            # For SPA, always index outputs by image ids. In the contrast
+            # do-over pass the per-batch particle ids may be stale or
+            # malformed, but batch_image_ind is the validated dataset order.
             target_ind = batch_image_ind
             xs[target_ind] = xs_single
             estimated_contrasts[batch_image_ind] = contrast_single
