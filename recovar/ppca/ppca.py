@@ -1667,8 +1667,15 @@ def EM(
 
     for iter_i in range(EM_iter):
         # Update eigenvalues from current W for contrast marginalization
-        _eigenvalues = np.array(jnp.sum(jnp.abs(W) ** 2, axis=0).real) / W.shape[0]
-        _eigenvalues = np.maximum(_eigenvalues, 1e-10).astype(np.float32)
+        # Eigenvalues for contrast solver.
+        # PPCA: z ~ N(0, I), W = U·S after SVD. The E-step uses PW, so
+        # H = (PW)^T(PW) absorbs S². The prior is Λ = I.
+        # However, with random W (early iters), H >> Λ^{-1} causes contrast
+        # to collapse to the grid boundary. Warmup: use "none" for first
+        # contrast_warmup iters, then switch to requested mode.
+        _eigenvalues = np.ones(basis_size, dtype=np.float32)
+        contrast_warmup = 3
+        _contrast_mode = contrast_mode if iter_i >= contrast_warmup else "none"
 
         if not sparse_PCA:
             # L2: use half-spectrum EM step (4× less memory, ~2× faster M-step)
@@ -1700,7 +1707,7 @@ def EM(
                 W_prev_real=_W_prev_real if iter_i > 0 else None,
                 soft_penalty_lam=soft_penalty_lam,
                 mstep_solver_fn=mstep_solver_fn,
-                contrast_mode=contrast_mode,
+                contrast_mode=_contrast_mode,
                 contrast_grid=jnp.array(contrast_grid) if contrast_grid is not None else None,
                 eigenvalues=_eigenvalues,
                 contrast_mean=contrast_mean,
