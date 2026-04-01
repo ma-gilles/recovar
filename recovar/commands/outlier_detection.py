@@ -1204,7 +1204,6 @@ def _run_outlier_detection(args):
             n_clusters = 100
             n_particles = len(zs)
             n_particles_per_cluster = min(100, max(10, n_particles // n_clusters))
-
             # Override with user-provided value if specified
             if hasattr(args, "particles_per_cluster") and args.particles_per_cluster is not None:
                 n_particles_per_cluster = args.particles_per_cluster

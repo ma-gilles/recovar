@@ -33,6 +33,7 @@ import mrcfile
 import numpy as np
 import pytest
 
+from conftest import gpu_subprocess_env
 from helpers.metrics_regression import compare_metric, metric_direction, log_comparison_table
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.tiny_metrics]
@@ -42,6 +43,7 @@ _N_IMAGES = int(os.environ.get("TINY_OUTLIERS_N_IMAGES", "800"))
 _PCT = float(os.environ.get("TINY_OUTLIERS_PERCENT", "0.15"))
 _K = int(os.environ.get("TINY_OUTLIERS_K_ROUNDS", "1"))
 _TOL = float(os.environ.get("TINY_OUTLIERS_TOL_FRAC", "0.10"))
+_PARTICLES_PER_CLUSTER = int(os.environ.get("TINY_OUTLIERS_PARTICLES_PER_CLUSTER", "50"))
 _N_VOLS = 12
 
 
@@ -90,6 +92,7 @@ def _run_and_score(
     volumes_prefix: Path,
     baseline_json: Path,
     overwrite_baseline: bool,
+    env: dict[str, str],
 ) -> tuple[dict, dict]:
     """Run the full outliers pipeline; return (scores, regression_report)."""
     from recovar.commands.run_test_outliers_pipeline import create_outlier_volume
@@ -117,7 +120,7 @@ def _run_and_score(
         "--seed",
         "42",
     ]
-    subprocess.run(make_cmd, check=True)
+    subprocess.run(make_cmd, check=True, env=env)
 
     # Compute GT union mask from the volume MRC files
     from recovar.core import mask as mask_mod
@@ -157,8 +160,10 @@ def _run_and_score(
         "--use-contrast-detection",
         "--use-junk-detection",
         "--save-pipeline-indices",
+        "--particles-per-cluster",
+        str(_PARTICLES_PER_CLUSTER),
     ]
-    subprocess.run(pipe_cmd, check=True)
+    subprocess.run(pipe_cmd, check=True, env=env)
 
     # Compute detection metrics from ground truth
     sim_info_path = dataset_dir / "simulation_info.pkl"
@@ -236,6 +241,7 @@ def test_run_test_outliers_pipeline_tiny_regression_uses_saved_baseline(tmp_path
     vols_prefix = tmp_path / "vol"
     _write_volumes(vols_prefix, n_vols=_N_VOLS, grid=_GRID)
     baseline_json = tmp_path / "baseline" / "outlier_scores.json"
+    env = gpu_subprocess_env()
 
     # Run 1: write baseline
     first_scores, first_report = _run_and_score(
@@ -243,6 +249,7 @@ def test_run_test_outliers_pipeline_tiny_regression_uses_saved_baseline(tmp_path
         volumes_prefix=vols_prefix,
         baseline_json=baseline_json,
         overwrite_baseline=True,
+        env=env,
     )
     assert baseline_json.exists(), "baseline JSON must be written after run 1"
     assert first_report.get("status") == "baseline_written"
@@ -253,6 +260,7 @@ def test_run_test_outliers_pipeline_tiny_regression_uses_saved_baseline(tmp_path
         volumes_prefix=vols_prefix,
         baseline_json=baseline_json,
         overwrite_baseline=False,
+        env=env,
     )
     assert second_report.get("status") == "checked", f"expected status='checked', got: {second_report}"
     assert int(second_report.get("checked_metrics", 0)) > 0, (

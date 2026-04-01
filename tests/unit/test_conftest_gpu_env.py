@@ -38,3 +38,13 @@ def test_gpu_subprocess_env_picks_gpu_when_unassigned(monkeypatch):
     env = _CONFTEST.gpu_subprocess_env()
 
     assert env["CUDA_VISIBLE_DEVICES"] == "2"
+
+
+def test_gpu_subprocess_env_preserves_existing_xla_flags(monkeypatch):
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    monkeypatch.setenv("XLA_FLAGS", "--xla_force_host_platform_device_count=8")
+
+    env = _CONFTEST.gpu_subprocess_env()
+    tokens = env["XLA_FLAGS"].split()
+
+    assert "--xla_force_host_platform_device_count=8" in tokens
