@@ -274,7 +274,7 @@ def test_E_M_step_batch_half_shapes():
     lhs_init = jnp.zeros((d["half_volume_size"], tri_sz), dtype=np.float32)
     rhs_init = jnp.zeros((d["half_volume_size"], d["basis_size"]), dtype=np.complex64)
 
-    lhs, rhs, ez, smz, ll, ll_pi = E_M_step_batch_half(
+    lhs, rhs, ez, smz, ll, ll_pi, _mc = E_M_step_batch_half(
         d["images_half"],
         lhs_init,
         rhs_init,
@@ -336,7 +336,7 @@ def _run_and_compare_half_vs_full(d, atol_ez=1e-5, atol_ll=1e-2, atol_suf=1e-4):
     )
 
     # --- Run half version ---
-    lhs_half, rhs_half, ez_half, smz_half, ll_half, _ = E_M_step_batch_half(
+    lhs_half, rhs_half, ez_half, smz_half, ll_half, _, _mc = E_M_step_batch_half(
         d["images_half"],
         jnp.zeros((d["half_volume_size"], tri_sz), dtype=float_dtype),
         jnp.zeros((d["half_volume_size"], basis_size), dtype=complex_dtype),
@@ -480,7 +480,7 @@ def test_E_M_step_batch_half_no_stats():
     lhs_init = jnp.zeros((d["half_volume_size"], tri_sz), dtype=np.float32)
     rhs_init = jnp.zeros((d["half_volume_size"], d["basis_size"]), dtype=np.complex64)
 
-    lhs, rhs, ez, smz, ll, _ = E_M_step_batch_half(
+    lhs, rhs, ez, smz, ll, _, _mc = E_M_step_batch_half(
         d["images_half"],
         lhs_init,
         rhs_init,
@@ -551,7 +551,7 @@ def test_E_M_step_batch_half_accumulates_across_batches():
     lhs_h = jnp.zeros((d["half_volume_size"], tri_sz), dtype=np.float32)
     rhs_h = jnp.zeros((d["half_volume_size"], basis_size), dtype=np.complex64)
     for s in [slice(0, split), slice(split, d["n_images"])]:
-        lhs_h, rhs_h, _, _, _, _ = E_M_step_batch_half(
+        lhs_h, rhs_h, _, _, _, _, _ = E_M_step_batch_half(
             d["images_half"][s],
             lhs_h,
             rhs_h,
