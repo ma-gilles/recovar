@@ -816,8 +816,11 @@ def _e_step_half_inner(
     )
     CTF_half = ctf_evaluator(CTF_params, image_shape, voxel_size, half_image=True) / jnp.sqrt(noise_variance_half)
 
+    # For contrast estimation, mean must use same disc_type as data generation
+    # (disc_type_mean="cubic" gives 174x scale mismatch vs linear_interp).
+    # Standard PPCA is unaffected since mean cancels in centering.
     projected_mean_half = core.slice_volume(
-        mean, rotation_matrices, image_shape, volume_shape, disc_type_mean, half_image=True
+        mean, rotation_matrices, image_shape, volume_shape, disc_type, half_image=True
     )
     projected_mean_half = (
         projected_mean_half
