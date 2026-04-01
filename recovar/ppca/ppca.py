@@ -933,48 +933,46 @@ def E_M_step_batch_half(
     disc_type_mean="cubic",
     disc_type="linear_interp",
     compute_stats=True,
+    contrast_mode="none",
+    contrast_grid=None,
+    contrast_weights=None,
+    eigenvalues=None,
+    contrast_mean=1.0,
+    contrast_variance=np.inf,
 ):
     """Half-spectrum, upper-triangular-LHS variant of :func:`E_M_step_batch`.
 
-    E-step is JIT'd. LHS backprojection uses the fused CUDA kernel
-    (all tri_sz channels in one call — no chunking needed since the
-    fused kernel doesn't materialize the before_chunk tensor).
+    E-step is JIT'd. LHS backprojection uses the fused CUDA kernel.
+    When contrast_mode != "none", uses contrast-weighted moments:
+      LHS += CTF² ⊗ E[c²zz^T],  RHS += CTF·y·E[cz]^T - CTF·Aμ·E[c²z]^T
     """
     basis_size = W_half.shape[1]
     tri_i, tri_j = np.triu_indices(basis_size)
     tri_sz = len(tri_i)
 
     # --- JIT'd E-step ---
-    expected_zs, second_moment_zs, ctf_squared_half, centered_half, CTF_half, ll_sum = _e_step_half_inner(
-        images_half,
-        mean,
-        W_half,
-        CTF_params,
-        rotation_matrices,
-        translations,
-        voxel_size,
-        noise_variance_half,
-        image_shape,
-        volume_shape,
-        ctf_evaluator,
-        compute_ll,
-        disc_type_mean,
-        disc_type,
+    (expected_zs, second_moment_czz, ctf_squared_half,
+     images_half_w, projected_mean_half_w, CTF_half, ll_sum,
+     mean_cz, mean_c2z, mean_c) = _e_step_half_inner(
+        images_half, mean, W_half, CTF_params, rotation_matrices,
+        translations, voxel_size, noise_variance_half, image_shape,
+        volume_shape, ctf_evaluator, compute_ll, disc_type_mean, disc_type,
+        contrast_mode=contrast_mode, contrast_grid=contrast_grid,
+        contrast_weights=contrast_weights, eigenvalues=eigenvalues,
+        contrast_mean=contrast_mean, contrast_variance=contrast_variance,
     )
 
     # --- backprojection ---
     if compute_stats:
         half_volume_size = lhs_summed.shape[0]
-        second_moment_tri = second_moment_zs[:, tri_i, tri_j]
+        # LHS uses E[c²zz^T] (= E[zz^T] when c=1)
+        second_moment_tri = second_moment_czz[:, tri_i, tri_j]
         ctf_squared_full = ftu.half_image_to_full_image(ctf_squared_half, image_shape)
         _max_r = image_shape[0] // 2 - 1
 
-        # LHS: per-image scatter + GEMM when CUDA kernel available, else JAX fallback.
         n_images = ctf_squared_full.shape[0]
         real_dtype = lhs_summed.dtype
-        # try:
         from recovar.cuda_backproject import per_image_backproject
-
 
         ctf2_bp = per_image_backproject(
             jnp.zeros((half_volume_size, n_images), dtype=real_dtype),
@@ -985,16 +983,7 @@ def E_M_step_batch_half(
             max_r=_max_r,
         )  # (half_vol, n_images)
 
-        ## TODO: do not erase this, report it in the math document description of 
-        ## This is very memory inefficient, (it allocates n^3 x images), but somehow compute efficient, 
-        ## this is is done doing  |n_images| backproj, instead of |n_images| * q^2/2
-        ## Compute is N^3 n_images + N^3 * n_images * q^2 but the second is a big mat-mat
-        ## A more reasonable (in theory) would be N^2 * n_images * n^2, but the whole thing would be backprojects essentially.
-        ## This backprojects are the dominant cost, this is worse
-        ## Ideally, we would find a way to have much faster backprojection of this kind, using the fact that there is a lot of data locallity
-        ## Since we reprojecting to teh same voxels (in different volumes), so tehy could be continguous in memory.
-        ## I have not been able to make that work (by prompting claude/codex to write better kernel).
-
+        ## TODO: memory-inefficient GEMM — see original comment
         lhs_summed = lhs_summed + (ctf2_bp @ second_moment_tri.real.astype(real_dtype))
         # except Exception:
         #     # Fallback: standard per-column backprojection (slower but works on CPU)
@@ -1012,24 +1001,26 @@ def E_M_step_batch_half(
         #         )
         #         lhs_summed = lhs_summed.at[:, k].add(bp_col.reshape(-1).real)
 
-        # RHS: standard half-image backprojection (only q=20 complex channels,
-        # fast enough that per-image trick gives <10% improvement).
-        before_rhs = (CTF_half[..., None] * centered_half[..., None] * jnp.conj(expected_zs)[:, None, :]).transpose(
-            2, 0, 1
+        # RHS term 1: CTF · y · E[cz]^T  (= CTF · y · E[z]^T when c=1)
+        before_rhs1 = (CTF_half[..., None] * images_half_w[..., None]
+                       * jnp.conj(mean_cz)[:, None, :]).transpose(2, 0, 1)
+        bp_rhs1 = core.batch_adjoint_slice_volume(
+            before_rhs1, rotation_matrices, image_shape, volume_shape,
+            disc_type, half_image=True, half_volume=True,
         )
-        bp_rhs = core.batch_adjoint_slice_volume(
-            before_rhs,
-            rotation_matrices,
-            image_shape,
-            volume_shape,
-            disc_type,
-            half_image=True,
-            half_volume=True,
+        rhs_summed = rhs_summed + bp_rhs1.T
+
+        # RHS term 2: -CTF · Aμ · E[c²z]^T  (mean correction; = -CTF·Aμ·E[z]^T when c=1)
+        before_rhs2 = (CTF_half[..., None] * projected_mean_half_w[..., None]
+                       * jnp.conj(mean_c2z)[:, None, :]).transpose(2, 0, 1)
+        bp_rhs2 = core.batch_adjoint_slice_volume(
+            before_rhs2, rotation_matrices, image_shape, volume_shape,
+            disc_type, half_image=True, half_volume=True,
         )
-        rhs_summed = rhs_summed + bp_rhs.T
+        rhs_summed = rhs_summed - bp_rhs2.T
 
     ll_per_image = jnp.zeros((0,), dtype=images_half.dtype)
-    return lhs_summed, rhs_summed, expected_zs, second_moment_zs, ll_sum, ll_per_image
+    return lhs_summed, rhs_summed, expected_zs, second_moment_czz, ll_sum, ll_per_image, mean_c
 
 
 def unpack_tri_to_full(lhs_tri, basis_size):
@@ -1131,7 +1122,7 @@ def EM_step_half(
             experiment_dataset, batch_size
         ):
             noise_variance_half = experiment_dataset.noise.get_half(batch_image_ind)
-            lhs_summed, rhs_summed, ez_batch, smz_batch, ll_batch, _ = E_M_step_batch_half(
+            lhs_summed, rhs_summed, ez_batch, smz_batch, ll_batch, _, _mc = E_M_step_batch_half(
                 batch_half,
                 lhs_summed,
                 rhs_summed,
@@ -1763,7 +1754,7 @@ def EM(
             for _ds in _ds_list:
                 for _bh, _cp, _rm, _tr, _bi in _iter_processed_batches_half(_ds, batch_size):
                     _nvh = _ds.noise.get_half(_bi)
-                    _, _, _, _, _llb, _ = E_M_step_batch_half(
+                    _, _, _, _, _llb, _, _ = E_M_step_batch_half(
                         _bh,
                         jnp.zeros((_hv, _tsz), dtype=jnp.float32),
                         jnp.zeros((_hv, basis_size), dtype=jnp.complex64),
