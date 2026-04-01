@@ -1,5 +1,24 @@
 # EM Module Developer Guide
 
+## RELION Volume Convention (READ THIS FIRST)
+
+recovar and RELION use different 3D coordinate frames:
+```python
+vol_recovar = -np.transpose(vol_relion, (2, 1, 0))   # negate + swap X↔Z
+```
+
+When loading RELION volumes for comparison:
+```python
+from recovar.utils.helpers import relion_volume_to_recovar
+import mrcfile
+with mrcfile.open("relion_output.mrc") as m:
+    vol = relion_volume_to_recovar(m.data.copy())
+```
+
+`R_to_relion` / `R_from_relion` are CORRECT and produce RELION-compatible
+STAR files. Do NOT change them — the Euler convention is paired with the
+volume transpose. See issue #86.
+
 ## Active Development Plan
 
 **Read `docs/math/plan_relion_parity.md` before making any changes to this module.**
