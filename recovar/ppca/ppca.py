@@ -1588,7 +1588,8 @@ def EM(
     if volume_mask is None:
         volume_mask = np.ones(reference_dataset.volume_shape)
     basis_size = W_initial.shape[-1]
-    contrast_grid = np.ones([1])
+    if contrast_grid is None:
+        contrast_grid = np.ones([1])
     # Larger batches amortize per-batch overhead (kernel launches, backprojection).
     # 200 is optimal for 256³/20 PCs on 80 GB GPU (~37 GB peak, 4.6 ms/img).
     # Smaller grids use less memory so the same batch size is safe.
