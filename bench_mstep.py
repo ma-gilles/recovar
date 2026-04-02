@@ -532,9 +532,9 @@ def run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt, mask_arr,
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--grid-size", type=int, default=128)
+    parser.add_argument("--grid-size", type=int, default=64)
     parser.add_argument("--n-pcs", type=int, default=10)
-    parser.add_argument("--n-images", type=int, default=50000)
+    parser.add_argument("--n-images", type=int, default=10000)
     parser.add_argument("--em-iters", type=int, default=20)
     parser.add_argument("--cg-maxiter", type=int, default=50)
     parser.add_argument("--mu", type=float, default=100.0)
@@ -544,7 +544,11 @@ def main():
     parser.add_argument("--mask-dilate", type=int, default=0,
         help="Extra dilation of binary mask before passing to solvers (match soft mask ramp)")
     parser.add_argument("--dataset-dir", type=str, default=None,
-        help="Override dataset directory (default: ppca_pcg_5nrl_{gs}/test_dataset)")
+        help="Override dataset directory")
+    parser.add_argument("--contrast-std", type=float, default=0.0,
+        help="Per-image contrast std (0 = no contrast variation)")
+    parser.add_argument("--noise-level", type=float, default=1.0,
+        help="Noise level for dataset generation")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--no-grid-correction", action="store_true",
         help="Set G=1 (identity) for all methods — isolate effect of gridding kernel K")
@@ -552,7 +556,7 @@ def main():
         choices=["none", "profile", "marginalize"],
         help="Contrast handling: none (c=1), profile (MAP), marginalize (quadrature)")
     parser.add_argument("--methods", type=str,
-        default="naive,hard,hard_precond,soft,soft_precond")
+        default="hard")
     args = parser.parse_args()
 
     gs = args.grid_size; npc = args.n_pcs
@@ -565,20 +569,33 @@ def main():
     if args.solver != "cg": suffix += f"_{args.solver}"
     if args.mask_dilate > 0: suffix += f"_dil{args.mask_dilate}"
     if not use_K: suffix += "_noK"
+    if args.contrast_mode != "none": suffix += f"_{args.contrast_mode}"
     base_dir = "/scratch/gpfs/GILLES/mg6942/tmp/convergence_tests"
     out_dir = f"{base_dir}/mstep_{gs}_{npc}pc{suffix}"
     os.makedirs(out_dir, exist_ok=True)
 
-    # Default: B-factored dataset (noise=1, Bfac=60). Fallback to old dataset if not found.
-    default_ds = f"/scratch/gpfs/GILLES/mg6942/tmp/ppca_bfac60_n1_{gs}/test_dataset"
-    fallback_ds = f"/scratch/gpfs/GILLES/mg6942/tmp/ppca_pcg_5nrl_{gs}/test_dataset"
+    # Generate or load dataset
     if args.dataset_dir:
         ds_dir = args.dataset_dir
-    elif os.path.exists(os.path.join(default_ds, "particles.star")):
-        ds_dir = default_ds
     else:
-        logger.warning("B-factored dataset not found at %s, using fallback %s", default_ds, fallback_ds)
-        ds_dir = fallback_ds
+        # Auto-generate from B-factored volumes
+        vol_path = f"/scratch/gpfs/GILLES/mg6942/tmp/ppca_bfac60_n1_128/true_volumes"
+        tag = f"bench_{gs}_n{args.noise_level}_c{args.contrast_std}_{args.n_images}"
+        ds_dir = f"/scratch/gpfs/GILLES/mg6942/tmp/{tag}/test_dataset"
+        if not os.path.exists(os.path.join(ds_dir, "particles.star")):
+            from recovar.simulation import simulator
+            voxel_size = 4.25 * 128 / gs  # source vols are 128³ at 4.25 Å/px
+            logger.info("Generating dataset: %s (voxel_size=%.2f)", ds_dir, voxel_size)
+            simulator.generate_synthetic_dataset(
+                ds_dir, voxel_size=voxel_size, volumes_path_root=vol_path,
+                n_images=args.n_images, grid_size=gs,
+                noise_level=args.noise_level, noise_model="radial1",
+                contrast_std=args.contrast_std, noise_scale_std=0.0,
+                dataset_params_option="dataset1", disc_type="linear_interp",
+                trailing_zero_format_in_vol_name=True,
+                put_extra_particles=False, percent_outliers=0.0)
+        else:
+            logger.info("Dataset exists: %s", ds_dir)
     cryos, sim_info, gt, nv = _load_simulated_dataset(
         _with_trailing_separator(ds_dir), gs, args.n_images, lazy=False)
     vs = gt.volume_shape
