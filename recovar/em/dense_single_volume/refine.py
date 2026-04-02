@@ -1056,16 +1056,29 @@ def _refine_relion_mode(
         # --- Angular step refinement: regenerate rotation grid if needed ---
         # When update_refinement_state incremented healpix_order, we need
         # a new rotation grid at the finer level.
+        # IMPORTANT: At order >= 5, the full grid has 2.4M+ rotations which
+        # OOMs the GPU.  Instead, keep the order-4 grid as the "base" and
+        # rely on local search + oversampling to achieve finer angular steps.
+        # The order is still tracked for sigma calculation.
+        MAX_FULL_GRID_ORDER = 4
         if state.healpix_order != current_healpix_order:
-            logger.info(
-                "Regenerating rotation grid: order %d -> %d",
-                current_healpix_order, state.healpix_order,
-            )
-            current_rotations = get_rotation_grid_at_order(
-                state.healpix_order, matrices=True,
-            ).astype(np.float32)
-            current_healpix_order = state.healpix_order
-            current_nside_level = state.healpix_order
+            new_order = min(state.healpix_order, MAX_FULL_GRID_ORDER)
+            if new_order != current_healpix_order:
+                logger.info(
+                    "Regenerating rotation grid: order %d -> %d",
+                    current_healpix_order, new_order,
+                )
+                current_rotations = get_rotation_grid_at_order(
+                    new_order, matrices=True,
+                ).astype(np.float32)
+                current_healpix_order = new_order
+            else:
+                logger.info(
+                    "Angular step refined to order %d (grid stays at order %d "
+                    "— local search handles finer sampling)",
+                    state.healpix_order, current_healpix_order,
+                )
+            current_nside_level = current_healpix_order
 
             # Regenerate translation grid based on updated parameters
             current_translations = jnp.array(
