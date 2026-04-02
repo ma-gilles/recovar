@@ -62,6 +62,50 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
+# Coarse image size for adaptive oversampling (RELION parity)
+# ---------------------------------------------------------------------------
+
+def compute_coarse_image_size(
+    angular_step_deg, pixel_size, ori_size, particle_diameter=None,
+):
+    """Compute the coarse image size for pass 1 of adaptive oversampling.
+
+    RELION formula (expectation.cpp line 5760):
+        rotated_distance = (angular_step / 360) * pi * particle_diameter
+        coarse_resolution = rotated_distance / 1.2       (3D)
+        image_coarse_size = 2 * ceil(pixel_size * ori_size / coarse_resolution)
+
+    Parameters
+    ----------
+    angular_step_deg : float
+        Effective angular step in degrees (after oversampling).
+    pixel_size : float
+        Pixel size in Angstrom.
+    ori_size : int
+        Original image box size in pixels.
+    particle_diameter : float or None
+        Particle diameter in Angstrom.  If None, use box_size * pixel_size.
+
+    Returns
+    -------
+    coarse_size : int
+        Coarse image size (diameter in pixels), clamped to [8, ori_size].
+    """
+    if particle_diameter is None:
+        particle_diameter = ori_size * pixel_size
+
+    rotated_distance = (angular_step_deg / 360.0) * np.pi * particle_diameter
+    coarse_resolution = rotated_distance / 1.2  # keepsafe_factor for 3D
+
+    if coarse_resolution <= 0:
+        return ori_size
+
+    coarse_size = int(2 * np.ceil(pixel_size * ori_size / coarse_resolution))
+    coarse_size = max(8, min(coarse_size, ori_size))
+    return coarse_size
+
+
+# ---------------------------------------------------------------------------
 # Batched significance pruning (avoids materializing full weight matrix)
 # ---------------------------------------------------------------------------
 
@@ -932,6 +976,10 @@ def _refine_relion_mode(
     healpix_order_trajectory = []
     ave_Pmax_trajectory = []
 
+    # RELION uses padding_factor=2 for reconstruction: the 3D Fourier
+    # grid is (2*N)^3 to reduce interpolation artifacts at high freq.
+    PADDING_FACTOR = 2
+
     iteration = 0
     while not state.has_converged and iteration < max_iter:
         t0 = time.time()
@@ -1112,26 +1160,176 @@ def _refine_relion_mode(
         cs_for_engine = cs if cs < cryo.image_shape[0] else None
 
         # --- Run E+M on each half-set ---
+        # Two modes: single-pass (adaptive_oversampling=0) or two-pass
+        # coarse/fine (adaptive_oversampling>=1).
         iter_sig_counts = None
+        use_adaptive = (state.adaptive_oversampling > 0
+                        and effective_rotations.shape[0] > 16)
 
-        for k in range(2):
-            # Standard single-pass E+M with the current (possibly local) grid
-            # and optional Gaussian rotation prior
-            new_mean_k, ha_k, Ft_y_k, Ft_ctf_k = run_em_v2(
-                experiment_datasets[k],
-                means[k],
-                mean_variance,
-                noise_variance,
-                effective_rotations,
-                current_translations,
-                disc_type,
-                image_batch_size=image_batch_size,
-                rotation_block_size=rotation_block_size,
-                current_size=cs_for_engine,
-                rotation_log_prior=rotation_log_prior,
+        # Track the rotation grids used for pose extraction.
+        # When adaptive oversampling is active, ha_k indices refer to the
+        # oversampled grid (from pass 2), not effective_rotations.
+        pose_rotations = [None, None]  # rotations to use with ha for poses
+        # Coarse-grid assignments for local search tracking (always indexed
+        # into effective_rotations, even when adaptive oversampling is used).
+        coarse_ha = [None, None]
+
+        if use_adaptive:
+            # --- TWO-PASS ADAPTIVE OVERSAMPLING (RELION parity) ---
+            # Pass 1: coarse E-step at reduced resolution to find
+            #         significant orientations.
+            # Pass 2: oversampled E+M at full current_size for significant
+            #         orientations only.
+
+            # Compute coarse image size from angular step
+            effective_step_deg = healpix_angular_step(current_healpix_order)
+            pixel_size = cryo.voxel_size if cryo.voxel_size > 0 else 1.0
+            coarse_size = compute_coarse_image_size(
+                effective_step_deg, pixel_size, grid_size,
+            )
+            coarse_size = quantize_current_size(coarse_size)
+            # Coarse size must be smaller than full current_size
+            if cs_for_engine is not None and coarse_size >= cs:
+                coarse_size = max(8, cs // 2)
+                coarse_size = quantize_current_size(coarse_size)
+            coarse_cs = coarse_size if coarse_size < grid_size else None
+
+            logger.info(
+                "Adaptive oversampling: pass 1 at coarse_size=%s, "
+                "pass 2 at current_size=%s (oversampling=%d)",
+                coarse_cs, cs_for_engine, state.adaptive_oversampling,
             )
 
-            means[k] = new_mean_k
+        for k in range(2):
+            if use_adaptive:
+                # --- PASS 1: Coarse significance pruning ---
+                t_pass1 = time.time()
+                sig_rot_any, n_sig_batch, ha_coarse = (
+                    _compute_significance_batched(
+                        experiment_datasets[k],
+                        means[k],
+                        noise_variance,
+                        effective_rotations,
+                        current_translations,
+                        disc_type,
+                        adaptive_fraction=0.999,
+                        max_significants=500,
+                        image_batch_size=image_batch_size,
+                        rotation_block_size=rotation_block_size,
+                        current_size=coarse_cs,
+                    )
+                )
+                n_sig_total = int(np.sum(sig_rot_any))
+                dt_pass1 = time.time() - t_pass1
+
+                logger.info(
+                    "Pass 1 (half %d): %d / %d significant coarse "
+                    "rotations in %.1fs (median n_sig/image=%d)",
+                    k, n_sig_total, effective_rotations.shape[0],
+                    dt_pass1, int(np.median(n_sig_batch)),
+                )
+
+                # --- Generate oversampled children ---
+                # Use compute_pass2_stats which generates HEALPix children
+                # of significant coarse rotations and runs a full E+M at
+                # the fine grid.
+                t_pass2 = time.time()
+                Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots = (
+                    compute_pass2_stats(
+                        experiment_datasets[k],
+                        means[k],
+                        mean_variance,
+                        noise_variance,
+                        effective_rotations,
+                        current_translations,
+                        sig_rot_any,
+                        current_nside_level,
+                        disc_type,
+                        oversampling_order=state.adaptive_oversampling,
+                        current_size=cs_for_engine,
+                        image_batch_size=image_batch_size,
+                    )
+                )
+                dt_pass2 = time.time() - t_pass2
+
+                if Ft_y_k is None:
+                    # Pass 2 was skipped (too many significant rotations);
+                    # fall back to single-pass at full current_size.
+                    logger.warning(
+                        "Pass 2 skipped for half %d; falling back to "
+                        "single-pass E+M.", k,
+                    )
+                    _, ha_k, Ft_y_k, Ft_ctf_k = run_em_v2(
+                        experiment_datasets[k],
+                        means[k],
+                        mean_variance,
+                        noise_variance,
+                        effective_rotations,
+                        current_translations,
+                        disc_type,
+                        image_batch_size=image_batch_size,
+                        rotation_block_size=rotation_block_size,
+                        current_size=cs_for_engine,
+                        rotation_log_prior=rotation_log_prior,
+                    )
+                    pose_rotations[k] = effective_rotations
+                    coarse_ha[k] = ha_k  # fallback: same grid
+                else:
+                    n_oversampled = (oversampled_rots.shape[0]
+                                     if oversampled_rots is not None else 0)
+                    logger.info(
+                        "Pass 2 (half %d): %d oversampled rotations, "
+                        "%.1fs",
+                        k, n_oversampled, dt_pass2,
+                    )
+                    # ha_k indices are into oversampled_rots, not
+                    # effective_rotations.  Track this for pose extraction.
+                    pose_rotations[k] = oversampled_rots
+
+                # Store coarse-grid assignment from pass 1 for local search.
+                coarse_ha[k] = ha_coarse
+
+                if iter_sig_counts is None:
+                    iter_sig_counts = n_sig_batch
+                else:
+                    iter_sig_counts = np.concatenate([
+                        iter_sig_counts, n_sig_batch
+                    ])
+
+            else:
+                # --- SINGLE-PASS E+M (no adaptive oversampling) ---
+                _, ha_k, Ft_y_k, Ft_ctf_k = run_em_v2(
+                    experiment_datasets[k],
+                    means[k],
+                    mean_variance,
+                    noise_variance,
+                    effective_rotations,
+                    current_translations,
+                    disc_type,
+                    image_batch_size=image_batch_size,
+                    rotation_block_size=rotation_block_size,
+                    current_size=cs_for_engine,
+                    rotation_log_prior=rotation_log_prior,
+                )
+                pose_rotations[k] = effective_rotations
+                coarse_ha[k] = ha_k  # same grid, no oversampling
+
+            # Reconstruct the regularized mean with padding_factor=2.
+            # run_em_v2 uses padding_factor=1 internally; we override here.
+            Ft_ctf_k_padded = relion_functions.zero_pad_fourier_volume(
+                Ft_ctf_k, volume_shape, PADDING_FACTOR,
+            )
+            Ft_y_k_padded = relion_functions.zero_pad_fourier_volume(
+                Ft_y_k, volume_shape, PADDING_FACTOR,
+            )
+            means[k] = relion_functions.post_process_from_filter_v2(
+                Ft_ctf_k_padded, Ft_y_k_padded,
+                volume_shape, PADDING_FACTOR,
+                tau=mean_variance,
+                kernel="triangular",
+                use_spherical_mask=True, grid_correct=True,
+                gridding_correct="square",
+            ).reshape(-1)
             hard_assignments[k] = ha_k
 
             if k == 0:
@@ -1147,18 +1345,37 @@ def _refine_relion_mode(
         Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
 
         # --- Compute unregularized half-maps for FSC and prior ---
-        # TODO: Use padding_factor=2 (RELION default) for reduced interpolation
-        # artifacts at high frequencies. Requires zero-padding Ft_ctf/F_ty
-        # before reconstruction. For now, use padding_factor=1 (native size).
-        PADDING_FACTOR = 1
+        # RELION uses padding_factor=2 by default: the 3D Fourier grid is
+        # (2*N)^3 to reduce interpolation artifacts.  We zero-pad the
+        # native-size Ft_ctf/Ft_y into the padded grid, then
+        # post_process_from_filter_v2 does iDFT on the padded grid and
+        # crops back to native size in real space.
+        Ft_ctf_0_padded = relion_functions.zero_pad_fourier_volume(
+            Ft_ctf_0, volume_shape, PADDING_FACTOR,
+        )
+        Ft_y_0_padded = relion_functions.zero_pad_fourier_volume(
+            Ft_y_0, volume_shape, PADDING_FACTOR,
+        )
+        Ft_ctf_1_padded = relion_functions.zero_pad_fourier_volume(
+            Ft_ctf_1, volume_shape, PADDING_FACTOR,
+        )
+        Ft_y_1_padded = relion_functions.zero_pad_fourier_volume(
+            Ft_y_1, volume_shape, PADDING_FACTOR,
+        )
         unreg_means = [
-            relion_functions.post_process_from_filter(
-                cryo, Ft_ctf_0, Ft_y_0, tau=None, disc_type=disc_type,
-                padding_factor=PADDING_FACTOR,
+            relion_functions.post_process_from_filter_v2(
+                Ft_ctf_0_padded, Ft_y_0_padded,
+                volume_shape, PADDING_FACTOR,
+                tau=None, kernel="triangular",
+                use_spherical_mask=True, grid_correct=True,
+                gridding_correct="square",
             ),
-            relion_functions.post_process_from_filter(
-                cryo, Ft_ctf_1, Ft_y_1, tau=None, disc_type=disc_type,
-                padding_factor=PADDING_FACTOR,
+            relion_functions.post_process_from_filter_v2(
+                Ft_ctf_1_padded, Ft_y_1_padded,
+                volume_shape, PADDING_FACTOR,
+                tau=None, kernel="triangular",
+                use_spherical_mask=True, grid_correct=True,
+                gridding_correct="square",
             ),
         ]
 
@@ -1279,8 +1496,9 @@ def _refine_relion_mode(
 
         # --- Track per-image best assignments for convergence detection ---
         # Combine both half-sets' assignments into a single array for
-        # update_refinement_state.  We use half-set 0 as representative.
-        current_combined_ha = hard_assignments[0]
+        # update_refinement_state.  Use coarse_ha (indexed into
+        # effective_rotations) for consistent convergence tracking.
+        current_combined_ha = coarse_ha[0]
         previous_combined_ha = previous_assignments[0]
 
         # --- Update prior (RELION-style tau^2 from FSC) ---
@@ -1292,8 +1510,10 @@ def _refine_relion_mode(
 
         # --- Update poses and noise ---
         for k in range(2):
+            # When adaptive oversampling is used, ha indices refer to the
+            # oversampled grid stored in pose_rotations[k], not effective_rotations.
             best_rots, best_trans = hard_assignment_idx_to_pose(
-                hard_assignments[k], effective_rotations, current_translations,
+                hard_assignments[k], pose_rotations[k], current_translations,
             )
             experiment_datasets[k].update_poses(best_rots, best_trans)
 
@@ -1339,10 +1559,13 @@ def _refine_relion_mode(
         )
         state._last_frac_changed = frac_changed
 
-        # Save assignments for next iteration's change tracking
+        # Save assignments for next iteration's change tracking.
+        # Use coarse_ha (indexed into effective_rotations/current_rotations)
+        # so that local search and convergence detection work correctly
+        # regardless of whether adaptive oversampling was used.
         previous_assignments = [
             ha.copy() if ha is not None else None
-            for ha in hard_assignments
+            for ha in coarse_ha
         ]
 
         # --- Timing ---
