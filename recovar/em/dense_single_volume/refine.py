@@ -1070,6 +1070,21 @@ def _refine_relion_mode(
             )
             dt_local = time.time() - t0_local
 
+            # Cap the local grid to prevent it from growing to the full grid.
+            # Keep the highest-prior rotations.  At order 4 with 5K images,
+            # the uncapped grid can grow to 200K+ (86% of 295K).
+            # A cap of ~20K gives ~20s/iter while maintaining quality.
+            MAX_LOCAL_ROTATIONS = 20000
+            if len(selected_indices) > MAX_LOCAL_ROTATIONS:
+                # Keep the top-N by log_prior
+                top_idx = np.argsort(rotation_log_prior)[-MAX_LOCAL_ROTATIONS:]
+                selected_indices = selected_indices[top_idx]
+                rotation_log_prior = rotation_log_prior[top_idx]
+                # Re-sort by index for consistent ordering
+                sort_order = np.argsort(selected_indices)
+                selected_indices = selected_indices[sort_order]
+                rotation_log_prior = rotation_log_prior[sort_order]
+
             if len(selected_indices) < current_rotations.shape[0]:
                 effective_rotations = current_rotations[selected_indices]
                 local_rot_indices = selected_indices
