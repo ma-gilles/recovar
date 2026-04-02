@@ -377,11 +377,16 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
     if state.has_fine_enough_angular_sampling:
         return False
 
-    # Need resolution and assignment stalls
+    # Need resolution stalls (required) and either assignment stalls
+    # OR extended resolution stalls (>= 5 iters).  The extended check
+    # handles adaptive oversampling where assignments churn due to
+    # the changing oversampled grid but orientations are actually stable.
     if state.nr_iter_wo_resol_gain < MAX_NR_ITER_WO_RESOL_GAIN:
         return False
 
-    if state.nr_iter_wo_assignment_changes < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES:
+    EXTENDED_RESOL_STALL = 5
+    if (state.nr_iter_wo_assignment_changes < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
+            and state.nr_iter_wo_resol_gain < EXTENDED_RESOL_STALL):
         return False
 
     # Don't refine beyond 75% of estimated angular accuracy
