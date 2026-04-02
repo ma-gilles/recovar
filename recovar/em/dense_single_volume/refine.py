@@ -959,9 +959,11 @@ def _refine_relion_mode(
     # use it; otherwise infer from init_healpix_order.
     current_nside_level = nside_level if nside_level is not None else init_healpix_order
 
-    # RELION uses padding_factor=2 for reconstruction (8x Fourier grid).
-    # Defined once here so all reconstruction calls use the same value.
-    PADDING_FACTOR = 2
+    # TODO: RELION uses padding_factor=2 for reconstruction (8x Fourier grid).
+    # Currently disabled because zero_pad_fourier_volume has a frequency
+    # mapping bug (CC drops from 0.97 to 0.25). Fix the padding function
+    # before re-enabling.
+    PADDING_FACTOR = 1
 
     def _safe_batch_sizes(n_rot):
         """Reduce batch sizes for large grids to avoid GPU OOM."""
