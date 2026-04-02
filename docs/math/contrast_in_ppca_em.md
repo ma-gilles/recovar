@@ -35,6 +35,11 @@ With Hermitian half-spectrum weights $w$, the six sufficient statistics per imag
 These are computed in `_e_step_half_inner` from the existing
 noise-whitened half-spectrum quantities.
 
+When `disc_type_mean="cubic"`, `EM_step_half` precomputes periodic cubic
+B-spline coefficients once per EM step via `core.precompute_cubic_coefficients`
+before `_e_step_half_inner` slices the mean. Passing raw Fourier samples
+directly into cubic interpolation gives the wrong scale.
+
 ## E-step: latent posterior
 
 Given the sufficient statistics, the per-image posterior over $(z, c)$ is
@@ -110,6 +115,7 @@ and the two RHS terms combine to $\text{backproject}(\mathrm{CTF} \cdot (\tilde 
 | Sufficient statistics | `recovar/ppca/ppca.py:_e_step_half_inner` |
 | Contrast solver | `recovar/ppca/contrast_posterior.py:solve_latent_posterior` |
 | Backprojection | `recovar/ppca/ppca.py:E_M_step_batch_half` |
+| Cubic mean preparation | `recovar/ppca/ppca.py:_prepare_mean_estimate_for_slicing` |
 | Eigenvalue / warmup | `recovar/ppca/ppca.py:EM` (loop body) |
 | EM threading | `recovar/ppca/ppca.py:EM_step_half` |
 | Spectral eigendecomp | `recovar/ppca/contrast_posterior.py:_spectral_decomposition` |

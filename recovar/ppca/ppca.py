@@ -77,6 +77,21 @@ def _forward_model_from_map(
     return slices
 
 
+def _prepare_mean_estimate_for_slicing(mean_estimate, mean_estimate_raw, volume_shape, disc_type_mean):
+    """Return the mean representation expected by ``slice_volume``.
+
+    ``slice_volume(..., disc_type="cubic")`` expects cubic B-spline
+    coefficients, not raw Fourier samples. Callers can either pass raw Fourier
+    data via ``mean_estimate_raw`` or pass precomputed coefficients directly via
+    ``mean_estimate``.
+    """
+    if disc_type_mean != "cubic":
+        return mean_estimate
+    if mean_estimate_raw is None:
+        return mean_estimate
+    return core.precompute_cubic_coefficients(mean_estimate_raw, volume_shape)
+
+
 # =============================================================================
 # WHITENING CONSTRAINT IMPLEMENTATION
 # =============================================================================
@@ -975,35 +990,24 @@ def E_M_step_batch_half(
         #         )
         #         lhs_summed = lhs_summed.at[:, k].add(bp_col.reshape(-1).real)
 
-        if contrast_mode == "none":
-            # Original single-pass centering: CTF · (y - Aμ) · E[z]^T
-            # This avoids disc_type_mean/disc_type mismatch in backprojection.
-            centered_half = images_half_w - projected_mean_half_w
-            before_rhs = (CTF_half[..., None] * centered_half[..., None]
-                          * jnp.conj(expected_zs)[:, None, :]).transpose(2, 0, 1)
-            bp_rhs = core.batch_adjoint_slice_volume(
-                before_rhs, rotation_matrices, image_shape, volume_shape,
-                disc_type, half_image=True, half_volume=True,
-            )
-            rhs_summed = rhs_summed + bp_rhs.T
-        else:
-            # Split RHS for contrast: CTF·y·E[cz]^T - CTF·Aμ·E[c²z]^T
-            before_rhs1 = (CTF_half[..., None] * images_half_w[..., None]
-                           * jnp.conj(mean_cz)[:, None, :]).transpose(2, 0, 1)
-            bp_rhs1 = core.batch_adjoint_slice_volume(
-                before_rhs1, rotation_matrices, image_shape, volume_shape,
-                disc_type, half_image=True, half_volume=True,
-            )
-            rhs_summed = rhs_summed + bp_rhs1.T
-
-            # Mean correction: use disc_type_mean for adjoint to match forward
-            before_rhs2 = (CTF_half[..., None] * projected_mean_half_w[..., None]
-                           * jnp.conj(mean_c2z)[:, None, :]).transpose(2, 0, 1)
-            bp_rhs2 = core.batch_adjoint_slice_volume(
-                before_rhs2, rotation_matrices, image_shape, volume_shape,
-                disc_type_mean, half_image=True, half_volume=True,
-            )
-            rhs_summed = rhs_summed - bp_rhs2.T
+        # The W-update always uses the basis adjoint P_W*, so both RHS terms
+        # must backproject through the basis interpolation disc_type. For c=1
+        # this collapses to the original centered residual CTF · (y - Aμ) · E[z]^T.
+        rhs_residual = (
+            images_half_w[..., None] * jnp.conj(mean_cz)[:, None, :]
+            - projected_mean_half_w[..., None] * jnp.conj(mean_c2z)[:, None, :]
+        )
+        before_rhs = (CTF_half[..., None] * rhs_residual).transpose(2, 0, 1)
+        bp_rhs = core.batch_adjoint_slice_volume(
+            before_rhs,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            disc_type,
+            half_image=True,
+            half_volume=True,
+        )
+        rhs_summed = rhs_summed + bp_rhs.T
 
     ll_per_image = jnp.zeros((0,), dtype=images_half.dtype)
     return lhs_summed, rhs_summed, expected_zs, second_moment_czz, ll_sum, ll_per_image, mean_c
@@ -1101,6 +1105,13 @@ def EM_step_half(
     else:
         W_half = ftu.full_volume_to_half_volume(W_estimate.T, volume_shape).T
 
+    mean_for_slicing = _prepare_mean_estimate_for_slicing(
+        mean_estimate,
+        mean_estimate_raw,
+        volume_shape,
+        disc_type_mean,
+    )
+
     # Half-volume accumulators
     lhs_summed = jnp.zeros((half_volume_size, tri_sz), dtype=ref.dtype_real)
     rhs_summed = jnp.zeros((half_volume_size, basis_size), dtype=ref.dtype)
@@ -1118,7 +1129,7 @@ def EM_step_half(
                 batch_half,
                 lhs_summed,
                 rhs_summed,
-                mean_estimate,
+                mean_for_slicing,
                 W_half,
                 ctf_params,
                 rotation_matrices,
@@ -1320,6 +1331,12 @@ def EM_step(
     full_dataset, dataset_list = _normalize_experiment_datasets(experiment_datasets)
     reference_dataset = full_dataset if full_dataset is not None else dataset_list[0]
     basis_size = W_estimate.shape[-1]
+    mean_for_slicing = _prepare_mean_estimate_for_slicing(
+        mean_estimate,
+        mean_estimate_raw,
+        reference_dataset.volume_shape,
+        disc_type_mean,
+    )
     rhs_summed = jnp.zeros((reference_dataset.volume_size, basis_size), dtype=reference_dataset.dtype)
     lhs_summed = jnp.zeros((reference_dataset.volume_size, basis_size * basis_size), dtype=reference_dataset.dtype_real)
 
@@ -1335,7 +1352,7 @@ def EM_step(
                 batch,
                 lhs_summed,
                 rhs_summed,
-                mean_estimate,
+                mean_for_slicing,
                 W_estimate,
                 ctf_params,
                 rotation_matrices,
@@ -1462,7 +1479,7 @@ def EM_step(
                     batch,
                     lhs_summed,
                     rhs_summed,
-                    mean_estimate,
+                    mean_for_slicing,
                     W,
                     ctf_params,
                     rotation_matrices,
@@ -1605,13 +1622,9 @@ def EM(
     batch_size = 200
     W = W_initial
 
-    # Precompute spline coefficients for cubic interpolation
+    # Keep the raw Fourier mean here. EM_step/EM_step_half precompute cubic
+    # spline coefficients once per step, outside the per-batch loops.
     mean_estimate_raw = mean_estimate
-    if disc_type_mean == "cubic":
-        mean_estimate = core.precompute_cubic_coefficients(
-            mean_estimate,
-            reference_dataset.volume_shape,
-        )
 
     # =============================================================================
     # L1 REGULARIZATION WEIGHT
@@ -1766,6 +1779,12 @@ def EM(
             _hv = int(np.prod(ftu.volume_shape_to_half_volume_shape(vs)))
             _tsz = _tri_size(basis_size)
             ll_sum_r = jnp.array(0.0, dtype=jnp.complex64)
+            mean_for_slicing = _prepare_mean_estimate_for_slicing(
+                mean_estimate,
+                mean_estimate_raw,
+                reference_dataset.volume_shape,
+                disc_type_mean,
+            )
             _, _ds_list = _normalize_experiment_datasets(experiment_dataset)
             for _ds in _ds_list:
                 for _bh, _cp, _rm, _tr, _bi in _iter_processed_batches_half(_ds, batch_size):
@@ -1774,7 +1793,7 @@ def EM(
                         _bh,
                         jnp.zeros((_hv, _tsz), dtype=jnp.float32),
                         jnp.zeros((_hv, basis_size), dtype=jnp.complex64),
-                        mean_estimate,
+                        mean_for_slicing,
                         W,
                         _cp,
                         _rm,
@@ -1820,10 +1839,7 @@ def EM(
                 x0_real=mean_real,
             )
             mean_estimate_raw = jnp.array(means_pcg.combined)
-            if disc_type_mean == "cubic":
-                mean_estimate = core.precompute_cubic_coefficients(mean_estimate_raw, reference_dataset.volume_shape)
-            else:
-                mean_estimate = mean_estimate_raw
+            mean_estimate = mean_estimate_raw
             logger.info(f"  PCG mean updated (iter {iter_i})")
 
         logger.info(f"Done with EM step {iter_i}")

@@ -355,6 +355,7 @@ def adjoint_slice_volume(
     slices = _normalize_slices(slices, image_shape, half_image)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
+    assert order <= 1, "Cubic backprojection is NOT supported for adjoint_slice_volume" ## DO NOT CHANGE THIS ASSERTION
 
     # CUDA backproject (order 0/1 only)
     if _use_cuda_backproject(order):
@@ -496,6 +497,7 @@ def batch_adjoint_slice_volume(
     slices = jnp.asarray(slices)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
+    assert order <= 1, "Cubic backprojection is NOT supported for batch_adjoint_slice_volume" ## DO NOT CHANGE THIS ASSERTION
     vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
     vol_flat = int(np.prod(vol_shape))
     batch = slices.shape[0]

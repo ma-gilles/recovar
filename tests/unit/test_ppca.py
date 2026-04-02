@@ -303,6 +303,118 @@ def test_E_M_step_batch_half_shapes():
     assert np.all(np.isfinite(np.asarray(ll)))
 
 
+def test_prepare_mean_estimate_for_slicing_cubic_matches_explicit_coefficients():
+    """Cubic mean preparation must match an explicit spline prefilter."""
+    from recovar import core
+    from recovar.ppca.ppca import _prepare_mean_estimate_for_slicing
+
+    rng = np.random.default_rng(124)
+    grid_size = 8
+    image_shape = (grid_size, grid_size)
+    volume_shape = (grid_size, grid_size, grid_size)
+
+    real_vol = rng.normal(size=volume_shape).astype(np.float32)
+    mean_full = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(real_vol), norm="backward")).reshape(-1).astype(np.complex64)
+    rotations = np.tile(np.eye(3, dtype=np.float32), (1, 1, 1))
+
+    prepared = _prepare_mean_estimate_for_slicing(
+        jnp.array(mean_full),
+        jnp.array(mean_full),
+        volume_shape,
+        "cubic",
+    )
+    manual = core.precompute_cubic_coefficients(jnp.array(mean_full), volume_shape)
+    np.testing.assert_allclose(np.asarray(prepared), np.asarray(manual), atol=1e-6, rtol=1e-6)
+
+    prepared_proj = np.asarray(
+        core.slice_volume(prepared, rotations, image_shape, volume_shape, "cubic", half_image=True)
+    )
+    manual_proj = np.asarray(
+        core.slice_volume(manual, rotations, image_shape, volume_shape, "cubic", half_image=True)
+    )
+    raw_proj = np.asarray(
+        core.slice_volume(jnp.array(mean_full), rotations, image_shape, volume_shape, "cubic", half_image=True)
+    )
+
+    np.testing.assert_allclose(prepared_proj, manual_proj, atol=1e-5, rtol=1e-5)
+    assert not np.allclose(raw_proj, prepared_proj, atol=1e-2, rtol=1e-2)
+
+
+def test_prepare_mean_estimate_for_slicing_keeps_precomputed_cubic_coefficients():
+    """Passing precomputed cubic coefficients must remain a no-op."""
+    from recovar import core
+    from recovar.ppca.ppca import _prepare_mean_estimate_for_slicing
+
+    rng = np.random.default_rng(125)
+    volume_shape = (8, 8, 8)
+    real_vol = rng.normal(size=volume_shape).astype(np.float32)
+    mean_full = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(real_vol), norm="backward")).reshape(-1).astype(np.complex64)
+
+    coeffs = core.precompute_cubic_coefficients(jnp.array(mean_full), volume_shape)
+    prepared = _prepare_mean_estimate_for_slicing(coeffs, None, volume_shape, "cubic")
+    np.testing.assert_allclose(np.asarray(prepared), np.asarray(coeffs), atol=1e-6, rtol=1e-6)
+
+
+def test_E_M_step_batch_half_contrast_rhs_uses_basis_adjoint(monkeypatch):
+    """Contrast RHS backprojection must use the basis adjoint exactly once."""
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar import core
+    from recovar.ppca import ppca as ppca_mod
+
+    rng = np.random.default_rng(126)
+    d = _make_em_step_test_data(rng, grid_size=8, n_images=3, basis_size=1)
+    tri_sz = ppca_mod._tri_size(d["basis_size"])
+    mean_coeffs = core.precompute_cubic_coefficients(jnp.array(d["mean_full"]), d["volume_shape"])
+
+    calls = []
+
+    def fake_batch_adjoint_slice_volume(
+        slices,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        disc_type,
+        half_image=False,
+        half_volume=False,
+        max_r=None,
+    ):
+        del rotation_matrices, image_shape, max_r
+        calls.append((disc_type, half_image, half_volume))
+        out_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+        out_size = int(np.prod(out_shape))
+        return jnp.zeros((slices.shape[0], out_size), dtype=slices.dtype)
+
+    monkeypatch.setattr(ppca_mod.core, "batch_adjoint_slice_volume", fake_batch_adjoint_slice_volume)
+
+    ppca_mod.E_M_step_batch_half(
+        d["images_half"],
+        jnp.zeros((d["half_volume_size"], tri_sz), dtype=np.float32),
+        jnp.zeros((d["half_volume_size"], d["basis_size"]), dtype=np.complex64),
+        mean_coeffs,
+        d["W_half"],
+        d["CTF_params"],
+        d["rotation_matrices"],
+        d["translations"],
+        d["image_shape"],
+        d["volume_shape"],
+        d["grid_size"],
+        d["voxel_size"],
+        d["noise_variance_half"],
+        d["ctf_evaluator"],
+        compute_ll=False,
+        disc_type_mean="cubic",
+        disc_type="linear_interp",
+        compute_stats=True,
+        contrast_mode="marginalize",
+        contrast_grid=jnp.array(np.linspace(0.5, 1.5, 5), dtype=np.float32),
+        eigenvalues=jnp.ones(d["basis_size"], dtype=np.float32),
+        contrast_mean=1.0,
+        contrast_variance=0.3**2,
+    )
+
+    assert calls == [("linear_interp", True, True)]
+
+
 def _run_and_compare_half_vs_full(d, atol_ez=1e-5, atol_ll=1e-2, atol_suf=1e-4):
     """Run both E_M_step_batch and E_M_step_batch_half, assert equivalence."""
     import recovar.core.fourier_transform_utils as ftu
