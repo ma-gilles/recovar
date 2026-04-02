@@ -959,6 +959,18 @@ def _refine_relion_mode(
     # use it; otherwise infer from init_healpix_order.
     current_nside_level = nside_level if nside_level is not None else init_healpix_order
 
+    # RELION uses padding_factor=2 for reconstruction (8x Fourier grid).
+    # Defined once here so all reconstruction calls use the same value.
+    PADDING_FACTOR = 2
+
+    def _safe_batch_sizes(n_rot):
+        """Reduce batch sizes for large grids to avoid GPU OOM."""
+        # Target: ~50M elements in the score tensor (n_img * n_rot * n_trans)
+        budget = 50_000_000
+        rbs = min(rotation_block_size, max(500, budget // max(n_rot, 1)))
+        ibs = min(image_batch_size, max(50, budget // max(n_rot, 1)))
+        return ibs, rbs
+
     # State: two half-set volumes, noise, prior
     means = [jnp.array(init_volume), jnp.array(init_volume)]
     noise_variance = jnp.array(init_noise_variance)
@@ -1203,6 +1215,8 @@ def _refine_relion_mode(
         for k in range(2):
             if use_adaptive:
                 # --- PASS 1: Coarse significance pruning ---
+                safe_ibs, safe_rbs = _safe_batch_sizes(effective_rotations.shape[0])
+
                 t_pass1 = time.time()
                 sig_rot_any, n_sig_batch, ha_coarse = (
                     _compute_significance_batched(
@@ -1214,8 +1228,8 @@ def _refine_relion_mode(
                         disc_type,
                         adaptive_fraction=0.999,
                         max_significants=500,
-                        image_batch_size=image_batch_size,
-                        rotation_block_size=rotation_block_size,
+                        image_batch_size=safe_ibs,
+                        rotation_block_size=safe_rbs,
                         current_size=coarse_cs,
                     )
                 )
@@ -1298,6 +1312,7 @@ def _refine_relion_mode(
 
             else:
                 # --- SINGLE-PASS E+M (no adaptive oversampling) ---
+                safe_ibs, safe_rbs = _safe_batch_sizes(effective_rotations.shape[0])
                 _, ha_k, Ft_y_k, Ft_ctf_k = run_em_v2(
                     experiment_datasets[k],
                     means[k],
@@ -1306,8 +1321,8 @@ def _refine_relion_mode(
                     effective_rotations,
                     current_translations,
                     disc_type,
-                    image_batch_size=image_batch_size,
-                    rotation_block_size=rotation_block_size,
+                    image_batch_size=safe_ibs,
+                    rotation_block_size=safe_rbs,
                     current_size=cs_for_engine,
                     rotation_log_prior=rotation_log_prior,
                 )
