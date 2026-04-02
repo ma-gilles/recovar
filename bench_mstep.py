@@ -103,6 +103,8 @@ def _A_mul_fourier(W_h, lhs_tri, q, unpack_fn):
     for i0 in range(0, hv, _CHUNK):
         i1 = min(i0 + _CHUNK, hv)
         L = unpack_fn(lhs_tri[i0:i1], q) if is_tri else lhs_tri[i0:i1]
+        if L.ndim == 2:  # q=1: (chunk, 1) → (chunk, 1, 1)
+            L = L[:, :, None]
         out = out.at[i0:i1].set(jnp.einsum("vij,vj->vi", L, W_h[i0:i1]))
     return out
 
@@ -114,6 +116,8 @@ def _AL_solve_fourier(W_h, lhs_tri, reg_diag, q, unpack_fn, lhs_scale=1.0):
     for i0 in range(0, hv, _CHUNK):
         i1 = min(i0 + _CHUNK, hv)
         L = unpack_fn(lhs_tri[i0:i1], q) if is_tri else lhs_tri[i0:i1]
+        if L.ndim == 2:  # q=1: (chunk, 1) → (chunk, 1, 1)
+            L = L[:, :, None]
         if lhs_scale != 1.0:
             L = lhs_scale * L
         D = L.at[:, jnp.arange(q), jnp.arange(q)].add(reg_diag[i0:i1])
