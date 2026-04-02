@@ -959,6 +959,7 @@ def _refine_relion_mode(
             )
             data_vs_prior_iter = compute_data_vs_prior(
                 Ft_ctf_combined, tau2_radial, volume_shape,
+                padding_factor=PADDING_FACTOR,
             )
             data_vs_prior_trajectory.append(data_vs_prior_iter)
 
@@ -1146,12 +1147,18 @@ def _refine_relion_mode(
         Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
 
         # --- Compute unregularized half-maps for FSC and prior ---
+        # TODO: Use padding_factor=2 (RELION default) for reduced interpolation
+        # artifacts at high frequencies. Requires zero-padding Ft_ctf/F_ty
+        # before reconstruction. For now, use padding_factor=1 (native size).
+        PADDING_FACTOR = 1
         unreg_means = [
             relion_functions.post_process_from_filter(
                 cryo, Ft_ctf_0, Ft_y_0, tau=None, disc_type=disc_type,
+                padding_factor=PADDING_FACTOR,
             ),
             relion_functions.post_process_from_filter(
                 cryo, Ft_ctf_1, Ft_y_1, tau=None, disc_type=disc_type,
+                padding_factor=PADDING_FACTOR,
             ),
         ]
 
@@ -1255,6 +1262,7 @@ def _refine_relion_mode(
         )
         dvp_iter = compute_data_vs_prior(
             Ft_ctf_combined, tau2_radial_iter, volume_shape,
+            padding_factor=PADDING_FACTOR,
         )
         dvp_res_shell = resolution_from_data_vs_prior(dvp_iter)
         pixel_res = float(dvp_res_shell)
@@ -1289,13 +1297,20 @@ def _refine_relion_mode(
             )
             experiment_datasets[k].update_poses(best_rots, best_trans)
 
-        noise_from_res = noise.estimate_noise_level_no_masks(
-            experiment_datasets[0],
-            np.arange(min(1000, cryo.n_units)),
-            means[0],
-            100,
-            disc_type=disc_type,
-        )
+        # Estimate noise from BOTH half-sets, ALL images (not just 1000).
+        # Still hard-assignment based, but less biased than a small subset.
+        noise_estimates = []
+        for k in range(2):
+            n_k = experiment_datasets[k].n_units
+            noise_k = noise.estimate_noise_level_no_masks(
+                experiment_datasets[k],
+                np.arange(n_k),
+                means[k],
+                100,
+                disc_type=disc_type,
+            )
+            noise_estimates.append(noise_k)
+        noise_from_res = (noise_estimates[0] + noise_estimates[1]) / 2
         noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
 
         # --- Update convergence state ---

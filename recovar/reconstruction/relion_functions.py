@@ -443,6 +443,7 @@ def post_process_from_filter(
     gridding_correct="square",
     kernel_width=1,
     tau2_fudge=1.0,
+    padding_factor=1,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -454,7 +455,7 @@ def post_process_from_filter(
         Ft_ctf,
         F_ty,
         cryo.volume_shape,
-        1,
+        padding_factor,
         tau=tau,
         kernel=kernel,
         use_spherical_mask=use_spherical_mask,
