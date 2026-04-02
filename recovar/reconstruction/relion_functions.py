@@ -17,6 +17,55 @@ from recovar.reconstruction import noise, regularization
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Fourier volume zero-padding for reconstruction with padding_factor > 1
+# ---------------------------------------------------------------------------
+
+def zero_pad_fourier_volume(vol_flat, native_shape, padding_factor):
+    """Zero-pad a flat centered Fourier volume to a larger grid.
+
+    The native Fourier data (stored in centered / fftshift layout) is embedded
+    into the center of a larger zero-filled grid.  This is the Fourier-domain
+    equivalent of real-space zero-padding and corresponds to RELION's
+    ``padding_factor`` oversampling of the 3D Fourier grid.
+
+    Parameters
+    ----------
+    vol_flat : jnp.ndarray, shape (N^3,)
+        Flat centered Fourier volume at native resolution.
+    native_shape : tuple of int, (N, N, N)
+        Native volume shape.
+    padding_factor : int
+        Padding factor (typically 2).  Output size is (N*pf)^3.
+
+    Returns
+    -------
+    padded_flat : jnp.ndarray, shape ((N*pf)^3,)
+        Zero-padded Fourier volume in centered layout.
+    """
+    if padding_factor == 1:
+        return vol_flat
+
+    N = native_shape[0]
+    padded_N = N * padding_factor
+    padded_shape = (padded_N, padded_N, padded_N)
+
+    # Reshape to 3D grid, embed in center of padded grid
+    vol_3d = vol_flat.reshape(native_shape)
+
+    # In centered (fftshift) layout, DC is at (N//2, N//2, N//2).
+    # We place the native cube at the center of the padded cube.
+    offset = (padded_N - N) // 2
+    padded = jnp.zeros(padded_shape, dtype=vol_3d.dtype)
+    padded = padded.at[
+        offset : offset + N,
+        offset : offset + N,
+        offset : offset + N,
+    ].set(vol_3d)
+
+    return padded.reshape(-1)
+
+
 def griddingCorrect(vol_in, ori_size, padding_factor, order=0):
     """Radial sinc gridding correction."""
     og_shape = vol_in.shape
