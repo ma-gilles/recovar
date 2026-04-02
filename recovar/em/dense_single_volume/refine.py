@@ -1047,14 +1047,17 @@ def _refine_relion_mode(
                 )
                 sigma_rot = np.sqrt(2.0 * 2.0) * step_rad
 
-            # Gather per-image best rotation matrices from both half-sets
-            prior_rot_list = []
+            # Gather UNIQUE per-image best rotation matrices from both half-sets
+            # Deduplication is critical: 5000 images may have only ~1000 unique
+            # rotations, and get_local_rotation_grid is O(n_priors * n_grid).
+            unique_rot_idx = set()
             for k in range(2):
                 if previous_assignments[k] is not None:
                     rot_idx = previous_assignments[k] // n_trans_current
                     rot_idx = np.clip(rot_idx, 0, current_rotations.shape[0] - 1)
-                    prior_rot_list.append(current_rotations[rot_idx])
-            prior_rotations = np.concatenate(prior_rot_list, axis=0)
+                    unique_rot_idx.update(rot_idx.tolist())
+            unique_rot_idx = np.array(sorted(unique_rot_idx))
+            prior_rotations = current_rotations[unique_rot_idx]
 
             # Use get_local_rotation_grid for the selection + prior weights
             from recovar.em.sampling import get_local_rotation_grid
