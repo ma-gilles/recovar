@@ -149,7 +149,7 @@ def compute_pass2_stats(
     oversampling_order=1,
     current_size=None,
     image_batch_size=500,
-    max_union_pixels=200,
+    max_union_pixels=5000,
 ):
     """Pass 2: evaluate oversampled children of significant coarse rotations.
 
