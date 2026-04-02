@@ -1078,6 +1078,7 @@ def EM_step_half(
     eigenvalues=None,
     contrast_mean=1.0,
     contrast_variance=np.inf,
+    return_mean_c=False,
 ):
     """Half-spectrum EM step for L2-regularized PPCA.
 
@@ -1119,6 +1120,7 @@ def EM_step_half(
     ll_sum = jnp.array(0.0, dtype=ref.dtype)
     expected_zs = []
     second_moment_zs = []
+    mean_cs = []
 
     for experiment_dataset in dataset_list:
         for batch_half, ctf_params, rotation_matrices, translations, batch_image_ind in _iter_processed_batches_half(
@@ -1153,10 +1155,12 @@ def EM_step_half(
             )
             expected_zs.append(np.array(ez_batch))
             second_moment_zs.append(np.array(smz_batch))
+            mean_cs.append(np.array(_mc))
             ll_sum += ll_batch
 
     expected_zs = np.concatenate(expected_zs, axis=0)
     second_moment_zs = np.concatenate(second_moment_zs, axis=0)
+    mean_cs = np.concatenate(mean_cs, axis=0)
     expected_zs_mean = np.mean(expected_zs, axis=0)
     expected_zs_var = np.var(expected_zs, axis=0)
 
@@ -1280,6 +1284,18 @@ def EM_step_half(
         logger.error("EM_step_half produced NaN in W")
         raise ValueError("EM_step_half produced NaN in W")
 
+    if return_mean_c:
+        return (
+            W,
+            expected_zs,
+            second_moment_zs,
+            expected_zs_mean,
+            expected_zs_var,
+            neg_ll_total,
+            neg_ll_data,
+            neg_ll_prior,
+            mean_cs,
+        )
     return W, expected_zs, second_moment_zs, expected_zs_mean, expected_zs_var, neg_ll_total, neg_ll_data, neg_ll_prior
 
 
@@ -1541,6 +1557,7 @@ def EM(
     disc_type_mean="cubic",
     disc_type="linear_interp",
     return_iteration_data=False,
+    return_posterior_info=False,
     recompute_ll=False,
     use_pcg_mean=False,
     volume_mask=None,
@@ -1580,6 +1597,8 @@ def EM(
         disc_type_mean: Interpolation type for mean projection ('cubic' or 'linear_interp').
                         'cubic' requires precomputing spline coefficients (done automatically).
         return_iteration_data: If True, return per-iteration diagnostics.
+        return_posterior_info: If True, also return PPCA-native posterior
+            diagnostics such as ``mean_c`` from the final E-step.
         recompute_ll: If True, recompute data log-likelihood using updated W each iter.
         use_pcg_mean: If True, re-estimate mean via PCG with support mask each iteration.
         volume_mask: Real-space support mask for PCG mean (required if use_pcg_mean=True).
@@ -1651,6 +1670,7 @@ def EM(
 
     # Initialize table for collecting iteration data
     iteration_data = []
+    posterior_info = None
 
     # Print table header
     print("\n" + "=" * 130)
@@ -1685,6 +1705,7 @@ def EM(
                 neg_ll_total,
                 neg_ll_data,
                 neg_ll_prior,
+                mean_c,
             ) = EM_step_half(
                 experiment_dataset,
                 mean_estimate,
@@ -1709,7 +1730,9 @@ def EM(
                 eigenvalues=None,  # Λ=I (z~N(0,I), W absorbs scale)
                 contrast_mean=contrast_mean,
                 contrast_variance=contrast_variance,
+                return_mean_c=True,
             )
+            posterior_info = {"mean_c": np.asarray(mean_c, dtype=np.float32)}
         else:
             # L1/sparse: use full-spectrum EM step (ADMM needs full volume)
             (
@@ -1736,6 +1759,7 @@ def EM(
                 recompute_ll=recompute_ll,
                 mean_estimate_raw=mean_estimate_raw,
             )
+            posterior_info = {"mean_c": np.ones(expected_zs.shape[0], dtype=np.float32)}
 
         # Half-volume → real space via irfft3 (guaranteed real, no .real needed)
         vs = reference_dataset.volume_shape
@@ -1945,8 +1969,12 @@ def EM(
 
     # Orthogonalize
     U, S, _ = jnp.linalg.svd(W, full_matrices=False)
+    if return_iteration_data and return_posterior_info:
+        return U, S**2, W, expected_zs, second_moment_zs, iteration_data, posterior_info
     if return_iteration_data:
         return U, S**2, W, expected_zs, second_moment_zs, iteration_data
+    if return_posterior_info:
+        return U, S**2, W, expected_zs, second_moment_zs, posterior_info
     return U, S**2, W, expected_zs, second_moment_zs
 
 

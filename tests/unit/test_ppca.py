@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
 jax = pytest.importorskip("jax")
 import jax.numpy as jnp
@@ -695,6 +696,52 @@ def test_E_M_step_batch_half_accumulates_across_batches():
     np.testing.assert_allclose(
         rhs_h_expanded, np.asarray(rhs_f), atol=1e-4, rtol=1e-4, err_msg="multi-batch rhs_summed mismatch"
     )
+
+
+def test_em_return_posterior_info_exposes_mean_c(monkeypatch):
+    from recovar.ppca import ppca as ppca_impl
+
+    fake_dataset = SimpleNamespace(
+        volume_shape=(2, 2, 2),
+        volume_size=8,
+        grid_size=2,
+    )
+    W_initial = np.ones((8, 2), dtype=np.float32)
+    W_prior = np.ones((8, 2), dtype=np.float32)
+
+    def _fake_em_step_half(*_args, **_kwargs):
+        return (
+            np.ones((8, 2), dtype=np.complex64),
+            np.array([[1.0, 2.0]], dtype=np.float32),
+            np.array([np.eye(2, dtype=np.float32) * 3.0]),
+            np.array([1.0, 2.0], dtype=np.float32),
+            np.array([0.1, 0.2], dtype=np.float32),
+            10.0,
+            8.0,
+            2.0,
+            np.array([1.3], dtype=np.float32),
+        )
+
+    monkeypatch.setattr(ppca_impl, "EM_step_half", _fake_em_step_half)
+
+    U, S, W, expected_zs, second_moment_zs, iteration_data, posterior_info = ppca_impl.EM(
+        [fake_dataset],
+        np.zeros(8, dtype=np.complex64),
+        W_initial,
+        W_prior,
+        EM_iter=1,
+        return_iteration_data=True,
+        return_posterior_info=True,
+        contrast_mode="marginalize",
+    )
+
+    assert U.shape == (8, 2)
+    assert S.shape == (2,)
+    assert W.shape == (8, 2)
+    np.testing.assert_allclose(expected_zs, np.array([[1.0, 2.0]], dtype=np.float32))
+    np.testing.assert_allclose(second_moment_zs, np.array([np.eye(2, dtype=np.float32) * 3.0]))
+    assert iteration_data[0]["Iteration"] == 0
+    np.testing.assert_allclose(posterior_info["mean_c"], np.array([1.3], dtype=np.float32))
 
 
 # ---------------------------------------------------------------------------

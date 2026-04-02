@@ -52,6 +52,7 @@ def test_pipeline_registers_use_ppca():
     actions = _parser_with_pipeline_args()._option_string_actions
     assert "--use-ppca" in actions
     assert "--ppca-em-iters" in actions
+    assert "--ppca-zdim" in actions
     assert "--ppca-use-gridding-correction" in actions
     assert "--ppca-contrast-mode" in actions
 
@@ -239,15 +240,51 @@ def test_resolve_ppca_contrast_mode_auto():
     )
 
 
+def test_configure_ppca_single_zdim_overrides_options():
+    args = SimpleNamespace(ppca_zdim=7, zdim=[1, 2, 4])
+    options = SimpleNamespace(zs_dim_to_test=[1, 2, 4, 10])
+
+    out = pipeline_cmd._configure_ppca_single_zdim(args, options)
+
+    assert out == 7
+    assert args.zdim == [7]
+    assert options.zs_dim_to_test == [7]
+
+
+def test_rescale_ppca_posteriors_matches_covariance_space_formula():
+    expected_zs = np.array([[1.0, 2.0], [0.5, -1.0]], dtype=np.float32)
+    second_moment_zs = np.array(
+        [
+            [[2.0, 2.5], [2.5, 6.0]],
+            [[1.0, -0.5], [-0.5, 3.0]],
+        ],
+        dtype=np.float32,
+    )
+    eigenvalues = np.array([9.0, 4.0], dtype=np.float32)
+
+    coords, covariances = pipeline_cmd._rescale_ppca_posteriors(expected_zs, second_moment_zs, eigenvalues)
+
+    scale = np.sqrt(eigenvalues)
+    expected_coords = expected_zs * scale[None, :]
+    cov_z = second_moment_zs - np.einsum("ni,nj->nij", expected_zs, expected_zs)
+    expected_cov = cov_z * scale[None, :, None] * scale[None, None, :]
+
+    np.testing.assert_allclose(coords, expected_coords)
+    np.testing.assert_allclose(covariances, expected_cov)
+
+
 def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
-    fake_dataset = SimpleNamespace(volume_shape=(2, 2, 2))
+    fake_dataset = SimpleNamespace(volume_shape=(2, 2, 2), volume_size=8)
     means = SimpleNamespace(combined=np.zeros(8, dtype=np.complex64))
     options = SimpleNamespace(zs_dim_to_test=[4])
     args = SimpleNamespace(
+        ppca_zdim=4,
         ppca_contrast_mode="auto",
         correct_contrast=True,
         ppca_em_iters=7,
         use_complement_mask=False,
+        ppca_use_gridding_correction=True,
+        tilt_series=False,
     )
 
     prior_calls = {}
@@ -264,13 +301,24 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
         em_calls["W_prior"] = W_prior
         em_calls["kwargs"] = kwargs
         q = W_init.shape[1]
+        expected_zs = np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32)
+        second_moment_zs = np.array(
+            [[
+                [2.0, 2.5, 0.0, 0.0],
+                [2.5, 6.0, 0.0, 0.0],
+                [0.0, 0.0, 1.0, 0.0],
+                [0.0, 0.0, 0.0, 1.0],
+            ]],
+            dtype=np.float32,
+        )
         return (
-            np.ones((8, q), dtype=np.complex64),
-            np.arange(1, q + 1, dtype=np.float32),
-            np.full((8, q), 5.0, dtype=np.complex64),
-            np.zeros((10, q), dtype=np.float32),
-            np.zeros((10, q, q), dtype=np.float32),
+            np.ones((8, q), dtype=np.complex128),
+            np.arange(1, q + 1, dtype=np.float64),
+            np.full((8, q), 5.0, dtype=np.complex128),
+            expected_zs,
+            second_moment_zs,
             [{"Iteration": 0}],
+            {"mean_c": np.array([1.25], dtype=np.float32)},
         )
 
     monkeypatch.setattr(
@@ -280,13 +328,9 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
     )
     monkeypatch.setattr(pipeline_cmd.ppca_module, "EM", _fake_em)
 
-    u_rescaled = np.arange(8 * 6, dtype=np.float32).reshape(8, 6).astype(np.complex64)
-    s_rescaled = np.array([9.0, 4.0, 1.0, 16.0, 25.0, 36.0], dtype=np.float32)
     out = pipeline_cmd._run_ppca_refinement(
         fake_dataset,
         means,
-        u_rescaled,
-        s_rescaled,
         np.ones((2, 2, 2), dtype=np.float32),
         options,
         args,
@@ -297,13 +341,16 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
     assert prior_calls["args"][2] == 4
     assert prior_calls["args"][3] == (2, 2, 2)
     assert prior_calls["args"][4] == 32
-    np.testing.assert_allclose(
-        em_calls["W_init"],
-        u_rescaled[:, :4] * np.sqrt(s_rescaled[:4])[None, :],
-    )
+    assert em_calls["W_init"].shape == (8, 4)
     np.testing.assert_allclose(em_calls["W_prior"], np.full((8, 4), 3.0, dtype=np.float32))
     assert em_calls["kwargs"]["contrast_mode"] == "marginalize"
     assert em_calls["kwargs"]["EM_iter"] == 7
+    assert em_calls["kwargs"]["return_posterior_info"] is True
     assert out["basis_size"] == 4
     assert out["contrast_mode"] == "marginalize"
     assert out["prior_mode"] == "hybrid_shell"
+    assert out["u_rescaled"].dtype == np.complex64
+    assert out["s_rescaled"].dtype == np.float32
+    assert out["W"].dtype == np.complex64
+    np.testing.assert_allclose(out["latent_coords"][4], np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32) * np.sqrt(np.arange(1, 5, dtype=np.float32))[None, :])
+    np.testing.assert_allclose(out["contrasts"][4], np.array([1.25], dtype=np.float32))

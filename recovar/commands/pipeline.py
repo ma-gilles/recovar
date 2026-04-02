@@ -358,6 +358,13 @@ def add_args(parser: argparse.ArgumentParser):
         help="Number of PPCA EM refinement iterations when --use-ppca is enabled.",
     )
     adv.add_argument(
+        "--ppca-zdim",
+        dest="ppca_zdim",
+        type=int,
+        default=10,
+        help="Single latent dimension to use when --use-ppca is enabled.",
+    )
+    adv.add_argument(
         "--ppca-use-gridding-correction",
         dest="ppca_use_gridding_correction",
         action=argparse.BooleanOptionalAction,
@@ -752,14 +759,77 @@ def _resolve_ppca_contrast_grid(contrast_mode):
     return np.linspace(0.3, 1.7, 16, dtype=np.float32)
 
 
-def _make_ppca_initial_loading(u_rescaled, s_rescaled, basis_size):
-    """Convert covariance eigenvectors/eigenvalues into a PPCA loading init."""
-    eigvals = np.maximum(np.asarray(s_rescaled[:basis_size], dtype=np.float32), 1e-8)
-    return np.asarray(u_rescaled[:, :basis_size]) * np.sqrt(eigvals)[None, :]
+def _resolve_ppca_zdim(args):
+    """Return the single latent dimension used by the direct PPCA pipeline path."""
+    basis_size = int(getattr(args, "ppca_zdim", 10))
+    if basis_size <= 0:
+        raise ValueError(f"--ppca-zdim must be positive, got {basis_size}")
+    return basis_size
 
 
-def _run_ppca_refinement(dataset, means, u_rescaled, s_rescaled, focus_mask, options, args, batch_size):
-    """Refine the covariance basis with PPCA and return PipelineOutput-compatible arrays."""
+def _configure_ppca_single_zdim(args, options):
+    """Force pipeline metadata/options into the single-zdim PPCA contract."""
+    basis_size = _resolve_ppca_zdim(args)
+    args.zdim = [basis_size]
+    options.zs_dim_to_test = [basis_size]
+    return basis_size
+
+
+def _make_ppca_initial_loading(volume_size, basis_size, seed=0, init_scale=0.01):
+    """Build a deterministic small random PPCA loading initialization."""
+    rng = np.random.default_rng(seed)
+    return rng.standard_normal((volume_size, basis_size)).astype(np.float32) * float(init_scale)
+
+
+def _rescale_ppca_posteriors(expected_zs, second_moment_zs, eigenvalues):
+    """Map PPCA latents into the covariance-PCA coordinate convention.
+
+    Covariance-PCA stores scale on the latent coordinates. PPCA stores the
+    same scale on ``W = U diag(sqrt(lambda))``. To make downstream consumers
+    interchangeable, convert ``z`` to ``x = diag(sqrt(lambda)) z`` and return
+    the corresponding posterior covariance in that same space.
+    """
+    expected_zs = np.asarray(expected_zs)
+    second_moment_zs = np.asarray(second_moment_zs)
+    eigvals = np.maximum(np.asarray(eigenvalues, dtype=np.float32), 0.0)
+    scale = np.sqrt(eigvals).astype(np.float32)
+
+    mean_x = expected_zs * scale[None, :]
+    cov_z = second_moment_zs - np.einsum("ni,nj->nij", expected_zs, np.conj(expected_zs))
+    cov_x = cov_z * scale[None, :, None] * scale[None, None, :]
+    cov_x = 0.5 * (cov_x + np.swapaxes(np.conj(cov_x), -1, -2))
+    return np.asarray(mean_x.real, dtype=np.float32), np.asarray(cov_x.real, dtype=np.float32)
+
+
+def _build_ppca_embedding_outputs(expected_zs, second_moment_zs, eigenvalues, mean_c, basis_size):
+    """Build PipelineOutput-compatible embedding dictionaries from PPCA posteriors."""
+    coords, covariances = _rescale_ppca_posteriors(
+        np.asarray(expected_zs)[:, :basis_size],
+        np.asarray(second_moment_zs)[:, :basis_size, :basis_size],
+        np.asarray(eigenvalues)[:basis_size],
+    )
+    contrasts = np.asarray(mean_c, dtype=np.float32)
+    latent_coords = {basis_size: coords}
+    latent_covariances = {basis_size: covariances}
+    contrast_dict = {basis_size: contrasts}
+    return (
+        latent_coords,
+        dict(latent_coords),
+        latent_covariances,
+        dict(latent_covariances),
+        contrast_dict,
+        dict(contrast_dict),
+    )
+
+
+def _as_pipeline_basis_dtype(arr):
+    """Downcast PPCA basis outputs to the dtypes expected by pipeline output code."""
+    arr = np.asarray(arr)
+    return arr.astype(np.complex64 if np.iscomplexobj(arr) else np.float32)
+
+
+def _run_ppca_refinement(dataset, means, focus_mask, options, args, batch_size):
+    """Run PPCA directly from the mean estimate and return pipeline-compatible arrays."""
     basis_size = int(np.max(options.zs_dim_to_test))
     if basis_size <= 0:
         raise ValueError(f"PPCA basis size must be positive, got {basis_size}")
@@ -774,7 +844,7 @@ def _run_ppca_refinement(dataset, means, u_rescaled, s_rescaled, focus_mask, opt
     )
     contrast_mode = _resolve_ppca_contrast_mode(args)
     contrast_grid = _resolve_ppca_contrast_grid(contrast_mode)
-    W_init = _make_ppca_initial_loading(u_rescaled, s_rescaled, basis_size)
+    W_init = _make_ppca_initial_loading(dataset.volume_size, basis_size)
     prior_info = ppca_prior_estimation.estimate_hybrid_shell_prior_from_data(
         dataset,
         means.combined,
@@ -782,7 +852,15 @@ def _run_ppca_refinement(dataset, means, u_rescaled, s_rescaled, focus_mask, opt
         dataset.volume_shape,
         batch_size,
     )
-    U_ppca, S_ppca, W_ppca, _expected_zs, _second_moment_zs, iteration_data = ppca_module.EM(
+    (
+        U_ppca,
+        S_ppca,
+        W_ppca,
+        expected_zs,
+        second_moment_zs,
+        iteration_data,
+        posterior_info,
+    ) = ppca_module.EM(
         dataset,
         means.combined,
         W_init,
@@ -793,26 +871,47 @@ def _run_ppca_refinement(dataset, means, u_rescaled, s_rescaled, focus_mask, opt
         disc_type_mean="cubic",
         disc_type="linear_interp",
         return_iteration_data=True,
+        return_posterior_info=True,
         use_gridding_correction=bool(getattr(args, "ppca_use_gridding_correction", True)),
         volume_mask=np.asarray(focus_mask, dtype=np.float32),
         contrast_mode=contrast_mode,
         contrast_grid=contrast_grid,
     )
+    (
+        latent_coords,
+        latent_coords_noreg,
+        latent_precision,
+        latent_precision_noreg,
+        contrasts,
+        contrasts_noreg,
+    ) = _build_ppca_embedding_outputs(
+        expected_zs,
+        second_moment_zs,
+        S_ppca,
+        posterior_info["mean_c"],
+        basis_size,
+    )
     logger.info(
-        "PPCA refinement complete: q=%d contrast_mode=%s iters=%d",
+        "PPCA direct solve complete: q=%d contrast_mode=%s iters=%d",
         basis_size,
         contrast_mode,
         int(getattr(args, "ppca_em_iters", 20)),
     )
     return {
-        "u_rescaled": np.asarray(U_ppca),
-        "s_rescaled": np.asarray(S_ppca),
-        "W": np.asarray(W_ppca),
+        "u_rescaled": _as_pipeline_basis_dtype(U_ppca),
+        "s_rescaled": np.asarray(S_ppca, dtype=np.float32),
+        "W": _as_pipeline_basis_dtype(W_ppca),
         "iteration_data": iteration_data,
         "prior_info": prior_info,
         "basis_size": basis_size,
         "contrast_mode": contrast_mode,
         "prior_mode": "hybrid_shell",
+        "latent_coords": latent_coords,
+        "latent_coords_noreg": latent_coords_noreg,
+        "latent_precision": latent_precision,
+        "latent_precision_noreg": latent_precision_noreg,
+        "contrasts": contrasts,
+        "contrasts_noreg": contrasts_noreg,
     }
 
 
@@ -955,6 +1054,9 @@ def standard_recovar_pipeline(args):
         logger.info("  Datadir: %s", dataset_spec.datadir)
 
     options = utils.make_algorithm_options(args)
+    if getattr(args, "use_ppca", False):
+        ppca_zdim = _configure_ppca_single_zdim(args, options)
+        logger.info("PPCA mode enabled: overriding latent dimensions to single zdim=%d", ppca_zdim)
 
     ## TODO this is a big one, so do with care. I wonder if there is a better way to handle this logic.
     ## Could we instead store 'one' dataset and the indices instead of two different objects, then do a clevery use of iterators
@@ -1184,38 +1286,77 @@ def standard_recovar_pipeline(args):
         n_pcs_to_keep = np.max(np.append(options.zs_dim_to_test, 50))
 
         ignore_zero_frequency = options.ignore_zero_frequency
-        for idx, focus_mask in enumerate(focus_masks):
-            u_this, s_this, covariance_cols, picked_frequencies, column_fscs = (
-                principal_components.estimate_principal_components(
-                    ds,
-                    options,
-                    means,
-                    mean_prior,
-                    focus_mask,
-                    dilated_volume_mask,
-                    valid_idx,
-                    batch_size,
-                    gpu_memory_to_use=gpu_memory,
-                    covariance_options=covariance_options,
-                    variance_estimate=variance_est["combined"],
-                    use_reg_mean_in_contrast=args.use_reg_mean_in_contrast,
-                    use_multi_gpu=args.multi_gpu,
-                    n_gpus=args.n_gpus,
-                )
+        if getattr(args, "use_ppca", False):
+            ppca_result = _run_ppca_refinement(
+                ds,
+                means,
+                focus_masks[-1],
+                options,
+                args,
+                batch_size,
             )
-            if idx == num_foc_masks - 1:
-                s.append(s_this["rescaled"][:n_pcs_to_keep].copy())
-                u.append(u_this["rescaled"][:, :n_pcs_to_keep].copy())
-            else:
-                s.append(s_this["rescaled"][:zdim_for_rest].copy())
-                u.append(u_this["rescaled"][:, :zdim_for_rest].copy())
-            del u_this, s_this
+            u = {"rescaled": ppca_result["u_rescaled"], "real": None}
+            s = {"rescaled": ppca_result["s_rescaled"], "real": None}
+            covariance_cols = None
+            picked_frequencies = None
+            column_fscs = None
+            ppca_loadings = ppca_result["W"]
+            ppca_iteration_data = ppca_result["iteration_data"]
+            ppca_info = {
+                "basis_size": int(ppca_result["basis_size"]),
+                "contrast_mode": ppca_result["contrast_mode"],
+                "prior_mode": ppca_result["prior_mode"],
+                "em_iters": int(args.ppca_em_iters),
+            }
+            latent_coords = ppca_result["latent_coords"]
+            latent_coords_noreg = ppca_result["latent_coords_noreg"]
+            latent_precision = ppca_result["latent_precision"]
+            latent_precision_noreg = ppca_result["latent_precision_noreg"]
+            est_contrasts = ppca_result["contrasts"]
+            est_contrasts_noreg = ppca_result["contrasts_noreg"]
+        else:
+            for idx, focus_mask in enumerate(focus_masks):
+                u_this, s_this, covariance_cols, picked_frequencies, column_fscs = (
+                    principal_components.estimate_principal_components(
+                        ds,
+                        options,
+                        means,
+                        mean_prior,
+                        focus_mask,
+                        dilated_volume_mask,
+                        valid_idx,
+                        batch_size,
+                        gpu_memory_to_use=gpu_memory,
+                        covariance_options=covariance_options,
+                        variance_estimate=variance_est["combined"],
+                        use_reg_mean_in_contrast=args.use_reg_mean_in_contrast,
+                        use_multi_gpu=args.multi_gpu,
+                        n_gpus=args.n_gpus,
+                    )
+                )
+                if idx == num_foc_masks - 1:
+                    s.append(s_this["rescaled"][:n_pcs_to_keep].copy())
+                    u.append(u_this["rescaled"][:, :n_pcs_to_keep].copy())
+                else:
+                    s.append(s_this["rescaled"][:zdim_for_rest].copy())
+                    u.append(u_this["rescaled"][:, :zdim_for_rest].copy())
+                del u_this, s_this
 
-        u = {"rescaled": np.concatenate(u, axis=1), "real": None}
-        s = {"rescaled": np.concatenate(s, axis=0), "real": None}
-        options.ignore_zero_frequency = ignore_zero_frequency
+            u = {"rescaled": np.concatenate(u, axis=1), "real": None}
+            s = {"rescaled": np.concatenate(s, axis=0), "real": None}
+            options.ignore_zero_frequency = ignore_zero_frequency
 
-        # Validate PCA results
+            # --- Compute embeddings ---
+            (
+                latent_coords,
+                latent_coords_noreg,
+                latent_precision,
+                latent_precision_noreg,
+                est_contrasts,
+                est_contrasts_noreg,
+            ) = _compute_embeddings(means, u, s, ds, volume_mask, options, gpu_memory, focus_masks, zdim_for_rest, args)
+
+        # Validate basis/results
         if not np.all(np.isfinite(u["rescaled"])):
             raise ValueError("u contains non-finite values")
         if not np.all(np.isfinite(s["rescaled"])):
@@ -1236,43 +1377,11 @@ def standard_recovar_pipeline(args):
             )
             noise_var_used[0] *= 1e16
 
-        if getattr(args, "use_ppca", False):
-            ppca_result = _run_ppca_refinement(
-                ds,
-                means,
-                u["rescaled"],
-                s["rescaled"],
-                focus_masks[-1],
-                options,
-                args,
-                batch_size,
-            )
-            u["rescaled"] = ppca_result["u_rescaled"]
-            s["rescaled"] = ppca_result["s_rescaled"]
-            ppca_loadings = ppca_result["W"]
-            ppca_iteration_data = ppca_result["iteration_data"]
-            ppca_info = {
-                "basis_size": int(ppca_result["basis_size"]),
-                "contrast_mode": ppca_result["contrast_mode"],
-                "prior_mode": ppca_result["prior_mode"],
-                "em_iters": int(args.ppca_em_iters),
-            }
-
         if not args.keep_intermediate:
             del u["real"]
             if "rescaled_no_contrast" in u:
                 del u["rescaled_no_contrast"]
             covariance_cols = None
-
-        # --- Compute embeddings ---
-        (
-            latent_coords,
-            latent_coords_noreg,
-            latent_precision,
-            latent_precision_noreg,
-            est_contrasts,
-            est_contrasts_noreg,
-        ) = _compute_embeddings(means, u, s, ds, volume_mask, options, gpu_memory, focus_masks, zdim_for_rest, args)
 
         ## Make sure this makes sense
         if repeat == 1:
