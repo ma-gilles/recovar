@@ -350,13 +350,19 @@ def _as_flat_single_volume(arr, volume_shape):
 
 
 def adjust_regularization_relion_style(
-    filter, volume_shape, tau=None, padding_factor=1, max_res_shell=None, half_volume=False
+    filter, volume_shape, tau=None, padding_factor=1, max_res_shell=None, half_volume=False,
+    tau2_fudge=1.0,
 ):
     """Adjust the RELION-style regularization filter.
 
     Adds 1/tau to the filter (Wiener denominator) and floors small values at
     1/1000 of the spherically-averaged filter to avoid division by zero.
     See RELION backprojector.cpp for the original algorithm.
+
+    The ``tau2_fudge`` parameter mirrors RELION's ``--tau2_fudge`` flag
+    (default 1.0).  It enters the Wiener denominator as::
+
+        inv_tau = 1 / (padding_factor**3 * tau2_fudge * tau)
     """
     volume_shape = tuple(int(s) for s in volume_shape)
     packed_shape = (
@@ -374,6 +380,7 @@ def adjust_regularization_relion_style(
             padding_factor=padding_factor,
             max_res_shell=max_res_shell,
             half_volume=False,
+            tau2_fudge=tau2_fudge,
         )
         reg_half = fourier_transform_utils.full_volume_to_half_volume(reg_full, volume_shape).reshape(-1)
         if input_is_grid:
@@ -381,11 +388,12 @@ def adjust_regularization_relion_style(
         return reg_half
 
     if tau is not None:
+        # RELION: invtau2 = 1 / (padding_factor^3 * tau2_fudge * tau2[ires])
         oversampling_factor = padding_factor**3
         og_volume_shape = tuple(s // padding_factor for s in volume_shape)
         tau = upscale_tau(tau, padding_factor, og_volume_shape, tau_is_1d=False)
         safe_tau = jnp.where(tau > 1e-20, tau, jnp.float32(1.0))
-        inv_tau = 1 / (oversampling_factor * safe_tau)
+        inv_tau = 1 / (oversampling_factor * tau2_fudge * safe_tau)
         inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
         inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
         regularized_filter = filter_flat + inv_tau
@@ -434,6 +442,7 @@ def post_process_from_filter(
     grid_correct=True,
     gridding_correct="square",
     kernel_width=1,
+    tau2_fudge=1.0,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -452,6 +461,7 @@ def post_process_from_filter(
         grid_correct=grid_correct,
         gridding_correct=gridding_correct,
         kernel_width=kernel_width,
+        tau2_fudge=tau2_fudge,
     )
 
 
@@ -471,6 +481,7 @@ def post_process_from_filter_v2(
     return_real_space=False,
     return_half_volume=False,
     input_half_volume=None,
+    tau2_fudge=1.0,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -478,6 +489,10 @@ def post_process_from_filter_v2(
 
     Supports both full Fourier inputs ``(N0*N1*N2,)`` and packed half-volume
     inputs ``(N0*N1*(N2//2+1),)``.
+
+    The ``tau2_fudge`` parameter (default 1.0) is forwarded to
+    :func:`adjust_regularization_relion_style` and mirrors RELION's
+    ``--tau2_fudge`` flag.
     """
     upsampled_volume_shape = tuple(3 * [og_volume_shape[0] * volume_upsampling_factor])
     if input_half_volume is None:
@@ -509,6 +524,7 @@ def post_process_from_filter_v2(
         padding_factor=volume_upsampling_factor,
         max_res_shell=None,
         half_volume=False,
+        tau2_fudge=tau2_fudge,
     )
     vol = (F_ty_flat * valid_indices) / Ft_ctf2
 
@@ -549,6 +565,7 @@ def relion_reconstruct(
     grid_correct=True,
     gridding_correct="square",
     tau=None,
+    tau2_fudge=1.0,
 ):
     """Full mean reconstruction pipeline: accumulate → post-process."""
     Ft_ctf, F_ty = relion_style_triangular_kernel(
@@ -570,5 +587,6 @@ def relion_reconstruct(
         grid_correct=grid_correct,
         gridding_correct=gridding_correct,
         kernel_width=1,
+        tau2_fudge=tau2_fudge,
     )
     return estimate, Ft_ctf

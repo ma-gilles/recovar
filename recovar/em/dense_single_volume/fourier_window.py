@@ -32,7 +32,7 @@ import recovar.core.fourier_transform_utils as ftu
 #
 # More JIT compilations (7 vs 3) but each only happens once -- budget ~3
 # minutes total extra compile time across a full run.
-ALLOWED_CURRENT_SIZES = [16, 24, 32, 48, 64, 96, 128]
+ALLOWED_CURRENT_SIZES = [16, 24, 32, 48, 64, 80, 96, 104, 112, 120, 128, 160, 192, 224, 256]
 
 
 def make_frequency_radius_map_half(image_shape):

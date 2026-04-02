@@ -73,7 +73,8 @@ def compute_prior_quantites(halfset_datasets, cov_noise, batch_size, for_whiteni
 
 
 def compute_relion_prior(
-    halfset_datasets, cov_noise, image0, image1, batch_size, estimate_merged_SNR=False, noise_level=None
+    halfset_datasets, cov_noise, image0, image1, batch_size, estimate_merged_SNR=False, noise_level=None,
+    tau2_fudge=1.0,
 ):
     """Compute a RELION-style spectral prior from two half-set reconstructions.
 
@@ -85,6 +86,8 @@ def compute_relion_prior(
         batch_size: GPU batch size for noise estimation.
         estimate_merged_SNR: Estimate SNR from merged map.
         noise_level: Pre-computed noise level (skips estimation if given).
+        tau2_fudge: RELION's ``--tau2_fudge`` parameter (default 1.0).
+            Multiplies the SSNR before computing tau2.
 
     Returns:
         Tuple ``(prior, fsc, prior_avg)`` — the spectral prior, FSC
@@ -105,6 +108,7 @@ def compute_relion_prior(
         bottom_of_fraction,
         estimate_merged_SNR=estimate_merged_SNR,
         from_noise_level=from_noise_level,
+        tau2_fudge=tau2_fudge,
     )
 
 
@@ -244,6 +248,7 @@ def compute_fsc_prior_gpu(
     substract_shell_mean=False,
     frequency_shift=0,
     from_noise_level=False,
+    tau2_fudge=1.0,
 ):
     epsilon = jax_config.FSC_ZERO_THRESHOLD
     # FSC top:
@@ -258,8 +263,8 @@ def compute_fsc_prior_gpu(
     if estimate_merged_SNR:
         fsc = 2 * fsc / (1 + fsc)
 
-    # SNR = jnp.where(fsc < 1 - epsilon, fsc / ( 1 - fsc), jnp.inf)
-    SNR = fsc / (1 - fsc)
+    # RELION: SSNR = myfsc / (1 - myfsc) * tau2_fudge
+    SNR = fsc / (1 - fsc) * tau2_fudge
 
     # Bottom of fraction
     if from_noise_level:
@@ -298,7 +303,8 @@ def downsample_lhs(lhs, volume_shape, upsampling_factor=1):
 @functools.partial(jax.jit, static_argnums=[0, 6, 7])
 @nvtx.annotate("compute_fsc_prior_gpu_v2", color="cyan", domain=NVTX_DOMAIN_REG)
 def compute_fsc_prior_gpu_v2(
-    volume_shape, image0, image1, lhs, prior, frequency_shift, substract_shell_mean=False, upsampling_factor=1
+    volume_shape, image0, image1, lhs, prior, frequency_shift, substract_shell_mean=False, upsampling_factor=1,
+    tau2_fudge=1.0,
 ):
     epsilon = jax_config.FSC_ZERO_THRESHOLD
     # FSC top:
@@ -307,7 +313,8 @@ def compute_fsc_prior_gpu_v2(
     fsc = jnp.where(fsc_raw > epsilon, fsc_raw, epsilon)
     fsc = jnp.where(fsc < 1 - epsilon, fsc, 1 - epsilon)
 
-    SNR = fsc / (1 - fsc)
+    # RELION: SSNR = myfsc / (1 - myfsc) * tau2_fudge
+    SNR = fsc / (1 - fsc) * tau2_fudge
 
     # Gotta somehow downsample lhs by a factor of 2
     upsampled_volume_shape = tuple([upsampling_factor * i for i in volume_shape])
@@ -410,6 +417,7 @@ def prior_iteration_relion_style(
     volume_mask=None,
     prior_iterations=3,
     downsample_from_fsc_flag=False,
+    tau2_fudge=1.0,
 ):
     # assert substract_shell_mean == False
     # assert jnp.linalg.norm(frequency_shift) < 1e-8
@@ -430,6 +438,7 @@ def prior_iteration_relion_style(
             gridding_correct="square",
             kernel_width=1,
             volume_mask=volume_mask,
+            tau2_fudge=tau2_fudge,
         )
         cov_col1 = relion_functions.post_process_from_filter_v2(
             H1,
@@ -443,6 +452,7 @@ def prior_iteration_relion_style(
             gridding_correct="square",
             kernel_width=1,
             volume_mask=volume_mask,
+            tau2_fudge=tau2_fudge,
         )
         prior, fsc, _ = compute_fsc_prior_gpu_v2(
             volume_shape,
@@ -452,6 +462,7 @@ def prior_iteration_relion_style(
             prior,
             frequency_shift=frequency_shift,
             substract_shell_mean=substract_shell_mean,
+            tau2_fudge=tau2_fudge,
         )
         return prior, fsc
 
@@ -488,6 +499,7 @@ def prior_iteration_relion_style(
         gridding_correct="square",
         kernel_width=1,
         volume_mask=volume_mask,
+        tau2_fudge=tau2_fudge,
     )
 
     return cov_col0.reshape(-1), prior, fsc
@@ -510,9 +522,123 @@ def downsample_from_fsc(array, fsc, volume_shape):
     return array * fsc_mask.reshape(-1)
 
 
+# ---------------------------------------------------------------------------
+# RELION-style data_vs_prior resolution criterion (C4)
+# ---------------------------------------------------------------------------
+
+
+def compute_data_vs_prior(Ft_ctf, tau2, volume_shape, padding_factor=1, tau2_fudge=1.0):
+    """Compute RELION's data_vs_prior ratio per radial shell.
+
+    RELION determines the effective resolution from the shell where
+    ``data_vs_prior`` drops below 1.0, rather than from FSC < 0.143.
+
+    The ratio is defined as::
+
+        data_vs_prior[ires] = avg_Fweight[ires] * tau2_fudge * tau2[ires] * padding_factor**3
+
+    where ``avg_Fweight`` is the shell-averaged Fourier weight from
+    backprojection (the real part of ``Ft_ctf``), and ``tau2`` is the
+    spectral signal prior.
+
+    Parameters
+    ----------
+    Ft_ctf : jnp.ndarray
+        Fourier-space CTF weight array (flattened volume).  The real part
+        gives the per-voxel weight (sum of CTF^2 / noise).
+    tau2 : jnp.ndarray, shape (n_shells,)
+        Spectral signal prior (one value per radial shell).
+    volume_shape : tuple of int
+        3-D volume dimensions, e.g. ``(N, N, N)``.
+    padding_factor : int or float
+        Oversampling / padding factor (1 for no padding).
+    tau2_fudge : float
+        RELION's ``--tau2_fudge`` parameter (default 1.0).
+
+    Returns
+    -------
+    jnp.ndarray, shape (n_shells,)
+        Per-shell data_vs_prior ratio.
+    """
+    avg_weight = average_over_shells(Ft_ctf.real, volume_shape)
+    oversampling_correction = padding_factor ** 3
+    return avg_weight * tau2_fudge * tau2 * oversampling_correction
+
+
+def resolution_from_data_vs_prior(data_vs_prior):
+    """Find the resolution shell where data_vs_prior drops below 1.0.
+
+    Scans from shell 1 outward (skipping DC) and returns the last shell
+    where ``data_vs_prior >= 1.0``.
+
+    Parameters
+    ----------
+    data_vs_prior : array-like, shape (n_shells,)
+        Per-shell data_vs_prior ratio from :func:`compute_data_vs_prior`.
+
+    Returns
+    -------
+    int
+        Shell index of the resolution limit.  Returns ``len(data_vs_prior) - 1``
+        if data_vs_prior never drops below 1.0.
+    """
+    dvp = np.asarray(data_vs_prior)
+    for ires in range(1, len(dvp)):
+        if dvp[ires] < 1.0:
+            return ires - 1
+    return len(dvp) - 1
+
+
+# ---------------------------------------------------------------------------
+# RELION-style current_size growth logic (C5)
+# ---------------------------------------------------------------------------
+
+
+def compute_current_size_relion(resolution_shell, ori_size, ave_Pmax=0.0,
+                                has_high_fsc_at_limit=False, incr_size=10):
+    """Compute the next current_size using RELION's growth logic.
+
+    RELION grows current_size beyond the current resolution limit.  If
+    the average maximum posterior probability (``ave_Pmax``) exceeds 0.1
+    AND the FSC is still high at the resolution limit, the jump is 25%
+    of ``ori_size / 2`` (aggressive growth).  Otherwise the jump is
+    ``incr_size`` shells (conservative).
+
+    The result is clamped to ``ori_size``.
+
+    Parameters
+    ----------
+    resolution_shell : int
+        Current resolution shell index (e.g. from
+        :func:`resolution_from_data_vs_prior` or FSC-based estimate).
+    ori_size : int
+        Original image size in pixels (diameter, e.g. 128).
+    ave_Pmax : float
+        Average of the per-image maximum posterior probability.
+        Typical range 0-1; early iterations have low values.
+    has_high_fsc_at_limit : bool
+        True if the FSC is still significantly above 0 at the current
+        resolution limit (indicating the data supports higher resolution).
+    incr_size : int
+        Default shell increment when conditions for aggressive growth
+        are not met.
+
+    Returns
+    -------
+    int
+        New current_size in pixels (diameter).
+    """
+    maxres = resolution_shell
+    if ave_Pmax > 0.1 and has_high_fsc_at_limit:
+        maxres += round(0.25 * ori_size / 2)
+    else:
+        maxres += incr_size
+    return min(2 * maxres, ori_size)
+
+
 prior_iteration_batch = jax.vmap(prior_iteration, in_axes=(0, 0, 0, 0, 0, 0, None, None, None))
 prior_iteration_relion_style_batch = jax.vmap(
-    prior_iteration_relion_style, in_axes=(0, 0, 0, 0, 0, 0, None, None, None, None, None, None, None, None)
+    prior_iteration_relion_style, in_axes=(0, 0, 0, 0, 0, 0, None, None, None, None, None, None, None, None, None)
 )
 
 batch_average_over_shells = jax.vmap(average_over_shells, in_axes=(0, None, None))
