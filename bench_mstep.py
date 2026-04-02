@@ -586,20 +586,19 @@ def main():
         vol_path = f"/scratch/gpfs/GILLES/mg6942/tmp/ppca_bfac60_n1_128/true_volumes"
         tag = f"bench_{gs}_n{args.noise_level}_c{args.contrast_std}_{args.n_images}"
         ds_dir = f"/scratch/gpfs/GILLES/mg6942/tmp/{tag}/test_dataset"
-        if not os.path.exists(os.path.join(ds_dir, "particles.star")):
-            from recovar.simulation import simulator
-            voxel_size = 4.25 * 128 / gs  # source vols are 128³ at 4.25 Å/px
-            logger.info("Generating dataset: %s (voxel_size=%.2f)", ds_dir, voxel_size)
-            simulator.generate_synthetic_dataset(
-                ds_dir, voxel_size=voxel_size, volumes_path_root=vol_path,
-                n_images=args.n_images, grid_size=gs,
-                noise_level=args.noise_level, noise_model="radial1",
-                contrast_std=args.contrast_std, noise_scale_std=0.0,
-                dataset_params_option="dataset1", disc_type="linear_interp",
-                trailing_zero_format_in_vol_name=True,
-                put_extra_particles=False, percent_outliers=0.0)
-        else:
-            logger.info("Dataset exists: %s", ds_dir)
+        # if not os.path.exists(os.path.join(ds_dir, "particles.star")):
+        from recovar.simulation import simulator
+        voxel_size = 4.25 * 128 / gs  # source vols are 128³ at 4.25 Å/px
+        logger.info("Generating dataset: %s (voxel_size=%.2f)", ds_dir, voxel_size)
+        simulator.generate_synthetic_dataset(
+            ds_dir, voxel_size=voxel_size, volumes_path_root=vol_path,
+            n_images=args.n_images, grid_size=gs,
+            noise_level=args.noise_level, noise_model="radial1",
+            contrast_std=args.contrast_std, noise_scale_std=0.0,
+            dataset_params_option="dataset1", disc_type="linear_interp",
+            trailing_zero_format_in_vol_name=True,
+            put_extra_particles=False, percent_outliers=0.0)
+
     cryos, sim_info, gt, nv = _load_simulated_dataset(
         _with_trailing_separator(ds_dir), gs, args.n_images, lazy=False)
     vs = gt.volume_shape

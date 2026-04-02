@@ -816,11 +816,8 @@ def _e_step_half_inner(
     )
     CTF_half = ctf_evaluator(CTF_params, image_shape, voxel_size, half_image=True) / jnp.sqrt(noise_variance_half)
 
-    # For contrast estimation, mean must use same disc_type as data generation
-    # (disc_type_mean="cubic" gives 174x scale mismatch vs linear_interp).
-    # Standard PPCA is unaffected since mean cancels in centering.
     projected_mean_half = core.slice_volume(
-        mean, rotation_matrices, image_shape, volume_shape, disc_type, half_image=True
+        mean, rotation_matrices, image_shape, volume_shape, disc_type_mean, half_image=True
     )
     projected_mean_half = (
         projected_mean_half
@@ -978,23 +975,35 @@ def E_M_step_batch_half(
         #         )
         #         lhs_summed = lhs_summed.at[:, k].add(bp_col.reshape(-1).real)
 
-        # RHS term 1: CTF · y · E[cz]^T  (= CTF · y · E[z]^T when c=1)
-        before_rhs1 = (CTF_half[..., None] * images_half_w[..., None]
-                       * jnp.conj(mean_cz)[:, None, :]).transpose(2, 0, 1)
-        bp_rhs1 = core.batch_adjoint_slice_volume(
-            before_rhs1, rotation_matrices, image_shape, volume_shape,
-            disc_type, half_image=True, half_volume=True,
-        )
-        rhs_summed = rhs_summed + bp_rhs1.T
+        if contrast_mode == "none":
+            # Original single-pass centering: CTF · (y - Aμ) · E[z]^T
+            # This avoids disc_type_mean/disc_type mismatch in backprojection.
+            centered_half = images_half_w - projected_mean_half_w
+            before_rhs = (CTF_half[..., None] * centered_half[..., None]
+                          * jnp.conj(expected_zs)[:, None, :]).transpose(2, 0, 1)
+            bp_rhs = core.batch_adjoint_slice_volume(
+                before_rhs, rotation_matrices, image_shape, volume_shape,
+                disc_type, half_image=True, half_volume=True,
+            )
+            rhs_summed = rhs_summed + bp_rhs.T
+        else:
+            # Split RHS for contrast: CTF·y·E[cz]^T - CTF·Aμ·E[c²z]^T
+            before_rhs1 = (CTF_half[..., None] * images_half_w[..., None]
+                           * jnp.conj(mean_cz)[:, None, :]).transpose(2, 0, 1)
+            bp_rhs1 = core.batch_adjoint_slice_volume(
+                before_rhs1, rotation_matrices, image_shape, volume_shape,
+                disc_type, half_image=True, half_volume=True,
+            )
+            rhs_summed = rhs_summed + bp_rhs1.T
 
-        # RHS term 2: -CTF · Aμ · E[c²z]^T  (mean correction; = -CTF·Aμ·E[z]^T when c=1)
-        before_rhs2 = (CTF_half[..., None] * projected_mean_half_w[..., None]
-                       * jnp.conj(mean_c2z)[:, None, :]).transpose(2, 0, 1)
-        bp_rhs2 = core.batch_adjoint_slice_volume(
-            before_rhs2, rotation_matrices, image_shape, volume_shape,
-            disc_type, half_image=True, half_volume=True,
-        )
-        rhs_summed = rhs_summed - bp_rhs2.T
+            # Mean correction: use disc_type_mean for adjoint to match forward
+            before_rhs2 = (CTF_half[..., None] * projected_mean_half_w[..., None]
+                           * jnp.conj(mean_c2z)[:, None, :]).transpose(2, 0, 1)
+            bp_rhs2 = core.batch_adjoint_slice_volume(
+                before_rhs2, rotation_matrices, image_shape, volume_shape,
+                disc_type_mean, half_image=True, half_volume=True,
+            )
+            rhs_summed = rhs_summed - bp_rhs2.T
 
     ll_per_image = jnp.zeros((0,), dtype=images_half.dtype)
     return lhs_summed, rhs_summed, expected_zs, second_moment_czz, ll_sum, ll_per_image, mean_c
