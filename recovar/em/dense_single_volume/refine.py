@@ -990,9 +990,8 @@ def _refine_relion_mode(
     healpix_order_trajectory = []
     ave_Pmax_trajectory = []
 
-    # RELION uses padding_factor=2 for reconstruction: the 3D Fourier
-    # grid is (2*N)^3 to reduce interpolation artifacts at high freq.
-    PADDING_FACTOR = 2
+    # NOTE: PADDING_FACTOR is already set above (currently 1, pending
+    # fix for zero_pad_fourier_volume).  Do NOT override here.
 
     iteration = 0
     while not state.has_converged and iteration < max_iter:
