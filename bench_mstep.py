@@ -581,7 +581,8 @@ def main():
     # Generate or load dataset
     if args.dataset_dir:
         ds_dir = args.dataset_dir
-    else:
+    # else:
+    if True:
         # Auto-generate from B-factored volumes
         vol_path = f"/scratch/gpfs/GILLES/mg6942/tmp/ppca_bfac60_n1_128/true_volumes"
         tag = f"bench_{gs}_n{args.noise_level}_c{args.contrast_std}_{args.n_images}"
@@ -595,10 +596,10 @@ def main():
             n_images=args.n_images, grid_size=gs,
             noise_level=args.noise_level, noise_model="radial1",
             contrast_std=args.contrast_std, noise_scale_std=0.0,
-            dataset_params_option="dataset1", disc_type="linear_interp",
+            dataset_params_option="dataset1", disc_type="cubic",
             trailing_zero_format_in_vol_name=True,
             put_extra_particles=False, percent_outliers=0.0)
-
+ 
     cryos, sim_info, gt, nv = _load_simulated_dataset(
         _with_trailing_separator(ds_dir), gs, args.n_images, lazy=False)
     vs = gt.volume_shape
