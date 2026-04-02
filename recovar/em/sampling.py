@@ -362,6 +362,174 @@ def get_local_rotation_grid(
     )
 
 
+def get_local_rotation_grid_fast(
+    prior_rotation_indices,
+    sigma_rot,
+    sigma_psi,
+    healpix_order,
+    sigma_cutoff=3.0,
+):
+    """Fast local rotation grid selection using HEALPix pixel lookup.
+
+    Decomposes the rotation grid into (HEALPix direction, psi) and uses
+    ``hp.query_disc`` for O(1)-per-pixel neighbor lookup instead of
+    brute-force pairwise geodesic distance.
+
+    Parameters
+    ----------
+    prior_rotation_indices : np.ndarray, shape (n_priors,), dtype int
+        Indices into the full rotation grid (from ``get_rotation_grid``)
+        for each image's best orientation from the previous iteration.
+    sigma_rot : float
+        Gaussian prior sigma for direction (radians).
+    sigma_psi : float
+        Gaussian prior sigma for in-plane angle (radians).
+    healpix_order : int
+        HEALPix order (nside = 2^order) of the rotation grid.
+    sigma_cutoff : float
+        Include grid points within ``sigma_cutoff * sigma`` of at least
+        one prior (default 3.0).
+
+    Returns
+    -------
+    selected_indices : np.ndarray, shape (n_selected,), dtype int
+        Sorted indices into the full rotation grid.
+    rotation_log_prior : np.ndarray, shape (n_selected,), dtype float32
+        Per-rotation log Gaussian prior weight.  For each selected rotation,
+        this is the max over all priors of
+        ``-d_dir^2/(2*sigma_rot^2) - d_psi^2/(2*sigma_psi^2)``.
+    """
+    prior_rotation_indices = np.asarray(prior_rotation_indices, dtype=np.int64)
+
+    # --- Reconstruct grid geometry ---
+    nside = 2 ** healpix_order
+    n_pixels = hp.nside2npix(nside)
+    angle_res = 360.0 / (6.0 * 2 ** healpix_order)
+    n_psi = int(np.round(360.0 / angle_res))
+    n_total = n_psi * n_pixels
+
+    # Grid layout: index k -> psi_index = k // n_pixels, pixel = k % n_pixels
+    # (from meshgrid(arange(n_pixels), psi_angles) then reshape(-1, 3))
+    psi_angles = np.linspace(0, 2 * np.pi, n_psi, endpoint=False)  # radians
+
+    # --- Decompose priors into (pixel, psi_index) ---
+    prior_pixels = prior_rotation_indices % n_pixels
+    prior_psi_idx = prior_rotation_indices // n_pixels
+
+    # --- Direction neighbors via query_disc ---
+    dir_cutoff_rad = sigma_cutoff * sigma_rot
+    # Get unique prior pixels to avoid redundant query_disc calls
+    unique_prior_pixels = np.unique(prior_pixels)
+
+    # Pre-compute unit vectors for all HEALPix pixels
+    all_theta, all_phi = hp.pix2ang(nside, np.arange(n_pixels))
+
+    # Collect selected direction pixels
+    selected_pixel_set = set()
+    for pix in unique_prior_pixels:
+        vec = hp.pix2vec(nside, int(pix))
+        neighbors = hp.query_disc(nside, vec, dir_cutoff_rad, inclusive=True)
+        selected_pixel_set.update(neighbors.tolist())
+    selected_pixels = np.array(sorted(selected_pixel_set), dtype=np.int64)
+
+    # --- Psi neighbors via circular distance ---
+    psi_cutoff_rad = sigma_cutoff * sigma_psi
+    unique_prior_psi_idx = np.unique(prior_psi_idx)
+    prior_psi_vals = psi_angles[unique_prior_psi_idx]  # radians
+
+    # For each psi in the grid, check circular distance to nearest prior psi
+    # Circular distance: min(|a-b|, 2*pi - |a-b|)
+    selected_psi_set = set()
+    for psi_val in prior_psi_vals:
+        diffs = np.abs(psi_angles - psi_val)
+        circ_dists = np.minimum(diffs, 2 * np.pi - diffs)
+        within = np.where(circ_dists <= psi_cutoff_rad)[0]
+        selected_psi_set.update(within.tolist())
+    selected_psi_idx = np.array(sorted(selected_psi_set), dtype=np.int64)
+
+    # --- Combine: selected_rotations = selected_psi x selected_pixels ---
+    # Grid index = psi_index * n_pixels + pixel_index
+    psi_grid, pix_grid = np.meshgrid(selected_psi_idx, selected_pixels, indexing='ij')
+    selected_indices = (psi_grid * n_pixels + pix_grid).ravel()
+    selected_indices.sort()
+
+    if len(selected_indices) == 0:
+        # Fallback: return all
+        selected_indices = np.arange(n_total, dtype=np.int64)
+
+    # --- Compute Gaussian log-prior (decomposed) ---
+    # Direction and psi priors are independent (RELION convention):
+    #   log_prior(r) = log_prior_dir(pixel_r) + log_prior_psi(psi_r)
+    # where each component takes the max over all priors independently.
+    # This avoids the O(n_priors * n_selected) joint computation.
+
+    # 1. Direction component: for each unique selected pixel, find min
+    #    angular distance to any unique prior pixel.
+    unique_sel_pixels = np.unique(selected_pixels)  # already computed above
+    unique_prior_pix = np.unique(prior_pixels)
+
+    # Unit vectors for unique pixels
+    prior_pix_vecs = np.array(hp.pix2vec(nside, unique_prior_pix)).T  # (n_up, 3)
+    sel_pix_vecs = np.array(hp.pix2vec(nside, unique_sel_pixels)).T  # (n_usp, 3)
+
+    # Compute min angular distance for each selected pixel
+    # Process in chunks to limit memory
+    n_usp = len(unique_sel_pixels)
+    min_d_dir_sq = np.full(n_usp, np.inf, dtype=np.float64)
+    CHUNK_PIX = 5000
+    for s in range(0, n_usp, CHUNK_PIX):
+        e = min(s + CHUNK_PIX, n_usp)
+        dots = sel_pix_vecs[s:e] @ prior_pix_vecs.T  # (chunk, n_up)
+        np.clip(dots, -1.0, 1.0, out=dots)
+        d = np.arccos(dots)  # (chunk, n_up)
+        np.minimum(min_d_dir_sq[s:e], np.min(d ** 2, axis=1), out=min_d_dir_sq[s:e])
+
+    # Map unique pixel distances back to all selected rotations
+    # Build pixel -> unique index map
+    pix_to_uidx = np.empty(n_pixels, dtype=np.int64)
+    pix_to_uidx[unique_sel_pixels] = np.arange(n_usp)
+
+    sel_pixels = selected_indices % n_pixels
+    sel_psi_idx = selected_indices // n_pixels
+    log_prior_dir = -min_d_dir_sq[pix_to_uidx[sel_pixels]] / (2.0 * sigma_rot ** 2)
+
+    # 2. Psi component: for each unique selected psi index, find min
+    #    circular distance to any unique prior psi index.
+    unique_sel_psi = np.unique(selected_psi_idx)  # already computed above
+    unique_prior_psi = np.unique(prior_psi_idx)
+
+    sel_psi_vals = psi_angles[unique_sel_psi]
+    prior_psi_vals_u = psi_angles[unique_prior_psi]
+
+    # Circular distance: min over all prior psi values
+    # Shape: (n_unique_sel_psi, n_unique_prior_psi)
+    d_psi_raw = np.abs(sel_psi_vals[:, None] - prior_psi_vals_u[None, :])
+    d_psi = np.minimum(d_psi_raw, 2 * np.pi - d_psi_raw)
+    min_d_psi_sq = np.min(d_psi ** 2, axis=1)  # (n_unique_sel_psi,)
+
+    # Map back to all selected rotations
+    psi_to_uidx = np.empty(n_psi, dtype=np.int64)
+    psi_to_uidx[unique_sel_psi] = np.arange(len(unique_sel_psi))
+    log_prior_psi = -min_d_psi_sq[psi_to_uidx[sel_psi_idx]] / (2.0 * sigma_psi ** 2)
+
+    # Total log-prior
+    log_prior = log_prior_dir + log_prior_psi
+
+    # Apply cutoff: keep only rotations where both direction and psi
+    # are within sigma_cutoff of some prior
+    min_log_prior = -(sigma_cutoff ** 2)  # sum of two (sigma_cutoff^2/2) terms
+    keep = log_prior > min_log_prior
+    if np.any(keep):
+        selected_indices = selected_indices[keep]
+        log_prior = log_prior[keep]
+
+    if len(selected_indices) == 0:
+        selected_indices = np.arange(n_total, dtype=np.int64)
+        log_prior = np.zeros(n_total, dtype=np.float32)
+
+    return selected_indices, log_prior.astype(np.float32)
+
+
 def get_healpix_neighbors(pixel_idx, nside_level, n_neighbors=8):
     """Return the neighbor HEALPix pixel indices for a given pixel.
 

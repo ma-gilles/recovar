@@ -49,6 +49,7 @@ from recovar.em.dense_single_volume.convergence import (
 from recovar.em.sampling import (
     get_rotation_grid_at_order,
     get_local_rotation_grid,
+    get_local_rotation_grid_fast,
     get_translation_grid,
 )
 from recovar.reconstruction.regularization import (
@@ -1039,17 +1040,17 @@ def _refine_relion_mode(
         if use_local:
             n_trans_current = current_translations.shape[0]
             sigma_rot = state.sigma_rot
+            sigma_psi = state.sigma_psi if state.sigma_psi > 0 else sigma_rot
             if sigma_rot <= 0:
-                # Fallback: compute from angular step
+                # Fallback: compute from effective angular step
                 step_rad = np.deg2rad(
                     healpix_angular_step(state.healpix_order)
                     / (2 ** state.adaptive_oversampling)
                 )
                 sigma_rot = np.sqrt(2.0 * 2.0) * step_rad
+                sigma_psi = sigma_rot
 
-            # Gather UNIQUE per-image best rotation matrices from both half-sets
-            # Deduplication is critical: 5000 images may have only ~1000 unique
-            # rotations, and get_local_rotation_grid is O(n_priors * n_grid).
+            # Gather UNIQUE per-image best rotation indices from both half-sets
             unique_rot_idx = set()
             for k in range(2):
                 if previous_assignments[k] is not None:
@@ -1057,44 +1058,39 @@ def _refine_relion_mode(
                     rot_idx = np.clip(rot_idx, 0, current_rotations.shape[0] - 1)
                     unique_rot_idx.update(rot_idx.tolist())
             unique_rot_idx = np.array(sorted(unique_rot_idx))
-            prior_rotations = current_rotations[unique_rot_idx]
 
-            # Use get_local_rotation_grid for the selection + prior weights
-            from recovar.em.sampling import get_local_rotation_grid
-            selected_rots, selected_indices, prior_weights = get_local_rotation_grid(
-                prior_rotations,
+            # Fast HEALPix-based local search
+            t0_local = time.time()
+            selected_indices, rotation_log_prior = get_local_rotation_grid_fast(
+                unique_rot_idx,
                 sigma_rot,
-                grid_rotations=current_rotations,
+                sigma_psi,
+                state.healpix_order,
                 sigma_cutoff=3.0,
             )
+            dt_local = time.time() - t0_local
 
             if len(selected_indices) < current_rotations.shape[0]:
-                effective_rotations = selected_rots
+                effective_rotations = current_rotations[selected_indices]
                 local_rot_indices = selected_indices
 
-                # Compute per-rotation log-prior as max over all images:
-                # log_prior[r] = max_i log(prior_weights[i, r])
-                # prior_weights[i,r] = exp(-d^2 / (2*sigma^2)), already computed
-                # We take max weight (= min distance), then take log.
-                max_prior_weight = np.max(prior_weights, axis=0)  # (n_selected,)
-                # Clamp to avoid log(0)
-                max_prior_weight = np.maximum(max_prior_weight, 1e-30)
-                rotation_log_prior = np.log(max_prior_weight).astype(np.float32)
-
                 logger.info(
-                    "Local search: %d / %d rotations "
-                    "(sigma_rot=%.4f rad = %.2f deg, "
+                    "Local search (fast): %d / %d rotations in %.2f s "
+                    "(sigma_rot=%.4f rad = %.2f deg, sigma_psi=%.4f rad, "
                     "log_prior range=[%.2f, %.2f])",
                     effective_rotations.shape[0],
                     current_rotations.shape[0],
+                    dt_local,
                     sigma_rot, np.rad2deg(sigma_rot),
+                    sigma_psi,
                     rotation_log_prior.min(), rotation_log_prior.max(),
                 )
             else:
+                rotation_log_prior = None
                 logger.info(
-                    "Local search: all %d rotations selected "
+                    "Local search (fast): all %d rotations selected in %.2f s "
                     "(sigma_rot=%.4f rad); using flat prior",
-                    current_rotations.shape[0], sigma_rot,
+                    current_rotations.shape[0], dt_local, sigma_rot,
                 )
 
         cs_for_engine = cs if cs < cryo.image_shape[0] else None
