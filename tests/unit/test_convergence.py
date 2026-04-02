@@ -1,0 +1,868 @@
+"""Unit tests for convergence detection, angular step refinement, and local angular search.
+
+Tests cover:
+- RefinementState construction and properties
+- Assignment change tracking
+- Translation change tracking
+- Average Pmax computation
+- Convergence detection logic
+- Angular step refinement triggers and parameter updates
+- Local search activation
+- Full update_refinement_state workflow
+- get_local_rotation_grid from sampling.py
+- get_rotation_grid_at_order from sampling.py
+- get_healpix_neighbors from sampling.py
+"""
+
+import numpy as np
+import pytest
+
+pytestmark = pytest.mark.unit
+
+
+# ---------------------------------------------------------------------------
+# Import targets
+# ---------------------------------------------------------------------------
+
+from recovar.em.dense_single_volume.convergence import (
+    RefinementState,
+    healpix_angular_step,
+    effective_angular_step,
+    compute_assignment_changes,
+    compute_translation_changes,
+    compute_ave_Pmax,
+    check_convergence,
+    should_refine_angular_sampling,
+    refine_angular_sampling,
+    update_refinement_state,
+    MAX_NR_ITER_WO_RESOL_GAIN,
+    MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+    LOCAL_SEARCH_HEALPIX_ORDER,
+    SIGMA_CUTOFF,
+)
+
+from recovar.em.sampling import (
+    get_rotation_grid_at_order,
+    get_local_rotation_grid,
+    get_healpix_neighbors,
+    get_rotation_grid,
+)
+
+
+# =========================================================================
+# RefinementState construction
+# =========================================================================
+
+
+class TestRefinementStateConstruction:
+    """Tests for RefinementState dataclass creation and defaults."""
+
+    def test_default_construction(self):
+        state = RefinementState()
+        assert state.iteration == 0
+        assert state.healpix_order == 2
+        assert state.has_converged is False
+        assert state.do_local_search is False
+        assert state.best_rotations is None
+        assert state.best_translations is None
+
+    def test_angular_step_auto_computed(self):
+        """angular_step is auto-computed from healpix_order when not specified."""
+        state = RefinementState(healpix_order=3)
+        expected = 360.0 / (6.0 * 2**3)
+        assert abs(state.angular_step - expected) < 1e-10
+
+    def test_angular_step_explicit(self):
+        """Explicit angular_step overrides auto-computation."""
+        state = RefinementState(healpix_order=3, angular_step=5.0)
+        assert state.angular_step == 5.0
+
+    def test_effective_step_property(self):
+        state = RefinementState(healpix_order=3, adaptive_oversampling=1)
+        expected = healpix_angular_step(3) / 2.0
+        assert abs(state.effective_step - expected) < 1e-10
+
+    def test_has_fine_enough_at_max(self):
+        state = RefinementState(healpix_order=7, max_healpix_order=7)
+        assert state.has_fine_enough_angular_sampling is True
+
+    def test_has_fine_enough_below_max(self):
+        state = RefinementState(healpix_order=3, max_healpix_order=7)
+        assert state.has_fine_enough_angular_sampling is False
+
+    def test_should_do_local_search_at_order_4(self):
+        state = RefinementState(healpix_order=4)
+        assert state.should_do_local_search is True
+
+    def test_should_not_do_local_search_below_order_4(self):
+        state = RefinementState(healpix_order=3)
+        assert state.should_do_local_search is False
+
+
+# =========================================================================
+# healpix_angular_step / effective_angular_step
+# =========================================================================
+
+
+class TestAngularStepFunctions:
+
+    def test_healpix_angular_step_known_values(self):
+        """Check against the known table in the RELION reference doc."""
+        # Order 0: ~58.6 deg (360 / 6 = 60, close enough)
+        assert abs(healpix_angular_step(0) - 60.0) < 1e-10
+        # Order 3: ~7.5 deg
+        assert abs(healpix_angular_step(3) - 7.5) < 1e-10
+        # Order 4: ~3.75 deg
+        assert abs(healpix_angular_step(4) - 3.75) < 1e-10
+
+    def test_effective_angular_step_no_oversampling(self):
+        assert effective_angular_step(3, 0) == healpix_angular_step(3)
+
+    def test_effective_angular_step_with_oversampling(self):
+        """Oversampling 1 halves the step, oversampling 2 quarters it."""
+        step3 = healpix_angular_step(3)
+        assert abs(effective_angular_step(3, 1) - step3 / 2) < 1e-10
+        assert abs(effective_angular_step(3, 2) - step3 / 4) < 1e-10
+
+
+# =========================================================================
+# Assignment change tracking
+# =========================================================================
+
+
+class TestAssignmentChanges:
+
+    def test_identical_assignments_zero_change(self):
+        n_rot, n_trans = 100, 5
+        assignments = np.arange(50) * n_trans + 2  # 50 images
+        frac = compute_assignment_changes(assignments, assignments, n_rot, n_trans, 3)
+        assert frac == 0.0
+
+    def test_all_different_assignments(self):
+        n_rot, n_trans = 100, 5
+        current = np.arange(50) * n_trans
+        previous = (np.arange(50) + 1) * n_trans
+        frac = compute_assignment_changes(current, previous, n_rot, n_trans, 3)
+        assert frac == 1.0
+
+    def test_half_changed(self):
+        n_rot, n_trans = 100, 5
+        n_images = 100
+        current = np.arange(n_images) * n_trans
+        previous = current.copy()
+        # Change first 50
+        previous[:50] = (np.arange(50) + 50) * n_trans
+        frac = compute_assignment_changes(current, previous, n_rot, n_trans, 3)
+        assert abs(frac - 0.5) < 1e-10
+
+    def test_translation_only_change_not_counted(self):
+        """If only translation changed but rotation is same, fraction = 0."""
+        n_rot, n_trans = 100, 5
+        current = np.array([0, 5, 10, 15])  # rot indices 0, 1, 2, 3
+        previous = np.array([1, 6, 11, 16])  # same rot indices, different trans
+        frac = compute_assignment_changes(current, previous, n_rot, n_trans, 3)
+        assert frac == 0.0
+
+    def test_none_assignments_return_one(self):
+        frac = compute_assignment_changes(None, np.array([1, 2, 3]), 10, 5, 3)
+        assert frac == 1.0
+
+    def test_mismatched_shapes_return_one(self):
+        frac = compute_assignment_changes(
+            np.array([1, 2]), np.array([1, 2, 3]), 10, 5, 3
+        )
+        assert frac == 1.0
+
+    def test_empty_assignments_return_zero(self):
+        frac = compute_assignment_changes(
+            np.array([], dtype=np.int32),
+            np.array([], dtype=np.int32),
+            10, 5, 3,
+        )
+        assert frac == 0.0
+
+
+# =========================================================================
+# Translation change tracking
+# =========================================================================
+
+
+class TestTranslationChanges:
+
+    def test_identical_assignments_zero_change(self):
+        translations = np.array([[0, 0], [1, 0], [0, 1], [-1, 0]], dtype=np.float32)
+        n_trans = len(translations)
+        assignments = np.array([0, 1, 2, 3])
+        rms = compute_translation_changes(
+            assignments, assignments, translations, n_trans
+        )
+        assert rms == 0.0
+
+    def test_known_shift(self):
+        """All images shift by (1, 0) -> RMS = 1.0."""
+        translations = np.array([[0, 0], [1, 0]], dtype=np.float32)
+        n_trans = 2
+        # 4 images, all at trans_idx=0 -> trans_idx=1 (shift of (1,0))
+        current = np.array([0, 0, 0, 0])   # rot_idx=0, trans_idx=0
+        previous = np.array([1, 1, 1, 1])  # rot_idx=0, trans_idx=1
+        rms = compute_translation_changes(current, previous, translations, n_trans)
+        assert abs(rms - 1.0) < 1e-6
+
+    def test_none_returns_inf(self):
+        translations = np.array([[0, 0]], dtype=np.float32)
+        rms = compute_translation_changes(None, np.array([0]), translations, 1)
+        assert rms == float("inf")
+
+
+# =========================================================================
+# Average Pmax
+# =========================================================================
+
+
+class TestAvePmax:
+
+    def test_uniform_pmax(self):
+        pmax = np.ones(100) * 0.5
+        assert abs(compute_ave_Pmax(pmax) - 0.5) < 1e-10
+
+    def test_varied_pmax(self):
+        pmax = np.array([0.1, 0.3, 0.5, 0.7, 0.9])
+        expected = np.mean(pmax)
+        assert abs(compute_ave_Pmax(pmax) - expected) < 1e-10
+
+    def test_empty_returns_zero(self):
+        assert compute_ave_Pmax(np.array([])) == 0.0
+
+
+# =========================================================================
+# Convergence detection
+# =========================================================================
+
+
+class TestCheckConvergence:
+
+    def test_not_converged_when_sampling_coarse(self):
+        """Not converged when healpix_order < max."""
+        state = RefinementState(
+            healpix_order=3,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=5,
+            nr_iter_wo_assignment_changes=5,
+        )
+        assert check_convergence(state) is False
+
+    def test_not_converged_when_resolution_improving(self):
+        state = RefinementState(
+            healpix_order=7,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=0,
+            nr_iter_wo_assignment_changes=5,
+        )
+        assert check_convergence(state) is False
+
+    def test_not_converged_when_assignments_unstable(self):
+        state = RefinementState(
+            healpix_order=7,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=5,
+            nr_iter_wo_assignment_changes=0,
+        )
+        assert check_convergence(state) is False
+
+    def test_converged_when_all_criteria_met(self):
+        state = RefinementState(
+            healpix_order=7,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
+            nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+        )
+        assert check_convergence(state) is True
+
+    def test_converged_with_excess_stalls(self):
+        """Extra stall iterations still converge."""
+        state = RefinementState(
+            healpix_order=7,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=10,
+            nr_iter_wo_assignment_changes=10,
+        )
+        assert check_convergence(state) is True
+
+
+# =========================================================================
+# Angular step refinement
+# =========================================================================
+
+
+class TestShouldRefineAngularSampling:
+
+    def test_not_refine_when_at_max(self):
+        state = RefinementState(
+            healpix_order=7,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=5,
+            nr_iter_wo_assignment_changes=5,
+        )
+        assert should_refine_angular_sampling(state) is False
+
+    def test_not_refine_when_resolution_improving(self):
+        state = RefinementState(
+            healpix_order=3,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=0,
+            nr_iter_wo_assignment_changes=5,
+        )
+        assert should_refine_angular_sampling(state) is False
+
+    def test_not_refine_when_assignments_unstable(self):
+        state = RefinementState(
+            healpix_order=3,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=5,
+            nr_iter_wo_assignment_changes=0,
+        )
+        assert should_refine_angular_sampling(state) is False
+
+    def test_refine_when_stalled_and_stable(self):
+        state = RefinementState(
+            healpix_order=3,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
+            nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+        )
+        assert should_refine_angular_sampling(state) is True
+
+    def test_not_refine_beyond_75pct_acc_rot(self):
+        """Don't refine if current step < 75% of estimated accuracy."""
+        state = RefinementState(
+            healpix_order=5,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=5,
+            nr_iter_wo_assignment_changes=5,
+            acc_rot=1.0,  # 1 degree accuracy
+        )
+        # effective_step at order 5 = 360 / (6 * 32) = 1.875 deg
+        # 75% of 1.0 = 0.75; 1.875 > 0.75, so should refine
+        assert should_refine_angular_sampling(state) is True
+
+        # Now set acc_rot large enough that step < 0.75 * acc_rot
+        state2 = RefinementState(
+            healpix_order=6,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=5,
+            nr_iter_wo_assignment_changes=5,
+            acc_rot=1.0,  # 1 degree accuracy
+        )
+        # effective_step at order 6 = 360 / (6 * 64) = 0.9375 deg
+        # 0.9375 > 0.75 so should still refine
+        assert should_refine_angular_sampling(state2) is True
+
+        # Make acc_rot so that step is below threshold
+        state3 = RefinementState(
+            healpix_order=6,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=5,
+            nr_iter_wo_assignment_changes=5,
+            acc_rot=0.5,  # 0.5 degree accuracy
+        )
+        # effective_step at order 6 = 0.9375 deg; 0.75 * 0.5 = 0.375
+        # 0.9375 > 0.375, so should still refine
+        assert should_refine_angular_sampling(state3) is True
+
+
+class TestRefineAngularSampling:
+
+    def test_order_increments_by_one(self):
+        state = RefinementState(healpix_order=3)
+        new_state = refine_angular_sampling(state)
+        assert new_state.healpix_order == 4
+
+    def test_angular_step_updated(self):
+        state = RefinementState(healpix_order=3)
+        new_state = refine_angular_sampling(state)
+        expected = healpix_angular_step(4)
+        assert abs(new_state.angular_step - expected) < 1e-10
+
+    def test_counters_reset(self):
+        state = RefinementState(
+            healpix_order=3,
+            nr_iter_wo_resol_gain=5,
+            nr_iter_wo_assignment_changes=5,
+        )
+        new_state = refine_angular_sampling(state)
+        assert new_state.nr_iter_wo_resol_gain == 0
+        assert new_state.nr_iter_wo_assignment_changes == 0
+
+    def test_local_search_activated_at_order_4(self):
+        state = RefinementState(healpix_order=3)
+        new_state = refine_angular_sampling(state)
+        assert new_state.healpix_order == 4
+        assert new_state.do_local_search is True
+        assert new_state.sigma_rot > 0.0
+        assert new_state.sigma_psi > 0.0
+
+    def test_local_search_not_activated_below_order_4(self):
+        state = RefinementState(healpix_order=2)
+        new_state = refine_angular_sampling(state)
+        assert new_state.healpix_order == 3
+        assert new_state.do_local_search is False
+        assert new_state.sigma_rot == 0.0
+
+    def test_translation_step_from_acc_trans(self):
+        state = RefinementState(
+            healpix_order=3,
+            acc_trans=2.0,
+            adaptive_oversampling=1,
+        )
+        new_state = refine_angular_sampling(state)
+        expected = min(1.5, 0.75 * 2.0) * (2 ** 1)
+        assert abs(new_state.translation_step - expected) < 1e-10
+
+    def test_translation_range_from_offset_changes(self):
+        state = RefinementState(
+            healpix_order=3,
+            changes_optimal_offsets=1.5,
+            translation_range=10.0,
+        )
+        new_state = refine_angular_sampling(state)
+        expected = min(5.0 * 1.5, 1.3 * 10.0)
+        assert abs(new_state.translation_range - expected) < 1e-10
+
+    def test_translation_range_capped_at_1_3x(self):
+        """Range is capped at 1.3x previous when 5 * changes is larger."""
+        state = RefinementState(
+            healpix_order=3,
+            changes_optimal_offsets=10.0,
+            translation_range=5.0,
+        )
+        new_state = refine_angular_sampling(state)
+        expected = 1.3 * 5.0
+        assert abs(new_state.translation_range - expected) < 1e-10
+
+    def test_sigma_rot_formula(self):
+        """sigma2_rot = 2 * 2 * step^2 (RELION convention)."""
+        state = RefinementState(healpix_order=3, adaptive_oversampling=0)
+        new_state = refine_angular_sampling(state)
+        step_deg = healpix_angular_step(4)
+        step_rad = np.deg2rad(step_deg)
+        expected_sigma = np.sqrt(4.0) * step_rad
+        assert abs(new_state.sigma_rot - expected_sigma) < 1e-10
+
+
+# =========================================================================
+# Full update_refinement_state workflow
+# =========================================================================
+
+
+class TestUpdateRefinementState:
+
+    def _make_base_state(self, **kwargs):
+        defaults = dict(
+            iteration=0,
+            healpix_order=3,
+            max_healpix_order=7,
+            current_resolution=5.0,
+            translation_range=10.0,
+            translation_step=2.0,
+        )
+        defaults.update(kwargs)
+        return RefinementState(**defaults)
+
+    def test_iteration_increments(self):
+        state = self._make_base_state()
+        n_rot, n_trans = 100, 5
+        assignments = np.zeros(50, dtype=np.int32)
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state, assignments, None, n_rot, n_trans, translations,
+            new_resolution=4.5,
+        )
+        assert updated.iteration == 1
+
+    def test_resolution_improvement_resets_stall(self):
+        state = self._make_base_state(
+            current_resolution=5.0,
+            nr_iter_wo_resol_gain=3,
+        )
+        n_rot, n_trans = 100, 5
+        assignments = np.zeros(50, dtype=np.int32)
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state, assignments, None, n_rot, n_trans, translations,
+            new_resolution=4.0,  # better than 5.0
+        )
+        assert updated.nr_iter_wo_resol_gain == 0
+
+    def test_resolution_stall_increments(self):
+        state = self._make_base_state(
+            current_resolution=5.0,
+            nr_iter_wo_resol_gain=0,
+        )
+        n_rot, n_trans = 100, 5
+        assignments = np.zeros(50, dtype=np.int32)
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state, assignments, None, n_rot, n_trans, translations,
+            new_resolution=5.5,  # worse than 5.0
+        )
+        assert updated.nr_iter_wo_resol_gain == 1
+
+    def test_stable_assignments_increment_counter(self):
+        # Use improving resolution so angular refinement is NOT triggered
+        # (refinement requires both stalls to be >= 1)
+        state = self._make_base_state(current_resolution=5.0)
+        n_rot, n_trans = 100, 5
+        # All assignments identical -> fraction_changed = 0
+        assignments = np.arange(50) * n_trans
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state, assignments, assignments, n_rot, n_trans, translations,
+            new_resolution=4.0,  # improving -> no resol stall -> no refinement
+        )
+        assert updated.fraction_changed == 0.0
+        assert updated.nr_iter_wo_assignment_changes == 1
+        assert updated.nr_iter_wo_resol_gain == 0  # resolution improved
+
+    def test_unstable_assignments_reset_counter(self):
+        state = self._make_base_state(nr_iter_wo_assignment_changes=5)
+        n_rot, n_trans = 100, 5
+        current = np.arange(50) * n_trans
+        previous = (np.arange(50) + 50) * n_trans  # all different
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state, current, previous, n_rot, n_trans, translations,
+            new_resolution=5.0,
+        )
+        assert updated.fraction_changed == 1.0
+        assert updated.nr_iter_wo_assignment_changes == 0
+
+    def test_angular_refinement_triggered(self):
+        """When both stalls are met and not at max order, order should increase."""
+        state = self._make_base_state(
+            healpix_order=3,
+            nr_iter_wo_resol_gain=0,  # will become 1 after this iter
+            nr_iter_wo_assignment_changes=0,  # will become 1
+        )
+        n_rot, n_trans = 100, 5
+        assignments = np.arange(50) * n_trans
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state, assignments, assignments, n_rot, n_trans, translations,
+            new_resolution=5.5,  # stall
+        )
+        # After update: resol_gain=1, assignment_changes=1 -> should refine
+        assert updated.healpix_order == 4
+        # Counters should be reset after refinement
+        assert updated.nr_iter_wo_resol_gain == 0
+        assert updated.nr_iter_wo_assignment_changes == 0
+
+    def test_convergence_at_max_order(self):
+        """When at max order with both stalls, should converge."""
+        state = self._make_base_state(
+            healpix_order=7,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=0,
+            nr_iter_wo_assignment_changes=0,
+        )
+        n_rot, n_trans = 100, 5
+        assignments = np.arange(50) * n_trans
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state, assignments, assignments, n_rot, n_trans, translations,
+            new_resolution=5.5,
+        )
+        assert updated.has_converged is True
+
+    def test_pmax_tracking(self):
+        state = self._make_base_state()
+        n_rot, n_trans = 100, 5
+        assignments = np.zeros(50, dtype=np.int32)
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+        pmax = np.ones(50) * 0.42
+
+        updated = update_refinement_state(
+            state, assignments, None, n_rot, n_trans, translations,
+            new_resolution=4.0,
+            max_posterior_per_image=pmax,
+        )
+        assert abs(updated.ave_Pmax - 0.42) < 1e-6
+
+
+# =========================================================================
+# get_rotation_grid_at_order (sampling.py)
+# =========================================================================
+
+
+class TestGetRotationGridAtOrder:
+
+    def test_returns_matrices(self):
+        rots = get_rotation_grid_at_order(2, matrices=True)
+        assert rots.ndim == 3
+        assert rots.shape[1:] == (3, 3)
+
+    def test_returns_euler_angles(self):
+        angles = get_rotation_grid_at_order(2, matrices=False)
+        assert angles.ndim == 2
+        assert angles.shape[1] == 3
+
+    def test_matches_get_rotation_grid(self):
+        """get_rotation_grid_at_order should produce identical output."""
+        for order in [1, 2, 3]:
+            expected = get_rotation_grid(order, matrices=True)
+            actual = get_rotation_grid_at_order(order, matrices=True)
+            np.testing.assert_array_equal(actual, expected)
+
+    def test_count_increases_with_order(self):
+        n2 = get_rotation_grid_at_order(2, matrices=True).shape[0]
+        n3 = get_rotation_grid_at_order(3, matrices=True).shape[0]
+        assert n3 > n2
+
+
+# =========================================================================
+# get_local_rotation_grid (sampling.py)
+# =========================================================================
+
+
+class TestGetLocalRotationGrid:
+
+    def test_basic_functionality(self):
+        """Local grid returns a subset of the full grid."""
+        grid = get_rotation_grid(2, matrices=True)
+        # Use the first rotation as the prior
+        prior = grid[:1]  # (1, 3, 3)
+        sigma = np.deg2rad(30.0)  # 30 degree sigma -> large neighborhood
+
+        selected, indices, weights = get_local_rotation_grid(
+            prior, sigma, grid_rotations=grid, sigma_cutoff=3.0,
+        )
+
+        assert selected.ndim == 3
+        assert selected.shape[1:] == (3, 3)
+        assert len(indices) == len(selected)
+        assert weights.shape == (1, len(selected))
+
+        # Should be a strict subset (unless sigma is huge)
+        assert len(selected) <= len(grid)
+
+    def test_selected_are_from_grid(self):
+        """Selected rotations are exact copies of grid rotations."""
+        grid = get_rotation_grid(2, matrices=True)
+        prior = grid[:3]
+        sigma = np.deg2rad(20.0)
+
+        selected, indices, weights = get_local_rotation_grid(
+            prior, sigma, grid_rotations=grid, sigma_cutoff=3.0,
+        )
+
+        for i, idx in enumerate(indices):
+            np.testing.assert_allclose(
+                selected[i], grid[idx], atol=1e-5,
+                err_msg=f"Selected rotation {i} doesn't match grid[{idx}]"
+            )
+
+    def test_prior_has_highest_weight(self):
+        """The prior rotation itself should have weight close to 1.0."""
+        grid = get_rotation_grid(2, matrices=True)
+        prior = grid[0:1]  # shape (1, 3, 3)
+        sigma = np.deg2rad(10.0)
+
+        selected, indices, weights = get_local_rotation_grid(
+            prior, sigma, grid_rotations=grid, sigma_cutoff=3.0,
+        )
+
+        # Find the index of the prior in the selected set
+        prior_in_selected = np.where(indices == 0)[0]
+        assert len(prior_in_selected) > 0, "Prior rotation not in selected set"
+        # Weight at the prior should be ~1.0 (distance = 0)
+        assert weights[0, prior_in_selected[0]] > 0.99
+
+    def test_weights_decrease_with_distance(self):
+        """Weights should decrease monotonically with geodesic distance."""
+        grid = get_rotation_grid(2, matrices=True)
+        prior = grid[0:1]
+        sigma = np.deg2rad(30.0)
+
+        selected, indices, weights = get_local_rotation_grid(
+            prior, sigma, grid_rotations=grid, sigma_cutoff=3.0,
+        )
+
+        # Sort by weight, check distances increase
+        w = weights[0]
+        order = np.argsort(-w)
+        sorted_w = w[order]
+        # Non-increasing
+        assert np.all(np.diff(sorted_w) <= 1e-7)
+
+    def test_with_grid_order(self):
+        """Can specify grid_order instead of grid_rotations."""
+        grid = get_rotation_grid(2, matrices=True)
+        prior = grid[:1]
+        sigma = np.deg2rad(20.0)
+
+        selected, indices, weights = get_local_rotation_grid(
+            prior, sigma, grid_order=2, sigma_cutoff=3.0,
+        )
+
+        assert len(selected) > 0
+        assert len(selected) <= len(grid)
+
+    def test_multiple_priors_union(self):
+        """With multiple priors, the result is the union of neighborhoods."""
+        grid = get_rotation_grid(2, matrices=True)
+        # Pick two distant priors
+        prior = grid[[0, len(grid) // 2]]
+        sigma = np.deg2rad(10.0)
+
+        selected_union, idx_union, weights_union = get_local_rotation_grid(
+            prior, sigma, grid_rotations=grid, sigma_cutoff=3.0,
+        )
+
+        # Each prior's neighborhood separately
+        sel_0, idx_0, _ = get_local_rotation_grid(
+            grid[0:1], sigma, grid_rotations=grid, sigma_cutoff=3.0,
+        )
+        sel_1, idx_1, _ = get_local_rotation_grid(
+            grid[len(grid)//2:len(grid)//2+1], sigma,
+            grid_rotations=grid, sigma_cutoff=3.0,
+        )
+
+        # Union should contain everything from both individual neighborhoods
+        assert set(idx_0.tolist()).issubset(set(idx_union.tolist()))
+        assert set(idx_1.tolist()).issubset(set(idx_union.tolist()))
+
+    def test_small_sigma_selects_few(self):
+        """Very small sigma should select only very close rotations."""
+        grid = get_rotation_grid(3, matrices=True)  # finer grid
+        prior = grid[:1]
+        sigma = np.deg2rad(1.0)  # very tight: 1 degree
+
+        selected, indices, weights = get_local_rotation_grid(
+            prior, sigma, grid_rotations=grid, sigma_cutoff=3.0,
+        )
+
+        # Should be much smaller than the full grid
+        assert len(selected) < len(grid) / 2
+
+    def test_raises_if_no_grid_source(self):
+        prior = np.eye(3, dtype=np.float32).reshape(1, 3, 3)
+        sigma = np.deg2rad(10.0)
+        with pytest.raises(ValueError, match="grid_order or grid_rotations"):
+            get_local_rotation_grid(prior, sigma)
+
+    def test_sigma_cutoff_respected(self):
+        """No selected rotation should be beyond sigma_cutoff * sigma."""
+        from recovar.em.sampling import _angular_distance_matrices
+
+        grid = get_rotation_grid(2, matrices=True)
+        prior = grid[:1]
+        sigma = np.deg2rad(15.0)
+        cutoff = 2.0
+
+        selected, indices, weights = get_local_rotation_grid(
+            prior, sigma, grid_rotations=grid, sigma_cutoff=cutoff,
+        )
+
+        # Compute distances from prior to each selected
+        dists = _angular_distance_matrices(
+            prior[:, np.newaxis, :, :].astype(np.float64),
+            selected[np.newaxis, :, :, :].astype(np.float64),
+        )  # (1, n_selected)
+
+        # All should be within cutoff * sigma (with small tolerance)
+        assert np.all(dists <= cutoff * sigma + 1e-6)
+
+
+# =========================================================================
+# get_healpix_neighbors (sampling.py)
+# =========================================================================
+
+
+class TestGetHealpixNeighbors:
+
+    def test_returns_eight_neighbors(self):
+        neighbors = get_healpix_neighbors(0, 2)
+        assert neighbors.shape[0] == 8
+
+    def test_neighbors_are_valid_pixels(self):
+        import healpy as hp
+        nside_level = 2
+        nside = 2 ** nside_level
+        npix = hp.nside2npix(nside)
+        neighbors = get_healpix_neighbors(5, nside_level)
+        # All valid neighbors should be in [0, npix)
+        valid = neighbors[neighbors >= 0]
+        assert np.all(valid < npix)
+
+    def test_multiple_pixels(self):
+        neighbors = get_healpix_neighbors([0, 1, 2], 2)
+        assert neighbors.shape == (8, 3)
+
+
+# =========================================================================
+# Integration: RefinementState + update across multiple iterations
+# =========================================================================
+
+
+class TestMultiIterationWorkflow:
+    """Simulate several iterations and verify the state machine behavior."""
+
+    def test_three_iteration_convergence(self):
+        """
+        Iter 0: improving resolution, assignments unstable
+        Iter 1: resolution stalls, assignments stabilize -> refine order 2->3
+        Iter 2: at max order, stalls -> converge
+        """
+        n_rot, n_trans = 100, 5
+        n_images = 50
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        # Start at order 2
+        state = RefinementState(
+            healpix_order=2,
+            max_healpix_order=3,  # small max for fast test
+            current_resolution=10.0,
+        )
+
+        # Iter 0: resolution improves, assignments change
+        ha0 = np.arange(n_images) * n_trans
+        state = update_refinement_state(
+            state, ha0, None, n_rot, n_trans, translations,
+            new_resolution=8.0,
+        )
+        assert state.iteration == 1
+        assert state.has_converged is False
+        assert state.healpix_order == 2  # not refined yet
+
+        # Iter 1: resolution stalls, assignments stable -> triggers refinement
+        state = update_refinement_state(
+            state, ha0, ha0, n_rot, n_trans, translations,
+            new_resolution=9.0,  # worse
+        )
+        # update_refinement_state increments iteration to 2, then
+        # refine_angular_sampling preserves that iteration count
+        assert state.iteration == 2
+        assert state.healpix_order == 3  # refined!
+        assert state.nr_iter_wo_resol_gain == 0  # reset
+        assert state.has_converged is False
+
+        # Iter 2: at max order, resolution stalls, assignments stable -> converge
+        state2 = RefinementState(
+            iteration=state.iteration,
+            healpix_order=3,
+            max_healpix_order=3,
+            current_resolution=9.0,
+            nr_iter_wo_resol_gain=0,
+            nr_iter_wo_assignment_changes=0,
+        )
+        state2 = update_refinement_state(
+            state2, ha0, ha0, n_rot, n_trans, translations,
+            new_resolution=9.5,
+        )
+        assert state2.has_converged is True

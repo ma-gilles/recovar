@@ -630,11 +630,12 @@ class TestQuantizeCurrentSize:
         assert quantize_current_size(25) == 32
         assert quantize_current_size(33) == 48
         assert quantize_current_size(49) == 64
-        assert quantize_current_size(65) == 96
-        assert quantize_current_size(97) == 128
+        assert quantize_current_size(65) == 80
+        assert quantize_current_size(81) == 96
+        assert quantize_current_size(97) == 104
 
     def test_above_max(self):
-        assert quantize_current_size(200) == 128
+        assert quantize_current_size(200) == 224
 
     def test_custom_allowed(self):
         assert quantize_current_size(10, allowed=[8, 16, 32]) == 16
@@ -646,7 +647,7 @@ class TestQuantizeCurrentSize:
 
     def test_allowed_sizes_match_module(self):
         """Sanity: module constant matches expected set."""
-        assert ALLOWED_CURRENT_SIZES == [16, 24, 32, 48, 64, 96, 128]
+        assert ALLOWED_CURRENT_SIZES == [16, 24, 32, 48, 64, 80, 96, 104, 112, 120, 128, 160, 192, 224, 256]
 
 
 # ===========================================================================
