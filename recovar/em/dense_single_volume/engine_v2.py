@@ -276,6 +276,7 @@ def run_em_v2(
     image_batch_size: int = 500,
     rotation_block_size: int = 5000,
     current_size: int = None,
+    rotation_log_prior: np.ndarray = None,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -296,6 +297,11 @@ def run_em_v2(
         When None, use full resolution (same as Phase 1 behavior).
         When set, only frequencies with radius <= current_size // 2 are
         included in the E-step and M-step GEMMs.
+    rotation_log_prior : np.ndarray or None, shape (n_rot,)
+        Per-rotation log-prior weights, added to E-step scores before softmax.
+        Used for RELION-style Gaussian angular prior in local search:
+        ``log_prior[r] = -angular_distance(R_prev, R_r)^2 / (2 * sigma_rot^2)``.
+        When None (default), flat prior (all zeros) is used.
     """
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]
@@ -338,6 +344,18 @@ def run_em_v2(
         ], axis=0)
     else:
         rotations_padded = rotations
+
+    # Prepare per-rotation log-prior (pad to match rotations_padded)
+    if rotation_log_prior is not None:
+        log_prior_padded = np.full(n_rot_padded, -1e30, dtype=np.float32)
+        log_prior_padded[:n_rot] = np.asarray(rotation_log_prior, dtype=np.float32)
+        log_prior_padded_jnp = jnp.asarray(log_prior_padded)
+        logger.info(
+            "Using rotation log-prior: %d rotations, range [%.2f, %.2f]",
+            n_rot, float(rotation_log_prior.min()), float(rotation_log_prior.max()),
+        )
+    else:
+        log_prior_padded_jnp = None
 
     # Initialize accumulators
     Ft_y = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
@@ -404,6 +422,11 @@ def run_em_v2(
                     batch_size, n_trans, image_shape, volume_shape,
                 )
 
+            # Add rotation log-prior (Gaussian angular prior for local search)
+            if log_prior_padded_jnp is not None:
+                log_prior_block = log_prior_padded_jnp[r0:r1]
+                scores = scores + log_prior_block[None, :, None]
+
             # Mask padding rotations (set their scores to -inf)
             if r1 > n_rot:
                 valid = n_rot - r0
@@ -448,6 +471,11 @@ def run_em_v2(
                     proj_half_weighted_b, proj_abs2_weighted_b, half_weights,
                     batch_size, n_trans, image_shape, volume_shape,
                 )
+
+            # Add rotation log-prior (must match pass 1 exactly)
+            if log_prior_padded_jnp is not None:
+                log_prior_block = log_prior_padded_jnp[r0:r1]
+                scores = scores + log_prior_block[None, :, None]
 
             # Mask padding
             if r1 > n_rot:

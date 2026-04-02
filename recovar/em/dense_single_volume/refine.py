@@ -44,6 +44,7 @@ from recovar.em.dense_single_volume.convergence import (
     should_refine_angular_sampling,
     refine_angular_sampling,
     compute_ave_Pmax,
+    healpix_angular_step,
 )
 from recovar.em.sampling import (
     get_rotation_grid_at_order,
@@ -339,6 +340,7 @@ def refine_single_volume(
     max_healpix_order=7,
     init_translation_range=10.0,
     init_translation_step=2.0,
+    save_intermediates_dir=None,
 ):
     """Multi-iteration EM refinement with FSC-driven resolution management.
 
@@ -456,6 +458,7 @@ def refine_single_volume(
             init_translation_range=init_translation_range,
             init_translation_step=init_translation_step,
             nside_level=nside_level,
+            save_intermediates_dir=save_intermediates_dir,
         )
 
     # ===================================================================
@@ -867,6 +870,7 @@ def _refine_relion_mode(
     init_translation_range,
     init_translation_step,
     nside_level,
+    save_intermediates_dir=None,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -1012,54 +1016,82 @@ def _refine_relion_mode(
                 state.translation_range, state.translation_step,
             )
 
-        # --- Local angular search (fast index-based + neighbor expansion) ---
-        # Restrict rotations to unique previous assignments + their HEALPix
-        # neighbors.  Falls back to global search if assignments are unstable
-        # (frac_changed > 0.5 means local grid is insufficient).
+        # --- Local angular search with Gaussian prior weighting ---
+        # RELION-style local search: restrict the rotation grid to
+        # orientations near previous best assignments, AND add Gaussian
+        # prior log-weights so orientations far from the previous best
+        # are exponentially down-weighted in the E-step.
+        #
+        # Grid restriction (for speed): use get_local_rotation_grid to
+        # select all grid rotations within sigma_cutoff * sigma_rot of
+        # any image's previous best orientation.
+        #
+        # Prior weighting: for each selected rotation r, compute
+        #   log_prior[r] = max_i(-d(R_prev[i], R_r)^2 / (2*sigma^2))
+        # where the max is over all images (union approach).  This is
+        # conservative -- the closest image's prior dominates.
         effective_rotations = current_rotations
+        rotation_log_prior = None
+        local_rot_indices = None  # mapping from local -> global rotation index
         use_local = (state.do_local_search
                      and previous_assignments[0] is not None
                      and iteration > 0)
         if use_local:
             n_trans_current = current_translations.shape[0]
-            # Get unique rotation indices from both half-sets
-            unique_rot_indices = set()
+            sigma_rot = state.sigma_rot
+            if sigma_rot <= 0:
+                # Fallback: compute from angular step
+                step_rad = np.deg2rad(
+                    healpix_angular_step(state.healpix_order)
+                    / (2 ** state.adaptive_oversampling)
+                )
+                sigma_rot = np.sqrt(2.0 * 2.0) * step_rad
+
+            # Gather per-image best rotation matrices from both half-sets
+            prior_rot_list = []
             for k in range(2):
                 if previous_assignments[k] is not None:
                     rot_idx = previous_assignments[k] // n_trans_current
                     rot_idx = np.clip(rot_idx, 0, current_rotations.shape[0] - 1)
-                    unique_rot_indices.update(rot_idx.tolist())
+                    prior_rot_list.append(current_rotations[rot_idx])
+            prior_rotations = np.concatenate(prior_rot_list, axis=0)
 
-            # Expand with HEALPix neighbors: add 2 levels of neighbors
-            # to ensure nearby orientations are included even when
-            # assignments shift between iterations.
-            try:
-                from recovar.em.sampling import get_healpix_neighbors
-                expanded = set(unique_rot_indices)
-                frontier = set(unique_rot_indices)
-                n_rots = current_rotations.shape[0]
-                for _level in range(2):  # 2 levels of neighbor expansion
-                    next_frontier = set()
-                    for idx in frontier:
-                        neighbors = get_healpix_neighbors(
-                            idx, current_nside_level)
-                        for n in neighbors:
-                            if 0 <= n < n_rots and n not in expanded:
-                                next_frontier.add(n)
-                                expanded.add(n)
-                    frontier = next_frontier
-                unique_rot_indices = expanded
-            except Exception:
-                pass  # Fall back to no expansion
+            # Use get_local_rotation_grid for the selection + prior weights
+            from recovar.em.sampling import get_local_rotation_grid
+            selected_rots, selected_indices, prior_weights = get_local_rotation_grid(
+                prior_rotations,
+                sigma_rot,
+                grid_rotations=current_rotations,
+                sigma_cutoff=3.0,
+            )
 
-            unique_rot_indices = np.array(sorted(unique_rot_indices))
+            if len(selected_indices) < current_rotations.shape[0]:
+                effective_rotations = selected_rots
+                local_rot_indices = selected_indices
 
-            if len(unique_rot_indices) < current_rotations.shape[0]:
-                effective_rotations = current_rotations[unique_rot_indices]
+                # Compute per-rotation log-prior as max over all images:
+                # log_prior[r] = max_i log(prior_weights[i, r])
+                # prior_weights[i,r] = exp(-d^2 / (2*sigma^2)), already computed
+                # We take max weight (= min distance), then take log.
+                max_prior_weight = np.max(prior_weights, axis=0)  # (n_selected,)
+                # Clamp to avoid log(0)
+                max_prior_weight = np.maximum(max_prior_weight, 1e-30)
+                rotation_log_prior = np.log(max_prior_weight).astype(np.float32)
+
                 logger.info(
-                    "Local search: %d / %d rotations (unique + neighbors)",
+                    "Local search: %d / %d rotations "
+                    "(sigma_rot=%.4f rad = %.2f deg, "
+                    "log_prior range=[%.2f, %.2f])",
                     effective_rotations.shape[0],
                     current_rotations.shape[0],
+                    sigma_rot, np.rad2deg(sigma_rot),
+                    rotation_log_prior.min(), rotation_log_prior.max(),
+                )
+            else:
+                logger.info(
+                    "Local search: all %d rotations selected "
+                    "(sigma_rot=%.4f rad); using flat prior",
+                    current_rotations.shape[0], sigma_rot,
                 )
 
         cs_for_engine = cs if cs < cryo.image_shape[0] else None
@@ -1069,6 +1101,7 @@ def _refine_relion_mode(
 
         for k in range(2):
             # Standard single-pass E+M with the current (possibly local) grid
+            # and optional Gaussian rotation prior
             new_mean_k, ha_k, Ft_y_k, Ft_ctf_k = run_em_v2(
                 experiment_datasets[k],
                 means[k],
@@ -1080,6 +1113,7 @@ def _refine_relion_mode(
                 image_batch_size=image_batch_size,
                 rotation_block_size=rotation_block_size,
                 current_size=cs_for_engine,
+                rotation_log_prior=rotation_log_prior,
             )
 
             means[k] = new_mean_k
@@ -1112,6 +1146,90 @@ def _refine_relion_mode(
             unreg_means[0], unreg_means[1], volume_shape,
         )
         fsc_history.append(fsc)
+
+        # --- Save intermediate volumes if requested ---
+        if save_intermediates_dir is not None:
+            import os
+            os.makedirs(save_intermediates_dir, exist_ok=True)
+            import mrcfile
+            for k_half in range(2):
+                vol_real = np.real(
+                    np.fft.ifftn(
+                        np.fft.ifftshift(
+                            np.asarray(means[k_half]).reshape(volume_shape)
+                        )
+                    )
+                ).astype(np.float32)
+                mrc_path = os.path.join(
+                    save_intermediates_dir,
+                    f"it{iteration:03d}_half{k_half+1}_reg.mrc",
+                )
+                with mrcfile.new(mrc_path, overwrite=True) as mrc:
+                    mrc.set_data(vol_real)
+                # Also save unregularized half-map
+                vol_unreg = np.real(
+                    np.fft.ifftn(
+                        np.fft.ifftshift(
+                            np.asarray(unreg_means[k_half]).reshape(volume_shape)
+                        )
+                    )
+                ).astype(np.float32)
+                mrc_unreg_path = os.path.join(
+                    save_intermediates_dir,
+                    f"it{iteration:03d}_half{k_half+1}_unreg.mrc",
+                )
+                with mrcfile.new(mrc_unreg_path, overwrite=True) as mrc:
+                    mrc.set_data(vol_unreg)
+            # Save FSC and noise/tau2 per iteration
+            np.save(
+                os.path.join(save_intermediates_dir, f"it{iteration:03d}_fsc.npy"),
+                np.asarray(fsc),
+            )
+            np.save(
+                os.path.join(save_intermediates_dir, f"it{iteration:03d}_noise.npy"),
+                np.asarray(noise_variance),
+            )
+            np.save(
+                os.path.join(save_intermediates_dir, f"it{iteration:03d}_tau2.npy"),
+                np.asarray(mean_variance),
+            )
+            # Save hard assignments for angular error analysis
+            for k_half in range(2):
+                if hard_assignments[k_half] is not None:
+                    np.save(
+                        os.path.join(
+                            save_intermediates_dir,
+                            f"it{iteration:03d}_ha_half{k_half+1}.npy",
+                        ),
+                        hard_assignments[k_half],
+                    )
+            # Save per-iteration metadata
+            iter_meta = {
+                "iteration": iteration,
+                "current_size": int(cs),
+                "n_rotations": int(effective_rotations.shape[0]),
+                "n_translations": int(current_translations.shape[0]),
+                "healpix_order": int(state.healpix_order),
+                "local_search": bool(use_local),
+                "sigma_rot": float(state.sigma_rot),
+            }
+            np.save(
+                os.path.join(save_intermediates_dir, f"it{iteration:03d}_meta.npy"),
+                iter_meta,
+            )
+            # Save the effective rotation grid for angular error computation
+            np.save(
+                os.path.join(save_intermediates_dir, f"it{iteration:03d}_rotations.npy"),
+                np.asarray(effective_rotations),
+            )
+            np.save(
+                os.path.join(save_intermediates_dir, f"it{iteration:03d}_translations.npy"),
+                np.asarray(current_translations),
+            )
+            logger.info(
+                "Saved intermediate volumes to %s (iteration %d)",
+                save_intermediates_dir, iteration,
+            )
 
         # --- Resolution from data_vs_prior (RELION-style, for convergence) ---
         # Use data_vs_prior criterion, not FSC < 0.143, because with
