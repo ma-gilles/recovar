@@ -7,6 +7,7 @@ Only tests argument registration via add_args() – no actual EM execution.
 import argparse
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 pytest.importorskip("jax")  # pipeline.py imports jax at module level
@@ -45,6 +46,14 @@ def test_pipeline_registers_outdir():
 def test_pipeline_registers_zdim():
     actions = _parser_with_pipeline_args()._option_string_actions
     assert "--zdim" in actions
+
+
+def test_pipeline_registers_use_ppca():
+    actions = _parser_with_pipeline_args()._option_string_actions
+    assert "--use-ppca" in actions
+    assert "--ppca-em-iters" in actions
+    assert "--ppca-use-gridding-correction" in actions
+    assert "--ppca-contrast-mode" in actions
 
 
 def test_pipeline_zdim_default_is_list():
@@ -190,3 +199,111 @@ def test_standard_pipeline_estimates_initial_noise_from_halfset_zero(monkeypatch
 
     with pytest.raises(RuntimeError, match="noise-estimate-stop"):
         pipeline_cmd.standard_recovar_pipeline(args)
+
+
+def test_standard_pipeline_rejects_ppca_without_gpu(monkeypatch, tmp_path):
+    monkeypatch.setattr(pipeline_cmd.utils, "jax_has_gpu", lambda: False)
+
+    args = SimpleNamespace(
+        outdir=str(tmp_path / "pipeline_out"),
+        particles="particles.star",
+        poses="poses.pkl",
+        ctf="ctf.pkl",
+        mask="mask.mrc",
+        accept_cpu=True,
+        use_ppca=True,
+    )
+
+    with pytest.raises(ValueError, match="--use-ppca currently requires a CUDA GPU"):
+        pipeline_cmd.standard_recovar_pipeline(args)
+
+
+def test_resolve_ppca_contrast_mode_auto():
+    assert (
+        pipeline_cmd._resolve_ppca_contrast_mode(
+            SimpleNamespace(ppca_contrast_mode="auto", correct_contrast=False)
+        )
+        == "none"
+    )
+    assert (
+        pipeline_cmd._resolve_ppca_contrast_mode(
+            SimpleNamespace(ppca_contrast_mode="auto", correct_contrast=True)
+        )
+        == "marginalize"
+    )
+    assert (
+        pipeline_cmd._resolve_ppca_contrast_mode(
+            SimpleNamespace(ppca_contrast_mode="profile", correct_contrast=False)
+        )
+        == "profile"
+    )
+
+
+def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
+    fake_dataset = SimpleNamespace(volume_shape=(2, 2, 2))
+    means = SimpleNamespace(combined=np.zeros(8, dtype=np.complex64))
+    options = SimpleNamespace(zs_dim_to_test=[4])
+    args = SimpleNamespace(
+        ppca_contrast_mode="auto",
+        correct_contrast=True,
+        ppca_em_iters=7,
+        use_complement_mask=False,
+    )
+
+    prior_calls = {}
+    em_calls = {}
+
+    def _fake_prior(dataset, mean_estimate, npc, volume_shape, batch_size):
+        prior_calls["args"] = (dataset, mean_estimate, npc, volume_shape, batch_size)
+        return {"W_prior": np.full((8, npc), 3.0, dtype=np.float32)}
+
+    def _fake_em(dataset, mean_estimate, W_init, W_prior, **kwargs):
+        em_calls["dataset"] = dataset
+        em_calls["mean_estimate"] = mean_estimate
+        em_calls["W_init"] = W_init
+        em_calls["W_prior"] = W_prior
+        em_calls["kwargs"] = kwargs
+        q = W_init.shape[1]
+        return (
+            np.ones((8, q), dtype=np.complex64),
+            np.arange(1, q + 1, dtype=np.float32),
+            np.full((8, q), 5.0, dtype=np.complex64),
+            np.zeros((10, q), dtype=np.float32),
+            np.zeros((10, q, q), dtype=np.float32),
+            [{"Iteration": 0}],
+        )
+
+    monkeypatch.setattr(
+        pipeline_cmd.ppca_prior_estimation,
+        "estimate_hybrid_shell_prior_from_data",
+        _fake_prior,
+    )
+    monkeypatch.setattr(pipeline_cmd.ppca_module, "EM", _fake_em)
+
+    u_rescaled = np.arange(8 * 6, dtype=np.float32).reshape(8, 6).astype(np.complex64)
+    s_rescaled = np.array([9.0, 4.0, 1.0, 16.0, 25.0, 36.0], dtype=np.float32)
+    out = pipeline_cmd._run_ppca_refinement(
+        fake_dataset,
+        means,
+        u_rescaled,
+        s_rescaled,
+        np.ones((2, 2, 2), dtype=np.float32),
+        options,
+        args,
+        batch_size=32,
+    )
+
+    assert prior_calls["args"][0] is fake_dataset
+    assert prior_calls["args"][2] == 4
+    assert prior_calls["args"][3] == (2, 2, 2)
+    assert prior_calls["args"][4] == 32
+    np.testing.assert_allclose(
+        em_calls["W_init"],
+        u_rescaled[:, :4] * np.sqrt(s_rescaled[:4])[None, :],
+    )
+    np.testing.assert_allclose(em_calls["W_prior"], np.full((8, 4), 3.0, dtype=np.float32))
+    assert em_calls["kwargs"]["contrast_mode"] == "marginalize"
+    assert em_calls["kwargs"]["EM_iter"] == 7
+    assert out["basis_size"] == 4
+    assert out["contrast_mode"] == "marginalize"
+    assert out["prior_mode"] == "hybrid_shell"

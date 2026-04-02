@@ -295,6 +295,7 @@ def build_params_dict(
     column_fscs,
     picked_frequencies,
     input_args,
+    extras=None,
 ):
     """Build the params dict saved as ``model/params.pkl``.
 
@@ -342,8 +343,10 @@ def build_params_dict(
         Frequency indices selected for covariance columns.
     input_args : Namespace
         The full command-line arguments used to run the pipeline.
+    extras : dict or None
+        Optional additional fields to merge into the params dict.
     """
-    return {
+    result = {
         'version': '0.7',
         'volume_shape': volume_shape,
         'voxel_size': voxel_size,
@@ -371,6 +374,9 @@ def build_params_dict(
         # Input
         'input_args': input_args,
     }
+    if extras:
+        result.update(extras)
+    return result
 
 
 def build_embedding_dict(latent_coords, latent_coords_noreg,
@@ -413,6 +419,8 @@ def save_pipeline_results(
     particles_ind_split,
     ind_split,
     zs_full=None,
+    ppca_loadings=None,
+    ppca_iteration_data=None,
 ):
     """Save all pipeline results to disk.
 
@@ -432,6 +440,11 @@ def save_pipeline_results(
         Per-image halfset indices.
     zs_full : dict or None
         Full latent coordinates before complement-mask trimming (if applicable).
+    ppca_loadings : ndarray or None
+        Optional PPCA loading matrix ``W`` saved separately when the pipeline
+        uses the PPCA refinement path.
+    ppca_iteration_data : list[dict] or None
+        Optional per-iteration PPCA diagnostics.
     """
     paths.ensure_dirs()
 
@@ -445,6 +458,11 @@ def save_pipeline_results(
 
     if zs_full is not None:
         utils.pickle_dump(zs_full, paths.zs_with_complement)
+
+    if ppca_loadings is not None:
+        np.save(paths.ppca_loadings, np.asarray(ppca_loadings))
+    if ppca_iteration_data is not None:
+        utils.pickle_dump(ppca_iteration_data, paths.ppca_iteration_data)
 
     write_metadata_json(paths, result)
 
@@ -581,6 +599,11 @@ def write_metadata_json(paths, result):
             'mask': 'output/volumes/mask.mrc',
         },
     }
+
+    if os.path.isfile(paths.ppca_loadings):
+        metadata['files']['ppca_loadings'] = 'model/ppca_loadings.npy'
+    if os.path.isfile(paths.ppca_iteration_data):
+        metadata['files']['ppca_iteration_data'] = 'model/ppca_iteration_data.pkl'
 
     try:
         with open(paths.metadata, 'w') as f:
@@ -960,7 +983,8 @@ class PipelineOutput:
             return self.embedding[key]
 
         elif key == 'unsorted_embedding':
-            return utils.pickle_load(self.paths.embeddings)
+            self._ensure_embedding_raw_loaded()
+            return self.embedding
 
         elif key in ('u', 'u_real'):
             return self.get_u_real(50) if key == 'u_real' else self.get_u(50)
@@ -995,6 +1019,14 @@ class PipelineOutput:
             return utils.load_mrc(self.paths.dilated_mask_volume)
         elif key == 'covariance_cols':
             return utils.pickle_load(self.paths.covariance_cols)
+        elif key in ('ppca_W', 'W'):
+            if not os.path.isfile(self.paths.ppca_loadings):
+                raise KeyError(f"key '{key}' not found in PipelineOutput")
+            return np.load(self.paths.ppca_loadings)
+        elif key == 'ppca_iteration_data':
+            if not os.path.isfile(self.paths.ppca_iteration_data):
+                raise KeyError("key 'ppca_iteration_data' not found in PipelineOutput")
+            return utils.pickle_load(self.paths.ppca_iteration_data)
 
         elif key in ('dataset', 'lazy_dataset'):
             ds = halfsets.load_halfset_dataset_from_args(
@@ -1030,6 +1062,10 @@ class PipelineOutput:
         keys = list(self.params.keys())
         keys += list(self._EMBEDDING_ENTRIES)
         keys += ['u', 'u_real', 'mean', 'volume_mask', 'dilated_volume_mask', 'covariance_cols', 'dataset', 'lazy_dataset', 'variance', 'variance20', 'focus_mask', 'image_snr', 'mean_halfmaps', 'halfsets', 'input_args', 'unsorted_embedding']
+        if os.path.isfile(self.paths.ppca_loadings):
+            keys += ['ppca_W', 'W']
+        if os.path.isfile(self.paths.ppca_iteration_data):
+            keys.append('ppca_iteration_data')
         return keys
 
 

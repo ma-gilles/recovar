@@ -17,7 +17,20 @@ Both data (A) and prior (Λ) act on KV.  This ensures the naive solution
 V = K^{-1}(A+Λ)^{-1}d is the exact unmasked optimum.
 
 Defaults: 128³, q=10, 50k images, 20 EM iters.
-Prior: (1/NPC) * gt.get_fourier_variances(), radially averaged.
+Mean modes:
+  - gt: use gt.get_mean().
+  - estimated: reconstruct mean from data once up front.
+Prior modes:
+  - gt: (1/NPC) * gt.get_fourier_variances(), radially averaged.
+  - data_once: provisional estimated-prior path. For now this aliases to
+               the legacy hybrid shell prior because it is the only
+               estimator that is robust across the current no-contrast and
+               contrast-varying benchmarks. This needs to be tightened up.
+  - combined_reg_raw: shell-average regularized `variance["combined"]` only.
+  - combined_noreg_raw: shell-average unregularized `variance["combined"]` only.
+  - gaussian_shell: legacy Gaussian shell prior from PPCA-EM notes.
+  - hybrid_shell: Gaussian shell prior with |mean|^2 fallback.
+  - iter: refresh prior from the current W after each EM step.
 Mask: moving GT mask.  collar=4%.  μ=100.
 """
 import argparse, json, logging, os, sys, time
@@ -37,12 +50,14 @@ try:
     from recovar.cuda_backproject import _ensure_ffi; _ensure_ffi()
 except Exception: pass
 
-from recovar.ppca import ppca
+from recovar.ppca import ppca, prior_estimation
 from recovar.ppca.ppca_scale_sweep import _load_simulated_dataset, _with_trailing_separator
+from recovar import utils
 import recovar.core.fourier_transform_utils as ftu
-from recovar.core.mask import make_moving_gt_mask
+from recovar.core.mask import make_moving_gt_mask, make_union_gt_mask
+from recovar.heterogeneity import covariance_estimation
 from recovar.output import metrics
-from recovar.reconstruction import regularization
+from recovar.reconstruction import homogeneous, regularization, relion_functions
 from recovar.utils import batch_make_radial_image
 from scipy.ndimage import distance_transform_edt
 
@@ -51,6 +66,15 @@ logger = logging.getLogger("bench")
 
 _CHUNK = 100_000
 _PC_BATCH = 4
+STATIC_PRIOR_MODES = (
+    "gt",
+    "data_once",
+    "combined_reg_raw",
+    "combined_noreg_raw",
+    "gaussian_shell",
+    "hybrid_shell",
+)
+ESTIMATED_PRIOR_MODES = STATIC_PRIOR_MODES[1:]
 
 # ═══════════════════════════════════════════════════════════════════════
 # Utilities
@@ -492,32 +516,314 @@ def make_soft_solver(mu=100, collar=5, precondition=False, use_float64=False,
 # Prior, EM runner, main
 # ═══════════════════════════════════════════════════════════════════════
 
-def make_prior(gt, npc, vs):
-    fv = gt.get_fourier_variances(contrasted=False)
+def _variance_to_radial_prior(fourier_variance, npc, vs, label, clip_negative=False):
+    """Convert total Fourier variance into the spherically averaged PPCA prior."""
+    per_pc = np.asarray(fourier_variance, dtype=np.float32).reshape(-1) / float(npc)
+    radial_raw = np.array(
+        regularization.batch_average_over_shells(jnp.array(per_pc).reshape(1, -1), vs, 0)
+    )[0]
+    radial_used = np.maximum(radial_raw, 1e-8) if clip_negative else radial_raw
+    img = np.array(batch_make_radial_image(jnp.array(radial_used).reshape(1, -1), vs, True))[0]
+    W_prior = np.tile(img.reshape(-1, 1), (1, npc)).astype(np.float32)
+    neg_frac = float(np.mean(radial_raw < 0))
+    logger.info(
+        "%s prior: median(full)=%.2e median(radial)=%.2e neg_shell_frac=%.3f",
+        label,
+        float(np.median(per_pc)),
+        float(np.median(radial_used)),
+        neg_frac,
+    )
+    return W_prior, per_pc, radial_raw, radial_used
+
+
+def make_gt_prior(gt, npc, vs):
+    return prior_estimation.make_gt_prior_from_variance_total(
+        gt.get_fourier_variances(contrasted=False), npc, vs
+    )["W_prior"]
+
+
+def estimate_mean_from_data(cryos, noise_variance_radial, batch_size):
+    noise_var_image = utils.make_radial_image(noise_variance_radial, cryos.image_shape)
+    means, mean_prior, mean_fsc = homogeneous.get_mean_conformation_relion(
+        cryos,
+        batch_size,
+        noise_variance=noise_var_image,
+        use_regularization=False,
+    )
+    return (
+        np.asarray(means.combined).reshape(-1),
+        means,
+        np.asarray(mean_prior),
+        np.asarray(mean_fsc),
+    )
+
+
+def estimate_data_prior(
+    cryos,
+    mean_estimate,
+    npc,
+    vs,
+    volume_mask,
+    batch_size,
+    *,
+    use_regularization=True,
+    repair_tail=True,
+    label="DataCombinedReg",
+):
+    variance_est, variance_prior, variance_fsc, lhs, noise_p_variance_est = covariance_estimation.compute_variance(
+        cryos,
+        mean_estimate,
+        batch_size,
+        volume_mask,
+        use_regularization=use_regularization,
+        disc_type="cubic",
+    )
+    prior_total_signal = np.asarray(
+        variance_est.get("prior_total_signal", variance_prior)
+    ).reshape(-1)
+    prior_shell_subtracted = np.asarray(
+        variance_est.get("prior_shell_subtracted", variance_prior)
+    ).reshape(-1)
+    combined = np.asarray(variance_est["combined"]).reshape(-1)
+    raw_shell_total = prior_estimation.shell_average_real(combined, vs)
+    if repair_tail:
+        prior_info = prior_estimation.make_estimated_prior_from_combined(
+            combined,
+            mean_estimate,
+            npc,
+            vs,
+            label=label,
+        )
+        shell_total_used = prior_info["repaired_shell_total"]
+    else:
+        prior_info = prior_estimation.make_radial_prior_from_shell_total(
+            raw_shell_total,
+            npc,
+            vs,
+            label=label,
+            clip_negative=True,
+        )
+        prior_info.update(
+            {
+                "raw_shell_total": raw_shell_total,
+                "repaired_shell_total": raw_shell_total.copy(),
+                "mean_sq_shells": prior_estimation.shell_average_real(
+                    np.abs(np.asarray(mean_estimate).reshape(-1)) ** 2,
+                    vs,
+                ),
+                "reliable": np.isfinite(raw_shell_total) & (raw_shell_total > 1e-8),
+                "tail_fallback_mask": np.zeros(raw_shell_total.shape, dtype=bool),
+                "median_ratio": 1.0,
+                "meansq_fallback": raw_shell_total.copy(),
+                "meansq_threshold": 0.0,
+                "last_reliable_shell": int(np.max(np.where(raw_shell_total > 1e-8)[0])) if np.any(raw_shell_total > 1e-8) else -1,
+            }
+        )
+        shell_total_used = raw_shell_total
+    per_pc = shell_total_used / float(npc)
+    return {
+        "W_prior": prior_info["W_prior"],
+        "fourier_variance_total": combined,
+        "fourier_variance_prior_total": combined,
+        "fourier_variance_prior_shell_subtracted": prior_shell_subtracted,
+        "fourier_variance_per_pc": per_pc,
+        "radial_raw": prior_info["radial_raw"],
+        "radial_used": prior_info["radial_used"],
+        "variance_prior": combined,
+        "variance_tau_total_signal": prior_total_signal,
+        "variance_prior_shell_subtracted": prior_shell_subtracted,
+        "variance_fsc": np.asarray(variance_est.get("fsc_total_signal", variance_fsc)),
+        "variance_fsc_shell_subtracted": np.asarray(
+            variance_est.get("fsc_shell_subtracted", variance_fsc)
+        ),
+        "lhs": np.asarray(lhs),
+        "noise_p_variance_est": np.asarray(noise_p_variance_est),
+        "raw_shell_total": prior_info["raw_shell_total"],
+        "repaired_shell_total": prior_info["repaired_shell_total"],
+        "mean_sq_shells": prior_info["mean_sq_shells"],
+        "reliable": prior_info["reliable"],
+        "tail_fallback_mask": prior_info["tail_fallback_mask"],
+        "median_ratio": prior_info["median_ratio"],
+        "meansq_fallback": prior_info["meansq_fallback"],
+        "meansq_threshold": prior_info["meansq_threshold"],
+        "last_reliable_shell": prior_info["last_reliable_shell"],
+        "combined_regularized": bool(use_regularization),
+        "tail_repaired": bool(repair_tail),
+    }
+
+
+def estimate_gaussian_shell_prior(cryos, mean_estimate, npc, vs, batch_size):
+    """Legacy Gaussian shell prior from PPCA-EM notes, using an all-ones mask."""
+    volume_mask = np.ones(vs, dtype=np.float32)
+    ctf_w, signal = [], []
+    for halfset_dataset in cryos.materialize_halfset_datasets():
+        fw, sig, _nw, _ns = covariance_estimation.variance_relion_style_triangular_kernel(
+            halfset_dataset,
+            mean_estimate,
+            batch_size,
+            image_subset=None,
+            volume_mask=volume_mask,
+            disc_type="linear_interp",
+        )
+        ctf_w.append(np.asarray(relion_functions.adjust_regularization_relion_style(fw, halfset_dataset.volume_shape)))
+        signal.append(np.asarray(sig))
+
+    corrected = [
+        covariance_estimation._safe_div(jnp.asarray(signal[i]), jnp.asarray(ctf_w[i])) for i in range(2)
+    ]
+    lhs = (np.asarray(ctf_w[0]) + np.asarray(ctf_w[1])) / 2
+
+    rhs_total = np.asarray(signal[0]).real + np.asarray(signal[1]).real
+    lhs_total = np.asarray(ctf_w[0]).real + np.asarray(ctf_w[1]).real
+    rhs_shell = np.asarray(regularization.sum_over_shells(jnp.array(rhs_total), vs).real).reshape(-1)
+    lhs_shell = np.asarray(regularization.sum_over_shells(jnp.array(lhs_total), vs).real).reshape(-1)
+    shell_mean = np.where(lhs_shell > 1e-20, rhs_shell / lhs_shell, 0.0)
+
+    fsc = np.asarray(
+        regularization.get_fsc_gpu(corrected[0], corrected[1], vs, substract_shell_mean=True).real
+    ).reshape(-1)
+    fsc_raw = np.asarray(
+        regularization.get_fsc_gpu(corrected[0], corrected[1], vs, substract_shell_mean=False).real
+    ).reshape(-1)
+    fsc_clipped = np.clip(fsc, 0.01, 0.999)
+    shell_var = shell_mean**2 * (1.0 - fsc_clipped) / fsc_clipped
+
+    shell_mean_vol = np.asarray(utils.make_radial_image(jnp.array(shell_mean), vs)).reshape(-1).real
+    shell_var_vol = np.asarray(utils.make_radial_image(jnp.array(shell_var), vs)).reshape(-1).real
+    combined = np.asarray((corrected[0] + corrected[1]) / 2).real.reshape(-1)
+
+    inv_shell_var_vol = np.where(shell_var_vol > 1e-20, 1.0 / shell_var_vol, 0.0)
+    corrected_gp = []
+    for idx in range(2):
+        rhs_idx = np.asarray(signal[idx]).real.reshape(-1)
+        lhs_idx = np.asarray(ctf_w[idx]).real.reshape(-1)
+        corrected_gp.append(
+            np.where(
+                lhs_idx + inv_shell_var_vol > 1e-20,
+                (rhs_idx + shell_mean_vol * inv_shell_var_vol) / (lhs_idx + inv_shell_var_vol),
+                shell_mean_vol,
+            )
+        )
+    combined_gp = (corrected_gp[0] + corrected_gp[1]) / 2
+
+    radial = prior_estimation.make_radial_prior_from_shell_total(
+        shell_mean, npc, vs, label="GaussianShell", clip_negative=True
+    )
+    return {
+        "W_prior": radial["W_prior"],
+        "radial_raw": radial["radial_raw"],
+        "radial_used": radial["radial_used"],
+        "shell_mean": np.asarray(shell_mean),
+        "shell_var": np.asarray(shell_var),
+        "shell_mean_vol": shell_mean_vol,
+        "shell_var_vol": shell_var_vol,
+        "fsc": fsc,
+        "fsc_raw": fsc_raw,
+        "corrected0": np.asarray(corrected[0]).real.reshape(-1),
+        "corrected1": np.asarray(corrected[1]).real.reshape(-1),
+        "combined": combined,
+        "corrected_gp0": corrected_gp[0],
+        "corrected_gp1": corrected_gp[1],
+        "combined_gp": combined_gp,
+        "lhs": np.asarray(lhs).real.reshape(-1),
+    }
+
+
+def estimate_hybrid_prior(cryos, mean_estimate, npc, vs, batch_size):
+    """Legacy hybrid prior: Gaussian shell estimate with |mean|^2 fallback.
+
+    This is the current provisional estimated-prior fallback for PPCA bench
+    work. It is empirically the most robust option across the current issue-76
+    no-contrast and contrast-varying ablations, but it is still heuristic and
+    should be tightened up.
+    """
+    gp = estimate_gaussian_shell_prior(cryos, mean_estimate, npc, vs, batch_size)
+    mean_sq_shells = prior_estimation.shell_average_real(np.abs(np.asarray(mean_estimate).reshape(-1)) ** 2, vs)
+    repaired = prior_estimation.repair_shell_total_with_mean_sq(
+        gp["shell_mean"],
+        mean_sq_shells,
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        var_over_meansq = np.where(
+            repaired["mean_sq_shells"] > 1e-12,
+            repaired["raw_shell_total"] / repaired["mean_sq_shells"],
+            np.nan,
+        )
+    radial = prior_estimation.make_radial_prior_from_shell_total(
+        repaired["repaired_shell_total"], npc, vs, label="HybridShell", clip_negative=True
+    )
+    gp.update(
+        {
+            "W_prior": radial["W_prior"],
+            "radial_raw": radial["radial_raw"],
+            "radial_used": radial["radial_used"],
+            "hybrid_prior_shells": np.asarray(repaired["repaired_shell_total"]),
+            "mean_sq_shells": np.asarray(repaired["mean_sq_shells"]),
+            "var_over_meansq": np.asarray(var_over_meansq),
+            "reliable": np.asarray(repaired["reliable"]),
+            "median_ratio": float(repaired["median_ratio"]),
+            "meansq_fallback": np.asarray(repaired["meansq_fallback"]),
+            "tail_fallback_mask": np.asarray(repaired["tail_fallback_mask"]),
+            "meansq_threshold": float(repaired["meansq_threshold"]),
+            "last_reliable_shell": int(repaired["last_reliable_shell"]),
+        }
+    )
+    return gp
+
+
+def make_iter_prior(W, npc, vs):
+    """Estimate a radial prior from the current loading matrix."""
+    volume_size = int(np.prod(vs))
+    if W.shape[0] != volume_size:
+        W_full = np.asarray(ftu.half_volume_to_full_volume(W.T, vs).T)
+    else:
+        W_full = np.asarray(W)
+    fv = np.sum(np.abs(W_full) ** 2, axis=1)
     per_pc = fv / npc
     radial = regularization.batch_average_over_shells(
         jnp.array(per_pc).reshape(1, -1), vs, 0)
     img = batch_make_radial_image(radial, vs, True).T
     W_prior = np.array(jnp.tile(img, (1, npc)))
-    logger.info("Prior: (1/%d)*fourier_var, median=%.2e", npc, float(np.median(per_pc)))
+    logger.info("Prior refresh: (1/%d)*fourier_var, median=%.2e", npc, float(np.median(per_pc)))
     return W_prior
 
 
-def run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt, mask_arr,
+def run_em(cryos, mean_estimate, gt_mean, W_init, W_prior, U_gt, s_gt, mask_arr,
            use_pcg, solver_fn, pcg_maxiter, label, n_iter,
            use_gridding_correction=True,
-           contrast_mode="none", contrast_grid=None):
+           contrast_mode="none", contrast_grid=None, prior_mode="gt"):
     logger.info("=== %s ===", label)
     t0 = time.time()
-    U, S, W, ez, sm, idata = ppca.EM(
-        cryos, gt_mean, W_init.copy(), W_prior,
-        U_gt=U_gt, S_gt=s_gt**2, EM_iter=n_iter,
-        use_whitening=False, sparse_PCA=False,
-        disc_type_mean="cubic", disc_type="linear_interp",
-        return_iteration_data=True, use_pcg_mean=use_pcg,
-        volume_mask=mask_arr, pcg_maxiter=pcg_maxiter,
-        use_gridding_correction=use_gridding_correction, mstep_solver_fn=solver_fn,
-        contrast_mode=contrast_mode, contrast_grid=contrast_grid)
+    if prior_mode in STATIC_PRIOR_MODES:
+        U, S, W, ez, sm, idata = ppca.EM(
+            cryos, mean_estimate, W_init.copy(), W_prior,
+            U_gt=U_gt, S_gt=s_gt**2, EM_iter=n_iter,
+            use_whitening=False, sparse_PCA=False,
+            disc_type_mean="cubic", disc_type="linear_interp",
+            return_iteration_data=True, use_pcg_mean=use_pcg,
+            volume_mask=mask_arr, pcg_maxiter=pcg_maxiter,
+            use_gridding_correction=use_gridding_correction, mstep_solver_fn=solver_fn,
+            contrast_mode=contrast_mode, contrast_grid=contrast_grid)
+    elif prior_mode == "iter":
+        if contrast_mode != "none":
+            raise ValueError("prior_mode='iter' currently supports contrast_mode='none' only")
+        W = W_init.copy()
+        idata = []
+        for _ in range(n_iter):
+            U, S, W, ez, sm, iter_data = ppca.EM(
+                cryos, mean_estimate, W, W_prior,
+                U_gt=U_gt, S_gt=s_gt**2, EM_iter=1,
+                use_whitening=False, sparse_PCA=False,
+                disc_type_mean="cubic", disc_type="linear_interp",
+                return_iteration_data=True, use_pcg_mean=use_pcg,
+                volume_mask=mask_arr, pcg_maxiter=pcg_maxiter,
+                use_gridding_correction=use_gridding_correction, mstep_solver_fn=solver_fn,
+                contrast_mode=contrast_mode, contrast_grid=contrast_grid)
+            idata.extend(iter_data)
+            vs = cryos[0].volume_shape if hasattr(cryos, '__len__') else cryos.volume_shape
+            W_prior = make_iter_prior(W, W.shape[1], vs)
+    else:
+        raise ValueError(f"Unknown prior_mode: {prior_mode}")
     dt = time.time() - t0
     _, rv, _ = metrics.get_all_variance_scores(U, U_gt, s_gt**2)
     logger.info("  RelVar=%.4f time=%.0fs", rv[-1], dt)
@@ -529,9 +835,30 @@ def run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt, mask_arr,
     vs = cryos[0].volume_shape if hasattr(cryos, '__len__') else cryos.volume_shape
     q = W_init.shape[1]
     W_real = np.array(ftu.get_idft3(W.T.reshape(q, *vs)).real)
+    gt_mean_real = np.array(ftu.get_idft3(gt_mean.reshape(*vs)).real)
+    W_gt_real = np.array(ftu.get_idft3((U_gt[:, :q] * s_gt[:q]).T.reshape(q, *vs)).real)
+
+    def abs_cosine(a, b):
+        a = np.asarray(a).reshape(-1)
+        b = np.asarray(b).reshape(-1)
+        denom = np.linalg.norm(a) * np.linalg.norm(b)
+        return 0.0 if denom == 0 else float(np.abs(np.vdot(a, b)) / denom)
+
+    mean_cosine_per_pc = [abs_cosine(W_real[k], gt_mean_real) for k in range(q)]
+    gt_pc_cosine_diag = [abs_cosine(W_real[k], W_gt_real[k]) for k in range(q)]
+    gt_pc_cosine_max_per_pc = [
+        max(abs_cosine(W_real[k], W_gt_real[j]) for j in range(q)) for k in range(q)
+    ]
+    eigenvalues = [float(x) for x in np.asarray(S).reshape(-1)]
+    gt_eigenvalues = [float(x) for x in np.asarray(s_gt[:q] ** 2).reshape(-1)]
     return {"label": label, "relvar": float(rv[-1]),
             "relvar_per_pc": [float(x) for x in rv],
-            "time": dt, "em_data": em_data, "W_real": W_real}
+            "time": dt, "em_data": em_data, "W_real": W_real,
+            "mean_cosine_per_pc": mean_cosine_per_pc,
+            "gt_pc_cosine_diag": gt_pc_cosine_diag,
+            "gt_pc_cosine_max_per_pc": gt_pc_cosine_max_per_pc,
+            "eigenvalues": eigenvalues,
+            "gt_eigenvalues": gt_eigenvalues}
 
 
 def main():
@@ -547,6 +874,8 @@ def main():
     parser.add_argument("--solver", type=str, default="cg", choices=["cg", "minres"])
     parser.add_argument("--mask-dilate", type=int, default=0,
         help="Extra dilation of binary mask before passing to solvers (match soft mask ramp)")
+    parser.add_argument("--mask-mode", type=str, default="moving", choices=["moving", "union"],
+        help="Support mask choice: moving GT mask (default) or GT union mask.")
     parser.add_argument("--dataset-dir", type=str, default=None,
         help="Override dataset directory")
     parser.add_argument("--contrast-std", type=float, default=0.0,
@@ -559,8 +888,17 @@ def main():
     parser.add_argument("--contrast-mode", type=str, default="none",
         choices=["none", "profile", "marginalize"],
         help="Contrast handling: none (c=1), profile (MAP), marginalize (quadrature)")
+    parser.add_argument("--mean-mode", type=str, default="gt", choices=["gt", "estimated"],
+        help="Mean handling: gt uses gt.get_mean(); estimated reconstructs the mean from data once up front.")
+    parser.add_argument("--prior-mode", type=str, default="gt",
+        choices=[*STATIC_PRIOR_MODES, "iter"],
+        help="Prior handling: gt uses GT variance; data_once currently aliases to the provisional hybrid-shell fallback; combined_reg_raw and combined_noreg_raw keep the raw shell-averaged combined curves for diagnostics; gaussian_shell and hybrid_shell reproduce legacy shell priors from the PPCA-EM notes; iter refreshes from the current W each EM step")
+    parser.add_argument("--estimation-batch-size", type=int, default=1000,
+        help="Batch size for up-front mean/variance estimation.")
     parser.add_argument("--methods", type=str,
         default="hard")
+    parser.add_argument("--n-plot-pcs", type=int, default=-1,
+        help="Number of PCs to include in the slice plot; use -1 to plot all.")
     args = parser.parse_args()
 
     gs = args.grid_size; npc = args.n_pcs
@@ -572,8 +910,11 @@ def main():
     suffix = "_f64" if args.float64 else "_f32"
     if args.solver != "cg": suffix += f"_{args.solver}"
     if args.mask_dilate > 0: suffix += f"_dil{args.mask_dilate}"
+    if args.mask_mode != "moving": suffix += f"_{args.mask_mode}mask"
     if not use_K: suffix += "_noK"
     if args.contrast_mode != "none": suffix += f"_{args.contrast_mode}"
+    if args.mean_mode != "gt": suffix += f"_{args.mean_mode}mean"
+    if args.prior_mode != "gt": suffix += f"_{args.prior_mode}"
     base_dir = "/scratch/gpfs/GILLES/mg6942/tmp/convergence_tests"
     out_dir = f"{base_dir}/mstep_{gs}_{npc}pc{suffix}"
     os.makedirs(out_dir, exist_ok=True)
@@ -581,13 +922,11 @@ def main():
     # Generate or load dataset
     if args.dataset_dir:
         ds_dir = args.dataset_dir
-    # else:
-    if True:
+    else:
         # Auto-generate from B-factored volumes
         vol_path = f"/scratch/gpfs/GILLES/mg6942/tmp/ppca_bfac60_n1_128/true_volumes"
         tag = f"bench_{gs}_n{args.noise_level}_c{args.contrast_std}_{args.n_images}"
         ds_dir = f"/scratch/gpfs/GILLES/mg6942/tmp/{tag}/test_dataset"
-        # if not os.path.exists(os.path.join(ds_dir, "particles.star")):
         from recovar.simulation import simulator
         voxel_size = 4.25 * 128 / gs  # source vols are 128³ at 4.25 Å/px
         logger.info("Generating dataset: %s (voxel_size=%.2f)", ds_dir, voxel_size)
@@ -603,15 +942,23 @@ def main():
     cryos, sim_info, gt, nv = _load_simulated_dataset(
         _with_trailing_separator(ds_dir), gs, args.n_images, lazy=False)
     vs = gt.volume_shape
+    est_batch_size = max(1, min(args.estimation_batch_size, args.n_images))
 
     U_gt_all, s_gt_all, _ = gt.get_vol_svd()
     U_gt, s_gt = U_gt_all[:, :npc], s_gt_all[:npc]
     gt_mean = gt.get_mean()
-    W_prior = make_prior(gt, npc, vs)
+    W_prior_gt, gt_prior_per_pc, gt_prior_radial_raw, gt_prior_radial_used = _variance_to_radial_prior(
+        gt.get_fourier_variances(contrasted=False), npc, vs, "GT", clip_negative=False
+    )
 
     real_vols = [np.asarray(ftu.get_idft3(gt.volumes[i].reshape(vs)).real)
                  for i in range(gt.volumes.shape[0])]
-    mov_soft, mov_bin = make_moving_gt_mask(real_vols, vs)
+    if args.mask_mode == "moving":
+        mov_soft, mov_bin = make_moving_gt_mask(real_vols, vs)
+    elif args.mask_mode == "union":
+        mov_soft, mov_bin = make_union_gt_mask(real_vols, vs)
+    else:
+        raise ValueError(f"Unknown mask_mode: {args.mask_mode}")
     if args.mask_dilate > 0:
         from scipy.ndimage import binary_dilation
         mov_bin = binary_dilation(mov_bin, iterations=args.mask_dilate)
@@ -619,12 +966,183 @@ def main():
         mov_soft = soften_volume_mask(mov_bin, kern_rad=3)
     mask = np.array(mov_soft, dtype=np.float32)
     n_mask = int(np.sum(mov_bin))
+    estimation_diag = {
+        "dataset_dir": ds_dir,
+        "grid_size": gs,
+        "n_images": args.n_images,
+        "n_pcs": npc,
+        "contrast_std": args.contrast_std,
+        "contrast_mode": args.contrast_mode,
+        "mask_mode": args.mask_mode,
+        "mean_mode": args.mean_mode,
+        "prior_mode": args.prior_mode,
+        "estimation_batch_size": est_batch_size,
+        "gt_prior_radial_raw": gt_prior_radial_raw.tolist(),
+        "gt_prior_radial_used": gt_prior_radial_used.tolist(),
+        "estimated_mean_rel_error": None,
+        "mean_rel_error": 0.0,
+        "mean_used_rel_error": 0.0,
+        "prior_input_mean_rel_error": 0.0,
+        "prior_shell_rel_error": None,
+        "prior_shell_correlation": None,
+    }
+
+    mean_estimate = gt_mean
+    mean_rel_err = 0.0
+    if args.mean_mode == "estimated" or args.prior_mode in ("data_once", "combined_reg_raw", "combined_noreg_raw"):
+        mean_estimate, means_est, mean_prior_est, mean_fsc_est = estimate_mean_from_data(
+            cryos, nv, est_batch_size
+        )
+        mean_rel_err = float(np.linalg.norm(mean_estimate - gt_mean) / np.linalg.norm(gt_mean))
+        estimation_diag["estimated_mean_rel_error"] = mean_rel_err
+        estimation_diag["mean_prior_est"] = np.asarray(mean_prior_est).reshape(-1).tolist()
+        estimation_diag["mean_fsc_est"] = np.asarray(mean_fsc_est).reshape(-1).tolist()
+        logger.info("Mean estimate: rel_err=%.4f", mean_rel_err)
+
+    if args.mean_mode == "gt":
+        mean_used = gt_mean
+    elif args.mean_mode == "estimated":
+        mean_used = mean_estimate
+    else:
+        raise ValueError(f"Unknown mean_mode: {args.mean_mode}")
+    estimation_diag["mean_used_rel_error"] = float(
+        np.linalg.norm(mean_used - gt_mean) / np.linalg.norm(gt_mean)
+    )
+    estimation_diag["mean_rel_error"] = estimation_diag["mean_used_rel_error"]
+
+    if args.prior_mode == "gt":
+        W_prior = W_prior_gt
+    elif args.prior_mode == "data_once":
+        logger.warning(
+            "prior_mode='data_once' currently aliases to the provisional hybrid-shell fallback. "
+            "The unified estimated-prior path still needs tightening."
+        )
+        if args.contrast_mode != "none":
+            logger.warning(
+                "Estimating hybrid-shell prior on contrast-varying data without explicit contrast correction; shells may be inflated."
+            )
+        prior_est = estimate_hybrid_prior(cryos, mean_used, npc, vs, est_batch_size)
+    elif args.prior_mode == "combined_reg_raw":
+        if args.contrast_mode != "none":
+            logger.warning(
+                "Estimating regularized combined prior on contrast-varying data without explicit contrast correction; shells may be inflated."
+            )
+        prior_est = estimate_data_prior(
+            cryos,
+            mean_used,
+            npc,
+            vs,
+            mask,
+            est_batch_size,
+            use_regularization=True,
+            repair_tail=False,
+            label="DataCombinedRegRaw",
+        )
+    elif args.prior_mode == "combined_noreg_raw":
+        if args.contrast_mode != "none":
+            logger.warning(
+                "Estimating unregularized combined prior on contrast-varying data without explicit contrast correction; shells may be inflated."
+            )
+        prior_est = estimate_data_prior(
+            cryos,
+            mean_used,
+            npc,
+            vs,
+            mask,
+            est_batch_size,
+            use_regularization=False,
+            repair_tail=False,
+            label="DataCombinedNoRegRaw",
+        )
+    elif args.prior_mode == "gaussian_shell":
+        if args.contrast_mode != "none":
+            logger.warning(
+                "Estimating Gaussian-shell prior on contrast-varying data without explicit contrast correction; shells may be inflated."
+            )
+        prior_est = estimate_gaussian_shell_prior(cryos, mean_used, npc, vs, est_batch_size)
+    elif args.prior_mode == "hybrid_shell":
+        if args.contrast_mode != "none":
+            logger.warning(
+                "Estimating hybrid-shell prior on contrast-varying data without explicit contrast correction; shells may be inflated."
+            )
+        prior_est = estimate_hybrid_prior(cryos, mean_used, npc, vs, est_batch_size)
+    elif args.prior_mode == "iter":
+        W_prior = np.ones_like(W_prior_gt, dtype=np.float32)
+    else:
+        raise ValueError(f"Unknown prior_mode: {args.prior_mode}")
+
+    if args.prior_mode in ESTIMATED_PRIOR_MODES:
+        W_prior = prior_est["W_prior"]
+        gt_rad = gt_prior_radial_used
+        est_rad_raw = np.asarray(prior_est["radial_raw"])
+        est_rad_used = np.asarray(prior_est["radial_used"])
+        valid_shells = gt_rad > 1e-12
+        shell_corr = float(np.corrcoef(gt_rad[valid_shells], est_rad_raw[valid_shells])[0, 1]) if np.sum(valid_shells) >= 2 else 0.0
+        shell_rel_err = float(np.linalg.norm(est_rad_raw - gt_rad) / np.linalg.norm(gt_rad))
+        ratio = np.where(valid_shells, est_rad_used / np.maximum(gt_rad, 1e-12), np.nan)
+        estimation_diag.update(
+            {
+                "estimated_prior_method": args.prior_mode,
+                "prior_radial_raw": est_rad_raw.tolist(),
+                "prior_radial_used": est_rad_used.tolist(),
+                "prior_shell_rel_error": shell_rel_err,
+                "prior_shell_correlation": shell_corr,
+                "prior_shell_ratio": ratio.tolist(),
+                "prior_negative_shell_fraction": float(np.mean(est_rad_raw < 0)),
+                "prior_total_power_ratio": float(np.sum(est_rad_used) / np.sum(gt_rad)),
+                "prior_median_shell_ratio": float(np.nanmedian(ratio)),
+                "data_prior_radial_raw": est_rad_raw.tolist(),
+                "data_prior_radial_used": est_rad_used.tolist(),
+                "data_prior_shell_rel_error": shell_rel_err,
+                "data_prior_shell_correlation": shell_corr,
+                "data_prior_shell_ratio": ratio.tolist(),
+                "data_prior_negative_shell_fraction": float(np.mean(est_rad_raw < 0)),
+                "data_prior_total_power_ratio": float(np.sum(est_rad_used) / np.sum(gt_rad)),
+                "data_prior_median_shell_ratio": float(np.nanmedian(ratio)),
+            }
+        )
+        if "variance_fsc" in prior_est:
+            estimation_diag["data_prior_variance_fsc"] = np.asarray(prior_est["variance_fsc"]).reshape(-1).tolist()
+        if "raw_shell_total" in prior_est:
+            estimation_diag["data_prior_raw_shell_total"] = np.asarray(prior_est["raw_shell_total"]).reshape(-1).tolist()
+        if "repaired_shell_total" in prior_est:
+            estimation_diag["data_prior_repaired_shell_total"] = np.asarray(prior_est["repaired_shell_total"]).reshape(-1).tolist()
+        if "tail_fallback_mask" in prior_est:
+            estimation_diag["data_prior_tail_fallback_mask"] = np.asarray(prior_est["tail_fallback_mask"]).astype(bool).tolist()
+        if "meansq_threshold" in prior_est:
+            estimation_diag["data_prior_meansq_threshold"] = float(prior_est["meansq_threshold"])
+        if "last_reliable_shell" in prior_est:
+            estimation_diag["data_prior_last_reliable_shell"] = int(prior_est["last_reliable_shell"])
+        if "fsc" in prior_est:
+            estimation_diag["gaussian_shell_fsc"] = np.asarray(prior_est["fsc"]).reshape(-1).tolist()
+        if "fsc_raw" in prior_est:
+            estimation_diag["gaussian_shell_fsc_raw"] = np.asarray(prior_est["fsc_raw"]).reshape(-1).tolist()
+        if "shell_var" in prior_est:
+            estimation_diag["gaussian_shell_var"] = np.asarray(prior_est["shell_var"]).reshape(-1).tolist()
+        if "hybrid_prior_shells" in prior_est:
+            estimation_diag["hybrid_prior_shells"] = np.asarray(prior_est["hybrid_prior_shells"]).reshape(-1).tolist()
+            estimation_diag["hybrid_reliable"] = np.asarray(prior_est["reliable"]).astype(bool).tolist()
+            estimation_diag["hybrid_median_ratio"] = float(prior_est["median_ratio"])
+            estimation_diag["hybrid_mean_sq_shells"] = np.asarray(prior_est["mean_sq_shells"]).reshape(-1).tolist()
+            estimation_diag["hybrid_meansq_fallback"] = np.asarray(prior_est["meansq_fallback"]).reshape(-1).tolist()
+            estimation_diag["hybrid_tail_fallback_mask"] = np.asarray(prior_est["tail_fallback_mask"]).astype(bool).tolist()
+        estimation_diag["prior_input_mean_rel_error"] = float(
+            np.linalg.norm(mean_used - gt_mean) / np.linalg.norm(gt_mean)
+        )
+        logger.info(
+            "%s radial prior: rel_err=%.4f corr=%.4f neg_shell_frac=%.3f",
+            args.prior_mode,
+            shell_rel_err,
+            shell_corr,
+            estimation_diag["prior_negative_shell_fraction"],
+        )
+
     contrast_grid = np.linspace(0.3, 1.7, 16) if args.contrast_mode != "none" else None
-    logger.info("Setup: %d³ q=%d mask=%.1f%% collar=%d μ=%g solver=%s f64=%s K=%s contrast=%s",
-                gs, npc, 100*n_mask/np.prod(vs), collar, args.mu, args.solver, args.float64, use_K, args.contrast_mode)
+    logger.info("Setup: %d³ q=%d mask=%.1f%% (%s) collar=%d μ=%g solver=%s f64=%s K=%s contrast=%s mean=%s prior=%s",
+                gs, npc, 100*n_mask/np.prod(vs), args.mask_mode, collar, args.mu, args.solver, args.float64, use_K, args.contrast_mode, args.mean_mode, args.prior_mode)
 
     np.random.seed(args.seed)
-    W_init = jnp.array(np.random.randn(gt_mean.shape[0], npc).astype(np.float32) * 0.01)
+    W_init = jnp.array(np.random.randn(mean_used.shape[0], npc).astype(np.float32) * 0.01)
 
     results = {}
 
@@ -635,10 +1153,11 @@ def main():
     em_K_solver = False         # CG/ADMM with K handle it internally
 
     if "naive" in methods:
-        r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
+        r = run_em(cryos, mean_used, gt_mean, W_init, W_prior, U_gt, s_gt,
                    mask, False, None, 20, "naive", args.em_iters,
                    use_gridding_correction=em_K_naive,
-                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid)
+                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid,
+                   prior_mode=args.prior_mode)
         r["cg_residuals"] = []
         results["naive"] = r
 
@@ -646,10 +1165,11 @@ def main():
         fn, res = make_hard_solver(precondition=False, use_float64=args.float64,
                                    krylov_fn=krylov_fn, override_tol=args.tol,
                                    use_grid_correction=use_K)
-        r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
+        r = run_em(cryos, mean_used, gt_mean, W_init, W_prior, U_gt, s_gt,
                    mask, False, fn, args.cg_maxiter, "hard", args.em_iters,
                    use_gridding_correction=em_K_solver if use_K else False,
-                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid)
+                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid,
+                   prior_mode=args.prior_mode)
         r["cg_residuals"] = [list(x) for x in res]
         results["hard"] = r
 
@@ -657,10 +1177,11 @@ def main():
         fn, res = make_hard_solver(precondition=True, use_float64=args.float64,
                                    krylov_fn=krylov_fn, override_tol=args.tol,
                                    use_grid_correction=use_K)
-        r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
+        r = run_em(cryos, mean_used, gt_mean, W_init, W_prior, U_gt, s_gt,
                    mask, False, fn, args.cg_maxiter, "hard+precond", args.em_iters,
                    use_gridding_correction=em_K_solver if use_K else False,
-                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid)
+                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid,
+                   prior_mode=args.prior_mode)
         r["cg_residuals"] = [list(x) for x in res]
         results["hard+precond"] = r
 
@@ -668,10 +1189,11 @@ def main():
         fn, res = make_soft_solver(mu=args.mu, collar=collar, precondition=False,
                                    use_float64=args.float64, krylov_fn=krylov_fn,
                                    override_tol=args.tol, use_grid_correction=use_K)
-        r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
+        r = run_em(cryos, mean_used, gt_mean, W_init, W_prior, U_gt, s_gt,
                    mask, False, fn, args.cg_maxiter, "soft", args.em_iters,
                    use_gridding_correction=em_K_solver if use_K else False,
-                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid)
+                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid,
+                   prior_mode=args.prior_mode)
         r["cg_residuals"] = [list(x) for x in res]
         results["soft"] = r
 
@@ -679,10 +1201,11 @@ def main():
         fn, res = make_soft_solver(mu=args.mu, collar=collar, precondition=True,
                                    use_float64=args.float64, krylov_fn=krylov_fn,
                                    override_tol=args.tol, use_grid_correction=use_K)
-        r = run_em(cryos, gt_mean, W_init, W_prior, U_gt, s_gt,
+        r = run_em(cryos, mean_used, gt_mean, W_init, W_prior, U_gt, s_gt,
                    mask, False, fn, args.cg_maxiter, "soft+precond", args.em_iters,
                    use_gridding_correction=em_K_solver if use_K else False,
-                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid)
+                   contrast_mode=args.contrast_mode, contrast_grid=contrast_grid,
+                   prior_mode=args.prior_mode)
         r["cg_residuals"] = [list(x) for x in res]
         results["soft+precond"] = r
 
@@ -698,6 +1221,9 @@ def main():
 
     for n, r in results.items():
         print(f"\n--- {n} ---")
+        if r.get("eigenvalues"):
+            eigvals = ", ".join(f"{v:.4g}" for v in r["eigenvalues"])
+            print(f"  eigvals=[{eigvals}]")
         for i, d in enumerate(r["em_data"]):
             print(f"  {i:2d} RV={d.get('Rel_Var_Explained',''):>10} "
                   f"LL_D={d.get('Neg_LL_Data',''):>14} LL_P={d.get('Neg_LL_Prior',''):>12}")
@@ -706,6 +1232,8 @@ def main():
             for k, v in results.items()}
     with open(os.path.join(out_dir, "results.json"), "w") as f:
         json.dump(save, f, indent=2, default=str)
+    with open(os.path.join(out_dir, "estimation_diagnostics.json"), "w") as f:
+        json.dump(estimation_diag, f, indent=2, default=str)
 
     # ── Plots ──
     try:
@@ -743,7 +1271,7 @@ def main():
         plt.savefig(os.path.join(out_dir, "convergence.png"), dpi=150); plt.close()
 
         # Eigenvector slices
-        n_show = min(3, npc)
+        n_show = npc if args.n_plot_pcs < 0 else min(args.n_plot_pcs, npc)
         mnames = list(results.keys())
         W_gt = U_gt[:, :n_show] * s_gt[:n_show]
         W_gt_real = np.array(ftu.get_idft3(W_gt.T.reshape(n_show, *vs)).real)
@@ -755,15 +1283,74 @@ def main():
             gt_slice = W_gt_real[k, mid]
             gt_norm = max(float(np.max(np.abs(gt_slice))), 1e-10)
             axes[k, 0].imshow(gt_slice / gt_norm, cmap="RdBu_r", vmin=-1, vmax=1)
-            axes[k, 0].set_title(f"GT PC{k}", fontsize=8); axes[k, 0].axis("off")
+            gt_eig = float(s_gt[k] ** 2)
+            axes[k, 0].set_title(f"GT PC{k}\nlam={gt_eig:.3g}", fontsize=8); axes[k, 0].axis("off")
             for j, n in enumerate(mnames):
                 pc_slice = results[n]["W_real"][k, mid]
                 pc_norm = max(float(np.max(np.abs(pc_slice))), 1e-10)
                 axes[k, j+1].imshow(pc_slice / pc_norm, cmap="RdBu_r", vmin=-1, vmax=1)
-                axes[k, j+1].set_title(f"{n} PC{k}", fontsize=7); axes[k, j+1].axis("off")
+                eig = results[n]["eigenvalues"][k]
+                axes[k, j+1].set_title(f"{n} PC{k}\nlam={eig:.3g}", fontsize=7); axes[k, j+1].axis("off")
         plt.suptitle(f"Eigenvectors: {gs}³ q={npc}", fontsize=11)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "slices.png"), dpi=150); plt.close()
+
+        if args.mean_mode == "estimated" or args.prior_mode in ("data_once", "combined_reg_raw", "combined_noreg_raw"):
+            gt_mean_real = np.array(ftu.get_idft3(gt_mean.reshape(*vs)).real)
+            mean_est_real = np.array(ftu.get_idft3(np.asarray(mean_estimate).reshape(*vs)).real)
+            mid = gs // 2
+            fig, axes = plt.subplots(1, 3, figsize=(12, 4))
+            panels = [
+                ("GT mean", gt_mean_real[mid]),
+                ("Estimated mean", mean_est_real[mid]),
+                ("Difference", mean_est_real[mid] - gt_mean_real[mid]),
+            ]
+            for ax, (title, panel) in zip(axes, panels):
+                vmax = max(float(np.max(np.abs(panel))), 1e-10)
+                ax.imshow(panel / vmax, cmap="RdBu_r", vmin=-1, vmax=1)
+                ax.set_title(title, fontsize=8)
+                ax.axis("off")
+            plt.suptitle(
+                "Mean diagnostics: "
+                f"estimated_err={(estimation_diag['estimated_mean_rel_error'] or 0.0):.4f}, "
+                f"used_err={estimation_diag['mean_used_rel_error']:.4f}",
+                fontsize=11,
+            )
+            plt.tight_layout()
+            plt.savefig(os.path.join(out_dir, "mean_compare.png"), dpi=150); plt.close()
+
+        if args.prior_mode in ESTIMATED_PRIOR_MODES:
+            gt_rad = np.asarray(gt_prior_radial_used)
+            est_raw = np.asarray(estimation_diag["prior_radial_raw"])
+            est_used = np.asarray(estimation_diag["prior_radial_used"])
+            shells = np.arange(gt_rad.size)
+            fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+            axes[0].plot(shells, gt_rad, label="GT radial prior")
+            axes[0].plot(shells, est_raw, label="Estimated radial prior (raw)")
+            axes[0].plot(shells, est_used, "--", label="Estimated radial prior (clipped)")
+            axes[0].set_xlabel("Shell")
+            axes[0].set_ylabel("Variance / PC")
+            axes[0].set_yscale("log")
+            axes[0].grid(True, alpha=0.3)
+            axes[0].legend(fontsize=7)
+
+            valid = gt_rad > 1e-12
+            ratio = np.where(valid, est_used / np.maximum(gt_rad, 1e-12), np.nan)
+            axes[1].plot(shells, ratio, label="Estimated / GT")
+            axes[1].axhline(1.0, color="k", linestyle="--", linewidth=1)
+            axes[1].set_xlabel("Shell")
+            axes[1].set_ylabel("Ratio")
+            axes[1].grid(True, alpha=0.3)
+            axes[1].legend(fontsize=7)
+
+            plt.suptitle(
+                "Prior diagnostics: "
+                f"rel_err={estimation_diag['data_prior_shell_rel_error']:.4f}, "
+                f"corr={estimation_diag['data_prior_shell_correlation']:.4f}",
+                fontsize=11,
+            )
+            plt.tight_layout()
+            plt.savefig(os.path.join(out_dir, "prior_radial_compare.png"), dpi=150); plt.close()
         print(f"\nPlots: {out_dir}/{{convergence,slices}}.png")
     except Exception as e:
         import traceback; print(f"Plot failed: {e}"); traceback.print_exc()

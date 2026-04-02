@@ -13,6 +13,8 @@ from recovar.data_io import cryoem_dataset, halfsets
 from recovar.core import mask
 from recovar.heterogeneity import embedding, principal_components, covariance_estimation
 from recovar.output.output_paths import ResultPaths
+from recovar.ppca import ppca as ppca_module
+from recovar.ppca import prior_estimation as ppca_prior_estimation
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 
@@ -341,6 +343,33 @@ def add_args(parser: argparse.ArgumentParser):
         dest="keep_intermediate",
         action="store_true",
         help="Save intermediate results (for debugging)",
+    )
+    adv.add_argument(
+        "--use-ppca",
+        dest="use_ppca",
+        action="store_true",
+        help="Refine the covariance basis with PPCA EM before exporting embeddings.",
+    )
+    adv.add_argument(
+        "--ppca-em-iters",
+        dest="ppca_em_iters",
+        type=int,
+        default=20,
+        help="Number of PPCA EM refinement iterations when --use-ppca is enabled.",
+    )
+    adv.add_argument(
+        "--ppca-use-gridding-correction",
+        dest="ppca_use_gridding_correction",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Apply gridding correction inside the PPCA refinement path.",
+    )
+    adv.add_argument(
+        "--ppca-contrast-mode",
+        dest="ppca_contrast_mode",
+        choices=["auto", "none", "profile", "marginalize"],
+        default="auto",
+        help="PPCA contrast handling. 'auto' maps to marginalize when --correct-contrast is on, else none.",
     )
     adv.add_argument(
         "--test-covar-options",
@@ -709,6 +738,84 @@ def _compute_embeddings(means, u, s, dataset, volume_mask, options, gpu_memory, 
     return (latent_coords, latent_coords_noreg, latent_precision, latent_precision_noreg, contrasts, contrasts_noreg)
 
 
+def _resolve_ppca_contrast_mode(args):
+    """Resolve the PPCA contrast mode from CLI args."""
+    if getattr(args, "ppca_contrast_mode", "auto") != "auto":
+        return args.ppca_contrast_mode
+    return "marginalize" if getattr(args, "correct_contrast", False) else "none"
+
+
+def _resolve_ppca_contrast_grid(contrast_mode):
+    """Return the provisional PPCA contrast quadrature grid."""
+    if contrast_mode == "none":
+        return None
+    return np.linspace(0.3, 1.7, 16, dtype=np.float32)
+
+
+def _make_ppca_initial_loading(u_rescaled, s_rescaled, basis_size):
+    """Convert covariance eigenvectors/eigenvalues into a PPCA loading init."""
+    eigvals = np.maximum(np.asarray(s_rescaled[:basis_size], dtype=np.float32), 1e-8)
+    return np.asarray(u_rescaled[:, :basis_size]) * np.sqrt(eigvals)[None, :]
+
+
+def _run_ppca_refinement(dataset, means, u_rescaled, s_rescaled, focus_mask, options, args, batch_size):
+    """Refine the covariance basis with PPCA and return PipelineOutput-compatible arrays."""
+    basis_size = int(np.max(options.zs_dim_to_test))
+    if basis_size <= 0:
+        raise ValueError(f"PPCA basis size must be positive, got {basis_size}")
+
+    if getattr(args, "tilt_series", False):
+        raise ValueError("PPCA pipeline mode does not support --tilt-series yet")
+    if getattr(args, "use_complement_mask", False):
+        raise ValueError("PPCA pipeline mode does not support --use-complement-mask yet")
+
+    logger.warning(
+        "PPCA pipeline mode currently uses the provisional hybrid-shell prior. This should be tightened up."
+    )
+    contrast_mode = _resolve_ppca_contrast_mode(args)
+    contrast_grid = _resolve_ppca_contrast_grid(contrast_mode)
+    W_init = _make_ppca_initial_loading(u_rescaled, s_rescaled, basis_size)
+    prior_info = ppca_prior_estimation.estimate_hybrid_shell_prior_from_data(
+        dataset,
+        means.combined,
+        basis_size,
+        dataset.volume_shape,
+        batch_size,
+    )
+    U_ppca, S_ppca, W_ppca, _expected_zs, _second_moment_zs, iteration_data = ppca_module.EM(
+        dataset,
+        means.combined,
+        W_init,
+        prior_info["W_prior"],
+        EM_iter=int(getattr(args, "ppca_em_iters", 20)),
+        sparse_PCA=False,
+        use_whitening=False,
+        disc_type_mean="cubic",
+        disc_type="linear_interp",
+        return_iteration_data=True,
+        use_gridding_correction=bool(getattr(args, "ppca_use_gridding_correction", True)),
+        volume_mask=np.asarray(focus_mask, dtype=np.float32),
+        contrast_mode=contrast_mode,
+        contrast_grid=contrast_grid,
+    )
+    logger.info(
+        "PPCA refinement complete: q=%d contrast_mode=%s iters=%d",
+        basis_size,
+        contrast_mode,
+        int(getattr(args, "ppca_em_iters", 20)),
+    )
+    return {
+        "u_rescaled": np.asarray(U_ppca),
+        "s_rescaled": np.asarray(S_ppca),
+        "W": np.asarray(W_ppca),
+        "iteration_data": iteration_data,
+        "prior_info": prior_info,
+        "basis_size": basis_size,
+        "contrast_mode": contrast_mode,
+        "prior_mode": "hybrid_shell",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main pipeline
 # ---------------------------------------------------------------------------
@@ -750,7 +857,14 @@ def standard_recovar_pipeline(args):
     if args.mask.endswith(".mrc"):
         args.mask = os.path.abspath(args.mask)
 
-    if (not args.accept_cpu) and (not utils.jax_has_gpu()):
+    has_gpu = utils.jax_has_gpu()
+    if getattr(args, "use_ppca", False) and (not has_gpu):
+        raise ValueError(
+            "--use-ppca currently requires a CUDA GPU. "
+            "The PPCA E/M-step path uses CUDA FFI backprojection kernels and does not yet support CPU-only runs."
+        )
+
+    if (not args.accept_cpu) and (not has_gpu):
         raise ValueError(
             "No GPU found. Set --accept-cpu if you really want to run on CPU (probably not). More likely, you want to check that JAX has been properly installed with GPU support."
         )
@@ -882,6 +996,10 @@ def standard_recovar_pipeline(args):
 
     # --- Contrast correction repeat logic ---
     n_repeats = 2 if args.do_over_with_contrast else 1
+    if getattr(args, "use_ppca", False):
+        if args.do_over_with_contrast:
+            logger.info("PPCA refinement handles contrast inside EM; disabling pipeline do-over loop.")
+        n_repeats = 1
     if args.do_over_with_contrast and not args.correct_contrast:
         logger.warning("Do over with contrast, but contrast correction is off. Setting contrast correction to on")
         args.correct_contrast = True
@@ -906,6 +1024,9 @@ def standard_recovar_pipeline(args):
         raise ValueError(f"noise model {noise_model} not recognized")
 
     contrasts_for_second = None
+    ppca_loadings = None
+    ppca_iteration_data = None
+    ppca_info = None
     for repeat in range(n_repeats):
         if repeat == 1:
             ndim = 10 if 10 in options.zs_dim_to_test else int(np.median(options.zs_dim_to_test))
@@ -1115,6 +1236,28 @@ def standard_recovar_pipeline(args):
             )
             noise_var_used[0] *= 1e16
 
+        if getattr(args, "use_ppca", False):
+            ppca_result = _run_ppca_refinement(
+                ds,
+                means,
+                u["rescaled"],
+                s["rescaled"],
+                focus_masks[-1],
+                options,
+                args,
+                batch_size,
+            )
+            u["rescaled"] = ppca_result["u_rescaled"]
+            s["rescaled"] = ppca_result["s_rescaled"]
+            ppca_loadings = ppca_result["W"]
+            ppca_iteration_data = ppca_result["iteration_data"]
+            ppca_info = {
+                "basis_size": int(ppca_result["basis_size"]),
+                "contrast_mode": ppca_result["contrast_mode"],
+                "prior_mode": ppca_result["prior_mode"],
+                "em_iters": int(args.ppca_em_iters),
+            }
+
         if not args.keep_intermediate:
             del u["real"]
             if "rescaled_no_contrast" in u:
@@ -1262,6 +1405,12 @@ def standard_recovar_pipeline(args):
 
     args.halfsets = paths.particles_halfsets
 
+    result_extras = {
+        "heterogeneity_method": "ppca" if getattr(args, "use_ppca", False) else "covariance",
+    }
+    if ppca_info is not None:
+        result_extras["ppca_info"] = ppca_info
+
     result = output.build_params_dict(
         volume_shape=volume_shape,
         voxel_size=ds.voxel_size,
@@ -1278,6 +1427,7 @@ def standard_recovar_pipeline(args):
         column_fscs=column_fscs,
         picked_frequencies=picked_frequencies,
         input_args=args,
+        extras=result_extras,
     )
 
     output.save_pipeline_results(
@@ -1288,6 +1438,8 @@ def standard_recovar_pipeline(args):
         particles_ind_split,
         ind_split,
         zs_full=zs_full if args.use_complement_mask else None,
+        ppca_loadings=ppca_loadings,
+        ppca_iteration_data=ppca_iteration_data,
     )
 
     logger.info("total time: %s", time.time() - st_time)
