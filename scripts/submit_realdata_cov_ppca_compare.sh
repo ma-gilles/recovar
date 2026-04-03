@@ -7,9 +7,10 @@ RESULTS_ROOT="${RESULTS_ROOT:-/scratch/gpfs/GILLES/mg6942/realdata_cov_ppca_comp
 ZDIM="${ZDIM:-10}"
 PPCA_EM_ITERS="${PPCA_EM_ITERS:-20}"
 GPU_GB="${GPU_GB:-40}"
+ANALYZE_MODE="${ANALYZE_MODE:-umap}"
 
 DATASETS=(10073 10076 10180 10345)
-METHODS=(covariance ppca)
+METHODS=(covariance ppca ppca_projected_covariance)
 
 cd "$REPO_ROOT"
 mkdir -p "$RESULTS_ROOT"
@@ -23,7 +24,7 @@ for dataset in "${DATASETS[@]}"; do
     jid="$(
       sbatch --parsable \
         --job-name="real-${dataset}-${method}" \
-        --export=ALL,REPO_ROOT="$REPO_ROOT",DATASET_ID="$dataset",METHOD="$method",RESULTS_ROOT="$RESULTS_ROOT",ZDIM="$ZDIM",PPCA_EM_ITERS="$PPCA_EM_ITERS",GPU_GB="$GPU_GB" \
+        --export=ALL,REPO_ROOT="$REPO_ROOT",DATASET_ID="$dataset",METHOD="$method",RESULTS_ROOT="$RESULTS_ROOT",ZDIM="$ZDIM",PPCA_EM_ITERS="$PPCA_EM_ITERS",GPU_GB="$GPU_GB",ANALYZE_MODE="$ANALYZE_MODE" \
         scripts/realdata_cov_ppca_focus_compare.sbatch
     )"
     echo "$jid dataset=$dataset method=$method" | tee -a "$MANIFEST"

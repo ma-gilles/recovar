@@ -55,6 +55,7 @@ def test_pipeline_registers_use_ppca():
     assert "--ppca-zdim" in actions
     assert "--ppca-use-gridding-correction" in actions
     assert "--ppca-contrast-mode" in actions
+    assert "--ppca-projected-covariance" in actions
 
 
 def test_pipeline_zdim_default_is_list():
@@ -354,3 +355,111 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
     assert out["W"].dtype == np.complex64
     np.testing.assert_allclose(out["latent_coords"][4], np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32) * np.sqrt(np.arange(1, 5, dtype=np.float32))[None, :])
     np.testing.assert_allclose(out["contrasts"][4], np.array([1.25], dtype=np.float32))
+
+
+def test_orthonormalize_loading_basis_returns_orthonormal_columns():
+    loadings = np.array(
+        [
+            [1.0, 1.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    basis = pipeline_cmd._orthonormalize_loading_basis(loadings, basis_size=2)
+
+    assert basis.shape == (3, 2)
+    gram = np.asarray(basis).conj().T @ np.asarray(basis)
+    np.testing.assert_allclose(gram, np.eye(2), atol=1e-6, rtol=1e-6)
+
+
+def test_run_ppca_projected_covariance_refinement_uses_projcov_then_embeddings(monkeypatch):
+    fake_dataset = SimpleNamespace(image_size=16)
+    means = SimpleNamespace(combined=np.arange(8, dtype=np.complex64))
+    options = SimpleNamespace(zs_dim_to_test=[4])
+    args = SimpleNamespace(tilt_series=False)
+    focus_mask = np.ones((2, 2, 2), dtype=np.float32)
+    volume_mask = np.ones((2, 2, 2), dtype=np.float32) * 2.0
+    dilated_mask = np.ones((2, 2, 2), dtype=np.float32) * 3.0
+    ppca_loadings = np.arange(32, dtype=np.float32).reshape(8, 4)
+
+    projcov_calls = {}
+    embedding_calls = {}
+
+    def _fake_projcov(dataset, basis, mean, volume_mask_arg, disc_type, disc_type_u, **kwargs):
+        projcov_calls["dataset"] = dataset
+        projcov_calls["basis"] = np.asarray(basis)
+        projcov_calls["mean"] = mean
+        projcov_calls["volume_mask"] = np.asarray(volume_mask_arg)
+        projcov_calls["disc_type"] = disc_type
+        projcov_calls["disc_type_u"] = disc_type_u
+        projcov_calls["kwargs"] = kwargs
+        return np.full((8, 4), 7.0, dtype=np.complex64), np.array([4.0, 3.0, 2.0, 1.0], dtype=np.float32)
+
+    def _fake_embeddings(means_arg, u_arg, s_arg, dataset_arg, volume_mask_arg, options_arg, gpu_memory_arg, focus_masks_arg, zdim_for_rest_arg, args_arg):
+        embedding_calls["means"] = means_arg
+        embedding_calls["u"] = u_arg
+        embedding_calls["s"] = s_arg
+        embedding_calls["dataset"] = dataset_arg
+        embedding_calls["volume_mask"] = np.asarray(volume_mask_arg)
+        embedding_calls["options"] = options_arg
+        embedding_calls["gpu_memory"] = gpu_memory_arg
+        embedding_calls["focus_masks"] = [np.asarray(x) for x in focus_masks_arg]
+        embedding_calls["zdim_for_rest"] = zdim_for_rest_arg
+        embedding_calls["args"] = args_arg
+        return (
+            {4: np.ones((5, 4), dtype=np.float32)},
+            {4: np.ones((5, 4), dtype=np.float32) * 2},
+            {4: np.ones((5, 4, 4), dtype=np.float32)},
+            {4: np.ones((5, 4, 4), dtype=np.float32) * 3},
+            {4: np.ones(5, dtype=np.float32)},
+            {4: np.ones(5, dtype=np.float32) * 4},
+        )
+
+    monkeypatch.setattr(pipeline_cmd.principal_components, "pca_by_projected_covariance", _fake_projcov)
+    monkeypatch.setattr(pipeline_cmd, "_compute_embeddings", _fake_embeddings)
+
+    out = pipeline_cmd._run_ppca_projected_covariance_refinement(
+        fake_dataset,
+        means,
+        ppca_loadings,
+        volume_mask,
+        dilated_mask,
+        options,
+        args,
+        batch_size=32,
+        gpu_memory=40,
+        covariance_options={
+            "disc_type": "linear_interp",
+            "disc_type_u": "linear_interp",
+            "mask_images_in_proj": True,
+        },
+        focus_masks=[focus_mask],
+        zdim_for_rest=20,
+    )
+
+    assert projcov_calls["dataset"] is fake_dataset
+    np.testing.assert_allclose(projcov_calls["mean"], means.combined)
+    np.testing.assert_allclose(projcov_calls["volume_mask"], dilated_mask)
+    assert projcov_calls["disc_type"] == "linear_interp"
+    assert projcov_calls["disc_type_u"] == "linear_interp"
+    assert projcov_calls["kwargs"]["gpu_memory_to_use"] == 40
+    assert projcov_calls["kwargs"]["use_mask"] is True
+    assert projcov_calls["kwargs"]["n_pcs_to_compute"] == 4
+
+    gram = projcov_calls["basis"].conj().T @ projcov_calls["basis"]
+    np.testing.assert_allclose(gram, np.eye(4), atol=1e-5, rtol=1e-5)
+
+    assert embedding_calls["means"] is means
+    assert embedding_calls["dataset"] is fake_dataset
+    np.testing.assert_allclose(embedding_calls["volume_mask"], volume_mask)
+    np.testing.assert_allclose(embedding_calls["focus_masks"][0], focus_mask)
+    assert embedding_calls["gpu_memory"] == 40
+    assert embedding_calls["zdim_for_rest"] == 20
+    np.testing.assert_allclose(embedding_calls["u"]["rescaled"], np.full((8, 4), 7.0, dtype=np.complex64))
+    np.testing.assert_allclose(embedding_calls["s"]["rescaled"], np.array([4.0, 3.0, 2.0, 1.0], dtype=np.float32))
+
+    np.testing.assert_allclose(out["u_rescaled"], np.full((8, 4), 7.0, dtype=np.complex64))
+    np.testing.assert_allclose(out["s_rescaled"], np.array([4.0, 3.0, 2.0, 1.0], dtype=np.float32))
+    np.testing.assert_allclose(out["latent_coords"][4], np.ones((5, 4), dtype=np.float32))

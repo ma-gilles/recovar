@@ -325,7 +325,7 @@ def analyze(
                     input_density=input_density,
                     latent_space_bounds=latent_space_bounds,
                 )
-            except RuntimeError as e:
+            except (RuntimeError, ValueError, IndexError) as e:
                 logger.warning(
                     "Trajectory %d (clusters %d→%d) failed: %s. Skipping this trajectory.",
                     pair_idx,

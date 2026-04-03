@@ -38,6 +38,18 @@ DEFAULT_BASE_DIR = "/home/mg6942/mytigress/cryobench2"
 DEFAULT_RESULTS_ROOT = "/scratch/gpfs/GILLES/mg6942/ppca_pipeline_compare"
 logger = logging.getLogger(__name__)
 
+METHOD_ORDER = ("covariance", "ppca", "ppca_projected_covariance")
+METHOD_LABELS = {
+    "covariance": "Covariance",
+    "ppca": "PPCA",
+    "ppca_projected_covariance": "PPCA+ProjCov",
+}
+METHOD_COLORS = {
+    "covariance": "#d55e00",
+    "ppca": "#0072b2",
+    "ppca_projected_covariance": "#009e73",
+}
+
 
 def _with_trailing_separator(path: str) -> str:
     return path if path.endswith("/") else path + "/"
@@ -164,6 +176,8 @@ def run_pipeline_method(
     ppca_em_iters: int,
     use_contrast: bool,
     gpu_gb: float | None,
+    low_memory_option: bool,
+    very_low_memory_option: bool,
     lazy: bool,
     force: bool,
 ) -> tuple[str, str, float | None]:
@@ -197,12 +211,27 @@ def run_pipeline_method(
     ]
     if gpu_gb is not None:
         cmd.extend(["--gpu-gb", str(gpu_gb)])
+    if low_memory_option:
+        cmd.append("--low-memory-option")
+    if very_low_memory_option:
+        cmd.append("--very-low-memory-option")
     if lazy:
         cmd.append("--lazy")
     if use_contrast:
         cmd.append("--correct-contrast")
     if method == "ppca":
         cmd.extend(["--use-ppca", "--ppca-zdim", str(zdim), "--ppca-em-iters", str(ppca_em_iters)])
+    elif method == "ppca_projected_covariance":
+        cmd.extend(
+            [
+                "--use-ppca",
+                "--ppca-zdim",
+                str(zdim),
+                "--ppca-em-iters",
+                str(ppca_em_iters),
+                "--ppca-projected-covariance",
+            ]
+        )
     elif method != "covariance":
         raise ValueError(f"Unknown method: {method}")
 
@@ -479,17 +508,19 @@ def write_comparison_plots(output_root: str, scores: dict, zdim: int) -> dict:
     plot_dir = os.path.join(output_root, "comparison_plots")
     os.makedirs(plot_dir, exist_ok=True)
 
-    methods = ["covariance", "ppca"]
-    labels = ["Covariance", "PPCA"]
-    colors = ["#d55e00", "#0072b2"]
+    methods = [method for method in METHOD_ORDER if method in scores]
+    labels = [METHOD_LABELS[method] for method in methods]
+    colors = [METHOD_COLORS[method] for method in methods]
     x = np.arange(1, zdim + 1)
 
     fig, axes = plt.subplots(1, 3, figsize=(16, 4.5))
-    for method, label, color in zip(methods, labels, colors):
+    width = 0.8 / max(len(methods), 1)
+    center_offsets = (np.arange(len(methods)) - (len(methods) - 1) / 2.0) * width
+    for offset, method, label, color in zip(center_offsets, methods, labels, colors):
         axes[0].bar(
-            x + (-0.18 if method == "covariance" else 0.18),
+            x + offset,
             scores[method]["rel_var_per_pc"],
-            width=0.35,
+            width=width,
             label=label,
             color=color,
             alpha=0.85,
@@ -500,9 +531,10 @@ def write_comparison_plots(output_root: str, scores: dict, zdim: int) -> dict:
     axes[0].set_title("Per-PC Relative Variance")
     axes[0].legend(loc="best")
 
-    axes[1].plot(x, scores["covariance"]["s_gt"], "k--", linewidth=2, label="GT")
-    axes[1].plot(x, scores["covariance"]["s_est"], marker="o", color=colors[0], label="Covariance")
-    axes[1].plot(x, scores["ppca"]["s_est"], marker="s", color=colors[1], label="PPCA")
+    axes[1].plot(x, scores[methods[0]]["s_gt"], "k--", linewidth=2, label="GT")
+    markers = ["o", "s", "^", "d", "v"]
+    for marker, method, label, color in zip(markers, methods, labels, colors):
+        axes[1].plot(x, scores[method]["s_est"], marker=marker, color=color, label=label)
     axes[1].set_yscale("log")
     axes[1].set_xlabel("PC")
     axes[1].set_ylabel("Eigenvalue")
@@ -511,13 +543,13 @@ def write_comparison_plots(output_root: str, scores: dict, zdim: int) -> dict:
 
     relvar_vals = [scores[m]["rel_var_mean"] for m in methods]
     mean_err_vals = [scores[m]["mean_error"] for m in methods]
-    axes[2].bar(np.arange(2), relvar_vals, color=colors, alpha=0.85)
-    axes[2].set_xticks(np.arange(2), labels)
+    axes[2].bar(np.arange(len(methods)), relvar_vals, color=colors, alpha=0.85)
+    axes[2].set_xticks(np.arange(len(methods)), labels)
     axes[2].set_ylabel("Mean RelVar")
     axes[2].set_ylim(0.0, 1.05)
     axes[2].set_title("Overall RelVar")
     ax2 = axes[2].twinx()
-    ax2.plot(np.arange(2), mean_err_vals, "ko--", linewidth=1.5)
+    ax2.plot(np.arange(len(methods)), mean_err_vals, "ko--", linewidth=1.5)
     ax2.set_ylabel("Mean Relative Error")
     ax2.set_ylim(0.0, max(mean_err_vals + [1e-3]) * 1.3)
 
@@ -526,13 +558,16 @@ def write_comparison_plots(output_root: str, scores: dict, zdim: int) -> dict:
     plt.savefig(metrics_plot, dpi=150, bbox_inches="tight")
     plt.close(fig)
 
-    cov_summary = os.path.join(scores["covariance"]["result_dir"], "output", "plots", "pipeline_summary.png")
-    ppca_summary = os.path.join(scores["ppca"]["result_dir"], "output", "plots", "pipeline_summary.png")
-    summary_row = _merge_images_horizontally([cov_summary, ppca_summary], os.path.join(plot_dir, "pipeline_summaries.png"))
+    summary_images = [
+        os.path.join(scores[method]["result_dir"], "output", "plots", "pipeline_summary.png") for method in methods
+    ]
+    summary_row = _merge_images_horizontally(summary_images, os.path.join(plot_dir, "pipeline_summaries.png"))
 
-    cov_pc = os.path.join(scores["covariance"]["result_dir"], "output", "plots", "principal_component_space_analysis.png")
-    ppca_pc = os.path.join(scores["ppca"]["result_dir"], "output", "plots", "principal_component_space_analysis.png")
-    pc_row = _merge_images_horizontally([cov_pc, ppca_pc], os.path.join(plot_dir, "pc_space_comparison.png"))
+    pc_images = [
+        os.path.join(scores[method]["result_dir"], "output", "plots", "principal_component_space_analysis.png")
+        for method in methods
+    ]
+    pc_row = _merge_images_horizontally(pc_images, os.path.join(plot_dir, "pc_space_comparison.png"))
 
     combined = _merge_images_vertically(
         [summary_row, pc_row, metrics_plot],
@@ -572,8 +607,13 @@ def compare_methods(args) -> dict:
     logs = {}
     runtimes = {}
     use_contrast = args.contrast_std > 0
-    for method in ("covariance", "ppca"):
+    for method in METHOD_ORDER:
         method_root = os.path.join(output_root, method)
+        method_gpu_gb = args.covariance_gpu_gb if method == "covariance" else args.ppca_gpu_gb
+        method_low_memory = args.covariance_low_memory_option if method == "covariance" else args.ppca_low_memory_option
+        method_very_low_memory = (
+            args.covariance_very_low_memory_option if method == "covariance" else args.ppca_very_low_memory_option
+        )
         result_dir, log_path, runtime_seconds = run_pipeline_method(
             method,
             sim_dir,
@@ -583,7 +623,9 @@ def compare_methods(args) -> dict:
             args.zdim,
             args.ppca_em_iters,
             use_contrast,
-            args.gpu_gb,
+            method_gpu_gb,
+            method_low_memory,
+            method_very_low_memory,
             args.lazy,
             args.force,
         )
@@ -603,6 +645,12 @@ def compare_methods(args) -> dict:
         "ppca_em_iters": args.ppca_em_iters,
         "seed": args.seed,
         "use_contrast_correction": use_contrast,
+        "covariance_gpu_gb": args.covariance_gpu_gb,
+        "ppca_gpu_gb": args.ppca_gpu_gb,
+        "covariance_low_memory_option": args.covariance_low_memory_option,
+        "covariance_very_low_memory_option": args.covariance_very_low_memory_option,
+        "ppca_low_memory_option": args.ppca_low_memory_option,
+        "ppca_very_low_memory_option": args.ppca_very_low_memory_option,
         "scores": scores,
         "logs": logs,
         "runtimes_seconds": runtimes,
@@ -633,6 +681,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ppca-em-iters", type=int, default=20)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gpu-gb", type=float, default=None)
+    parser.add_argument("--covariance-gpu-gb", type=float, default=None)
+    parser.add_argument("--ppca-gpu-gb", type=float, default=None)
+    parser.add_argument("--covariance-low-memory-option", action="store_true")
+    parser.add_argument("--covariance-very-low-memory-option", action="store_true")
+    parser.add_argument("--ppca-low-memory-option", action="store_true")
+    parser.add_argument("--ppca-very-low-memory-option", action="store_true")
     parser.add_argument("--lazy", action="store_true")
     parser.add_argument("--force", action="store_true")
     return parser
@@ -640,6 +694,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> None:
     args = build_parser().parse_args()
+    if args.covariance_gpu_gb is None:
+        args.covariance_gpu_gb = args.gpu_gb
+    if args.ppca_gpu_gb is None:
+        args.ppca_gpu_gb = args.gpu_gb
     compare_methods(args)
 
 

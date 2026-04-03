@@ -14,6 +14,7 @@ set -euo pipefail
 
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/${SLURM_JOB_ID}"
 export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/${SLURM_JOB_ID}"
 export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/${SLURM_JOB_ID}"
@@ -45,8 +46,26 @@ CMD=(
   --ppca-em-iters "${PPCA_EM_ITERS:-20}"
   --seed "${SEED:-42}"
   --gpu-gb "${GPU_GB:-40}"
+  --covariance-gpu-gb "${COVARIANCE_GPU_GB:-${GPU_GB:-40}}"
+  --ppca-gpu-gb "${PPCA_GPU_GB:-${GPU_GB:-40}}"
   --lazy
 )
+
+if [ "${COVARIANCE_LOW_MEMORY_OPTION:-0}" = "1" ]; then
+  CMD+=(--covariance-low-memory-option)
+fi
+
+if [ "${COVARIANCE_VERY_LOW_MEMORY_OPTION:-0}" = "1" ]; then
+  CMD+=(--covariance-very-low-memory-option)
+fi
+
+if [ "${PPCA_LOW_MEMORY_OPTION:-0}" = "1" ]; then
+  CMD+=(--ppca-low-memory-option)
+fi
+
+if [ "${PPCA_VERY_LOW_MEMORY_OPTION:-0}" = "1" ]; then
+  CMD+=(--ppca-very-low-memory-option)
+fi
 
 if [ "${FORCE:-0}" = "1" ]; then
   CMD+=(--force)

@@ -28,6 +28,7 @@ RESULTS_ROOT="${RESULTS_ROOT:?RESULTS_ROOT not set}"
 ZDIM="${ZDIM:-10}"
 PPCA_EM_ITERS="${PPCA_EM_ITERS:-20}"
 GPU_GB="${GPU_GB:-40}"
+ANALYZE_MODE="${ANALYZE_MODE:-umap}"
 
 cd "$REPO_ROOT"
 PYTHON="$REPO_ROOT/.pixi/envs/default/bin/python"
@@ -103,6 +104,8 @@ fi
 
 if [ "$METHOD" = "ppca" ]; then
   PIPELINE_CMD+=(--use-ppca --ppca-zdim "$ZDIM" --ppca-em-iters "$PPCA_EM_ITERS")
+elif [ "$METHOD" = "ppca_projected_covariance" ]; then
+  PIPELINE_CMD+=(--use-ppca --ppca-zdim "$ZDIM" --ppca-em-iters "$PPCA_EM_ITERS" --ppca-projected-covariance)
 elif [ "$METHOD" != "covariance" ]; then
   echo "Unsupported METHOD=$METHOD" >&2
   exit 1
@@ -113,12 +116,23 @@ ANALYZE_CMD=(
   "$OUT_DIR"
   --zdim "$ZDIM"
   --n-clusters 20
-  --n-trajectories 2
 )
+
+case "$ANALYZE_MODE" in
+  umap)
+    ANALYZE_CMD+=(--n-trajectories 0 --skip-centers)
+    ;;
+  full)
+    ANALYZE_CMD+=(--n-trajectories 2)
+    ;;
+  *)
+    echo "Unsupported ANALYZE_MODE=$ANALYZE_MODE" >&2
+    exit 1
+    ;;
+esac
 
 echo "Running pipeline: ${PIPELINE_CMD[*]}"
 "${PIPELINE_CMD[@]}" 2>&1 | tee "$LOG_DIR/pipeline.log"
 
 echo "Running analyze: ${ANALYZE_CMD[*]}"
 "${ANALYZE_CMD[@]}" 2>&1 | tee "$LOG_DIR/analyze.log"
-
