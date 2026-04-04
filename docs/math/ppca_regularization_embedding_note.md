@@ -1,235 +1,430 @@
-# PPCA Regularization, Spectrum Shrinkage, and Embedding Quality
+# PPCA Spectrum Shrinkage: Problem Statement, Mathematical Framing, and Open Questions
 
-This note is meant as context for a future agent or human trying to understand
-why direct PPCA can recover a good subspace while still producing worse latent
-embeddings than expected.
+This note is intended as context for a future agent or human trying to
+understand a specific problem in RECOVAR:
 
-The working empirical theme is:
+- direct PPCA often appears to recover a better heterogeneity basis than the
+  older covariance-PCA pipeline,
+- but PPCA can still produce a worse spectrum and worse latent embeddings,
+- and we want to understand why that happens mathematically, not just patch it
+  empirically.
 
-1. PPCA often gets the **PC directions** mostly right.
-2. PPCA can still produce **too-small eigenvalues / latent scales**.
-3. When that happens, the **embedding** can be worse even when the basis is
-   already good.
-4. A post-step that keeps the PPCA span fixed but recomputes the covariance in
-   that span (`PPCA -> orthonormalize -> projected covariance`) can improve the
-   latent calibration without changing the subspace much.
+The key goal is to explain the following empirical pattern:
 
-This note is intentionally open-ended. It is not claiming the mechanism is
-fully understood yet.
+1. `W` from PPCA is often good.
+2. The implied eigenvalues or latent scale from PPCA are often too small.
+3. The resulting embeddings can therefore be worse than the basis quality would
+   suggest.
+4. A postprocessing step that keeps the PPCA span but recalibrates the spectrum
+   often improves embeddings without changing the span much.
 
-## Setup
+That suggests a "good subspace, bad calibration" problem.
 
-These plots use the synthetic comparison runs already on Della:
+This note is deliberately phrased as an open problem statement, not a final
+theory.
 
-- datasets: `Ribosembly`, `IgG-1D`, `IgG-RL`, `Tomotwin-100`
-- grid: `128^3`
-- images: `100000`
-- SNR setting used in the sweep: `noise_level=1.0`
-- `zdim=10`
-- contrast settings: `c=0.0` and `c=0.3`
+## The Model
 
-Methods compared:
+We observe cryo-EM images
 
-- `Covariance`
-- `PPCA`
-- `PPCA+ProjCov`
-  - run PPCA to get `W`
-  - orthonormalize `W -> U`
-  - run projected covariance in `span(U)`
-  - use the refined `U, S` for the embedding
+$$
+y_i = A_i x_i + \varepsilon_i,
+$$
 
-At the time this note was written, `PPCA+ProjCov` is available for:
+where:
 
-- `IgG-1D, c=0.0`
-- `IgG-1D, c=0.3`
-- `Tomotwin-100, c=0.0`
+- $y_i \in \mathbb{R}^{m_i}$ is image $i$,
+- $A_i$ is the forward operator for image $i$:
+  projection, CTF, masking, discretization, whitening, and any other linear
+  observation effects used by the implementation,
+- $x_i \in \mathbb{R}^d$ is the unknown 3D Fourier or volume-space signal for
+  image $i$,
+- $\varepsilon_i \sim \mathcal{N}(0, \Sigma_{\varepsilon,i})$ is noise.
 
-The other synthetic `PPCA+ProjCov` cases were still limited by orchestration /
-memory issues during the original compare runs, so the figures mark those cases
-as pending rather than silently dropping them.
+We write the heterogeneity model as
 
-## Main Observation
+$$
+x_i = \mu + U \alpha_i,
+$$
 
-The strongest pattern is not simply "PPCA is better" or "covariance is
-better." The pattern is more specific:
+or equivalently in PPCA form
 
-- `PPCA` can improve **RelVar** a lot relative to covariance.
-- Yet the **eigenvalue spectrum** from `PPCA` can still be too small or too
-  flat relative to GT.
-- When that happens, **embedding error** can stay worse than the basis quality
-  alone would suggest.
-- `PPCA+ProjCov` often changes **RelVar very little**, but improves
-  **embedding error** noticeably.
+$$
+x_i = \mu + W z_i, \qquad z_i \sim \mathcal{N}(0, I_q).
+$$
 
-That is exactly the signature you would expect if the span is already mostly
-correct, but the latent regularization / scale is too aggressive.
+If we factor
 
-## Figures
+$$
+W = U S^{1/2} R,
+$$
 
-### 1. Per-PC quality (RelVar)
+with $U^\top U = I_q$, $S = \operatorname{diag}(s_1,\dots,s_q)$, and $R$ an
+orthogonal rotation, then:
+
+- the **subspace** is $\operatorname{span}(U)=\operatorname{span}(W)$,
+- the **spectrum** is $S$,
+- the **embedding scale** lives partly in $S$ and partly in the posterior on
+  $z_i$.
+
+That separation is the whole point of this note:
+
+- subspace recovery,
+- eigenvalue calibration,
+- embedding quality
+
+are related, but they are not the same problem.
+
+## Two Competing Methods
+
+### 1. Covariance-PCA
+
+The older RECOVAR pipeline estimates a covariance operator
+
+$$
+C \approx \mathbb{E}\big[(x_i-\mu)(x_i-\mu)^\top\big],
+$$
+
+then computes its leading eigendecomposition
+
+$$
+C \approx U S U^\top.
+$$
+
+Embeddings are then computed downstream using this $U,S$ pair, for example via
+a marginalized or regularized posterior solve.
+
+Conceptually:
+
+- estimate covariance first,
+- then diagonalize,
+- then embed.
+
+This method can produce a decent spectrum even when the leading subspace is not
+optimal.
+
+### 2. Direct PPCA
+
+PPCA instead optimizes a low-rank factor directly:
+
+$$
+x_i = \mu + W z_i,\qquad z_i \sim \mathcal{N}(0, I_q).
+$$
+
+Under Gaussian noise, the per-image covariance is
+
+$$
+\operatorname{Cov}(y_i \mid W)
+=
+A_i W W^\top A_i^\top + \Sigma_{\varepsilon,i}.
+$$
+
+The negative log-likelihood is therefore, up to constants,
+
+$$
+\mathcal{L}(W)
+=
+\frac12 \sum_i
+\left[
+\log \left|A_i W W^\top A_i^\top + \Sigma_{\varepsilon,i}\right|
++
+(y_i-A_i\mu)^\top
+\left(A_i W W^\top A_i^\top + \Sigma_{\varepsilon,i}\right)^{-1}
+(y_i-A_i\mu)
+\right].
+$$
+
+RECOVAR does not optimize this bare likelihood. In practice there is additional
+regularization and prior structure in the PPCA path. That matters, because the
+main empirical issue seems to be not "PPCA cannot find the right subspace", but
+"PPCA seems to shrink the spectrum too much."
+
+The posterior mean of the latent variable has the generic form
+
+$$
+\mathbb{E}[z_i \mid y_i]
+=
+M_i^{-1}
+W^\top A_i^\top \Sigma_{\varepsilon,i}^{-1}(y_i-A_i\mu),
+$$
+
+where
+
+$$
+M_i
+=
+I_q + W^\top A_i^\top \Sigma_{\varepsilon,i}^{-1} A_i W.
+$$
+
+This formula makes the problem clear:
+
+- if $W$ is shrunk too much in norm,
+- then the implied covariance $W W^\top$ is too small,
+- and the posterior means of $z_i$ are also pulled inward.
+
+So a basis can look directionally correct while the latent coordinates are
+still over-regularized.
+
+## The Empirical Problem We Are Trying To Explain
+
+Across the synthetic RECOVAR comparisons, the recurring pattern is:
+
+- PPCA often improves per-PC quality / `RelVar`,
+- but the PPCA eigenvalues are often too small relative to GT,
+- and the embedding error is then worse than the basis quality alone would
+  predict.
+
+This is the main phenomenon to explain.
+
+A convenient way to say it is:
+
+> PPCA often learns a good `W`, but a badly calibrated spectrum and therefore a
+> badly calibrated embedding.
+
+This is not merely a visualization issue. It shows up quantitatively in:
+
+- the saved eigenvalues,
+- the gap between `s` and empirical `var(z)`,
+- embedding squared error,
+- sometimes contrast recovery as well.
+
+## Initial Fix That Helps, But Is Probably Not The Final Answer
+
+We tried the following postprocessing:
+
+1. run PPCA and get $W$,
+2. orthonormalize $W \mapsto U$,
+3. run projected covariance restricted to $\operatorname{span}(U)$,
+4. recover a refined basis/spectrum pair $(U_{\mathrm{ref}}, S_{\mathrm{ref}})$,
+5. recompute embeddings using that refined $(U,S)$.
+
+Call this **PPCA+ProjCov**.
+
+Empirically this often:
+
+- changes `RelVar` very little,
+- leaves the span essentially as good as PPCA,
+- improves embedding error materially.
+
+That is strong evidence that the PPCA issue is often not the span itself. The
+issue is more likely:
+
+- spectrum calibration,
+- posterior shrinkage,
+- or a mismatch between the variable being regularized and the variable whose
+  spectrum we want to interpret.
+
+So the current fix can be summarized as:
+
+> keep the good PPCA span, recalibrate the spectrum in that span.
+
+Useful, but still ad hoc.
+
+## Why The Variable Being Regularized Might Matter
+
+One useful idea from `main_look_t_this_one.tex` is the distinction between
+regularizing a deconvolved object and regularizing a gridded / blurred object.
+
+Suppose the physically meaningful object is $V$, but the reconstruction is
+performed in a gridded variable
+
+$$
+U = K V,
+$$
+
+where $K$ is an invertible gridding or interpolation kernel.
+
+Then these are **not** the same problem:
+
+$$
+\min_V \|A K V - b\|_2^2 + \lambda \|V\|_2^2
+$$
+
+and
+
+$$
+\min_V \|A K V - b\|_2^2 + \lambda \|K V\|_2^2.
+$$
+
+The second one is equivalent to solving in the gridded variable and
+deconvolving afterward; the first one is the natural Tikhonov penalty on the
+deconvolved object itself. They lead to different shrinkage.
+
+This is relevant here because the PPCA regularization may be acting in a
+variable that is not the same as the one in which we want to interpret:
+
+- eigenvalues,
+- basis magnitude,
+- posterior latent scale.
+
+So one plausible mathematical explanation is:
+
+> PPCA is regularizing the right span in the wrong coordinates.
+
+That would naturally produce:
+
+- good directions,
+- biased low singular values,
+- over-shrunk embeddings.
+
+This should be treated as a hypothesis, not a conclusion.
+
+## A Cleaner Mathematical Way To Phrase The Problem
+
+Let the true heterogeneity covariance be
+
+$$
+C_\star = U_\star S_\star U_\star^\top.
+$$
+
+Suppose PPCA returns
+
+$$
+W_{\mathrm{ppca}} \approx U_\star \widetilde{S}^{1/2} R
+$$
+
+with a good column span but with
+
+$$
+\widetilde{S} \ll S_\star
+$$
+
+in magnitude.
+
+Then two things can simultaneously be true:
+
+1. the principal directions are good, because $\operatorname{span}(W)$ is close
+   to $\operatorname{span}(U_\star)$,
+2. the posterior means are over-shrunk, because the effective covariance in the
+   posterior solve is too small.
+
+That immediately explains how one can get:
+
+- good `RelVar`,
+- poor eigenvalues,
+- poor embeddings.
+
+Projected covariance in the PPCA span then acts like a restricted
+re-estimation of $S$ while keeping $U$ approximately fixed.
+
+That explains why PPCA+ProjCov can improve embedding quality while barely
+changing subspace quality.
+
+## What We Want To Understand
+
+The mathematical questions are:
+
+1. Why can PPCA recover a better $W$ or better subspace than covariance-PCA,
+   yet produce a worse spectrum?
+2. Where exactly does the shrinkage enter?
+   - in the PPCA likelihood itself,
+   - in the explicit regularizer,
+   - in the prior estimation,
+   - in whitening / deconvolution conventions,
+   - in the posterior solve for $z_i$,
+   - or in some combination of all of these?
+3. Can the phenomenon be described as:
+   - good subspace recovery,
+   - bad spectrum calibration,
+   - and therefore bad embedding calibration?
+4. Can we derive a simple toy model showing:
+   - correct span,
+   - underestimated eigenvalues,
+   - degraded embeddings,
+   - improvement from recalibrating only $S$ in a fixed span?
+
+## What We Actually Want From A Better Algorithm
+
+The goal is not just to explain the current fix. The real goal is to design a
+better method.
+
+The desired method should:
+
+- retain the good PPCA basis discovery,
+- avoid the apparent spectrum shrinkage,
+- produce well-calibrated embeddings directly,
+- and ideally not require a separate covariance recalibration step.
+
+So the open-ended algorithmic question is:
+
+> Can we design a principled method that preserves the improved PPCA span while
+> estimating the spectrum and embeddings in a better-calibrated way?
+
+Possible directions to think about, without assuming any of them is correct:
+
+- decouple subspace estimation from spectrum estimation,
+- alternate between span updates and spectrum recalibration,
+- regularize in a variable that matches the physically meaningful object,
+- explicitly separate basis regularization from posterior embedding
+  regularization,
+- estimate $U$ with PPCA but estimate $S$ with a moment-matching or restricted
+  covariance criterion,
+- learn a posterior temperature / scale correction for embeddings,
+- formulate a model where $U$ and $S$ have different priors or penalties.
+
+Again, these are directions to analyze, not settled recommendations.
+
+## What Not To Assume
+
+- Do not assume covariance-PCA is "the correct answer."
+- Do not assume direct PPCA is mathematically wrong just because its saved
+  spectrum looks too small.
+- Do not assume PPCA+ProjCov is the final algorithm.
+- Do not assume the issue is only numerical.
+
+The most plausible current reading is:
+
+- PPCA often improves the subspace,
+- but regularization / scaling / posterior calibration appears to distort the
+  spectrum,
+- and that hurts embeddings.
+
+## Relevant Empirical Outputs In This Repo
+
+The following figures summarize the existing synthetic comparisons:
+
+### Per-PC quality
 
 ![Synthetic per-PC quality](./ppca_shrinkage_pc_quality.png)
 
-Read this as: how good are the learned PC directions, one PC at a time?
-
-### 2. Raw eigenvalues against GT
+### Raw eigenvalues
 
 ![Synthetic eigenvalues vs GT](./ppca_shrinkage_eigenvalues.png)
 
-Read this as: do the methods recover the right spectrum magnitude?
-
-### 3. Estimated eigenvalue divided by GT eigenvalue
+### Estimated-to-GT eigenvalue ratio
 
 ![Synthetic eigenvalue ratio to GT](./ppca_shrinkage_eigenvalue_ratio.png)
 
-Read this as: are we overestimating or shrinking the spectrum, and by how
-much?
-
-### 4. Embedding error and contrast correlation
+### Embedding and contrast metrics
 
 ![Synthetic embedding error and contrast correlation](./ppca_shrinkage_embedding_error.png)
 
-Read this as: does the latent representation actually behave better, not just
-the basis?
+These are evidence for the problem statement above; they are not themselves the
+mathematical explanation.
 
-## Minimal Empirical Evidence For "Good Span, Bad Scale"
+## External References That Are Likely Useful
 
-The cleanest completed cases are:
+- Tipping and Bishop, *Probabilistic Principal Component Analysis*:
+  <https://www.microsoft.com/en-us/research/publication/probabilistic-principal-component-analysis/>
+- Katsevich, Katsevich, and Singer, *Covariance Matrix Estimation for the
+  Cryo-EM Heterogeneity Problem* / *Structural Variability from Noisy
+  Tomographic Projections*:
+  <https://oar.princeton.edu/bitstream/88435/pr11t1k/1/1710.09791.pdf>
+- Gavish and Donoho, *Optimal Shrinkage of Eigenvalues in the Spiked Covariance
+  Model*:
+  <https://arxiv.org/abs/1311.0851>
+- SOLVAR, as a more recent covariance-based cryo-EM comparison point:
+  <https://arxiv.org/abs/2602.17603>
 
-| Dataset | Contrast | Method | Mean RelVar | Embedding Error |
-| --- | --- | --- | ---: | ---: |
-| `IgG-1D` | `0.0` | Covariance | `0.5024` | `2.8146` |
-| `IgG-1D` | `0.0` | PPCA | `0.6226` | `2.8851` |
-| `IgG-1D` | `0.0` | PPCA+ProjCov | `0.6226` | `2.4829` |
-| `IgG-1D` | `0.3` | Covariance | `0.5191` | `3.0921` |
-| `IgG-1D` | `0.3` | PPCA | `0.6271` | `3.2449` |
-| `IgG-1D` | `0.3` | PPCA+ProjCov | `0.6271` | `2.8322` |
-| `Tomotwin-100` | `0.0` | Covariance | `0.4340` | `3.6642` |
-| `Tomotwin-100` | `0.0` | PPCA | `0.4404` | `3.2968` |
-| `Tomotwin-100` | `0.0` | PPCA+ProjCov | `0.4425` | `3.1378` |
+The main use of these references here is:
 
-The key pattern is:
-
-- `PPCA -> PPCA+ProjCov` changes RelVar only a little.
-- But `PPCA -> PPCA+ProjCov` can improve embedding error a lot.
-
-That points to **spectral / latent calibration** being a major issue, not just
-subspace identification.
-
-## Working Mathematical Picture
-
-One possible interpretation is:
-
-1. PPCA learns a basis `W` that spans something close to the right subspace.
-2. The PPCA regularization and posterior inference shrink the effective latent
-   scale too much.
-3. This shrinkage shows up as underestimated or distorted `s`, and sometimes
-   also in `var(z)` / `var(z_noreg)`.
-4. The result is a basis that looks good in RelVar, but latent coordinates
-   that are too collapsed for downstream embedding metrics.
-
-Put differently:
-
-- **basis quality** is mostly about the span of `W`
-- **embedding quality** is also about how the spectrum `S` and posterior on `z`
-  are calibrated
-
-This is why the projected-covariance refinement is interesting:
-
-- it keeps the PPCA span
-- it recomputes the covariance in that span
-- it often leaves subspace quality almost unchanged
-- but it can recover a better latent scale
-
-## Why This Could Happen
-
-These are hypotheses, not settled conclusions.
-
-### Hypothesis A: PPCA regularization is shrinking the latent spectrum too much
-
-This is the most direct reading of the plots.
-
-If the learned eigenvalues are too small, then posterior means of `z` are
-pulled too strongly toward zero. That hurts embedding metrics even if the basis
-vectors are already close to correct.
-
-### Hypothesis B: the shrinkage is happening in the "wrong" variable
-
-The note in `~/PPCA-EM-Notes/main_look_t_this_one.tex` is relevant only at a
-high level: where you place the regularization matters. A penalty in the
-gridded / blurred / whitened variable is not the same as a penalty in the final
-object or latent variable. If those are conflated, the recovered spectrum can
-be biased low even when the span looks reasonable.
-
-That TeX note should not be taken as the answer here, but it is a useful
-warning: **the space in which regularization acts matters**.
-
-### Hypothesis C: the basis is right but the saved `s` is not the right
-quantity for downstream embedding
-
-Another possibility is that the learned `W` is fine, but the particular
-regularized spectrum propagated into the embedding step is too small. In that
-case, recalibrating `S` in the fixed PPCA span would naturally help, exactly as
-the `PPCA+ProjCov` cases suggest.
-
-## Open Questions
-
-This is the part a follow-up agent should investigate.
-
-1. Where exactly is the dominant shrinkage entering?
-   - PPCA M-step?
-   - prior on `W` / `S`?
-   - latent posterior solve?
-   - the contrast-marginalized E-step?
-   - the hybrid-shell prior used in current PPCA pipeline runs?
-
-2. Which mismatch matters most for downstream embedding?
-   - mismatch between `s` and GT eigenvalues?
-   - mismatch between `s` and empirical `var(z)`?
-   - mismatch between regularized and unregularized `z`?
-
-3. Is the right fix to change PPCA itself, or to keep PPCA for span discovery
-   and recalibrate the spectrum afterward?
-
-4. If regularization is indeed too strong, where should it live instead?
-   - on the gridded variable?
-   - on the deconvolved basis?
-   - on latent coordinates only?
-   - with a different whitening / scaling convention?
-
-## What Not To Conclude Too Quickly
-
-- Do **not** conclude that PPCA is failing at subspace recovery. In several
-  synthetic cases it clearly is not.
-- Do **not** conclude that covariance is always better calibrated. The plots do
-  not support that either.
-- Do **not** conclude that `PPCA+ProjCov` is the final answer. It is evidence
-  that the span/spectrum separation is useful, not proof that the math is
-  settled.
-
-## Suggested Next Measurements
-
-If another agent picks this up, the most useful next comparisons are:
-
-1. compare `s`, `var(z)`, and `var(z_noreg)` systematically for all methods
-2. check whether posterior shrinkage alone explains the embedding gap
-3. test whether replacing only `S` while keeping PPCA `U` is enough
-4. isolate exactly where the regularization enters in the PPCA code path
-5. compare regularization in the latent variable vs regularization in the
-   gridded / reconstructed variable
-
-## Data Sources Used For This Note
-
-Synthetic summaries came from:
-
-- `/scratch/gpfs/GILLES/mg6942/ppca_pipeline_compare_20260402_180524`
-- `/scratch/gpfs/GILLES/mg6942/ppca_pipeline_compare_projcov_20260403_1320`
-- `/scratch/gpfs/GILLES/mg6942/ppca_pipeline_compare_projcov_retry_gpu20_lowmem_20260403_1605`
-- `/scratch/gpfs/GILLES/mg6942/tmp/projcov_refresh_20260403_1735/embedding_contrast_metrics_updated.csv`
+- PPCA theory,
+- covariance-spectrum shrinkage theory,
+- cryo-EM covariance estimation structure.
 
 ## Code References
 
-- direct PPCA / projected-covariance pipeline branch:
+- direct PPCA and projected-covariance pipeline branch:
   - `recovar/commands/pipeline.py`
 - synthetic compare harness:
   - `recovar/ppca/compare_covariance_vs_ppca_pipeline.py`
@@ -237,5 +432,5 @@ Synthetic summaries came from:
   - `recovar/ppca/summarize_pipeline_compare_sweep.py`
 - PPCA implementation:
   - `recovar/ppca/ppca.py`
-- existing prior note:
+- variance-prior note:
   - `docs/math/ppca_variance_prior_notes.md`
