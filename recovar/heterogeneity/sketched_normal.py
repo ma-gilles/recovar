@@ -8,18 +8,17 @@ the normal residual gradient is G(X) = [g_1, ..., g_n] where
 
 We compute S_L @ G(X)  and  G(X) @ Q_R  without forming dense G(X).
 
-All operations use the half-image (rfft2) convention for ~2x memory/compute
-savings.  Hermitian weights ensure half-spectrum sums equal full-spectrum
-sums for the left sketch contraction.
-
-All large-dimension loops (PCs, sketch columns) are chunked to bound peak
-GPU memory — safe for 200+ PCs at 256^2 image size with 100k images.
+All operations use the half-image (rfft2) convention.  The three
+batch-level primitives are JIT-compiled — the PC/sketch chunking
+loops unroll at trace time so XLA sees the full graph and fuses
+everything into one kernel per image batch.
 
 See docs/math/sketched_normal_operator.md for derivations.
 """
 
 import logging
 
+import equinox as eqx
 import jax.numpy as jnp
 import numpy as np
 
@@ -68,12 +67,13 @@ def _ensure_half_noise(noise_variance, image_shape, batch_shape):
 
 
 # ---------------------------------------------------------------------------
-# Batch-level primitives
+# JIT-compiled batch-level primitives
 # ---------------------------------------------------------------------------
 
 
+@eqx.filter_jit
 def compute_residual_batch_from_factors(
-    config,
+    config: ForwardModelConfig,
     U_X,
     sigma_X,
     V_X_batch,
@@ -83,12 +83,12 @@ def compute_residual_batch_from_factors(
     translations,
     ctf_params,
     noise_variance,
-    pc_batch_size=10,
+    pc_batch_size: int = 10,
 ):
     """Compute whitened residual batch: r_i = A_i(x_i) - b_i.
 
-    All outputs are in half-image (rfft) format.  The basis projection is
-    chunked over PCs to avoid OOM when rank is large (e.g. 200).
+    JIT-compiled.  The PC chunking loop unrolls at trace time so XLA
+    fuses the full residual computation into one kernel.
 
     Parameters
     ----------
@@ -102,7 +102,8 @@ def compute_residual_batch_from_factors(
     translations : (batch, 2)
     ctf_params : (batch, 9)
     noise_variance : (batch, image_size) or scalar-broadcastable
-    pc_batch_size : int — number of PCs to project at once (default 10).
+    pc_batch_size : int — PCs to project at once (default 10).  Controls
+        peak memory: pc_batch_size * batch * half_image_size * 8 bytes.
 
     Returns
     -------
@@ -112,7 +113,7 @@ def compute_residual_batch_from_factors(
     n_images = images_batch.shape[0]
     rank = U_X.shape[1]
 
-    # --- Preprocess images: convert to half, translate ---
+    # Preprocess images: convert to half, translate
     images = _to_half_image(images_batch, config.image_shape)
     images = core.translate_images(
         images, translations, config.image_shape, half_image=True
@@ -126,18 +127,15 @@ def compute_residual_batch_from_factors(
     )
     CTF_w = CTF / safe_noise_std
 
-    # --- Whitened projected mean: CTF * slice(mean) / sqrt(noise_var) ---
+    # Whitened projected mean
     projected_mean = core_forward.forward_model(
         config, mean, ctf_params, rotation_matrices,
         skip_ctf=False, half_image=True,
     )
-    projected_mean_w = projected_mean / safe_noise_std
+    whitened_data = images / safe_noise_std - projected_mean / safe_noise_std
 
-    # --- Whitened centered data: b_i = (y_i - P_i mu) / sqrt(noise_var) ---
-    whitened_data = images / safe_noise_std - projected_mean_w
-
-    # --- Forward model for X columns via factored form, chunked over PCs ---
-    C_batch = V_X_batch * sigma_X[None, :]  # (batch, rank)
+    # Predicted images from factored X, chunked over PCs
+    C_batch = V_X_batch * sigma_X[None, :]
     half_image_size = int(
         np.prod(ftu.image_shape_to_half_image_shape(config.image_shape))
     )
@@ -150,51 +148,46 @@ def compute_residual_batch_from_factors(
             skip_ctf=False, half_image=True,
         )
         AUs_chunk = AUs_chunk / safe_noise_std[None, :, :]
-        C_chunk = C_batch[:, j_start:j_end]
-        predicted_w = predicted_w + jnp.einsum("jip,ij->ip", AUs_chunk, C_chunk)
+        predicted_w = predicted_w + jnp.einsum(
+            "jip,ij->ip", AUs_chunk, C_batch[:, j_start:j_end]
+        )
 
-    # --- Residual: r_i = A_i(x_i) - b_i ---
     residual = predicted_w - whitened_data
     return residual, CTF_w
 
 
+@eqx.filter_jit
 def right_sketch_normal_residual_batch(
     residual_batch,
     Q_batch,
     CTF_w,
     rotation_matrices,
-    image_shape,
-    volume_shape,
-    disc_type,
-    sketch_chunk_size=10,
+    image_shape: tuple,
+    volume_shape: tuple,
+    disc_type: str,
+    sketch_chunk_size: int = 10,
 ):
     """Batch contribution to G(X) @ Q_R via multi-channel backprojection.
 
-    Chunked over sketch columns to avoid OOM when qrank is large.
+    JIT-compiled.  Chunked over sketch columns; the loop unrolls at
+    trace time.
 
     Parameters
     ----------
-    residual_batch : (batch, half_image_size) — whitened residuals, half-image.
+    residual_batch : (batch, half_image_size) — whitened residuals.
     Q_batch : (batch, qrank) — rows of Q_R for this batch.
-    CTF_w : (batch, half_image_size) — whitened CTF, half-image.
+    CTF_w : (batch, half_image_size) — whitened CTF.
     rotation_matrices : (batch, 3, 3)
     image_shape, volume_shape, disc_type : forward model geometry.
-    sketch_chunk_size : int — sketch columns to backproject at once (default 10).
+    sketch_chunk_size : int — columns to backproject at once (default 10).
 
     Returns
     -------
-    contribution : (qrank, volume_size) — batch sum of A_i^*(r_i) q_i^T.
+    contribution : (qrank, volume_size)
     """
     qrank = Q_batch.shape[1]
     volume_size = int(np.prod(volume_shape))
-    adjoint_input = CTF_w * residual_batch  # (batch, half_image_size)
-
-    if qrank <= sketch_chunk_size:
-        weighted_slices = adjoint_input[None, :, :] * Q_batch.T[:, :, None]
-        return batch_adjoint_slice_volume(
-            weighted_slices, rotation_matrices, image_shape, volume_shape,
-            disc_type, half_image=True,
-        )
+    adjoint_input = CTF_w * residual_batch
 
     contribution = jnp.zeros((qrank, volume_size), dtype=adjoint_input.dtype)
     for j_start in range(0, qrank, sketch_chunk_size):
@@ -209,65 +202,53 @@ def right_sketch_normal_residual_batch(
     return contribution
 
 
+@eqx.filter_jit
 def left_sketch_normal_residual_batch(
+    config: ForwardModelConfig,
     S_left,
     residual_batch,
     CTF_w,
     rotation_matrices,
     ctf_params,
-    config,
-    hermitian_weights=None,
-    sketch_chunk_size=10,
+    hermitian_weights,
+    sketch_chunk_size: int = 10,
 ):
     """Batch columns of S_left @ G(X) without backprojection.
 
-    Chunked over sketch rows to avoid OOM when sketch_rank is large.
+    JIT-compiled.  Chunked over sketch rows; the loop unrolls at
+    trace time.
 
     Parameters
     ----------
+    config : ForwardModelConfig
     S_left : (sketch_rank, volume_size) — left sketch matrix.
-    residual_batch : (batch, half_image_size) — whitened residuals, half-image.
-    CTF_w : (batch, half_image_size) — whitened CTF, half-image.
+    residual_batch : (batch, half_image_size) — whitened residuals.
+    CTF_w : (batch, half_image_size) — whitened CTF.
     rotation_matrices : (batch, 3, 3)
     ctf_params : (batch, 9)
-    config : ForwardModelConfig
     hermitian_weights : (half_image_size,) — sqrt(w) for half-spectrum sums.
-    sketch_chunk_size : int — sketch rows to project at once (default 10).
+    sketch_chunk_size : int — rows to project at once (default 10).
 
     Returns
     -------
-    out : (sketch_rank, batch) — columns of S_L @ G(X) for this batch.
+    out : (sketch_rank, batch) — real-valued columns of S_L @ G(X).
     """
     sketch_rank = S_left.shape[0]
     n_images = residual_batch.shape[0]
-    use_hermitian = hermitian_weights is not None
 
-    # Precompute weighted adjoint input (shared across chunks)
-    adjoint_input = CTF_w * residual_batch
-    if use_hermitian:
-        adjoint_input_w = adjoint_input * hermitian_weights[None, :]
-    else:
-        adjoint_input_w = adjoint_input
-
-    out_dtype = adjoint_input.real.dtype if use_hermitian else adjoint_input.dtype
-    out = jnp.zeros((sketch_rank, n_images), dtype=out_dtype)
+    adjoint_input_w = (CTF_w * residual_batch) * hermitian_weights[None, :]
+    out = jnp.zeros((sketch_rank, n_images), dtype=adjoint_input_w.real.dtype)
 
     for s_start in range(0, sketch_rank, sketch_chunk_size):
         s_end = min(s_start + sketch_chunk_size, sketch_rank)
-        S_chunk = S_left[s_start:s_end]
-
         projected_chunk = covariance_core.batch_vol_forward_from_map(
-            config, S_chunk, ctf_params, rotation_matrices,
+            config, S_left[s_start:s_end], ctf_params, rotation_matrices,
             skip_ctf=True, half_image=True,
         )
-
-        if use_hermitian:
-            projected_chunk = projected_chunk * hermitian_weights[None, None, :]
-
-        chunk_out = jnp.einsum("sik,ik->si", projected_chunk, adjoint_input_w)
-        if use_hermitian:
-            chunk_out = chunk_out.real
-
+        projected_chunk = projected_chunk * hermitian_weights[None, None, :]
+        chunk_out = jnp.einsum(
+            "sik,ik->si", projected_chunk, adjoint_input_w
+        ).real
         out = out.at[s_start:s_end].set(chunk_out)
 
     return out
@@ -288,16 +269,14 @@ def compute_normal_residual_sketches(
     batch_size,
     left_sketch=None,
     right_sketch=None,
-    disc_type_mean="cubic",
     disc_type="linear_interp",
     pc_batch_size=10,
     sketch_chunk_size=10,
 ):
     """Compute S_left @ G(X) and/or G(X) @ Q_R without forming dense G(X).
 
-    Uses the half-image (rfft2) convention throughout for ~2x savings.
-    All large dimension loops (PCs, sketch columns) are chunked to bound
-    peak GPU memory.
+    Iterates over image batches; each batch calls the JIT-compiled
+    primitives above.
 
     Parameters
     ----------
@@ -310,13 +289,9 @@ def compute_normal_residual_sketches(
     batch_size : int — images per batch.
     left_sketch : (s, volume_size) or None — S_left matrix.
     right_sketch : (n_images, t) or None — Q_R matrix.
-    disc_type_mean : str — discretization for mean projection.
-    disc_type : str — discretization for basis/sketch projection.
-    pc_batch_size : int — PCs to project at once in residual computation
-        (default 10).  Peak memory ≈ pc_batch_size * batch_size *
-        half_image_size * 8 bytes.
-    sketch_chunk_size : int — sketch columns/rows to process at once
-        (default 10).
+    disc_type : str — discretization type (default "linear_interp").
+    pc_batch_size : int — PCs to project at once (default 10).
+    sketch_chunk_size : int — sketch columns/rows at once (default 10).
 
     Returns
     -------
@@ -329,16 +304,10 @@ def compute_normal_residual_sketches(
 
     volume_size = int(np.prod(experiment_dataset.volume_shape))
     n_images = experiment_dataset.n_images
-    rank = U_X.shape[1] if U_X.ndim == 2 else U_X.shape[0]
 
-    config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
-    config_mean = (
-        config if disc_type_mean == disc_type
-        else ForwardModelConfig.from_dataset(
-            experiment_dataset, disc_type=disc_type_mean
-        )
+    config = ForwardModelConfig.from_dataset(
+        experiment_dataset, disc_type=disc_type
     )
-
     hermitian_weights = linalg.rfft2_hermitian_weights(config.image_shape)
 
     right_acc = None
@@ -369,7 +338,7 @@ def compute_normal_residual_sketches(
         rotation_matrices,
         translations,
         ctf_params,
-        batch_noise_variance,
+        _batch_noise_variance,
         _particle_indices,
         image_indices,
     ) in experiment_dataset.iter_batches(batch_size):
@@ -380,71 +349,26 @@ def compute_normal_residual_sketches(
         elif hasattr(nv, "shape") and nv.ndim == 1 and nv.shape[0] == n_images:
             nv = nv[image_indices]
 
-        # --- Compute whitened residuals in half-image format ---
-        if disc_type_mean != disc_type:
-            bs = images.shape[0]
-            images_half = _to_half_image(images, config.image_shape)
-            images_half = core.translate_images(
-                images_half, translations, config.image_shape, half_image=True
-            )
-            CTF = config.compute_ctf(ctf_params, half_image=True)
-            noise_var = _ensure_half_noise(nv, config.image_shape, (bs,))
-            safe_noise_std = jnp.sqrt(
-                jnp.maximum(noise_var, jnp.finfo(noise_var.dtype).tiny)
-            )
-            CTF_w = CTF / safe_noise_std
+        V_X_batch = V_X[image_indices]
+        residual, CTF_w = compute_residual_batch_from_factors(
+            config, U_X, sigma_X, V_X_batch, images, mean,
+            rotation_matrices, translations, ctf_params, nv,
+            pc_batch_size=pc_batch_size,
+        )
 
-            projected_mean = core_forward.forward_model(
-                config_mean, mean, ctf_params, rotation_matrices,
-                skip_ctf=False, half_image=True,
-            )
-            projected_mean_w = projected_mean / safe_noise_std
-            whitened_data = images_half / safe_noise_std - projected_mean_w
-
-            C_batch = V_X[image_indices] * sigma_X[None, :]
-            half_image_size = int(
-                np.prod(ftu.image_shape_to_half_image_shape(config.image_shape))
-            )
-            predicted_w = jnp.zeros(
-                (bs, half_image_size), dtype=images_half.dtype
-            )
-            for j_start in range(0, rank, pc_batch_size):
-                j_end = min(j_start + pc_batch_size, rank)
-                AUs_chunk = covariance_core.batch_vol_forward_from_map(
-                    config, U_X[:, j_start:j_end].T,
-                    ctf_params, rotation_matrices,
-                    skip_ctf=False, half_image=True,
-                )
-                AUs_chunk = AUs_chunk / safe_noise_std[None, :, :]
-                predicted_w = predicted_w + jnp.einsum(
-                    "jip,ij->ip", AUs_chunk, C_batch[:, j_start:j_end]
-                )
-            residual = predicted_w - whitened_data
-        else:
-            V_X_batch = V_X[image_indices]
-            residual, CTF_w = compute_residual_batch_from_factors(
-                config, U_X, sigma_X, V_X_batch, images, mean,
-                rotation_matrices, translations, ctf_params, nv,
-                pc_batch_size=pc_batch_size,
-            )
-
-        # --- Right sketch: accumulate backprojection ---
         if right_sketch is not None:
             Q_batch = right_sketch[image_indices]
             right_contrib = right_sketch_normal_residual_batch(
-                residual, Q_batch, CTF_w,
-                rotation_matrices,
+                residual, Q_batch, CTF_w, rotation_matrices,
                 config.image_shape, config.volume_shape, config.disc_type,
                 sketch_chunk_size=sketch_chunk_size,
             )
             right_acc = right_acc + right_contrib
 
-        # --- Left sketch: fill in batch columns ---
         if left_sketch is not None:
             left_cols = left_sketch_normal_residual_batch(
-                left_sketch, residual, CTF_w,
-                rotation_matrices, ctf_params, config,
-                hermitian_weights=hermitian_weights,
+                config, left_sketch, residual, CTF_w,
+                rotation_matrices, ctf_params, hermitian_weights,
                 sketch_chunk_size=sketch_chunk_size,
             )
             left_result = left_result.at[:, image_indices].set(left_cols)

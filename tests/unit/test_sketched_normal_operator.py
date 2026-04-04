@@ -27,6 +27,7 @@ from recovar.heterogeneity.sketched_normal import (
     left_sketch_normal_residual_batch,
     right_sketch_normal_residual_batch,
 )
+# left_sketch_normal_residual_batch now takes config as first arg
 
 pytestmark = pytest.mark.unit
 
@@ -231,14 +232,12 @@ class TestDenseReference:
         )
 
         left_c = left_sketch_normal_residual_batch(
-            s["S_left"], residual, CTF_w, s["rotation_matrices"],
-            s["ctf_params"], s["config"],
-            hermitian_weights=s["hermitian_weights"], sketch_chunk_size=1,
+            s["config"], s["S_left"], residual, CTF_w, s["rotation_matrices"],
+            s["ctf_params"], s["hermitian_weights"], sketch_chunk_size=1,
         )
         left_u = left_sketch_normal_residual_batch(
-            s["S_left"], residual, CTF_w, s["rotation_matrices"],
-            s["ctf_params"], s["config"],
-            hermitian_weights=s["hermitian_weights"], sketch_chunk_size=999,
+            s["config"], s["S_left"], residual, CTF_w, s["rotation_matrices"],
+            s["ctf_params"], s["hermitian_weights"], sketch_chunk_size=999,
         )
         np.testing.assert_allclose(
             np.asarray(left_c), np.asarray(left_u),
@@ -260,9 +259,8 @@ class TestDenseReference:
             s["translations"], s["ctf_params"], s["noise_variance"],
         )
         actual = left_sketch_normal_residual_batch(
-            s["S_left"], residual, CTF_w, s["rotation_matrices"],
-            s["ctf_params"], s["config"],
-            hermitian_weights=s["hermitian_weights"],
+            s["config"], s["S_left"], residual, CTF_w, s["rotation_matrices"],
+            s["ctf_params"], s["hermitian_weights"],
         )
 
         # Left sketch output is real (Hermitian contraction); expected is also real.
@@ -403,8 +401,8 @@ def test_zero_residual_gives_zero():
     # Left sketch should be near zero
     S_left = jnp.array(np.stack([_hermitian_volume(rng, config.volume_shape) for _ in range(sketch_rank)]))
     left_out = left_sketch_normal_residual_batch(
-        S_left, residual, CTF_w, rotation_matrices, ctf_params, config,
-        hermitian_weights=hermitian_weights,
+        config, S_left, residual, CTF_w, rotation_matrices, ctf_params,
+        hermitian_weights,
     )
     # Left sketch amplifies residual error by sketch norm * image_size,
     # so tolerance scales with sketch size.
@@ -499,14 +497,12 @@ class TestLinearity:
         alpha = 3.0
 
         out1 = left_sketch_normal_residual_batch(
-            s["S_left"], s["r1"], s["CTF_w"], s["rotation_matrices"],
-            s["ctf_params"], s["config"],
-            hermitian_weights=s["hermitian_weights"],
+            s["config"], s["S_left"], s["r1"], s["CTF_w"], s["rotation_matrices"],
+            s["ctf_params"], s["hermitian_weights"],
         )
         out_scaled = left_sketch_normal_residual_batch(
-            s["S_left"], alpha * s["r1"], s["CTF_w"], s["rotation_matrices"],
-            s["ctf_params"], s["config"],
-            hermitian_weights=s["hermitian_weights"],
+            s["config"], s["S_left"], alpha * s["r1"], s["CTF_w"], s["rotation_matrices"],
+            s["ctf_params"], s["hermitian_weights"],
         )
 
         np.testing.assert_allclose(
@@ -518,19 +514,16 @@ class TestLinearity:
         s = setup
 
         out1 = left_sketch_normal_residual_batch(
-            s["S_left"], s["r1"], s["CTF_w"], s["rotation_matrices"],
-            s["ctf_params"], s["config"],
-            hermitian_weights=s["hermitian_weights"],
+            s["config"], s["S_left"], s["r1"], s["CTF_w"], s["rotation_matrices"],
+            s["ctf_params"], s["hermitian_weights"],
         )
         out2 = left_sketch_normal_residual_batch(
-            s["S_left"], s["r2"], s["CTF_w"], s["rotation_matrices"],
-            s["ctf_params"], s["config"],
-            hermitian_weights=s["hermitian_weights"],
+            s["config"], s["S_left"], s["r2"], s["CTF_w"], s["rotation_matrices"],
+            s["ctf_params"], s["hermitian_weights"],
         )
         out_sum = left_sketch_normal_residual_batch(
-            s["S_left"], s["r1"] + s["r2"], s["CTF_w"], s["rotation_matrices"],
-            s["ctf_params"], s["config"],
-            hermitian_weights=s["hermitian_weights"],
+            s["config"], s["S_left"], s["r1"] + s["r2"], s["CTF_w"], s["rotation_matrices"],
+            s["ctf_params"], s["hermitian_weights"],
         )
 
         np.testing.assert_allclose(
