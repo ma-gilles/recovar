@@ -162,11 +162,9 @@ def main():
 
     # True per-image coordinates: project each image's GT volume onto U_gt
     assign = np.array(sim_info["image_assignment"])
-    centered_vols = gt.volumes - gt_mean[None, :]
-    V_true = np.array([
-        (np.conj(centered_vols[assign[i]]) @ U_gt) / s_gt
-        for i in range(n_images)
-    ]).real.astype(np.float32)
+    centered_vols = np.asarray(gt.volumes - gt_mean[None, :])  # (n_states, vol_size)
+    # Vectorized: index by assignment, project onto basis
+    V_true = ((np.conj(centered_vols[assign]) @ np.asarray(U_gt)) / np.asarray(s_gt)).real.astype(np.float32)
 
     # Random test sketch
     rng = np.random.default_rng(0)
