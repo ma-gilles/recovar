@@ -42,7 +42,7 @@ from recovar.simulation.trajectory_generation import generate_trajectory_volumes
 from recovar.ppca.ppca_scale_sweep import (
     _load_simulated_dataset, _with_trailing_separator,
 )
-from recovar.ppca import ppca as ppca_mod
+from recovar.ppca import ppca as ppca_mod, prior_estimation
 from recovar.ppca.sketched_normal import compute_normal_residual_sketches
 
 
@@ -214,8 +214,11 @@ def main():
     W_init = jr.normal(jr.PRNGKey(0), (vol_size, N_PCS), dtype=jnp.float32)
     W_init = linalg.batch_dft3(W_init, vs, N_PCS)
 
-    # Flat prior (minimal regularization)
-    W_prior = np.ones((vol_size, N_PCS), dtype=np.float32) * 1e10
+    # GT prior: spherically averaged Fourier variance / n_pcs
+    W_prior = prior_estimation.make_gt_prior_from_variance_total(
+        gt.get_fourier_variances(contrasted=False), N_PCS, vs,
+    )["W_prior"]
+    logger.info("  W_prior shape=%s, median=%.2e", W_prior.shape, np.median(W_prior))
 
     U_ppca, S_ppca, W_ppca, _, _ = ppca_mod.EM(
         cryo,
