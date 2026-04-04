@@ -13,6 +13,7 @@ import argparse
 import json
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -57,6 +58,13 @@ def _with_trailing_separator(path: str) -> str:
 
 def _contrast_tag(contrast_std: float) -> str:
     return f"c{contrast_std:.2f}".replace(".", "p")
+
+
+def _build_run_name(dataset_name: str, grid_size: int, n_images: int, noise_level: float, contrast_std: float, zdim: int, seed: int) -> str:
+    return (
+        f"{dataset_name}_g{grid_size}_n{n_images}_snr{noise_level}"
+        f"_{_contrast_tag(contrast_std)}_z{zdim}_seed{seed}"
+    )
 
 
 def _find_cryobench_dataset(base_dir: str, dataset_name: str) -> dict:
@@ -166,7 +174,7 @@ def ensure_halfsets(output_root: str, n_images: int, seed: int) -> str:
     return halfsets_path
 
 
-def run_pipeline_method(
+def build_pipeline_command(
     method: str,
     sim_dir: str,
     method_root: str,
@@ -180,17 +188,10 @@ def run_pipeline_method(
     very_low_memory_option: bool,
     lazy: bool,
     force: bool,
-) -> tuple[str, str, float | None]:
-    """Run one pipeline method and return ``(result_dir, log_path, runtime_seconds)``."""
+) -> tuple[list[str], str, str]:
+    """Build one pipeline command and return ``(cmd, result_dir, log_path)``."""
     result_dir = _pipeline_output_dir(method_root)
     log_path = os.path.join(method_root, f"{method}.log")
-    params_path = os.path.join(result_dir, "model", "params.pkl")
-    if os.path.isfile(params_path) and not force:
-        return result_dir, log_path, None
-
-    if force and os.path.isdir(method_root):
-        shutil.rmtree(method_root)
-    os.makedirs(method_root, exist_ok=True)
     cmd = [
         sys.executable,
         "-m",
@@ -234,12 +235,197 @@ def run_pipeline_method(
         )
     elif method != "covariance":
         raise ValueError(f"Unknown method: {method}")
+    return cmd, result_dir, log_path
+
+
+def run_pipeline_method(
+    method: str,
+    sim_dir: str,
+    method_root: str,
+    grid_size: int,
+    halfsets_path: str,
+    zdim: int,
+    ppca_em_iters: int,
+    use_contrast: bool,
+    gpu_gb: float | None,
+    low_memory_option: bool,
+    very_low_memory_option: bool,
+    lazy: bool,
+    force: bool,
+) -> tuple[str, str, float | None]:
+    """Run one pipeline method and return ``(result_dir, log_path, runtime_seconds)``."""
+    cmd, result_dir, log_path = build_pipeline_command(
+        method=method,
+        sim_dir=sim_dir,
+        method_root=method_root,
+        grid_size=grid_size,
+        halfsets_path=halfsets_path,
+        zdim=zdim,
+        ppca_em_iters=ppca_em_iters,
+        use_contrast=use_contrast,
+        gpu_gb=gpu_gb,
+        low_memory_option=low_memory_option,
+        very_low_memory_option=very_low_memory_option,
+        lazy=lazy,
+        force=force,
+    )
+    params_path = os.path.join(result_dir, "model", "params.pkl")
+    if os.path.isfile(params_path) and not force:
+        return result_dir, log_path, None
+
+    if force and os.path.isdir(method_root):
+        shutil.rmtree(method_root)
+    os.makedirs(method_root, exist_ok=True)
 
     started = time.time()
     with open(log_path, "w", encoding="utf-8") as log_fh:
         subprocess.run(cmd, check=True, stdout=log_fh, stderr=subprocess.STDOUT)
     runtime_seconds = time.time() - started
     return result_dir, log_path, runtime_seconds
+
+
+def _write_method_runner_script(output_root: str, method_specs: list[dict]) -> str:
+    script_path = os.path.join(output_root, "run_methods.sh")
+    lines = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        "",
+        "run_one() {",
+        "  local method=\"$1\"",
+        "  local log_path=\"$2\"",
+        "  local status_path=\"$3\"",
+        "  shift 3",
+        "  local -a cmd=(\"$@\")",
+        "  echo \"[compare] running ${method}: ${cmd[*]}\"",
+        "  set +e",
+        "  \"${cmd[@]}\" >\"${log_path}\" 2>&1",
+        "  local code=$?",
+        "  set -e",
+        "  printf '%s\\n' \"$code\" >\"${status_path}\"",
+        "  if [ \"$code\" -ne 0 ]; then",
+        "    echo \"[compare] method ${method} failed with exit code ${code}\" >&2",
+        "  fi",
+        "}",
+        "",
+    ]
+    for spec in method_specs:
+        cmd_parts = " ".join(shlex.quote(part) for part in spec["cmd"])
+        params_path = os.path.join(spec["result_dir"], "model", "params.pkl")
+        lines.extend(
+            [
+                f"mkdir -p {shlex.quote(os.path.dirname(spec['log_path']))} {shlex.quote(spec['result_dir'])}",
+                f"if [ -f {shlex.quote(params_path)} ]; then",
+                f"  echo \"[compare] skipping {spec['method']}; found existing {params_path}\"",
+                f"  printf '0\\n' > {shlex.quote(spec['status_path'])}",
+                "else",
+                f"  run_one {shlex.quote(spec['method'])} {shlex.quote(spec['log_path'])} {shlex.quote(spec['status_path'])} {cmd_parts}",
+                "fi",
+                "",
+            ]
+        )
+    Path(script_path).write_text("\n".join(lines), encoding="utf-8")
+    os.chmod(script_path, 0o755)
+    return script_path
+
+
+def prepare_compare_run(args) -> dict:
+    dataset_info = _find_cryobench_dataset(args.base_dir, args.dataset)
+    run_name = _build_run_name(
+        dataset_info["name"],
+        args.grid_size,
+        args.n_images,
+        args.noise_level,
+        args.contrast_std,
+        args.zdim,
+        args.seed,
+    )
+    output_root = os.path.join(args.results_root, run_name)
+    sim_dir = generate_dataset(
+        dataset_info,
+        output_root,
+        args.grid_size,
+        args.n_images,
+        args.noise_level,
+        args.contrast_std,
+        args.seed,
+    )
+    halfsets_path = ensure_halfsets(output_root, args.n_images, args.seed)
+    use_contrast = args.contrast_std > 0
+
+    method_specs = []
+    for method in METHOD_ORDER:
+        method_root = os.path.join(output_root, method)
+        if args.force and os.path.isdir(method_root):
+            shutil.rmtree(method_root)
+        os.makedirs(method_root, exist_ok=True)
+        method_gpu_gb = args.covariance_gpu_gb if method == "covariance" else args.ppca_gpu_gb
+        method_low_memory = args.covariance_low_memory_option if method == "covariance" else args.ppca_low_memory_option
+        method_very_low_memory = (
+            args.covariance_very_low_memory_option if method == "covariance" else args.ppca_very_low_memory_option
+        )
+        cmd, result_dir, log_path = build_pipeline_command(
+            method=method,
+            sim_dir=sim_dir,
+            method_root=method_root,
+            grid_size=args.grid_size,
+            halfsets_path=halfsets_path,
+            zdim=args.zdim,
+            ppca_em_iters=args.ppca_em_iters,
+            use_contrast=use_contrast,
+            gpu_gb=method_gpu_gb,
+            low_memory_option=method_low_memory,
+            very_low_memory_option=method_very_low_memory,
+            lazy=args.lazy,
+            force=args.force,
+        )
+        result_path = Path(result_dir)
+        result_path.mkdir(parents=True, exist_ok=True)
+        command_path = result_path / "command.txt"
+        command_path.write_text(shlex.join(cmd) + "\n", encoding="utf-8")
+        status_path = os.path.join(method_root, f"{method}.exitcode")
+        method_specs.append(
+            {
+                "method": method,
+                "cmd": cmd,
+                "result_dir": result_dir,
+                "log_path": log_path,
+                "status_path": status_path,
+                "command_path": str(command_path),
+            }
+        )
+
+    runner_script = _write_method_runner_script(output_root, method_specs)
+    manifest = {
+        "dataset": dataset_info["name"],
+        "run_root": output_root,
+        "sim_dir": sim_dir,
+        "halfsets_path": halfsets_path,
+        "runner_script": runner_script,
+        "method_specs": [
+            {
+                "method": spec["method"],
+                "result_dir": spec["result_dir"],
+                "log_path": spec["log_path"],
+                "status_path": spec["status_path"],
+                "command_path": spec["command_path"],
+            }
+            for spec in method_specs
+        ],
+    }
+    manifest_path = os.path.join(output_root, "compare_run_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+    manifest["manifest_path"] = manifest_path
+    return manifest
+
+
+def _read_runtime_seconds(result_dir: str) -> float | None:
+    job_path = os.path.join(result_dir, "job.json")
+    if not os.path.isfile(job_path):
+        return None
+    with open(job_path, "r", encoding="utf-8") as fh:
+        job = json.load(fh)
+    return job.get("timing", {}).get("duration_seconds")
 
 
 def _maybe_float(value):
@@ -581,59 +767,57 @@ def write_comparison_plots(output_root: str, scores: dict, zdim: int) -> dict:
     }
 
 
-def compare_methods(args) -> dict:
+def _score_existing_run(args) -> dict:
+    prep = prepare_compare_run(args)
     dataset_info = _find_cryobench_dataset(args.base_dir, args.dataset)
-    run_name = (
-        f"{dataset_info['name']}_g{args.grid_size}_n{args.n_images}_snr{args.noise_level}"
-        f"_{_contrast_tag(args.contrast_std)}_z{args.zdim}_seed{args.seed}"
-    )
-    output_root = os.path.join(args.results_root, run_name)
-    sim_dir = generate_dataset(
-        dataset_info,
-        output_root,
-        args.grid_size,
-        args.n_images,
-        args.noise_level,
-        args.contrast_std,
-        args.seed,
-    )
+    output_root = prep["run_root"]
+    sim_dir = prep["sim_dir"]
     sim_info_path = os.path.join(sim_dir, "simulation_info.pkl")
     sim_info = utils.pickle_load(sim_info_path)
     gt_results = synthetic_dataset.load_heterogeneous_reconstruction(os.path.join(sim_dir, "simulation_info.pkl"))
     metric_context = _build_metric_context(gt_results, sim_info, (args.grid_size, args.grid_size, args.grid_size))
-    halfsets_path = ensure_halfsets(output_root, args.n_images, args.seed)
-
     scores = {}
     logs = {}
     runtimes = {}
-    use_contrast = args.contrast_std > 0
-    for method in METHOD_ORDER:
+    status_paths = {}
+    missing_methods = []
+    failed_methods = {}
+    for spec in prep["method_specs"]:
+        method = spec["method"]
         method_root = os.path.join(output_root, method)
-        method_gpu_gb = args.covariance_gpu_gb if method == "covariance" else args.ppca_gpu_gb
-        method_low_memory = args.covariance_low_memory_option if method == "covariance" else args.ppca_low_memory_option
-        method_very_low_memory = (
-            args.covariance_very_low_memory_option if method == "covariance" else args.ppca_very_low_memory_option
-        )
         result_dir, log_path, runtime_seconds = run_pipeline_method(
-            method,
-            sim_dir,
-            method_root,
-            args.grid_size,
-            halfsets_path,
-            args.zdim,
-            args.ppca_em_iters,
-            use_contrast,
-            method_gpu_gb,
-            method_low_memory,
-            method_very_low_memory,
-            args.lazy,
-            args.force,
+            method=method,
+            sim_dir=sim_dir,
+            method_root=method_root,
+            grid_size=args.grid_size,
+            halfsets_path=prep["halfsets_path"],
+            zdim=args.zdim,
+            ppca_em_iters=args.ppca_em_iters,
+            use_contrast=args.contrast_std > 0,
+            gpu_gb=args.covariance_gpu_gb if method == "covariance" else args.ppca_gpu_gb,
+            low_memory_option=args.covariance_low_memory_option if method == "covariance" else args.ppca_low_memory_option,
+            very_low_memory_option=(
+                args.covariance_very_low_memory_option if method == "covariance" else args.ppca_very_low_memory_option
+            ),
+            lazy=args.lazy,
+            force=args.force,
         )
-        scores[method] = score_pipeline_output(result_dir, method_root, gt_results, metric_context, args.zdim)
         logs[method] = log_path
-        runtimes[method] = runtime_seconds
+        status_paths[method] = spec["status_path"]
+        if runtime_seconds is not None:
+            runtimes[method] = runtime_seconds
+        else:
+            runtimes[method] = _read_runtime_seconds(result_dir)
+        params_path = os.path.join(result_dir, "model", "params.pkl")
+        if os.path.isfile(params_path):
+            scores[method] = score_pipeline_output(result_dir, method_root, gt_results, metric_context, args.zdim)
+            continue
+        missing_methods.append(method)
+        if os.path.isfile(spec["status_path"]):
+            with open(spec["status_path"], "r", encoding="utf-8") as fh:
+                failed_methods[method] = fh.read().strip()
 
-    plot_paths = write_comparison_plots(output_root, scores, args.zdim)
+    plot_paths = write_comparison_plots(output_root, scores, args.zdim) if scores else {}
     summary = {
         "dataset": dataset_info["name"],
         "n_volumes": dataset_info["n_volumes"],
@@ -653,10 +837,13 @@ def compare_methods(args) -> dict:
         "ppca_very_low_memory_option": args.ppca_very_low_memory_option,
         "scores": scores,
         "logs": logs,
+        "status_paths": status_paths,
+        "missing_methods": missing_methods,
+        "failed_methods": failed_methods,
         "runtimes_seconds": runtimes,
         "plots": plot_paths,
         "sim_dir": sim_dir,
-        "halfsets_path": halfsets_path,
+        "halfsets_path": prep["halfsets_path"],
         "run_root": output_root,
     }
     summary_path = os.path.join(output_root, "comparison_summary.json")
@@ -664,6 +851,31 @@ def compare_methods(args) -> dict:
         json.dump(summary, fh, indent=2)
     print(json.dumps(summary, indent=2))
     return summary
+
+
+def compare_methods(args) -> dict:
+    prep = prepare_compare_run(args)
+    for spec in prep["method_specs"]:
+        method = spec["method"]
+        method_root = os.path.join(prep["run_root"], method)
+        run_pipeline_method(
+            method=method,
+            sim_dir=prep["sim_dir"],
+            method_root=method_root,
+            grid_size=args.grid_size,
+            halfsets_path=prep["halfsets_path"],
+            zdim=args.zdim,
+            ppca_em_iters=args.ppca_em_iters,
+            use_contrast=args.contrast_std > 0,
+            gpu_gb=args.covariance_gpu_gb if method == "covariance" else args.ppca_gpu_gb,
+            low_memory_option=args.covariance_low_memory_option if method == "covariance" else args.ppca_low_memory_option,
+            very_low_memory_option=(
+                args.covariance_very_low_memory_option if method == "covariance" else args.ppca_very_low_memory_option
+            ),
+            lazy=args.lazy,
+            force=args.force,
+        )
+    return _score_existing_run(args)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -689,6 +901,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--ppca-very-low-memory-option", action="store_true")
     parser.add_argument("--lazy", action="store_true")
     parser.add_argument("--force", action="store_true")
+    parser.add_argument("--stage", choices=("full", "prepare", "score"), default="full")
+    parser.add_argument("--print-run-root", action="store_true")
     return parser
 
 
@@ -698,6 +912,16 @@ def main() -> None:
         args.covariance_gpu_gb = args.gpu_gb
     if args.ppca_gpu_gb is None:
         args.ppca_gpu_gb = args.gpu_gb
+    if args.stage == "prepare":
+        prep = prepare_compare_run(args)
+        if args.print_run_root:
+            print(prep["run_root"])
+        else:
+            print(json.dumps(prep, indent=2))
+        return
+    if args.stage == "score":
+        _score_existing_run(args)
+        return
     compare_methods(args)
 
 

@@ -33,7 +33,7 @@ fi
 
 "$PYTHON" -c "import pathlib,recovar,jax; repo=pathlib.Path('$REPO_ROOT').resolve(); assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo)+'/'); assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve())"
 
-CMD=(
+COMMON_ARGS=(
   "$PYTHON" -m recovar.ppca.compare_covariance_vs_ppca_pipeline
   --base-dir "${BASE_DIR:?BASE_DIR not set}"
   --results-root "${RESULTS_ROOT:?RESULTS_ROOT not set}"
@@ -52,24 +52,43 @@ CMD=(
 )
 
 if [ "${COVARIANCE_LOW_MEMORY_OPTION:-0}" = "1" ]; then
-  CMD+=(--covariance-low-memory-option)
+  COMMON_ARGS+=(--covariance-low-memory-option)
 fi
 
 if [ "${COVARIANCE_VERY_LOW_MEMORY_OPTION:-0}" = "1" ]; then
-  CMD+=(--covariance-very-low-memory-option)
+  COMMON_ARGS+=(--covariance-very-low-memory-option)
 fi
 
 if [ "${PPCA_LOW_MEMORY_OPTION:-0}" = "1" ]; then
-  CMD+=(--ppca-low-memory-option)
+  COMMON_ARGS+=(--ppca-low-memory-option)
 fi
 
 if [ "${PPCA_VERY_LOW_MEMORY_OPTION:-0}" = "1" ]; then
-  CMD+=(--ppca-very-low-memory-option)
+  COMMON_ARGS+=(--ppca-very-low-memory-option)
 fi
 
 if [ "${FORCE:-0}" = "1" ]; then
-  CMD+=(--force)
+  COMMON_ARGS+=(--force)
 fi
 
-echo "Running: ${CMD[*]}"
-"${CMD[@]}"
+PREP_CMD=("${COMMON_ARGS[@]}" --stage prepare --print-run-root)
+echo "Preparing compare run: ${PREP_CMD[*]}"
+RUN_ROOT="$("${PREP_CMD[@]}" | tail -n 1)"
+
+if [ ! -d "$RUN_ROOT" ]; then
+  echo "Prepare stage did not produce a run root: $RUN_ROOT" >&2
+  exit 1
+fi
+
+RUNNER="$RUN_ROOT/run_methods.sh"
+if [ ! -x "$RUNNER" ]; then
+  echo "Missing runner script at $RUNNER" >&2
+  exit 1
+fi
+
+echo "Running methods directly via shell: $RUNNER"
+bash "$RUNNER"
+
+SCORE_CMD=("${COMMON_ARGS[@]}" --stage score)
+echo "Scoring completed outputs: ${SCORE_CMD[*]}"
+"${SCORE_CMD[@]}"

@@ -1,4 +1,5 @@
 import os
+from argparse import Namespace
 from pathlib import Path
 
 import pytest
@@ -58,3 +59,47 @@ def test_run_pipeline_method_adds_ppca_projected_covariance_flag(monkeypatch, tm
     assert "--correct-contrast" in captured["cmd"]
     assert "--ppca-zdim" in captured["cmd"]
     assert "--ppca-em-iters" in captured["cmd"]
+
+
+def test_prepare_compare_run_writes_shell_runner(monkeypatch, tmp_path):
+    sim_dir = tmp_path / "simulated_data"
+    sim_dir.mkdir()
+    monkeypatch.setattr(
+        compare_mod,
+        "_find_cryobench_dataset",
+        lambda base_dir, dataset_name: {"name": dataset_name, "vol_dir": str(tmp_path / "vols"), "n_volumes": 3},
+    )
+    monkeypatch.setattr(compare_mod, "generate_dataset", lambda *args, **kwargs: str(sim_dir))
+    monkeypatch.setattr(compare_mod, "ensure_halfsets", lambda *args, **kwargs: str(tmp_path / "halfsets.pkl"))
+
+    args = Namespace(
+        base_dir=str(tmp_path),
+        results_root=str(tmp_path / "results"),
+        dataset="DummySet",
+        grid_size=64,
+        n_images=1000,
+        noise_level=1.0,
+        contrast_std=0.3,
+        zdim=10,
+        ppca_em_iters=20,
+        seed=7,
+        gpu_gb=12.0,
+        covariance_gpu_gb=12.0,
+        ppca_gpu_gb=10.0,
+        covariance_low_memory_option=True,
+        covariance_very_low_memory_option=False,
+        ppca_low_memory_option=False,
+        ppca_very_low_memory_option=False,
+        lazy=True,
+        force=False,
+    )
+
+    prep = compare_mod.prepare_compare_run(args)
+
+    runner_text = Path(prep["runner_script"]).read_text(encoding="utf-8")
+    assert "run_one" in runner_text
+    assert "recovar.commands.pipeline" in runner_text
+    assert "--ppca-projected-covariance" in runner_text
+    assert "skipping covariance; found existing" in runner_text
+    assert Path(prep["manifest_path"]).is_file()
+    assert len(prep["method_specs"]) == 3
