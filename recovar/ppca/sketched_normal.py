@@ -1,13 +1,15 @@
 """Sketched normal-operator products for low-rank recovery.
 
-Computes  S_L @ G(X)  and  G(X) @ Q_R  without forming dense G(X),
-where G(X) = A^*(A(X) - b) is the normal residual gradient.
+Public API — all inputs/outputs are real-space:
 
-Follows the same whitened half-image convention as ppca.E_M_step_batch_half.
+    op = SketchedNormalOperator(cryo, mean_real, batch_size)
+    left  = op.left_matvec(U, s, V, S)      # S_L @ G(X)
+    right = op.right_matvec(U, s, V, Q)      # G(X) @ Q_R
+    left, right = op.both_matvecs(U, s, V, S, Q)
 
-Key optimization: per_image_backproject gives (half_vol, batch) in one CUDA
-call, then S_L @ bp and bp @ Q are just matmuls.  This avoids doing
-sketch_rank separate backprojections.
+where U (vol_shape, rank), S (s, vol_size), Q (n_images, t) are all real.
+
+Internally uses half-volume Fourier convention + per_image_backproject.
 """
 
 import functools
@@ -25,189 +27,137 @@ from recovar.ppca.ppca import batch_over_vol_slice_volume_half
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Real ↔ half-volume Fourier conversion
+# ---------------------------------------------------------------------------
+
+def _real_vols_to_half_fourier(vols_real, volume_shape):
+    """(*, vol_size) real → (*, half_vol_size) complex half-volume Fourier."""
+    vols = np.asarray(vols_real)
+    leading = vols.shape[:-1]
+    flat = vols.reshape(-1, *volume_shape)
+    ft = np.asarray(ftu.get_dft3(flat))  # (batch, *vol_shape) complex
+    half = np.asarray(ftu.full_volume_to_half_volume(
+        ft.reshape(-1, int(np.prod(volume_shape))), volume_shape
+    ))
+    half_vol_size = half.shape[-1]
+    return half.reshape(*leading, half_vol_size).astype(np.complex64)
+
+
+def _half_fourier_to_real_vols(vols_half, volume_shape):
+    """(*, half_vol_size) complex half-volume Fourier → (*, vol_size) real."""
+    vols = np.asarray(vols_half)
+    leading = vols.shape[:-1]
+    half_vol_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
+    vol_size = int(np.prod(volume_shape))
+    flat = vols.reshape(-1, half_vol_size)
+    full = np.asarray(ftu.half_volume_to_full_volume(flat, volume_shape))
+    real = np.asarray(ftu.get_idft3(full.reshape(-1, *volume_shape))).real
+    return real.reshape(*leading, vol_size).astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# JIT-compiled batch kernel (internal, half-volume)
+# ---------------------------------------------------------------------------
+
 @functools.partial(jax.jit, static_argnums=[10, 11, 12, 13, 14])
 def _sketched_normal_batch(
-    images_half,          # (batch, half_image)
-    mean,                 # (half_vol,)
-    U_X_half,             # (half_vol, rank)
-    sigma_X,              # (rank,)
-    V_X_batch,            # (batch, rank)
-    CTF_params,           # (batch, 9)
-    rotation_matrices,    # (batch, 3, 3)
-    translations,         # (batch, 2)
-    noise_variance_half,  # (batch, half_image) or broadcastable
-    voxel_size,           # scalar
-    image_shape,          # static
-    volume_shape,         # static
-    ctf_evaluator,        # static
-    disc_type,            # static
-    disc_type_mean,       # static
-    S_left_half=None,     # (sketch_rank, half_vol) or None
-    Q_batch=None,         # (batch, qrank) or None
+    images_half, mean_half, U_X_half, sigma_X, V_X_batch,
+    CTF_params, rotation_matrices, translations,
+    noise_variance_half, voxel_size,
+    image_shape, volume_shape, ctf_evaluator, disc_type, disc_type_mean,
+    S_left_half=None, Q_batch=None,
 ):
-    """JIT-compiled core: residual + both sketches for one image batch.
-
-    Uses per_image_backproject (one CUDA call for all images), then
-    matmuls for both sketches.  Cost is O(batch) backprojections
-    regardless of sketch_rank.
-    """
+    """Residual + per-image backproject + matmul sketches.  All half-volume."""
     from recovar.cuda_backproject import per_image_backproject
 
-    half_vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
-    half_vol_size = int(np.prod(half_vol_shape))
+    half_vol_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
     batch_size = images_half.shape[0]
 
-    # --- Whiten ---
+    # Whiten
     images_w = core.translate_images(
         images_half, translations, image_shape, half_image=True
     ) / jnp.sqrt(noise_variance_half)
 
-    CTF_w_half = ctf_evaluator(
+    CTF_w = ctf_evaluator(
         CTF_params, image_shape, voxel_size, half_image=True
     ) / jnp.sqrt(noise_variance_half)
 
     projected_mean_w = core.slice_volume(
-        mean, rotation_matrices, image_shape, volume_shape,
+        mean_half, rotation_matrices, image_shape, volume_shape,
         disc_type_mean, half_image=True, half_volume=True,
     ) * ctf_evaluator(
         CTF_params, image_shape, voxel_size, half_image=True,
     ) / jnp.sqrt(noise_variance_half)
 
-    centered_images_w = images_w - projected_mean_w
-
-    # --- Predicted images from X = U diag(s) V^T ---
+    # Predicted from X = U diag(s) V^T
     PU_X = batch_over_vol_slice_volume_half(
         U_X_half, rotation_matrices, image_shape, volume_shape, disc_type,
-    )  # (batch, rank, half_image)
-    PU_X *= CTF_w_half[:, None, :]
-
-    C_batch = V_X_batch * sigma_X[None, :]
-    predicted_w = jnp.einsum("bri,br->bi", PU_X, C_batch)
-
-    # --- Residual ---
-    residual = predicted_w - centered_images_w  # (batch, half_image)
-
-    # --- Per-image backprojection: one CUDA call → (half_vol, batch) ---
-    # per_image_backproject needs full images, so convert adjoint_input
-    adjoint_input_half = CTF_w_half * residual
-    adjoint_input_full = ftu.half_image_to_full_image(
-        adjoint_input_half, image_shape
     )
-    _max_r = image_shape[0] // 2 - 1
-    real_dtype = adjoint_input_full.real.dtype
+    PU_X *= CTF_w[:, None, :]
+    predicted_w = jnp.einsum("bri,br->bi", PU_X, V_X_batch * sigma_X[None, :])
 
+    # Residual
+    residual = predicted_w - (images_w - projected_mean_w)
+
+    # Per-image backproject → (half_vol, batch)
+    adjoint_full = ftu.half_image_to_full_image(CTF_w * residual, image_shape)
+    real_dtype = adjoint_full.real.dtype
     bp = per_image_backproject(
         jnp.zeros((half_vol_size, batch_size), dtype=real_dtype),
-        adjoint_input_full.real.astype(real_dtype),
-        rotation_matrices,
-        image_shape,
-        volume_shape,
-        max_r=_max_r,
-    )  # (half_vol, batch) — real
+        adjoint_full.real.astype(real_dtype),
+        rotation_matrices, image_shape, volume_shape,
+        max_r=image_shape[0] // 2 - 1,
+    )
 
-    # --- Right sketch: bp @ Q_batch → (half_vol, qrank) ---
-    right_contrib = None
-    if Q_batch is not None:
-        right_contrib = bp @ Q_batch  # (half_vol, qrank)
+    # Sketches via matmul
+    right_contrib = bp @ Q_batch if Q_batch is not None else None
+    left_cols = (S_left_half @ bp).real if S_left_half is not None else None
 
-    # --- Left sketch: S_left @ bp → (sketch_rank, batch) ---
-    left_cols = None
-    if S_left_half is not None:
-        # S_left_half is complex (half_vol, sketch_rank) layout.
-        # bp is real.  The product S_left @ bp gives complex, but the
-        # true answer is real (Hermitian data), so take .real.
-        left_cols = (S_left_half @ bp).real  # (sketch_rank, batch)
-
-    return residual, right_contrib, left_cols
+    return right_contrib, left_cols
 
 
 # ---------------------------------------------------------------------------
-# Dataset-level driver
+# Internal dataset loop (half-volume)
 # ---------------------------------------------------------------------------
 
-
-def compute_normal_residual_sketches(
-    experiment_dataset,
-    U_X_half,
-    sigma_X,
-    V_X,
-    mean_half,
-    batch_size,
-    left_sketch_half=None,
-    right_sketch=None,
-    disc_type="linear_interp",
-    disc_type_mean="linear_interp",
+def _compute_sketches_half(
+    cryo, U_half, sigma, V, mean_half,
+    batch_size, S_half=None, Q=None,
+    disc_type="linear_interp", disc_type_mean="linear_interp",
 ):
-    """Compute S_L @ G(X) and/or G(X) @ Q_R without forming dense G(X).
+    """Loop over image batches, accumulate sketches.  All half-volume."""
+    from recovar.ppca.ppca import _iter_processed_batches_half
 
-    Parameters
-    ----------
-    experiment_dataset : CryoEMDataset
-        Must have .noise with .get_half().
-    U_X_half : (half_vol, rank) — basis in half-volume layout.
-    sigma_X : (rank,) — singular values.
-    V_X : (n_images, rank) — right factor.
-    mean_half : (half_vol,) — mean volume in half-volume layout.
-    batch_size : int
-    left_sketch_half : (s, half_vol) or None — S_L in half-volume layout.
-    right_sketch : (n_images, t) or None — Q_R.
-    disc_type : str
-    disc_type_mean : str
-
-    Returns
-    -------
-    dict with "left" : (s, n_images) or None, "right" : (half_vol, t) or None.
-    """
-    if left_sketch_half is None and right_sketch is None:
-        return {"left": None, "right": None}
-
-    cryo = experiment_dataset
-    half_vol_shape = ftu.volume_shape_to_half_volume_shape(cryo.volume_shape)
-    half_vol_size = int(np.prod(half_vol_shape))
+    half_vol_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(cryo.volume_shape)))
     n_images = cryo.n_images
 
-    U_X_half = jnp.asarray(U_X_half)
-    sigma_X = jnp.asarray(sigma_X)
-    V_X = jnp.asarray(V_X)
+    U_half = jnp.asarray(U_half)
+    sigma = jnp.asarray(sigma)
+    V = jnp.asarray(V)
     mean_half = jnp.asarray(mean_half)
 
     right_acc = None
-    if right_sketch is not None:
-        qrank = right_sketch.shape[1]
-        right_sketch = jnp.asarray(right_sketch)
-        right_acc = jnp.zeros((half_vol_size, qrank), dtype=cryo.dtype_real)
+    if Q is not None:
+        Q = jnp.asarray(Q)
+        right_acc = jnp.zeros((half_vol_size, Q.shape[1]), dtype=jnp.float32)
 
     left_result = None
-    if left_sketch_half is not None:
-        sketch_rank = left_sketch_half.shape[0]
-        left_sketch_half = jnp.asarray(left_sketch_half)
-        left_result = jnp.zeros((sketch_rank, n_images), dtype=cryo.dtype_real)
-
-    from recovar.ppca.ppca import _iter_processed_batches_half
+    if S_half is not None:
+        S_half = jnp.asarray(S_half)
+        left_result = jnp.zeros((S_half.shape[0], n_images), dtype=jnp.float32)
 
     for (batch_half, ctf_params, rotation_matrices,
          translations, image_indices) in _iter_processed_batches_half(cryo, batch_size):
 
-        noise_half = cryo.noise.get_half(image_indices)
-
-        _, right_contrib, left_cols = _sketched_normal_batch(
-            batch_half,
-            mean_half,
-            U_X_half,
-            sigma_X,
-            V_X[image_indices],
-            ctf_params,
-            rotation_matrices,
-            translations,
-            noise_half,
-            cryo.voxel_size,
-            cryo.image_shape,
-            cryo.volume_shape,
-            cryo.ctf_evaluator,
-            disc_type,
-            disc_type_mean,
-            S_left_half=left_sketch_half,
-            Q_batch=right_sketch[image_indices] if right_sketch is not None else None,
+        right_contrib, left_cols = _sketched_normal_batch(
+            batch_half, mean_half, U_half, sigma, V[image_indices],
+            ctf_params, rotation_matrices, translations,
+            cryo.noise.get_half(image_indices), cryo.voxel_size,
+            cryo.image_shape, cryo.volume_shape, cryo.ctf_evaluator,
+            disc_type, disc_type_mean,
+            S_left_half=S_half,
+            Q_batch=Q[image_indices] if Q is not None else None,
         )
 
         if right_contrib is not None:
@@ -215,7 +165,129 @@ def compute_normal_residual_sketches(
         if left_cols is not None:
             left_result = left_result.at[:, image_indices].set(left_cols)
 
-    return {
-        "left": left_result,
-        "right": right_acc,
-    }
+    return right_acc, left_result
+
+
+# ---------------------------------------------------------------------------
+# Public API — all real-space
+# ---------------------------------------------------------------------------
+
+class SketchedNormalOperator:
+    """Sketched products of G(X) = A*(A(X) - b).
+
+    All public methods take and return real-space arrays.
+    Fourier / half-volume conversion happens internally.
+
+    Parameters
+    ----------
+    cryo : CryoEMDataset
+        Dataset with images and noise model.
+    mean_real : (vol_size,) or (N, N, N)
+        Mean volume in real space.
+    batch_size : int
+        Images per GPU batch.
+    disc_type : str
+        Interpolation type (default "linear_interp").
+    """
+
+    def __init__(self, cryo, mean_real, batch_size=500,
+                 disc_type="linear_interp"):
+        self.cryo = cryo
+        self.vs = cryo.volume_shape
+        self.vol_size = int(np.prod(self.vs))
+        self.half_vol_size = int(np.prod(
+            ftu.volume_shape_to_half_volume_shape(self.vs)
+        ))
+        self.n_images = cryo.n_images
+        self.batch_size = batch_size
+        self.disc_type = disc_type
+
+        # Convert mean to half-volume Fourier once
+        mean_flat = np.asarray(mean_real).reshape(-1)
+        if mean_flat.size == self.vol_size:
+            self.mean_half = _real_vols_to_half_fourier(
+                mean_flat.reshape(1, -1), self.vs
+            )[0]
+        else:
+            # Already half-volume
+            self.mean_half = np.asarray(mean_flat).astype(np.complex64)
+
+    def _to_U_half(self, U):
+        """(vol_size, rank) real → (half_vol, rank) complex."""
+        U = np.asarray(U)
+        if U.ndim > 2:
+            U = U.reshape(-1, U.shape[-1])
+        return _real_vols_to_half_fourier(U.T, self.vs).T
+
+    def _to_S_half(self, S):
+        """(s, vol_size) real → (s, half_vol) complex."""
+        return _real_vols_to_half_fourier(np.asarray(S), self.vs)
+
+    def _right_to_real(self, right_half):
+        """(half_vol, t) half-Fourier → (vol_size, t) real."""
+        return _half_fourier_to_real_vols(
+            np.asarray(right_half).T, self.vs
+        ).T
+
+    def right_matvec(self, U, s, V, Q):
+        """Compute G(X) @ Q.
+
+        Parameters
+        ----------
+        U : (vol_size, rank) — real-space basis columns of X.
+        s : (rank,) — singular values.
+        V : (n_images, rank) — right factor.
+        Q : (n_images, t) — right sketch matrix.
+
+        Returns
+        -------
+        (vol_size, t) — real-space result.
+        """
+        U_half = self._to_U_half(U)
+        right_half, _ = _compute_sketches_half(
+            self.cryo, U_half, s, V, self.mean_half,
+            self.batch_size, Q=np.asarray(Q, dtype=np.float32),
+            disc_type=self.disc_type, disc_type_mean=self.disc_type,
+        )
+        return self._right_to_real(right_half)
+
+    def left_matvec(self, U, s, V, S):
+        """Compute S @ G(X).
+
+        Parameters
+        ----------
+        U : (vol_size, rank) — real-space basis columns of X.
+        s : (rank,) — singular values.
+        V : (n_images, rank) — right factor.
+        S : (sketch_rank, vol_size) — real-space left sketch matrix.
+
+        Returns
+        -------
+        (sketch_rank, n_images) — real result.
+        """
+        U_half = self._to_U_half(U)
+        S_half = self._to_S_half(S)
+        _, left = _compute_sketches_half(
+            self.cryo, U_half, s, V, self.mean_half,
+            self.batch_size, S_half=S_half,
+            disc_type=self.disc_type, disc_type_mean=self.disc_type,
+        )
+        return np.asarray(left)
+
+    def both_matvecs(self, U, s, V, S, Q):
+        """Compute S @ G(X) and G(X) @ Q in one pass.
+
+        Returns
+        -------
+        left : (sketch_rank, n_images)
+        right : (vol_size, t)
+        """
+        U_half = self._to_U_half(U)
+        S_half = self._to_S_half(S)
+        right_half, left = _compute_sketches_half(
+            self.cryo, U_half, s, V, self.mean_half,
+            self.batch_size, S_half=S_half,
+            Q=np.asarray(Q, dtype=np.float32),
+            disc_type=self.disc_type, disc_type_mean=self.disc_type,
+        )
+        return np.asarray(left), self._right_to_real(right_half)
