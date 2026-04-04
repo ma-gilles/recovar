@@ -22,12 +22,12 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s: %(message)
 logger = logging.getLogger("bench")
 
 # ── Configuration ──────────────────────────────────────────────────────
-GRID_SIZE   = 64
-N_IMAGES    = 5000
+GRID_SIZE   = 128
+N_IMAGES    = 100000
 NOISE_LEVEL = 0.1          # lower = higher SNR
 N_VOLUMES   = 10            # trajectory states
 N_PCS       = 10            # number of PCs to compute/compare
-SKETCH_RANK = 15            # left/right sketch dimension
+SKETCH_RANK = 200           # left/right sketch dimension
 BATCH_SIZE  = 500
 DISC_TYPE   = "linear_interp"
 # ───────────────────────────────────────────────────────────────────────
@@ -181,6 +181,48 @@ def main():
     logger.info("  (This should be small — only disc_type mismatch and float32 noise)")
 
     # ==================================================================
+    # 1b. SKETCH AT SCALE: both sketches with SKETCH_RANK dimensions
+    # ==================================================================
+    logger.info("=" * 60)
+    logger.info("SKETCH AT SCALE: sketch_rank=%d, n_pcs=%d", SKETCH_RANK, N_PCS)
+    logger.info("=" * 60)
+
+    S_left_half = (rng.normal(size=(SKETCH_RANK, half_vol_size))
+                   + 1j * rng.normal(size=(SKETCH_RANK, half_vol_size))).astype(np.complex64)
+    Q_right = rng.normal(size=(n_images, SKETCH_RANK)).astype(np.float32)
+
+    t0 = time.time()
+    result_scale = compute_normal_residual_sketches(
+        cryo, U_gt_half, s_gt.astype(np.float32), V_true, mean_half,
+        batch_size=BATCH_SIZE,
+        left_sketch_half=S_left_half,
+        right_sketch=Q_right,
+        disc_type=DISC_TYPE,
+    )
+    jax.block_until_ready(result_scale["left"])
+    jax.block_until_ready(result_scale["right"])
+    dt_sketch = time.time() - t0
+    left_norm = float(np.linalg.norm(np.asarray(result_scale["left"])))
+    right_norm = float(np.linalg.norm(np.asarray(result_scale["right"])))
+    logger.info("  Left  sketch: shape=%s, ||S_L @ G(X)|| = %.6f", result_scale["left"].shape, left_norm)
+    logger.info("  Right sketch: shape=%s, ||G(X) @ Q_R|| = %.6f", result_scale["right"].shape, right_norm)
+    logger.info("  Time: %.1fs (incl JIT compile)", dt_sketch)
+
+    # Second call (compiled)
+    t0 = time.time()
+    result_scale2 = compute_normal_residual_sketches(
+        cryo, U_gt_half, s_gt.astype(np.float32), V_true, mean_half,
+        batch_size=BATCH_SIZE,
+        left_sketch_half=S_left_half,
+        right_sketch=Q_right,
+        disc_type=DISC_TYPE,
+    )
+    jax.block_until_ready(result_scale2["left"])
+    jax.block_until_ready(result_scale2["right"])
+    dt_compiled = time.time() - t0
+    logger.info("  Compiled run: %.1fs", dt_compiled)
+
+    # ==================================================================
     # 2. COVARIANCE PCA BASELINE (using GT mean, GT noise, GT mask)
     # ==================================================================
     logger.info("=" * 60)
@@ -268,8 +310,15 @@ def main():
         "config": {
             "grid_size": GRID_SIZE, "n_images": N_IMAGES,
             "noise_level": NOISE_LEVEL, "n_pcs": N_PCS,
+            "sketch_rank": SKETCH_RANK,
         },
         "sanity_norm": sanity_norm,
+        "sketch_at_scale": {
+            "left_norm": left_norm,
+            "right_norm": right_norm,
+            "time_warmup_s": dt_sketch,
+            "time_compiled_s": dt_compiled,
+        },
         "covariance": {
             "relvar": [float(x) for x in relvar_cov],
             "time_s": dt_cov,
@@ -278,9 +327,14 @@ def main():
     with open(os.path.join(out_dir, "bench_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
-    logger.info("\n  %-20s %10s %10s", "Method", f"relvar@{N_PCS}", "Time")
-    logger.info("  %-20s %10.4f %10.1fs", "Covariance PCA", relvar_cov[min(N_PCS, len(relvar_cov)) - 1], dt_cov)
-    logger.info("  Sanity ||G(X_gt)@Q|| = %.6f", sanity_norm)
+    logger.info("\n  %-25s %12s %12s", "Method", f"relvar@{N_PCS}", "Time")
+    logger.info("  %-25s %12.4f %12.1fs", "Covariance PCA",
+                relvar_cov[min(N_PCS, len(relvar_cov)) - 1], dt_cov)
+    logger.info("  %-25s %12s %12.1fs", f"Sketch (rank={SKETCH_RANK})",
+                "—", dt_compiled)
+    logger.info("  Sanity ||G(X_gt)@Q|| = %.6f (should be ~0)", sanity_norm)
+    logger.info("  Sketch norms at X=GT: left=%.4f, right=%.4f (should be ~0)",
+                left_norm, right_norm)
     logger.info("Done. Plots in %s/plots/", out_dir)
 
 
