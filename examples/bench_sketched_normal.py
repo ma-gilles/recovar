@@ -214,8 +214,8 @@ def main():
     W_init = jr.normal(jr.PRNGKey(0), (vol_size, N_PCS), dtype=jnp.float32)
     W_init = linalg.batch_dft3(W_init, vs, N_PCS)
 
-    # Flat prior (no regularization)
-    W_prior = np.ones(vol_size, dtype=np.float32) * 1e10
+    # Flat prior (minimal regularization)
+    W_prior = np.ones((vol_size, N_PCS), dtype=np.float32) * 1e10
 
     U_ppca, S_ppca, W_ppca, _, _ = ppca_mod.EM(
         cryo,
