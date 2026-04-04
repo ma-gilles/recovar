@@ -4,6 +4,10 @@ Computes  S_L @ G(X)  and  G(X) @ Q_R  without forming dense G(X),
 where G(X) = A^*(A(X) - b) is the normal residual gradient.
 
 Follows the same whitened half-image convention as ppca.E_M_step_batch_half.
+
+Key optimization: per_image_backproject gives (half_vol, batch) in one CUDA
+call, then S_L @ bp and bp @ Q are just matmuls.  This avoids doing
+sketch_rank separate backprojections.
 """
 
 import functools
@@ -16,17 +20,10 @@ import numpy as np
 from recovar import core
 from recovar.core import linalg
 import recovar.core.fourier_transform_utils as ftu
-from recovar.ppca.ppca import (
-    _forward_model_from_map,
-    batch_over_vol_slice_volume_half,
-)
+from recovar.ppca.ppca import batch_over_vol_slice_volume_half
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# JIT-compiled batch kernel
-# ---------------------------------------------------------------------------
 
 @functools.partial(jax.jit, static_argnums=[10, 11, 12, 13, 14])
 def _sketched_normal_batch(
@@ -45,30 +42,27 @@ def _sketched_normal_batch(
     ctf_evaluator,        # static
     disc_type,            # static
     disc_type_mean,       # static
-    # Optional sketch matrices (pass zeros if unused)
     S_left_half=None,     # (sketch_rank, half_vol) or None
     Q_batch=None,         # (batch, qrank) or None
 ):
     """JIT-compiled core: residual + both sketches for one image batch.
 
-    Everything is in half-image / half-volume convention.
-    The PC loop is unrolled at trace time — XLA fuses into one kernel.
+    Uses per_image_backproject (one CUDA call for all images), then
+    matmuls for both sketches.  Cost is O(batch) backprojections
+    regardless of sketch_rank.
     """
+    from recovar.cuda_backproject import per_image_backproject
+
     half_vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
     half_vol_size = int(np.prod(half_vol_shape))
-    rank = U_X_half.shape[1]
-
-    rfft_w = jnp.tile(
-        linalg.half_spectrum_last_axis_weights(image_shape[1]),
-        (image_shape[0], 1),
-    ).reshape(-1)
+    batch_size = images_half.shape[0]
 
     # --- Whiten ---
     images_w = core.translate_images(
         images_half, translations, image_shape, half_image=True
     ) / jnp.sqrt(noise_variance_half)
 
-    CTF_w = ctf_evaluator(
+    CTF_w_half = ctf_evaluator(
         CTF_params, image_shape, voxel_size, half_image=True
     ) / jnp.sqrt(noise_variance_half)
 
@@ -82,46 +76,47 @@ def _sketched_normal_batch(
     centered_images_w = images_w - projected_mean_w
 
     # --- Predicted images from X = U diag(s) V^T ---
-    # batch_over_vol_slice_volume_half vmaps over volume column axis (1)
-    # input:  U_X_half (half_vol, rank)
-    # output: PU_X (n_images, rank, half_image)
     PU_X = batch_over_vol_slice_volume_half(
         U_X_half, rotation_matrices, image_shape, volume_shape, disc_type,
-    )
-    PU_X *= CTF_w[:, None, :]  # whiten: (batch, rank, half_image)
+    )  # (batch, rank, half_image)
+    PU_X *= CTF_w_half[:, None, :]
 
-    C_batch = V_X_batch * sigma_X[None, :]  # (batch, rank)
+    C_batch = V_X_batch * sigma_X[None, :]
     predicted_w = jnp.einsum("bri,br->bi", PU_X, C_batch)
 
     # --- Residual ---
     residual = predicted_w - centered_images_w  # (batch, half_image)
 
-    # --- Right sketch: G(X) @ Q_R ---
+    # --- Per-image backprojection: one CUDA call → (half_vol, batch) ---
+    # per_image_backproject needs full images, so convert adjoint_input
+    adjoint_input_half = CTF_w_half * residual
+    adjoint_input_full = ftu.half_image_to_full_image(
+        adjoint_input_half, image_shape
+    )
+    _max_r = image_shape[0] // 2 - 1
+    real_dtype = adjoint_input_full.real.dtype
+
+    bp = per_image_backproject(
+        jnp.zeros((half_vol_size, batch_size), dtype=real_dtype),
+        adjoint_input_full.real.astype(real_dtype),
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        max_r=_max_r,
+    )  # (half_vol, batch) — real
+
+    # --- Right sketch: bp @ Q_batch → (half_vol, qrank) ---
     right_contrib = None
     if Q_batch is not None:
-        adjoint_input = CTF_w * residual  # (batch, half_image)
-        # weighted_slices[j, i, :] = adjoint_input[i,:] * Q[i,j]
-        weighted_slices = adjoint_input[None, :, :] * Q_batch.T[:, :, None]
-        # (qrank, batch, half_image) → batch_adjoint gives (qrank, half_vol)
-        right_contrib = core.batch_adjoint_slice_volume(
-            weighted_slices, rotation_matrices, image_shape, volume_shape,
-            disc_type, half_image=True, half_volume=True,
-        ).T  # → (half_vol, qrank)
+        right_contrib = bp @ Q_batch  # (half_vol, qrank)
 
-    # --- Left sketch: S_L @ G(X) ---
+    # --- Left sketch: S_left @ bp → (sketch_rank, batch) ---
     left_cols = None
     if S_left_half is not None:
-        # Project S_left rows: batch_over_vol_slice_volume_half vmaps over
-        # column axis (1), so pass S_left_half.T = (half_vol, sketch_rank).
-        PS = batch_over_vol_slice_volume_half(
-            S_left_half.T, rotation_matrices, image_shape, volume_shape, disc_type,
-        )  # (batch, sketch_rank, half_image)
-        # Contract: (S_L G)_{s,i} = sum_k PS[i,s,k] * CTF_w[i,k] * r[i,k] * w[k]
-        adjoint_input = CTF_w * residual  # (batch, half_image)
-        left_cols = jnp.einsum(
-            "bsi,bi,i->sb",
-            PS, adjoint_input, rfft_w,
-        ).real  # (sketch_rank, batch)  — real for Hermitian data
+        # S_left_half is complex (half_vol, sketch_rank) layout.
+        # bp is real.  The product S_left @ bp gives complex, but the
+        # true answer is real (Hermitian data), so take .real.
+        left_cols = (S_left_half @ bp).real  # (sketch_rank, batch)
 
     return residual, right_contrib, left_cols
 
@@ -180,7 +175,7 @@ def compute_normal_residual_sketches(
     if right_sketch is not None:
         qrank = right_sketch.shape[1]
         right_sketch = jnp.asarray(right_sketch)
-        right_acc = jnp.zeros((half_vol_size, qrank), dtype=cryo.dtype)
+        right_acc = jnp.zeros((half_vol_size, qrank), dtype=cryo.dtype_real)
 
     left_result = None
     if left_sketch_half is not None:
