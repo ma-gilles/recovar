@@ -190,7 +190,7 @@ class SketchedNormalOperator:
         Interpolation type (default "linear_interp").
     """
 
-    def __init__(self, cryo, mean_real, batch_size=500,
+    def __init__(self, cryo, mean, batch_size=500,
                  disc_type="linear_interp"):
         self.cryo = cryo
         self.vs = cryo.volume_shape
@@ -202,15 +202,21 @@ class SketchedNormalOperator:
         self.batch_size = batch_size
         self.disc_type = disc_type
 
-        # Convert mean to half-volume Fourier once
-        mean_flat = np.asarray(mean_real).reshape(-1)
-        if mean_flat.size == self.vol_size:
+        # Mean: accept Fourier (complex, from pipeline) or real-space (real)
+        mean_flat = np.asarray(mean).reshape(-1)
+        if np.iscomplexobj(mean_flat):
+            # Fourier-domain mean — convert to half-volume directly
+            if mean_flat.size == self.vol_size:
+                self.mean_half = np.asarray(
+                    ftu.full_volume_to_half_volume(mean_flat, self.vs)
+                ).astype(np.complex64)
+            else:
+                self.mean_half = mean_flat.astype(np.complex64)
+        else:
+            # Real-space mean
             self.mean_half = _real_vols_to_half_fourier(
                 mean_flat.reshape(1, -1), self.vs
             )[0]
-        else:
-            # Already half-volume
-            self.mean_half = np.asarray(mean_flat).astype(np.complex64)
 
     def _to_U_half(self, U):
         """(vol_size, rank) real → (half_vol, rank) complex."""
@@ -228,6 +234,21 @@ class SketchedNormalOperator:
         return _half_fourier_to_real_vols(
             np.asarray(right_half).T, self.vs
         ).T
+
+    def right_matvec_fourier(self, U_fourier, s, V, Q):
+        """Like right_matvec but U_fourier is already in Fourier domain (vol_size,rank).
+
+        Use this when you have Fourier-domain eigenvectors (e.g. from gt.get_vol_svd()).
+        """
+        U_half = np.asarray(ftu.full_volume_to_half_volume(
+            np.asarray(U_fourier).T, self.vs
+        ).T).astype(np.complex64)
+        right_half, _ = _compute_sketches_half(
+            self.cryo, U_half, s, V, self.mean_half,
+            self.batch_size, Q=np.asarray(Q, dtype=np.float32),
+            disc_type=self.disc_type, disc_type_mean=self.disc_type,
+        )
+        return self._right_to_real(right_half)
 
     def right_matvec(self, U, s, V, Q):
         """Compute G(X) @ Q.
