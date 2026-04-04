@@ -242,6 +242,7 @@ def main():
     from recovar.heterogeneity.covariance_core import get_picked_frequencies
 
     covariance_options = covariance_estimation.get_default_covariance_computation_options(GRID_SIZE)
+    covariance_options["column_sampling_scheme"] = "low_freqs"  # avoid needing variance_estimate
     picked_frequencies = np.array(get_picked_frequencies(
         vs, radius=covariance_options["column_radius"], use_half=True,
     ))
