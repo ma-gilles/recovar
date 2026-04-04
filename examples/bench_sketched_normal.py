@@ -257,6 +257,8 @@ def main():
     class DummyOptions:
         ignore_zero_frequency = False
         disc_type = DISC_TYPE
+        keep_intermediate = False
+        contrast = "none"
 
     u_cov, s_cov, _, _, _ = principal_components.estimate_principal_components(
         cryo, DummyOptions(), means_dict,
