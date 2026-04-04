@@ -160,11 +160,12 @@ def main():
     logger.info("  If b_i = A_i(x_i) for all i, then G(X) = 0.")
     logger.info("=" * 60)
 
-    # True per-image coordinates: project each image's GT volume onto U_gt
+    # True per-image coordinates: project each state onto U_gt, then index by assignment
     assign = np.array(sim_info["image_assignment"])
     centered_vols = np.asarray(gt.volumes - gt_mean[None, :])  # (n_states, vol_size)
-    # Vectorized: index by assignment, project onto basis
-    V_true = ((np.conj(centered_vols[assign]) @ np.asarray(U_gt)) / np.asarray(s_gt)).real.astype(np.float32)
+    # Project each state (not each image!) — only n_states vectors
+    state_coords = (np.conj(centered_vols) @ np.asarray(U_gt)) / np.asarray(s_gt)  # (n_states, n_pcs)
+    V_true = state_coords[assign].real.astype(np.float32)  # (n_images, n_pcs)
 
     # Random test sketch
     rng = np.random.default_rng(0)
