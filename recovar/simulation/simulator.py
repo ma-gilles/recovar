@@ -408,6 +408,7 @@ def generate_synthetic_dataset(
     create_nested_structure=False,
     nested_prefix="Extract/job193",
     percent_tilt_series_outliers=0.0,
+    pad_before_ctf=True,
 ):
     from recovar.output import output
 
@@ -453,6 +454,7 @@ def generate_synthetic_dataset(
             image_offset_n_std=image_offset_n_std,
             per_particle_contrast=per_particle_contrast,
             premultiplied_ctf=False,
+            pad_before_ctf=pad_before_ctf,
         )
         norm_image_square = np.mean(main_image_stack**2)
         norm_image = norm_image_square
@@ -484,6 +486,7 @@ def generate_synthetic_dataset(
         premultiplied_ctf=premultiplied_ctf,
         noise_increase_per_tilt=noise_increase_per_tilt,
         percent_tilt_series_outliers=percent_tilt_series_outliers,
+        pad_before_ctf=pad_before_ctf,
     )
 
     # Add additional simulation parameters that weren't set in generate_simulated_dataset
@@ -595,6 +598,7 @@ def generate_simulated_dataset(
     premultiplied_ctf=False,
     noise_increase_per_tilt=None,
     percent_tilt_series_outliers=0.0,
+    pad_before_ctf=True,
 ):
 
     volume_shape = utils.guess_vol_shape_from_vol_size(volumes[0].size)
@@ -703,6 +707,7 @@ def generate_simulated_dataset(
         disc_type=disc_type,
         mrc_file=mrc_file,
         premultiplied_ctf=premultiplied_ctf,
+        pad_before_ctf=pad_before_ctf,
     )
 
     image_means = np.mean(main_image_stack, axis=(-1, -2))
@@ -892,7 +897,15 @@ def simulate_data(
     pad_before_translate=False,
     Bfactor=100,
     premultiplied_ctf=False,
+    pad_before_ctf=True,
 ):
+
+    if not pad_before_ctf:
+        logger.warning(
+            "pad_before_ctf=False: CTF applied directly in Fourier space without "
+            "upsampling.  This introduces aliasing but matches the reconstruction "
+            "forward model exactly.  Use only for testing/debugging."
+        )
 
     if disc_type == "pdb":
         from recovar.simulation import simulate_scattering_potential as gsm
@@ -941,8 +954,6 @@ def simulate_data(
             volume = cubic_interpolation.calculate_spline_coefficients(vol.reshape(experiment_dataset.volume_shape))
         else:
             volume = vol
-
-        pad_before_ctf = True
 
         for k in range(0, int(np.ceil(n_images / batch_size))):
             batch_st = int(k * batch_size)
