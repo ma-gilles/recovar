@@ -36,6 +36,32 @@ def test_upscale_tau_shape_and_values():
     assert float(np.max(np.asarray(out))) <= 2.0
 
 
+def test_zero_pad_fourier_volume_maps_centered_frequencies():
+    native_shape = (4, 4, 4)
+    padding_factor = 2
+    padded_shape = tuple(dim * padding_factor for dim in native_shape)
+
+    real = np.arange(np.prod(native_shape), dtype=np.float32).reshape(native_shape)
+    imag = (1000 + np.arange(np.prod(native_shape), dtype=np.float32)).reshape(native_shape)
+    native = real + 1j * imag
+
+    padded = np.asarray(
+        rf.zero_pad_fourier_volume(jnp.array(native.reshape(-1)), native_shape, padding_factor)
+    ).reshape(padded_shape)
+
+    mapped_axes = []
+    for native_dim, padded_dim in zip(native_shape, padded_shape):
+        start = padded_dim // 2 - padding_factor * (native_dim // 2)
+        mapped_axes.append(start + padding_factor * np.arange(native_dim))
+
+    recovered = padded[np.ix_(*mapped_axes)]
+    np.testing.assert_array_equal(recovered, native)
+
+    mask = np.zeros(padded_shape, dtype=bool)
+    mask[np.ix_(*mapped_axes)] = True
+    assert np.count_nonzero(padded[~mask]) == 0
+
+
 def test_adjust_regularization_relion_style_lower_bounded():
     filt = np.zeros((4, 4, 4), dtype=np.float32)
     reg = rf.adjust_regularization_relion_style(filt, volume_shape=(4, 4, 4))

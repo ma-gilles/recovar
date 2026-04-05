@@ -21,8 +21,10 @@ import argparse
 import logging
 import os
 import pickle
+import re
 import sys
 import time
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -35,6 +37,98 @@ logging.basicConfig(
     stream=sys.stderr,
 )
 logger = logging.getLogger(__name__)
+
+
+def _shell_index_to_resolution_angstrom(shell_index, grid_size, voxel_size):
+    if voxel_size <= 0:
+        return float(shell_index)
+    shell_index = float(shell_index)
+    if shell_index <= 0:
+        return float("inf")
+    return float(grid_size) * float(voxel_size) / shell_index
+
+
+def _load_relion_mask_params(optimiser_star_path):
+    """Extract RELION image-mask parameters from an optimiser STAR file."""
+    text = Path(optimiser_star_path).read_text(errors="ignore")
+
+    particle_match = re.search(r"rlnParticleDiameter\s+([0-9]+(?:\.[0-9]+)?)", text)
+    if particle_match is None:
+        particle_match = re.search(r"particle_diameter\s+([0-9]+(?:\.[0-9]+)?)", text)
+
+    width_match = re.search(r"rlnWidthMaskEdge\s+([0-9]+(?:\.[0-9]+)?)", text)
+    if width_match is None:
+        width_match = re.search(r"width_mask_edge\s+([0-9]+(?:\.[0-9]+)?)", text)
+
+    if particle_match is None or width_match is None:
+        return None
+
+    return float(particle_match.group(1)), float(width_match.group(1))
+
+
+def _load_relion_max_significants(optimiser_star_path):
+    """Extract RELION's maximum-significant-poses setting from an optimiser STAR."""
+    text = Path(optimiser_star_path).read_text(errors="ignore")
+
+    match = re.search(r"rlnMaximumSignificantPoses\s+(-?[0-9]+)", text)
+    if match is None:
+        match = re.search(r"maximum_significant_poses\s+(-?[0-9]+)", text)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _find_relion_optimiser_star(args):
+    candidates = []
+    if args.relion_half_sets is not None:
+        candidates.append(Path(args.relion_half_sets).resolve().parent / "run_optimiser.star")
+    candidates.append(Path(args.data_dir) / "relion_ref" / "run_optimiser.star")
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _maybe_apply_relion_image_mask(ds, args):
+    """Override the dataset scoring mask with RELION's particle-diameter mask."""
+    if args.mode != "relion":
+        return None
+
+    optimiser_star = _find_relion_optimiser_star(args)
+    if optimiser_star is None:
+        logger.info("RELION optimiser STAR not found; keeping dataset image mask")
+        return None
+
+    params = _load_relion_mask_params(optimiser_star)
+    if params is None:
+        logger.info("No RELION mask parameters found in %s; keeping dataset image mask", optimiser_star)
+        return None
+
+    from recovar.core import mask as core_mask
+
+    particle_diameter_ang, width_mask_edge_px = params
+    relion_mask = core_mask.relion_soft_image_mask(
+        image_size=ds.image_shape[0],
+        pixel_size=ds.voxel_size,
+        particle_diameter_ang=particle_diameter_ang,
+        width_mask_edge_px=width_mask_edge_px,
+    )
+
+    ds.image_source.backend.image_mask = relion_mask
+    if hasattr(ds.image_source, "image_mask"):
+        ds.image_source.image_mask = relion_mask
+
+    radius_px = particle_diameter_ang / (2.0 * ds.voxel_size)
+    logger.info(
+        "Applied RELION scoring mask from %s: particle_diameter=%.1f A, "
+        "width_mask_edge=%.1f px, radius=%.2f px",
+        optimiser_star,
+        particle_diameter_ang,
+        width_mask_edge_px,
+        radius_px,
+    )
+    return params
 
 
 def main():
@@ -50,12 +144,44 @@ def main():
         help="Directory to save results",
     )
     parser.add_argument("--max_iter", type=int, default=10, help="Maximum EM iterations")
-    parser.add_argument("--healpix_order", type=int, default=3, help="HEALPix order for rotation grid")
+    parser.add_argument(
+        "--mode",
+        choices=["legacy", "relion"],
+        default="relion",
+        help="Refinement mode to run. Use 'relion' for the parity path.",
+    )
+    parser.add_argument(
+        "--healpix_order",
+        type=int,
+        default=3,
+        help="HEALPix order for the evaluated orientation grid. In RELION mode "
+             "this is the finest order; the coarse pass-1 order is "
+             "healpix_order - adaptive_oversampling.",
+    )
     parser.add_argument("--offset_range", type=float, default=3.0, help="Translation search range (pixels)")
     parser.add_argument("--offset_step", type=float, default=1.0, help="Translation step (pixels)")
+    parser.add_argument(
+        "--offset_sigma_angstrom",
+        type=float,
+        default=10.0,
+        help="RELION-style Gaussian translation-prior sigma in Angstrom.",
+    )
     parser.add_argument("--adaptive_oversampling", type=int, default=1, help="Oversampling levels (0=off, 1=2x)")
     parser.add_argument("--adaptive_fraction", type=float, default=0.999, help="Significance fraction")
-    parser.add_argument("--max_significants", type=int, default=500, help="Max significant samples per image")
+    parser.add_argument(
+        "--max_significants",
+        type=int,
+        default=None,
+        help="Max significant samples per image. Use <=0 for RELION-style uncapped mode. "
+             "If omitted in RELION mode, read _rlnMaximumSignificantPoses from the optimiser STAR.",
+    )
+    parser.add_argument(
+        "--adaptive_skip_threshold",
+        type=float,
+        default=0.5,
+        help="Skip adaptive pass 2 when the mean significant-sample fraction "
+             "is at least this value. Use a negative value to disable the shortcut.",
+    )
     parser.add_argument("--init_resolution", type=float, default=30.0, help="Initial resolution (Angstrom)")
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
     parser.add_argument("--rotation_block_size", type=int, default=5000, help="Rotations per block")
@@ -91,6 +217,8 @@ def main():
         os.path.join(args.data_dir, "particles.star"),
         lazy=False,
     )
+    relion_mask_params = _maybe_apply_relion_image_mask(ds, args)
+    particle_diameter_ang = None if relion_mask_params is None else float(relion_mask_params[0])
     logger.info("Dataset: %d images, image_shape=%s, voxel_size=%.3f A/px",
                 ds.n_units, ds.image_shape, ds.voxel_size)
 
@@ -143,6 +271,19 @@ def main():
     ds_half2 = ds.subset(half2_idx)
     logger.info("Half-sets: %d + %d images", ds_half1.n_units, ds_half2.n_units)
 
+    optimiser_star = _find_relion_optimiser_star(args)
+    if args.mode == "relion" and args.max_significants is None and optimiser_star is not None:
+        relion_max_significants = _load_relion_max_significants(optimiser_star)
+        if relion_max_significants is not None:
+            args.max_significants = relion_max_significants
+            logger.info(
+                "Using RELION max_significants from %s: %d",
+                optimiser_star,
+                args.max_significants,
+            )
+    if args.max_significants is None:
+        args.max_significants = 500
+
     # ---- Load initial volume ----
     init_mrc_path = os.path.join(args.data_dir, "reference_init.mrc")
     with mrcfile.open(init_mrc_path, mode="r") as mrc:
@@ -157,20 +298,47 @@ def main():
     # ---- Set up rotation and translation grids ----
     from recovar.em.sampling import get_rotation_grid, get_translation_grid
 
-    rotations = get_rotation_grid(args.healpix_order, matrices=True).astype(np.float32)
+    if args.mode == "relion":
+        init_healpix_order = max(args.healpix_order - args.adaptive_oversampling, 0)
+        rotation_grid_order = init_healpix_order
+        logger.info(
+            "RELION grid orders: coarse=%d, finest=%d (adaptive_oversampling=%d)",
+            init_healpix_order, args.healpix_order, args.adaptive_oversampling,
+        )
+    else:
+        init_healpix_order = args.healpix_order
+        rotation_grid_order = args.healpix_order
+
+    rotations = get_rotation_grid(rotation_grid_order, matrices=True).astype(np.float32)
     translations = get_translation_grid(args.offset_range, args.offset_step).astype(np.float32)
     logger.info("Rotation grid: %d rotations (healpix_order=%d)",
-                rotations.shape[0], args.healpix_order)
+                rotations.shape[0], rotation_grid_order)
     logger.info("Translation grid: %d translations (range=%.1f, step=%.1f)",
                 translations.shape[0], args.offset_range, args.offset_step)
 
     # ---- Initialize noise and prior ----
-    # Start with flat noise and weak prior (will be updated after first iteration)
+    # Use a RELION-style initial sigma2 estimate from particle power spectra
+    # instead of a flat unit spectrum, so iteration 1 starts on a comparable
+    # likelihood scale.
     image_size = ds.image_size
     volume_size = ds.volume_size
 
-    # Use a reasonable initial noise: 1.0 per pixel (flat)
-    noise_variance = jnp.ones(image_size, dtype=jnp.float32)
+    from recovar.reconstruction import noise as recon_noise
+
+    initial_noise_subset = np.arange(min(1000, ds.n_units), dtype=np.int32)
+    initial_noise_radial = recon_noise.estimate_initial_noise_spectrum_from_unaligned_images(
+        ds,
+        initial_noise_subset,
+        batch_size=min(args.image_batch_size, initial_noise_subset.size),
+    )
+    noise_variance = recon_noise.make_radial_noise(initial_noise_radial, ds.image_shape)
+    logger.info(
+        "Initial sigma2_noise estimate from %d images: min=%.3e median=%.3e max=%.3e",
+        initial_noise_subset.size,
+        float(np.min(np.asarray(initial_noise_radial))),
+        float(np.median(np.asarray(initial_noise_radial))),
+        float(np.max(np.asarray(initial_noise_radial))),
+    )
 
     # Compute initial signal prior from init volume (weak prior)
     from recovar.reconstruction.regularization import average_over_shells
@@ -192,8 +360,8 @@ def main():
     translations_jnp = jnp.asarray(translations)
 
     logger.info("=" * 70)
-    logger.info("Starting refinement: max_iter=%d, adaptive_oversampling=%d",
-                args.max_iter, args.adaptive_oversampling)
+    logger.info("Starting refinement: mode=%s, max_iter=%d, adaptive_oversampling=%d",
+                args.mode, args.max_iter, args.adaptive_oversampling)
     logger.info("=" * 70)
 
     # Parse oracle current_sizes if provided
@@ -212,6 +380,7 @@ def main():
         rotations=rotations,
         translations=translations_jnp,
         disc_type="linear_interp",
+        mode=args.mode,
         max_iter=args.max_iter,
         image_batch_size=args.image_batch_size,
         rotation_block_size=args.rotation_block_size,
@@ -221,8 +390,12 @@ def main():
         adaptive_oversampling=args.adaptive_oversampling,
         adaptive_fraction=args.adaptive_fraction,
         max_significants=args.max_significants,
-        nside_level=args.healpix_order if args.adaptive_oversampling > 0 else None,
+        adaptive_pass2_skip_threshold=args.adaptive_skip_threshold,
+        nside_level=rotation_grid_order if args.adaptive_oversampling > 0 else None,
         translation_pixel_offset=args.offset_step if args.adaptive_oversampling > 0 else None,
+        init_healpix_order=init_healpix_order,
+        init_translation_sigma_angstrom=args.offset_sigma_angstrom,
+        particle_diameter_ang=particle_diameter_ang,
     )
 
     total_time = time.time() - t_start
@@ -238,6 +411,7 @@ def main():
         "total_time": total_time,
         "n_iterations": args.max_iter,
         "healpix_order": args.healpix_order,
+        "coarse_healpix_order": init_healpix_order,
         "n_rotations": rotations.shape[0],
         "n_translations": translations.shape[0],
         "n_images": n_images,
@@ -247,9 +421,34 @@ def main():
         "adaptive_oversampling": args.adaptive_oversampling,
         "adaptive_fraction": args.adaptive_fraction,
         "max_significants": args.max_significants,
+        "adaptive_skip_threshold": args.adaptive_skip_threshold,
+        "offset_sigma_angstrom": args.offset_sigma_angstrom,
+        "particle_diameter_ang": (
+            np.float64(particle_diameter_ang)
+            if particle_diameter_ang is not None
+            else np.nan
+        ),
         "half1_indices": half1_idx,
         "half2_indices": half2_idx,
     }
+
+    if "healpix_order_trajectory" in result:
+        save_dict["healpix_order_trajectory"] = np.asarray(
+            result["healpix_order_trajectory"], dtype=np.int32,
+        )
+    if "ave_Pmax_trajectory" in result:
+        save_dict["ave_Pmax_trajectory"] = np.asarray(
+            result["ave_Pmax_trajectory"], dtype=np.float64,
+        )
+    if "convergence_state" in result:
+        state = result["convergence_state"]
+        save_dict["convergence_iteration"] = np.int32(state.iteration)
+        save_dict["convergence_current_resolution"] = np.float64(
+            state.current_resolution
+        )
+        save_dict["convergence_ave_Pmax"] = np.float64(state.ave_Pmax)
+        save_dict["convergence_healpix_order"] = np.int32(state.healpix_order)
+        save_dict["convergence_has_converged"] = np.bool_(state.has_converged)
 
     # Save FSC curves per iteration
     for i, fsc in enumerate(result["fsc_history"]):
@@ -259,6 +458,15 @@ def main():
     for i, counts in enumerate(result["significant_counts"]):
         if counts is not None:
             save_dict[f"sig_counts_iter_{i:03d}"] = np.asarray(counts)
+
+    if "data_vs_prior_trajectory" in result:
+        for i, dvp in enumerate(result["data_vs_prior_trajectory"]):
+            save_dict[f"data_vs_prior_iter_{i:03d}"] = np.asarray(dvp)
+
+    # Save per-image Pmax per iteration (if available)
+    if "pmax_per_image_history" in result:
+        for i, pmax in enumerate(result["pmax_per_image_history"]):
+            save_dict[f"pmax_per_image_iter_{i:03d}"] = np.asarray(pmax, dtype=np.float32)
 
     # Save final merged volume (Fourier space)
     save_dict["final_mean_ft"] = np.asarray(result["mean"])
@@ -308,7 +516,7 @@ def main():
     for i in range(len(result["current_sizes"])):
         cs = result["current_sizes"][i]
         pr = result["pixel_resolutions"][i]
-        res_a = pr / ds.voxel_size if ds.voxel_size > 0 else pr
+        res_a = _shell_index_to_resolution_angstrom(pr, ds.image_shape[0], ds.voxel_size)
         wt = result["wall_times"][i]
         line = f"{i+1:4d}  {cs:8d}  {pr:8.1f}  {res_a:8.2f}  {wt:8.1f}"
         if result["significant_counts"][i] is not None:
@@ -320,7 +528,10 @@ def main():
     print(f"Total wall time: {total_time:.1f}s")
     print(f"Final current_size: {result['current_sizes'][-1]}")
     print(f"Final pixel resolution: {result['pixel_resolutions'][-1]:.1f}")
-    print(f"Final resolution: {result['pixel_resolutions'][-1] / ds.voxel_size:.2f} A")
+    print(
+        "Final resolution: "
+        f"{_shell_index_to_resolution_angstrom(result['pixel_resolutions'][-1], ds.image_shape[0], ds.voxel_size):.2f} A"
+    )
     print("=" * 70)
 
 

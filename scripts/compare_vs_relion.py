@@ -33,6 +33,15 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _shell_index_to_resolution_angstrom(shell_index, grid_size, voxel_size):
+    if voxel_size <= 0:
+        return float(shell_index)
+    shell_index = float(shell_index)
+    if shell_index <= 0:
+        return float("inf")
+    return float(grid_size) * float(voxel_size) / shell_index
+
+
 def load_our_results(results_dir):
     """Load our refinement results from .npz file."""
     path = os.path.join(results_dir, "refinement_results.npz")
@@ -61,7 +70,7 @@ def compare_resolution_trajectory(our_data, relion_dir, n_iter):
     relion_sizes = []
 
     for it in range(n_iter):
-        rd = load_relion_iteration(relion_dir, it)
+        rd = load_relion_iteration(relion_dir, it + 1)
         if rd is not None:
             relion_sizes.append(int(rd["current_image_size"]))
         else:
@@ -85,19 +94,20 @@ def compare_resolution_trajectory(our_data, relion_dir, n_iter):
     # Also print pixel resolution comparison
     our_pix_res = our_data["pixel_resolutions"]
     voxel_size = float(our_data.get("voxel_size", 4.25))
+    image_shape = tuple(int(x) for x in np.asarray(our_data.get("image_shape", (128, 128))))
     print()
     print(f"{'Iter':>4s}  {'OurPixRes':>10s}  {'OurResA':>10s}  {'RELIONResA':>12s}")
     print("-" * 50)
     for i in range(n):
         pr = float(our_pix_res[i])
-        res_a = pr / voxel_size
-        rd = load_relion_iteration(relion_dir, i)
+        res_a = _shell_index_to_resolution_angstrom(pr, image_shape[0], voxel_size)
+        rd = load_relion_iteration(relion_dir, i + 1)
         relion_res_a = float(rd["current_resolution"]) if rd is not None else 0.0
         print(f"{i+1:4d}  {pr:10.1f}  {res_a:10.2f}  {relion_res_a:12.2f}")
 
     print()
     print(f"Maximum current_size difference: {max_diff}")
-    print("NOTE: Our allowed sizes are {32, 64, 128} vs RELION's finer granularity.")
+    print("NOTE: current_size parity is improving, but shell statistics upstream still differ.")
     return {"max_diff": max_diff, "our_sizes": our_sizes[:n], "relion_sizes": np.array(relion_sizes[:n])}
 
 
@@ -119,7 +129,7 @@ def compare_fsc_curves(our_data, relion_dir, iterations_to_compare=None):
             continue
 
         our_fsc = our_data[our_fsc_key]
-        rd = load_relion_iteration(relion_dir, it)
+        rd = load_relion_iteration(relion_dir, it + 1)
         if rd is None:
             print(f"\nIteration {it+1}: No RELION reference data")
             continue
@@ -165,7 +175,7 @@ def compare_significant_samples(our_data, relion_dir, n_iter):
 
     for it in range(n_iter):
         our_key = f"sig_counts_iter_{it:03d}"
-        rd = load_relion_iteration(relion_dir, it)
+        rd = load_relion_iteration(relion_dir, it + 1)
 
         our_str = ""
         if our_key in our_data:
@@ -191,10 +201,41 @@ def compare_significant_samples(our_data, relion_dir, n_iter):
     print("NOTE: Our prior/noise differs from RELION (scalar noise, different estimation).")
 
 
+def compare_pmax_trajectory(our_data, relion_dir, n_iter):
+    """Compare average per-image maximum posterior probabilities."""
+    print("\n" + "=" * 70)
+    print("D. PMAX TRAJECTORY")
+    print("=" * 70)
+
+    our_pmax = our_data.get("ave_Pmax_trajectory")
+    if our_pmax is None:
+        print("Our results do not contain ave_Pmax_trajectory.")
+        return
+
+    print(f"{'Iter':>4s}  {'Our_mean':>10s}  {'REL_mean':>10s}  {'REL_med':>10s}")
+    print("-" * 44)
+
+    n = min(len(our_pmax), n_iter)
+    for it in range(n):
+        rd = load_relion_iteration(relion_dir, it + 1)
+        rel_mean = np.nan
+        rel_med = np.nan
+        if rd is not None and "max_value_prob_distribution" in rd:
+            rel_vals = np.asarray(rd["max_value_prob_distribution"], dtype=np.float64)
+            if rel_vals.size > 0:
+                rel_mean = float(np.mean(rel_vals))
+                rel_med = float(np.median(rel_vals))
+
+        print(
+            f"{it+1:4d}  {float(our_pmax[it]):10.4f}  "
+            f"{rel_mean:10.4f}  {rel_med:10.4f}"
+        )
+
+
 def compare_final_volumes(our_data, relion_ref_star_dir, volume_shape):
     """Compute FSC between our final volume and RELION's final volumes."""
     print("\n" + "=" * 70)
-    print("D. FINAL VOLUME QUALITY (FSC vs RELION)")
+    print("E. FINAL VOLUME QUALITY (FSC vs RELION)")
     print("=" * 70)
 
     from recovar.reconstruction.regularization import get_fsc_gpu
@@ -274,7 +315,7 @@ def compare_final_volumes(our_data, relion_ref_star_dir, volume_shape):
 def compare_wall_times(our_data, n_iter):
     """Print per-iteration and total wall-clock times."""
     print("\n" + "=" * 70)
-    print("E. WALL-CLOCK TIME")
+    print("F. WALL-CLOCK TIME")
     print("=" * 70)
 
     wall_times = our_data["wall_times"]
@@ -296,35 +337,46 @@ def compare_wall_times(our_data, n_iter):
 def summarize_known_differences():
     """Document known algorithmic differences between our code and RELION."""
     print("\n" + "=" * 70)
-    print("F. KNOWN DIFFERENCES")
+    print("G. KNOWN DIFFERENCES")
     print("=" * 70)
     print("""
 1. NOISE ESTIMATION:
-   - Ours: hard-assignment + subset-based (first 1000 images of half-set 0)
+   - Ours: hard-assignment residual estimate, averaged over both half-sets
+     and all images in RELION mode
    - RELION: posterior-weighted, all images, per-half-set
 
 2. SIGNAL PRIOR (tau^2):
-   - Ours: scalar cov_noise in compute_relion_prior
-   - RELION: per-shell sigma2_noise
+   - Ours: reconstructed from backprojected weights, but still not from the
+     exact same weighted shell statistics RELION uses
+   - RELION: per-shell sigma2_noise / sigma2_out path end-to-end
 
-3. ALLOWED CURRENT SIZES:
-   - Ours: {32, 64, 128} (quantized to powers of 2)
-   - RELION: any even integer up to original_image_size
+3. CURRENT-SIZE / RESOLUTION UPDATE:
+   - Ours: bootstrap and growth are much closer to RELION, but still depend on
+     different upstream noise / tau2 / data-vs-prior statistics
+   - RELION: uses its own weighted shell statistics end-to-end
 
-4. ADAPTIVE OVERSAMPLING (Pass 2):
-   - Ours: union-of-significant (evaluates all significant rots for all images)
-   - RELION: per-image sparse (evaluates only each image's significant rots)
+4. ADAPTIVE OVERSAMPLING:
+   - Ours: per-image sparse pass 2 is implemented, with RELION-style uncapped
+     significant-sample mode available (`max_significants <= 0`)
+   - RELION: same high-level behavior, but exact posterior/statistics parity is
+     still not complete
 
 5. HALF-SET SPLIT:
-   - Ours: random shuffle with seed=42
-   - RELION: rlnRandomSubset from STAR file (set at import time)
+   - This benchmark can now use RELION's `rlnRandomSubset` split directly
+   - Older runs may still have used a random shuffle; check the saved indices
 
-6. PADDING:
-   - RELION: --pad 2 (2x zero-padding for volume during reconstruction)
-   - Ours: no volume padding (uses image_shape == volume_shape[:2])
+6. MASKING / HIGHRES_XI2:
+   - Ours: masked-alignment / unmasked-reconstruction split is implemented
+   - Ours: exact `highres_Xi2` / `exp_power_img` bookkeeping is still missing
+   - RELION: uses both the split and the explicit high-frequency residual term
 
 7. FFT NORMALIZATION:
    - Different conventions may introduce scale factors
+
+8. TRANSLATION / LOCAL-SEARCH PRIORS:
+   - Ours: RELION-style translation prior is in the score path, but local-search
+     and convergence statistics are still not exact RELION metadata parity
+   - RELION: couples priors, statistics, and metadata updates in one path
 
 These differences mean we expect approximate (not exact) agreement.
 """)
@@ -386,6 +438,7 @@ def main():
     compare_resolution_trajectory(our_data, args.relion_ref_npz, n_iter)
     compare_fsc_curves(our_data, args.relion_ref_npz)
     compare_significant_samples(our_data, args.relion_ref_npz, n_iter)
+    compare_pmax_trajectory(our_data, args.relion_ref_npz, n_iter)
     compare_final_volumes(our_data, args.relion_ref_star, volume_shape)
     compare_wall_times(our_data, n_iter)
     summarize_known_differences()

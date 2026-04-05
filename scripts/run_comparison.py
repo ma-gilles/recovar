@@ -137,11 +137,16 @@ def run_refinement(
     ds, half1_idx, half2_idx, max_iter, output_subdir,
     oracle_current_sizes=None, adaptive_oversampling=0,
     healpix_order=3, offset_range=3.0, offset_step=1.0,
+    mode="relion", adaptive_fraction=0.999, max_significants=-1,
+    offset_sigma_angstrom=10.0,
+    image_batch_size=500, rotation_block_size=5000,
+    adaptive_skip_threshold=0.5,
 ):
     """Run our refinement and return results dict + wall time."""
     from recovar.em.sampling import get_rotation_grid, get_translation_grid
     from recovar.em.dense_single_volume.refine import refine_single_volume
     from recovar.reconstruction.regularization import average_over_shells
+    from recovar.reconstruction import noise as recon_noise
     from recovar import utils
 
     out_dir = os.path.join(OUTPUT_DIR, output_subdir)
@@ -161,7 +166,13 @@ def run_refinement(
     translations = get_translation_grid(offset_range, offset_step).astype(np.float32)
 
     # Initial noise and prior
-    noise_variance = jnp.ones(ds.image_size, dtype=jnp.float32)
+    initial_noise_subset = np.arange(min(1000, ds.n_units), dtype=np.int32)
+    initial_noise_radial = recon_noise.estimate_initial_noise_spectrum_from_unaligned_images(
+        ds,
+        initial_noise_subset,
+        batch_size=min(image_batch_size, initial_noise_subset.size),
+    )
+    noise_variance = recon_noise.make_radial_noise(initial_noise_radial, ds.image_shape)
     init_PS = average_over_shells(
         jnp.abs(jnp.asarray(init_vol_ft)) ** 2, ds.volume_shape
     )
@@ -180,15 +191,18 @@ def run_refinement(
         rotations=rotations,
         translations=jnp.asarray(translations),
         disc_type="linear_interp",
+        mode=mode,
         max_iter=max_iter,
-        image_batch_size=500,
-        rotation_block_size=5000,
+        image_batch_size=image_batch_size,
+        rotation_block_size=rotation_block_size,
         relion_current_sizes=oracle_current_sizes,
         init_current_size=init_current_size,
         fsc_threshold=1.0 / 7.0,
         adaptive_oversampling=adaptive_oversampling,
-        adaptive_fraction=0.999,
-        max_significants=500,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+        adaptive_pass2_skip_threshold=adaptive_skip_threshold,
+        init_translation_sigma_angstrom=offset_sigma_angstrom,
         nside_level=healpix_order if adaptive_oversampling > 0 else None,
         translation_pixel_offset=offset_step if adaptive_oversampling > 0 else None,
     )
@@ -234,15 +248,45 @@ def run_refinement(
 # ---------------------------------------------------------------------------
 
 def main():
-    global OUTPUT_DIR
+    global DATA_DIR, RELION_REF, OUTPUT_DIR
 
     parser = argparse.ArgumentParser(description="Head-to-head comparison vs RELION")
     parser.add_argument("--max_iter", type=int, default=10)
+    parser.add_argument("--data_dir", default=DATA_DIR)
     parser.add_argument("--output", default=OUTPUT_DIR)
+    parser.add_argument(
+        "--mode",
+        choices=["legacy", "relion"],
+        default="relion",
+        help="Refinement mode to benchmark. Use 'relion' for parity comparisons.",
+    )
+    parser.add_argument("--adaptive_oversampling", type=int, default=0)
+    parser.add_argument("--adaptive_fraction", type=float, default=0.999)
+    parser.add_argument(
+        "--max_significants",
+        type=int,
+        default=-1,
+        help="Max significant samples per image. Use <=0 for RELION-style uncapped mode.",
+    )
+    parser.add_argument(
+        "--adaptive_skip_threshold",
+        type=float,
+        default=0.5,
+        help="Skip adaptive pass 2 when the mean significant-sample fraction "
+             "is at least this value. Use a negative value to disable the shortcut.",
+    )
+    parser.add_argument("--healpix_order", type=int, default=3)
+    parser.add_argument("--offset_range", type=float, default=3.0)
+    parser.add_argument("--offset_step", type=float, default=1.0)
+    parser.add_argument("--offset_sigma_angstrom", type=float, default=10.0)
+    parser.add_argument("--image_batch_size", type=int, default=500)
+    parser.add_argument("--rotation_block_size", type=int, default=5000)
     parser.add_argument("--skip_run", action="store_true",
                         help="Skip running refinement; load existing results")
     args = parser.parse_args()
 
+    DATA_DIR = args.data_dir
+    RELION_REF = os.path.join(DATA_DIR, "relion_ref")
     OUTPUT_DIR = args.output
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
@@ -271,7 +315,13 @@ def main():
     if not args.skip_run:
         # ---- Load dataset ----
         from recovar.data_io.cryoem_dataset import load_dataset
+        from run_full_refinement import _maybe_apply_relion_image_mask
         ds = load_dataset(our_star, lazy=False)
+        class _Args:
+            data_dir = DATA_DIR
+            mode = args.mode
+            relion_half_sets = relion_star
+        _maybe_apply_relion_image_mask(ds, _Args)
         volume_shape = ds.volume_shape
         voxel_size = ds.voxel_size
 
@@ -284,7 +334,17 @@ def main():
             max_iter=args.max_iter,
             output_subdir="run1_own_fsc",
             oracle_current_sizes=None,
-            adaptive_oversampling=0,
+            adaptive_oversampling=args.adaptive_oversampling,
+            adaptive_fraction=args.adaptive_fraction,
+            max_significants=args.max_significants,
+            healpix_order=args.healpix_order,
+            offset_range=args.offset_range,
+            offset_step=args.offset_step,
+            offset_sigma_angstrom=args.offset_sigma_angstrom,
+            image_batch_size=args.image_batch_size,
+            rotation_block_size=args.rotation_block_size,
+            mode=args.mode,
+            adaptive_skip_threshold=args.adaptive_skip_threshold,
         )
 
         # ---- Run 2: Oracle current_sizes from RELION ----
@@ -296,12 +356,28 @@ def main():
             max_iter=args.max_iter,
             output_subdir="run2_oracle_cs",
             oracle_current_sizes=relion_current_sizes[:args.max_iter],
-            adaptive_oversampling=0,
+            adaptive_oversampling=args.adaptive_oversampling,
+            adaptive_fraction=args.adaptive_fraction,
+            max_significants=args.max_significants,
+            healpix_order=args.healpix_order,
+            offset_range=args.offset_range,
+            offset_step=args.offset_step,
+            offset_sigma_angstrom=args.offset_sigma_angstrom,
+            image_batch_size=args.image_batch_size,
+            rotation_block_size=args.rotation_block_size,
+            mode=args.mode,
+            adaptive_skip_threshold=args.adaptive_skip_threshold,
         )
     else:
         # Load existing results
         from recovar.data_io.cryoem_dataset import load_dataset
+        from run_full_refinement import _maybe_apply_relion_image_mask
         ds = load_dataset(our_star, lazy=False)
+        class _Args:
+            data_dir = DATA_DIR
+            mode = args.mode
+            relion_half_sets = relion_star
+        _maybe_apply_relion_image_mask(ds, _Args)
         volume_shape = ds.volume_shape
         voxel_size = ds.voxel_size
         result1 = _load_saved_results(os.path.join(OUTPUT_DIR, "run1_own_fsc"))

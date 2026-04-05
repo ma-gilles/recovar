@@ -24,10 +24,10 @@ logger = logging.getLogger(__name__)
 def zero_pad_fourier_volume(vol_flat, native_shape, padding_factor):
     """Zero-pad a flat centered Fourier volume to a larger grid.
 
-    The native Fourier data (stored in centered / fftshift layout) is embedded
-    into the center of a larger zero-filled grid.  This is the Fourier-domain
-    equivalent of real-space zero-padding and corresponds to RELION's
-    ``padding_factor`` oversampling of the 3D Fourier grid.
+    RELION's padded reconstruction grid uses the same physical frequencies on a
+    finer lattice. In centered / fftshift layout, native frequency bin ``k``
+    therefore lands at ``padding_factor * k`` on the padded grid, not at the
+    same array index inside a larger centered cube.
 
     Parameters
     ----------
@@ -46,22 +46,17 @@ def zero_pad_fourier_volume(vol_flat, native_shape, padding_factor):
     if padding_factor == 1:
         return vol_flat
 
-    N = native_shape[0]
-    padded_N = N * padding_factor
-    padded_shape = (padded_N, padded_N, padded_N)
-
-    # Reshape to 3D grid, embed in center of padded grid
-    vol_3d = vol_flat.reshape(native_shape)
-
-    # In centered (fftshift) layout, DC is at (N//2, N//2, N//2).
-    # We place the native cube at the center of the padded cube.
-    offset = (padded_N - N) // 2
+    native_shape = tuple(int(s) for s in native_shape)
+    padded_shape = tuple(s * padding_factor for s in native_shape)
+    vol_3d = jnp.asarray(vol_flat).reshape(native_shape)
     padded = jnp.zeros(padded_shape, dtype=vol_3d.dtype)
-    padded = padded.at[
-        offset : offset + N,
-        offset : offset + N,
-        offset : offset + N,
-    ].set(vol_3d)
+
+    padded_indices = []
+    for native_dim, padded_dim in zip(native_shape, padded_shape):
+        start = padded_dim // 2 - padding_factor * (native_dim // 2)
+        padded_indices.append(np.arange(native_dim, dtype=np.int32) * padding_factor + start)
+
+    padded = padded.at[np.ix_(*padded_indices)].set(vol_3d)
 
     return padded.reshape(-1)
 

@@ -5,6 +5,35 @@ import numpy as np
 from recovar import utils
 
 
+def rotation_grid_n_in_planes(order: int) -> int:
+    """Number of in-plane angles used by the RELION-style HEALPix grid."""
+    angle_res = 360.0 / (6.0 * 2 ** order)
+    return int(np.round(360.0 / angle_res))
+
+
+def rotation_grid_size(order: int) -> int:
+    """Total number of rotations in the full HEALPix x psi grid."""
+    nside = 2 ** order
+    return hp.nside2npix(nside) * rotation_grid_n_in_planes(order)
+
+
+def _split_rotation_indices(indices, healpix_order):
+    """Split full-grid rotation indices into HEALPix pixel and psi components."""
+    indices = np.asarray(indices, dtype=np.int64).reshape(-1)
+    n_pixels = hp.nside2npix(2 ** healpix_order)
+    pixel_idx = indices % n_pixels
+    psi_idx = indices // n_pixels
+    return pixel_idx, psi_idx
+
+
+def _combine_rotation_indices(pixel_idx, psi_idx, healpix_order):
+    """Combine HEALPix pixel and psi components into full-grid indices."""
+    pixel_idx = np.asarray(pixel_idx, dtype=np.int64).reshape(-1)
+    psi_idx = np.asarray(psi_idx, dtype=np.int64).reshape(-1)
+    n_pixels = hp.nside2npix(2 ** healpix_order)
+    return psi_idx * n_pixels + pixel_idx
+
+
 def get_rotation_grid(nside_level, n_in_planes=None, matrices=False):
 
     #  * order	Npix	Theta-sampling
@@ -51,6 +80,51 @@ def get_translation_grid(max_pixel, pixel_offset):
     norm_res = np.linalg.norm(grid, axis=1) <= max_pixel + 0.001
     grid = grid[norm_res]
     return grid
+
+
+def rotation_indices_to_matrices(indices, healpix_order):
+    """Convert full-grid rotation indices to rotation matrices.
+
+    The indexing convention matches :func:`get_rotation_grid`: the grid is
+    flattened with psi as the slow axis and HEALPix pixel as the fast axis,
+    so ``index = psi_idx * n_pixels + pixel_idx``.
+    """
+    nside = 2 ** healpix_order
+    n_psi = rotation_grid_n_in_planes(healpix_order)
+    pixel_idx, psi_idx = _split_rotation_indices(indices, healpix_order)
+
+    theta, phi = hp.pix2ang(nside, pixel_idx)
+    psi = (2.0 * np.pi / n_psi) * psi_idx
+    angles = np.stack(
+        [np.rad2deg(theta), np.rad2deg(phi), np.rad2deg(psi)],
+        axis=-1,
+    )
+    return utils.R_from_relion(angles).astype(np.float32)
+
+
+def remap_rotation_indices_to_order(indices, src_order, dst_order):
+    """Map full-grid rotation indices between HEALPix orders.
+
+    The mapped indices correspond to the nearest direction/pixel center on the
+    destination grid together with the nearest in-plane sample.
+    """
+    indices = np.asarray(indices, dtype=np.int64).reshape(-1)
+    if src_order == dst_order:
+        return indices.copy()
+
+    src_n_psi = rotation_grid_n_in_planes(src_order)
+    dst_nside = 2 ** dst_order
+    dst_n_psi = rotation_grid_n_in_planes(dst_order)
+
+    src_pixel_idx, src_psi_idx = _split_rotation_indices(indices, src_order)
+
+    theta, phi = hp.pix2ang(2 ** src_order, src_pixel_idx)
+    dst_pixel_idx = hp.ang2pix(dst_nside, theta, phi)
+
+    src_psi_deg = (360.0 / src_n_psi) * src_psi_idx
+    dst_psi_idx = np.round(src_psi_deg / (360.0 / dst_n_psi)).astype(np.int64) % dst_n_psi
+
+    return _combine_rotation_indices(dst_pixel_idx, dst_psi_idx, dst_order)
 
 
 def get_healpix_children(parent_pixels, parent_nside_level):
@@ -123,6 +197,111 @@ def get_oversampled_rotation_grid(parent_pixels, parent_nside_level, oversamplin
     return matrices, parent_map[pix_idx_flat]
 
 
+def get_oversampled_rotation_grid_from_samples(
+    parent_rotation_indices,
+    parent_nside_level,
+    oversampling_order=1,
+    *,
+    return_rotation_indices=False,
+):
+    """Generate oversampled child orientations from coarse sample indices.
+
+    RELION oversamples each coarse orientation sample, not just the HEALPix
+    direction. For a single oversampling level in 3D, each coarse sample
+    expands into 4 child directions and 2 child in-plane angles, yielding
+    ``8`` child orientations per parent sample.
+
+    Parameters
+    ----------
+    parent_rotation_indices : array-like of int
+        Indices into the coarse rotation grid. Each index corresponds to a
+        specific ``(healpix_pixel, psi_index)`` sample.
+    parent_nside_level : int
+        HEALPix level of the coarse grid.
+    oversampling_order : int
+        Number of oversampling levels.
+
+    Returns
+    -------
+    matrices : np.ndarray, shape (n_children, 3, 3)
+        Oversampled child rotation matrices.
+    parent_map : np.ndarray, shape (n_children,)
+        Index into ``parent_rotation_indices`` for each child orientation.
+    child_rotation_indices : np.ndarray, shape (n_children,), optional
+        Nearest full-grid indices of the child orientations on the fine grid.
+        RELION's oversampled psi children are midpoints inside the parent bin,
+        so for 3D they are generally not exact rows of the global fine grid.
+        Only returned when ``return_rotation_indices=True``.
+    """
+    parent_rotation_indices = np.asarray(parent_rotation_indices, dtype=np.int64)
+    if parent_rotation_indices.size == 0:
+        empty_rot = np.empty((0, 3, 3), dtype=np.float32)
+        empty_map = np.empty((0,), dtype=np.int64)
+        if return_rotation_indices:
+            return empty_rot, empty_map, empty_map.copy()
+        return empty_rot, empty_map
+
+    coarse_nside = 2 ** parent_nside_level
+    coarse_n_pixels = hp.nside2npix(coarse_nside)
+    parent_pixels = parent_rotation_indices % coarse_n_pixels
+    parent_psi = parent_rotation_indices // coarse_n_pixels
+
+    current_pixels = parent_pixels.copy()
+    parent_map = np.arange(len(parent_rotation_indices), dtype=np.int64)
+    for level in range(oversampling_order):
+        current_pixels = get_healpix_children(current_pixels, parent_nside_level + level)
+        parent_map = np.repeat(parent_map, 4)
+
+    psi_factor = 2**oversampling_order
+    coarse_n_in_planes = rotation_grid_n_in_planes(parent_nside_level)
+    coarse_psi_step = 2.0 * np.pi / coarse_n_in_planes
+    fine_nside_level = parent_nside_level + oversampling_order
+    fine_nside = 2**fine_nside_level
+    fine_n_pixels = hp.nside2npix(fine_nside)
+    fine_n_in_planes = rotation_grid_n_in_planes(fine_nside_level)
+    fine_psi_step = 2.0 * np.pi / fine_n_in_planes
+
+    theta, phi = hp.pix2ang(fine_nside, current_pixels)
+    current_parent_psi = parent_psi[parent_map]
+    # Match RELION's pushbackOversampledPsiAngles(): oversampled psi samples
+    # are midpoints inside the parent psi bin, not rows of the fine global grid.
+    psi_child_angles = (
+        current_parent_psi[:, None] * coarse_psi_step
+        - 0.5 * coarse_psi_step
+        + (0.5 + np.arange(psi_factor, dtype=np.float64)[None, :])
+        * (coarse_psi_step / psi_factor)
+    )
+    nearest_child_psi = np.floor(
+        np.mod(psi_child_angles, 2.0 * np.pi) / fine_psi_step + 0.5
+    ).astype(np.int64) % fine_n_in_planes
+
+    child_pixels = np.repeat(current_pixels, psi_factor)
+    child_rotation_indices = (
+        nearest_child_psi.reshape(-1) * fine_n_pixels + child_pixels
+    )
+
+    euler_angles = np.stack(
+        [
+            np.repeat(theta, psi_factor),
+            np.repeat(phi, psi_factor),
+            psi_child_angles.reshape(-1),
+        ],
+        axis=-1,
+    )
+    euler_angles = euler_angles / (2 * np.pi) * 360
+    matrices = utils.R_from_relion(euler_angles)
+    parent_map = np.repeat(parent_map, psi_factor)
+
+    if return_rotation_indices:
+        return (
+            matrices.astype(np.float32),
+            parent_map,
+            child_rotation_indices.astype(np.int64),
+        )
+
+    return matrices.astype(np.float32), parent_map
+
+
 def get_oversampled_translation_grid(parent_translations, pixel_offset, oversampling_order=1):
     """Generate a finer translation grid by subdividing each parent cell.
 
@@ -148,7 +327,7 @@ def get_oversampled_translation_grid(parent_translations, pixel_offset, oversamp
         pixel_offset / 2 - fine_offset / 2,
         n_subdiv,
     )
-    dx, dy = np.meshgrid(half_offsets, half_offsets)
+    dx, dy = np.meshgrid(half_offsets, half_offsets, indexing="ij")
     child_offsets = np.stack([dx.ravel(), dy.ravel()], axis=-1)  # (4**os, 2)
     n_children = n_subdiv**2
 
@@ -368,18 +547,24 @@ def get_local_rotation_grid_fast(
     sigma_psi,
     healpix_order,
     sigma_cutoff=3.0,
+    *,
+    per_image=False,
 ):
     """Fast local rotation grid selection using HEALPix pixel lookup.
 
-    Decomposes the rotation grid into (HEALPix direction, psi) and uses
-    ``hp.query_disc`` for O(1)-per-pixel neighbor lookup instead of
-    brute-force pairwise geodesic distance.
+    Accepts either discrete full-grid rotation indices or exact prior rotation
+    matrices. This matters for RELION-parity local search: adaptive pass-2
+    orientations use midpoint psi children inside the parent bin, so they do
+    not generally coincide with rows of the global fine HEALPix x psi grid.
+
+    The prior is factored into independent direction and psi terms, matching
+    RELION's ``P(idir) * P(ipsi)`` structure.
 
     Parameters
     ----------
-    prior_rotation_indices : np.ndarray, shape (n_priors,), dtype int
-        Indices into the full rotation grid (from ``get_rotation_grid``)
-        for each image's best orientation from the previous iteration.
+    prior_rotation_indices : np.ndarray
+        Either full-grid rotation indices of shape ``(n_priors,)`` or exact
+        prior rotation matrices of shape ``(n_priors, 3, 3)``.
     sigma_rot : float
         Gaussian prior sigma for direction (radians).
     sigma_psi : float
@@ -394,58 +579,91 @@ def get_local_rotation_grid_fast(
     -------
     selected_indices : np.ndarray, shape (n_selected,), dtype int
         Sorted indices into the full rotation grid.
-    rotation_log_prior : np.ndarray, shape (n_selected,), dtype float32
-        Per-rotation log Gaussian prior weight.  For each selected rotation,
-        this is the max over all priors of
+    rotation_log_prior : np.ndarray
+        If ``per_image=False`` (default), shape ``(n_selected,)`` and each
+        rotation uses the max over all priors of
         ``-d_dir^2/(2*sigma_rot^2) - d_psi^2/(2*sigma_psi^2)``.
+        If ``per_image=True``, shape ``(n_priors, n_selected)`` with an exact
+        per-image log-prior over the union grid.
     """
-    prior_rotation_indices = np.asarray(prior_rotation_indices, dtype=np.int64)
+    prior_rotation_indices = np.asarray(prior_rotation_indices)
 
     # --- Reconstruct grid geometry ---
     nside = 2 ** healpix_order
     n_pixels = hp.nside2npix(nside)
-    angle_res = 360.0 / (6.0 * 2 ** healpix_order)
-    n_psi = int(np.round(360.0 / angle_res))
+    n_psi = rotation_grid_n_in_planes(healpix_order)
     n_total = n_psi * n_pixels
 
     # Grid layout: index k -> psi_index = k // n_pixels, pixel = k % n_pixels
     # (from meshgrid(arange(n_pixels), psi_angles) then reshape(-1, 3))
     psi_angles = np.linspace(0, 2 * np.pi, n_psi, endpoint=False)  # radians
 
-    # --- Decompose priors into (pixel, psi_index) ---
-    prior_pixels = prior_rotation_indices % n_pixels
-    prior_psi_idx = prior_rotation_indices // n_pixels
+    if prior_rotation_indices.ndim == 0:
+        prior_rotation_indices = prior_rotation_indices.reshape(1)
+
+    if prior_rotation_indices.ndim == 1:
+        prior_rotations = rotation_indices_to_matrices(
+            prior_rotation_indices.astype(np.int64),
+            healpix_order,
+        )
+    else:
+        prior_rotations = np.asarray(
+            prior_rotation_indices,
+            dtype=np.float64,
+        ).reshape(-1, 3, 3)
+
+    prior_eulers_deg = utils.R_to_relion(prior_rotations, degrees=True)
+    prior_rot_deg = prior_eulers_deg[:, 0]
+    prior_tilt_deg = prior_eulers_deg[:, 1]
+    prior_psi = np.deg2rad(prior_eulers_deg[:, 2])
+
+    prior_dir_vecs = np.column_stack(
+        [
+            np.sin(np.deg2rad(prior_tilt_deg)) * np.cos(np.deg2rad(prior_rot_deg)),
+            np.sin(np.deg2rad(prior_tilt_deg)) * np.sin(np.deg2rad(prior_rot_deg)),
+            np.cos(np.deg2rad(prior_tilt_deg)),
+        ]
+    )
 
     # --- Direction neighbors via query_disc ---
     dir_cutoff_rad = sigma_cutoff * sigma_rot
-    # Get unique prior pixels to avoid redundant query_disc calls
-    unique_prior_pixels = np.unique(prior_pixels)
-
-    # Pre-compute unit vectors for all HEALPix pixels
-    all_theta, all_phi = hp.pix2ang(nside, np.arange(n_pixels))
 
     # Collect selected direction pixels
     selected_pixel_set = set()
-    for pix in unique_prior_pixels:
-        vec = hp.pix2vec(nside, int(pix))
-        neighbors = hp.query_disc(nside, vec, dir_cutoff_rad, inclusive=True)
-        selected_pixel_set.update(neighbors.tolist())
+    if sigma_rot > 0:
+        for vec in prior_dir_vecs:
+            neighbors = hp.query_disc(nside, vec, dir_cutoff_rad, inclusive=True)
+            selected_pixel_set.update(np.asarray(neighbors, dtype=np.int64).tolist())
+    else:
+        selected_pixel_set.update(range(n_pixels))
     selected_pixels = np.array(sorted(selected_pixel_set), dtype=np.int64)
+    if selected_pixels.size == 0:
+        nearest_pixels = hp.ang2pix(
+            nside,
+            np.deg2rad(prior_tilt_deg),
+            np.deg2rad(prior_rot_deg),
+        )
+        selected_pixels = np.unique(np.asarray(nearest_pixels, dtype=np.int64))
 
     # --- Psi neighbors via circular distance ---
     psi_cutoff_rad = sigma_cutoff * sigma_psi
-    unique_prior_psi_idx = np.unique(prior_psi_idx)
-    prior_psi_vals = psi_angles[unique_prior_psi_idx]  # radians
 
     # For each psi in the grid, check circular distance to nearest prior psi
     # Circular distance: min(|a-b|, 2*pi - |a-b|)
     selected_psi_set = set()
-    for psi_val in prior_psi_vals:
-        diffs = np.abs(psi_angles - psi_val)
-        circ_dists = np.minimum(diffs, 2 * np.pi - diffs)
-        within = np.where(circ_dists <= psi_cutoff_rad)[0]
-        selected_psi_set.update(within.tolist())
+    if sigma_psi > 0:
+        for psi_val in prior_psi:
+            diffs = np.abs(psi_angles - psi_val)
+            circ_dists = np.minimum(diffs, 2 * np.pi - diffs)
+            within = np.where(circ_dists <= psi_cutoff_rad)[0]
+            selected_psi_set.update(within.tolist())
+    else:
+        selected_psi_set.update(range(n_psi))
     selected_psi_idx = np.array(sorted(selected_psi_set), dtype=np.int64)
+    if selected_psi_idx.size == 0:
+        diffs = np.abs(psi_angles[:, None] - prior_psi[None, :])
+        circ_dists = np.minimum(diffs, 2 * np.pi - diffs)
+        selected_psi_idx = np.unique(np.argmin(circ_dists, axis=0).astype(np.int64))
 
     # --- Combine: selected_rotations = selected_psi x selected_pixels ---
     # Grid index = psi_index * n_pixels + pixel_index
@@ -463,26 +681,38 @@ def get_local_rotation_grid_fast(
     # where each component takes the max over all priors independently.
     # This avoids the O(n_priors * n_selected) joint computation.
 
-    # 1. Direction component: for each unique selected pixel, find min
-    #    angular distance to any unique prior pixel.
+    # 1. Direction component.
     unique_sel_pixels = np.unique(selected_pixels)  # already computed above
-    unique_prior_pix = np.unique(prior_pixels)
 
-    # Unit vectors for unique pixels
-    prior_pix_vecs = np.array(hp.pix2vec(nside, unique_prior_pix)).T  # (n_up, 3)
     sel_pix_vecs = np.array(hp.pix2vec(nside, unique_sel_pixels)).T  # (n_usp, 3)
 
-    # Compute min angular distance for each selected pixel
-    # Process in chunks to limit memory
     n_usp = len(unique_sel_pixels)
-    min_d_dir_sq = np.full(n_usp, np.inf, dtype=np.float64)
     CHUNK_PIX = 5000
-    for s in range(0, n_usp, CHUNK_PIX):
-        e = min(s + CHUNK_PIX, n_usp)
-        dots = sel_pix_vecs[s:e] @ prior_pix_vecs.T  # (chunk, n_up)
-        np.clip(dots, -1.0, 1.0, out=dots)
-        d = np.arccos(dots)  # (chunk, n_up)
-        np.minimum(min_d_dir_sq[s:e], np.min(d ** 2, axis=1), out=min_d_dir_sq[s:e])
+    if per_image:
+        if sigma_rot > 0:
+            log_prior_dir_u = np.empty(
+                (prior_dir_vecs.shape[0], n_usp), dtype=np.float64,
+            )
+            for s in range(0, n_usp, CHUNK_PIX):
+                e = min(s + CHUNK_PIX, n_usp)
+                dots = prior_dir_vecs @ sel_pix_vecs[s:e].T  # (n_priors, chunk)
+                np.clip(dots, -1.0, 1.0, out=dots)
+                d = np.arccos(dots)
+                log_vals = -d ** 2 / (2.0 * sigma_rot ** 2)
+                log_vals[d > dir_cutoff_rad] = -1e30
+                log_prior_dir_u[:, s:e] = log_vals
+        else:
+            log_prior_dir_u = np.zeros(
+                (prior_dir_vecs.shape[0], n_usp), dtype=np.float64,
+            )
+    else:
+        min_d_dir_sq = np.full(n_usp, np.inf, dtype=np.float64)
+        for s in range(0, n_usp, CHUNK_PIX):
+            e = min(s + CHUNK_PIX, n_usp)
+            dots = sel_pix_vecs[s:e] @ prior_dir_vecs.T  # (chunk, n_priors)
+            np.clip(dots, -1.0, 1.0, out=dots)
+            d = np.arccos(dots)  # (chunk, n_priors)
+            np.minimum(min_d_dir_sq[s:e], np.min(d ** 2, axis=1), out=min_d_dir_sq[s:e])
 
     # Map unique pixel distances back to all selected rotations
     # Build pixel -> unique index map
@@ -491,26 +721,33 @@ def get_local_rotation_grid_fast(
 
     sel_pixels = selected_indices % n_pixels
     sel_psi_idx = selected_indices // n_pixels
-    log_prior_dir = -min_d_dir_sq[pix_to_uidx[sel_pixels]] / (2.0 * sigma_rot ** 2)
+    if per_image:
+        log_prior_dir = log_prior_dir_u[:, pix_to_uidx[sel_pixels]]
+    else:
+        log_prior_dir = -min_d_dir_sq[pix_to_uidx[sel_pixels]] / (2.0 * sigma_rot ** 2)
 
-    # 2. Psi component: for each unique selected psi index, find min
-    #    circular distance to any unique prior psi index.
+    # 2. Psi component.
     unique_sel_psi = np.unique(selected_psi_idx)  # already computed above
-    unique_prior_psi = np.unique(prior_psi_idx)
-
     sel_psi_vals = psi_angles[unique_sel_psi]
-    prior_psi_vals_u = psi_angles[unique_prior_psi]
 
-    # Circular distance: min over all prior psi values
-    # Shape: (n_unique_sel_psi, n_unique_prior_psi)
-    d_psi_raw = np.abs(sel_psi_vals[:, None] - prior_psi_vals_u[None, :])
+    d_psi_raw = np.abs(sel_psi_vals[:, None] - prior_psi[None, :])
     d_psi = np.minimum(d_psi_raw, 2 * np.pi - d_psi_raw)
-    min_d_psi_sq = np.min(d_psi ** 2, axis=1)  # (n_unique_sel_psi,)
 
     # Map back to all selected rotations
     psi_to_uidx = np.empty(n_psi, dtype=np.int64)
     psi_to_uidx[unique_sel_psi] = np.arange(len(unique_sel_psi))
-    log_prior_psi = -min_d_psi_sq[psi_to_uidx[sel_psi_idx]] / (2.0 * sigma_psi ** 2)
+    if per_image:
+        if sigma_psi > 0:
+            log_prior_psi_u = -d_psi.T ** 2 / (2.0 * sigma_psi ** 2)
+            log_prior_psi_u[d_psi.T > psi_cutoff_rad] = -1e30
+        else:
+            log_prior_psi_u = np.zeros(
+                (prior_rotations.shape[0], len(unique_sel_psi)), dtype=np.float64,
+            )
+        log_prior_psi = log_prior_psi_u[:, psi_to_uidx[sel_psi_idx]]
+    else:
+        min_d_psi_sq = np.min(d_psi ** 2, axis=1)  # (n_unique_sel_psi,)
+        log_prior_psi = -min_d_psi_sq[psi_to_uidx[sel_psi_idx]] / (2.0 * sigma_psi ** 2)
 
     # Total log-prior
     log_prior = log_prior_dir + log_prior_psi
@@ -518,14 +755,17 @@ def get_local_rotation_grid_fast(
     # Apply cutoff: keep only rotations where both direction and psi
     # are within sigma_cutoff of some prior
     min_log_prior = -(sigma_cutoff ** 2)  # sum of two (sigma_cutoff^2/2) terms
-    keep = log_prior > min_log_prior
+    keep = np.any(log_prior > min_log_prior, axis=0) if per_image else (log_prior > min_log_prior)
     if np.any(keep):
         selected_indices = selected_indices[keep]
-        log_prior = log_prior[keep]
+        log_prior = log_prior[:, keep] if per_image else log_prior[keep]
 
     if len(selected_indices) == 0:
         selected_indices = np.arange(n_total, dtype=np.int64)
-        log_prior = np.zeros(n_total, dtype=np.float32)
+        if per_image:
+            log_prior = np.zeros((prior_rotations.shape[0], n_total), dtype=np.float32)
+        else:
+            log_prior = np.zeros(n_total, dtype=np.float32)
 
     return selected_indices, log_prior.astype(np.float32)
 

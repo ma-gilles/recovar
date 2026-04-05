@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import healpy as hp
 import numpy as np
 import pytest
 
@@ -50,6 +51,123 @@ def test_get_rotation_grid_shapes_with_and_without_matrices():
     assert mats.shape == (48, 3, 3)
     assert np.isfinite(euler).all()
     assert np.isfinite(mats).all()
+
+
+def test_rotation_indices_to_matrices_matches_full_grid_rows():
+    order = 2
+    indices = np.array([0, 7, 191, 192, 387, 1024], dtype=np.int64)
+    expected = em_sampling.get_rotation_grid(order, matrices=True)[indices]
+    actual = em_sampling.rotation_indices_to_matrices(indices, order)
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+
+
+def test_remap_rotation_indices_to_finer_order_preserves_pixel_centers_and_psi():
+    src_order = 1
+    dst_order = 2
+    src_nside = 2 ** src_order
+    src_npix = hp.nside2npix(src_nside)
+    dst_nside = 2 ** dst_order
+    dst_npix = hp.nside2npix(dst_nside)
+
+    src_indices = np.array(
+        [0, src_npix + 5, 3 * src_npix + 7, 11 * src_npix + 13],
+        dtype=np.int64,
+    )
+    dst_indices = em_sampling.remap_rotation_indices_to_order(
+        src_indices, src_order, dst_order,
+    )
+
+    theta, phi = hp.pix2ang(src_nside, src_indices % src_npix)
+    expected_pixels = hp.ang2pix(dst_nside, theta, phi)
+    expected_psi = (src_indices // src_npix) * 2
+
+    np.testing.assert_array_equal(dst_indices % dst_npix, expected_pixels)
+    np.testing.assert_array_equal(dst_indices // dst_npix, expected_psi)
+
+
+def test_local_rotation_grid_fast_uses_exact_prior_rotation_angles():
+    from recovar import utils
+
+    coarse_order = 2
+    fine_order = 3
+    child_rotations, _ = em_sampling.get_oversampled_rotation_grid_from_samples(
+        np.array([0], dtype=np.int64),
+        coarse_order,
+        oversampling_order=1,
+    )
+    child_eulers = utils.R_to_relion(child_rotations, degrees=True)
+    prior_idx = np.argmin(np.abs(child_eulers[:, 2] - 3.75))
+    prior_rotation = child_rotations[prior_idx : prior_idx + 1]
+
+    selected_indices, log_prior = em_sampling.get_local_rotation_grid_fast(
+        prior_rotation,
+        sigma_rot=np.deg2rad(0.2),
+        sigma_psi=np.deg2rad(2.0),
+        healpix_order=fine_order,
+        sigma_cutoff=2.0,
+    )
+
+    n_pixels = hp.nside2npix(2 ** fine_order)
+    prior_euler = utils.R_to_relion(prior_rotation, degrees=True)[0]
+    prior_pixel = hp.ang2pix(
+        2 ** fine_order,
+        np.deg2rad(prior_euler[1]),
+        np.deg2rad(prior_euler[0]),
+    )
+
+    same_pixel = (selected_indices % n_pixels) == prior_pixel
+    selected_psi = np.sort(np.unique(selected_indices[same_pixel] // n_pixels))
+    np.testing.assert_array_equal(selected_psi, np.array([0, 1], dtype=np.int64))
+
+    same_pixel_log_prior = log_prior[same_pixel]
+    assert same_pixel_log_prior.shape == (2,)
+    np.testing.assert_allclose(
+        same_pixel_log_prior[0],
+        same_pixel_log_prior[1],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_local_rotation_grid_fast_per_image_priors_prefer_each_image_peak():
+    fine_order = 3
+    n_pixels = hp.nside2npix(2 ** fine_order)
+    prior_indices = np.array([0, n_pixels], dtype=np.int64)
+    prior_rotations = em_sampling.rotation_indices_to_matrices(prior_indices, fine_order)
+
+    selected_indices, log_prior = em_sampling.get_local_rotation_grid_fast(
+        prior_rotations,
+        sigma_rot=np.deg2rad(0.2),
+        sigma_psi=np.deg2rad(2.0),
+        healpix_order=fine_order,
+        sigma_cutoff=2.0,
+        per_image=True,
+    )
+
+    assert log_prior.shape == (2, selected_indices.shape[0])
+    per_image_best = selected_indices[np.argmax(log_prior, axis=1)]
+
+    reference_best = []
+    for i in range(2):
+        ref_indices, ref_log_prior = em_sampling.get_local_rotation_grid_fast(
+            prior_rotations[i : i + 1],
+            sigma_rot=np.deg2rad(0.2),
+            sigma_psi=np.deg2rad(2.0),
+            healpix_order=fine_order,
+            sigma_cutoff=2.0,
+        )
+        reference_best.append(ref_indices[np.argmax(ref_log_prior)])
+
+    np.testing.assert_array_equal(
+        per_image_best,
+        np.array(reference_best, dtype=np.int64),
+    )
+
+
+def test_rotation_grid_size_matches_grid_shape():
+    for order in range(4):
+        grid = em_sampling.get_rotation_grid(order, matrices=True)
+        assert em_sampling.rotation_grid_size(order) == grid.shape[0]
 
 
 def test_E_M_batches_2_small_memory_forces_single_image_batches():

@@ -168,6 +168,8 @@ class RefinementState:
     def __post_init__(self):
         if self.angular_step == 0.0:
             self.angular_step = healpix_angular_step(self.healpix_order)
+        if self.should_do_local_search:
+            self.do_local_search = True
 
     @property
     def effective_step(self) -> float:

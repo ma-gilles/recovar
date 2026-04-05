@@ -10,9 +10,10 @@ gather/scatter to operate on only the unmasked indices.
 This gives the same FLOP reduction as actual Fourier cropping while preserving
 correct physical frequency spacing.
 
-**Restricted size set**: Only sizes that are divisors of the original image
-dimension are allowed (``[32, 64, 128]`` for 128px images).  Non-divisor sizes
-break RECOVAR's CUDA scaling rule.
+**Quantized size options**: explicit callers may still request a restricted
+size set, but the RELION-parity path now allows any even ``current_size`` up
+to the original box size because the gather/scatter window does not change the
+underlying CUDA image grid.
 
 See ``docs/math/plan_relion_parity.md``, Phase 3.
 """
@@ -22,16 +23,7 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
 
-# Allowed current_size values for 128px images.
-#
-# The CUDA kernel divisibility concern only applies to volume_shape[0] //
-# image_shape[0] (the upsampling factor), NOT to the Fourier window radius.
-# Our windowing approach uses gather/scatter on the original grid, so any
-# current_size is safe.  We include sizes that are composites of small primes
-# (good for FFT) to better match RELION's fine-grained resolution ramp.
-#
-# More JIT compilations (7 vs 3) but each only happens once -- budget ~3
-# minutes total extra compile time across a full run.
+# Representative sizes kept for explicit callers that still want a bounded set.
 ALLOWED_CURRENT_SIZES = [16, 24, 32, 48, 64, 80, 96, 104, 112, 120, 128, 160, 192, 224, 256]
 
 
@@ -78,7 +70,8 @@ def make_fourier_window_indices(image_shape, current_size):
     """
     r_max = current_size // 2
     radii = make_frequency_radius_map_half(image_shape)
-    mask = radii <= r_max
+    # Use rounded radii for RELION-compatible shell assignment
+    mask = jnp.round(radii).astype(jnp.int32) <= r_max
     return jnp.where(mask, size=_max_window_size(image_shape, current_size),
                      fill_value=0)[0]
 
@@ -96,7 +89,9 @@ def _max_window_size(image_shape, current_size):
     # Use the same coordinate computation as make_frequency_radius_map_half
     coords_np = np.array(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
     radii_np = np.sqrt(np.sum(coords_np ** 2, axis=-1))
-    return int(np.sum(radii_np <= r_max))
+    # Use rounded radii, matching RELION's ROUND() convention
+    radii_rounded = np.round(radii_np).astype(np.int32)
+    return int(np.sum(radii_rounded <= r_max))
 
 
 def make_fourier_window_indices_np(image_shape, current_size):
@@ -104,6 +99,10 @@ def make_fourier_window_indices_np(image_shape, current_size):
 
     This avoids JIT compilation overhead and is suitable for precomputing
     the window indices once before the EM loop.
+
+    Uses ROUNDED integer radii for the window cutoff, matching RELION's
+    convention where ``Mresol_fine[n] = ROUND(sqrt(kp^2 + ip^2))`` and
+    pixels with ``ires <= current_size // 2`` are included.
 
     Parameters
     ----------
@@ -118,25 +117,62 @@ def make_fourier_window_indices_np(image_shape, current_size):
     r_max = current_size // 2
     coords_np = np.array(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
     radii_np = np.sqrt(np.sum(coords_np ** 2, axis=-1))
-    mask = radii_np <= r_max
+    # Use rounded radii for shell assignment, matching RELION's ROUND() convention
+    radii_rounded = np.round(radii_np).astype(np.int32)
+    mask = radii_rounded <= r_max
     indices = np.where(mask)[0].astype(np.int32)
     return indices, len(indices)
 
 
-def quantize_current_size(cs, allowed=None):
-    """Round up ``cs`` to the nearest allowed current_size.
+def quantize_current_size(cs, allowed=None, ori_size=None, min_size=16):
+    """Quantize ``cs`` to a valid current_size.
 
     Parameters
     ----------
     cs : int or float
         Raw current_size value (e.g., from 2 * max_FSC_shell).
     allowed : list of int, optional
-        Sorted list of allowed sizes. Defaults to ALLOWED_CURRENT_SIZES.
+        Sorted list of allowed sizes. When provided, round up to the
+        smallest allowed size >= ``cs``.
+    ori_size : int, optional
+        Original image box size. When provided and ``allowed`` is None,
+        quantize to the nearest even size in ``[min_size, ori_size]`` (matching
+        RELION's arbitrary-even current image sizes).
+    min_size : int, optional
+        Minimum current_size to allow in the ``ori_size`` path. For tiny
+        test boxes where ``ori_size < min_size``, the lower bound is reduced
+        automatically so those tests can still exercise non-trivial windowing.
 
     Returns
     -------
-    int : The smallest allowed size >= cs.
+    int
+        Quantized current_size.
     """
+    if allowed is not None:
+        for s in allowed:
+            if s >= cs:
+                return s
+        return allowed[-1]
+
+    if ori_size is not None:
+        upper = int(ori_size)
+        if upper % 2 != 0:
+            upper -= 1
+        if upper < 2:
+            raise ValueError(f"ori_size must allow at least one even size, got {ori_size}")
+
+        lower = int(min_size)
+        if upper < lower:
+            lower = max(4, upper // 2)
+            if lower % 2 != 0:
+                lower -= 1
+            lower = max(2, lower)
+
+        q = max(lower, int(np.ceil(cs)))
+        if q % 2 != 0:
+            q += 1
+        return min(q, upper)
+
     if allowed is None:
         allowed = ALLOWED_CURRENT_SIZES
     for s in allowed:

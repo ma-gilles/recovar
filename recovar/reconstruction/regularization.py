@@ -152,7 +152,8 @@ def get_fsc_gpu(vol1, vol2, volume_shape, substract_shell_mean=False, frequency_
     bot = jnp.sqrt(bot1 * bot2)
     fsc = top_avg / bot
     fsc = jnp.where(~jnp.isfinite(fsc), 0, fsc)
-    fsc = fsc.at[0].set(fsc[1])  # Always set this 1st shell?
+    # RELION sets fsc(0) = 1.0 in calculateDownSampledFourierShellCorrelation
+    fsc = fsc.at[0].set(1.0)
     return fsc
 
 
@@ -400,7 +401,7 @@ def prior_iteration(
 from recovar.reconstruction import relion_functions
 
 
-@functools.partial(jax.jit, static_argnums=[6, 7, 8, 9, 10, 12, 13])
+@functools.partial(jax.jit, static_argnums=[6, 7, 8, 9, 10, 12, 13, 15])
 @nvtx.annotate("prior_iteration_relion_style", color="red", domain=NVTX_DOMAIN_REG)
 def prior_iteration_relion_style(
     H0,
@@ -418,6 +419,7 @@ def prior_iteration_relion_style(
     prior_iterations=3,
     downsample_from_fsc_flag=False,
     tau2_fudge=1.0,
+    volume_upsampling_factor=1,
 ):
     # assert substract_shell_mean == False
     # assert jnp.linalg.norm(frequency_shift) < 1e-8
@@ -430,7 +432,7 @@ def prior_iteration_relion_style(
             H0,
             B0,
             volume_shape,
-            volume_upsampling_factor=1,
+            volume_upsampling_factor=volume_upsampling_factor,
             tau=prior,
             kernel=kernel,
             use_spherical_mask=use_spherical_mask,
@@ -444,7 +446,7 @@ def prior_iteration_relion_style(
             H1,
             B1,
             volume_shape,
-            volume_upsampling_factor=1,
+            volume_upsampling_factor=volume_upsampling_factor,
             tau=prior,
             kernel=kernel,
             use_spherical_mask=use_spherical_mask,
@@ -463,6 +465,7 @@ def prior_iteration_relion_style(
             frequency_shift=frequency_shift,
             substract_shell_mean=substract_shell_mean,
             tau2_fudge=tau2_fudge,
+            upsampling_factor=volume_upsampling_factor,
         )
         return prior, fsc
 
@@ -491,7 +494,7 @@ def prior_iteration_relion_style(
         H0 + H1,
         B,
         volume_shape,
-        volume_upsampling_factor=1,
+        volume_upsampling_factor=volume_upsampling_factor,
         tau=prior,
         kernel=kernel,
         use_spherical_mask=use_spherical_mask,
@@ -503,6 +506,77 @@ def prior_iteration_relion_style(
     )
 
     return cov_col0.reshape(-1), prior, fsc
+
+
+def compute_relion_prior_from_reconstruction_stats(
+    Ft_ctf_0,
+    Ft_ctf_1,
+    Ft_y_0,
+    Ft_y_1,
+    volume_shape,
+    init_regularization,
+    *,
+    padding_factor=1,
+    prior_iterations=3,
+    tau2_fudge=1.0,
+):
+    """Estimate RELION-style tau2 directly from accumulated reconstruction stats.
+
+    This mirrors RELION's `BackProjector::updateSSNRarrays()` path more closely
+    than `compute_relion_prior(...)` because it uses the actual backprojected
+    CTF weight volumes from the current E/M step instead of reconstructing a
+    surrogate denominator from the dataset's stored poses.
+
+    The homogeneous RELION update is a direct shell-wise FSC/SNR calculation
+    on the unregularized half-maps combined with the shell-averaged
+    reconstruction weights. It does not iterate tau2 against the previous
+    regularization estimate, so ``prior_iterations`` is retained only for API
+    stability and intentionally ignored here.
+    """
+    _ = prior_iterations
+
+    prior_dtype = jnp.asarray(init_regularization).real.dtype
+    complex_dtype = jnp.complex64 if prior_dtype == jnp.float32 else jnp.complex128
+
+    H0 = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
+    H1 = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
+    B0 = jnp.asarray(Ft_y_0).astype(complex_dtype)
+    B1 = jnp.asarray(Ft_y_1).astype(complex_dtype)
+
+    if padding_factor != 1:
+        H0 = relion_functions.zero_pad_fourier_volume(H0, volume_shape, padding_factor).astype(prior_dtype)
+        H1 = relion_functions.zero_pad_fourier_volume(H1, volume_shape, padding_factor).astype(prior_dtype)
+        B0 = relion_functions.zero_pad_fourier_volume(B0, volume_shape, padding_factor).astype(complex_dtype)
+        B1 = relion_functions.zero_pad_fourier_volume(B1, volume_shape, padding_factor).astype(complex_dtype)
+
+    # RELION computes FSC for tau2 on raw Fourier-domain data/weight ratios
+    # (via getDownsampledAverage), NOT on fully post-processed real-space
+    # volumes. Using post_process_from_filter_v2 (with spherical mask and
+    # gridding correction) lowers FSC at mid frequencies because the mask
+    # mixes information between shells. Simple Fourier-domain division
+    # matches RELION's convention and gives higher (correct) FSC values.
+    #
+    # We compute FSC on the NATIVE (unpadded) grid. Even though the data was
+    # zero-padded above, we use the unpadded Ft_y/Ft_ctf for the FSC
+    # computation because the prior is needed at native resolution.
+    H0_native = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
+    H1_native = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
+    B0_native = jnp.asarray(Ft_y_0).astype(complex_dtype)
+    B1_native = jnp.asarray(Ft_y_1).astype(complex_dtype)
+
+    weight_floor = jnp.float32(1e-10)
+    unreg_half0 = B0_native / jnp.maximum(H0_native, weight_floor)
+    unreg_half1 = B1_native / jnp.maximum(H1_native, weight_floor)
+
+    H_comb = (H0_native + H1_native) / jnp.asarray(2.0, dtype=prior_dtype)
+    prior, fsc, _ = compute_fsc_prior_gpu(
+        volume_shape,
+        unreg_half0,
+        unreg_half1,
+        H_comb,
+        tau2_fudge=jnp.asarray(tau2_fudge, dtype=prior_dtype),
+    )
+    return prior, fsc
 
 
 def downsample_from_fsc(array, fsc, volume_shape):
@@ -565,16 +639,33 @@ def compute_data_vs_prior(Ft_ctf, tau2, volume_shape, padding_factor=1, tau2_fud
     return avg_weight * tau2_fudge * tau2 * oversampling_correction
 
 
-def resolution_from_data_vs_prior(data_vs_prior):
+def resolution_from_data_vs_prior(
+    data_vs_prior,
+    *,
+    allow_high_res_recovery=False,
+    recovery_margin_shells=3,
+):
     """Find the resolution shell where data_vs_prior drops below 1.0.
 
     Scans from shell 1 outward (skipping DC) and returns the last shell
     where ``data_vs_prior >= 1.0``.
 
+    When ``allow_high_res_recovery`` is enabled, mimic RELION's
+    ``updateCurrentResolution()`` behavior for split-half auto-refine: if the
+    curve dips below 1.0 and then rises again at substantially higher shells,
+    keep the later shell instead of the first crossing. This handles the
+    phase-randomization / tight-mask artefact check in RELION.
+
     Parameters
     ----------
     data_vs_prior : array-like, shape (n_shells,)
         Per-shell data_vs_prior ratio from :func:`compute_data_vs_prior`.
+
+    allow_high_res_recovery : bool, optional
+        Enable RELION's high-resolution recheck.
+    recovery_margin_shells : int, optional
+        Minimum number of shells by which the recovered high-resolution shell
+        must exceed the first crossing.
 
     Returns
     -------
@@ -585,8 +676,91 @@ def resolution_from_data_vs_prior(data_vs_prior):
     dvp = np.asarray(data_vs_prior)
     for ires in range(1, len(dvp)):
         if dvp[ires] < 1.0:
-            return ires - 1
-    return len(dvp) - 1
+            maxres = ires - 1
+            break
+    else:
+        maxres = len(dvp) - 1
+
+    if allow_high_res_recovery:
+        recovered = maxres
+        for ires2 in range(len(dvp) - 1, maxres - 1, -1):
+            if dvp[ires2] > 1.0:
+                recovered = ires2
+                break
+        if recovered > maxres + int(recovery_margin_shells):
+            maxres = recovered
+
+    return maxres
+
+
+# ---------------------------------------------------------------------------
+# RELION auto-refine resolution / current-size helpers
+# ---------------------------------------------------------------------------
+
+
+def fsc_to_relion_ssnr(fsc, tau2_fudge=1.0, is_whole_instead_of_half=False):
+    """Convert an FSC curve to RELION's data-vs-prior / SSNR curve.
+
+    In gold-standard auto-refine, RELION updates ``data_vs_prior`` from the
+    half-map FSC by converting each shell's FSC into an SSNR value. The shell
+    where this curve drops below ``1`` is the same shell where the FSC drops
+    below ``0.5``.
+    """
+    fsc = jnp.asarray(fsc)
+    epsilon = jax_config.FSC_ZERO_THRESHOLD
+    myfsc = jnp.clip(fsc, epsilon, 1.0 - epsilon)
+    if is_whole_instead_of_half:
+        myfsc = jnp.sqrt(2.0 * myfsc / (myfsc + 1.0))
+    return tau2_fudge * myfsc / (1.0 - myfsc)
+
+
+def first_shell_below_threshold(values, threshold):
+    """Return the first shell index below ``threshold``.
+
+    RELION's shell scans start at shell 1 (skipping DC). If no shell drops
+    below the threshold, return the last available shell.
+    """
+    arr = np.asarray(values)
+    for i in range(1, len(arr)):
+        if arr[i] < threshold:
+            return i
+    return len(arr) - 1
+
+
+def compute_relion_incr_size_from_fsc(fsc, default=10):
+    """RELION auto-refine shell-growth heuristic from the current FSC curve.
+
+    RELION enlarges ``incr_size`` to at least ``fsc0143 - fsc05 + 5`` after the
+    half-map comparison, where ``fsc05`` and ``fsc0143`` are the first shells
+    where the FSC drops below 0.5 and 0.143, respectively.
+    """
+    fsc05 = first_shell_below_threshold(fsc, 0.5)
+    fsc0143 = first_shell_below_threshold(fsc, 0.143)
+    return max(int(default), int(fsc0143 - fsc05 + 5))
+
+
+def update_relion_growth_state_from_fsc(
+    fsc,
+    current_size,
+    *,
+    incr_size=10,
+    has_high_fsc_at_limit=False,
+):
+    """Update RELION's sticky current-size growth state from the FSC curve.
+
+    RELION keeps ``incr_size`` as a non-decreasing value across iterations and
+    only flips ``has_high_fsc_at_limit`` from false to true once. This helper
+    mirrors the MPI auto-refine update in ``ml_optimiser_mpi.cpp``.
+    """
+    fsc = np.asarray(fsc)
+    next_incr_size = compute_relion_incr_size_from_fsc(fsc, default=int(incr_size))
+
+    if len(fsc) == 0:
+        return next_incr_size, bool(has_high_fsc_at_limit)
+
+    limit_shell = min(max(int(current_size) // 2 - 1, 0), len(fsc) - 1)
+    high_fsc_now = bool(float(fsc[limit_shell]) > 0.2)
+    return next_incr_size, bool(has_high_fsc_at_limit or high_fsc_now)
 
 
 # ---------------------------------------------------------------------------
