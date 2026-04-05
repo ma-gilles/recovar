@@ -2295,11 +2295,10 @@ def _refine_relion_mode(
             # Mask cutoff: the mask's FT has significant power at k < ~1/mask_radius
             k_mask = shells / max(mask_radius_px, 1.0)
             sinc_mask = np.where(k_mask < 1e-6, 1.0, np.sin(np.pi * k_mask) / (np.pi * k_mask))
-            # Use a moderate fraction of the full area_ratio to prevent
-            # over-softening while still regularizing low-frequency shells.
-            # Factor 0.15 gives ~2.3x at DC (instead of 9.4x), which
-            # is enough to prevent collapse without exploding significant counts.
-            effective_ratio = 1.0 + 0.15 * (area_ratio - 1.0)
+            # Use a moderate fraction of the full area_ratio.
+            # Factor 0.25 gives ~3.1x at DC, which balances preventing
+            # posterior collapse vs not over-softening significant counts.
+            effective_ratio = 1.0 + 0.25 * (area_ratio - 1.0)
             per_shell_factor = 1.0 + (effective_ratio - 1.0) * sinc_mask ** 2
             # Clamp factor to [1, area_ratio]
             per_shell_factor = np.clip(per_shell_factor, 1.0, area_ratio)
