@@ -2224,17 +2224,25 @@ def _refine_relion_mode(
                 float(jnp.min(noise_from_res)), float(jnp.max(noise_from_res)),
             )
 
-        # Also apply initial-noise floor: never go below initial estimate
+        # Apply running-maximum noise floor: never let noise decrease from
+        # the highest level ever reached at each shell.  This captures the
+        # model error from early iterations and prevents posterior collapse
+        # when the model overfits at later iterations.
         old_noise_radial = previous_noise_radial
         noise_from_res_raw = noise_from_res
         n_floor = min(len(noise_from_res), len(initial_noise_radial))
+        # Update running max with current noise (before applying floor)
+        initial_noise_radial = initial_noise_radial.at[:n_floor].set(
+            jnp.maximum(initial_noise_radial[:n_floor], noise_from_res[:n_floor])
+        )
+        # Apply the running-max floor
         noise_from_res = noise_from_res.at[:n_floor].set(
             jnp.maximum(noise_from_res[:n_floor], initial_noise_radial[:n_floor])
         )
         n_clamped = int(jnp.sum(noise_from_res_raw[:n_floor] < initial_noise_radial[:n_floor]))
         if n_clamped > 0:
             logger.info(
-                "Noise floor applied: %d/%d shells clamped to initial noise estimate",
+                "Noise floor applied: %d/%d shells clamped to running-max noise",
                 n_clamped, n_floor,
             )
 
