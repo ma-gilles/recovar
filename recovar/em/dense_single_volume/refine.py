@@ -1776,7 +1776,7 @@ def _refine_relion_mode(
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        noise_fill_outside_mask=True,
+                        # noise_fill_outside_mask disabled: tested, makes Pmax worse
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     pose_rotations[k] = effective_rotations
@@ -1806,7 +1806,7 @@ def _refine_relion_mode(
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        noise_fill_outside_mask=True,
+                        # noise_fill_outside_mask disabled: tested, makes Pmax worse
                     )
                     Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots_k, em_stats_k, noise_stats_k = pass2_outputs
                     noise_stats_per_half[k] = noise_stats_k
@@ -1855,7 +1855,7 @@ def _refine_relion_mode(
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        noise_fill_outside_mask=True,
+                        # noise_fill_outside_mask disabled: tested, makes Pmax worse
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     dt_pass2 = time.time() - t_pass2

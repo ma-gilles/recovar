@@ -86,6 +86,91 @@ def make_shell_indices_half(image_shape):
     return radii.reshape(-1).astype(jnp.int32)
 
 
+def _make_rfft2_shell_indices(image_shape):
+    """Return (H, W//2+1) int32 shell indices for the standard rfft2 layout.
+
+    Uses numpy fftfreq conventions: rows [0,1,...,H//2,-(H//2-1),...,-1],
+    columns [0,1,...,W//2].  Shell index = round(sqrt(ky^2 + kx^2)).
+    """
+    H, W = image_shape
+    ky = np.fft.fftfreq(H, d=1.0).astype(np.float32) * H  # [-H/2..H/2-1] in int freq
+    kx = np.arange(0, W // 2 + 1, dtype=np.float32)        # [0..W/2]
+    ky_grid, kx_grid = np.meshgrid(ky, kx, indexing='ij')   # (H, W//2+1)
+    radii = np.round(np.sqrt(ky_grid**2 + kx_grid**2)).astype(np.int32)
+    return radii
+
+
+def _extract_noise_per_shell(noise_variance, image_shape):
+    """Extract per-shell noise variance from the radially-symmetric pixel array.
+
+    noise_variance is (H*W,) in centered full-FFT layout.  Since it's radially
+    symmetric, we average pixels in each shell to get per-shell values.
+
+    Returns: (n_shells,) array where n_shells = image_shape[0]//2 + 1.
+    """
+    H, W = image_shape
+    n_shells = H // 2 + 1
+    # Use the half-image shell indices (which are the same radial shells)
+    shell_idx = make_shell_indices_half(image_shape)  # (N_half,)
+    nv_half = fourier_transform_utils.full_image_to_half_image(
+        jnp.asarray(noise_variance).reshape(1, -1), image_shape,
+    ).squeeze()  # (N_half,)
+    # Average noise_variance per shell
+    nv_per_shell = jnp.zeros(n_shells, dtype=jnp.float32)
+    counts = jnp.zeros(n_shells, dtype=jnp.float32)
+    nv_per_shell = nv_per_shell.at[shell_idx].add(nv_half)
+    counts = counts.at[shell_idx].add(1.0)
+    nv_per_shell = jnp.where(counts > 0, nv_per_shell / counts, 0.0)
+    return np.asarray(nv_per_shell)
+
+
+def _noise_fill_batch(batch_data, indices, image_mask, noise_sigma_rfft,
+                      rfft_shell_indices, image_shape, noise_seed=42):
+    """Fill outside mask with per-particle deterministic colored noise.
+
+    Implements RELION's noise-fill convention:
+    - Each particle gets a deterministic noise instance seeded by
+      ``noise_seed + particle_idx`` (matching RELION's
+      ``init_random_generator(random_seed + part_id)``).
+    - Noise is generated in rfft2 layout with per-shell sigma, then
+      transformed to real space via irfft2.
+    - Result: ``batch_data * mask + noise * (1 - mask)``
+
+    Parameters
+    ----------
+    batch_data : (n_batch, H, W) real-space images
+    indices : (n_batch,) int particle indices
+    image_mask : (H, W) real-space mask (1 inside, 0 outside)
+    noise_sigma_rfft : (H, W//2+1) float, sqrt(noise_variance) per rfft pixel
+    rfft_shell_indices : unused, kept for API compatibility
+    image_shape : (H, W) tuple
+    noise_seed : int, base seed for deterministic noise
+
+    Returns
+    -------
+    filled : (n_batch, H, W) noise-filled images
+    """
+    H, W = image_shape
+
+    # Pre-generate per-particle PRNG keys and split into real/imag subkeys.
+    # PRNGKey is applied elementwise over the batch of seeds.
+    seeds = noise_seed + indices  # (n_batch,)
+    keys = jax.vmap(jax.random.PRNGKey)(seeds)  # (n_batch, 2) or (n_batch, 4)
+    keys_split = jax.vmap(jax.random.split)(keys)  # (n_batch, 2, key_shape)
+    keys_r = keys_split[:, 0]
+    keys_i = keys_split[:, 1]
+
+    def _fill_one(image, key_r, key_i):
+        noise_real = jax.random.normal(key_r, (H, W // 2 + 1), dtype=jnp.float32)
+        noise_imag = jax.random.normal(key_i, (H, W // 2 + 1), dtype=jnp.float32)
+        noise_rfft = (noise_real + 1j * noise_imag) * noise_sigma_rfft
+        # irfft2 to real space.  jnp.fft.irfft2 norm="backward" divides by N.
+        noise_real_space = jnp.fft.irfft2(noise_rfft, s=(H, W))
+        return image * image_mask + noise_real_space * (1.0 - image_mask)
+
+    return jax.vmap(_fill_one)(batch_data, keys_r, keys_i)
+
+
 # -- JIT-compiled kernels ---------------------------------------------------
 
 @partial(jax.jit, static_argnums=(5, 6, 7))
@@ -639,6 +724,39 @@ def run_em_v2(
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
 
+    # Noise-fill precomputation (RELION parity: colored noise outside mask)
+    noise_fill_mask = None
+    noise_fill_sigma_rfft = None
+    if noise_fill_outside_mask:
+        # Check that the dataset has an image mask
+        ds_mask = getattr(experiment_dataset, 'image_mask', None)
+        if ds_mask is None:
+            logger.warning(
+                "noise_fill_outside_mask=True but dataset has no image_mask; "
+                "falling back to no noise fill",
+            )
+            noise_fill_outside_mask = False
+        else:
+            # Extract per-shell noise variance and build rfft2-layout sigma map
+            nv_per_shell = _extract_noise_per_shell(noise_variance, image_shape)
+            rfft_shell_idx = _make_rfft2_shell_indices(image_shape)
+            # Clamp shell indices to valid range (noise shells are 0..H//2)
+            n_nv_shells = len(nv_per_shell)
+            rfft_shell_idx_clamped = np.clip(rfft_shell_idx, 0, n_nv_shells - 1)
+            # Per-pixel sigma in rfft2 layout: sqrt(sigma2_noise[shell])
+            noise_fill_sigma_rfft = jnp.asarray(
+                np.sqrt(np.maximum(nv_per_shell[rfft_shell_idx_clamped], 0.0)),
+                dtype=jnp.float32,
+            )
+            # Get real-space image mask
+            noise_fill_mask = jnp.asarray(ds_mask, dtype=jnp.float32)
+            logger.info(
+                "Noise-fill outside mask: %d shells, sigma range [%.2e, %.2e]",
+                n_nv_shells,
+                float(noise_fill_sigma_rfft.min()),
+                float(noise_fill_sigma_rfft.max()),
+            )
+
     start_idx = 0
 
     for (batch_data, _, _, ctf_params, _, _, indices) in experiment_dataset.iter_batches(
@@ -648,14 +766,33 @@ def run_em_v2(
         end_idx = start_idx + batch_size
         batch_data = jnp.asarray(batch_data)
 
+        # -- NOISE FILL outside mask (RELION parity) --
+        # Replace pixels outside the scoring mask with per-particle
+        # deterministic colored noise matching the noise spectrum.
+        # When active, scoring uses the noise-filled images WITHOUT
+        # additional mask multiplication (score_with_masked_images=False
+        # effectively, since the fill already handles the mask boundary).
+        # Reconstruction still uses the original (unfilled) images.
+        batch_data_for_recon = batch_data
+        if noise_fill_outside_mask:
+            batch_data = _noise_fill_batch(
+                batch_data, jnp.asarray(indices),
+                noise_fill_mask, noise_fill_sigma_rfft,
+                None, image_shape,
+            )
+            # Score with the noise-filled images (no additional masking)
+            effective_score_mask = False
+        else:
+            effective_score_mask = score_with_masked_images
+
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
             batch_data, ctf_params, noise_variance, translations, config,
-            batch_size, n_trans, score_with_masked_images,
+            batch_size, n_trans, effective_score_mask,
         )
         shifted_recon_half = (
             _prepare_reconstruction_batch(
-                batch_data, ctf_params, noise_variance, translations, config,
+                batch_data_for_recon, ctf_params, noise_variance, translations, config,
                 batch_size, n_trans,
             )
             if score_with_masked_images
@@ -694,8 +831,11 @@ def run_em_v2(
         # -- Noise: precompute per-batch image power spectrum --
         if accumulate_noise:
             # P_img = sum_i |masked_img_i(k)|^2 per half-spectrum pixel
-            # Use the masked processed images (score path)
-            processed_masked = config.process_fn(batch_data, apply_image_mask=score_with_masked_images)
+            # Use the masked processed images (score path).
+            # When noise_fill is active, batch_data is already noise-filled
+            # (mask boundary handled), so skip additional masking.
+            noise_apply_mask = effective_score_mask
+            processed_masked = config.process_fn(batch_data, apply_image_mask=noise_apply_mask)
             processed_masked_half = fourier_transform_utils.full_image_to_half_image(
                 processed_masked, image_shape,
             )
