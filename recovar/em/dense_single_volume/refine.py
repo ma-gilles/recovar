@@ -27,13 +27,16 @@ import time
 
 import jax.numpy as jnp
 import numpy as np
+import scipy.special
 
 from recovar.em.core import hard_assignment_idx_to_pose
 from recovar.em.dense_single_volume.engine_v2 import run_em_v2
+from recovar.em.dense_single_volume.types import RelionStats
 from recovar.em.dense_single_volume.fourier_window import quantize_current_size
 from recovar.em.dense_single_volume.adaptive import (
     find_significant_rotations,
     compute_pass2_stats,
+    compute_pass2_stats_sparse,
 )
 
 # RELION-parity building blocks (used only by mode="relion")
@@ -50,15 +53,32 @@ from recovar.em.sampling import (
     get_rotation_grid_at_order,
     get_local_rotation_grid,
     get_local_rotation_grid_fast,
+    get_oversampled_translation_grid,
     get_translation_grid,
+    rotation_grid_n_in_planes,
+    rotation_grid_size,
+    rotation_indices_to_matrices,
 )
 from recovar.reconstruction.regularization import (
-    compute_data_vs_prior,
     resolution_from_data_vs_prior,
     compute_current_size_relion,
+    fsc_to_relion_ssnr,
+    update_relion_growth_state_from_fsc,
 )
 
 logger = logging.getLogger(__name__)
+
+ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION = 0.5
+
+
+def shell_index_to_resolution_angstrom(shell_index, ori_size, voxel_size):
+    """Convert a Fourier shell index into a real-space resolution in Angstrom."""
+    if voxel_size <= 0:
+        return float(shell_index)
+    shell_index = float(shell_index)
+    if shell_index <= 0:
+        return float("inf")
+    return float(ori_size) * float(voxel_size) / shell_index
 
 
 # ---------------------------------------------------------------------------
@@ -105,6 +125,187 @@ def compute_coarse_image_size(
     return coarse_size
 
 
+def should_skip_adaptive_pass2(
+    significant_counts,
+    n_rotations,
+    n_translations,
+    *,
+    threshold=ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
+):
+    """Return whether adaptive pass 2 should be skipped for this batch.
+
+    RELION's two-pass search only helps when significance pruning is actually
+    selective. If most coarse samples remain significant, the fine pass is pure
+    overhead. We therefore disable pass 2 whenever the mean fraction of
+    significant coarse samples is at least ``threshold``.
+    """
+    if threshold is None or float(threshold) < 0.0:
+        return False, 0.0
+    total_samples = max(int(n_rotations) * int(n_translations), 1)
+    sig_counts = np.asarray(significant_counts, dtype=np.float32)
+    mean_fraction = float(np.mean(sig_counts) / total_samples)
+    return mean_fraction >= float(threshold), mean_fraction
+
+
+def _bootstrap_current_size_relion(init_current_size: int, ori_size: int, incr_size: int = 10) -> int:
+    """Match RELION's first expectation-time current_size growth step.
+
+    RELION seeds the initial resolution from ``--ini_high`` and then immediately
+    calls ``updateImageSizeAndResolutionPointers()`` before the first E-step.
+    At startup ``ave_Pmax == 0`` and ``has_high_fsc_at_limit == false``, so the
+    first current_size is the initial resolution shell plus ``incr_size``.
+    """
+    init_shell = max(0, int(np.ceil(init_current_size / 2.0)))
+    raw_cs = compute_current_size_relion(
+        init_shell,
+        ori_size,
+        ave_Pmax=0.0,
+        has_high_fsc_at_limit=False,
+        incr_size=incr_size,
+    )
+    return quantize_current_size(raw_cs, ori_size=ori_size)
+
+
+def _run_grouped_local_search_em(
+    experiment_dataset,
+    mean,
+    mean_variance,
+    noise_variance,
+    prior_rotations,
+    healpix_order,
+    sigma_rot,
+    sigma_psi,
+    translations,
+    prior_translations,
+    sigma_offset_angstrom,
+    offset_range_pixels,
+    disc_type,
+    image_batch_size,
+    rotation_block_size,
+    current_size,
+):
+    """Run batched exact local search on the fine HEALPix grid.
+
+    Each image carries its own exact prior rotation from the previous
+    iteration. Images are processed in chunks; each chunk evaluates the union
+    of its local neighborhoods with an image-specific rotation prior.
+    """
+    prior_rotations = np.asarray(prior_rotations, dtype=np.float32).reshape(-1, 3, 3)
+    if prior_translations is None:
+        prior_translations = np.zeros(
+            (prior_rotations.shape[0], np.asarray(translations).shape[1]),
+            dtype=np.float32,
+        )
+    else:
+        prior_translations = np.asarray(prior_translations, dtype=np.float32).reshape(
+            -1, np.asarray(translations).shape[1],
+        )
+    n_images = experiment_dataset.n_units
+    n_trans = int(np.asarray(translations).shape[0])
+    active_offset_range = float(offset_range_pixels) if offset_range_pixels is not None else float(
+        np.max(np.linalg.norm(np.asarray(translations, dtype=np.float32), axis=1))
+    )
+    volume_size = experiment_dataset.volume_size
+
+    Ft_y_total = jnp.zeros(volume_size, dtype=experiment_dataset.dtype)
+    Ft_ctf_total = jnp.zeros(volume_size, dtype=experiment_dataset.dtype)
+    hard_assignment = np.empty(n_images, dtype=np.int32)
+    log_evidence = np.empty(n_images, dtype=np.float32)
+    best_log_score = np.empty(n_images, dtype=np.float32)
+    max_posterior = np.empty(n_images, dtype=np.float32)
+    rotation_posterior_sums = np.zeros(
+        rotation_grid_size(healpix_order), dtype=np.float64,
+    )
+
+    total_local_rotations = 0
+    max_local_rotations = 0
+    chunk_sizes = []
+    n_chunks = 0
+
+    chunk_size = max(1, min(image_batch_size, 64))
+    for chunk_start in range(0, n_images, chunk_size):
+        chunk_stop = min(chunk_start + chunk_size, n_images)
+        group_image_indices = np.arange(chunk_start, chunk_stop, dtype=np.int64)
+        n_chunks += 1
+        chunk_sizes.append(len(group_image_indices))
+
+        local_indices, local_log_prior = get_local_rotation_grid_fast(
+            prior_rotations[group_image_indices],
+            sigma_rot,
+            sigma_psi,
+            healpix_order,
+            sigma_cutoff=3.0,
+            per_image=True,
+        )
+        local_rotations = rotation_indices_to_matrices(local_indices, healpix_order)
+        local_translation_log_prior = make_relion_translation_log_prior(
+            translations,
+            experiment_dataset.voxel_size,
+            sigma_offset_angstrom,
+            prior_translations[group_image_indices],
+            offset_range_pixels=active_offset_range,
+        )
+
+        total_local_rotations += int(local_rotations.shape[0])
+        max_local_rotations = max(max_local_rotations, int(local_rotations.shape[0]))
+
+        _, ha_local, Ft_y_g, Ft_ctf_g, stats_g = run_em_v2(
+            experiment_dataset,
+            mean,
+            mean_variance,
+            noise_variance,
+            local_rotations,
+            translations,
+            disc_type,
+            image_batch_size=image_batch_size,
+            rotation_block_size=min(rotation_block_size, max(1, local_rotations.shape[0])),
+            current_size=current_size,
+            rotation_log_prior=local_log_prior,
+            translation_log_prior=local_translation_log_prior,
+            image_indices=group_image_indices,
+            score_with_masked_images=True,
+            return_stats=True,
+        )
+
+        Ft_y_total = Ft_y_total + Ft_y_g
+        Ft_ctf_total = Ft_ctf_total + Ft_ctf_g
+
+        local_rot_idx = ha_local // n_trans
+        trans_idx = ha_local % n_trans
+        hard_assignment[group_image_indices] = (
+            local_indices[local_rot_idx] * n_trans + trans_idx
+        ).astype(np.int32)
+        log_evidence[group_image_indices] = np.asarray(
+            stats_g.log_evidence_per_image, dtype=np.float32,
+        )
+        best_log_score[group_image_indices] = np.asarray(
+            stats_g.best_log_score_per_image, dtype=np.float32,
+        )
+        max_posterior[group_image_indices] = np.asarray(
+            stats_g.max_posterior_per_image, dtype=np.float32,
+        )
+        rotation_posterior_sums[local_indices] += np.asarray(
+            stats_g.rotation_posterior_sums, dtype=np.float64,
+        )
+
+    logger.info(
+        "Batched local search: %d chunks, median chunk size=%d, "
+        "mean local rotations=%.1f, max local rotations=%d",
+        n_chunks,
+        int(np.median(chunk_sizes)) if chunk_sizes else 0,
+        float(total_local_rotations / max(n_chunks, 1)),
+        max_local_rotations,
+    )
+
+    relion_stats = RelionStats(
+        log_evidence_per_image=jnp.asarray(log_evidence),
+        best_log_score_per_image=jnp.asarray(best_log_score),
+        max_posterior_per_image=jnp.asarray(max_posterior),
+        rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
+    )
+    return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats
+
+
 # ---------------------------------------------------------------------------
 # Batched significance pruning (avoids materializing full weight matrix)
 # ---------------------------------------------------------------------------
@@ -121,6 +322,12 @@ def _compute_significance_batched(
     image_batch_size,
     rotation_block_size,
     current_size,
+    *,
+    score_with_masked_images=False,
+    return_significant_sample_indices=False,
+    rotation_log_prior=None,
+    translation_log_prior=None,
+    half_spectrum_scoring=False,
 ):
     """Run coarse E-step and find significant rotations in a memory-efficient way.
 
@@ -139,6 +346,10 @@ def _compute_significance_batched(
         Per-image count of significant (rot x trans) samples.
     hard_assignments : np.ndarray, shape (n_images,), dtype int32
         Best (rot_idx * n_trans + trans_idx) per image from coarse pass.
+    significant_sample_indices : list[np.ndarray], optional
+        Returned only when ``return_significant_sample_indices=True``.
+        ``significant_sample_indices[i]`` stores flattened
+        ``rot_idx * n_trans + trans_idx`` entries kept for image ``i``.
     """
     from recovar.em.dense_single_volume.engine_v2 import (
         _preprocess_batch, _compute_projections_block,
@@ -163,7 +374,7 @@ def _compute_significance_batched(
         process_fn=experiment_dataset.process_images,
     )
 
-    half_weights = make_half_image_weights(image_shape)
+    half_weights = jnp.ones(n_half, dtype=jnp.float32) if half_spectrum_scoring else make_half_image_weights(image_shape)
 
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
@@ -190,6 +401,47 @@ def _compute_significance_batched(
     sig_rot_any = np.zeros(n_rot, dtype=bool)
     n_sig_all = np.empty(n_images, dtype=np.int32)
     hard_assignment = np.empty(n_images, dtype=np.int32)
+    significant_sample_indices = (
+        [None] * n_images if return_significant_sample_indices else None
+    )
+
+    if translation_log_prior is not None:
+        translation_log_prior = np.asarray(translation_log_prior, dtype=np.float32)
+        if translation_log_prior.ndim == 1:
+            if translation_log_prior.shape != (n_trans,):
+                raise ValueError(
+                    "translation_log_prior must have shape "
+                    f"({n_trans},), got {translation_log_prior.shape}",
+                )
+        elif translation_log_prior.ndim == 2:
+            if translation_log_prior.shape != (n_images, n_trans):
+                raise ValueError(
+                    "translation_log_prior must have shape "
+                    f"({n_images}, {n_trans}) when image-specific, got "
+                    f"{translation_log_prior.shape}",
+                )
+        else:
+            raise ValueError(
+                "translation_log_prior must be 1D or 2D, got "
+                f"{translation_log_prior.ndim} dimensions",
+            )
+
+    if rotation_log_prior is not None:
+        rotation_log_prior = np.asarray(rotation_log_prior, dtype=np.float32)
+        if rotation_log_prior.shape != (n_rot,):
+            raise ValueError(
+                "rotation_log_prior must have shape "
+                f"({n_rot},), got {rotation_log_prior.shape}",
+            )
+        if n_rot_padded > n_rot:
+            rotation_log_prior_padded = np.concatenate([
+                rotation_log_prior,
+                np.zeros(n_rot_padded - n_rot, dtype=np.float32),
+            ])
+        else:
+            rotation_log_prior_padded = rotation_log_prior
+    else:
+        rotation_log_prior_padded = None
 
     image_indices = np.arange(n_images)
     start_idx = 0
@@ -200,11 +452,27 @@ def _compute_significance_batched(
         batch_size = len(indices)
         end_idx = start_idx + batch_size
         batch_data = jnp.asarray(batch_data)
+        if translation_log_prior is None:
+            batch_translation_log_prior = None
+        elif translation_log_prior.ndim == 1:
+            batch_translation_log_prior = jnp.asarray(translation_log_prior)
+        else:
+            batch_translation_log_prior = jnp.asarray(
+                translation_log_prior[start_idx:end_idx],
+            )
 
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
             batch_data, ctf_params, noise_variance, translations, config,
-            batch_size, n_trans,
+            batch_size, n_trans, score_with_masked_images,
         )
+
+        # DC exclusion (RELION parity: Minvsigma2[0] = 0)
+        if half_spectrum_scoring:
+            from recovar.em.dense_single_volume.engine_v2 import make_shell_indices_half as _mshi
+            dc_shell = _mshi(image_shape)
+            dc_mask = (dc_shell == 0)
+            shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
+            ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
 
         if use_window:
             shifted_data = shifted_half[:, window_indices]
@@ -249,6 +517,15 @@ def _compute_significance_batched(
                 mask = jnp.arange(rotation_block_size) < valid
                 scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
 
+            if rotation_log_prior_padded is not None:
+                scores = scores + jnp.asarray(rotation_log_prior_padded[r0:r1])[None, :, None]
+
+            if batch_translation_log_prior is not None:
+                if translation_log_prior.ndim == 1:
+                    scores = scores + batch_translation_log_prior[None, None, :]
+                else:
+                    scores = scores + batch_translation_log_prior[:, None, :]
+
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
 
         log_Z = max_s + jnp.log(sum_exp)
@@ -290,6 +567,15 @@ def _compute_significance_batched(
                 pmask = jnp.arange(rotation_block_size) < valid
                 scores = jnp.where(pmask[None, :, None], scores, -jnp.inf)
 
+            if rotation_log_prior_padded is not None:
+                scores = scores + jnp.asarray(rotation_log_prior_padded[r0:r1])[None, :, None]
+
+            if batch_translation_log_prior is not None:
+                if translation_log_prior.ndim == 1:
+                    scores = scores + batch_translation_log_prior[None, None, :]
+                else:
+                    scores = scores + batch_translation_log_prior[:, None, :]
+
             probs = jnp.exp(scores - log_Z[:, None, None])
 
             block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
@@ -308,7 +594,7 @@ def _compute_significance_batched(
         batch_weights = np.concatenate(batch_weights_blocks, axis=1)
 
         # Find significance for this batch
-        _, batch_sig_rot_mask, batch_n_sig = _find_sig(
+        batch_sig_mask, batch_sig_rot_mask, batch_n_sig = _find_sig(
             jnp.asarray(batch_weights),
             n_rot, n_trans,
             adaptive_fraction=adaptive_fraction,
@@ -320,9 +606,98 @@ def _compute_significance_batched(
         sig_rot_any |= batch_sig_rot_any
 
         n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig)
+        if return_significant_sample_indices:
+            batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
+            for local_idx, global_idx in enumerate(indices):
+                if np.all(batch_sig_mask_np[local_idx]):
+                    significant_sample_indices[int(global_idx)] = None
+                else:
+                    significant_sample_indices[int(global_idx)] = np.flatnonzero(
+                        batch_sig_mask_np[local_idx]
+                    ).astype(np.int32)
         start_idx = end_idx
 
+    if return_significant_sample_indices:
+        return sig_rot_any, n_sig_all, hard_assignment, significant_sample_indices
     return sig_rot_any, n_sig_all, hard_assignment
+
+
+def make_relion_translation_log_prior(
+    translations,
+    voxel_size,
+    sigma_offset_angstrom,
+    prior_centers=None,
+    *,
+    offset_range_pixels=None,
+):
+    """Return RELION-style normalized log-priors over a translation grid."""
+    translations = np.asarray(translations, dtype=np.float32)
+    if translations.ndim != 2:
+        raise ValueError(
+            f"translations must have shape (n_trans, dim), got {translations.shape}",
+        )
+    sigma_offset_angstrom = float(sigma_offset_angstrom)
+    voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
+    if offset_range_pixels is not None and float(offset_range_pixels) > 0.0:
+        # RELION's score path uses sigma = offset_range / 3 while an explicit
+        # translational search range is active.
+        sigma_offset_angstrom = float(offset_range_pixels) * voxel_size / 3.0
+    n_trans = translations.shape[0]
+
+    if prior_centers is None:
+        centers = np.zeros((1, translations.shape[1]), dtype=np.float32)
+        shared = True
+    else:
+        centers = np.asarray(prior_centers, dtype=np.float32).reshape(-1, translations.shape[1])
+        shared = False
+
+    if sigma_offset_angstrom <= 0.0:
+        zeros = np.zeros((centers.shape[0], n_trans), dtype=np.float32)
+        return zeros[0] if shared else zeros
+
+    diffs_ang = (translations[None, :, :] - centers[:, None, :]) * voxel_size
+    sqdist_ang = np.sum(diffs_ang ** 2, axis=-1)
+    log_prior = -0.5 * sqdist_ang / (sigma_offset_angstrom ** 2)
+    log_prior -= scipy.special.logsumexp(log_prior, axis=1, keepdims=True)
+    log_prior += np.log(float(n_trans))
+    log_prior = log_prior.astype(np.float32)
+    return log_prior[0] if shared else log_prior
+
+
+def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
+    """Collapse per-rotation posterior mass onto RELION's HEALPix directions."""
+    rotation_posterior_sums = np.asarray(rotation_posterior_sums, dtype=np.float64).reshape(-1)
+    n_rot = rotation_grid_size(healpix_order)
+    if rotation_posterior_sums.shape[0] != n_rot:
+        raise ValueError(
+            "rotation_posterior_sums must have shape "
+            f"({n_rot},), got {rotation_posterior_sums.shape}",
+        )
+
+    n_pixels = n_rot // rotation_grid_n_in_planes(healpix_order)
+    direction_weights = np.zeros(n_pixels, dtype=np.float64)
+    np.add.at(direction_weights, np.arange(n_rot, dtype=np.int64) % n_pixels, rotation_posterior_sums)
+    total = float(direction_weights.sum())
+    if total <= 0.0 or not np.isfinite(total):
+        direction_weights.fill(1.0 / max(n_pixels, 1))
+    else:
+        direction_weights /= total
+    return direction_weights.astype(np.float32)
+
+
+def make_relion_direction_log_prior(direction_prior, healpix_order):
+    """Expand RELION's learned ``pdf_direction`` onto the full rotation grid."""
+    direction_prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
+    n_rot = rotation_grid_size(healpix_order)
+    n_pixels = n_rot // rotation_grid_n_in_planes(healpix_order)
+    if direction_prior.shape[0] != n_pixels:
+        raise ValueError(
+            f"direction_prior must have shape ({n_pixels},), got {direction_prior.shape}",
+        )
+
+    safe_prior = np.clip(direction_prior, np.finfo(np.float32).tiny, None)
+    pixel_idx = np.arange(n_rot, dtype=np.int64) % n_pixels
+    return np.log(safe_prior[pixel_idx]).astype(np.float32)
 
 
 # ---------------------------------------------------------------------------
@@ -380,11 +755,14 @@ def refine_single_volume(
     nside_level=None,
     translation_pixel_offset=None,
     mode="legacy",
+    adaptive_pass2_skip_threshold=ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
     # --- RELION-mode parameters (only used when mode="relion") ---
     init_healpix_order=2,
     max_healpix_order=7,
     init_translation_range=10.0,
     init_translation_step=2.0,
+    init_translation_sigma_angstrom=10.0,
+    particle_diameter_ang=None,
     save_intermediates_dir=None,
 ):
     """Multi-iteration EM refinement with FSC-driven resolution management.
@@ -449,6 +827,10 @@ def refine_single_volume(
     mode : str
         ``"legacy"`` preserves existing behavior.  ``"relion"`` enables
         RELION-parity convergence-driven refinement.
+    adaptive_pass2_skip_threshold : float
+        Skip adaptive pass 2 when the mean significant-sample fraction is at
+        least this value. Set to a negative value to disable this shortcut and
+        keep the full RELION-style two-pass adaptive search.
     init_healpix_order : int
         Starting HEALPix order for RELION mode (default 2, ~14.7 deg).
     max_healpix_order : int
@@ -457,6 +839,11 @@ def refine_single_volume(
         Initial translation search range in pixels (RELION mode).
     init_translation_step : float
         Initial translation step size in pixels (RELION mode).
+    init_translation_sigma_angstrom : float
+        Initial RELION-style translation prior width in Angstrom.
+    particle_diameter_ang : float or None
+        RELION particle diameter in Angstrom for the adaptive coarse-image-size
+        formula. When None, fall back to ``ori_size * pixel_size``.
 
     Returns
     -------
@@ -498,11 +885,16 @@ def refine_single_volume(
             init_current_size=init_current_size,
             fsc_threshold=fsc_threshold,
             adaptive_oversampling=adaptive_oversampling,
+            adaptive_fraction=adaptive_fraction,
+            max_significants=max_significants,
             init_healpix_order=init_healpix_order,
             max_healpix_order=max_healpix_order,
             init_translation_range=init_translation_range,
             init_translation_step=init_translation_step,
+            init_translation_sigma_angstrom=init_translation_sigma_angstrom,
+            particle_diameter_ang=particle_diameter_ang,
             nside_level=nside_level,
+            adaptive_pass2_skip_threshold=adaptive_pass2_skip_threshold,
             save_intermediates_dir=save_intermediates_dir,
         )
 
@@ -550,9 +942,9 @@ def refine_single_volume(
                 means[0], means[1], volume_shape,
             )
             raw_cs = fsc_to_current_size(fsc_prev, threshold=fsc_threshold)
-            cs = quantize_current_size(raw_cs)
+            cs = quantize_current_size(raw_cs, ori_size=cryo.image_shape[0])
 
-        cs = quantize_current_size(cs)
+        cs = quantize_current_size(cs, ori_size=cryo.image_shape[0])
         current_sizes.append(cs)
 
         logger.info(
@@ -565,6 +957,11 @@ def refine_single_volume(
 
         # --- Run E+M on each half-set ---
         iter_sig_counts = None
+        pose_rotations = [np.asarray(rotations), np.asarray(rotations)]
+        pose_translations = [
+            np.asarray(translations, dtype=np.float32),
+            np.asarray(translations, dtype=np.float32),
+        ]
 
         for k in range(2):
             if not use_adaptive:
@@ -648,12 +1045,29 @@ def refine_single_volume(
                         current_size=cs_for_engine,
                     )
                     oversampled_rots = None
+                    pose_rotations[k] = np.asarray(rotations)
+                    pose_translations[k] = np.asarray(translations, dtype=np.float32)
                 else:
                     # Solve for this half-set using pass 2 statistics
                     new_mean_k = relion_functions.post_process_from_filter(
                         experiment_datasets[k], Ft_ctf_k, Ft_y_k,
                         tau=mean_variance, disc_type=disc_type,
                     ).reshape(-1)
+                    pose_rotations[k] = np.asarray(oversampled_rots)
+                    translation_vals = np.unique(np.asarray(translations, dtype=np.float32))
+                    translation_diffs = np.diff(np.sort(translation_vals))
+                    translation_diffs = translation_diffs[translation_diffs > 1e-6]
+                    translation_step = (
+                        float(translation_diffs.min()) if translation_diffs.size else 1.0
+                    )
+                    oversampled_translations, _ = get_oversampled_translation_grid(
+                        np.asarray(translations, dtype=np.float32),
+                        translation_step,
+                        oversampling_order=adaptive_oversampling,
+                    )
+                    pose_translations[k] = np.asarray(
+                        oversampled_translations, dtype=np.float32,
+                    )
 
             means[k] = new_mean_k
             hard_assignments[k] = ha_k
@@ -693,20 +1107,10 @@ def refine_single_volume(
         mean_variance = mean_signal_variance
 
         # --- Update noise estimate ---
-        # For adaptive oversampling, the hard assignments index into the
-        # oversampled grid, not the original.  Use the coarse assignments
-        # for pose updates.
-        effective_rots = rotations
-        effective_trans = translations
         for k in range(2):
-            if use_adaptive and oversampled_rots is not None and len(oversampled_rots) > 0:
-                best_rots, best_trans = hard_assignment_idx_to_pose(
-                    hard_assignments[k], oversampled_rots, translations,
-                )
-            else:
-                best_rots, best_trans = hard_assignment_idx_to_pose(
-                    hard_assignments[k], rotations, translations,
-                )
+            best_rots, best_trans = hard_assignment_idx_to_pose(
+                hard_assignments[k], pose_rotations[k], pose_translations[k],
+            )
             experiment_datasets[k].update_poses(best_rots, best_trans)
 
         noise_from_res = noise.estimate_noise_level_no_masks(
@@ -722,7 +1126,9 @@ def refine_single_volume(
         elapsed = time.time() - t0
         wall_times.append(elapsed)
 
-        res_angstrom = pixel_res / cryo.voxel_size if cryo.voxel_size > 0 else pixel_res
+        res_angstrom = shell_index_to_resolution_angstrom(
+            pixel_res, cryo.image_shape[0], cryo.voxel_size,
+        )
         logger.info(
             "Iteration %d: current_size=%d, pixel_res=%.1f, "
             "res=%.2f A, time=%.1fs",
@@ -760,6 +1166,7 @@ def _extract_max_posterior_per_image(
     image_batch_size,
     rotation_block_size,
     current_size,
+    half_spectrum_scoring=False,
 ):
     """Extract per-image maximum posterior probability from an E-step pass.
 
@@ -798,7 +1205,7 @@ def _extract_max_posterior_per_image(
         process_fn=experiment_dataset.process_images,
     )
 
-    half_weights = make_half_image_weights(image_shape)
+    half_weights = jnp.ones(n_half, dtype=jnp.float32) if half_spectrum_scoring else make_half_image_weights(image_shape)
 
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
@@ -910,11 +1317,16 @@ def _refine_relion_mode(
     init_current_size,
     fsc_threshold,
     adaptive_oversampling,
+    adaptive_fraction,
+    max_significants,
     init_healpix_order,
     max_healpix_order,
     init_translation_range,
     init_translation_step,
+    init_translation_sigma_angstrom,
+    particle_diameter_ang,
     nside_level,
+    adaptive_pass2_skip_threshold,
     save_intermediates_dir=None,
 ):
     """RELION-parity refinement loop with convergence detection.
@@ -948,29 +1360,43 @@ def _refine_relion_mode(
         current_resolution=float("inf"),
     )
 
-    # Use the provided rotation grid as the initial grid.
-    # In RELION mode, the grid may be regenerated at higher HEALPix orders
-    # when angular step refinement triggers.
-    current_rotations = np.asarray(rotations, dtype=np.float32)
+    # RELION mode owns the coarse HEALPix grid. When coarse-grid metadata is
+    # provided, regenerate the matching coarse grid here instead of inheriting
+    # any finer caller-supplied rotation table.
+    current_healpix_order = int(init_healpix_order)
+    if nside_level is not None:
+        if int(nside_level) != current_healpix_order:
+            logger.info(
+                "RELION mode: ignoring caller nside_level=%d and regenerating "
+                "initial coarse grid at healpix_order=%d",
+                int(nside_level), current_healpix_order,
+            )
+        current_rotations = get_rotation_grid_at_order(
+            current_healpix_order, matrices=True,
+        ).astype(np.float32)
+        current_nside_level = current_healpix_order
+    else:
+        current_rotations = np.asarray(rotations, dtype=np.float32)
+        current_nside_level = current_healpix_order
     current_translations = jnp.asarray(translations, dtype=jnp.float32)
-    current_healpix_order = init_healpix_order
 
-    # Determine nside_level for current rotations.  If nside_level is provided,
-    # use it; otherwise infer from init_healpix_order.
-    current_nside_level = nside_level if nside_level is not None else init_healpix_order
+    # RELION reconstructs on a 2x padded Fourier grid to reduce interpolation
+    # error before cropping back to the native real-space volume.
+    PADDING_FACTOR = 2
 
-    # TODO: RELION uses padding_factor=2 for reconstruction (8x Fourier grid).
-    # Currently disabled because zero_pad_fourier_volume has a frequency
-    # mapping bug (CC drops from 0.97 to 0.25). Fix the padding function
-    # before re-enabling.
-    PADDING_FACTOR = 1
-
-    def _safe_batch_sizes(n_rot):
-        """Reduce batch sizes for large grids to avoid GPU OOM."""
-        # Target: ~50M elements in the score tensor (n_img * n_rot * n_trans)
+    def _safe_batch_sizes(n_rot, n_trans):
+        """Reduce batch sizes for large pose grids to avoid GPU OOM."""
+        # Target the actual score-tensor size: n_img * n_rot_block * n_trans.
         budget = 50_000_000
-        rbs = min(rotation_block_size, max(500, budget // max(n_rot, 1)))
-        ibs = min(image_batch_size, max(50, budget // max(n_rot, 1)))
+        n_trans = max(int(n_trans), 1)
+        ibs = min(
+            image_batch_size,
+            max(1, budget // max(n_rot * n_trans, 1)),
+        )
+        rbs = min(
+            rotation_block_size,
+            max(64, budget // max(ibs * n_trans, 1)),
+        )
         return ibs, rbs
 
     # State: two half-set volumes, noise, prior
@@ -985,63 +1411,100 @@ def _refine_relion_mode(
     wall_times = []
     hard_assignments = [None, None]
     previous_assignments = [None, None]
+    previous_best_rotations = [None, None]
+    previous_best_translations = [None, None]
+    max_posterior_per_half = [None, None]
+    rotation_posterior_per_half = [None, None]
     significant_counts = []
     data_vs_prior_trajectory = []
     healpix_order_trajectory = []
     ave_Pmax_trajectory = []
+    pmax_per_image_history = []
+    relion_incr_size = 10
+    relion_has_high_fsc_at_limit = False
+    global_direction_prior = None
+    global_direction_prior_order = None
 
-    # NOTE: PADDING_FACTOR is already set above (currently 1, pending
-    # fix for zero_pad_fourier_volume).  Do NOT override here.
+    # Extract radial noise profile from initial pixel-array noise_variance.
+    # This serves as the floor reference for the first iteration's noise update,
+    # preventing runaway collapse when posteriors are too peaked.
+    from recovar.core import fourier_transform_utils
+    n_shells_init = cryo.image_shape[0] // 2 + 1
+    radial_dist_init = np.clip(
+        fourier_transform_utils.get_grid_of_radial_distances(
+            cryo.image_shape, scaled=False, frequency_shift=0,
+        )
+        .astype(int)
+        .reshape(-1),
+        0, n_shells_init - 1,
+    )
+    # Average pixel values per shell (noise_variance is radially symmetric)
+    previous_noise_radial = np.zeros(n_shells_init, dtype=np.float64)
+    shell_counts = np.zeros(n_shells_init, dtype=np.float64)
+    noise_variance_np = np.asarray(noise_variance, dtype=np.float64)
+    np.add.at(previous_noise_radial, radial_dist_init[:noise_variance_np.size], noise_variance_np)
+    np.add.at(shell_counts, radial_dist_init[:noise_variance_np.size], 1.0)
+    shell_counts = np.maximum(shell_counts, 1.0)
+    previous_noise_radial = previous_noise_radial / shell_counts
+    previous_noise_radial = jnp.asarray(previous_noise_radial[:n_shells_init], dtype=jnp.float32)
+
+    # Save the initial noise estimate once, before any iterations update it.
+    # This is used as a per-shell floor: the posterior-weighted noise can only
+    # INCREASE from this baseline, never decrease.  At high frequencies the
+    # posterior noise exceeds the initial estimate (model error raises it), so
+    # we use the posterior value.  At low frequencies the posterior noise is
+    # lower than the initial estimate (selection bias lowers it), so we clamp
+    # to the initial value.  This matches RELION's observed behavior where
+    # noise increases at low freq and stays similar at high freq during early
+    # iterations.
+    initial_noise_radial = previous_noise_radial.copy()
+
+    # NOTE: keep the padded reconstruction factor defined above; the
+    # current-size and convergence logic below assumes a single source of truth.
 
     iteration = 0
     while not state.has_converged and iteration < max_iter:
         t0 = time.time()
 
-        # --- Determine current_size using data_vs_prior (RELION C4/C5) ---
-        # At iteration 0, no FSC or tau2 available yet; use init_current_size.
-        # After iteration 0, compute data_vs_prior from the combined Ft_ctf
-        # and the current tau2 (mean_variance).
+        # --- Determine current_size using RELION's FSC-derived SSNR (C4/C5) ---
+        # At iteration 0, no previous half-map FSC exists yet; use the initial
+        # resolution plus RELION's bootstrap image-size growth. After that,
+        # mimic RELION's auto-refine update:
+        # 1. zero FSC beyond the previous current_size limit
+        # 2. convert FSC -> SSNR (= data_vs_prior in split-half auto-refine)
+        # 3. grow current_size using ave_Pmax, FSC at the current limit, and
+        #    RELION's dynamic incr_size heuristic.
         if iteration == 0:
-            cs = init_current_size
+            cs = _bootstrap_current_size_relion(init_current_size, grid_size)
             data_vs_prior_iter = None
         else:
-            # Compute FSC between the two half-maps for tau2 estimation
-            fsc_prev = regularization.get_fsc_gpu(
-                means[0], means[1], volume_shape,
-            )
-            # Compute data_vs_prior using the combined Fourier weights.
-            # Ft_ctf_combined is computed after the previous iteration's M-step.
-            # We stored Ft_ctf_0 + Ft_ctf_1 from the previous iteration.
-            n_shells = volume_shape[0] // 2 - 1
-            # mean_variance is stored as per-voxel; extract radial profile
-            # for data_vs_prior (which needs per-shell tau2).
-            tau2_radial = regularization.average_over_shells(
-                mean_variance.real, volume_shape,
-            )
-            data_vs_prior_iter = compute_data_vs_prior(
-                Ft_ctf_combined, tau2_radial, volume_shape,
-                padding_factor=PADDING_FACTOR,
-            )
+            fsc_prev = np.asarray(fsc_history[-1], dtype=np.float32).copy()
+            prev_cs = current_sizes[-1]
+            if prev_cs < grid_size:
+                fsc_prev[min(len(fsc_prev), prev_cs // 2):] = 0.0
+
+            data_vs_prior_iter = np.asarray(fsc_to_relion_ssnr(fsc_prev))
             data_vs_prior_trajectory.append(data_vs_prior_iter)
+            res_shell = resolution_from_data_vs_prior(
+                data_vs_prior_iter,
+                allow_high_res_recovery=True,
+            )
+            relion_incr_size, relion_has_high_fsc_at_limit = update_relion_growth_state_from_fsc(
+                fsc_prev,
+                prev_cs,
+                incr_size=relion_incr_size,
+                has_high_fsc_at_limit=relion_has_high_fsc_at_limit,
+            )
 
-            # Resolution from data_vs_prior (RELION uses this, not FSC < 0.143)
-            res_shell = resolution_from_data_vs_prior(data_vs_prior_iter)
-
-            # Check if FSC is still high at the resolution limit
-            # (used by compute_current_size_relion for aggressive growth)
-            has_high_fsc = False
-            if res_shell < len(np.asarray(fsc_prev)):
-                has_high_fsc = float(fsc_prev[res_shell]) > 0.2
-
-            # RELION's current_size growth logic (C5)
             raw_cs = compute_current_size_relion(
                 res_shell, grid_size,
                 ave_Pmax=state.ave_Pmax,
-                has_high_fsc_at_limit=has_high_fsc,
+                has_high_fsc_at_limit=relion_has_high_fsc_at_limit,
+                incr_size=relion_incr_size,
             )
-            cs = quantize_current_size(raw_cs)
+            cs = quantize_current_size(raw_cs, ori_size=grid_size)
 
-        cs = quantize_current_size(cs)
+        cs = quantize_current_size(cs, ori_size=grid_size)
         current_sizes.append(cs)
         healpix_order_trajectory.append(state.healpix_order)
 
@@ -1071,6 +1534,8 @@ def _refine_relion_mode(
                     new_order, matrices=True,
                 ).astype(np.float32)
                 current_healpix_order = new_order
+                global_direction_prior = None
+                global_direction_prior_order = None
             else:
                 logger.info(
                     "Angular step refined to order %d (grid stays at order %d "
@@ -1092,96 +1557,52 @@ def _refine_relion_mode(
                 state.translation_range, state.translation_step,
             )
 
-        # --- Local angular search with Gaussian prior weighting ---
-        # RELION-style local search: restrict the rotation grid to
-        # orientations near previous best assignments, AND add Gaussian
-        # prior log-weights so orientations far from the previous best
-        # are exponentially down-weighted in the E-step.
-        #
-        # Grid restriction (for speed): use get_local_rotation_grid to
-        # select all grid rotations within sigma_cutoff * sigma_rot of
-        # any image's previous best orientation.
-        #
-        # Prior weighting: for each selected rotation r, compute
-        #   log_prior[r] = max_i(-d(R_prev[i], R_r)^2 / (2*sigma^2))
-        # where the max is over all images (union approach).  This is
-        # conservative -- the closest image's prior dominates.
+        # --- Local angular search bookkeeping ---
+        # Once RELION enters local search, each image should search around its
+        # own previous orientation on the true current HEALPix order. Use the
+        # exact rotations selected in the previous iteration, not the nearest
+        # snapped grid indices.
         effective_rotations = current_rotations
         rotation_log_prior = None
-        local_rot_indices = None  # mapping from local -> global rotation index
-        use_local = (state.do_local_search
-                     and previous_assignments[0] is not None
-                     and iteration > 0)
-        if use_local:
-            n_trans_current = current_translations.shape[0]
-            sigma_rot = state.sigma_rot
-            sigma_psi = state.sigma_psi if state.sigma_psi > 0 else sigma_rot
-            if sigma_rot <= 0:
-                # Fallback: compute from effective angular step
-                step_rad = np.deg2rad(
-                    healpix_angular_step(state.healpix_order)
-                    / (2 ** state.adaptive_oversampling)
-                )
-                sigma_rot = np.sqrt(2.0 * 2.0) * step_rad
-                sigma_psi = sigma_rot
-
-            # Gather UNIQUE per-image best rotation indices from both half-sets
-            unique_rot_idx = set()
-            for k in range(2):
-                if previous_assignments[k] is not None:
-                    rot_idx = previous_assignments[k] // n_trans_current
-                    rot_idx = np.clip(rot_idx, 0, current_rotations.shape[0] - 1)
-                    unique_rot_idx.update(rot_idx.tolist())
-            unique_rot_idx = np.array(sorted(unique_rot_idx))
-
-            # Fast HEALPix-based local search
-            t0_local = time.time()
-            selected_indices, rotation_log_prior = get_local_rotation_grid_fast(
-                unique_rot_idx,
-                sigma_rot,
-                sigma_psi,
-                state.healpix_order,
-                sigma_cutoff=3.0,
+        use_local = (
+            state.do_local_search
+            and all(rot is not None for rot in previous_best_rotations)
+            and iteration > 0
+        )
+        local_search_order = None
+        sigma_rot = state.sigma_rot
+        sigma_psi = state.sigma_psi if state.sigma_psi > 0 else sigma_rot
+        if use_local and sigma_rot <= 0:
+            step_rad = np.deg2rad(
+                healpix_angular_step(state.healpix_order)
+                / (2 ** state.adaptive_oversampling)
             )
-            dt_local = time.time() - t0_local
+            sigma_rot = np.sqrt(2.0 * 2.0) * step_rad
+            sigma_psi = sigma_rot
 
-            # Cap the local grid to prevent it from growing to the full grid.
-            # Keep the highest-prior rotations.  At order 4 with 5K images,
-            # the uncapped grid can grow to 200K+ (86% of 295K).
-            # A cap of ~20K gives ~20s/iter while maintaining quality.
-            MAX_LOCAL_ROTATIONS = 20000
-            if len(selected_indices) > MAX_LOCAL_ROTATIONS:
-                # Keep the top-N by log_prior
-                top_idx = np.argsort(rotation_log_prior)[-MAX_LOCAL_ROTATIONS:]
-                selected_indices = selected_indices[top_idx]
-                rotation_log_prior = rotation_log_prior[top_idx]
-                # Re-sort by index for consistent ordering
-                sort_order = np.argsort(selected_indices)
-                selected_indices = selected_indices[sort_order]
-                rotation_log_prior = rotation_log_prior[sort_order]
-
-            if len(selected_indices) < current_rotations.shape[0]:
-                effective_rotations = current_rotations[selected_indices]
-                local_rot_indices = selected_indices
-
-                logger.info(
-                    "Local search (fast): %d / %d rotations in %.2f s "
-                    "(sigma_rot=%.4f rad = %.2f deg, sigma_psi=%.4f rad, "
-                    "log_prior range=[%.2f, %.2f])",
-                    effective_rotations.shape[0],
-                    current_rotations.shape[0],
-                    dt_local,
-                    sigma_rot, np.rad2deg(sigma_rot),
-                    sigma_psi,
-                    rotation_log_prior.min(), rotation_log_prior.max(),
-                )
-            else:
-                rotation_log_prior = None
-                logger.info(
-                    "Local search (fast): all %d rotations selected in %.2f s "
-                    "(sigma_rot=%.4f rad); using flat prior",
-                    current_rotations.shape[0], dt_local, sigma_rot,
-                )
+        if use_local:
+            local_search_order = state.healpix_order + state.adaptive_oversampling
+            logger.info(
+                "Local search (batched exact): fine_order=%d, sigma_rot=%.4f rad "
+                "(%.2f deg), sigma_psi=%.4f rad",
+                local_search_order,
+                sigma_rot,
+                np.rad2deg(sigma_rot),
+                sigma_psi,
+            )
+        elif (
+            global_direction_prior is not None
+            and global_direction_prior_order == current_healpix_order
+        ):
+            rotation_log_prior = make_relion_direction_log_prior(
+                global_direction_prior,
+                current_healpix_order,
+            )
+            logger.info(
+                "Using learned global direction prior: %d directions at healpix_order=%d",
+                global_direction_prior.shape[0],
+                current_healpix_order,
+            )
 
         cs_for_engine = cs if cs < cryo.image_shape[0] else None
 
@@ -1189,13 +1610,22 @@ def _refine_relion_mode(
         # Two modes: single-pass (adaptive_oversampling=0) or two-pass
         # coarse/fine (adaptive_oversampling>=1).
         iter_sig_counts = None
-        use_adaptive = (state.adaptive_oversampling > 0
-                        and effective_rotations.shape[0] > 16)
+        use_adaptive = (
+            state.adaptive_oversampling > 0
+            and not use_local
+            and effective_rotations.shape[0] > 16
+        )
 
         # Track the rotation grids used for pose extraction.
         # When adaptive oversampling is active, ha_k indices refer to the
         # oversampled grid (from pass 2), not effective_rotations.
         pose_rotations = [None, None]  # rotations to use with ha for poses
+        pose_translations = [
+            np.asarray(current_translations, dtype=np.float32),
+            np.asarray(current_translations, dtype=np.float32),
+        ]
+        best_pose_rotations = [None, None]
+        best_pose_translations = [None, None]
         # Coarse-grid assignments for local search tracking (always indexed
         # into effective_rotations, even when adaptive oversampling is used).
         coarse_ha = [None, None]
@@ -1211,28 +1641,77 @@ def _refine_relion_mode(
             effective_step_deg = healpix_angular_step(current_healpix_order)
             pixel_size = cryo.voxel_size if cryo.voxel_size > 0 else 1.0
             coarse_size = compute_coarse_image_size(
-                effective_step_deg, pixel_size, grid_size,
+                effective_step_deg,
+                pixel_size,
+                grid_size,
+                particle_diameter=particle_diameter_ang,
             )
-            coarse_size = quantize_current_size(coarse_size)
+            coarse_size = quantize_current_size(coarse_size, ori_size=grid_size)
             # Coarse size must be smaller than full current_size
             if cs_for_engine is not None and coarse_size >= cs:
                 coarse_size = max(8, cs // 2)
-                coarse_size = quantize_current_size(coarse_size)
+                coarse_size = quantize_current_size(coarse_size, ori_size=grid_size)
             coarse_cs = coarse_size if coarse_size < grid_size else None
 
             logger.info(
                 "Adaptive oversampling: pass 1 at coarse_size=%s, "
-                "pass 2 at current_size=%s (oversampling=%d)",
-                coarse_cs, cs_for_engine, state.adaptive_oversampling,
+                "pass 2 at current_size=%s (oversampling=%d, particle_diameter=%s)",
+                coarse_cs,
+                cs_for_engine,
+                state.adaptive_oversampling,
+                (
+                    f"{float(particle_diameter_ang):.1f} A"
+                    if particle_diameter_ang is not None
+                    else "box_size"
+                ),
             )
 
+        noise_stats_per_half = [None, None]
+
         for k in range(2):
-            if use_adaptive:
+            current_translation_range = float(state.translation_range)
+            translation_log_prior = make_relion_translation_log_prior(
+                np.asarray(current_translations, dtype=np.float32),
+                cryo.voxel_size,
+                init_translation_sigma_angstrom,
+                previous_best_translations[k],
+                offset_range_pixels=current_translation_range,
+            )
+            if use_local:
+                safe_ibs, safe_rbs = _safe_batch_sizes(
+                    rotation_grid_size(local_search_order),
+                    current_translations.shape[0],
+                )
+                Ft_y_k, Ft_ctf_k, ha_k, em_stats_k = _run_grouped_local_search_em(
+                    experiment_datasets[k],
+                    means[k],
+                    mean_variance,
+                    noise_variance,
+                    previous_best_rotations[k],
+                    local_search_order,
+                    sigma_rot,
+                    sigma_psi,
+                    current_translations,
+                    previous_best_translations[k],
+                    init_translation_sigma_angstrom,
+                    current_translation_range,
+                    disc_type,
+                    image_batch_size=safe_ibs,
+                    rotation_block_size=safe_rbs,
+                    current_size=cs_for_engine,
+                )
+                pose_rotations[k] = None
+                coarse_ha[k] = ha_k
+
+            elif use_adaptive:
                 # --- PASS 1: Coarse significance pruning ---
-                safe_ibs, safe_rbs = _safe_batch_sizes(effective_rotations.shape[0])
+                safe_ibs, safe_rbs = _safe_batch_sizes(
+                    effective_rotations.shape[0],
+                    current_translations.shape[0],
+                )
 
                 t_pass1 = time.time()
-                sig_rot_any, n_sig_batch, ha_coarse = (
+                sig_rot_any, n_sig_batch, ha_coarse, sig_sample_indices = (
                     _compute_significance_batched(
                         experiment_datasets[k],
                         means[k],
@@ -1240,11 +1719,16 @@ def _refine_relion_mode(
                         effective_rotations,
                         current_translations,
                         disc_type,
-                        adaptive_fraction=0.999,
-                        max_significants=500,
+                        adaptive_fraction=adaptive_fraction,
+                        max_significants=max_significants,
                         image_batch_size=safe_ibs,
                         rotation_block_size=safe_rbs,
                         current_size=coarse_cs,
+                        score_with_masked_images=True,
+                        return_significant_sample_indices=True,
+                        rotation_log_prior=rotation_log_prior,
+                        translation_log_prior=translation_log_prior,
+                        half_spectrum_scoring=True,
                     )
                 )
                 n_sig_total = int(np.sum(sig_rot_any))
@@ -1257,65 +1741,141 @@ def _refine_relion_mode(
                     dt_pass1, int(np.median(n_sig_batch)),
                 )
 
-                # --- Generate oversampled children ---
-                # Use compute_pass2_stats which generates HEALPix children
-                # of significant coarse rotations and runs a full E+M at
-                # the fine grid.
-                t_pass2 = time.time()
-                Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots = (
-                    compute_pass2_stats(
+                skip_pass2, sig_fraction = should_skip_adaptive_pass2(
+                    n_sig_batch,
+                    effective_rotations.shape[0],
+                    current_translations.shape[0],
+                    threshold=adaptive_pass2_skip_threshold,
+                )
+                total_coarse_samples = (
+                    effective_rotations.shape[0] * current_translations.shape[0]
+                )
+
+                if skip_pass2:
+                    logger.info(
+                        "Pass 2 skipped (half %d): mean significant fraction=%.3f >= %.3f; "
+                        "running single-pass full-resolution E+M",
+                        k,
+                        sig_fraction,
+                        ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
+                    )
+                    _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em_v2(
                         experiment_datasets[k],
                         means[k],
                         mean_variance,
                         noise_variance,
                         effective_rotations,
                         current_translations,
-                        sig_rot_any,
+                        disc_type,
+                        image_batch_size=safe_ibs,
+                        rotation_block_size=safe_rbs,
+                        current_size=cs_for_engine,
+                        rotation_log_prior=rotation_log_prior,
+                        translation_log_prior=translation_log_prior,
+                        score_with_masked_images=True,
+                        return_stats=True,
+                        accumulate_noise=True,
+                        half_spectrum_scoring=True,
+                        noise_fill_outside_mask=True,
+                    )
+                    noise_stats_per_half[k] = noise_stats_k
+                    pose_rotations[k] = effective_rotations
+                    pose_translations[k] = np.asarray(current_translations, dtype=np.float32)
+                    coarse_ha[k] = ha_k
+                elif np.all(np.asarray(n_sig_batch) == total_coarse_samples):
+                    # Exact early-iteration fast path: if every coarse sample is
+                    # significant for every image, sparse per-image pass 2 is
+                    # equivalent to one shared dense oversampled pass.
+                    t_pass2 = time.time()
+                    pass2_outputs = compute_pass2_stats(
+                        experiment_datasets[k],
+                        means[k],
+                        mean_variance,
+                        noise_variance,
+                        effective_rotations,
+                        current_translations,
+                        np.ones(effective_rotations.shape[0], dtype=bool),
                         current_nside_level,
                         disc_type,
                         oversampling_order=state.adaptive_oversampling,
                         current_size=cs_for_engine,
-                        image_batch_size=image_batch_size,
+                        translation_step=state.translation_step,
+                        rotation_log_prior=rotation_log_prior,
+                        translation_log_prior=translation_log_prior,
+                        score_with_masked_images=True,
+                        return_stats=True,
+                        accumulate_noise=True,
+                        half_spectrum_scoring=True,
+                        noise_fill_outside_mask=True,
                     )
-                )
-                dt_pass2 = time.time() - t_pass2
-
-                if Ft_y_k is None:
-                    # Pass 2 was skipped (too many significant rotations);
-                    # fall back to single-pass at full current_size.
-                    logger.warning(
-                        "Pass 2 skipped for half %d; falling back to "
-                        "single-pass E+M.", k,
+                    Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots_k, em_stats_k, noise_stats_k = pass2_outputs
+                    noise_stats_per_half[k] = noise_stats_k
+                    dt_pass2 = time.time() - t_pass2
+                    logger.info(
+                        "Pass 2 dense exact (half %d): %.1fs using full oversampled grid",
+                        k, dt_pass2,
                     )
-                    _, ha_k, Ft_y_k, Ft_ctf_k = run_em_v2(
+                    pose_rotations[k] = np.asarray(oversampled_rots_k, dtype=np.float32)
+                    oversampled_translations, _ = get_oversampled_translation_grid(
+                        np.asarray(current_translations, dtype=np.float32),
+                        state.translation_step,
+                        oversampling_order=state.adaptive_oversampling,
+                    )
+                    pose_translations[k] = np.asarray(
+                        oversampled_translations, dtype=np.float32,
+                    )
+                    coarse_ha[k] = ha_coarse
+                else:
+                    # --- Exact sparse pass 2 over significant coarse samples ---
+                    t_pass2 = time.time()
+                    (
+                        Ft_y_k,
+                        Ft_ctf_k,
+                        ha_k,
+                        best_rots_k,
+                        best_trans_k,
+                        _best_rot_indices_k,
+                        em_stats_k,
+                        noise_stats_k,
+                    ) = compute_pass2_stats_sparse(
                         experiment_datasets[k],
                         means[k],
                         mean_variance,
                         noise_variance,
-                        effective_rotations,
                         current_translations,
+                        sig_sample_indices,
+                        current_nside_level,
                         disc_type,
-                        image_batch_size=image_batch_size,
-                        rotation_block_size=rotation_block_size,
+                        oversampling_order=state.adaptive_oversampling,
                         current_size=cs_for_engine,
+                        translation_step=state.translation_step,
                         rotation_log_prior=rotation_log_prior,
+                        translation_log_prior=translation_log_prior,
+                        score_with_masked_images=True,
+                        return_stats=True,
+                        accumulate_noise=True,
+                        half_spectrum_scoring=True,
+                        noise_fill_outside_mask=True,
                     )
-                    pose_rotations[k] = effective_rotations
-                    coarse_ha[k] = ha_k  # fallback: same grid
-                else:
-                    n_oversampled = (oversampled_rots.shape[0]
-                                     if oversampled_rots is not None else 0)
+                    noise_stats_per_half[k] = noise_stats_k
+                    dt_pass2 = time.time() - t_pass2
                     logger.info(
-                        "Pass 2 (half %d): %d oversampled rotations, "
-                        "%.1fs",
-                        k, n_oversampled, dt_pass2,
+                        "Pass 2 sparse (half %d): %.1fs",
+                        k, dt_pass2,
                     )
-                    # ha_k indices are into oversampled_rots, not
-                    # effective_rotations.  Track this for pose extraction.
-                    pose_rotations[k] = oversampled_rots
+                    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
+                    best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
+                    oversampled_translations, _ = get_oversampled_translation_grid(
+                        np.asarray(current_translations, dtype=np.float32),
+                        state.translation_step,
+                        oversampling_order=state.adaptive_oversampling,
+                    )
+                    pose_translations[k] = np.asarray(
+                        oversampled_translations, dtype=np.float32,
+                    )
 
-                # Store coarse-grid assignment from pass 1 for local search.
-                coarse_ha[k] = ha_coarse
+                    # Store coarse-grid assignment from pass 1 for local search.
+                    coarse_ha[k] = ha_coarse
 
                 if iter_sig_counts is None:
                     iter_sig_counts = n_sig_batch
@@ -1326,8 +1886,11 @@ def _refine_relion_mode(
 
             else:
                 # --- SINGLE-PASS E+M (no adaptive oversampling) ---
-                safe_ibs, safe_rbs = _safe_batch_sizes(effective_rotations.shape[0])
-                _, ha_k, Ft_y_k, Ft_ctf_k = run_em_v2(
+                safe_ibs, safe_rbs = _safe_batch_sizes(
+                    effective_rotations.shape[0],
+                    current_translations.shape[0],
+                )
+                _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em_v2(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
@@ -1339,8 +1902,14 @@ def _refine_relion_mode(
                     rotation_block_size=safe_rbs,
                     current_size=cs_for_engine,
                     rotation_log_prior=rotation_log_prior,
+                    translation_log_prior=translation_log_prior,
+                    score_with_masked_images=True,
+                    return_stats=True,
+                    accumulate_noise=True,
                 )
+                noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
+                pose_translations[k] = np.asarray(current_translations, dtype=np.float32)
                 coarse_ha[k] = ha_k  # same grid, no oversampling
 
             # Reconstruct the regularized mean with padding_factor=2.
@@ -1360,6 +1929,12 @@ def _refine_relion_mode(
                 gridding_correct="square",
             ).reshape(-1)
             hard_assignments[k] = ha_k
+            max_posterior_per_half[k] = np.asarray(
+                em_stats_k.max_posterior_per_image, dtype=np.float32,
+            )
+            rotation_posterior_per_half[k] = np.asarray(
+                em_stats_k.rotation_posterior_sums, dtype=np.float32,
+            )
 
             if k == 0:
                 Ft_y_0, Ft_ctf_0 = Ft_y_k, Ft_ctf_k
@@ -1367,6 +1942,18 @@ def _refine_relion_mode(
                 Ft_y_1, Ft_ctf_1 = Ft_y_k, Ft_ctf_k
 
         significant_counts.append(iter_sig_counts)
+
+        if (
+            not use_local
+            and all(rot_sum is not None for rot_sum in rotation_posterior_per_half)
+            and effective_rotations.shape[0] == rotation_grid_size(current_healpix_order)
+        ):
+            global_direction_prior = collapse_rotation_posterior_to_direction_prior(
+                np.asarray(rotation_posterior_per_half[0], dtype=np.float64)
+                + np.asarray(rotation_posterior_per_half[1], dtype=np.float64),
+                current_healpix_order,
+            )
+            global_direction_prior_order = current_healpix_order
 
         # --- Combined Fourier weights for data_vs_prior at next iteration ---
         # RELION uses the combined (both half-sets) CTF^2 weight for
@@ -1474,7 +2061,11 @@ def _refine_relion_mode(
             iter_meta = {
                 "iteration": iteration,
                 "current_size": int(cs),
-                "n_rotations": int(effective_rotations.shape[0]),
+                "n_rotations": int(
+                    rotation_grid_size(local_search_order)
+                    if use_local
+                    else effective_rotations.shape[0]
+                ),
                 "n_translations": int(current_translations.shape[0]),
                 "healpix_order": int(state.healpix_order),
                 "local_search": bool(use_local),
@@ -1487,7 +2078,11 @@ def _refine_relion_mode(
             # Save the effective rotation grid for angular error computation
             np.save(
                 os.path.join(save_intermediates_dir, f"it{iteration:03d}_rotations.npy"),
-                np.asarray(effective_rotations),
+                (
+                    np.asarray(effective_rotations)
+                    if not use_local
+                    else np.empty((0, 3, 3), dtype=np.float32)
+                ),
             )
             np.save(
                 os.path.join(save_intermediates_dir, f"it{iteration:03d}_translations.npy"),
@@ -1498,57 +2093,87 @@ def _refine_relion_mode(
                 save_intermediates_dir, iteration,
             )
 
-        # --- Resolution from data_vs_prior (RELION-style, for convergence) ---
-        # Use data_vs_prior criterion, not FSC < 0.143, because with
-        # [cryo, cryo] half-sets the FSC is always 1.0.
-        # data_vs_prior is computed at the START of the next iteration,
-        # but we also compute it here for convergence tracking.
-        tau2_radial_iter = regularization.average_over_shells(
-            mean_variance.real, volume_shape,
+        # --- Compute ave_Pmax from the actual E-step maxima ---
+        if any(pmax is None for pmax in max_posterior_per_half):
+            raise RuntimeError(
+                "RELION mode expected per-image posterior maxima from the EM engine",
+            )
+        combined_max_posterior = np.concatenate(
+            [np.asarray(pmax, dtype=np.float32) for pmax in max_posterior_per_half],
+            axis=0,
         )
-        dvp_iter = compute_data_vs_prior(
-            Ft_ctf_combined, tau2_radial_iter, volume_shape,
-            padding_factor=PADDING_FACTOR,
-        )
-        dvp_res_shell = resolution_from_data_vs_prior(dvp_iter)
-        pixel_res = float(dvp_res_shell)
-        pixel_resolutions.append(pixel_res)
-
-        # --- Compute ave_Pmax ---
-        # TODO: extract Pmax from run_em_v2 directly instead of a separate
-        # E-step pass (_extract_max_posterior_per_image is too expensive).
-        # For now, estimate from hard assignment counts: if assignments are
-        # concentrated, Pmax is high.  Use 0.5 as a reasonable default that
-        # enables RELION's aggressive current_size growth.
-        ave_pmax = 0.5
+        ave_pmax = float(np.mean(combined_max_posterior))
         ave_Pmax_trajectory.append(ave_pmax)
+        pmax_per_image_history.append(combined_max_posterior.copy())
 
         # --- Track per-image best assignments for convergence detection ---
         # Combine both half-sets' assignments into a single array for
         # update_refinement_state.  Use coarse_ha (indexed into
         # effective_rotations) for consistent convergence tracking.
-        current_combined_ha = coarse_ha[0]
-        previous_combined_ha = previous_assignments[0]
+        current_combined_ha = np.concatenate(
+            [np.asarray(ha, dtype=np.int32) for ha in coarse_ha],
+            axis=0,
+        )
+        if all(ha is not None for ha in previous_assignments):
+            previous_combined_ha = np.concatenate(
+                [np.asarray(ha, dtype=np.int32) for ha in previous_assignments],
+                axis=0,
+            )
+        else:
+            previous_combined_ha = None
 
-        # --- Update prior (RELION-style tau^2 from FSC) ---
-        mean_signal_variance, _, _ = regularization.compute_relion_prior(
-            experiment_datasets, noise_variance,
-            unreg_means[0], unreg_means[1], 100,
+        # --- Update prior from the actual weighted reconstruction stats ---
+        mean_signal_variance, _ = regularization.compute_relion_prior_from_reconstruction_stats(
+            Ft_ctf_0,
+            Ft_ctf_1,
+            Ft_y_0,
+            Ft_y_1,
+            volume_shape,
+            mean_variance,
+            padding_factor=PADDING_FACTOR,
         )
         mean_variance = mean_signal_variance
 
+        # --- Resolution from updated FSC-derived SSNR (RELION auto-refine) ---
+        dvp_iter = np.asarray(fsc, dtype=np.float32).copy()
+        if cs < grid_size:
+            dvp_iter[min(len(dvp_iter), cs // 2):] = 0.0
+        dvp_iter = np.asarray(fsc_to_relion_ssnr(dvp_iter))
+        dvp_res_shell = resolution_from_data_vs_prior(
+            dvp_iter,
+            allow_high_res_recovery=True,
+        )
+        pixel_res = float(dvp_res_shell)
+        pixel_resolutions.append(pixel_res)
+
         # --- Update poses and noise ---
         for k in range(2):
-            # When adaptive oversampling is used, ha indices refer to the
-            # oversampled grid stored in pose_rotations[k], not effective_rotations.
-            best_rots, best_trans = hard_assignment_idx_to_pose(
-                hard_assignments[k], pose_rotations[k], current_translations,
-            )
+            if best_pose_rotations[k] is not None:
+                best_rots = np.asarray(best_pose_rotations[k], dtype=np.float32)
+                best_trans = np.asarray(best_pose_translations[k], dtype=np.float32)
+            elif use_local:
+                rot_idx = hard_assignments[k] // current_translations.shape[0]
+                trans_idx = hard_assignments[k] % current_translations.shape[0]
+                best_rots = rotation_indices_to_matrices(
+                    rot_idx, local_search_order,
+                )
+                best_trans = np.asarray(current_translations)[trans_idx]
+            else:
+                # Global search uses the dense grid in pose_rotations[k].
+                best_rots, best_trans = hard_assignment_idx_to_pose(
+                    hard_assignments[k], pose_rotations[k], pose_translations[k],
+                )
+            previous_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
+            previous_best_translations[k] = np.asarray(best_trans, dtype=np.float32)
             experiment_datasets[k].update_poses(best_rots, best_trans)
 
-        # Estimate noise from BOTH half-sets, ALL images (not just 1000).
-        # Still hard-assignment based, but less biased than a small subset.
-        noise_estimates = []
+        # Estimate noise using BOTH hard-assignment residuals AND posterior-weighted stats.
+        # Hard-assignment: captures model error (imperfect reference → large residual
+        # even at best orientation). Important at low frequencies.
+        # Posterior-weighted: captures posterior uncertainty. Important for RELION parity
+        # at later iterations when model improves.
+        # Strategy: take the MAX per shell to get the most conservative (highest) estimate.
+        noise_estimates_hard = []
         for k in range(2):
             n_k = experiment_datasets[k].n_units
             noise_k = noise.estimate_noise_level_no_masks(
@@ -1558,14 +2183,83 @@ def _refine_relion_mode(
                 100,
                 disc_type=disc_type,
             )
-            noise_estimates.append(noise_k)
-        noise_from_res = (noise_estimates[0] + noise_estimates[1]) / 2
+            noise_estimates_hard.append(noise_k)
+        noise_hard_raw = (noise_estimates_hard[0] + noise_estimates_hard[1]) / 2
+        # Convert from recovar's unnormalized FFT convention to RELION convention
+        fft_power_scale = float(cryo.image_shape[0] * cryo.image_shape[1]) ** 2
+        noise_hard = noise_hard_raw / fft_power_scale
+
+        if noise_stats_per_half[0] is not None and noise_stats_per_half[1] is not None:
+            wsum_combined = (
+                np.asarray(noise_stats_per_half[0].wsum_sigma2_noise, dtype=np.float64)
+                + np.asarray(noise_stats_per_half[1].wsum_sigma2_noise, dtype=np.float64)
+            )
+            img_power_combined = (
+                np.asarray(noise_stats_per_half[0].wsum_img_power, dtype=np.float64)
+                + np.asarray(noise_stats_per_half[1].wsum_img_power, dtype=np.float64)
+            )
+            sumw_combined = noise_stats_per_half[0].sumw + noise_stats_per_half[1].sumw
+            noise_posterior = noise.normalize_wsum_to_sigma2_noise(
+                wsum_combined, img_power_combined, sumw_combined, cryo.image_shape,
+            )
+            # Take per-shell MAX of hard-assignment and posterior-weighted noise.
+            # This ensures model error is captured (hard-assignment at low freq)
+            # while also allowing posterior-weighted increases at high freq.
+            n_common = min(len(noise_hard), len(noise_posterior))
+            noise_from_res = jnp.maximum(
+                jnp.asarray(noise_hard[:n_common]),
+                jnp.asarray(noise_posterior[:n_common]),
+            )
+            logger.info(
+                "Noise updated: hard=[%.2e, %.2e], posterior=[%.2e, %.2e], "
+                "combined=[%.2e, %.2e]",
+                float(jnp.min(noise_hard)), float(jnp.max(noise_hard)),
+                float(jnp.min(noise_posterior)), float(jnp.max(noise_posterior)),
+                float(jnp.min(noise_from_res)), float(jnp.max(noise_from_res)),
+            )
+        else:
+            noise_from_res = jnp.asarray(noise_hard)
+            logger.info(
+                "Noise from hard-assignment: range=[%.2e, %.2e]",
+                float(jnp.min(noise_from_res)), float(jnp.max(noise_from_res)),
+            )
+
+        # Also apply initial-noise floor: never go below initial estimate
+        old_noise_radial = previous_noise_radial
+        noise_from_res_raw = noise_from_res
+        n_floor = min(len(noise_from_res), len(initial_noise_radial))
+        noise_from_res = noise_from_res.at[:n_floor].set(
+            jnp.maximum(noise_from_res[:n_floor], initial_noise_radial[:n_floor])
+        )
+        n_clamped = int(jnp.sum(noise_from_res_raw[:n_floor] < initial_noise_radial[:n_floor]))
+        if n_clamped > 0:
+            logger.info(
+                "Noise floor applied: %d/%d shells clamped to initial noise estimate",
+                n_clamped, n_floor,
+            )
+
+        # Log per-shell noise comparison (first 10 shells) for convergence diagnostics
+        n_log = min(10, len(noise_from_res), len(old_noise_radial))
+        logger.info(
+            "Noise update per shell (first %d): old=[%s] new=[%s]",
+            n_log,
+            ", ".join(f"{float(x):.3e}" for x in old_noise_radial[:n_log]),
+            ", ".join(f"{float(x):.3e}" for x in noise_from_res[:n_log]),
+        )
+
+        # Update previous_noise_radial for next iteration's diagnostics
+        previous_noise_radial = noise_from_res
+
         noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
 
         # --- Update convergence state ---
         # This checks assignment changes, resolution stalls, and may trigger
         # angular step refinement or convergence.
-        n_rot_current = effective_rotations.shape[0]
+        n_rot_current = (
+            rotation_grid_size(local_search_order)
+            if use_local
+            else effective_rotations.shape[0]
+        )
         n_trans_current = current_translations.shape[0]
 
         state = update_refinement_state(
@@ -1576,7 +2270,7 @@ def _refine_relion_mode(
             n_translations=n_trans_current,
             translations=np.asarray(current_translations),
             new_resolution=pixel_res,
-            max_posterior_per_image=np.full(cryo.n_units, ave_pmax, dtype=np.float32),
+            max_posterior_per_image=combined_max_posterior,
         )
 
         # Track frac_changed for local search fallback
@@ -1601,7 +2295,9 @@ def _refine_relion_mode(
         elapsed = time.time() - t0
         wall_times.append(elapsed)
 
-        res_angstrom = pixel_res / cryo.voxel_size if cryo.voxel_size > 0 else pixel_res
+        res_angstrom = shell_index_to_resolution_angstrom(
+            pixel_res, cryo.image_shape[0], cryo.voxel_size,
+        )
         logger.info(
             "RELION Iteration %d: current_size=%d, pixel_res=%.1f, "
             "res=%.2f A, ave_Pmax=%.4f, healpix_order=%d, "
@@ -1641,4 +2337,5 @@ def _refine_relion_mode(
         "data_vs_prior_trajectory": data_vs_prior_trajectory,
         "healpix_order_trajectory": healpix_order_trajectory,
         "ave_Pmax_trajectory": ave_Pmax_trajectory,
+        "pmax_per_image_history": pmax_per_image_history,
     }

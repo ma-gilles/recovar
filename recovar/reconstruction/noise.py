@@ -782,6 +782,168 @@ def estimate_noise_level_no_masks(
     return estimated_noise
 
 
+def estimate_initial_noise_spectrum_from_unaligned_images(
+    experiment_dataset,
+    image_subset,
+    batch_size,
+):
+    """Approximate RELION's initial sigma2_noise estimate from particle spectra.
+
+    RELION initializes ``sigma2_noise`` from the average particle power spectrum
+    minus the power spectrum of the average image before the first refinement
+    iteration. This helper mirrors that structure for the benchmark harness so
+    the first E-step starts from a comparable likelihood scale.
+
+    recovar stores Fourier images in the native unnormalized FFT convention, so
+    raw image power is larger than RELION's ``sigma2_noise`` convention by a
+    factor of ``(H * W)^2`` for 2D images. We therefore rescale the final radial
+    spectrum back to RELION units before returning it.
+    """
+    from recovar.reconstruction import regularization
+
+    if image_subset is None:
+        image_subset = np.arange(experiment_dataset.n_images, dtype=np.int32)
+    image_subset = np.asarray(image_subset, dtype=np.int32)
+    if image_subset.size == 0:
+        raise ValueError("image_subset must contain at least one image")
+
+    batch_size = int(min(batch_size, image_subset.size))
+    sum_radial_power = None
+    sum_images = None
+    n_images = 0
+
+    for (
+        batch,
+        _rotation_matrices,
+        _translations,
+        _ctf_params,
+        _noise_variance,
+        _particle_indices,
+        _image_indices,
+    ) in experiment_dataset.iter_batches(batch_size, indices=image_subset):
+        batch = experiment_dataset.process_images(batch)
+        batch_radial_power = regularization.batch_average_over_shells(
+            jnp.abs(batch) ** 2,
+            experiment_dataset.image_shape,
+            0,
+        )
+        batch_sum_images = jnp.sum(batch, axis=0)
+
+        if sum_radial_power is None:
+            sum_radial_power = jnp.sum(batch_radial_power, axis=0)
+            sum_images = batch_sum_images
+        else:
+            sum_radial_power = sum_radial_power + jnp.sum(batch_radial_power, axis=0)
+            sum_images = sum_images + batch_sum_images
+        n_images += int(batch.shape[0])
+
+    if n_images <= 0:
+        raise RuntimeError("No images were processed for initial noise estimation")
+
+    average_particle_power = sum_radial_power / float(n_images)
+    average_image = sum_images / float(n_images)
+    average_image_power = regularization.average_over_shells(
+        jnp.abs(average_image) ** 2,
+        experiment_dataset.image_shape,
+        0,
+    )
+
+    sigma2_noise = np.asarray(
+        0.5 * (average_particle_power - average_image_power),
+        dtype=np.float32,
+    )
+
+    positive_mask = sigma2_noise > 0
+    if not np.any(positive_mask):
+        logger.warning(
+            "Initial noise estimate had no positive shells; falling back to the particle power spectrum",
+        )
+        sigma2_noise = np.asarray(0.5 * average_particle_power, dtype=np.float32)
+        positive_mask = sigma2_noise > 0
+
+    if np.any(~positive_mask):
+        for idx in range(sigma2_noise.shape[0]):
+            if sigma2_noise[idx] > 0:
+                continue
+            replacement = None
+            if idx > 0 and sigma2_noise[idx - 1] > 0:
+                replacement = sigma2_noise[idx - 1]
+            else:
+                for jdx in range(idx + 1, sigma2_noise.shape[0]):
+                    if sigma2_noise[jdx] > 0:
+                        replacement = sigma2_noise[jdx]
+                        break
+            sigma2_noise[idx] = replacement if replacement is not None else 1.0
+
+    fft_power_scale = float(np.prod(experiment_dataset.image_shape) ** 2)
+    sigma2_noise = sigma2_noise / fft_power_scale
+    return jnp.asarray(sigma2_noise)
+
+
+def normalize_wsum_to_sigma2_noise(wsum_sigma2_noise, wsum_img_power, sumw, image_shape):
+    """Convert posterior-weighted noise accumulators to per-shell noise variance.
+
+    Implements RELION's M-step noise update from ``maximizationOtherParameters``
+    (ml_optimiser.cpp:5246-5285)::
+
+        sigma2_noise[s] = wsum_total[s] / (2 * sumw * Npix_per_shell[s])
+
+    where ``wsum_total = wsum_sigma2_noise + wsum_img_power`` is the total
+    posterior-weighted squared residual (A2 - 2*XA + P_img), ``sumw`` is the
+    total number of images processed, and ``Npix_per_shell`` counts
+    half-spectrum pixels per shell.
+
+    The factor of 2 accounts for the real and imaginary components of each
+    complex Fourier coefficient (RELION convention: sigma2 is per-component
+    variance).
+
+    Parameters
+    ----------
+    wsum_sigma2_noise : array, shape (n_shells,)
+        Accumulated A2 - 2*XA per shell from ``_compute_noise_block``.
+    wsum_img_power : array, shape (n_shells,)
+        Accumulated |img|^2 per shell (P_img term).
+    sumw : float
+        Total posterior weight (= number of images when posteriors sum to 1).
+    image_shape : tuple of int
+        2-D image dimensions, e.g. ``(128, 128)``.
+
+    Returns
+    -------
+    sigma2_noise : jnp.ndarray, shape (n_shells,)
+        Per-shell noise variance in RELION convention.
+    """
+    from recovar.em.dense_single_volume.engine_v2 import make_shell_indices_half
+
+    wsum_sigma2_noise = jnp.asarray(wsum_sigma2_noise, dtype=jnp.float32)
+    wsum_img_power = jnp.asarray(wsum_img_power, dtype=jnp.float32)
+    n_shells = image_shape[0] // 2 + 1
+
+    shell_indices = make_shell_indices_half(image_shape)
+    Npix_per_shell = jnp.zeros(n_shells, dtype=jnp.float32)
+    Npix_per_shell = Npix_per_shell.at[shell_indices].add(jnp.ones_like(shell_indices, dtype=jnp.float32))
+
+    total_wsum = wsum_sigma2_noise + wsum_img_power
+    sigma2 = total_wsum / (2.0 * sumw * jnp.maximum(Npix_per_shell, 1.0))
+
+    # Convert from recovar's unnormalized FFT convention to RELION convention.
+    # recovar images are stored as jnp.fft.fft2 (no 1/N factor), so pixel
+    # values are N times larger than RELION's and power spectra are N^2 larger.
+    # The rest of the codebase uses sigma2_noise in RELION convention.
+    fft_power_scale = float(image_shape[0] * image_shape[1]) ** 2
+    sigma2 = sigma2 / fft_power_scale
+
+    # Floor at 1e-15 (RELION ml_optimiser.cpp:5279)
+    sigma2 = jnp.maximum(sigma2, 1e-15)
+
+    # Fill zeros from previous shell (RELION ml_optimiser.cpp:5281-5284)
+    sigma2_np = np.asarray(sigma2, dtype=np.float32)
+    for i in range(1, len(sigma2_np)):
+        if sigma2_np[i] < 1e-14 and sigma2_np[i - 1] > 1e-14:
+            sigma2_np[i] = sigma2_np[i - 1]
+    return jnp.asarray(sigma2_np)
+
+
 def batch_make_radial_noise(average_image_PS, image_shape):
     return jax.vmap(lambda amp: make_radial_noise(amp, image_shape))(average_image_PS)
 

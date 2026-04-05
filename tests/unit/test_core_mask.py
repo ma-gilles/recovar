@@ -193,6 +193,48 @@ class TestSmoothCircularMask:
         assert center >= edge
 
 
+class TestRelionSoftImageMask:
+    def test_matches_smooth_circular_mask_parameterization(self):
+        image_size = 128
+        pixel_size = 4.25
+        particle_diameter_ang = 200.0
+        width_mask_edge_px = 5.0
+
+        result = mask.relion_soft_image_mask(
+            image_size=image_size,
+            pixel_size=pixel_size,
+            particle_diameter_ang=particle_diameter_ang,
+            width_mask_edge_px=width_mask_edge_px,
+        )
+        expected = mask.smooth_circular_mask(
+            image_size=image_size,
+            radius=particle_diameter_ang / (2.0 * pixel_size),
+            thickness=width_mask_edge_px,
+        )
+        np.testing.assert_allclose(result, expected)
+
+    def test_radius_tracks_relion_particle_diameter(self):
+        image_size = 128
+        pixel_size = 4.25
+        particle_diameter_ang = 200.0
+        width_mask_edge_px = 5.0
+
+        result = mask.relion_soft_image_mask(
+            image_size=image_size,
+            pixel_size=pixel_size,
+            particle_diameter_ang=particle_diameter_ang,
+            width_mask_edge_px=width_mask_edge_px,
+        )
+
+        half = image_size // 2
+        radius_px = particle_diameter_ang / (2.0 * pixel_size)
+        inside = int(np.floor(radius_px)) - 1
+        outside = int(np.ceil(radius_px + width_mask_edge_px)) + 1
+
+        assert result[half, half + inside] == pytest.approx(1.0, abs=1e-6)
+        assert result[half, half + outside] == pytest.approx(0.0, abs=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # window_mask
 # ---------------------------------------------------------------------------

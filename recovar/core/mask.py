@@ -393,6 +393,44 @@ def smooth_circular_mask(image_size, radius, thickness):
     return mask
 
 
+def relion_soft_image_mask(image_size, pixel_size, particle_diameter_ang, width_mask_edge_px):
+    """RELION-style 2D soft circular mask for experimental-image scoring.
+
+    RELION applies ``softMaskOutsideMap`` in real space with:
+
+    - radius = ``particle_diameter_ang / (2 * pixel_size)``
+    - cosine width = ``width_mask_edge_px``
+
+    This helper mirrors that convention and returns a mask in image-space
+    pixels, ready to multiply against centered particle images before the DFT.
+    """
+    if image_size <= 0:
+        raise ValueError(f"image_size must be positive, got {image_size}")
+    if pixel_size <= 0:
+        raise ValueError(f"pixel_size must be positive, got {pixel_size}")
+    if particle_diameter_ang <= 0:
+        raise ValueError(
+            f"particle_diameter_ang must be positive, got {particle_diameter_ang}"
+        )
+    if width_mask_edge_px < 0:
+        raise ValueError(
+            f"width_mask_edge_px must be non-negative, got {width_mask_edge_px}"
+        )
+
+    radius_px = float(particle_diameter_ang) / (2.0 * float(pixel_size))
+    radius_px = min(radius_px, image_size / 2.0)
+    thickness_px = float(width_mask_edge_px)
+
+    if thickness_px == 0.0:
+        thickness_px = 1e-6
+
+    return smooth_circular_mask(
+        image_size=image_size,
+        radius=radius_px,
+        thickness=thickness_px,
+    ).astype(np.float32)
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers (adapted from EMDA - https://emda.readthedocs.io/)
 # ---------------------------------------------------------------------------

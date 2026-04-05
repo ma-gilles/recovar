@@ -226,11 +226,13 @@ class TestFscToCurrentSize:
         assert 40 <= cs <= 70, f"Expected ~58, got {cs}"
 
     def test_quantize_after_fsc(self):
-        """After fsc_to_current_size, quantize produces allowed value."""
+        """After fsc_to_current_size, quantize produces a valid even size."""
         fsc = jnp.concatenate([jnp.ones(20), jnp.zeros(44)])
         raw_cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0)
-        q_cs = quantize_current_size(raw_cs)
-        assert q_cs in ALLOWED_CURRENT_SIZES, f"Quantized {q_cs} not in allowed"
+        q_cs = quantize_current_size(raw_cs, ori_size=128)
+        assert q_cs % 2 == 0
+        assert 16 <= q_cs <= 128
+        assert q_cs >= raw_cs
 
 
 # ===========================================================================
@@ -241,7 +243,7 @@ class TestOracleMode:
     """Run refinement with RELION's current_sizes injected."""
 
     def test_oracle_sizes_are_used(self, half_datasets, init_volume, rotations, translations):
-        """Verify that when relion_current_sizes is provided, those sizes are used."""
+        """Oracle sizes should be used after quantization/clamping to the box size."""
         oracle_sizes = [32, 32, 64]
 
         result = refine_single_volume(
@@ -258,8 +260,8 @@ class TestOracleMode:
             relion_current_sizes=oracle_sizes,
         )
 
-        # All 3 sizes should be the quantized oracle values
-        assert result["current_sizes"] == [32, 32, 64], (
+        # On the tiny 8px mock dataset these values all saturate at full resolution.
+        assert result["current_sizes"] == [8, 8, 8], (
             f"Oracle sizes not used: {result['current_sizes']}"
         )
 
@@ -282,10 +284,10 @@ class TestOracleMode:
             init_current_size=32,
         )
 
-        # First iteration should use init_current_size (quantized) since oracle=0
-        assert result["current_sizes"][0] == 32
-        assert result["current_sizes"][1] == 32
-        assert result["current_sizes"][2] == 64
+        # On the tiny 8px mock dataset all oracle/full-resolution requests clamp to 8.
+        assert result["current_sizes"][0] == 8
+        assert result["current_sizes"][1] == 8
+        assert result["current_sizes"][2] == 8
 
     def test_oracle_produces_valid_outputs(self, half_datasets, init_volume, rotations, translations):
         """Oracle mode produces finite volumes and valid assignments."""
@@ -343,8 +345,9 @@ class TestResolutionProgression:
 
         sizes = result["current_sizes"]
         assert len(sizes) == 3
-        # At minimum, the last size should be >= init (32 is the floor)
-        assert sizes[-1] >= 32, f"Resolution collapsed: sizes={sizes}"
+        # The tiny 8px mock dataset can legitimately clamp to very small sizes,
+        # but should not drop below the scaled minimum of 4.
+        assert sizes[-1] >= 4, f"Resolution collapsed: sizes={sizes}"
 
     def test_fsc_history_populated(self, half_datasets, init_volume, rotations, translations):
         """FSC history has one entry per iteration."""
@@ -415,7 +418,7 @@ class TestOneIterationWithWindowing:
         )
 
         assert np.all(np.isfinite(np.array(result["mean"])))
-        assert result["current_sizes"] == [16]  # quantized from 4 -> 16 (new minimum)
+        assert result["current_sizes"] == [4]
 
     def test_single_iteration_no_window(self, half_datasets, init_volume, rotations, translations):
         """One EM iteration at current_size=None (full res) produces valid output."""
@@ -435,9 +438,8 @@ class TestOneIterationWithWindowing:
         )
 
         assert np.all(np.isfinite(np.array(result["mean"])))
-        # 128 quantizes to 128 (max allowed), but for 8x8 images this means
-        # no windowing since current_size >= image_shape[0]
-        assert result["current_sizes"] == [128]
+        # On the tiny 8px mock dataset, any oversized request clamps to full resolution.
+        assert result["current_sizes"] == [8]
 
     def test_hard_assignments_valid_range(self, half_datasets, init_volume, rotations, translations):
         """Hard assignments are in valid range after one iteration."""

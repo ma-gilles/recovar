@@ -137,6 +137,71 @@ def test_prior_iteration_relion_style_and_downsample_from_fsc():
     assert np.any(out == 0.0)
 
 
+def test_compute_relion_prior_from_reconstruction_stats_matches_direct_weight_formula():
+    shape = (4, 4, 4)
+    n = int(np.prod(shape))
+    rng = np.random.default_rng(2)
+
+    h0 = np.abs(rng.normal(size=n)).astype(np.float32) + 1.0
+    h1 = np.abs(rng.normal(size=n)).astype(np.float32) + 1.0
+    b0 = (rng.normal(size=n) + 1j * rng.normal(size=n)).astype(np.complex64)
+    b1 = (rng.normal(size=n) + 1j * rng.normal(size=n)).astype(np.complex64)
+    prior0 = np.ones(n, dtype=np.float32)
+
+    prior, fsc = regularization.compute_relion_prior_from_reconstruction_stats(
+        h0,
+        h1,
+        b0,
+        b1,
+        shape,
+        prior0,
+        padding_factor=2,
+        prior_iterations=2,
+    )
+    prior = np.asarray(prior)
+    fsc = np.asarray(fsc)
+
+    h0_pad = regularization.relion_functions.zero_pad_fourier_volume(h0, shape, 2)
+    h1_pad = regularization.relion_functions.zero_pad_fourier_volume(h1, shape, 2)
+    b0_pad = regularization.relion_functions.zero_pad_fourier_volume(b0, shape, 2)
+    b1_pad = regularization.relion_functions.zero_pad_fourier_volume(b1, shape, 2)
+    unreg0 = regularization.relion_functions.post_process_from_filter_v2(
+        h0_pad,
+        b0_pad,
+        shape,
+        volume_upsampling_factor=2,
+        tau=None,
+        kernel="triangular",
+        use_spherical_mask=True,
+        grid_correct=True,
+        gridding_correct="square",
+    )
+    unreg1 = regularization.relion_functions.post_process_from_filter_v2(
+        h1_pad,
+        b1_pad,
+        shape,
+        volume_upsampling_factor=2,
+        tau=None,
+        kernel="triangular",
+        use_spherical_mask=True,
+        grid_correct=True,
+        gridding_correct="square",
+    )
+    expected_prior, expected_fsc, _ = regularization.compute_fsc_prior_gpu(
+        shape,
+        unreg0,
+        unreg1,
+        (h0 + h1) / 2.0,
+    )
+
+    assert prior.shape == (n,)
+    assert fsc.ndim == 1
+    assert np.all(np.isfinite(prior))
+    assert np.all(np.isfinite(fsc))
+    np.testing.assert_allclose(prior, np.asarray(expected_prior), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(fsc, np.asarray(expected_fsc), rtol=1e-5, atol=1e-5)
+
+
 # ---------------------------------------------------------------------------
 # covariance_update_col tests
 # ---------------------------------------------------------------------------

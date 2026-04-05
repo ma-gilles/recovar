@@ -96,6 +96,12 @@ def _identity_process(batch, apply_image_mask=False):
     return batch
 
 
+def _mask_for_score_only_process(batch, apply_image_mask=False):
+    if apply_image_mask:
+        return jnp.zeros_like(batch)
+    return batch
+
+
 class MockDataset:
     """Minimal dataset for equivalence tests."""
 
@@ -143,6 +149,19 @@ class MockDataset:
 
     def get_valid_frequency_indices(self, pixel_res):
         return np.ones(self.volume_size, dtype=bool)
+
+
+class MaskedScoringDataset(MockDataset):
+    """Dataset where masked scoring sees zeros but reconstruction sees data."""
+
+    def __init__(self, rng):
+        super().__init__(rng)
+        self.process_images = staticmethod(_mask_for_score_only_process)
+
+        class _ImageSource:
+            process_images = staticmethod(_mask_for_score_only_process)
+
+        self.image_source = _ImageSource()
 
 
 @pytest.fixture
@@ -317,8 +336,9 @@ class TestEStepHalfMatchesFull:
             n_images, n_trans, IMAGE_SHAPE, VOLUME_SHAPE,
         )
 
+        score_offset = 0.5 * np.asarray(batch_norm).reshape(n_images, 1, 1)
         np.testing.assert_allclose(
-            np.array(scores_full),
+            np.array(scores_full) + score_offset,
             np.array(scores_half),
             atol=1e-3,
             rtol=1e-4,
@@ -439,7 +459,7 @@ class TestMStepHalfMatchesFull:
         Ft_y_half = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
         Ft_ctf_half = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
 
-        Ft_y_half, Ft_ctf_half, probs, _, _ = _m_step_block(
+        Ft_y_half, Ft_ctf_half, probs, _, _, _, _ = _m_step_block(
             shifted_half, scores, log_Z, rotations, ctf2_over_nv_half,
             Ft_y_half, Ft_ctf_half,
             n_images, n_trans, IMAGE_SHAPE, VOLUME_SHAPE,
@@ -573,6 +593,317 @@ class TestFullIterationHalfMatches:
         assert np.all(np.isfinite(np.array(new_mean)))
         assert np.all(np.isfinite(np.array(Ft_y)))
         assert np.all(np.isfinite(np.array(Ft_ctf)))
+
+    def test_return_stats_matches_direct_pmax(self, seeded_inputs):
+        """Optional return_stats path should expose the exact batchwise E-step maxima."""
+        s = seeded_inputs
+        ds = s["dataset"]
+        volume = s["volume"]
+        noise_variance = s["noise_variance"]
+        rotations = np.array(s["rotations"])
+        translations = np.array(s["translations"])
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+
+        _, hard_assignments, _, _, stats = run_em_v2(
+            ds, volume, mean_variance, noise_variance,
+            rotations, translations, "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            return_stats=True,
+        )
+
+        batch_data, _, _, ctf_params, _, _, _ = next(
+            ds.iter_batches(N_IMAGES, indices=np.arange(N_IMAGES), by_image=False)
+        )
+        config = ForwardModelConfig.from_dataset(
+            ds, disc_type="linear_interp", process_fn=ds.process_images,
+        )
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+            jnp.asarray(batch_data),
+            jnp.asarray(ctf_params),
+            noise_variance,
+            translations,
+            config,
+            N_IMAGES,
+            N_TRANSLATIONS,
+        )
+        proj_half, proj_abs2_half = _compute_projections_block(
+            volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp",
+        )
+        half_weights = make_half_image_weights(IMAGE_SHAPE)
+        scores = _e_step_block_scores(
+            shifted_half,
+            batch_norm,
+            ctf2_over_nv_half,
+            proj_half * half_weights,
+            proj_abs2_half * half_weights,
+            half_weights,
+            N_IMAGES,
+            N_TRANSLATIONS,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+        )
+        scores_flat = np.asarray(scores).reshape(N_IMAGES, -1)
+        expected_best = np.max(scores_flat, axis=1)
+        max_scores = np.max(scores_flat, axis=1, keepdims=True)
+        expected_log_z = max_scores[:, 0] + np.log(
+            np.sum(np.exp(scores_flat - max_scores), axis=1)
+        )
+        log_score_offset = -0.5 * np.asarray(batch_norm).reshape(N_IMAGES)
+        expected_pmax = np.exp(expected_best - expected_log_z)
+
+        np.testing.assert_allclose(
+            np.asarray(stats.best_log_score_per_image),
+            expected_best + log_score_offset,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            np.asarray(stats.log_evidence_per_image),
+            expected_log_z + log_score_offset,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            np.asarray(stats.max_posterior_per_image),
+            expected_pmax,
+            atol=1e-5,
+        )
+        expected_rotation_mass = np.sum(
+            np.exp(np.asarray(scores) - expected_log_z[:, None, None]),
+            axis=(0, 2),
+        )
+        np.testing.assert_allclose(
+            np.asarray(stats.rotation_posterior_sums),
+            expected_rotation_mass,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            float(np.sum(np.asarray(stats.rotation_posterior_sums))),
+            float(N_IMAGES),
+            atol=1e-5,
+        )
+        np.testing.assert_array_equal(hard_assignments, np.argmax(scores_flat, axis=1))
+        assert np.all(np.asarray(stats.max_posterior_per_image) >= 0.0)
+        assert np.all(np.asarray(stats.max_posterior_per_image) <= 1.0)
+
+    def test_return_stats_stable_with_large_image_norm_constant(self, seeded_inputs):
+        """Large per-image norm constants should not collapse the posterior to uniform."""
+        s = seeded_inputs
+        ds = s["dataset"]
+        ds._images = (np.asarray(ds._images) * 1e4).astype(np.complex64)
+        volume = s["volume"] * np.complex64(1e-6)
+        noise_variance = s["noise_variance"]
+        rotations = np.array(s["rotations"])
+        translations = np.array(s["translations"])
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+
+        _, _, _, _, stats = run_em_v2(
+            ds, volume, mean_variance, noise_variance,
+            rotations, translations, "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            return_stats=True,
+        )
+
+        batch_data, _, _, ctf_params, _, _, _ = next(
+            ds.iter_batches(N_IMAGES, indices=np.arange(N_IMAGES), by_image=False)
+        )
+        config = ForwardModelConfig.from_dataset(
+            ds, disc_type="linear_interp", process_fn=ds.process_images,
+        )
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+            jnp.asarray(batch_data),
+            jnp.asarray(ctf_params),
+            noise_variance,
+            translations,
+            config,
+            N_IMAGES,
+            N_TRANSLATIONS,
+        )
+        proj_half, proj_abs2_half = _compute_projections_block(
+            volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp",
+        )
+        half_weights = make_half_image_weights(IMAGE_SHAPE)
+
+        shifted_np = np.asarray(shifted_half, dtype=np.complex128)
+        ctf2_np = np.asarray(ctf2_over_nv_half, dtype=np.float64)
+        proj_weighted_np = np.asarray(proj_half * half_weights, dtype=np.complex128)
+        proj_abs2_np = np.asarray(proj_abs2_half * half_weights, dtype=np.float64)
+
+        cross = -2.0 * np.real(np.conj(shifted_np) @ proj_weighted_np.T)
+        cross = cross.reshape(N_IMAGES, N_TRANSLATIONS, N_ROTATIONS).swapaxes(1, 2)
+        norms = ctf2_np @ proj_abs2_np.T
+        rel_scores = -0.5 * (cross + norms[..., None])
+        rel_scores_flat = rel_scores.reshape(N_IMAGES, -1)
+        rel_best = np.max(rel_scores_flat, axis=1)
+        rel_max = np.max(rel_scores_flat, axis=1, keepdims=True)
+        rel_log_z = rel_max[:, 0] + np.log(
+            np.sum(np.exp(rel_scores_flat - rel_max), axis=1)
+        )
+        expected_pmax = np.exp(rel_best - rel_log_z)
+
+        uniform_pmax = np.full_like(
+            expected_pmax,
+            1.0 / float(N_ROTATIONS * N_TRANSLATIONS),
+        )
+        assert np.max(np.abs(expected_pmax - uniform_pmax)) > 1e-8
+        np.testing.assert_allclose(
+            np.asarray(stats.max_posterior_per_image),
+            expected_pmax,
+            atol=1e-3,
+            rtol=1e-3,
+        )
+        np.testing.assert_allclose(
+            np.asarray(stats.log_evidence_per_image),
+            rel_log_z - 0.5 * np.asarray(batch_norm).reshape(N_IMAGES),
+            atol=1e-5,
+            rtol=1e-6,
+        )
+
+    def test_masked_scoring_unmasked_reconstruction_split(self, rng):
+        """Masked likelihood path should not zero out the reconstruction path."""
+        ds = MaskedScoringDataset(rng)
+        mean = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32)
+        noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+        rotations = np.asarray(_make_rotations(2, seed=9))
+        translations = np.array([[0.0, 0.0]], dtype=np.float32)
+
+        _, _, Ft_y, _, stats = run_em_v2(
+            ds,
+            mean,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=1,
+            rotation_block_size=2,
+            score_with_masked_images=True,
+            return_stats=True,
+        )
+
+        np.testing.assert_allclose(
+            np.asarray(stats.max_posterior_per_image),
+            np.full(ds.n_units, 0.5, dtype=np.float32),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        assert np.max(np.abs(np.asarray(Ft_y))) > 0.0
+
+    def test_subset_image_indices_matches_restricted_dataset(self, seeded_inputs):
+        """Subset E-step/M-step via image_indices should match an explicitly restricted dataset."""
+        s = seeded_inputs
+        ds = s["dataset"]
+        volume = s["volume"]
+        noise_variance = s["noise_variance"]
+        rotations = np.array(s["rotations"])
+        translations = np.array(s["translations"])
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+        subset = np.array([0, 2, 3], dtype=np.int64)
+
+        class _SubsetDataset:
+            def __init__(self, base_ds, image_indices):
+                self.image_shape = base_ds.image_shape
+                self.image_size = base_ds.image_size
+                self.grid_size = base_ds.grid_size
+                self.volume_shape = base_ds.volume_shape
+                self.volume_size = base_ds.volume_size
+                self.voxel_size = base_ds.voxel_size
+                self.dtype = base_ds.dtype
+                self.ctf_evaluator = base_ds.ctf_evaluator
+                self.process_images = base_ds.process_images
+                self.image_source = base_ds.image_source
+                self._images = np.asarray(base_ds._images)[image_indices].copy()
+                self.CTF_params = np.asarray(base_ds.CTF_params)[image_indices].copy()
+                self.n_images = len(image_indices)
+                self.n_units = len(image_indices)
+
+            def iter_batches(self, batch_size, *, indices=None, by_image=False, **kwargs):
+                _ = kwargs
+                _ = by_image
+                if indices is None:
+                    indices = np.arange(self.n_images)
+                indices = np.asarray(indices)
+                for chunk_start in range(0, len(indices), max(1, batch_size)):
+                    chunk_end = min(chunk_start + max(1, batch_size), len(indices))
+                    idx = np.asarray(indices[chunk_start:chunk_end])
+                    yield (
+                        jnp.asarray(self._images[idx]),
+                        None,
+                        None,
+                        jnp.asarray(self.CTF_params[idx]),
+                        None,
+                        idx,
+                        idx,
+                    )
+
+            def get_valid_frequency_indices(self, pixel_res):
+                return np.ones(self.volume_size, dtype=bool)
+
+        ds_subset = _SubsetDataset(ds, subset)
+
+        mean_subset, ha_subset, Ft_y_subset, Ft_ctf_subset = run_em_v2(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=2,
+            rotation_block_size=2,
+            image_indices=subset,
+        )
+
+        mean_restricted, ha_restricted, Ft_y_restricted, Ft_ctf_restricted = run_em_v2(
+            ds_subset,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=2,
+            rotation_block_size=2,
+        )
+
+        np.testing.assert_allclose(np.array(mean_subset), np.array(mean_restricted), atol=1e-5)
+        np.testing.assert_array_equal(ha_subset, ha_restricted)
+        np.testing.assert_allclose(np.array(Ft_y_subset), np.array(Ft_y_restricted), atol=1e-5)
+        np.testing.assert_allclose(np.array(Ft_ctf_subset), np.array(Ft_ctf_restricted), atol=1e-5)
+
+    def test_image_specific_rotation_log_prior_controls_assignments(self, seeded_inputs):
+        """run_em_v2 should support image-specific rotation priors."""
+        s = seeded_inputs
+        log_prior = np.array(
+            [
+                [0.0, -1e6],
+                [-1e6, 0.0],
+                [0.0, -1e6],
+                [-1e6, 0.0],
+            ],
+            dtype=np.float32,
+        )
+
+        _, hard_assignments, _, _, stats = run_em_v2(
+            s["dataset"],
+            s["volume"],
+            np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0,
+            s["noise_variance"],
+            np.array(s["rotations"][:2]),
+            np.array([[0.0, 0.0]], dtype=np.float32),
+            "linear_interp",
+            image_batch_size=2,
+            rotation_block_size=2,
+            rotation_log_prior=log_prior,
+            return_stats=True,
+        )
+
+        np.testing.assert_array_equal(
+            hard_assignments,
+            np.array([0, 1, 0, 1], dtype=np.int32),
+        )
+        assert np.all(np.asarray(stats.max_posterior_per_image) > 0.99)
 
     def test_multiple_rotation_blocks(self, seeded_inputs):
         """Results should be identical regardless of rotation block size."""

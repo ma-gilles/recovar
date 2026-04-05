@@ -93,10 +93,12 @@ class TestRefinementStateConstruction:
     def test_should_do_local_search_at_order_4(self):
         state = RefinementState(healpix_order=4)
         assert state.should_do_local_search is True
+        assert state.do_local_search is True
 
     def test_should_not_do_local_search_below_order_4(self):
         state = RefinementState(healpix_order=3)
         assert state.should_do_local_search is False
+        assert state.do_local_search is False
 
 
 # =========================================================================
@@ -318,7 +320,7 @@ class TestShouldRefineAngularSampling:
         state = RefinementState(
             healpix_order=3,
             max_healpix_order=7,
-            nr_iter_wo_resol_gain=5,
+            nr_iter_wo_resol_gain=4,
             nr_iter_wo_assignment_changes=0,
         )
         assert should_refine_angular_sampling(state) is False

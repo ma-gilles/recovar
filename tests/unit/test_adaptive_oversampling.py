@@ -295,6 +295,28 @@ class TestSignificanceMaskCap:
         assert mask[1, 10], "Image 1: sample 10 should be significant"
         assert mask[2, 15], "Image 2: sample 15 should be significant"
 
+    def test_non_positive_cap_disables_threshold_cap(self):
+        """RELION uses -1 to mean uncapped significant-pose selection."""
+        raw_w = np.array(
+            [[0.40, 0.25, 0.15, 0.10, 0.06, 0.04]],
+            dtype=np.float32,
+        )
+        w = jnp.array(raw_w / raw_w.sum(axis=-1, keepdims=True))
+
+        _, n_sig_capped = find_significant_mask(
+            w, adaptive_fraction=0.90, max_significants=2,
+        )
+        mask_uncapped, n_sig_uncapped = find_significant_mask(
+            w, adaptive_fraction=0.90, max_significants=-1,
+        )
+
+        assert int(n_sig_capped[0]) == 2
+        assert int(n_sig_uncapped[0]) == 4
+        assert np.array_equal(
+            np.asarray(mask_uncapped[0], dtype=bool),
+            np.array([True, True, True, True, False, False]),
+        )
+
 
 # ===========================================================================
 # Test 3: Significant counts reasonable on synthetic data
@@ -429,6 +451,114 @@ class TestSignificantCountsReasonable:
             err_msg="sig_rot_mask inconsistent with sig_mask",
         )
 
+    def test_batched_significance_returns_sparse_sample_lists(self):
+        """The batched coarse pass should preserve per-image significant samples."""
+        from recovar.em.dense_single_volume.refine import _compute_significance_batched
+
+        n_images = 6
+        n_rot = 12
+        n_trans = 4
+
+        ds = MockDataset(n_images=n_images, seed=11)
+        volume = _hermitian_volume(VOLUME_SHAPE, seed=13)
+        rotations = _make_rotations(n_rot, seed=17)
+        translations = jnp.array(
+            [[0.0, 0.0], [1.0, 0.0], [-1.0, 0.0], [0.0, 1.0]],
+            dtype=jnp.float32,
+        )
+        noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+
+        weights, hard_assignments = compute_e_step_weights(
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=3,
+            rotation_block_size=5,
+        )
+        sig_mask, _, n_sig = find_significant_rotations(
+            jnp.asarray(weights),
+            n_rot,
+            n_trans,
+            adaptive_fraction=0.999,
+            max_significants=500,
+        )
+
+        sig_rot_any, n_sig_b, hard_b, sparse_sig = _compute_significance_batched(
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            adaptive_fraction=0.999,
+            max_significants=500,
+            image_batch_size=3,
+            rotation_block_size=5,
+            current_size=None,
+            return_significant_sample_indices=True,
+        )
+
+        np.testing.assert_array_equal(np.asarray(hard_b), np.asarray(hard_assignments))
+        np.testing.assert_array_equal(np.asarray(n_sig_b), np.asarray(n_sig))
+        assert np.any(sig_rot_any)
+        for i in range(n_images):
+            np.testing.assert_array_equal(
+                np.asarray(sparse_sig[i]),
+                np.flatnonzero(np.asarray(sig_mask[i])),
+            )
+
+    def test_sparse_pass2_runs_with_full_candidate_lists(self):
+        """Sparse pass 2 should handle the ``sig_samples is None`` full-grid case."""
+        from recovar.em.dense_single_volume.adaptive import compute_pass2_stats_sparse
+
+        n_images = 2
+        nside_level = 1
+
+        ds = MockDataset(n_images=n_images, seed=23)
+        volume = _hermitian_volume(VOLUME_SHAPE, seed=29)
+        mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+        noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+        translations = jnp.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=jnp.float32,
+        )
+
+        (
+            Ft_y,
+            Ft_ctf,
+            hard_assignment,
+            best_rotations,
+            best_translations,
+            best_rotation_indices,
+            relion_stats,
+        ) = compute_pass2_stats_sparse(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            translations,
+            significant_sample_indices=[None] * n_images,
+            nside_level=nside_level,
+            disc_type="linear_interp",
+            oversampling_order=1,
+            current_size=None,
+            return_stats=True,
+        )
+
+        assert Ft_y.shape == (VOLUME_SIZE,)
+        assert Ft_ctf.shape == (VOLUME_SIZE,)
+        assert hard_assignment.shape == (n_images,)
+        assert best_rotations.shape == (n_images, 3, 3)
+        assert best_translations.shape == (n_images, 2)
+        assert best_rotation_indices.shape == (n_images,)
+        assert np.all(np.isfinite(np.asarray(relion_stats.log_evidence_per_image)))
+        assert np.all(np.isfinite(np.asarray(relion_stats.best_log_score_per_image)))
+        assert np.all(np.isfinite(np.asarray(relion_stats.max_posterior_per_image)))
+        assert np.all(np.asarray(best_rotation_indices) >= 0)
+
 
 # ===========================================================================
 # Test 4: Oversampled grid generation
@@ -495,6 +625,92 @@ class TestOversampledGridGeneration:
             n_children = np.sum(parent_map == p_idx)
             assert n_children > 0, f"Parent {p_idx} has no children in parent_map"
 
+    def test_oversampled_rotation_grid_from_samples_size(self):
+        """Each coarse orientation sample should expand to 8 children at order 1."""
+        from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
+
+        nside_level = 2
+        parent_rotations = np.array([0, 5, 10])
+
+        matrices, parent_map = get_oversampled_rotation_grid_from_samples(
+            parent_rotations, nside_level, oversampling_order=1,
+        )
+
+        expected_n = 8 * len(parent_rotations)
+        assert matrices.shape == (expected_n, 3, 3)
+        assert parent_map.shape == (expected_n,)
+        for p_idx in range(len(parent_rotations)):
+            assert np.sum(parent_map == p_idx) == 8
+
+    def test_oversampled_rotation_grid_from_samples_preserves_psi_identity(self):
+        """Two coarse samples on the same pixel but different psi get distinct children."""
+        from recovar.em.sampling import (
+            get_oversampled_rotation_grid_from_samples,
+            rotation_grid_size,
+        )
+        import healpy as hp
+
+        nside_level = 2
+        n_pixels = hp.nside2npix(2 ** nside_level)
+        parent_rotations = np.array([0, n_pixels], dtype=np.int64)
+
+        matrices, parent_map = get_oversampled_rotation_grid_from_samples(
+            parent_rotations, nside_level, oversampling_order=1,
+        )
+
+        assert matrices.shape == (16, 3, 3)
+        assert np.sum(parent_map == 0) == 8
+        assert np.sum(parent_map == 1) == 8
+        assert rotation_grid_size(nside_level) > parent_rotations.max()
+        assert not np.allclose(matrices[:8], matrices[8:])
+
+    def test_oversampled_rotation_grid_from_samples_matches_relion_midpoints(self):
+        """Child orientations should follow RELION's midpoint psi oversampling."""
+        from recovar.em.sampling import (
+            get_healpix_children,
+            get_oversampled_rotation_grid_from_samples,
+            rotation_grid_n_in_planes,
+        )
+        from recovar import utils
+        import healpy as hp
+
+        nside_level = 2
+        parent_rotations = np.array([0, 5, 10, 193], dtype=np.int64)
+
+        matrices, parent_map, child_indices = get_oversampled_rotation_grid_from_samples(
+            parent_rotations,
+            nside_level,
+            oversampling_order=1,
+            return_rotation_indices=True,
+        )
+        coarse_n_pixels = hp.nside2npix(2 ** nside_level)
+        parent_pixels = parent_rotations % coarse_n_pixels
+        parent_psi = parent_rotations // coarse_n_pixels
+        child_pixels = get_healpix_children(parent_pixels, nside_level)
+        coarse_psi_step = 2.0 * np.pi / rotation_grid_n_in_planes(nside_level)
+        psi_factor = 2
+        child_psi = (
+            np.repeat(parent_psi, 4)[:, None] * coarse_psi_step
+            - 0.5 * coarse_psi_step
+            + (0.5 + np.arange(psi_factor, dtype=np.float64)[None, :])
+            * (coarse_psi_step / psi_factor)
+        ).reshape(-1)
+        theta, phi = hp.pix2ang(2 ** (nside_level + 1), child_pixels)
+        expected_angles = np.stack(
+            [
+                np.repeat(theta, psi_factor),
+                np.repeat(phi, psi_factor),
+                child_psi,
+            ],
+            axis=-1,
+        )
+        expected_matrices = utils.R_from_relion(np.rad2deg(expected_angles))
+
+        np.testing.assert_allclose(matrices, expected_matrices, atol=1e-6, rtol=1e-6)
+        assert np.all(child_indices >= 0)
+        for p_idx in range(len(parent_rotations)):
+            assert np.sum(parent_map == p_idx) == 8
+
     def test_oversampled_translation_grid_size(self):
         """get_oversampled_translation_grid should produce 4x translations."""
         from recovar.em.sampling import get_oversampled_translation_grid
@@ -528,9 +744,30 @@ class TestOversampledGridGeneration:
             assert abs(t[0] - 10.0) <= pixel_offset / 2 + 1e-6
             assert abs(t[1] - 20.0) <= pixel_offset / 2 + 1e-6
 
-        # Mean of children should be close to parent
+    def test_oversampled_translation_grid_matches_relion_child_order(self):
+        """Child translations should be ordered x-outer, y-inner like RELION."""
+        from recovar.em.sampling import get_oversampled_translation_grid
+
+        fine_trans, parent_map = get_oversampled_translation_grid(
+            np.array([[0.0, 0.0]], dtype=np.float32),
+            pixel_offset=2.0,
+            oversampling_order=1,
+        )
+
+        expected = np.array(
+            [
+                [-0.5, -0.5],
+                [-0.5, 0.5],
+                [0.5, -0.5],
+                [0.5, 0.5],
+            ],
+            dtype=np.float32,
+        )
+        np.testing.assert_allclose(fine_trans, expected, atol=1e-6)
+        np.testing.assert_array_equal(parent_map, np.zeros(4, dtype=np.int64))
+
         np.testing.assert_allclose(
-            fine_trans.mean(axis=0), [10.0, 20.0], atol=1e-10,
+            fine_trans.mean(axis=0), [0.0, 0.0], atol=1e-10,
             err_msg="Child translations not centered on parent",
         )
 
@@ -781,6 +1018,62 @@ class TestEStepWeightsWindowed:
         )
 
 
+class TestMaskedCartesianGrid:
+    """Verify run_em_v2 respects sparse candidate masks."""
+
+    def test_rotation_translation_mask_matches_manual_masking(self):
+        ds = MockDataset(n_images=1, seed=5)
+        volume = _hermitian_volume(VOLUME_SHAPE, seed=7)
+        mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32)
+        noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+        rotations = _make_rotations(5, seed=19)
+        translations = jnp.array(
+            [[0.0, 0.0], [1.0, 0.0], [-1.0, 0.0]],
+            dtype=jnp.float32,
+        )
+
+        weights, hard_assignments = compute_e_step_weights(
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=1,
+            rotation_block_size=3,
+        )
+        valid_mask = np.ones((rotations.shape[0], translations.shape[0]), dtype=bool)
+        valid_mask.reshape(-1)[int(hard_assignments[0])] = False
+
+        masked_weights = weights.reshape(rotations.shape[0], translations.shape[0]).copy()
+        masked_weights[~valid_mask] = 0.0
+        masked_weights /= masked_weights.sum()
+        expected_argmax = int(masked_weights.reshape(-1).argmax())
+        expected_pmax = float(masked_weights.max())
+
+        _, masked_ha, _, _, masked_stats = run_em_v2(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=1,
+            rotation_block_size=3,
+            rotation_translation_mask=valid_mask,
+            return_stats=True,
+        )
+
+        assert int(masked_ha[0]) == expected_argmax
+        np.testing.assert_allclose(
+            np.asarray(masked_stats.max_posterior_per_image),
+            np.array([expected_pmax], dtype=np.float32),
+            atol=1e-5,
+            rtol=1e-5,
+        )
+
+
 # ===========================================================================
 # Test 7: Union cap in compute_pass2_stats
 # ===========================================================================
@@ -863,3 +1156,71 @@ class TestUnionCap:
         assert Ft_ctf is not None, "Expected non-None when within cap"
         assert ha is not None, "Expected non-None when within cap"
         assert oversampled is not None, "Expected non-None when within cap"
+
+    def test_pass2_oversamples_translation_grid(self, monkeypatch):
+        """Pass 2 should evaluate on oversampled translations, not the coarse grid."""
+        from recovar.em.dense_single_volume import adaptive as adaptive_mod
+        from recovar.em.dense_single_volume import engine_v2 as engine_mod
+        from recovar.em.sampling import get_rotation_grid
+
+        nside_level = 1
+        rotations = get_rotation_grid(nside_level, matrices=True).astype(np.float32)
+        n_rot = rotations.shape[0]
+
+        ds = MockDataset(n_images=2, seed=42)
+        volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
+        mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
+        noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+        translations = jnp.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32,
+        )
+        sig_rot_mask = np.zeros(n_rot, dtype=bool)
+        sig_rot_mask[:2] = True
+        captured = {}
+
+        def fake_run_em_v2(
+            experiment_dataset,
+            mean,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            disc_type,
+            **kwargs,
+        ):
+            _ = (
+                experiment_dataset, mean, mean_variance, noise_variance, rotations,
+                disc_type, kwargs,
+            )
+            captured["translations"] = np.asarray(translations)
+            n_images = ds.n_units
+            ha = np.zeros(n_images, dtype=np.int32)
+            Ft_y = jnp.zeros(ds.volume_size, dtype=ds.dtype)
+            Ft_ctf = jnp.zeros(ds.volume_size, dtype=ds.dtype)
+            return jnp.zeros(ds.volume_size, dtype=ds.dtype), ha, Ft_y, Ft_ctf
+
+        monkeypatch.setattr(engine_mod, "run_em_v2", fake_run_em_v2)
+
+        Ft_y, Ft_ctf, ha, oversampled = adaptive_mod.compute_pass2_stats(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            np.asarray(rotations),
+            translations,
+            sig_rot_mask,
+            nside_level=nside_level,
+            disc_type="linear_interp",
+            oversampling_order=1,
+            current_size=None,
+            image_batch_size=ds.n_units,
+            max_union_pixels=1000,
+            translation_step=1.0,
+        )
+
+        assert Ft_y is not None
+        assert Ft_ctf is not None
+        assert ha is not None
+        assert oversampled is not None
+        assert "translations" in captured
+        assert captured["translations"].shape[0] == 4 * translations.shape[0]

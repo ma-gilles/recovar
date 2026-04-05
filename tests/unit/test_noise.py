@@ -536,6 +536,70 @@ def _legacy_estimate_noise_level_no_masks(dataset, image_subset, mean_estimate, 
     return estimated_noise
 
 
+def _legacy_estimate_initial_noise_spectrum_from_unaligned_images(dataset, image_subset, batch_size):
+    from recovar.reconstruction import regularization
+
+    image_subset = np.asarray(image_subset, dtype=np.int32)
+    batch_size = int(min(batch_size, image_subset.size))
+    sum_radial_power = None
+    sum_images = None
+    n_images = 0
+
+    for (
+        batch,
+        _rotation_matrices,
+        _translations,
+        _ctf_params,
+        _noise_variance,
+        _particle_indices,
+        _image_indices,
+    ) in dataset.iter_batches(batch_size=batch_size, indices=image_subset):
+        batch = dataset.process_images(batch)
+        batch_radial_power = regularization.batch_average_over_shells(
+            jnp.abs(batch) ** 2, dataset.image_shape, 0,
+        )
+        batch_sum_images = jnp.sum(batch, axis=0)
+
+        if sum_radial_power is None:
+            sum_radial_power = jnp.sum(batch_radial_power, axis=0)
+            sum_images = batch_sum_images
+        else:
+            sum_radial_power = sum_radial_power + jnp.sum(batch_radial_power, axis=0)
+            sum_images = sum_images + batch_sum_images
+        n_images += int(batch.shape[0])
+
+    average_particle_power = sum_radial_power / float(n_images)
+    average_image = sum_images / float(n_images)
+    average_image_power = regularization.average_over_shells(
+        jnp.abs(average_image) ** 2, dataset.image_shape, 0,
+    )
+    sigma2_noise = np.asarray(
+        0.5 * (average_particle_power - average_image_power),
+        dtype=np.float32,
+    )
+
+    positive_mask = sigma2_noise > 0
+    if not np.any(positive_mask):
+        sigma2_noise = np.asarray(0.5 * average_particle_power, dtype=np.float32)
+        positive_mask = sigma2_noise > 0
+
+    if np.any(~positive_mask):
+        for idx in range(sigma2_noise.shape[0]):
+            if sigma2_noise[idx] > 0:
+                continue
+            replacement = None
+            if idx > 0 and sigma2_noise[idx - 1] > 0:
+                replacement = sigma2_noise[idx - 1]
+            else:
+                for jdx in range(idx + 1, sigma2_noise.shape[0]):
+                    if sigma2_noise[jdx] > 0:
+                        replacement = sigma2_noise[jdx]
+                        break
+            sigma2_noise[idx] = replacement if replacement is not None else 1.0
+
+    return sigma2_noise
+
+
 def test_estimate_noise_variance_matches_legacy_loop():
     rng = np.random.default_rng(7)
     image_shape = (4, 4)
@@ -589,6 +653,31 @@ def test_estimate_noise_level_no_masks_matches_legacy_loop():
         ds,
         image_subset=subset,
         mean_estimate=None,
+        batch_size=3,
+    )
+
+    np.testing.assert_allclose(np.asarray(got), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+def test_estimate_initial_noise_spectrum_from_unaligned_images_matches_legacy_loop():
+    rng = np.random.default_rng(23)
+    image_shape = (4, 4)
+    images = (
+        rng.normal(size=(8, np.prod(image_shape))).astype(np.float32)
+        + 1j * rng.normal(size=(8, np.prod(image_shape))).astype(np.float32)
+    ).astype(np.complex64)
+    ds = _MockNoiseDataset(images, image_shape=image_shape)
+    subset = np.arange(ds.n_images, dtype=np.int32)
+
+    expected_raw = _legacy_estimate_initial_noise_spectrum_from_unaligned_images(
+        ds,
+        image_subset=subset,
+        batch_size=3,
+    )
+    expected = expected_raw / float(np.prod(image_shape) ** 2)
+    got = noise.estimate_initial_noise_spectrum_from_unaligned_images(
+        ds,
+        image_subset=subset,
         batch_size=3,
     )
 

@@ -16,6 +16,9 @@ from recovar.reconstruction.regularization import (
     compute_data_vs_prior,
     resolution_from_data_vs_prior,
     compute_current_size_relion,
+    compute_relion_incr_size_from_fsc,
+    fsc_to_relion_ssnr,
+    update_relion_growth_state_from_fsc,
 )
 
 pytestmark = pytest.mark.unit
@@ -122,6 +125,76 @@ class TestResolutionFromDataVsPrior:
         """Should work with JAX arrays too."""
         dvp = jnp.array([10.0, 5.0, 0.5, 0.1])
         assert resolution_from_data_vs_prior(dvp) == 1
+
+    def test_relion_high_res_recovery_prefers_later_shell(self):
+        """RELION keeps a later shell when the curve rises again well beyond the first dip."""
+        dvp = np.array([5.0, 4.0, 0.8, 0.7, 0.6, 0.5, 1.2, 1.1], dtype=np.float32)
+        assert resolution_from_data_vs_prior(dvp) == 1
+        assert resolution_from_data_vs_prior(dvp, allow_high_res_recovery=True) == 7
+
+    def test_relion_high_res_recovery_ignores_small_bumps(self):
+        """A small post-dip bump within three shells should not move the limit."""
+        dvp = np.array([5.0, 4.0, 0.8, 0.7, 1.2, 0.5], dtype=np.float32)
+        assert resolution_from_data_vs_prior(dvp, allow_high_res_recovery=True) == 1
+
+
+# ---------------------------------------------------------------------------
+# FSC -> RELION SSNR / incr_size helpers
+# ---------------------------------------------------------------------------
+
+
+class TestRelionFscHelpers:
+    """Test RELION auto-refine helpers derived from the FSC curve."""
+
+    def test_fsc_to_relion_ssnr_matches_half_map_formula(self):
+        fsc = jnp.array([1.0, 0.5, 0.2], dtype=jnp.float32)
+        ssnr = np.asarray(fsc_to_relion_ssnr(fsc))
+        # shell 1: FSC=0.5 -> SSNR=1
+        assert ssnr[1] == pytest.approx(1.0, rel=1e-5)
+        # shell 2: FSC=0.2 -> SSNR=0.25
+        assert ssnr[2] == pytest.approx(0.25, rel=1e-5)
+
+    def test_compute_relion_incr_size_uses_fsc05_and_fsc0143_gap(self):
+        fsc = np.array(
+            [1.0, 0.95, 0.9, 0.8, 0.7, 0.49, 0.4, 0.3, 0.2, 0.15, 0.14, 0.05],
+            dtype=np.float32,
+        )
+        # First FSC<0.5 at shell 5, first FSC<0.143 at shell 10.
+        # incr_size = max(10, 10 - 5 + 5) = 10
+        assert compute_relion_incr_size_from_fsc(fsc) == 10
+
+    def test_compute_relion_incr_size_can_exceed_default(self):
+        fsc = np.array(
+            [1.0, 0.95, 0.9, 0.8, 0.49, 0.48, 0.47, 0.46, 0.45, 0.3, 0.2, 0.15, 0.14],
+            dtype=np.float32,
+        )
+        # First FSC<0.5 at shell 4, first FSC<0.143 at shell 12.
+        # incr_size = max(10, 12 - 4 + 5) = 13
+        assert compute_relion_incr_size_from_fsc(fsc) == 13
+
+    def test_update_relion_growth_state_is_sticky_and_non_decreasing(self):
+        fsc1 = np.array(
+            [1.0, 0.95, 0.9, 0.8, 0.49, 0.48, 0.47, 0.46, 0.45, 0.3, 0.2, 0.15, 0.14],
+            dtype=np.float32,
+        )
+        incr1, high1 = update_relion_growth_state_from_fsc(
+            fsc1,
+            current_size=10,
+            incr_size=10,
+            has_high_fsc_at_limit=False,
+        )
+        assert incr1 == 13
+        assert high1 is True
+
+        fsc2 = np.array([1.0, 0.1, 0.05, 0.02], dtype=np.float32)
+        incr2, high2 = update_relion_growth_state_from_fsc(
+            fsc2,
+            current_size=8,
+            incr_size=incr1,
+            has_high_fsc_at_limit=high1,
+        )
+        assert incr2 == 13
+        assert high2 is True
 
 
 # ---------------------------------------------------------------------------

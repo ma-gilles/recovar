@@ -46,7 +46,7 @@ from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
-from .types import MeanStats
+from .types import MeanStats, NoiseStats, RelionStats
 
 logger = logging.getLogger(__name__)
 
@@ -73,17 +73,46 @@ def make_half_image_weights(image_shape):
     return w.reshape(-1)        # (N_half,)
 
 
+def make_shell_indices_half(image_shape):
+    """Return (N_half,) int32 mapping each half-spectrum pixel to its radial shell.
+
+    Uses the rfft-packed layout matching ``full_image_to_half_image``.
+    Shell indices range from 0 (DC) to ``image_shape[0] // 2`` (Nyquist).
+    """
+    # get_grid_of_radial_distances_real returns shape (H, W//2+1) with rounded int distances
+    radii = fourier_transform_utils.get_grid_of_radial_distances_real(
+        image_shape, voxel_size=1, scaled=False, frequency_shift=0, rounded=True,
+    )
+    return radii.reshape(-1).astype(jnp.int32)
+
+
 # -- JIT-compiled kernels ---------------------------------------------------
 
-@partial(jax.jit, static_argnums=(5, 6))
-def _preprocess_batch(batch, ctf_params, noise_variance, translations, config, n_images, n_trans):
-    """Preprocess one image batch: CTF weight + phase shifts -> half-spectrum.
+@partial(jax.jit, static_argnums=(5, 6, 7))
+def _preprocess_batch(
+    batch,
+    ctf_params,
+    noise_variance,
+    translations,
+    config,
+    n_images,
+    n_trans,
+    score_with_masked_images=False,
+):
+    """Preprocess one image batch for E-step scoring.
 
-    Returns shifted images in half-spectrum layout (N_half per pixel),
-    along with batch norms and CTF^2/noise for the norm-term computation.
+    When ``score_with_masked_images`` is True, the likelihood path uses the
+    dataset's masked-image preprocessing. The returned ``batch_norm`` is the
+    per-image constant ``||y||^2 / sigma^2`` term from the Gaussian
+    likelihood. The score kernels intentionally omit that constant from the
+    relative candidate scores to avoid catastrophic float32 cancellation, and
+    add it back only when absolute log-evidence outputs are requested.
     """
     CTF = config.compute_ctf(ctf_params)
-    processed = config.process_fn(batch, apply_image_mask=False)
+    processed = config.process_fn(
+        batch,
+        apply_image_mask=score_with_masked_images,
+    )
     ctf_weighted = processed * CTF / noise_variance
     # Phase shifts operate on full spectrum (need all frequencies for correct shift)
     shifted = core.batch_trans_translate_images(
@@ -98,6 +127,30 @@ def _preprocess_batch(batch, ctf_params, noise_variance, translations, config, n
     # Also convert ctf2_over_nv to half for norm-term GEMM
     ctf2_over_nv_half = fourier_transform_utils.full_image_to_half_image(ctf2_over_nv, config.image_shape)
     return shifted_half, batch_norm, ctf2_over_nv_half
+
+
+@partial(jax.jit, static_argnums=(5, 6))
+def _prepare_reconstruction_batch(
+    batch,
+    ctf_params,
+    noise_variance,
+    translations,
+    config,
+    n_images,
+    n_trans,
+):
+    """Preprocess one image batch for the unmasked M-step path."""
+    CTF = config.compute_ctf(ctf_params)
+    processed = config.process_fn(batch, apply_image_mask=False)
+    ctf_weighted = processed * CTF / noise_variance
+    shifted = core.batch_trans_translate_images(
+        ctf_weighted, jnp.repeat(translations[None], n_images, axis=0), config.image_shape,
+    )
+    shifted_flat = shifted.reshape(n_images * n_trans, -1)
+    return fourier_transform_utils.full_image_to_half_image(
+        shifted_flat,
+        config.image_shape,
+    )
 
 
 @partial(jax.jit, static_argnums=(6, 7, 8, 9))
@@ -117,7 +170,8 @@ def _e_step_block_scores(shifted_half, batch_norm, ctf2_over_nv_half,
 
     Args:
         shifted_half: (n_images * n_trans, N_half) complex -- phase-shifted CTF-weighted images.
-        batch_norm: (n_images, 1) float -- ||processed_image / sqrt(noise)||^2.
+        batch_norm: (n_images, 1) float -- ignored additive constant
+            ``||processed_image / sqrt(noise)||^2`` carried separately.
         ctf2_over_nv_half: (n_images, N_half) float -- CTF^2/noise in half layout.
         proj_half_weighted: (rot_block, N_half) complex -- projections * half_weights.
         proj_abs2_half: (rot_block, N_half) float -- |proj|^2 * half_weights.
@@ -131,7 +185,10 @@ def _e_step_block_scores(shifted_half, batch_norm, ctf2_over_nv_half,
     # Cross-term: -2 Re(conj(Y_half) @ (P_half * w).T)
     # This recovers -2 Re<Y, P>_full via the half-spectrum identity
     cross = -2.0 * (jnp.conj(shifted_half) @ proj_half_weighted.T).real
-    cross = cross.reshape(n_images, n_trans, rot_block_size) + batch_norm[:, None, :]
+    # ``batch_norm`` is a per-image additive constant over the entire
+    # rotation x translation grid. Omitting it preserves the posterior exactly
+    # while keeping the relative scores representable in float32.
+    cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)  # (n_images, rot_block_size, n_trans)
     # Norm-term: sum_k w(k) * CTF^2/noise(k) * |proj(k)|^2
     norms = ctf2_over_nv_half @ proj_abs2_half.T  # (n_images, rot_block_size)
@@ -152,7 +209,8 @@ def _e_step_block_scores_windowed(shifted_windowed, batch_norm, ctf2_over_nv_win
 
     Args:
         shifted_windowed: (n_images * n_trans, n_windowed) complex
-        batch_norm: (n_images, 1) float
+        batch_norm: (n_images, 1) float -- ignored additive constant
+            ``||processed_image / sqrt(noise)||^2`` carried separately.
         ctf2_over_nv_windowed: (n_images, n_windowed) float
         proj_windowed_weighted: (rot_block, n_windowed) complex
         proj_abs2_windowed: (rot_block, n_windowed) float
@@ -165,7 +223,7 @@ def _e_step_block_scores_windowed(shifted_windowed, batch_norm, ctf2_over_nv_win
     rot_block_size = proj_windowed_weighted.shape[0]
     # Cross-term on windowed subset
     cross = -2.0 * (jnp.conj(shifted_windowed) @ proj_windowed_weighted.T).real
-    cross = cross.reshape(n_images, n_trans, rot_block_size) + batch_norm[:, None, :]
+    cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)  # (n_images, rot_block_size, n_trans)
     # Norm-term on windowed subset
     norms = ctf2_over_nv_windowed @ proj_abs2_windowed.T  # (n_images, rot_block_size)
@@ -226,6 +284,9 @@ def _m_step_block(shifted_half, scores_block, log_Z, rotations_block, ctf2_over_
     The M-step GEMM computes P @ shifted_half -> (rot_block, N_half).
     This is a weighted sum (not an inner product), so no Hermitian weights needed.
     The result goes directly to adjoint_slice_volume with half_image=True.
+
+    Returns intermediates ``summed_half`` and ``ctf_probs_half`` for optional
+    downstream noise accumulation.
     """
     rot_block_size = rotations_block.shape[0]
     # Normalize
@@ -250,7 +311,70 @@ def _m_step_block(shifted_half, scores_block, log_Z, rotations_block, ctf2_over_
     # Hard assignment contribution: argmax over this block
     block_best = jnp.max(scores_block.reshape(n_images, -1), axis=1)
     block_argmax = jnp.argmax(scores_block.reshape(n_images, -1), axis=1)
-    return Ft_y, Ft_ctf, probs, block_best, block_argmax
+    return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half, ctf_probs_half
+
+
+@partial(jax.jit, static_argnums=(6,))
+def _compute_noise_block(proj_half, proj_abs2_half, summed_masked,
+                         ctf_probs, noise_variance_half, shell_indices,
+                         n_shells):
+    """Accumulate RELION-style posterior-weighted noise for one rotation block.
+
+    Uses the decomposition::
+
+        E_w[|CTF*proj - img|^2] = E_w[|CTF*proj|^2] - 2*Re(E_w[conj(img)*CTF*proj]) + |img|^2
+                                 =     A2            -           2*XA                  + P_img
+
+    ``P_img`` is handled by the caller (image-only, no rotation dependence).
+    This function computes the ``A2 - 2*XA`` contribution from one rotation
+    block, binned to resolution shells.
+
+    The key identity: since CTF is real-valued,
+    ``conj(raw_img_shifted) * CTF = conj(shifted_half) * sigma2``,
+    so the XA GEMM output ``P @ shifted_masked`` can be reused.
+
+    Parameters
+    ----------
+    proj_half : (rot_block, N) complex
+        Projections (unweighted by half_weights).
+    proj_abs2_half : (rot_block, N) float
+        ``|proj|^2``.
+    summed_masked : (rot_block, N) complex
+        ``P @ shifted_masked_half`` -- masked-image M-step GEMM output.
+    ctf_probs : (rot_block, N) float
+        ``probs_sum_t.T @ (CTF^2 / noise_variance)`` -- already computed
+        for Ft_ctf.
+    noise_variance_half : (N,) float
+        Per-pixel noise variance in half-spectrum layout.
+    shell_indices : (N,) int32
+        Radial shell index per half-spectrum pixel.
+    n_shells : int (static)
+        Number of resolution shells.
+
+    Returns
+    -------
+    noise_shells : (n_shells,) float
+        ``sum_{k in shell} (A2(k) - 2*XA(k))`` contribution from this block.
+    """
+    # A2 term: sum_r |proj_r|^2 * (ctf_probs * noise_variance)[r, k]
+    # ctf_probs has CTF^2/sigma2; multiply by sigma2 to get CTF^2
+    ctf_probs_raw = ctf_probs * noise_variance_half  # (rot_block, N)
+    A2 = jnp.sum(proj_abs2_half * ctf_probs_raw, axis=0)  # (N,) sum over rotations
+
+    # XA term: noise_variance * Re(sum_r proj_r * conj(summed_masked_r))
+    # summed_masked = P @ shifted_masked, where shifted_masked = img*CTF/sigma2*phase
+    # conj(raw*CTF) = conj(shifted_half) * sigma2, so:
+    # XA = sigma2 * Re(sum_r proj_r * conj(summed_masked_r))
+    cross = jnp.sum(proj_half * jnp.conj(summed_masked), axis=0)  # (N,) complex
+    XA = noise_variance_half * cross.real  # (N,)
+
+    # Per-pixel block contribution (without P_img)
+    block_noise = A2 - 2.0 * XA
+
+    # Bin to resolution shells (no Hermitian weights -- matching RELION)
+    noise_shells = jnp.zeros(n_shells, dtype=jnp.float32)
+    noise_shells = noise_shells.at[shell_indices].add(block_noise)
+    return noise_shells
 
 
 def _compute_projections_block(volume, rotations_block, image_shape, volume_shape, disc_type):
@@ -277,6 +401,15 @@ def run_em_v2(
     rotation_block_size: int = 5000,
     current_size: int = None,
     rotation_log_prior: np.ndarray = None,
+    translation_log_prior: np.ndarray = None,
+    image_indices: np.ndarray = None,
+    rotation_translation_mask: np.ndarray = None,
+    *,
+    score_with_masked_images: bool = False,
+    return_stats: bool = False,
+    accumulate_noise: bool = False,
+    half_spectrum_scoring: bool = False,
+    noise_fill_outside_mask: bool = False,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -297,15 +430,41 @@ def run_em_v2(
         When None, use full resolution (same as Phase 1 behavior).
         When set, only frequencies with radius <= current_size // 2 are
         included in the E-step and M-step GEMMs.
-    rotation_log_prior : np.ndarray or None, shape (n_rot,)
-        Per-rotation log-prior weights, added to E-step scores before softmax.
-        Used for RELION-style Gaussian angular prior in local search:
-        ``log_prior[r] = -angular_distance(R_prev, R_r)^2 / (2 * sigma_rot^2)``.
-        When None (default), flat prior (all zeros) is used.
+    rotation_log_prior : np.ndarray or None
+        Log-prior weights added to E-step scores before softmax. Supports
+        either a shared vector of shape ``(n_rot,)`` or an image-specific
+        matrix of shape ``(n_images, n_rot)`` for exact local-search unions.
+        When None (default), a flat prior is used.
+    translation_log_prior : np.ndarray or None
+        Log-prior weights added to E-step scores before softmax over the
+        translation axis. Supports either a shared vector of shape
+        ``(n_trans,)`` or an image-specific matrix of shape
+        ``(n_images, n_trans)``.
+    image_indices : np.ndarray or None
+        Optional subset of images to process. When provided, the returned
+        hard assignments and per-image stats are ordered according to this
+        subset rather than the full dataset.
+    rotation_translation_mask : np.ndarray or None, shape (n_rot, n_trans)
+        Optional boolean validity mask over the Cartesian rotation x
+        translation grid. Entries set to False are excluded by forcing
+        their scores to ``-inf`` in both E-step passes.
+    score_with_masked_images : bool
+        When True, compute E-step scores from masked images but keep the
+        M-step reconstruction on unmasked images.
+    return_stats : bool
+        When True, also return a :class:`RelionStats` container with the
+        per-image log normalizer, best score, maximum posterior
+        probability, and additive posterior mass per rotation computed
+        during the E-step.
     """
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]
-    n_images = experiment_dataset.n_units
+    image_indices = (
+        np.arange(experiment_dataset.n_units)
+        if image_indices is None
+        else np.asarray(image_indices)
+    )
+    n_images = image_indices.size
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
 
@@ -316,8 +475,17 @@ def run_em_v2(
         experiment_dataset, disc_type=disc_type, process_fn=experiment_dataset.process_images,
     )
 
-    # Precompute half-spectrum weights once
-    half_weights = make_half_image_weights(image_shape)
+    # Precompute half-spectrum weights for E-step scoring.
+    # RELION sums over independent half-complex modes (no Hermitian doubling).
+    # Using all-1 weights matches RELION's convention: each independent mode
+    # counted once.  The full-spectrum Hermitian weights (2 for interior pixels)
+    # double-count conjugate pairs, making the score ~2x too large and the
+    # posterior exponentially more peaked than RELION's.
+    if half_spectrum_scoring:
+        H_w, W_w = image_shape
+        half_weights = jnp.ones(H_w * (W_w // 2 + 1), dtype=jnp.float32)
+    else:
+        half_weights = make_half_image_weights(image_shape)
 
     # Precompute window indices if current_size is set
     use_window = current_size is not None and current_size < image_shape[0]
@@ -346,23 +514,131 @@ def run_em_v2(
         rotations_padded = rotations
 
     # Prepare per-rotation log-prior (pad to match rotations_padded)
+    per_image_log_prior = False
     if rotation_log_prior is not None:
-        log_prior_padded = np.full(n_rot_padded, -1e30, dtype=np.float32)
-        log_prior_padded[:n_rot] = np.asarray(rotation_log_prior, dtype=np.float32)
+        rotation_log_prior = np.asarray(rotation_log_prior, dtype=np.float32)
+        if rotation_log_prior.ndim == 1:
+            log_prior_padded = np.full(n_rot_padded, -1e30, dtype=np.float32)
+            log_prior_padded[:n_rot] = rotation_log_prior
+        elif rotation_log_prior.ndim == 2:
+            if rotation_log_prior.shape != (n_images, n_rot):
+                raise ValueError(
+                    "rotation_log_prior must have shape "
+                    f"({n_images}, {n_rot}) when image-specific, got "
+                    f"{rotation_log_prior.shape}",
+                )
+            log_prior_padded = np.full((n_images, n_rot_padded), -1e30, dtype=np.float32)
+            log_prior_padded[:, :n_rot] = rotation_log_prior
+            per_image_log_prior = True
+        else:
+            raise ValueError(
+                "rotation_log_prior must be 1D or 2D, got "
+                f"{rotation_log_prior.ndim} dimensions",
+            )
         log_prior_padded_jnp = jnp.asarray(log_prior_padded)
+        finite_prior = rotation_log_prior[np.isfinite(rotation_log_prior)]
+        if finite_prior.size == 0:
+            finite_prior = np.array([-1e30], dtype=np.float32)
         logger.info(
-            "Using rotation log-prior: %d rotations, range [%.2f, %.2f]",
-            n_rot, float(rotation_log_prior.min()), float(rotation_log_prior.max()),
+            "Using rotation log-prior: %d rotations%s, range [%.2f, %.2f]",
+            n_rot,
+            " (per-image)" if per_image_log_prior else "",
+            float(finite_prior.min()),
+            float(finite_prior.max()),
         )
     else:
         log_prior_padded_jnp = None
+
+    per_image_translation_log_prior = False
+    if translation_log_prior is not None:
+        translation_log_prior = np.asarray(translation_log_prior, dtype=np.float32)
+        if translation_log_prior.ndim == 1:
+            if translation_log_prior.shape != (n_trans,):
+                raise ValueError(
+                    "translation_log_prior must have shape "
+                    f"({n_trans},), got {translation_log_prior.shape}",
+                )
+            translation_log_prior_jnp = jnp.asarray(translation_log_prior)
+        elif translation_log_prior.ndim == 2:
+            if translation_log_prior.shape != (n_images, n_trans):
+                raise ValueError(
+                    "translation_log_prior must have shape "
+                    f"({n_images}, {n_trans}) when image-specific, got "
+                    f"{translation_log_prior.shape}",
+                )
+            translation_log_prior_jnp = jnp.asarray(translation_log_prior)
+            per_image_translation_log_prior = True
+        else:
+            raise ValueError(
+                "translation_log_prior must be 1D or 2D, got "
+                f"{translation_log_prior.ndim} dimensions",
+            )
+        finite_translation_prior = translation_log_prior[np.isfinite(translation_log_prior)]
+        if finite_translation_prior.size == 0:
+            finite_translation_prior = np.array([-1e30], dtype=np.float32)
+        logger.info(
+            "Using translation log-prior: %d translations%s, range [%.2f, %.2f]",
+            n_trans,
+            " (per-image)" if per_image_translation_log_prior else "",
+            float(finite_translation_prior.min()),
+            float(finite_translation_prior.max()),
+        )
+    else:
+        translation_log_prior_jnp = None
+
+    candidate_mask_padded_jnp = None
+    if rotation_translation_mask is not None:
+        candidate_mask = np.asarray(rotation_translation_mask, dtype=bool)
+        if candidate_mask.shape != (n_rot, n_trans):
+            raise ValueError(
+                "rotation_translation_mask must have shape "
+                f"({n_rot}, {n_trans}), got {candidate_mask.shape}",
+            )
+        candidate_mask_padded = np.zeros((n_rot_padded, n_trans), dtype=bool)
+        candidate_mask_padded[:n_rot] = candidate_mask
+        candidate_mask_padded_jnp = jnp.asarray(candidate_mask_padded)
+        logger.info(
+            "Using rotation-translation mask: %d / %d candidates valid",
+            int(candidate_mask.sum()),
+            int(candidate_mask.size),
+        )
 
     # Initialize accumulators
     Ft_y = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
     Ft_ctf = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
     hard_assignment = np.empty(n_images, dtype=np.int32)
+    log_evidence_per_image = None
+    best_log_score_per_image = None
+    max_posterior_per_image = None
+    rotation_posterior_sums = None
+    if return_stats:
+        log_evidence_per_image = np.empty(n_images, dtype=np.float32)
+        best_log_score_per_image = np.empty(n_images, dtype=np.float32)
+        max_posterior_per_image = np.empty(n_images, dtype=np.float32)
+        rotation_posterior_sums = np.zeros(n_rot, dtype=np.float64)
 
-    image_indices = np.arange(n_images)
+    # Noise accumulation precomputation (RELION parity)
+    noise_wsum = None
+    noise_img_power = None
+    noise_sumw = 0.0
+    if accumulate_noise:
+        n_shells = image_shape[0] // 2 + 1
+        shell_indices_half = make_shell_indices_half(image_shape)
+        if use_window:
+            shell_indices_noise = shell_indices_half[window_indices]
+        else:
+            shell_indices_noise = shell_indices_half
+        # noise_variance in half-spectrum layout
+        noise_variance_half = fourier_transform_utils.full_image_to_half_image(
+            noise_variance.reshape(1, -1), image_shape,
+        ).squeeze()
+        if use_window:
+            noise_variance_windowed = noise_variance_half[window_indices]
+        else:
+            noise_variance_windowed = noise_variance_half
+        noise_wsum = np.zeros(n_shells, dtype=np.float64)
+        noise_img_power = np.zeros(n_shells, dtype=np.float64)
+
     start_idx = 0
 
     for (batch_data, _, _, ctf_params, _, _, indices) in experiment_dataset.iter_batches(
@@ -375,16 +651,66 @@ def run_em_v2(
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
             batch_data, ctf_params, noise_variance, translations, config,
-            batch_size, n_trans,
+            batch_size, n_trans, score_with_masked_images,
         )
+        shifted_recon_half = (
+            _prepare_reconstruction_batch(
+                batch_data, ctf_params, noise_variance, translations, config,
+                batch_size, n_trans,
+            )
+            if score_with_masked_images
+            else shifted_half
+        )
+
+        # -- Save pre-DC-exclusion arrays for noise accumulation --
+        # RELION excludes DC from scores but INCLUDES DC in noise estimation.
+        # We save the original arrays before zeroing DC so the noise path
+        # can use them with DC intact.
+        shifted_half_with_dc = shifted_half
+        ctf2_over_nv_half_with_dc = ctf2_over_nv_half
+
+        # -- DC exclusion (RELION parity: Minvsigma2[0] = 0) --
+        # RELION excludes the DC pixel from likelihood scores.
+        # In recovar's half-spectrum layout, DC is NOT at flat index 0.
+        # Find the DC pixel by locating shell index 0 in the precomputed
+        # shell_indices_half array.
+        if half_spectrum_scoring:
+            dc_shell_idx = make_shell_indices_half(image_shape)
+            dc_mask = (dc_shell_idx == 0)  # True at DC pixel(s)
+            # Zero out DC in SCORING arrays only
+            shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
+            ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
 
         # -- WINDOW gather (if active) --
         if use_window:
             shifted_windowed = shifted_half[:, window_indices]
+            shifted_recon_windowed = shifted_recon_half[:, window_indices]
             ctf2_over_nv_windowed = ctf2_over_nv_half[:, window_indices]
         else:
             shifted_windowed = shifted_half
+            shifted_recon_windowed = shifted_recon_half
             ctf2_over_nv_windowed = ctf2_over_nv_half
+
+        # -- Noise: precompute per-batch image power spectrum --
+        if accumulate_noise:
+            # P_img = sum_i |masked_img_i(k)|^2 per half-spectrum pixel
+            # Use the masked processed images (score path)
+            processed_masked = config.process_fn(batch_data, apply_image_mask=score_with_masked_images)
+            processed_masked_half = fourier_transform_utils.full_image_to_half_image(
+                processed_masked, image_shape,
+            )
+            # Sum |img|^2 over images in this batch, bin to shells (FULL spectrum, not windowed)
+            batch_img_power = jnp.sum(jnp.abs(processed_masked_half) ** 2, axis=0)  # (N_half,)
+            batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
+            batch_img_power_shells = batch_img_power_shells.at[shell_indices_half].add(batch_img_power)
+            noise_img_power += np.asarray(batch_img_power_shells, dtype=np.float64)
+            noise_sumw += batch_size
+            # Masked shifted images for the noise GEMM: use WITH-DC versions
+            # (RELION includes DC in noise but excludes from scoring)
+            if use_window:
+                shifted_masked_for_noise = shifted_half_with_dc[:, window_indices]
+            else:
+                shifted_masked_for_noise = shifted_half_with_dc
 
         # -- PASS 1: streaming logsumexp over rotation blocks --
         max_s = jnp.full(batch_size, -jnp.inf)
@@ -424,8 +750,23 @@ def run_em_v2(
 
             # Add rotation log-prior (Gaussian angular prior for local search)
             if log_prior_padded_jnp is not None:
-                log_prior_block = log_prior_padded_jnp[r0:r1]
-                scores = scores + log_prior_block[None, :, None]
+                if per_image_log_prior:
+                    log_prior_block = log_prior_padded_jnp[start_idx:end_idx, r0:r1]
+                    scores = scores + log_prior_block[:, :, None]
+                else:
+                    log_prior_block = log_prior_padded_jnp[r0:r1]
+                    scores = scores + log_prior_block[None, :, None]
+
+            if translation_log_prior_jnp is not None:
+                if per_image_translation_log_prior:
+                    translation_prior_block = translation_log_prior_jnp[start_idx:end_idx]
+                    scores = scores + translation_prior_block[:, None, :]
+                else:
+                    scores = scores + translation_log_prior_jnp[None, None, :]
+
+            if candidate_mask_padded_jnp is not None:
+                candidate_mask_block = candidate_mask_padded_jnp[r0:r1]
+                scores = jnp.where(candidate_mask_block[None, :, :], scores, -jnp.inf)
 
             # Mask padding rotations (set their scores to -inf)
             if r1 > n_rot:
@@ -474,8 +815,23 @@ def run_em_v2(
 
             # Add rotation log-prior (must match pass 1 exactly)
             if log_prior_padded_jnp is not None:
-                log_prior_block = log_prior_padded_jnp[r0:r1]
-                scores = scores + log_prior_block[None, :, None]
+                if per_image_log_prior:
+                    log_prior_block = log_prior_padded_jnp[start_idx:end_idx, r0:r1]
+                    scores = scores + log_prior_block[:, :, None]
+                else:
+                    log_prior_block = log_prior_padded_jnp[r0:r1]
+                    scores = scores + log_prior_block[None, :, None]
+
+            if translation_log_prior_jnp is not None:
+                if per_image_translation_log_prior:
+                    translation_prior_block = translation_log_prior_jnp[start_idx:end_idx]
+                    scores = scores + translation_prior_block[:, None, :]
+                else:
+                    scores = scores + translation_log_prior_jnp[None, None, :]
+
+            if candidate_mask_padded_jnp is not None:
+                candidate_mask_block = candidate_mask_padded_jnp[r0:r1]
+                scores = jnp.where(candidate_mask_block[None, :, :], scores, -jnp.inf)
 
             # Mask padding
             if r1 > n_rot:
@@ -487,7 +843,7 @@ def run_em_v2(
                 # Windowed M-step: GEMM at reduced dimension, then scatter back
                 (Ft_y, Ft_ctf, probs, block_best, block_argmax,
                  summed_windowed, ctf_probs_windowed) = _m_step_block_windowed(
-                    shifted_windowed, scores, log_Z, rots_b, ctf2_over_nv_windowed,
+                    shifted_recon_windowed, scores, log_Z, rots_b, ctf2_over_nv_windowed,
                     Ft_y, Ft_ctf,
                     batch_size, n_trans, n_windowed, image_shape, volume_shape,
                 )
@@ -508,16 +864,67 @@ def run_em_v2(
                     "linear_interp", volume=Ft_ctf, half_image=True,
                 )
             else:
-                Ft_y, Ft_ctf, probs, block_best, block_argmax = _m_step_block(
-                    shifted_half, scores, log_Z, rots_b, ctf2_over_nv_half,
+                (Ft_y, Ft_ctf, probs, block_best, block_argmax,
+                 summed_half_block, ctf_probs_half_block) = _m_step_block(
+                    shifted_recon_half, scores, log_Z, rots_b, ctf2_over_nv_half,
                     Ft_y, Ft_ctf,
                     batch_size, n_trans, image_shape, volume_shape,
                 )
+
+            # -- Noise accumulation for this rotation block --
+            if accumulate_noise:
+                rot_block_size_actual = rots_b.shape[0]
+                # Compute masked GEMM: P @ shifted_masked (with DC intact)
+                P_noise = probs.swapaxes(0, 1).reshape(rot_block_size_actual, batch_size * n_trans)
+                summed_masked_noise = P_noise @ shifted_masked_for_noise  # (rot_block, N_noise)
+                # ctf_probs for noise: recompute WITH DC (M-step used DC-zeroed version)
+                probs_sum_t_noise = jnp.sum(probs, axis=-1)  # (n_images, rot_block)
+                if use_window:
+                    ctf2_nv_noise = ctf2_over_nv_half_with_dc[:, window_indices]
+                    ctf_probs_for_noise = probs_sum_t_noise.T @ ctf2_nv_noise
+                    nv_for_noise = noise_variance_windowed
+                    si_for_noise = shell_indices_noise
+                    proj_for_noise = proj_windowed_b
+                    proj_abs2_for_noise = proj_abs2_windowed_b
+                else:
+                    ctf_probs_for_noise = probs_sum_t_noise.T @ ctf2_over_nv_half_with_dc
+                    nv_for_noise = noise_variance_half
+                    si_for_noise = shell_indices_noise
+                    proj_for_noise = proj_half_b
+                    proj_abs2_for_noise = proj_abs2_half_b
+
+                block_noise_shells = _compute_noise_block(
+                    proj_for_noise, proj_abs2_for_noise, summed_masked_noise,
+                    ctf_probs_for_noise, nv_for_noise, si_for_noise, n_shells,
+                )
+                noise_wsum += np.asarray(block_noise_shells, dtype=np.float64)
 
             # Track global hard assignment
             improved = block_best > best_score
             best_score = jnp.where(improved, block_best, best_score)
             best_argmax = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax)
+
+            if return_stats:
+                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
+                if actual_rot > 0:
+                    block_rotation_sums = np.asarray(
+                        jnp.sum(probs[:, :actual_rot, :], axis=(0, 2)),
+                        dtype=np.float64,
+                    )
+                    rotation_posterior_sums[r0:r0 + actual_rot] += block_rotation_sums
+
+        if return_stats:
+            log_score_offset = -0.5 * jnp.squeeze(batch_norm, axis=1)
+            pmax = jnp.exp(best_score - log_Z)
+            log_evidence_per_image[start_idx:end_idx] = np.asarray(
+                log_Z + log_score_offset, dtype=np.float32,
+            )
+            best_log_score_per_image[start_idx:end_idx] = np.asarray(
+                best_score + log_score_offset, dtype=np.float32,
+            )
+            max_posterior_per_image[start_idx:end_idx] = np.asarray(
+                pmax, dtype=np.float32,
+            )
 
         hard_assignment[start_idx:end_idx] = np.asarray(best_argmax)
         start_idx = end_idx
@@ -527,6 +934,42 @@ def run_em_v2(
     new_mean = relion_functions.post_process_from_filter(
         experiment_dataset, Ft_ctf, Ft_y, tau=mean_variance, disc_type=disc_type,
     ).reshape(-1)
+
+    noise_stats = None
+    if accumulate_noise:
+        noise_stats = NoiseStats(
+            wsum_sigma2_noise=jnp.asarray(noise_wsum, dtype=jnp.float32),
+            wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
+            sumw=float(noise_sumw),
+        )
+        # Diagnostic: log per-shell noise breakdown to debug identical values
+        # across scoring variants (v2 vs v4)
+        logger.info(
+            "Noise diagnostics: sumw=%.1f, "
+            "wsum_sigma2_noise[0:5]=%s, "
+            "wsum_img_power[0:5]=%s, "
+            "wsum_sigma2_noise sum=%.6e, "
+            "wsum_img_power sum=%.6e",
+            noise_stats.sumw,
+            np.array2string(noise_wsum[:5], precision=6),
+            np.array2string(noise_img_power[:5], precision=6),
+            noise_wsum.sum(),
+            noise_img_power.sum(),
+        )
+
+    if return_stats:
+        relion_stats = RelionStats(
+            log_evidence_per_image=jnp.asarray(log_evidence_per_image),
+            best_log_score_per_image=jnp.asarray(best_log_score_per_image),
+            max_posterior_per_image=jnp.asarray(max_posterior_per_image),
+            rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
+        )
+        if accumulate_noise:
+            return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats, noise_stats
+        return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats
+
+    if accumulate_noise:
+        return new_mean, hard_assignment, Ft_y, Ft_ctf, noise_stats
 
     return new_mean, hard_assignment, Ft_y, Ft_ctf
 
@@ -541,6 +984,7 @@ def compute_e_step_weights(
     image_batch_size: int = 500,
     rotation_block_size: int = 5000,
     current_size: int = None,
+    score_with_masked_images: bool = False,
 ):
     """E-step only: compute posterior weights for all (rotation, translation) pairs.
 
@@ -622,7 +1066,7 @@ def compute_e_step_weights(
 
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
             batch_data, ctf_params, noise_variance, translations, config,
-            batch_size, n_trans,
+            batch_size, n_trans, score_with_masked_images,
         )
 
         if use_window:

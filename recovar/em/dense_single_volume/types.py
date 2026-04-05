@@ -18,3 +18,54 @@ class MeanStats(NamedTuple):
 
     Ft_y: jax.Array
     Ft_ctf: jax.Array
+
+
+class RelionStats(NamedTuple):
+    """Per-image E-step statistics needed by the RELION-style refine loop.
+
+    These fields are not additive like :class:`MeanStats`; they are emitted
+    per iteration so convergence and current-size logic can reuse the exact
+    normalization already computed inside ``run_em_v2``.
+
+    Attributes:
+        log_evidence_per_image: Log normalizer ``log_Z`` for each image.
+        best_log_score_per_image: Maximum unnormalized log-score per image.
+        max_posterior_per_image: Maximum posterior probability per image.
+        rotation_posterior_sums: Posterior mass accumulated per rotation over
+            the processed image subset. This is additive across batches and can
+            be collapsed to RELION-style ``pdf_direction`` updates.
+    """
+
+    log_evidence_per_image: jax.Array
+    best_log_score_per_image: jax.Array
+    max_posterior_per_image: jax.Array
+    rotation_posterior_sums: jax.Array
+
+
+class NoiseStats(NamedTuple):
+    """Posterior-weighted noise shell statistics (RELION parity).
+
+    Accumulated during the M-step pass of ``run_em_v2`` when
+    ``accumulate_noise=True``.  These are additive over image batches
+    and across half-sets, matching RELION's ``wsum_sigma2_noise``.
+
+    RELION formula::
+
+        sigma2_noise[s] = (wsum_sigma2_noise[s] + wsum_img_power[s])
+                          / (2 * sumw * Npix_per_shell[s])
+
+    Attributes:
+        wsum_sigma2_noise: (n_shells,) float -- accumulated
+            ``sum_{i,r,t} w * (A2 - 2*XA)`` per shell (reference-dependent
+            part of the residual).
+        wsum_img_power: (n_shells,) float -- accumulated
+            ``sum_i |img_masked_i|^2`` per shell (image power, orientation-
+            independent).  For shells beyond ``current_size // 2`` this is
+            the only contribution (high-frequency fill).
+        sumw: float -- total posterior weight processed (equals the number
+            of images when posteriors are normalised to sum to 1 per image).
+    """
+
+    wsum_sigma2_noise: jax.Array
+    wsum_img_power: jax.Array
+    sumw: float
