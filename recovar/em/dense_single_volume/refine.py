@@ -2209,6 +2209,26 @@ def _refine_relion_mode(
         fft_power_scale = float(cryo.image_shape[0] * cryo.image_shape[1]) ** 2
         noise_hard = noise_hard_raw / fft_power_scale
 
+        # RELION-parity: inflate hard-assignment noise by the mask area ratio.
+        # Zero-masked images have ~f of the full image power (f = mask_area/total).
+        # The residual |proj - img_masked|^2 underestimates noise by ~1/f because
+        # 89% of pixels are zero. Multiplying by 1/f ≈ area_ratio restores the
+        # effective noise that RELION gets from noise-filled images.
+        # This is the critical difference that gives RELION sigma2_noise 5-33x
+        # higher at low frequencies, which makes iter 2 Pmax ~ 0.0002.
+        if particle_diameter_ang is not None and cryo.voxel_size > 0:
+            mask_radius_px = float(particle_diameter_ang) / (2.0 * cryo.voxel_size)
+            mask_area = np.pi * mask_radius_px ** 2
+            total_area = float(cryo.image_shape[0] * cryo.image_shape[1])
+            mask_inflation = total_area / max(mask_area, 1.0)
+            noise_hard = noise_hard * mask_inflation
+            logger.info(
+                "Hard-assignment noise inflated by mask ratio %.2f "
+                "(mask_radius=%.1f px), range=[%.2e, %.2e]",
+                mask_inflation, mask_radius_px,
+                float(jnp.min(noise_hard)), float(jnp.max(noise_hard)),
+            )
+
         if noise_stats_per_half[0] is not None and noise_stats_per_half[1] is not None:
             wsum_combined = (
                 np.asarray(noise_stats_per_half[0].wsum_sigma2_noise, dtype=np.float64)
@@ -2272,47 +2292,9 @@ def _refine_relion_mode(
         # Update previous_noise_radial for next iteration's diagnostics
         previous_noise_radial = noise_from_res
 
-        # RELION-parity: inflate noise by mask factor to approximate the
-        # effective noise increase from softMaskOutsideMap with colored noise.
-        # RELION's noise estimate includes the outside-mask noise power, which
-        # acts as a regularizer by making the likelihood less discriminative.
-        # The mask factor = total_pixels / mask_pixels ≈ D^2 / (pi*r^2).
-        if particle_diameter_ang is not None and cryo.voxel_size > 0:
-            mask_radius_px = float(particle_diameter_ang) / (2.0 * cryo.voxel_size)
-            # Per-shell inflation: the soft mask's FT has a shell-dependent
-            # effect. At low frequencies (k << 1/mask_radius), the mask FT
-            # is ~1 and the outside-mask noise contributes fully.  At high
-            # frequencies (k >> 1/mask_radius), the mask FT drops and the
-            # outside contribution diminishes.
-            # Model: inflation[s] = 1 + (area_ratio - 1) * sinc(s / mask_radius)^2
-            # where sinc drops at the mask's natural frequency cutoff.
-            total_area = float(cryo.image_shape[0] * cryo.image_shape[1])
-            mask_area = np.pi * mask_radius_px ** 2
-            area_ratio = total_area / max(mask_area, 1.0)
-            n_noise_shells = len(noise_from_res)
-            shells = np.arange(n_noise_shells, dtype=np.float64)
-            # Mask cutoff: the mask's FT has significant power at k < ~1/mask_radius
-            k_mask = shells / max(mask_radius_px, 1.0)
-            sinc_mask = np.where(k_mask < 1e-6, 1.0, np.sin(np.pi * k_mask) / (np.pi * k_mask))
-            # Annealing schedule: start with high inflation and decrease
-            # over iterations as the model improves. This mimics RELION's
-            # natural behavior where noise is high early (model error)
-            # and decreases as the model converges.
-            # Schedule: fraction = 0.5 / (1 + iteration) — starts at 0.25
-            # (iter 0 noise applied at iter 1), then 0.17, 0.125, ...
-            anneal_fraction = 0.5 / (1.0 + max(iteration, 0))
-            effective_ratio = 1.0 + anneal_fraction * (area_ratio - 1.0)
-            per_shell_factor = 1.0 + (effective_ratio - 1.0) * sinc_mask ** 2
-            # Clamp factor to [1, area_ratio]
-            per_shell_factor = np.clip(per_shell_factor, 1.0, area_ratio)
-            noise_from_res = noise_from_res * jnp.asarray(per_shell_factor, dtype=noise_from_res.dtype)
-            logger.info(
-                "Per-shell noise inflation: area_ratio=%.2f, "
-                "factor range=[%.2f, %.2f], noise range=[%.2e, %.2e]",
-                area_ratio,
-                float(per_shell_factor.min()), float(per_shell_factor.max()),
-                float(jnp.min(noise_from_res)), float(jnp.max(noise_from_res)),
-            )
+        # The mask-ratio inflation on noise_hard (above) already accounts for
+        # the effective noise increase from RELION's softMaskOutsideMap.
+        # No additional per-shell or annealing inflation needed.
 
         noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
 
