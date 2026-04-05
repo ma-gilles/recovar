@@ -1,8 +1,8 @@
-# Sketched Normal-Operator Products — Student Guide
+# Sketched Normal-Operator Products — Guide
 
 ## What this is
 
-Given a low-rank iterate $X = U \operatorname{diag}(\sigma) V^T$ and the
+Given a low-rank iterate $X = U\, \text{diag}(\sigma)\, V^T$ and the
 cryo-EM forward model, this code computes $S\, G(X)$ (left sketch) and
 $G(X)\, Q$ (right sketch) without forming the dense gradient matrix
 $G(X) = A^*(A(X) - b)$.

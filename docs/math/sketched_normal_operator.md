@@ -33,10 +33,10 @@ The full gradient: $G(X) = [g_1, \ldots, g_n] \in \mathbb{R}^{p \times n}$.
 
 ## Factored input
 
-$X = U \operatorname{diag}(\sigma) V^T$ with $U \in \mathbb{R}^{p \times r}$,
+$X = U \text{diag}(\sigma) V^T$ with $U \in \mathbb{R}^{p \times r}$,
 $\sigma \in \mathbb{R}^r$, $V \in \mathbb{R}^{n \times r}$.
 
-For image $i$: $x_i = U \operatorname{diag}(\sigma) V_i^T$, so
+For image $i$: $x_i = U \text{diag}(\sigma) V_i^T$, so
 $\mathcal{A}_i(x_i) = \sum_j \sigma_j V_{ij} \cdot w_i \cdot P_i(U_j)$.
 
 This reuses `batch_over_vol_slice_volume_half` to project all $r$ columns
