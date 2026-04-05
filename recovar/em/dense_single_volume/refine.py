@@ -1420,7 +1420,12 @@ def _refine_relion_mode(
     healpix_order_trajectory = []
     ave_Pmax_trajectory = []
     pmax_per_image_history = []
-    relion_incr_size = 10
+    # RELION uses incr_size=10. We add 2 extra shells to compensate for
+    # the 1-shell FSC gap that makes our current_size 2 pixels smaller.
+    # This gives current_size=30 instead of 26 at iter 2, providing ~450
+    # scoring pixels vs ~280, which prevents the chi^2 from being too
+    # discriminative and causing posterior collapse.
+    relion_incr_size = 12
     relion_has_high_fsc_at_limit = False
     global_direction_prior = None
     global_direction_prior_order = None
