@@ -538,37 +538,19 @@ def compute_relion_prior_from_reconstruction_stats(
     prior_dtype = jnp.asarray(init_regularization).real.dtype
     complex_dtype = jnp.complex64 if prior_dtype == jnp.float32 else jnp.complex128
 
+    # RELION computes FSC for tau2 on raw Fourier-domain data/weight ratios
+    # (via getDownsampledAverage), NOT on fully post-processed real-space
+    # volumes. Simple Fourier-domain division at native resolution.
     H0 = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
     H1 = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
     B0 = jnp.asarray(Ft_y_0).astype(complex_dtype)
     B1 = jnp.asarray(Ft_y_1).astype(complex_dtype)
 
-    if padding_factor != 1:
-        H0 = relion_functions.zero_pad_fourier_volume(H0, volume_shape, padding_factor).astype(prior_dtype)
-        H1 = relion_functions.zero_pad_fourier_volume(H1, volume_shape, padding_factor).astype(prior_dtype)
-        B0 = relion_functions.zero_pad_fourier_volume(B0, volume_shape, padding_factor).astype(complex_dtype)
-        B1 = relion_functions.zero_pad_fourier_volume(B1, volume_shape, padding_factor).astype(complex_dtype)
-
-    # RELION computes FSC for tau2 on raw Fourier-domain data/weight ratios
-    # (via getDownsampledAverage), NOT on fully post-processed real-space
-    # volumes. Using post_process_from_filter_v2 (with spherical mask and
-    # gridding correction) lowers FSC at mid frequencies because the mask
-    # mixes information between shells. Simple Fourier-domain division
-    # matches RELION's convention and gives higher (correct) FSC values.
-    #
-    # We compute FSC on the NATIVE (unpadded) grid. Even though the data was
-    # zero-padded above, we use the unpadded Ft_y/Ft_ctf for the FSC
-    # computation because the prior is needed at native resolution.
-    H0_native = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
-    H1_native = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
-    B0_native = jnp.asarray(Ft_y_0).astype(complex_dtype)
-    B1_native = jnp.asarray(Ft_y_1).astype(complex_dtype)
-
     weight_floor = jnp.float32(1e-10)
-    unreg_half0 = B0_native / jnp.maximum(H0_native, weight_floor)
-    unreg_half1 = B1_native / jnp.maximum(H1_native, weight_floor)
+    unreg_half0 = B0 / jnp.maximum(H0, weight_floor)
+    unreg_half1 = B1 / jnp.maximum(H1, weight_floor)
 
-    H_comb = (H0_native + H1_native) / jnp.asarray(2.0, dtype=prior_dtype)
+    H_comb = (H0 + H1) / jnp.asarray(2.0, dtype=prior_dtype)
     prior, fsc, _ = compute_fsc_prior_gpu(
         volume_shape,
         unreg_half0,
