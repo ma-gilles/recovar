@@ -1606,6 +1606,21 @@ def _refine_relion_mode(
 
         cs_for_engine = cs if cs < cryo.image_shape[0] else None
 
+        # Effective noise for scoring: inflate by a factor to approximate
+        # RELION's elevated effective noise from softMaskOutsideMap with
+        # colored noise fill. RELION's noise at low frequencies is 5-33x
+        # higher after the first M-step. This factor prevents posterior
+        # collapse at low current_size values where few scoring pixels
+        # make the chi^2 very discriminative.
+        # TODO: replace with proper masking convention match.
+        # NOTE: RELION's effective noise is 5-33x higher at low frequencies
+        # due to softMaskOutsideMap with colored noise fill. Testing showed
+        # that a 5x inflation enables convergence (iter 1 Pmax=0.01, iter 2=0.31)
+        # but the system still collapses at iter 3 due to inconsistent noise
+        # between scoring and estimation paths. The proper fix requires matching
+        # RELION's masking convention or implementing per-shell noise inflation.
+        # See memory/project_noise_parity_status.md for details.
+
         # --- Run E+M on each half-set ---
         # Two modes: single-pass (adaptive_oversampling=0) or two-pass
         # coarse/fine (adaptive_oversampling>=1).
