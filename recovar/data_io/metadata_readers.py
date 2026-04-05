@@ -232,7 +232,10 @@ def parse_poses_from_cs(
             break
 
     if shift_key is not None:
-        trans_pixels = data[shift_key].astype(np.float64)  # (N, 2)
+        shifts_angstrom = data[shift_key].astype(np.float64)  # (N, 2) in Angstroms
+        # Convert Angstroms → pixels using per-particle pixel size
+        apix = data["blob/psize_A"].astype(np.float64)  # (N,)
+        trans_pixels = shifts_angstrom / apix.reshape(-1, 1)
     else:
         logger.warning("No translation field found in CS file; assuming zero shifts.")
         trans_pixels = np.zeros((n, 2), dtype=np.float64)
