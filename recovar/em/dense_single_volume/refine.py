@@ -1791,7 +1791,7 @@ def _refine_relion_mode(
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        # noise_fill_outside_mask disabled: tested, makes Pmax worse
+                        # noise_fill_outside_mask=True,  # disabled: makes Pmax worse
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     pose_rotations[k] = effective_rotations
@@ -1821,7 +1821,7 @@ def _refine_relion_mode(
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        # noise_fill_outside_mask disabled: tested, makes Pmax worse
+                        # noise_fill_outside_mask=True,  # disabled: makes Pmax worse
                     )
                     Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots_k, em_stats_k, noise_stats_k = pass2_outputs
                     noise_stats_per_half[k] = noise_stats_k
@@ -1870,7 +1870,7 @@ def _refine_relion_mode(
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        # noise_fill_outside_mask disabled: tested, makes Pmax worse
+                        # noise_fill_outside_mask=True,  # disabled: makes Pmax worse
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     dt_pass2 = time.time() - t_pass2
@@ -2272,6 +2272,28 @@ def _refine_relion_mode(
 
         # Update previous_noise_radial for next iteration's diagnostics
         previous_noise_radial = noise_from_res
+
+        # RELION-parity: inflate noise by mask factor to approximate the
+        # effective noise increase from softMaskOutsideMap with colored noise.
+        # RELION's noise estimate includes the outside-mask noise power, which
+        # acts as a regularizer by making the likelihood less discriminative.
+        # The mask factor = total_pixels / mask_pixels ≈ D^2 / (pi*r^2).
+        if particle_diameter_ang is not None and cryo.voxel_size > 0:
+            mask_radius_px = float(particle_diameter_ang) / (2.0 * cryo.voxel_size)
+            mask_area = np.pi * mask_radius_px ** 2
+            total_area = float(cryo.image_shape[0] * cryo.image_shape[1])
+            # Use sqrt of the area ratio as the inflation factor.
+            # Full ratio (9.4x) is too aggressive — makes posteriors uniformly
+            # diffuse and explodes significant counts. sqrt(9.4) ≈ 3.1x gives
+            # a moderate inflation that prevents collapse without over-softening.
+            mask_factor = float(np.sqrt(total_area / max(mask_area, 1.0)))
+            noise_from_res = noise_from_res * mask_factor
+            logger.info(
+                "Mask-factor noise inflation: factor=%.2f (mask_radius=%.1f px, "
+                "mask_area=%.0f, total=%.0f), noise range=[%.2e, %.2e]",
+                mask_factor, mask_radius_px, mask_area, total_area,
+                float(jnp.min(noise_from_res)), float(jnp.max(noise_from_res)),
+            )
 
         noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
 
