@@ -2280,18 +2280,30 @@ def _refine_relion_mode(
         # The mask factor = total_pixels / mask_pixels ≈ D^2 / (pi*r^2).
         if particle_diameter_ang is not None and cryo.voxel_size > 0:
             mask_radius_px = float(particle_diameter_ang) / (2.0 * cryo.voxel_size)
-            mask_area = np.pi * mask_radius_px ** 2
+            # Per-shell inflation: the soft mask's FT has a shell-dependent
+            # effect. At low frequencies (k << 1/mask_radius), the mask FT
+            # is ~1 and the outside-mask noise contributes fully.  At high
+            # frequencies (k >> 1/mask_radius), the mask FT drops and the
+            # outside contribution diminishes.
+            # Model: inflation[s] = 1 + (area_ratio - 1) * sinc(s / mask_radius)^2
+            # where sinc drops at the mask's natural frequency cutoff.
             total_area = float(cryo.image_shape[0] * cryo.image_shape[1])
-            # Use sqrt of the area ratio as the inflation factor.
-            # Full ratio (9.4x) is too aggressive — makes posteriors uniformly
-            # diffuse and explodes significant counts. sqrt(9.4) ≈ 3.1x gives
-            # a moderate inflation that prevents collapse without over-softening.
-            mask_factor = float(np.sqrt(total_area / max(mask_area, 1.0)))
-            noise_from_res = noise_from_res * mask_factor
+            mask_area = np.pi * mask_radius_px ** 2
+            area_ratio = total_area / max(mask_area, 1.0)
+            n_noise_shells = len(noise_from_res)
+            shells = np.arange(n_noise_shells, dtype=np.float64)
+            # Mask cutoff: the mask's FT has significant power at k < ~1/mask_radius
+            k_mask = shells / max(mask_radius_px, 1.0)
+            sinc_mask = np.where(k_mask < 1e-6, 1.0, np.sin(np.pi * k_mask) / (np.pi * k_mask))
+            per_shell_factor = 1.0 + (area_ratio - 1.0) * sinc_mask ** 2
+            # Clamp factor to [1, area_ratio]
+            per_shell_factor = np.clip(per_shell_factor, 1.0, area_ratio)
+            noise_from_res = noise_from_res * jnp.asarray(per_shell_factor, dtype=noise_from_res.dtype)
             logger.info(
-                "Mask-factor noise inflation: factor=%.2f (mask_radius=%.1f px, "
-                "mask_area=%.0f, total=%.0f), noise range=[%.2e, %.2e]",
-                mask_factor, mask_radius_px, mask_area, total_area,
+                "Per-shell noise inflation: area_ratio=%.2f, "
+                "factor range=[%.2f, %.2f], noise range=[%.2e, %.2e]",
+                area_ratio,
+                float(per_shell_factor.min()), float(per_shell_factor.max()),
                 float(jnp.min(noise_from_res)), float(jnp.max(noise_from_res)),
             )
 
