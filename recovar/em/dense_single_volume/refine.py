@@ -2244,18 +2244,12 @@ def _refine_relion_mode(
                 float(jnp.min(noise_from_res)), float(jnp.max(noise_from_res)),
             )
 
-        # Apply running-maximum noise floor: never let noise decrease from
-        # the highest level ever reached at each shell.  This captures the
-        # model error from early iterations and prevents posterior collapse
-        # when the model overfits at later iterations.
+        # Apply initial-noise floor: never let noise go below the initial
+        # estimate. With annealing, the noise inflation decreases over
+        # iterations, so the running-max floor would defeat the annealing.
         old_noise_radial = previous_noise_radial
         noise_from_res_raw = noise_from_res
         n_floor = min(len(noise_from_res), len(initial_noise_radial))
-        # Update running max with current noise (before applying floor)
-        initial_noise_radial = initial_noise_radial.at[:n_floor].set(
-            jnp.maximum(initial_noise_radial[:n_floor], noise_from_res[:n_floor])
-        )
-        # Apply the running-max floor
         noise_from_res = noise_from_res.at[:n_floor].set(
             jnp.maximum(noise_from_res[:n_floor], initial_noise_radial[:n_floor])
         )
@@ -2300,10 +2294,14 @@ def _refine_relion_mode(
             # Mask cutoff: the mask's FT has significant power at k < ~1/mask_radius
             k_mask = shells / max(mask_radius_px, 1.0)
             sinc_mask = np.where(k_mask < 1e-6, 1.0, np.sin(np.pi * k_mask) / (np.pi * k_mask))
-            # Use a moderate fraction of the full area_ratio.
-            # Factor 0.25 gives ~3.1x at DC, which balances preventing
-            # posterior collapse vs not over-softening significant counts.
-            effective_ratio = 1.0 + 0.25 * (area_ratio - 1.0)
+            # Annealing schedule: start with high inflation and decrease
+            # over iterations as the model improves. This mimics RELION's
+            # natural behavior where noise is high early (model error)
+            # and decreases as the model converges.
+            # Schedule: fraction = 0.5 / (1 + iteration) — starts at 0.25
+            # (iter 0 noise applied at iter 1), then 0.17, 0.125, ...
+            anneal_fraction = 0.5 / (1.0 + max(iteration, 0))
+            effective_ratio = 1.0 + anneal_fraction * (area_ratio - 1.0)
             per_shell_factor = 1.0 + (effective_ratio - 1.0) * sinc_mask ** 2
             # Clamp factor to [1, area_ratio]
             per_shell_factor = np.clip(per_shell_factor, 1.0, area_ratio)
