@@ -1,15 +1,22 @@
 """Sketched normal-operator products for low-rank recovery.
 
-Public API — all inputs/outputs are real-space:
+Given X = U diag(s) V^T and whitened forward model A, the normal residual
+gradient is G(X) = A*(A(X) - b).  This module computes S @ G(X) and
+G(X) @ Q without forming the dense (volume_size x n_images) matrix G(X).
 
-    op = SketchedNormalOperator(cryo, mean_real, batch_size)
-    left  = op.left_matvec(U, s, V, S)      # S_L @ G(X)
-    right = op.right_matvec(U, s, V, Q)      # G(X) @ Q_R
+Public API:
+
+    op = SketchedNormalOperator(cryo, mean_fourier, batch_size)
+    left  = op.left_matvec(U, s, V, S)         # S @ G(X)
+    right = op.right_matvec(U, s, V, Q)         # G(X) @ Q
     left, right = op.both_matvecs(U, s, V, S, Q)
 
-where U (vol_shape, rank), S (s, vol_size), Q (n_images, t) are all real.
+Inputs U, S, Q are real-space.  Mean is Fourier (complex, from pipeline).
+Fourier / half-volume conversion happens internally.
 
-Internally uses half-volume Fourier convention + per_image_backproject.
+Key optimization: per_image_backproject gives (half_vol, batch) in one
+CUDA call, then S @ bp and bp @ Q are matmuls — cost is O(batch)
+backprojections regardless of sketch rank.
 """
 
 import functools
@@ -175,15 +182,15 @@ def _compute_sketches_half(
 class SketchedNormalOperator:
     """Sketched products of G(X) = A*(A(X) - b).
 
-    All public methods take and return real-space arrays.
-    Fourier / half-volume conversion happens internally.
+    U, S, Q inputs are real-space.  Mean is Fourier (complex) or real.
 
     Parameters
     ----------
     cryo : CryoEMDataset
-        Dataset with images and noise model.
-    mean_real : (vol_size,) or (N, N, N)
-        Mean volume in real space.
+        Dataset with images and noise model (.noise.get_half()).
+    mean : array
+        Mean volume.  Complex → Fourier domain (from pipeline).
+        Real → real-space (DFT'd internally).
     batch_size : int
         Images per GPU batch.
     disc_type : str
