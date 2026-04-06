@@ -2143,6 +2143,13 @@ def _refine_relion_mode(
             previous_combined_ha = None
 
         # --- Update prior from the actual weighted reconstruction stats ---
+        # tau2_fudge < 1 strengthens the prior in the Wiener filter
+        # (smaller SNR → larger 1/tau² → more smoothing). RELION uses
+        # tau2_fudge=1 by default, but recovar's iter-1 volume tends to
+        # be 12% more concentrated than RELION's (Pmax 0.66 vs 0.59),
+        # which compounds into iter-2 collapse. Over-regularizing the
+        # reconstruction breaks that feedback loop. The factor 0.5
+        # roughly compensates for the Pmax gap (Pmax² ≈ 0.5).
         mean_signal_variance, _ = regularization.compute_relion_prior_from_reconstruction_stats(
             Ft_ctf_0,
             Ft_ctf_1,
@@ -2151,6 +2158,7 @@ def _refine_relion_mode(
             volume_shape,
             mean_variance,
             padding_factor=PADDING_FACTOR,
+            tau2_fudge=0.5,
         )
         mean_variance = mean_signal_variance
 
