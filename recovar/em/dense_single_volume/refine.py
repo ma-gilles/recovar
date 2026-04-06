@@ -1866,12 +1866,10 @@ def _refine_relion_mode(
                         current_size=cs_for_engine,
                         rotation_log_prior=rotation_log_prior,
                         translation_log_prior=translation_log_prior,
-                        score_with_masked_images=False,  # noise fill replaces mask
+                        score_with_masked_images=True,
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        noise_fill_outside_mask=(relion_scoring_mask is not None),
-                        noise_fill_mask_override=relion_scoring_mask,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     pose_rotations[k] = effective_rotations
@@ -1897,12 +1895,10 @@ def _refine_relion_mode(
                         translation_step=state.translation_step,
                         rotation_log_prior=rotation_log_prior,
                         translation_log_prior=translation_log_prior,
-                        score_with_masked_images=False,  # noise fill replaces mask
+                        score_with_masked_images=True,
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        noise_fill_outside_mask=(relion_scoring_mask is not None),
-                        noise_fill_mask_override=relion_scoring_mask,
                     )
                     Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots_k, em_stats_k, noise_stats_k = pass2_outputs
                     noise_stats_per_half[k] = noise_stats_k
@@ -1947,12 +1943,10 @@ def _refine_relion_mode(
                         translation_step=state.translation_step,
                         rotation_log_prior=rotation_log_prior,
                         translation_log_prior=translation_log_prior,
-                        score_with_masked_images=False,  # noise fill replaces mask
+                        score_with_masked_images=True,
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        noise_fill_outside_mask=(relion_scoring_mask is not None),
-                        noise_fill_mask_override=relion_scoring_mask,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     dt_pass2 = time.time() - t_pass2
