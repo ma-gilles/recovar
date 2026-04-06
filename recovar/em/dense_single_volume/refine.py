@@ -1400,36 +1400,18 @@ def _refine_relion_mode(
         return ibs, rbs
 
     # State: two half-set volumes, noise, prior
-    # Apply RELION-style soft real-space mask to the initial volume
-    # (RELION ml_optimiser.cpp:2742-2744 calls softMaskOutsideMap on Iref).
-    # IMPORTANT: init_volume is in CORNER (uncentered) Fourier layout
-    # because the script does `np.fft.fftn(np.fft.ifftshift(real))`.  We
-    # must convert via raw numpy with matching convention.
-    init_volume_arr = jnp.array(init_volume)
-    if particle_diameter_ang is not None and cryo.voxel_size > 0:
-        from recovar.core.mask import soft_mask_outside_map as _soft_mask_vol
-        mask_radius_voxels = float(particle_diameter_ang) / (2.0 * cryo.voxel_size)
-        # Convert init_volume (corner Fourier) → real centered → mask → corner Fourier
-        init_vol_corner_fft = np.asarray(init_volume).reshape(volume_shape)
-        init_vol_real = np.real(
-            np.fft.fftshift(np.fft.ifftn(init_vol_corner_fft))
-        ).astype(np.float32)
-        init_vol_masked, _ = _soft_mask_vol(
-            jnp.asarray(init_vol_real),
-            radius=mask_radius_voxels,
-            cosine_width=3,
-        )
-        init_vol_masked_np = np.asarray(init_vol_masked)
-        init_vol_corner_fft_masked = np.fft.fftn(
-            np.fft.ifftshift(init_vol_masked_np)
-        ).astype(np.complex64).reshape(-1)
-        init_volume_arr = jnp.asarray(init_vol_corner_fft_masked)
-        logger.info(
-            "Applied RELION-style soft mask to initial volume: radius=%.1f vox "
-            "(particle_diameter=%.1f A, voxel=%.3f A)",
-            mask_radius_voxels, particle_diameter_ang, cryo.voxel_size,
-        )
-    means = [init_volume_arr, init_volume_arr]
+    # NOTE: tried applying RELION-style soft real-space mask to the initial
+    # volume in v31 (commit 76b1bfe) and v32 (commit 1773a58, with fixed
+    # FFT convention).  Both gave catastrophic Pmax collapse at iter 1.
+    # Reason: the recovar prepare script uses `gt * get_valid_frequency_indices(rad=5)`
+    # to lowpass the init volume to Fourier shell 5, while RELION uses
+    # ini_high=30A which corresponds to shell 18.  Our init has SO MUCH
+    # less high-frequency content that masking it removes the smoothing
+    # effect of the delocalized Fourier-low-pass tails, leaving only the
+    # central particle which makes scoring extremely peaked.
+    # Conclusion: matching RELION's mask requires also matching RELION's
+    # initial lowpass (shell 18, not shell 5).  Skipping for now.
+    means = [jnp.array(init_volume), jnp.array(init_volume)]
     noise_variance = jnp.array(init_noise_variance)
     mean_variance = jnp.array(init_mean_variance)
 
