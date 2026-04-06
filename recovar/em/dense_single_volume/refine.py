@@ -1400,7 +1400,33 @@ def _refine_relion_mode(
         return ibs, rbs
 
     # State: two half-set volumes, noise, prior
-    means = [jnp.array(init_volume), jnp.array(init_volume)]
+    # Apply RELION-style soft real-space mask to the initial volume.
+    # RELION calls softMaskOutsideMap(Iref, particle_diameter/2, edge_width)
+    # at startup (ml_optimiser.cpp:2742-2744).  This zeroes density outside
+    # a particle-sized sphere with a cosine taper.  Without this, recovar's
+    # initial volume retains content outside the particle support, making
+    # iter-1 projections more discriminative than RELION's and producing
+    # the 12% Pmax gap (0.66 vs 0.59).
+    init_volume_arr = jnp.array(init_volume)
+    if particle_diameter_ang is not None and cryo.voxel_size > 0:
+        from recovar.core.mask import soft_mask_outside_map
+        from recovar.core import fourier_transform_utils
+        mask_radius_voxels = float(particle_diameter_ang) / (2.0 * cryo.voxel_size)
+        init_vol_real = fourier_transform_utils.get_idft3(
+            init_volume_arr.reshape(volume_shape)
+        ).real
+        init_vol_masked, _ = soft_mask_outside_map(
+            init_vol_real, radius=mask_radius_voxels, cosine_width=3,
+        )
+        init_volume_arr = fourier_transform_utils.get_dft3(
+            init_vol_masked.reshape(volume_shape)
+        ).reshape(-1).astype(init_volume_arr.dtype)
+        logger.info(
+            "Applied RELION-style soft mask to initial volume: radius=%.1f vox "
+            "(particle_diameter=%.1f A, voxel=%.3f A)",
+            mask_radius_voxels, particle_diameter_ang, cryo.voxel_size,
+        )
+    means = [init_volume_arr, init_volume_arr]
     noise_variance = jnp.array(init_noise_variance)
     mean_variance = jnp.array(init_mean_variance)
 
@@ -1947,7 +1973,7 @@ def _refine_relion_mode(
                 kernel="triangular",
                 use_spherical_mask=True, grid_correct=True,
                 gridding_correct="square",
-                tau2_fudge=0.1,
+                tau2_fudge=0.5,
             ).reshape(-1)
             hard_assignments[k] = ha_k
             max_posterior_per_half[k] = np.asarray(
@@ -2159,7 +2185,7 @@ def _refine_relion_mode(
             volume_shape,
             mean_variance,
             padding_factor=PADDING_FACTOR,
-            tau2_fudge=0.1,
+            tau2_fudge=0.5,
         )
         mean_variance = mean_signal_variance
 
