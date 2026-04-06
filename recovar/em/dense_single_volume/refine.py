@@ -2018,7 +2018,7 @@ def _refine_relion_mode(
                 kernel="triangular",
                 use_spherical_mask=True, grid_correct=True,
                 gridding_correct="square",
-                tau2_fudge=1.0,
+                tau2_fudge=0.25,
             ).reshape(-1)
             hard_assignments[k] = ha_k
             max_posterior_per_half[k] = np.asarray(
@@ -2230,7 +2230,7 @@ def _refine_relion_mode(
             volume_shape,
             mean_variance,
             padding_factor=PADDING_FACTOR,
-            tau2_fudge=1.0,
+            tau2_fudge=0.25,
         )
         mean_variance = mean_signal_variance
 
