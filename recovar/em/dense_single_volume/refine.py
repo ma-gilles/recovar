@@ -2209,25 +2209,18 @@ def _refine_relion_mode(
         fft_power_scale = float(cryo.image_shape[0] * cryo.image_shape[1]) ** 2
         noise_hard = noise_hard_raw / fft_power_scale
 
-        # RELION-parity: inflate hard-assignment noise by the mask area ratio.
-        # Zero-masked images have ~f of the full image power (f = mask_area/total).
-        # The residual |proj - img_masked|^2 underestimates noise by ~1/f because
-        # 89% of pixels are zero. Multiplying by 1/f ≈ area_ratio restores the
-        # effective noise that RELION gets from noise-filled images.
-        # This is the critical difference that gives RELION sigma2_noise 5-33x
-        # higher at low frequencies, which makes iter 2 Pmax ~ 0.0002.
-        if particle_diameter_ang is not None and cryo.voxel_size > 0:
-            mask_radius_px = float(particle_diameter_ang) / (2.0 * cryo.voxel_size)
-            mask_area = np.pi * mask_radius_px ** 2
-            total_area = float(cryo.image_shape[0] * cryo.image_shape[1])
-            mask_inflation = total_area / max(mask_area, 1.0)
-            noise_hard = noise_hard * mask_inflation
-            logger.info(
-                "Hard-assignment noise inflated by mask ratio %.2f "
-                "(mask_radius=%.1f px), range=[%.2e, %.2e]",
-                mask_inflation, mask_radius_px,
-                float(jnp.min(noise_hard)), float(jnp.max(noise_hard)),
-            )
+        # NOTE: A previous version (v25) inflated noise_hard by an
+        # ad-hoc mask area ratio (particle_diameter / image_size). That
+        # rationale was wrong on two counts:
+        #   (1) `estimate_noise_level_no_masks` uses unmasked images
+        #       (apply_image_mask=False), so there is no underestimation
+        #       to compensate for.
+        #   (2) When masking IS applied, the mask is window_mask(D, 0.85,
+        #       0.99) (a soft circular mask of radius ~54 px), not the
+        #       particle_diameter mask of ~23.5 px.
+        # We now leave noise_hard at the unmodified, RELION-normalized
+        # scale and rely on the posterior-weighted noise update to
+        # capture the iter-by-iter noise increase.
 
         if noise_stats_per_half[0] is not None and noise_stats_per_half[1] is not None:
             wsum_combined = (
@@ -2291,10 +2284,6 @@ def _refine_relion_mode(
 
         # Update previous_noise_radial for next iteration's diagnostics
         previous_noise_radial = noise_from_res
-
-        # The mask-ratio inflation on noise_hard (above) already accounts for
-        # the effective noise increase from RELION's softMaskOutsideMap.
-        # No additional per-shell or annealing inflation needed.
 
         noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
 
