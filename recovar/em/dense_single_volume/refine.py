@@ -1947,6 +1947,7 @@ def _refine_relion_mode(
                 kernel="triangular",
                 use_spherical_mask=True, grid_correct=True,
                 gridding_correct="square",
+                tau2_fudge=0.5,
             ).reshape(-1)
             hard_assignments[k] = ha_k
             max_posterior_per_half[k] = np.asarray(
