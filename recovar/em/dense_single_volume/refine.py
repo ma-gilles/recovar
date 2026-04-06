@@ -1384,6 +1384,50 @@ def _refine_relion_mode(
     # error before cropping back to the native real-space volume.
     PADDING_FACTOR = 2
 
+    # --- Build RELION-style image mask for scoring (softMaskOutsideMap equivalent) ---
+    # RELION applies softMaskOutsideMap(img(), particle_diameter/2, width_mask_edge)
+    # to every image before scoring (ml_optimiser.cpp:6369).  The mask is a
+    # raised-cosine circular mask with radius = particle_diameter/2 in pixels.
+    # When do_zero_mask=False (RELION's default for 3D auto-refine), outside the
+    # mask is filled with colored noise drawn from the current sigma2_noise.
+    #
+    # recovar's dataset.image_mask is window_mask(D, 0.85, 0.99) which has
+    # radius ~0.92*D/2 (not particle_diameter).  That mask is WAY larger than
+    # RELION's particle-sized mask.  To match RELION we build a separate mask
+    # with the correct radius here and pass it through to the engine via the
+    # noise_fill_mask_override parameter.
+    relion_scoring_mask = None
+    if particle_diameter_ang is not None and cryo.voxel_size > 0:
+        H, W = cryo.image_shape
+        mask_radius_px = float(particle_diameter_ang) / (2.0 * cryo.voxel_size)
+        # RELION uses width_mask_edge = 5 px by default
+        width_mask_edge = 5.0
+        # Build a 2D raised-cosine circular mask centered at the image center.
+        # The mask is in real-space image layout (H, W) with values in [0, 1],
+        # 1 inside radius, cosine taper in [radius, radius+edge], 0 outside.
+        yy, xx = np.meshgrid(
+            np.arange(H) - H // 2,
+            np.arange(W) - W // 2,
+            indexing='ij',
+        )
+        rr = np.sqrt(yy ** 2 + xx ** 2).astype(np.float32)
+        radius_p = mask_radius_px + width_mask_edge
+        mask_np = np.ones_like(rr, dtype=np.float32)
+        mask_np = np.where(rr >= radius_p, 0.0, mask_np)
+        taper = (rr >= mask_radius_px) & (rr < radius_p)
+        raised_cos = 0.5 - 0.5 * np.cos(
+            np.pi * (radius_p - rr[taper]) / width_mask_edge
+        )
+        mask_np[taper] = raised_cos
+        relion_scoring_mask = jnp.asarray(mask_np)
+        logger.info(
+            "Built RELION-style scoring mask: radius=%.1f px, edge=%.1f px, "
+            "mask_fraction_inside=%.3f (%.1f%% of image)",
+            mask_radius_px, width_mask_edge,
+            float(mask_np.mean()),
+            100.0 * float(mask_np.mean()),
+        )
+
     def _safe_batch_sizes(n_rot, n_trans):
         """Reduce batch sizes for large pose grids to avoid GPU OOM."""
         # Target the actual score-tensor size: n_img * n_rot_block * n_trans.
@@ -1822,11 +1866,12 @@ def _refine_relion_mode(
                         current_size=cs_for_engine,
                         rotation_log_prior=rotation_log_prior,
                         translation_log_prior=translation_log_prior,
-                        score_with_masked_images=True,
+                        score_with_masked_images=False,  # noise fill replaces mask
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        # noise_fill_outside_mask=True,  # disabled: makes Pmax worse
+                        noise_fill_outside_mask=(relion_scoring_mask is not None),
+                        noise_fill_mask_override=relion_scoring_mask,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     pose_rotations[k] = effective_rotations
@@ -1852,11 +1897,12 @@ def _refine_relion_mode(
                         translation_step=state.translation_step,
                         rotation_log_prior=rotation_log_prior,
                         translation_log_prior=translation_log_prior,
-                        score_with_masked_images=True,
+                        score_with_masked_images=False,  # noise fill replaces mask
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        # noise_fill_outside_mask=True,  # disabled: makes Pmax worse
+                        noise_fill_outside_mask=(relion_scoring_mask is not None),
+                        noise_fill_mask_override=relion_scoring_mask,
                     )
                     Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots_k, em_stats_k, noise_stats_k = pass2_outputs
                     noise_stats_per_half[k] = noise_stats_k
@@ -1901,11 +1947,12 @@ def _refine_relion_mode(
                         translation_step=state.translation_step,
                         rotation_log_prior=rotation_log_prior,
                         translation_log_prior=translation_log_prior,
-                        score_with_masked_images=True,
+                        score_with_masked_images=False,  # noise fill replaces mask
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
-                        # noise_fill_outside_mask=True,  # disabled: makes Pmax worse
+                        noise_fill_outside_mask=(relion_scoring_mask is not None),
+                        noise_fill_mask_override=relion_scoring_mask,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     dt_pass2 = time.time() - t_pass2

@@ -495,6 +495,7 @@ def run_em_v2(
     accumulate_noise: bool = False,
     half_spectrum_scoring: bool = False,
     noise_fill_outside_mask: bool = False,
+    noise_fill_mask_override: np.ndarray = None,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -728,8 +729,13 @@ def run_em_v2(
     noise_fill_mask = None
     noise_fill_sigma_rfft = None
     if noise_fill_outside_mask:
-        # Check that the dataset has an image mask
-        ds_mask = getattr(experiment_dataset, 'image_mask', None)
+        # If the caller passed an explicit mask override (e.g. RELION's
+        # softMaskOutsideMap using particle_diameter/2), use that.  Otherwise
+        # fall back to the dataset's window_mask.
+        if noise_fill_mask_override is not None:
+            ds_mask = noise_fill_mask_override
+        else:
+            ds_mask = getattr(experiment_dataset, 'image_mask', None)
         if ds_mask is None:
             logger.warning(
                 "noise_fill_outside_mask=True but dataset has no image_mask; "
@@ -751,10 +757,13 @@ def run_em_v2(
             # Get real-space image mask
             noise_fill_mask = jnp.asarray(ds_mask, dtype=jnp.float32)
             logger.info(
-                "Noise-fill outside mask: %d shells, sigma range [%.2e, %.2e]",
+                "Noise-fill outside mask: %d shells, sigma range [%.2e, %.2e], "
+                "mask_mean=%.3f (%.1f%% inside)",
                 n_nv_shells,
                 float(noise_fill_sigma_rfft.min()),
                 float(noise_fill_sigma_rfft.max()),
+                float(noise_fill_mask.mean()),
+                100.0 * float(noise_fill_mask.mean()),
             )
 
     start_idx = 0
