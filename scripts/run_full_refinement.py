@@ -31,6 +31,8 @@ import jax.numpy as jnp
 import mrcfile
 import numpy as np
 
+from recovar.core import fourier_transform_utils as ftu
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(name)s %(levelname)s %(message)s",
@@ -285,14 +287,23 @@ def main():
         args.max_significants = 500
 
     # ---- Load initial volume ----
+    # CANONICAL recovar idiom for loading a volume: load_mrc + get_dft3.
+    # See recovar/output/output.py:980-984 and recovar/simulation/simulator.py:425.
+    # NEVER use raw `mrcfile.open` + `np.fft.fftn(np.fft.ifftshift(...))` here:
+    # that produces a Fourier volume with the right values but at WRONG array
+    # indices (DC at corner instead of center), so `slice_volume` reads
+    # Nyquist as if it were DC and projections are off by ~2400x in amplitude
+    # at low frequencies.
+    from recovar.utils.helpers import load_mrc as _load_mrc
     init_mrc_path = os.path.join(args.data_dir, "reference_init.mrc")
-    with mrcfile.open(init_mrc_path, mode="r") as mrc:
-        init_vol_real = np.array(mrc.data, dtype=np.float32)
+    init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
     assert init_vol_real.shape == ds.volume_shape, (
         f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
     )
-    # Convert to Fourier space (matching recovar convention)
-    init_vol_ft = np.fft.fftn(np.fft.ifftshift(init_vol_real)).astype(np.complex64).reshape(-1)
+    # Convert to centered Fourier space using the proper helper.
+    init_vol_ft = np.array(
+        ftu.get_dft3(jnp.asarray(init_vol_real))
+    ).astype(np.complex64).reshape(-1)
     logger.info("Initial volume loaded: shape=%s", init_vol_real.shape)
 
     # ---- Set up rotation and translation grids ----
@@ -484,23 +495,25 @@ def main():
     np.savez_compressed(out_path, **save_dict)
     logger.info("Results saved to %s", out_path)
 
-    # Also save final merged volume as MRC for visual inspection
+    # Also save final merged volume as MRC for visual inspection.
+    # Use the canonical idiom: get_idft3 + write_mrc (handles axis transpose).
+    from recovar.utils.helpers import write_mrc as _write_mrc
     final_mean_ft = np.asarray(result["mean"]).reshape(ds.volume_shape)
-    final_mean_real = np.fft.fftshift(np.real(np.fft.ifftn(final_mean_ft))).astype(np.float32)
+    final_mean_real = np.real(
+        np.array(ftu.get_idft3(jnp.asarray(final_mean_ft)))
+    ).astype(np.float32)
     mrc_path = os.path.join(args.output, "final_merged.mrc")
-    with mrcfile.new(mrc_path, overwrite=True) as mrc:
-        mrc.set_data(final_mean_real)
-        mrc.voxel_size = ds.voxel_size
+    _write_mrc(mrc_path, final_mean_real, voxel_size=ds.voxel_size)
     logger.info("Final merged volume saved to %s", mrc_path)
 
     # Save per-half volumes as MRC
     for k in range(2):
         half_ft = np.asarray(result["means"][k]).reshape(ds.volume_shape)
-        half_real = np.fft.fftshift(np.real(np.fft.ifftn(half_ft))).astype(np.float32)
+        half_real = np.real(
+            np.array(ftu.get_idft3(jnp.asarray(half_ft)))
+        ).astype(np.float32)
         half_mrc_path = os.path.join(args.output, f"final_half{k+1}.mrc")
-        with mrcfile.new(half_mrc_path, overwrite=True) as mrc:
-            mrc.set_data(half_real)
-            mrc.voxel_size = ds.voxel_size
+        _write_mrc(half_mrc_path, half_real, voxel_size=ds.voxel_size)
         logger.info("Half-%d volume saved to %s", k + 1, half_mrc_path)
 
     # ---- Print summary ----
