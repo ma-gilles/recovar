@@ -472,18 +472,6 @@ def _resolve_downsample(args):
         args.downsample = None
         return
 
-    # Skip if within 12.5% — not worth the overhead
-    threshold = int(target_D * 1.125)
-    if orig_D <= threshold:
-        logger.info(
-            "Image size %d is close to target %d (threshold %d), skipping downsampling",
-            orig_D,
-            target_D,
-            threshold,
-        )
-        args.downsample = None
-        return
-
     logger.info("Will downsample images from %d to %d", orig_D, target_D)
 
 
