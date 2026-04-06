@@ -1637,19 +1637,24 @@ def _refine_relion_mode(
         # RELION's masking convention or implementing per-shell noise inflation.
         # See memory/project_noise_parity_status.md for details.
 
-        # --- Score temperature for RELION parity ---
-        # Sub-agent diagnostic (2026-04-06) found that recovar's log-scores
-        # are ~6-7x more discriminative than RELION's at iter 1, producing
-        # the 12% Pmax gap (0.66 vs 0.59).  Inflating noise_variance by 6x
-        # at iter 1 matches RELION exactly.  But keeping the 6x for iter 2+
-        # causes a catastrophic iter 3 collapse because the inflation also
-        # distorts the M-step reconstruction (volume becomes prior-dominated).
-        # Use a schedule: 6x at iter 1, identity thereafter.
-        if iteration == 0:
-            SCORE_TEMPERATURE = 2.0
-        else:
-            SCORE_TEMPERATURE = 1.0
-        noise_variance_for_scoring = noise_variance * SCORE_TEMPERATURE
+        # --- Score temperature experiments (v33-v35, reverted) ---
+        # Multiplying noise_variance by a constant T before passing to
+        # the engine inflates sigma^2 in both the E-step (which we want,
+        # to make scores less discriminative) AND the M-step reconstruction
+        # (which we don't want, because the Wiener denominator becomes
+        # prior-dominated and produces degenerate volumes).
+        #
+        # v33 (T=6 constant): iter 1 Pmax 0.0036 (way too diffuse vs RELION
+        #   0.594), iter 3 collapse.
+        # v34 (T=6 iter 1 only): iter 1 0.0036, iter 2 slow from overly
+        #   diffuse volume, iter 3 degenerate.
+        # v35 (T=2 iter 1 only): ran for 12+ min on iter 1 pass 2 alone,
+        #   cancelled.
+        #
+        # The proper fix requires a SEPARATE score temperature parameter
+        # in the engine that only scales posterior computation, not the
+        # M-step GEMMs. Out of scope for this pass.
+        noise_variance_for_scoring = noise_variance
 
         # --- Run E+M on each half-set ---
         # Two modes: single-pass (adaptive_oversampling=0) or two-pass
