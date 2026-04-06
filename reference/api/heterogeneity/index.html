@@ -2899,7 +2899,7 @@ embedding, and volume reconstruction.</p>
 
 
 <h3 id="recovar.heterogeneity.covariance_estimation.get_default_covariance_computation_options" class="doc doc-heading">
-            <code class="highlight language-python"><span class="n">get_default_covariance_computation_options</span><span class="p">(</span><span class="n">grid_size</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+            <code class="highlight language-python"><span class="n">get_default_covariance_computation_options</span><span class="p">(</span><span class="n">grid_size</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">adaptive_n_pcs</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
 
 <a href="#recovar.heterogeneity.covariance_estimation.get_default_covariance_computation_options" class="headerlink" title="Permanent link">&para;</a></h3>
 
@@ -2907,9 +2907,11 @@ embedding, and volume reconstruction.</p>
     <div class="doc doc-contents ">
 
         <p>Return default options dict for covariance computation.</p>
-<p>Automatically sizes the number of principal components and column
-sampling parameters based on available GPU memory and the
-reconstruction grid size.</p>
+<p>Uses a fixed number of principal components (200) by default for
+reproducibility across different GPU configurations. If
+<code>adaptive_n_pcs=True</code>, the number of PCs is reduced to fit in
+available GPU memory (useful for smaller GPUs, but results will
+depend on hardware).</p>
 
 
 <p><span class="doc-section-title">Parameters:</span></p>
@@ -2931,12 +2933,28 @@ reconstruction grid size.</p>
             </td>
             <td>
               <div class="doc-md-description">
-                <p>Side length of the 3-D reconstruction grid.  When
-provided, the number of PCs is scaled to fit in GPU memory.</p>
+                <p>Side length of the 3-D reconstruction grid. Used for
+memory estimation and adaptive PC count.</p>
               </div>
             </td>
             <td>
                   <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>adaptive_n_pcs</code>
+            </td>
+            <td>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If True, reduce the number of PCs to fit in GPU
+memory. Default False (always use 200 PCs).</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
             </td>
           </tr>
       </tbody>
