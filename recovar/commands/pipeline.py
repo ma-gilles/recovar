@@ -283,6 +283,14 @@ def add_args(parser: argparse.ArgumentParser):
         action="store_true",
         help="Use lowest memory options for covariance estimation",
     )
+    perf.add_argument(
+        "--adaptive-memory",
+        dest="adaptive_memory",
+        action="store_true",
+        help="Adapt number of PCs to available GPU memory. By default, "
+             "200 PCs are used regardless of GPU size for reproducibility. "
+             "This flag reduces n_pcs on smaller GPUs to avoid OOM.",
+    )
 
     # ── Advanced / debugging ─────────────────────────────────────────────
     adv = parser.add_argument_group("Advanced")
@@ -993,13 +1001,15 @@ def standard_recovar_pipeline(args):
         utils.report_memory_device(logger=logger)
 
         # --- Covariance options ---
-        covariance_options = covariance_estimation.get_default_covariance_computation_options(ds.grid_size)
+        adaptive = args.low_memory_option or getattr(args, "adaptive_memory", False)
+        covariance_options = covariance_estimation.get_default_covariance_computation_options(
+            ds.grid_size, adaptive_n_pcs=adaptive,
+        )
 
         if args.low_memory_option:
-            logger.info("Using low-memory covariance options (reduced sampling)")
+            logger.info("Using low-memory covariance options (reduced sampling, adaptive n_pcs)")
             covariance_options["sampling_n_cols"] = 50
             covariance_options["randomized_sketch_size"] = 100
-            covariance_options["n_pcs_to_compute"] = 100
             covariance_options["sampling_avoid_in_radius"] = 3
 
         if args.very_low_memory_option:
