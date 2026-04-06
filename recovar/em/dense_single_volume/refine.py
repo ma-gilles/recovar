@@ -1646,7 +1646,7 @@ def _refine_relion_mode(
         # distorts the M-step reconstruction (volume becomes prior-dominated).
         # Use a schedule: 6x at iter 1, identity thereafter.
         if iteration == 0:
-            SCORE_TEMPERATURE = 6.0
+            SCORE_TEMPERATURE = 2.0
         else:
             SCORE_TEMPERATURE = 1.0
         noise_variance_for_scoring = noise_variance * SCORE_TEMPERATURE
