@@ -35,7 +35,15 @@ logger = logging.getLogger(__name__)
 
 
 def _write_reference_volumes(output_dir):
-    """Write the benchmark init and ground-truth reference maps as MRC."""
+    """Write the benchmark init and ground-truth reference maps as MRC.
+
+    Uses the canonical recovar idiom: ``save_volume(flat_centered_FT, ...)``
+    which round-trips correctly through ``ftu.get_dft3(load_mrc(path))``.
+    The previous version used raw ``np.fft.ifftn(np.fft.ifftshift(...))``
+    which is NOT the inverse of ``get_dft3``, producing volumes that fail
+    to round-trip and corrupt projections downstream.
+    """
+    from recovar.output.output import save_volume
     dataset = load_dataset(
         os.path.join(output_dir, "particles.128.mrcs"),
         poses_file=os.path.join(output_dir, "poses.pkl"),
@@ -46,19 +54,20 @@ def _write_reference_volumes(output_dir):
     gt = synthetic_dataset.load_heterogeneous_reconstruction(sim_info).get_mean()
     init = gt * dataset.get_valid_frequency_indices(rad=5)
 
-    init_real = np.real(
-        np.fft.ifftn(np.fft.ifftshift(init.reshape(dataset.volume_shape)))
-    ).astype(np.float32)
-    with mrcfile.new(os.path.join(output_dir, "reference_init.mrc"), overwrite=True) as mrc:
-        mrc.set_data(np.transpose(init_real, (2, 1, 0)))
-        mrc.voxel_size = dataset.voxel_size
-
-    gt_real = np.real(
-        np.fft.ifftn(np.fft.ifftshift(gt.reshape(dataset.volume_shape)))
-    ).astype(np.float32)
-    with mrcfile.new(os.path.join(output_dir, "reference_gt.mrc"), overwrite=True) as mrc:
-        mrc.set_data(np.transpose(gt_real, (2, 1, 0)))
-        mrc.voxel_size = dataset.voxel_size
+    save_volume(
+        np.asarray(init.reshape(-1)),
+        os.path.join(output_dir, "reference_init"),
+        volume_shape=dataset.volume_shape,
+        from_ft=True,
+        voxel_size=dataset.voxel_size,
+    )
+    save_volume(
+        np.asarray(gt.reshape(-1)),
+        os.path.join(output_dir, "reference_gt"),
+        volume_shape=dataset.volume_shape,
+        from_ft=True,
+        voxel_size=dataset.voxel_size,
+    )
 
 
 def prepare_benchmark(output_dir, *, n_images, grid_size, noise_level):
