@@ -1640,13 +1640,15 @@ def _refine_relion_mode(
         # --- Score temperature for RELION parity ---
         # Sub-agent diagnostic (2026-04-06) found that recovar's log-scores
         # are ~6-7x more discriminative than RELION's at iter 1, producing
-        # the 12% Pmax gap (0.66 vs 0.59).  A simple 6x inflation of the
-        # scoring noise matches RELION exactly.  The root cause is likely
-        # a combination of FFT-convention quirks in the init volume and the
-        # half-spectrum Hermitian weighting, but untangling them without
-        # breaking other paths is beyond this scope.  Apply a uniform
-        # temperature of 6 here as a pragmatic fix.
-        SCORE_TEMPERATURE = 6.0
+        # the 12% Pmax gap (0.66 vs 0.59).  Inflating noise_variance by 6x
+        # at iter 1 matches RELION exactly.  But keeping the 6x for iter 2+
+        # causes a catastrophic iter 3 collapse because the inflation also
+        # distorts the M-step reconstruction (volume becomes prior-dominated).
+        # Use a schedule: 6x at iter 1, identity thereafter.
+        if iteration == 0:
+            SCORE_TEMPERATURE = 6.0
+        else:
+            SCORE_TEMPERATURE = 1.0
         noise_variance_for_scoring = noise_variance * SCORE_TEMPERATURE
 
         # --- Run E+M on each half-set ---
