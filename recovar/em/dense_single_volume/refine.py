@@ -1400,18 +1400,36 @@ def _refine_relion_mode(
         return ibs, rbs
 
     # State: two half-set volumes, noise, prior
-    # NOTE: Tried applying RELION-style soft real-space mask to the initial
-    # volume in v31 (commit 76b1bfe).  Result: iter 1 Pmax went from 0.66
-    # to 0.9999 (catastrophic collapse).  Two issues:
-    #   (1) FFT convention mismatch: init_volume is in CORNER (uncentered)
-    #       Fourier layout, but we used get_dft3/get_idft3 which assume
-    #       CENTERED Fourier layout.
-    #   (2) Even with correct FFT, the masked volume produces
-    #       higher-amplitude projections within the support, making the
-    #       chi^2 MORE discriminative, not less.
-    # Reverting until we understand how RELION compensates (likely a
-    # normalization step we don't replicate).
-    means = [jnp.array(init_volume), jnp.array(init_volume)]
+    # Apply RELION-style soft real-space mask to the initial volume
+    # (RELION ml_optimiser.cpp:2742-2744 calls softMaskOutsideMap on Iref).
+    # IMPORTANT: init_volume is in CORNER (uncentered) Fourier layout
+    # because the script does `np.fft.fftn(np.fft.ifftshift(real))`.  We
+    # must convert via raw numpy with matching convention.
+    init_volume_arr = jnp.array(init_volume)
+    if particle_diameter_ang is not None and cryo.voxel_size > 0:
+        from recovar.core.mask import soft_mask_outside_map as _soft_mask_vol
+        mask_radius_voxels = float(particle_diameter_ang) / (2.0 * cryo.voxel_size)
+        # Convert init_volume (corner Fourier) → real centered → mask → corner Fourier
+        init_vol_corner_fft = np.asarray(init_volume).reshape(volume_shape)
+        init_vol_real = np.real(
+            np.fft.fftshift(np.fft.ifftn(init_vol_corner_fft))
+        ).astype(np.float32)
+        init_vol_masked, _ = _soft_mask_vol(
+            jnp.asarray(init_vol_real),
+            radius=mask_radius_voxels,
+            cosine_width=3,
+        )
+        init_vol_masked_np = np.asarray(init_vol_masked)
+        init_vol_corner_fft_masked = np.fft.fftn(
+            np.fft.ifftshift(init_vol_masked_np)
+        ).astype(np.complex64).reshape(-1)
+        init_volume_arr = jnp.asarray(init_vol_corner_fft_masked)
+        logger.info(
+            "Applied RELION-style soft mask to initial volume: radius=%.1f vox "
+            "(particle_diameter=%.1f A, voxel=%.3f A)",
+            mask_radius_voxels, particle_diameter_ang, cryo.voxel_size,
+        )
+    means = [init_volume_arr, init_volume_arr]
     noise_variance = jnp.array(init_noise_variance)
     mean_variance = jnp.array(init_mean_variance)
 
