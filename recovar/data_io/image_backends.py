@@ -126,7 +126,7 @@ class ParticleImageDataset:
         self.image_shape = (self.image_size, self.image_size)
         self.total_pixels = self.image_size * self.image_size
         self.image_mask = np.array(mask.window_mask(self.image_size, 0.85, 0.99))
-        self.data_multiplier = -1 if invert_data else 1
+        self._data_multiplier = -1 if invert_data else 1
 
         # Compatibility aliases
         self.N = self.num_images
@@ -134,13 +134,29 @@ class ParticleImageDataset:
         self.D = self.image_size
         self.unpadded_D = self.image_size
         self.mask = self.image_mask
-        self.mult = self.data_multiplier
 
     def __len__(self) -> int:
         return self.num_images
 
     def __repr__(self) -> str:
         return f"ParticleImageDataset(N={self.num_images}, D={self.image_size})"
+
+    @property
+    def data_multiplier(self):
+        return self._data_multiplier
+
+    @data_multiplier.setter
+    def data_multiplier(self, value):
+        self._data_multiplier = value
+        self.invert_data = bool(value < 0)
+
+    @property
+    def mult(self):
+        return self.data_multiplier
+
+    @mult.setter
+    def mult(self, value):
+        self.data_multiplier = value
 
     @nvtx.annotate("ParticleImageDataset.__getitem__", color="yellow", domain=NVTX_DOMAIN_DATA_IO)
     def __getitem__(self, index):
@@ -154,7 +170,7 @@ class ParticleImageDataset:
             images = images * self.image_mask
         import recovar.core.padding as pad
 
-        images = pad.padded_dft(images * self.mult, self.D, self.padding)
+        images = pad.padded_dft(images * self.data_multiplier, self.D, self.padding)
         return images.astype(self.dtype, copy=False)
 
     def process_images_half(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:

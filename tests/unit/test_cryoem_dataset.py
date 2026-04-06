@@ -156,6 +156,21 @@ def test_reorder_to_dataset_indexing_uses_local_dataset_order():
     np.testing.assert_array_equal(out, np.array([20.0, 40.0, 10.0, 30.0], dtype=np.float32))
 
 
+def test_dataset_data_multiplier_prefers_image_source_data_multiplier():
+    class _Source:
+        data_multiplier = -1
+        mult = 1
+
+    cryo = dataset.CryoEMDataset.__new__(dataset.CryoEMDataset)
+    cryo._image_source = _Source()
+
+    assert cryo.data_multiplier == -1
+
+    cryo.data_multiplier = 1
+    assert cryo.image_source.data_multiplier == 1
+    assert cryo.image_source.mult == 1
+
+
 def test_reorder_to_original_indexing_from_halfsets_rejects_too_small_num_images():
     arr = np.array([1.0], dtype=np.float32)
     halfsets = [np.array([2], dtype=np.int32), np.array([], dtype=np.int32)]
@@ -276,6 +291,7 @@ def test_cryoemdataset_halfset_original_group_indices_tilt():
 
 def test_reload_from_original_images_preserves_original_indices_and_noise_mapping(monkeypatch):
     fake_stack = _FakeImageStack(n_images=6, D=8, padding=0, Np=3)
+    fake_stack.data_multiplier = -1
     image_source = dataset.BackendImageSource(
         fake_stack,
         info=dataset.ImageSourceInfo(
@@ -395,6 +411,81 @@ def test_reload_from_original_images_preserves_original_indices_and_noise_mappin
         half0.CTF_params,
         ctf[[0, 2, 4]],
     )
+
+
+def test_reload_from_original_images_uses_live_data_multiplier(monkeypatch):
+    fake_stack = _FakeImageStack(n_images=4, D=8, padding=0, Np=2)
+    fake_stack.data_multiplier = -1
+    image_source = dataset.BackendImageSource(
+        fake_stack,
+        info=dataset.ImageSourceInfo(tilt_series=True, invert_data=True),
+    )
+    rots = np.tile(np.eye(3, dtype=np.float32), (4, 1, 1))
+    trans = np.zeros((4, 2), dtype=np.float32)
+    ctf = np.zeros((4, 9), dtype=np.float32)
+    cryo = dataset.CryoEMDataset(
+        image_source=image_source,
+        voxel_size=1.0,
+        metadata=dataset.ImageMetadata(rots, trans, ctf),
+        dataset_indices=np.array([10, 11, 12, 13], dtype=np.int32),
+        tilt_series_flag=True,
+    )
+    cryo.particles_file = "particles.star"
+    cryo.poses_file = "poses.pkl"
+    cryo.ctf_file = "ctf.pkl"
+    cryo.halfset_indices = [
+        np.array([0, 2], dtype=np.int32),
+        np.array([1, 3], dtype=np.int32),
+    ]
+
+    captured = {}
+
+    class _Reloaded:
+        def update_poses(self, rots, trans):
+            self.rotation_matrices = np.asarray(rots)
+            self.translations = np.asarray(trans)
+
+        def update_ctf(self, ctf_params):
+            self.CTF_params = np.asarray(ctf_params)
+
+    def fake_load_dataset(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return _Reloaded()
+
+    monkeypatch.setattr(dataset, "load_dataset", fake_load_dataset)
+
+    cryo.data_multiplier = 1
+
+    cryo.get_halfset_dataset(0, independent=True, lazy=True)
+
+    assert cryo.image_source.info.invert_data is False
+    assert captured["kwargs"]["uninvert_data"] is False
+
+
+def test_subset_image_source_info_tracks_parent_data_multiplier():
+    fake_stack = _FakeImageStack(n_images=4, D=8, padding=0, Np=2)
+    fake_stack.data_multiplier = -1
+    image_source = dataset.BackendImageSource(
+        fake_stack,
+        info=dataset.ImageSourceInfo(tilt_series=True, invert_data=True),
+    )
+    rots = np.tile(np.eye(3, dtype=np.float32), (4, 1, 1))
+    trans = np.zeros((4, 2), dtype=np.float32)
+    ctf = np.zeros((4, 9), dtype=np.float32)
+    cryo = dataset.CryoEMDataset(
+        image_source=image_source,
+        voxel_size=1.0,
+        metadata=dataset.ImageMetadata(rots, trans, ctf),
+        dataset_indices=np.array([10, 11, 12, 13], dtype=np.int32),
+        tilt_series_flag=True,
+    )
+
+    sub = cryo.subset(np.array([1, 3], dtype=np.int32))
+    assert sub.image_source.info.invert_data is True
+
+    cryo.data_multiplier = 1
+
+    assert sub.image_source.info.invert_data is False
 
 
 def test_materialize_halfset_datasets_prefers_independent_reloads_for_lazy_sources(monkeypatch):
