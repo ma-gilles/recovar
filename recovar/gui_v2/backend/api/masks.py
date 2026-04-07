@@ -38,6 +38,15 @@ router = APIRouter(prefix="/api/masks", tags=["masks"])
 # ---------------------------------------------------------------------------
 
 
+class EraseSphere(BaseModel):
+    """A sphere of voxels to subtract from the generated mask."""
+
+    x: float
+    y: float
+    z: float
+    r: float = Field(..., gt=0, description="Radius in voxels")
+
+
 class MaskParams(BaseModel):
     """Parameters forwarded to ``recovar.core.mask.make_mask``."""
 
@@ -58,6 +67,10 @@ class MaskParams(BaseModel):
     cleanup: bool = Field(
         True,
         description="Fill holes and keep only the largest connected component",
+    )
+    erase_spheres: list[EraseSphere] = Field(
+        default_factory=list,
+        description="Spheres in voxel coordinates whose contents are zeroed in the final mask",
     )
 
 
@@ -129,11 +142,12 @@ def _write_mrc(path: str, data: Any, voxel_size: float) -> None:
 
 
 def _generate_mask(volume: Any, params: MaskParams) -> Any:
-    """Run :func:`recovar.core.mask.make_mask` with the given params."""
+    """Run :func:`recovar.core.mask.make_mask` then apply any sphere erases."""
     from recovar.core.mask import make_mask
+    import numpy as np
 
     threshold: Any = "auto" if params.threshold is None else float(params.threshold)
-    return make_mask(
+    mask = make_mask(
         volume,
         threshold=threshold,
         lowpass_sigma=params.lowpass_sigma,
@@ -141,6 +155,21 @@ def _generate_mask(volume: Any, params: MaskParams) -> Any:
         soft_edge=params.soft_edge,
         cleanup=params.cleanup,
     )
+
+    if params.erase_spheres:
+        mask = np.asarray(mask, dtype=np.float32).copy()
+        nz, ny, nx = mask.shape
+        # Build coordinate grids once per call (the volumes here are small).
+        zz, yy, xx = np.mgrid[0:nz, 0:ny, 0:nx]
+        for s in params.erase_spheres:
+            # ``EraseSphere`` uses (x, y, z) which we map to MRC axes
+            # (column-major: data[z, y, x]).
+            dx = xx - s.x
+            dy = yy - s.y
+            dz = zz - s.z
+            inside = (dx * dx + dy * dy + dz * dz) <= (s.r * s.r)
+            mask[inside] = 0.0
+    return mask
 
 
 def _render_overlay_png(source: Any, mask: Any, axis: int, idx: int) -> bytes:

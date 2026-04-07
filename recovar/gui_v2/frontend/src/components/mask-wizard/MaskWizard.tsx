@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, Suspense } from "react";
-import { Save, Loader2, Layers } from "lucide-react";
+import { Save, Loader2, Layers, Eraser, X } from "lucide-react";
 import { Dialog } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
@@ -10,6 +10,7 @@ import {
   saveMask,
   ApiError,
   type MaskParams,
+  type EraseSphere,
 } from "../../lib/api/client";
 
 // Lazy-load VtkViewer (vtk.js is heavy; only loaded when 3D mode is opened)
@@ -46,7 +47,11 @@ const DEFAULT_STATE: WizardState = {
   cleanup: true,
 };
 
-function buildParams(s: WizardState, sourcePath: string): MaskParams {
+function buildParams(
+  s: WizardState,
+  sourcePath: string,
+  eraseSpheres: EraseSphere[] = []
+): MaskParams {
   return {
     source_path: sourcePath,
     threshold: s.thresholdMode === "auto" ? null : s.threshold,
@@ -54,6 +59,7 @@ function buildParams(s: WizardState, sourcePath: string): MaskParams {
     extend: s.extend,
     soft_edge: s.softEdge,
     cleanup: s.cleanup,
+    erase_spheres: eraseSpheres,
   };
 }
 
@@ -88,6 +94,10 @@ export function MaskWizard({
   const [previewVolPath, setPreviewVolPath] = useState<string | null>(null);
   const [vol3dLoading, setVol3dLoading] = useState(false);
 
+  const [eraseMode, setEraseMode] = useState(false);
+  const [eraseRadius, setEraseRadius] = useState(5);
+  const [eraseSpheres, setEraseSpheres] = useState<EraseSphere[]>([]);
+
   // Debounced preview generation
   const previewTokenRef = useRef(0);
   const triggerPreview = useCallback(async () => {
@@ -96,7 +106,7 @@ export function MaskWizard({
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const params = buildParams(state, sourcePath);
+      const params = buildParams(state, sourcePath, eraseSpheres);
       const result = await previewMask({
         ...params,
         axis,
@@ -119,7 +129,7 @@ export function MaskWizard({
     } finally {
       if (myToken === previewTokenRef.current) setPreviewLoading(false);
     }
-  }, [open, state, sourcePath, axis, sliceIdx]);
+  }, [open, state, sourcePath, axis, sliceIdx, eraseSpheres]);
 
   // Debounced 3D mask volume generation
   const vol3dTokenRef = useRef(0);
@@ -129,7 +139,7 @@ export function MaskWizard({
     setVol3dLoading(true);
     try {
       const result = await previewMaskVolume({
-        ...buildParams(state, sourcePath),
+        ...buildParams(state, sourcePath, eraseSpheres),
         project_id: projectId,
       });
       if (myToken !== vol3dTokenRef.current) {
@@ -150,7 +160,7 @@ export function MaskWizard({
     } finally {
       if (myToken === vol3dTokenRef.current) setVol3dLoading(false);
     }
-  }, [open, state, sourcePath, projectId]);
+  }, [open, state, sourcePath, projectId, eraseSpheres]);
 
   // Auto-preview on open and on parameter changes (debounced 350ms).
   useEffect(() => {
@@ -173,6 +183,8 @@ export function MaskWizard({
       setSavedPath(null);
       setSaveError(null);
       setSliceIdx(null);
+      setEraseSpheres([]);
+      setEraseMode(false);
     }
     return () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -199,7 +211,7 @@ export function MaskWizard({
     setSaveError(null);
     try {
       const result = await saveMask({
-        ...buildParams(state, sourcePath),
+        ...buildParams(state, sourcePath, eraseSpheres),
         project_id: projectId,
         output_name: outputName.trim(),
       });
@@ -211,7 +223,7 @@ export function MaskWizard({
     } finally {
       setSaving(false);
     }
-  }, [outputName, state, sourcePath, projectId, onSaved]);
+  }, [outputName, state, sourcePath, projectId, eraseSpheres, onSaved]);
 
   const maxSlice = shape ? shape[axis] - 1 : 0;
   const currentIdx = sliceIdx ?? (shape ? Math.floor(shape[axis] / 2) : 0);
@@ -280,8 +292,43 @@ export function MaskWizard({
                 <img
                   src={previewUrl}
                   alt="Mask preview"
-                  className="h-full w-full object-contain"
+                  className={
+                    "h-full w-full object-contain " +
+                    (eraseMode ? "cursor-crosshair" : "")
+                  }
                   style={{ imageRendering: "pixelated" }}
+                  onClick={(e) => {
+                    if (!eraseMode || !shape) return;
+                    const img = e.currentTarget;
+                    const rect = img.getBoundingClientRect();
+                    // Image is object-contain inside a square box, so the
+                    // rendered image fills the full rect (volumes are cubic).
+                    const fx = (e.clientX - rect.left) / rect.width;
+                    const fy = (e.clientY - rect.top) / rect.height;
+                    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
+                    // mrcfile loads data as [NZ, NY, NX] so shape=[nz, ny, nx].
+                    // Backend renders the slice via:
+                    //   axis=0 -> data[idx, :, :]   shape (NY, NX)  rows=Y cols=X
+                    //   axis=1 -> data[:, idx, :]   shape (NZ, NX)  rows=Z cols=X
+                    //   axis=2 -> data[:, :, idx]   shape (NZ, NY)  rows=Z cols=Y
+                    // EraseSphere uses (x, y, z) which the backend
+                    // interprets via mgrid as data[z, y, x] indices.
+                    let x = 0, y = 0, z = 0;
+                    if (axis === 0) {
+                      x = fx * shape[2];
+                      y = fy * shape[1];
+                      z = currentIdx;
+                    } else if (axis === 1) {
+                      x = fx * shape[2];
+                      y = currentIdx;
+                      z = fy * shape[0];
+                    } else {
+                      x = currentIdx;
+                      y = fx * shape[1];
+                      z = fy * shape[0];
+                    }
+                    setEraseSpheres((prev) => [...prev, { x, y, z, r: eraseRadius }]);
+                  }}
                 />
               ) : (
                 <Spinner label="Generating..." />
@@ -483,6 +530,80 @@ export function MaskWizard({
             <label htmlFor="mask-cleanup" className="text-xs text-zinc-400">
               Cleanup (fill holes, keep largest component)
             </label>
+          </div>
+
+          {/* Sphere eraser */}
+          <div className="border-t border-zinc-800 pt-3 space-y-1">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                Eraser
+              </label>
+              <button
+                onClick={() => setEraseMode((m) => !m)}
+                className={
+                  "flex items-center gap-1 rounded px-2 py-0.5 text-xs " +
+                  (eraseMode
+                    ? "bg-rose-500/20 text-rose-300"
+                    : "border border-zinc-700 text-zinc-400 hover:text-zinc-200")
+                }
+                aria-pressed={eraseMode}
+                title="Click on the slice to add a sphere that erases voxels from the mask"
+              >
+                <Eraser className="h-3 w-3" /> {eraseMode ? "On" : "Off"}
+              </button>
+            </div>
+            <div className="flex items-center gap-2 text-xs text-zinc-500">
+              <span className="w-14">Radius</span>
+              <input
+                type="range"
+                min={1}
+                max={30}
+                step={1}
+                value={eraseRadius}
+                onChange={(e) => setEraseRadius(parseInt(e.target.value))}
+                className="flex-1"
+              />
+              <span className="w-10 text-right text-zinc-300">{eraseRadius}</span>
+            </div>
+            {eraseMode && viewMode === "slice" && (
+              <p className="text-xs text-rose-300/80">
+                Click anywhere on the slice preview to add an erase sphere here.
+              </p>
+            )}
+            {eraseMode && viewMode === "3d" && (
+              <p className="text-xs text-amber-300/80">
+                Switch to Slice view to place erase spheres.
+              </p>
+            )}
+            {eraseSpheres.length > 0 && (
+              <div className="max-h-24 space-y-0.5 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-1">
+                {eraseSpheres.map((s, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-1 text-[11px] text-zinc-400"
+                  >
+                    <span className="font-mono tabular-nums">
+                      ({s.x.toFixed(0)}, {s.y.toFixed(0)}, {s.z.toFixed(0)}) r={s.r}
+                    </span>
+                    <button
+                      onClick={() =>
+                        setEraseSpheres((prev) => prev.filter((_, j) => j !== i))
+                      }
+                      className="ml-auto rounded p-0.5 text-zinc-600 hover:bg-zinc-800 hover:text-rose-300"
+                      aria-label={`Remove erase sphere ${i + 1}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setEraseSpheres([])}
+                  className="w-full rounded py-0.5 text-[11px] text-zinc-500 hover:text-rose-300"
+                >
+                  Clear all ({eraseSpheres.length})
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Output name */}

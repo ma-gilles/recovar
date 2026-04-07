@@ -324,6 +324,13 @@ export function getJobSbatchScript(id: string): Promise<SbatchScript> {
 
 // --- Masks ---
 
+export interface EraseSphere {
+  x: number;
+  y: number;
+  z: number;
+  r: number;
+}
+
 export interface MaskParams {
   source_path: string;
   threshold?: number | null;
@@ -331,6 +338,7 @@ export interface MaskParams {
   extend?: number | null;
   soft_edge: number;
   cleanup: boolean;
+  erase_spheres?: EraseSphere[];
 }
 
 export interface MaskInfo {
