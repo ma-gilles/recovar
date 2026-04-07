@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${RECOVAR_SKIP_PRE_PUSH_CHANGED_PYTHON:-0}" == "1" ]]; then
+  echo "Skipping changed-files Python checks because RECOVAR_SKIP_PRE_PUSH_CHANGED_PYTHON=1"
+  exit 0
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+echo "Running changed-files Python checks before push..."
+exec pixi run check-changed-python

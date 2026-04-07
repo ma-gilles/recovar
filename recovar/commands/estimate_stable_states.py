@@ -5,10 +5,10 @@ import os
 import numpy as np
 
 from recovar import utils
-
-logger = logging.getLogger(__name__)
 from recovar.heterogeneity import deconvolve_density
 from recovar.output import output
+
+logger = logging.getLogger(__name__)
 
 
 def estimate_stable_states(density, latent_space_bounds, percent_top=1, n_local_maxs=3, file_path=None):

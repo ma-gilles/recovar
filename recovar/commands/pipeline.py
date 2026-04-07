@@ -1,23 +1,25 @@
 """Main recovar pipeline command: mean reconstruction, covariance, PCA, embedding."""
 
+import argparse
 import logging
+import os
+import sys
+import time
 
-logger = logging.getLogger(__name__)
-import recovar.jax_config
 import numpy as np
-import os, argparse, time, sys
-from recovar import utils
-from recovar.reconstruction import homogeneous, noise
-from recovar.output import output
-from recovar.data_io import cryoem_dataset, halfsets
-from recovar.core import mask
-from recovar.heterogeneity import embedding, principal_components, covariance_estimation
-from recovar.output.output_paths import ResultPaths
+
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-
-
+from recovar import utils
+from recovar.core import mask
+from recovar.data_io import halfsets
+from recovar.heterogeneity import covariance_estimation, embedding, principal_components
+from recovar.output import output
+from recovar.output.output_paths import ResultPaths
+from recovar.reconstruction import homogeneous, noise
 from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
 from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
+
+logger = logging.getLogger(__name__)
 
 
 def add_args(parser: argparse.ArgumentParser):
@@ -289,8 +291,8 @@ def add_args(parser: argparse.ArgumentParser):
         dest="adaptive_memory",
         action="store_true",
         help="Adapt number of PCs to available GPU memory. By default, "
-             "200 PCs are used regardless of GPU size for reproducibility. "
-             "This flag reduces n_pcs on smaller GPUs to avoid OOM.",
+        "200 PCs are used regardless of GPU size for reproducibility. "
+        "This flag reduces n_pcs on smaller GPUs to avoid OOM.",
     )
 
     # ── Advanced / debugging ─────────────────────────────────────────────
@@ -895,10 +897,13 @@ def standard_recovar_pipeline(args):
         raise ValueError(f"noise model {noise_model} not recognized")
 
     contrasts_for_second = None
+    est_contrasts = None
     for repeat in range(n_repeats):
         if repeat == 1:
             ndim = 10 if 10 in options.zs_dim_to_test else int(np.median(options.zs_dim_to_test))
             logger.warning("repeating with contrast of zdim=%s", ndim)
+            if est_contrasts is None or ndim not in est_contrasts:
+                raise RuntimeError(f"missing contrast estimate for zdim={ndim} before repeat")
             contrasts_for_second = est_contrasts[ndim]
             contrasts_for_second /= np.mean(contrasts_for_second)
             # Embedding returns contrasts in original dataset order (no halfset reordering needed).
@@ -1017,7 +1022,8 @@ def standard_recovar_pipeline(args):
         # --- Covariance options ---
         adaptive = args.low_memory_option or getattr(args, "adaptive_memory", False)
         covariance_options = covariance_estimation.get_default_covariance_computation_options(
-            ds.grid_size, adaptive_n_pcs=adaptive,
+            ds.grid_size,
+            adaptive_n_pcs=adaptive,
         )
 
         if args.low_memory_option:

@@ -46,13 +46,13 @@ def test_standard_downstream_args_defaults_and_flags():
     assert parsed.apply_global_filtering is True
 
 
-
 def test_standard_downstream_args_project_mode_defaults():
     parser = parser_args.standard_downstream_args(argparse.ArgumentParser(), analyze=True)
     parsed = parser.parse_args(["--project", "/tmp/project", "--output-name", "embedding_k10"])
     assert parsed.result_dir is None
     assert parsed.project == "/tmp/project"
     assert parsed.output_name == "embedding_k10"
+
 
 @pytest.mark.parametrize(
     ("module", "argv", "expected"),
@@ -109,4 +109,3 @@ def test_postprocess_parser_accepts_output_name():
     )
     assert parsed.project == "/tmp/project"
     assert parsed.output_name == "postprocess_custom"
-

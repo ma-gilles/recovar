@@ -1,4 +1,3 @@
-import recovar.jax_config
 import argparse
 import logging
 import os
@@ -7,7 +6,7 @@ import time
 import numpy as np
 
 from recovar import utils
-from recovar.data_io import cryoem_dataset, halfsets
+from recovar.data_io import halfsets
 from recovar.output import output as o
 from recovar.reconstruction import noise
 

@@ -17,7 +17,7 @@ import re
 from contextlib import contextmanager
 from typing import Any, Mapping, Optional
 
-from recovar.project.registry import JOB_TYPES, get_job_type
+from recovar.project.registry import get_job_type
 
 logger = logging.getLogger(__name__)
 
@@ -328,9 +328,10 @@ class RecovarProject:
         description: str = "",
     ):
         """Add a job entry to project.json with status=running."""
+        job_type = get_job_type(command_name)
         entry = {
             "uid": uid,
-            "type": get_job_type(command_name).name if get_job_type(command_name) else command_name,
+            "type": job_type.name if job_type is not None else command_name,
             "status": "running",
             "created": datetime.datetime.now().isoformat(),
             "completed": None,
@@ -341,11 +342,7 @@ class RecovarProject:
         with self._lock():
             data = self._read()
             jobs = [j for j in data.setdefault("jobs", []) if j.get("uid") != uid]
-            aliases = {
-                name: target
-                for name, target in data.setdefault("aliases", {}).items()
-                if target != uid
-            }
+            aliases = {name: target for name, target in data.setdefault("aliases", {}).items() if target != uid}
             existing_aliases = {j.get("alias") for j in jobs if j.get("alias")}
             if alias:
                 alias = uniquify_job_alias(normalize_job_alias(alias), existing_aliases)

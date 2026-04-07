@@ -1,4 +1,3 @@
-import recovar.jax_config
 import argparse
 import logging
 from pathlib import Path
@@ -7,8 +6,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from recovar import utils
-from recovar.output import output
 from recovar.heterogeneity import deconvolve_density
+from recovar.output import output
 
 logger = logging.getLogger(__name__)
 

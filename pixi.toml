@@ -56,6 +56,7 @@ pytest-cov = ">=5.0"
 # Documentation
 mkdocstrings = { extras = ["python"], version = "*" }
 mypy = "==1.20.0"
+ruff = ">=0.8.0"
 # JAX 0.9.x with CUDA 12 support. Pin plugin/PJRT to match jaxlib exactly
 # so fresh resolutions do not pull newer incompatible CUDA wheels.
 jax = { extras = ["cuda12"], version = "==0.9.0.1" }
@@ -100,6 +101,8 @@ test-recovar = "recovar run_test_dataset"
 
 # Quick smoke test: verifies the environment can import the package without running workloads.
 smoke-import-recovar = "python -c \"import recovar; print('recovar_import_ok')\""
+check-changed-python = "bash ./scripts/check_changed_python.sh"
+install-git-hooks = "git config core.hooksPath .githooks && chmod +x .githooks/pre-push"
 
 # Pytest tasks
 test-fast = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py"

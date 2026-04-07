@@ -20,16 +20,29 @@ New in this version:
 - Reconstruction metadata is saved in reconstructions_info_{zdim_key}.pkl
 """
 
+import argparse
+import logging
 import os
 import pickle
-import numpy as np
+
+import jax.numpy as jnp
 import matplotlib
+import matplotlib.cm as cm
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
-import logging
+import mrcfile
+import numpy as np
+import pandas as pd
+import seaborn as sns
+import umap
 from sklearn.cluster import KMeans
-from recovar import utils
-from recovar.reconstruction import relion_functions
+
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.output import output, plot_utils
+from recovar.reconstruction import relion_functions
+
+logger = logging.getLogger(__name__)
+matplotlib.rcParams["contour.negative_linestyle"] = "solid"
 
 
 def _safe_savefig(filepath, **kwargs):
@@ -45,21 +58,6 @@ def _safe_savefig(filepath, **kwargs):
     except (ValueError, TypeError):
         kwargs.pop("bbox_inches", None)
         plt.savefig(filepath, **kwargs)
-
-
-import recovar.core.fourier_transform_utils as fourier_transform_utils
-import jax.numpy as jnp
-import seaborn as sns
-import mrcfile
-import pandas as pd
-import matplotlib.cm as cm
-import matplotlib.colors as mcolors
-import umap
-import argparse
-
-matplotlib.rcParams["contour.negative_linestyle"] = "solid"
-
-logger = logging.getLogger(__name__)
 
 
 def compute_fsc_auc(fsc_curve, grid_size, voxel_size, threshold=1 / 7):
@@ -261,8 +259,6 @@ def compute_cluster_fsc_scores(
 
         # Apply low-pass filtering if requested
         if filter_resolution is not None:
-            from recovar.reconstruction import regularization
-
             # Convert resolution to frequency
             freq_threshold = 1.0 / filter_resolution  # 1/Angstrom
 
@@ -2638,7 +2634,7 @@ def junk_particle_detection(
             "n_particles_per_cluster": np.array([info.get("n_particles", 0) for info in junk_info.values()])
             if junk_info
             else np.array([]),
-            "junk_threshold": junk_threshold if "junk_threshold" in dir() else 0.5,
+            "junk_threshold": locals().get("junk_threshold", 0.5),
             "n_junk": len(junk_particles),
             "n_good": len(good_particles),
         }
@@ -3100,13 +3096,13 @@ Good Particles: {stats["good_particles"]:,} ({(1 - stats["junk_fraction"]) * 100
 Cluster Statistics:
   Junk Clusters: {stats["n_junk_clusters"]}
   Good Clusters: {stats["n_good_clusters"]}
-  
+
   Avg Junk Cluster Size: {stats["avg_junk_cluster_size"]:.1f}
   Avg Good Cluster Size: {stats["avg_good_cluster_size"]:.1f}
-  
+
   Max Junk Cluster Size: {stats["max_junk_cluster_size"]}
   Max Good Cluster Size: {stats["max_good_cluster_size"]}
-  
+
   Min Junk Cluster Size: {stats["min_junk_cluster_size"]}
   Min Good Cluster Size: {stats["min_good_cluster_size"]}
 
@@ -3197,9 +3193,9 @@ Classification Quality:
 
         # Overlay good and junk particles
         if len(good_particles) > 0:
-            ax.scatter(zs[good_particles, 0], zs[good_particles, 1], c="green", alpha=0.6, s=5, label=f"Good particles")
+            ax.scatter(zs[good_particles, 0], zs[good_particles, 1], c="green", alpha=0.6, s=5, label="Good particles")
         if len(junk_particles) > 0:
-            ax.scatter(zs[junk_particles, 0], zs[junk_particles, 1], c="red", alpha=0.6, s=5, label=f"Junk particles")
+            ax.scatter(zs[junk_particles, 0], zs[junk_particles, 1], c="red", alpha=0.6, s=5, label="Junk particles")
 
         ax.set_xlabel("Latent Dimension 1")
         ax.set_ylabel("Latent Dimension 2")
