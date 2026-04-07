@@ -239,8 +239,13 @@ def parse_poses_from_cs(
         logger.warning("No translation field found in CS file; assuming zero shifts.")
         trans_pixels = np.zeros((n, 2), dtype=np.float64)
 
-    # Pixel → fractional
-    trans_fractional = trans_pixels / float(D)
+    # Pixel → fractional. Use the original image size from the .cs file when
+    # available so downsampled runs preserve the same fractional translations.
+    if "blob/shape" in data.dtype.names:
+        orig_D = data["blob/shape"][:, 0].astype(np.float64).reshape(-1, 1)
+        trans_fractional = trans_pixels / orig_D
+    else:
+        trans_fractional = trans_pixels / float(D)
 
     return rot_matrices, trans_fractional
 
