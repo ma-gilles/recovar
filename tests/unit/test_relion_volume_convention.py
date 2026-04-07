@@ -22,11 +22,12 @@ import pytest
 
 
 def test_helpers_exist():
-    """The four canonical RELION-MRC helpers must exist in recovar.utils.helpers."""
+    """The canonical RELION-MRC helpers must exist in recovar.utils.helpers."""
     from recovar.utils.helpers import (
         relion_volume_to_recovar,
         recovar_volume_to_relion,
         load_relion_volume,
+        write_relion_mrc,
         load_mrc,
         write_mrc,
     )
@@ -35,6 +36,7 @@ def test_helpers_exist():
     assert callable(relion_volume_to_recovar)
     assert callable(recovar_volume_to_relion)
     assert callable(load_relion_volume)
+    assert callable(write_relion_mrc)
     assert callable(load_mrc)
     assert callable(write_mrc)
 
@@ -124,6 +126,60 @@ def test_load_relion_volume_round_trip(tmp_path):
 
     loaded = load_relion_volume(str(path))
     np.testing.assert_allclose(loaded, vol_recovar, atol=1e-5)
+
+
+def test_write_relion_mrc_round_trips_with_load_relion_volume(tmp_path):
+    """``write_relion_mrc`` and ``load_relion_volume`` round-trip cleanly.
+
+    This pins the helper that writes a recovar-frame volume into a
+    RELION-readable MRC file. Without this helper, ``prepare_relion_parity_benchmark.py``
+    used the wrong write path (``save_volume`` -> ``write_mrc``), which
+    produced a cryosparc-frame MRC. Feeding that file to RELION as
+    ``--ref reference_init.mrc`` made RELION refine into the antipode
+    basin (median pose error ~133°), invalidating the entire RELION-parity
+    comparison.
+    """
+    from recovar.utils.helpers import (
+        write_relion_mrc,
+        load_relion_volume,
+    )
+
+    rng = np.random.default_rng(7)
+    vol_recovar = rng.standard_normal((8, 8, 8)).astype(np.float32)
+
+    path = tmp_path / "for_relion.mrc"
+    write_relion_mrc(str(path), vol_recovar, voxel_size=1.0)
+
+    loaded = load_relion_volume(str(path))
+    np.testing.assert_allclose(loaded, vol_recovar, atol=1e-5)
+
+
+def test_write_relion_mrc_disk_bytes_match_recovar_to_relion(tmp_path):
+    """The on-disk bytes of a write_relion_mrc file must equal recovar_volume_to_relion(vol).
+
+    Belt-and-suspenders test: even if some future refactor reshuffles the
+    helpers, the disk-side invariant guarantees RELION reads the volume
+    in its expected frame. Reading the file back with raw mrcfile and
+    comparing against the explicit recovar->relion conversion catches any
+    drift in either direction.
+    """
+    import mrcfile
+    from recovar.utils.helpers import (
+        write_relion_mrc,
+        recovar_volume_to_relion,
+    )
+
+    rng = np.random.default_rng(11)
+    vol_recovar = rng.standard_normal((8, 8, 8)).astype(np.float32)
+
+    path = tmp_path / "raw_disk.mrc"
+    write_relion_mrc(str(path), vol_recovar, voxel_size=2.5)
+
+    with mrcfile.open(str(path)) as m:
+        raw_disk = np.array(m.data, dtype=np.float32)
+
+    expected_disk = recovar_volume_to_relion(vol_recovar)
+    np.testing.assert_allclose(raw_disk, expected_disk, atol=1e-5)
 
 
 def test_em_claude_md_helper_reference_is_valid():

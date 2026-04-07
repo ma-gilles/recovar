@@ -37,13 +37,24 @@ logger = logging.getLogger(__name__)
 def _write_reference_volumes(output_dir):
     """Write the benchmark init and ground-truth reference maps as MRC.
 
-    Uses the canonical recovar idiom: ``save_volume(flat_centered_FT, ...)``
-    which round-trips correctly through ``ftu.get_dft3(load_mrc(path))``.
-    The previous version used raw ``np.fft.ifftn(np.fft.ifftshift(...))``
-    which is NOT the inverse of ``get_dft3``, producing volumes that fail
-    to round-trip and corrupt projections downstream.
+    Two pairs of files are written:
+
+    * ``reference_init.mrc`` / ``reference_gt.mrc`` — recovar / cryoSPARC /
+      cryoDRGN axis convention. These are read by recovar via ``load_mrc``
+      and used by recovar's refinement and FSC scripts.
+
+    * ``reference_init_relion.mrc`` / ``reference_gt_relion.mrc`` — RELION
+      axis convention (``write_relion_mrc``). RELION reads MRC files raw
+      and expects this frame; passing the cryosparc-frame file causes
+      RELION to refine into the antipode basin (median pose error ~133°,
+      see commit history around 2026-04-08). The RELION reference run
+      must use ``--ref reference_init_relion.mrc``.
     """
     from recovar.output.output import save_volume
+    from recovar.utils.helpers import write_relion_mrc
+    from recovar.core import fourier_transform_utils as ftu
+    import jax.numpy as jnp
+
     dataset = load_dataset(
         os.path.join(output_dir, "particles.128.mrcs"),
         poses_file=os.path.join(output_dir, "poses.pkl"),
@@ -54,6 +65,7 @@ def _write_reference_volumes(output_dir):
     gt = synthetic_dataset.load_heterogeneous_reconstruction(sim_info).get_mean()
     init = gt * dataset.get_valid_frequency_indices(rad=5)
 
+    # --- recovar-frame MRCs (used by recovar's refine / FSC scripts) ---
     save_volume(
         np.asarray(init.reshape(-1)),
         os.path.join(output_dir, "reference_init"),
@@ -66,6 +78,25 @@ def _write_reference_volumes(output_dir):
         os.path.join(output_dir, "reference_gt"),
         volume_shape=dataset.volume_shape,
         from_ft=True,
+        voxel_size=dataset.voxel_size,
+    )
+
+    # --- RELION-frame MRCs (used by ``--ref`` in the RELION reference run) ---
+    init_real_recovar = np.real(
+        ftu.get_idft3(jnp.asarray(init).reshape(dataset.volume_shape))
+    )
+    write_relion_mrc(
+        os.path.join(output_dir, "reference_init_relion.mrc"),
+        np.asarray(init_real_recovar),
+        voxel_size=dataset.voxel_size,
+    )
+
+    gt_real_recovar = np.real(
+        ftu.get_idft3(jnp.asarray(gt).reshape(dataset.volume_shape))
+    )
+    write_relion_mrc(
+        os.path.join(output_dir, "reference_gt_relion.mrc"),
+        np.asarray(gt_real_recovar),
         voxel_size=dataset.voxel_size,
     )
 

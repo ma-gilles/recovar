@@ -299,6 +299,39 @@ def load_relion_volume(filepath, return_voxel_size=False):
     return vol
 
 
+def write_relion_mrc(filepath, vol_recovar, voxel_size=None):
+    """Write a recovar-frame volume into an MRC file readable by RELION.
+
+    Inverse of :func:`load_relion_volume`. Use this when you need to feed
+    a recovar volume into RELION (e.g. as the ``--ref`` argument of
+    ``relion_refine``). Round-trips with ``load_relion_volume``::
+
+        write_relion_mrc(path, vol_recovar)
+        assert np.allclose(load_relion_volume(path), vol_recovar)
+
+    Do NOT use :func:`write_mrc` for RELION input — that helper writes in
+    the cryosparc/cryoDRGN axis order, and the resulting file is read by
+    RELION as the **antipode** of what you intended (which corrupts pose
+    search and silently sends auto-refine into the wrong basin: median
+    pose error ~133° instead of grid quantization).
+
+    Parameters
+    ----------
+    filepath : str or Path
+        Output path. Should end in ``.mrc``.
+    vol_recovar : numpy.ndarray, shape (N, N, N), real
+        Real-space volume in recovar's internal convention. Typically the
+        output of ``np.real(ftu.get_idft3(flat_ft_vol.reshape(volume_shape)))``.
+    voxel_size : float, optional
+        Voxel size in Å written to the MRC header.
+    """
+    vol_relion = recovar_volume_to_relion(np.asarray(vol_recovar))
+    with mrcfile.new(filepath, overwrite=True) as mrc:
+        mrc.set_data(vol_relion.real.astype(np.float32))
+        if voxel_size is not None:
+            mrc.voxel_size = voxel_size
+
+
 def symmetrize_ft_volume(vol, volume_shape):
     og_volume_shape = vol.shape
     vol = vol.reshape(volume_shape)
