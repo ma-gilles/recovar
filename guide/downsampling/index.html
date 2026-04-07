@@ -1722,23 +1722,28 @@
 <h1 id="downsampling">Downsampling<a class="headerlink" href="#downsampling" title="Permanent link">&para;</a></h1>
 <p>If your images are larger than 256x256 pixels, downsampling significantly speeds up the pipeline without meaningfully affecting results at the resolutions relevant for heterogeneity analysis.</p>
 <h2 id="automatic-downsampling-recommended">Automatic downsampling (recommended)<a class="headerlink" href="#automatic-downsampling-recommended" title="Permanent link">&para;</a></h2>
-<p>Use <code>--downsample D</code> with the pipeline:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--downsample<span class="w"> </span><span class="m">128</span>
+<p>Use <code>--downsample D</code> with the pipeline inside a project:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>init_project<span class="w"> </span>my_project
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>my_project
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--downsample<span class="w"> </span><span class="m">128</span><span class="w"> </span>--project<span class="w"> </span>.
 </code></pre></div>
 <p>The pipeline automatically:</p>
 <ol>
-<li>Pre-downsamples all images to disk (stored in <code>output/downsampled/</code>)</li>
-<li>Runs the pipeline on the downsampled images</li>
-<li>On re-runs with the same output directory, reuses the cached downsampled images</li>
+<li>Pre-downsamples all images to disk in the shared project cache (<code>Cache/downsample/...</code>)</li>
+<li>Runs the pipeline on the downsampled images in the numbered Pipeline job directory</li>
+<li>Reuses the cached downsampled images across matching project runs, instead of tying the cache to one output directory</li>
 </ol>
-<p>This is the simplest approach — one command handles everything.</p>
+<p>This is the simplest and recommended approach — one command handles everything.</p>
 <h2 id="manual-pre-downsampling">Manual pre-downsampling<a class="headerlink" href="#manual-pre-downsampling" title="Permanent link">&para;</a></h2>
-<p>For maximum control or to reuse across multiple pipeline runs:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Downsample to 128x128</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>recovar<span class="w"> </span>downsample<span class="w"> </span>particles.star<span class="w"> </span>-D<span class="w"> </span><span class="m">128</span><span class="w"> </span>-o<span class="w"> </span>downsampled/
+<p>For maximum control or to materialize a reusable downsampled dataset explicitly:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Project-style downsample job</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>recovar<span class="w"> </span>downsample<span class="w"> </span>particles.star<span class="w"> </span>-D<span class="w"> </span><span class="m">128</span><span class="w"> </span>--project<span class="w"> </span>.<span class="w"> </span>--output-name<span class="w"> </span>particles_d128
 <a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Run pipeline on downsampled data</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>downsampled/particles.128.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Or an explicit standalone output directory</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>recovar<span class="w"> </span>downsample<span class="w"> </span>particles.star<span class="w"> </span>-D<span class="w"> </span><span class="m">128</span><span class="w"> </span>-o<span class="w"> </span>downsampled/
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Run pipeline on the materialized downsampled data</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>downsampled/particles.128.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc
 </code></pre></div>
 <h3 id="recovar-downsample-options"><code>recovar downsample</code> options<a class="headerlink" href="#recovar-downsample-options" title="Permanent link">&para;</a></h3>
 <table>
@@ -1755,7 +1760,7 @@
 </tr>
 <tr>
 <td><code>-o</code>, <code>--outdir</code></td>
-<td>Output directory</td>
+<td>Output directory (optional in project mode; shared project cache is still used when available)</td>
 </tr>
 <tr>
 <td><code>--datadir</code></td>

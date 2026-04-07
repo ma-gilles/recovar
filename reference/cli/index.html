@@ -2110,6 +2110,7 @@
 
 <h1 id="cli-commands">CLI Commands<a class="headerlink" href="#cli-commands" title="Permanent link">&para;</a></h1>
 <p>All RECOVAR commands follow the pattern <code>recovar &lt;command&gt; [arguments]</code>.</p>
+<p>Project mode is the standard workflow: pass <code>--project &lt;dir&gt;</code> (or run from inside a project), let RECOVAR place outputs in stable numbered directories such as <code>Pipeline/job_0001/</code>, and use project metadata for readable names in the CLI and GUI. Standalone explicit paths remain supported.</p>
 <h2 id="main-workflow">Main workflow<a class="headerlink" href="#main-workflow" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -2282,13 +2283,15 @@
 <hr />
 <h2 id="pipeline"><code>pipeline</code><a class="headerlink" href="#pipeline" title="Permanent link">&para;</a></h2>
 <p>Run the full heterogeneity analysis pipeline.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># or: recovar pipeline particles.star -o output --mask mask.mrc [options]</span>
 </code></pre></div>
 <p>See <a href="../../guide/pipeline/">Running the Pipeline</a> for full documentation.</p>
 <hr />
 <h2 id="analyze"><code>analyze</code><a class="headerlink" href="#analyze" title="Permanent link">&para;</a></h2>
 <p>Post-pipeline analysis: k-means clustering, volume generation, UMAP, trajectories.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>result_dir<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># or: recovar analyze result_dir --zdim=10 [options]</span>
 </code></pre></div>
 <table>
 <thead>
@@ -2394,7 +2397,8 @@
 <hr />
 <h2 id="downsample"><code>downsample</code><a class="headerlink" href="#downsample" title="Permanent link">&para;</a></h2>
 <p>Pre-downsample particle images to disk via Fourier cropping.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>recovar<span class="w"> </span>downsample<span class="w"> </span>particles.star<span class="w"> </span>-D<span class="w"> </span><span class="m">128</span><span class="w"> </span>-o<span class="w"> </span>downsampled/<span class="w"> </span><span class="o">[</span>options<span class="o">]</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>recovar<span class="w"> </span>downsample<span class="w"> </span>particles.star<span class="w"> </span>-D<span class="w"> </span><span class="m">128</span><span class="w"> </span>--project<span class="w"> </span>.<span class="w"> </span>--output-name<span class="w"> </span>particles_d128
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="c1"># or: recovar downsample particles.star -D 128 -o downsampled/ [options]</span>
 </code></pre></div>
 <table>
 <thead>
@@ -2412,7 +2416,7 @@
 </tr>
 <tr>
 <td><code>-o</code>, <code>--outdir</code></td>
-<td>Required</td>
+<td>Auto in project mode</td>
 <td>Output directory</td>
 </tr>
 <tr>
@@ -2817,7 +2821,7 @@
 </table>
 <hr />
 <h2 id="common-flag-project">Common flag: <code>--project</code><a class="headerlink" href="#common-flag-project" title="Permanent link">&para;</a></h2>
-<p>All commands that produce output accept <code>--project &lt;dir&gt;</code> to enable project mode. When active, output directories are auto-generated. If you run from within a project directory (containing <code>project.json</code>), it is auto-detected without needing the flag.</p>
+<p>All commands that produce output accept <code>--project &lt;dir&gt;</code> to enable project mode. This is the recommended way to run RECOVAR. When active, output directories are auto-generated, downstream commands may omit <code>result_dir</code> to use the latest completed Pipeline job, and RECOVAR stores human-readable job names alongside the numbered directories. If you run from within a project directory (containing <code>project.json</code>), it is auto-detected without needing the flag.</p>
 <p>Each job creates <code>job.json</code>, <code>command.txt</code>, <code>run.log</code>, and <code>README.txt</code> metadata files.</p>
 <h3 id="project-directory-naming">Project directory naming<a class="headerlink" href="#project-directory-naming" title="Permanent link">&para;</a></h3>
 <table>
@@ -2832,7 +2836,7 @@
 <tr>
 <td><code>pipeline</code></td>
 <td><code>Pipeline/</code></td>
-<td><code>Pipeline/job_0001/</code></td>
+<td><code>Pipeline/job_0001/</code> (alias shown separately in CLI/GUI)</td>
 </tr>
 <tr>
 <td><code>analyze</code></td>

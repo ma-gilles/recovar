@@ -586,10 +586,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#from-relion" class="md-nav__link">
+  <a href="#recommended-project-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        From RELION
+        Recommended: project workflow
       
     </span>
   </a>
@@ -597,10 +597,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#from-cryosparc" class="md-nav__link">
+  <a href="#optional-standalone-output-directories" class="md-nav__link">
     <span class="md-ellipsis">
       
-        From cryoSPARC
+        Optional: standalone output directories
       
     </span>
   </a>
@@ -612,17 +612,6 @@
     <span class="md-ellipsis">
       
         With downsampling
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#analyze-the-results" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Analyze the results
       
     </span>
   </a>
@@ -1673,10 +1662,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#from-relion" class="md-nav__link">
+  <a href="#recommended-project-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        From RELION
+        Recommended: project workflow
       
     </span>
   </a>
@@ -1684,10 +1673,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#from-cryosparc" class="md-nav__link">
+  <a href="#optional-standalone-output-directories" class="md-nav__link">
     <span class="md-ellipsis">
       
-        From cryoSPARC
+        Optional: standalone output directories
       
     </span>
   </a>
@@ -1699,17 +1688,6 @@
     <span class="md-ellipsis">
       
         With downsampling
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#analyze-the-results" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Analyze the results
       
     </span>
   </a>
@@ -1792,46 +1770,55 @@
 </code></pre></div>
 <p>The wizard walks you through selecting your input files, mask, downsampling, and other options, then generates and optionally executes the pipeline command. Works over SSH with no extra dependencies.</p>
 <h2 id="manual-quick-start">Manual quick start<a class="headerlink" href="#manual-quick-start" title="Permanent link">&para;</a></h2>
-<h3 id="from-relion">From RELION<a class="headerlink" href="#from-relion" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc
+<h3 id="recommended-project-workflow">Recommended: project workflow<a class="headerlink" href="#recommended-project-workflow" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>init_project<span class="w"> </span>my_project
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nb">cd</span><span class="w"> </span>my_project
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># RELION</span>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># cryoSPARC</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.cs<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--datadir<span class="w"> </span>/path/to/cryosparc/project<span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="c1"># Analyze the latest completed Pipeline job</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span>--project<span class="w"> </span>.
 </code></pre></div>
-<h3 id="from-cryosparc">From cryoSPARC<a class="headerlink" href="#from-cryosparc" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.cs<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--datadir<span class="w"> </span>/path/to/cryosparc/project
+<p>In project mode, RECOVAR keeps machine-stable numbered directories on disk (for example <code>Pipeline/job_0001/</code>) and stores readable job aliases in project metadata for the CLI and GUI.</p>
+<h3 id="optional-standalone-output-directories">Optional: standalone output directories<a class="headerlink" href="#optional-standalone-output-directories" title="Permanent link">&para;</a></h3>
+<p>If you prefer the older explicit-path style, it still works:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>output<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span>
 </code></pre></div>
 <h3 id="with-downsampling">With downsampling<a class="headerlink" href="#with-downsampling" title="Permanent link">&para;</a></h3>
 <p>If your images are larger than ~256 pixels, downsample for faster processing:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--downsample<span class="w"> </span><span class="m">128</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--downsample<span class="w"> </span><span class="m">128</span><span class="w"> </span>--project<span class="w"> </span>.
 </code></pre></div>
-<p>This automatically pre-downsamples images to disk the first time and caches them for re-runs.</p>
-<h3 id="analyze-the-results">Analyze the results<a class="headerlink" href="#analyze-the-results" title="Permanent link">&para;</a></h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>output<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span>
-</code></pre></div>
-<p>This runs k-means clustering, generates representative volumes, computes UMAP embeddings, and optionally creates trajectory movies.</p>
+<p>This automatically pre-downsamples images into the shared project cache on the first run and reuses that cache across matching project runs.</p>
 <h3 id="view-volumes">View volumes<a class="headerlink" href="#view-volumes" title="Permanent link">&para;</a></h3>
 <p>Open the generated <code>.mrc</code> files in ChimeraX, Chimera, or any MRC viewer:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>output/analysis_10/kmeans/center000.mrc
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>output/analysis_10/kmeans/center001.mrc
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>...
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>output/analysis_10/kmeans/center000.mrc
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>output/analysis_10/kmeans/center001.mrc
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>...
 </code></pre></div>
 <h2 id="project-system">Project system<a class="headerlink" href="#project-system" title="Permanent link">&para;</a></h2>
-<p>For multi-step workflows, use the project system. It auto-numbers job directories (e.g. <code>Pipeline/job_0001/</code>, <code>Analyze/job_0001/</code>) and tracks job metadata (<code>job.json</code>, <code>command.txt</code>, <code>run.log</code>, <code>README.txt</code>).</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Initialize a project directory</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>recovar<span class="w"> </span>init_project<span class="w"> </span>my_project
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nb">cd</span><span class="w"> </span>my_project
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Run pipeline (auto-creates Pipeline/job_0001/)</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--project<span class="w"> </span>.
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1"># Analyze (auto-creates Analyze/job_0001/)</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>Pipeline/job_0001<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span>--project<span class="w"> </span>.
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
-<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="c1"># Check status of all jobs</span>
-<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>recovar<span class="w"> </span>project_status
+<p>For multi-step workflows, use the project system. It is the standard RECOVAR workflow: numbered job directories stay stable on disk (e.g. <code>Pipeline/job_0001/</code>, <code>Analyze/job_0001/</code>), while the CLI and GUI show human-readable job names from project metadata.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># Initialize a project directory</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>recovar<span class="w"> </span>init_project<span class="w"> </span>my_project
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nb">cd</span><span class="w"> </span>my_project
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># Run pipeline (auto-creates Pipeline/job_0001/)</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc<span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="c1"># Analyze the latest completed pipeline (auto-creates Analyze/job_0001/)</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span>--project<span class="w"> </span>.
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="c1"># Check status of all jobs and aliases</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>recovar<span class="w"> </span>project_status
 </code></pre></div>
-<p>All commands accept <code>--project &lt;dir&gt;</code> to enable project mode. If you run from within a project directory, it is auto-detected.</p>
+<p>All commands accept <code>--project &lt;dir&gt;</code> to enable project mode. If you run from within a project directory, it is auto-detected. Downstream commands can omit <code>result_dir</code>; RECOVAR then uses the latest completed Pipeline job in that project.</p>
 <h2 id="web-gui">Web GUI<a class="headerlink" href="#web-gui" title="Permanent link">&para;</a></h2>
 <p>For a visual interface, launch the RECOVAR web GUI:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>recovar<span class="w"> </span>gui
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>recovar<span class="w"> </span>gui
 </code></pre></div>
 <p>The GUI lets you configure and launch jobs, interactively explore the latent space, and view 3D volumes — all from your browser. See the <a href="../../guide/gui/">GUI Guide</a> for details.</p>
 <h2 id="whats-next">What's next<a class="headerlink" href="#whats-next" title="Permanent link">&para;</a></h2>
