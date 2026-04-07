@@ -182,8 +182,6 @@ def compute_pass2_stats(
     translation_log_prior=None,
     accumulate_noise=False,
     half_spectrum_scoring=False,
-    noise_fill_outside_mask=False,
-    noise_fill_mask_override=None,
 ):
     """Pass 2: evaluate oversampled children of significant coarse rotations.
 
@@ -395,8 +393,6 @@ def compute_pass2_stats(
         return_stats=return_stats,
         accumulate_noise=accumulate_noise,
         half_spectrum_scoring=half_spectrum_scoring,
-        noise_fill_outside_mask=noise_fill_outside_mask,
-        noise_fill_mask_override=noise_fill_mask_override,
     )
 
     # Unpack: run_em_v2 returns (mean, ha, Ft_y, Ft_ctf, [relion_stats], [noise_stats])
@@ -459,8 +455,6 @@ def compute_pass2_stats_sparse(
     translation_log_prior=None,
     accumulate_noise=False,
     half_spectrum_scoring=False,
-    noise_fill_outside_mask=False,
-    noise_fill_mask_override=None,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -616,8 +610,6 @@ def compute_pass2_stats_sparse(
             return_stats=return_stats,
             accumulate_noise=accumulate_noise,
             half_spectrum_scoring=half_spectrum_scoring,
-            noise_fill_outside_mask=noise_fill_outside_mask,
-            noise_fill_mask_override=noise_fill_mask_override,
         )
 
         # Unpack return based on flags
