@@ -1,27 +1,60 @@
 # RECOVAR Source Code Conventions
 
-## ⚠ READ FIRST: subdirectory developer guides
+## ⚠ Critical conventions — always loaded, do NOT reinvent
 
-The recovar repo has critical conventions documented in subdirectory
-`CLAUDE.md` files. Claude Code only loads them lazily (on file read), so
-import them all at startup to make sure they're always in context:
+Two convention pitfalls that have repeatedly cost days of debugging in
+this repo:
 
-@em/CLAUDE.md
-@cuda/CLAUDE.md
-@gui_v2/CLAUDE.md
+### FFT / MRC volume I/O
+Volumes live FLAT and in **CENTERED Fourier space** (DC at array center).
+Real-space volumes are **CENTERED** (origin at `[N/2, N/2, N/2]`).
 
-(`tests/CLAUDE.md` is loaded by the parent project as well.)
+Use these helpers in `recovar.utils.helpers` and `recovar.core.fourier_transform_utils`:
+- `load_mrc(path)` / `write_mrc(path, vol)` — recovar/cryoSPARC/cryoDRGN frame
+- `load_relion_volume(path)` — load a RELION MRC, convert to recovar frame
+- `save_volume(flat_ft, path, ...)` — write a flat centered-FT volume
+- `ftu.get_dft3(real)` / `ftu.get_idft3(ft)` — centered 3D FFT pair
+- `ftu.get_dft2` / `ftu.get_idft2` — centered 2D FFT pair
 
-The most commonly missed convention is the **RELION ↔ recovar volume axis
-flip** (negate + transpose(2,1,0)) — see `recovar/em/CLAUDE.md`. The
-canonical helpers are in `recovar/utils/helpers.py`:
-- `load_mrc(path)` / `write_mrc(path, vol)` — cryosparc/cryoDRGN frame
-- `load_relion_volume(path)` — converts on load to recovar's frame
-- `relion_volume_to_recovar(vol)` / `recovar_volume_to_relion(vol)` — explicit conversion
-- `R_to_relion(R)` / `R_from_relion(euler)` — rotation Euler conversion
+NEVER write raw `np.fft.fftn(np.fft.ifftshift(...))` or raw
+`mrcfile.open(...).data` for 3D volumes — these omit the
+`(2, 1, 0)` axis transpose AND/OR an outer `fftshift`, silently
+corrupting projections (DC reads as Nyquist, ~2400× amplitude error
+at low frequencies).
 
-`tests/unit/test_relion_volume_convention.py` pins these helpers so they
-cannot be silently removed.
+### RELION ↔ recovar volume axis flip
+recovar and RELION use different real-space axis conventions:
+```python
+vol_recovar = -np.transpose(vol_relion, (2, 1, 0))   # negate + swap X<->Z
+```
+The negation is paired with `R_to_relion` / `R_from_relion`; both are
+correct as written. Do NOT "fix" them.
+
+When loading a **RELION-produced** MRC for FSC against a recovar
+reconstruction, use `load_relion_volume(path)`, NOT `load_mrc(path)` —
+the latter is for recovar/cryoSPARC frame and leaves RELION volumes in
+the wrong frame, producing FSC ≈ 0 against the matching recovar volume.
+
+`tests/unit/test_relion_volume_convention.py` pins all these helpers and
+will fail loudly if any future PR removes one of them. **Do not skip
+fixing the test if it breaks** — that test exists because the helpers
+were silently deleted in commit 4703c634 (2026-04-01) and the
+documentation in `recovar/em/CLAUDE.md` was left referencing them, which
+cost ~25 wasted commits over the next year (see
+`docs/relion_parity_commit_audit.md`).
+
+## Subdirectory developer guides (loaded lazily on file read)
+
+The recovar repo has module-specific CLAUDE.md files that load only
+when Claude reads a file in the corresponding subtree. Read them
+explicitly if a task spans multiple modules without touching their
+files:
+- `recovar/em/CLAUDE.md` — EM module: RELION-parity plan, engine
+  performance, more on the volume conventions, test rules
+- `recovar/cuda/CLAUDE.md` — CUDA kernel coordinate convention (k0=row,
+  k1=col), build via pixi, JAX FFI headers
+- `recovar/gui_v2/CLAUDE.md` — GUI v2 architecture
+- `tests/CLAUDE.md` — test conventions, baseline rules
 
 ## JAX / Equinox Patterns
 
