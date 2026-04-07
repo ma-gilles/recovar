@@ -941,20 +941,6 @@ def run_em_v2(
             wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
             sumw=float(noise_sumw),
         )
-        # Diagnostic: log per-shell noise breakdown to debug identical values
-        # across scoring variants (v2 vs v4)
-        logger.info(
-            "Noise diagnostics: sumw=%.1f, "
-            "wsum_sigma2_noise[0:5]=%s, "
-            "wsum_img_power[0:5]=%s, "
-            "wsum_sigma2_noise sum=%.6e, "
-            "wsum_img_power sum=%.6e",
-            noise_stats.sumw,
-            np.array2string(noise_wsum[:5], precision=6),
-            np.array2string(noise_img_power[:5], precision=6),
-            noise_wsum.sum(),
-            noise_img_power.sum(),
-        )
 
     if return_stats:
         relion_stats = RelionStats(

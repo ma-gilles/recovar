@@ -1156,153 +1156,6 @@ def refine_single_volume(
 # ---------------------------------------------------------------------------
 
 
-def _extract_max_posterior_per_image(
-    experiment_dataset,
-    mean,
-    noise_variance,
-    rotations,
-    translations,
-    disc_type,
-    image_batch_size,
-    rotation_block_size,
-    current_size,
-    half_spectrum_scoring=False,
-):
-    """Extract per-image maximum posterior probability from an E-step pass.
-
-    Runs a lightweight E-step (pass 1 only: streaming logsumexp) and
-    returns the best log-score per image, converted to a probability
-    via exp(best_score - log_Z).
-
-    This is a separate utility because run_em_v2 does not currently expose
-    per-image Pmax.  We reuse the same block structure as run_em_v2's
-    pass 1 to compute log_Z and best_score in a memory-efficient way.
-
-    Returns
-    -------
-    max_prob : np.ndarray, shape (n_images,)
-        Per-image maximum posterior probability in [0, 1].
-    """
-    from recovar.em.dense_single_volume.engine_v2 import (
-        _preprocess_batch, _compute_projections_block,
-        _e_step_block_scores, _e_step_block_scores_windowed,
-        _update_logsumexp, make_half_image_weights,
-    )
-    from recovar.core.configs import ForwardModelConfig
-    import recovar.core.fourier_transform_utils as fourier_transform_utils
-
-    n_rot = rotations.shape[0]
-    n_trans = translations.shape[0]
-    n_images = experiment_dataset.n_units
-    image_shape = experiment_dataset.image_shape
-    volume_shape = experiment_dataset.volume_shape
-
-    H, W = image_shape
-    n_half = H * (W // 2 + 1)
-
-    config = ForwardModelConfig.from_dataset(
-        experiment_dataset, disc_type=disc_type,
-        process_fn=experiment_dataset.process_images,
-    )
-
-    half_weights = jnp.ones(n_half, dtype=jnp.float32) if half_spectrum_scoring else make_half_image_weights(image_shape)
-
-    use_window = current_size is not None and current_size < image_shape[0]
-    if use_window:
-        from .fourier_window import make_fourier_window_indices_np
-        window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size)
-        window_indices = jnp.asarray(window_indices_np)
-        half_weights_windowed = half_weights[window_indices]
-    else:
-        window_indices = None
-        n_windowed = n_half
-
-    # Pad rotations
-    n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
-    n_rot_padded = n_blocks * rotation_block_size
-    if n_rot_padded > n_rot:
-        pad_size = n_rot_padded - n_rot
-        rotations_padded = np.concatenate([
-            rotations, np.tile(np.eye(3, dtype=np.float32), (pad_size, 1, 1))
-        ], axis=0)
-    else:
-        rotations_padded = rotations
-
-    max_prob_all = np.empty(n_images, dtype=np.float32)
-
-    image_indices = np.arange(n_images)
-    start_idx = 0
-
-    for (batch_data, _, _, ctf_params, _, _, indices) in experiment_dataset.iter_batches(
-        image_batch_size, indices=image_indices, by_image=False,
-    ):
-        batch_size = len(indices)
-        end_idx = start_idx + batch_size
-        batch_data = jnp.asarray(batch_data)
-
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data, ctf_params, noise_variance, translations, config,
-            batch_size, n_trans,
-        )
-
-        if use_window:
-            shifted_data = shifted_half[:, window_indices]
-            ctf2_data = ctf2_over_nv_half[:, window_indices]
-        else:
-            shifted_data = shifted_half
-            ctf2_data = ctf2_over_nv_half
-
-        # Streaming logsumexp + best score tracking
-        max_s = jnp.full(batch_size, -jnp.inf)
-        sum_exp = jnp.zeros(batch_size)
-        best_score = jnp.full(batch_size, -jnp.inf)
-
-        for b in range(n_blocks):
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
-            rots_b = rotations_padded[r0:r1]
-
-            proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean, rots_b, image_shape, volume_shape, disc_type)
-
-            if use_window:
-                proj_w = proj_half_b[:, window_indices]
-                proj_abs2_w = proj_abs2_half_b[:, window_indices]
-                scores = _e_step_block_scores_windowed(
-                    shifted_data, batch_norm, ctf2_data,
-                    proj_w * half_weights_windowed,
-                    proj_abs2_w * half_weights_windowed,
-                    half_weights_windowed,
-                    batch_size, n_trans, n_windowed, image_shape, volume_shape,
-                )
-            else:
-                scores = _e_step_block_scores(
-                    shifted_data, batch_norm, ctf2_data,
-                    proj_half_b * half_weights,
-                    proj_abs2_half_b * half_weights,
-                    half_weights,
-                    batch_size, n_trans, image_shape, volume_shape,
-                )
-
-            if r1 > n_rot:
-                valid = n_rot - r0
-                mask = jnp.arange(rotation_block_size) < valid
-                scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
-
-            max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
-            # Track best score per image across all blocks
-            block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
-            best_score = jnp.maximum(best_score, block_best)
-
-        # Pmax = exp(best_score - log_Z)
-        log_Z = max_s + jnp.log(sum_exp)
-        pmax = jnp.exp(best_score - log_Z)
-        max_prob_all[start_idx:end_idx] = np.asarray(pmax)
-        start_idx = end_idx
-
-    return max_prob_all
-
-
 def _refine_relion_mode(
     experiment_datasets,
     init_volume,
@@ -1400,17 +1253,6 @@ def _refine_relion_mode(
         return ibs, rbs
 
     # State: two half-set volumes, noise, prior
-    # NOTE: tried applying RELION-style soft real-space mask to the initial
-    # volume in v31 (commit 76b1bfe) and v32 (commit 1773a58, with fixed
-    # FFT convention).  Both gave catastrophic Pmax collapse at iter 1.
-    # Reason: the recovar prepare script uses `gt * get_valid_frequency_indices(rad=5)`
-    # to lowpass the init volume to Fourier shell 5, while RELION uses
-    # ini_high=30A which corresponds to shell 18.  Our init has SO MUCH
-    # less high-frequency content that masking it removes the smoothing
-    # effect of the delocalized Fourier-low-pass tails, leaving only the
-    # central particle which makes scoring extremely peaked.
-    # Conclusion: matching RELION's mask requires also matching RELION's
-    # initial lowpass (shell 18, not shell 5).  Skipping for now.
     means = [jnp.array(init_volume), jnp.array(init_volume)]
     noise_variance = jnp.array(init_noise_variance)
     mean_variance = jnp.array(init_mean_variance)
@@ -1431,12 +1273,7 @@ def _refine_relion_mode(
     healpix_order_trajectory = []
     ave_Pmax_trajectory = []
     pmax_per_image_history = []
-    # RELION uses incr_size=10. We add 2 extra shells to compensate for
-    # the 1-shell FSC gap that makes our current_size 2 pixels smaller.
-    # This gives current_size=30 instead of 26 at iter 2, providing ~450
-    # scoring pixels vs ~280, which prevents the chi^2 from being too
-    # discriminative and causing posterior collapse.
-    relion_incr_size = 10
+    relion_incr_size = 10  # RELION default
     relion_has_high_fsc_at_limit = False
     global_direction_prior = None
     global_direction_prior_order = None
@@ -2003,36 +1840,29 @@ def _refine_relion_mode(
         # --- Save intermediate volumes if requested ---
         if save_intermediates_dir is not None:
             import os
+            from recovar.output.output import save_volume
             os.makedirs(save_intermediates_dir, exist_ok=True)
-            import mrcfile
             for k_half in range(2):
-                vol_real = np.real(
-                    np.fft.ifftn(
-                        np.fft.ifftshift(
-                            np.asarray(means[k_half]).reshape(volume_shape)
-                        )
-                    )
-                ).astype(np.float32)
-                mrc_path = os.path.join(
-                    save_intermediates_dir,
-                    f"it{iteration:03d}_half{k_half+1}_reg.mrc",
+                save_volume(
+                    np.asarray(means[k_half]).reshape(-1),
+                    os.path.join(
+                        save_intermediates_dir,
+                        f"it{iteration:03d}_half{k_half+1}_reg",
+                    ),
+                    volume_shape=volume_shape,
+                    from_ft=True,
+                    voxel_size=cryo.voxel_size,
                 )
-                with mrcfile.new(mrc_path, overwrite=True) as mrc:
-                    mrc.set_data(vol_real)
-                # Also save unregularized half-map
-                vol_unreg = np.real(
-                    np.fft.ifftn(
-                        np.fft.ifftshift(
-                            np.asarray(unreg_means[k_half]).reshape(volume_shape)
-                        )
-                    )
-                ).astype(np.float32)
-                mrc_unreg_path = os.path.join(
-                    save_intermediates_dir,
-                    f"it{iteration:03d}_half{k_half+1}_unreg.mrc",
+                save_volume(
+                    np.asarray(unreg_means[k_half]).reshape(-1),
+                    os.path.join(
+                        save_intermediates_dir,
+                        f"it{iteration:03d}_half{k_half+1}_unreg",
+                    ),
+                    volume_shape=volume_shape,
+                    from_ft=True,
+                    voxel_size=cryo.voxel_size,
                 )
-                with mrcfile.new(mrc_unreg_path, overwrite=True) as mrc:
-                    mrc.set_data(vol_unreg)
             # Save FSC and noise/tau2 per iteration
             np.save(
                 os.path.join(save_intermediates_dir, f"it{iteration:03d}_fsc.npy"),
