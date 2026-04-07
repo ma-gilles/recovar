@@ -669,12 +669,14 @@ def test_estimate_initial_noise_spectrum_from_unaligned_images_matches_legacy_lo
     ds = _MockNoiseDataset(images, image_shape=image_shape)
     subset = np.arange(ds.n_images, dtype=np.int32)
 
-    expected_raw = _legacy_estimate_initial_noise_spectrum_from_unaligned_images(
+    # Returned spectrum is in recovar's native FFT units (the same units as
+    # ``process_images(batch)``). NO ``(H*W)^2`` rescale is applied — see the
+    # docstring of estimate_initial_noise_spectrum_from_unaligned_images.
+    expected = _legacy_estimate_initial_noise_spectrum_from_unaligned_images(
         ds,
         image_subset=subset,
         batch_size=3,
     )
-    expected = expected_raw / float(np.prod(image_shape) ** 2)
     got = noise.estimate_initial_noise_spectrum_from_unaligned_images(
         ds,
         image_subset=subset,
@@ -682,3 +684,38 @@ def test_estimate_initial_noise_spectrum_from_unaligned_images_matches_legacy_lo
     )
 
     np.testing.assert_allclose(np.asarray(got), np.asarray(expected), atol=1e-6, rtol=1e-6)
+
+
+def test_estimate_initial_noise_spectrum_matches_image_power_scale():
+    """The returned sigma² must agree with mean |F|² for noise-only images.
+
+    For an iter-0 state where images are pure noise (no signal model), the
+    average particle power spectrum equals the noise variance, so
+    ``mean|F|² / mean σ² ≈ 2`` (the factor of 2 is RELION's per-component
+    convention). If a (H*W)² rescale ever sneaks back in, this test fails
+    immediately because σ² becomes (H*W)²/2 ≈ 1e8 too small.
+    """
+    rng = np.random.default_rng(101)
+    image_shape = (16, 16)
+    n_pix = int(np.prod(image_shape))
+    images = (
+        rng.normal(size=(50, n_pix)).astype(np.float32)
+        + 1j * rng.normal(size=(50, n_pix)).astype(np.float32)
+    ).astype(np.complex64)
+    ds = _MockNoiseDataset(images, image_shape=image_shape)
+    subset = np.arange(ds.n_images, dtype=np.int32)
+
+    sigma2_radial = noise.estimate_initial_noise_spectrum_from_unaligned_images(
+        ds, image_subset=subset, batch_size=10,
+    )
+    mean_image_power = float(np.mean(np.abs(np.asarray(images)) ** 2))
+    mean_sigma2 = float(np.mean(np.asarray(sigma2_radial)))
+
+    # Should be ~2 for pure complex Gaussian noise (real² + imag² convention).
+    # Anything ≫ 10 means an erroneous rescale has been reintroduced.
+    ratio = mean_image_power / mean_sigma2
+    assert 0.5 < ratio < 10.0, (
+        f"mean|F|²/mean σ² = {ratio:.3e} is far from the expected ~2; "
+        f"a stray (H*W)² rescale has likely been reintroduced into "
+        f"estimate_initial_noise_spectrum_from_unaligned_images."
+    )
