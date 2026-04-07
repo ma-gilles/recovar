@@ -2,22 +2,44 @@
 
 ## RELION Volume Convention (READ THIS FIRST)
 
-recovar and RELION use different 3D coordinate frames:
+recovar and RELION use different 3D coordinate frames for real-space
+volumes:
 ```python
 vol_recovar = -np.transpose(vol_relion, (2, 1, 0))   # negate + swap X↔Z
 ```
 
-When loading RELION volumes for comparison:
+**Pinned by tests/unit/test_relion_volume_convention.py — do NOT remove
+these helpers without updating that test.**
+
+### Canonical helpers (in `recovar/utils/helpers.py`)
+- `load_mrc(path)` / `write_mrc(path, vol)` — for **recovar / cryosparc /
+  cryoDRGN** MRCs. Round-trip safe.
+- `load_relion_volume(path)` — load a **RELION** MRC and return it
+  already in recovar's frame. **Use this when comparing RELION outputs
+  against recovar outputs.**
+- `relion_volume_to_recovar(vol)` / `recovar_volume_to_relion(vol)` —
+  explicit frame conversion (the operation is its own inverse).
+- `R_to_relion(R)` / `R_from_relion(euler)` — rotation Euler conversion.
+  These are **CORRECT and intentionally paired with the volume
+  transpose**. The negation in the volume convention cancels out at the
+  projection step. Do NOT "fix" them. See issue #86.
+
+### One-liner for FSC against a RELION reference
 ```python
-from recovar.utils.helpers import relion_volume_to_recovar
-import mrcfile
-with mrcfile.open("relion_output.mrc") as m:
-    vol = relion_volume_to_recovar(m.data.copy())
+from recovar.utils.helpers import load_relion_volume, load_mrc
+relion_ref = load_relion_volume("relion_output/run_class001.mrc")
+recovar_vol = load_mrc("recovar_output/final_merged.mrc")
+# both are now in the same frame; FSC is meaningful
 ```
 
-`R_to_relion` / `R_from_relion` are CORRECT and produce RELION-compatible
-STAR files. Do NOT change them — the Euler convention is paired with the
-volume transpose. See issue #86.
+### History
+The helpers were added in commit `7df73fa` (2026-04-01 11:00) and
+removed in commit `4703c634` (2026-04-01 12:08, "revert helpers.py to
+clean origin/dev state") **without updating this guide**. The result was
+a year of intermittent confusion: every maintainer who tried to follow
+this guide hit `ImportError` and gave up. Restored by commit on
+2026-04-07 along with `tests/unit/test_relion_volume_convention.py` to
+prevent the same drift.
 
 ## Active Development Plan
 
