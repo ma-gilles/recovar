@@ -1480,7 +1480,7 @@ def _refine_relion_mode(
     # This gives current_size=30 instead of 26 at iter 2, providing ~450
     # scoring pixels vs ~280, which prevents the chi^2 from being too
     # discriminative and causing posterior collapse.
-    relion_incr_size = 12
+    relion_incr_size = 10
     relion_has_high_fsc_at_limit = False
     global_direction_prior = None
     global_direction_prior_order = None
@@ -2018,7 +2018,7 @@ def _refine_relion_mode(
                 kernel="triangular",
                 use_spherical_mask=True, grid_correct=True,
                 gridding_correct="square",
-                tau2_fudge=0.25,
+                tau2_fudge=1.0,
             ).reshape(-1)
             hard_assignments[k] = ha_k
             max_posterior_per_half[k] = np.asarray(
@@ -2230,7 +2230,7 @@ def _refine_relion_mode(
             volume_shape,
             mean_variance,
             padding_factor=PADDING_FACTOR,
-            tau2_fudge=0.25,
+            tau2_fudge=1.0,
         )
         mean_variance = mean_signal_variance
 
