@@ -322,6 +322,61 @@ export function getJobSbatchScript(id: string): Promise<SbatchScript> {
   return request(`/jobs/${id}/sbatch-script`);
 }
 
+// --- Masks ---
+
+export interface MaskParams {
+  source_path: string;
+  threshold?: number | null;
+  lowpass_sigma?: number | null;
+  extend?: number | null;
+  soft_edge: number;
+  cleanup: boolean;
+}
+
+export interface MaskInfo {
+  name: string;
+  path: string;
+  size_bytes: number;
+  modified: string;
+}
+
+export interface SaveMaskRequest extends MaskParams {
+  project_id: string;
+  output_name: string;
+}
+
+/**
+ * Build a URL for the mask preview endpoint. Uses POST so we cannot
+ * use a plain <img src=...>. Returns a fetch helper that resolves to
+ * an object URL the caller can drop into <img>.
+ */
+export async function previewMask(
+  params: MaskParams & { axis?: 0 | 1 | 2; idx?: number | null }
+): Promise<{ url: string; coverage: number; shape: number[] }> {
+  const resp = await fetch(`${BASE}/masks/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!resp.ok) {
+    throw new ApiError(resp.status, await resp.text());
+  }
+  const blob = await resp.blob();
+  const url = URL.createObjectURL(blob);
+  const coverage = parseFloat(resp.headers.get("X-Mask-Coverage") ?? "0");
+  const shapeStr = resp.headers.get("X-Volume-Shape") ?? "";
+  const shape = shapeStr ? shapeStr.split(",").map((n) => parseInt(n, 10)) : [];
+  return { url, coverage, shape };
+}
+
+export function saveMask(req: SaveMaskRequest): Promise<MaskInfo> {
+  return request(`/masks/save`, { method: "POST", body: JSON.stringify(req) });
+}
+
+export function listProjectMasks(projectId: string): Promise<MaskInfo[]> {
+  return request(`/masks/by-project/${projectId}`);
+}
+
 // --- Charts ---
 
 export interface ChartData {

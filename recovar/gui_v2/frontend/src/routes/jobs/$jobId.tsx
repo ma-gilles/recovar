@@ -18,6 +18,7 @@ import {
   RefreshCw,
   ZoomIn,
   Pin,
+  Wand2,
 } from "lucide-react";
 import { clsx } from "clsx";
 import {
@@ -40,6 +41,7 @@ import {
 import Plot from "react-plotly.js";
 import { useProject } from "../../lib/project-context";
 import { VolumeViewer, type PinnedVolume } from "../../components/volume-viewer/VolumeViewer";
+import { MaskWizard } from "../../components/mask-wizard/MaskWizard";
 import { MAX_PINNED_VOLUMES } from "../../lib/constants";
 import { StatusBadge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -454,6 +456,7 @@ function VolumeCategoryGroup({
   onPin,
   onUnpin,
   pinDisabled,
+  onMakeMask,
 }: {
   cat: string;
   vols: VolumeEntry[];
@@ -465,6 +468,7 @@ function VolumeCategoryGroup({
   onPin?: (path: string, name: string) => void;
   onUnpin?: (path: string) => void;
   pinDisabled?: boolean;
+  onMakeMask?: (path: string, name: string) => void;
 }): React.JSX.Element {
   const [open, setOpen] = useState(!defaultCollapsed);
 
@@ -531,6 +535,19 @@ function VolumeCategoryGroup({
                     <Pin className="h-3 w-3" />
                   </button>
                 )}
+                {onMakeMask && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onMakeMask(v.path, v.name);
+                    }}
+                    className="shrink-0 text-zinc-600 hover:text-emerald-300"
+                    aria-label={`Create mask from ${displayName}`}
+                    title="Create mask from this volume"
+                  >
+                    <Wand2 className="h-3 w-3" />
+                  </button>
+                )}
               </div>
             );
           })}
@@ -540,10 +557,11 @@ function VolumeCategoryGroup({
   );
 }
 
-function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
+function VolumesTab({ jobId, projectId }: { jobId: string; projectId: string }): React.JSX.Element {
   const [selectedVolume, setSelectedVolume] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
   const [pinnedVolumes, setPinnedVolumes] = useState<PinnedVolume[]>([]);
+  const [maskSource, setMaskSource] = useState<{ path: string; name: string } | null>(null);
   const { data: volumes, isLoading } = useQuery<VolumeEntry[]>({
     queryKey: ["job-volumes", jobId],
     queryFn: () => getJobVolumes(jobId),
@@ -669,9 +687,18 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
             onPin={handlePin}
             onUnpin={handleUnpin}
             pinDisabled={pinnedVolumes.length >= MAX_PINNED_VOLUMES}
+            onMakeMask={(path, name) => setMaskSource({ path, name })}
           />
         ))}
       </div>
+
+      <MaskWizard
+        open={maskSource !== null}
+        onClose={() => setMaskSource(null)}
+        sourcePath={maskSource?.path ?? ""}
+        sourceName={maskSource?.name ?? ""}
+        projectId={projectId}
+      />
     </div>
   );
 }
@@ -1071,7 +1098,7 @@ export function JobDetailPage(): React.JSX.Element {
           <LogViewer jobId={jobId} jobStatus={job.status} onStatusChange={handleStatusChange} />
         )}
         {activeTab === "params" && <ParamsTab job={job} />}
-        {activeTab === "volumes" && <VolumesTab jobId={jobId} />}
+        {activeTab === "volumes" && <VolumesTab jobId={jobId} projectId={job.project_id} />}
         {activeTab === "plots" && <PlotsTab jobId={jobId} />}
       </div>
     </div>
