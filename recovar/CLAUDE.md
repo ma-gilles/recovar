@@ -1,5 +1,28 @@
 # RECOVAR Source Code Conventions
 
+## ⚠ READ FIRST: subdirectory developer guides
+
+The recovar repo has critical conventions documented in subdirectory
+`CLAUDE.md` files. Claude Code only loads them lazily (on file read), so
+import them all at startup to make sure they're always in context:
+
+@em/CLAUDE.md
+@cuda/CLAUDE.md
+@gui_v2/CLAUDE.md
+
+(`tests/CLAUDE.md` is loaded by the parent project as well.)
+
+The most commonly missed convention is the **RELION ↔ recovar volume axis
+flip** (negate + transpose(2,1,0)) — see `recovar/em/CLAUDE.md`. The
+canonical helpers are in `recovar/utils/helpers.py`:
+- `load_mrc(path)` / `write_mrc(path, vol)` — cryosparc/cryoDRGN frame
+- `load_relion_volume(path)` — converts on load to recovar's frame
+- `relion_volume_to_recovar(vol)` / `recovar_volume_to_relion(vol)` — explicit conversion
+- `R_to_relion(R)` / `R_from_relion(euler)` — rotation Euler conversion
+
+`tests/unit/test_relion_volume_convention.py` pins these helpers so they
+cannot be silently removed.
+
 ## JAX / Equinox Patterns
 
 ### Static vs Dynamic
