@@ -205,3 +205,84 @@ def test_pipeline_with_outliers_uses_original_particle_ids_between_rounds(tmp_pa
         np.testing.assert_array_equal(pickle.load(f), combined_particles_round_1)
     with open(tmp_path / "pipeline" / "round_2" / "particle_inliers_round_1.pkl", "rb") as f:
         np.testing.assert_array_equal(pickle.load(f), combined_particles_round_1)
+
+
+def test_pipeline_with_outliers_preserves_initial_subset_index_space_between_rounds(tmp_path, monkeypatch):
+    args = _make_args(tmp_path, tilt_series=True)
+    initial_images = np.array([100, 110, 120, 130], dtype=np.int32)
+    initial_particles = np.array([7, 11, 13], dtype=np.int32)
+    initial_ind = tmp_path / "initial_ind.pkl"
+    initial_tilt_ind = tmp_path / "initial_particle_ind.pkl"
+    with open(initial_ind, "wb") as f:
+        pickle.dump(initial_images, f)
+    with open(initial_tilt_ind, "wb") as f:
+        pickle.dump(initial_particles, f)
+    args.ind = str(initial_ind)
+    args.tilt_ind = str(initial_tilt_ind)
+
+    combined_images_round_1 = np.array([110, 120], dtype=np.int32)
+    combined_particles_round_1 = np.array([11], dtype=np.int32)
+    combined_images_round_2 = np.array([120], dtype=np.int32)
+    combined_particles_round_2 = np.array([11], dtype=np.int32)
+
+    monkeypatch.setattr(pipeline_with_outliers, "add_args", lambda parser: None)
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
+    monkeypatch.setattr(pipeline_with_outliers.output, "mkdir_safe", os.makedirs)
+    monkeypatch.setattr(pipeline_with_outliers.output, "PipelineOutput", lambda outdir: _FakePO())
+    monkeypatch.setattr(
+        pipeline_with_outliers.output,
+        "standard_pipeline_plots",
+        lambda *unused, **unused_kwargs: None,
+    )
+
+    def fake_standard_recovar_pipeline(pipeline_args):
+        _write_round_artifacts(tmp_path / "pipeline" / f"round_{len(created_rounds) + 1}")
+        if len(created_rounds) == 0:
+            with open(pipeline_args.ind, "rb") as f:
+                np.testing.assert_array_equal(pickle.load(f), initial_images)
+            with open(pipeline_args.tilt_ind, "rb") as f:
+                np.testing.assert_array_equal(pickle.load(f), initial_particles)
+        else:
+            with open(pipeline_args.ind, "rb") as f:
+                np.testing.assert_array_equal(pickle.load(f), combined_images_round_1)
+            with open(pipeline_args.tilt_ind, "rb") as f:
+                np.testing.assert_array_equal(pickle.load(f), combined_particles_round_1)
+        created_rounds.append(pipeline_args.outdir)
+
+    def fake_outlier_main():
+        round_outdir = tmp_path / "pipeline" / f"round_{len(outlier_rounds) + 1}"
+        combined_dir = round_outdir / "outlier_detection" / "data" / "combined_results"
+        combined_dir.mkdir(parents=True, exist_ok=True)
+        image_ids = combined_images_round_1 if not outlier_rounds else combined_images_round_2
+        particle_ids = combined_particles_round_1 if not outlier_rounds else combined_particles_round_2
+        with open(combined_dir / "combined_image_inliers_4.pkl", "wb") as f:
+            pickle.dump(image_ids, f)
+        with open(combined_dir / "combined_image_outliers_4.pkl", "wb") as f:
+            pickle.dump(np.array([], dtype=np.int32), f)
+        with open(combined_dir / "combined_particle_inliers_4.pkl", "wb") as f:
+            pickle.dump(particle_ids, f)
+        with open(combined_dir / "combined_particle_outliers_4.pkl", "wb") as f:
+            pickle.dump(np.array([], dtype=np.int32), f)
+        outlier_rounds.append(str(round_outdir))
+
+    created_rounds = []
+    outlier_rounds = []
+    monkeypatch.setattr(
+        pipeline_with_outliers,
+        "standard_recovar_pipeline",
+        fake_standard_recovar_pipeline,
+    )
+    import recovar.commands.outlier_detection as outlier_detection
+
+    monkeypatch.setattr(outlier_detection, "main", fake_outlier_main)
+
+    pipeline_with_outliers._run_pipeline_with_outlier_removal_impl(args)
+
+    with open(tmp_path / "pipeline" / "inliers_round_1.pkl", "rb") as f:
+        np.testing.assert_array_equal(pickle.load(f), combined_images_round_1)
+    with open(tmp_path / "pipeline" / "particle_inliers_round_1.pkl", "rb") as f:
+        np.testing.assert_array_equal(pickle.load(f), combined_particles_round_1)
+    with open(tmp_path / "pipeline" / "round_2" / "inliers_round_1.pkl", "rb") as f:
+        np.testing.assert_array_equal(pickle.load(f), combined_images_round_1)
+    with open(tmp_path / "pipeline" / "round_2" / "particle_inliers_round_1.pkl", "rb") as f:
+        np.testing.assert_array_equal(pickle.load(f), combined_particles_round_1)

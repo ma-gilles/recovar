@@ -13,8 +13,9 @@ import fcntl
 import json
 import logging
 import os
+import re
 from contextlib import contextmanager
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 from recovar.project.registry import JOB_TYPES, get_job_type
 
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 PROJECT_FILE = "project.json"
 LOCK_FILE = ".project.lock"
 PROJECT_VERSION = "1.0"
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
 
 def _get_recovar_version():
@@ -48,6 +50,147 @@ def find_project_root(start_dir: Optional[str] = None) -> Optional[str]:
             break
         d = parent
     return None
+
+
+def normalize_job_alias(value: str) -> str:
+    """Normalize a user- or system-provided job label for CLI/UI use."""
+    text = _NON_ALNUM_RE.sub("_", str(value).strip().lower())
+    text = re.sub(r"_+", "_", text).strip("_")
+    return text or "job"
+
+
+def uniquify_job_alias(alias: str, existing: set[str]) -> str:
+    """Return *alias* or a numbered variant that is unique within *existing*."""
+    if alias not in existing:
+        return alias
+
+    suffix = 2
+    while True:
+        candidate = f"{alias}_{suffix}"
+        if candidate not in existing:
+            return candidate
+        suffix += 1
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value in (None, "", False):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _basename_stem(path: Any) -> str | None:
+    if not path:
+        return None
+    stem = os.path.splitext(os.path.basename(str(path)))[0]
+    alias = normalize_job_alias(stem)
+    return alias if alias != "job" else None
+
+
+def default_job_alias(command_name: str, params: Mapping[str, Any] | None = None) -> str:
+    """Generate a readable default alias for a recovar job."""
+    params = params or {}
+    explicit = params.get("output_name")
+    if explicit:
+        return normalize_job_alias(str(explicit))
+
+    command = str(command_name).strip().lower()
+
+    if command == "pipeline":
+        particle_stem = _basename_stem(params.get("particles"))
+        downsample = _coerce_int(params.get("downsample"))
+        if particle_stem and downsample:
+            return f"{particle_stem}_d{downsample}"
+        if particle_stem:
+            return particle_stem
+        return "pipeline"
+
+    if command == "analyze":
+        zdim = _coerce_int(params.get("zdim"))
+        return f"embedding_k{zdim}" if zdim else "embedding"
+
+    if command == "compute_state":
+        zdim = _coerce_int(params.get("zdim"))
+        return f"compute_state_k{zdim}" if zdim else "compute_state"
+
+    if command == "compute_trajectory":
+        zdim = _coerce_int(params.get("zdim"))
+        return f"trajectory_k{zdim}" if zdim else "trajectory"
+
+    if command == "estimate_conformational_density":
+        zdim = _coerce_int(params.get("z_dim_used")) or _coerce_int(params.get("pca_dim"))
+        return f"density_k{zdim}" if zdim else "density"
+
+    if command == "estimate_stable_states":
+        return "stable_states"
+
+    if command == "junk_particle_detection":
+        zdim = _coerce_int(params.get("zdim"))
+        return f"junk_detection_k{zdim}" if zdim else "junk_detection"
+
+    if command == "outlier_detection":
+        return "outlier_detection"
+
+    if command == "postprocess":
+        input_stem = _basename_stem(params.get("input"))
+        return f"postprocess_{input_stem}" if input_stem else "postprocess"
+
+    if command == "downsample":
+        target_d = _coerce_int(params.get("target_D"))
+        particle_stem = _basename_stem(params.get("particles"))
+        if particle_stem and target_d:
+            return f"{particle_stem}_d{target_d}"
+        if target_d:
+            return f"downsample_d{target_d}"
+        return "downsample"
+
+    if command == "pipeline_with_outliers":
+        return "pipeline_with_outliers"
+
+    if command == "reconstruct_from_external_embedding":
+        return "external_reconstruction"
+
+    return normalize_job_alias(command.replace("-", "_"))
+
+
+def infer_job_display_name(
+    type_name: str,
+    params: Mapping[str, Any] | None = None,
+    output_dir: str | None = None,
+    alias: str | None = None,
+) -> str:
+    """Return the best available human-readable label for a job."""
+    if alias:
+        return alias
+
+    type_to_command = {
+        "Pipeline": "pipeline",
+        "Analyze": "analyze",
+        "ComputeState": "compute_state",
+        "ReconstructState": "compute_state",
+        "ComputeTrajectory": "compute_trajectory",
+        "ReconstructTrajectory": "compute_trajectory",
+        "Density": "estimate_conformational_density",
+        "StableStates": "estimate_stable_states",
+        "JunkDetection": "junk_particle_detection",
+        "OutlierDetection": "outlier_detection",
+        "Postprocess": "postprocess",
+        "Downsample": "downsample",
+        "PipelineWithOutliers": "pipeline_with_outliers",
+        "ReconstructExternal": "reconstruct_from_external_embedding",
+    }
+    command_name = type_to_command.get(type_name, type_name)
+    display = default_job_alias(command_name, params)
+    if display and display != "job":
+        return display
+
+    if output_dir:
+        tail = os.path.basename(os.path.normpath(output_dir))
+        if tail:
+            return tail
+    return normalize_job_alias(type_name)
 
 
 class RecovarProject:
@@ -94,6 +237,7 @@ class RecovarProject:
             "recovar_version": _get_recovar_version(),
             "counters": {},
             "jobs": [],
+            "aliases": {},
         }
         with open(proj_file, "w") as f:
             json.dump(data, f, indent=2)
@@ -131,6 +275,7 @@ class RecovarProject:
                 "recovar_version": _get_recovar_version(),
                 "counters": {},
                 "jobs": [],
+                "aliases": {},
             }
         with open(self._project_file) as f:
             return json.load(f)
@@ -174,7 +319,13 @@ class RecovarProject:
     # ------------------------------------------------------------------
 
     def register_job_start(
-        self, uid: str, command_name: str, command_line: str = "", parent_jobs: Optional[list] = None
+        self,
+        uid: str,
+        command_name: str,
+        command_line: str = "",
+        parent_jobs: Optional[list] = None,
+        alias: Optional[str] = None,
+        description: str = "",
     ):
         """Add a job entry to project.json with status=running."""
         entry = {
@@ -185,15 +336,24 @@ class RecovarProject:
             "completed": None,
             "parent_jobs": parent_jobs or [],
             "alias": None,
-            "description": "",
+            "description": description,
         }
         with self._lock():
             data = self._read()
-            jobs = data.setdefault("jobs", [])
-            # Remove any existing entry for this uid (e.g. from a crashed restart)
-            jobs = [j for j in jobs if j.get("uid") != uid]
+            jobs = [j for j in data.setdefault("jobs", []) if j.get("uid") != uid]
+            aliases = {
+                name: target
+                for name, target in data.setdefault("aliases", {}).items()
+                if target != uid
+            }
+            existing_aliases = {j.get("alias") for j in jobs if j.get("alias")}
+            if alias:
+                alias = uniquify_job_alias(normalize_job_alias(alias), existing_aliases)
+                entry["alias"] = alias
+                aliases[alias] = uid
             jobs.append(entry)
             data["jobs"] = jobs
+            data["aliases"] = aliases
             self._write(data)
 
     def register_job_complete(self, uid: str, status: str = "completed"):
@@ -237,6 +397,30 @@ class RecovarProject:
         """Return the absolute path for a job uid."""
         return os.path.join(self.root, uid)
 
+    def get_job_alias_map(self) -> dict[str, str]:
+        """Return a mapping of job uid -> alias for jobs that define one."""
+        with self._lock():
+            data = self._read()
+        return {job["uid"]: job["alias"] for job in data.get("jobs", []) if job.get("alias")}
+
+    def infer_uid_from_job_dir(self, job_dir: str, expected_command: Optional[str] = None) -> Optional[str]:
+        """Infer a project job uid from an on-disk job directory path."""
+        abs_job_dir = os.path.abspath(job_dir)
+        try:
+            rel = os.path.relpath(abs_job_dir, self.root)
+        except ValueError:
+            return None
+        if rel.startswith(".."):
+            return None
+        parts = rel.split(os.sep)
+        if len(parts) < 2 or not parts[1].startswith("job_"):
+            return None
+        if expected_command is not None:
+            jt = get_job_type(expected_command)
+            if jt is not None and parts[0] != jt.dir_name:
+                return None
+        return f"{parts[0]}/{parts[1]}"
+
     def resolve_pipeline(self, result_dir_arg: Optional[str] = None) -> str:
         """Resolve a pipeline directory from a CLI argument.
 
@@ -257,6 +441,18 @@ class RecovarProject:
             candidate2 = os.path.join(self.root, "Pipeline", result_dir_arg)
             if os.path.isdir(candidate2):
                 return candidate2
+
+            # Project alias (e.g. "ribosome_d128")
+            with self._lock():
+                aliases = self._read().get("aliases", {})
+            alias_target = aliases.get(result_dir_arg)
+            if alias_target is None and os.sep not in result_dir_arg:
+                alias_target = aliases.get(normalize_job_alias(result_dir_arg))
+            if alias_target:
+                candidate3 = self.get_job_dir(alias_target)
+                if os.path.isdir(candidate3):
+                    return candidate3
+
             # Fall back to treating as absolute
             return os.path.abspath(result_dir_arg)
 

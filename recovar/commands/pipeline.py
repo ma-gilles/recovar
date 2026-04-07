@@ -37,9 +37,10 @@ def add_args(parser: argparse.ArgumentParser):
         type=os.path.abspath,
         help="Output directory to save model. Required unless --project is used.",
     )
-    from recovar.utils.parser_args import add_project_arg
+    from recovar.utils.parser_args import add_output_name_arg, add_project_arg
 
     add_project_arg(parser)
+    add_output_name_arg(parser)
     parser.add_argument(
         "--mask",
         metavar="mrc",
@@ -763,29 +764,54 @@ def standard_recovar_pipeline(args):
 
     # --- Auto pre-downsample to disk if requested ---
     if getattr(args, "downsample", None) is not None:
-        from recovar.commands.downsample import downsample_to_disk
+        from recovar.commands.downsample import (
+            build_project_downsample_cache_dir,
+            downsample_cache_lock,
+            downsample_to_disk,
+            write_downsample_cache_metadata,
+        )
 
         # Save original values for metadata before swapping
         args._original_particles = args.particles
         args._downsample_applied = args.downsample
 
-        ds_dir = os.path.join(args.outdir, "downsampled")
-        ds_mrcs = os.path.join(ds_dir, f"particles.{args.downsample}.mrcs")
-
-        if os.path.exists(ds_mrcs):
-            logger.info("Using cached downsampled images: %s", ds_mrcs)
-        else:
-            logger.info("Pre-downsampling images to D=%d ...", args.downsample)
-            downsample_to_disk(
+        project_root = getattr(args, "_project_root", None)
+        if project_root:
+            ds_dir = build_project_downsample_cache_dir(
+                project_root=project_root,
                 particles_file=args.particles,
                 target_D=args.downsample,
-                outdir=ds_dir,
                 datadir=getattr(args, "datadir", None) or "",
                 strip_prefix=getattr(args, "strip_prefix", None),
-                gpu_memory_gb=args.gpu_memory,
             )
+            logger.info("Using project downsample cache directory: %s", ds_dir)
+        else:
+            ds_dir = os.path.join(args.outdir, "downsampled")
 
+        ds_mrcs = os.path.join(ds_dir, f"particles.{args.downsample}.mrcs")
         ds_star = os.path.join(ds_dir, f"particles.{args.downsample}.star")
+
+        with downsample_cache_lock(ds_dir):
+            if os.path.exists(ds_mrcs) and os.path.exists(ds_star):
+                logger.info("Using cached downsampled images: %s", ds_mrcs)
+            else:
+                logger.info("Pre-downsampling images to D=%d ...", args.downsample)
+                downsample_to_disk(
+                    particles_file=args.particles,
+                    target_D=args.downsample,
+                    outdir=ds_dir,
+                    datadir=getattr(args, "datadir", None) or "",
+                    strip_prefix=getattr(args, "strip_prefix", None),
+                    gpu_memory_gb=args.gpu_memory,
+                )
+                if project_root:
+                    write_downsample_cache_metadata(
+                        ds_dir=ds_dir,
+                        particles_file=args._original_particles,
+                        target_D=args._downsample_applied,
+                        datadir=getattr(args, "datadir", None) or "",
+                        strip_prefix=getattr(args, "strip_prefix", None),
+                    )
 
         # Swap to downsampled data (STAR has full metadata for both CS and STAR input)
         args.particles = ds_star

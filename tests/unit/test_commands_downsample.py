@@ -60,6 +60,42 @@ def test_get_pixel_size_returns_none_for_mrc_with_zero_voxel_size(tmp_path):
     assert ds_cmd._get_pixel_size(str(mrc_path)) is None
 
 
+def test_build_project_downsample_cache_dir_is_stable(tmp_path):
+    cache_dir = ds_cmd.build_project_downsample_cache_dir(
+        project_root=str(tmp_path / "project"),
+        particles_file=str(tmp_path / "Particles" / "ribosome.star"),
+        target_D=128,
+        datadir=str(tmp_path / "data"),
+        strip_prefix="Extract/job001",
+    )
+    assert cache_dir.endswith("Cache/downsample/ribosome_d128_" + cache_dir.split("_")[-1])
+    cache_dir_2 = ds_cmd.build_project_downsample_cache_dir(
+        project_root=str(tmp_path / "project"),
+        particles_file=str(tmp_path / "Particles" / "ribosome.star"),
+        target_D=128,
+        datadir=str(tmp_path / "data"),
+        strip_prefix="Extract/job001",
+    )
+    assert cache_dir == cache_dir_2
+
+
+def test_write_downsample_cache_metadata_creates_manifest(tmp_path):
+    ds_dir = tmp_path / "Cache" / "downsample" / "ribosome_d128"
+    ds_dir.mkdir(parents=True)
+    ds_cmd.write_downsample_cache_metadata(
+        ds_dir=str(ds_dir),
+        particles_file=str(tmp_path / "particles.star"),
+        target_D=128,
+        datadir=str(tmp_path / "data"),
+        strip_prefix="Extract/job001",
+    )
+    manifest = ds_dir / "cache.json"
+    assert manifest.exists()
+    payload = __import__("json").loads(manifest.read_text())
+    assert payload["target_D"] == 128
+    assert payload["strip_prefix"] == "Extract/job001"
+
+
 # ---------------------------------------------------------------------------
 # downsample_to_disk – input validation
 # ---------------------------------------------------------------------------

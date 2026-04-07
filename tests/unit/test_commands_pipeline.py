@@ -48,6 +48,11 @@ def test_pipeline_registers_zdim():
     assert "--zdim" in actions
 
 
+def test_pipeline_registers_output_name():
+    actions = _parser_with_pipeline_args()._option_string_actions
+    assert "--output-name" in actions
+
+
 def test_pipeline_zdim_default_is_list():
     """Default zdim must be a list (multiple resolutions are trained)."""
     parser = _parser_with_pipeline_args()
@@ -197,16 +202,29 @@ def test_standard_pipeline_passes_gpu_limit_to_predownsample(monkeypatch, tmp_pa
     captured = {}
 
     monkeypatch.setattr(pipeline_cmd, "_resolve_downsample", lambda _args: None)
+    monkeypatch.setattr(pipeline_cmd.utils, "jax_has_gpu", lambda: True)
     monkeypatch.setattr(
         pipeline_cmd.utils,
         "set_gpu_memory_limit",
         lambda value: captured.setdefault("limits", []).append(value),
     )
     monkeypatch.setattr(pipeline_cmd.os.path, "exists", lambda _path: False)
+    class _NoopLock:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
     monkeypatch.setitem(
         sys.modules,
         "recovar.commands.downsample",
-        SimpleNamespace(downsample_to_disk=lambda **kwargs: captured.setdefault("downsample_kwargs", kwargs)),
+        SimpleNamespace(
+            build_project_downsample_cache_dir=lambda **kwargs: str(tmp_path / "Cache" / "downsample" / "particles_d128"),
+            downsample_cache_lock=lambda _path: _NoopLock(),
+            downsample_to_disk=lambda **kwargs: captured.setdefault("downsample_kwargs", kwargs),
+            write_downsample_cache_metadata=lambda **kwargs: captured.setdefault("cache_metadata", kwargs),
+        ),
     )
     monkeypatch.setattr(
         pipeline_cmd.halfsets,
@@ -240,3 +258,70 @@ def test_standard_pipeline_passes_gpu_limit_to_predownsample(monkeypatch, tmp_pa
 
     assert captured["limits"] == [12.0]
     assert captured["downsample_kwargs"]["gpu_memory_gb"] == 12.0
+
+
+
+def test_standard_pipeline_uses_project_downsample_cache(monkeypatch, tmp_path):
+    captured = {}
+
+    monkeypatch.setattr(pipeline_cmd, "_resolve_downsample", lambda _args: None)
+    monkeypatch.setattr(pipeline_cmd.utils, "jax_has_gpu", lambda: True)
+    monkeypatch.setattr(pipeline_cmd.utils, "set_gpu_memory_limit", lambda value: None)
+
+    cache_dir = tmp_path / "project" / "Cache" / "downsample" / "particles_d128"
+    cache_dir.mkdir(parents=True)
+    (cache_dir / "particles.128.mrcs").touch()
+    (cache_dir / "particles.128.star").touch()
+
+    class _NoopLock:
+        def __enter__(self):
+            captured["locked"] = True
+            return None
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setitem(
+        sys.modules,
+        "recovar.commands.downsample",
+        SimpleNamespace(
+            build_project_downsample_cache_dir=lambda **kwargs: captured.setdefault("cache_dir", str(cache_dir)),
+            downsample_cache_lock=lambda _path: _NoopLock(),
+            downsample_to_disk=lambda **kwargs: (_ for _ in ()).throw(AssertionError("should reuse cached downsample outputs")),
+            write_downsample_cache_metadata=lambda **kwargs: captured.setdefault("cache_metadata", kwargs),
+        ),
+    )
+    monkeypatch.setattr(
+        pipeline_cmd.halfsets,
+        "resolve_halfset_indices",
+        lambda _args: (_ for _ in ()).throw(RuntimeError("stop-after-cache-hit")),
+    )
+
+    args = SimpleNamespace(
+        outdir=str(tmp_path / "project" / "Pipeline" / "job_0001"),
+        particles="particles.star",
+        poses="poses.pkl",
+        ctf="ctf.pkl",
+        mask="mask.mrc",
+        datadir=None,
+        strip_prefix=None,
+        downsample=128,
+        accept_cpu=False,
+        tilt_series=False,
+        tilt_series_ctf=None,
+        dose_per_tilt=None,
+        angle_per_tilt=None,
+        do_over_with_contrast=False,
+        correct_contrast=False,
+        lazy=True,
+        gpu_memory=12.0,
+        noise_model="radial",
+        _project_root=str(tmp_path / "project"),
+    )
+
+    with pytest.raises(RuntimeError, match="stop-after-cache-hit"):
+        pipeline_cmd.standard_recovar_pipeline(args)
+
+    assert captured["locked"] is True
+    assert args.particles.endswith("particles.128.star")
+    assert args.downsample is None

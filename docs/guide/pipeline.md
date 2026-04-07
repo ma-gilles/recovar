@@ -8,18 +8,22 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 ## Basic usage
 
 ```bash
-# RELION star file
-recovar pipeline particles.star -o output --mask mask.mrc
+# Recommended: run inside a project
+recovar init_project my_project
+cd my_project
+recovar pipeline particles.star --mask mask.mrc --project .
 
 # cryoSPARC cs file
-recovar pipeline particles.cs -o output --mask mask.mrc --datadir /project/
+recovar pipeline particles.cs --mask mask.mrc --datadir /project/ --project .
 
 # With downsampling
-recovar pipeline particles.star -o output --mask mask.mrc --downsample 128
+recovar pipeline particles.star --mask mask.mrc --downsample 128 --project .
+
+# Standalone explicit output directory (still supported)
+recovar pipeline particles.star -o output --mask mask.mrc
 
 # Legacy pickle files
-recovar pipeline particles.128.mrcs -o output \
-    --poses poses.pkl --ctf ctf.pkl --mask mask.mrc
+recovar pipeline particles.128.mrcs -o output     --poses poses.pkl --ctf ctf.pkl --mask mask.mrc
 ```
 
 ## Required arguments
@@ -27,7 +31,7 @@ recovar pipeline particles.128.mrcs -o output \
 | Argument | Description |
 |----------|-------------|
 | `particles` | Input particles (`.star`, `.cs`, `.mrcs`, or `.txt`) |
-| `-o`, `--outdir` | Output directory |
+| `-o`, `--outdir` | Output directory (optional in project mode) |
 | `--mask` | Solvent mask (`.mrc`), or `from_halfmaps`, `sphere`, `none` |
 
 ## Common options
@@ -143,7 +147,7 @@ output/
   analysis_*/              # Results per zdim (after running analyze)
 ```
 
-When using the **project system** (`--project`), pipeline output is placed into auto-numbered directories like `Pipeline/job_0001/`.
+When using the **project system** (`--project`), pipeline output is placed into auto-numbered directories like `Pipeline/job_0001/`. The numbered directories stay stable on disk, while RECOVAR records human-readable job names in project metadata for the CLI and GUI.
 
 ## Example output
 

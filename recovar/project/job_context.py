@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from recovar.output.job import JobDir
-from recovar.project.project import RecovarProject, find_project_root
+from recovar.project.project import RecovarProject, default_job_alias, find_project_root
 from recovar.project.registry import get_job_type
 
 logger = logging.getLogger(__name__)
@@ -124,10 +124,12 @@ def job_context(args, command_name: str):
         # Explicit output dir (standalone or project override)
         ctx.output_dir = os.path.abspath(outdir)
         if project is not None:
-            # Still register in project even with explicit -o
-            uid, _ = project.allocate_job(command_name)
-            ctx.uid = uid
-            # But use the user's explicit path
+            # Reuse a preallocated project job dir when one is provided (GUI path),
+            # otherwise allocate a bookkeeping uid for this run.
+            ctx.uid = project.infer_uid_from_job_dir(ctx.output_dir, expected_command=command_name)
+            if ctx.uid is None:
+                uid, _ = project.allocate_job(command_name)
+                ctx.uid = uid
     elif result_dir is not None:
         # No project, no explicit outdir — auto-generate inside result_dir
         ctx.output_dir = os.path.join(os.path.abspath(result_dir), jt.dir_name if jt else command_name)
@@ -139,11 +141,16 @@ def job_context(args, command_name: str):
         )
 
     # --- Resolve pipeline directory ---
-    if jt and jt.needs_pipeline and result_dir is not None:
+    if jt and jt.needs_pipeline:
         if project is not None:
             ctx.pipeline_dir = project.resolve_pipeline(result_dir)
-        else:
+        elif result_dir is not None:
             ctx.pipeline_dir = os.path.abspath(result_dir)
+        else:
+            raise ValueError(
+                "No pipeline result directory specified. Pass result_dir explicitly, "
+                "or use --project from within a project with a completed Pipeline job."
+            )
     elif result_dir is not None:
         ctx.pipeline_dir = os.path.abspath(result_dir)
 
@@ -154,6 +161,10 @@ def job_context(args, command_name: str):
             ctx.parent_jobs = [parent_uid]
 
     # --- Create JobDir and start ---
+    setattr(args, "_project_root", project.root if project is not None else None)
+    setattr(args, "_project_uid", ctx.uid)
+    setattr(args, "_resolved_pipeline_dir", ctx.pipeline_dir)
+
     job = JobDir(ctx.output_dir, command_name)
     ctx.job = job
     job._parent_result_dir = ctx.pipeline_dir
@@ -168,6 +179,7 @@ def job_context(args, command_name: str):
             command_name,
             command_line="python " + " ".join(sys.argv),
             parent_jobs=ctx.parent_jobs,
+            alias=default_job_alias(command_name, vars(args)),
         )
 
     try:

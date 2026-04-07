@@ -4,29 +4,34 @@ If your images are larger than 256x256 pixels, downsampling significantly speeds
 
 ## Automatic downsampling (recommended)
 
-Use `--downsample D` with the pipeline:
+Use `--downsample D` with the pipeline inside a project:
 
 ```bash
-recovar pipeline particles.star -o output --mask mask.mrc --downsample 128
+recovar init_project my_project
+cd my_project
+recovar pipeline particles.star --mask mask.mrc --downsample 128 --project .
 ```
 
 The pipeline automatically:
 
-1. Pre-downsamples all images to disk (stored in `output/downsampled/`)
-2. Runs the pipeline on the downsampled images
-3. On re-runs with the same output directory, reuses the cached downsampled images
+1. Pre-downsamples all images to disk in the shared project cache (`Cache/downsample/...`)
+2. Runs the pipeline on the downsampled images in the numbered Pipeline job directory
+3. Reuses the cached downsampled images across matching project runs, instead of tying the cache to one output directory
 
-This is the simplest approach — one command handles everything.
+This is the simplest and recommended approach — one command handles everything.
 
 ## Manual pre-downsampling
 
-For maximum control or to reuse across multiple pipeline runs:
+For maximum control or to materialize a reusable downsampled dataset explicitly:
 
 ```bash
-# Downsample to 128x128
+# Project-style downsample job
+recovar downsample particles.star -D 128 --project . --output-name particles_d128
+
+# Or an explicit standalone output directory
 recovar downsample particles.star -D 128 -o downsampled/
 
-# Run pipeline on downsampled data
+# Run pipeline on the materialized downsampled data
 recovar pipeline downsampled/particles.128.star -o output --mask mask.mrc
 ```
 
@@ -35,7 +40,7 @@ recovar pipeline downsampled/particles.128.star -o output --mask mask.mrc
 | Flag | Description |
 |------|-------------|
 | `-D`, `--target-D` | Target box size (must be even) |
-| `-o`, `--outdir` | Output directory |
+| `-o`, `--outdir` | Output directory (optional in project mode; shared project cache is still used when available) |
 | `--datadir` | Base directory for image paths |
 | `--strip-prefix` | Strip prefix from paths |
 | `--batch-size` | Images per batch (default: 1000) |

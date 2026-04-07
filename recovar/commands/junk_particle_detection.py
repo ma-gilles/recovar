@@ -2730,9 +2730,10 @@ def add_args(parser):
         help="Save all detailed diagnostic plots and data files (default: only summary plot and essential indices)",
     )
 
-    from recovar.utils.parser_args import add_project_arg
+    from recovar.utils.parser_args import add_output_name_arg, add_project_arg
 
     add_project_arg(parser)
+    add_output_name_arg(parser)
 
     return parser
 

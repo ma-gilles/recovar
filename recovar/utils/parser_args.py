@@ -10,7 +10,18 @@ def add_project_arg(parser: argparse.ArgumentParser):
         help="Path to a recovar project directory (containing project.json). "
         "If omitted, auto-detects by walking up from the current directory. "
         "When a project is active, output directories are auto-generated "
-        "(e.g. ComputeState/job_0001/).",
+        "(e.g. ComputeState/job_0001/), and downstream commands default to the latest completed Pipeline job when result_dir is omitted.",
+    )
+    return parser
+
+
+def add_output_name_arg(parser: argparse.ArgumentParser):
+    """Add a human-readable project job label without changing the job dir name."""
+    parser.add_argument(
+        "--output-name",
+        default=None,
+        help="Human-readable job label stored in project metadata and shown in the GUI. "
+        "Does not change the on-disk job directory name.",
     )
     return parser
 
@@ -19,8 +30,11 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze=False):
 
     parser.add_argument(
         "result_dir",
+        nargs="?",
+        default=None,
         type=os.path.abspath,
-        help="Pipeline job directory (e.g. Pipeline/job_0001 or an absolute path).",
+        help="Pipeline job directory (e.g. Pipeline/job_0001 or an absolute path). "
+        "When omitted in project mode, the latest completed Pipeline job is used.",
     )
 
     parser.add_argument(
@@ -32,6 +46,7 @@ def standard_downstream_args(parser: argparse.ArgumentParser, analyze=False):
     )
 
     add_project_arg(parser)
+    add_output_name_arg(parser)
 
     parser.add_argument(
         "--Bfactor",

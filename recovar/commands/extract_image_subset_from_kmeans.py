@@ -57,9 +57,10 @@ def main():
         action="store_true",
         help="If provided, keep the images that correspond to kmeans centers that are not in list of kmeans indices",
     )
-    from recovar.utils.parser_args import add_project_arg
+    from recovar.utils.parser_args import add_output_name_arg, add_project_arg
 
     add_project_arg(parser)
+    add_output_name_arg(parser)
 
     args = parser.parse_args()
     # job_context checks for args.output; this parser uses output_path
