@@ -794,10 +794,15 @@ def estimate_initial_noise_spectrum_from_unaligned_images(
     iteration. This helper mirrors that structure for the benchmark harness so
     the first E-step starts from a comparable likelihood scale.
 
-    recovar stores Fourier images in the native unnormalized FFT convention, so
-    raw image power is larger than RELION's ``sigma2_noise`` convention by a
-    factor of ``(H * W)^2`` for 2D images. We therefore rescale the final radial
-    spectrum back to RELION units before returning it.
+    The returned spectrum is in **recovar's native FFT units**, i.e. it has the
+    same scale as ``|process_images(batch)|^2``. Downstream consumers (the
+    engine, ``make_radial_noise``, the M-step likelihood) all operate in these
+    same units, so the noise variance and the image power must agree
+    numerically. Do **not** rescale by ``(H*W)^2`` to "RELION units" — recovar
+    never converts the images, and the resulting per-pixel SNR² becomes
+    ``(H*W)^2`` too large, collapsing every posterior to a single rotation
+    (Pmax → 1.0). See ``tmp/diagnose_pmax_gap.py`` for the diagnostic that
+    pinned this in 2026-04-08.
     """
     from recovar.reconstruction import regularization
 
@@ -875,8 +880,6 @@ def estimate_initial_noise_spectrum_from_unaligned_images(
                         break
             sigma2_noise[idx] = replacement if replacement is not None else 1.0
 
-    fft_power_scale = float(np.prod(experiment_dataset.image_shape) ** 2)
-    sigma2_noise = sigma2_noise / fft_power_scale
     return jnp.asarray(sigma2_noise)
 
 
@@ -911,7 +914,8 @@ def normalize_wsum_to_sigma2_noise(wsum_sigma2_noise, wsum_img_power, sumw, imag
     Returns
     -------
     sigma2_noise : jnp.ndarray, shape (n_shells,)
-        Per-shell noise variance in RELION convention.
+        Per-shell noise variance in **recovar's native FFT units**, ready to
+        be fed back into the engine. Same scale as ``|process_images|^2``.
     """
     from recovar.em.dense_single_volume.engine_v2 import make_shell_indices_half
 
@@ -926,12 +930,16 @@ def normalize_wsum_to_sigma2_noise(wsum_sigma2_noise, wsum_img_power, sumw, imag
     total_wsum = wsum_sigma2_noise + wsum_img_power
     sigma2 = total_wsum / (2.0 * sumw * jnp.maximum(Npix_per_shell, 1.0))
 
-    # Convert from recovar's unnormalized FFT convention to RELION convention.
-    # recovar images are stored as jnp.fft.fft2 (no 1/N factor), so pixel
-    # values are N times larger than RELION's and power spectra are N^2 larger.
-    # The rest of the codebase uses sigma2_noise in RELION convention.
-    fft_power_scale = float(image_shape[0] * image_shape[1]) ** 2
-    sigma2 = sigma2 / fft_power_scale
+    # NOTE: The output is in **recovar's native FFT units**, not "RELION
+    # units". Both ``wsum_sigma2_noise`` and ``wsum_img_power`` are accumulated
+    # from ``|process_images(batch)|^2``-scaled quantities (the engine never
+    # converts), so the resulting sigma2 already lives in the same units as
+    # the engine's image power. A previous version divided by ``(H*W)^2`` to
+    # "convert to RELION units" — that was wrong: the engine then re-uses this
+    # sigma2 in ``processed * CTF / sigma2``, and the divide blows up chi² by
+    # ``(H*W)^2``, collapsing every posterior to a single rotation
+    # (``Pmax → 1.0``). See ``estimate_initial_noise_spectrum_from_unaligned_images``
+    # docstring and ``tmp/diagnose_pmax_gap.py``.
 
     # Floor at 1e-15 (RELION ml_optimiser.cpp:5279)
     sigma2 = jnp.maximum(sigma2, 1e-15)

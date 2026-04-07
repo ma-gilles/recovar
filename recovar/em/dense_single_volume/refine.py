@@ -2202,10 +2202,15 @@ def _refine_relion_mode(
                 disc_type=disc_type,
             )
             noise_estimates_hard.append(noise_k)
-        noise_hard_raw = (noise_estimates_hard[0] + noise_estimates_hard[1]) / 2
-        # Convert from recovar's unnormalized FFT convention to RELION convention
-        fft_power_scale = float(cryo.image_shape[0] * cryo.image_shape[1]) ** 2
-        noise_hard = noise_hard_raw / fft_power_scale
+        noise_hard = (noise_estimates_hard[0] + noise_estimates_hard[1]) / 2
+        # noise_hard is in recovar's native FFT units already (matching the
+        # engine's image power). Do NOT divide by (H*W)^2 to "convert to
+        # RELION units" — the engine never converts the images, so the noise
+        # variance must stay in the same units as |F_obs|^2. The previous
+        # divide cancelled out 8 orders of magnitude of per-pixel SNR, leaving
+        # chi^2 ~10^9 too large and Pmax pinned at 1.0. See the docstring of
+        # ``estimate_initial_noise_spectrum_from_unaligned_images`` and
+        # ``tmp/diagnose_pmax_gap.py`` for the diagnostic that pinned this.
 
         # NOTE: A previous version (v25) inflated noise_hard by an
         # ad-hoc mask area ratio (particle_diameter / image_size). That
@@ -2216,9 +2221,8 @@ def _refine_relion_mode(
         #   (2) When masking IS applied, the mask is window_mask(D, 0.85,
         #       0.99) (a soft circular mask of radius ~54 px), not the
         #       particle_diameter mask of ~23.5 px.
-        # We now leave noise_hard at the unmodified, RELION-normalized
-        # scale and rely on the posterior-weighted noise update to
-        # capture the iter-by-iter noise increase.
+        # We now leave noise_hard unmodified and rely on the posterior-weighted
+        # noise update to capture the iter-by-iter noise increase.
 
         if noise_stats_per_half[0] is not None and noise_stats_per_half[1] is not None:
             wsum_combined = (
