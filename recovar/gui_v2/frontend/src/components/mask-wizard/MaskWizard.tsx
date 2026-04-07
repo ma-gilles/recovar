@@ -356,6 +356,15 @@ export function MaskWizard({
                       colorIndex: 2,
                     },
                   ]}
+                  onPickWorld={
+                    eraseMode
+                      ? ([x, y, z]) =>
+                          setEraseSpheres((prev) => [
+                            ...prev,
+                            { x, y, z, r: eraseRadius },
+                          ])
+                      : undefined
+                  }
                 />
               </Suspense>
             ) : (
@@ -565,14 +574,11 @@ export function MaskWizard({
               />
               <span className="w-10 text-right text-zinc-300">{eraseRadius}</span>
             </div>
-            {eraseMode && viewMode === "slice" && (
+            {eraseMode && (
               <p className="text-xs text-rose-300/80">
-                Click anywhere on the slice preview to add an erase sphere here.
-              </p>
-            )}
-            {eraseMode && viewMode === "3d" && (
-              <p className="text-xs text-amber-300/80">
-                Switch to Slice view to place erase spheres.
+                {viewMode === "slice"
+                  ? "Click anywhere on the slice preview to add an erase sphere here."
+                  : "Click on the mask isosurface to drop an erase sphere at that point."}
               </p>
             )}
             {eraseSpheres.length > 0 && (
