@@ -541,11 +541,11 @@ function VolumeCategoryGroup({
                       e.stopPropagation();
                       onMakeMask(v.path, v.name);
                     }}
-                    className="shrink-0 text-zinc-600 hover:text-emerald-300"
+                    className="shrink-0 rounded p-0.5 text-emerald-500 hover:bg-emerald-500/15 hover:text-emerald-300"
                     aria-label={`Create mask from ${displayName}`}
                     title="Create mask from this volume"
                   >
-                    <Wand2 className="h-3 w-3" />
+                    <Wand2 className="h-4 w-4" />
                   </button>
                 )}
               </div>

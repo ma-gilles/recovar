@@ -377,6 +377,27 @@ export function listProjectMasks(projectId: string): Promise<MaskInfo[]> {
   return request(`/masks/by-project/${projectId}`);
 }
 
+export interface PreviewVolumeResponse {
+  path: string;
+  voxel_size: number;
+  shape: number[];
+}
+
+export function previewMaskVolume(
+  params: MaskParams & { project_id: string }
+): Promise<PreviewVolumeResponse> {
+  return request(`/masks/preview-volume`, {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
+}
+
+export function deletePreviewMaskVolume(path: string): Promise<{ deleted: boolean }> {
+  return request(`/masks/preview-volume?path=${encodeURIComponent(path)}`, {
+    method: "DELETE",
+  });
+}
+
 // --- Charts ---
 
 export interface ChartData {

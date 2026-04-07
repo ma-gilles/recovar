@@ -1,14 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Save, Loader2 } from "lucide-react";
+import React, { useCallback, useEffect, useRef, useState, Suspense } from "react";
+import { Save, Loader2, Layers } from "lucide-react";
 import { Dialog } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
 import {
   previewMask,
+  previewMaskVolume,
+  deletePreviewMaskVolume,
   saveMask,
   ApiError,
   type MaskParams,
 } from "../../lib/api/client";
+
+// Lazy-load VtkViewer (vtk.js is heavy; only loaded when 3D mode is opened)
+const VtkViewer = React.lazy(() =>
+  import("../volume-viewer/VtkViewer").then((m) => ({ default: m.VtkViewer }))
+);
 
 interface MaskWizardProps {
   open: boolean;
@@ -77,6 +84,10 @@ export function MaskWizard({
   const [axis, setAxis] = useState<0 | 1 | 2>(2);
   const [sliceIdx, setSliceIdx] = useState<number | null>(null);
 
+  const [viewMode, setViewMode] = useState<"slice" | "3d">("slice");
+  const [previewVolPath, setPreviewVolPath] = useState<string | null>(null);
+  const [vol3dLoading, setVol3dLoading] = useState(false);
+
   // Debounced preview generation
   const previewTokenRef = useRef(0);
   const triggerPreview = useCallback(async () => {
@@ -110,12 +121,49 @@ export function MaskWizard({
     }
   }, [open, state, sourcePath, axis, sliceIdx]);
 
-  // Auto-preview on open and on parameter changes (debounced 250ms).
+  // Debounced 3D mask volume generation
+  const vol3dTokenRef = useRef(0);
+  const trigger3dPreview = useCallback(async () => {
+    if (!open) return;
+    const myToken = ++vol3dTokenRef.current;
+    setVol3dLoading(true);
+    try {
+      const result = await previewMaskVolume({
+        ...buildParams(state, sourcePath),
+        project_id: projectId,
+      });
+      if (myToken !== vol3dTokenRef.current) {
+        // A newer request superseded us — discard this output
+        deletePreviewMaskVolume(result.path).catch(() => undefined);
+        return;
+      }
+      setPreviewVolPath((prev) => {
+        if (prev && prev !== result.path) {
+          deletePreviewMaskVolume(prev).catch(() => undefined);
+        }
+        return result.path;
+      });
+    } catch (e) {
+      if (myToken !== vol3dTokenRef.current) return;
+      const msg = e instanceof ApiError ? e.message : String(e);
+      setPreviewError(msg);
+    } finally {
+      if (myToken === vol3dTokenRef.current) setVol3dLoading(false);
+    }
+  }, [open, state, sourcePath, projectId]);
+
+  // Auto-preview on open and on parameter changes (debounced 350ms).
   useEffect(() => {
     if (!open) return;
-    const t = setTimeout(triggerPreview, 250);
+    const t = setTimeout(() => {
+      if (viewMode === "slice") {
+        triggerPreview();
+      } else {
+        trigger3dPreview();
+      }
+    }, 350);
     return () => clearTimeout(t);
-  }, [open, triggerPreview]);
+  }, [open, viewMode, triggerPreview, trigger3dPreview]);
 
   // Reset state when modal opens with a new source
   useEffect(() => {
@@ -131,6 +179,16 @@ export function MaskWizard({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sourcePath]);
+
+  // Clean up the server-side preview MRC when the modal closes
+  useEffect(() => {
+    if (open) return;
+    if (previewVolPath) {
+      deletePreviewMaskVolume(previewVolPath).catch(() => undefined);
+      setPreviewVolPath(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const handleSave = useCallback(async () => {
     if (!outputName.trim()) {
@@ -169,44 +227,95 @@ export function MaskWizard({
         {/* Left: preview */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium uppercase tracking-wider text-zinc-500">
-              Preview
-            </span>
             <div className="flex gap-1 rounded-md border border-zinc-700 p-0.5">
-              {(["X", "Y", "Z"] as const).map((label, i) => (
-                <button
-                  key={label}
-                  onClick={() => {
-                    setAxis(i as 0 | 1 | 2);
-                    setSliceIdx(null);
-                  }}
-                  className={
-                    "rounded px-2 py-0.5 text-xs " +
-                    (axis === i ? "bg-zinc-700 text-zinc-50" : "text-zinc-400")
-                  }
-                >
-                  {label}
-                </button>
-              ))}
+              <button
+                onClick={() => setViewMode("slice")}
+                aria-pressed={viewMode === "slice"}
+                className={
+                  "rounded px-2 py-0.5 text-xs " +
+                  (viewMode === "slice" ? "bg-zinc-700 text-zinc-50" : "text-zinc-400")
+                }
+              >
+                <Layers className="inline h-3 w-3" /> Slice
+              </button>
+              <button
+                onClick={() => setViewMode("3d")}
+                aria-pressed={viewMode === "3d"}
+                className={
+                  "rounded px-2 py-0.5 text-xs " +
+                  (viewMode === "3d" ? "bg-zinc-700 text-zinc-50" : "text-zinc-400")
+                }
+              >
+                3D
+              </button>
             </div>
+            {viewMode === "slice" && (
+              <div className="flex gap-1 rounded-md border border-zinc-700 p-0.5">
+                {(["X", "Y", "Z"] as const).map((label, i) => (
+                  <button
+                    key={label}
+                    onClick={() => {
+                      setAxis(i as 0 | 1 | 2);
+                      setSliceIdx(null);
+                    }}
+                    className={
+                      "rounded px-2 py-0.5 text-xs " +
+                      (axis === i ? "bg-zinc-700 text-zinc-50" : "text-zinc-400")
+                    }
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
           <div
-            className="relative flex items-center justify-center rounded-lg border border-zinc-800 bg-black"
-            style={{ aspectRatio: "1 / 1", minHeight: 220 }}
+            className="relative flex items-center justify-center overflow-hidden rounded-lg border border-zinc-800 bg-black"
+            style={{ aspectRatio: "1 / 1", minHeight: 260 }}
           >
-            {previewError ? (
-              <p className="px-3 text-center text-xs text-red-400">{previewError}</p>
-            ) : previewUrl ? (
-              <img
-                src={previewUrl}
-                alt="Mask preview"
-                className="h-full w-full object-contain"
-                style={{ imageRendering: "pixelated" }}
-              />
+            {viewMode === "slice" ? (
+              previewError ? (
+                <p className="px-3 text-center text-xs text-red-400">{previewError}</p>
+              ) : previewUrl ? (
+                <img
+                  src={previewUrl}
+                  alt="Mask preview"
+                  className="h-full w-full object-contain"
+                  style={{ imageRendering: "pixelated" }}
+                />
+              ) : (
+                <Spinner label="Generating..." />
+              )
+            ) : previewVolPath ? (
+              <Suspense fallback={<Spinner label="Loading 3D viewer..." />}>
+                <VtkViewer
+                  activeVolume={sourcePath}
+                  activeSigma={3.0}
+                  pinnedVolumes={[
+                    {
+                      path: sourcePath,
+                      name: sourceName,
+                      threshold: 3.0,
+                      opacity: 0.4,
+                      visible: true,
+                      colorIndex: 0,
+                    },
+                    {
+                      path: previewVolPath,
+                      name: "mask",
+                      threshold: 0.5,
+                      opacity: 0.85,
+                      visible: true,
+                      colorIndex: 2,
+                    },
+                  ]}
+                />
+              </Suspense>
             ) : (
-              <Spinner label="Generating..." />
+              <Spinner label="Generating mask..." />
             )}
-            {previewLoading && previewUrl && (
+            {((viewMode === "slice" && previewLoading && previewUrl) ||
+              (viewMode === "3d" && vol3dLoading && previewVolPath)) && (
               <div className="absolute right-2 top-2">
                 <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
               </div>

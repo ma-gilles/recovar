@@ -66,6 +66,10 @@ class PreviewRequest(MaskParams):
     idx: int | None = Field(None, description="Slice index; defaults to middle")
 
 
+class PreviewVolumeRequest(MaskParams):
+    project_id: str = Field(..., description="Used to locate the project Masks/ dir")
+
+
 class SaveRequest(MaskParams):
     project_id: str
     output_name: str = Field(..., min_length=1)
@@ -268,6 +272,75 @@ async def save_mask(req: SaveRequest) -> dict:
     }
 
 
+@router.post("/preview-volume")
+async def preview_mask_volume(req: PreviewVolumeRequest) -> dict:
+    """Generate a mask and write it to a temporary MRC file the client can
+    fetch via ``/api/volumes/raw`` for 3D rendering.
+
+    Returns ``{path, voxel_size, shape}``. The temp file lives under
+    ``<project>/Masks/.preview_<uuid>.mrc`` (hidden from list_project_masks
+    by the leading dot). Callers should ``DELETE`` it via
+    ``/api/masks/preview-volume?path=...`` when done.
+    """
+    _check_path_allowed(req.source_path)
+    if not os.path.isfile(req.source_path):
+        raise HTTPException(status_code=404, detail=f"Source not found: {req.source_path}")
+
+    project, session = await _load_project_by_id(req.project_id)
+    try:
+        masks_dir = os.path.join(project.path, "Masks")
+        os.makedirs(masks_dir, exist_ok=True)
+    finally:
+        await session.close()
+
+    try:
+        data, voxel = await asyncio.to_thread(_read_mrc, req.source_path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read MRC: {exc}") from exc
+    if data.ndim != 3:
+        raise HTTPException(status_code=400, detail=f"Source is not a 3D volume: shape={list(data.shape)}")
+
+    try:
+        mask = await asyncio.to_thread(_generate_mask, data, req)
+    except Exception as exc:
+        logger.exception("Mask generation failed")
+        raise HTTPException(status_code=400, detail=f"Mask generation failed: {exc}") from exc
+
+    import uuid as _uuid
+    out_path = os.path.join(masks_dir, f".preview_{_uuid.uuid4().hex}.mrc")
+    try:
+        await asyncio.to_thread(_write_mrc, out_path, mask, voxel)
+    except Exception as exc:
+        logger.exception("Failed to write preview")
+        raise HTTPException(status_code=500, detail=f"Failed to write preview: {exc}") from exc
+
+    return {
+        "path": out_path,
+        "voxel_size": voxel,
+        "shape": list(mask.shape),
+    }
+
+
+@router.delete("/preview-volume")
+async def delete_preview_volume(path: str) -> dict:
+    """Delete a preview MRC produced by /api/masks/preview-volume.
+
+    Only files whose basename starts with ``.preview_`` and end with
+    ``.mrc`` are eligible — prevents the endpoint from being used as
+    a generic delete API.
+    """
+    _check_path_allowed(path)
+    base = os.path.basename(path)
+    if not base.startswith(".preview_") or not base.endswith(".mrc"):
+        raise HTTPException(status_code=400, detail="Not a preview file")
+    try:
+        if os.path.isfile(path):
+            os.unlink(path)
+    except OSError as exc:
+        logger.warning("Could not delete preview %s: %s", path, exc)
+    return {"deleted": True, "path": path}
+
+
 @router.get("/by-project/{project_id}", response_model=list[MaskInfo])
 async def list_project_masks(project_id: str) -> list[MaskInfo]:
     """List masks under ``<project>/Masks/``."""
@@ -286,6 +359,8 @@ async def list_project_masks(project_id: str) -> list[MaskInfo]:
         full = os.path.join(masks_dir, entry)
         if not os.path.isfile(full) or not entry.lower().endswith(".mrc"):
             continue
+        if entry.startswith("."):
+            continue  # hidden / preview files
         try:
             stat = os.stat(full)
         except OSError:
