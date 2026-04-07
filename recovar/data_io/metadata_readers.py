@@ -232,10 +232,9 @@ def parse_poses_from_cs(
             break
 
     if shift_key is not None:
-        shifts_angstrom = data[shift_key].astype(np.float64)  # (N, 2) in Angstroms
-        # Convert Angstroms → pixels using per-particle pixel size
-        apix = data["blob/psize_A"].astype(np.float64)  # (N,)
-        trans_pixels = shifts_angstrom / apix.reshape(-1, 1)
+        # cryoSPARC stores alignments*/shift in pixel units. Keep the values
+        # as-is and only convert to the fractional convention expected by recovar.
+        trans_pixels = data[shift_key].astype(np.float64)
     else:
         logger.warning("No translation field found in CS file; assuming zero shifts.")
         trans_pixels = np.zeros((n, 2), dtype=np.float64)
