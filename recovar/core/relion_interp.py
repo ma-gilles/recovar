@@ -324,8 +324,7 @@ def _project_one_image(vol, rotation_matrix, pixel_freqs, center, N0, N1, N2, or
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def project(vol, rotations, image_shape, volume_shape, order=1, half_volume=False, half_image=False, max_r=None,
-            freq_scale=1.0):
+def project(vol, rotations, image_shape, volume_shape, order=1, half_volume=False, half_image=False, max_r=None):
     """RELION-style forward projection (Fourier slice extraction).
 
     Projects a 3D Fourier volume onto 2D Fourier images via central-slice
@@ -341,9 +340,6 @@ def project(vol, rotations, image_shape, volume_shape, order=1, half_volume=Fals
         half_volume: if True, vol is kz ≥ 0 half-volume
         half_image: if True, output is rfft-packed ``(n, H*(W//2+1))``
         max_r: optional spherical frequency cutoff (in grid units)
-        freq_scale: scale factor for pixel frequencies before interpolation.
-            Set to ``padding_factor`` when projecting from a padded volume,
-            matching RELION's ``Ainv *= padding_factor``.  Default 1.0.
 
     Returns:
         Images: ``(n_images, n_pixels)`` complex
@@ -360,7 +356,6 @@ def project(vol, rotations, image_shape, volume_shape, order=1, half_volume=Fals
     rotations = jnp.asarray(rotations)
 
     pixel_freqs = _pixel_frequencies(image_shape, half_image=half_image)
-    pixel_freqs = pixel_freqs * jnp.float32(freq_scale)
     center = jnp.array([N0 // 2, N1 // 2, N2 // 2], dtype=jnp.float32)
     max_r2 = float(max_r * max_r) if max_r is not None else None
 
@@ -582,8 +577,7 @@ def _backproject_one_image(
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume=False, half_image=False, max_r=None,
-                freq_scale=1.0):
+def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume=False, half_image=False, max_r=None):
     """RELION-style backprojection (adjoint of forward projection).
 
     Scatters 2D Fourier image values back into a 3D Fourier volume using
@@ -603,9 +597,6 @@ def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume
         half_volume: if True, output is kz ≥ 0 half-volume
         half_image: if True, input images are rfft-packed
         max_r: optional spherical frequency cutoff
-        freq_scale: scale factor for pixel frequencies before interpolation.
-            Set to ``padding_factor`` when backprojecting into a padded volume,
-            matching RELION's ``Ainv *= padding_factor``.  Default 1.0.
 
     Returns:
         Volume: flat ``(n_voxels,)`` complex
@@ -621,7 +612,6 @@ def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume
     imgs = jnp.asarray(imgs)
     rotations = jnp.asarray(rotations)
     pixel_freqs = _pixel_frequencies(image_shape, half_image=half_image)
-    pixel_freqs = pixel_freqs * jnp.float32(freq_scale)
     center = jnp.array([N0 // 2, N1 // 2, N2 // 2], dtype=jnp.float32)
     max_r2 = float(max_r * max_r) if max_r is not None else None
 

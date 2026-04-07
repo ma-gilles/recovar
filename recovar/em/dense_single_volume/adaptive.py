@@ -699,32 +699,3 @@ def compute_pass2_stats_sparse(
     return result
 
 
-def extract_posterior_weights_from_scores(scores_all_blocks, log_Z, n_images, n_rot, n_trans):
-    """Convert accumulated scores from all blocks into posterior weights.
-
-    Parameters
-    ----------
-    scores_all_blocks : list of jnp.ndarray
-        Each element has shape (n_images, block_rot, n_trans).
-    log_Z : jnp.ndarray, shape (n_images,)
-        Log normalizing constant.
-    n_images, n_rot, n_trans : int
-        Grid dimensions.
-
-    Returns
-    -------
-    weights_flat : jnp.ndarray, shape (n_images, n_rot * n_trans)
-        Posterior probabilities, summing to ~1 per image.
-    """
-    # Concatenate all blocks along the rotation axis
-    # Each block is (n_images, block_rot, n_trans)
-    all_scores = jnp.concatenate(scores_all_blocks, axis=1)  # (n_images, n_rot_padded, n_trans)
-
-    # Trim to actual n_rot (remove padding)
-    all_scores = all_scores[:, :n_rot, :]  # (n_images, n_rot, n_trans)
-
-    # Normalize to probabilities
-    weights = jnp.exp(all_scores - log_Z[:, None, None])
-    weights_flat = weights.reshape(n_images, n_rot * n_trans)
-
-    return weights_flat
