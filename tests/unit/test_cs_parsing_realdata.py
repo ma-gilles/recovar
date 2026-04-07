@@ -89,6 +89,18 @@ def test_parse_poses_translation_regression(ref):
     )
 
 
+def test_parse_poses_translation_downsample_invariant(ref):
+    """Fractional translations should not change when target D is downsampled."""
+    _, trans = parse_poses_from_cs(CS_PATH, 128)
+    np.testing.assert_allclose(
+        trans,
+        ref["translations"],
+        atol=1e-10,
+        rtol=1e-12,
+        err_msg="Translations should use the original CS image size, not target D",
+    )
+
+
 def test_parse_poses_rotations_are_orthogonal(ref):
     """All rotation matrices should be proper rotations (det=1, R^T R = I)."""
     D = int(ref["D"])

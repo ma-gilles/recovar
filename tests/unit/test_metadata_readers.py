@@ -272,6 +272,15 @@ class TestParseFromCS:
         expected_frac = trans_pix / float(grid_size)
         assert_allclose(trans_frac, expected_frac, atol=1e-5)
 
+    def test_translation_uses_original_image_size_when_target_D_differs(self):
+        """Downsampled target D must not rescale CS fractional translations."""
+        cs_path, _, trans_pix, *_, voxel_size, grid_size = _make_test_cs(grid_size=288)
+
+        _, trans_frac = metadata_parsing.parse_poses_from_cs(cs_path, 128)
+
+        expected_frac = trans_pix / float(grid_size)
+        assert_allclose(trans_frac, expected_frac, atol=1e-5)
+
     def test_ctf_extraction(self):
         """CS CTF extraction produces correct values."""
         cs_path, _, _, dfu, dfv, dfang_rad, volt, cs_mm, amp_c, phase_rad, voxel_size, grid_size = _make_test_cs()

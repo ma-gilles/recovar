@@ -12,10 +12,13 @@ import sys
 from types import SimpleNamespace
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from recovar.commands import downsample as ds_cmd
 from recovar.data_io import downsample as ds_io
+from recovar.data_io import metadata_readers as metadata_parsing
+from recovar.data_io.starfile import StarFile, write_star
 
 pytestmark = pytest.mark.unit
 
@@ -225,3 +228,170 @@ def test_write_minimal_star_creates_file(tmp_path):
         n_images=10,
     )
     assert (tmp_path / "particles.128.star").exists()
+
+
+
+def _make_relion31_star_input(tmp_path, orig_D=288, orig_apix=1.5, n_images=4):
+    star_path = tmp_path / "input.star"
+    optics = pd.DataFrame(
+        {
+            "_rlnOpticsGroup": [1],
+            "_rlnOpticsGroupName": ["opticsGroup1"],
+            "_rlnImagePixelSize": [orig_apix],
+            "_rlnImageSize": [orig_D],
+            "_rlnImageDimensionality": [2],
+            "_rlnVoltage": [300.0],
+            "_rlnSphericalAberration": [2.7],
+            "_rlnAmplitudeContrast": [0.1],
+        }
+    )
+    trans_px = np.array(
+        [
+            [3.25, -1.5],
+            [-4.0, 2.75],
+            [0.5, 0.25],
+            [-1.125, -2.5],
+        ],
+        dtype=np.float64,
+    )[:n_images]
+    particles = pd.DataFrame(
+        {
+            "_rlnImageName": [f"{i + 1}@input.mrcs" for i in range(n_images)],
+            "_rlnOpticsGroup": np.ones(n_images, dtype=int),
+            "_rlnAngleRot": [10.0, 20.0, 30.0, 40.0][:n_images],
+            "_rlnAngleTilt": [15.0, 25.0, 35.0, 45.0][:n_images],
+            "_rlnAnglePsi": [5.0, 12.0, 18.0, 24.0][:n_images],
+            "_rlnOriginXAngst": trans_px[:, 0] * orig_apix,
+            "_rlnOriginYAngst": trans_px[:, 1] * orig_apix,
+            "_rlnDefocusU": np.linspace(10000.0, 13000.0, n_images),
+            "_rlnDefocusV": np.linspace(11000.0, 14000.0, n_images),
+            "_rlnDefocusAngle": np.linspace(0.0, 90.0, n_images),
+            "_rlnPhaseShift": np.linspace(0.0, 12.0, n_images),
+        }
+    )
+    write_star(str(star_path), particles, optics)
+    return str(star_path), trans_px, float(orig_apix), int(orig_D), n_images
+
+
+def _make_cs_input(tmp_path, orig_D=288, orig_apix=1.5, n_images=4):
+    cs_path = tmp_path / "input.cs"
+    rotvecs = np.array(
+        [
+            [0.05, -0.02, 0.01],
+            [-0.03, 0.04, 0.02],
+            [0.01, 0.02, -0.05],
+            [0.06, 0.01, 0.03],
+        ],
+        dtype=np.float32,
+    )[:n_images]
+    trans_px = np.array(
+        [
+            [3.25, -1.5],
+            [-4.0, 2.75],
+            [0.5, 0.25],
+            [-1.125, -2.5],
+        ],
+        dtype=np.float32,
+    )[:n_images]
+    dtype = np.dtype(
+        [
+            ("blob/idx", np.int32),
+            ("blob/path", "U200"),
+            ("blob/shape", np.int32, (2,)),
+            ("blob/psize_A", np.float32),
+            ("alignments3D/pose", np.float32, (3,)),
+            ("alignments3D/shift", np.float32, (2,)),
+            ("ctf/df1_A", np.float32),
+            ("ctf/df2_A", np.float32),
+            ("ctf/df_angle_rad", np.float32),
+            ("ctf/accel_kv", np.float32),
+            ("ctf/cs_mm", np.float32),
+            ("ctf/amp_contrast", np.float32),
+            ("ctf/phase_shift_rad", np.float32),
+        ]
+    )
+    data = np.zeros(n_images, dtype=dtype)
+    data["blob/idx"] = np.arange(n_images, dtype=np.int32)
+    data["blob/path"] = "input.mrcs"
+    data["blob/shape"] = [orig_D, orig_D]
+    data["blob/psize_A"] = np.float32(orig_apix)
+    data["alignments3D/pose"] = rotvecs
+    data["alignments3D/shift"] = trans_px
+    data["ctf/df1_A"] = np.linspace(10000.0, 13000.0, n_images, dtype=np.float32)
+    data["ctf/df2_A"] = np.linspace(11000.0, 14000.0, n_images, dtype=np.float32)
+    data["ctf/df_angle_rad"] = np.deg2rad(np.linspace(0.0, 90.0, n_images)).astype(np.float32)
+    data["ctf/accel_kv"] = 300.0
+    data["ctf/cs_mm"] = 2.7
+    data["ctf/amp_contrast"] = 0.1
+    data["ctf/phase_shift_rad"] = np.deg2rad(np.linspace(0.0, 12.0, n_images)).astype(np.float32)
+    with open(cs_path, "wb") as f:
+        np.save(f, data)
+    return str(cs_path), trans_px.astype(np.float64), float(orig_apix), int(orig_D), n_images
+
+
+@pytest.mark.parametrize("target_D", [288, 192, 128, 96])
+def test_write_output_star_preserves_star_metadata_across_downsampling(tmp_path, target_D):
+    input_star, trans_px, orig_apix, orig_D, n_images = _make_relion31_star_input(tmp_path)
+    expected_rot, expected_trans = metadata_parsing.parse_poses_from_star(input_star, target_D)
+    expected_ctf = metadata_parsing.parse_ctf_from_star(input_star, target_D)
+
+    out_star = tmp_path / f"particles.{target_D}.star"
+    out_mrcs = tmp_path / f"particles.{target_D}.mrcs"
+    new_apix = orig_apix * orig_D / float(target_D)
+
+    ds_cmd._write_output_star(
+        input_path=input_star,
+        mrcs_path=str(out_mrcs),
+        star_path=str(out_star),
+        target_D=target_D,
+        new_apix=new_apix,
+        n_images=n_images,
+    )
+
+    sf = StarFile.load(str(out_star))
+    assert np.all(sf.resolution == target_D)
+    assert np.allclose(sf.apix, new_apix)
+    assert np.allclose(sf.apix * sf.resolution, orig_apix * orig_D)
+
+    got_rot, got_trans = metadata_parsing.parse_poses_from_star(str(out_star), target_D)
+    got_ctf = metadata_parsing.parse_ctf_from_star(str(out_star), target_D)
+
+    np.testing.assert_allclose(got_rot, expected_rot, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(got_trans, expected_trans, atol=1e-10, rtol=1e-12)
+    np.testing.assert_allclose(got_trans, trans_px / float(orig_D), atol=1e-10, rtol=1e-12)
+    np.testing.assert_allclose(got_ctf, expected_ctf, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(got_ctf[:, 0] * target_D, orig_apix * orig_D, atol=1e-6, rtol=1e-6)
+
+
+@pytest.mark.parametrize("target_D", [288, 192, 128, 96])
+def test_write_output_star_preserves_cs_metadata_across_downsampling(tmp_path, target_D):
+    input_cs, trans_px, orig_apix, orig_D, n_images = _make_cs_input(tmp_path)
+    expected_rot, expected_trans = metadata_parsing.parse_poses_from_cs(input_cs, target_D)
+    expected_ctf = metadata_parsing.parse_ctf_from_cs(input_cs, target_D)
+
+    out_star = tmp_path / f"particles.{target_D}.star"
+    out_mrcs = tmp_path / f"particles.{target_D}.mrcs"
+    new_apix = orig_apix * orig_D / float(target_D)
+
+    ds_cmd._write_output_star(
+        input_path=input_cs,
+        mrcs_path=str(out_mrcs),
+        star_path=str(out_star),
+        target_D=target_D,
+        new_apix=new_apix,
+        n_images=n_images,
+    )
+
+    sf = StarFile.load(str(out_star))
+    assert np.all(sf.resolution == target_D)
+    assert np.allclose(sf.apix, new_apix)
+    assert np.allclose(sf.apix * sf.resolution, orig_apix * orig_D)
+
+    got_rot, got_trans = metadata_parsing.parse_poses_from_star(str(out_star), target_D)
+    got_ctf = metadata_parsing.parse_ctf_from_star(str(out_star), target_D)
+
+    np.testing.assert_allclose(got_rot, expected_rot, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(got_trans, expected_trans, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(got_trans, trans_px / float(orig_D), atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(got_ctf, expected_ctf, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(got_ctf[:, 0] * target_D, orig_apix * orig_D, atol=1e-6, rtol=1e-6)
