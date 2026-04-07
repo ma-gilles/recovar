@@ -150,19 +150,30 @@ def _is_analyze_output(job_dir: str) -> bool:
 
 
 def _detect_job_type_from_dir(type_dir_name: str, job_dir: str) -> str | None:
-    """Infer the job type from the parent directory name and contents."""
-    # Try to match known directory names from the registry
-    # Import here to avoid circular imports at module level
+    """Infer the job type from the parent directory name and contents.
+
+    First checks job.json's ``command`` field (authoritative), then falls
+    back to matching the directory name against the registry.
+    """
     try:
-        from recovar.project.registry import JOB_TYPES
-
-        for jt in JOB_TYPES.values():
-            if jt.dir_name == type_dir_name:
-                return jt.name
+        from recovar.project.registry import JOB_TYPES, get_job_type
     except ImportError:
-        pass
+        JOB_TYPES = {}
+        get_job_type = lambda _: None  # noqa: E731
 
-    # Fallback: heuristic detection
+    # Primary: read job.json and use the command field to look up type
+    job_data = _read_job_json(job_dir)
+    if job_data and job_data.get("command"):
+        jt = get_job_type(job_data["command"])
+        if jt is not None:
+            return jt.name
+
+    # Fallback: match directory name against registry
+    for jt in JOB_TYPES.values():
+        if jt.dir_name == type_dir_name:
+            return jt.name
+
+    # Last resort: hardcoded known names
     known_dirs = {
         "Pipeline": "Pipeline",
         "Analyze": "Analyze",
@@ -272,12 +283,18 @@ def scan_project_directory(project_dir: str) -> list[ScannedJob]:
         logger.error("Cannot list directory %s: %s", project_dir, exc)
         return results
 
+    # Check if the project root itself is a pipeline output (flat layout
+    # where outputs live directly in the project dir, not inside
+    # Pipeline/job_NNNN/).
+    if _is_pipeline_output(project_dir):
+        results.append(_scan_job_dir("Pipeline", project_dir))
+
     for type_dir_name in top_entries:
         type_dir = os.path.join(project_dir, type_dir_name)
         if not os.path.isdir(type_dir):
             continue
 
-        # Check if this looks like a job-type directory
+        # Detect job type from dir name or job.json command field
         job_type = _detect_job_type_from_dir(type_dir_name, type_dir)
         if job_type is None:
             continue
@@ -288,6 +305,7 @@ def scan_project_directory(project_dir: str) -> list[ScannedJob]:
         except OSError:
             continue
 
+        found_job_dir = False
         for job_name in job_entries:
             if not _JOB_DIR_RE.match(job_name):
                 continue
@@ -297,6 +315,17 @@ def scan_project_directory(project_dir: str) -> list[ScannedJob]:
 
             scanned = _scan_job_dir(job_type, job_dir)
             results.append(scanned)
+            found_job_dir = True
+
+        # If no job_NNNN subdirectories found, check if the type
+        # directory itself contains output directly (flat layout).
+        if not found_job_dir:
+            if (
+                os.path.isfile(os.path.join(type_dir, "job.json"))
+                or _is_pipeline_output(type_dir)
+                or _is_analyze_output(type_dir)
+            ):
+                results.append(_scan_job_dir(job_type, type_dir))
 
     # Sort by creation time (oldest first)
     results.sort(key=lambda s: s.created_at or datetime.datetime.min)

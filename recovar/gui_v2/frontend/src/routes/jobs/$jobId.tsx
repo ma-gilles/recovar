@@ -17,6 +17,7 @@ import {
   EyeOff,
   RefreshCw,
   ZoomIn,
+  Pin,
 } from "lucide-react";
 import { clsx } from "clsx";
 import {
@@ -38,7 +39,8 @@ import {
 } from "../../lib/api/client";
 import Plot from "react-plotly.js";
 import { useProject } from "../../lib/project-context";
-import { VolumeViewer } from "../../components/volume-viewer/VolumeViewer";
+import { VolumeViewer, type PinnedVolume } from "../../components/volume-viewer/VolumeViewer";
+import { MAX_PINNED_VOLUMES } from "../../lib/constants";
 import { StatusBadge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Spinner } from "../../components/ui/spinner";
@@ -448,6 +450,10 @@ function VolumeCategoryGroup({
   onSelect,
   ambiguousNames,
   defaultCollapsed,
+  pinnedPaths,
+  onPin,
+  onUnpin,
+  pinDisabled,
 }: {
   cat: string;
   vols: VolumeEntry[];
@@ -455,6 +461,10 @@ function VolumeCategoryGroup({
   onSelect: (path: string) => void;
   ambiguousNames: Set<string>;
   defaultCollapsed: boolean;
+  pinnedPaths?: Set<string>;
+  onPin?: (path: string, name: string) => void;
+  onUnpin?: (path: string) => void;
+  pinDisabled?: boolean;
 }): React.JSX.Element {
   const [open, setOpen] = useState(!defaultCollapsed);
 
@@ -481,23 +491,47 @@ function VolumeCategoryGroup({
             const displayName = volumeDisplayName(v, ambiguousNames.has(v.name));
             const active = selectedVolume === v.path;
             return (
-              <button
+              <div
                 key={v.path}
-                onClick={() => onSelect(v.path)}
                 className={clsx(
-                  "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm",
+                  "flex items-center gap-2 rounded px-2 py-1 text-sm",
                   active
                     ? "bg-blue-500/15 text-blue-300"
                     : "text-zinc-300 hover:bg-zinc-800 hover:text-zinc-100"
                 )}
                 title={v.path}
               >
-                <Box className="h-3.5 w-3.5 shrink-0 text-sky-400" />
-                <span className="truncate">{displayName}</span>
-                <span className="ml-auto shrink-0 text-xs text-zinc-600">
+                <button
+                  className="flex flex-1 items-center gap-2 text-left min-w-0"
+                  onClick={() => onSelect(v.path)}
+                >
+                  <Box className="h-3.5 w-3.5 shrink-0 text-sky-400" />
+                  <span className="truncate">{displayName}</span>
+                </button>
+                <span className="shrink-0 text-xs text-zinc-600">
                   {(v.size_bytes / 1e6).toFixed(1)} MB
                 </span>
-              </button>
+                {onPin && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const isPinned = pinnedPaths?.has(v.path);
+                      if (isPinned) onUnpin?.(v.path);
+                      else onPin(v.path, v.name);
+                    }}
+                    className={clsx(
+                      "shrink-0",
+                      pinnedPaths?.has(v.path)
+                        ? "text-blue-400"
+                        : "text-zinc-600 hover:text-zinc-300"
+                    )}
+                    disabled={pinDisabled && !pinnedPaths?.has(v.path)}
+                    aria-label={pinnedPaths?.has(v.path) ? `Unpin ${displayName}` : `Pin ${displayName}`}
+                  >
+                    <Pin className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
             );
           })}
         </div>
@@ -509,6 +543,7 @@ function VolumeCategoryGroup({
 function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
   const [selectedVolume, setSelectedVolume] = useState<string | null>(null);
   const [showAll, setShowAll] = useState(false);
+  const [pinnedVolumes, setPinnedVolumes] = useState<PinnedVolume[]>([]);
   const { data: volumes, isLoading } = useQuery<VolumeEntry[]>({
     queryKey: ["job-volumes", jobId],
     queryFn: () => getJobVolumes(jobId),
@@ -560,6 +595,24 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
     setSelectedVolume((prev) => (prev === path ? null : path));
   }, []);
 
+  const handlePin = useCallback(
+    (path: string, name: string) => {
+      setPinnedVolumes((prev) => {
+        if (prev.length >= MAX_PINNED_VOLUMES) return prev;
+        if (prev.some((v) => v.path === path)) return prev;
+        const category = volumes?.find((v) => v.path === path)?.category;
+        return [...prev, { path, name, threshold: 3.0, opacity: 0.8, visible: true, colorIndex: prev.length, category }];
+      });
+    },
+    [volumes]
+  );
+
+  const handleUnpin = useCallback((path: string) => {
+    setPinnedVolumes((prev) => prev.filter((v) => v.path !== path));
+  }, []);
+
+  const pinnedPaths = useMemo(() => new Set(pinnedVolumes.map((p) => p.path)), [pinnedVolumes]);
+
   if (isLoading) return <Spinner label="Loading volumes..." />;
   if (!volumes || volumes.length === 0) {
     return <p className="text-sm text-zinc-500">No volumes in this job output.</p>;
@@ -570,7 +623,13 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
       {/* TOP HALF: Volume viewer (fixed) */}
       <div className="shrink-0 rounded-lg border border-zinc-800 bg-zinc-950 p-4" style={selectedVolume ? { minHeight: 480 } : undefined}>
         {selectedVolume ? (
-          <VolumeViewer volumes={filteredVolumes} initialVolumePath={selectedVolume} hideVolumeList />
+          <VolumeViewer
+            volumes={filteredVolumes}
+            initialVolumePath={selectedVolume}
+            hideVolumeList
+            pinnedVolumes={pinnedVolumes}
+            onPinnedVolumesChange={setPinnedVolumes}
+          />
         ) : (
           <div className="flex items-center justify-center rounded-lg border border-zinc-800 bg-zinc-900/50" style={{ height: 120 }}>
             <p className="text-sm text-zinc-500">Click a volume below to view it</p>
@@ -606,6 +665,10 @@ function VolumesTab({ jobId }: { jobId: string }): React.JSX.Element {
             onSelect={handleSelect}
             ambiguousNames={ambiguousNames}
             defaultCollapsed={COLLAPSED_BY_DEFAULT.has(cat) || vols.length > 10}
+            pinnedPaths={pinnedPaths}
+            onPin={handlePin}
+            onUnpin={handleUnpin}
+            pinDisabled={pinnedVolumes.length >= MAX_PINNED_VOLUMES}
           />
         ))}
       </div>
