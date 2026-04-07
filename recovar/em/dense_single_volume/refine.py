@@ -1441,9 +1441,9 @@ def _refine_relion_mode(
     global_direction_prior = None
     global_direction_prior_order = None
 
-    # Extract radial noise profile from initial pixel-array noise_variance.
-    # This serves as the floor reference for the first iteration's noise update,
-    # preventing runaway collapse when posteriors are too peaked.
+    # Extract a per-shell radial profile from the input pixel-array
+    # noise_variance for diagnostic logging only ("noise update per shell:
+    # old=... new=...").
     from recovar.core import fourier_transform_utils
     n_shells_init = cryo.image_shape[0] // 2 + 1
     radial_dist_init = np.clip(
@@ -1454,7 +1454,6 @@ def _refine_relion_mode(
         .reshape(-1),
         0, n_shells_init - 1,
     )
-    # Average pixel values per shell (noise_variance is radially symmetric)
     previous_noise_radial = np.zeros(n_shells_init, dtype=np.float64)
     shell_counts = np.zeros(n_shells_init, dtype=np.float64)
     noise_variance_np = np.asarray(noise_variance, dtype=np.float64)
@@ -1463,20 +1462,6 @@ def _refine_relion_mode(
     shell_counts = np.maximum(shell_counts, 1.0)
     previous_noise_radial = previous_noise_radial / shell_counts
     previous_noise_radial = jnp.asarray(previous_noise_radial[:n_shells_init], dtype=jnp.float32)
-
-    # Save the initial noise estimate once, before any iterations update it.
-    # This is used as a per-shell floor: the posterior-weighted noise can only
-    # INCREASE from this baseline, never decrease.  At high frequencies the
-    # posterior noise exceeds the initial estimate (model error raises it), so
-    # we use the posterior value.  At low frequencies the posterior noise is
-    # lower than the initial estimate (selection bias lowers it), so we clamp
-    # to the initial value.  This matches RELION's observed behavior where
-    # noise increases at low freq and stays similar at high freq during early
-    # iterations.
-    initial_noise_radial = previous_noise_radial.copy()
-
-    # NOTE: keep the padded reconstruction factor defined above; the
-    # current-size and convergence logic below assumes a single source of truth.
 
     iteration = 0
     while not state.has_converged and iteration < max_iter:
@@ -2137,9 +2122,6 @@ def _refine_relion_mode(
             previous_combined_ha = None
 
         # --- Update prior from the actual weighted reconstruction stats ---
-        # tau2_fudge=1.0 matches RELION's default. The 0.25 workaround
-        # used here in v29 was a symptom of the FFT convention bug
-        # (commits 4be563e, 5eb5e4b) which has since been fixed.
         mean_signal_variance, _ = regularization.compute_relion_prior_from_reconstruction_stats(
             Ft_ctf_0,
             Ft_ctf_1,
@@ -2185,97 +2167,28 @@ def _refine_relion_mode(
             previous_best_translations[k] = np.asarray(best_trans, dtype=np.float32)
             experiment_datasets[k].update_poses(best_rots, best_trans)
 
-        # Estimate noise using BOTH hard-assignment residuals AND posterior-weighted stats.
-        # Hard-assignment: captures model error (imperfect reference → large residual
-        # even at best orientation). Important at low frequencies.
-        # Posterior-weighted: captures posterior uncertainty. Important for RELION parity
-        # at later iterations when model improves.
-        # Strategy: take the MAX per shell to get the most conservative (highest) estimate.
-        noise_estimates_hard = []
-        for k in range(2):
-            n_k = experiment_datasets[k].n_units
-            noise_k = noise.estimate_noise_level_no_masks(
-                experiment_datasets[k],
-                np.arange(n_k),
-                means[k],
-                100,
-                disc_type=disc_type,
+        # RELION-style posterior-weighted noise update. Sums the wsum/img_power
+        # accumulators from both half-sets and normalizes via the M-step formula.
+        if noise_stats_per_half[0] is None or noise_stats_per_half[1] is None:
+            raise RuntimeError(
+                "RELION mode expected per-half NoiseStats from the EM engine; "
+                "ensure accumulate_noise=True is plumbed through pass 2.",
             )
-            noise_estimates_hard.append(noise_k)
-        noise_hard = (noise_estimates_hard[0] + noise_estimates_hard[1]) / 2
-        # noise_hard is in recovar's native FFT units already (matching the
-        # engine's image power). Do NOT divide by (H*W)^2 to "convert to
-        # RELION units" — the engine never converts the images, so the noise
-        # variance must stay in the same units as |F_obs|^2. The previous
-        # divide cancelled out 8 orders of magnitude of per-pixel SNR, leaving
-        # chi^2 ~10^9 too large and Pmax pinned at 1.0. See the docstring of
-        # ``estimate_initial_noise_spectrum_from_unaligned_images`` and
-        # ``tmp/diagnose_pmax_gap.py`` for the diagnostic that pinned this.
-
-        # NOTE: A previous version (v25) inflated noise_hard by an
-        # ad-hoc mask area ratio (particle_diameter / image_size). That
-        # rationale was wrong on two counts:
-        #   (1) `estimate_noise_level_no_masks` uses unmasked images
-        #       (apply_image_mask=False), so there is no underestimation
-        #       to compensate for.
-        #   (2) When masking IS applied, the mask is window_mask(D, 0.85,
-        #       0.99) (a soft circular mask of radius ~54 px), not the
-        #       particle_diameter mask of ~23.5 px.
-        # We now leave noise_hard unmodified and rely on the posterior-weighted
-        # noise update to capture the iter-by-iter noise increase.
-
-        if noise_stats_per_half[0] is not None and noise_stats_per_half[1] is not None:
-            wsum_combined = (
-                np.asarray(noise_stats_per_half[0].wsum_sigma2_noise, dtype=np.float64)
-                + np.asarray(noise_stats_per_half[1].wsum_sigma2_noise, dtype=np.float64)
-            )
-            img_power_combined = (
-                np.asarray(noise_stats_per_half[0].wsum_img_power, dtype=np.float64)
-                + np.asarray(noise_stats_per_half[1].wsum_img_power, dtype=np.float64)
-            )
-            sumw_combined = noise_stats_per_half[0].sumw + noise_stats_per_half[1].sumw
-            noise_posterior = noise.normalize_wsum_to_sigma2_noise(
-                wsum_combined, img_power_combined, sumw_combined, cryo.image_shape,
-            )
-            # Take per-shell MAX of hard-assignment and posterior-weighted noise.
-            # This ensures model error is captured (hard-assignment at low freq)
-            # while also allowing posterior-weighted increases at high freq.
-            n_common = min(len(noise_hard), len(noise_posterior))
-            noise_from_res = jnp.maximum(
-                jnp.asarray(noise_hard[:n_common]),
-                jnp.asarray(noise_posterior[:n_common]),
-            )
-            logger.info(
-                "Noise updated: hard=[%.2e, %.2e], posterior=[%.2e, %.2e], "
-                "combined=[%.2e, %.2e]",
-                float(jnp.min(noise_hard)), float(jnp.max(noise_hard)),
-                float(jnp.min(noise_posterior)), float(jnp.max(noise_posterior)),
-                float(jnp.min(noise_from_res)), float(jnp.max(noise_from_res)),
-            )
-        else:
-            noise_from_res = jnp.asarray(noise_hard)
-            logger.info(
-                "Noise from hard-assignment: range=[%.2e, %.2e]",
-                float(jnp.min(noise_from_res)), float(jnp.max(noise_from_res)),
-            )
-
-        # Apply initial-noise floor: never let noise go below the initial
-        # estimate. With annealing, the noise inflation decreases over
-        # iterations, so the running-max floor would defeat the annealing.
-        old_noise_radial = previous_noise_radial
-        noise_from_res_raw = noise_from_res
-        n_floor = min(len(noise_from_res), len(initial_noise_radial))
-        noise_from_res = noise_from_res.at[:n_floor].set(
-            jnp.maximum(noise_from_res[:n_floor], initial_noise_radial[:n_floor])
+        wsum_combined = (
+            np.asarray(noise_stats_per_half[0].wsum_sigma2_noise, dtype=np.float64)
+            + np.asarray(noise_stats_per_half[1].wsum_sigma2_noise, dtype=np.float64)
         )
-        n_clamped = int(jnp.sum(noise_from_res_raw[:n_floor] < initial_noise_radial[:n_floor]))
-        if n_clamped > 0:
-            logger.info(
-                "Noise floor applied: %d/%d shells clamped to running-max noise",
-                n_clamped, n_floor,
-            )
+        img_power_combined = (
+            np.asarray(noise_stats_per_half[0].wsum_img_power, dtype=np.float64)
+            + np.asarray(noise_stats_per_half[1].wsum_img_power, dtype=np.float64)
+        )
+        sumw_combined = noise_stats_per_half[0].sumw + noise_stats_per_half[1].sumw
+        noise_from_res = noise.normalize_wsum_to_sigma2_noise(
+            wsum_combined, img_power_combined, sumw_combined, cryo.image_shape,
+        )
 
         # Log per-shell noise comparison (first 10 shells) for convergence diagnostics
+        old_noise_radial = previous_noise_radial
         n_log = min(10, len(noise_from_res), len(old_noise_radial))
         logger.info(
             "Noise update per shell (first %d): old=[%s] new=[%s]",
@@ -2284,9 +2197,7 @@ def _refine_relion_mode(
             ", ".join(f"{float(x):.3e}" for x in noise_from_res[:n_log]),
         )
 
-        # Update previous_noise_radial for next iteration's diagnostics
         previous_noise_radial = noise_from_res
-
         noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
 
         # --- Update convergence state ---
