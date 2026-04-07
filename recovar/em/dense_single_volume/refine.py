@@ -1384,50 +1384,6 @@ def _refine_relion_mode(
     # error before cropping back to the native real-space volume.
     PADDING_FACTOR = 2
 
-    # --- Build RELION-style image mask for scoring (softMaskOutsideMap equivalent) ---
-    # RELION applies softMaskOutsideMap(img(), particle_diameter/2, width_mask_edge)
-    # to every image before scoring (ml_optimiser.cpp:6369).  The mask is a
-    # raised-cosine circular mask with radius = particle_diameter/2 in pixels.
-    # When do_zero_mask=False (RELION's default for 3D auto-refine), outside the
-    # mask is filled with colored noise drawn from the current sigma2_noise.
-    #
-    # recovar's dataset.image_mask is window_mask(D, 0.85, 0.99) which has
-    # radius ~0.92*D/2 (not particle_diameter).  That mask is WAY larger than
-    # RELION's particle-sized mask.  To match RELION we build a separate mask
-    # with the correct radius here and pass it through to the engine via the
-    # noise_fill_mask_override parameter.
-    relion_scoring_mask = None
-    if particle_diameter_ang is not None and cryo.voxel_size > 0:
-        H, W = cryo.image_shape
-        mask_radius_px = float(particle_diameter_ang) / (2.0 * cryo.voxel_size)
-        # RELION uses width_mask_edge = 5 px by default
-        width_mask_edge = 5.0
-        # Build a 2D raised-cosine circular mask centered at the image center.
-        # The mask is in real-space image layout (H, W) with values in [0, 1],
-        # 1 inside radius, cosine taper in [radius, radius+edge], 0 outside.
-        yy, xx = np.meshgrid(
-            np.arange(H) - H // 2,
-            np.arange(W) - W // 2,
-            indexing='ij',
-        )
-        rr = np.sqrt(yy ** 2 + xx ** 2).astype(np.float32)
-        radius_p = mask_radius_px + width_mask_edge
-        mask_np = np.ones_like(rr, dtype=np.float32)
-        mask_np = np.where(rr >= radius_p, 0.0, mask_np)
-        taper = (rr >= mask_radius_px) & (rr < radius_p)
-        raised_cos = 0.5 - 0.5 * np.cos(
-            np.pi * (radius_p - rr[taper]) / width_mask_edge
-        )
-        mask_np[taper] = raised_cos
-        relion_scoring_mask = jnp.asarray(mask_np)
-        logger.info(
-            "Built RELION-style scoring mask: radius=%.1f px, edge=%.1f px, "
-            "mask_fraction_inside=%.3f (%.1f%% of image)",
-            mask_radius_px, width_mask_edge,
-            float(mask_np.mean()),
-            100.0 * float(mask_np.mean()),
-        )
-
     def _safe_batch_sizes(n_rot, n_trans):
         """Reduce batch sizes for large pose grids to avoid GPU OOM."""
         # Target the actual score-tensor size: n_img * n_rot_block * n_trans.
@@ -1666,40 +1622,6 @@ def _refine_relion_mode(
 
         cs_for_engine = cs if cs < cryo.image_shape[0] else None
 
-        # Effective noise for scoring: inflate by a factor to approximate
-        # RELION's elevated effective noise from softMaskOutsideMap with
-        # colored noise fill. RELION's noise at low frequencies is 5-33x
-        # higher after the first M-step. This factor prevents posterior
-        # collapse at low current_size values where few scoring pixels
-        # make the chi^2 very discriminative.
-        # TODO: replace with proper masking convention match.
-        # NOTE: RELION's effective noise is 5-33x higher at low frequencies
-        # due to softMaskOutsideMap with colored noise fill. Testing showed
-        # that a 5x inflation enables convergence (iter 1 Pmax=0.01, iter 2=0.31)
-        # but the system still collapses at iter 3 due to inconsistent noise
-        # between scoring and estimation paths. The proper fix requires matching
-        # RELION's masking convention or implementing per-shell noise inflation.
-        # See memory/project_noise_parity_status.md for details.
-
-        # --- Score temperature experiments (v33-v35, reverted) ---
-        # Multiplying noise_variance by a constant T before passing to
-        # the engine inflates sigma^2 in both the E-step (which we want,
-        # to make scores less discriminative) AND the M-step reconstruction
-        # (which we don't want, because the Wiener denominator becomes
-        # prior-dominated and produces degenerate volumes).
-        #
-        # v33 (T=6 constant): iter 1 Pmax 0.0036 (way too diffuse vs RELION
-        #   0.594), iter 3 collapse.
-        # v34 (T=6 iter 1 only): iter 1 0.0036, iter 2 slow from overly
-        #   diffuse volume, iter 3 degenerate.
-        # v35 (T=2 iter 1 only): ran for 12+ min on iter 1 pass 2 alone,
-        #   cancelled.
-        #
-        # The proper fix requires a SEPARATE score temperature parameter
-        # in the engine that only scales posterior computation, not the
-        # M-step GEMMs. Out of scope for this pass.
-        noise_variance_for_scoring = noise_variance
-
         # --- Run E+M on each half-set ---
         # Two modes: single-pass (adaptive_oversampling=0) or two-pass
         # coarse/fine (adaptive_oversampling>=1).
@@ -1780,7 +1702,7 @@ def _refine_relion_mode(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
-                    noise_variance_for_scoring,
+                    noise_variance,
                     previous_best_rotations[k],
                     local_search_order,
                     sigma_rot,
@@ -1809,7 +1731,7 @@ def _refine_relion_mode(
                     _compute_significance_batched(
                         experiment_datasets[k],
                         means[k],
-                        noise_variance_for_scoring,
+                        noise_variance,
                         effective_rotations,
                         current_translations,
                         disc_type,
@@ -1857,7 +1779,7 @@ def _refine_relion_mode(
                         experiment_datasets[k],
                         means[k],
                         mean_variance,
-                        noise_variance_for_scoring,
+                        noise_variance,
                         effective_rotations,
                         current_translations,
                         disc_type,
@@ -1884,7 +1806,7 @@ def _refine_relion_mode(
                         experiment_datasets[k],
                         means[k],
                         mean_variance,
-                        noise_variance_for_scoring,
+                        noise_variance,
                         effective_rotations,
                         current_translations,
                         np.ones(effective_rotations.shape[0], dtype=bool),
@@ -1933,7 +1855,7 @@ def _refine_relion_mode(
                         experiment_datasets[k],
                         means[k],
                         mean_variance,
-                        noise_variance_for_scoring,
+                        noise_variance,
                         current_translations,
                         sig_sample_indices,
                         current_nside_level,
@@ -1985,7 +1907,7 @@ def _refine_relion_mode(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
-                    noise_variance_for_scoring,
+                    noise_variance,
                     effective_rotations,
                     current_translations,
                     disc_type,
@@ -2215,13 +2137,9 @@ def _refine_relion_mode(
             previous_combined_ha = None
 
         # --- Update prior from the actual weighted reconstruction stats ---
-        # tau2_fudge < 1 strengthens the prior in the Wiener filter
-        # (smaller SNR → larger 1/tau² → more smoothing). RELION uses
-        # tau2_fudge=1 by default, but recovar's iter-1 volume tends to
-        # be 12% more concentrated than RELION's (Pmax 0.66 vs 0.59),
-        # which compounds into iter-2 collapse. Over-regularizing the
-        # reconstruction breaks that feedback loop. The factor 0.5
-        # roughly compensates for the Pmax gap (Pmax² ≈ 0.5).
+        # tau2_fudge=1.0 matches RELION's default. The 0.25 workaround
+        # used here in v29 was a symptom of the FFT convention bug
+        # (commits 4be563e, 5eb5e4b) which has since been fixed.
         mean_signal_variance, _ = regularization.compute_relion_prior_from_reconstruction_stats(
             Ft_ctf_0,
             Ft_ctf_1,
