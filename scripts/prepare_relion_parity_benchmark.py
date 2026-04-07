@@ -34,7 +34,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _write_reference_volumes(output_dir):
+def _write_reference_volumes(output_dir, grid_size):
     """Write the benchmark init and ground-truth reference maps as MRC.
 
     Two pairs of files are written:
@@ -56,7 +56,7 @@ def _write_reference_volumes(output_dir):
     import jax.numpy as jnp
 
     dataset = load_dataset(
-        os.path.join(output_dir, "particles.128.mrcs"),
+        os.path.join(output_dir, f"particles.{grid_size}.mrcs"),
         poses_file=os.path.join(output_dir, "poses.pkl"),
         ctf_file=os.path.join(output_dir, "ctf.pkl"),
         lazy=False,
@@ -148,7 +148,7 @@ def prepare_benchmark(output_dir, *, n_images, grid_size, noise_level):
     else:
         logger.info("Dataset files already present in %s; reusing them", output_dir)
 
-    _write_reference_volumes(output_dir)
+    _write_reference_volumes(output_dir, grid_size)
     logger.info("Benchmark ready at %s", output_dir)
     logger.info("Expected RELION output path: %s", os.path.join(output_dir, "relion_ref"))
     logger.info("Expected extracted reference path: %s", os.path.join(output_dir, "relion_ref_npz"))
