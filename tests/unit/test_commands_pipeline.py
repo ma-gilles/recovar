@@ -209,6 +209,7 @@ def test_standard_pipeline_passes_gpu_limit_to_predownsample(monkeypatch, tmp_pa
         lambda value: captured.setdefault("limits", []).append(value),
     )
     monkeypatch.setattr(pipeline_cmd.os.path, "exists", lambda _path: False)
+
     class _NoopLock:
         def __enter__(self):
             return None
@@ -220,7 +221,9 @@ def test_standard_pipeline_passes_gpu_limit_to_predownsample(monkeypatch, tmp_pa
         sys.modules,
         "recovar.commands.downsample",
         SimpleNamespace(
-            build_project_downsample_cache_dir=lambda **kwargs: str(tmp_path / "Cache" / "downsample" / "particles_d128"),
+            build_project_downsample_cache_dir=lambda **kwargs: str(
+                tmp_path / "Cache" / "downsample" / "particles_d128"
+            ),
             downsample_cache_lock=lambda _path: _NoopLock(),
             downsample_to_disk=lambda **kwargs: captured.setdefault("downsample_kwargs", kwargs),
             write_downsample_cache_metadata=lambda **kwargs: captured.setdefault("cache_metadata", kwargs),
@@ -260,7 +263,6 @@ def test_standard_pipeline_passes_gpu_limit_to_predownsample(monkeypatch, tmp_pa
     assert captured["downsample_kwargs"]["gpu_memory_gb"] == 12.0
 
 
-
 def test_standard_pipeline_uses_project_downsample_cache(monkeypatch, tmp_path):
     captured = {}
 
@@ -287,7 +289,9 @@ def test_standard_pipeline_uses_project_downsample_cache(monkeypatch, tmp_path):
         SimpleNamespace(
             build_project_downsample_cache_dir=lambda **kwargs: captured.setdefault("cache_dir", str(cache_dir)),
             downsample_cache_lock=lambda _path: _NoopLock(),
-            downsample_to_disk=lambda **kwargs: (_ for _ in ()).throw(AssertionError("should reuse cached downsample outputs")),
+            downsample_to_disk=lambda **kwargs: (_ for _ in ()).throw(
+                AssertionError("should reuse cached downsample outputs")
+            ),
             write_downsample_cache_metadata=lambda **kwargs: captured.setdefault("cache_metadata", kwargs),
         ),
     )

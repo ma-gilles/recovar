@@ -9,7 +9,6 @@ Covers:
 
 import argparse
 import sys
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -130,7 +129,9 @@ def test_downsample_to_disk_uses_explicit_gpu_memory_cap(monkeypatch, tmp_path):
         return 4
 
     monkeypatch.setattr(ds_io, "get_downsample_batch_size", _record_batch_size)
-    monkeypatch.setattr(ds_io, "downsample_images", lambda images, target_D, use_gpu=None: images[:, :target_D, :target_D])
+    monkeypatch.setattr(
+        ds_io, "downsample_images", lambda images, target_D, use_gpu=None: images[:, :target_D, :target_D]
+    )
     monkeypatch.setattr("recovar.data_io.image_loader.load_images", lambda *args, **kwargs: _FakeLoader())
 
     import recovar.utils.helpers as helpers
@@ -264,7 +265,6 @@ def test_write_minimal_star_creates_file(tmp_path):
         n_images=10,
     )
     assert (tmp_path / "particles.128.star").exists()
-
 
 
 def _make_relion31_star_input(tmp_path, orig_D=288, orig_apix=1.5, n_images=4):

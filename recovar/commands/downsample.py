@@ -148,7 +148,7 @@ def downsample_to_disk(
     (mrcs_path, star_path) : tuple of str
         Paths to the output ``.mrcs`` stack and ``.star`` metadata file.
     """
-    from recovar.data_io.downsample import downsample_images, get_downsample_batch_size, _gpu_available
+    from recovar.data_io.downsample import _gpu_available, downsample_images, get_downsample_batch_size
     from recovar.data_io.image_loader import load_images
 
     if target_D % 2 != 0:
@@ -388,7 +388,6 @@ def _write_output_star(input_path, mrcs_path, star_path, target_D, new_apix, n_i
     If the input was a CS file, convert metadata to RELION STAR format.
     Otherwise, write a minimal file with just image references.
     """
-    import pandas as pd
 
     ext = input_path.rsplit(".", 1)[-1].lower()
 
@@ -402,7 +401,6 @@ def _write_output_star(input_path, mrcs_path, star_path, target_D, new_apix, n_i
         # Use our own cached read_star (fast) rather than the external starfile package.
         try:
             from recovar.data_io.starfile import read_star, write_star
-            import pandas as pd
 
             particles_df, optics_df = read_star(input_path)
 
@@ -435,9 +433,9 @@ def _write_output_star(input_path, mrcs_path, star_path, target_D, new_apix, n_i
 
 def _write_star_from_cs(cs_path, star_path, mrcs_rel, target_D, new_apix, n_images):
     """Convert cryoSPARC .cs metadata to a RELION 3.1 STAR file."""
-    from scipy.spatial.transform import Rotation as SciPyRot
-    import starfile
     import pandas as pd
+    import starfile
+    from scipy.spatial.transform import Rotation as SciPyRot
 
     data = np.load(cs_path, allow_pickle=True)
 
@@ -530,8 +528,8 @@ def _write_star_from_cs(cs_path, star_path, mrcs_rel, target_D, new_apix, n_imag
 
 def _write_minimal_star(star_path, mrcs_rel, target_D, new_apix, n_images):
     """Write a minimal RELION 3.1 STAR file."""
-    import starfile
     import pandas as pd
+    import starfile
 
     optics = pd.DataFrame(
         {

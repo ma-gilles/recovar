@@ -1,4 +1,5 @@
-import os, argparse
+import argparse
+import os
 
 
 def add_project_arg(parser: argparse.ArgumentParser):

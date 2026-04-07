@@ -167,7 +167,7 @@ def job_context(args, command_name: str):
 
     job = JobDir(ctx.output_dir, command_name)
     ctx.job = job
-    job._parent_result_dir = ctx.pipeline_dir
+    setattr(job, "_parent_result_dir", ctx.pipeline_dir)
     job.start(args)
 
     # --- Register in project ---

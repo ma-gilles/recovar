@@ -1386,7 +1386,7 @@ def _run_outlier_detection(args):
     if save_all_plots:
         breakdown_file = os.path.join(combined_output_dir, "detection_breakdown.txt")
         with open(breakdown_file, "w") as f:
-            f.write(f"Combined Outlier Detection Results\n")
+            f.write("Combined Outlier Detection Results\n")
             f.write(f"Total particles: {total_particles}\n")
             f.write(
                 f"Combined image outliers: {len(combined_image_outliers)} ({len(combined_image_outliers) / original_image_indices.size * 100:.1f}%)\n"

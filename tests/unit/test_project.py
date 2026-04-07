@@ -6,8 +6,8 @@ import os
 
 import pytest
 
-from recovar.project.registry import JOB_TYPES, get_job_type
 from recovar.project.project import RecovarProject, default_job_alias, find_project_root
+from recovar.project.registry import JOB_TYPES, get_job_type
 
 pytestmark = pytest.mark.unit
 
@@ -162,7 +162,6 @@ class TestRecovarProject:
         resolved = proj.resolve_pipeline(None)
         assert resolved == job_dir
 
-
     def test_register_job_start_records_unique_alias(self, tmp_path):
         proj = RecovarProject.init(str(tmp_path / "p"))
         uid1, _ = proj.allocate_job("pipeline")
@@ -271,7 +270,6 @@ class TestJobContext:
 
         jobs = proj.list_jobs()
         assert any(j["uid"] == "Pipeline/job_0001" and j["status"] == "failed" for j in jobs)
-
 
     def test_project_mode_resolves_latest_pipeline_when_result_dir_omitted(self, tmp_path):
         from recovar.project.job_context import job_context

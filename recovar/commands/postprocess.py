@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 
 import argparse
+import glob
 import logging
 import os
-import glob
+
 import numpy as np
+
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
 from recovar.heterogeneity import locres
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 logger = logging.getLogger(__name__)
 
@@ -206,9 +208,9 @@ def estimate_bfactor_from_halfmaps(halfmap1, voxel_size, plot_path=None):
     -------
     RuntimeError : If estimation fails due to insufficient data
     """
-    import numpy as np
-    import matplotlib.pyplot as plt
     import logging
+
+    import numpy as np
 
     logger = logging.getLogger(__name__)
 
@@ -420,7 +422,6 @@ def _create_bfactor_plot_robust(
 ):
     """Create diagnostic plot for B-factor estimation (RELION-inspired)."""
     import matplotlib.pyplot as plt
-    import numpy as np
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
 
@@ -554,9 +555,10 @@ def estimate_bfactor_from_fsc_weighted_halfmaps(
       - The B-factor fit line (on the FSC-weighted plot)
     If multiple FSCs are available (e.g., unmasked, masked), plot them all for comparison.
     """
-    import numpy as np
-    import matplotlib.pyplot as plt
     import logging
+
+    import matplotlib.pyplot as plt
+    import numpy as np
 
     logger = logging.getLogger(__name__)
     # Use seaborn for style if available
@@ -857,7 +859,7 @@ def local_filter_halfmaps(
     else:
         info_path = output_path + "_info.txt"
     with open(info_path, "w") as f:
-        f.write(f"Local Resolution Statistics:\n")
+        f.write("Local Resolution Statistics:\n")
         if not np.isnan(median_resol):
             f.write(f"  Median: {median_resol:.2f} Angstroms\n")
             f.write(f"  Mean: {mean_resol:.2f} Angstroms\n")
@@ -866,7 +868,7 @@ def local_filter_halfmaps(
         f.write(f"Voxel Size: {voxel_size} Angstroms\n")
         f.write(f"Input Halfmap1: {halfmap1_path}\n")
         f.write(f"Input Halfmap2: {halfmap2_path}\n")
-        f.write(f"Local Resolution Parameters:\n")
+        f.write("Local Resolution Parameters:\n")
         f.write(f"  Sampling: {locres_sampling} Angstroms\n")
         f.write(f"  Mask radius: {locres_maskrad} Angstroms\n")
         f.write(f"  Edge width: {locres_edgwidth} Angstroms\n")
@@ -881,7 +883,7 @@ def local_filter_halfmaps(
             f.write(f"B-factor fit plot: {bfactor_plot_prefix}_bfactor_fsc_panels.png\n")
         if apply_mask_path is not None:
             f.write(f"Apply mask: {apply_mask_path}\n")
-        f.write(f"Output files:\n")
+        f.write("Output files:\n")
         f.write(f"  Filtered map: {output_path}\n")
         f.write(f"  Local resolution map: {local_resol_path}\n")
         f.write(f"  Local AUC map: {local_auc_path}\n")
@@ -1184,28 +1186,28 @@ def main():
 Examples:
   # Single halfmap filtering (global)
   python -m recovar.commands.postprocess half1_unfil.mrc --voxel-size 1.0 --output filtered.mrc
-  
+
   # Single halfmap filtering (local)
   python -m recovar.commands.postprocess half1_unfil.mrc --voxel-size 1.0 --output filtered.mrc --local
-  
+
   # With B-factor sharpening and masking (global)
   python -m recovar.commands.postprocess half1_unfil.mrc --voxel-size 1.0 --output filtered.mrc --B-factor -100 --mask-radius 50
-  
+
   # With B-factor sharpening and masking (local)
   python -m recovar.commands.postprocess half1_unfil.mrc --voxel-size 1.0 --output filtered.mrc --local --B-factor -100 --mask-radius 50
-  
+
   # With custom mask applied to final result
   python -m recovar.commands.postprocess half1_unfil.mrc --voxel-size 1.0 --output filtered.mrc --apply-mask mask.mrc
-  
+
   # Local filtering with custom parameters
   python -m recovar.commands.postprocess half1_unfil.mrc --voxel-size 1.0 --output filtered.mrc --local --locres-sampling 20 --locres-minres 30
-  
+
   # Batch process analyze output volumes directory (global)
   python -m recovar.commands.postprocess /path/to/analysis_output/kmeans_center_volumes --batch --voxel-size 1.0 --output /path/to/filtered_volumes
-  
+
   # Batch process analyze output volumes directory (local)
   python -m recovar.commands.postprocess /path/to/analysis_output/kmeans_center_volumes --batch --local --voxel-size 1.0 --output /path/to/filtered_volumes
-  
+
   # Specify both halfmaps explicitly
   python -m recovar.commands.postprocess half1_unfil.mrc --halfmap2 half2_unfil.mrc --voxel-size 1.0 --output filtered.mrc
         """,
