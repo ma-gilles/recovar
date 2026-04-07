@@ -15,14 +15,20 @@ can then be passed directly to ``recovar pipeline``.
 """
 
 import argparse
+import fcntl
+import hashlib
+import json
 import logging
 import os
 import sys
 import time
+from contextlib import contextmanager
 from typing import Optional, Tuple
 
 import mrcfile
 import numpy as np
+
+from recovar.project.project import normalize_job_alias
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +36,80 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def _downsample_cache_fingerprint(
+    particles_file: str,
+    target_D: int,
+    datadir: str = "",
+    strip_prefix: Optional[str] = None,
+) -> str:
+    """Fingerprint the effective downsample input for project cache reuse."""
+    payload = {
+        "particles_file": os.path.abspath(particles_file),
+        "target_D": int(target_D),
+        "datadir": os.path.abspath(datadir) if datadir else "",
+        "strip_prefix": strip_prefix or "",
+    }
+    try:
+        stat = os.stat(particles_file)
+        payload["particles_mtime_ns"] = stat.st_mtime_ns
+        payload["particles_size"] = stat.st_size
+    except OSError:
+        payload["particles_mtime_ns"] = None
+        payload["particles_size"] = None
+    digest = hashlib.sha1(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:10]
+    return digest
+
+
+def build_project_downsample_cache_dir(
+    project_root: str,
+    particles_file: str,
+    target_D: int,
+    datadir: str = "",
+    strip_prefix: Optional[str] = None,
+) -> str:
+    """Return the shared project cache directory for a downsampled dataset."""
+    stem = normalize_job_alias(os.path.splitext(os.path.basename(particles_file))[0])
+    digest = _downsample_cache_fingerprint(particles_file, target_D, datadir=datadir, strip_prefix=strip_prefix)
+    return os.path.join(os.path.abspath(project_root), "Cache", "downsample", f"{stem}_d{int(target_D)}_{digest}")
+
+
+@contextmanager
+def downsample_cache_lock(ds_dir: str):
+    """Serialize writes to a shared downsample cache directory."""
+    os.makedirs(ds_dir, exist_ok=True)
+    lock_path = os.path.join(ds_dir, ".lock")
+    with open(lock_path, "w") as fd:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+
+
+def write_downsample_cache_metadata(
+    ds_dir: str,
+    particles_file: str,
+    target_D: int,
+    datadir: str = "",
+    strip_prefix: Optional[str] = None,
+) -> None:
+    """Write a small manifest alongside project-cached downsample outputs."""
+    payload = {
+        "particles_file": os.path.abspath(particles_file),
+        "target_D": int(target_D),
+        "datadir": os.path.abspath(datadir) if datadir else "",
+        "strip_prefix": strip_prefix or "",
+        "fingerprint": _downsample_cache_fingerprint(
+            particles_file,
+            target_D,
+            datadir=datadir,
+            strip_prefix=strip_prefix,
+        ),
+    }
+    with open(os.path.join(ds_dir, "cache.json"), "w") as f:
+        json.dump(payload, f, indent=2)
 
 
 def downsample_to_disk(
@@ -190,7 +270,12 @@ def main():
     parser = argparse.ArgumentParser(description="Downsample particle images via Fourier cropping and save to disk.")
     parser.add_argument("particles", help="Input particles (.mrcs, .star, .cs, or .txt)")
     parser.add_argument("-D", "--target-D", type=int, required=True, help="Target box size in pixels (must be even)")
-    parser.add_argument("-o", "--outdir", required=True, help="Output directory")
+    parser.add_argument(
+        "-o",
+        "--outdir",
+        required=False,
+        help="Output directory. Required unless --project is used.",
+    )
     parser.add_argument("--datadir", default=None, help="Path prefix for resolving relative image paths")
     parser.add_argument("--strip-prefix", default=None, help="Prefix to strip from paths in star file")
     parser.add_argument("--batch-size", type=int, default=1000, help="Number of images per batch (default: 1000)")
@@ -208,9 +293,10 @@ def main():
         default=None,
         help="Split output into chunks of this many images (default: single file)",
     )
-    from recovar.utils.parser_args import add_project_arg
+    from recovar.utils.parser_args import add_output_name_arg, add_project_arg
 
     add_project_arg(parser)
+    add_output_name_arg(parser)
 
     args = parser.parse_args()
 

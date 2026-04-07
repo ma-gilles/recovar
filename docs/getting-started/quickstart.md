@@ -12,16 +12,31 @@ The wizard walks you through selecting your input files, mask, downsampling, and
 
 ## Manual quick start
 
-### From RELION
+### Recommended: project workflow
+
+```bash
+recovar init_project my_project
+cd my_project
+
+# RELION
+recovar pipeline particles.star --mask mask.mrc --project .
+
+# cryoSPARC
+recovar pipeline particles.cs --mask mask.mrc --datadir /path/to/cryosparc/project --project .
+
+# Analyze the latest completed Pipeline job
+recovar analyze --zdim=10 --project .
+```
+
+In project mode, RECOVAR keeps machine-stable numbered directories on disk (for example `Pipeline/job_0001/`) and stores readable job aliases in project metadata for the CLI and GUI.
+
+### Optional: standalone output directories
+
+If you prefer the older explicit-path style, it still works:
 
 ```bash
 recovar pipeline particles.star -o output --mask mask.mrc
-```
-
-### From cryoSPARC
-
-```bash
-recovar pipeline particles.cs -o output --mask mask.mrc --datadir /path/to/cryosparc/project
+recovar analyze output --zdim=10
 ```
 
 ### With downsampling
@@ -29,18 +44,11 @@ recovar pipeline particles.cs -o output --mask mask.mrc --datadir /path/to/cryos
 If your images are larger than ~256 pixels, downsample for faster processing:
 
 ```bash
-recovar pipeline particles.star -o output --mask mask.mrc --downsample 128
+recovar pipeline particles.star --mask mask.mrc --downsample 128 --project .
 ```
 
-This automatically pre-downsamples images to disk the first time and caches them for re-runs.
+This automatically pre-downsamples images into the shared project cache on the first run and reuses that cache across matching project runs.
 
-### Analyze the results
-
-```bash
-recovar analyze output --zdim=10
-```
-
-This runs k-means clustering, generates representative volumes, computes UMAP embeddings, and optionally creates trajectory movies.
 
 ### View volumes
 
@@ -54,7 +62,7 @@ output/analysis_10/kmeans/center001.mrc
 
 ## Project system
 
-For multi-step workflows, use the project system. It auto-numbers job directories (e.g. `Pipeline/job_0001/`, `Analyze/job_0001/`) and tracks job metadata (`job.json`, `command.txt`, `run.log`, `README.txt`).
+For multi-step workflows, use the project system. It is the standard RECOVAR workflow: numbered job directories stay stable on disk (e.g. `Pipeline/job_0001/`, `Analyze/job_0001/`), while the CLI and GUI show human-readable job names from project metadata.
 
 ```bash
 # Initialize a project directory
@@ -64,14 +72,14 @@ cd my_project
 # Run pipeline (auto-creates Pipeline/job_0001/)
 recovar pipeline particles.star --mask mask.mrc --project .
 
-# Analyze (auto-creates Analyze/job_0001/)
-recovar analyze Pipeline/job_0001 --zdim=10 --project .
+# Analyze the latest completed pipeline (auto-creates Analyze/job_0001/)
+recovar analyze --zdim=10 --project .
 
-# Check status of all jobs
+# Check status of all jobs and aliases
 recovar project_status
 ```
 
-All commands accept `--project <dir>` to enable project mode. If you run from within a project directory, it is auto-detected.
+All commands accept `--project <dir>` to enable project mode. If you run from within a project directory, it is auto-detected. Downstream commands can omit `result_dir`; RECOVAR then uses the latest completed Pipeline job in that project.
 
 ## Web GUI
 

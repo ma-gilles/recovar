@@ -7,7 +7,7 @@ import os
 import pytest
 
 from recovar.project.registry import JOB_TYPES, get_job_type
-from recovar.project.project import RecovarProject, find_project_root
+from recovar.project.project import RecovarProject, default_job_alias, find_project_root
 
 pytestmark = pytest.mark.unit
 
@@ -162,6 +162,28 @@ class TestRecovarProject:
         resolved = proj.resolve_pipeline(None)
         assert resolved == job_dir
 
+
+    def test_register_job_start_records_unique_alias(self, tmp_path):
+        proj = RecovarProject.init(str(tmp_path / "p"))
+        uid1, _ = proj.allocate_job("pipeline")
+        proj.register_job_start(uid1, "pipeline", alias="ribosome")
+        uid2, _ = proj.allocate_job("pipeline")
+        proj.register_job_start(uid2, "pipeline", alias="ribosome")
+        jobs = {job["uid"]: job for job in proj.list_jobs()}
+        assert jobs[uid1]["alias"] == "ribosome"
+        assert jobs[uid2]["alias"] == "ribosome_2"
+        assert proj.get_job_alias_map() == {uid1: "ribosome", uid2: "ribosome_2"}
+
+    def test_resolve_pipeline_alias(self, tmp_path):
+        proj = RecovarProject.init(str(tmp_path / "p"))
+        uid, job_dir = proj.allocate_job("pipeline")
+        proj.register_job_start(uid, "pipeline", alias="ribosome_d128")
+        proj.register_job_complete(uid, "completed")
+        assert proj.resolve_pipeline("ribosome_d128") == job_dir
+
+    def test_default_job_alias_prefers_explicit_output_name(self):
+        assert default_job_alias("analyze", {"output_name": "My Embedding"}) == "my_embedding"
+
     def test_parent_jobs_tracking(self, tmp_path):
         proj = RecovarProject.init(str(tmp_path / "p"))
         uid_p, _ = proj.allocate_job("pipeline")
@@ -212,14 +234,14 @@ class TestJobContext:
             outdir=None,
             result_dir=None,
         )
-        with job_context(args, "compute_state") as ctx:
-            assert ctx.uid == "ReconstructState/job_0001"
+        with job_context(args, "pipeline") as ctx:
+            assert ctx.uid == "Pipeline/job_0001"
             assert os.path.isdir(ctx.output_dir)
             assert ctx.project is not None
 
         # After context exits, job should be completed
         jobs = proj.list_jobs()
-        assert any(j["uid"] == "ReconstructState/job_0001" and j["status"] == "completed" for j in jobs)
+        assert any(j["uid"] == "Pipeline/job_0001" and j["status"] == "completed" for j in jobs)
 
     def test_standalone_mode_with_explicit_outdir(self, tmp_path):
         from recovar.project.job_context import job_context
@@ -229,7 +251,7 @@ class TestJobContext:
             outdir=str(tmp_path / "my_output"),
             result_dir=None,
         )
-        with job_context(args, "compute_state") as ctx:
+        with job_context(args, "pipeline") as ctx:
             assert ctx.output_dir == str(tmp_path / "my_output")
             assert ctx.project is None
             assert ctx.uid is None
@@ -244,8 +266,34 @@ class TestJobContext:
             result_dir=None,
         )
         with pytest.raises(RuntimeError):
-            with job_context(args, "compute_state") as ctx:
+            with job_context(args, "pipeline") as ctx:
                 raise RuntimeError("test failure")
 
         jobs = proj.list_jobs()
-        assert any(j["uid"] == "ReconstructState/job_0001" and j["status"] == "failed" for j in jobs)
+        assert any(j["uid"] == "Pipeline/job_0001" and j["status"] == "failed" for j in jobs)
+
+
+    def test_project_mode_resolves_latest_pipeline_when_result_dir_omitted(self, tmp_path):
+        from recovar.project.job_context import job_context
+
+        proj = RecovarProject.init(str(tmp_path / "p"))
+        pipeline_uid, pipeline_dir = proj.allocate_job("pipeline")
+        proj.register_job_start(pipeline_uid, "pipeline", alias="sample_pipeline")
+        proj.register_job_complete(pipeline_uid, "completed")
+
+        args = argparse.Namespace(
+            project=str(tmp_path / "p"),
+            outdir=None,
+            output_dir=None,
+            output=None,
+            result_dir=None,
+            recovar_result_dir=None,
+            output_name="Embedding K10",
+        )
+        with job_context(args, "analyze") as ctx:
+            assert ctx.pipeline_dir == pipeline_dir
+            assert ctx.parent_jobs == [pipeline_uid]
+            assert ctx.uid == "Analyze/job_0001"
+
+        jobs = proj.list_jobs("Analyze")
+        assert jobs[0]["alias"] == "embedding_k10"

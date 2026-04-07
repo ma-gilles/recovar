@@ -43,3 +43,12 @@ def test_standard_downstream_args_defaults_and_flags():
     assert parsed.no_z_regularization is True
     assert parsed.lazy is True
     assert parsed.apply_global_filtering is True
+
+
+
+def test_standard_downstream_args_project_mode_defaults():
+    parser = parser_args.standard_downstream_args(argparse.ArgumentParser(), analyze=True)
+    parsed = parser.parse_args(["--project", "/tmp/project", "--output-name", "embedding_k10"])
+    assert parsed.result_dir is None
+    assert parsed.project == "/tmp/project"
+    assert parsed.output_name == "embedding_k10"

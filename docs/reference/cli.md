@@ -2,6 +2,8 @@
 
 All RECOVAR commands follow the pattern `recovar <command> [arguments]`.
 
+Project mode is the standard workflow: pass `--project <dir>` (or run from inside a project), let RECOVAR place outputs in stable numbered directories such as `Pipeline/job_0001/`, and use project metadata for readable names in the CLI and GUI. Standalone explicit paths remain supported.
+
 ## Main workflow
 
 | Command | Description |
@@ -74,7 +76,8 @@ recovar <command> -h
 Run the full heterogeneity analysis pipeline.
 
 ```bash
-recovar pipeline particles.star -o output --mask mask.mrc [options]
+recovar pipeline particles.star --mask mask.mrc --project .
+# or: recovar pipeline particles.star -o output --mask mask.mrc [options]
 ```
 
 See [Running the Pipeline](../guide/pipeline.md) for full documentation.
@@ -86,7 +89,8 @@ See [Running the Pipeline](../guide/pipeline.md) for full documentation.
 Post-pipeline analysis: k-means clustering, volume generation, UMAP, trajectories.
 
 ```bash
-recovar analyze result_dir --zdim=10 [options]
+recovar analyze --zdim=10 --project .
+# or: recovar analyze result_dir --zdim=10 [options]
 ```
 
 | Flag | Default | Description |
@@ -117,13 +121,14 @@ recovar analyze result_dir --zdim=10 [options]
 Pre-downsample particle images to disk via Fourier cropping.
 
 ```bash
-recovar downsample particles.star -D 128 -o downsampled/ [options]
+recovar downsample particles.star -D 128 --project . --output-name particles_d128
+# or: recovar downsample particles.star -D 128 -o downsampled/ [options]
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `-D`, `--target-D` | Required | Target box size (even integer) |
-| `-o`, `--outdir` | Required | Output directory |
+| `-o`, `--outdir` | Auto in project mode | Output directory |
 | `--datadir` | None | Base directory for image paths |
 | `--strip-prefix` | None | Strip prefix from paths |
 | `--batch-size` | 1000 | Images per batch |
@@ -320,7 +325,7 @@ recovar project_status [directory] [--tree]
 
 ## Common flag: `--project`
 
-All commands that produce output accept `--project <dir>` to enable project mode. When active, output directories are auto-generated. If you run from within a project directory (containing `project.json`), it is auto-detected without needing the flag.
+All commands that produce output accept `--project <dir>` to enable project mode. This is the recommended way to run RECOVAR. When active, output directories are auto-generated, downstream commands may omit `result_dir` to use the latest completed Pipeline job, and RECOVAR stores human-readable job names alongside the numbered directories. If you run from within a project directory (containing `project.json`), it is auto-detected without needing the flag.
 
 Each job creates `job.json`, `command.txt`, `run.log`, and `README.txt` metadata files.
 
@@ -328,7 +333,7 @@ Each job creates `job.json`, `command.txt`, `run.log`, and `README.txt` metadata
 
 | CLI command | Directory name | Example |
 |-------------|----------------|---------|
-| `pipeline` | `Pipeline/` | `Pipeline/job_0001/` |
+| `pipeline` | `Pipeline/` | `Pipeline/job_0001/` (alias shown separately in CLI/GUI) |
 | `analyze` | `Analyze/` | `Analyze/job_0001/` |
 | `compute_state` | `ReconstructState/` | `ReconstructState/job_0001/` |
 | `compute_trajectory` | `ReconstructTrajectory/` | `ReconstructTrajectory/job_0001/` |
