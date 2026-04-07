@@ -24,22 +24,13 @@ jobs:
       - name: Ruff format check (changed .py files only)
         run: |
           BASE=${{ github.event.pull_request.base.sha || 'HEAD~1' }}
-          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- '*.py' || true)
-          if [ -n "$FILES" ]; then
-            echo "Checking: $FILES"
-            echo "$FILES" | xargs ruff format --check --diff
-          else
-            echo "No Python files changed"
-          fi
+          bash scripts/check_changed_python.sh --base "$BASE" --format
 
       - name: Ruff lint (changed .py files only)
         if: always()
         run: |
           BASE=${{ github.event.pull_request.base.sha || 'HEAD~1' }}
-          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- '*.py' || true)
-          if [ -n "$FILES" ]; then
-            echo "$FILES" | xargs ruff check
-          fi
+          bash scripts/check_changed_python.sh --base "$BASE" --lint
 
   typecheck:
     name: Type Check (changed files only)
@@ -58,13 +49,7 @@ jobs:
       - name: Mypy (changed .py files only)
         run: |
           BASE=${{ github.event.pull_request.base.sha || 'HEAD~1' }}
-          FILES=$(git diff --name-only --diff-filter=ACMR "$BASE" HEAD -- '*.py' || true)
-          if [ -n "$FILES" ]; then
-            echo "Checking: $FILES"
-            echo "$FILES" | xargs python -m mypy --config-file pyproject.toml
-          else
-            echo "No Python files changed"
-          fi
+          bash scripts/check_changed_python.sh --base "$BASE" --typecheck
 
   fast-tests:
     name: Unit tests
