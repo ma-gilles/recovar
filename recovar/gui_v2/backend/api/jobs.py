@@ -260,7 +260,7 @@ def _categorize_volume(name: str, rel_path: str = "") -> str:
     # Analyze job subfolder detection
     if "kmeans" in rel_lower or "center" in lower:
         return "kmeans_center"
-    if "trajectory" in rel_lower or "traj" in lower:
+    if "trajectory" in rel_lower or "traj" in rel_lower or "traj" in lower:
         return "trajectory"
 
     if "state" in lower:

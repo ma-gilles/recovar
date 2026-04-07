@@ -29,7 +29,7 @@ import {
 
 const VOLUME_COLOR_HEX = ["#38bdf8", "#fb7185", "#34d399", "#fbbf24"];
 
-interface PinnedVolume {
+export interface PinnedVolume {
   path: string;
   name: string;
   threshold: number;
@@ -44,6 +44,9 @@ interface VolumeViewerProps {
   initialVolumePath?: string;
   /** Hide the built-in volume list (when the parent already provides one) */
   hideVolumeList?: boolean;
+  /** Controlled pinning state — when provided, VolumeViewer does not manage its own pin state */
+  pinnedVolumes?: PinnedVolume[];
+  onPinnedVolumesChange?: (pinned: PinnedVolume[]) => void;
 }
 
 /**
@@ -51,8 +54,17 @@ interface VolumeViewerProps {
  * Full vtk.js isosurface rendering requires the vtk.js package (installed separately).
  * This provides the slice view mode and controls as a fallback/default.
  */
-export function VolumeViewer({ volumes, initialVolumePath, hideVolumeList }: VolumeViewerProps): React.JSX.Element {
-  const [pinnedVolumes, setPinnedVolumes] = useState<PinnedVolume[]>([]);
+export function VolumeViewer({
+  volumes,
+  initialVolumePath,
+  hideVolumeList,
+  pinnedVolumes: controlledPinned,
+  onPinnedVolumesChange,
+}: VolumeViewerProps): React.JSX.Element {
+  const [internalPinned, setInternalPinned] = useState<PinnedVolume[]>([]);
+  // Use controlled state if provided, otherwise internal
+  const pinnedVolumes = controlledPinned ?? internalPinned;
+  const setPinnedVolumes = onPinnedVolumesChange ?? setInternalPinned;
   const [activeVolume, setActiveVolume] = useState<string | null>(initialVolumePath ?? null);
 
   // Sync activeVolume when the parent changes initialVolumePath (e.g. user
