@@ -799,7 +799,16 @@ def compute_current_size_relion(resolution_shell, ori_size, ave_Pmax=0.0,
 
 prior_iteration_batch = jax.vmap(prior_iteration, in_axes=(0, 0, 0, 0, 0, 0, None, None, None))
 prior_iteration_relion_style_batch = jax.vmap(
-    prior_iteration_relion_style, in_axes=(0, 0, 0, 0, 0, 0, None, None, None, None, None, None, None, None, None)
+    prior_iteration_relion_style,
+    # 14 positional args from
+    # ``compute_covariance_regularization_relion_style``: H0, H1, B0, B1,
+    # frequency_shift, init_regularization (all batched: 0), then
+    # substract_shell_mean, volume_shape, kernel, use_spherical_mask,
+    # grid_correct, volume_mask, prior_iterations, downsample_from_fsc_flag
+    # (all broadcast: None). The trailing ``tau2_fudge`` and
+    # ``volume_upsampling_factor`` are taken from their defaults and are
+    # NOT passed positionally.
+    in_axes=(0, 0, 0, 0, 0, 0, None, None, None, None, None, None, None, None),
 )
 
 batch_average_over_shells = jax.vmap(average_over_shells, in_axes=(0, None, None))
