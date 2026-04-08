@@ -189,13 +189,52 @@ single-pass vs RELION `healpix_order 3 --oversampling 1`):
 | 4 | 0.8740 | 0.9520 | 58 | 60 | 27.20 | 27.20 |
 | 5 | 0.9678 | 0.9806 | 60 | 60 | 27.20 | 28.63 |
 
-**Verdict:**
+**Verdict (CORRECTED 2026-04-08 evening, then RESOLVED later same day):**
 
-1. ✅ **`Pmax` at iter 1 matches RELION within 20%** (0.0226 vs 0.0274). The
-   chi²/softmax formula and pose grid are correct. The previous "12×
-   diffuse" gap from the 5k matched-grid test was an artifact of
-   recovar's `adaptive_oversampling=1` two-pass code generating MORE
-   pose candidates than the direct fine-grid path.
+The earlier "Pmax matches at iter 1" claim was a **false positive** —
+it compared `recovar h3` (1.07M poses) to `RELION os1` (17M poses,
+with `--oversampling 1`'s 4× rotation × 4× translation oversampling).
+That was an unfair comparison.
+
+When we run RELION ALSO with `--oversampling 0` (matched 1.07M poses
+to recovar), there were two real bugs that were causing recovar's
+posterior to look completely different from RELION's:
+
+**Bug 1 (FIXED): Bootstrap noise estimation used unmasked images.**
+RELION mode runs the E-step on masked images (via the RELION
+particle-diameter mask), but recovar's
+`estimate_initial_noise_spectrum_from_unaligned_images` was computing
+σ² from unmasked images. Solvent area dominates the unmasked spectrum,
+so σ² was 3-6× too big (7-32× at high shells), making χ² 3-6× too
+small and collapsing the iter-1 posterior. Fix: thread `apply_image_mask`
+through `process_images` in the bootstrap function.
+
+**Bug 2 (FIXED): `_refine_relion_mode` used `PADDING_FACTOR=2`, but the
+zero-padding path leaves the padded grid sparse, so the iFFT divides
+by `(pf*N)^3` even though only `N^3` worth of energy is present.**
+This produced a real-space volume `1/pf^3 = 1/8` the correct amplitude.
+Benign at iter 1 (the volume is the LP-filtered init), but at iter 2+
+the projections from the under-amplified reconstruction don't match the
+data, giving huge residuals that inflate σ²_noise and collapse the
+posterior. Fix: set `PADDING_FACTOR = 1`. (Recovar's homogeneous code
+uses `pf=2` correctly because it accumulates directly at the upsampled
+grid via the interpolation kernel; only the dense-engine refine path
+was broken.)
+
+**Final parity (recovar h3 pf=1 vs RELION os0, tiny dataset 1k/64):**
+
+| iter | recovar Pmax | RELION os0 Pmax | recovar cs | RELION cs | match |
+|---|---|---|---|---|---|
+| 1 | 0.2603 | 0.2445 | 56 | 56 | 6% |
+| 2 | 0.9315 | 0.8725 | 48 | 54 | 7% |
+| 3 | 0.9617 | 0.9790 | 48 | 58 | 2% |
+| 4 | 0.9904 | 0.9799 | 54 | 54 | 1% |
+| 5 | 0.9986 | 0.9870 | 56 | 56 | 1% |
+
+Per-shell σ²_noise also matches RELION within 3-15% across shells 1-30.
+DC (shell 0) remains ~4× lower in recovar because recovar's mask zeros
+the outside while RELION's `softMaskOutsideMap` replaces with the
+average background. This is a 1-pixel residual that doesn't affect χ².
 
 2. ✅ **Both pipelines converge to the same final values**: Pmax≈0.97,
    `current_size`=60, resolution≈27 Å. Recovar takes ~3 iterations
