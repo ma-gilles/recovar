@@ -1,21 +1,21 @@
 """Per-image latent coordinate estimation via linear projection."""
 
+import functools
 import logging
 import time
-import functools
 
 import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core, jax_config, utils
 from recovar.core import linalg
-from recovar.core.configs import ForwardModelConfig, ModelState, EmbeddingOpts
+from recovar.core.configs import EmbeddingOpts, ForwardModelConfig, ModelState
 from recovar.heterogeneity import covariance_core
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -234,6 +234,8 @@ def get_per_image_embedding(
         bias = bias.real
 
     return zs, cov_zs, est_contrasts, bias
+
+
 @nvtx.annotate("get_coords_in_basis_and_contrast", color="blue", domain=NVTX_DOMAIN_EMBED)
 def get_coords_in_basis_and_contrast_3(
     experiment_dataset,
@@ -316,8 +318,10 @@ def get_coords_in_basis_and_contrast_3(
         by_image=False,
         noise_model=noise_model,
         noise_half=prefer_half_noise,
-        # TODO(#45): enable pack_groups once compute_grouped_shared_batch_coords
-        # produces identical results to per-particle compute_batch_coords.
+        # For tilt series, pack multiple particles into each batch while
+        # preserving per-image particle ids so the grouped/shared-label solve
+        # remains numerically identical to the legacy per-particle loop.
+        pack_groups=shared_label,
     ):
         batch = jnp.asarray(batch)
         batch_image_ind = np.asarray(image_indices).reshape(-1)
@@ -331,12 +335,18 @@ def get_coords_in_basis_and_contrast_3(
             if contrast_shared_across_tilt_series:
                 # Batched solve for all particles at once.
                 xs_group, contrast_group, cov_group, bias_group = compute_grouped_shared_batch_coords(
-                    config, batch, model,
-                    experiment_dataset.image_mask, contrast_grid,
-                    contrast_mean, contrast_variance,
+                    config,
+                    batch,
+                    model,
+                    experiment_dataset.image_mask,
+                    contrast_grid,
+                    contrast_mean,
+                    contrast_variance,
                     jnp.asarray(particle_group_ids, dtype=jnp.int32),
                     int(unique_particles.size),
-                    compute_covariances, compute_bias, hermitian_weights,
+                    compute_covariances,
+                    compute_bias,
+                    hermitian_weights,
                     rotation_matrices=rotation_matrices,
                     translations=translations,
                     ctf_params=ctf_params,
@@ -352,11 +362,19 @@ def get_coords_in_basis_and_contrast_3(
                 # Per-image contrast: solve each particle separately.
                 for pid in unique_particles:
                     mask = particle_ids == pid
-                    local_nv = _noise_get_half_or_full(noise_model, batch_image_ind[mask], prefer_half=prefer_half_noise)
+                    local_nv = _noise_get_half_or_full(
+                        noise_model, batch_image_ind[mask], prefer_half=prefer_half_noise
+                    )
                     xs_single, contrast_single, cov_batch, bias_val = compute_batch_coords(
-                        config, batch[mask], model, opts,
-                        experiment_dataset.image_mask, contrast_grid,
-                        contrast_mean, contrast_variance, hermitian_weights,
+                        config,
+                        batch[mask],
+                        model,
+                        opts,
+                        experiment_dataset.image_mask,
+                        contrast_grid,
+                        contrast_mean,
+                        contrast_variance,
+                        hermitian_weights,
                         rotation_matrices=rotation_matrices[mask],
                         translations=translations[mask],
                         ctf_params=ctf_params[mask],
@@ -372,9 +390,15 @@ def get_coords_in_basis_and_contrast_3(
         else:
             # SPA: one solve per batch, results indexed by image or particle.
             xs_single, contrast_single, cov_batch, bias = compute_batch_coords(
-                config, batch, model, opts,
-                experiment_dataset.image_mask, contrast_grid,
-                contrast_mean, contrast_variance, hermitian_weights,
+                config,
+                batch,
+                model,
+                opts,
+                experiment_dataset.image_mask,
+                contrast_grid,
+                contrast_mean,
+                contrast_variance,
+                hermitian_weights,
                 rotation_matrices=rotation_matrices,
                 translations=translations,
                 ctf_params=ctf_params,
@@ -464,8 +488,11 @@ def _compute_batch_coords_p1(
             )
         batch = core.translate_images(batch, translations, config.image_shape)
 
+    basis = model.basis
+    assert basis is not None
+
     mean_half_volume = half and _mean_is_half_volume(model.mean_estimate, config.volume_shape)
-    basis_half_volume = half and _basis_is_half_volume(model.basis, config.volume_shape)
+    basis_half_volume = half and _basis_is_half_volume(basis, config.volume_shape)
     projected_mean = core_forward.forward_model(
         config,
         model.mean_estimate,
@@ -478,7 +505,7 @@ def _compute_batch_coords_p1(
     # AUs: (n_basis, n_images, n_pix[_half])
     AUs = covariance_core.batch_vol_forward_from_map(
         config,
-        model.basis,
+        basis,
         ctf_params,
         rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
@@ -604,6 +631,7 @@ def _compute_batch_coords_explicit(
 ):
     contrast_grid = jnp.array(contrast_grid)
     eigenvalues = model.eigenvalues
+    assert eigenvalues is not None
 
     AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = _compute_batch_coords_p1(
         config,
@@ -782,6 +810,7 @@ def _compute_grouped_shared_batch_coords_explicit(
     contrast_grid = jnp.asarray(contrast_grid)
     group_ids = jnp.asarray(group_ids, dtype=jnp.int32)
     eigenvalues = model.eigenvalues
+    assert eigenvalues is not None
 
     AU_t_images, AU_t_Amean, AU_t_AU, image_norms_sq, image_T_A_mean, A_mean_norm_sq = _compute_batch_coords_p1(
         config,

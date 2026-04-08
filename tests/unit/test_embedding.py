@@ -1,13 +1,13 @@
 from types import SimpleNamespace
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
+from helpers import tiny_synthetic
 
-jax = pytest.importorskip("jax")
-import jax.numpy as jnp
-
+from recovar.core.configs import EmbeddingOpts, ForwardModelConfig, ModelState
 from recovar.heterogeneity import embedding
-from recovar.core.configs import ForwardModelConfig, ModelState, EmbeddingOpts
 
 pytestmark = pytest.mark.unit
 
@@ -103,9 +103,6 @@ def test_generate_conformation_from_reprojection_linear_combination():
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------
-
-import jax
-import jax.numpy as jnp
 
 
 @pytest.mark.gpu
@@ -414,7 +411,8 @@ def test_get_coords_shared_label_splits_mixed_particle_batches(monkeypatch):
             return self.image_source.process_images(batch, apply_image_mask=apply_image_mask)
 
         def iter_batches(self, batch_size, **kwargs):
-            _ = (batch_size, kwargs)
+            assert batch_size == 8
+            assert kwargs["pack_groups"] is True
             batch = np.zeros((4, 16), dtype=np.complex64)
             particles_ind = np.array([0, 0, 1, 1], dtype=np.int32)
             batch_image_ind = np.array([0, 1, 2, 3], dtype=np.int32)
@@ -529,7 +527,8 @@ def test_get_coords_shared_label_grouped_shared_contrast(monkeypatch):
             return self.image_source.process_images(batch, apply_image_mask=apply_image_mask)
 
         def iter_batches(self, batch_size, **kwargs):
-            _ = (batch_size, kwargs)
+            assert batch_size == 8
+            assert kwargs["pack_groups"] is True
             batch = np.zeros((4, 16), dtype=np.complex64)
             particles_ind = np.array([0, 0, 1, 1], dtype=np.int32)
             batch_image_ind = np.array([0, 1, 2, 3], dtype=np.int32)
@@ -581,6 +580,110 @@ def test_get_coords_shared_label_grouped_shared_contrast(monkeypatch):
     np.testing.assert_allclose(contrasts, np.array([11.0, 12.0], dtype=np.float32))
     np.testing.assert_allclose(cov, np.stack([np.eye(2), 2 * np.eye(2)], axis=0))
     assert bias is None
+
+
+def test_compute_grouped_shared_batch_coords_matches_per_particle_loop():
+    cryo = tiny_synthetic.make_tiny_cryo_dataset_with_images(grid_size=4, n_images=4, seed=0)
+    config = ForwardModelConfig.from_dataset(
+        cryo,
+        disc_type="linear_interp",
+        process_fn=cryo.image_source.process_images,
+    )
+
+    mean_estimate = jnp.zeros((cryo.volume_size,), dtype=cryo.dtype)
+    basis = jnp.asarray(
+        np.stack(
+            [
+                np.linspace(0.1, 1.0, cryo.volume_size, dtype=np.float32),
+                np.linspace(1.0, 0.2, cryo.volume_size, dtype=np.float32),
+            ],
+            axis=0,
+        ).astype(np.complex64)
+    )
+    mean_estimate, basis = embedding._prepare_model_half_volumes(config, mean_estimate, basis)
+    model = ModelState(
+        mean_estimate=mean_estimate,
+        volume_mask=jnp.ones(cryo.volume_shape, dtype=cryo.dtype_real),
+        basis=basis,
+        eigenvalues=jnp.array([1.0, 2.0], dtype=cryo.dtype_real),
+    )
+
+    batch, rotation_matrices, translations, ctf_params, noise_variance, _particles_ind, _image_indices = next(
+        cryo.iter_batches(
+            batch_size=4,
+            by_image=True,
+            noise_model=cryo.noise,
+            noise_half=True,
+            prefetch=False,
+        )
+    )
+    group_ids = np.array([0, 0, 1, 1], dtype=np.int32)
+    contrast_grid = jnp.array([0.5, 1.0, 1.5], dtype=cryo.dtype_real)
+    image_mask = jnp.asarray(cryo.image_mask, dtype=cryo.dtype_real)
+    hermitian_weights = embedding._embedding_hermitian_weights(config)
+    opts = EmbeddingOpts(
+        compute_covariances=True,
+        compute_bias=True,
+        shared_label=True,
+        contrast_shared_across_tilt_series=True,
+    )
+
+    with jax.disable_jit():
+        grouped_xs, grouped_contrast, grouped_cov, grouped_bias = embedding.compute_grouped_shared_batch_coords(
+            config,
+            jnp.asarray(batch),
+            model,
+            image_mask,
+            contrast_grid,
+            1.0,
+            np.inf,
+            jnp.asarray(group_ids, dtype=jnp.int32),
+            2,
+            True,
+            True,
+            hermitian_weights,
+            rotation_matrices=jnp.asarray(rotation_matrices),
+            translations=jnp.asarray(translations),
+            ctf_params=jnp.asarray(ctf_params),
+            noise_variance=jnp.asarray(noise_variance),
+        )
+
+        ref_xs = []
+        ref_contrast = []
+        ref_cov = []
+        ref_bias = []
+        for gid in range(2):
+            mask = group_ids == gid
+            batch_data = _make_batch_fields(
+                images=jnp.asarray(batch)[mask],
+                rotation_matrices=jnp.asarray(rotation_matrices)[mask],
+                translations=jnp.asarray(translations)[mask],
+                ctf_params=jnp.asarray(ctf_params)[mask],
+                noise_variance=jnp.asarray(noise_variance)[mask],
+            )
+            xs, contrast, cov, bias = _call_compute_batch_coords(
+                config,
+                batch_data,
+                model,
+                opts,
+                image_mask,
+                contrast_grid,
+                hermitian_weights=hermitian_weights,
+            )
+            ref_xs.append(np.asarray(xs))
+            ref_contrast.append(np.asarray(contrast))
+            ref_cov.append(np.asarray(cov))
+            ref_bias.append(np.asarray(bias))
+
+    np.testing.assert_allclose(np.asarray(grouped_xs), np.concatenate(ref_xs, axis=0), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(grouped_contrast),
+        np.concatenate(ref_contrast, axis=0),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(np.asarray(grouped_cov), np.concatenate(ref_cov, axis=0), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(grouped_bias), np.concatenate(ref_bias, axis=0), rtol=1e-5, atol=1e-5)
 
 
 def test_get_coords_spa_indexes_outputs_by_image_id_not_particle_id(monkeypatch):
