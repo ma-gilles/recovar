@@ -417,6 +417,21 @@ export function listProjectMasks(projectId: string): Promise<MaskInfo[]> {
   return request(`/masks/by-project/${projectId}`);
 }
 
+export interface BooleanOpRequest {
+  project_id: string;
+  mask_a: string;
+  mask_b: string;
+  op: "union" | "intersect" | "subtract";
+  output_name: string;
+}
+
+export function maskBooleanOp(req: BooleanOpRequest): Promise<MaskInfo> {
+  return request(`/masks/boolean-op`, {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
 export interface PreviewVolumeResponse {
   path: string;
   voxel_size: number;

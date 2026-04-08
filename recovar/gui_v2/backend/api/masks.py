@@ -113,6 +113,14 @@ class MaskInfo(BaseModel):
     modified: str  # ISO 8601
 
 
+class BooleanOpRequest(BaseModel):
+    project_id: str
+    mask_a: str = Field(..., description="Absolute path to the first mask MRC")
+    mask_b: str = Field(..., description="Absolute path to the second mask MRC")
+    op: str = Field(..., description="One of: union, intersect, subtract")
+    output_name: str = Field(..., min_length=1)
+
+
 # ---------------------------------------------------------------------------
 # Helpers (run in thread pool to avoid blocking the event loop)
 # ---------------------------------------------------------------------------
@@ -396,6 +404,69 @@ async def delete_preview_volume(path: str) -> dict:
     except OSError as exc:
         logger.warning("Could not delete preview %s: %s", path, exc)
     return {"deleted": True, "path": path}
+
+
+@router.post("/boolean-op", response_model=MaskInfo)
+async def mask_boolean_op(req: BooleanOpRequest) -> MaskInfo:
+    """Combine two existing project masks with a boolean operation.
+
+    Operations:
+        ``union``     — element-wise max(A, B)        ("A OR B")
+        ``intersect`` — element-wise min(A, B)        ("A AND B")
+        ``subtract``  — A * (1 - B), clamped to [0,1] ("A AND NOT B")
+    """
+    if req.op not in ("union", "intersect", "subtract"):
+        raise HTTPException(status_code=400, detail=f"Unknown op: {req.op}")
+    _check_path_allowed(req.mask_a)
+    _check_path_allowed(req.mask_b)
+    if not os.path.isfile(req.mask_a):
+        raise HTTPException(status_code=404, detail=f"Mask A not found: {req.mask_a}")
+    if not os.path.isfile(req.mask_b):
+        raise HTTPException(status_code=404, detail=f"Mask B not found: {req.mask_b}")
+
+    project, session = await _load_project_by_id(req.project_id)
+    try:
+        out_basename = _sanitize_output_name(req.output_name)
+        masks_dir = os.path.join(project.path, "Masks")
+        os.makedirs(masks_dir, exist_ok=True)
+        out_path = os.path.join(masks_dir, out_basename)
+    finally:
+        await session.close()
+
+    def _do() -> None:
+        import numpy as np
+        a, voxel_a = _read_mrc(req.mask_a)
+        b, _voxel_b = _read_mrc(req.mask_b)
+        a = np.asarray(a, dtype=np.float32)
+        b = np.asarray(b, dtype=np.float32)
+        if a.shape != b.shape:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Mask shapes do not match: {list(a.shape)} vs {list(b.shape)}",
+            )
+        if req.op == "union":
+            result = np.maximum(a, b)
+        elif req.op == "intersect":
+            result = np.minimum(a, b)
+        else:  # subtract
+            result = np.clip(a * (1.0 - b), 0.0, 1.0)
+        _write_mrc(out_path, result, voxel_a)
+
+    try:
+        await asyncio.to_thread(_do)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Boolean op failed")
+        raise HTTPException(status_code=500, detail=f"Boolean op failed: {exc}") from exc
+
+    import datetime as _dt
+    return MaskInfo(
+        name=out_basename,
+        path=out_path,
+        size_bytes=os.path.getsize(out_path),
+        modified=_dt.datetime.fromtimestamp(os.path.getmtime(out_path)).isoformat(),
+    )
 
 
 @router.get("/by-project/{project_id}", response_model=list[MaskInfo])

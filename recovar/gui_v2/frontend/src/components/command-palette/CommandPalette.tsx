@@ -79,6 +79,13 @@ export function CommandPalette(): React.JSX.Element | null {
       icon: <FlaskConical className="h-4 w-4 text-blue-400" />,
       navigate: () => navigate({ to: "/jobs/new", search: {} as never }),
     });
+    items.push({
+      id: "masks-page",
+      label: "Masks",
+      sub: "Mask library + boolean operations",
+      icon: <Wand2 className="h-4 w-4 text-emerald-500" />,
+      navigate: () => navigate({ to: "/masks" }),
+    });
     if (projectDetail?.jobs) {
       for (const job of projectDetail.jobs) {
         items.push({

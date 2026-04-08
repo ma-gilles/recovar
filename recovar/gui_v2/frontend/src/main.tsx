@@ -12,6 +12,7 @@ import { NewJobPage } from "./routes/jobs/new";
 import { JobDetailPage } from "./routes/jobs/$jobId";
 import { ExplorePage } from "./routes/explore/$jobId";
 import { ComparePage } from "./routes/compare";
+import { MasksPage } from "./routes/masks";
 
 // Define routes
 const rootRoute = createRootRoute({ component: RootLayout });
@@ -57,12 +58,19 @@ const compareRoute = createRoute({
   }),
 });
 
+const masksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/masks",
+  component: MasksPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   newJobRoute,
   jobDetailRoute,
   exploreRoute,
   compareRoute,
+  masksRoute,
 ]);
 
 const router = createRouter({ routeTree });
