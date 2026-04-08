@@ -1,13 +1,17 @@
-import numpy as np
-import pytest
 from pathlib import Path
 from types import SimpleNamespace
+
+import numpy as np
+import pytest
 
 pytest.importorskip("jax")
 
 from helpers import tiny_synthetic
+
 from recovar import core, utils
-from recovar.data_io import cryoem_dataset as dataset, halfsets, starfile, image_backends as cryo_dataset
+from recovar.data_io import cryoem_dataset as dataset
+from recovar.data_io import halfsets, starfile
+from recovar.data_io import image_backends as cryo_dataset
 
 pytestmark = pytest.mark.unit
 
@@ -54,6 +58,16 @@ def _batch_images(batch):
 
 def _batch_particle_indices(batch):
     return np.asarray(batch[5]).reshape(-1)
+
+
+def _batch_particle_ids_per_image(batch):
+    particle_indices = _batch_particle_indices(batch)
+    n_images = int(_batch_images(batch).shape[0])
+    if particle_indices.size == n_images:
+        return particle_indices
+    if particle_indices.size == 1:
+        return np.full(n_images, particle_indices[0], dtype=particle_indices.dtype)
+    raise ValueError(f"Unexpected particle index layout {particle_indices.shape} for {n_images} images")
 
 
 def _batch_image_indices(batch):
@@ -1140,6 +1154,52 @@ def test_tiny_tilt_particle_subset_generator_preserves_duplicates(tmp_path):
     batches = _dataset_group_batches(cryo, batch_size=8, subset_indices=subset_particles)
     got_particles = [int(_batch_particle_indices(batch)[0]) for batch in batches]
     assert got_particles == [2, 0, 2]
+
+
+def test_simulator_tiny_tilt_packed_group_batches_preserve_flattened_order(sim_tiny_tilt_files):
+    files = sim_tiny_tilt_files
+    datadir = str(Path(files["particles_star"]).parent)
+    cryo = dataset.load_dataset(
+        particles_file=files["particles_star"],
+        poses_file=files["poses_pkl"],
+        ctf_file=files["ctf_pkl"],
+        datadir=datadir,
+        lazy=True,
+        tilt_series=True,
+        tilt_series_ctf="relion5",
+    )
+
+    subset_particles = np.array([2, 0, 2], dtype=np.int32)
+    unpacked_batches = list(
+        cryo.iter_batches(
+            batch_size=6,
+            indices=subset_particles,
+            by_image=False,
+            prefetch=False,
+            pack_groups=False,
+        )
+    )
+    packed_batches = list(
+        cryo.iter_batches(
+            batch_size=6,
+            indices=subset_particles,
+            by_image=False,
+            prefetch=False,
+            pack_groups=True,
+        )
+    )
+
+    unpacked_images = np.concatenate([_batch_images(batch) for batch in unpacked_batches], axis=0)
+    packed_images = np.concatenate([_batch_images(batch) for batch in packed_batches], axis=0)
+    unpacked_particles = np.concatenate([_batch_particle_ids_per_image(batch) for batch in unpacked_batches], axis=0)
+    packed_particles = np.concatenate([_batch_particle_ids_per_image(batch) for batch in packed_batches], axis=0)
+    unpacked_indices = np.concatenate([_batch_image_indices(batch) for batch in unpacked_batches], axis=0)
+    packed_indices = np.concatenate([_batch_image_indices(batch) for batch in packed_batches], axis=0)
+
+    np.testing.assert_allclose(packed_images, unpacked_images, atol=1e-6)
+    np.testing.assert_array_equal(packed_particles, unpacked_particles)
+    np.testing.assert_array_equal(packed_indices, unpacked_indices)
+    assert [int(np.asarray(batch[0]).shape[0]) for batch in packed_batches] == [6, 3]
 
 
 def test_tiny_tilt_split_indices_accepts_in_memory_halfsets_and_arrays(tmp_path):

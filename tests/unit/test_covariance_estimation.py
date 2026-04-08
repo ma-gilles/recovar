@@ -1,19 +1,19 @@
 from types import SimpleNamespace
 
+import jax
+import jax.numpy as jnp
 import numpy as np
 import pytest
-
-pytest.importorskip("jax")
-
-import jax.numpy as jnp
-
-import recovar.heterogeneity.covariance_estimation as cov_est
-import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import core
-from recovar.core.configs import ForwardModelConfig
-from recovar.core.ctf import as_ctf_evaluator
-
 from helpers.tiny_synthetic import make_tiny_cryo_dataset, make_tiny_cryo_dataset_with_images
+
+import recovar.core.forward as core_forward
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.heterogeneity.covariance_estimation as cov_est
+from recovar import core
+from recovar.core import linalg
+from recovar.core.configs import CovarianceOpts, CovColumnOpts, ForwardModelConfig, ModelState
+from recovar.core.ctf import as_ctf_evaluator
+from recovar.heterogeneity import covariance_core
 
 pytestmark = pytest.mark.unit
 
@@ -493,6 +493,9 @@ def test_compute_h_b_for_halfset_preprocesses_tilt_labels_before_freq_kernel(mon
             return images
 
         def iter_batches(self, batch_size, **kwargs):
+            assert batch_size == 8
+            assert kwargs["by_image"] is False
+            assert kwargs["pack_groups"] is True
             yield (
                 np.zeros((3, 4), dtype=np.complex64),
                 np.zeros((3, 3, 3), dtype=np.float32),
@@ -648,8 +651,6 @@ def test_compute_h_b_runs_on_tiny_image_dataset():
 
 def test_compute_freq_batch_two_calls_accumulate():
     """Verify compute_freq_batch accumulates correctly across two calls."""
-    from recovar.core.configs import ForwardModelConfig, CovColumnOpts
-
     rng = np.random.RandomState(123)
     grid_size = 4
     n_images = 6
@@ -758,11 +759,184 @@ def test_compute_projected_covariance_runs_on_tiny_image_dataset():
     np.testing.assert_allclose(covar_np, covar_np.T, atol=1e-5, rtol=1e-5)
 
 
+def test_compute_projected_covariance_single_requests_packed_tilt_batches(monkeypatch):
+    seen_kwargs = []
+
+    class _FakeTiltDataset:
+        dtype = np.complex64
+        dtype_real = np.float32
+        tilt_series_flag = True
+        volume_shape = (2, 2, 1)
+        volume_size = 4
+        image_shape = (2, 2)
+        noise = object()
+        image_mask = np.ones((2, 2), dtype=np.float32)
+        halfset_indices = None
+
+        def process_images(self, images):
+            return images
+
+        def iter_batches(self, batch_size, **kwargs):
+            seen_kwargs.append(kwargs.copy())
+            assert batch_size == 6
+            assert kwargs["by_image"] is False
+            assert kwargs["pack_groups"] is True
+            yield (
+                np.zeros((3, 4), dtype=np.complex64),
+                np.zeros((3, 3, 3), dtype=np.float32),
+                np.zeros((3, 2), dtype=np.float32),
+                np.zeros((3, 9), dtype=np.float32),
+                np.zeros((3, 4), dtype=np.float32),
+                np.array([0, 0, 1], dtype=np.int32),
+                np.arange(3, dtype=np.int32),
+            )
+
+    config = SimpleNamespace(image_shape=(2, 2), volume_shape=(2, 2, 1))
+    monkeypatch.setattr(cov_est.ForwardModelConfig, "from_dataset", lambda *args, **kwargs: config)
+    monkeypatch.setattr(cov_est.linalg, "rfft2_hermitian_weights", lambda *args, **kwargs: jnp.ones((4,)))
+    monkeypatch.setattr(cov_est.utils, "report_memory_device", lambda *args, **kwargs: None)
+
+    def fake_reduce_covariance_inner(
+        config,
+        images,
+        model,
+        opts,
+        image_mask,
+        *,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        hermitian_weights,
+        lhs,
+        rhs,
+        tilt_labels,
+    ):
+        _ = (
+            config,
+            images,
+            model,
+            opts,
+            image_mask,
+            rotation_matrices,
+            translations,
+            ctf_params,
+            noise_variance,
+            hermitian_weights,
+            tilt_labels,
+        )
+        return lhs + jnp.eye(lhs.shape[0], dtype=lhs.dtype), rhs + jnp.eye(rhs.shape[0], dtype=rhs.dtype)
+
+    monkeypatch.setattr(cov_est, "reduce_covariance_inner", fake_reduce_covariance_inner)
+
+    covar = cov_est._compute_projected_covariance_single(
+        _FakeTiltDataset(),
+        mean_estimate=np.zeros(4, dtype=np.complex64),
+        basis=np.eye(4, 1, dtype=np.complex64),
+        volume_mask=np.ones((2, 2, 1), dtype=np.float32),
+        batch_size=6,
+        disc_type="linear_interp",
+        disc_type_u="linear_interp",
+        do_mask_images=False,
+    )
+
+    assert covar.shape == (1, 1)
+    assert len(seen_kwargs) == 1
+    assert seen_kwargs[0]["noise_half"] is False
+    assert seen_kwargs[0]["by_image"] is False
+    assert seen_kwargs[0]["pack_groups"] is True
+
+
+def test_compute_projected_covariance_halfsets_requests_packed_tilt_batches(monkeypatch):
+    seen_kwargs = []
+
+    class _FakeTiltHalfsetDataset:
+        dtype = np.complex64
+        dtype_real = np.float32
+        tilt_series_flag = True
+        volume_shape = (2, 2, 1)
+        volume_size = 4
+        image_shape = (2, 2)
+        noise = object()
+        image_mask = np.ones((2, 2), dtype=np.float32)
+        halfset_indices = [np.array([0], dtype=np.int32), np.array([1], dtype=np.int32)]
+
+        def process_images(self, images):
+            return images
+
+        def iter_batches(self, batch_size, **kwargs):
+            seen_kwargs.append(kwargs.copy())
+            assert batch_size == 6
+            assert kwargs["by_image"] is False
+            assert kwargs["pack_groups"] is True
+            yield (
+                np.zeros((3, 4), dtype=np.complex64),
+                np.zeros((3, 3, 3), dtype=np.float32),
+                np.zeros((3, 2), dtype=np.float32),
+                np.zeros((3, 9), dtype=np.float32),
+                np.zeros((3, 4), dtype=np.float32),
+                np.array([0, 0, 1], dtype=np.int32),
+                np.arange(3, dtype=np.int32),
+            )
+
+    config = SimpleNamespace(image_shape=(2, 2), volume_shape=(2, 2, 1))
+    monkeypatch.setattr(cov_est.ForwardModelConfig, "from_dataset", lambda *args, **kwargs: config)
+    monkeypatch.setattr(cov_est.linalg, "rfft2_hermitian_weights", lambda *args, **kwargs: jnp.ones((4,)))
+    monkeypatch.setattr(cov_est.utils, "report_memory_device", lambda *args, **kwargs: None)
+
+    def fake_reduce_covariance_inner(
+        config,
+        images,
+        model,
+        opts,
+        image_mask,
+        *,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        hermitian_weights,
+        lhs,
+        rhs,
+        tilt_labels,
+    ):
+        _ = (
+            config,
+            images,
+            model,
+            opts,
+            image_mask,
+            rotation_matrices,
+            translations,
+            ctf_params,
+            noise_variance,
+            hermitian_weights,
+            tilt_labels,
+        )
+        return lhs + jnp.eye(lhs.shape[0], dtype=lhs.dtype), rhs + jnp.eye(rhs.shape[0], dtype=rhs.dtype)
+
+    monkeypatch.setattr(cov_est, "reduce_covariance_inner", fake_reduce_covariance_inner)
+
+    covar = cov_est.compute_projected_covariance(
+        dataset=_FakeTiltHalfsetDataset(),
+        mean_estimate=np.zeros(4, dtype=np.complex64),
+        basis=np.eye(4, 1, dtype=np.complex64),
+        volume_mask=np.ones((2, 2, 1), dtype=np.float32),
+        batch_size=6,
+        disc_type="linear_interp",
+        disc_type_u="linear_interp",
+        do_mask_images=False,
+    )
+
+    assert covar.shape == (1, 1)
+    assert len(seen_kwargs) == 2
+    assert {kwargs["halfset_id"] for kwargs in seen_kwargs} == {0, 1}
+    assert all(kwargs["pack_groups"] is True for kwargs in seen_kwargs)
+
+
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------
-
-import jax
 
 
 @pytest.mark.gpu
@@ -1140,11 +1314,6 @@ def test_variance_kernel_accumulator_f64(enable_x64):
 # ---------------------------------------------------------------------------
 # Tests for half-image masking in reduce_covariance_inner
 # ---------------------------------------------------------------------------
-
-from recovar.heterogeneity import covariance_core
-from recovar.core import linalg
-from recovar.core.configs import ModelState, CovarianceOpts
-import recovar.core.forward as core_forward
 
 
 def _make_reduce_cov_fixtures(grid_size=4, n_images=6, seed=0):

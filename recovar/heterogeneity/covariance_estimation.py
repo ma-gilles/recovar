@@ -8,17 +8,16 @@ import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import core, utils, jax_config
-from recovar.core import linalg
-from recovar.jax_config import _to_cpu
-from recovar.core import cubic_interpolation
-from recovar.core.configs import ForwardModelConfig, ModelState, CovarianceOpts, CovColumnOpts
+from recovar import core, jax_config, utils
+from recovar.core import cubic_interpolation, linalg
+from recovar.core.configs import CovarianceOpts, CovColumnOpts, ForwardModelConfig, ModelState
 from recovar.heterogeneity import covariance_core
-from recovar.reconstruction import regularization, relion_functions, noise
+from recovar.jax_config import _to_cpu
+from recovar.reconstruction import noise, regularization, relion_functions
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +129,10 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
         logger.info(
             "Adaptive n_pcs: using %s PCs for covariance computation "
             "(GPU memory: %.1f GB, grid_size: %s, estimated memory: %.1f GB)",
-            n_pcs, gpu_memory, grid_size, base_memory + basis_memory,
+            n_pcs,
+            gpu_memory,
+            grid_size,
+            base_memory + basis_memory,
         )
     else:
         n_pcs = 200
@@ -145,13 +147,17 @@ def get_default_covariance_computation_options(grid_size=None, adaptive_n_pcs=Fa
             logger.info(
                 "Using %s PCs for covariance computation "
                 "(GPU memory: %.1f GB, grid_size: %s, estimated memory: %.1f GB)",
-                n_pcs, gpu_memory, grid_size, total_memory_gb,
+                n_pcs,
+                gpu_memory,
+                grid_size,
+                total_memory_gb,
             )
             if total_memory_gb > gpu_memory * 0.8:
                 logger.warning(
                     "Estimated memory (%.1f GB) may exceed available GPU memory (%.1f GB). "
                     "If you get OOM errors, use --low-memory-option to adaptively reduce n_pcs.",
-                    total_memory_gb, gpu_memory,
+                    total_memory_gb,
+                    gpu_memory,
                 )
         else:
             logger.info("Using %s PCs for covariance computation (GPU memory: %.1f GB)", n_pcs, gpu_memory)
@@ -466,10 +472,10 @@ def variance_relion_kernel_trilinear(
     ctf_params,
     noise_variance,
     soften: int = 5,
-    Ft_y: jax.Array = None,
-    Ft_ctf: jax.Array = None,
-    Ft_im: jax.Array = None,
-    Ft_one: jax.Array = None,
+    Ft_y: jax.Array | None = None,
+    Ft_ctf: jax.Array | None = None,
+    Ft_im: jax.Array | None = None,
+    Ft_one: jax.Array | None = None,
 ):
     """Variance estimation via RELION-style trilinear kernel — Equinox API.
 
@@ -506,10 +512,10 @@ def _variance_relion_kernel_trilinear_explicit(
     volume_mask: jax.Array,
     image_mask: jax.Array,
     soften: int = 5,
-    Ft_y: jax.Array = None,
-    Ft_ctf: jax.Array = None,
-    Ft_im: jax.Array = None,
-    Ft_one: jax.Array = None,
+    Ft_y: jax.Array | None = None,
+    Ft_ctf: jax.Array | None = None,
+    Ft_im: jax.Array | None = None,
+    Ft_one: jax.Array | None = None,
 ):
     noise_variances = noise_variance
 
@@ -975,6 +981,7 @@ def compute_H_B_for_halfset(
             noise_half=False,
             noise_by_particle=True,
             by_image=not cryo.tilt_series_flag,
+            pack_groups=cryo.tilt_series_flag,
         )
         if halfset_id is not None:
             _iter_kw["halfset_id"] = halfset_id
@@ -1183,6 +1190,7 @@ def _compute_projected_covariance_single(
         noise_model=experiment_dataset.noise,
         noise_half=False,
         by_image=not experiment_dataset.tilt_series_flag,
+        pack_groups=experiment_dataset.tilt_series_flag,
     ):
         tilt_labels = None
         if experiment_dataset.tilt_series_flag:
@@ -1287,6 +1295,7 @@ def compute_projected_covariance(
             noise_half=False,
             halfset_id=halfset_id,
             by_image=not dataset.tilt_series_flag,
+            pack_groups=dataset.tilt_series_flag,
         ):
             tilt_labels = None
             if dataset.tilt_series_flag:
@@ -1444,10 +1453,12 @@ def _reduce_covariance_inner_explicit(
         )
 
     # Forward model basis vectors — use disc_type_u for eigenvectors
+    basis = model.basis
+    assert basis is not None
     config_u = config.replace(disc_type=opts.disc_type_u)
     AUs = covariance_core.batch_vol_forward_from_map(
         config_u,
-        model.basis,
+        basis,
         ctf_params,
         rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
@@ -1648,8 +1659,8 @@ def compute_freq_batch(
     premultiplied_ctf: bool,
     shared_label: bool,
     no_mask: bool,
-    H_accum: jax.Array = None,
-    B_accum: jax.Array = None,
+    H_accum: jax.Array | None = None,
+    B_accum: jax.Array | None = None,
 ):
     """Compute H and B for a batch of frequencies in a single XLA program.
 
