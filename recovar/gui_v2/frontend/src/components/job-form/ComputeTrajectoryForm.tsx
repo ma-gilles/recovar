@@ -15,6 +15,7 @@ interface ComputeTrajectoryFormProps {
   prefilledZdim?: number;
   prefilledStart?: number[];
   prefilledEnd?: number[];
+  prefilledDensity?: string;
   onSubmitted?: (jobId: string) => void;
 }
 
@@ -24,6 +25,7 @@ export function ComputeTrajectoryForm({
   prefilledZdim,
   prefilledStart,
   prefilledEnd,
+  prefilledDensity,
   onSubmitted,
 }: ComputeTrajectoryFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
@@ -32,7 +34,7 @@ export function ComputeTrajectoryForm({
   const [zStart, setZStart] = useState(prefilledStart?.join(", ") ?? "");
   const [zEnd, setZEnd] = useState(prefilledEnd?.join(", ") ?? "");
   const [nVols, setNVols] = useState("6");
-  const [densityPath, setDensityPath] = useState<string>("");
+  const [densityPath, setDensityPath] = useState<string>(prefilledDensity ?? "");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
 
   // Find Density jobs in this project; only the ones whose result_dir

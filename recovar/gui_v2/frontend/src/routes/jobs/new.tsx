@@ -108,6 +108,7 @@ export function NewJobPage(): React.JSX.Element {
             <ComputeTrajectoryForm
               projectId={project.id}
               prefilledResultDir={searchParams.result_dir}
+              prefilledDensity={searchParams.density}
               onSubmitted={handleSubmitted}
             />
           )}

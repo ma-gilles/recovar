@@ -971,15 +971,21 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
             prefilled_params={"result_dir": job.output_dir},
         ))
     elif job.type == "Analyze":
+        result_dir = job.params.get("result_dir", "")
         suggestions.append(SuggestedNext(
             type="ComputeState",
             label="Compute volume at a latent point",
-            prefilled_params={"result_dir": job.params.get("result_dir", "")},
+            prefilled_params={"result_dir": result_dir},
         ))
         suggestions.append(SuggestedNext(
             type="ComputeTrajectory",
             label="Compute trajectory between two points",
-            prefilled_params={"result_dir": job.params.get("result_dir", "")},
+            prefilled_params={"result_dir": result_dir},
+        ))
+        suggestions.append(SuggestedNext(
+            type="Density",
+            label="Estimate conformational density (enables density-guided trajectories)",
+            prefilled_params={"result_dir": result_dir},
         ))
     elif job.type == "Density":
         density_pkl = os.path.join(
@@ -989,6 +995,17 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
             type="StableStates",
             label="Find stable states from density",
             prefilled_params={"density": density_pkl},
+        ))
+        # Density-guided trajectory: use this density file to follow the
+        # data manifold instead of straight-line interpolation in z-space.
+        suggestions.append(SuggestedNext(
+            type="ComputeTrajectory",
+            label="Compute density-guided trajectory using this density",
+            prefilled_params={
+                "result_dir": job.params.get("recovar_result_dir", "")
+                or job.params.get("result_dir", ""),
+                "density": density_pkl,
+            },
         ))
 
     return suggestions
