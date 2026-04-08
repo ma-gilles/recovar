@@ -46,8 +46,12 @@ module load "$RELION_MODULE"
 export CUDA_VISIBLE_DEVICES=0
 
 cd "$DATA_DIR"
-# --firstiter_cc REQUIRED for non-RELION init volumes; see
-# memory/feedback_relion_firstiter_cc_required.md
+# Two REQUIRED RELION flags for any non-RELION-init benchmark:
+# --firstiter_cc — non-RELION init intensity-scale fix.
+#   memory/feedback_relion_firstiter_cc_required.md
+# --ctf — RELION default is OFF. Without it, RELION reconstructs the
+#   CTF-convolved volume (dark halo, ~18-22 A ceiling).
+#   memory/feedback_relion_ctf_required.md
 mpirun -n "$RELION_MPI_RANKS" relion_refine_mpi \
   --i particles.star \
   --ref reference_init_relion.mrc \
@@ -57,6 +61,12 @@ mpirun -n "$RELION_MPI_RANKS" relion_refine_mpi \
   --particle_diameter 200 \
   --ini_high "$INI_HIGH" \
   --firstiter_cc \
+  --ctf \
+  --flatten_solvent \
+  --zero_mask \
+  --low_resol_join_halves 40 \
+  --norm \
+  --scale \
   --healpix_order "$HEALPIX_ORDER" \
   --offset_range "$OFFSET_RANGE" \
   --offset_step "$OFFSET_STEP" \

@@ -32,6 +32,112 @@ recovar_vol = load_mrc("recovar_output/final_merged.mrc")
 # both are now in the same frame; FSC is meaningful
 ```
 
+## RELION Reference Runs — REQUIRED FLAGS (READ BEFORE BENCHMARKING)
+
+We lost a week of the 2026-04 RELION-parity benchmark to RELION flags
+that default to off on the **command line** but are always set by the
+**GUI**. NEVER trust `relion_refine --help` for "what should I pass";
+the help shows C++ defaults (mostly wrong). The authoritative source is
+`relion/src/pipeline_jobs.cpp::initialiseAutorefineJob()` (≈line 4126).
+
+After auditing every `parser.checkOption(...)` call in
+`relion/src/ml_optimiser.cpp::parseInitial()` against the GUI's
+auto-refine job constructor, **7 flags need to be added** to any CLI
+invocation of `relion_refine_mpi --auto_refine`:
+
+### Critical (silently wrong reconstruction without these)
+
+| Flag | CLI default | What breaks |
+|---|---|---|
+| `--ctf` | **OFF** | RELION reconstructs the CTF-convolved volume. Dark halo / ringing in real space, resolution plateaus ~18-22 A regardless of particle count, radial power spectrum has CTF oscillations + excess high-freq power. |
+| `--firstiter_cc` | **OFF** | When init is non-RELION (recovar / cryosparc / EMD), iter-1 Bayesian E-step uses the wrong intensity scale. Pose search collapses to a 2D-extruded "stripes" basin. |
+
+### Quality (degraded convergence / artifacts without these)
+
+| Flag | CLI default | What it does |
+|---|---|---|
+| `--flatten_solvent` | OFF | Masks reconstructed reference outside the particle to zero. GUI: "Always flatten the solvent" (`pipeline_jobs.cpp:4461`). Without it, references contain noise outside the particle that pollutes projections. |
+| `--zero_mask` | OFF | Masks particle exterior to **zero** instead of random noise. GUI default true for SPA. Random-noise fill (CLI default) introduces correlated Fourier components into alignment. |
+| `--low_resol_join_halves 40` | -1 (off) | Below 40 Å, the two random half-reconstructions share orientation statistics instead of being independent. GUI: "Always join low-res data" (`pipeline_jobs.cpp:4509`). Prevents h1/h2 divergence at low SNR. |
+
+### No-op for single-optics-group, but set for parity
+
+| Flag | CLI default | What it does |
+|---|---|---|
+| `--norm` | OFF | Per-optics-group normalisation correction. NO-OP if all particles share an optics group. Important for any real-data benchmark with multiple sessions. GUI: hardcoded (`pipeline_jobs.cpp:4510`). |
+| `--scale` | OFF | Per-optics-group intensity scale correction. Same NO-OP / multi-optics caveat as `--norm`. GUI: hardcoded same line. |
+
+**Diagnostic before any "RELION volume looks wrong" investigation:**
+```bash
+grep -E "_rlnDoCorrectCtf|_rlnRefsAreCtfCorrected|_rlnDoNormCorrection|_rlnDoScaleCorrection" \
+     <relion_run_dir>/run_it000_optimiser.star
+# _rlnDoCorrectCtf      0   ←  YOU FORGOT --ctf  (silently wrong reconstruction)
+# _rlnDoCorrectCtf      1   ←  ok
+```
+
+**Canonical RELION-parity invocation** (also in
+`scripts/run_relion_parity_benchmark_slurm.sh`):
+```bash
+mpirun -n 3 relion_refine_mpi \
+  --i particles.star \
+  --ref reference_init_relion.mrc \   # RELION-frame init via write_relion_mrc
+  --o run \
+  --auto_refine --split_random_halves \
+  --particle_diameter 200 --ini_high 30 \
+  --ctf \                              # required (default off!)
+  --firstiter_cc \                     # required for non-RELION init
+  --flatten_solvent \                  # GUI always sets this
+  --zero_mask \                        # GUI default true
+  --low_resol_join_halves 40 \         # GUI always sets this
+  --norm --scale \                     # GUI always sets these
+  --healpix_order 3 --offset_range 3 --offset_step 1 \
+  --oversampling 1 --pad 2 --gpu 0 --j 4
+```
+
+**To verify the CTF-trap diagnosis** (debugging only — does NOT change
+recovar's production code path), disable CTF in recovar with
+`scripts/debug_recovar_no_ctf.py` and confirm it produces the same dark
+halo + power-spectrum signature as RELION-no-ctf. The script
+`scripts/diagnose_relion_no_ctf_quantitative.py` makes a falsifiable
+prediction: `|F[vol_relion]|^2 / |F[vol_GT]|^2 ≈ <CTF^2(k)>` if RELION
+ran without `--ctf`. Both curves overlap shell-by-shell when the
+diagnosis is correct.
+
+## RELION's iter-1 ave_Pmax = 1.0 is a binarization artifact, NOT inference
+
+When diffing recovar vs RELION per-iter, **ignore the iter-1 Pmax gap**.
+At iter 1 with `--firstiter_cc` (or `--always_cc`), RELION executes a
+literal winner-take-all binarization (`ml_optimiser.cpp:7775-7803`):
+
+```cpp
+if ((iter == 1 && do_firstiter_cc) || do_always_cc) {
+    // Binarize the squared differences array to skip marginalisation
+    // Find best CC, set its weight to 1.0, all others to 0.0
+    ...
+    DIRECT_A1D_ELEM(exp_Mweight, myminidx) = 1.;
+}
+```
+
+So `ave_Pmax = 1.0` is by construction at iter 1, not because RELION's
+inference is "sharper". The CC scoring (line 7414) is also scale-invariant,
+specifically to absorb intensity-scale mismatch from non-RELION init
+volumes. **Do not add a hard-CC iter-1 path to recovar's `_refine_relion_mode`**
+to match this number — it's RELION's hack, not its model.
+
+The compounding effect on iter 2+ via the iter-1 volume IS real, though:
+RELION's iter-1 hard-assigned reconstruction is tighter than recovar's
+soft-Bayesian one, so iter 2's Bayesian E-step starts from a sharper
+volume and gets sharper posteriors. This persists for ~6 iters before
+both pipelines converge to similar Pmax.
+
+See `~/.claude/projects/-home-mg6942/memory/feedback_relion_iter1_hard_cc_is_not_parity_bug.md`
+for the full forensic write-up.
+
+See `~/.claude/projects/-home-mg6942/memory/feedback_relion_required_flags.md`,
+`feedback_relion_ctf_required.md`, and
+`feedback_relion_firstiter_cc_required.md` for the full forensic
+write-ups.
+
 ### History
 The helpers were added in commit `7df73fa` (2026-04-01 11:00) and
 removed in commit `4703c634` (2026-04-01 12:08, "revert helpers.py to

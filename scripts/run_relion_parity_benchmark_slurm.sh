@@ -80,11 +80,20 @@ echo "=== Load RELION ==="
      [ ! -f "$RELION_REF_DIR/run_half2_class001_unfil.mrc" ]; then
     echo "=== Run RELION auto-refine ==="
     # NOTE: --ref should be reference_init_relion.mrc (RELION-frame), not
-    # reference_init.mrc (cryosparc-frame). Also --firstiter_cc REQUIRED for
-    # any non-RELION init. See:
-    #   memory/feedback_relion_firstiter_cc_required.md
-    #   recovar/utils/helpers.py::write_relion_mrc
+    # reference_init.mrc (cryosparc-frame). Both --firstiter_cc AND --ctf
+    # are REQUIRED:
+    #   --firstiter_cc — for any non-RELION init (intensity-scale fix).
+    #     See memory/feedback_relion_firstiter_cc_required.md.
+    #   --ctf — RELION's default is OFF. Without it, RELION reconstructs
+    #     the CTF-convolved volume (dark halo, ~18-22 A ceiling).
+    #     See memory/feedback_relion_ctf_required.md.
     cd "$DATA_DIR"
+    # The --flatten_solvent, --zero_mask, --low_resol_join_halves, --norm,
+    # --scale flags below are GUI-default for auto_refine but DEFAULT OFF on
+    # the command line (pipeline_jobs.cpp:4461,4463,4509,4510). They are NOT
+    # silently-wrong like --ctf / --firstiter_cc, but they DO match GUI behavior
+    # and prevent low-res half-set divergence + reference contamination.
+    # See memory/feedback_relion_required_flags.md for the audit.
     mpirun -n "$RELION_MPI_RANKS" relion_refine_mpi \
       --i particles.star \
       --ref reference_init_relion.mrc \
@@ -94,6 +103,12 @@ echo "=== Load RELION ==="
       --particle_diameter 200 \
       --ini_high 30 \
       --firstiter_cc \
+      --ctf \
+      --flatten_solvent \
+      --zero_mask \
+      --low_resol_join_halves 40 \
+      --norm \
+      --scale \
       --healpix_order "$HEALPIX_ORDER" \
       --offset_range "$OFFSET_RANGE" \
       --offset_step "$OFFSET_STEP" \
