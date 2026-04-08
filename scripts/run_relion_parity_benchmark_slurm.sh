@@ -79,15 +79,21 @@ echo "=== Load RELION ==="
      [ ! -f "$RELION_REF_DIR/run_half1_class001_unfil.mrc" ] || \
      [ ! -f "$RELION_REF_DIR/run_half2_class001_unfil.mrc" ]; then
     echo "=== Run RELION auto-refine ==="
+    # NOTE: --ref should be reference_init_relion.mrc (RELION-frame), not
+    # reference_init.mrc (cryosparc-frame). Also --firstiter_cc REQUIRED for
+    # any non-RELION init. See:
+    #   memory/feedback_relion_firstiter_cc_required.md
+    #   recovar/utils/helpers.py::write_relion_mrc
     cd "$DATA_DIR"
     mpirun -n "$RELION_MPI_RANKS" relion_refine_mpi \
       --i particles.star \
-      --ref reference_init.mrc \
+      --ref reference_init_relion.mrc \
       --o "$RELION_RUN_PREFIX" \
       --auto_refine \
       --split_random_halves \
       --particle_diameter 200 \
       --ini_high 30 \
+      --firstiter_cc \
       --healpix_order "$HEALPIX_ORDER" \
       --offset_range "$OFFSET_RANGE" \
       --offset_step "$OFFSET_STEP" \

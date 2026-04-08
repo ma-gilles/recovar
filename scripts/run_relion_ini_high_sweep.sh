@@ -46,6 +46,8 @@ module load "$RELION_MODULE"
 export CUDA_VISIBLE_DEVICES=0
 
 cd "$DATA_DIR"
+# --firstiter_cc REQUIRED for non-RELION init volumes; see
+# memory/feedback_relion_firstiter_cc_required.md
 mpirun -n "$RELION_MPI_RANKS" relion_refine_mpi \
   --i particles.star \
   --ref reference_init_relion.mrc \
@@ -54,6 +56,7 @@ mpirun -n "$RELION_MPI_RANKS" relion_refine_mpi \
   --split_random_halves \
   --particle_diameter 200 \
   --ini_high "$INI_HIGH" \
+  --firstiter_cc \
   --healpix_order "$HEALPIX_ORDER" \
   --offset_range "$OFFSET_RANGE" \
   --offset_step "$OFFSET_STEP" \
