@@ -371,6 +371,22 @@ export interface MaskParams {
   cleanup: boolean;
   erase_spheres?: EraseSphere[];
   erase_boxes?: EraseBox[];
+  keep_top_segments?: number | null;
+}
+
+export interface SegmentInfoResponse {
+  n_segments: number;
+  total_voxels: number;
+  top_sizes: number[];
+}
+
+export function segmentInfo(
+  params: MaskParams
+): Promise<SegmentInfoResponse> {
+  return request(`/masks/segment-info`, {
+    method: "POST",
+    body: JSON.stringify(params),
+  });
 }
 
 export interface MaskInfo {

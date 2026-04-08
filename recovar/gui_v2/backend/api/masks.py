@@ -90,6 +90,10 @@ class MaskParams(BaseModel):
         default_factory=list,
         description="Axis-aligned boxes in voxel coordinates whose contents are zeroed in the final mask",
     )
+    keep_top_segments: int | None = Field(
+        None,
+        description="If set to N>=1, run connected-components on the post-erase binary mask and keep only the N largest blobs.",
+    )
 
 
 class PreviewRequest(MaskParams):
@@ -205,6 +209,26 @@ def _generate_mask(volume: Any, params: MaskParams) -> Any:
             z1 = min(nz, int(max(b.z0, b.z1)) + 1)
             if x1 > x0 and y1 > y0 and z1 > z0:
                 mask[z0:z1, y0:y1, x0:x1] = 0.0
+
+    # keep_top_segments: connected-component based "watershed-lite". When
+    # set to N >= 1, label the binary mask, sort components by voxel count,
+    # and zero everything outside the top N. Soft-edge values are preserved
+    # within the kept components by multiplying instead of overwriting.
+    if params.keep_top_segments is not None and params.keep_top_segments >= 1:
+        from scipy.ndimage import label as ndi_label
+        import numpy as np
+        m = np.asarray(mask, dtype=np.float32)
+        binary = m > 0.05
+        labels, n = ndi_label(binary)
+        if n > 0:
+            sizes = np.bincount(labels.ravel())
+            sizes[0] = 0  # background
+            keep_n = min(int(params.keep_top_segments), int((sizes > 0).sum()))
+            top_labels = np.argsort(sizes)[::-1][:keep_n]
+            keep_mask = np.zeros_like(binary, dtype=bool)
+            for lbl in top_labels:
+                keep_mask |= labels == lbl
+            mask = (m * keep_mask).astype(np.float32)
     return mask
 
 
@@ -335,6 +359,50 @@ async def save_mask(req: SaveRequest) -> dict:
         "size_bytes": os.path.getsize(out_path),
         "modified": _dt.datetime.fromtimestamp(os.path.getmtime(out_path)).isoformat(),
     }
+
+
+@router.post("/segment-info")
+async def segment_info(req: PreviewRequest) -> dict:
+    """Generate the mask (with current params + erases, BUT ignoring
+    keep_top_segments) and return connected-component statistics so the
+    UI can decide how many to keep.
+    """
+    _check_path_allowed(req.source_path)
+    if not os.path.isfile(req.source_path):
+        raise HTTPException(status_code=404, detail=f"Source not found: {req.source_path}")
+
+    try:
+        data, _voxel = await asyncio.to_thread(_read_mrc, req.source_path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read MRC: {exc}") from exc
+    if data.ndim != 3:
+        raise HTTPException(status_code=400, detail=f"Source is not a 3D volume: shape={list(data.shape)}")
+
+    # Build a transient request without keep_top_segments so the labeling
+    # sees the raw post-erase mask.
+    req_for_mask = req.model_copy(update={"keep_top_segments": None})
+    try:
+        mask = await asyncio.to_thread(_generate_mask, data, req_for_mask)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Mask generation failed: {exc}") from exc
+
+    def _label() -> dict:
+        from scipy.ndimage import label as ndi_label
+        import numpy as np
+        binary = mask > 0.05
+        labels, n = ndi_label(binary)
+        sizes = np.bincount(labels.ravel())
+        sizes[0] = 0
+        order = np.argsort(sizes)[::-1]
+        top = [int(sizes[i]) for i in order if sizes[i] > 0]
+        total = int(binary.sum())
+        return {
+            "n_segments": int((sizes > 0).sum()),
+            "total_voxels": total,
+            "top_sizes": top[:10],
+        }
+
+    return await asyncio.to_thread(_label)
 
 
 @router.post("/preview-volume")

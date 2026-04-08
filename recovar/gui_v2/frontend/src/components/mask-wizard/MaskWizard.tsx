@@ -8,6 +8,7 @@ import {
   previewMaskVolume,
   deletePreviewMaskVolume,
   saveMask,
+  segmentInfo,
   ApiError,
   type MaskParams,
   type EraseSphere,
@@ -92,7 +93,8 @@ function buildParams(
   s: WizardState,
   sourcePath: string,
   eraseSpheres: EraseSphere[] = [],
-  eraseBoxes: EraseBox[] = []
+  eraseBoxes: EraseBox[] = [],
+  keepTopSegments: number | null = null
 ): MaskParams {
   return {
     source_path: sourcePath,
@@ -103,6 +105,7 @@ function buildParams(
     cleanup: s.cleanup,
     erase_spheres: eraseSpheres,
     erase_boxes: eraseBoxes,
+    keep_top_segments: keepTopSegments,
   };
 }
 
@@ -142,6 +145,12 @@ export function MaskWizard({
   const [eraseRadius, setEraseRadius] = useState(5);
   const [eraseSpheres, setEraseSpheresRaw] = useState<EraseSphere[]>([]);
   const [eraseBoxes, setEraseBoxesRaw] = useState<EraseBox[]>([]);
+  const [keepTopSegments, setKeepTopSegments] = useState<number | null>(null);
+  const [segmentInfoData, setSegmentInfoData] = useState<{
+    n_segments: number;
+    top_sizes: number[];
+  } | null>(null);
+  const [segmentLoading, setSegmentLoading] = useState(false);
   // First-corner snapshot for box mode (cleared after the second click).
   const [boxFirstCorner, setBoxFirstCorner] = useState<EraseSphere | null>(null);
   // In-progress brush stroke (committed to eraseSpheres on mouseup as a
@@ -234,7 +243,7 @@ export function MaskWizard({
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const params = buildParams(state, sourcePath, eraseSpheres, eraseBoxes);
+      const params = buildParams(state, sourcePath, eraseSpheres, eraseBoxes, keepTopSegments);
       const result = await previewMask({
         ...params,
         axis,
@@ -257,7 +266,7 @@ export function MaskWizard({
     } finally {
       if (myToken === previewTokenRef.current) setPreviewLoading(false);
     }
-  }, [open, state, sourcePath, axis, sliceIdx, eraseSpheres, eraseBoxes]);
+  }, [open, state, sourcePath, axis, sliceIdx, eraseSpheres, eraseBoxes, keepTopSegments]);
 
   // Debounced 3D mask volume generation
   const vol3dTokenRef = useRef(0);
@@ -267,7 +276,7 @@ export function MaskWizard({
     setVol3dLoading(true);
     try {
       const result = await previewMaskVolume({
-        ...buildParams(state, sourcePath, eraseSpheres, eraseBoxes),
+        ...buildParams(state, sourcePath, eraseSpheres, eraseBoxes, keepTopSegments),
         project_id: projectId,
       });
       if (myToken !== vol3dTokenRef.current) {
@@ -288,7 +297,7 @@ export function MaskWizard({
     } finally {
       if (myToken === vol3dTokenRef.current) setVol3dLoading(false);
     }
-  }, [open, state, sourcePath, projectId, eraseSpheres, eraseBoxes]);
+  }, [open, state, sourcePath, projectId, eraseSpheres, eraseBoxes, keepTopSegments]);
 
   // Auto-preview on open and on parameter changes (debounced 350ms).
   useEffect(() => {
@@ -318,6 +327,8 @@ export function MaskWizard({
       setEraseFuture([]);
       setEraseMode(false);
       setEraseTool("brush");
+      setKeepTopSegments(null);
+      setSegmentInfoData(null);
       brushDragRef.current = { active: false, sample: [] };
       setBrushPreview(null);
     }
@@ -367,7 +378,7 @@ export function MaskWizard({
     setSaveError(null);
     try {
       const result = await saveMask({
-        ...buildParams(state, sourcePath, eraseSpheres, eraseBoxes),
+        ...buildParams(state, sourcePath, eraseSpheres, eraseBoxes, keepTopSegments),
         project_id: projectId,
         output_name: outputName.trim(),
       });
@@ -379,7 +390,7 @@ export function MaskWizard({
     } finally {
       setSaving(false);
     }
-  }, [outputName, state, sourcePath, projectId, eraseSpheres, eraseBoxes, onSaved]);
+  }, [outputName, state, sourcePath, projectId, eraseSpheres, eraseBoxes, keepTopSegments, onSaved]);
 
   const maxSlice = shape ? shape[axis] - 1 : 0;
   const currentIdx = sliceIdx ?? (shape ? Math.floor(shape[axis] / 2) : 0);
@@ -742,6 +753,60 @@ export function MaskWizard({
             <label htmlFor="mask-cleanup" className="text-xs text-zinc-400">
               Cleanup (fill holes, keep largest component)
             </label>
+          </div>
+
+          {/* Segments (auto-segment) */}
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
+                Segments
+              </label>
+              <button
+                disabled={segmentLoading}
+                onClick={async () => {
+                  setSegmentLoading(true);
+                  try {
+                    const info = await segmentInfo(buildParams(state, sourcePath, eraseSpheres, eraseBoxes, null));
+                    setSegmentInfoData(info);
+                  } catch (e) {
+                    setSegmentInfoData(null);
+                    setSaveError(e instanceof ApiError ? e.message : String(e));
+                  } finally {
+                    setSegmentLoading(false);
+                  }
+                }}
+                className="rounded border border-zinc-700 px-2 py-0.5 text-xs text-zinc-400 hover:text-zinc-200 disabled:opacity-50"
+              >
+                {segmentLoading ? "Analyzing…" : "Find segments"}
+              </button>
+            </div>
+            {segmentInfoData && (
+              <p className="text-xs text-zinc-500">
+                Found <span className="text-zinc-300">{segmentInfoData.n_segments}</span> connected component
+                {segmentInfoData.n_segments === 1 ? "" : "s"}.
+                {segmentInfoData.top_sizes.length > 0 && (
+                  <> Largest sizes: {segmentInfoData.top_sizes.slice(0, 5).join(", ")}{segmentInfoData.top_sizes.length > 5 ? "…" : ""}</>
+                )}
+              </p>
+            )}
+            <div className="flex items-center gap-2 text-xs text-zinc-500">
+              <span className="w-20">Keep top</span>
+              <input
+                type="range"
+                min={0}
+                max={Math.max(1, segmentInfoData?.n_segments ?? 5)}
+                step={1}
+                value={keepTopSegments ?? 0}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value);
+                  setKeepTopSegments(v === 0 ? null : v);
+                }}
+                className="flex-1"
+              />
+              <span className="w-12 text-right text-zinc-300">
+                {keepTopSegments ?? "all"}
+              </span>
+            </div>
           </div>
 
           {/* Sphere eraser */}
