@@ -12,7 +12,7 @@ import {
 } from "../lib/api/client";
 import { useProject } from "../lib/project-context";
 import type { UseMutationResult } from "@tanstack/react-query";
-import { Plus, Server, FolderPlus, FolderOpen, Search, Beaker, BarChart3, Play, ScanSearch, AlertTriangle, Clock } from "lucide-react";
+import { Plus, Server, FolderPlus, FolderOpen, Search, Beaker, BarChart3, Play, ScanSearch, AlertTriangle, Clock, Sparkles, Loader2 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
@@ -30,6 +30,7 @@ export function DashboardPage(): React.JSX.Element {
 
   const [showCreate, setShowCreate] = useState(false);
   const [showOpen, setShowOpen] = useState(false);
+  const [showTutorial, setShowTutorial] = useState(false);
   const [createPath, setCreatePath] = useState("");
   const [createName, setCreateName] = useState("");
   const [showCreateBrowser, setShowCreateBrowser] = useState(false);
@@ -131,16 +132,30 @@ export function DashboardPage(): React.JSX.Element {
               Create a project or open an existing one to get started.
             </p>
             <div className="mt-4 flex items-center justify-center gap-3">
-              <Button onClick={() => { setShowCreate(true); setShowOpen(false); }}>
+              <Button onClick={() => { setShowCreate(true); setShowOpen(false); setShowTutorial(false); }}>
                 <FolderPlus className="h-4 w-4" />
                 Create Project
               </Button>
-              <Button variant="outline" onClick={() => { setShowOpen(true); setShowCreate(false); }}>
+              <Button variant="outline" onClick={() => { setShowOpen(true); setShowCreate(false); setShowTutorial(false); }}>
                 <FolderOpen className="h-4 w-4" />
                 Open Project
               </Button>
+              <Button variant="outline" onClick={() => { setShowTutorial(true); setShowCreate(false); setShowOpen(false); }}>
+                <Sparkles className="h-4 w-4" />
+                Tutorial Dataset
+              </Button>
             </div>
           </div>
+
+          {/* Tutorial dataset form */}
+          {showTutorial && (
+            <TutorialDatasetForm
+              onProjectCreated={(p) => {
+                setProject(p);
+                setShowTutorial(false);
+              }}
+            />
+          )}
 
           {/* Create Project form */}
           {showCreate && (
@@ -263,6 +278,122 @@ export function DashboardPage(): React.JSX.Element {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tutorial dataset generator — runs `recovar make_test_dataset` then opens
+// the resulting directory as a project, so the user can explore the full
+// pipeline → analyze → density workflow without having to download data.
+// ---------------------------------------------------------------------------
+
+function TutorialDatasetForm({
+  onProjectCreated,
+}: {
+  onProjectCreated: (p: { id: string; path: string; name: string }) => void;
+}): React.JSX.Element {
+  const [outputDir, setOutputDir] = useState("");
+  const [imageSize, setImageSize] = useState("64");
+  const [nImages, setNImages] = useState("2000");
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ duration: number; files: number } | null>(null);
+
+  async function run(): Promise<void> {
+    if (!outputDir.trim()) {
+      setError("Please specify an output directory.");
+      return;
+    }
+    setRunning(true);
+    setError(null);
+    setResult(null);
+    try {
+      const { generateTestDataset, createProject } = await import("../lib/api/client");
+      const gen = await generateTestDataset({
+        output_dir: outputDir.trim(),
+        image_size: parseInt(imageSize, 10) || 64,
+        n_images: parseInt(nImages, 10) || 2000,
+        seed: 0,
+      });
+      setResult({ duration: gen.duration_seconds, files: gen.files_created.length });
+      // Open the generated directory as a project so the user can dive in.
+      const proj = await createProject(
+        gen.output_dir,
+        gen.output_dir.split("/").filter(Boolean).pop() ?? "tutorial"
+      );
+      onProjectCreated(proj);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setError(msg);
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-6 space-y-3">
+      <h3 className="flex items-center gap-2 text-sm font-medium">
+        <Sparkles className="h-4 w-4 text-amber-400" /> Generate Tutorial Dataset
+      </h3>
+      <p className="text-xs text-zinc-400">
+        Runs <code>recovar make_test_dataset</code> locally to create a small
+        synthetic dataset (default: 64<sup>3</sup> box × 2000 images, ~30s on
+        a CPU). Then opens it as a project so you can run the full pipeline →
+        analyze → density → trajectory workflow without downloading anything.
+      </p>
+      <div className="space-y-1">
+        <Label>Output directory</Label>
+        <Input
+          value={outputDir}
+          onChange={(e) => setOutputDir(e.target.value)}
+          placeholder="/scratch/gpfs/.../recovar_tutorial"
+          className="font-mono"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <Label>Image size</Label>
+          <Input
+            type="number"
+            value={imageSize}
+            onChange={(e) => setImageSize(e.target.value)}
+            min={32}
+            max={256}
+          />
+        </div>
+        <div className="space-y-1">
+          <Label>Number of images</Label>
+          <Input
+            type="number"
+            value={nImages}
+            onChange={(e) => setNImages(e.target.value)}
+            min={100}
+            max={200000}
+          />
+        </div>
+      </div>
+      {error && <p className="text-xs text-red-400">{error}</p>}
+      {result && (
+        <p className="text-xs text-emerald-400">
+          Generated {result.files} file(s) in {result.duration}s. Opening project…
+        </p>
+      )}
+      <div className="flex justify-end">
+        <Button onClick={run} disabled={running}>
+          {running ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Generating…
+            </>
+          ) : (
+            <>
+              <Sparkles className="h-4 w-4" />
+              Generate
+            </>
+          )}
+        </Button>
+      </div>
     </div>
   );
 }

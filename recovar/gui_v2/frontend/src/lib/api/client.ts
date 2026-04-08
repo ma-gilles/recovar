@@ -316,6 +316,28 @@ export function getSlurmDefaults(): Promise<SlurmDefaults> {
   return request("/system/slurm-defaults");
 }
 
+export interface GenerateTestDatasetRequest {
+  output_dir: string;
+  image_size?: number;
+  n_images?: number;
+  seed?: number | null;
+}
+
+export interface GenerateTestDatasetResponse {
+  output_dir: string;
+  files_created: string[];
+  duration_seconds: number;
+}
+
+export function generateTestDataset(
+  req: GenerateTestDatasetRequest
+): Promise<GenerateTestDatasetResponse> {
+  return request("/system/generate-test-dataset", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+}
+
 // --- Jobs (extended) ---
 
 export function getJobSbatchScript(id: string): Promise<SbatchScript> {
