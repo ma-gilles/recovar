@@ -1273,6 +1273,12 @@ def _refine_relion_mode(
     healpix_order_trajectory = []
     ave_Pmax_trajectory = []
     pmax_per_image_history = []
+    # Per-iter per-shell trajectories for RELION parity diff (added for the
+    # 2026-04 audit). noise_radial_trajectory[i] = sigma2_noise per shell after
+    # iter i's noise update; tau2_radial_trajectory[i] = recovar's tau2 prior
+    # per shell after iter i's signal-prior update.
+    noise_radial_trajectory = []
+    tau2_radial_trajectory = []
     relion_incr_size = 10  # RELION default
     relion_has_high_fsc_at_limit = False
     global_direction_prior = None
@@ -2030,6 +2036,24 @@ def _refine_relion_mode(
         previous_noise_radial = noise_from_res
         noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
 
+        # Save per-iter per-shell sigma2 (after this iter's noise update) and
+        # tau2-equivalent (radial average of mean_variance over voxels) so the
+        # RELION-parity diff script can compare them shell-by-shell.
+        noise_radial_trajectory.append(np.asarray(noise_from_res, dtype=np.float64))
+        try:
+            from recovar.reconstruction.regularization import average_over_shells
+            tau2_radial = np.asarray(
+                average_over_shells(
+                    np.asarray(mean_variance, dtype=np.float64),
+                    volume_shape,
+                ),
+                dtype=np.float64,
+            )
+            tau2_radial_trajectory.append(tau2_radial)
+        except Exception as exc:
+            logger.warning("tau2 radial average failed: %s", exc)
+            tau2_radial_trajectory.append(None)
+
         # --- Update convergence state ---
         # This checks assignment changes, resolution stalls, and may trigger
         # angular step refinement or convergence.
@@ -2116,4 +2140,6 @@ def _refine_relion_mode(
         "healpix_order_trajectory": healpix_order_trajectory,
         "ave_Pmax_trajectory": ave_Pmax_trajectory,
         "pmax_per_image_history": pmax_per_image_history,
+        "noise_radial_trajectory": noise_radial_trajectory,
+        "tau2_radial_trajectory": tau2_radial_trajectory,
     }

@@ -474,6 +474,16 @@ def main():
         for i, dvp in enumerate(result["data_vs_prior_trajectory"]):
             save_dict[f"data_vs_prior_iter_{i:03d}"] = np.asarray(dvp)
 
+    # Per-iter per-shell sigma2_noise and tau2 (added 2026-04 for RELION parity diff)
+    if "noise_radial_trajectory" in result:
+        for i, nr in enumerate(result["noise_radial_trajectory"]):
+            if nr is not None:
+                save_dict[f"noise_radial_iter_{i:03d}"] = np.asarray(nr, dtype=np.float64)
+    if "tau2_radial_trajectory" in result:
+        for i, t2 in enumerate(result["tau2_radial_trajectory"]):
+            if t2 is not None:
+                save_dict[f"tau2_radial_iter_{i:03d}"] = np.asarray(t2, dtype=np.float64)
+
     # Save per-image Pmax per iteration (if available)
     if "pmax_per_image_history" in result:
         for i, pmax in enumerate(result["pmax_per_image_history"]):

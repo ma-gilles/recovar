@@ -50,15 +50,29 @@ command -v mpirun
 export CUDA_VISIBLE_DEVICES=0
 
 echo "=== Run RELION auto-refine with fixed init ==="
-# --firstiter_cc is REQUIRED here: the recovar prepare script writes the
-# init via save_volume() which is in recovar's intensity convention, NOT
-# RELION's. Without --firstiter_cc, RELION's iter-1 Bayesian E-step uses
-# the wrong projection scale and the pose search collapses to a 2D-extruded
-# basin (volume slices show horizontal stripes instead of a 3D ribosome,
+# Two RELION flags REQUIRED here:
+#
+# --firstiter_cc — the recovar prepare script writes the init via
+# save_volume() which is in recovar's intensity convention, NOT RELION's.
+# Without --firstiter_cc, RELION's iter-1 Bayesian E-step uses the wrong
+# projection scale and the pose search collapses to a 2D-extruded basin
+# (volume slices show horizontal stripes instead of a 3D ribosome,
 # h1/h2 FSC plateaus at ~14-22 A but FSC vs GT stays at ~20 A regardless
-# of particle count). Documented in
+# of particle count). See
 # ~/.claude/projects/-home-mg6942/memory/feedback_relion_firstiter_cc_required.md
+#
+# --ctf — RELION's default is OFF. Without --ctf, RELION reconstructs
+# the CTF-convolved volume directly: real-space dark halo / ringing
+# around bright density, resolution plateau ~18-22 A regardless of
+# particle count, radial power spectrum shows CTF oscillations and
+# 1-2 orders of magnitude excess high-freq power vs GT. See
+# ~/.claude/projects/-home-mg6942/memory/feedback_relion_ctf_required.md
 cd "$DATA_DIR"
+# Additional GUI-default flags (DEFAULT OFF on command line):
+#   --flatten_solvent / --zero_mask — mask references and particle exterior
+#   --low_resol_join_halves 40 — prevents h1/h2 divergence below 40 A
+#   --norm / --scale — per-optics-group corrections (no-op for single group)
+# See memory/feedback_relion_required_flags.md for the GUI-vs-CLI audit.
 mpirun -n "$RELION_MPI_RANKS" relion_refine_mpi \
   --i particles.star \
   --ref reference_init_relion.mrc \
@@ -68,6 +82,12 @@ mpirun -n "$RELION_MPI_RANKS" relion_refine_mpi \
   --particle_diameter 200 \
   --ini_high 30 \
   --firstiter_cc \
+  --ctf \
+  --flatten_solvent \
+  --zero_mask \
+  --low_resol_join_halves 40 \
+  --norm \
+  --scale \
   --healpix_order "$HEALPIX_ORDER" \
   --offset_range "$OFFSET_RANGE" \
   --offset_step "$OFFSET_STEP" \
