@@ -47,6 +47,46 @@ const DEFAULT_STATE: WizardState = {
   cleanup: true,
 };
 
+/**
+ * Convert a click position on the slice preview to (x, y, z) voxel
+ * coordinates given the current slice axis and index. Returns null when
+ * the position is outside the image.
+ */
+function clientToSphere(
+  clientX: number,
+  clientY: number,
+  img: HTMLImageElement,
+  shape: number[],
+  axis: 0 | 1 | 2,
+  currentIdx: number,
+  radius: number
+): EraseSphere | null {
+  const rect = img.getBoundingClientRect();
+  const fx = (clientX - rect.left) / rect.width;
+  const fy = (clientY - rect.top) / rect.height;
+  if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return null;
+  // mrcfile loads data as [NZ, NY, NX] so shape=[nz, ny, nx].
+  // Backend renders the slice via:
+  //   axis=0 -> data[idx, :, :]   shape (NY, NX)  rows=Y cols=X
+  //   axis=1 -> data[:, idx, :]   shape (NZ, NX)  rows=Z cols=X
+  //   axis=2 -> data[:, :, idx]   shape (NZ, NY)  rows=Z cols=Y
+  let x = 0, y = 0, z = 0;
+  if (axis === 0) {
+    x = fx * shape[2];
+    y = fy * shape[1];
+    z = currentIdx;
+  } else if (axis === 1) {
+    x = fx * shape[2];
+    y = currentIdx;
+    z = fy * shape[0];
+  } else {
+    x = currentIdx;
+    y = fx * shape[1];
+    z = fy * shape[0];
+  }
+  return { x, y, z, r: radius };
+}
+
 function buildParams(
   s: WizardState,
   sourcePath: string,
@@ -97,6 +137,13 @@ export function MaskWizard({
   const [eraseMode, setEraseMode] = useState(false);
   const [eraseRadius, setEraseRadius] = useState(5);
   const [eraseSpheres, setEraseSpheresRaw] = useState<EraseSphere[]>([]);
+  // In-progress brush stroke (committed to eraseSpheres on mouseup as a
+  // single undo entry). brushPreview drives the live count.
+  const brushDragRef = useRef<{ active: boolean; sample: EraseSphere[] }>({
+    active: false,
+    sample: [],
+  });
+  const [brushPreview, setBrushPreview] = useState<EraseSphere[] | null>(null);
   // Undo/redo history. Each entry is a snapshot of eraseSpheres BEFORE
   // the change. Past = undoable, future = redoable.
   const [erasePast, setErasePast] = useState<EraseSphere[][]>([]);
@@ -232,6 +279,8 @@ export function MaskWizard({
       setErasePast([]);
       setEraseFuture([]);
       setEraseMode(false);
+      brushDragRef.current = { active: false, sample: [] };
+      setBrushPreview(null);
     }
     return () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -362,40 +411,53 @@ export function MaskWizard({
                   alt="Mask preview"
                   className={
                     "h-full w-full object-contain " +
-                    (eraseMode ? "cursor-crosshair" : "")
+                    (eraseMode ? "cursor-crosshair select-none" : "")
                   }
                   style={{ imageRendering: "pixelated" }}
-                  onClick={(e) => {
+                  draggable={false}
+                  onMouseDown={(e) => {
                     if (!eraseMode || !shape) return;
-                    const img = e.currentTarget;
-                    const rect = img.getBoundingClientRect();
-                    // Image is object-contain inside a square box, so the
-                    // rendered image fills the full rect (volumes are cubic).
-                    const fx = (e.clientX - rect.left) / rect.width;
-                    const fy = (e.clientY - rect.top) / rect.height;
-                    if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;
-                    // mrcfile loads data as [NZ, NY, NX] so shape=[nz, ny, nx].
-                    // Backend renders the slice via:
-                    //   axis=0 -> data[idx, :, :]   shape (NY, NX)  rows=Y cols=X
-                    //   axis=1 -> data[:, idx, :]   shape (NZ, NX)  rows=Z cols=X
-                    //   axis=2 -> data[:, :, idx]   shape (NZ, NY)  rows=Z cols=Y
-                    // EraseSphere uses (x, y, z) which the backend
-                    // interprets via mgrid as data[z, y, x] indices.
-                    let x = 0, y = 0, z = 0;
-                    if (axis === 0) {
-                      x = fx * shape[2];
-                      y = fy * shape[1];
-                      z = currentIdx;
-                    } else if (axis === 1) {
-                      x = fx * shape[2];
-                      y = currentIdx;
-                      z = fy * shape[0];
-                    } else {
-                      x = currentIdx;
-                      y = fx * shape[1];
-                      z = fy * shape[0];
+                    e.preventDefault();
+                    const sph = clientToSphere(e.clientX, e.clientY, e.currentTarget, shape, axis, currentIdx, eraseRadius);
+                    if (!sph) return;
+                    brushDragRef.current = { active: true, sample: [sph] };
+                    setBrushPreview([sph]);
+                  }}
+                  onMouseMove={(e) => {
+                    if (!brushDragRef.current.active || !shape) return;
+                    const sph = clientToSphere(e.clientX, e.clientY, e.currentTarget, shape, axis, currentIdx, eraseRadius);
+                    if (!sph) return;
+                    // Throttle by minimum distance: skip if within r/2 of the last
+                    const last = brushDragRef.current.sample[brushDragRef.current.sample.length - 1];
+                    if (last) {
+                      const dx = sph.x - last.x;
+                      const dy = sph.y - last.y;
+                      const dz = sph.z - last.z;
+                      const minDist = eraseRadius * 0.5;
+                      if (dx * dx + dy * dy + dz * dz < minDist * minDist) return;
                     }
-                    setEraseSpheres((prev) => [...prev, { x, y, z, r: eraseRadius }]);
+                    brushDragRef.current.sample.push(sph);
+                    setBrushPreview([...brushDragRef.current.sample]);
+                  }}
+                  onMouseUp={() => {
+                    if (!brushDragRef.current.active) return;
+                    const stroke = brushDragRef.current.sample;
+                    brushDragRef.current = { active: false, sample: [] };
+                    setBrushPreview(null);
+                    if (stroke.length > 0) {
+                      setEraseSpheres((prev) => [...prev, ...stroke]);
+                    }
+                  }}
+                  onMouseLeave={() => {
+                    // Treat leaving the image like mouseup so a half-finished
+                    // stroke still commits.
+                    if (!brushDragRef.current.active) return;
+                    const stroke = brushDragRef.current.sample;
+                    brushDragRef.current = { active: false, sample: [] };
+                    setBrushPreview(null);
+                    if (stroke.length > 0) {
+                      setEraseSpheres((prev) => [...prev, ...stroke]);
+                    }
                   }}
                 />
               ) : (
@@ -665,7 +727,9 @@ export function MaskWizard({
             {eraseMode && (
               <p className="text-xs text-rose-300/80">
                 {viewMode === "slice"
-                  ? "Click anywhere on the slice preview to add an erase sphere here."
+                  ? brushPreview
+                    ? `Painting brush stroke… ${brushPreview.length} point${brushPreview.length === 1 ? "" : "s"}`
+                    : "Click or drag on the slice preview to add erase spheres."
                   : "Click on the mask isosurface to drop an erase sphere at that point."}
               </p>
             )}
