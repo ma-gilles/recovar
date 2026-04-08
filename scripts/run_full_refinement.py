@@ -337,10 +337,16 @@ def main():
     from recovar.reconstruction import noise as recon_noise
 
     initial_noise_subset = np.arange(min(1000, ds.n_units), dtype=np.int32)
+    # In RELION mode the E-step scores masked images, so the bootstrap noise
+    # MUST come from masked images too — otherwise sigma2 is dominated by the
+    # solvent area and the iter-1 chi² is ~3.3-6× too small (verified
+    # 2026-04-08 against the tiny parity dataset, see tmp/check_sigma2_mask.py).
+    bootstrap_apply_mask = args.mode == "relion"
     initial_noise_radial = recon_noise.estimate_initial_noise_spectrum_from_unaligned_images(
         ds,
         initial_noise_subset,
         batch_size=min(args.image_batch_size, initial_noise_subset.size),
+        apply_image_mask=bootstrap_apply_mask,
     )
     noise_variance = recon_noise.make_radial_noise(initial_noise_radial, ds.image_shape)
     logger.info(

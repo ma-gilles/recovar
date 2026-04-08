@@ -786,6 +786,8 @@ def estimate_initial_noise_spectrum_from_unaligned_images(
     experiment_dataset,
     image_subset,
     batch_size,
+    *,
+    apply_image_mask=False,
 ):
     """Approximate RELION's initial sigma2_noise estimate from particle spectra.
 
@@ -793,6 +795,14 @@ def estimate_initial_noise_spectrum_from_unaligned_images(
     minus the power spectrum of the average image before the first refinement
     iteration. This helper mirrors that structure for the benchmark harness so
     the first E-step starts from a comparable likelihood scale.
+
+    Pass ``apply_image_mask=True`` to multiply each image by
+    ``experiment_dataset.image_mask`` before the FFT. This is **required** when
+    the downstream E-step also uses masked images (RELION-mode refinement),
+    because the noise spectrum must match the masking convention of the chi²
+    formula. Without it, recovar's chi² is ~3.3-6× too small at the matched
+    pose grid, collapsing the iter-1 posterior compared to RELION (verified
+    2026-04-08, see ``tmp/check_sigma2_mask.py``).
 
     The returned spectrum is in **recovar's native FFT units**, i.e. it has the
     same scale as ``|process_images(batch)|^2``. Downstream consumers (the
@@ -826,7 +836,9 @@ def estimate_initial_noise_spectrum_from_unaligned_images(
         _particle_indices,
         _image_indices,
     ) in experiment_dataset.iter_batches(batch_size, indices=image_subset):
-        batch = experiment_dataset.process_images(batch)
+        batch = experiment_dataset.process_images(
+            batch, apply_image_mask=apply_image_mask,
+        )
         batch_radial_power = regularization.batch_average_over_shells(
             jnp.abs(batch) ** 2,
             experiment_dataset.image_shape,
