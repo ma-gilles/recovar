@@ -101,7 +101,7 @@ def _write_reference_volumes(output_dir, grid_size):
     )
 
 
-def prepare_benchmark(output_dir, *, n_images, grid_size, noise_level):
+def prepare_benchmark(output_dir, *, n_images, grid_size, noise_level, relion_normalize=False):
     mkdir_safe(output_dir)
 
     particles_star = os.path.join(output_dir, "particles.star")
@@ -119,11 +119,12 @@ def prepare_benchmark(output_dir, *, n_images, grid_size, noise_level):
         voxel_size = 4.25 * 128 / grid_size
         volumes_path = str(files(recovar) / "assets" / "vol")
         logger.info(
-            "Generating benchmark dataset: output=%s n_images=%d grid=%d noise=%.3f",
+            "Generating benchmark dataset: output=%s n_images=%d grid=%d noise=%.3f relion_normalize=%s",
             output_dir,
             n_images,
             grid_size,
             noise_level,
+            relion_normalize,
         )
         simulator.generate_synthetic_dataset(
             output_dir,
@@ -144,6 +145,7 @@ def prepare_benchmark(output_dir, *, n_images, grid_size, noise_level):
             disc_type="nufft",
             n_tilts=-1,
             outlier_file_input=None,
+            relion_normalize=relion_normalize,
         )
     else:
         logger.info("Dataset files already present in %s; reusing them", output_dir)
@@ -164,6 +166,15 @@ def main():
     parser.add_argument("--n-images", type=int, default=5000)
     parser.add_argument("--grid-size", type=int, default=128)
     parser.add_argument("--noise-level", type=float, default=1.0)
+    parser.add_argument(
+        "--relion-normalize",
+        action="store_true",
+        help="Apply RELION-style per-particle background normalization "
+             "to the simulated particles (mean subtraction + per-particle "
+             "stddev division using pixels outside the particle disk). "
+             "This makes the data directly compatible with RELION's "
+             "iter-1 Bayesian E-step (no need for --firstiter_cc). Default off.",
+    )
     args = parser.parse_args()
 
     prepare_benchmark(
@@ -171,6 +182,7 @@ def main():
         n_images=args.n_images,
         grid_size=args.grid_size,
         noise_level=args.noise_level,
+        relion_normalize=args.relion_normalize,
     )
 
 
