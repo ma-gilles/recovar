@@ -807,3 +807,114 @@ prior_iteration_relion_style_batch = jax.vmap(
 )
 
 batch_average_over_shells = jax.vmap(average_over_shells, in_axes=(0, None, None))
+
+
+def join_halves_at_low_resolution(
+    Ft_y_0,
+    Ft_y_1,
+    Ft_ctf_0,
+    Ft_ctf_1,
+    volume_shape,
+    voxel_size,
+    grid_size,
+    low_resol_join_halves_angstrom,
+    current_resolution_angstrom=None,
+):
+    """RELION's ``--low_resol_join_halves`` operation on Fourier accumulators.
+
+    Mirrors ``MlOptimiserMpi::joinTwoHalvesAtLowResolution`` in
+    ``relion/src/ml_optimiser_mpi.cpp:3112-3219``: at low resolutions where
+    the half-set reconstructions are unreliably independent, RELION
+    averages the **backprojection accumulators** (``data`` ↔ ``Ft_y`` and
+    ``weight`` ↔ ``Ft_ctf``) of the two halves at every Fourier voxel
+    inside a low-resolution sphere, then writes the average back into both
+    halves before doing the Wiener solve. This forces the iter's two
+    half-maps to share their low-frequency content, preventing the
+    half-sets from diverging in orientation space at SNR-poor low shells.
+
+    The joining radius (in shells) is set by the LARGER (lower-frequency)
+    of:
+        - ``low_resol_join_halves_angstrom`` (the user/GUI default 40 Å), and
+        - ``current_resolution_angstrom`` (the iter's resolution estimate)
+    so that the joining radius never exceeds the actual resolution of the
+    map (which would join shells where the FSC is genuinely high).
+    Concretely:
+
+    .. code-block:: text
+
+        myres = max(low_resol_join_halves_angstrom, current_resolution_angstrom)
+        lowres_r_max = ceil(grid_size * voxel_size / myres)
+
+    matching ``ml_optimiser_mpi.cpp:3122-3123``:
+
+    .. code-block:: cpp
+
+        RFLOAT myres = XMIPP_MAX(low_resol_join_halves, 1./mymodel.current_resolution);
+        int lowres_r_max = CEIL(mymodel.ori_size * mymodel.pixel_size / myres);
+
+    Parameters
+    ----------
+    Ft_y_0, Ft_y_1 : array (volume_size,) complex
+        Per-half ``Pᵀy`` (numerator of the Wiener filter) accumulators
+        from the M-step, in centered Fourier order, flattened.
+    Ft_ctf_0, Ft_ctf_1 : array (volume_size,) float
+        Per-half ``Pᵀ(CTF² / σ²)`` (denominator) accumulators.
+    volume_shape : tuple of 3 ints
+        Shape of the centered Fourier volume.
+    voxel_size : float
+        Voxel size in Angstroms (image pixel size in real space).
+    grid_size : int
+        Real-space grid edge length, ``ori_size`` in RELION terms.
+    low_resol_join_halves_angstrom : float
+        The user-set joining resolution (RELION's ``--low_resol_join_halves``).
+        Pass ``<= 0`` to disable; the function then returns the inputs
+        unchanged.
+    current_resolution_angstrom : float or None
+        The current iteration's resolution estimate in Angstroms. The
+        joining radius is the LOWER frequency (LARGER Å) of this and
+        ``low_resol_join_halves_angstrom``. Pass ``None`` (the default)
+        to ignore (equivalent to passing ``+inf``).
+
+    Returns
+    -------
+    (Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined)
+        New accumulators with the low-resolution shells averaged. Outside
+        the joining sphere they are identical to the inputs.
+    """
+    if low_resol_join_halves_angstrom is None or low_resol_join_halves_angstrom <= 0:
+        return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
+
+    # Effective joining resolution: the larger (lower-frequency) of
+    # low_resol_join_halves and current_resolution.
+    myres = float(low_resol_join_halves_angstrom)
+    if current_resolution_angstrom is not None and np.isfinite(
+        current_resolution_angstrom
+    ):
+        myres = max(myres, float(current_resolution_angstrom))
+
+    lowres_r_max = int(np.ceil(grid_size * voxel_size / myres))
+    if lowres_r_max <= 0:
+        return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
+
+    # Build the radial-shell mask once. Centered Fourier volume → radial
+    # distance from the center is the shell index.
+    radial_dist_3d = fourier_transform_utils.get_grid_of_radial_distances(
+        volume_shape, voxel_size=1, scaled=False, frequency_shift=0, rounded=True,
+    )
+    join_mask_3d = (radial_dist_3d <= lowres_r_max)
+    join_mask_flat = join_mask_3d.reshape(-1)
+
+    Ft_y_0_arr = jnp.asarray(Ft_y_0)
+    Ft_y_1_arr = jnp.asarray(Ft_y_1)
+    Ft_ctf_0_arr = jnp.asarray(Ft_ctf_0)
+    Ft_ctf_1_arr = jnp.asarray(Ft_ctf_1)
+
+    avg_Ft_y = 0.5 * (Ft_y_0_arr + Ft_y_1_arr)
+    avg_Ft_ctf = 0.5 * (Ft_ctf_0_arr + Ft_ctf_1_arr)
+
+    Ft_y_0_joined = jnp.where(join_mask_flat, avg_Ft_y, Ft_y_0_arr)
+    Ft_y_1_joined = jnp.where(join_mask_flat, avg_Ft_y, Ft_y_1_arr)
+    Ft_ctf_0_joined = jnp.where(join_mask_flat, avg_Ft_ctf, Ft_ctf_0_arr)
+    Ft_ctf_1_joined = jnp.where(join_mask_flat, avg_Ft_ctf, Ft_ctf_1_arr)
+
+    return Ft_y_0_joined, Ft_y_1_joined, Ft_ctf_0_joined, Ft_ctf_1_joined
