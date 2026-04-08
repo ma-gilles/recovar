@@ -1,9 +1,22 @@
 import React, { useMemo, Suspense } from "react";
 import { Link, useSearch } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Box, Diff, GitCompare } from "lucide-react";
-import { getJob, getJobVolumes, type JobDetail, type VolumeEntry } from "../lib/api/client";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { ArrowLeft, Box, Diff, GitCompare, LineChart } from "lucide-react";
+import Plot from "react-plotly.js";
+import {
+  getJob,
+  getJobVolumes,
+  getJobPlots,
+  getChartData,
+  type ChartData,
+  type JobDetail,
+  type PlotEntry,
+  type VolumeEntry,
+} from "../lib/api/client";
 import { Spinner } from "../components/ui/spinner";
+
+// Design system colors matching the volume overlay (sky/rose/emerald/amber).
+const JOB_COLORS = ["#38bdf8", "#fb7185", "#34d399", "#fbbf24"];
 
 // Lazy-load VtkViewer (vtk.js is heavy; only fetched when this page loads)
 const VtkViewer = React.lazy(() =>
@@ -194,6 +207,55 @@ function CompareInner({ jobs, paramRows, diffCount, sameCount }: CompareInnerPro
     () => [v0.data, v1.data, v2.data, v3.data].slice(0, jobs.length).map(pickRepresentativeVolume),
     [v0.data, v1.data, v2.data, v3.data, jobs.length]
   );
+
+  // FSC chart data for each job (returns null gracefully if unavailable).
+  const fscQueries = useQueries({
+    queries: jobs.map((j) => ({
+      queryKey: ["chart-data", j.id, "fsc"] as const,
+      queryFn: () => getChartData(j.id, "fsc"),
+    })),
+  });
+  const fscOverlay = useMemo(() => {
+    const traces: Array<Record<string, unknown>> = [];
+    fscQueries.forEach((q, i) => {
+      const data = q.data as ChartData | null | undefined;
+      if (!data || !data.traces || data.traces.length === 0) return;
+      const color = JOB_COLORS[i % JOB_COLORS.length];
+      data.traces.forEach((trace, ti) => {
+        traces.push({
+          ...trace,
+          line: { color, width: 2, ...(trace.line as object | undefined) },
+          marker: { color, ...(trace.marker as object | undefined) },
+          name:
+            data.traces.length > 1
+              ? `${jobs[i].type} #${i + 1} · ${trace.name ?? `curve ${ti}`}`
+              : `${jobs[i].type} #${i + 1}`,
+        });
+      });
+    });
+    return traces;
+  }, [fscQueries, jobs]);
+  const fscLoading = fscQueries.some((q) => q.isLoading);
+
+  // Fallback: if structured FSC data is not available, show the existing
+  // diagnostic PNG (mean_fsc.png) side-by-side per job.
+  const plotQueries = useQueries({
+    queries: jobs.map((j) => ({
+      queryKey: ["job-plots", j.id] as const,
+      queryFn: () => getJobPlots(j.id),
+    })),
+  });
+  const fscPlotPerJob = useMemo(
+    () =>
+      plotQueries.map((q) => {
+        const list = (q.data as PlotEntry[] | undefined) ?? [];
+        return (
+          list.find((p) => /mean_fsc|^fsc/i.test(p.name)) ?? null
+        );
+      }),
+    [plotQueries]
+  );
+  const anyFscPlot = fscPlotPerJob.some((p) => !!p);
   const pinnedForOverlay = useMemo(
     () =>
       repVolumes
@@ -305,6 +367,81 @@ function CompareInner({ jobs, paramRows, diffCount, sameCount }: CompareInnerPro
                 pinnedVolumes={pinnedForOverlay}
               />
             </Suspense>
+          )}
+        </div>
+      </div>
+
+      {/* FSC overlay */}
+      <div className="space-y-2">
+        <h2 className="flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-zinc-500">
+          <LineChart className="h-4 w-4" /> FSC
+          <span className="ml-auto text-xs normal-case tracking-normal text-zinc-600">
+            Half-map gold-standard FSC per job
+          </span>
+        </h2>
+        <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-2" style={{ minHeight: 280 }}>
+          {fscLoading && fscOverlay.length === 0 && !anyFscPlot ? (
+            <div className="flex h-64 items-center justify-center">
+              <Spinner label="Loading FSC..." />
+            </div>
+          ) : fscOverlay.length === 0 && anyFscPlot ? (
+            <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+              {fscPlotPerJob.map((p, i) => (
+                <div key={jobs[i].id} className="space-y-1">
+                  <div className="flex items-center gap-1.5 text-xs">
+                    <span
+                      className="inline-block h-2 w-2 rounded-full"
+                      style={{ backgroundColor: JOB_COLORS[i % JOB_COLORS.length] }}
+                    />
+                    <span className="truncate text-zinc-400">
+                      {jobs[i].type} · {jobs[i].output_dir.split("/").slice(-1)[0]}
+                    </span>
+                  </div>
+                  {p ? (
+                    <img
+                      src={`/api/files/serve?path=${encodeURIComponent(p.path)}`}
+                      alt={`FSC for ${jobs[i].type}`}
+                      className="w-full rounded border border-zinc-800 bg-black"
+                    />
+                  ) : (
+                    <div className="flex h-32 items-center justify-center rounded border border-zinc-800 text-xs text-zinc-600">
+                      No FSC plot
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : fscOverlay.length === 0 ? (
+            <div className="flex h-64 items-center justify-center text-xs text-zinc-500">
+              No FSC data available for these jobs.
+            </div>
+          ) : (
+            <Plot
+              data={fscOverlay as Plotly.Data[]}
+              layout={{
+                autosize: true,
+                paper_bgcolor: "rgba(0,0,0,0)",
+                plot_bgcolor: "rgba(24,24,27,1)",
+                font: { color: "#a1a1aa", size: 12 },
+                xaxis: {
+                  title: "Spatial frequency shell",
+                  gridcolor: "#3f3f46",
+                  zerolinecolor: "#52525b",
+                },
+                yaxis: {
+                  title: "FSC",
+                  range: [0, 1],
+                  gridcolor: "#3f3f46",
+                  zerolinecolor: "#52525b",
+                },
+                margin: { t: 20, r: 20, b: 50, l: 60 },
+                showlegend: true,
+                legend: { bgcolor: "rgba(0,0,0,0)" },
+              }}
+              useResizeHandler
+              style={{ width: "100%", height: 280 }}
+              config={{ displaylogo: false, responsive: true }}
+            />
           )}
         </div>
       </div>
