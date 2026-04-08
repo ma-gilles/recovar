@@ -1,8 +1,14 @@
-import { useMemo } from "react";
+import React, { useMemo, Suspense } from "react";
 import { Link, useSearch } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, Diff, GitCompare } from "lucide-react";
-import { getJob, type JobDetail } from "../lib/api/client";
+import { ArrowLeft, Box, Diff, GitCompare } from "lucide-react";
+import { getJob, getJobVolumes, type JobDetail, type VolumeEntry } from "../lib/api/client";
+import { Spinner } from "../components/ui/spinner";
+
+// Lazy-load VtkViewer (vtk.js is heavy; only fetched when this page loads)
+const VtkViewer = React.lazy(() =>
+  import("../components/volume-viewer/VtkViewer").then((m) => ({ default: m.VtkViewer }))
+);
 
 interface CompareSearch {
   jobs: string;
@@ -128,6 +134,86 @@ export function ComparePage(): React.JSX.Element {
   const sameCount = paramRows.length - diffCount;
 
   return (
+    <CompareInner
+      jobs={jobs}
+      paramRows={paramRows}
+      diffCount={diffCount}
+      sameCount={sameCount}
+    />
+  );
+}
+
+/**
+ * Pick the most representative single volume from a job's volume list.
+ * Pipeline → mean.mrc; ComputeState/ComputeTrajectory → state000.mrc;
+ * otherwise the first non-halfmap. Returns null if nothing usable.
+ */
+function pickRepresentativeVolume(volumes: VolumeEntry[] | undefined): VolumeEntry | null {
+  if (!volumes || volumes.length === 0) return null;
+  const usable = volumes.filter(
+    (v) => !/half|unfil|locres|sampling/i.test(v.name)
+  );
+  const mean = usable.find((v) => /\bmean(_filt)?\.mrc$/i.test(v.name));
+  if (mean) return mean;
+  const state0 = usable.find((v) => /state0+\.mrc$/i.test(v.name));
+  if (state0) return state0;
+  return usable[0] ?? volumes[0] ?? null;
+}
+
+interface CompareInnerProps {
+  jobs: JobDetail[];
+  paramRows: { key: string; values: unknown[]; differs: boolean }[];
+  diffCount: number;
+  sameCount: number;
+}
+
+function CompareInner({ jobs, paramRows, diffCount, sameCount }: CompareInnerProps): React.JSX.Element {
+  // Fetch volumes for up to 4 jobs (hooks must be in stable order).
+  const v0 = useQuery<VolumeEntry[]>({
+    queryKey: ["job-volumes", jobs[0]?.id],
+    queryFn: () => getJobVolumes(jobs[0]!.id),
+    enabled: !!jobs[0],
+  });
+  const v1 = useQuery<VolumeEntry[]>({
+    queryKey: ["job-volumes", jobs[1]?.id],
+    queryFn: () => getJobVolumes(jobs[1]!.id),
+    enabled: !!jobs[1],
+  });
+  const v2 = useQuery<VolumeEntry[]>({
+    queryKey: ["job-volumes", jobs[2]?.id],
+    queryFn: () => getJobVolumes(jobs[2]!.id),
+    enabled: !!jobs[2],
+  });
+  const v3 = useQuery<VolumeEntry[]>({
+    queryKey: ["job-volumes", jobs[3]?.id],
+    queryFn: () => getJobVolumes(jobs[3]!.id),
+    enabled: !!jobs[3],
+  });
+
+  const repVolumes = useMemo(
+    () => [v0.data, v1.data, v2.data, v3.data].slice(0, jobs.length).map(pickRepresentativeVolume),
+    [v0.data, v1.data, v2.data, v3.data, jobs.length]
+  );
+  const pinnedForOverlay = useMemo(
+    () =>
+      repVolumes
+        .map((rep, i) =>
+          rep
+            ? {
+                path: rep.path,
+                name: `${jobs[i].type} (${rep.name})`,
+                threshold: 3.0,
+                opacity: 0.6,
+                visible: true,
+                colorIndex: i % 4,
+              }
+            : null
+        )
+        .filter((p): p is NonNullable<typeof p> => !!p),
+    [repVolumes, jobs]
+  );
+
+  return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
         <Link
@@ -197,6 +283,30 @@ export function ComparePage(): React.JSX.Element {
             </tr>
           </tbody>
         </table>
+      </div>
+
+      {/* Volume overlay (isosurfaces) */}
+      <div className="space-y-2">
+        <h2 className="flex items-center gap-2 text-sm font-medium uppercase tracking-wider text-zinc-500">
+          <Box className="h-4 w-4" /> Volume Overlay
+          <span className="ml-auto text-xs normal-case tracking-normal text-zinc-600">
+            Representative volume per job, overlaid as colored isosurfaces
+          </span>
+        </h2>
+        <div className="rounded-lg border border-zinc-800 bg-black" style={{ height: 360 }}>
+          {pinnedForOverlay.length === 0 ? (
+            <div className="flex h-full items-center justify-center text-xs text-zinc-500">
+              No comparable volumes found in these jobs.
+            </div>
+          ) : (
+            <Suspense fallback={<Spinner label="Loading 3D viewer..." />}>
+              <VtkViewer
+                activeVolume={pinnedForOverlay[0].path}
+                pinnedVolumes={pinnedForOverlay}
+              />
+            </Suspense>
+          )}
+        </div>
       </div>
 
       {/* Parameter diff */}
