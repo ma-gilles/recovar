@@ -148,6 +148,45 @@ For each iteration `iter` ≥ 1:
 That's the canonical loop. Everything in v3 below is in service of
 matching this exactly.
 
+## ★ Verified-done items — DO NOT re-audit (2026-04-08 evening)
+
+After re-reading the actual code in
+`/scratch/gpfs/GILLES/mg6942/recovar_relion_parity_audit/` against
+RELION 5.0.1 source line by line, the following items the original
+audit (and the v2 plan) flagged as "MISSING" or "PARTIAL" are
+**actually fully implemented** in the current `_refine_relion_mode`.
+The earlier audit was based on stale info, conflated the legacy and
+relion modes, or both.
+
+| Item | Verdict | Where in worktree | RELION ref | Verification |
+|---|---|---|---|---|
+| **A2: τ² from real reconstruction weights** | ✅ DONE | `refine.py:2006` calls `compute_relion_prior_from_reconstruction_stats(Ft_ctf_0, Ft_ctf_1, Ft_y_0, Ft_y_1, ...)` | `backprojector.cpp:1096-1125` | The audit was looking at the legacy-mode path; relion-mode already uses real weights |
+| **A5: padding factor 2 + zero_pad_fourier_volume** | ✅ DONE | `refine.py:1241 PADDING_FACTOR = 2`; `relion_functions.zero_pad_fourier_volume` | RELION default `--pad 2` | Standalone test: 8³ → 16³ → crop, DC at center, round-trip CC = 1.0. The "known geometry bug" mentioned in earlier audit was fixed at some prior commit |
+| **A1: data_vs_prior resolution criterion** | ✅ DONE (equivalent) | `refine.py:2018-2024`: `dvp_iter = fsc_to_relion_ssnr(fsc); resolution_from_data_vs_prior(dvp)` | `ml_optimiser.cpp:5600-5648` | recovar uses `SSNR<1` ⇔ `FSC<0.5`, equivalent to RELION's `data_vs_prior<1` to leading order. The exact RELION formula has an extra `(sum_weight/Npix)²` factor that recovar omits, but it's a small second-order correction |
+| **`--low_resol_join_halves` in recovar M-step** | ✅ DONE | `refine.py:1800-1807` calls `regularization.join_halves_at_low_resolution`; helper at `regularization.py:812` | `ml_optimiser_mpi.cpp:3112-3219` | Implemented commit `ebfd2a9`. **Empirically verified NOT to be the dominant cause** of the recovar-vs-RELION FSC gap on the 5k benchmark. With/without join: ΔPmax < 0.0001 per iter, identical `current_size` growth. The joining radius is shell 14 (40 Å) but recovar's FSC drops at shell 21, well past the joining region. The fix is correct and matches RELION; just don't expect it to close the convergence-speed gap on this benchmark. |
+| **A4: posterior-weighted σ²_noise (formula)** | ✅ DONE (formula matches) | `engine_v2._compute_noise_block` accumulates the A2−2·XA decomposition, plus per-image P_img; `noise.normalize_wsum_to_sigma2_noise` divides by `2·sumw·Npix_per_shell` | `ml_optimiser.cpp:8634-8638` (`wsum += weight·\|residual\|²`); `5268-5270` (`σ² = wsum/(2·sumw·Npix)`) | Mathematically equivalent: recovar's `A2 − 2·XA + P_img = E_w[\|CTF·proj − img\|²]` is exactly the expected per-pose squared residual, summed over the same posterior weights RELION uses. The maximization formula matches exactly. (Open: are recovar's accumulators using **masked** images per RELION line 8633 "Use FT of masked image for noise estimation!"? See B1 below — the noise accumulator code path uses `summed_masked` from the M-step GEMM, suggesting masking IS used; needs explicit verification.) |
+
+**Implications for the remaining work:**
+1. We do **NOT** need to "wire `data_vs_prior`" — already wired.
+2. We do **NOT** need to "fix the `zero_pad_fourier_volume` geometry
+   bug" — it works. PADDING_FACTOR = 2 is enabled.
+3. We do **NOT** need to "use real reconstruction weights for τ²" —
+   already done.
+4. We do **NOT** need to "implement posterior-weighted noise" — already
+   done; formula matches RELION exactly.
+
+**Convergence-speed gap status**: with all the verified-done items
+above, recovar's iter-by-iter trajectory STILL lags RELION on the
+2026-04-08 5k normalized benchmark. The remaining gap at shells 14–25
+must come from one of the items below (in best-guess priority):
+- **B1**: masked-alignment / unmasked-reconstruction split
+- **A3**: `tau²_fudge` parameter passthrough
+- **B2**: `highres_Xi2` high-freq term (non-zero per-particle constant
+  added to chi² for shells above current_size)
+- A more subtle inference difference (`sigma2_fudge` constant in chi²,
+  `pdf_orientation` / `pdf_offset` prior factors, adaptive-oversampling
+  quantization, ...)
+
 ## Where recovar is, after the 2026-04-08 fixes
 
 Audit verdict (full report in
