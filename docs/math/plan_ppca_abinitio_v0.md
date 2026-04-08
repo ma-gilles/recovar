@@ -85,6 +85,38 @@ this document:
   it can leave the learned columns outside the real-volume Fourier
   subspace (i.e. they no longer correspond to FTs of real volumes).
   Section 8.3 is rewritten around a real-volume parameterization.
+
+### 0.3.1 User-driven correction (2026-04-08): half-volume layout
+
+A subsequent user correction replaced the original "enforce
+Hermitian symmetry on full-volume FTs" design with the **half-volume
+rfft layout** that the rest of the codebase already uses
+(`recovar/em/dense_single_volume/engine_v2.py`). Key consequences:
+
+- `μ` and each row of `U` are stored in `(N0, N1, N2//2+1)`
+  rfft-packed half-volume layout (flattened to
+  `half_volume_size = N0 * N1 * (N2//2+1)`).
+- The Hermitian-symmetry constraint is **structural**, not
+  enforced. There is no `enforce_real_volume_ft` step; the layout
+  simply does not represent the redundant half of the spectrum.
+  Any complex array of the right rfft shape decodes via
+  `recovar.core.fourier_transform_utils.get_idft3_real` to a
+  real-valued volume by construction.
+- Slicing and backprojection use `slice_volume(...,
+  half_volume=True, half_image=True)` and the matching
+  `adjoint_slice_volume(...)` (`recovar/core/slicing.py:222, 331`).
+- **Inner products on the half-spectrum require an rfft Hermitian
+  weight**: `2` for interior packed-axis columns (which represent
+  conjugate pairs), `1` on the DC column (`kx=0`) and the Nyquist
+  column (`kx=N2/2`, even N only). With these weights,
+  `Σ_k w(k) Re(conj(a_half) b_half) = Re<a_full, b_full>` exactly.
+  The 3D weight is provided by
+  `recovar.em.ppca_abinitio.half_volume.make_half_volume_weights`,
+  matching the 2D `engine_v2.make_half_image_weights` recipe.
+- Real-space orthonormalization on the rows of a `(q, N_half)`
+  matrix is done via Cholesky-whitening of the **weighted** Gram
+  `(U * w) @ U^H / N_full` (see
+  `real_volume_orthonormalize_half`).
 - **The dense `(n_img, n_rot, n_trans, q)` posterior tensor is a
   memory dead-end** and silently locks out significant-weight
   pruning, local-grid search, and the streaming pattern that
@@ -237,35 +269,47 @@ complex `α` or applies a complex unitary to `U` is wrong.
 
 ### 4.2 Representation contract (load-bearing)
 
-`μ` and each column of `U` correspond to **real-space 3D volumes**.
-They are stored as flat centered Fourier-transform vectors in
-recovar's convention (see `recovar/CLAUDE.md`).
+`μ` and each row of `U` correspond to **real-space 3D volumes**.
+They are stored in **half-volume rfft layout**: a flat complex128
+vector of length `half_volume_size = N0 * N1 * (N2//2 + 1)`. The
+half-volume layout makes Hermitian symmetry structural — the
+redundant half of the spectrum is simply not stored. There is no
+projection-back step.
 
 This means:
 
-- Each column of `U` and `μ` itself must satisfy the conjugate-
-  symmetry condition `v[k] = conj(v[-k])` (with `-k` taken in
-  centered FT layout). DC and Nyquist coefficients are real.
-- After **every** update to `μ` or `U`, the result must be projected
-  back to the real-volume Fourier subspace by enforcing this
-  symmetry. The projection is implemented in
-  `recovar/em/ppca_abinitio/real_volume.py:enforce_real_volume_ft`.
-- "Orthonormal columns of `U`" means orthonormal under the
-  Frobenius inner product on the **real-space volumes**, not the
-  complex Fourier vectors. By Parseval this is equivalent up to a
-  fixed `prod(volume_shape)` scale, so it can be done in Fourier
-  space *provided* the real-volume invariant is enforced first.
-- The gauge group is real orthogonal `O(q)`. Gauge fixes are
-  performed by orthonormalizing the real-space columns
-  (`recovar/em/ppca_abinitio/real_volume.py:real_volume_orthonormalize`),
-  not by complex thin SVD.
+- The layout is the same one `recovar/em/dense_single_volume/`
+  uses, produced by
+  `recovar.core.fourier_transform_utils.get_dft3_real` and
+  inverted by `get_idft3_real`. Any complex array of the right
+  rfft shape decodes to a real-valued volume by construction.
+- Slicing: use
+  `recovar.core.slicing.slice_volume(..., half_volume=True,
+  half_image=True)` (`recovar/core/slicing.py:222`). Backprojection:
+  `adjoint_slice_volume(..., half_volume=True, half_image=True)`
+  (`recovar/core/slicing.py:331`).
+- "Orthonormal rows of `U`" means orthonormal under the
+  **real-space** inner product on the decoded real volumes, NOT
+  the bare complex inner product on the half-spectrum vectors.
+  Parseval gives the relationship: with rfft Hermitian weights
+  `w(k)` (2 for interior packed-axis columns, 1 for DC and
+  Nyquist columns), real-space inner product
+  `<a, b>_real = (1/N_full) · Σ_k w(k) Re[conj(a_half) b_half]`.
+  Real-space orthonormality is therefore
+  `Re[(U * w) @ U^H] / N_full = I_q`.
+- The gauge group is real orthogonal `O(q)`. The gauge fix is
+  Cholesky-whitening of the weighted Gram, implemented in
+  `recovar/em/ppca_abinitio/half_volume.py:real_volume_orthonormalize_half`.
 
 Stored shapes:
 
-- `μ` ∈ `(volume_size,)`, complex but Hermitian-symmetric.
-- `U` ∈ `(q, volume_size)`, each row Hermitian-symmetric, rows
-  orthonormal in the real-space sense.
+- `μ` ∈ `(half_volume_size,)`, complex128, rfft-packed.
+- `U` ∈ `(q, half_volume_size)`, complex128, rfft-packed; rows
+  real-space orthonormal under the weighted inner product.
 - `s` ∈ `(q,)`, non-negative, descending, **real**.
+- The full real-space `volume_shape = (N0, N1, N2)` is carried as
+  a static field on `PPCAInit`, since the half size alone does
+  not determine the full size unambiguously when `N2` is odd.
 
 ### 4.3 FFT noise scale contract
 
@@ -374,19 +418,22 @@ the post-processing solve, not PPCA.
 ```
 recovar/em/ppca_abinitio/
     __init__.py
-    types.py            # PPCAInit, FixedGridSpec, PPCAConfig, PosteriorStats, PosteriorBlock
-    real_volume.py      # enforce_real_volume_ft, real_volume_orthonormalize, radial_band_limit
+    types.py            # PPCAInit (half-volume layout), FixedGridSpec, PPCAConfig, PosteriorStats, PosteriorBlock
+    half_volume.py      # rfft Hermitian weights, radial band-limit, real_volume_orthonormalize_half, decoders
     grid.py             # build_fixed_grid (order 2 only in v0)
-    posterior.py        # score_and_posterior_moments_eqx + streaming block iterator
+    posterior.py        # score_and_posterior_moments_eqx + streaming block iterator (half-volume / half-image)
     synthetic.py        # 5 synthetic families (Section 9.3)
     metrics.py          # hidden-state, mean (oracle_fsc_gt), subspace, embedding, optimization
     init.py             # init_truth_perturbed, init_random_lowpass, init_from_external_mean
-    factor_update.py    # U-only updates with real-volume projection (Section 8.3)
+    factor_update.py    # U-only updates with weighted real-space orthonormalization (Section 8.3)
     mean_update.py      # residualized mean update calling post_process_from_filter
     loop.py             # run_score_diagnostic, run_fixed_grid_ppca
     atlas.py            # K-class volume alignment + atlas PCA (Phase 3)
     relion_io.py        # thin wrappers over recovar.utils.helpers for K-class import
 ```
+
+`half_volume.py` replaces the earlier `real_volume.py` design (full
+volume + Hermitian projection), per Section 0.3.1.
 
 ```
 tests/ppca_abinitio/
@@ -394,8 +441,7 @@ tests/ppca_abinitio/
     test_compute_bHb_terms_dtype.py              # already committed (audit P2)
     test_score_matches_e_step_residual_ref.py    # production-path parity
     test_fft_noise_scale_contract.py             # FFT unit pin
-    test_real_volume_projection.py               # gauge fix preserves real-volume subspace
-    test_real_volume_orthonormalize.py           # O(q) gauge correctness
+    test_half_volume.py                          # rfft weights, weighted Gram orthonormalization, decoders
     test_posterior_brute_force.py                # m, Hinv, log_scores vs dense reference
     test_posterior_calibration.py                # 90% ellipsoid coverage at true pose
     test_posterior_real_valued.py                # post_mean is real for real-volume inputs
@@ -569,7 +615,11 @@ Ft_y, Ft_ctf = M_with_precompute(... feeding y_i^res(g) ...)
 mu_next = relion_functions.post_process_from_filter(
     dataset, Ft_ctf, Ft_y, tau=mean_variance, disc_type=disc_type
 ).reshape(-1)
-mu_next = enforce_real_volume_ft(mu_next, dataset.volume_shape)
+# In half-volume layout there is no Hermitian-projection step.
+# The post-processing solve is performed in whichever layout the
+# rest of the parity branch uses; convert to half-volume via
+# full_volume_to_half_volume before storing back into PPCAInit.mu.
+mu_next_half = ftu.full_volume_to_half_volume(mu_next, dataset.volume_shape)
 ```
 
 The PPCA loop and the homogeneous loop being compared **must use
@@ -606,38 +656,55 @@ hand-derive the gradient.
 (`PosteriorBlock`), not full posterior tensors. The accumulator
 adds block contributions into running `(volume_size, q)` arrays.
 
-#### 8.3.3 The update step (real-volume projection mandatory)
+#### 8.3.3 The update step (half-volume layout)
 
 ```python
-U_raw  = U - lr * grad_U                              # free gradient step
-U_sym  = enforce_real_volume_ft(U_raw, volume_shape)  # restore Hermitian symmetry
-U_band = radial_band_limit(U_sym, k_max)              # optional low-pass mask
-U      = real_volume_orthonormalize(U_band)           # O(q) gauge fix
+U_raw  = U - lr * grad_U                                          # free gradient step (half-volume)
+U_band = radial_band_limit_half(U_raw, volume_shape, k_max)       # optional low-pass mask
+U      = real_volume_orthonormalize_half(U_band, weights, N_full) # weighted O(q) gauge fix
 ```
 
-The order is load-bearing:
+There is **no Hermitian-projection step** (per Section 0.3.1).
+With `U` stored in half-volume rfft layout, the redundant half of
+the spectrum is not represented at all, so it cannot be violated.
+Any complex array of the right rfft shape decodes via
+`get_idft3_real` to a real volume by construction.
 
-1. **Gradient step** can drift out of the real-volume Fourier
-   subspace because autodiff treats `U` as a free complex array.
-2. **`enforce_real_volume_ft`** restores conjugate symmetry by
-   averaging `v[k]` and `conj(v[-k])`, and zeroing imaginary parts
-   at self-conjugate frequencies (DC, Nyquist).
-3. **`radial_band_limit`** zeroes shells above `k_max` to prevent
-   `U` from learning high-frequency noise where `Σ^{-1}` is small
-   and `H` is ill-conditioned. v0 uses `k_max = grid_size // 4`.
-4. **`real_volume_orthonormalize`** is a real-space-equivalent QR
-   on the columns viewed as real-space volumes. It is the correct
-   `O(q)` gauge fix and is **not** a complex thin SVD.
+The remaining steps:
 
-After the projection chain, columns of `U` are guaranteed to:
-- correspond to real 3D volumes,
-- have no energy above `k_max`,
-- be orthonormal in the real-space inner product.
+1. **Gradient step** is on the half-spectrum complex array. The
+   gradient itself comes from autodiff over a closure that
+   consumes `(U_half, posterior_block)` and returns the
+   complete-data NLL. Autodiff respects the half-volume
+   parameterization.
+2. **`radial_band_limit_half`** zeroes voxels with radial
+   frequency above `k_max` to prevent `U` from learning
+   high-frequency noise where `Σ^{-1}` is small and `H` is
+   ill-conditioned. v0 uses `k_max = grid_size // 4`. The radial
+   index respects the half-volume layout (centered `kz, ky`,
+   packed `kx`).
+3. **`real_volume_orthonormalize_half`** is Cholesky-whitening of
+   the rfft-weighted Gram `Re[(U * w) @ U^H] / N_full`, where
+   `w = make_half_volume_weights(volume_shape)`. It is the
+   correct real `O(q)` gauge fix and is **not** a complex thin
+   SVD.
 
-**Mandatory test** (`test_real_volume_projection.py`):
-`volume_shape=(8,8,8)`, `q=3`, one synthetic gradient step;
-assert `imag_energy_fraction(idft3(U_col)) < 1e-10` for every
-column after the projection chain.
+After this chain, the rows of `U`:
+- correspond to real 3D volumes by layout (no representation
+  outside the Hermitian subspace);
+- have no energy above `k_max`;
+- are orthonormal in the real-space inner product on the decoded
+  volumes.
+
+**Mandatory test** (`tests/ppca_abinitio/test_half_volume.py`,
+already committed):
+- `test_orthonormalized_rows_decode_to_orthonormal_real_volumes`
+  decodes `U_orth` via `get_idft3_real` and verifies the resulting
+  real volumes are row-orthonormal under the standard real-space
+  inner product.
+- `test_weighted_half_inner_product_equals_full_inner_product`
+  pins the rfft Hermitian weights against the full-spectrum
+  reference.
 
 #### 8.3.4 Ridge constant
 
@@ -717,7 +784,9 @@ volume invariant.
 ### 9.5 Initialization controls (`init.py`)
 
 - `init_truth_perturbed(gt, eps_mu, eps_U)` — Stage 1B/1C positive
-  control. Must apply `enforce_real_volume_ft` after perturbation.
+  control. Perturbations are added in real space and re-encoded
+  via `real_volume_to_half`, so the half-volume layout's structural
+  Hermitian symmetry is preserved automatically.
 - `init_random_lowpass(volume_shape, q, k_max, seed)` — stress
   control. Generates real-space volumes, FTs them, band-limits.
 - `init_from_external_mean(mu_path, q, k_max, seed)` — Phase 2.
@@ -1041,9 +1110,10 @@ Out of scope for v0. Tracked here for completeness:
 
 @dataclass
 class PPCAInit:
-    mu: jnp.ndarray   # (volume_size,) complex128, Hermitian-symmetric
-    U:  jnp.ndarray   # (q, volume_size) complex128, Hermitian-symmetric, real-orthonormal
+    mu: jnp.ndarray   # (half_volume_size,) complex128, rfft-packed half-volume
+    U:  jnp.ndarray   # (q, half_volume_size) complex128, rfft-packed half-volume, real-orthonormal rows
     s:  jnp.ndarray   # (q,) float64, descending
+    volume_shape: tuple  # (N0, N1, N2) — full real-space volume shape, static field
 
 @dataclass
 class FixedGridSpec:
@@ -1080,11 +1150,14 @@ class PosteriorBlock:
     post_mean:   jnp.ndarray
     post_Hinv:   jnp.ndarray
 
-# real_volume.py
-def enforce_real_volume_ft(v_flat_ft, volume_shape) -> jnp.ndarray: ...
-def real_volume_orthonormalize(U) -> jnp.ndarray: ...
-def radial_band_limit(v_flat_ft, volume_shape, k_max) -> jnp.ndarray: ...
-def imag_energy_fraction(v_flat_ft, volume_shape) -> float: ...
+# half_volume.py
+def make_half_volume_weights(volume_shape) -> jnp.ndarray: ...
+def half_volume_radial_index(volume_shape) -> jnp.ndarray: ...
+def radial_band_limit_half(v_flat_half, volume_shape, k_max) -> jnp.ndarray: ...
+def real_volume_orthonormalize_half(U_flat_half, weights, volume_size, *, ridge=1e-12) -> jnp.ndarray: ...
+def half_real_space_gram(U_flat_half, weights, volume_size) -> jnp.ndarray: ...
+def half_to_real_volume(v_flat_half, volume_shape) -> jnp.ndarray: ...
+def real_volume_to_half(real_vol, volume_shape) -> jnp.ndarray: ...
 
 # grid.py
 def build_fixed_grid(healpix_order: int, max_shift: int, shift_step: int = 1) -> FixedGridSpec: ...
@@ -1146,10 +1219,9 @@ These pin math and invariants. They run in `pixi run test-fast`.
 |---|---|---|
 | `test_compute_bHb_terms_correctness.py` | Audit P1: brute-force parity for `compute_bHb_terms` to `rtol=1e-10`. | committed |
 | `test_compute_bHb_terms_dtype.py` | Audit P2: float64 propagation through the existing scorer. | committed |
-| `test_score_matches_e_step_residual_ref.py` | Production-score parity: assemble the score from `compute_dot_products_eqx + compute_CTFed_proj_norms_eqx − compute_bHb_terms`, compare to a brute-force reference. **Pin against the production path, not against the dead `_eqx` helper.** | TODO |
-| `test_fft_noise_scale_contract.py` | Pin the FFT-unit convention so `noise_variance`, synthetic `σ²`, and learned `s` live on the same scale. | TODO |
-| `test_real_volume_projection.py` | `volume_shape=(8,8,8)`, `q=3`; after one synthetic gradient step + projection chain, `imag_energy_fraction(idft3(U_col)) < 1e-10` for every column. | TODO |
-| `test_real_volume_orthonormalize.py` | Real-orthonormalization preserves span, produces real-volume orthogonality, is idempotent under repeated application. | TODO |
+| `test_score_matches_e_step_residual_ref.py` | Production-score parity: assemble the score from `compute_dot_products_eqx + compute_CTFed_proj_norms_eqx − compute_bHb_terms`, compare to a brute-force reference. Pinned against the actual production assembly. | committed |
+| `test_fft_noise_scale_contract.py` | Pin the FFT-unit convention so `noise_variance`, synthetic `σ²`, and learned `s` live on the same scale. | committed |
+| `test_half_volume.py` | rfft Hermitian weights match Parseval against full-spectrum, weighted Gram orthonormalization produces row-orthonormal real volumes (verified via `get_idft3_real`), span preservation, ridge-stable on rank-deficient input. | committed |
 | `test_posterior_brute_force.py` | New posterior helper agrees with dense `Σ_y` reference for `q ≤ 3`, `image_size ≤ 32`. | TODO |
 | `test_posterior_calibration.py` | 90% ellipsoid coverage at the true pose lies in `[0.85, 0.95]`. | TODO |
 | `test_posterior_real_valued.py` | `imag(post_mean) < 1e-10` for real-volume inputs. | TODO |
@@ -1207,8 +1279,9 @@ does not re-run the experiment as part of `test-fast`.
     Phase 3 alignment must include an explicit handedness check;
     rigid Procrustes is not sufficient (Section 11.8).
 12. **`U` columns leave the real-volume Fourier subspace under
-    autodiff.** Mitigation: `enforce_real_volume_ft` after every
-    gradient step; pinned by `test_real_volume_projection.py`.
+    autodiff.** Mitigation: half-volume rfft layout makes Hermitian
+    symmetry structural — the redundant half is not stored, so it
+    cannot be violated. Pinned by `test_half_volume.py`.
 13. **Float32 silent downcast.** Mitigation: dtype contract on
     `score_and_posterior_moments_eqx` enforces complex128 / float64
     on entry; pinned by `test_compute_bHb_terms_dtype.py` and the
