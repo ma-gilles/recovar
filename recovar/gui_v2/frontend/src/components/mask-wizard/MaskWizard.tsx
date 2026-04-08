@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, Suspense } from "react";
-import { Save, Loader2, Layers, Eraser, X } from "lucide-react";
+import { Save, Loader2, Layers, Eraser, X, Undo2, Redo2 } from "lucide-react";
 import { Dialog } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
@@ -96,7 +96,52 @@ export function MaskWizard({
 
   const [eraseMode, setEraseMode] = useState(false);
   const [eraseRadius, setEraseRadius] = useState(5);
-  const [eraseSpheres, setEraseSpheres] = useState<EraseSphere[]>([]);
+  const [eraseSpheres, setEraseSpheresRaw] = useState<EraseSphere[]>([]);
+  // Undo/redo history. Each entry is a snapshot of eraseSpheres BEFORE
+  // the change. Past = undoable, future = redoable.
+  const [erasePast, setErasePast] = useState<EraseSphere[][]>([]);
+  const [eraseFuture, setEraseFuture] = useState<EraseSphere[][]>([]);
+
+  // Wrap setEraseSpheres so every mutation pushes the previous value
+  // onto the undo stack and clears the redo stack. Pass the same
+  // (value | updater) signature as the raw setter.
+  const setEraseSpheres = useCallback(
+    (next: EraseSphere[] | ((prev: EraseSphere[]) => EraseSphere[])) => {
+      setEraseSpheresRaw((prev) => {
+        const value = typeof next === "function" ? (next as (p: EraseSphere[]) => EraseSphere[])(prev) : next;
+        // Don't record no-op updates.
+        if (JSON.stringify(value) === JSON.stringify(prev)) return prev;
+        setErasePast((p) => [...p, prev]);
+        setEraseFuture([]);
+        return value;
+      });
+    },
+    []
+  );
+
+  const undoErase = useCallback(() => {
+    setErasePast((past) => {
+      if (past.length === 0) return past;
+      const previous = past[past.length - 1];
+      setEraseSpheresRaw((current) => {
+        setEraseFuture((f) => [...f, current]);
+        return previous;
+      });
+      return past.slice(0, -1);
+    });
+  }, []);
+
+  const redoErase = useCallback(() => {
+    setEraseFuture((future) => {
+      if (future.length === 0) return future;
+      const next = future[future.length - 1];
+      setEraseSpheresRaw((current) => {
+        setErasePast((p) => [...p, current]);
+        return next;
+      });
+      return future.slice(0, -1);
+    });
+  }, []);
 
   // Debounced preview generation
   const previewTokenRef = useRef(0);
@@ -183,7 +228,9 @@ export function MaskWizard({
       setSavedPath(null);
       setSaveError(null);
       setSliceIdx(null);
-      setEraseSpheres([]);
+      setEraseSpheresRaw([]);
+      setErasePast([]);
+      setEraseFuture([]);
       setEraseMode(false);
     }
     return () => {
@@ -201,6 +248,27 @@ export function MaskWizard({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Cmd+Z / Cmd+Shift+Z (and Ctrl+Z / Ctrl+Y) for the eraser history.
+  useEffect(() => {
+    if (!open) return;
+    function onKey(e: KeyboardEvent): void {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      // Don't intercept if focus is in a text input that handles its own undo
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoErase();
+      } else if ((k === "z" && e.shiftKey) || k === "y") {
+        e.preventDefault();
+        redoErase();
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, undoErase, redoErase]);
 
   const handleSave = useCallback(async () => {
     if (!outputName.trim()) {
@@ -547,19 +615,39 @@ export function MaskWizard({
               <label className="text-xs font-medium uppercase tracking-wider text-zinc-500">
                 Eraser
               </label>
-              <button
-                onClick={() => setEraseMode((m) => !m)}
-                className={
-                  "flex items-center gap-1 rounded px-2 py-0.5 text-xs " +
-                  (eraseMode
-                    ? "bg-rose-500/20 text-rose-300"
-                    : "border border-zinc-700 text-zinc-400 hover:text-zinc-200")
-                }
-                aria-pressed={eraseMode}
-                title="Click on the slice to add a sphere that erases voxels from the mask"
-              >
-                <Eraser className="h-3 w-3" /> {eraseMode ? "On" : "Off"}
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={undoErase}
+                  disabled={erasePast.length === 0}
+                  className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-30 disabled:hover:bg-transparent"
+                  aria-label="Undo eraser action (Cmd+Z)"
+                  title="Undo (Cmd/Ctrl+Z)"
+                >
+                  <Undo2 className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={redoErase}
+                  disabled={eraseFuture.length === 0}
+                  className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 disabled:opacity-30 disabled:hover:bg-transparent"
+                  aria-label="Redo eraser action (Cmd+Shift+Z)"
+                  title="Redo (Cmd/Ctrl+Shift+Z)"
+                >
+                  <Redo2 className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={() => setEraseMode((m) => !m)}
+                  className={
+                    "flex items-center gap-1 rounded px-2 py-0.5 text-xs " +
+                    (eraseMode
+                      ? "bg-rose-500/20 text-rose-300"
+                      : "border border-zinc-700 text-zinc-400 hover:text-zinc-200")
+                  }
+                  aria-pressed={eraseMode}
+                  title="Click on the slice to add a sphere that erases voxels from the mask"
+                >
+                  <Eraser className="h-3 w-3" /> {eraseMode ? "On" : "Off"}
+                </button>
+              </div>
             </div>
             <div className="flex items-center gap-2 text-xs text-zinc-500">
               <span className="w-14">Radius</span>
