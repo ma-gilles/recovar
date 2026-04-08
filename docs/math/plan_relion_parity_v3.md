@@ -175,10 +175,99 @@ relion modes, or both.
 4. We do **NOT** need to "implement posterior-weighted noise" — already
    done; formula matches RELION exactly.
 
-**Convergence-speed gap status**: with all the verified-done items
-above, recovar's iter-by-iter trajectory STILL lags RELION on the
-2026-04-08 5k normalized benchmark. The remaining gap at shells 14–25
-must come from one of the items below (in best-guess priority):
+## Empirical findings from the 2026-04-08 1k tiny benchmark (added evening session)
+
+Reproducible 1k-particle, 64-px box test with `--relion-normalize`,
+matching pose grid (recovar `healpix_order=3 adaptive_oversampling=0`
+single-pass vs RELION `healpix_order 3 --oversampling 1`):
+
+| iter | recovar Pmax | RELION Pmax | recovar cs | RELION cs | recovar res Å | RELION res Å |
+|---|---|---|---|---|---|---|
+| 1 | **0.0226** | **0.0274** | 56 | 56 | 34.00 | 25.90 |
+| 2 | 0.1304 | 0.6992 | 52 | 62 | 34.00 | 27.20 |
+| 3 | 0.5308 | 0.9717 | 52 | 60 | 28.63 | 27.20 |
+| 4 | 0.8740 | 0.9520 | 58 | 60 | 27.20 | 27.20 |
+| 5 | 0.9678 | 0.9806 | 60 | 60 | 27.20 | 28.63 |
+
+**Verdict:**
+
+1. ✅ **`Pmax` at iter 1 matches RELION within 20%** (0.0226 vs 0.0274). The
+   chi²/softmax formula and pose grid are correct. The previous "12×
+   diffuse" gap from the 5k matched-grid test was an artifact of
+   recovar's `adaptive_oversampling=1` two-pass code generating MORE
+   pose candidates than the direct fine-grid path.
+
+2. ✅ **Both pipelines converge to the same final values**: Pmax≈0.97,
+   `current_size`=60, resolution≈27 Å. Recovar takes ~3 iterations
+   longer to get there.
+
+3. 🟡 **Iter-1 FSC has a real gap at shells 15-17**:
+   ```
+   shell:    14    15    16    17    18
+   RELION:   0.97  0.81  0.81  0.80  ~0.7
+   recovar:  0.98  0.64  0.60  0.46  ~drops further
+   ```
+   Both pipelines have FSC = 1.0 through shell 13 (the join radius for
+   40 Å on a 64-px box). At shells 14+, recovar's FSC drops sharply
+   while RELION's declines smoothly. This is a **per-iter
+   reconstruction-quality gap at moderate shells**, NOT a chi²/softmax
+   gap.
+
+4. 🟡 **`current_size` non-monotonic**: recovar 56→52→52→58→60,
+   RELION 56→62→60→60→60. The drop from 56→52 at iter 2 is the wrong
+   direction. It comes from recovar's iter 1 FSC dropping below 0.5 at
+   shell 17 while RELION's drops at shell 22.
+
+**Next investigation**: what's making recovar's iter-1 reconstruction
+worse at shells 14-17? Hypotheses (in order of suspected impact):
+- Pose grid: recovar uses 1× oversampling at healpix 3 (36864 × 29
+  poses); RELION's `--oversampling 1` adds another 4× rotation
+  oversampling and 4× translation oversampling (= ~16× more poses
+  effective). This is the most likely cause and is testable.
+- Wiener filter / gridding correction: recovar uses
+  `griddingCorrect_square` from `relion_functions.py`; could differ
+  subtly from RELION's `griddingCorrect` in `backprojector.cpp`.
+- Iter-1 noise estimate: recovar uses
+  `estimate_initial_noise_spectrum_from_unaligned_images` (the
+  particle-power approach); RELION's iter-1 noise is set differently.
+
+## Engine speed problem (the slow `_compute_significance_batched` and
+   `run_em_v2` two-pass code)
+
+Both `recovar/em/dense_single_volume/refine.py:313`
+(`_compute_significance_batched`) and
+`recovar/em/dense_single_volume/engine_v2.py:643` (`run_em_v2`)
+contain **TWO Python `for b in range(n_blocks)` loops over rotation
+blocks per image batch**, recomputing the same forward slices and
+scoring GEMMs twice each iteration. This makes the engine ~2× slower
+than necessary AND prevents JAX from fusing operations. Combined
+with per-block `np.asarray()` round-trips and Python list `.append`
+calls, the per-batch overhead dominates GPU time at small problem
+sizes (e.g., 1k particles, 64-px box).
+
+The fix is to rewrite both functions as a single jit-compiled
+`jax.lax.scan` over rotation blocks that:
+1. Computes scores once per block
+2. Streams logsumexp AND running argmax in the same scan
+3. Stores per-block scores in a buffer
+4. Computes log_Z and probs in a fused step
+5. Backprojects in a single pass
+
+Memory cost: `(batch_size × n_rot_padded × n_trans)` floats ≈ 100 MB
+for tiny, ≈ 3 GB for 5k full grid. Tractable on A100 80GB.
+
+This is a substantial rewrite (~1-2 days) but unlocks fast iteration
+on the matched-grid parity tests. Until then, use
+`adaptive_oversampling=0 + healpix_order=3 single-pass` as the
+matched-grid recovar configuration (verified working, ~3 min for 5
+iters on 1k particles).
+
+## Convergence-speed gap status (legacy section, retained for context)
+
+With all the verified-done items above, recovar's iter-by-iter
+trajectory STILL lags RELION on the 2026-04-08 5k normalized
+benchmark. The remaining gap at shells 14–25 must come from one of
+the items below (in best-guess priority):
 - **B1**: masked-alignment / unmasked-reconstruction split
 - **A3**: `tau²_fudge` parameter passthrough
 - **B2**: `highres_Xi2` high-freq term (non-zero per-particle constant
