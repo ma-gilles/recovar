@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState, Suspense } from "react";
-import { Save, Loader2, Layers, Eraser, X, Undo2, Redo2 } from "lucide-react";
+import { Save, Loader2, Layers, Eraser, X, Undo2, Redo2, BoxSelect, Brush } from "lucide-react";
 import { Dialog } from "../ui/dialog";
 import { Button } from "../ui/button";
 import { Spinner } from "../ui/spinner";
@@ -11,6 +11,7 @@ import {
   ApiError,
   type MaskParams,
   type EraseSphere,
+  type EraseBox,
 } from "../../lib/api/client";
 
 // Lazy-load VtkViewer (vtk.js is heavy; only loaded when 3D mode is opened)
@@ -90,7 +91,8 @@ function clientToSphere(
 function buildParams(
   s: WizardState,
   sourcePath: string,
-  eraseSpheres: EraseSphere[] = []
+  eraseSpheres: EraseSphere[] = [],
+  eraseBoxes: EraseBox[] = []
 ): MaskParams {
   return {
     source_path: sourcePath,
@@ -100,6 +102,7 @@ function buildParams(
     soft_edge: s.softEdge,
     cleanup: s.cleanup,
     erase_spheres: eraseSpheres,
+    erase_boxes: eraseBoxes,
   };
 }
 
@@ -135,8 +138,12 @@ export function MaskWizard({
   const [vol3dLoading, setVol3dLoading] = useState(false);
 
   const [eraseMode, setEraseMode] = useState(false);
+  const [eraseTool, setEraseTool] = useState<"brush" | "box">("brush");
   const [eraseRadius, setEraseRadius] = useState(5);
   const [eraseSpheres, setEraseSpheresRaw] = useState<EraseSphere[]>([]);
+  const [eraseBoxes, setEraseBoxesRaw] = useState<EraseBox[]>([]);
+  // First-corner snapshot for box mode (cleared after the second click).
+  const [boxFirstCorner, setBoxFirstCorner] = useState<EraseSphere | null>(null);
   // In-progress brush stroke (committed to eraseSpheres on mouseup as a
   // single undo entry). brushPreview drives the live count.
   const brushDragRef = useRef<{ active: boolean; sample: EraseSphere[] }>({
@@ -144,35 +151,61 @@ export function MaskWizard({
     sample: [],
   });
   const [brushPreview, setBrushPreview] = useState<EraseSphere[] | null>(null);
-  // Undo/redo history. Each entry is a snapshot of eraseSpheres BEFORE
-  // the change. Past = undoable, future = redoable.
-  const [erasePast, setErasePast] = useState<EraseSphere[][]>([]);
-  const [eraseFuture, setEraseFuture] = useState<EraseSphere[][]>([]);
+  // Undo/redo history. Each entry is a snapshot of {spheres, boxes}
+  // BEFORE the change.
+  type EraseSnapshot = { spheres: EraseSphere[]; boxes: EraseBox[] };
+  const [erasePast, setErasePast] = useState<EraseSnapshot[]>([]);
+  const [eraseFuture, setEraseFuture] = useState<EraseSnapshot[]>([]);
 
-  // Wrap setEraseSpheres so every mutation pushes the previous value
-  // onto the undo stack and clears the redo stack. Pass the same
-  // (value | updater) signature as the raw setter.
+  const pushHistory = useCallback(
+    (prevSpheres: EraseSphere[], prevBoxes: EraseBox[]) => {
+      setErasePast((p) => [...p, { spheres: prevSpheres, boxes: prevBoxes }]);
+      setEraseFuture([]);
+    },
+    []
+  );
+
   const setEraseSpheres = useCallback(
     (next: EraseSphere[] | ((prev: EraseSphere[]) => EraseSphere[])) => {
       setEraseSpheresRaw((prev) => {
         const value = typeof next === "function" ? (next as (p: EraseSphere[]) => EraseSphere[])(prev) : next;
-        // Don't record no-op updates.
         if (JSON.stringify(value) === JSON.stringify(prev)) return prev;
-        setErasePast((p) => [...p, prev]);
-        setEraseFuture([]);
+        // Capture both arrays at the moment of the change.
+        setEraseBoxesRaw((boxesPrev) => {
+          pushHistory(prev, boxesPrev);
+          return boxesPrev;
+        });
         return value;
       });
     },
-    []
+    [pushHistory]
+  );
+
+  const setEraseBoxes = useCallback(
+    (next: EraseBox[] | ((prev: EraseBox[]) => EraseBox[])) => {
+      setEraseBoxesRaw((prev) => {
+        const value = typeof next === "function" ? (next as (p: EraseBox[]) => EraseBox[])(prev) : next;
+        if (JSON.stringify(value) === JSON.stringify(prev)) return prev;
+        setEraseSpheresRaw((spheresPrev) => {
+          pushHistory(spheresPrev, prev);
+          return spheresPrev;
+        });
+        return value;
+      });
+    },
+    [pushHistory]
   );
 
   const undoErase = useCallback(() => {
     setErasePast((past) => {
       if (past.length === 0) return past;
       const previous = past[past.length - 1];
-      setEraseSpheresRaw((current) => {
-        setEraseFuture((f) => [...f, current]);
-        return previous;
+      setEraseSpheresRaw((curS) => {
+        setEraseBoxesRaw((curB) => {
+          setEraseFuture((f) => [...f, { spheres: curS, boxes: curB }]);
+          return previous.boxes;
+        });
+        return previous.spheres;
       });
       return past.slice(0, -1);
     });
@@ -182,9 +215,12 @@ export function MaskWizard({
     setEraseFuture((future) => {
       if (future.length === 0) return future;
       const next = future[future.length - 1];
-      setEraseSpheresRaw((current) => {
-        setErasePast((p) => [...p, current]);
-        return next;
+      setEraseSpheresRaw((curS) => {
+        setEraseBoxesRaw((curB) => {
+          setErasePast((p) => [...p, { spheres: curS, boxes: curB }]);
+          return next.boxes;
+        });
+        return next.spheres;
       });
       return future.slice(0, -1);
     });
@@ -198,7 +234,7 @@ export function MaskWizard({
     setPreviewLoading(true);
     setPreviewError(null);
     try {
-      const params = buildParams(state, sourcePath, eraseSpheres);
+      const params = buildParams(state, sourcePath, eraseSpheres, eraseBoxes);
       const result = await previewMask({
         ...params,
         axis,
@@ -221,7 +257,7 @@ export function MaskWizard({
     } finally {
       if (myToken === previewTokenRef.current) setPreviewLoading(false);
     }
-  }, [open, state, sourcePath, axis, sliceIdx, eraseSpheres]);
+  }, [open, state, sourcePath, axis, sliceIdx, eraseSpheres, eraseBoxes]);
 
   // Debounced 3D mask volume generation
   const vol3dTokenRef = useRef(0);
@@ -231,7 +267,7 @@ export function MaskWizard({
     setVol3dLoading(true);
     try {
       const result = await previewMaskVolume({
-        ...buildParams(state, sourcePath, eraseSpheres),
+        ...buildParams(state, sourcePath, eraseSpheres, eraseBoxes),
         project_id: projectId,
       });
       if (myToken !== vol3dTokenRef.current) {
@@ -252,7 +288,7 @@ export function MaskWizard({
     } finally {
       if (myToken === vol3dTokenRef.current) setVol3dLoading(false);
     }
-  }, [open, state, sourcePath, projectId, eraseSpheres]);
+  }, [open, state, sourcePath, projectId, eraseSpheres, eraseBoxes]);
 
   // Auto-preview on open and on parameter changes (debounced 350ms).
   useEffect(() => {
@@ -276,9 +312,12 @@ export function MaskWizard({
       setSaveError(null);
       setSliceIdx(null);
       setEraseSpheresRaw([]);
+      setEraseBoxesRaw([]);
+      setBoxFirstCorner(null);
       setErasePast([]);
       setEraseFuture([]);
       setEraseMode(false);
+      setEraseTool("brush");
       brushDragRef.current = { active: false, sample: [] };
       setBrushPreview(null);
     }
@@ -328,7 +367,7 @@ export function MaskWizard({
     setSaveError(null);
     try {
       const result = await saveMask({
-        ...buildParams(state, sourcePath, eraseSpheres),
+        ...buildParams(state, sourcePath, eraseSpheres, eraseBoxes),
         project_id: projectId,
         output_name: outputName.trim(),
       });
@@ -340,7 +379,7 @@ export function MaskWizard({
     } finally {
       setSaving(false);
     }
-  }, [outputName, state, sourcePath, projectId, eraseSpheres, onSaved]);
+  }, [outputName, state, sourcePath, projectId, eraseSpheres, eraseBoxes, onSaved]);
 
   const maxSlice = shape ? shape[axis] - 1 : 0;
   const currentIdx = sliceIdx ?? (shape ? Math.floor(shape[axis] / 2) : 0);
@@ -416,7 +455,7 @@ export function MaskWizard({
                   style={{ imageRendering: "pixelated" }}
                   draggable={false}
                   onMouseDown={(e) => {
-                    if (!eraseMode || !shape) return;
+                    if (!eraseMode || !shape || eraseTool !== "brush") return;
                     e.preventDefault();
                     const sph = clientToSphere(e.clientX, e.clientY, e.currentTarget, shape, axis, currentIdx, eraseRadius);
                     if (!sph) return;
@@ -449,14 +488,48 @@ export function MaskWizard({
                     }
                   }}
                   onMouseLeave={() => {
-                    // Treat leaving the image like mouseup so a half-finished
-                    // stroke still commits.
                     if (!brushDragRef.current.active) return;
                     const stroke = brushDragRef.current.sample;
                     brushDragRef.current = { active: false, sample: [] };
                     setBrushPreview(null);
                     if (stroke.length > 0) {
                       setEraseSpheres((prev) => [...prev, ...stroke]);
+                    }
+                  }}
+                  onClick={(e) => {
+                    if (!eraseMode || !shape || eraseTool !== "box") return;
+                    const sph = clientToSphere(e.clientX, e.clientY, e.currentTarget, shape, axis, currentIdx, eraseRadius);
+                    if (!sph) return;
+                    if (!boxFirstCorner) {
+                      // First corner — record and wait for the second click.
+                      setBoxFirstCorner(sph);
+                    } else {
+                      // Second corner — build the box. Depth is constrained
+                      // to the perpendicular axis ± eraseRadius (slab).
+                      const a = boxFirstCorner;
+                      const b = sph;
+                      const halfThick = eraseRadius;
+                      let z0 = Math.min(a.z, b.z);
+                      let z1 = Math.max(a.z, b.z);
+                      let x0 = Math.min(a.x, b.x);
+                      let x1 = Math.max(a.x, b.x);
+                      let y0 = Math.min(a.y, b.y);
+                      let y1 = Math.max(a.y, b.y);
+                      // For each axis where the user can't actually place a
+                      // different value (the perpendicular axis), expand by
+                      // ±halfThick to make a slab.
+                      if (axis === 0) {
+                        z0 -= halfThick;
+                        z1 += halfThick;
+                      } else if (axis === 1) {
+                        y0 -= halfThick;
+                        y1 += halfThick;
+                      } else {
+                        x0 -= halfThick;
+                        x1 += halfThick;
+                      }
+                      setEraseBoxes((prev) => [...prev, { x0, x1, y0, y1, z0, z1 }]);
+                      setBoxFirstCorner(null);
                     }
                   }}
                 />
@@ -725,12 +798,47 @@ export function MaskWizard({
               <span className="w-10 text-right text-zinc-300">{eraseRadius}</span>
             </div>
             {eraseMode && (
+              <div className="flex gap-1 rounded-md border border-zinc-700 p-0.5">
+                <button
+                  onClick={() => {
+                    setEraseTool("brush");
+                    setBoxFirstCorner(null);
+                  }}
+                  aria-pressed={eraseTool === "brush"}
+                  className={
+                    "flex flex-1 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs " +
+                    (eraseTool === "brush"
+                      ? "bg-zinc-700 text-zinc-50"
+                      : "text-zinc-400")
+                  }
+                >
+                  <Brush className="h-3 w-3" /> Brush
+                </button>
+                <button
+                  onClick={() => setEraseTool("box")}
+                  aria-pressed={eraseTool === "box"}
+                  className={
+                    "flex flex-1 items-center justify-center gap-1 rounded px-2 py-0.5 text-xs " +
+                    (eraseTool === "box"
+                      ? "bg-zinc-700 text-zinc-50"
+                      : "text-zinc-400")
+                  }
+                >
+                  <BoxSelect className="h-3 w-3" /> Box
+                </button>
+              </div>
+            )}
+            {eraseMode && (
               <p className="text-xs text-rose-300/80">
-                {viewMode === "slice"
+                {viewMode === "3d"
+                  ? "Click on the mask isosurface to drop an erase sphere at that point."
+                  : eraseTool === "brush"
                   ? brushPreview
                     ? `Painting brush stroke… ${brushPreview.length} point${brushPreview.length === 1 ? "" : "s"}`
                     : "Click or drag on the slice preview to add erase spheres."
-                  : "Click on the mask isosurface to drop an erase sphere at that point."}
+                  : boxFirstCorner
+                  ? `First corner placed at (${boxFirstCorner.x.toFixed(0)}, ${boxFirstCorner.y.toFixed(0)}, ${boxFirstCorner.z.toFixed(0)}). Click the opposite corner.`
+                  : "Click two opposite corners on the slice to define a box (depth = ±radius)."}
               </p>
             )}
             {eraseSpheres.length > 0 && (
@@ -741,7 +849,7 @@ export function MaskWizard({
                     className="flex items-center gap-1 text-[11px] text-zinc-400"
                   >
                     <span className="font-mono tabular-nums">
-                      ({s.x.toFixed(0)}, {s.y.toFixed(0)}, {s.z.toFixed(0)}) r={s.r}
+                      ● ({s.x.toFixed(0)}, {s.y.toFixed(0)}, {s.z.toFixed(0)}) r={s.r}
                     </span>
                     <button
                       onClick={() =>
@@ -758,7 +866,36 @@ export function MaskWizard({
                   onClick={() => setEraseSpheres([])}
                   className="w-full rounded py-0.5 text-[11px] text-zinc-500 hover:text-rose-300"
                 >
-                  Clear all ({eraseSpheres.length})
+                  Clear all spheres ({eraseSpheres.length})
+                </button>
+              </div>
+            )}
+            {eraseBoxes.length > 0 && (
+              <div className="max-h-24 space-y-0.5 overflow-y-auto rounded border border-zinc-800 bg-zinc-950 p-1">
+                {eraseBoxes.map((b, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center gap-1 text-[11px] text-zinc-400"
+                  >
+                    <span className="font-mono tabular-nums">
+                      ▢ x[{b.x0.toFixed(0)},{b.x1.toFixed(0)}] y[{b.y0.toFixed(0)},{b.y1.toFixed(0)}] z[{b.z0.toFixed(0)},{b.z1.toFixed(0)}]
+                    </span>
+                    <button
+                      onClick={() =>
+                        setEraseBoxes((prev) => prev.filter((_, j) => j !== i))
+                      }
+                      className="ml-auto rounded p-0.5 text-zinc-600 hover:bg-zinc-800 hover:text-rose-300"
+                      aria-label={`Remove erase box ${i + 1}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+                <button
+                  onClick={() => setEraseBoxes([])}
+                  className="w-full rounded py-0.5 text-[11px] text-zinc-500 hover:text-rose-300"
+                >
+                  Clear all boxes ({eraseBoxes.length})
                 </button>
               </div>
             )}

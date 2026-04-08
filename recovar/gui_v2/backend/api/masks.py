@@ -47,6 +47,20 @@ class EraseSphere(BaseModel):
     r: float = Field(..., gt=0, description="Radius in voxels")
 
 
+class EraseBox(BaseModel):
+    """An axis-aligned box of voxels to subtract from the generated mask.
+
+    Bounds are inclusive and clamped to the volume shape on the backend.
+    """
+
+    x0: float
+    x1: float
+    y0: float
+    y1: float
+    z0: float
+    z1: float
+
+
 class MaskParams(BaseModel):
     """Parameters forwarded to ``recovar.core.mask.make_mask``."""
 
@@ -71,6 +85,10 @@ class MaskParams(BaseModel):
     erase_spheres: list[EraseSphere] = Field(
         default_factory=list,
         description="Spheres in voxel coordinates whose contents are zeroed in the final mask",
+    )
+    erase_boxes: list[EraseBox] = Field(
+        default_factory=list,
+        description="Axis-aligned boxes in voxel coordinates whose contents are zeroed in the final mask",
     )
 
 
@@ -156,19 +174,29 @@ def _generate_mask(volume: Any, params: MaskParams) -> Any:
         cleanup=params.cleanup,
     )
 
-    if params.erase_spheres:
+    if params.erase_spheres or params.erase_boxes:
         mask = np.asarray(mask, dtype=np.float32).copy()
         nz, ny, nx = mask.shape
-        # Build coordinate grids once per call (the volumes here are small).
-        zz, yy, xx = np.mgrid[0:nz, 0:ny, 0:nx]
-        for s in params.erase_spheres:
-            # ``EraseSphere`` uses (x, y, z) which we map to MRC axes
-            # (column-major: data[z, y, x]).
-            dx = xx - s.x
-            dy = yy - s.y
-            dz = zz - s.z
-            inside = (dx * dx + dy * dy + dz * dz) <= (s.r * s.r)
-            mask[inside] = 0.0
+        if params.erase_spheres:
+            # Build coordinate grids once per call (the volumes here are small).
+            zz, yy, xx = np.mgrid[0:nz, 0:ny, 0:nx]
+            for s in params.erase_spheres:
+                # EraseSphere uses (x, y, z) which we map to MRC axes
+                # (column-major: data[z, y, x]).
+                dx = xx - s.x
+                dy = yy - s.y
+                dz = zz - s.z
+                inside = (dx * dx + dy * dy + dz * dz) <= (s.r * s.r)
+                mask[inside] = 0.0
+        for b in params.erase_boxes:
+            x0 = max(0, int(min(b.x0, b.x1)))
+            x1 = min(nx, int(max(b.x0, b.x1)) + 1)
+            y0 = max(0, int(min(b.y0, b.y1)))
+            y1 = min(ny, int(max(b.y0, b.y1)) + 1)
+            z0 = max(0, int(min(b.z0, b.z1)))
+            z1 = min(nz, int(max(b.z0, b.z1)) + 1)
+            if x1 > x0 and y1 > y0 and z1 > z0:
+                mask[z0:z1, y0:y1, x0:x1] = 0.0
     return mask
 
 

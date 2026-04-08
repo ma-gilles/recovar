@@ -331,6 +331,15 @@ export interface EraseSphere {
   r: number;
 }
 
+export interface EraseBox {
+  x0: number;
+  x1: number;
+  y0: number;
+  y1: number;
+  z0: number;
+  z1: number;
+}
+
 export interface MaskParams {
   source_path: string;
   threshold?: number | null;
@@ -339,6 +348,7 @@ export interface MaskParams {
   soft_edge: number;
   cleanup: boolean;
   erase_spheres?: EraseSphere[];
+  erase_boxes?: EraseBox[];
 }
 
 export interface MaskInfo {
