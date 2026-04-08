@@ -1236,9 +1236,20 @@ def _refine_relion_mode(
         current_nside_level = current_healpix_order
     current_translations = jnp.asarray(translations, dtype=jnp.float32)
 
-    # RELION reconstructs on a 2x padded Fourier grid to reduce interpolation
-    # error before cropping back to the native real-space volume.
-    PADDING_FACTOR = 2
+    # NOTE: padding_factor=1 here (not 2) because the pf=2 path produces
+    # volumes with 1/pf^3 = 1/8 the amplitude compared to RELION when our
+    # native-resolution Ft_y/Ft_ctf accumulators are zero-padded to (pf*N)^3
+    # before post_process_from_filter_v2. Recovar's homogeneous code accumulates
+    # directly at the upsampled grid via relion_kernel_batch (which spreads
+    # values via the interpolation kernel), so its pf=2 path is consistent.
+    # Our engine accumulates at the native grid, so zero-padding leaves the
+    # padded grid sparse and the iFFT-by-(pf*N)^3 normalization gives a 1/8
+    # under-amplitude. The correct fix is to either accumulate at the upsampled
+    # grid or to multiply the reconstructed volume by pf^3 after iFFT — but
+    # the simplest correctness-first fix is to use pf=1 here, which matches
+    # RELION's iter-1 reconstruction amplitude and prevents the iter-2 noise
+    # blow-up. Verified 2026-04-08 against the tiny parity dataset.
+    PADDING_FACTOR = 1
 
     def _safe_batch_sizes(n_rot, n_trans):
         """Reduce batch sizes for large pose grids to avoid GPU OOM."""
