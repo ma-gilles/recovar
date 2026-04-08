@@ -764,6 +764,7 @@ def refine_single_volume(
     init_translation_sigma_angstrom=10.0,
     particle_diameter_ang=None,
     save_intermediates_dir=None,
+    low_resol_join_halves_angstrom=40.0,
 ):
     """Multi-iteration EM refinement with FSC-driven resolution management.
 
@@ -896,6 +897,7 @@ def refine_single_volume(
             nside_level=nside_level,
             adaptive_pass2_skip_threshold=adaptive_pass2_skip_threshold,
             save_intermediates_dir=save_intermediates_dir,
+            low_resol_join_halves_angstrom=low_resol_join_halves_angstrom,
         )
 
     # ===================================================================
@@ -1181,6 +1183,7 @@ def _refine_relion_mode(
     nside_level,
     adaptive_pass2_skip_threshold,
     save_intermediates_dir=None,
+    low_resol_join_halves_angstrom=40.0,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -1753,23 +1756,10 @@ def _refine_relion_mode(
                 pose_translations[k] = np.asarray(current_translations, dtype=np.float32)
                 coarse_ha[k] = ha_k  # same grid, no oversampling
 
-            # Reconstruct the regularized mean with padding_factor=2.
-            # run_em_v2 uses padding_factor=1 internally; we override here.
-            Ft_ctf_k_padded = relion_functions.zero_pad_fourier_volume(
-                Ft_ctf_k, volume_shape, PADDING_FACTOR,
-            )
-            Ft_y_k_padded = relion_functions.zero_pad_fourier_volume(
-                Ft_y_k, volume_shape, PADDING_FACTOR,
-            )
-            means[k] = relion_functions.post_process_from_filter_v2(
-                Ft_ctf_k_padded, Ft_y_k_padded,
-                volume_shape, PADDING_FACTOR,
-                tau=mean_variance,
-                kernel="triangular",
-                use_spherical_mask=True, grid_correct=True,
-                gridding_correct="square",
-                tau2_fudge=1.0,
-            ).reshape(-1)
+            # NOTE: means[k] reconstruction is DEFERRED until after the
+            # low_resol_join_halves step below — we need both halves'
+            # Ft_y / Ft_ctf accumulators in hand before we can average
+            # the low-frequency shells across the two halves.
             hard_assignments[k] = ha_k
             max_posterior_per_half[k] = np.asarray(
                 em_stats_k.max_posterior_per_image, dtype=np.float32,
@@ -1782,6 +1772,61 @@ def _refine_relion_mode(
                 Ft_y_0, Ft_ctf_0 = Ft_y_k, Ft_ctf_k
             else:
                 Ft_y_1, Ft_ctf_1 = Ft_y_k, Ft_ctf_k
+
+        # --- RELION's --low_resol_join_halves: average the low-resolution
+        # shells of the per-half Fourier accumulators between the two halves
+        # BEFORE the Wiener solve. This forces the two half-maps to share
+        # their low-frequency content, preventing them from diverging in
+        # orientation space at SNR-poor low shells. RELION mirrors this in
+        # ml_optimiser_mpi.cpp::joinTwoHalvesAtLowResolution; without it
+        # recovar's iter-N FSC drops gradually from shell ~2 while RELION's
+        # stays at 1.0 through shell 13 (= 40 A for a 128/4.25 dataset),
+        # which directly translates to a ~5-shell deficit in
+        # ``first_shell_below_0.5`` and a ~10-pixel/iter deficit in
+        # ``current_size`` growth (the dominant convergence-speed gap
+        # observed in the 2026-04 5k normalized parity benchmark).
+        #
+        # Use the previous iteration's resolution to cap the join radius
+        # (so we never join shells beyond the actual resolution of the
+        # map). Mirrors the ``XMIPP_MAX(low_resol_join_halves,
+        # 1./mymodel.current_resolution)`` in RELION's source.
+        prev_res_angstrom = None
+        if pixel_resolutions:
+            prev_pixel_res = pixel_resolutions[-1]
+            if prev_pixel_res > 0:
+                prev_res_angstrom = shell_index_to_resolution_angstrom(
+                    prev_pixel_res, grid_size, cryo.voxel_size,
+                )
+        Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
+            Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1,
+            volume_shape,
+            cryo.voxel_size,
+            grid_size,
+            low_resol_join_halves_angstrom,
+            current_resolution_angstrom=prev_res_angstrom,
+        )
+
+        # --- Now reconstruct the regularized per-half means from the
+        # (post-join) Ft_y / Ft_ctf accumulators. RELION reconstructs on a
+        # 2x padded Fourier grid to reduce interpolation artifacts.
+        for k in range(2):
+            Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
+            Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
+            Ft_ctf_k_padded = relion_functions.zero_pad_fourier_volume(
+                Ft_ctf_k_local, volume_shape, PADDING_FACTOR,
+            )
+            Ft_y_k_padded = relion_functions.zero_pad_fourier_volume(
+                Ft_y_k_local, volume_shape, PADDING_FACTOR,
+            )
+            means[k] = relion_functions.post_process_from_filter_v2(
+                Ft_ctf_k_padded, Ft_y_k_padded,
+                volume_shape, PADDING_FACTOR,
+                tau=mean_variance,
+                kernel="triangular",
+                use_spherical_mask=True, grid_correct=True,
+                gridding_correct="square",
+                tau2_fudge=1.0,
+            ).reshape(-1)
 
         significant_counts.append(iter_sig_counts)
 
