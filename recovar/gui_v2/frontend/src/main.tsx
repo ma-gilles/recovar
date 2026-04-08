@@ -11,6 +11,7 @@ import { DashboardPage } from "./routes/index";
 import { NewJobPage } from "./routes/jobs/new";
 import { JobDetailPage } from "./routes/jobs/$jobId";
 import { ExplorePage } from "./routes/explore/$jobId";
+import { ComparePage } from "./routes/compare";
 
 // Define routes
 const rootRoute = createRootRoute({ component: RootLayout });
@@ -47,11 +48,21 @@ const exploreRoute = createRoute({
   component: ExplorePage,
 });
 
+const compareRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/compare",
+  component: ComparePage,
+  validateSearch: (search: Record<string, unknown>) => ({
+    jobs: (search.jobs as string) || "",
+  }),
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   newJobRoute,
   jobDetailRoute,
   exploreRoute,
+  compareRoute,
 ]);
 
 const router = createRouter({ routeTree });

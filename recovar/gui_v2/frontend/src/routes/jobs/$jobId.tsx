@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useParams, Link } from "@tanstack/react-router";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
@@ -32,6 +32,7 @@ import {
   reconcileJob,
   getChartData,
   type JobDetail,
+  type ProjectDetail,
   type VolumeEntry,
   type PlotEntry,
   type SuggestedNext,
@@ -947,6 +948,80 @@ function PlotsTab({ jobId }: { jobId: string }): React.JSX.Element {
   );
 }
 
+/**
+ * Dropdown that lets the user pick another job of the same type from
+ * the active project, then navigates to /compare?jobs=<this>,<that>.
+ */
+function CompareWithDropdown({
+  currentJob,
+  project,
+}: {
+  currentJob: JobDetail;
+  project: { id: string } | null;
+}): React.JSX.Element | null {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onClick(e: MouseEvent): void {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, [open]);
+
+  const { data: projectDetail } = useQuery<ProjectDetail>({
+    queryKey: ["project", project?.id],
+    queryFn: () => getProject(project!.id),
+    enabled: open && !!project?.id,
+  });
+
+  const candidates = useMemo(() => {
+    if (!projectDetail) return [] as typeof projectDetail.jobs;
+    return projectDetail.jobs.filter(
+      (j) => j.id !== currentJob.id && j.type === currentJob.type
+    );
+  }, [projectDetail, currentJob.id, currentJob.type]);
+
+  return (
+    <div ref={ref} className="relative">
+      <Button variant="outline" size="sm" onClick={() => setOpen((o) => !o)}>
+        Compare with…
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full z-20 mt-1 max-h-72 w-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
+          {!projectDetail ? (
+            <p className="px-3 py-2 text-xs text-zinc-500">Loading…</p>
+          ) : candidates.length === 0 ? (
+            <p className="px-3 py-2 text-xs text-zinc-500">
+              No other {currentJob.type} jobs in this project.
+            </p>
+          ) : (
+            candidates.map((j) => (
+              <Link
+                key={j.id}
+                to="/compare"
+                search={{ jobs: `${currentJob.id},${j.id}` }}
+                onClick={() => setOpen(false)}
+                className="block px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50"
+                title={j.output_dir}
+              >
+                <span className="block truncate">
+                  {j.output_dir.split("/").slice(-2).join("/")}
+                </span>
+                <span className="text-[10px] text-zinc-500">{j.status} · {new Date(j.created).toLocaleDateString()}</span>
+              </Link>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function JobDetailPage(): React.JSX.Element {
   const { jobId } = useParams({ from: "/jobs/$jobId" });
   const [activeTab, setActiveTab] = useState<TabId>("overview");
@@ -1056,6 +1131,7 @@ export function JobDetailPage(): React.JSX.Element {
               </Button>
             </Link>
           )}
+          <CompareWithDropdown currentJob={job} project={project} />
         </div>
       </div>
 
