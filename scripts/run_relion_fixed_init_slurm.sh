@@ -18,14 +18,14 @@
 # scripts/run_relion_parity_benchmark_slurm.sh, so the resulting
 # trajectories are directly comparable.
 
-set -euo pipefail
+set -eo pipefail   # NOT -u: RELION's module load tickles unbound PS1
 
 export PYTHONNOUSERSITE=1
 export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/${SLURM_JOB_ID}"
 mkdir -p "$TMPDIR" /scratch/gpfs/GILLES/mg6942/slurmo
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
-unset LD_LIBRARY_PATH
+unset LD_LIBRARY_PATH || true
 
 DATA_DIR="${DATA_DIR:-/scratch/gpfs/GILLES/mg6942/tmp/em_profile/data}"
 RELION_REF_DIR="${RELION_REF_DIR:-${DATA_DIR}/relion_ref_fixed_init}"
@@ -50,6 +50,14 @@ command -v mpirun
 export CUDA_VISIBLE_DEVICES=0
 
 echo "=== Run RELION auto-refine with fixed init ==="
+# --firstiter_cc is REQUIRED here: the recovar prepare script writes the
+# init via save_volume() which is in recovar's intensity convention, NOT
+# RELION's. Without --firstiter_cc, RELION's iter-1 Bayesian E-step uses
+# the wrong projection scale and the pose search collapses to a 2D-extruded
+# basin (volume slices show horizontal stripes instead of a 3D ribosome,
+# h1/h2 FSC plateaus at ~14-22 A but FSC vs GT stays at ~20 A regardless
+# of particle count). Documented in
+# ~/.claude/projects/-home-mg6942/memory/feedback_relion_firstiter_cc_required.md
 cd "$DATA_DIR"
 mpirun -n "$RELION_MPI_RANKS" relion_refine_mpi \
   --i particles.star \
@@ -59,6 +67,7 @@ mpirun -n "$RELION_MPI_RANKS" relion_refine_mpi \
   --split_random_halves \
   --particle_diameter 200 \
   --ini_high 30 \
+  --firstiter_cc \
   --healpix_order "$HEALPIX_ORDER" \
   --offset_range "$OFFSET_RANGE" \
   --offset_step "$OFFSET_STEP" \
