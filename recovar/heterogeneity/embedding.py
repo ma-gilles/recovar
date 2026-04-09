@@ -493,9 +493,19 @@ def _compute_batch_coords_p1(
 
     mean_half_volume = half and _mean_is_half_volume(model.mean_estimate, config.volume_shape)
     basis_half_volume = half and _basis_is_half_volume(basis, config.volume_shape)
+    mean_volume = (
+        core.VolumeRepr(
+            model.mean_estimate,
+            disc_type=config.disc_type,
+            half_volume=mean_half_volume,
+            prefiltered=True,
+        )
+        if config.disc_type == "cubic"
+        else model.mean_estimate
+    )
     projected_mean = core_forward.forward_model(
         config,
-        model.mean_estimate,
+        mean_volume,
         ctf_params,
         rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
@@ -503,9 +513,19 @@ def _compute_batch_coords_p1(
         half_volume=mean_half_volume,
     )
     # AUs: (n_basis, n_images, n_pix[_half])
+    basis_volume = (
+        core.VolumeRepr(
+            basis,
+            disc_type=config.disc_type,
+            half_volume=basis_half_volume,
+            prefiltered=True,
+        )
+        if config.disc_type == "cubic"
+        else basis
+    )
     AUs = covariance_core.batch_vol_forward_from_map(
         config,
-        basis,
+        basis_volume,
         ctf_params,
         rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
@@ -884,6 +904,8 @@ def _legacy_forward_model_from_map(
     disc_type,
     skip_ctf=False,
 ):
+    if disc_type == "cubic":
+        volume = core.VolumeRepr(volume, disc_type=disc_type, prefiltered=True)
     slices = core.slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type)
     if not skip_ctf:
         slices = slices * ctf_fun(ctf_params, image_shape, voxel_size)
