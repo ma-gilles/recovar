@@ -613,10 +613,41 @@ def get_local_rotation_grid_fast(
         ).reshape(-1, 3, 3)
 
     prior_eulers_deg = utils.R_to_relion(prior_rotations, degrees=True)
+    # CORRECT view direction for each prior matrix.
+    #
+    # Recovar's grid construction (rotation_indices_to_matrices) passes
+    # angles to R_from_relion in [theta_healpy, phi_healpy, psi] order. The
+    # matrix at HEALPix pixel p has its R_to_relion[0] (= "rot") equal to
+    # theta_healpy (the polar angle from pix2ang) and R_to_relion[1] (= "tilt")
+    # equal to phi_healpy (azimuthal). This is OPPOSITE to the standard
+    # RELION convention (rot=azim, tilt=polar). Internally consistent but
+    # makes the relationship between HEALPix pixels and matrix view
+    # directions non-standard.
+    #
+    # The actual VIEW DIRECTION of a matrix M with R_to_relion(M) = (a, b, c),
+    # using the standard formula `(sin(tilt)*cos(rot), sin(tilt)*sin(rot),
+    # cos(tilt))`, is `(sin(b)*cos(a), sin(b)*sin(a), cos(b))`. This vector
+    # corresponds to the actual physical view of the projection.
+    #
+    # For local search, we want to find grid matrices whose view directions
+    # are near the prior view direction (in sphere distance). Because of the
+    # SWAP in the grid, the HEALPix pixel index is NOT a good proxy for view
+    # direction, so HEALPix `query_disc` cannot be used directly. Instead, we
+    # precompute the view directions of ALL grid matrices (one-time per
+    # healpix_order) and find pixels within the cone via direct dot product.
+    # This was a parity bug fix for Task #100 on 2026-04-09: the previous
+    # implementation used HEALPix `query_disc` with the prior view as the
+    # query vector, but this returns pixels at HEALPix coordinates near the
+    # view direction, NOT pixels whose matrices have view directions near
+    # the prior. The result was that the local cone was systematically
+    # centered ~70-80 degrees AWAY from the prior pose for typical priors,
+    # causing recovar's iter-6 noise update to spike (resolution regression
+    # at the global→local transition).
     prior_rot_deg = prior_eulers_deg[:, 0]
     prior_tilt_deg = prior_eulers_deg[:, 1]
     prior_psi = np.deg2rad(prior_eulers_deg[:, 2])
 
+    # Standard view direction for each prior (RELION's Euler_angles2direction)
     prior_dir_vecs = np.column_stack(
         [
             np.sin(np.deg2rad(prior_tilt_deg)) * np.cos(np.deg2rad(prior_rot_deg)),
@@ -625,25 +656,51 @@ def get_local_rotation_grid_fast(
         ]
     )
 
-    # --- Direction neighbors via query_disc ---
-    dir_cutoff_rad = sigma_cutoff * sigma_rot
+    # --- Direction neighbors via direct dot-product ---
+    # Precompute view directions for ALL grid matrices at this order. This
+    # is the correct way to find pixels with matrix view directions near
+    # the prior, given recovar's non-standard rot/tilt convention. O(n_pix)
+    # per call, fast enough for chunks of <100 priors at order ≤4 (3072
+    # directions × 96 psi = 295k matrices, but we only need 3072 view
+    # directions since psi doesn't affect the view).
+    all_pixel_indices = np.arange(n_pixels, dtype=np.int64)
+    grid_eulers_deg = np.empty((n_pixels, 3), dtype=np.float64)
+    grid_theta, grid_phi = hp.pix2ang(nside, all_pixel_indices)
+    grid_eulers_deg[:, 0] = np.rad2deg(grid_theta)  # stored as "rot" (recovar convention)
+    grid_eulers_deg[:, 1] = np.rad2deg(grid_phi)    # stored as "tilt" (recovar convention)
+    grid_eulers_deg[:, 2] = 0.0
+    # Standard view direction formula on the recovar grid eulers
+    grid_view_dirs = np.column_stack(
+        [
+            np.sin(np.deg2rad(grid_eulers_deg[:, 1])) * np.cos(np.deg2rad(grid_eulers_deg[:, 0])),
+            np.sin(np.deg2rad(grid_eulers_deg[:, 1])) * np.sin(np.deg2rad(grid_eulers_deg[:, 0])),
+            np.cos(np.deg2rad(grid_eulers_deg[:, 1])),
+        ]
+    )
 
-    # Collect selected direction pixels
+    dir_cutoff_rad = sigma_cutoff * sigma_rot
+    cos_cutoff = np.cos(dir_cutoff_rad)
+
+    # Collect selected direction pixels: those whose view direction is
+    # within `dir_cutoff_rad` of any prior view direction (sphere distance).
     selected_pixel_set = set()
     if sigma_rot > 0:
-        for vec in prior_dir_vecs:
-            neighbors = hp.query_disc(nside, vec, dir_cutoff_rad, inclusive=True)
-            selected_pixel_set.update(np.asarray(neighbors, dtype=np.int64).tolist())
+        # cos(angle) >= cos(cutoff) iff angle <= cutoff (since cos decreases on [0, pi])
+        for prior_vec in prior_dir_vecs:
+            dots = grid_view_dirs @ prior_vec  # (n_pixels,)
+            in_cone = dots >= cos_cutoff
+            in_cone_pix = np.nonzero(in_cone)[0]
+            selected_pixel_set.update(in_cone_pix.tolist())
     else:
         selected_pixel_set.update(range(n_pixels))
     selected_pixels = np.array(sorted(selected_pixel_set), dtype=np.int64)
     if selected_pixels.size == 0:
-        nearest_pixels = hp.ang2pix(
-            nside,
-            np.deg2rad(prior_tilt_deg),
-            np.deg2rad(prior_rot_deg),
-        )
-        selected_pixels = np.unique(np.asarray(nearest_pixels, dtype=np.int64))
+        # Fallback: pick the closest pixel for each prior
+        for prior_vec in prior_dir_vecs:
+            dots = grid_view_dirs @ prior_vec
+            best = int(np.argmax(dots))
+            selected_pixel_set.add(best)
+        selected_pixels = np.array(sorted(selected_pixel_set), dtype=np.int64)
 
     # --- Psi neighbors via circular distance ---
     psi_cutoff_rad = sigma_cutoff * sigma_psi
@@ -684,7 +741,12 @@ def get_local_rotation_grid_fast(
     # 1. Direction component.
     unique_sel_pixels = np.unique(selected_pixels)  # already computed above
 
-    sel_pix_vecs = np.array(hp.pix2vec(nside, unique_sel_pixels)).T  # (n_usp, 3)
+    # IMPORTANT: use grid_view_dirs (matrix view directions), NOT
+    # hp.pix2vec(p) (HEALPix pixel center). Recovar's grid construction
+    # has rot/tilt swapped relative to standard, so the matrix's view
+    # direction is NOT at the HEALPix pixel center. See the comment at
+    # the top of this function for details. (Task #100 fix.)
+    sel_pix_vecs = grid_view_dirs[unique_sel_pixels]  # (n_usp, 3)
 
     n_usp = len(unique_sel_pixels)
     CHUNK_PIX = 5000
