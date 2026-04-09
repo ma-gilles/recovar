@@ -966,6 +966,31 @@ def EM(
             # Bake the calibrated spectrum into W (W^T W = diag(projcov_s)),
             # then convert back to half-Fourier for the next E-step.
             W_full = (refined_u * np.sqrt(projcov_s)[None, :]).astype(np.complex64)
+
+            # ── Self-check: rebake fixed point of pca_by_projected_covariance ──
+            # If the rebake is consistent, re-running projcov on the
+            # scale-carrying W as the "basis" should return eigenvalues ≈ 1
+            # (the calibration is a fixed point of the projcov operator).
+            # Anything noticeably different from 1 means the projcov pipeline
+            # is doing something we don't account for in the rebake math.
+            # ⚠ Run-by-default sanity gate — delete once we trust it.
+            _, projcov_s_check = principal_components.pca_by_projected_covariance(
+                reference_dataset,
+                W_full,
+                mean_estimate_raw,
+                dilated_volume_mask,
+                disc_type=disc_type,
+                disc_type_u=disc_type_u,
+                gpu_memory_to_use=gpu_memory_to_use,
+                use_mask=True,
+                n_pcs_to_compute=q_loc,
+            )
+            logger.info(
+                "  iter %d projcov self-check (should be ~1): s_check[:5]=[%s]",
+                iter_i + 1,
+                ", ".join(f"{float(x):.3f}" for x in projcov_s_check[:5]),
+            )
+
             W_full_grid = W_full.T.reshape(q_loc, *vs)
             W_half_grid = ftu.full_volume_to_half_volume(W_full_grid, vs)
             W = jnp.array(np.asarray(W_half_grid).reshape(q_loc, -1).T)
