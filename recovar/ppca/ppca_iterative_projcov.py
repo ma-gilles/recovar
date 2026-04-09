@@ -109,7 +109,6 @@ def run_iterative_ppca_projcov(
         disc_type_u="linear_interp",
         volume_mask=np.asarray(volume_mask, dtype=np.float32) if volume_mask is not None else None,
         dilated_volume_mask=dilated_volume_mask,
-        use_gridding_correction=True,
         projcov_every=projcov_every,
         projcov_start=projcov_start,
         bfit_whitening=bfit_whitening,

@@ -379,6 +379,179 @@ def unpack_tri_to_full(lhs_tri, basis_size):
 batch1_symmetrize_ft_volume = jax.vmap(utils.symmetrize_ft_volume, in_axes=(1, None), out_axes=1)
 
 
+# ═════════════════════════════════════════════════════════════════════════
+# Masked PCG hard M-step solver (K-internalised, support-restricted)
+#
+# Solves   min_V  (KV)^T A (KV) + V^T Λ V   subject to  V ⊂ supp(mask)
+# in real-space reduced coordinates V = E Z where E gathers the mask
+# support, with circulant Fourier preconditioner. K = sinc² is the
+# trilinear gridding kernel; baking it into the operator means the
+# returned W is already mask-zeroed AND deconvolved — no post-EM cleanup
+# needed.
+#
+# Adapted from bench_mstep.py (the masked-mstep benchmark). See
+# docs/math/masked_mstep.md for the derivation.
+# ═════════════════════════════════════════════════════════════════════════
+
+_MSTEP_PC_BATCH = 4
+_MSTEP_CHUNK = 100_000
+
+
+def _compute_gridding_kernel(volume_shape):
+    """K(x) = sinc²(x/D), the inverse of trilinear interpolation in Fourier."""
+    D = volume_shape[0]
+    c = np.arange(D, dtype=np.float32) - D / 2
+    n = c / D
+
+    def sinc(a):
+        s = np.where(np.abs(a) < 1e-8, 1.0, a)
+        return np.where(np.abs(a) < 1e-8, 1.0, np.sin(np.pi * s) / (np.pi * s))
+
+    g = sinc(n) ** 2
+    return jnp.array((g[:, None, None] * g[None, :, None] * g[None, None, :]).astype(np.float32))
+
+
+def _mstep_batched_rfft(V, vs):
+    """(q, D, D, D) real → (half_vol, q) complex."""
+    q = V.shape[0]
+    hvs = ftu.get_real_fft_packed_shape(vs)
+    hv = int(np.prod(hvs))
+    parts = []
+    for j0 in range(0, q, _MSTEP_PC_BATCH):
+        j1 = min(j0 + _MSTEP_PC_BATCH, q)
+        parts.append(ftu.get_dft3_real(V[j0:j1]).reshape(j1 - j0, hv).T)
+    return jnp.concatenate(parts, axis=1)
+
+
+def _mstep_batched_irfft(W_h, vs, q):
+    """(half_vol, q) complex → (q, D, D, D) real."""
+    hvs = ftu.get_real_fft_packed_shape(vs)
+    parts = []
+    for j0 in range(0, q, _MSTEP_PC_BATCH):
+        j1 = min(j0 + _MSTEP_PC_BATCH, q)
+        parts.append(ftu.get_idft3_real(W_h[:, j0:j1].T.reshape(j1 - j0, *hvs), vs))
+    return jnp.concatenate(parts, axis=0)
+
+
+def _mstep_A_mul_fourier(W_h, lhs_tri, q, unpack_fn):
+    """A(ξ) · W(ξ), chunked. ``lhs_tri`` is upper-tri-packed (hv, tri_sz)."""
+    hv = W_h.shape[0]
+    out = jnp.zeros_like(W_h)
+    for i0 in range(0, hv, _MSTEP_CHUNK):
+        i1 = min(i0 + _MSTEP_CHUNK, hv)
+        L = unpack_fn(lhs_tri[i0:i1], q)
+        if L.ndim == 2:
+            L = L[:, :, None]
+        out = out.at[i0:i1].set(jnp.einsum("vij,vj->vi", L, W_h[i0:i1]))
+    return out
+
+
+def _mstep_AL_solve_fourier(W_h, lhs_tri, reg_diag, q, unpack_fn, lhs_scale=1.0):
+    """(scale·A(ξ) + Λ(ξ))^{-1} · W(ξ), chunked — used by the preconditioner."""
+    hv = W_h.shape[0]
+    parts = []
+    for i0 in range(0, hv, _MSTEP_CHUNK):
+        i1 = min(i0 + _MSTEP_CHUNK, hv)
+        L = unpack_fn(lhs_tri[i0:i1], q)
+        if L.ndim == 2:
+            L = L[:, :, None]
+        if lhs_scale != 1.0:
+            L = lhs_scale * L
+        D = L.at[:, jnp.arange(q), jnp.arange(q)].add(reg_diag[i0:i1])
+        parts.append(jnp.linalg.solve(D, W_h[i0:i1, :, None])[..., 0])
+    return jnp.concatenate(parts, axis=0)
+
+
+def _mstep_apply_fourier_op(V_real, lhs_tri, reg_diag, q, vs, unpack_fn, G):
+    """Real-space matvec   K · iFFT[(A + Λ) · FFT[K · V]]."""
+    KV = G[None] * V_real
+    KV_h = _mstep_batched_rfft(KV, vs)
+    AKV_h = _mstep_A_mul_fourier(KV_h, lhs_tri, q, unpack_fn)
+    result_h = AKV_h + reg_diag * KV_h
+    result = _mstep_batched_irfft(result_h, vs, q)
+    return G[None] * result
+
+
+def _mstep_cg(matvec, b, x0, maxiter, tol, precond):
+    """Preconditioned CG, real-flat vectors. Returns ``x`` at convergence/maxiter."""
+    x = x0
+    r = b - matvec(x)
+    z = precond(r) if precond is not None else r
+    p = z
+    rz = float(jnp.sum(r * z))
+    b2 = max(float(jnp.sum(b * b)), 1e-30)
+    for _ in range(maxiter):
+        Ap = matvec(p)
+        pAp = float(jnp.sum(p * Ap))
+        if pAp < 1e-30:
+            break
+        alpha = rz / pAp
+        x = x + alpha * p
+        r = r - alpha * Ap
+        rr = float(jnp.sum(r * r))
+        if jnp.sqrt(rr / b2) < tol:
+            break
+        z = precond(r) if precond is not None else r
+        rz_new = float(jnp.sum(r * z))
+        p = z + (rz_new / max(abs(rz), 1e-30)) * p
+        rz = rz_new
+    return x
+
+
+def _pcg_hard_mstep(lhs_tri, rhs_h, reg_diag, mask, vs, q, unpack_fn,
+                    W0_real=None, maxiter=20, tol=1e-4):
+    """Masked, K-internalised PCG hard M-step.
+
+    Solves the masked PPCA M-step in support-restricted coordinates Z, with
+    the gridding kernel K = sinc² baked into the operator. The returned W
+    is real-space (q, D, D, D), already mask-zeroed and K-deconvolved —
+    callers feed it straight into rfft (no post-mask, no post-gridding).
+    """
+    G = _compute_gridding_kernel(vs)
+    sup = jnp.where(jnp.asarray(mask).ravel() > 0.5)[0]
+    n_sup = sup.shape[0]
+    vol = int(np.prod(vs))
+    N = vol
+    k_eff_sq = float(jnp.sum(G ** 2)) / N
+
+    def scatter(Z_flat):
+        Z = Z_flat.reshape(n_sup, q)
+        f = jnp.zeros((q, vol), dtype=jnp.float32)
+        return f.at[:, sup].set(Z.T).reshape(q, *vs)
+
+    def gather(V):
+        return V.reshape(q, vol)[:, sup].T.ravel()
+
+    def matvec(Z_flat):
+        V = scatter(Z_flat)
+        return gather(_mstep_apply_fourier_op(V, lhs_tri, reg_diag, q, vs, unpack_fn, G))
+
+    # RHS = E^T K iFFT[d]
+    d_real = _mstep_batched_irfft(rhs_h, vs, q)
+    rhs_flat = gather(G[None] * d_real).astype(jnp.float32)
+
+    # Circulant preconditioner: E^T iFFT[(k_eff² A + Λ)^{-1} FFT[E Z]]
+    prec_reg = k_eff_sq * reg_diag
+
+    def precond(Z_flat):
+        V = scatter(Z_flat)
+        V_h = _mstep_batched_rfft(V, vs)
+        S_h = _mstep_AL_solve_fourier(V_h, lhs_tri, prec_reg, q, unpack_fn, lhs_scale=k_eff_sq)
+        return gather(_mstep_batched_irfft(S_h, vs, q))
+
+    # Initial guess: warmstart from previous iter (in support coords) or
+    # per-voxel Wiener (with K^{-1}) gathered to the support.
+    if W0_real is not None:
+        x0 = gather(jnp.asarray(W0_real, dtype=jnp.float32).reshape(q, *vs))
+    else:
+        W0_h = _mstep_AL_solve_fourier(rhs_h, lhs_tri, reg_diag, q, unpack_fn)
+        W0_r = _mstep_batched_irfft(W0_h, vs, q) / jnp.maximum(G[None], 0.01)
+        x0 = gather(W0_r).astype(jnp.float32)
+
+    Z_flat = _mstep_cg(matvec, rhs_flat, x0, maxiter, tol, precond)
+    return scatter(Z_flat).astype(jnp.float32)
+
+
 def _iter_processed_batches_half(experiment_dataset, batch_size):
     """Like _iter_processed_batches but yields half-spectrum images and noise."""
     for (
@@ -413,10 +586,8 @@ def EM_step_half(
     recompute_ll=False,
     mean_estimate_raw=None,
     volume_mask=None,
-    pcg_lam=0.0,
     pcg_maxiter=20,
     W_prev_real=None,
-    soft_penalty_lam=0.0,
     contrast_mode="none",
     contrast_grid=None,
     contrast_weights=None,
@@ -427,14 +598,11 @@ def EM_step_half(
 ):
     """Half-spectrum EM step for L2-regularized PPCA.
 
-    Same interface as :func:`EM_step` but uses :func:`E_M_step_batch_half`
-    internally.  All accumulation happens in half-volume / upper-triangular
-    format, and the M-step solve runs on half_volume_size voxels only.
-
-    Memory savings vs ``EM_step``:
-    * ``lhs``: ``volume_size × q²`` → ``half_vol × q(q+1)/2``  (~4× less)
-    * ``rhs``: ``volume_size × q``  → ``half_vol × q``          (~2× less)
-    * ``W``: kept in half-volume during E-step, expanded only for whitening
+    Accumulates ``lhs`` (half_vol, tri_sz) and ``rhs`` (half_vol, q) in
+    half-volume / upper-triangular format, then runs the K-internalised
+    masked PCG hard solver to produce the new W. The returned W is in
+    half-Fourier shape, already mask-zeroed and gridding-corrected — the
+    outer EM loop does not need any post-step cleanup.
     """
     full_dataset, dataset_list = _normalize_experiment_datasets(experiment_datasets)
     ref = full_dataset if full_dataset is not None else dataset_list[0]
@@ -510,13 +678,11 @@ def EM_step_half(
     expected_zs_var = np.var(expected_zs, axis=0)
 
     # ------------------------------------------------------------------
-    # M-step solve: unconditionally PCG (joint q×q masked least-squares,
-    # half-volume preconditioner, optional warmstart). With a trivial mask
-    # PCG converges in one iteration to the same answer as the per-voxel
-    # diagonal solve, so we don't bother with a fast path.
+    # M-step solve: K-internalised PCG hard solver in support-restricted
+    # real-space coordinates. The output W_real is already mask-zeroed and
+    # K-deconvolved — callers feed it straight into rfft. No post-EM
+    # mask projection or gridding correction is needed.
     # ------------------------------------------------------------------
-    from recovar.reconstruction.pcg_mean import pcg_mstep
-
     W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
     reg_half = 1 / (W_prior_half + 1e-16)
     mask = jnp.array(volume_mask).reshape(volume_shape) if volume_mask is not None \
@@ -526,18 +692,17 @@ def EM_step_half(
     if W_prev_real is not None:
         W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))
 
-    W_real, _res_mstep = pcg_mstep(
-        lhs_summed,           # (half_vol, tri_sz) upper-tri packed
-        rhs_summed,           # (half_vol, q)
-        reg_half,             # (half_vol, q)
+    W_real = _pcg_hard_mstep(
+        lhs_summed,
+        rhs_summed,
+        reg_half,
         mask,
         volume_shape,
+        basis_size,
+        unpack_tri_to_full,
         W0_real=W0,
         maxiter=pcg_maxiter,
         tol=1e-4,
-        precondition=True,
-        soft_penalty_lam=soft_penalty_lam,
-        unpack_fn=unpack_tri_to_full,
     )
     # (q, D, D, D) real → (half_vol, q) half-Fourier
     W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T
@@ -629,8 +794,6 @@ def EM(
     volume_mask=None,
     dilated_volume_mask=None,
     pcg_maxiter=20,
-    soft_penalty_lam=0.0,
-    use_gridding_correction=False,
     contrast_mode="none",
     contrast_grid=None,
     contrast_mean=1.0,
@@ -751,7 +914,6 @@ def EM(
             volume_mask=volume_mask,
             pcg_maxiter=pcg_maxiter,
             W_prev_real=_W_prev_real if iter_i > 0 else None,
-            soft_penalty_lam=soft_penalty_lam,
             contrast_mode=_contrast_mode,
             contrast_grid=jnp.array(contrast_grid) if contrast_grid is not None else None,
             eigenvalues=None,  # Λ=I (z~N(0,I), W absorbs scale)
@@ -761,23 +923,12 @@ def EM(
         )
         posterior_info = {"mean_c": np.asarray(mean_c, dtype=np.float32)}
 
-        # Half-volume → real space, mask projection, gridding correction, then
-        # back to half-Fourier. The PCG M-step already applies the mask inside
-        # CG and ``pcg_mstep`` does not internalise the gridding kernel K, so
-        # both post-steps are needed (and idempotent).
-        W = ftu.get_idft3_real(W.T.reshape(basis_size, *half_vs), vs)  # (q, D, D, D) real
-
-        if volume_mask is not None and not np.all(volume_mask == 1):
-            W = W * jnp.array(volume_mask)[None]
-
-        _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)
-
-        if use_gridding_correction:
-            from recovar.reconstruction.relion_functions import griddingCorrect_square
-            for k in range(basis_size):
-                W = W.at[k].set(griddingCorrect_square(W[k], vs[0], 1, order=1)[0])
-
-        W = ftu.get_dft3_real(W).reshape(basis_size, -1).T  # (half_vol, q)
+        # The K-internalised PCG hard solver inside EM_step_half returns W
+        # in half-Fourier shape, already mask-zeroed and K-deconvolved. No
+        # post-step mask projection or gridding correction needed.
+        # Cache the real-space form for next iter's CG warmstart.
+        W_real_for_warmstart = ftu.get_idft3_real(W.T.reshape(basis_size, *half_vs), vs)
+        _W_prev_real = np.asarray(W_real_for_warmstart.reshape(basis_size, -1).T)
 
         # ── Optional projected-covariance refinement of the spectrum ────────
         # When projcov_every > 0, every Nth iter (starting from projcov_start)

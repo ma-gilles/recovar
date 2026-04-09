@@ -943,7 +943,6 @@ def _run_ppca_refinement(
         disc_type_u=covariance_options["disc_type_u"],
         return_iteration_data=True,
         return_posterior_info=True,
-        use_gridding_correction=bool(getattr(args, "ppca_use_gridding_correction", True)),
         volume_mask=np.asarray(focus_mask, dtype=np.float32),
         dilated_volume_mask=dilated_volume_mask,
         contrast_mode=contrast_mode,

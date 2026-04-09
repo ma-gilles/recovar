@@ -191,7 +191,6 @@ def iterative_ppca_refitb(
     contrast_grid=None,
     contrast_mean=1.0,
     contrast_variance=np.inf,
-    use_gridding_correction=True,
 ):
     """PPCA EM with RefitB after each (sufficient) iteration.
 
@@ -215,8 +214,8 @@ def iterative_ppca_refitb(
         _contrast_mode = contrast_mode if iter_i >= 3 else "none"
 
         # --- 1. PPCA EM step using current B as the prior ---
-        # EM_step_half now uses PCG (masked, half-volume PCG) unconditionally
-        # when volume_mask is non-trivial — no solver to plumb through.
+        # EM_step_half's K-internalised PCG hard solver returns W in
+        # half-Fourier already mask-zeroed and K-deconvolved — no post-step.
         (
             W,
             expected_zs,
@@ -245,20 +244,7 @@ def iterative_ppca_refitb(
             contrast_variance=contrast_variance,
             return_mean_c=True,
         )
-
-        # Post-process W: half-Fourier → real → mask → gridding → half-Fourier.
-        # pcg_mstep does not internalise K (the gridding kernel), so this
-        # post-step is the canonical correction.
         basis_size = W.shape[1]
-        half_vs = ftu.volume_shape_to_half_volume_shape(vs)
-        W_real = ftu.get_idft3_real(W.T.reshape(basis_size, *half_vs), vs)
-        if volume_mask is not None and not np.all(np.asarray(volume_mask) == 1):
-            W_real = W_real * jnp.array(volume_mask)[None]
-        if use_gridding_correction:
-            from recovar.reconstruction.relion_functions import griddingCorrect_square
-            for k in range(basis_size):
-                W_real = W_real.at[k].set(griddingCorrect_square(W_real[k], vs[0], 1, order=1)[0])
-        W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T
 
         em_time = time.time() - t0
 
