@@ -2174,8 +2174,6 @@ def _refine_relion_mode(
         )
 
         if state.has_converged:
-            # RELION does one final iteration at full resolution with
-            # joined half-sets.  For now, we just log and break.
             logger.info(
                 "Convergence reached at iteration %d. "
                 "Final resolution: %.2f A (pixel_res=%.1f)",
@@ -2185,8 +2183,84 @@ def _refine_relion_mode(
 
         iteration += 1
 
-    # --- Final merged mean ---
-    merged_mean = (means[0] + means[1]) / 2
+    # --- RELION's final iteration: do_join_random_halves + do_use_all_data ---
+    # After the EM loop finishes (either by convergence or max_iter), RELION
+    # runs ONE more iter with:
+    #   - current_size = ori_size (Nyquist, all shells)
+    #   - both halves joined (single combined dataset)
+    #   - the merged volume as the projection source
+    # See ml_optimiser.cpp:10157-10160 (sets do_join_random_halves and
+    # do_use_all_data) and ml_optimiser.cpp:5707-5708 (forces current_size to
+    # ori_size when do_use_all_data is true).
+    #
+    # Implementation: average the two half-set volumes, then run one more E+M
+    # at full Nyquist on the COMBINED dataset (both halves' particles).
+    final_join_means = [(means[0] + means[1]) / 2, (means[0] + means[1]) / 2]
+    final_iter_t0 = time.time()
+    logger.info(
+        "=== RELION final all-data Nyquist iteration "
+        "(do_join_random_halves=True, do_use_all_data=True) ==="
+    )
+    final_cs = grid_size  # = ori_size, full Nyquist
+    final_ft_y = jnp.zeros(cryo.volume_size, dtype=cryo.dtype)
+    final_ft_ctf = jnp.zeros(cryo.volume_size, dtype=cryo.dtype)
+    final_noise_wsum = np.zeros_like(np.asarray(noise_radial_trajectory[-1])) if noise_radial_trajectory else None
+    final_img_power = np.zeros_like(np.asarray(noise_radial_trajectory[-1])) if noise_radial_trajectory else None
+    final_sumw = 0.0
+    for k in range(2):
+        # Pass the merged mean as input (both halves get the same projection source).
+        # Run on each half-set's particles (avoids loading all particles at once),
+        # then accumulate Ft_y/Ft_ctf and noise stats from BOTH halves.
+        safe_ibs, safe_rbs = _safe_batch_sizes(
+            current_rotations.shape[0],
+            current_translations.shape[0],
+        )
+        _, ha_k_final, Ft_y_k_final, Ft_ctf_k_final, _, noise_stats_k_final = run_em_v2(
+            experiment_datasets[k],
+            final_join_means[k],
+            mean_variance,
+            noise_variance,
+            current_rotations,
+            current_translations,
+            disc_type,
+            image_batch_size=safe_ibs,
+            rotation_block_size=safe_rbs,
+            current_size=final_cs,  # full Nyquist
+            score_with_masked_images=True,
+            return_stats=True,
+            accumulate_noise=True,
+        )
+        final_ft_y = final_ft_y + Ft_y_k_final
+        final_ft_ctf = final_ft_ctf + Ft_ctf_k_final
+        if noise_stats_k_final is not None and final_noise_wsum is not None:
+            final_noise_wsum += np.asarray(noise_stats_k_final.wsum_sigma2_noise, dtype=np.float64)
+            final_img_power += np.asarray(noise_stats_k_final.wsum_img_power, dtype=np.float64)
+            final_sumw += float(noise_stats_k_final.sumw)
+
+    # Reconstruct the final volume from the COMBINED Ft_y/Ft_ctf accumulators
+    # at the full Nyquist resolution. Skip the join_halves step (we're already
+    # combining the two halves into one dataset for this final iter).
+    final_ft_ctf_padded = relion_functions.zero_pad_fourier_volume(
+        final_ft_ctf, volume_shape, PADDING_FACTOR,
+    )
+    final_ft_y_padded = relion_functions.zero_pad_fourier_volume(
+        final_ft_y, volume_shape, PADDING_FACTOR,
+    )
+    merged_mean = relion_functions.post_process_from_filter_v2(
+        final_ft_ctf_padded, final_ft_y_padded,
+        volume_shape, PADDING_FACTOR,
+        tau=mean_variance,
+        kernel="triangular",
+        use_spherical_mask=True, grid_correct=True,
+        gridding_correct="square",
+        tau2_fudge=1.0,
+    ).reshape(-1)
+    final_iter_elapsed = time.time() - final_iter_t0
+    logger.info(
+        "Final iter complete: current_size=%d (Nyquist), wall=%.1fs",
+        final_cs, final_iter_elapsed,
+    )
+    wall_times.append(final_iter_elapsed)
 
     return {
         "mean": merged_mean,
