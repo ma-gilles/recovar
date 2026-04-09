@@ -2076,6 +2076,19 @@ def _refine_relion_mode(
         pixel_resolutions.append(pixel_res)
 
         # --- Update poses and noise ---
+        # Snapshot the iter K-1 best rotations / translations BEFORE the
+        # loop overwrites them, so update_refinement_state below can compute
+        # the RELION-exact change metrics (B3) between iter K-1 and iter K.
+        prior_iter_best_rotations = [
+            np.asarray(rot).copy() if rot is not None else None
+            for rot in previous_best_rotations
+        ]
+        prior_iter_best_translations = [
+            np.asarray(trans).copy() if trans is not None else None
+            for trans in previous_best_translations
+        ]
+        new_iter_best_rotations = [None, None]
+        new_iter_best_translations = [None, None]
         for k in range(2):
             if best_pose_rotations[k] is not None:
                 best_rots = np.asarray(best_pose_rotations[k], dtype=np.float32)
@@ -2092,9 +2105,42 @@ def _refine_relion_mode(
                 best_rots, best_trans = hard_assignment_idx_to_pose(
                     hard_assignments[k], pose_rotations[k], pose_translations[k],
                 )
-            previous_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
-            previous_best_translations[k] = np.asarray(best_trans, dtype=np.float32)
+            new_iter_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
+            new_iter_best_translations[k] = np.asarray(best_trans, dtype=np.float32)
+            previous_best_rotations[k] = new_iter_best_rotations[k]
+            previous_best_translations[k] = new_iter_best_translations[k]
             experiment_datasets[k].update_poses(best_rots, best_trans)
+
+        # --- RELION-exact change tracking inputs (B3 / B4) ---
+        # Combine both half-sets in the same image order as
+        # current_combined_ha. RELION's monitorHiddenVariableChanges sums
+        # over all particles, so the per-half order is irrelevant for the
+        # mean -- but we keep the half-0-then-half-1 convention for
+        # consistency with the rest of the loop.
+        try:
+            current_rotation_matrices_combined = np.concatenate(
+                new_iter_best_rotations, axis=0,
+            ).astype(np.float64)
+            current_translations_pixel_combined = np.concatenate(
+                new_iter_best_translations, axis=0,
+            ).astype(np.float64)
+        except (ValueError, TypeError):
+            current_rotation_matrices_combined = None
+            current_translations_pixel_combined = None
+        if all(rot is not None for rot in prior_iter_best_rotations):
+            try:
+                previous_rotation_matrices_combined = np.concatenate(
+                    prior_iter_best_rotations, axis=0,
+                ).astype(np.float64)
+                previous_translations_pixel_combined = np.concatenate(
+                    prior_iter_best_translations, axis=0,
+                ).astype(np.float64)
+            except (ValueError, TypeError):
+                previous_rotation_matrices_combined = None
+                previous_translations_pixel_combined = None
+        else:
+            previous_rotation_matrices_combined = None
+            previous_translations_pixel_combined = None
 
         # RELION-style posterior-weighted noise update. Sums the wsum/img_power
         # accumulators from both half-sets and normalizes via the M-step formula.
@@ -2166,6 +2212,11 @@ def _refine_relion_mode(
             translations=np.asarray(current_translations),
             new_resolution=pixel_res,
             max_posterior_per_image=combined_max_posterior,
+            current_rotation_matrices=current_rotation_matrices_combined,
+            previous_rotation_matrices=previous_rotation_matrices_combined,
+            current_translations_pixel=current_translations_pixel_combined,
+            previous_translations_pixel=previous_translations_pixel_combined,
+            voxel_size_angstrom=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
         )
 
         # Track frac_changed for local search fallback
