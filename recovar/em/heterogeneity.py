@@ -594,26 +594,20 @@ def compute_projected_covariance_rhs_lhs(
     u_projections = np.empty((rotations.shape[0], n_principal_components, image_size), dtype=np.complex64)
     # Compute all mean and principal component projections
     mean_projections = np.empty((rotations.shape[0], image_size), dtype=np.complex64)
-    mean_volume = (
-        core.VolumeRepr(mean, disc_type=disc_type_mean, prefiltered=True) if disc_type_mean == "cubic" else mean
-    )
-    basis_volume = (
-        core.VolumeRepr(basis, disc_type=disc_type_u, prefiltered=True) if disc_type_u == "cubic" else basis
-    )
+    mean_volume = core.VolumeRepr(mean, disc_type=disc_type_mean) if disc_type_mean == "cubic" else mean
+    basis_volume = core.VolumeRepr(basis, disc_type=disc_type_u) if disc_type_u == "cubic" else basis
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
         mean_projections[rot_indices] = core.slice_volume(
             mean_volume,
             rotations[rot_indices],
             experiment_dataset.image_shape,
             experiment_dataset.volume_shape,
-            disc_type_mean,
         )
         u_projections[rot_indices] = batch_vol_slice_volume(
             basis_volume,
             rotations[rot_indices],
             experiment_dataset.image_shape,
             experiment_dataset.volume_shape,
-            disc_type_u,
         )
 
     del basis, mean

@@ -524,7 +524,7 @@ def _variance_relion_kernel_trilinear_explicit(
     CTF_squared = half_ctf**2
 
     mean_volume = (
-        core.VolumeRepr(mean_estimate, disc_type=config.disc_type, prefiltered=True)
+        core.VolumeRepr(mean_estimate, disc_type=config.disc_type)
         if config.disc_type == "cubic"
         else mean_estimate
     )
@@ -864,7 +864,7 @@ def preprocess_covariance_batch(
 
     # 2. Center images: y_i - A_i * mu
     mean_volume = (
-        core.VolumeRepr(mean_estimate, disc_type=config.disc_type, prefiltered=True)
+        core.VolumeRepr(mean_estimate, disc_type=config.disc_type)
         if config.disc_type == "cubic"
         else mean_estimate
     )
@@ -1600,7 +1600,6 @@ def _reduce_covariance_inner_explicit(
             model.mean_estimate,
             disc_type=config.disc_type,
             half_volume=mean_half_volume,
-            prefiltered=True,
         )
         if config.disc_type == "cubic"
         else model.mean_estimate
@@ -1629,7 +1628,6 @@ def _reduce_covariance_inner_explicit(
             basis,
             disc_type=opts.disc_type_u,
             half_volume=basis_half_volume,
-            prefiltered=True,
         )
         if opts.disc_type_u == "cubic"
         else basis

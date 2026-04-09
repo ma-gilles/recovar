@@ -936,13 +936,7 @@ def simulate_data(
         if disc_type == "nufft":
             vol_real = fourier_transform_utils.get_idft3(vol.reshape(experiment_dataset.volume_shape))
         elif "cubic" in disc_type:
-            from recovar.core import cubic_interpolation
-
-            volume = core.VolumeRepr(
-                cubic_interpolation.calculate_spline_coefficients(vol.reshape(experiment_dataset.volume_shape)),
-                disc_type="cubic",
-                prefiltered=True,
-            )
+            volume = core.to_cubic(vol.reshape(experiment_dataset.volume_shape), experiment_dataset.volume_shape)
         else:
             volume = vol
 
