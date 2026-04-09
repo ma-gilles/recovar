@@ -1392,7 +1392,12 @@ def _refine_relion_mode(
             if prev_cs < grid_size:
                 fsc_prev[min(len(fsc_prev), prev_cs // 2):] = 0.0
 
-            data_vs_prior_iter = np.asarray(fsc_to_relion_ssnr(fsc_prev))
+            # data_vs_prior = tau2_fudge * fsc / (1 - fsc), matching
+            # RELION's updateSSNRarrays at backprojector.cpp:1117-1123
+            # for the gold-standard split-half auto-refine path.
+            data_vs_prior_iter = np.asarray(
+                fsc_to_relion_ssnr(fsc_prev, tau2_fudge=tau2_fudge),
+            )
             data_vs_prior_trajectory.append(data_vs_prior_iter)
             res_shell = resolution_from_data_vs_prior(
                 data_vs_prior_iter,
@@ -2087,10 +2092,15 @@ def _refine_relion_mode(
         mean_variance = mean_signal_variance
 
         # --- Resolution from updated FSC-derived SSNR (RELION auto-refine) ---
+        # Matches RELION updateSSNRarrays at backprojector.cpp:1117-1123:
+        # data_vs_prior[i] = tau2_fudge * fsc / (1 - fsc), with fsc clamped
+        # to [0.001, 0.999] inside fsc_to_relion_ssnr.
         dvp_iter = np.asarray(fsc, dtype=np.float32).copy()
         if cs < grid_size:
             dvp_iter[min(len(dvp_iter), cs // 2):] = 0.0
-        dvp_iter = np.asarray(fsc_to_relion_ssnr(dvp_iter))
+        dvp_iter = np.asarray(
+            fsc_to_relion_ssnr(dvp_iter, tau2_fudge=tau2_fudge),
+        )
         dvp_res_shell = resolution_from_data_vs_prior(
             dvp_iter,
             allow_high_res_recovery=True,
