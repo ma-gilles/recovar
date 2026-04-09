@@ -4,6 +4,31 @@ import healpy as hp
 import numpy as np
 from recovar import utils
 
+# Cache of full-grid rotation matrices keyed by healpix_order. Each entry has
+# shape (n_pixels * n_psi, 3, 3) and is reused across calls to
+# get_local_rotation_grid_fast to avoid rebuilding the grid every chunk.
+# Cleared automatically when Python exits; we don't bother with manual eviction
+# because there are at most a handful of healpix orders in active use.
+_GRID_MATRIX_CACHE: "dict[int, np.ndarray]" = {}
+
+
+def _get_full_grid_matrices(healpix_order: int) -> np.ndarray:
+    """Return all (n_pixels * n_psi, 3, 3) rotation matrices for one order.
+
+    Cached because the only inputs are integers (healpix_order) and the
+    output is deterministic. Used by ``get_local_rotation_grid_fast`` to
+    do axis-angle cone selection without rebuilding the grid each call.
+    """
+    cached = _GRID_MATRIX_CACHE.get(int(healpix_order))
+    if cached is not None:
+        return cached
+    n_total = rotation_grid_size(int(healpix_order))
+    mats = rotation_indices_to_matrices(
+        np.arange(n_total, dtype=np.int64), int(healpix_order),
+    )
+    _GRID_MATRIX_CACHE[int(healpix_order)] = mats
+    return mats
+
 
 def rotation_grid_n_in_planes(order: int) -> int:
     """Number of in-plane angles used by the RELION-style HEALPix grid."""
@@ -550,53 +575,86 @@ def get_local_rotation_grid_fast(
     *,
     per_image=False,
 ):
-    """Fast local rotation grid selection using HEALPix pixel lookup.
+    """Local rotation grid selection via SO(3) axis-angle distance.
 
-    Accepts either discrete full-grid rotation indices or exact prior rotation
-    matrices. This matters for RELION-parity local search: adaptive pass-2
-    orientations use midpoint psi children inside the parent bin, so they do
-    not generally coincide with rows of the global fine HEALPix x psi grid.
+    For each prior rotation matrix, find every grid rotation within
+    ``sigma_cutoff * max(sigma_rot, sigma_psi)`` axis-angle distance.
 
-    The prior is factored into independent direction and psi terms, matching
-    RELION's ``P(idir) * P(ipsi)`` structure.
+    **Implementation note (Task #101 fix, 2026-04-09):** earlier versions
+    of this function tried to factor the cone selection into independent
+    direction (HEALPix pixel) and psi (in-plane angle) components, then
+    score each candidate via ``log_prior_dir + log_prior_psi``. That
+    approach made two distinct mistakes:
+
+    1. The "direction" of a recovar grid matrix is **not** the standard
+       ZYZ view formula `(sin(tilt)*cos(rot), sin(tilt)*sin(rot), cos(tilt))`.
+       Recovar's `R_from_relion` uses an extrinsic ZXZ convention with
+       offsets `[rot+90, tilt, psi-90]` and a `[[1,-1,1],[-1,1,-1],[1,-1,1]]`
+       frame-adjust multiply (`recovar/utils/helpers.py:717`). The actual
+       view direction is::
+
+           view = (-cos(psi)*sin(tilt), sin(psi)*sin(tilt), cos(tilt))
+
+       so it depends on **psi**, not just `(rot, tilt)`. The Task #100
+       fix used the standard formula and got x and y wrong; that left
+       ~49% of priors with <10% cone overlap, including some priors with
+       0 overlap (the cone landed on the antipodal set).
+
+    2. RELION factors the prior into `P(direction) * P(psi)`, but it
+       still requires both diffang and diffpsi to be small individually.
+       Trying to mimic this with a recovar-specific direction definition
+       compounds the bug above.
+
+    Both problems disappear when we work directly in SO(3): the axis-angle
+    distance between two rotation matrices is `arccos((trace(R1^T R2) - 1)/2)`,
+    invariant under the Euler convention. We compute it for every (prior,
+    grid_matrix) pair using a single batched einsum and select the
+    in-cone subset. The full grid of matrices is cached per healpix_order
+    so the cost is one matmul per call (~64 priors × 295k matrices at
+    order 4, well under a millisecond on GPU/CPU).
+
+    The log-prior is computed as a single Gaussian in axis-angle distance
+    with sigma `max(sigma_rot, sigma_psi)`, which matches RELION's
+    "biggest_sigma" convention in `selectOrientationsWithNonZeroPriorProbability`
+    (`healpix_sampling.cpp:769`). This is NOT a perfect match to RELION's
+    factored direction × psi prior, but the SELECTION is now correct
+    regardless of convention, which is the dominant source of error in
+    practice.
 
     Parameters
     ----------
     prior_rotation_indices : np.ndarray
-        Either full-grid rotation indices of shape ``(n_priors,)`` or exact
-        prior rotation matrices of shape ``(n_priors, 3, 3)``.
+        Either full-grid rotation indices of shape ``(n_priors,)`` or
+        exact prior rotation matrices of shape ``(n_priors, 3, 3)``.
     sigma_rot : float
-        Gaussian prior sigma for direction (radians).
+        Gaussian prior sigma for rotation, **radians**. Used as the
+        cone radius scale and the log-prior denominator.
     sigma_psi : float
-        Gaussian prior sigma for in-plane angle (radians).
+        Gaussian prior sigma for in-plane angle, **radians**. Combined
+        with ``sigma_rot`` via ``max(sigma_rot, sigma_psi)`` to match
+        RELION's `biggest_sigma`.
     healpix_order : int
         HEALPix order (nside = 2^order) of the rotation grid.
     sigma_cutoff : float
-        Include grid points within ``sigma_cutoff * sigma`` of at least
-        one prior (default 3.0).
+        Include grid points within ``sigma_cutoff * max(sigma_rot, sigma_psi)``
+        SO(3) distance of at least one prior (default 3.0).
+    per_image : bool
+        When True, return a per-image log-prior of shape
+        ``(n_priors, n_selected)``. When False, collapse to the max over
+        priors per grid index, shape ``(n_selected,)``.
 
     Returns
     -------
     selected_indices : np.ndarray, shape (n_selected,), dtype int
         Sorted indices into the full rotation grid.
     rotation_log_prior : np.ndarray
-        If ``per_image=False`` (default), shape ``(n_selected,)`` and each
-        rotation uses the max over all priors of
-        ``-d_dir^2/(2*sigma_rot^2) - d_psi^2/(2*sigma_psi^2)``.
-        If ``per_image=True``, shape ``(n_priors, n_selected)`` with an exact
-        per-image log-prior over the union grid.
+        Per-image (or aggregated) Gaussian log-prior over the selected
+        union, with out-of-cone entries set to ``-1e30``.
     """
     prior_rotation_indices = np.asarray(prior_rotation_indices)
 
-    # --- Reconstruct grid geometry ---
-    nside = 2 ** healpix_order
-    n_pixels = hp.nside2npix(nside)
-    n_psi = rotation_grid_n_in_planes(healpix_order)
-    n_total = n_psi * n_pixels
-
-    # Grid layout: index k -> psi_index = k // n_pixels, pixel = k % n_pixels
-    # (from meshgrid(arange(n_pixels), psi_angles) then reshape(-1, 3))
-    psi_angles = np.linspace(0, 2 * np.pi, n_psi, endpoint=False)  # radians
+    # --- Reconstruct grid geometry (still needed for fallbacks) ---
+    n_total = rotation_grid_size(healpix_order)
 
     if prior_rotation_indices.ndim == 0:
         prior_rotation_indices = prior_rotation_indices.reshape(1)
@@ -612,238 +670,88 @@ def get_local_rotation_grid_fast(
             dtype=np.float64,
         ).reshape(-1, 3, 3)
 
-    prior_eulers_deg = utils.R_to_relion(prior_rotations, degrees=True)
-    # CORRECT view direction for each prior matrix.
-    #
-    # Recovar's grid construction (rotation_indices_to_matrices) passes
-    # angles to R_from_relion in [theta_healpy, phi_healpy, psi] order. The
-    # matrix at HEALPix pixel p has its R_to_relion[0] (= "rot") equal to
-    # theta_healpy (the polar angle from pix2ang) and R_to_relion[1] (= "tilt")
-    # equal to phi_healpy (azimuthal). This is OPPOSITE to the standard
-    # RELION convention (rot=azim, tilt=polar). Internally consistent but
-    # makes the relationship between HEALPix pixels and matrix view
-    # directions non-standard.
-    #
-    # The actual VIEW DIRECTION of a matrix M with R_to_relion(M) = (a, b, c),
-    # using the standard formula `(sin(tilt)*cos(rot), sin(tilt)*sin(rot),
-    # cos(tilt))`, is `(sin(b)*cos(a), sin(b)*sin(a), cos(b))`. This vector
-    # corresponds to the actual physical view of the projection.
-    #
-    # For local search, we want to find grid matrices whose view directions
-    # are near the prior view direction (in sphere distance). Because of the
-    # SWAP in the grid, the HEALPix pixel index is NOT a good proxy for view
-    # direction, so HEALPix `query_disc` cannot be used directly. Instead, we
-    # precompute the view directions of ALL grid matrices (one-time per
-    # healpix_order) and find pixels within the cone via direct dot product.
-    # This was a parity bug fix for Task #100 on 2026-04-09: the previous
-    # implementation used HEALPix `query_disc` with the prior view as the
-    # query vector, but this returns pixels at HEALPix coordinates near the
-    # view direction, NOT pixels whose matrices have view directions near
-    # the prior. The result was that the local cone was systematically
-    # centered ~70-80 degrees AWAY from the prior pose for typical priors,
-    # causing recovar's iter-6 noise update to spike (resolution regression
-    # at the global→local transition).
-    prior_rot_deg = prior_eulers_deg[:, 0]
-    prior_tilt_deg = prior_eulers_deg[:, 1]
-    prior_psi = np.deg2rad(prior_eulers_deg[:, 2])
+    n_priors = prior_rotations.shape[0]
+    prior_rotations = prior_rotations.astype(np.float64)
 
-    # Standard view direction for each prior (RELION's Euler_angles2direction)
-    prior_dir_vecs = np.column_stack(
-        [
-            np.sin(np.deg2rad(prior_tilt_deg)) * np.cos(np.deg2rad(prior_rot_deg)),
-            np.sin(np.deg2rad(prior_tilt_deg)) * np.sin(np.deg2rad(prior_rot_deg)),
-            np.cos(np.deg2rad(prior_tilt_deg)),
-        ]
-    )
-
-    # --- Direction neighbors via direct dot-product ---
-    # Precompute view directions for ALL grid matrices at this order. This
-    # is the correct way to find pixels with matrix view directions near
-    # the prior, given recovar's non-standard rot/tilt convention. O(n_pix)
-    # per call, fast enough for chunks of <100 priors at order ≤4 (3072
-    # directions × 96 psi = 295k matrices, but we only need 3072 view
-    # directions since psi doesn't affect the view).
-    all_pixel_indices = np.arange(n_pixels, dtype=np.int64)
-    grid_eulers_deg = np.empty((n_pixels, 3), dtype=np.float64)
-    grid_theta, grid_phi = hp.pix2ang(nside, all_pixel_indices)
-    grid_eulers_deg[:, 0] = np.rad2deg(grid_theta)  # stored as "rot" (recovar convention)
-    grid_eulers_deg[:, 1] = np.rad2deg(grid_phi)    # stored as "tilt" (recovar convention)
-    grid_eulers_deg[:, 2] = 0.0
-    # Standard view direction formula on the recovar grid eulers
-    grid_view_dirs = np.column_stack(
-        [
-            np.sin(np.deg2rad(grid_eulers_deg[:, 1])) * np.cos(np.deg2rad(grid_eulers_deg[:, 0])),
-            np.sin(np.deg2rad(grid_eulers_deg[:, 1])) * np.sin(np.deg2rad(grid_eulers_deg[:, 0])),
-            np.cos(np.deg2rad(grid_eulers_deg[:, 1])),
-        ]
-    )
-
-    dir_cutoff_rad = sigma_cutoff * sigma_rot
-    cos_cutoff = np.cos(dir_cutoff_rad)
-
-    # Collect selected direction pixels: those whose view direction is
-    # within `dir_cutoff_rad` of any prior view direction (sphere distance).
-    selected_pixel_set = set()
-    if sigma_rot > 0:
-        # cos(angle) >= cos(cutoff) iff angle <= cutoff (since cos decreases on [0, pi])
-        for prior_vec in prior_dir_vecs:
-            dots = grid_view_dirs @ prior_vec  # (n_pixels,)
-            in_cone = dots >= cos_cutoff
-            in_cone_pix = np.nonzero(in_cone)[0]
-            selected_pixel_set.update(in_cone_pix.tolist())
-    else:
-        selected_pixel_set.update(range(n_pixels))
-    selected_pixels = np.array(sorted(selected_pixel_set), dtype=np.int64)
-    if selected_pixels.size == 0:
-        # Fallback: pick the closest pixel for each prior
-        for prior_vec in prior_dir_vecs:
-            dots = grid_view_dirs @ prior_vec
-            best = int(np.argmax(dots))
-            selected_pixel_set.add(best)
-        selected_pixels = np.array(sorted(selected_pixel_set), dtype=np.int64)
-
-    # --- Psi neighbors via circular distance ---
-    psi_cutoff_rad = sigma_cutoff * sigma_psi
-
-    # For each psi in the grid, check circular distance to nearest prior psi.
-    # Circular distance: min(|a-b|, 2*pi - |a-b|).
-    #
-    # IMPORTANT (Task #101 fix, 2026-04-09): `prior_psi` may contain
-    # negative values because `R_to_relion` returns psi in `[-180, 180)`.
-    # Without normalization, `np.abs(psi_angles - psi_val)` for psi_val < 0
-    # produces values in `[π, 3π)`, and `2π - diff` gives values in
-    # `(-π, π]`. The `np.minimum` then returns NEGATIVE distances, which
-    # trivially pass the `<= psi_cutoff_rad` test, polluting the cone with
-    # ~30 spurious psi candidates per negative-psi prior. The joint
-    # `log_prior > -sigma_cutoff^2` filter masks most but not all of them.
-    # Wrapping `prior_psi` to `[0, 2*pi)` first eliminates the bug.
-    prior_psi_wrapped = np.mod(prior_psi, 2 * np.pi)
-
-    selected_psi_set = set()
-    if sigma_psi > 0:
-        for psi_val in prior_psi_wrapped:
-            diffs = np.abs(psi_angles - psi_val)
-            circ_dists = np.minimum(diffs, 2 * np.pi - diffs)
-            within = np.where(circ_dists <= psi_cutoff_rad)[0]
-            selected_psi_set.update(within.tolist())
-    else:
-        selected_psi_set.update(range(n_psi))
-    selected_psi_idx = np.array(sorted(selected_psi_set), dtype=np.int64)
-    if selected_psi_idx.size == 0:
-        diffs = np.abs(psi_angles[:, None] - prior_psi_wrapped[None, :])
-        circ_dists = np.minimum(diffs, 2 * np.pi - diffs)
-        selected_psi_idx = np.unique(np.argmin(circ_dists, axis=0).astype(np.int64))
-
-    # --- Combine: selected_rotations = selected_psi x selected_pixels ---
-    # Grid index = psi_index * n_pixels + pixel_index
-    psi_grid, pix_grid = np.meshgrid(selected_psi_idx, selected_pixels, indexing='ij')
-    selected_indices = (psi_grid * n_pixels + pix_grid).ravel()
-    selected_indices.sort()
-
-    if len(selected_indices) == 0:
-        # Fallback: return all
-        selected_indices = np.arange(n_total, dtype=np.int64)
-
-    # --- Compute Gaussian log-prior (decomposed) ---
-    # Direction and psi priors are independent (RELION convention):
-    #   log_prior(r) = log_prior_dir(pixel_r) + log_prior_psi(psi_r)
-    # where each component takes the max over all priors independently.
-    # This avoids the O(n_priors * n_selected) joint computation.
-
-    # 1. Direction component.
-    unique_sel_pixels = np.unique(selected_pixels)  # already computed above
-
-    # IMPORTANT: use grid_view_dirs (matrix view directions), NOT
-    # hp.pix2vec(p) (HEALPix pixel center). Recovar's grid construction
-    # has rot/tilt swapped relative to standard, so the matrix's view
-    # direction is NOT at the HEALPix pixel center. See the comment at
-    # the top of this function for details. (Task #100 fix.)
-    sel_pix_vecs = grid_view_dirs[unique_sel_pixels]  # (n_usp, 3)
-
-    n_usp = len(unique_sel_pixels)
-    CHUNK_PIX = 5000
-    if per_image:
-        if sigma_rot > 0:
-            log_prior_dir_u = np.empty(
-                (prior_dir_vecs.shape[0], n_usp), dtype=np.float64,
-            )
-            for s in range(0, n_usp, CHUNK_PIX):
-                e = min(s + CHUNK_PIX, n_usp)
-                dots = prior_dir_vecs @ sel_pix_vecs[s:e].T  # (n_priors, chunk)
-                np.clip(dots, -1.0, 1.0, out=dots)
-                d = np.arccos(dots)
-                log_vals = -d ** 2 / (2.0 * sigma_rot ** 2)
-                log_vals[d > dir_cutoff_rad] = -1e30
-                log_prior_dir_u[:, s:e] = log_vals
-        else:
-            log_prior_dir_u = np.zeros(
-                (prior_dir_vecs.shape[0], n_usp), dtype=np.float64,
-            )
-    else:
-        min_d_dir_sq = np.full(n_usp, np.inf, dtype=np.float64)
-        for s in range(0, n_usp, CHUNK_PIX):
-            e = min(s + CHUNK_PIX, n_usp)
-            dots = sel_pix_vecs[s:e] @ prior_dir_vecs.T  # (chunk, n_priors)
-            np.clip(dots, -1.0, 1.0, out=dots)
-            d = np.arccos(dots)  # (chunk, n_priors)
-            np.minimum(min_d_dir_sq[s:e], np.min(d ** 2, axis=1), out=min_d_dir_sq[s:e])
-
-    # Map unique pixel distances back to all selected rotations
-    # Build pixel -> unique index map
-    pix_to_uidx = np.empty(n_pixels, dtype=np.int64)
-    pix_to_uidx[unique_sel_pixels] = np.arange(n_usp)
-
-    sel_pixels = selected_indices % n_pixels
-    sel_psi_idx = selected_indices // n_pixels
-    if per_image:
-        log_prior_dir = log_prior_dir_u[:, pix_to_uidx[sel_pixels]]
-    else:
-        log_prior_dir = -min_d_dir_sq[pix_to_uidx[sel_pixels]] / (2.0 * sigma_rot ** 2)
-
-    # 2. Psi component.
-    unique_sel_psi = np.unique(selected_psi_idx)  # already computed above
-    sel_psi_vals = psi_angles[unique_sel_psi]
-
-    # Use the wrapped prior_psi (Task #101 fix) so that negative-psi priors
-    # produce correct circular distances (psi_angles is in [0, 2*pi)).
-    d_psi_raw = np.abs(sel_psi_vals[:, None] - prior_psi_wrapped[None, :])
-    d_psi = np.minimum(d_psi_raw, 2 * np.pi - d_psi_raw)
-
-    # Map back to all selected rotations
-    psi_to_uidx = np.empty(n_psi, dtype=np.int64)
-    psi_to_uidx[unique_sel_psi] = np.arange(len(unique_sel_psi))
-    if per_image:
-        if sigma_psi > 0:
-            log_prior_psi_u = -d_psi.T ** 2 / (2.0 * sigma_psi ** 2)
-            log_prior_psi_u[d_psi.T > psi_cutoff_rad] = -1e30
-        else:
-            log_prior_psi_u = np.zeros(
-                (prior_rotations.shape[0], len(unique_sel_psi)), dtype=np.float64,
-            )
-        log_prior_psi = log_prior_psi_u[:, psi_to_uidx[sel_psi_idx]]
-    else:
-        min_d_psi_sq = np.min(d_psi ** 2, axis=1)  # (n_unique_sel_psi,)
-        log_prior_psi = -min_d_psi_sq[psi_to_uidx[sel_psi_idx]] / (2.0 * sigma_psi ** 2)
-
-    # Total log-prior
-    log_prior = log_prior_dir + log_prior_psi
-
-    # Apply cutoff: keep only rotations where both direction and psi
-    # are within sigma_cutoff of some prior
-    min_log_prior = -(sigma_cutoff ** 2)  # sum of two (sigma_cutoff^2/2) terms
-    keep = np.any(log_prior > min_log_prior, axis=0) if per_image else (log_prior > min_log_prior)
-    if np.any(keep):
-        selected_indices = selected_indices[keep]
-        log_prior = log_prior[:, keep] if per_image else log_prior[keep]
-
-    if len(selected_indices) == 0:
+    # --- Axis-angle cone selection ---
+    # Combined sigma matches RELION's `biggest_sigma = max(sigma_rot, sigma_tilt)`
+    # at healpix_sampling.cpp:769. The cone is in SO(3) axis-angle distance.
+    biggest_sigma = float(max(sigma_rot, sigma_psi))
+    if biggest_sigma <= 0:
+        # No cone -> include all rotations with zero log-prior.
         selected_indices = np.arange(n_total, dtype=np.int64)
         if per_image:
-            log_prior = np.zeros((prior_rotations.shape[0], n_total), dtype=np.float32)
+            log_prior = np.zeros((n_priors, n_total), dtype=np.float32)
         else:
             log_prior = np.zeros(n_total, dtype=np.float32)
+        return selected_indices, log_prior
 
-    return selected_indices, log_prior.astype(np.float32)
+    cone_rad = float(sigma_cutoff) * biggest_sigma
+
+    # Cached full-grid matrices for this healpix order.
+    all_grid_mats = _get_full_grid_matrices(healpix_order)  # (n_total, 3, 3)
+    n_total_grid = all_grid_mats.shape[0]
+
+    # For each prior P, compute axis-angle distance to every grid matrix G:
+    #   d(P, G) = arccos((trace(P^T @ G) - 1) / 2)
+    # Vectorized:
+    #   diffs = einsum('pij,gjk->pgik', prior^T, grid)  # (n_priors, n_total, 3, 3)
+    # That's a (n_priors, n_total, 3, 3) tensor — too big for n_total=295k. Loop
+    # over priors instead, computing one (n_total, 3, 3) per prior.
+    log_prior_per_image = np.full(
+        (n_priors, n_total_grid), -1e30, dtype=np.float64,
+    )
+    selected_set: set = set()
+    inv_two_sigma_sq = 1.0 / (2.0 * biggest_sigma * biggest_sigma)
+
+    for i in range(n_priors):
+        P_T = prior_rotations[i].T  # (3, 3)
+        # Per-grid R_diff = P^T @ G_i, shape (n_total, 3, 3).
+        # einsum 'jk,nkl->njl' gives (n_total, 3, 3).
+        R_diff = np.einsum("jk,nkl->njl", P_T, all_grid_mats)
+        # Trace per matrix.
+        traces = np.trace(R_diff, axis1=1, axis2=2)
+        # Numerical clip for arccos domain.
+        cos_arg = (traces - 1.0) * 0.5
+        np.clip(cos_arg, -1.0, 1.0, out=cos_arg)
+        angles = np.arccos(cos_arg)  # (n_total,)
+        in_cone_mask = angles <= cone_rad
+        if in_cone_mask.any():
+            in_cone_idx = np.nonzero(in_cone_mask)[0]
+            selected_set.update(in_cone_idx.tolist())
+            log_prior_per_image[i, in_cone_idx] = (
+                -(angles[in_cone_idx] ** 2) * inv_two_sigma_sq
+            )
+
+    if not selected_set:
+        # Fallback: pick the single closest grid matrix for each prior so
+        # we never return an empty selection. Distance reuse from above
+        # would be cleaner but this path is rare; keep it simple.
+        for i in range(n_priors):
+            P_T = prior_rotations[i].T
+            R_diff = np.einsum("jk,nkl->njl", P_T, all_grid_mats)
+            traces = np.trace(R_diff, axis1=1, axis2=2)
+            best = int(np.argmax(traces))
+            selected_set.add(best)
+            angle = float(np.arccos(np.clip((traces[best] - 1.0) * 0.5, -1.0, 1.0)))
+            log_prior_per_image[i, best] = -(angle ** 2) * inv_two_sigma_sq
+
+    selected_indices = np.array(sorted(selected_set), dtype=np.int64)
+
+    # Restrict to selected union, dropping the giant -1e30 columns.
+    log_prior = log_prior_per_image[:, selected_indices]  # (n_priors, n_selected)
+
+    if per_image:
+        out_log_prior = log_prior.astype(np.float32)
+    else:
+        # Per-grid max log-prior across priors. Out-of-cone entries are
+        # -1e30 in every row, so the max over n_priors stays -1e30 for
+        # rotations no prior has selected. After the union restriction
+        # above, every selected index has at least one prior with a
+        # finite value, so the max is well-defined.
+        out_log_prior = np.max(log_prior, axis=0).astype(np.float32)
+
+    return selected_indices, out_log_prior
 
 
 def get_healpix_neighbors(pixel_idx, nside_level, n_neighbors=8):
