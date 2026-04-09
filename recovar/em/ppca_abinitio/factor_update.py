@@ -258,3 +258,151 @@ def update_factor_one_outer_step(
         s=init.s,  # strictly frozen per Q2
         volume_shape=init.volume_shape,
     )
+
+
+# ---------------------------------------------------------------------------
+# Stage 1D — full soft M-step (per spec Section 11.6)
+# ---------------------------------------------------------------------------
+
+
+def update_factor_full_ecm(
+    config,
+    init: PPCAInit,
+    batch_full,
+    rotations,
+    translations,
+    ctf_params,
+    noise_variance_full,
+    *,
+    max_inner_steps: int = 200,
+    lr: float = 1e-2,
+    grad_norm_tol: float = 1e-4,
+    k_max: float | None = None,
+    ridge_lambda: float = 1e-4,
+    line_search: bool = True,
+    line_search_shrink: float = 0.5,
+    line_search_min_lr_frac: float = 1e-4,
+):
+    """Stage 1D / "full soft M-step" factor update.
+
+    Differs from `update_factor_one_outer_step` in two ways:
+
+    1. **Inner-loop convergence**: instead of taking a fixed K=3
+       gradient steps, we run the inner loop until the gradient norm
+       drops below `grad_norm_tol` (or `max_inner_steps` is reached).
+       At convergence, the result is the *local minimum of the
+       expected complete-data NLL with respect to U*, which is what
+       the proper soft M-step computes (modulo a closed-form solve
+       vs. an iterative one).
+
+    2. **Backtracking line search**: each step shrinks the learning
+       rate until the loss actually decreases. This makes the
+       inner loop monotone in the loss, which is what spec
+       Section 11.5 criterion 5 requires for the GEM objective.
+
+    The closed-form per-voxel ECM solve is more efficient at scale
+    but requires per-voxel q×q linear algebra over the rotation set;
+    the iterative version below produces the same fixed point at
+    much smaller code volume and is what v0 ships.
+
+    Returns
+    -------
+    out : PPCAInit
+        Updated factor with mu and s preserved.
+    info : dict
+        `n_inner_steps`, `final_grad_norm`, `final_loss`, and
+        `converged` (True if grad norm dropped below tolerance).
+    """
+    image_shape = config.image_shape
+    volume_shape = config.volume_shape
+    weights_half_image = make_half_image_weights(image_shape)
+    weights_half_volume = make_half_volume_weights(volume_shape)
+
+    # E-step snapshot
+    mean_proj_half = _slice_mu_half(init.mu, rotations, image_shape, volume_shape).astype(jnp.complex128)
+    u_proj_half = _slice_U_half(init.U, rotations, image_shape, volume_shape).astype(jnp.complex128)
+    shifted_half, ctf2_over_nv_half, _ctf_half = _preprocess_batch_to_half(
+        config, batch_full, translations, ctf_params, noise_variance_full
+    )
+    stats = score_from_half_image_projections(
+        mean_proj_half,
+        u_proj_half,
+        init.s,
+        shifted_half,
+        ctf2_over_nv_half,
+        weights_half_image,
+    )
+
+    loss_fn = _build_loss_closure(
+        mu_half=init.mu,
+        s=init.s,
+        rotations=rotations,
+        image_shape=image_shape,
+        volume_shape=volume_shape,
+        shifted_half=shifted_half,
+        ctf2_over_nv_half=ctf2_over_nv_half,
+        weights_half=weights_half_image,
+        log_resp=stats.log_resp,
+        post_mean=stats.post_mean,
+        post_Hinv=stats.post_Hinv,
+        ridge_lambda=ridge_lambda,
+    )
+    grad_fn = jax.value_and_grad(loss_fn)
+
+    U = init.U
+    cur_lr = float(lr)
+    cur_loss, _ = grad_fn(U)
+    cur_loss = float(cur_loss)
+    initial_loss = cur_loss
+    final_grad_norm = float("inf")
+    converged = False
+    step_idx = 0
+
+    for step_idx in range(1, max_inner_steps + 1):
+        cur_loss, grad_U = grad_fn(U)
+        cur_loss = float(cur_loss)
+        gn = float(jnp.sqrt(jnp.sum(jnp.abs(grad_U) ** 2)).real)
+        final_grad_norm = gn
+        if gn < grad_norm_tol:
+            converged = True
+            break
+
+        if line_search:
+            trial_lr = cur_lr
+            min_trial_lr = float(line_search_min_lr_frac * lr)
+            while trial_lr > min_trial_lr:
+                U_trial = U - trial_lr * grad_U
+                trial_loss = float(loss_fn(U_trial))
+                if trial_loss < cur_loss:
+                    U = U_trial
+                    cur_loss = trial_loss
+                    cur_lr = trial_lr
+                    break
+                trial_lr *= line_search_shrink
+            else:
+                # No step decreases the loss → declare convergence
+                converged = True
+                break
+        else:
+            U = U - cur_lr * grad_U
+
+    # Final gauge fix
+    if k_max is None:
+        k_max = float(volume_shape[0]) / 4.0
+    U_new = _project_factor(U, volume_shape, k_max, weights_half_volume)
+
+    out = PPCAInit(
+        mu=init.mu,
+        U=U_new,
+        s=init.s,
+        volume_shape=init.volume_shape,
+    )
+    info = {
+        "n_inner_steps": int(step_idx),
+        "final_grad_norm": float(final_grad_norm),
+        "initial_loss": float(initial_loss),
+        "final_loss": float(cur_loss),
+        "loss_decrease": float(initial_loss - cur_loss),
+        "converged": bool(converged),
+    }
+    return out, info

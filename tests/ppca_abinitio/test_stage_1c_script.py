@@ -74,10 +74,15 @@ def test_stage_1c_script_runs_and_passes_relaxed(tmp_path):
     assert relaxed["family_C_ok"] is True
     assert relaxed["family_D_ok"] is True
 
-    # Strict check is reported but not gating
+    # Strict check is reported but not gating. After the residual-PCA
+    # baseline integration, the strict check actually passes at toy
+    # size — we just verify the structure of the report rather than
+    # gating on it.
     strict = payload["strict_check_for_reference"]
     assert strict["criterion"] == "strict"
-    assert strict["heterogeneous_em_state_baseline_check"] == "unimplemented_in_v0"
+    assert "family_B_beats_baseline" in strict
+    assert "family_A_no_overfit_on_null" in strict
+    assert "baseline_implementation_note" in strict
 
 
 def test_stage_1c_relaxed_pure_logic():
@@ -151,16 +156,74 @@ def test_stage_1c_relaxed_pure_logic():
     assert ec["passed"] is False
 
 
-def test_stage_1c_strict_is_currently_not_passable_without_baseline():
-    """The strict check is not passable until HeterogeneousEMState
-    baseline + family C/D specific clauses are wired up."""
-    records = [
-        {
-            "family": "B",
-            "seed": 0,
-            "proj_improvement": 0.5,
-        }
-    ]
+def test_stage_1c_strict_with_baseline_records():
+    """Strict check on hand-built records that satisfy all gates."""
+    records = (
+        [
+            {
+                "family": "B",
+                "seed": s,
+                "init_proj_err": 0.6,
+                "final_proj_err": 0.4,
+                "proj_improvement": 0.2,
+                "baseline_proj_err": 1.5,
+                "ppca_minus_baseline_proj_err": 0.4 - 1.5,
+            }
+            for s in (0, 1, 2)
+        ]
+        + [
+            {
+                "family": "A",
+                "seed": s,
+                "init_proj_err": 0.6,
+                "final_proj_err": 0.55,
+                "proj_improvement": 0.05,
+                "baseline_proj_err": 1.8,
+                "ppca_minus_baseline_proj_err": -1.25,
+            }
+            for s in (0, 1, 2)
+        ]
+        + [
+            {
+                "family": "C",
+                "seed": s,
+                "init_proj_err": 0.6,
+                "final_proj_err": 0.45,
+                "proj_improvement": 0.15,
+                "baseline_proj_err": 1.7,
+                "ppca_minus_baseline_proj_err": -1.25,
+            }
+            for s in (0, 1, 2)
+        ]
+        + [
+            {
+                "family": "D",
+                "seed": s,
+                "init_proj_err": 0.6,
+                "final_proj_err": 0.5,
+                "proj_improvement": 0.1,
+                "baseline_proj_err": 1.7,
+                "ppca_minus_baseline_proj_err": -1.2,
+            }
+            for s in (0, 1, 2)
+        ]
+    )
     ec = evaluate_stage_1c_strict(records)
+    assert ec["passed"] is True
+    assert ec["family_B_proj_improves"] is True
+    assert ec["family_B_beats_baseline"] is True
+    assert ec["family_A_no_overfit_on_null"] is True
+    assert ec["family_C_subspace_close_to_B"] is True
+    assert ec["family_D_subspace_close_to_B"] is True
+
+    # Family A overfits → strict fails
+    overfit_a = [{**r, "proj_improvement": 0.5} if r["family"] == "A" else r for r in records]
+    ec = evaluate_stage_1c_strict(overfit_a)
     assert ec["passed"] is False
-    assert ec["heterogeneous_em_state_baseline_check"] == "unimplemented_in_v0"
+    assert ec["family_A_no_overfit_on_null"] is False
+
+    # Baseline beats PPCA on family B → strict fails
+    bad_b = [{**r, "ppca_minus_baseline_proj_err": 0.5} if r["family"] == "B" else r for r in records]
+    ec = evaluate_stage_1c_strict(bad_b)
+    assert ec["passed"] is False
+    assert ec["family_B_beats_baseline"] is False
