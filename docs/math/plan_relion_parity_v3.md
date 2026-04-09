@@ -978,13 +978,53 @@ V3 (regression test) follows V2.
 6. **Always normalize the simulator output** with `--relion-normalize` for the parity benchmark. This makes RELION's iter-1 Bayesian E-step work without `--firstiter_cc` (so iter-1 Pmax is comparable across the two pipelines).
 7. **Every commit's message should cite the file:line in RELION source it's matching**. The audit reports include exact citations.
 
+## ⚠️ Open parity bug (2026-04-09): noise wsum jumps 30%+ at coarse→local transition
+
+Empirical evidence from `recovar_5k_h3_long` (15 iters, h3→h4 transition at iter 6):
+
+| iter | local | shell-5 sigma² (recovar) | shell-5 sigma² (RELION) | recovar resol Å | recovar Pmax |
+|---:|:---:|---:|---:|---:|---:|
+| 4 | false | 6.817e3 | 2.502e-5 | 22.67 | 0.985 |
+| 5 | false | 6.820e3 | 2.509e-5 | 22.67 | 0.995 |
+| 6 | **true** | **8.905e3 (+31%)** | 2.483e-5 (-1%) | **28.63 (regress)** | 0.844 |
+| 7 | true | 8.134e3 (+19%) | 2.484e-5 | 24.73 (recovering) | 0.803 |
+
+(RELION values from `data_noise1_5k_normalized/relion_ref_os0/run_it00{4-7}_half1_model.star`.)
+
+**RELION's sigma2_noise is essentially constant** across the local-search transition (variations
+<1%). **Recovar's sigma2_noise jumps 30%+** at iter 6 (first local-search iter), which directly drives
+the resolution regression (resol shell 24→19, Å 22.67→28.63). The jump is non-uniform: shell 0 (DC)
+is unchanged (7.6e3 → 7.6e3), but shells 1-9 jump 20-42%.
+
+This is NOT "diffuse posterior averaging" — Pmax dropping from 0.99 to 0.84 cannot account for a
+30% wsum jump. RELION shows the same Pmax drop empirically without any corresponding noise jump.
+
+Hypotheses (priority order):
+1. **Chunk-union per-image log-prior**: 32k rotations per chunk with `-1e30` clamping for invalid
+   pairs may have a numerical / GEMM cancellation issue at low shells but not at DC.
+2. **Order-3 vs order-4 projection difference**: iter 5 projects on order-3 grid, iter 6 on order-4
+   grid. Pixel centers differ; sample slightly different volume points. Should be a small effect.
+3. **Posterior summation across chunks**: The per-chunk noise wsum may have a floating-point
+   summation issue when many invalid `(image, rot)` pairs sum near zero.
+4. **Per-image translation log-prior interaction with the local rotation log-prior**: applied as
+   factored `log_prior = log_prior_dir + log_prior_psi + log_prior_trans`. Verify magnitudes don't
+   drown out the chi² score variation.
+
+Diagnostic plan:
+- Add logging in `_compute_noise_block`: print `A2.sum()`, `XA.sum()`, `img_power.sum()` per chunk.
+- Run a 2-iter test (iter 5 = global, iter 6 = local) and compare numbers between iters.
+- Verify by replaying iter-5 best rotations through `run_em_v2` with no local prior — should
+  reproduce iter 5's noise.
+- Compare chunk-union vs per-image local search (no union) to isolate the chunk-union path.
+
+**Tracked as Task #100. DO NOT proceed with further parity items until this is understood — the noise
+update drives `data_vs_prior` and thus the entire resolution trajectory at iter 6+.**
+
 ## What to do RIGHT NOW
 
-1. **Wait for the recovar 5k normalized run with low_resol_join_halves
-   to finish** (in flight, ETA ~10 min). Verify per-iter diff narrows.
-2. **Start Phase A1 (data_vs_prior wire-up)**. Helpers exist; just
-   plumbing.
-3. **Don't touch Phase B/C/D until A is fully done and verified**.
+1. **Investigate Task #100** (noise wsum jump at coarse→local transition). This is THE blocker for
+   parity beyond iter 5. Until fixed, downstream parity work is misleading.
+2. After #100, resume Phase B/C work.
 
 ## References
 
