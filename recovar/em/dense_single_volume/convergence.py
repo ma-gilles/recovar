@@ -537,9 +537,23 @@ def check_convergence(state: RefinementState) -> bool:
 def should_refine_angular_sampling(state: RefinementState) -> bool:
     """Check whether angular sampling should be refined (HEALPix order incremented).
 
+    Mirrors RELION ``MlOptimiser::updateAngularSampling`` at
+    ``ml_optimiser.cpp:9772-9790``:
+
+    .. code-block:: cpp
+
+        do_proceed_resolution = nr_iter_wo_resol_gain >= MAX_NR_ITER_WO_RESOL_GAIN;
+        do_proceed_hidden_variables = nr_iter_wo_large_hidden_variable_changes
+                                      >= MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES;
+        if (do_proceed_resolution && do_proceed_hidden_variables) { bump }
+
     Refinement triggers when:
     1. Resolution stalled for >= MAX_NR_ITER_WO_RESOL_GAIN iterations
-    2. Assignments stable for >= MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES iterations
+    2. The RELION-exact ``nr_iter_wo_large_hidden_variable_changes`` counter
+       (B3+B4) >= MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES.  When that
+       counter has not been populated yet (very early iterations or callers
+       that don't pass rotation matrices to ``update_refinement_state``),
+       fall back to the legacy ``nr_iter_wo_assignment_changes``.
     3. Current angular step is NOT already finer than 75% of acc_rot
 
     Parameters
@@ -556,17 +570,31 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
     if state.has_fine_enough_angular_sampling:
         return False
 
-    # Need resolution stalls (required) and either assignment stalls
-    # OR extended resolution stalls (>= 5 iters).  The extended check
-    # handles adaptive oversampling where assignments churn due to
-    # the changing oversampled grid but orientations are actually stable.
+    # Resolution stalls are required.  RELION uses the strict
+    # `nr_iter_wo_resol_gain >= MAX_NR_ITER_WO_RESOL_GAIN` check; we keep
+    # the same threshold (==1).
     if state.nr_iter_wo_resol_gain < MAX_NR_ITER_WO_RESOL_GAIN:
         return False
 
-    EXTENDED_RESOL_STALL = 5
-    if (state.nr_iter_wo_assignment_changes < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
-            and state.nr_iter_wo_resol_gain < EXTENDED_RESOL_STALL):
-        return False
+    # Hidden-variable stalls: prefer the RELION-exact B3+B4 counter
+    # (`nr_iter_wo_large_hidden_variable_changes`) when available.  Fall
+    # back to the legacy `nr_iter_wo_assignment_changes` plus the extended
+    # resol-stall escape hatch only when B3+B4 hasn't been populated.
+    relion_changes_seen = (
+        state.smallest_changes_optimal_orientations
+        < SMALLEST_CHANGES_INIT_ORIENTATIONS
+    )
+    if relion_changes_seen:
+        if (
+            state.nr_iter_wo_large_hidden_variable_changes
+            < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
+        ):
+            return False
+    else:
+        EXTENDED_RESOL_STALL = 5
+        if (state.nr_iter_wo_assignment_changes < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
+                and state.nr_iter_wo_resol_gain < EXTENDED_RESOL_STALL):
+            return False
 
     # Don't refine beyond 75% of estimated angular accuracy
     if state.acc_rot < float("inf"):
