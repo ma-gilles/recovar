@@ -1175,49 +1175,37 @@ def EM_step_half(
     expected_zs_var = np.var(expected_zs, axis=0)
 
     # ------------------------------------------------------------------
-    # M-step solve
-    #
-    # The M-step is unconditionally PCG (joint q×q masked least-squares,
-    # half-volume preconditioner, optional warmstart) when a non-trivial
-    # support mask is provided. With a trivial mask the per-voxel diagonal
-    # solve is exact, so we fall back to that — strictly an optimisation.
+    # M-step solve: unconditionally PCG (joint q×q masked least-squares,
+    # half-volume preconditioner, optional warmstart). With a trivial mask
+    # PCG converges in one iteration to the same answer as the per-voxel
+    # diagonal solve, so we don't bother with a fast path.
     # ------------------------------------------------------------------
+    from recovar.reconstruction.pcg_mean import pcg_mstep
+
     W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
     reg_half = 1 / (W_prior_half + 1e-16)
-    mask_is_trivial = volume_mask is None or np.all(np.asarray(volume_mask) == 1)
+    mask = jnp.array(volume_mask).reshape(volume_shape) if volume_mask is not None \
+        else jnp.ones(volume_shape, dtype=jnp.float32)
 
-    if not mask_is_trivial:
-        from recovar.reconstruction.pcg_mean import pcg_mstep
+    W0 = None
+    if W_prev_real is not None:
+        W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))
 
-        W0 = None
-        if W_prev_real is not None:
-            W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))
-
-        W_real, _res_mstep = pcg_mstep(
-            lhs_summed,           # (half_vol, tri_sz) upper-tri packed
-            rhs_summed,           # (half_vol, q)
-            reg_half,             # (half_vol, q)
-            jnp.array(volume_mask).reshape(volume_shape),
-            volume_shape,
-            W0_real=W0,
-            maxiter=pcg_maxiter,
-            tol=1e-4,
-            precondition=True,
-            soft_penalty_lam=soft_penalty_lam,
-            unpack_fn=unpack_tri_to_full,
-        )
-        # (q, D, D, D) real → (half_vol, q) half-Fourier
-        W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T
-    else:
-        # Trivial mask: per-voxel diagonal solve is exact and ~free.
-        _SOLVE_CHUNK = 200_000
-        W_half_parts = []
-        for i0 in range(0, half_volume_size, _SOLVE_CHUNK):
-            i1 = min(i0 + _SOLVE_CHUNK, half_volume_size)
-            lhs_chunk = unpack_tri_to_full(lhs_summed[i0:i1], basis_size)
-            lhs_chunk = lhs_chunk + jax.vmap(jnp.diag)(reg_half[i0:i1])
-            W_half_parts.append(jnp.linalg.solve(lhs_chunk, rhs_summed[i0:i1, :, None])[..., 0])
-        W = jnp.concatenate(W_half_parts, axis=0)  # (half_vol, q)
+    W_real, _res_mstep = pcg_mstep(
+        lhs_summed,           # (half_vol, tri_sz) upper-tri packed
+        rhs_summed,           # (half_vol, q)
+        reg_half,             # (half_vol, q)
+        mask,
+        volume_shape,
+        W0_real=W0,
+        maxiter=pcg_maxiter,
+        tol=1e-4,
+        precondition=True,
+        soft_penalty_lam=soft_penalty_lam,
+        unpack_fn=unpack_tri_to_full,
+    )
+    # (q, D, D, D) real → (half_vol, q) half-Fourier
+    W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T
 
     if jnp.any(jnp.isnan(W)):
         logger.error("EM_step_half: NaN in W after M-step")
