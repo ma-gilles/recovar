@@ -287,20 +287,190 @@ def test_seed_reproducibility():
     np.testing.assert_array_equal(ds1.alpha_true, ds2.alpha_true)
 
 
-def test_unimplemented_families_raise():
+def test_only_family_E_is_unimplemented():
     grid = _make_grid()
-    for family in (
+    with pytest.raises(NotImplementedError):
+        make_synthetic_fixed_grid_dataset(
+            SyntheticFamily.CTF_ZERO_HET,
+            volume_shape=VOLUME_SHAPE,
+            image_shape=IMAGE_SHAPE,
+            grid=grid,
+            q=2,
+            n_images_train=2,
+            n_images_val=1,
+        )
+
+
+# ---------------------------------------------------------------------------
+# Family C — misspecified pose (off-grid jitter)
+# ---------------------------------------------------------------------------
+
+
+def test_family_C_runs_and_records_grid_indices():
+    grid = _make_grid()
+    ds = make_synthetic_fixed_grid_dataset(
         SyntheticFamily.MISSPECIFIED_POSE,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=8,
+        n_images_val=4,
+        sigma_real=0.3,
+        seed=0,
+    )
+    assert ds.family is SyntheticFamily.MISSPECIFIED_POSE
+    assert ds.batch_full.shape == (12, IMAGE_SHAPE[0] * IMAGE_SHAPE[1])
+    # The recorded r_true_idx / t_true_idx are the **nearest** grid pose,
+    # not the exact off-grid pose.
+    assert ds.r_true_idx.shape == (12,)
+    assert int(ds.r_true_idx.max()) < ds.n_rot
+    assert ds.t_true_idx.shape == (12,)
+
+
+def test_family_C_batch_differs_from_family_B():
+    """Same seed, same q, family B vs family C should produce
+    different batches because C jitters poses."""
+    grid = _make_grid()
+    kwargs = dict(
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=4,
+        n_images_val=2,
+        sigma_real=0.0,  # zero noise so the difference is purely from jitter
+        seed=0,
+    )
+    ds_b = make_synthetic_fixed_grid_dataset(SyntheticFamily.MATCHED_GRID_HET, **kwargs)
+    ds_c = make_synthetic_fixed_grid_dataset(SyntheticFamily.MISSPECIFIED_POSE, **kwargs)
+    # The batches must differ
+    assert not np.allclose(np.asarray(ds_b.batch_full), np.asarray(ds_c.batch_full))
+
+
+def test_family_C_pose_jitter_range():
+    """Custom pose_jitter_deg_range. Verifies the parameter is plumbed."""
+    grid = _make_grid()
+    # Tiny jitter — batches should be CLOSE to family B
+    ds_tiny = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.MISSPECIFIED_POSE,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=4,
+        n_images_val=2,
+        sigma_real=0.0,
+        pose_jitter_deg_range=(0.01, 0.02),
+        pose_jitter_trans_range=(0.001, 0.002),
+        seed=0,
+    )
+    ds_big = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.MISSPECIFIED_POSE,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=4,
+        n_images_val=2,
+        sigma_real=0.0,
+        pose_jitter_deg_range=(5.0, 10.0),
+        pose_jitter_trans_range=(1.0, 2.0),
+        seed=0,
+    )
+    # Bigger jitter → bigger deviation from the matched-grid version
+    ds_b = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.MATCHED_GRID_HET,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=4,
+        n_images_val=2,
+        sigma_real=0.0,
+        seed=0,
+    )
+    diff_tiny = float(jnp.sum(jnp.abs(ds_tiny.batch_full - ds_b.batch_full) ** 2))
+    diff_big = float(jnp.sum(jnp.abs(ds_big.batch_full - ds_b.batch_full) ** 2))
+    assert diff_big > diff_tiny
+
+
+# ---------------------------------------------------------------------------
+# Family D — per-particle contrast
+# ---------------------------------------------------------------------------
+
+
+def test_family_D_records_contrast_factors():
+    grid = _make_grid()
+    ds = make_synthetic_fixed_grid_dataset(
         SyntheticFamily.PER_PARTICLE_CONTRAST,
-        SyntheticFamily.CTF_ZERO_HET,
-    ):
-        with pytest.raises(NotImplementedError):
-            make_synthetic_fixed_grid_dataset(
-                family,
-                volume_shape=VOLUME_SHAPE,
-                image_shape=IMAGE_SHAPE,
-                grid=grid,
-                q=2,
-                n_images_train=2,
-                n_images_val=1,
-            )
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=16,
+        n_images_val=4,
+        sigma_real=0.3,
+        seed=0,
+    )
+    assert ds.family is SyntheticFamily.PER_PARTICLE_CONTRAST
+    assert ds.contrast_true is not None
+    assert ds.contrast_true.shape == (20,)
+    # Default range is [0.8, 1.2]
+    assert float(ds.contrast_true.min()) >= 0.8 - 1e-9
+    assert float(ds.contrast_true.max()) <= 1.2 + 1e-9
+
+
+def test_family_D_contrast_actually_scales_clean_image():
+    """With sigma=0 and contrast in [2, 2] (so c=2), the image should
+    equal twice the family-B image (modulo float roundoff)."""
+    grid = _make_grid()
+    kwargs = dict(
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=4,
+        n_images_val=2,
+        sigma_real=0.0,
+        seed=0,
+    )
+    ds_b = make_synthetic_fixed_grid_dataset(SyntheticFamily.MATCHED_GRID_HET, **kwargs)
+    ds_d = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.PER_PARTICLE_CONTRAST,
+        contrast_range=(2.0, 2.0),
+        **kwargs,
+    )
+    # Every image in D should equal 2 * the matching image in B
+    np.testing.assert_allclose(
+        np.asarray(ds_d.batch_full),
+        2.0 * np.asarray(ds_b.batch_full),
+        rtol=1e-10,
+        atol=1e-12,
+    )
+
+
+def test_family_AB_contrast_field_is_none():
+    grid = _make_grid()
+    ds_a = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.NULL,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=2,
+        n_images_val=1,
+        seed=0,
+    )
+    ds_b = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.MATCHED_GRID_HET,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=2,
+        n_images_val=1,
+        seed=0,
+    )
+    assert ds_a.contrast_true is None
+    assert ds_b.contrast_true is None

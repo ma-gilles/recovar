@@ -97,6 +97,9 @@ class SyntheticDataset:
     train_idx: np.ndarray
     val_idx: np.ndarray
 
+    # Optional per-image contrast factors. Only set for family D.
+    contrast_true: np.ndarray | None = None
+
     @property
     def n_img(self) -> int:
         return int(self.batch_full.shape[0])
@@ -206,6 +209,25 @@ def _slice_half_volume_through_rotations(half_vol_flat, rotations, image_shape, 
 # ---------------------------------------------------------------------------
 
 
+def _random_small_rotation(rng, angle_min_deg, angle_max_deg):
+    """Random rotation matrix about a uniform-direction axis with
+    angle uniform in `[angle_min_deg, angle_max_deg]`. Used by
+    family C to apply per-image off-grid rotation jitter."""
+    axis = rng.standard_normal(3)
+    axis = axis / np.linalg.norm(axis)
+    angle = float(rng.uniform(angle_min_deg, angle_max_deg)) * np.pi / 180.0
+    K = np.array(
+        [
+            [0.0, -axis[2], axis[1]],
+            [axis[2], 0.0, -axis[0]],
+            [-axis[1], axis[0], 0.0],
+        ],
+        dtype=np.float64,
+    )
+    R = np.eye(3) + np.sin(angle) * K + (1.0 - np.cos(angle)) * (K @ K)
+    return R
+
+
 def make_synthetic_fixed_grid_dataset(
     family: SyntheticFamily,
     *,
@@ -217,33 +239,31 @@ def make_synthetic_fixed_grid_dataset(
     n_images_val: int,
     sigma_real: float = 1.0,
     seed: int = 0,
+    pose_jitter_deg_range: tuple = (1.0, 2.0),
+    pose_jitter_trans_range: tuple = (0.25, 0.5),
+    contrast_range: tuple = (0.8, 1.2),
 ) -> SyntheticDataset:
     """Build a synthetic dataset for one of the v0 families.
 
-    Parameters
-    ----------
-    family : SyntheticFamily
-        A (null) or B (matched-grid heterogeneous). C/D/E raise
-        NotImplementedError until they are added.
-    volume_shape : 3-tuple
-    image_shape : 2-tuple
-    grid : FixedGridSpec
-        The pose / translation grid the kernel will score against.
-        True per-image poses are drawn from this grid for families
-        A and B (matched-grid).
-    q : int
-        Latent dimensionality.
-    n_images_train, n_images_val : int
-        Sizes of the train/validation splits.
-    sigma_real : float
-        Real-space noise standard deviation per pixel. Translated
-        to Fourier-units `noise_variance = sigma_real² · N_full`.
-    seed : int
-        Master RNG seed.
+    Supported families:
+
+    - **A** (NULL) — `s_true = 0`, no heterogeneity.
+    - **B** (MATCHED_GRID_HET) — continuous low-rank heterogeneity,
+      poses drawn from the inference grid.
+    - **C** (MISSPECIFIED_POSE) — same as B, but per-image rotation
+      and translation are perturbed by small off-grid jitters
+      (defaults: rotation 1-2 degrees, translation 0.25-0.5 px).
+      The kernel still scores against the grid, so the true pose
+      is *not* representable. The recorded `r_true_idx` /
+      `t_true_idx` point at the **nearest** grid pose.
+    - **D** (PER_PARTICLE_CONTRAST) — per-image scalar contrast
+      `c_i ∈ contrast_range` multiplies the clean projection
+      before noise. Recorded in `contrast_true`.
+    - **E** (CTF_ZERO_HET) — not implemented in v0.
     """
-    if family not in (SyntheticFamily.NULL, SyntheticFamily.MATCHED_GRID_HET):
+    if family is SyntheticFamily.CTF_ZERO_HET:
         raise NotImplementedError(
-            f"Family {family.value} not yet implemented in v0; only A (NULL) and B (MATCHED_GRID_HET) are supported."
+            f"Family {family.value} (CTF-zero-localized heterogeneity) is not yet implemented in v0."
         )
 
     rng = np.random.default_rng(seed)
@@ -278,7 +298,18 @@ def make_synthetic_fixed_grid_dataset(
     #   y_clean[i] = slice(mu_real + Σ_k alpha[i,k] U_real[k], R_{r_i})
     #              = slice(mu)[r_i] + Σ_k alpha[i,k] · slice(U_k)[r_i]
     # Slice mu and each U through the per-image rotation set.
-    rotations_per_image = grid.rotations[r_true_idx]  # (n_img, 3, 3)
+    rotations_per_image_np = np.asarray(grid.rotations)[r_true_idx]  # (n_img, 3, 3)
+
+    # Family C: jitter rotations off-grid
+    if family is SyntheticFamily.MISSPECIFIED_POSE:
+        jittered = np.empty_like(rotations_per_image_np)
+        for i in range(n_img):
+            R_eps = _random_small_rotation(rng, pose_jitter_deg_range[0], pose_jitter_deg_range[1])
+            jittered[i] = R_eps @ rotations_per_image_np[i]
+        rotations_per_image_np = jittered
+
+    rotations_per_image = jnp.asarray(rotations_per_image_np, dtype=jnp.float64)
+
     mean_proj_full = _slice_half_volume_through_rotations(
         mu_half, rotations_per_image, image_shape, volume_shape
     )  # (n_img, N_full)
@@ -290,12 +321,28 @@ def make_synthetic_fixed_grid_dataset(
     )  # (q, n_img, N_full)
     u_proj_full_per_img = jnp.transpose(u_proj_full, (1, 0, 2))  # (n_img, q, N_full)
 
-    # Linear combination
+    # Linear combination (heterogeneity contribution)
     alpha_jax = jnp.asarray(alpha_true)
     clean_full = mean_proj_full + jnp.einsum("iq,iqn->in", alpha_jax, u_proj_full_per_img)
 
+    # Family D: per-particle contrast multiply (BEFORE translation/noise so the
+    # contrast scales the entire image including the heterogeneity contribution).
+    contrast_true_arr = None
+    if family is SyntheticFamily.PER_PARTICLE_CONTRAST:
+        contrast_true_arr = rng.uniform(low=contrast_range[0], high=contrast_range[1], size=n_img).astype(np.float64)
+        clean_full = clean_full * jnp.asarray(contrast_true_arr)[:, None]
+
     # Apply per-image translation in full-image
-    translations_per_image = grid.translations[t_true_idx]  # (n_img, 2)
+    translations_per_image_np = np.asarray(grid.translations)[t_true_idx].astype(np.float64)
+    if family is SyntheticFamily.MISSPECIFIED_POSE:
+        # Sub-pixel translation jitter — uniform direction, magnitude in
+        # [pose_jitter_trans_range[0], pose_jitter_trans_range[1]].
+        jitter_dir = rng.standard_normal((n_img, 2))
+        jitter_dir = jitter_dir / np.linalg.norm(jitter_dir, axis=1, keepdims=True)
+        jitter_mag = rng.uniform(pose_jitter_trans_range[0], pose_jitter_trans_range[1], size=n_img)
+        translations_per_image_np = translations_per_image_np + jitter_dir * jitter_mag[:, None]
+    translations_per_image = jnp.asarray(translations_per_image_np, dtype=jnp.float64)
+
     # batch_trans_translate_images expects (n_img, n_trans, 2). We have n_trans=1
     # per image (one shift per image). Apply via the same primitive.
     trans_for_shift = translations_per_image[:, None, :]  # (n_img, 1, 2)
@@ -342,4 +389,5 @@ def make_synthetic_fixed_grid_dataset(
         alpha_true=alpha_true,
         train_idx=np.asarray(train_idx),
         val_idx=np.asarray(val_idx),
+        contrast_true=contrast_true_arr,
     )
