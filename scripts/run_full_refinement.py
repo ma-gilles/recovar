@@ -186,7 +186,7 @@ def main():
     )
     parser.add_argument("--init_resolution", type=float, default=30.0, help="Initial resolution (Angstrom)")
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
-    parser.add_argument("--rotation_block_size", type=int, default=5000, help="Rotations per block")
+    parser.add_argument("--rotation_block_size", type=int, default=40000, help="Rotations per block (larger = faster, less Python overhead)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for half-set split")
     parser.add_argument(
         "--relion_half_sets",

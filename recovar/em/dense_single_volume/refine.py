@@ -1252,9 +1252,17 @@ def _refine_relion_mode(
     PADDING_FACTOR = 1
 
     def _safe_batch_sizes(n_rot, n_trans):
-        """Reduce batch sizes for large pose grids to avoid GPU OOM."""
+        """Reduce batch sizes for large pose grids to avoid GPU OOM.
+
+        2026-04-08: bumped budget from 50M to 200M floats. This is the
+        score-tensor size budget; the M-step GEMMs and CTF accumulators
+        allocate ~10x this much in working memory, so 200M maps to ~2 GB
+        peak. Verified to fit on 80 GB A100s for both 64-px tiny (1k
+        particles) and 128-px 5k benchmarks. Larger budgets give faster
+        per-iter times on tiny but OOM on 128-px boxes.
+        """
         # Target the actual score-tensor size: n_img * n_rot_block * n_trans.
-        budget = 50_000_000
+        budget = 200_000_000
         n_trans = max(int(n_trans), 1)
         ibs = min(
             image_batch_size,
