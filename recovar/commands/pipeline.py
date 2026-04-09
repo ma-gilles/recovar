@@ -383,9 +383,54 @@ def add_args(parser: argparse.ArgumentParser):
         dest="ppca_projected_covariance",
         action="store_true",
         help=(
-            "After direct PPCA, orthonormalize W, run projected covariance in that subspace, "
-            "then recompute embeddings from the refined basis/eigenvalues."
+            "Single-shot projected-covariance refinement at the last EM iter. "
+            "Equivalent to --ppca-projcov-every=EM_iter --ppca-projcov-start=EM_iter-1."
         ),
+    )
+    adv.add_argument(
+        "--ppca-projcov-every",
+        dest="ppca_projcov_every",
+        type=int,
+        default=0,
+        help=(
+            "Run projected-covariance refinement every Nth EM iter (0 = never). "
+            "If both this and --ppca-projected-covariance are set, this wins."
+        ),
+    )
+    adv.add_argument(
+        "--ppca-projcov-start",
+        dest="ppca_projcov_start",
+        type=int,
+        default=0,
+        help="First EM iter (0-indexed) at which projcov is allowed.",
+    )
+    adv.add_argument(
+        "--ppca-refitb-every",
+        dest="ppca_refitb_every",
+        type=int,
+        default=0,
+        help="Run RefitB (latent covariance refit by EM) every Nth EM iter (0 = never).",
+    )
+    adv.add_argument(
+        "--ppca-refitb-start",
+        dest="ppca_refitb_start",
+        type=int,
+        default=0,
+        help="First EM iter (0-indexed) at which RefitB is allowed.",
+    )
+    adv.add_argument(
+        "--ppca-refitb-inner-iters",
+        dest="ppca_refitb_inner_iters",
+        type=int,
+        default=3,
+        help="Number of B-only EM steps inside each RefitB pass.",
+    )
+    adv.add_argument(
+        "--ppca-refitb-kappa",
+        dest="ppca_refitb_kappa",
+        type=float,
+        default=0.0,
+        help="Inverse-Wishart-style ridge strength on B in RefitB (0 = unregularised).",
     )
     adv.add_argument(
         "--test-covar-options",
@@ -919,10 +964,30 @@ def _run_ppca_refinement(
     )
 
     em_iter = int(getattr(args, "ppca_em_iters", 20))
-    use_projcov = bool(getattr(args, "ppca_projected_covariance", False))
-    # One projcov pass at the very last iteration (single-shot refinement).
-    projcov_every = em_iter if use_projcov else 0
-    projcov_start = em_iter - 1 if use_projcov else 0
+
+    # ── Resolve projcov flags ────────────────────────────────────────────
+    # --ppca-projcov-every wins if set; otherwise --ppca-projected-covariance
+    # is the legacy "single-shot at the last iter" shorthand.
+    projcov_every_arg = int(getattr(args, "ppca_projcov_every", 0))
+    projcov_start_arg = int(getattr(args, "ppca_projcov_start", 0))
+    legacy_oneshot = bool(getattr(args, "ppca_projected_covariance", False))
+    if projcov_every_arg > 0:
+        projcov_every = projcov_every_arg
+        projcov_start = projcov_start_arg
+    elif legacy_oneshot:
+        projcov_every = em_iter
+        projcov_start = em_iter - 1
+    else:
+        projcov_every = 0
+        projcov_start = 0
+
+    # ── Resolve refitb flags ─────────────────────────────────────────────
+    refitb_every = int(getattr(args, "ppca_refitb_every", 0))
+    refitb_start = int(getattr(args, "ppca_refitb_start", 0))
+    refitb_inner_iters = int(getattr(args, "ppca_refitb_inner_iters", 3))
+    refitb_kappa = float(getattr(args, "ppca_refitb_kappa", 0.0))
+
+    rebakes_basis = projcov_every > 0 or refitb_every > 0
 
     (
         U_ppca,
@@ -949,10 +1014,14 @@ def _run_ppca_refinement(
         contrast_grid=contrast_grid,
         projcov_every=projcov_every,
         projcov_start=projcov_start,
+        refitb_every=refitb_every,
+        refitb_start=refitb_start,
+        refitb_inner_iters=refitb_inner_iters,
+        refitb_kappa=refitb_kappa,
         gpu_memory_to_use=gpu_memory,
     )
 
-    if use_projcov:
+    if rebakes_basis:
         # The projcov pass rotated the basis inside W; the EM posteriors are
         # no longer in the right coordinates. Re-derive embeddings from
         # scratch in the final basis. _compute_embeddings expects U in
@@ -988,7 +1057,12 @@ def _run_ppca_refinement(
             args,
         )
         u_rescaled = U_full
-        embedding_source = "projected_covariance"
+        if projcov_every > 0 and refitb_every > 0:
+            embedding_source = "projcov+refitb"
+        elif projcov_every > 0:
+            embedding_source = "projected_covariance"
+        else:
+            embedding_source = "refitb"
     else:
         # Plain PPCA: posteriors are still in the basis ppca.EM returned, so
         # we can build embeddings cheaply from second moments.
@@ -1010,8 +1084,8 @@ def _run_ppca_refinement(
         embedding_source = "ppca_posterior"
 
     logger.info(
-        "PPCA solve complete: q=%d iters=%d projcov=%s contrast_mode=%s",
-        basis_size, em_iter, use_projcov, contrast_mode,
+        "PPCA solve complete: q=%d iters=%d projcov_every=%d refitb_every=%d contrast_mode=%s",
+        basis_size, em_iter, projcov_every, refitb_every, contrast_mode,
     )
     return {
         "u_rescaled": u_rescaled,
@@ -1435,11 +1509,12 @@ def standard_recovar_pipeline(args):
                 "contrast_mode": ppca_result["contrast_mode"],
                 "prior_mode": ppca_result["prior_mode"],
                 "em_iters": int(args.ppca_em_iters),
-                "postprocess": (
-                    "projected_covariance"
-                    if bool(getattr(args, "ppca_projected_covariance", False))
-                    else "none"
-                ),
+                "ppca_projcov_every": int(getattr(args, "ppca_projcov_every", 0)),
+                "ppca_projcov_start": int(getattr(args, "ppca_projcov_start", 0)),
+                "ppca_refitb_every": int(getattr(args, "ppca_refitb_every", 0)),
+                "ppca_refitb_start": int(getattr(args, "ppca_refitb_start", 0)),
+                "ppca_refitb_inner_iters": int(getattr(args, "ppca_refitb_inner_iters", 3)),
+                "ppca_refitb_kappa": float(getattr(args, "ppca_refitb_kappa", 0.0)),
                 "embedding_source": ppca_result["embedding_source"],
             }
         else:
