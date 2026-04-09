@@ -511,6 +511,31 @@ def test_pca_by_projected_covariance_real_tiny_dataset_runs():
     np.testing.assert_allclose(gram, np.eye(2), atol=5e-4, rtol=5e-4)
 
 
+def test_pca_by_projected_covariance_cubic_mean_tiny_dataset_runs():
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=6, n_images=6, seed=0)
+    basis = np.eye(cryo.volume_size, 4, dtype=np.complex64)
+
+    u, s = pc.pca_by_projected_covariance(
+        dataset=cryo,
+        basis=basis,
+        mean=np.zeros(cryo.volume_size, dtype=np.complex64),
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
+        disc_type="cubic",
+        disc_type_u="linear_interp",
+        gpu_memory_to_use=8,
+        use_mask=False,
+        n_pcs_to_compute=2,
+    )
+
+    assert u.shape == (cryo.volume_size, 2)
+    assert s.shape == (2,)
+    assert np.isfinite(s).all()
+    assert np.all(s >= pc.jax_config.EPSILON)
+    assert np.all(s[:-1] >= s[1:])
+    u_np = np.asarray(u)
+    assert np.isfinite(u_np).all()
+
+
 # ---------------------------------------------------------------------------
 # GPU tests – verify CPU/GPU numerical equivalence
 # ---------------------------------------------------------------------------

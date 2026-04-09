@@ -1565,6 +1565,78 @@ def test_reduce_covariance_inner_masked_vs_unmasked_differ():
     assert np.all(np.isfinite(np.asarray(rhs_no)))
 
 
+def test_reduce_covariance_inner_uses_half_volume_for_half_volume_model(monkeypatch):
+    config, batch_data, model_half, _, hermitian_weights, image_mask = _make_reduce_cov_fixtures()
+    opts = CovarianceOpts(disc_type_u="linear_interp", do_mask_images=False)
+
+    n_images = batch_data.images.shape[0]
+    n_basis = model_half.basis.shape[0]
+    half_image_size = int(np.prod(fourier_transform_utils.image_shape_to_half_image_shape(config.image_shape)))
+    seen = {"mean_half_volume": False, "basis_half_volume": False}
+
+    def fake_forward_model(
+        config,
+        volume,
+        ctf_params,
+        rotation_matrices,
+        skip_ctf=False,
+        half_image=False,
+        half_volume=False,
+    ):
+        seen["mean_half_volume"] = half_volume
+        n_pixels = half_image_size if half_image else int(np.prod(config.image_shape))
+        return jnp.zeros((n_images, n_pixels), dtype=jnp.complex64)
+
+    def fake_batch_vol_forward_from_map(
+        config,
+        volumes,
+        ctf_params,
+        rotation_matrices,
+        skip_ctf=False,
+        half_image=False,
+        half_volume=False,
+    ):
+        seen["basis_half_volume"] = half_volume
+        n_pixels = half_image_size if half_image else int(np.prod(config.image_shape))
+        return jnp.zeros((n_basis, n_images, n_pixels), dtype=jnp.complex64)
+
+    monkeypatch.setattr(core_forward, "forward_model", fake_forward_model)
+    monkeypatch.setattr(covariance_core, "batch_vol_forward_from_map", fake_batch_vol_forward_from_map)
+
+    _call_reduce_covariance_inner(
+        config,
+        batch_data,
+        model_half,
+        opts,
+        image_mask,
+        hermitian_weights=hermitian_weights,
+    )
+
+    assert seen["mean_half_volume"] is True
+    assert seen["basis_half_volume"] is True
+
+def test_solve_projected_covariance_system_retries_stronger_regularization(monkeypatch):
+    calls = []
+
+    def fake_solve(lhs, rhs, assume_a="pos"):
+        calls.append(float(np.asarray(lhs)[0, 0]))
+        if len(calls) < 4:
+            return jnp.full(rhs.shape, jnp.nan, dtype=rhs.dtype)
+        return jnp.arange(rhs.shape[0], dtype=rhs.dtype)
+
+    monkeypatch.setattr(cov_est.jax.scipy.linalg, "solve", fake_solve)
+
+    lhs = jnp.eye(4, dtype=jnp.float32)
+    rhs = jnp.arange(4, dtype=jnp.float32).reshape(2, 2)
+
+    covar = np.asarray(cov_est._solve_projected_covariance_system(lhs, rhs))
+    expected = np.asarray(cov_est._unvec_square_matrix(jnp.arange(4, dtype=jnp.float32)))
+
+    assert len(calls) == 4
+    assert np.all(np.diff(calls) > 0)
+    np.testing.assert_allclose(covar, expected)
+
+
 def test_compute_projected_covariance_masked():
     """compute_projected_covariance with do_mask_images=True completes and returns valid result."""
     cryo = make_tiny_cryo_dataset_with_images(grid_size=4, n_images=6, seed=0)
@@ -1614,6 +1686,147 @@ def test_compute_projected_covariance_masked_matches_unmasked_with_ones_mask():
         # With an all-ones mask the results should be close but not identical
         # because the mask→project→threshold cycle introduces small differences.
         np.testing.assert_allclose(covar_masked, covar_unmasked, atol=0.5, rtol=0.5)
+
+
+def test_compute_projected_covariance_preserves_full_volume_model_layout(monkeypatch):
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=6, n_images=6, seed=0)
+    basis = np.eye(cryo.volume_size, 3, dtype=np.complex64)
+    seen = {}
+
+    def fake_reduce_covariance_inner(
+        config,
+        images,
+        model,
+        opts,
+        image_mask,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        hermitian_weights=None,
+        lhs=None,
+        rhs=None,
+        tilt_labels=None,
+    ):
+        seen["mean_size"] = int(np.prod(model.mean_estimate.shape))
+        seen["basis_size"] = int(np.prod(model.basis.shape[1:]))
+        return lhs, rhs
+
+    monkeypatch.setattr(cov_est, "reduce_covariance_inner", fake_reduce_covariance_inner)
+
+    covar = cov_est.compute_projected_covariance(
+        dataset=[cryo],
+        mean_estimate=np.zeros(cryo.volume_size, dtype=np.complex64),
+        basis=basis,
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
+        batch_size=3,
+        disc_type="linear_interp",
+        disc_type_u="linear_interp",
+        do_mask_images=False,
+    )
+
+    assert seen["mean_size"] == cryo.volume_size
+    assert seen["basis_size"] == cryo.volume_size
+    np.testing.assert_allclose(np.asarray(covar), np.zeros((3, 3), dtype=np.float32), atol=1e-7, rtol=1e-7)
+
+
+def test_prepare_model_half_volumes_keeps_cubic_coefficients_full():
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=6, n_images=6, seed=0)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(cryo.volume_shape)
+    half_size = int(np.prod(half_shape))
+
+    mean_half = np.arange(half_size, dtype=np.float32).astype(np.complex64)
+    basis_half = np.arange(3 * half_size, dtype=np.float32).reshape(3, half_size).astype(np.complex64)
+
+    mean_full, basis_full = cov_est._prepare_model_half_volumes(
+        cryo.volume_shape,
+        mean_half,
+        basis_half,
+        mean_disc_type="cubic",
+        basis_disc_type="cubic",
+    )
+
+    expected_mean = np.asarray(
+        fourier_transform_utils.half_volume_to_full_volume(mean_half.reshape(half_shape), cryo.volume_shape)
+    ).reshape(-1)
+    expected_basis = np.stack(
+        [
+            np.asarray(fourier_transform_utils.half_volume_to_full_volume(vec.reshape(half_shape), cryo.volume_shape)).reshape(
+                -1
+            )
+            for vec in basis_half
+        ],
+        axis=0,
+    )
+
+    assert mean_full.shape == (cryo.volume_size,)
+    assert basis_full.shape == (3, cryo.volume_size)
+    np.testing.assert_allclose(np.asarray(mean_full), expected_mean, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(basis_full), expected_basis, atol=1e-6, rtol=1e-6)
+
+
+def test_prepare_model_half_volumes_preserves_linear_full_layout():
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=6, n_images=6, seed=0)
+    rng = np.random.default_rng(0)
+    mean = (rng.standard_normal(cryo.volume_size) + 1j * rng.standard_normal(cryo.volume_size)).astype(np.complex64)
+    basis = (
+        rng.standard_normal((4, cryo.volume_size)) + 1j * rng.standard_normal((4, cryo.volume_size))
+    ).astype(np.complex64)
+
+    mean_out, basis_out = cov_est._prepare_model_half_volumes(
+        cryo.volume_shape,
+        mean,
+        basis,
+        mean_disc_type="linear_interp",
+        basis_disc_type="linear_interp",
+    )
+
+    np.testing.assert_allclose(np.asarray(mean_out), mean, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(basis_out), basis, atol=1e-6, rtol=1e-6)
+
+
+def test_compute_projected_covariance_preserves_packed_half_volume_model_layout(monkeypatch):
+    cryo = make_tiny_cryo_dataset_with_images(grid_size=6, n_images=6, seed=0)
+    half_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(cryo.volume_shape)))
+    mean_half = np.zeros(half_size, dtype=np.complex64)
+    basis_half = np.zeros((half_size, 3), dtype=np.complex64)
+    seen = {}
+
+    def fake_reduce_covariance_inner(
+        config,
+        images,
+        model,
+        opts,
+        image_mask,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        noise_variance,
+        hermitian_weights=None,
+        lhs=None,
+        rhs=None,
+        tilt_labels=None,
+    ):
+        seen["mean_size"] = int(np.prod(model.mean_estimate.shape))
+        seen["basis_size"] = int(np.prod(model.basis.shape[1:]))
+        return lhs, rhs
+
+    monkeypatch.setattr(cov_est, "reduce_covariance_inner", fake_reduce_covariance_inner)
+
+    covar = cov_est.compute_projected_covariance(
+        dataset=[cryo],
+        mean_estimate=mean_half,
+        basis=basis_half,
+        volume_mask=np.ones(cryo.volume_shape, dtype=np.float32),
+        batch_size=3,
+        disc_type="linear_interp",
+        disc_type_u="linear_interp",
+        do_mask_images=False,
+    )
+
+    assert seen["mean_size"] == half_size
+    assert seen["basis_size"] == half_size
+    np.testing.assert_allclose(np.asarray(covar), np.zeros((3, 3), dtype=np.float32), atol=1e-7, rtol=1e-7)
 
 
 # ---------------------------------------------------------------------------

@@ -1113,6 +1113,92 @@ def compute_covariance_regularization_relion_style(
 _batch_calculate_spline_coefficients = jax.vmap(
     cubic_interpolation.calculate_spline_coefficients, in_axes=0, out_axes=0
 )
+_batch_half_volume_to_full_volume = jax.vmap(
+    fourier_transform_utils.half_volume_to_full_volume, in_axes=(0, None), out_axes=0
+)
+
+
+def _volume_layout_sizes(volume_shape):
+    full_size = int(np.prod(volume_shape))
+    half_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)))
+    return full_size, half_size
+
+
+def _mean_is_half_volume(mean_estimate, volume_shape):
+    _, half_size = _volume_layout_sizes(volume_shape)
+    return int(np.prod(mean_estimate.shape)) == half_size
+
+
+def _basis_is_half_volume(basis, volume_shape):
+    _, half_size = _volume_layout_sizes(volume_shape)
+    if basis is None or basis.ndim < 1:
+        return False
+    per_vec_size = int(np.prod(basis.shape[1:])) if basis.shape[0] != 0 else 0
+    return per_vec_size == half_size
+
+
+def _convert_half_volumes_to_full_in_batch(volumes, volume_shape, gpu_memory=None):
+    gpu_memory = utils.get_gpu_memory_total() if gpu_memory is None else gpu_memory
+    vol_batch_size = utils.safe_batch_size(utils.get_vol_batch_size(volume_shape[0], gpu_memory=gpu_memory))
+    logger.info(
+        "memory used = %s, vol_batch_size in convert_half_volumes_to_full_in_batch %s",
+        gpu_memory,
+        vol_batch_size,
+    )
+    utils.report_memory_device(logger=logger)
+
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    volumes_4d = jnp.asarray(volumes).reshape(-1, *half_shape)
+    if volumes_4d.shape[0] == 0:
+        return np.empty((0, *volume_shape), dtype=np.asarray(volumes).dtype)
+
+    full = []
+    for k in range(0, volumes_4d.shape[0], vol_batch_size):
+        full_block = _batch_half_volume_to_full_volume(volumes_4d[k : k + vol_batch_size], volume_shape)
+        full.append(np.asarray(full_block))
+    return np.concatenate(full, axis=0).reshape(volumes_4d.shape[0], -1)
+
+
+def _prepare_model_half_volumes(volume_shape, mean_estimate, basis, mean_disc_type, basis_disc_type, gpu_memory=None):
+    """Normalize model layouts for projected covariance.
+
+    Preserve the caller's existing full-vs-half layout whenever the downstream
+    interpolation path can consume it directly. Cubic interpolation needs full
+    grids, so packed half-volumes must be expanded before use.
+    """
+    full_size, half_size = _volume_layout_sizes(volume_shape)
+
+    mean_size = int(np.prod(mean_estimate.shape))
+    if mean_disc_type == "cubic":
+        if mean_size == half_size:
+            mean_estimate = fourier_transform_utils.half_volume_to_full_volume(
+                mean_estimate.reshape(fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)),
+                volume_shape,
+            ).reshape(-1)
+    elif mean_size not in (full_size, half_size):
+        logger.warning(
+            "Unexpected mean_estimate size %d for volume_shape %s; expected %d (full) or %d (half).",
+            mean_size,
+            volume_shape,
+            full_size,
+            half_size,
+        )
+
+    if basis is not None and basis.ndim >= 1 and basis.shape[0] > 0:
+        basis_size = int(np.prod(basis.shape[1:]))
+        if basis_disc_type == "cubic":
+            if basis_size == half_size:
+                basis = _convert_half_volumes_to_full_in_batch(basis, volume_shape, gpu_memory=gpu_memory)
+        elif basis_size not in (full_size, half_size):
+            logger.warning(
+                "Unexpected basis vector size %d for volume_shape %s; expected %d (full) or %d (half).",
+                basis_size,
+                volume_shape,
+                full_size,
+                half_size,
+            )
+
+    return mean_estimate, basis
 
 
 @nvtx.annotate("compute_spline_coeffs_in_batch", color="magenta")
@@ -1166,6 +1252,14 @@ def _compute_projected_covariance_single(
     if disc_type_u == "cubic":
         basis = compute_spline_coeffs_in_batch(basis, experiment_dataset.volume_shape, gpu_memory=None)
 
+    mean_estimate, basis = _prepare_model_half_volumes(
+        experiment_dataset.volume_shape,
+        mean_estimate,
+        basis,
+        mean_disc_type=disc_type,
+        basis_disc_type=disc_type_u,
+    )
+
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,
         disc_type=disc_type,
@@ -1216,16 +1310,7 @@ def _compute_projected_covariance_single(
 
     logger.info("end of covariance computation - before solve")
     utils.report_memory_device(logger=logger)
-    rhs = _vec_square_matrix(rhs)
-
-    trace_val = jnp.trace(lhs)
-    trace_val = jnp.where(jnp.isfinite(trace_val) & (trace_val > 0), trace_val, jnp.float32(1.0))
-    reg = jnp.float32(1e-6) * trace_val / lhs.shape[0]
-    diag_idx = jnp.arange(lhs.shape[0])
-    lhs = lhs.at[diag_idx, diag_idx].add(reg)
-
-    covar = jax.scipy.linalg.solve(lhs, rhs, assume_a="pos")
-    covar = _unvec_square_matrix(covar)
+    covar = _solve_projected_covariance_system(lhs, rhs)
     logger.info("end of solve")
     return covar
 
@@ -1261,6 +1346,14 @@ def compute_projected_covariance(
 
     if disc_type_u == "cubic":
         basis = compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory=None)
+
+    mean_estimate, basis = _prepare_model_half_volumes(
+        dataset.volume_shape,
+        mean_estimate,
+        basis,
+        mean_disc_type=disc_type,
+        basis_disc_type=disc_type_u,
+    )
 
     for halfset_id in range(2):
         config = ForwardModelConfig.from_dataset(
@@ -1322,18 +1415,7 @@ def compute_projected_covariance(
 
     logger.info("end of covariance computation - before solve")
     utils.report_memory_device(logger=logger)
-    rhs = _vec_square_matrix(rhs)
-
-    # Tikhonov regularization: prevents NaN from near-singular LHS
-    # (can happen when n_images is small relative to basis_size)
-    trace_val = jnp.trace(lhs)
-    trace_val = jnp.where(jnp.isfinite(trace_val) & (trace_val > 0), trace_val, jnp.float32(1.0))
-    reg = jnp.float32(1e-6) * trace_val / lhs.shape[0]
-    diag_idx = jnp.arange(lhs.shape[0])
-    lhs = lhs.at[diag_idx, diag_idx].add(reg)
-
-    covar = jax.scipy.linalg.solve(lhs, rhs, assume_a="pos")
-    covar = _unvec_square_matrix(covar)
+    covar = _solve_projected_covariance_system(lhs, rhs)
     logger.info("end of solve")
 
     return covar
@@ -1437,13 +1519,15 @@ def _reduce_covariance_inner_explicit(
     else:
         batch = core.translate_images(batch, translations, config.image_shape)
 
+    mean_half_volume = _mean_is_half_volume(model.mean_estimate, config.volume_shape)
+    basis_half_volume = _basis_is_half_volume(model.basis, config.volume_shape)
     projected_mean = core_forward.forward_model(
         config,
         model.mean_estimate,
         ctf_params,
         rotation_matrices,
         half_image=_use_half_proj,
-        half_volume=False,
+        half_volume=mean_half_volume,
     )
 
     if do_mask_images:
@@ -1463,7 +1547,7 @@ def _reduce_covariance_inner_explicit(
         rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
         half_image=_use_half_proj,
-        half_volume=False,
+        half_volume=basis_half_volume,
     )
 
     if do_mask_images:
@@ -1537,8 +1621,8 @@ def _reduce_covariance_inner_explicit(
         per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
         rhs_batch = (per_image_outer - per_image_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
 
-    # Kron product via einsum — avoids materialising (n_images, n²,n²) tensor.
     _n = AU_t_AU.shape[-1]
+    # Kron product via einsum — avoids materialising (n_images, n²,n²) tensor.
     lhs_batch = jnp.einsum("bik,bjl->ijkl", AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
     if lhs is not None:
         lhs_batch = lhs_batch + lhs
@@ -1564,6 +1648,36 @@ def summed_batch_kron_scan(X):
 
     summed_kron = jax.lax.fori_loop(0, X.shape[0], fori_loop_body, init)
     return summed_kron
+
+
+def _solve_projected_covariance_system(lhs, rhs, reg_scales=(1e-6, 1e-5, 1e-4, 1e-3)):
+    """Solve the projected-covariance normal equations with adaptive Tikhonov regularization."""
+    rhs = _vec_square_matrix(rhs)
+    trace_val = jnp.trace(lhs)
+    trace_val = jnp.where(jnp.isfinite(trace_val) & (trace_val > 0), trace_val, jnp.float32(1.0))
+    diag_idx = jnp.arange(lhs.shape[0])
+
+    last_covar = None
+    for reg_scale in reg_scales:
+        reg = jnp.asarray(reg_scale, dtype=lhs.dtype) * trace_val / lhs.shape[0]
+        lhs_reg = lhs.at[diag_idx, diag_idx].add(reg)
+        covar = jax.scipy.linalg.solve(lhs_reg, rhs, assume_a="pos")
+        covar = _unvec_square_matrix(covar)
+        if np.isfinite(np.asarray(covar)).all():
+            if reg_scale != reg_scales[0]:
+                logger.warning(
+                    "Projected covariance solve required stronger regularization (scale=%s) to avoid non-finite output.",
+                    reg_scale,
+                )
+            return covar
+
+        logger.warning(
+            "Projected covariance solve produced non-finite output with regularization scale %s; retrying.",
+            reg_scale,
+        )
+        last_covar = covar
+
+    return last_covar
 
 
 batch_x_T_y = jax.vmap(lambda x, y: jnp.conj(x).T @ y, in_axes=(0, 0))
