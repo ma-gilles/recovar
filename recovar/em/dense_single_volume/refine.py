@@ -2236,6 +2236,15 @@ def _refine_relion_mode(
         )
         n_trans_current = current_translations.shape[0]
 
+        # ``update_refinement_state`` expects ``new_resolution`` in
+        # Angstroms (lower = better resolution), matching RELION's
+        # ``mymodel.current_resolution``.  Convert from the shell index
+        # ``pixel_res`` to Å here so the resol_gain stall detection
+        # compares apples to apples (not shell-vs-shell with the wrong
+        # sign).
+        new_res_angstrom = shell_index_to_resolution_angstrom(
+            pixel_res, cryo.image_shape[0], cryo.voxel_size,
+        )
         state = update_refinement_state(
             state,
             current_assignments=current_combined_ha,
@@ -2243,7 +2252,7 @@ def _refine_relion_mode(
             n_rotations=n_rot_current,
             n_translations=n_trans_current,
             translations=np.asarray(current_translations),
-            new_resolution=pixel_res,
+            new_resolution=new_res_angstrom,
             max_posterior_per_image=combined_max_posterior,
             current_rotation_matrices=current_rotation_matrices_combined,
             previous_rotation_matrices=previous_rotation_matrices_combined,

@@ -820,6 +820,14 @@ def update_refinement_state(
         ave_pmax = compute_ave_Pmax(max_posterior_per_image)
 
     # --- Resolution stall detection ---
+    # ``new_resolution`` and ``state.current_resolution`` are in Angstroms
+    # (lower = better resolution).  Matches RELION
+    # MlOptimiser::updateCurrentResolution at ml_optimiser.cpp:5658-5663:
+    #
+    #   if (newres <= mymodel.current_resolution+0.0001) // Å, lower is better
+    #       nr_iter_wo_resol_gain_sum_bodies++;
+    #   else
+    #       nr_iter_wo_resol_gain = 0;
     resol_improved = new_resolution < state.current_resolution
     if resol_improved:
         nr_iter_wo_resol_gain = 0
