@@ -172,8 +172,8 @@ def batch_vol_forward_from_map(
     ctf_params: jax.Array,
     rotation_matrices: jax.Array,
     skip_ctf: bool = False,
-    half_image: bool = False,
-    half_volume: bool = False,
+    half_image: bool | None = None,
+    half_volume: bool | None = None,
 ) -> jax.Array:
     """Forward-model a batch of volumes via batch_slice_volume (vmap over volume axis).
 
@@ -181,21 +181,24 @@ def batch_vol_forward_from_map(
 
     Parameters
     ----------
-    half_image : bool
+    half_image : bool | None
         If True, project directly to rfft-packed half-spectrum images and use
         ``config.compute_ctf_half`` for CTF; roughly halves memory and compute
-        vs the default full-spectrum path.
-    half_volume : bool
+        vs the default full-spectrum path. ``None`` defaults to ``half_volume``.
+    half_volume : bool | None
         If True, *volumes* are rfft-packed half-volumes ``(batch, N0*N1*(N2//2+1))``.
     """
+    if half_volume is None:
+        half_volume = volumes.half_volume if isinstance(volumes, core.VolumeRepr) else False
+    if half_image is None:
+        half_image = half_volume
+
+    slice_kwargs = dict(half_volume=half_volume, half_image=half_image)
+    if not isinstance(volumes, core.VolumeRepr):
+        slice_kwargs["disc_type"] = config.disc_type
+
     slices = core.batch_slice_volume(
-        volumes,
-        rotation_matrices,
-        config.image_shape,
-        config.volume_shape,
-        config.disc_type,
-        half_volume=half_volume,
-        half_image=half_image,
+        volumes, rotation_matrices, config.image_shape, config.volume_shape, **slice_kwargs
     )
     if not skip_ctf:
         ctf = config.compute_ctf(ctf_params, half_image=half_image)

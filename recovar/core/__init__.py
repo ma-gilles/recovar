@@ -60,6 +60,7 @@ from recovar.core.slicing import (
     precompute_cubic_coefficients_half,
     slice_from_cubic_coefficients,
     slice_volume,
+    to_cubic,
 )
 
 __all__ = [
@@ -102,6 +103,7 @@ __all__ = [
     "round_to_int",
     "slice_from_cubic_coefficients",
     "slice_volume",
+    "to_cubic",
     "translate_images",
     "translate_single_image",
     "vec_indices_to_frequencies",

@@ -59,13 +59,12 @@ def test_adjoint_forward_model_shape():
     assert out.shape == (config.volume_size,)
 
 
-def test_forward_model_accepts_prefiltered_cubic_volume_repr():
+def test_forward_model_accepts_precomputed_cubic_volume_repr():
     config = _make_config(image_shape=(8, 8), volume_shape=(8, 8, 8), disc_type="cubic")
     rng = np.random.default_rng(123)
     real_volume = rng.standard_normal(config.volume_shape).astype(np.float32)
     volume = np.asarray(fourier_transform_utils.get_dft3(real_volume)).reshape(-1)
-    coeffs = recovar.core.precompute_cubic_coefficients(volume, config.volume_shape)
-    wrapped = recovar.core.VolumeRepr(coeffs, disc_type="cubic", prefiltered=True)
+    wrapped = recovar.core.to_cubic(volume.reshape(config.volume_shape), config.volume_shape)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 

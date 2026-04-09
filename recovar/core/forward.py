@@ -29,16 +29,17 @@ def forward_model(
     ctf_params: jax.Array,
     rotation_matrices: jax.Array,
     skip_ctf: bool = False,
-    half_image: bool = False,
+    half_image: bool | None = None,
     half_volume: bool | None = None,
 ) -> jax.Array:
     """Project volume into images via slice-and-CTF forward model.
 
     Parameters
     ----------
-    half_image : bool
+    half_image : bool | None
         If True, return rfft-packed half-spectrum images and use
         ``config.compute_ctf_half`` for CTF, roughly halving memory and compute.
+        ``None`` defaults to ``half_volume``.
     half_volume : bool | None
         If True, *volume* is an rfft-packed half-volume ``(N0*N1*(N2//2+1),)``.
         When *volume* is a :class:`~recovar.core.slicing.VolumeRepr`, ``None``
@@ -46,16 +47,14 @@ def forward_model(
     """
     if half_volume is None:
         half_volume = volume.half_volume if isinstance(volume, VolumeRepr) else False
+    if half_image is None:
+        half_image = half_volume
 
-    slices = slice_volume(
-        volume,
-        rotation_matrices,
-        config.image_shape,
-        config.volume_shape,
-        config.disc_type,
-        half_volume=half_volume,
-        half_image=half_image,
-    )
+    slice_kwargs = dict(half_volume=half_volume, half_image=half_image)
+    if not isinstance(volume, VolumeRepr):
+        slice_kwargs["disc_type"] = config.disc_type
+
+    slices = slice_volume(volume, rotation_matrices, config.image_shape, config.volume_shape, **slice_kwargs)
     if not skip_ctf:
         slices = slices * config.compute_ctf(ctf_params, half_image=half_image)
     return slices
@@ -83,8 +82,8 @@ def adjoint_forward_model(
     rotation_matrices: jax.Array,
     skip_ctf: bool = False,
     volume: jax.Array = None,
-    half_image: bool = False,
-    half_volume: bool = False,
+    half_image: bool | None = None,
+    half_volume: bool | None = None,
 ) -> jax.Array:
     """Adjoint of the forward model (direct back-projection).
 
@@ -99,18 +98,17 @@ def adjoint_forward_model(
     half_volume : if True, output volume uses rfft-packed layout
         ``(N0 * N1 * (N2 // 2 + 1),)``.  Only supported with CUDA.
     """
+    if half_volume is None:
+        half_volume = volume.half_volume if isinstance(volume, VolumeRepr) else False
+    if half_image is None:
+        half_image = half_volume
+
     if not skip_ctf:
         slices = slices * config.compute_ctf(ctf_params, half_image=half_image)
-    return adjoint_slice_volume(
-        slices,
-        rotation_matrices,
-        config.image_shape,
-        config.volume_shape,
-        config.disc_type,
-        volume=volume,
-        half_image=half_image,
-        half_volume=half_volume,
-    )
+    adjoint_kwargs = dict(volume=volume, half_image=half_image, half_volume=half_volume)
+    if not isinstance(volume, VolumeRepr):
+        adjoint_kwargs["disc_type"] = config.disc_type
+    return adjoint_slice_volume(slices, rotation_matrices, config.image_shape, config.volume_shape, **adjoint_kwargs)
 
 
 @eqx.filter_jit
