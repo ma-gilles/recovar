@@ -705,11 +705,23 @@ def get_local_rotation_grid_fast(
     # --- Psi neighbors via circular distance ---
     psi_cutoff_rad = sigma_cutoff * sigma_psi
 
-    # For each psi in the grid, check circular distance to nearest prior psi
-    # Circular distance: min(|a-b|, 2*pi - |a-b|)
+    # For each psi in the grid, check circular distance to nearest prior psi.
+    # Circular distance: min(|a-b|, 2*pi - |a-b|).
+    #
+    # IMPORTANT (Task #101 fix, 2026-04-09): `prior_psi` may contain
+    # negative values because `R_to_relion` returns psi in `[-180, 180)`.
+    # Without normalization, `np.abs(psi_angles - psi_val)` for psi_val < 0
+    # produces values in `[π, 3π)`, and `2π - diff` gives values in
+    # `(-π, π]`. The `np.minimum` then returns NEGATIVE distances, which
+    # trivially pass the `<= psi_cutoff_rad` test, polluting the cone with
+    # ~30 spurious psi candidates per negative-psi prior. The joint
+    # `log_prior > -sigma_cutoff^2` filter masks most but not all of them.
+    # Wrapping `prior_psi` to `[0, 2*pi)` first eliminates the bug.
+    prior_psi_wrapped = np.mod(prior_psi, 2 * np.pi)
+
     selected_psi_set = set()
     if sigma_psi > 0:
-        for psi_val in prior_psi:
+        for psi_val in prior_psi_wrapped:
             diffs = np.abs(psi_angles - psi_val)
             circ_dists = np.minimum(diffs, 2 * np.pi - diffs)
             within = np.where(circ_dists <= psi_cutoff_rad)[0]
@@ -718,7 +730,7 @@ def get_local_rotation_grid_fast(
         selected_psi_set.update(range(n_psi))
     selected_psi_idx = np.array(sorted(selected_psi_set), dtype=np.int64)
     if selected_psi_idx.size == 0:
-        diffs = np.abs(psi_angles[:, None] - prior_psi[None, :])
+        diffs = np.abs(psi_angles[:, None] - prior_psi_wrapped[None, :])
         circ_dists = np.minimum(diffs, 2 * np.pi - diffs)
         selected_psi_idx = np.unique(np.argmin(circ_dists, axis=0).astype(np.int64))
 
@@ -792,7 +804,9 @@ def get_local_rotation_grid_fast(
     unique_sel_psi = np.unique(selected_psi_idx)  # already computed above
     sel_psi_vals = psi_angles[unique_sel_psi]
 
-    d_psi_raw = np.abs(sel_psi_vals[:, None] - prior_psi[None, :])
+    # Use the wrapped prior_psi (Task #101 fix) so that negative-psi priors
+    # produce correct circular distances (psi_angles is in [0, 2*pi)).
+    d_psi_raw = np.abs(sel_psi_vals[:, None] - prior_psi_wrapped[None, :])
     d_psi = np.minimum(d_psi_raw, 2 * np.pi - d_psi_raw)
 
     # Map back to all selected rotations
