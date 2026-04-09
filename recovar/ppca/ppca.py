@@ -779,6 +779,112 @@ def _orthonormalize_W_to_basis(W_half, volume_shape):
     return U_real, s, Vt
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# RefitB helpers (used inside EM when refitb_every > 0)
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@jax.jit
+def _refitb_Gi_hi_batch(PU, centered_images):
+    """G_i = conj(PU) @ PU^T,  h_i = conj(PU) @ y. Real-valued, per batch."""
+    G_batch = (jnp.conj(PU) @ PU.transpose(0, 2, 1)).real
+    h_batch = (jnp.conj(PU) @ centered_images[..., None]).real.squeeze(-1)
+    return G_batch, h_batch
+
+
+def _refitb_compute_Gi_hi_from_U_real(
+    dataset, mean_fourier, U_real, volume_shape, voxel_size,
+    batch_size, disc_type, disc_type_mean, apply_image_mask=True,
+):
+    """Per-image G_i, h_i in the orthonormal basis ``U_real``.
+
+    Notes
+    -----
+    The basis is passed un-masked / un-gridded; mixing a masked-basis fit
+    with the un-masked rebake step would be undefined (multiplication by
+    a real-space mask is not invertible). The data fit absorbs the mask
+    via the dataset's image mask just like the rest of the EM.
+    """
+    image_shape = tuple(volume_shape[:2])
+    q = int(U_real.shape[0])
+    vol_size = int(np.prod(volume_shape))
+
+    U_fourier = np.zeros((vol_size, q), dtype=np.complex64)
+    for j in range(q):
+        U_fourier[:, j] = ftu.get_dft3(U_real[j]).reshape(-1)
+    U_jax = jnp.array(U_fourier)
+
+    mean_for_slicing = core.precompute_cubic_coefficients(mean_fourier, volume_shape)
+    mean_jax = jnp.array(mean_for_slicing)
+
+    n_images = dataset.n_images
+    G_all = np.zeros((n_images, q, q), dtype=np.float64)
+    h_all = np.zeros((n_images, q), dtype=np.float64)
+
+    for (
+        batch,
+        rotation_matrices,
+        translations,
+        ctf_params,
+        _noise_var,
+        _particle_indices,
+        image_indices,
+    ) in dataset.iter_batches(
+        batch_size,
+        by_image=not getattr(dataset, "tilt_series_flag", False),
+    ):
+        images = dataset.process_images(batch, apply_image_mask=apply_image_mask)
+        noise_variance = dataset.noise.get(image_indices)
+
+        images = core.translate_images(images, translations, image_shape) / jnp.sqrt(noise_variance)
+        CTF = dataset.ctf_evaluator(ctf_params, image_shape, voxel_size) / jnp.sqrt(noise_variance)
+
+        projected_mean = core.slice_volume(
+            mean_jax, rotation_matrices, image_shape, volume_shape, disc_type_mean,
+        ) * CTF
+        centered_images = images - projected_mean
+
+        PU = batch_over_vol_slice_volume(
+            U_jax, rotation_matrices, image_shape, volume_shape, disc_type,
+        )
+        PU = PU * CTF[:, None, :]
+
+        G_batch, h_batch = _refitb_Gi_hi_batch(PU, centered_images)
+        indices = np.asarray(image_indices)
+        G_all[indices] = np.asarray(G_batch, dtype=np.float64)
+        h_all[indices] = np.asarray(h_batch, dtype=np.float64)
+
+    return G_all, h_all
+
+
+def _refitb_em_steps(G_all, h_all, B_init, n_inner_iters=3, eps=1e-8,
+                     B_prior=None, kappa=0.0):
+    """A few EM iterations on B in a fixed span.
+
+    Optionally regularises with an inverse-Wishart-style ridge:
+        B_new = (Σ T_i + κ B_prior) / (n + κ)
+    """
+    n, q, _ = G_all.shape
+    B = np.array(B_init, dtype=np.float64)
+    if B_prior is None:
+        B_prior = np.eye(q, dtype=np.float64)
+    else:
+        B_prior = np.array(B_prior, dtype=np.float64)
+
+    for _ in range(n_inner_iters):
+        B_inv = np.linalg.inv(B)
+        P_all = np.linalg.inv(B_inv[None] + G_all)
+        m_all = np.einsum("nij,nj->ni", P_all, h_all)
+        T_all = P_all + np.einsum("ni,nj->nij", m_all, m_all)
+        sum_T = np.sum(T_all, axis=0)
+        if kappa > 0:
+            B = (sum_T + kappa * B_prior) / (n + kappa)
+        else:
+            B = sum_T / n
+        B = 0.5 * (B + B.T) + eps * np.eye(q)
+    return B
+
+
 def EM(
     experiment_dataset,
     mean_estimate,
@@ -800,6 +906,10 @@ def EM(
     contrast_variance=np.inf,
     projcov_every=0,
     projcov_start=0,
+    refitb_every=0,
+    refitb_start=0,
+    refitb_inner_iters=3,
+    refitb_kappa=0.0,
     gpu_memory_to_use=40,
 ):
     """Run EM for L2-regularized PPCA.
@@ -994,6 +1104,70 @@ def EM(
             W_full_grid = W_full.T.reshape(q_loc, *vs)
             W_half_grid = ftu.full_volume_to_half_volume(W_full_grid, vs)
             W = jnp.array(np.asarray(W_half_grid).reshape(q_loc, -1).T)
+
+        # ── Optional RefitB: refit the latent covariance B by EM ────────────
+        # Every Nth iter (starting from refitb_start) we orthonormalise W → U,
+        # compute per-image (G_i, h_i) in span(U), run a few inner-EM steps to
+        # fit B = (1/n) Σ T_i (optionally inverse-Wishart-regularised), then
+        # rebake the calibration into W as
+        #     W ← (U @ R) · √eigvals(B)
+        # where R diagonalises B. This puts the spectrum on a per-image
+        # posterior-moment basis instead of a projected-data-covariance basis.
+        if (
+            refitb_every > 0
+            and iter_i >= refitb_start
+            and (iter_i - refitb_start) % refitb_every == 0
+        ):
+            U_real, s_em_rb, _ = _orthonormalize_W_to_basis(W, vs)
+            q_rb = U_real.shape[0]
+            vol_size = int(np.prod(vs))
+            voxel_size = float(getattr(reference_dataset, "voxel_size", 1.0))
+
+            G_all, h_all = _refitb_compute_Gi_hi_from_U_real(
+                reference_dataset,
+                mean_estimate_raw,
+                np.asarray(U_real),
+                vs,
+                voxel_size,
+                batch_size=batch_size,
+                disc_type=disc_type,
+                disc_type_mean=disc_type_mean,
+            )
+
+            B_init = np.diag(s_em_rb.astype(np.float64))
+            B_refit = _refitb_em_steps(
+                G_all, h_all, B_init,
+                n_inner_iters=refitb_inner_iters,
+                kappa=refitb_kappa,
+                B_prior=B_init if refitb_kappa > 0 else None,
+            )
+
+            eigvals_refit, R_refit = np.linalg.eigh(B_refit)
+            order = np.argsort(eigvals_refit)[::-1]
+            eigvals_refit = eigvals_refit[order]
+            R_refit = R_refit[:, order]
+            refit_s = eigvals_refit.astype(np.float32)
+
+            logger.info(
+                "  iter %d refitb: s_em=[%.2e,%.2e,..] s_refit=[%.2e,%.2e,..]",
+                iter_i + 1,
+                float(s_em_rb[0]),
+                float(s_em_rb[1]) if len(s_em_rb) > 1 else 0.0,
+                float(refit_s[0]),
+                float(refit_s[1]) if len(refit_s) > 1 else 0.0,
+            )
+
+            # W ← (U @ R) · √refit_s, then back to half-Fourier.
+            U_rotated_real = np.einsum(
+                "kxyz,kj->jxyz", np.asarray(U_real), R_refit.astype(np.float32)
+            )
+            U_rotated_full_F = (
+                np.asarray(ftu.get_dft3(U_rotated_real)).reshape(q_rb, vol_size).T
+            )
+            W_full_rb = (U_rotated_full_F * np.sqrt(np.maximum(refit_s, 0.0))[None, :]).astype(np.complex64)
+            W_full_rb_grid = W_full_rb.T.reshape(q_rb, *vs)
+            W_half_rb_grid = ftu.full_volume_to_half_volume(W_full_rb_grid, vs)
+            W = jnp.array(np.asarray(W_half_rb_grid).reshape(q_rb, -1).T)
 
         # Recompute LL with the FINAL W (after mask + gridding) for fair comparison
         if recompute_ll:
