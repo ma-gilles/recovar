@@ -1218,9 +1218,6 @@ def EM_step_half(
         if whitening_mode == "proj_ls":
             if mean_estimate_raw is None:
                 raise ValueError("proj_ls whitening requires mean_estimate_raw")
-            volume_mask_wht = getattr(ref, "volume_mask", None)
-            if volume_mask_wht is None:
-                volume_mask_wht = np.ones(ref.volume_shape)
             # proj_ls needs full-volume W for slicing
             W_full_for_wht = (
                 ftu.half_volume_to_full_volume(W.T, volume_shape).T if W.shape[0] == half_volume_size else W
