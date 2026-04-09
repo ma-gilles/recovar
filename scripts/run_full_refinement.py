@@ -184,6 +184,13 @@ def main():
         help="Skip adaptive pass 2 when the mean significant-sample fraction "
              "is at least this value. Use a negative value to disable the shortcut.",
     )
+    parser.add_argument(
+        "--tau2_fudge",
+        type=float,
+        default=1.0,
+        help="RELION tau2_fudge regularization strength (default 1.0). "
+             "Higher values produce smoother volumes (stronger prior).",
+    )
     parser.add_argument("--init_resolution", type=float, default=30.0, help="Initial resolution (Angstrom)")
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
     parser.add_argument("--rotation_block_size", type=int, default=40000, help="Rotations per block (larger = faster, less Python overhead)")
@@ -413,6 +420,7 @@ def main():
         init_healpix_order=init_healpix_order,
         init_translation_sigma_angstrom=args.offset_sigma_angstrom,
         particle_diameter_ang=particle_diameter_ang,
+        tau2_fudge=args.tau2_fudge,
     )
 
     total_time = time.time() - t_start
