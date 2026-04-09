@@ -278,7 +278,8 @@ def get_cov_svds(
 
 def _projected_covariance_batch_size(basis, image_size, basis_size, gpu_memory_to_use):
     available_gpu_memory = utils.get_gpu_memory_total() if gpu_memory_to_use is None else gpu_memory_to_use
-    memory_left_over_after_kron_allocate = available_gpu_memory - 2 * basis_size**4 * 8 / 1e9
+    lhs_dim = covariance_estimation._symmetric_matrix_packed_size(basis_size)
+    memory_left_over_after_kron_allocate = available_gpu_memory - 2 * lhs_dim**2 * 8 / 1e9
     batch_size = utils.get_embedding_batch_size(
         basis,
         image_size,

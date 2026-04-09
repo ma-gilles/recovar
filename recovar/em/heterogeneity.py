@@ -612,8 +612,9 @@ def compute_projected_covariance_rhs_lhs(
 
     rotation_batch = max(1, rotations.shape[0] // 10)
 
+    packed_lhs_dim = covariance_estimation._symmetric_matrix_packed_size(basis_size)
     memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() - (
-        2 * basis_size**4 * 8 / 1e9 + utils.get_size_in_gb(mean_projections[:rotation_batch]) * (1 + basis_size**2)
+        2 * packed_lhs_dim**2 * 8 / 1e9 + utils.get_size_in_gb(mean_projections[:rotation_batch]) * (1 + basis_size**2)
     )
     # Divide by translations to account for per-translation memory in inner loop
     batch_size = utils.safe_batch_size(
@@ -786,7 +787,8 @@ def estimate_principal_components_simple(
     basis_size = 3
     basis = basis[:, :basis_size]
 
-    memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() - 2 * basis_size**4 * 8 / 1e9
+    packed_lhs_dim = covariance_estimation._symmetric_matrix_packed_size(basis_size)
+    memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() - 2 * packed_lhs_dim**2 * 8 / 1e9
     batch_size = utils.get_embedding_batch_size(
         basis, experiment_dataset.image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate
     )
@@ -899,7 +901,8 @@ def estimate_principal_components_halfset(
         )
 
         basis_size = cov_cols[cryo_idx].shape[0]
-        memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() - 2 * basis_size**4 * 8 / 1e9
+        packed_lhs_dim = covariance_estimation._symmetric_matrix_packed_size(basis_size)
+        memory_left_over_after_kron_allocate = utils.get_gpu_memory_total() - 2 * packed_lhs_dim**2 * 8 / 1e9
         batch_size = utils.get_embedding_batch_size(
             orthog_cov_cols, cryo.image_size, np.ones(1), basis_size, memory_left_over_after_kron_allocate
         )
