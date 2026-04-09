@@ -1247,11 +1247,24 @@ def EM(
     print("EM ALGORITHM COMPLETED")
     print("=" * 130)
 
-    # Return W in its natural half-Fourier (half_vol, q) shape. Consumers that
-    # need full-Fourier convert at their own boundary via
-    # ftu.half_volume_to_full_volume(W.T, vol_shape).T. SVD is taken on the
-    # half-Fourier W; U inherits the same shape.
-    U, S, _ = jnp.linalg.svd(W, full_matrices=False)
+    # W stays in its natural half-Fourier (half_vol, q) shape. For U/S we
+    # cannot just SVD W in half-Fourier — that produces a basis that's
+    # orthonormal in the rfft-weighted inner product but NOT orthonormal in
+    # the full-Fourier (or equivalently real-space) inner product. Downstream
+    # consumers (the scorer, the embedding code, the variance volume builder)
+    # all assume real-space orthonormality. Use _orthonormalize_W_to_basis,
+    # which goes through irfft → real-space SVD → re-applies the PPCA
+    # convention (U_real has unit norm in the Fourier-space sum / 1/√vol_size
+    # in real space, and S² are the Fourier-space squared singular values).
+    # We expand U_real back to half-Fourier so callers can keep treating U
+    # as a (half_vol, q) basis in the same shape as W.
+    U_real, S_squared, _Vt = _orthonormalize_W_to_basis(W, reference_dataset.volume_shape)
+    q_out = U_real.shape[0]
+    half_vs_out = ftu.volume_shape_to_half_volume_shape(reference_dataset.volume_shape)
+    U_half_F = ftu.get_dft3_real(jnp.array(U_real))                # (q, *half_vs)
+    U = U_half_F.reshape(q_out, -1).T                              # (half_vol, q)
+    S = jnp.array(np.sqrt(np.maximum(S_squared, 0.0)).astype(np.float32))
+
     if return_iteration_data and return_posterior_info:
         return U, S**2, W, expected_zs, second_moment_zs, iteration_data, posterior_info
     if return_iteration_data:
