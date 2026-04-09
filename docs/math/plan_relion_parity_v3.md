@@ -551,27 +551,16 @@ exists; just rewire the call site.
 
 **Effort**: 1 day.
 
-### A3. Pass `tau²_fudge` parameter through the Wiener solve
+### A3. Pass `tau²_fudge` parameter through the Wiener solve — ✅ DONE (commit `6ef6215`)
 
-**What RELION does**: at `backprojector.cpp:1379-1800`, the Wiener
-filter uses `1/(tau2_fudge · sigma2_noise[ires])` as the regularizer.
-`tau2_fudge` is a user-tunable strength (default 1.0).
+`tau2_fudge` is now plumbed through `_refine_relion_mode` to
+`compute_relion_prior_from_reconstruction_stats` and
+`post_process_from_filter_v2`. Also (commit `9ef1536`) passed to the
+two `fsc_to_relion_ssnr` call sites that produce `data_vs_prior` for
+the resolution criterion, matching RELION's
+`backprojector.cpp:1117-1123`.
 
-**What recovar does**:
-`relion_functions.adjust_regularization_relion_style` accepts
-`tau2_fudge` but the call site at `_refine_relion_mode` doesn't pass
-it through.
-
-**Fix**: wire the `tau2_fudge` parameter through the call chain. Trivial.
-
-**Files**: `recovar/em/dense_single_volume/refine.py` and the
-`post_process_from_filter_v2` call.
-
-**Verification**: with `tau2_fudge=1.0` (the default), no difference;
-with `tau2_fudge=4.0`, the reconstructed volume should be smoother
-(stronger prior).
-
-**Effort**: 1 day.
+**Files**: `recovar/em/dense_single_volume/refine.py`.
 
 ### A4. Posterior-weighted σ²_noise from the M-step accumulator (with momentum)
 
@@ -731,70 +720,42 @@ exactly.
 **Files**: `recovar/em/dense_single_volume/engine_v2.py:125,916`
 (`batch_norm` definition and the `log_score_offset` application).
 
-### B3. Per-iter `changes_orientations` / `changes_offsets` tracking
+### B3. Per-iter `changes_orientations` / `changes_offsets` tracking — ✅ DONE (commit `3ca66d4`)
 
-**What RELION does** (`monitorHiddenVariableChanges`,
-`ml_optimiser.cpp:9157-9242`):
-- For each particle: angular distance via
-  `sampling.calculateAngularDistance(new_rot, new_tilt, new_psi,
-  old_rot, old_tilt, old_psi)`. This is the Euler angle metric, NOT
-  rotation-matrix Frobenius distance.
-- Per-particle offset: L2 distance between new and old translation.
-- Aggregate: `mean angular change`, `RMS offset change`,
-  `fraction class change` (n/a for single-class).
-- Sticky tracker: `smallest_changes_optimal_orientations =
-  min(current_changes, smallest_so_far)`, etc.
-
-**What recovar does**: `convergence.py::update_refinement_state` has
-some tracking but it's a simplified version, not the exact RELION
-formula.
-
-**Fix**: implement the exact formula. Add a per-particle store of the
-previous iter's best (rot, trans), then compute angular and L2
-distances per particle, aggregate.
+Implemented `relion_angular_distance_per_particle` in
+`convergence.py` using the row-angle mean of `R_i^T R_j` (matching
+RELION's `Sampling::calculateAngularDistance` at
+`healpix_sampling.cpp:1240-1270`). Per-particle offset is L2 distance
+in pixels then converted to Å. The state object now carries
+`current_changes_optimal_orientations`, `current_changes_optimal_offsets_angstrom`,
+sticky `smallest_changes_optimal_*`, and the
+`nr_iter_wo_large_hidden_variable_changes` counter. The previous iter's
+best (rot, trans) is snapshotted in `_refine_relion_mode` BEFORE the
+per-half loop overwrites them, so the deltas are computed against the
+correct K-1 state.
 
 **Files**: `recovar/em/dense_single_volume/convergence.py`,
 `recovar/em/dense_single_volume/refine.py`.
 
-**Verification**: `changes_orientations` and `changes_offsets` per
-iter should match RELION's `rlnSmallestChangesOptimalOrientations`
-and `rlnSmallestChangesOptimalOffsets` within 5%.
+### B4. Convergence criterion (uses B3 and A1) — ✅ DONE (commit `3ca66d4`)
 
-**Effort**: 2-3 days.
+Implemented in `convergence.py::check_convergence`. The new code
+prefers the RELION-exact `nr_iter_wo_large_hidden_variable_changes`
+counter when available, and falls back to the legacy "smallest changes
+seen at all" stalls heuristic. Counter logic exactly matches
+`ml_optimiser.cpp::checkConvergence`:
 
-### B4. Convergence criterion (uses B3 and A1)
-
-**What RELION does** (`ml_optimiser.cpp:9244-9288`):
-
-```
-if  (new_angle_changes >= 0.97 * smallest_angle_changes_thus_far)
-and (ratio_trans_changes < 0.40 or new_offset_changes >= 0.97 * smallest_offset_changes_thus_far)
-and (ratio_orient_changes < 0.40 or new_angle_changes >= 0.97 * smallest_angle_changes_thus_far):
-    nr_iter_wo_large_hidden_variable_changes++
+```python
+if class_ok and trans_ok and rot_ok:
+    nr_iter_wo_large_hidden_variable_changes += 1
 else:
-    nr_iter_wo_large_hidden_variable_changes := 0
-
-# Plus the resolution-gain check at ml_optimiser.cpp:5658-5675:
-if current_resolution ≤ best_resolution + 0.0001:
-    nr_iter_wo_resol_gain++
-else:
-    nr_iter_wo_resol_gain := 0
-
-# checkConvergence at ml_optimiser.cpp:10135-10204 (precise quote needed):
-has_converged := (nr_iter_wo_resol_gain ≥ 2)
-              and (nr_iter_wo_large_hidden_variable_changes ≥ 2)
-              and (has_high_fsc_at_limit)
-              and (sampling order has stabilized)
+    nr_iter_wo_large_hidden_variable_changes = 0
 ```
 
-**Fix**: implement exact criterion in
-`convergence.py::check_convergence`.
+`refine_angular_sampling` resets the sticky trackers when the healpix
+order is bumped, matching RELION's behavior at the same boundary.
 
 **Files**: `recovar/em/dense_single_volume/convergence.py`.
-
-**Verification**: termination iteration should match RELION ±1.
-
-**Effort**: 1-2 days after B3 is in.
 
 ### B5. Final joined-halves iteration after convergence
 
@@ -820,20 +781,17 @@ single E+M sweep (or continue per-half then average).
 
 ## Phase C — Cosmetic / lower-priority
 
-### C1. `σ²_offset` translation prior update from data
+### C1. `σ²_offset` translation prior update from data — ✅ DONE (commit `9bdeabd`)
 
-**What RELION does**: `mymodel.sigma2_offset` is updated each iter
-from `wsum_sigma2_offset / (data_dim · sum_weight)` (with a momentum
-factor). It governs the Gaussian translation prior in the next iter.
+Implemented as a per-iter MAP approximation from the
+`current_changes_optimal_offsets_angstrom` value (which IS the RMS
+translation update for the iter). The next iter's
+`make_relion_translation_log_prior` uses this updated sigma with
+RELION's `min_sigma2_offset = 2 px^2` clamp from
+`ml_optimiser.cpp:9272`. Trajectory of `sigma_offset_trajectory` is
+stored in the result dict.
 
-**What recovar does**: hardcoded from `init_translation_sigma_angstrom`,
-never updated.
-
-**Fix**: accumulate `wsum_sigma2_offset` in the M-step, divide by
-`(data_dim · sum_weight)` after both halves, store, use in next iter's
-translation prior.
-
-**Effort**: 1-2 days.
+**Files**: `recovar/em/dense_single_volume/refine.py`.
 
 ### C2. `scale_correction[group]` per-optics-group update
 
