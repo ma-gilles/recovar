@@ -42,6 +42,56 @@ verification steps.
 pseudocode in `relion/src/ml_optimiser.cpp:3258` →
 `iterate()`.)
 
+### Key insight: how auto-refine reaches high resolution (2026-04-09 verification)
+
+Auto-refine does NOT do exhaustive search at high healpix orders. Instead:
+
+1. **Iter 1-3 (exhaustive search at low orders 2-3)**: 6k-50k coarse rotations × all images.
+2. **At iter K, when `acc_rot < 0.75 × current_step` AND no resolution gain ≥1 iter**:
+   - `updateAngularSampling()` bumps `healpix_order` by +1 (`ml_optimiser.cpp:9877`)
+   - When `new_hp_order ≥ autosampling_hporder_local_searches` (default = 4,
+     `ml_optimiser.cpp:732`), switches to **per-particle local search** with
+     `sigma2_rot = 4 × step^2` (`ml_optimiser.cpp:2324`) and a `±3σ`
+     Gaussian cone around each particle's previous best orientation
+     (`healpix_sampling.cpp:770`).
+3. **Local search caps per-particle work**: the cone shrinks ∝ `1/2^L`
+   while the grid density grows ∝ `4^L`, so the number of directions in
+   the cone is **approximately constant** (~36 directions × ~6 psi ≈
+   200-400 (rot, tilt, psi) per particle) regardless of healpix order.
+   **This is what makes high-res refinement tractable.**
+4. **Iter cost in local-search mode** is dominated by the growing
+   Fourier window (`current_image_size`), not by the rotation count.
+5. **Convergence**: `has_fine_enough_angular_sampling` (acc_rot below
+   0.75× step) AND no res gain ≥1 iter AND assignment changes ≤1 iter
+   → set `has_converged=true`, `do_join_random_halves=true`,
+   `do_use_all_data=true` (`ml_optimiser.cpp:10157-10160`).
+6. **One final all-data Nyquist iteration** with the joined halves
+   produces `run_class001.mrc` (`ml_optimiser.cpp:5707`:
+   `current_size = ori_size`).
+
+**Empirical 5k benchmark trajectory** (verified on
+`/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0/`,
+2026-04-09):
+
+| iter | acc_rot (°) | step (°) | local? | NrPoses |
+|---:|---:|---:|:---:|---:|
+| 1 | 20.36 | (init 7.5) | false | 1,069,056 |
+| 2 | 11.31 | 7.5 | false | 1,069,056 |
+| 3 | 1.96 | 7.5 | false | 1,069,056 |
+| 4 | 1.48 | 7.5 | false | 1,069,056 |
+| 5 | 1.52 | 7.5 | false | 1,069,056 |
+| 6 | 1.51 | **3.75 ↓** | **true ↑** | 63,602 |
+| 7 | 1.17 | 3.75 | true | 63,602 |
+| 8 | 1.15 | 1.875 ↓ | true | 48,026 |
+| 10 | 1.03 | 0.9375 ↓ | true | 11,781 |
+| 12 | 1.00 | 0.46875 ↓ | true | 11,979 |
+| 15 | 0.98 | 0.46875 | true | 11,979 ← converged |
+| final | (joined halves, Nyquist) | | | |
+
+Note: pose count GOES DOWN during refinement (1.07M → 12k) as local
+search restriction kicks in. Resolution improvement comes from finer
+local-search angular step (7.5° → 0.47°), not from larger pose grids.
+
 For each iteration `iter` ≥ 1:
 
 ```
