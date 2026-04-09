@@ -789,6 +789,7 @@ def refine_single_volume(
     particle_diameter_ang=None,
     save_intermediates_dir=None,
     low_resol_join_halves_angstrom=40.0,
+    tau2_fudge=1.0,
 ):
     """Multi-iteration EM refinement with FSC-driven resolution management.
 
@@ -922,6 +923,7 @@ def refine_single_volume(
             adaptive_pass2_skip_threshold=adaptive_pass2_skip_threshold,
             save_intermediates_dir=save_intermediates_dir,
             low_resol_join_halves_angstrom=low_resol_join_halves_angstrom,
+            tau2_fudge=tau2_fudge,
         )
 
     # ===================================================================
@@ -1208,6 +1210,7 @@ def _refine_relion_mode(
     adaptive_pass2_skip_threshold,
     save_intermediates_dir=None,
     low_resol_join_halves_angstrom=40.0,
+    tau2_fudge=1.0,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -1870,7 +1873,7 @@ def _refine_relion_mode(
                 kernel="triangular",
                 use_spherical_mask=True, grid_correct=True,
                 gridding_correct="square",
-                tau2_fudge=1.0,
+                tau2_fudge=tau2_fudge,
             ).reshape(-1)
 
         significant_counts.append(iter_sig_counts)
@@ -2056,7 +2059,7 @@ def _refine_relion_mode(
             volume_shape,
             mean_variance,
             padding_factor=PADDING_FACTOR,
-            tau2_fudge=1.0,
+            tau2_fudge=tau2_fudge,
         )
         mean_variance = mean_signal_variance
 
@@ -2279,7 +2282,7 @@ def _refine_relion_mode(
         kernel="triangular",
         use_spherical_mask=True, grid_correct=True,
         gridding_correct="square",
-        tau2_fudge=1.0,
+        tau2_fudge=tau2_fudge,
     ).reshape(-1)
     final_iter_elapsed = time.time() - final_iter_t0
     logger.info(
