@@ -246,12 +246,17 @@ def _run_grouped_local_search_em(
             per_image=True,
         )
         local_rotations = rotation_indices_to_matrices(local_indices, healpix_order)
+        # C1 (RELION-parity): use the explicit sigma_offset_angstrom from the
+        # caller (which is the data-driven value updated each iter) without
+        # the legacy `range/3` override (offset_range_pixels=None). The
+        # translation grid is still bounded by `active_offset_range` in the
+        # engine's score computation.
         local_translation_log_prior = make_relion_translation_log_prior(
             translations,
             experiment_dataset.voxel_size,
             sigma_offset_angstrom,
             prior_translations[group_image_indices],
-            offset_range_pixels=active_offset_range,
+            offset_range_pixels=None,
         )
 
         total_local_rotations += int(local_rotations.shape[0])
@@ -1328,6 +1333,17 @@ def _refine_relion_mode(
     # per shell after iter i's signal-prior update.
     noise_radial_trajectory = []
     tau2_radial_trajectory = []
+    # C1 (RELION-parity): per-iter sigma2_offset update from data. Initialized
+    # from `init_translation_sigma_angstrom`; updated each iter to the
+    # MAP-based RMS of per-particle translation deviations from the prior
+    # (`state.current_changes_optimal_offsets_angstrom`). Clamped to RELION's
+    # min_sigma2_offset = 2 (in pixels² → sqrt(2) pixels = 1.41 * voxel_size Å).
+    # Cite: ml_optimiser.cpp:5217-5240. We use the MAP approximation rather
+    # than the full posterior-weighted formula because it does not require
+    # changes to the engine's M-step accumulation; the difference is small
+    # for concentrated posteriors (Pmax > 0.8 typical at iter 6+).
+    current_sigma_offset_angstrom = float(init_translation_sigma_angstrom)
+    sigma_offset_trajectory = []
     relion_incr_size = 10  # RELION default
     relion_has_high_fsc_at_limit = False
     global_direction_prior = None
@@ -1563,12 +1579,19 @@ def _refine_relion_mode(
 
         for k in range(2):
             current_translation_range = float(state.translation_range)
+            # C1 (RELION-parity): use the data-driven sigma2_offset from the
+            # previous iter (current_sigma_offset_angstrom) instead of the
+            # constant init value. Pass offset_range_pixels=None so
+            # make_relion_translation_log_prior does NOT override our sigma
+            # with the legacy `range/3` heuristic. The translation grid is
+            # still bounded by `current_translation_range` outside this
+            # function (in the engine's score computation).
             translation_log_prior = make_relion_translation_log_prior(
                 np.asarray(current_translations, dtype=np.float32),
                 cryo.voxel_size,
-                init_translation_sigma_angstrom,
+                current_sigma_offset_angstrom,
                 previous_best_translations[k],
-                offset_range_pixels=current_translation_range,
+                offset_range_pixels=None,
             )
             if use_local:
                 safe_ibs, safe_rbs = _safe_batch_sizes(
@@ -1586,7 +1609,7 @@ def _refine_relion_mode(
                     sigma_psi,
                     current_translations,
                     previous_best_translations[k],
-                    init_translation_sigma_angstrom,
+                    current_sigma_offset_angstrom,
                     current_translation_range,
                     disc_type,
                     image_batch_size=safe_ibs,
@@ -2228,6 +2251,29 @@ def _refine_relion_mode(
         )
         state._last_frac_changed = frac_changed
 
+        # --- C1 (RELION-parity): update sigma2_offset from data ---
+        # MAP-based approximation of RELION's
+        #   sigma2_offset_new = wsum_sigma2_offset / (2 * sum_weight)
+        # (ml_optimiser.cpp:5234). We compute the per-particle sigma from
+        # the per-iter best translation deviations from the prior, then
+        # clamp to RELION's min_sigma2_offset = 2 pixels² (= sqrt(2) pixels
+        # = ~1.41 * voxel_size Å). When the per-iter change tracking is
+        # not yet populated (iter 1, no previous), keep the previous value.
+        new_sigma_offset_angstrom = state.current_changes_optimal_offsets_angstrom
+        if np.isfinite(new_sigma_offset_angstrom) and new_sigma_offset_angstrom > 0:
+            min_sigma_pixels = float(np.sqrt(2.0))  # RELION min_sigma2_offset = 2
+            min_sigma_angstrom = min_sigma_pixels * float(
+                cryo.voxel_size if cryo.voxel_size > 0 else 1.0
+            )
+            current_sigma_offset_angstrom = max(
+                float(new_sigma_offset_angstrom), min_sigma_angstrom,
+            )
+            logger.info(
+                "C1: sigma_offset updated %.3f Å (clamp >= %.3f Å)",
+                current_sigma_offset_angstrom, min_sigma_angstrom,
+            )
+        sigma_offset_trajectory.append(float(current_sigma_offset_angstrom))
+
         # Save assignments for next iteration's change tracking.
         # Use coarse_ha (indexed into effective_rotations/current_rotations)
         # so that local search and convergence detection work correctly
@@ -2360,4 +2406,5 @@ def _refine_relion_mode(
         "pmax_per_image_history": pmax_per_image_history,
         "noise_radial_trajectory": noise_radial_trajectory,
         "tau2_radial_trajectory": tau2_radial_trajectory,
+        "sigma_offset_trajectory": sigma_offset_trajectory,
     }
