@@ -199,6 +199,8 @@ def _slice_real_volumes_to_full_image(real_vols, rotations, image_shape, volume_
     For Stage 0B simplicity we use a Python loop and a JIT'd inner
     slice. n_img is small (≤ 256) so this is fine for v0.
     """
+    # Use NEAREST discretization so the simulator's forward model
+    # matches the inversion model in `posterior.py` exactly.
     n_img = real_vols.shape[0]
     out = []
     for i in range(n_img):
@@ -209,7 +211,7 @@ def _slice_real_volumes_to_full_image(real_vols, rotations, image_shape, volume_
             rot_i,
             image_shape,
             volume_shape,
-            "linear_interp",
+            "nearest",
             half_volume=False,
             half_image=False,
         )
@@ -221,13 +223,15 @@ def _slice_half_volume_through_rotations(half_vol_flat, rotations, image_shape, 
     """Slice a single half-volume through `rotations`, returning
     `(n_rot, full_image_size)` complex128. Used to project `mu`
     and each `U` row to the (per-image) rotation set.
+
+    Uses nearest discretization (matches inversion path).
     """
     proj = slice_volume(
         half_vol_flat,
         rotations,
         image_shape,
         volume_shape,
-        "linear_interp",
+        "nearest",
         half_volume=True,
         half_image=False,
     )

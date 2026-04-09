@@ -136,7 +136,7 @@ def residual_pca_baseline(
         rotations_per_image_argmax,
         image_shape,
         volume_shape,
-        "linear_interp",
+        "nearest",
         half_volume=True,
         half_image=False,
     )  # (n_img, full_image_size)
@@ -163,7 +163,7 @@ def residual_pca_baseline(
             rot_one,
             image_shape,
             volume_shape,
-            "linear_interp",
+            "nearest",
             half_image=False,
             half_volume=True,
         )

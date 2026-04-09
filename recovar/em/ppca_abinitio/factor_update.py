@@ -428,52 +428,90 @@ def update_factor_full_ecm(
     return out, info
 
 
-# ---------------------------------------------------------------------------
-# Closed-form M-step (Tipping & Bishop 1999, pose-marginal, CG solve)
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# Closed-form M-step for U  (Tipping & Bishop 1999, pose-marginal, NEAREST)
+# ===========================================================================
 #
-# This is the **correct** PPCA M-step for the v0 ab-initio loop. See
-# `docs/math/ppca_closed_form_mstep.md` for the math. The
-# pose-marginal version of `recovar/heterogeneity/ppca.py::M_step`,
-# adapted to the half-volume rfft layout and the
-# `score_from_half_image_projections` E-step.
+# WHAT THIS COMPUTES
+# ------------------
+# Given the OLD posterior moments (gamma, m, Hinv) from one E-step
+# of the score kernel, this returns the U that minimizes the expected
+# complete-data NLL with respect to U (with mu and s held fixed).
+# That is the canonical PPCA M-step (Tipping & Bishop 1999, §3),
+# extended from per-image to pose-marginal cryo-EM.
 #
-# Implementation notes
-# --------------------
-# The fixed-pose `recovar/heterogeneity/ppca.py::M_step` uses NEAREST
-# discretization, which makes the slice operator A_g binary so the
-# `A_g^T diag(CTF^2 / sigma^2) A_g` operator is exactly diagonal in
-# the volume basis. The M-step then decouples per voxel into a `q x q`
-# linear solve.
+# WHY IT'S A DIRECT BLOCK SOLVE
+# -----------------------------
+# Because v0 ab-initio uses NEAREST discretization throughout
+# (simulator + score kernel + mean update + this M-step), the slice
+# operator A_g[pixel, voxel] is binary: each pixel hits exactly one
+# voxel. As a consequence,
 #
-# The v0 ab-initio path uses LINEAR-INTERP slicing for consistency
-# with the score kernel and the mean update. Under linear-interp the
-# diagonal approximation has up to ~80% per-voxel error (verified on
-# vol 8), so we cannot reuse the per-voxel q x q solve directly.
+#     A_g^T diag(CTF_i^2 / sigma_i^2) A_g
 #
-# Instead we solve the EXACT linear system T(U) + lambda·U = B by
-# applying conjugate gradient to the matvec
+# is EXACTLY diagonal in the voxel basis (zero off-voxel coupling).
+# The M-step's normal equation
 #
-#     T(U)[v, k] = sum_{i,g,t} gamma_{i,g,t}
-#                  · sum_l (A_g^T diag(w · CTF^2/sigma^2) A_g · U[:, l])[v]
-#                  · C_{i,g,t}[k, l]
+#     [ sum_{i,g,t} gamma_{igt} · A_g^T diag(CTF^2/sigma^2) A_g
+#       (·) C_{igt} ]   +   lambda · I  =  RHS
 #
-# where the inner `A_g^T diag(...) A_g` is implemented as
-# `slice -> multiply -> adj_slice` and the outer sum over (i, g, t)
-# is folded into a precomputed `(n_rot, q, q, n_half_image)` weight
-# tensor `M_im` that depends only on (gamma, C, CTF^2/sigma^2). The
-# `w` factor is the rfft Hermitian weights from the half-image
-# layout.
+# therefore decomposes voxel-by-voxel into independent q×q linear
+# systems. No CG, no preconditioner, no nullspace handling — just
+# `vmap(jnp.linalg.solve)` over voxels.
 #
-# At oracle init this matvec satisfies T(U_true) = B to ~1e-4
-# relative precision (verified at vol 8 with sigma_real = 0.001),
-# confirming the formulation is correct. The remaining error is
-# numerical noise from the float64 GEMMs in the slice/adj_slice
-# pair.
+# DERIVATION SKETCH (full version in docs/math/ppca_closed_form_mstep.md)
+# ----------------------------------------------------------------------
+# Forward model in image space (per image i, pose (g, t)):
 #
-# Replaces `update_factor_one_outer_step` (gradient descent) and
-# `update_factor_full_ecm` (gradient with line search). Both of those
-# are retained only for parity testing.
+#     y_i = CTF_i · S_t · A_R · (mu + U alpha_i) + eps_i
+#
+# Expected complete-data NLL with respect to U (drop U-independent
+# terms; with E[alpha] = m, E[alpha alpha^T] = C = Hinv + m m^T):
+#
+#     Q(U) = -1/2 * sum_{igt} gamma_{igt} *
+#                E[ ||y - CTF*A_g*mu - CTF*A_g*U*alpha||^2 / sigma^2 ]
+#          = const
+#            + sum_{igt} gamma_igt * Re tr( m · U^* · A_g^T (CTF/s2) (y - CTF·A_g·mu) )
+#            - 1/2 * sum_{igt} gamma_igt * tr( U^* · A_g^T (CTF^2/s2) A_g · U · C )
+#            - 1/2 * lambda * ||U||^2
+#
+# Wirtinger derivative with respect to U^* (set to zero):
+#
+#     sum_{igt} gamma · A_g^T (CTF^2/s2) A_g · U · C  +  lambda · U
+#       =  sum_{igt} gamma · A_g^T (CTF/s2 · (y - CTF·A_g·mu)) · m^T
+#
+# Per-voxel (because A_g is binary under nearest):
+#
+#     M[v] · U[v, :]  =  B[v, :]
+#
+# with
+#
+#     M[v]_kl = sum_{igt} gamma_igt · Psi_{ig}[v] · C_{igt}[k, l]   + lambda * delta_kl
+#     B[v, k] = sum_{igt} gamma_igt · m_{igt, k} · b_{ig}[v]
+#
+# where
+#
+#     Psi_{ig}[v] = adj_slice_g(  w_p · (CTF_i^2 / sigma_i^2)_p  )[v]
+#     b_{ig}[v]   = adj_slice_g(  w_p · ( shifted_half_{it,p}
+#                                          - (CTF^2/sigma^2)_p · mean_proj_{g,p} )  )[v]
+#
+# - `w_p` are the rfft Hermitian half-image weights (1 at DC/Nyquist
+#   columns, 2 elsewhere). They appear because the score kernel and
+#   the M-step compute inner products in the FULL-image sense, and
+#   the half-image identity is `<a,b>_full = sum_half w * conj(a)*b`
+#   for Hermitian arrays.
+# - The "residual image" `shifted_half - (CTF^2/sigma^2) · mean_proj`
+#   is exactly what the score kernel's `_build_b` computes (b1 - b2).
+# - Both Psi and b live in the half-image basis BEFORE adj_slice.
+#   We accumulate them per pose with a weighted sum over images, then
+#   adj_slice once per (k, l) (for M) or per k (for B).
+#
+# REPLACES
+# --------
+# `update_factor_one_outer_step` (gradient descent) and
+# `update_factor_full_ecm` (gradient with line search). Both retained
+# only for parity testing — do not call from new code.
+# ===========================================================================
 
 
 def update_factor_closed_form(
@@ -485,99 +523,55 @@ def update_factor_closed_form(
     ctf_params,
     noise_variance_full,
     *,
-    k_max: float | None = None,
-    ridge_lambda: float = 100.0,
-    apply_gauge_fix: bool = False,
-    cg_tol: float = 1e-8,
-    cg_maxiter: int = 10,
+    ridge_lambda: float = 1e-4,
 ) -> PPCAInit:
-    """Closed-form M-step for the PPCA factor U (pose-marginal CG solve).
+    """Closed-form per-voxel M-step for the PPCA factor U.
 
-    Pose-marginal extension of
-    `recovar/heterogeneity/ppca.py::M_step` adapted to the half-volume
-    rfft layout used by the v0 ab-initio loop.
+    Pose-marginal extension of `recovar/heterogeneity/ppca.py::M_step`
+    adapted to the half-volume rfft layout. Exact under the v0
+    nearest-discretization design choice. See the module-level
+    "WHAT THIS COMPUTES" comment immediately above for the math.
 
-    Math summary
-    ------------
-    Given the OLD posterior moments ``(gamma, m, Hinv)`` from the
-    score-kernel E-step, the U-minimizer of the expected
-    complete-data NLL satisfies the linear system
+    The full call costs:
+      1. one E-step via `score_from_half_image_projections`,
+      2. one weighted sum-over-images per pose for `M_im` and `B_im`,
+      3. q*q + q half-volume `adjoint_slice_volume` calls,
+      4. `vmap(jnp.linalg.solve)` over the V_half voxels of a q×q
+         system per voxel.
 
-        ``T(U) + lambda · U = B``
-
-    where, for ``C_{igt} = Hinv_{ig} + m_{igt} m_{igt}^T``,
-
-        T(U)[v, k] = sum_{i,g,t} gamma_{igt}
-                     · sum_l (A_g^T diag(w · CTF^2/sigma^2) A_g · U[:, l])[v]
-                     · C_{igt}[k, l]
-
-        B[v, k]    = sum_{i,g,t} gamma_{igt} · m_{igt, k}
-                     · adj_slice_g( w · (shifted_half[i, t]
-                                         - (CTF^2/sigma^2)[i] · A_g mu) )[v]
-
-    `w` is the rfft Hermitian half-image weights (1 at DC/Nyquist
-    columns, 2 elsewhere) from `make_half_image_weights`. They are
-    needed because the score kernel and the M-step both compute
-    inner products in the *full-image* sense, expressed in the
-    half-image rfft layout via the identity
-    `<a, b>_full = sum_half w · conj(a) · b` for Hermitian operands.
-
-    The system is solved with conjugate gradient on the EXACT operator
-    `T + lambda · I`. We do NOT use the per-voxel diagonal
-    approximation that
-    `recovar/heterogeneity/ppca.py::M_step` uses, because under
-    linear-interp slicing the off-diagonal coupling is not negligible
-    (~80% per-voxel error at vol 8).
-
-    See `docs/math/ppca_closed_form_mstep.md` for the full
-    derivation and a discussion of why this replaces the previous
-    gradient-descent path.
+    No PCG, no preconditioner, no learning rate, no line search, no
+    Hermitian projection, no gauge fix, no band-limit. The M-step is
+    a single direct solve.
 
     Parameters
     ----------
     config, init, batch_full, rotations, translations, ctf_params,
-    noise_variance_full : same as `update_factor_one_outer_step`.
-    k_max : optional float
-        Radial band limit for the gauge fix. Defaults to
-        ``volume_shape[0] / 4``. Only used when ``apply_gauge_fix``
-        is True.
+    noise_variance_full : same as the legacy gradient M-steps.
     ridge_lambda : float
-        Tikhonov regularizer added to the diagonal of the linear
-        operator. Default ``100.0`` is calibrated for the v0 toy
-        synthetic family at ``sigma=0.1``; tune up at higher noise,
-        down at lower noise. Too small a ridge lets CG fit noise
-        in the near-null modes (the imaginary parts of constrained
-        rfft voxels); too large washes out the signal.
-    apply_gauge_fix : bool
-        If True, apply the half-volume gauge fix (Hermitian project
-        + radial band-limit + real-volume orthonormalize) after the
-        CG solve. **Default False** per the v0 design choice not to
-        apply masks/gridding inside the PPCA path. Set True only
-        when comparing against tests that expect the canonical
-        gauge.
-    cg_tol : float
-        Conjugate-gradient relative residual tolerance. With the
-        default early-stopping ``cg_maxiter=10`` this rarely
-        triggers in practice.
-    cg_maxiter : int
-        Conjugate-gradient iteration cap. **Default 10** uses early
-        stopping as the regularizer for the ill-conditioned operator
-        — more iterations just fit noise into the rfft nullspace.
-        The "few-step inner loop" idiom matches Tipping & Bishop's
-        original PPCA EM paper.
+        Tikhonov regularizer added to the diagonal of every per-voxel
+        ``M[v]``. Default ``1e-4`` is small (just enough to keep the
+        per-voxel solve well-conditioned at voxels with very low CTF²
+        coverage); the per-voxel system is well-conditioned almost
+        everywhere, so the ridge mostly only matters in the corners
+        of the half-volume that no rotation touches.
 
     Returns
     -------
     PPCAInit with U updated; mu, s, volume_shape unchanged.
     """
-    from recovar.core.slicing import adjoint_slice_volume, slice_volume
+    from recovar.core.slicing import adjoint_slice_volume
 
     image_shape = config.image_shape
     volume_shape = config.volume_shape
     weights_half_image = make_half_image_weights(image_shape)
-    weights_half_volume = make_half_volume_weights(volume_shape)
 
-    # ---- 1. E-step (gamma, m, Hinv) under the current (mu, U, s) ----
+    # -----------------------------------------------------------------
+    # 1. E-STEP — get gamma, m, Hinv for the current (mu, U, s).
+    # -----------------------------------------------------------------
+    # The score kernel handles the latent-z marginalization (gives us
+    # the Gaussian posterior of alpha given y, g, t) and the discrete
+    # pose marginalization (gives us responsibilities gamma over the
+    # fixed (rotation, translation) grid).
     mean_proj_half = _slice_mu_half(init.mu, rotations, image_shape, volume_shape).astype(jnp.complex128)
     u_proj_half = _slice_U_half(init.U, rotations, image_shape, volume_shape).astype(jnp.complex128)
     shifted_half, ctf2_over_nv_half, _ctf_half = _preprocess_batch_to_half(
@@ -591,38 +585,71 @@ def update_factor_closed_form(
         ctf2_over_nv_half,
         weights_half_image,
     )
-
-    gamma = jnp.exp(stats.log_resp)  # (n_img, n_rot, n_trans)
-    m = stats.post_mean  # (n_img, n_rot, n_trans, q)
-    Hinv = stats.post_Hinv  # (n_img, n_rot, q, q)
+    gamma = jnp.exp(stats.log_resp)  # (n_img, n_rot, n_trans)  responsibilities
+    m = stats.post_mean  # (n_img, n_rot, n_trans, q)  E[alpha | y, g, t]
+    Hinv = stats.post_Hinv  # (n_img, n_rot, q, q)        Cov(alpha | y, g)
 
     n_img, n_rot, n_trans, q = m.shape
-    n_half_image = ctf2_over_nv_half.shape[-1]
     half_volume_size = init.U.shape[-1]
 
-    # Second moment C[i,g,t] = Hinv[i,g] + m[i,g,t] m[i,g,t]^T
-    Hinv_b = Hinv[:, :, None, :, :]  # (n_img, n_rot, 1, q, q)
-    mm_outer = m[..., :, None] * m[..., None, :]  # (n_img, n_rot, n_trans, q, q)
-    C = Hinv_b + mm_outer  # (n_img, n_rot, n_trans, q, q)
+    # Second moment C[i, g, t] = Hinv[i, g] + m[i, g, t] m[i, g, t]^T.
+    # This is what gets multiplied into the per-pose CTF^2 accumulator.
+    # Note: Hinv has no n_trans axis (the kernel says posterior cov is
+    # translation-independent, see posterior.py docstring), so we
+    # broadcast it.
+    Hinv_b = Hinv[:, :, None, :, :]  # (n_img, n_rot, 1,        q, q)
+    mm_outer = m[..., :, None] * m[..., None, :]  # (n_img, n_rot, n_trans,  q, q)
+    C = Hinv_b + mm_outer  # (n_img, n_rot, n_trans,  q, q)
 
-    # ---- 2. Precompute the per-pose pixel-space (q, q) weight tensor for T ----
-    # weight_M[i, g, k, l] = sum_t gamma[i,g,t] * C[i,g,t,k,l]
-    weight_M_kl = jnp.einsum("igt,igtkl->igkl", gamma, C)  # (n_img, n_rot, q, q)
-    # ctf2_w[i, p] = w_p · (CTF^2/sigma^2)[i, p]   (Hermitian weights baked in)
+    # -----------------------------------------------------------------
+    # 2. ASSEMBLE M_im AND B_im IN PER-POSE IMAGE SPACE.
+    # -----------------------------------------------------------------
+    # The big sum over (i, g, t) factors into:
+    #   - sum over i of (γ * C * CTF²/σ²) which is a (n_img -> n_rot)
+    #     contraction with the per-image CTF² weights;
+    #   - one adj_slice per pose to get the half-volume accumulator.
+    #
+    # We bake the rfft Hermitian weights `w` into ctf2 here so that
+    # subsequent inner products are in the full-image sense.
+
     ctf2_w = ctf2_over_nv_half * weights_half_image[None, :]  # (n_img, n_half_image)
-    # M_im[g, k, l, p] = sum_i weight_M[i,g,k,l] * ctf2_w[i, p]
+    #         ^^^^^^^^^^^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^^^
+    #         per-image CTF^2/σ²    rfft Hermitian weights w_p
+
+    # ---- M_im[g, k, l, p] : per-pose, per-(k,l), per-pixel weight ----
+    # Math:  M_im[g,k,l,p] = sum_i [ sum_t gamma_{igt} C_{igt,kl} ] · ctf2_w[i,p]
+    weight_M_kl = jnp.einsum("igt,igtkl->igkl", gamma, C)  # (n_img, n_rot, q, q)
     M_im = jnp.einsum("igkl,ip->gklp", weight_M_kl, ctf2_w)  # (n_rot, q, q, n_half_image)
 
-    # ---- 3. Build the RHS B (q half-volumes) ----
-    # B residual_im = shifted_half - (CTF^2/sigma^2) · mean_proj   (per (i,g,t))
-    # B_im[g, k, p] = sum_{i,t} gamma * m_k * residual_im (with Hermitian weight w)
+    # ---- B_im[g, k, p] : per-pose, per-k, per-pixel residual ----
+    # Math:  residual_{igt,p} = shifted_half[i,t,p] - ctf2_over_nv[i,p] · mean_proj[g,p]
+    #        B_im[g,k,p]      = sum_{i,t} gamma_{igt} · m_{igt,k} · w_p · residual_{igt,p}
+    #
+    # We split residual into shifted-part minus mean-part to avoid
+    # materializing the full (n_img, n_rot, n_trans, n_half_image)
+    # tensor:
+    #
+    #     Part1 = sum_{i,t} (gamma * m_k) · (w · shifted_half)
+    #     Part2 = mean_proj[g] · sum_{i,t} (gamma * m_k) · ctf2_w[i]
+    #     B_im  = Part1 - Part2
+
     weight_B = gamma[..., None] * m  # (n_img, n_rot, n_trans, q)
-    shifted_w = shifted_half * weights_half_image[None, None, :]  # (n_img, n_trans, n_half_image)
+    shifted_w = shifted_half * weights_half_image[None, None, :]  # (n_img, n_trans,         n_half_image)
     Part1 = jnp.einsum("igtk,itp->gkp", weight_B, shifted_w)  # (n_rot, q, n_half_image)
+
     weight_B_t = jnp.sum(weight_B, axis=2)  # (n_img, n_rot, q)
     M_const = jnp.einsum("igk,ip->gkp", weight_B_t, ctf2_w)  # (n_rot, q, n_half_image)
     Part2 = mean_proj_half[:, None, :] * M_const  # (n_rot, q, n_half_image)
     B_im = Part1 - Part2  # (n_rot, q, n_half_image)
+
+    # -----------------------------------------------------------------
+    # 3. BACK-PROJECT EACH ACCUMULATOR INTO THE HALF-VOLUME.
+    # -----------------------------------------------------------------
+    # Under nearest discretization, adj_slice[v] = sum over pixels
+    # that map to voxel v (each pixel maps to exactly one voxel). So:
+    #
+    #     M[v]_kl = adj_slice( M_im[:, k, l, :] )[v]
+    #     B[v, k] = adj_slice( B_im[:, k,    :] )[v]
 
     def _adj_one(im_per_rot):
         # (n_rot, n_half_image) -> (half_volume_size,)
@@ -631,77 +658,38 @@ def update_factor_closed_form(
             rotations,
             image_shape,
             volume_shape,
-            "linear_interp",
+            "nearest",  # binary A_g => exact diagonal solve below
             half_image=True,
             half_volume=True,
         ).reshape(-1)
 
-    def _slice_one_vol(vol_half):
-        # (half_volume_size,) -> (n_rot, n_half_image)
-        return slice_volume(
-            vol_half,
-            rotations,
-            image_shape,
-            volume_shape,
-            "linear_interp",
-            half_volume=True,
-            half_image=True,
-        )
-
     # B_voxel: (q, half_volume_size)
     B_voxel = jax.vmap(_adj_one, in_axes=1)(B_im)
 
-    # ---- 4. Build the matvec T(U) + lambda U ----
-    def matvec(U_flat):
-        # CG operates on flat real arrays. We pack/unpack via real/imag parts.
-        # U_flat shape: (2 * q * half_volume_size,)
-        U_real = U_flat[: q * half_volume_size].reshape(q, half_volume_size)
-        U_imag = U_flat[q * half_volume_size :].reshape(q, half_volume_size)
-        U = (U_real + 1j * U_imag).astype(jnp.complex128)
+    # M_voxel: (q, q, half_volume_size). vmap over the (q*q) middle axis.
+    M_im_flat = M_im.reshape(n_rot, q * q, M_im.shape[-1])  # (n_rot, q*q, n_half_image)
+    M_voxel_flat = jax.vmap(_adj_one, in_axes=1)(M_im_flat)  # (q*q, half_volume_size)
+    M_voxel = M_voxel_flat.reshape(q, q, half_volume_size)  # (q, q, V_half)
 
-        # Slice each U[k] through all rotations: u_proj[k, g, p]
-        u_proj = jax.vmap(_slice_one_vol)(U)  # (q, n_rot, n_half_image)
-        u_proj = jnp.swapaxes(u_proj, 0, 1)  # (n_rot, q, n_half_image)
+    # M[v] should be Hermitian PSD by construction (sum of γ·Ψ·C with
+    # C ≽ 0 and Ψ ≥ 0). Symmetrize to clean up numerical asymmetry
+    # from the float64 GEMMs above.
+    M_voxel = 0.5 * (M_voxel + jnp.conj(jnp.swapaxes(M_voxel, 0, 1)))
 
-        # T_im[g, k, p] = sum_l u_proj[g, l, p] * M_im[g, k, l, p]
-        T_im = jnp.einsum("glp,gklp->gkp", u_proj, M_im.astype(u_proj.dtype))  # (n_rot, q, n_half_image)
+    # -----------------------------------------------------------------
+    # 4. PER-VOXEL DIRECT SOLVE.
+    # -----------------------------------------------------------------
+    # For each voxel v: solve  (M[v] + λ I_q) · U[v, :]  =  B[v, :].
+    # vmap over the voxel axis. Cost: V_half * O(q^3) flops, trivial
+    # for q ~ 2-10.
+    eye_q = jnp.eye(q, dtype=jnp.complex128)
+    M_with_ridge = M_voxel + ridge_lambda * eye_q[:, :, None]  # (q, q, V_half)
 
-        # Adjoint slice each T_im[k] back to a half-volume
-        T_U = jax.vmap(_adj_one, in_axes=1)(T_im)  # (q, half_volume_size)
+    M_per_voxel = jnp.moveaxis(M_with_ridge, -1, 0)  # (V_half, q, q)
+    B_per_voxel = jnp.moveaxis(B_voxel, -1, 0)  # (V_half, q)
 
-        T_U = T_U + ridge_lambda * U
-        # Re-flatten as real
-        out_real = T_U.real.reshape(-1)
-        out_imag = T_U.imag.reshape(-1)
-        return jnp.concatenate([out_real, out_imag])
-
-    # ---- 5. Solve T(U) + lambda U = B with conjugate gradient ----
-    # NOTE: this operator has a numerical near-nullspace from the
-    # half-volume rfft layout (imaginary parts of constrained voxels
-    # are unobservable). Letting CG run too long over-fits noise into
-    # the near-null modes, so we use early stopping (small `cg_maxiter`)
-    # as the natural regularizer. The empirical sweet spot at vol 8-32
-    # is ~30-50 iterations; the default `cg_maxiter=30` matches the
-    # PPCA "few-step inner loop" idiom from Tipping & Bishop.
-    rhs_flat = jnp.concatenate([B_voxel.real.reshape(-1), B_voxel.imag.reshape(-1)])
-    U0_flat = jnp.concatenate([init.U.real.reshape(-1), init.U.imag.reshape(-1)])
-
-    sol_flat, _info = jax.scipy.sparse.linalg.cg(
-        matvec,
-        rhs_flat,
-        x0=U0_flat,
-        tol=cg_tol,
-        maxiter=cg_maxiter,
-    )
-    U_real = sol_flat[: q * half_volume_size].reshape(q, half_volume_size)
-    U_imag = sol_flat[q * half_volume_size :].reshape(q, half_volume_size)
-    U_new = (U_real + 1j * U_imag).astype(jnp.complex128)
-
-    # ---- 6. Optional gauge fix (band limit + real-volume orthonormalize) ----
-    if apply_gauge_fix:
-        if k_max is None:
-            k_max = float(volume_shape[0]) / 4.0
-        U_new = _project_factor(U_new, volume_shape, k_max, weights_half_volume)
+    U_per_voxel = jax.vmap(jnp.linalg.solve)(M_per_voxel, B_per_voxel)  # (V_half, q)
+    U_new = jnp.moveaxis(U_per_voxel, 0, -1).astype(jnp.complex128)  # (q, V_half)
 
     return PPCAInit(
         mu=init.mu,

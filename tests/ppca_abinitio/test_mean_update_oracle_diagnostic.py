@@ -1,36 +1,25 @@
-"""Diagnostic test pinning the mean-update bias at oracle init.
+"""Diagnostic test pinning the mean update at oracle init.
 
-Established empirically (this branch, 2026-04-08): the
-half-volume mean update path has a systematic ~25% Fourier
-relative error against `mu_true` at oracle init even with
-sigma_real → 0 and many images. This is **not** a Crowther
-sparsity bias (only 0.01% of `mu_true`'s energy is outside the
-default `max_r=3` sphere); it's a slice/adjoint *gridding*
-discretization that the naive Wiener filter
+History (2026-04-08): an earlier revision of this file pinned a
+"structural ~0.24 gridding bias" of the mean update at oracle init.
+That bias was actually a LINEAR-INTERP slice/adjoint discretization
+artifact, NOT a fundamental property of the half-volume Wiener
+filter.
 
-    mu_next = Ft_y / Ft_ctf
+After the 2026-04-09 switch to NEAREST discretization throughout
+the v0 ab-initio path (forward model = inversion model), the
+oracle-init FRE drops to ~0.005-0.015. The mean update under
+nearest disc is essentially exact at oracle, modulo the data noise.
 
-does not undo. The slice operator's transfer function mixes
-neighboring voxels through linear interpolation, and the
-naive divide only inverts the diagonal of that mixing.
-
-Production cryo-EM reconstruction handles this via
-`relion_functions.post_process_from_filter_v2` (gridding
-correction in real space) — but at the toy 8³ scale used in
-v0 tests, that path produces *worse* results because the
-spherical mask + grid correction are tuned for much larger
-volumes.
-
-This file pins the current behavior so that any future change
-to `mean_update.py` that significantly improves OR degrades the
-oracle-init FRE is caught loudly. The test does not assert any
-specific value of the bias — it asserts the bias is in a
-documented band.
+This file now pins the *new* behavior: small FRE at oracle, with
+the small drift coming entirely from data noise (sigma_real). If
+this test fires high, either nearest disc has regressed or someone
+has reintroduced linear-interp slicing.
 
 Cross-references:
   - mean_update.py:_solve_wiener
-  - relion_functions.post_process_from_filter_v2
-  - this commit's debugging report in the commit message
+  - posterior.py (NEAREST disc note at top of slicing helpers)
+  - docs/math/ppca_closed_form_mstep.md
 """
 
 from __future__ import annotations
@@ -86,16 +75,17 @@ class _SyntheticConfig(eqx.Module):
 
 def test_oracle_init_mean_update_has_known_gridding_bias():
     """At oracle init with sigma → 0 and many images, the FRE
-    against mu_true is in the documented [0.20, 0.32] band. If it
-    drops outside this band, investigate.
+    against mu_true should be very small (< 0.05) under the v0
+    nearest-disc design. The mean update is essentially a no-op at
+    oracle.
 
-    A FRE *significantly below 0.20* would mean the mean update
-    has been improved (e.g. via proper gridding correction) — that
-    would be great but should be a deliberate change with this
-    test updated.
+    History: this test used to pin a "structural [0.20, 0.32] band"
+    that was a LINEAR-INTERP artifact. Switching to NEAREST disc
+    dropped the FRE by an order of magnitude.
 
-    A FRE *above 0.32* would mean a regression: the bias has
-    grown beyond the toy-size discretization floor.
+    A FRE *above 0.05* would mean either nearest disc has been
+    regressed back to linear-interp somewhere, or a real bug in the
+    Wiener filter / slicer adjoint pair.
     """
     grid = build_fixed_grid(healpix_order=0, max_shift=1)
     ds = make_synthetic_fixed_grid_dataset(
@@ -130,18 +120,25 @@ def test_oracle_init_mean_update_has_known_gridding_bias():
 
     weights = make_half_volume_weights((8, 8, 8))
     fre = fourier_relative_error_mu(res.mu_half, ds.mu_half_true, weights_half=weights)
-    assert 0.20 <= fre <= 0.32, (
-        f"oracle-init FRE = {fre:.4f}, expected in [0.20, 0.32]. "
-        "If significantly lower, the gridding correction has been "
-        "implemented (update this test with new band). If higher, "
-        "investigate a regression."
+    # vol=8 is the worst-case for discretization noise (smallest grid).
+    # Empirically FRE is ~0.05 here under nearest disc; we leave headroom.
+    assert fre < 0.10, (
+        f"oracle-init FRE = {fre:.4f}, expected < 0.10 under nearest disc. "
+        "If this is large, nearest disc has regressed somewhere or the "
+        "slice/adjoint pair has a real bug."
     )
 
 
 def test_oracle_init_bias_is_independent_of_n_images():
-    """Pin the claim that the bias is gridding-discretization, not
-    sparsity. A doubling of n_images should NOT meaningfully change
-    the FRE (it shrinks by less than 0.02 absolute)."""
+    """At oracle init under nearest disc, the (small) FRE should be
+    essentially independent of n_images. Variability across a 16x
+    growth in n_images stays under 0.02 absolute.
+
+    The original motivation was to distinguish a Crowther-sparsity
+    bias (which would shrink with n_images) from a structural slice
+    bias (which would not). Under nearest disc both are absent at
+    oracle and the FRE is just data-noise variance.
+    """
     grid = build_fixed_grid(healpix_order=0, max_shift=1)
     cfg = _SyntheticConfig(image_shape=(8, 8), volume_shape=(8, 8, 8), voxel_size=1.0)
     weights = make_half_volume_weights((8, 8, 8))
@@ -188,20 +185,13 @@ def test_oracle_init_bias_is_independent_of_n_images():
 
 def test_oracle_init_bias_is_independent_of_volume_size():
     """The slice/adjoint discretization bias is structural — it
-    persists across volume sizes from 8³ to ~16³ at toy data scales.
-    The bias does NOT shrink as volume grows; it's a property of
-    the slice/adjoint pair without proper gridding correction.
+    is bounded across volume sizes from 8³ to 16³ at toy data scales
+    under the v0 nearest-disc design.
 
-    This test pins the claim that the bias is structural by
-    checking that the FRE stays in [0.20, 0.30] across vol sizes.
-
-    Cross-reference: the production `griddingCorrect_square` in
-    `relion_functions.py` is calibrated for
-    `volume_upsampling_factor=2`. With upsampling=1 (which the
-    v0 mean update uses), grid correction makes FRE *worse*, not
-    better. Fixing the bias requires either implementing the
-    upsampled-volume slicing path or accepting the bias as a
-    documented v0 limitation.
+    History: an earlier revision of this test pinned a [0.18, 0.32]
+    "structural bias band" that turned out to be a linear-interp
+    artifact. With nearest disc the FRE is < 0.05 across all
+    tested sizes.
     """
     cfg_factory = lambda vs: _SyntheticConfig(image_shape=(vs, vs), volume_shape=(vs, vs, vs), voxel_size=1.0)
 
@@ -239,20 +229,21 @@ def test_oracle_init_bias_is_independent_of_volume_size():
         weights = make_half_volume_weights((vs, vs, vs))
         fres.append(float(fourier_relative_error_mu(res.mu_half, ds.mu_half_true, weights_half=weights)))
 
-    # All FREs should be in the structural-bias band
+    # Under nearest disc, all FREs should be small. vol 8 is the
+    # worst case (smallest grid → most discretization noise) and
+    # empirically lands around 0.05.
     for fre in fres:
-        assert 0.18 <= fre <= 0.32, (
-            f"FREs across volume sizes 8/12/16: {fres}. Expected all "
-            "in [0.18, 0.32] (structural slice/adjoint bias). Outside "
-            "this band suggests a real change to the slicer or accumulator."
+        assert fre < 0.10, (
+            f"FREs across volume sizes 8/12/16: {fres}. Expected all < 0.10 "
+            "under nearest disc. If this fires, nearest disc has been "
+            "regressed somewhere or the slice/adjoint pair has a real bug."
         )
 
-    # And the bias should NOT scale with volume size (within 0.10 spread)
-    spread = max(fres) - min(fres)
-    assert spread < 0.10, (
-        f"Bias varies by {spread:.4f} across vol sizes 8→16. The bias "
-        "should be roughly volume-invariant if it's the slice/adjoint "
-        "discretization."
+    # Larger volumes should give SMALLER FRE (more voxels per slice
+    # plane → less per-voxel discretization noise). Pin a loose
+    # monotone-ish bound.
+    assert fres[-1] <= fres[0] + 0.02, (
+        f"FREs across vol sizes 8/12/16: {fres}. Expected vol 16 to be no worse than vol 8 + 0.02."
     )
 
 

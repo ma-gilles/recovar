@@ -237,13 +237,19 @@ def _solve_wiener(Ft_y_half, Ft_ctf_half, tau, *, min_tau_frac: float = 0.05):
 
 
 def _backproject_to_half_volume(per_r_half, rotations, image_shape, volume_shape):
-    """One adjoint_slice_volume call on the full rotation stack."""
+    """One adjoint_slice_volume call on the full rotation stack.
+
+    Uses nearest discretization to match the forward model in
+    `posterior.py` (and the simulator). With nearest, A_g is binary,
+    so the back-projection scatters each pixel into exactly one voxel
+    — this is what makes the M-step's diagonal-block solve exact.
+    """
     return adjoint_slice_volume(
         per_r_half,
         rotations,
         image_shape,
         volume_shape,
-        "linear_interp",
+        "nearest",
         half_image=True,
         half_volume=True,
     )

@@ -142,31 +142,44 @@ is a `(V·q) × (V·q)` operator (V the volume size, q the latent
 dimension). It cannot be materialized as a dense matrix at any
 realistic scale.
 
-## The per-voxel diagonal approximation
+## The per-voxel direct solve (exact under nearest disc)
 
 The operator `A_g^* (CTF² / σ²) A_g` is the back-projection of
 `CTF² / σ²` through pose `g` followed by re-slicing through the
 same pose. In voxel space, it is the slice-then-adjoint-slice
-operator weighted per-pixel by `CTF² / σ²`. With **nearest-gridpoint
-discretization** each pixel touches exactly one voxel, so this
-operator is **diagonal** in the volume basis: voxel `v` accumulates
-`CTF² / σ²` at the pixel where it lands and does not couple to any
-other voxel. With **linear-interpolation discretization** each
-pixel touches eight voxels with weights, so the operator has
-nearest-neighbor coupling — but the diagonal entry still dominates,
-and the **diagonal approximation**
+operator weighted per-pixel by `CTF² / σ²`.
+
+**The v0 ab-initio path uses NEAREST discretization throughout**
+(simulator + score kernel + mean update + M-step). Under nearest,
+`A_g[pixel, voxel]` is binary: each pixel touches exactly one voxel.
+As a consequence, the operator
 
 ```
-A_g^* (CTF² / σ²) A_g  ≈  diag( Ψ_{i,g}[v] )
-Ψ_{i,g}[v] = (per-voxel back-projected CTF² / σ²)[v]
+A_g^* (CTF² / σ²) A_g  =  diag( Ψ_{i,g}[v] )       (EXACT under nearest)
+Ψ_{i,g}[v] = Σ_pixel A_g[pixel, v] · (CTF_i² / σ_i²)[pixel]
+           = adj_slice_g( CTF_i² / σ_i² )[v]
 ```
 
-is the standard simplification used throughout cryo-EM PPCA-style
-methods (it is what `recovar/heterogeneity/ppca.py`'s
-`batch_get_nearest_gridpoint_indices` path computes exactly, and
-what `HeterogeneousEMState` uses for its covariance accumulators).
+is **exactly** diagonal in the volume basis (no off-voxel coupling).
+The matrix entry at voxel `v` is just the per-voxel back-projection
+of CTF²/σ², a single number.
 
-Under the diagonal approximation, the U-equation **decouples per
+For comparison: under linear-interpolation slicing, each pixel touches
+up to 8 voxels with fractional weights, so the operator has nearest-
+neighbor coupling and the per-voxel diagonal version is only an
+approximation (verified ~80% per-voxel relative error at vol 8 in
+the v0 debugging session). The choice to keep v0 on nearest disc was
+made specifically so the M-step stays a direct block solve. See the
+top-of-module comment in `recovar/em/ppca_abinitio/posterior.py` for
+the rationale and trade-offs.
+
+The fixed-pose `recovar/heterogeneity/ppca.py::M_step` also uses
+nearest disc — via `batch_get_nearest_gridpoint_indices` — so the
+two implementations share the same exact per-voxel structure.
+`HeterogeneousEMState` uses the same approach for its covariance
+accumulators.
+
+Because the operator is diagonal, the U-equation **decouples per
 voxel**:
 
 ```

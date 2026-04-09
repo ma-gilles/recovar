@@ -85,15 +85,40 @@ def make_half_image_weights(image_shape) -> jnp.ndarray:
 # ---------------------------------------------------------------------------
 
 
+# NOTE: v0 ab-initio uses NEAREST discretization throughout. The
+# rationale (per the design memo of 2026-04-09):
+#
+#   1. Forward model parity. The synthetic simulator and the inversion
+#      code use the same slice operator A_g, so there is no
+#      forward/inverse mismatch contributing to the FRE floor.
+#
+#   2. Diagonal M-step operator. With nearest, A_g[pixel, voxel] is
+#      binary (0 or 1), so the per-pose Gram operator
+#      `A_g^T diag(CTF^2/sigma^2) A_g` is exactly diagonal in the
+#      voxel basis. This makes the PPCA M-step a per-voxel q×q solve
+#      with no PCG, no preconditioner, and no nullspace handling.
+#
+#   3. No mask, no gridding correction. Both of those are deferred
+#      post-v0; nearest sidesteps them entirely.
+#
+# If we ever switch to linear-interp slicing, the per-voxel diagonal
+# approximation has ~80% relative error per voxel and the M-step
+# requires either a kernel-regression reinterpretation or a CG solve.
+# See `docs/math/ppca_closed_form_mstep.md` for the discussion.
+
+
 def _slice_mu_half(mu_half, rotations, image_shape, volume_shape) -> jnp.ndarray:
     """Slice the half-volume `mu` through `rotations`. Returns
-    `(n_rot, half_image_size)` complex128."""
+    `(n_rot, half_image_size)` complex128.
+
+    Uses nearest discretization (see module note above).
+    """
     return slice_volume(
         mu_half,
         rotations,
         image_shape,
         volume_shape,
-        "linear_interp",
+        "nearest",
         half_volume=True,
         half_image=True,
     )
@@ -101,7 +126,10 @@ def _slice_mu_half(mu_half, rotations, image_shape, volume_shape) -> jnp.ndarray
 
 def _slice_U_half(U_half, rotations, image_shape, volume_shape) -> jnp.ndarray:
     """Slice each row of `U_half` through `rotations`. Returns
-    `(n_rot, q, half_image_size)` complex128."""
+    `(n_rot, q, half_image_size)` complex128.
+
+    Uses nearest discretization (see module note above).
+    """
 
     def slice_one(u_row):
         return slice_volume(
@@ -109,7 +137,7 @@ def _slice_U_half(U_half, rotations, image_shape, volume_shape) -> jnp.ndarray:
             rotations,
             image_shape,
             volume_shape,
-            "linear_interp",
+            "nearest",
             half_volume=True,
             half_image=True,
         )

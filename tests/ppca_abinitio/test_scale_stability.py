@@ -1,23 +1,28 @@
 """Pin the cross-volume stability of the fixed-grid PPCA loop.
 
-The mean update has a documented gridding-discretization bias at
-oracle init (~0.24 FRE), characterized in
-`test_mean_update_oracle_diagnostic.py` at vol 8. This file extends
-that characterization to vol 12, 16, 24, 32 and pins the claim that:
+History: an earlier revision of this file pinned a "structural
+gridding bias" of FRE ~0.24 across all volume sizes. After the
+2026-04-09 switch to NEAREST discretization throughout the v0
+ab-initio path (forward model = inversion model), that "structural"
+bias dropped to FRE ~0.01-0.02. The bias was a linear-interp
+artifact, not a fundamental property of the slice operator.
 
-  1. The bias is roughly volume-INVARIANT (does not shrink with N).
+What this file pins now (post-nearest):
+
+  1. From oracle init the loop preserves mu to FRE < 0.05 across
+     vol 12, 16, 24, 32. (Was [0.18, 0.32]; now < 0.05.)
   2. The loop is stable at every size (no NaN, no blow-up).
-  3. The iter-to-iter drift is bounded (the loop reaches a fixed point
-     in the documented [0.20, 0.32] band).
+  3. The iter-to-iter drift is bounded.
   4. From a perturbed init, iter 1 makes meaningful progress.
 
 These tests run the actual code (not loading the JSON artifact) so a
 regression in `mean_update.py` or the slicer is caught by tests, not
 by re-running the scale-validation script. The artifact in
-`docs/math/ppca_abinitio_artifacts/scale_validation_v0.json` is the
-v0 reference snapshot kept for the PR description.
+`docs/math/ppca_abinitio_artifacts/scale_validation_v0.json` is a
+historical snapshot from BEFORE the nearest-disc switch and should
+NOT be used as the current reference.
 
-Marked `slow` — vol 32 needs a GPU and ~1s wall time.
+Marked `slow` — vol 32 needs a GPU.
 """
 
 from __future__ import annotations
@@ -109,28 +114,35 @@ def _run_one(volume_size, n_images, init_kind, n_iters):
 
 @pytest.mark.parametrize("volume_size,n_images", [(12, 256), (16, 256), (24, 384), (32, 512)])
 def test_loop_oracle_init_stable_across_volume_sizes(volume_size, n_images):
-    """Across vol 12, 16, 24, 32, oracle-init loop must:
-    - produce no NaN
-    - reach FRE in the structural-bias band [0.18, 0.32] within 3 iters
-    - not blow up beyond 0.4 at any iteration
+    """Across vol 12, 16, 24, 32, oracle-init mean-only loop must:
+      - produce no NaN
+      - keep FRE small (< 0.05) — i.e. mu stays near truth.
+
+    Under NEAREST discretization the slice/adjoint operators are an
+    exact pair, so the mean update at oracle init is essentially a
+    no-op modulo data noise. The "structural 0.24 bias" pinned by an
+    earlier revision of this test was a linear-interp artifact and
+    is gone now.
     """
     res = _run_one(volume_size, n_images, "oracle", n_iters=3)
     fre_traj = [m.fre_mu_val for m in res.iter_metrics]
     assert all(np.isfinite(fre_traj)), f"non-finite fre_traj at vol={volume_size}: {fre_traj}"
-    assert max(fre_traj) < 0.4, f"loop blew up at vol={volume_size}: {fre_traj}"
-    assert 0.18 <= fre_traj[-1] <= 0.32, (
-        f"vol={volume_size}: final FRE {fre_traj[-1]:.4f} outside structural band [0.18, 0.32]. "
-        f"Full traj: {fre_traj}. Either an improvement (lower) or a regression (higher) — "
-        f"investigate before relaxing this band."
+    assert max(fre_traj) < 0.05, (
+        f"vol={volume_size}: max FRE {max(fre_traj):.4f} > 0.05. "
+        f"Full traj: {fre_traj}. The mean update should preserve mu near oracle "
+        f"under nearest discretization. If this fires, the slicer or adjoint may "
+        f"have regressed."
     )
 
 
 def test_perturbed_init_iter1_makes_progress_at_vol_16():
     """At vol 16 from a 0.3-perturbed init, iter 1 must reduce FRE
-    by at least 0.04 absolute (the perturbation is 0.30, the fixed
-    point is ~0.24, so the reduction is bounded above by ~0.06)."""
+    by at least 0.20 absolute. With nearest discretization the mean
+    update is essentially exact, so a single iteration brings the
+    mu from a 0.30-perturbed init back to within ~0.02 of truth.
+    """
     res = _run_one(16, 512, "perturbed", n_iters=2)
     fre_traj = [m.fre_mu_val for m in res.iter_metrics]
-    assert fre_traj[1] < fre_traj[0] - 0.04, (
-        f"perturbed-init iter 1 made too little progress: {fre_traj}. Expected fre_traj[1] < fre_traj[0] - 0.04."
+    assert fre_traj[1] < fre_traj[0] - 0.20, (
+        f"perturbed-init iter 1 made too little progress: {fre_traj}. Expected fre_traj[1] < fre_traj[0] - 0.20."
     )
