@@ -784,10 +784,39 @@ def _configure_ppca_single_zdim(args, options):
     return basis_size
 
 
-def _make_ppca_initial_loading(volume_size, basis_size, seed=0, init_scale=0.01):
-    """Build a deterministic small random PPCA loading initialization."""
+def _make_ppca_initial_loading(volume_size, basis_size, seed=0, init_scale=0.01, volume_shape=None):
+    """Build a deterministic random PPCA loading initialization in half-Fourier space.
+
+    ``ppca.EM`` consumes ``W_initial`` as a half-Fourier (Hermitian-packed) array of
+    shape ``(half_vol_size, basis_size)``. Historically this helper returned a real
+    matrix of shape ``(volume_size, basis_size)``, which ``EM_step_half`` then
+    *index-sliced* via ``full_volume_to_half_volume`` — that helper is a Hermitian
+    pack on a centered Fourier array, so feeding it a real matrix produces structurally
+    garbage "Fourier" coefficients (no Hermitian symmetry, no spectral structure).
+    PPCA from that init reliably collapses every PC past ~3.
+
+    The fix: draw a random real volume per column, DFT it to centered Fourier, then
+    Hermitian-pack to half-volume. ``volume_shape`` must be supplied so we know how
+    to reshape; for backwards compatibility we infer a cubic shape from
+    ``volume_size`` if it's omitted.
+    """
     rng = np.random.default_rng(seed)
-    return rng.standard_normal((volume_size, basis_size)).astype(np.float32) * float(init_scale)
+    if volume_shape is None:
+        side = int(round(volume_size ** (1.0 / 3.0)))
+        if side ** 3 != int(volume_size):
+            raise ValueError(
+                f"volume_size={volume_size} is not a perfect cube; pass volume_shape explicitly"
+            )
+        volume_shape = (side, side, side)
+    volume_shape = tuple(int(s) for s in volume_shape)
+    from recovar.core import fourier_transform_utils as _ftu
+    half_vol_size = int(np.prod(_ftu.volume_shape_to_half_volume_shape(volume_shape)))
+    W_half = np.empty((half_vol_size, int(basis_size)), dtype=np.complex64)
+    for j in range(int(basis_size)):
+        real_vol = rng.standard_normal(volume_shape).astype(np.float32) * float(init_scale)
+        ft_full = _ftu.get_dft3(real_vol)
+        W_half[:, j] = _ftu.full_volume_to_half_volume(ft_full, volume_shape).reshape(-1)
+    return W_half
 
 
 def _rescale_ppca_posteriors(expected_zs, second_moment_zs, eigenvalues):
@@ -936,7 +965,9 @@ def _run_ppca_refinement(dataset, means, focus_mask, options, args, batch_size):
     )
     contrast_mode = _resolve_ppca_contrast_mode(args)
     contrast_grid = _resolve_ppca_contrast_grid(contrast_mode)
-    W_init = _make_ppca_initial_loading(dataset.volume_size, basis_size)
+    W_init = _make_ppca_initial_loading(
+        dataset.volume_size, basis_size, volume_shape=dataset.volume_shape
+    )
     prior_info = ppca_prior_estimation.estimate_hybrid_shell_prior_from_data(
         dataset,
         means.combined,
