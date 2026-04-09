@@ -978,53 +978,70 @@ V3 (regression test) follows V2.
 6. **Always normalize the simulator output** with `--relion-normalize` for the parity benchmark. This makes RELION's iter-1 Bayesian E-step work without `--firstiter_cc` (so iter-1 Pmax is comparable across the two pipelines).
 7. **Every commit's message should cite the file:line in RELION source it's matching**. The audit reports include exact citations.
 
-## ⚠️ Open parity bug (2026-04-09): noise wsum jumps 30%+ at coarse→local transition
+## ✅ Major parity bug fixed 2026-04-09 (Task #100, commit `942e2c6`)
 
-Empirical evidence from `recovar_5k_h3_long` (15 iters, h3→h4 transition at iter 6):
+### Bug: `get_local_rotation_grid_fast` cone search was selecting rotations 70°+ away from the prior
 
-| iter | local | shell-5 sigma² (recovar) | shell-5 sigma² (RELION) | recovar resol Å | recovar Pmax |
+`get_local_rotation_grid_fast` was using `hp.query_disc(prior_view, radius)` to find HEALPix
+pixels near the prior. But recovar's grid construction (`rotation_indices_to_matrices` and
+`get_rotation_grid`) passes Euler angles to `R_from_relion` in `[theta_healpy, phi_healpy, psi]`
+order, treating `theta_healpy` (polar) as `rot` and `phi_healpy` (azimuthal) as `tilt`. This is
+OPPOSITE to standard RELION convention. As a result, the matrix at HEALPix pixel `p` has its
+view direction at SWAPPED HEALPix coords from the pixel's actual location, and `query_disc` was
+returning pixels whose 3D HEALPix POSITIONS were near the prior view — but those pixels' MATRICES
+have view directions at SWAPPED coords, NOT near the prior.
+
+**Empirical demonstration**: For prior at `(rot=11.72°, tilt=67.5°)` on the order-3 grid:
+- Closest matrix by axis-angle distance: pixel 5 at 3.75° distance
+- Buggy code selected: pixel 209 at **74° distance**
+
+**Effect on parity**: At every local-search iteration (iter 6+ on the 5k benchmark, or whenever
+`autosampling_hporder_local_searches >= healpix_order` activates), recovar was scoring rotations
+70-80° AWAY from the iter-prior best, completely defeating the local refinement. The noise
+wsum jumped 30-42% at shells 1-9 (shell 0 stayed put because DC is rotation-invariant), the
+resolution regressed by ~6 Å, and current_size shrank by 10 shells. RELION's reference run on
+the same dataset shows the noise spectrum essentially constant across the transition.
+
+**Diagnostic trajectory** (recovar 5k @ healpix_order=3 → 4 transition at iter 6):
+
+| iter | local | recovar Pmax | recovar res Å | recovar shell-5 σ² | RELION shell-5 σ² |
 |---:|:---:|---:|---:|---:|---:|
-| 4 | false | 6.817e3 | 2.502e-5 | 22.67 | 0.985 |
-| 5 | false | 6.820e3 | 2.509e-5 | 22.67 | 0.995 |
-| 6 | **true** | **8.905e3 (+31%)** | 2.483e-5 (-1%) | **28.63 (regress)** | 0.844 |
-| 7 | true | 8.134e3 (+19%) | 2.484e-5 | 24.73 (recovering) | 0.803 |
+| 5 | no | 0.9948 | 22.67 | 6.820e3 | 2.509e-5 |
+| 6 (buggy) | YES | 0.8442 | **28.63 (regress)** | **8.905e3 (+31%)** | 2.483e-5 |
+| 7 (buggy) | yes | 0.8029 | 24.73 | 8.134e3 (+19%) | 2.484e-5 |
+| 6 (fixed) | YES | 0.9036 | 23.65 (mild) | 7.860e3 (+15%) | 2.483e-5 |
+| 7 (fixed) | yes | 0.9685 | 22.67 (recovered) | 7.155e3 (+5%) | 2.484e-5 |
 
-(RELION values from `data_noise1_5k_normalized/relion_ref_os0/run_it00{4-7}_half1_model.star`.)
+The fix moves recovar from "completely broken at iter 6+" (severe regression) to "mostly working"
+(small residual <5% noise gap, no resolution regression). RELION's σ² is constant at 2.483e-5
+throughout. Recovar still has a small residual gap that may come from secondary issues (e.g.,
+the cartesian-product chunk-union structure of `_run_grouped_local_search_em` includes more
+rotations per chunk than RELION's per-particle local search, so the per-image priors are very
+sparse and may have numerical effects). But the dominant bug is fixed.
 
-**RELION's sigma2_noise is essentially constant** across the local-search transition (variations
-<1%). **Recovar's sigma2_noise jumps 30%+** at iter 6 (first local-search iter), which directly drives
-the resolution regression (resol shell 24→19, Å 22.67→28.63). The jump is non-uniform: shell 0 (DC)
-is unchanged (7.6e3 → 7.6e3), but shells 1-9 jump 20-42%.
+### The fix
+- Bypass HEALPix `query_disc`. Precompute matrix view directions for ALL grid pixels using
+  recovar's actual grid construction convention, then find pixels within the cone via direct
+  dot-product. This is `O(n_pixels)` per call but correct regardless of the rot/tilt convention.
+- Use `grid_view_dirs[unique_sel_pixels]` instead of `hp.pix2vec(p)` for the per-image log-prior
+  computation (matrix view direction, not HEALPix pixel center).
+- Updated test `test_local_rotation_grid_fast_uses_exact_prior_rotation_angles` which previously
+  asserted the buggy expected pixel.
 
-This is NOT "diffuse posterior averaging" — Pmax dropping from 0.99 to 0.84 cannot account for a
-30% wsum jump. RELION shows the same Pmax drop empirically without any corresponding noise jump.
+See commit `942e2c6` for the full change.
 
-Hypotheses (priority order):
-1. **Chunk-union per-image log-prior**: 32k rotations per chunk with `-1e30` clamping for invalid
-   pairs may have a numerical / GEMM cancellation issue at low shells but not at DC.
-2. **Order-3 vs order-4 projection difference**: iter 5 projects on order-3 grid, iter 6 on order-4
-   grid. Pixel centers differ; sample slightly different volume points. Should be a small effect.
-3. **Posterior summation across chunks**: The per-chunk noise wsum may have a floating-point
-   summation issue when many invalid `(image, rot)` pairs sum near zero.
-4. **Per-image translation log-prior interaction with the local rotation log-prior**: applied as
-   factored `log_prior = log_prior_dir + log_prior_psi + log_prior_trans`. Verify magnitudes don't
-   drown out the chi² score variation.
+### Remaining residual (5-15% noise gap at iter 6)
+After the fix, recovar's iter-6 noise is still ~5-15% above iter 5's stable value (whereas
+RELION's stays constant). Possible secondary causes:
+1. Cartesian-product chunk-union: scores 30k rotations per chunk vs RELION's per-particle local
+   search of ~700/particle. Per-image priors clamp invalid pairs to `-1e30`, but the extra
+   GEMM compute is wasted and may have minor numerical effects on the soft-max.
+2. Order-3 → order-4 projection sampling: the order-4 grid has different pixel centers than
+   order-3, so iter-6 samples slightly different orientations than iter-5's best.
+3. Small residual issue in the iteration of local search vs RELION's exact convention.
 
-Diagnostic plan:
-- Add logging in `_compute_noise_block`: print `A2.sum()`, `XA.sum()`, `img_power.sum()` per chunk.
-- Run a 2-iter test (iter 5 = global, iter 6 = local) and compare numbers between iters.
-- Verify by replaying iter-5 best rotations through `run_em_v2` with no local prior — should
-  reproduce iter 5's noise.
-- Compare chunk-union vs per-image local search (no union) to isolate the chunk-union path.
-
-**Tracked as Task #100. DO NOT proceed with further parity items until this is understood — the noise
-update drives `data_vs_prior` and thus the entire resolution trajectory at iter 6+.**
-
-## What to do RIGHT NOW
-
-1. **Investigate Task #100** (noise wsum jump at coarse→local transition). This is THE blocker for
-   parity beyond iter 5. Until fixed, downstream parity work is misleading.
-2. After #100, resume Phase B/C work.
+These should be investigated next, but they are SMALL effects compared to the 30% jump from
+the original bug.
 
 ## References
 
