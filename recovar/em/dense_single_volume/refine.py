@@ -1599,9 +1599,43 @@ def _refine_relion_mode(
                 offset_range_pixels=None,
             )
             if use_local:
+                # For local search the per-chunk M-step only sees the
+                # cone-restricted rotation set (typically a few thousand
+                # rotations per image with high overlap across the chunk)
+                # rather than the full ~10⁶-rotation grid at healpix order
+                # 5+. Sizing the batch by the full grid produces ibs ≈ 5
+                # at order 5 → chunks of 5 images → ~500 chunks per half
+                # → ~7 hours per iter on the 5k benchmark.
+                #
+                # Estimate the per-image cone size from
+                #     fraction = (sigma_cutoff * biggest_sigma / pi)^2
+                # which is the spherical cap area as a fraction of the
+                # full SO(3) volume (good to within ~30% for reasonable
+                # cones). Use that to compute an effective rotation count
+                # equal to ``chunk_size * cone_size``, with a safety
+                # factor of 2x for cone-overlap inefficiency.
+                _biggest_sigma = float(max(sigma_rot, sigma_psi))
+                _cone_radius = 3.0 * _biggest_sigma  # sigma_cutoff=3.0
+                _cone_fraction = max(
+                    (_cone_radius / float(np.pi)) ** 2,
+                    1.0 / float(rotation_grid_size(local_search_order)),
+                )
+                _est_cone_rots = int(np.ceil(
+                    rotation_grid_size(local_search_order) * _cone_fraction
+                ))
+                # Per-chunk effective rotations ≈ 2 * cone_size
+                # (after dedup of overlapping cones).
+                _eff_n_rot = max(64, 2 * _est_cone_rots)
                 safe_ibs, safe_rbs = _safe_batch_sizes(
-                    rotation_grid_size(local_search_order),
+                    _eff_n_rot,
                     current_translations.shape[0],
+                )
+                logger.info(
+                    "Local search batch sizing: cone_radius=%.3f rad "
+                    "(%.2f deg), est_cone_rots=%d, eff_n_rot=%d "
+                    "→ image_batch_size=%d, rotation_block_size=%d",
+                    _cone_radius, np.rad2deg(_cone_radius),
+                    _est_cone_rots, _eff_n_rot, safe_ibs, safe_rbs,
                 )
                 Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k = _run_grouped_local_search_em(
                     experiment_datasets[k],
