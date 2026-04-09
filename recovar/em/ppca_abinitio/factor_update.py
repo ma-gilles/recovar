@@ -44,6 +44,7 @@ import numpy as np
 
 from .half_volume import (
     make_half_volume_weights,
+    project_to_real_volume_subspace_batch,
     radial_band_limit_half,
     real_volume_orthonormalize_half,
 )
@@ -170,11 +171,22 @@ def _build_loss_closure(
 def _project_factor(U_half, volume_shape, k_max, weights_half_volume):
     """Apply the half-volume projection chain from spec Section 8.3.3:
 
-    U_band = radial_band_limit_half(U_raw, volume_shape, k_max)
-    U_new  = real_volume_orthonormalize_half(U_band, weights, N_full)
+    U_real_proj = project_to_real_volume_subspace(U_raw, volume_shape)
+    U_band      = radial_band_limit_half(U_real_proj, volume_shape, k_max)
+    U_new       = real_volume_orthonormalize_half(U_band, weights, N_full)
+
+    The first step (`project_to_real_volume_subspace_batch`) is
+    load-bearing: `jax.value_and_grad` produces free complex
+    gradients that don't respect the half-volume rfft layout's
+    Hermitian-symmetry constraint, so the post-gradient `U` has
+    random imaginary content in conjugate-symmetric pairs. Without
+    this projection, the subsequent Cholesky orthonormalization
+    rotates `U` wildly. Caught by the oracle-init factor-update
+    diagnostic test on this branch.
     """
     N_full = int(np.prod(volume_shape))
-    U_band = radial_band_limit_half(U_half, volume_shape, k_max)
+    U_proj = project_to_real_volume_subspace_batch(U_half, volume_shape)
+    U_band = radial_band_limit_half(U_proj, volume_shape, k_max)
     return real_volume_orthonormalize_half(U_band, weights_half_volume, N_full)
 
 
@@ -245,7 +257,12 @@ def update_factor_one_outer_step(
     U = init.U
     for _step in range(inner_steps):
         _val, grad_U = grad_fn(U)
-        U = U - lr * grad_U
+        # JAX uses Wirtinger calculus: for a real-valued loss `f(z)`
+        # with complex `z`, `jax.grad f(z)` returns the conjugate of
+        # the descent direction. The actual steepest-descent step is
+        # `z - lr * conj(grad)`. This was caught by the
+        # gradient-direction diagnostic on this branch.
+        U = U - lr * grad_U.conj()
 
     # Real-volume gauge fix
     if k_max is None:
@@ -275,7 +292,7 @@ def update_factor_full_ecm(
     noise_variance_full,
     *,
     max_inner_steps: int = 200,
-    lr: float = 1e-2,
+    lr: float = 1e-4,
     grad_norm_tol: float = 1e-4,
     k_max: float | None = None,
     ridge_lambda: float = 1e-4,
@@ -367,11 +384,14 @@ def update_factor_full_ecm(
             converged = True
             break
 
+        # Wirtinger descent direction (see comment in
+        # update_factor_one_outer_step): conj(grad), not grad.
+        descent_dir = grad_U.conj()
         if line_search:
             trial_lr = cur_lr
             min_trial_lr = float(line_search_min_lr_frac * lr)
             while trial_lr > min_trial_lr:
-                U_trial = U - trial_lr * grad_U
+                U_trial = U - trial_lr * descent_dir
                 trial_loss = float(loss_fn(U_trial))
                 if trial_loss < cur_loss:
                     U = U_trial
@@ -384,7 +404,7 @@ def update_factor_full_ecm(
                 converged = True
                 break
         else:
-            U = U - cur_lr * grad_U
+            U = U - cur_lr * descent_dir
 
     # Final gauge fix
     if k_max is None:

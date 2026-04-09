@@ -96,7 +96,7 @@ def test_ecm_returns_valid_init_and_info():
         ds.ctf_params,
         ds.noise_variance_full,
         max_inner_steps=20,
-        lr=1e-2,
+        lr=1e-4,
         grad_norm_tol=1e-4,
     )
     assert out.U.shape == init.U.shape
@@ -124,7 +124,7 @@ def test_ecm_preserves_s_and_mu():
         ds.ctf_params,
         ds.noise_variance_full,
         max_inner_steps=20,
-        lr=1e-2,
+        lr=1e-4,
     )
     np.testing.assert_array_equal(np.asarray(out.s), np.asarray(init.s))
     np.testing.assert_array_equal(np.asarray(out.mu), np.asarray(init.mu))
@@ -141,7 +141,7 @@ def test_ecm_output_is_real_space_orthonormal():
         ds.ctf_params,
         ds.noise_variance_full,
         max_inner_steps=20,
-        lr=1e-2,
+        lr=1e-4,
     )
     weights = make_half_volume_weights(VOLUME_SHAPE)
     G = np.asarray(half_real_space_gram(out.U, weights, N_FULL))
@@ -161,7 +161,7 @@ def test_ecm_loss_is_monotone_decreasing_with_line_search():
         ds.ctf_params,
         ds.noise_variance_full,
         max_inner_steps=20,
-        lr=1e-2,
+        lr=1e-4,
         line_search=True,
     )
     assert info["final_loss"] <= info["initial_loss"] + 1e-9
@@ -196,7 +196,7 @@ def test_ecm_at_least_as_good_as_1c_on_projector_error():
         ds.ctf_params,
         ds.noise_variance_full,
         max_inner_steps=50,
-        lr=1e-2,
+        lr=1e-4,
         k_max=2.5,
         line_search=True,
     )

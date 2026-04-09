@@ -133,23 +133,53 @@ def _gaussian_blob_volume(volume_shape, sigma=0.4):
 
 
 def _sinusoidal_pcs_real(volume_shape, q):
-    """`q` orthogonal-ish low-frequency real-space PCs."""
+    """`q` orthonormal low-frequency real-space PCs.
+
+    Built as Gaussian-windowed polynomials (Hermite-like basis)
+    so that each PC's Fourier energy is concentrated near DC.
+    This makes the synthetic harness compatible with the
+    factor-update's default `k_max = grid_size // 4` band-limit
+    without losing significant signal. Then real-space Gram-
+    Schmidt / QR enforces mutual orthonormality under the
+    standard inner product.
+
+    Without the smooth basis, the previous cosine-based PCs had
+    7%+ of their energy outside `r <= grid_size/4` for the
+    default 8³ grid, which made the factor update's projection
+    chain destroy `U_true` even from oracle init. Caught by the
+    oracle-init factor-update diagnostic test on this branch.
+    """
     N0, N1, N2 = volume_shape
     z = np.linspace(-1, 1, N0)
     y = np.linspace(-1, 1, N1)
     x = np.linspace(-1, 1, N2)
     Z, Y, X = np.meshgrid(z, y, x, indexing="ij")
 
-    pcs = []
-    for k in range(q):
-        kz = (k % 2) + 1
-        ky = ((k // 2) % 2) + 1
-        kx = (k // 4) + 1
-        pc = np.cos(np.pi * kz * Z) * np.cos(np.pi * ky * Y) * np.cos(np.pi * kx * X)
-        # Normalize to unit L2 in real space
-        pc = pc / np.sqrt(np.sum(pc**2))
-        pcs.append(pc.astype(np.float64))
-    return np.stack(pcs)  # (q, N0, N1, N2)
+    sigma = 0.5  # Gaussian width relative to the volume half-extent
+    G = np.exp(-(Z**2 + Y**2 + X**2) / (2 * sigma**2))
+
+    raw_basis = [
+        Z * G,
+        Y * G,
+        X * G,
+        (Z * Y) * G,
+        (Z * X) * G,
+        (Y * X) * G,
+        (Z**2 - 1.0 / 3.0) * G,
+        (Y**2 - 1.0 / 3.0) * G,
+    ]
+    if q > len(raw_basis):
+        raise ValueError(
+            f"q={q} exceeds the number of synthetic PCs in the test "
+            f"basis ({len(raw_basis)}); add more entries to raw_basis."
+        )
+    pcs = np.stack(raw_basis[:q]).astype(np.float64)
+
+    # Gram-Schmidt / QR in real space.
+    flat = pcs.reshape(q, -1)
+    Q, _R = np.linalg.qr(flat.T)
+    flat_orth = Q.T[:q]
+    return flat_orth.reshape(q, N0, N1, N2)
 
 
 def _real_volume_to_half_flat(real_vol):

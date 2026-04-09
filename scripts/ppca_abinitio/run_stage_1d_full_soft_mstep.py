@@ -261,7 +261,7 @@ def _parse_args(argv=None):
     parser.add_argument("--eps-U", type=float, default=0.3)
     parser.add_argument("--factor-lr-1c", type=float, default=1e-3)
     parser.add_argument("--factor-inner-steps-1c", type=int, default=3)
-    parser.add_argument("--ecm-lr", type=float, default=1e-2)
+    parser.add_argument("--ecm-lr", type=float, default=1e-4)
     parser.add_argument("--ecm-max-inner-steps", type=int, default=50)
     parser.add_argument("--ecm-grad-tol", type=float, default=1e-4)
     parser.add_argument("--factor-k-max", type=float, default=2.5)

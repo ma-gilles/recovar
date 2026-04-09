@@ -196,3 +196,34 @@ def real_volume_to_half(real_vol: jnp.ndarray, volume_shape: Sequence[int]) -> j
     """
     half_grid = ftu.get_dft3_real(real_vol.reshape(tuple(volume_shape)))
     return half_grid.reshape(-1)
+
+
+def project_to_real_volume_subspace(v_flat_half: jnp.ndarray, volume_shape: Sequence[int]) -> jnp.ndarray:
+    """Project an arbitrary half-volume vector onto the subspace of
+    half-volumes that correspond to real-valued 3D volumes.
+
+    The half-volume rfft layout's "real-volume subspace" is the set
+    of complex arrays whose inverse rfft is purely real. Any complex
+    array of the right shape (N0, N1, N2//2+1) decodes via
+    `irfftn` (which discards the imaginary part of the implicit
+    inverse FFT), so the projection is the round-trip
+    `rfftn(irfftn(v))`. This is the closest real-volume vector to
+    `v` in the standard L2 norm.
+
+    Used in the factor update: gradient steps via
+    `jax.value_and_grad` produce free complex gradients that do
+    NOT respect the half-volume Hermitian structure. After
+    `U_step = U - lr * grad`, the result has random imaginary
+    content in the conjugate-symmetric pairs, and the subsequent
+    Cholesky orthonormalization rotates `U` wildly. Applying this
+    projection between the gradient step and the gauge fix
+    restores the constraint.
+    """
+    real_vol = half_to_real_volume(v_flat_half, volume_shape)
+    return real_volume_to_half(real_vol, volume_shape)
+
+
+def project_to_real_volume_subspace_batch(U_flat_half: jnp.ndarray, volume_shape: Sequence[int]) -> jnp.ndarray:
+    """Apply `project_to_real_volume_subspace` to each row of a
+    `(q, N_half)` matrix."""
+    return jax.vmap(lambda v: project_to_real_volume_subspace(v, volume_shape))(U_flat_half)
