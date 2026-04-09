@@ -19,6 +19,21 @@ Principal component analysis of the estimated covariance operator.
     options:
       members_order: source
 
+## ppca
+
+Probabilistic PCA — fixed-pose closed-form EM solver
+(Tipping & Bishop 1999). The per-voxel q×q M-step is the canonical
+in-tree reference for any recovar code that wants to do PPCA. The
+math is documented in
+[`docs/math/ppca_closed_form_mstep.md`](../../math/ppca_closed_form_mstep.md).
+
+For the pose-marginal (ab-initio) extension, see
+`recovar.em.ppca_abinitio.factor_update.update_factor_closed_form`.
+
+::: recovar.heterogeneity.ppca
+    options:
+      members_order: source
+
 ## embedding
 
 Per-image latent coordinate estimation via linear projection.
