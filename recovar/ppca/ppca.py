@@ -811,7 +811,8 @@ def _e_step_half_inner(
     images_half, mean, W_half, CTF_params, rotation_matrices, translations,
     voxel_size, noise_variance_half,
     image_shape, volume_shape, ctf_evaluator, compute_ll,
-    disc_type_mean="cubic", disc_type="linear_interp",
+    disc_type_mean, disc_type,
+    z_prior_precision_diag,  # (q,) array of 1/var per dim. Use jnp.ones(q) for identity prior.
 ):
     """JIT'd E-step core: computes sufficient stats and c=1 posterior.
 
@@ -855,8 +856,11 @@ def _e_step_half_inner(
     nu = jnp.sum(rfft_w * jnp.real(jnp.conj(projected_mean_half) * projected_mean_half), axis=-1)
     y_norm_sq = jnp.sum(rfft_w * jnp.real(jnp.conj(images_half) * images_half), axis=-1)
 
-    # Standard c=1 posterior (always computed — used for LL and as fallback)
-    M_n = H + jnp.eye(basis_size)
+    # Standard c=1 posterior (always computed — used for LL and as fallback).
+    # Caller always supplies z_prior_precision_diag (a (q,) array). For the
+    # default identity prior z ~ N(0, I), pass jnp.ones(q). For a calibrated
+    # prior z ~ N(0, diag(eig)), pass 1/eig.
+    M_n = H + jnp.diag(z_prior_precision_diag)
     b_n = (g - h)[..., None]
     M_n_inv = jax.numpy.linalg.pinv(M_n, hermitian=True)
     expected_zs = (M_n_inv @ b_n).squeeze(-1)
@@ -919,12 +923,20 @@ def E_M_step_batch_half(
     from recovar.ppca import contrast_posterior
 
     # --- JIT'd E-step: sufficient stats + c=1 posterior ---
+    # When `eigenvalues` is provided AND contrast_mode == "none", use it as the
+    # c=1 prior variance per component (z_k ~ N(0, eigenvalues[k])). Otherwise
+    # default to the identity prior (jnp.ones).
+    if eigenvalues is not None and contrast_mode == "none":
+        z_prior_precision_diag = 1.0 / jnp.maximum(jnp.asarray(eigenvalues, dtype=W_half.real.dtype), 1e-12)
+    else:
+        z_prior_precision_diag = jnp.ones(basis_size, dtype=W_half.real.dtype)
     (expected_zs, second_moment_zs, ctf_squared_half,
      images_half_w, projected_mean_half_w, CTF_half, ll_sum,
      H, g, h, t, nu, y_norm_sq) = _e_step_half_inner(
         images_half, mean, W_half, CTF_params, rotation_matrices,
         translations, voxel_size, noise_variance_half, image_shape,
         volume_shape, ctf_evaluator, compute_ll, disc_type_mean, disc_type,
+        z_prior_precision_diag,
     )
 
     # --- Contrast dispatch (outside JIT) ---
@@ -1065,13 +1077,11 @@ def EM_step_half(
     disc_type="linear_interp",
     recompute_ll=False,
     mean_estimate_raw=None,
-    use_pcg_mstep=False,
     volume_mask=None,
     pcg_lam=0.0,
     pcg_maxiter=20,
     W_prev_real=None,
     soft_penalty_lam=0.0,
-    mstep_solver_fn=None,
     contrast_mode="none",
     contrast_grid=None,
     contrast_weights=None,
@@ -1166,41 +1176,27 @@ def EM_step_half(
 
     # ------------------------------------------------------------------
     # M-step solve
+    #
+    # The M-step is unconditionally PCG (joint q×q masked least-squares,
+    # half-volume preconditioner, optional warmstart) when a non-trivial
+    # support mask is provided. With a trivial mask the per-voxel diagonal
+    # solve is exact, so we fall back to that — strictly an optimisation.
     # ------------------------------------------------------------------
-    if mstep_solver_fn is not None and volume_mask is not None:
-        # Custom solver variant (for benchmarking)
-        W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
-        reg_half = 1 / (W_prior_half + 1e-16)
-        W0 = None
-        if W_prev_real is not None:
-            W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))
+    W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
+    reg_half = 1 / (W_prior_half + 1e-16)
+    mask_is_trivial = volume_mask is None or np.all(np.asarray(volume_mask) == 1)
 
-        W_real, _solver_info = mstep_solver_fn(
-            lhs_summed, rhs_summed, reg_half,
-            jnp.array(volume_mask).reshape(volume_shape),
-            volume_shape, W0_real=W0,
-            maxiter=pcg_maxiter, tol=1e-4,
-            unpack_fn=unpack_tri_to_full,
-        )
-        W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T
-    elif use_pcg_mstep and volume_mask is not None:
-        # Full q×q PCG M-step with mask constraint.
-        # Passes upper-tri LHS directly — unpacked in chunks inside pcg_mstep.
+    if not mask_is_trivial:
         from recovar.reconstruction.pcg_mean import pcg_mstep
 
-        # Regularization in half-volume
-        W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
-        reg_half = 1 / (W_prior_half + 1e-16)
-
-        # Warmstart
         W0 = None
         if W_prev_real is not None:
             W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))
 
-        W_real, res_mstep = pcg_mstep(
-            lhs_summed,  # (half_vol, tri_sz) — upper-tri, memory-efficient
-            rhs_summed,  # (half_vol, q) — stays half
-            reg_half,  # (half_vol, q) — stays half
+        W_real, _res_mstep = pcg_mstep(
+            lhs_summed,           # (half_vol, tri_sz) upper-tri packed
+            rhs_summed,           # (half_vol, q)
+            reg_half,             # (half_vol, q)
             jnp.array(volume_mask).reshape(volume_shape),
             volume_shape,
             W0_real=W0,
@@ -1210,24 +1206,18 @@ def EM_step_half(
             soft_penalty_lam=soft_penalty_lam,
             unpack_fn=unpack_tri_to_full,
         )
-        # W_real: (q, D, D, D) → rfft3 → half-volume (q, half_vol)
-        W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T  # (half_vol, q)
+        # (q, D, D, D) real → (half_vol, q) half-Fourier
+        W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T
     else:
-        # Standard per-voxel solve (chunked)
-        W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
-        reg_diag = 1 / (W_prior_half + 1e-16)
-
+        # Trivial mask: per-voxel diagonal solve is exact and ~free.
         _SOLVE_CHUNK = 200_000
         W_half_parts = []
         for i0 in range(0, half_volume_size, _SOLVE_CHUNK):
             i1 = min(i0 + _SOLVE_CHUNK, half_volume_size)
             lhs_chunk = unpack_tri_to_full(lhs_summed[i0:i1], basis_size)
-            lhs_chunk = lhs_chunk + jax.vmap(jnp.diag)(reg_diag[i0:i1])
+            lhs_chunk = lhs_chunk + jax.vmap(jnp.diag)(reg_half[i0:i1])
             W_half_parts.append(jnp.linalg.solve(lhs_chunk, rhs_summed[i0:i1, :, None])[..., 0])
-        W_half = jnp.concatenate(W_half_parts, axis=0)
-        # Return W in half-volume format — caller uses irfft3 (get_idft3_real)
-        # to convert to real space, which is guaranteed real (no .real needed).
-        W = W_half  # (half_volume_size, q) complex, half-volume Fourier
+        W = jnp.concatenate(W_half_parts, axis=0)  # (half_vol, q)
 
     if jnp.any(jnp.isnan(W)):
         logger.error("EM_step_half: NaN in W after M-step")
@@ -1541,6 +1531,33 @@ def batch_unvec(x):
     return x.reshape(-1, n, n).swapaxes(-1, -2)
 
 
+def _orthonormalize_W_to_basis(W_half, volume_shape):
+    """Orthonormalise a half-Fourier loading matrix in real space.
+
+    Returns ``(U_real, s, Vt)`` where ``U_real`` has shape
+    ``(q, *volume_shape)`` and is orthonormal in the PPCA Fourier convention
+    (i.e. real-space norm = 1/√vol_size, Fourier-space norm = 1), and
+    ``s`` are the corresponding eigenvalues (squared singular values in
+    the Fourier convention). Used by :func:`EM` to take a clean basis
+    snapshot for projected-covariance refinement.
+    """
+    vs = volume_shape
+    half_vs = ftu.volume_shape_to_half_volume_shape(vs)
+    q = W_half.shape[1]
+    vol_size = int(np.prod(vs))
+
+    # half-Fourier rfft → real space, all q columns at once
+    W_half_arr = np.asarray(W_half).T.reshape(q, *half_vs)
+    W_real_vol = np.asarray(ftu.get_idft3_real(W_half_arr, vs))
+    W_real = W_real_vol.reshape(q, vol_size).T.astype(np.float32)
+
+    U_flat, S_real, Vt = np.linalg.svd(W_real, full_matrices=False)
+    s = (S_real ** 2 * vol_size).astype(np.float32)
+    U_flat = U_flat / np.sqrt(vol_size)
+    U_real = U_flat.T.reshape(q, *vs).astype(np.float32)
+    return U_real, s, Vt
+
+
 def EM(
     experiment_dataset,
     mean_estimate,
@@ -1556,21 +1573,26 @@ def EM(
     l1_sigma=None,
     disc_type_mean="cubic",
     disc_type="linear_interp",
+    disc_type_u="linear_interp",
     return_iteration_data=False,
     return_posterior_info=False,
     recompute_ll=False,
     use_pcg_mean=False,
     volume_mask=None,
+    dilated_volume_mask=None,
     pcg_lam=0.0,
     pcg_maxiter=20,
     noise_variance=None,
     soft_penalty_lam=0.0,
     use_gridding_correction=False,
-    mstep_solver_fn=None,
     contrast_mode="none",
     contrast_grid=None,
     contrast_mean=1.0,
     contrast_variance=np.inf,
+    projcov_every=0,
+    projcov_start=0,
+    bfit_whitening=True,
+    gpu_memory_to_use=40,
 ):
     """
     Run EM algorithm for PPCA.
@@ -1605,10 +1627,25 @@ def EM(
         pcg_lam: Spatial regularization strength for PCG.
         pcg_maxiter: Max CG iterations per mean update (10-20 with warmstart).
         noise_variance: Noise variance for PCG mean accumulation.
-        soft_penalty_lam: If >0 and use_pcg_mean=True, use soft mask penalty
-            λ||(1-mask)*W||² instead of hard mask projection in PCG M-step.
-            The mask can be soft (0-1 values). Larger values → stronger suppression
-            of signal outside the support mask.
+        soft_penalty_lam: If >0, use soft mask penalty λ||(1-mask)*W||²
+            instead of hard mask projection in PCG M-step.
+            The mask can be soft (0-1 values). Larger values → stronger
+            suppression of signal outside the support mask.
+
+        projcov_every: int, default 0. Run projected covariance after every
+            Nth EM iteration. ``0`` = never (plain PPCA). ``1`` = every iter
+            (interleaved). ``EM_iter`` = once at the end (single-shot
+            refinement). When triggered, the spectrum is recalibrated in
+            span(U) and (if ``bfit_whitening``) baked back into W as
+            ``W ← U_refined · √projcov_s``.
+        projcov_start: int, default 0. First EM iter (0-indexed) at which a
+            projcov pass is allowed.
+        bfit_whitening: bool, default True. After projcov, rebake the
+            calibration into W. ``False`` runs projcov for diagnostics only
+            (used for forensic replay of the old broken-feedback path).
+        dilated_volume_mask: Real-space mask passed to ``pca_by_projected_covariance``.
+            Required when ``projcov_every > 0``.
+        gpu_memory_to_use: int, default 40. Memory budget hint for projcov.
 
     Regularization summary:
         L2 (sparse_PCA=False): min ||Y - XW||² + ||W||²/W_prior
@@ -1632,7 +1669,14 @@ def EM(
     reference_dataset = full_dataset if full_dataset is not None else dataset_list[0]
     if volume_mask is None:
         volume_mask = np.ones(reference_dataset.volume_shape)
+    if dilated_volume_mask is None:
+        dilated_volume_mask = volume_mask
     basis_size = W_initial.shape[-1]
+
+    if projcov_every > 0:
+        # Lazy import to avoid pulling heterogeneity into the cold path.
+        from recovar.heterogeneity import principal_components
+
     if contrast_grid is None:
         contrast_grid = np.ones([1])
     # Larger batches amortize per-batch overhead (kernel launches, backprojection).
@@ -1718,13 +1762,11 @@ def EM(
                 disc_type=disc_type,
                 recompute_ll=recompute_ll,
                 mean_estimate_raw=mean_estimate_raw,
-                use_pcg_mstep=use_pcg_mean,
                 volume_mask=volume_mask,
                 pcg_lam=pcg_lam,
                 pcg_maxiter=pcg_maxiter,
                 W_prev_real=_W_prev_real if iter_i > 0 else None,
                 soft_penalty_lam=soft_penalty_lam,
-                mstep_solver_fn=mstep_solver_fn,
                 contrast_mode=_contrast_mode,
                 contrast_grid=jnp.array(contrast_grid) if contrast_grid is not None else None,
                 eigenvalues=None,  # Λ=I (z~N(0,I), W absorbs scale)
@@ -1772,22 +1814,18 @@ def EM(
             W = W.T.reshape(basis_size, *vs)
             W = ftu.get_idft3(W).real
 
-        # Mask: PCG M-step already applies mask inside CG.
-        # For standard path and mstep_solver_fn, apply mask as safety projection.
-        # (CG solvers may have float32 leakage outside the mask.)
-        if not use_pcg_mean:
-            if volume_mask is not None and not np.all(volume_mask == 1):
-                W = W * jnp.array(volume_mask)[None]
+        # Apply mask (safety projection — PCG already applies mask inside CG,
+        # but float32 leakage outside the support is harmless to zero out).
+        if volume_mask is not None and not np.all(volume_mask == 1):
+            W = W * jnp.array(volume_mask)[None]
 
-        # Save real-space W for warmstart (before gridding — gridding
-        # is post-processing that shouldn't corrupt the CG solution space)
-        if use_pcg_mean or mstep_solver_fn is not None:
-            _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)
+        # Save real-space W for next iter's CG warmstart.
+        _W_prev_real = np.asarray(W.reshape(basis_size, -1).T)
 
-        # Gridding correction: divide by sinc² to undo trilinear blurring
+        # Gridding correction: divide by sinc² to undo trilinear blurring.
+        # pcg_mstep does not internalise K, so this post-step is correct.
         if use_gridding_correction:
             from recovar.reconstruction.relion_functions import griddingCorrect_square
-
             for k in range(basis_size):
                 W = W.at[k].set(griddingCorrect_square(W[k], vs[0], 1, order=1)[0])
 
@@ -1796,6 +1834,50 @@ def EM(
             W = ftu.get_dft3_real(W).reshape(basis_size, -1).T  # (half_vol, q)
         else:
             W = ftu.get_dft3(W.reshape(basis_size, *vs)).reshape(basis_size, -1).T
+
+        # ── Optional projected-covariance refinement of the spectrum ────────
+        # When projcov_every > 0, every Nth iter (starting from projcov_start)
+        # we orthonormalise W → U, run pca_by_projected_covariance to get a
+        # calibrated spectrum in span(U), and (if bfit_whitening) rebake the
+        # calibration directly into W as W ← U_refined · √projcov_s. The next
+        # E-step then uses this calibrated W and runs unconstrained.
+        if (
+            projcov_every > 0
+            and iter_i >= projcov_start
+            and (iter_i - projcov_start) % projcov_every == 0
+        ):
+            U_real, s_em, _ = _orthonormalize_W_to_basis(W, vs)
+            q_loc = U_real.shape[0]
+            vol_size = int(np.prod(vs))
+            basis_fourier = (
+                np.asarray(ftu.get_dft3(U_real)).reshape(q_loc, vol_size).T.astype(np.complex64)
+            )
+            refined_u, projcov_s = principal_components.pca_by_projected_covariance(
+                reference_dataset,
+                basis_fourier,
+                mean_estimate_raw,
+                dilated_volume_mask,
+                disc_type=disc_type,
+                disc_type_u=disc_type_u,
+                gpu_memory_to_use=gpu_memory_to_use,
+                use_mask=True,
+                n_pcs_to_compute=q_loc,
+            )
+            logger.info(
+                "  iter %d projcov: s_em=[%.2e,%.2e,..] s_pc=[%.2e,%.2e,..]",
+                iter_i + 1,
+                float(s_em[0]),
+                float(s_em[1]) if len(s_em) > 1 else 0.0,
+                float(projcov_s[0]),
+                float(projcov_s[1]) if len(projcov_s) > 1 else 0.0,
+            )
+            if bfit_whitening:
+                # W ← refined_u · diag(√projcov_s) so the implicit latent
+                # covariance W^T W matches projcov_s. Convert back to half-Fourier.
+                W_full = (refined_u * np.sqrt(projcov_s)[None, :]).astype(np.complex64)
+                W_full_grid = W_full.T.reshape(q_loc, *vs)
+                W_half_grid = ftu.full_volume_to_half_volume(W_full_grid, vs)
+                W = jnp.array(np.asarray(W_half_grid).reshape(q_loc, -1).T)
 
         # Recompute LL with the FINAL W (after mask + gridding) for fair comparison
         if recompute_ll:
@@ -1963,11 +2045,17 @@ def EM(
         print(f"  ||W||_F = {final_W_norm:.4f}")
         print("=" * 130)
 
-    # Expand W to full volume for output if in half-volume format
-    if not sparse_PCA and W.shape[0] != reference_dataset.volume_size:
-        W = ftu.half_volume_to_full_volume(W.T, reference_dataset.volume_shape).T
-
-    # Orthogonalize
+    # Return W in its NATURAL form: half-Fourier (half_vol, q) for the L2 path,
+    # full-Fourier (vol_size, q) for the sparse path. We deliberately do NOT
+    # expand half→full Fourier at the boundary anymore: it doubled memory and
+    # forced downstream consumers into a full-Fourier shape that wasn't useful.
+    # Consumers that need full-Fourier should call
+    # ftu.half_volume_to_full_volume(W.T, vol_shape).T explicitly. The standard
+    # legacy consumers (recovar.reconstruction.noise.get_average_residual_square_v2,
+    # recovar.output.output.save_covar_output_volumes) auto-detect half-Fourier
+    # input and do the conversion internally.
+    #
+    # SVD is taken on whatever shape W is in; U inherits the same shape.
     U, S, _ = jnp.linalg.svd(W, full_matrices=False)
     if return_iteration_data and return_posterior_info:
         return U, S**2, W, expected_zs, second_moment_zs, iteration_data, posterior_info

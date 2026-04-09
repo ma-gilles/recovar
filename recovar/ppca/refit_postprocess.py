@@ -36,6 +36,8 @@ ALL_METHODS = [
     "coord_reg_grid",
     "coord_reg_physical",
     "iterative_ppca_projcov",
+    "iterative_ppca_refitb",
+    "iterative_ppca_refitb_reg",
     "dmetric_em_noreg",
     "dmetric_em_reg",
 ]
@@ -184,6 +186,22 @@ def main(argv=None):
         )
         logger.info("D-metric EM (reg) eigenvalues: %s",
                     np.array2string(result["eigenvalues"][:5], precision=4))
+
+    elif args.method in ("iterative_ppca_refitb", "iterative_ppca_refitb_reg"):
+        from recovar.ppca.ppca_iterative_refitb import run_iterative_ppca_refitb
+        kappa_value = 100.0 if args.method == "iterative_ppca_refitb_reg" else 0.0
+        result = run_iterative_ppca_refitb(
+            po, args.output_dir,
+            zdim=args.zdim,
+            batch_size=args.batch_size,
+            n_iters=30,
+            refitb_every=1,
+            refitb_start=5,
+            refitb_inner_iters=3,
+            kappa=kappa_value,
+        )
+        logger.info("Iterative PPCA+RefitB (kappa=%.1f) eigenvalues: %s",
+                    kappa_value, np.array2string(result["eigenvalues"][:5], precision=4))
 
     elif args.method == "iterative_ppca_projcov":
         from recovar.ppca.ppca_iterative_projcov import run_iterative_ppca_projcov

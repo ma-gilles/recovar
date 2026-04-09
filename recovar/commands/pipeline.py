@@ -866,25 +866,10 @@ def _as_pipeline_basis_dtype(arr):
     return arr.astype(np.complex64 if np.iscomplexobj(arr) else np.float32)
 
 
-def _orthonormalize_loading_basis(loadings, basis_size=None):
-    """Return an orthonormal basis spanning the PPCA loading columns."""
-    loadings = np.asarray(loadings)
-    if loadings.ndim != 2:
-        raise ValueError(f"PPCA loadings must be a matrix, got shape {loadings.shape}")
-    if basis_size is None:
-        basis_size = loadings.shape[1]
-    basis_size = int(basis_size)
-    if basis_size <= 0:
-        raise ValueError(f"basis_size must be positive, got {basis_size}")
-    u, _, _ = np.linalg.svd(loadings, full_matrices=False)
-    return _as_pipeline_basis_dtype(u[:, :basis_size])
-
-
-def _run_ppca_projected_covariance_refinement(
+def _run_ppca_refinement(
     dataset,
     means,
-    ppca_loadings,
-    volume_mask,
+    focus_mask,
     dilated_volume_mask,
     options,
     args,
@@ -894,74 +879,19 @@ def _run_ppca_projected_covariance_refinement(
     focus_masks,
     zdim_for_rest,
 ):
-    """Refine a PPCA basis with projected covariance and rebuild embeddings.
+    """Run PPCA EM and return pipeline-compatible arrays.
 
-    This matches the user's requested hybrid path:
-    1. direct PPCA to estimate ``W``
-    2. orthonormalize ``W`` to get ``U``
-    3. run projected covariance in span(U)
-    4. recompute embeddings from the refined ``U, S``
+    With ``--ppca-projected-covariance`` (i.e. ``args.ppca_projected_covariance``)
+    a single projected-covariance refinement is folded into the *last* EM
+    iteration via :func:`recovar.ppca.ppca.EM`'s ``projcov_every`` parameter.
+    Without that flag, this is plain PPCA EM. Both modes share the same code
+    path; the only differences are:
+
+    * how embeddings are derived (the projcov rotation invalidates the EM
+      posteriors, so embeddings are recomputed via ``_compute_embeddings``);
+    * the ``"postprocess"`` / ``"embedding_source"`` info tags written into
+      ``ppca_info`` for downstream provenance.
     """
-    basis_size = int(np.max(options.zs_dim_to_test))
-    basis_init = _orthonormalize_loading_basis(ppca_loadings, basis_size)
-    # ppca.EM now returns W in half-Fourier (Hermitian-packed) shape
-    # (half_vol_size, q). pca_by_projected_covariance and downstream embedding
-    # code expect full-Fourier (volume_size, q). Convert here at the boundary.
-    half_vol_size = int(np.prod(
-        fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)
-    ))
-    if basis_init.shape[0] == half_vol_size:
-        basis_init = fourier_transform_utils.half_volume_to_full_volume(
-            basis_init.T, dataset.volume_shape
-        ).T
-        basis_init = _as_pipeline_basis_dtype(basis_init)
-    refined_u, refined_s = principal_components.pca_by_projected_covariance(
-        dataset,
-        basis_init,
-        means.combined,
-        dilated_volume_mask,
-        disc_type=covariance_options["disc_type"],
-        disc_type_u=covariance_options["disc_type_u"],
-        gpu_memory_to_use=gpu_memory,
-        use_mask=covariance_options["mask_images_in_proj"],
-        ignore_zero_frequency=False,
-        n_pcs_to_compute=basis_size,
-    )
-    u = {"rescaled": _as_pipeline_basis_dtype(refined_u), "real": None}
-    s = {"rescaled": np.asarray(refined_s, dtype=np.float32), "real": None}
-    (
-        latent_coords,
-        latent_coords_noreg,
-        latent_precision,
-        latent_precision_noreg,
-        contrasts,
-        contrasts_noreg,
-    ) = _compute_embeddings(
-        means,
-        u,
-        s,
-        dataset,
-        volume_mask,
-        options,
-        gpu_memory,
-        focus_masks,
-        zdim_for_rest,
-        args,
-    )
-    return {
-        "u_rescaled": u["rescaled"],
-        "s_rescaled": s["rescaled"],
-        "latent_coords": latent_coords,
-        "latent_coords_noreg": latent_coords_noreg,
-        "latent_precision": latent_precision,
-        "latent_precision_noreg": latent_precision_noreg,
-        "contrasts": contrasts,
-        "contrasts_noreg": contrasts_noreg,
-    }
-
-
-def _run_ppca_refinement(dataset, means, focus_mask, options, args, batch_size):
-    """Run PPCA directly from the mean estimate and return pipeline-compatible arrays."""
     basis_size = int(np.max(options.zs_dim_to_test))
     if basis_size <= 0:
         raise ValueError(f"PPCA basis size must be positive, got {basis_size}")
@@ -974,6 +904,7 @@ def _run_ppca_refinement(dataset, means, focus_mask, options, args, batch_size):
     logger.warning(
         "PPCA pipeline mode currently uses the provisional hybrid-shell prior. This should be tightened up."
     )
+
     contrast_mode = _resolve_ppca_contrast_mode(args)
     contrast_grid = _resolve_ppca_contrast_grid(contrast_mode)
     W_init = _make_ppca_initial_loading(
@@ -986,6 +917,13 @@ def _run_ppca_refinement(dataset, means, focus_mask, options, args, batch_size):
         dataset.volume_shape,
         batch_size,
     )
+
+    em_iter = int(getattr(args, "ppca_em_iters", 20))
+    use_projcov = bool(getattr(args, "ppca_projected_covariance", False))
+    # One projcov pass at the very last iteration (single-shot refinement).
+    projcov_every = em_iter if use_projcov else 0
+    projcov_start = em_iter - 1 if use_projcov else 0
+
     (
         U_ppca,
         S_ppca,
@@ -999,40 +937,88 @@ def _run_ppca_refinement(dataset, means, focus_mask, options, args, batch_size):
         means.combined,
         W_init,
         prior_info["W_prior"],
-        EM_iter=int(getattr(args, "ppca_em_iters", 20)),
+        EM_iter=em_iter,
         sparse_PCA=False,
         use_whitening=False,
         disc_type_mean="cubic",
         disc_type="linear_interp",
+        disc_type_u=covariance_options["disc_type_u"],
         return_iteration_data=True,
         return_posterior_info=True,
         use_gridding_correction=bool(getattr(args, "ppca_use_gridding_correction", True)),
         volume_mask=np.asarray(focus_mask, dtype=np.float32),
+        dilated_volume_mask=dilated_volume_mask,
         contrast_mode=contrast_mode,
         contrast_grid=contrast_grid,
+        projcov_every=projcov_every,
+        projcov_start=projcov_start,
+        bfit_whitening=True,
+        gpu_memory_to_use=gpu_memory,
     )
-    (
-        latent_coords,
-        latent_coords_noreg,
-        latent_precision,
-        latent_precision_noreg,
-        contrasts,
-        contrasts_noreg,
-    ) = _build_ppca_embedding_outputs(
-        expected_zs,
-        second_moment_zs,
-        S_ppca,
-        posterior_info["mean_c"],
-        basis_size,
-    )
+
+    if use_projcov:
+        # The projcov pass rotated the basis inside W; the EM posteriors are
+        # no longer in the right coordinates. Re-derive embeddings from
+        # scratch in the final basis. _compute_embeddings expects U in
+        # full-Fourier (volume_size, q) shape.
+        half_vol_size = int(np.prod(
+            fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)
+        ))
+        U_full = U_ppca
+        if U_full.shape[0] == half_vol_size:
+            U_full = fourier_transform_utils.half_volume_to_full_volume(
+                np.asarray(U_full).T, dataset.volume_shape
+            ).T
+        U_full = _as_pipeline_basis_dtype(U_full)
+        u = {"rescaled": U_full, "real": None}
+        s = {"rescaled": np.asarray(S_ppca, dtype=np.float32), "real": None}
+        (
+            latent_coords,
+            latent_coords_noreg,
+            latent_precision,
+            latent_precision_noreg,
+            contrasts,
+            contrasts_noreg,
+        ) = _compute_embeddings(
+            means,
+            u,
+            s,
+            dataset,
+            np.asarray(focus_mask, dtype=np.float32),
+            options,
+            gpu_memory,
+            focus_masks,
+            zdim_for_rest,
+            args,
+        )
+        u_rescaled = U_full
+        embedding_source = "projected_covariance"
+    else:
+        # Plain PPCA: posteriors are still in the basis ppca.EM returned, so
+        # we can build embeddings cheaply from second moments.
+        (
+            latent_coords,
+            latent_coords_noreg,
+            latent_precision,
+            latent_precision_noreg,
+            contrasts,
+            contrasts_noreg,
+        ) = _build_ppca_embedding_outputs(
+            expected_zs,
+            second_moment_zs,
+            S_ppca,
+            posterior_info["mean_c"],
+            basis_size,
+        )
+        u_rescaled = _as_pipeline_basis_dtype(U_ppca)
+        embedding_source = "ppca_posterior"
+
     logger.info(
-        "PPCA direct solve complete: q=%d contrast_mode=%s iters=%d",
-        basis_size,
-        contrast_mode,
-        int(getattr(args, "ppca_em_iters", 20)),
+        "PPCA solve complete: q=%d iters=%d projcov=%s contrast_mode=%s",
+        basis_size, em_iter, use_projcov, contrast_mode,
     )
     return {
-        "u_rescaled": _as_pipeline_basis_dtype(U_ppca),
+        "u_rescaled": u_rescaled,
         "s_rescaled": np.asarray(S_ppca, dtype=np.float32),
         "W": _as_pipeline_basis_dtype(W_ppca),
         "iteration_data": iteration_data,
@@ -1040,6 +1026,7 @@ def _run_ppca_refinement(dataset, means, focus_mask, options, args, batch_size):
         "basis_size": basis_size,
         "contrast_mode": contrast_mode,
         "prior_mode": "hybrid_shell",
+        "embedding_source": embedding_source,
         "latent_coords": latent_coords,
         "latent_coords_noreg": latent_coords_noreg,
         "latent_precision": latent_precision,
@@ -1425,9 +1412,14 @@ def standard_recovar_pipeline(args):
                 ds,
                 means,
                 focus_masks[-1],
+                dilated_volume_mask,
                 options,
                 args,
                 batch_size,
+                gpu_memory,
+                covariance_options,
+                focus_masks,
+                zdim_for_rest,
             )
             u = {"rescaled": ppca_result["u_rescaled"], "real": None}
             s = {"rescaled": ppca_result["s_rescaled"], "real": None}
@@ -1436,46 +1428,24 @@ def standard_recovar_pipeline(args):
             column_fscs = None
             ppca_loadings = ppca_result["W"]
             ppca_iteration_data = ppca_result["iteration_data"]
+            latent_coords = ppca_result["latent_coords"]
+            latent_coords_noreg = ppca_result["latent_coords_noreg"]
+            latent_precision = ppca_result["latent_precision"]
+            latent_precision_noreg = ppca_result["latent_precision_noreg"]
+            est_contrasts = ppca_result["contrasts"]
+            est_contrasts_noreg = ppca_result["contrasts_noreg"]
             ppca_info = {
                 "basis_size": int(ppca_result["basis_size"]),
                 "contrast_mode": ppca_result["contrast_mode"],
                 "prior_mode": ppca_result["prior_mode"],
                 "em_iters": int(args.ppca_em_iters),
+                "postprocess": (
+                    "projected_covariance"
+                    if bool(getattr(args, "ppca_projected_covariance", False))
+                    else "none"
+                ),
+                "embedding_source": ppca_result["embedding_source"],
             }
-            if getattr(args, "ppca_projected_covariance", False):
-                projcov_result = _run_ppca_projected_covariance_refinement(
-                    ds,
-                    means,
-                    ppca_loadings,
-                    volume_mask,
-                    dilated_volume_mask,
-                    options,
-                    args,
-                    batch_size,
-                    gpu_memory,
-                    covariance_options,
-                    focus_masks,
-                    zdim_for_rest,
-                )
-                u = {"rescaled": projcov_result["u_rescaled"], "real": None}
-                s = {"rescaled": projcov_result["s_rescaled"], "real": None}
-                latent_coords = projcov_result["latent_coords"]
-                latent_coords_noreg = projcov_result["latent_coords_noreg"]
-                latent_precision = projcov_result["latent_precision"]
-                latent_precision_noreg = projcov_result["latent_precision_noreg"]
-                est_contrasts = projcov_result["contrasts"]
-                est_contrasts_noreg = projcov_result["contrasts_noreg"]
-                ppca_info["postprocess"] = "projected_covariance"
-                ppca_info["embedding_source"] = "projected_covariance"
-            else:
-                latent_coords = ppca_result["latent_coords"]
-                latent_coords_noreg = ppca_result["latent_coords_noreg"]
-                latent_precision = ppca_result["latent_precision"]
-                latent_precision_noreg = ppca_result["latent_precision_noreg"]
-                est_contrasts = ppca_result["contrasts"]
-                est_contrasts_noreg = ppca_result["contrasts_noreg"]
-                ppca_info["postprocess"] = "none"
-                ppca_info["embedding_source"] = "ppca_posterior"
         else:
             for idx, focus_mask in enumerate(focus_masks):
                 u_this, s_this, covariance_cols, picked_frequencies, column_fscs = (

@@ -594,6 +594,15 @@ def _run_em_for_scale(
 def _summarize_scale_result(scale, em_output, U_gt, s_gt, volume_shape):
     u, _s, W, ez, sm, iteration_data = em_output
     C_z = np.mean(sm, axis=0)  # E[zz^T] = mean of second moments
+
+    # ppca.EM now returns u in its natural half-Fourier shape (half_vol, q).
+    # U_gt is full-Fourier. Convert u to full-Fourier for the variance score.
+    from recovar.core import fourier_transform_utils as _ftu
+    u_arr = np.asarray(u)
+    half_vol_size = int(np.prod(_ftu.volume_shape_to_half_volume_shape(volume_shape)))
+    if u_arr.shape[0] == half_vol_size:
+        u = _ftu.half_volume_to_full_volume(u_arr.T, volume_shape).T
+
     _, rel_var, _ = metrics.get_all_variance_scores(u, U_gt, s_gt**2)
     rv = float(np.mean(rel_var))
     W_norm = float(jnp.linalg.norm(W))

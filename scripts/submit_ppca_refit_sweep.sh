@@ -44,7 +44,7 @@ ALL_JOB_IDS=()
 
 build_run_name() {
   local dataset="$1"
-  printf '%s_g128_n100000_snr1.0_c0p00_z%s_seed42' "$dataset" "$ZDIM"
+  printf '%s_g128_n100000_snr%s_c0p00_z%s_seed42' "$dataset" "${SNR:-1.0}" "$ZDIM"
 }
 
 for dataset in "${DATASETS[@]}"; do

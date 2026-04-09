@@ -254,6 +254,22 @@ def save_covar_output_volumes(output_folder, mean, u, s, mask, volume_shape,  us
     if us_to_var is None:
         us_to_var = [4, 10, 20]
 
+    # Auto-convert half-Fourier basis to full-Fourier. ppca.EM now returns u
+    # in its natural half-Fourier shape (half_vol, q); this function was
+    # written for the legacy full-Fourier shape and uses linalg.batch_idft3
+    # which expects full Fourier. Detect and convert.
+    import numpy as _np
+    vol_size = int(_np.prod(volume_shape))
+    half_vol_size = int(_np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)))
+    u_arr = _np.asarray(u)
+    if u_arr.shape[0] == half_vol_size:
+        u = fourier_transform_utils.half_volume_to_full_volume(u_arr.T, volume_shape).T
+    elif u_arr.shape[0] != vol_size:
+        raise ValueError(
+            f"save_covar_output_volumes: u should be (vol_size, q) or (half_vol, q), "
+            f"got shape {u_arr.shape} (expected vol_size={vol_size} or half_vol={half_vol_size})"
+        )
+
     vol_dir = os.path.join(output_folder, 'volumes')
     mkdir_safe(vol_dir)
     n_available = int(u.shape[-1])
