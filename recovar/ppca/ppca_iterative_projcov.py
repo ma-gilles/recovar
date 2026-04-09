@@ -42,7 +42,7 @@ def run_iterative_ppca_projcov(
     """
     from recovar.output.output import PipelineOutput  # noqa: F401  (kept for type hint clarity)
     from recovar.ppca import prior_estimation as ppca_prior_estimation
-    from recovar.ppca.ppca_refit import (
+    from recovar.ppca.postprocess import (
         compute_embeddings_from_UB,
         compute_per_image_Gi_hi,
         create_postprocessed_result_dir,

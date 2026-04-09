@@ -368,7 +368,7 @@ def run_iterative_ppca_refitb(
 ):
     """High-level entry point for the dispatcher."""
     from recovar.output.output import PipelineOutput
-    from recovar.ppca.ppca_refit import (
+    from recovar.ppca.postprocess import (
         create_postprocessed_result_dir,
         compute_per_image_Gi_hi,
         compute_embeddings_from_UB,

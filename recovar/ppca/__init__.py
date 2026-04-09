@@ -1,4 +1,4 @@
-"""Public PPCA compatibility surface."""
+"""Public PPCA surface."""
 
 from .ppca import (
     EM,
@@ -9,20 +9,6 @@ from .ppca import (
     batch_vec,
     check_imaginary_part,
     unpack_tri_to_full,
-)
-from .sparse_PCA import (
-    Basis,
-    Identity,
-    Spatial,
-    Wavelet,
-    Wavelet_multilvl,
-    get_ft_U,
-    get_sparse_PCA_in_basis,
-    jax_ft,
-    jax_ift,
-    measure_orthogonality,
-    wavelet_dict_to_wavelet_vec,
-    wavelet_vec_to_wavelet_dict,
 )
 from .prior_estimation import (
     estimate_gaussian_shell_prior_from_data,
@@ -41,20 +27,6 @@ __all__ = [
     "E_M_step_batch_half",
     "unpack_tri_to_full",
     "_tri_size",
-    # Basis classes
-    "Basis",
-    "Wavelet",
-    "Wavelet_multilvl",
-    "Spatial",
-    "Identity",
-    # Sparse PCA utilities
-    "get_sparse_PCA_in_basis",
-    "measure_orthogonality",
-    "wavelet_dict_to_wavelet_vec",
-    "wavelet_vec_to_wavelet_dict",
-    "get_ft_U",
-    "jax_ft",
-    "jax_ift",
     # Batch processing utilities
     "batch_vec",
     "batch_unvec",
