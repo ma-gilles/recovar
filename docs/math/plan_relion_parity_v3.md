@@ -650,7 +650,7 @@ volume, the DC stays at the center and shells map correctly.
 
 ## Phase B — Per-iter state and convergence (B depends on A being right)
 
-### B1. Implement masked-alignment / unmasked-reconstruction split
+### B1. Implement masked-alignment / unmasked-reconstruction split — ✅ DONE
 
 **What RELION does** (`ml_optimiser.cpp:getFourierTransformsAndCtfs`,
 ~line 5840): for each particle, computes TWO Fourier images:
@@ -660,26 +660,29 @@ volume, the DC stays at the center and shells map correctly.
 - `Fimg_nomask`: from the unmasked (background-subtracted) particle.
   This is what enters the M-step backprojection (`Pᵀ y`).
 
-**What recovar does**: `_preprocess_batch` in `engine_v2.py:79` uses
-`apply_image_mask=False` everywhere. No mask is applied, ever.
+**Status**: ✅ ALREADY IMPLEMENTED in current `engine_v2.run_em_v2`
+(verified 2026-04-09). The earlier audit was stale.
 
-**Fix**: thread two image preprocessing paths through the engine —
-masked for the score computation and noise accumulator, unmasked for
-the M-step backprojection. The dataset already supports an
-`apply_image_mask` flag.
+Concretely:
+- `_preprocess_batch(..., apply_image_mask=score_with_masked_images)`
+  produces the **masked** `shifted_half` used by the E-step kernels
+  (`_e_step_block_scores*`) and the noise A2/XA path
+  (`shifted_masked_for_noise = shifted_half_with_dc`).
+- `_prepare_reconstruction_batch(..., apply_image_mask=False)` produces
+  the **unmasked** `shifted_recon_half` that is fed to
+  `_m_step_block*` for the y backprojection.
+- The `score_with_masked_images=True` flag is wired into every
+  `run_em_v2` call inside `_refine_relion_mode` (8+ call sites)
+  and into `_compute_significance_batched` for the relion-mode
+  coarse pass.
+- `process_images(images, apply_image_mask=True)` multiplies by the
+  RELION soft circular mask (`image_backends.py:152-158`); when False,
+  no mask. Dataset side is correct.
 
-**Files**: `recovar/em/dense_single_volume/engine_v2.py`,
-`recovar/em/dense_single_volume/refine.py` (call site that decides
-mask/no-mask for each pass).
+**Files**: `recovar/em/dense_single_volume/engine_v2.py:92-153`,
+`recovar/em/dense_single_volume/refine.py` (`run_em_v2(..., score_with_masked_images=True)`).
 
-**Verification**: with `particle_diameter == box_size` (our 5k
-synthetic case), the effect is small but should be a small Pmax sharpening
-(less background noise contributing to the chi²). With smaller
-particle diameters (real data), the effect is large.
-
-**Effort**: 2-3 days.
-
-### B2. `exp_highres_Xi2_img` high-freq residual term
+### B2. `exp_highres_Xi2_img` high-freq residual term — ✅ DONE (mathematically equivalent)
 
 **What RELION does**: per-particle, computes the image power above
 the current_size cutoff:
@@ -689,30 +692,44 @@ exp_highres_Xi2_img[i] := sum_{ires > current_size/2} |Fimg[i, ires]|² / sigma�
 ```
 
 This constant is added to every (rot, trans) candidate's diff² for
-particle `i`. It doesn't change the relative ordering of poses
-(since it's the same constant for all candidates of one particle), so
-it doesn't affect Pmax or the M-step. But it DOES affect:
-- Absolute log-likelihood per particle
-- Per-iter `_rlnLogLikelihood` (the optimizer's running total)
-- The numerical interpretation of `exp_min_diff2` for the
-  log-sum-exp trick
+particle `i`. It doesn't change Pmax or the M-step (cancels in
+softmax), but it DOES affect absolute log-likelihood and
+`_rlnLogLikelihood`.
 
-**What recovar does**: this term is missing entirely. Recovar's diff²
-only includes the windowed pixels.
+**Status**: ✅ EQUIVALENT formulation already in `engine_v2.run_em_v2`
+(verified 2026-04-09).
 
-**Fix**: precompute `highres_Xi2[i]` per particle from the full-spectrum
-masked image power, and add it to the diff² inside `_e_step_block_scores`
-(or add it to the per-particle `batch_norm` constant that's already
-tracked).
+Recovar tracks `batch_norm[i] = ||processed_image||^2 / noise_variance`
+on the **FULL** image spectrum (not just windowed), and applies it
+once at the end as `log_score_offset = -0.5 * batch_norm[i]` so that
+`log_evidence[i] = log_Z + log_score_offset`. The math is:
 
-**Files**: `recovar/em/dense_single_volume/engine_v2.py` (preprocessing
-and score functions).
+```
+RELION:
+  diff²[i,r,t] = (norm_window[i,r] + cross_window[i,r,t])
+               + img_power_window[i]                  ← part of in-window |img|² term
+               + highres_Xi2[i]                       ← high-freq |img|² term
 
-**Verification**: per-iter `_rlnLogLikelihood` from RELION's
-`model_general` should match recovar's running log-likelihood within
-relative error < 1%.
+  Note: img_power_window[i] + highres_Xi2[i] = ||img||²/σ² = batch_norm[i] (full)
 
-**Effort**: 1-2 days. Mostly bookkeeping.
+  log_Z_RELION  = logsumexp_(r,t) (-0.5 * diff²)
+                = -0.5*batch_norm + logsumexp_(r,t)(-0.5*(norm + cross))
+                = -0.5*batch_norm + log_Z_recovar
+                = log_evidence_recovar.
+```
+
+So recovar's `log_evidence_per_image` is mathematically identical to
+RELION's per-particle log evidence (the integrand of
+`_rlnLogLikelihood`), modulo the FFT-normalization convention
+discrepancy that is tracked under D1.
+
+**Implication**: per-image log-likelihood should match RELION's
+`_rlnLogLikelihood` per-particle to within an FFT-normalization
+constant (D1). Pmax is unaffected by per-image constants and matches
+exactly.
+
+**Files**: `recovar/em/dense_single_volume/engine_v2.py:125,916`
+(`batch_norm` definition and the `log_score_offset` application).
 
 ### B3. Per-iter `changes_orientations` / `changes_offsets` tracking
 
