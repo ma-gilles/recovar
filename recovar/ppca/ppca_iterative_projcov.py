@@ -104,8 +104,6 @@ def run_iterative_ppca_projcov(
         W_half,
         W_prior,
         EM_iter=n_iters,
-        sparse_PCA=False,
-        use_whitening=False,
         disc_type_mean="cubic",
         disc_type="linear_interp",
         disc_type_u="linear_interp",

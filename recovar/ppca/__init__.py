@@ -2,9 +2,7 @@
 
 from .ppca import (
     EM,
-    E_M_step_batch,
     E_M_step_batch_half,
-    EM_step,
     EM_step_half,
     _tri_size,
     batch_unvec,
@@ -39,8 +37,7 @@ from .prior_estimation import (
 __all__ = [
     # Main PPCA functions
     "EM",
-    "EM_step",
-    "E_M_step_batch",
+    "EM_step_half",
     "E_M_step_batch_half",
     "unpack_tri_to_full",
     "_tri_size",

@@ -14,8 +14,7 @@ pytestmark = pytest.mark.unit
 
 def test_ppca_modules_import_and_expose_expected_symbols():
     assert hasattr(ppca_module, "EM")
-    assert hasattr(ppca_module, "EM_step")
-    assert hasattr(ppca_module, "compute_sigma_proj_ls")
+    assert hasattr(ppca_module, "EM_step_half")
     assert hasattr(sparse_PCA, "Wavelet_multilvl")
     assert callable(output.mkdir_safe)
     assert callable(linalg.batch_linear_solver)

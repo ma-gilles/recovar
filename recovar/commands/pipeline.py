@@ -938,8 +938,6 @@ def _run_ppca_refinement(
         W_init,
         prior_info["W_prior"],
         EM_iter=em_iter,
-        sparse_PCA=False,
-        use_whitening=False,
         disc_type_mean="cubic",
         disc_type="linear_interp",
         disc_type_u=covariance_options["disc_type_u"],
