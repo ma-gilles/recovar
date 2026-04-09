@@ -1021,67 +1021,56 @@ def _run_ppca_refinement(
         gpu_memory_to_use=gpu_memory,
     )
 
-    if rebakes_basis:
-        # The projcov pass rotated the basis inside W; the EM posteriors are
-        # no longer in the right coordinates. Re-derive embeddings from
-        # scratch in the final basis. _compute_embeddings expects U in
-        # full-Fourier (volume_size, q) shape.
-        half_vol_size = int(np.prod(
-            fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)
-        ))
-        U_full = U_ppca
-        if U_full.shape[0] == half_vol_size:
-            U_full = fourier_transform_utils.half_volume_to_full_volume(
-                np.asarray(U_full).T, dataset.volume_shape
-            ).T
-        U_full = _as_pipeline_basis_dtype(U_full)
-        u = {"rescaled": U_full, "real": None}
-        s = {"rescaled": np.asarray(S_ppca, dtype=np.float32), "real": None}
-        (
-            latent_coords,
-            latent_coords_noreg,
-            latent_precision,
-            latent_precision_noreg,
-            contrasts,
-            contrasts_noreg,
-        ) = _compute_embeddings(
-            means,
-            u,
-            s,
-            dataset,
-            np.asarray(focus_mask, dtype=np.float32),
-            options,
-            gpu_memory,
-            focus_masks,
-            zdim_for_rest,
-            args,
-        )
-        u_rescaled = U_full
-        if projcov_every > 0 and refitb_every > 0:
-            embedding_source = "projcov+refitb"
-        elif projcov_every > 0:
-            embedding_source = "projected_covariance"
-        else:
-            embedding_source = "refitb"
+    # Embeddings: ALWAYS go through _compute_embeddings (= the same path the
+    # covariance pipeline uses), regardless of whether projcov/refitb fired.
+    # This guarantees that ``latent_coords`` is in the same convention across
+    # cov / plain ppca / ppca+projcov / ppca+refitb (covariance-PCA "true alpha"
+    # units, computed from the per-image posterior MAP in the eigenbasis using
+    # the actual saved (U, s)). The previous shortcut for plain PPCA used
+    # _build_ppca_embedding_outputs, which scaled PPCA's z ~ N(0,I) by √s_ppca
+    # — but s_ppca is the *biased* PPCA spectrum (under-calibrated by the
+    # standard (1 + σ²/λ) factor), so the resulting "alpha" was off by that
+    # bias and not directly comparable to cov/projcov/refitb.
+    half_vol_size = int(np.prod(
+        fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)
+    ))
+    U_full = U_ppca
+    if U_full.shape[0] == half_vol_size:
+        U_full = fourier_transform_utils.half_volume_to_full_volume(
+            np.asarray(U_full).T, dataset.volume_shape
+        ).T
+    U_full = _as_pipeline_basis_dtype(U_full)
+    u = {"rescaled": U_full, "real": None}
+    s = {"rescaled": np.asarray(S_ppca, dtype=np.float32), "real": None}
+    (
+        latent_coords,
+        latent_coords_noreg,
+        latent_precision,
+        latent_precision_noreg,
+        contrasts,
+        contrasts_noreg,
+    ) = _compute_embeddings(
+        means,
+        u,
+        s,
+        dataset,
+        np.asarray(focus_mask, dtype=np.float32),
+        options,
+        gpu_memory,
+        focus_masks,
+        zdim_for_rest,
+        args,
+    )
+    u_rescaled = U_full
+
+    if projcov_every > 0 and refitb_every > 0:
+        embedding_source = "projcov+refitb"
+    elif projcov_every > 0:
+        embedding_source = "projected_covariance"
+    elif refitb_every > 0:
+        embedding_source = "refitb"
     else:
-        # Plain PPCA: posteriors are still in the basis ppca.EM returned, so
-        # we can build embeddings cheaply from second moments.
-        (
-            latent_coords,
-            latent_coords_noreg,
-            latent_precision,
-            latent_precision_noreg,
-            contrasts,
-            contrasts_noreg,
-        ) = _build_ppca_embedding_outputs(
-            expected_zs,
-            second_moment_zs,
-            S_ppca,
-            posterior_info["mean_c"],
-            basis_size,
-        )
-        u_rescaled = _as_pipeline_basis_dtype(U_ppca)
-        embedding_source = "ppca_posterior"
+        embedding_source = "compute_embeddings"
 
     logger.info(
         "PPCA solve complete: q=%d iters=%d projcov_every=%d refitb_every=%d contrast_mode=%s",

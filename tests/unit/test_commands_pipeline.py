@@ -323,12 +323,23 @@ def test_run_ppca_refinement_uses_hybrid_shell_prior(monkeypatch):
             {"mean_c": np.array([1.25], dtype=np.float32)},
         )
 
+    def _fake_compute_embeddings(*args_, **kwargs_):
+        return (
+            {4: np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32) * np.sqrt(np.arange(1, 5, dtype=np.float32))[None, :]},
+            {4: np.array([[1.0, 2.0, 0.0, 0.0]], dtype=np.float32)},
+            {4: np.tile(np.eye(4, dtype=np.float32), (1, 1, 1))},
+            {4: np.tile(np.eye(4, dtype=np.float32), (1, 1, 1))},
+            {4: np.array([1.25], dtype=np.float32)},
+            {4: np.array([1.25], dtype=np.float32)},
+        )
+
     monkeypatch.setattr(
         pipeline_cmd.ppca_prior_estimation,
         "estimate_hybrid_shell_prior_from_data",
         _fake_prior,
     )
     monkeypatch.setattr(pipeline_cmd.ppca_module, "EM", _fake_em)
+    monkeypatch.setattr(pipeline_cmd, "_compute_embeddings", _fake_compute_embeddings)
 
     out = pipeline_cmd._run_ppca_refinement(
         fake_dataset,
