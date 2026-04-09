@@ -904,6 +904,17 @@ def _run_ppca_projected_covariance_refinement(
     """
     basis_size = int(np.max(options.zs_dim_to_test))
     basis_init = _orthonormalize_loading_basis(ppca_loadings, basis_size)
+    # ppca.EM now returns W in half-Fourier (Hermitian-packed) shape
+    # (half_vol_size, q). pca_by_projected_covariance and downstream embedding
+    # code expect full-Fourier (volume_size, q). Convert here at the boundary.
+    half_vol_size = int(np.prod(
+        fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)
+    ))
+    if basis_init.shape[0] == half_vol_size:
+        basis_init = fourier_transform_utils.half_volume_to_full_volume(
+            basis_init.T, dataset.volume_shape
+        ).T
+        basis_init = _as_pipeline_basis_dtype(basis_init)
     refined_u, refined_s = principal_components.pca_by_projected_covariance(
         dataset,
         basis_init,
