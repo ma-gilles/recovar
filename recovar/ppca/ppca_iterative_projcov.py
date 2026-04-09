@@ -1,12 +1,10 @@
 """Iterative PPCA + Projected Covariance — harness wrapper.
 
 The actual algorithm now lives inside :func:`recovar.ppca.ppca.EM` and is
-selected with the ``projcov_every`` / ``projcov_start`` / ``bfit_whitening``
-parameters. This module only contains the harness glue
-(:func:`run_iterative_ppca_projcov`) that wires a ``PipelineOutput`` to
-``ppca.EM`` and writes the result back to a PipelineOutput-compatible
-directory. Standalone scripts and the comparison driver import this entry
-point; nothing else here is part of the public surface.
+selected with the ``projcov_every`` / ``projcov_start`` parameters. This
+module only contains the harness glue (:func:`run_iterative_ppca_projcov`)
+that wires a ``PipelineOutput`` to ``ppca.EM`` and writes the result back
+to a PipelineOutput-compatible directory.
 """
 
 from __future__ import annotations
@@ -33,14 +31,13 @@ def run_iterative_ppca_projcov(
     projcov_every=1,
     projcov_start=0,
     gpu_memory_to_use=40,
-    bfit_whitening=True,
 ):
     """Run iterative PPCA+ProjCov from a ``PipelineOutput`` and save results.
 
     Loads the dataset and initial W from the PPCA result, calls
-    :func:`recovar.ppca.ppca.EM` with the requested ``projcov_every`` /
-    ``bfit_whitening`` settings, then re-derives per-image embeddings in the
-    final orthonormal basis (matching the refit_b convention) and writes a
+    :func:`recovar.ppca.ppca.EM` with the requested ``projcov_every``
+    setting, then re-derives per-image embeddings in the final orthonormal
+    basis (matching the refit_b convention) and writes a
     PipelineOutput-compatible directory.
     """
     from recovar.output.output import PipelineOutput  # noqa: F401  (kept for type hint clarity)
@@ -93,8 +90,8 @@ def run_iterative_ppca_projcov(
         dilated_volume_mask = volume_mask
 
     logger.info(
-        "Running ppca.EM(projcov_every=%d, projcov_start=%d, bfit_whitening=%s) zdim=%d n_iters=%d",
-        projcov_every, projcov_start, bfit_whitening, zdim, n_iters,
+        "Running ppca.EM(projcov_every=%d, projcov_start=%d) zdim=%d n_iters=%d",
+        projcov_every, projcov_start, zdim, n_iters,
     )
 
     # ── Run EM with projcov refinement ──────────────────────────────────
@@ -111,7 +108,6 @@ def run_iterative_ppca_projcov(
         dilated_volume_mask=dilated_volume_mask,
         projcov_every=projcov_every,
         projcov_start=projcov_start,
-        bfit_whitening=bfit_whitening,
         gpu_memory_to_use=gpu_memory_to_use,
     )
 
@@ -135,7 +131,6 @@ def run_iterative_ppca_projcov(
         "n_iters": n_iters,
         "projcov_every": projcov_every,
         "projcov_start": projcov_start,
-        "bfit_whitening": bfit_whitening,
         "zdim": zdim,
         "eigenvalues": s[:zdim].tolist(),
     }

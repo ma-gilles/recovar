@@ -949,7 +949,6 @@ def _run_ppca_refinement(
         contrast_grid=contrast_grid,
         projcov_every=projcov_every,
         projcov_start=projcov_start,
-        bfit_whitening=True,
         gpu_memory_to_use=gpu_memory,
     )
 

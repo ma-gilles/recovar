@@ -800,7 +800,6 @@ def EM(
     contrast_variance=np.inf,
     projcov_every=0,
     projcov_start=0,
-    bfit_whitening=True,
     gpu_memory_to_use=40,
 ):
     """Run EM for L2-regularized PPCA.
@@ -826,8 +825,6 @@ def EM(
             (interleaved). ``EM_iter`` = once at the end (single-shot refinement).
         projcov_start: int, default 0. First EM iter (0-indexed) at which a
             projcov pass is allowed.
-        bfit_whitening: bool, default True. After projcov, rebake the calibration
-            into W (``W ← U_refined · √projcov_s``).
         gpu_memory_to_use: Memory budget hint for projcov.
 
     Returns:
@@ -931,11 +928,11 @@ def EM(
         _W_prev_real = np.asarray(W_real_for_warmstart.reshape(basis_size, -1).T)
 
         # ── Optional projected-covariance refinement of the spectrum ────────
-        # When projcov_every > 0, every Nth iter (starting from projcov_start)
-        # we orthonormalise W → U, run pca_by_projected_covariance to get a
-        # calibrated spectrum in span(U), and (if bfit_whitening) rebake the
-        # calibration directly into W as W ← U_refined · √projcov_s. The next
-        # E-step then uses this calibrated W and runs unconstrained.
+        # Every Nth iter (starting from projcov_start) we orthonormalise W → U,
+        # run pca_by_projected_covariance to get a calibrated spectrum in
+        # span(U), and rebake the calibration directly into W as
+        # ``W ← U_refined · √projcov_s``. The next E-step then uses this
+        # calibrated W and runs unconstrained.
         if (
             projcov_every > 0
             and iter_i >= projcov_start
@@ -966,13 +963,12 @@ def EM(
                 float(projcov_s[0]),
                 float(projcov_s[1]) if len(projcov_s) > 1 else 0.0,
             )
-            if bfit_whitening:
-                # W ← refined_u · diag(√projcov_s) so the implicit latent
-                # covariance W^T W matches projcov_s. Convert back to half-Fourier.
-                W_full = (refined_u * np.sqrt(projcov_s)[None, :]).astype(np.complex64)
-                W_full_grid = W_full.T.reshape(q_loc, *vs)
-                W_half_grid = ftu.full_volume_to_half_volume(W_full_grid, vs)
-                W = jnp.array(np.asarray(W_half_grid).reshape(q_loc, -1).T)
+            # Bake the calibrated spectrum into W (W^T W = diag(projcov_s)),
+            # then convert back to half-Fourier for the next E-step.
+            W_full = (refined_u * np.sqrt(projcov_s)[None, :]).astype(np.complex64)
+            W_full_grid = W_full.T.reshape(q_loc, *vs)
+            W_half_grid = ftu.full_volume_to_half_volume(W_full_grid, vs)
+            W = jnp.array(np.asarray(W_half_grid).reshape(q_loc, -1).T)
 
         # Recompute LL with the FINAL W (after mask + gridding) for fair comparison
         if recompute_ll:
