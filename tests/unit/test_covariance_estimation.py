@@ -1615,26 +1615,17 @@ def test_reduce_covariance_inner_uses_half_volume_for_half_volume_model(monkeypa
     assert seen["mean_half_volume"] is True
     assert seen["basis_half_volume"] is True
 
-def test_solve_projected_covariance_system_retries_stronger_regularization(monkeypatch):
-    calls = []
-
+def test_solve_projected_covariance_system_raises_on_nonfinite_output(monkeypatch):
     def fake_solve(lhs, rhs, assume_a="pos"):
-        calls.append(float(np.asarray(lhs)[0, 0]))
-        if len(calls) < 4:
-            return jnp.full(rhs.shape, jnp.nan, dtype=rhs.dtype)
-        return jnp.arange(rhs.shape[0], dtype=rhs.dtype)
+        return jnp.full(rhs.shape, jnp.nan, dtype=rhs.dtype)
 
     monkeypatch.setattr(cov_est.jax.scipy.linalg, "solve", fake_solve)
 
     lhs = jnp.eye(4, dtype=jnp.float32)
     rhs = jnp.arange(4, dtype=jnp.float32).reshape(2, 2)
 
-    covar = np.asarray(cov_est._solve_projected_covariance_system(lhs, rhs))
-    expected = np.asarray(cov_est._unvec_square_matrix(jnp.arange(4, dtype=jnp.float32)))
-
-    assert len(calls) == 4
-    assert np.all(np.diff(calls) > 0)
-    np.testing.assert_allclose(covar, expected)
+    with pytest.raises(ValueError, match="projected covariance solve returned non-finite output"):
+        cov_est._solve_projected_covariance_system(lhs, rhs)
 
 
 def test_compute_projected_covariance_masked():

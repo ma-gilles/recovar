@@ -1650,34 +1650,25 @@ def summed_batch_kron_scan(X):
     return summed_kron
 
 
-def _solve_projected_covariance_system(lhs, rhs, reg_scales=(1e-6, 1e-5, 1e-4, 1e-3)):
-    """Solve the projected-covariance normal equations with adaptive Tikhonov regularization."""
+def _solve_projected_covariance_system(lhs, rhs, reg_scale=1e-6):
+    """Solve the projected-covariance normal equations and fail on non-finite output."""
     rhs = _vec_square_matrix(rhs)
     trace_val = jnp.trace(lhs)
     trace_val = jnp.where(jnp.isfinite(trace_val) & (trace_val > 0), trace_val, jnp.float32(1.0))
     diag_idx = jnp.arange(lhs.shape[0])
-
-    last_covar = None
-    for reg_scale in reg_scales:
-        reg = jnp.asarray(reg_scale, dtype=lhs.dtype) * trace_val / lhs.shape[0]
-        lhs_reg = lhs.at[diag_idx, diag_idx].add(reg)
-        covar = jax.scipy.linalg.solve(lhs_reg, rhs, assume_a="pos")
-        covar = _unvec_square_matrix(covar)
-        if np.isfinite(np.asarray(covar)).all():
-            if reg_scale != reg_scales[0]:
-                logger.warning(
-                    "Projected covariance solve required stronger regularization (scale=%s) to avoid non-finite output.",
-                    reg_scale,
-                )
-            return covar
-
-        logger.warning(
-            "Projected covariance solve produced non-finite output with regularization scale %s; retrying.",
-            reg_scale,
+    reg = jnp.asarray(reg_scale, dtype=lhs.dtype) * trace_val / lhs.shape[0]
+    lhs_reg = lhs.at[diag_idx, diag_idx].add(reg)
+    covar = jax.scipy.linalg.solve(lhs_reg, rhs, assume_a="pos")
+    covar = _unvec_square_matrix(covar)
+    covar_np = np.asarray(covar)
+    if not np.isfinite(covar_np).all():
+        n_nan = int(np.isnan(covar_np).sum())
+        n_inf = int(np.isinf(covar_np).sum())
+        raise ValueError(
+            "projected covariance solve returned non-finite output after "
+            f"regularization scale {reg_scale}: {n_nan} NaN, {n_inf} Inf"
         )
-        last_covar = covar
-
-    return last_covar
+    return covar
 
 
 batch_x_T_y = jax.vmap(lambda x, y: jnp.conj(x).T @ y, in_axes=(0, 0))
