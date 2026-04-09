@@ -211,8 +211,34 @@ class RefinementState:
 
     @property
     def has_fine_enough_angular_sampling(self) -> bool:
-        """True when angular sampling is at the finest allowed level."""
-        return self.healpix_order >= self.max_healpix_order
+        """True when angular sampling should not be refined further.
+
+        Fires when one of:
+        - ``healpix_order`` has reached ``max_healpix_order`` (hard cap), or
+        - the per-particle ``acc_rot`` estimate is populated and
+          ``effective_step < 0.75 * acc_rot``, or
+        - the resolution-driven Crowther step is populated and
+          ``effective_step < 0.75 * crowther_step`` (A6 proxy for
+          ``acc_rot``).
+
+        Mirrors RELION ``ml_optimiser.cpp:9817`` which sets
+        ``has_fine_enough_angular_sampling = true`` when the old step is
+        already finer than ``0.75 * acc_rot``, so the convergence check
+        downstream (``ml_optimiser.cpp:10137``) can proceed.
+        """
+        if self.healpix_order >= self.max_healpix_order:
+            return True
+        if self.acc_rot < float("inf"):
+            if self.effective_step < 0.75 * self.acc_rot:
+                return True
+        else:
+            crowther_step = self.crowther_angle_step_degrees()
+            if (
+                np.isfinite(crowther_step)
+                and self.effective_step < 0.75 * crowther_step
+            ):
+                return True
+        return False
 
     @property
     def should_do_local_search(self) -> bool:
