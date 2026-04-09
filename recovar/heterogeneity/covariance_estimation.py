@@ -927,6 +927,70 @@ def _unvec_square_matrix(vector):
     return vector.reshape(n, n).T
 
 
+def _symmetric_matrix_packed_size(n):
+    return n * (n + 1) // 2
+
+
+def _packed_symmetric_matrix_size_to_full(packed_size):
+    n = int((np.sqrt(8 * packed_size + 1) - 1) // 2)
+    if _symmetric_matrix_packed_size(n) != packed_size:
+        raise ValueError(f"packed_size={packed_size} is not a valid symmetric-matrix packed size")
+    return n
+
+
+@functools.lru_cache(maxsize=None)
+def _symmetric_packed_metadata(n):
+    row_idx, col_idx = np.triu_indices(n)
+    offdiag = row_idx != col_idx
+    scales = np.where(offdiag, np.sqrt(2.0), 1.0)
+    return row_idx.astype(np.int32), col_idx.astype(np.int32), offdiag, scales
+
+
+def _symmetric_packed_metadata_jax(n, dtype):
+    row_idx, col_idx, offdiag, scales = _symmetric_packed_metadata(n)
+    return (
+        jnp.asarray(row_idx),
+        jnp.asarray(col_idx),
+        jnp.asarray(offdiag),
+        jnp.asarray(scales, dtype=dtype),
+    )
+
+
+def _pack_symmetric_matrix_svec(matrix):
+    n = matrix.shape[-1]
+    row_idx, col_idx, _, scales = _symmetric_packed_metadata_jax(n, matrix.dtype)
+    return matrix[..., row_idx, col_idx] * scales
+
+
+def _unpack_symmetric_matrix_svec(vector):
+    n = _packed_symmetric_matrix_size_to_full(vector.shape[-1])
+    row_idx, col_idx, _, scales = _symmetric_packed_metadata_jax(n, vector.dtype)
+    values = vector / scales
+    matrix = jnp.zeros((*vector.shape[:-1], n, n), dtype=vector.dtype)
+    matrix = matrix.at[..., row_idx, col_idx].set(values)
+    matrix = matrix.at[..., col_idx, row_idx].set(values)
+    return matrix
+
+
+def _projected_covariance_dense_lhs_batch(AU_t_AU):
+    n_basis = AU_t_AU.shape[-1]
+    return jnp.einsum("bik,bjl->ijkl", AU_t_AU, AU_t_AU).reshape(n_basis * n_basis, n_basis * n_basis)
+
+
+def _projected_covariance_packed_lhs_batch(AU_t_AU):
+    n_basis = AU_t_AU.shape[-1]
+    row_idx, col_idx, offdiag, scales = _symmetric_packed_metadata_jax(n_basis, AU_t_AU.dtype)
+
+    lhs_rows = AU_t_AU[:, row_idx, :]
+    lhs_cols = AU_t_AU[:, col_idx, :]
+    cross_terms = jnp.einsum("bpk,bpl->pkl", lhs_rows, lhs_cols)
+
+    packed_lhs = cross_terms[:, row_idx, col_idx]
+    packed_lhs = packed_lhs + offdiag.astype(AU_t_AU.dtype)[None, :] * cross_terms[:, col_idx, row_idx]
+    packed_lhs = packed_lhs * (scales[:, None] / scales[None, :])
+    return packed_lhs
+
+
 @nvtx.annotate("compute_H_B_for_halfset", color="blue", domain=NVTX_DOMAIN_H_B)
 def compute_H_B_for_halfset(
     cryo, mean_estimate, volume_mask, picked_frequencies, gpu_memory, options, image_subset=None, halfset_id=None
@@ -1240,7 +1304,7 @@ def _compute_projected_covariance_single(
     mean_estimate = jnp.asarray(mean_estimate, dtype=experiment_dataset.dtype)
 
     n_basis = basis.shape[0]
-    lhs_size = n_basis * n_basis
+    lhs_size = _symmetric_matrix_packed_size(n_basis)
     lhs = jnp.zeros((lhs_size, lhs_size), dtype=experiment_dataset.dtype_real)
     rhs = jnp.zeros((n_basis, n_basis), dtype=experiment_dataset.dtype_real)
     logger.info("batch size in compute_projected_covariance %s", batch_size)
@@ -1336,7 +1400,7 @@ def compute_projected_covariance(
     mean_estimate = jnp.asarray(mean_estimate, dtype=dataset.dtype)
 
     n_basis = basis.shape[0]  # basis is (n_pcs, vol_size) after .T
-    lhs_size = n_basis * n_basis
+    lhs_size = _symmetric_matrix_packed_size(n_basis)
     lhs = jnp.zeros((lhs_size, lhs_size), dtype=dataset.dtype_real)
     rhs = jnp.zeros((n_basis, n_basis), dtype=dataset.dtype_real)
     logger.info("batch size in compute_projected_covariance %s", batch_size)
@@ -1621,9 +1685,7 @@ def _reduce_covariance_inner_explicit(
         per_image_outer = AU_t_images[:, :, None] * jnp.conj(AU_t_images[:, None, :])
         rhs_batch = (per_image_outer - per_image_noise_bias).sum(axis=0).real.astype(ctf_params.dtype)
 
-    _n = AU_t_AU.shape[-1]
-    # Kron product via einsum — avoids materialising (n_images, n²,n²) tensor.
-    lhs_batch = jnp.einsum("bik,bjl->ijkl", AU_t_AU, AU_t_AU).reshape(_n * _n, _n * _n)
+    lhs_batch = _projected_covariance_packed_lhs_batch(AU_t_AU)
     if lhs is not None:
         lhs_batch = lhs_batch + lhs
     if rhs is not None:
@@ -1650,16 +1712,15 @@ def summed_batch_kron_scan(X):
     return summed_kron
 
 
-def _solve_projected_covariance_system(lhs, rhs, reg_scale=1e-6):
-    """Solve the projected-covariance normal equations and fail on non-finite output."""
-    rhs = _vec_square_matrix(rhs)
+def _regularize_projected_covariance_lhs(lhs, reg_scale):
     trace_val = jnp.trace(lhs)
     trace_val = jnp.where(jnp.isfinite(trace_val) & (trace_val > 0), trace_val, jnp.float32(1.0))
     diag_idx = jnp.arange(lhs.shape[0])
     reg = jnp.asarray(reg_scale, dtype=lhs.dtype) * trace_val / lhs.shape[0]
-    lhs_reg = lhs.at[diag_idx, diag_idx].add(reg)
-    covar = jax.scipy.linalg.solve(lhs_reg, rhs, assume_a="pos")
-    covar = _unvec_square_matrix(covar)
+    return lhs.at[diag_idx, diag_idx].add(reg)
+
+
+def _raise_on_nonfinite_projected_covariance(covar, reg_scale):
     covar_np = np.asarray(covar)
     if not np.isfinite(covar_np).all():
         n_nan = int(np.isnan(covar_np).sum())
@@ -1669,6 +1730,39 @@ def _solve_projected_covariance_system(lhs, rhs, reg_scale=1e-6):
             f"regularization scale {reg_scale}: {n_nan} NaN, {n_inf} Inf"
         )
     return covar
+
+
+def _solve_projected_covariance_system_dense(lhs, rhs, reg_scale=1e-6):
+    rhs = _vec_square_matrix(rhs)
+    lhs_reg = _regularize_projected_covariance_lhs(lhs, reg_scale)
+    covar = jax.scipy.linalg.solve(lhs_reg, rhs, assume_a="pos")
+    covar = _unvec_square_matrix(covar)
+    _raise_on_nonfinite_projected_covariance(covar, reg_scale)
+    return covar
+
+
+def _solve_projected_covariance_system_packed(lhs, rhs, reg_scale=1e-6):
+    rhs = _pack_symmetric_matrix_svec(rhs)
+    lhs_reg = _regularize_projected_covariance_lhs(lhs, reg_scale)
+    covar = jax.scipy.linalg.solve(lhs_reg, rhs, assume_a="pos")
+    covar = _unpack_symmetric_matrix_svec(covar)
+    _raise_on_nonfinite_projected_covariance(covar, reg_scale)
+    return covar
+
+
+def _solve_projected_covariance_system(lhs, rhs, reg_scale=1e-6):
+    """Solve the projected-covariance normal equations and fail on non-finite output."""
+    n_basis = rhs.shape[-1]
+    packed_dim = _symmetric_matrix_packed_size(n_basis)
+    full_dim = n_basis * n_basis
+    if lhs.shape == (packed_dim, packed_dim):
+        return _solve_projected_covariance_system_packed(lhs, rhs, reg_scale=reg_scale)
+    if lhs.shape == (full_dim, full_dim):
+        return _solve_projected_covariance_system_dense(lhs, rhs, reg_scale=reg_scale)
+    raise ValueError(
+        "projected covariance lhs has incompatible shape "
+        f"{lhs.shape} for rhs shape {rhs.shape}; expected {(packed_dim, packed_dim)} or {(full_dim, full_dim)}"
+    )
 
 
 batch_x_T_y = jax.vmap(lambda x, y: jnp.conj(x).T @ y, in_axes=(0, 0))

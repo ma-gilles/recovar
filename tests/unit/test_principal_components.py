@@ -200,7 +200,8 @@ def test_projected_covariance_batch_size_uses_requested_gpu_budget(monkeypatch):
     assert calls["basis_shape"] == basis.shape
     assert calls["image_size"] == 16
     assert calls["zdim"] == 3
-    expected_budget = 8.0 - 2 * 3**4 * 8 / 1e9
+    lhs_dim = pc.covariance_estimation._symmetric_matrix_packed_size(3)
+    expected_budget = 8.0 - 2 * lhs_dim**2 * 8 / 1e9
     assert calls["gpu_memory"] == pytest.approx(expected_budget)
 
 

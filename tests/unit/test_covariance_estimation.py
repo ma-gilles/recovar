@@ -380,6 +380,65 @@ def test_summed_batch_kron_matches_scan():
     np.testing.assert_allclose(np.asarray(out1), np.asarray(out2), atol=1e-6, rtol=1e-6)
 
 
+def _dense_lhs_to_packed_reference(lhs_dense, n_basis):
+    packed_dim = cov_est._symmetric_matrix_packed_size(n_basis)
+    packed_eye = np.eye(packed_dim, dtype=np.asarray(lhs_dense).dtype)
+    packed_cols = []
+    for idx in range(packed_dim):
+        basis_matrix = cov_est._unpack_symmetric_matrix_svec(jnp.asarray(packed_eye[idx]))
+        dense_col = np.asarray(lhs_dense) @ np.asarray(cov_est._vec_square_matrix(basis_matrix))
+        packed_cols.append(
+            np.asarray(cov_est._pack_symmetric_matrix_svec(cov_est._unvec_square_matrix(jnp.asarray(dense_col))))
+        )
+    return np.stack(packed_cols, axis=1)
+
+
+def test_pack_symmetric_matrix_svec_round_trip():
+    matrix = np.array(
+        [
+            [1.0, 2.0, -1.0],
+            [2.0, 3.5, 0.25],
+            [-1.0, 0.25, 4.0],
+        ],
+        dtype=np.float32,
+    )
+
+    packed = cov_est._pack_symmetric_matrix_svec(jnp.asarray(matrix))
+    unpacked = cov_est._unpack_symmetric_matrix_svec(packed)
+
+    np.testing.assert_allclose(np.asarray(unpacked), matrix, atol=1e-6, rtol=1e-6)
+
+
+def test_projected_covariance_packed_lhs_matches_dense_reference():
+    rng = np.random.default_rng(0)
+    AU_t_AU = rng.standard_normal((4, 3, 3)).astype(np.float32)
+    AU_t_AU = 0.5 * (AU_t_AU + np.swapaxes(AU_t_AU, -1, -2))
+
+    lhs_dense = cov_est._projected_covariance_dense_lhs_batch(jnp.asarray(AU_t_AU))
+    lhs_packed = cov_est._projected_covariance_packed_lhs_batch(jnp.asarray(AU_t_AU))
+    lhs_packed_ref = _dense_lhs_to_packed_reference(lhs_dense, n_basis=3)
+
+    np.testing.assert_allclose(np.asarray(lhs_packed), lhs_packed_ref, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(lhs_packed), np.asarray(lhs_packed).T, atol=1e-6, rtol=1e-6)
+
+
+def test_solve_projected_covariance_system_packed_matches_dense():
+    rng = np.random.default_rng(1)
+    AU_features = rng.standard_normal((5, 4, 7)).astype(np.float64)
+    AU_t_AU = np.einsum("bik,bjk->bij", AU_features, AU_features)
+    cov_true = rng.standard_normal((4, 4)).astype(np.float64)
+    cov_true = 0.5 * (cov_true + cov_true.T)
+
+    lhs_dense = cov_est._projected_covariance_dense_lhs_batch(jnp.asarray(AU_t_AU))
+    lhs_packed = cov_est._projected_covariance_packed_lhs_batch(jnp.asarray(AU_t_AU))
+    rhs = cov_est._unvec_square_matrix(lhs_dense @ cov_est._vec_square_matrix(jnp.asarray(cov_true)))
+
+    dense_sol = cov_est._solve_projected_covariance_system_dense(lhs_dense, rhs)
+    packed_sol = cov_est._solve_projected_covariance_system_packed(lhs_packed, rhs)
+
+    np.testing.assert_allclose(np.asarray(packed_sol), np.asarray(dense_sol), atol=1e-6, rtol=1e-6)
+
+
 def test_summed_outer_products_matches_manual():
     a = jnp.array([[1 + 1j, 2 + 0j], [3 + 0j, 4 - 1j]], dtype=jnp.complex64)
     out = cov_est.summed_outer_products(a)
@@ -1621,7 +1680,7 @@ def test_solve_projected_covariance_system_raises_on_nonfinite_output(monkeypatc
 
     monkeypatch.setattr(cov_est.jax.scipy.linalg, "solve", fake_solve)
 
-    lhs = jnp.eye(4, dtype=jnp.float32)
+    lhs = jnp.eye(cov_est._symmetric_matrix_packed_size(2), dtype=jnp.float32)
     rhs = jnp.arange(4, dtype=jnp.float32).reshape(2, 2)
 
     with pytest.raises(ValueError, match="projected covariance solve returned non-finite output"):
