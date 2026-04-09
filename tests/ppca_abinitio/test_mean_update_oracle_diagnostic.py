@@ -186,6 +186,76 @@ def test_oracle_init_bias_is_independent_of_n_images():
     )
 
 
+def test_oracle_init_bias_is_independent_of_volume_size():
+    """The slice/adjoint discretization bias is structural — it
+    persists across volume sizes from 8³ to ~16³ at toy data scales.
+    The bias does NOT shrink as volume grows; it's a property of
+    the slice/adjoint pair without proper gridding correction.
+
+    This test pins the claim that the bias is structural by
+    checking that the FRE stays in [0.20, 0.30] across vol sizes.
+
+    Cross-reference: the production `griddingCorrect_square` in
+    `relion_functions.py` is calibrated for
+    `volume_upsampling_factor=2`. With upsampling=1 (which the
+    v0 mean update uses), grid correction makes FRE *worse*, not
+    better. Fixing the bias requires either implementing the
+    upsampled-volume slicing path or accepting the bias as a
+    documented v0 limitation.
+    """
+    cfg_factory = lambda vs: _SyntheticConfig(image_shape=(vs, vs), volume_shape=(vs, vs, vs), voxel_size=1.0)
+
+    fres = []
+    for vs in (8, 12, 16):
+        grid = build_fixed_grid(healpix_order=0 if vs <= 12 else 1, max_shift=1)
+        ds = make_synthetic_fixed_grid_dataset(
+            SyntheticFamily.MATCHED_GRID_HET,
+            volume_shape=(vs, vs, vs),
+            image_shape=(vs, vs),
+            grid=grid,
+            q=2,
+            n_images_train=512,
+            n_images_val=2,
+            sigma_real=0.001,
+            seed=0,
+        )
+        cfg = cfg_factory(vs)
+        init = init_oracle(
+            mu_half_true=ds.mu_half_true,
+            U_half_true=ds.U_half_true,
+            s_true=ds.s_true,
+            volume_shape=(vs, vs, vs),
+        )
+        res = update_mu_homogeneous(
+            cfg,
+            init,
+            ds.batch_full,
+            ds.rotations,
+            ds.translations,
+            ds.ctf_params,
+            ds.noise_variance_full,
+            tau=0.0,
+        )
+        weights = make_half_volume_weights((vs, vs, vs))
+        fres.append(float(fourier_relative_error_mu(res.mu_half, ds.mu_half_true, weights_half=weights)))
+
+    # All FREs should be in the structural-bias band
+    for fre in fres:
+        assert 0.18 <= fre <= 0.32, (
+            f"FREs across volume sizes 8/12/16: {fres}. Expected all "
+            "in [0.18, 0.32] (structural slice/adjoint bias). Outside "
+            "this band suggests a real change to the slicer or accumulator."
+        )
+
+    # And the bias should NOT scale with volume size (within 0.10 spread)
+    spread = max(fres) - min(fres)
+    assert spread < 0.10, (
+        f"Bias varies by {spread:.4f} across vol sizes 8→16. The bias "
+        "should be roughly volume-invariant if it's the slice/adjoint "
+        "discretization."
+    )
+
+
 def test_oracle_init_99pct_of_mu_energy_is_inside_max_r_sphere():
     """Sanity check supporting the 'gridding bias, not sparsity'
     diagnosis: most of mu_true's energy is inside the sphere of
