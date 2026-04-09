@@ -355,6 +355,10 @@ def _compute_noise_block(proj_half, proj_abs2_half, summed_masked,
     -------
     noise_shells : (n_shells,) float
         ``sum_{k in shell} (A2(k) - 2*XA(k))`` contribution from this block.
+    a2_shells : (n_shells,) float
+        ``sum_{k in shell} A2(k)`` (diagnostic split).
+    xa_shells : (n_shells,) float
+        ``sum_{k in shell} XA(k)`` (diagnostic split).
     """
     # A2 term: sum_r |proj_r|^2 * (ctf_probs * noise_variance)[r, k]
     # ctf_probs has CTF^2/sigma2; multiply by sigma2 to get CTF^2
@@ -374,7 +378,11 @@ def _compute_noise_block(proj_half, proj_abs2_half, summed_masked,
     # Bin to resolution shells (no Hermitian weights -- matching RELION)
     noise_shells = jnp.zeros(n_shells, dtype=jnp.float32)
     noise_shells = noise_shells.at[shell_indices].add(block_noise)
-    return noise_shells
+    a2_shells = jnp.zeros(n_shells, dtype=jnp.float32)
+    a2_shells = a2_shells.at[shell_indices].add(A2)
+    xa_shells = jnp.zeros(n_shells, dtype=jnp.float32)
+    xa_shells = xa_shells.at[shell_indices].add(XA)
+    return noise_shells, a2_shells, xa_shells
 
 
 def _compute_projections_block(volume, rotations_block, image_shape, volume_shape, disc_type):
@@ -620,6 +628,8 @@ def run_em_v2(
     noise_wsum = None
     noise_img_power = None
     noise_sumw = 0.0
+    noise_a2 = None  # diagnostic
+    noise_xa = None  # diagnostic
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_shell_indices_half(image_shape)
@@ -637,6 +647,8 @@ def run_em_v2(
             noise_variance_windowed = noise_variance_half
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
+        noise_a2 = np.zeros(n_shells, dtype=np.float64)
+        noise_xa = np.zeros(n_shells, dtype=np.float64)
 
     start_idx = 0
 
@@ -892,11 +904,13 @@ def run_em_v2(
                     proj_for_noise = proj_half_b
                     proj_abs2_for_noise = proj_abs2_half_b
 
-                block_noise_shells = _compute_noise_block(
+                block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
                     proj_for_noise, proj_abs2_for_noise, summed_masked_noise,
                     ctf_probs_for_noise, nv_for_noise, si_for_noise, n_shells,
                 )
                 noise_wsum += np.asarray(block_noise_shells, dtype=np.float64)
+                noise_a2 += np.asarray(block_a2_shells, dtype=np.float64)
+                noise_xa += np.asarray(block_xa_shells, dtype=np.float64)
 
             # Track global hard assignment
             improved = block_best > best_score
@@ -936,6 +950,36 @@ def run_em_v2(
 
     noise_stats = None
     if accumulate_noise:
+        # Diagnostic: log per-shell A2, XA, img_power, wsum for the first 6 shells
+        # so we can compare across iterations of refine.
+        try:
+            n_log_shells = min(6, len(noise_wsum))
+            logger.info(
+                "[NOISE-DIAG] sumw=%.0f n_rot=%d use_window=%s",
+                float(noise_sumw), int(n_rot), bool(use_window),
+            )
+            logger.info(
+                "[NOISE-DIAG] A2 (first %d shells): %s",
+                n_log_shells,
+                ", ".join(f"{noise_a2[i]:.3e}" for i in range(n_log_shells)),
+            )
+            logger.info(
+                "[NOISE-DIAG] XA (first %d shells): %s",
+                n_log_shells,
+                ", ".join(f"{noise_xa[i]:.3e}" for i in range(n_log_shells)),
+            )
+            logger.info(
+                "[NOISE-DIAG] img_power (first %d shells): %s",
+                n_log_shells,
+                ", ".join(f"{noise_img_power[i]:.3e}" for i in range(n_log_shells)),
+            )
+            logger.info(
+                "[NOISE-DIAG] wsum=A2-2XA (first %d shells): %s",
+                n_log_shells,
+                ", ".join(f"{noise_wsum[i]:.3e}" for i in range(n_log_shells)),
+            )
+        except Exception as exc:
+            logger.warning("noise diagnostic logging failed: %s", exc)
         noise_stats = NoiseStats(
             wsum_sigma2_noise=jnp.asarray(noise_wsum, dtype=jnp.float32),
             wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
