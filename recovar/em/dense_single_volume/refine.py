@@ -1246,6 +1246,7 @@ def _refine_relion_mode(
         translation_step=init_translation_step,
         max_healpix_order=max_healpix_order,
         current_resolution=float("inf"),
+        particle_diameter_angstrom=float(particle_diameter_ang or 0.0),
     )
 
     # RELION mode owns the coarse HEALPix grid. When coarse-grid metadata is
