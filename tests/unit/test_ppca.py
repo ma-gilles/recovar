@@ -6,7 +6,6 @@ jax = pytest.importorskip("jax")
 import jax.numpy as jnp
 
 from recovar.heterogeneity import adaptive_kernel_discretization as akd
-from recovar.heterogeneity import ppca
 
 pytestmark = pytest.mark.unit
 
