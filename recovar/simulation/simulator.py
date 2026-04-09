@@ -379,6 +379,71 @@ def get_noise_model(option, grid_size):
         return np.ones(grid_size // 2 - 1)
 
 
+def normalize_particles_relion_style_streaming(
+    images, bg_radius_px, chunk_size=1000, dtype_out=np.float32,
+):
+    """Memory-bounded variant of :func:`normalize_particles_relion_style`.
+
+    Designed to work with mmap'd MRC stacks: processes ``chunk_size``
+    particles at a time so the peak memory is
+
+        chunk_size * H * W * 8 bytes (float64 working copy)
+
+    instead of the full ``n_images * H * W * 8`` of the original. The
+    normalised pixels are written back into ``images`` in-place, so when
+    ``images`` is the ``.data`` attribute of an mmap'd ``mrcfile``, the
+    file on disk is updated directly without any auxiliary buffer the
+    size of the full stack.
+
+    Parameters mirror :func:`normalize_particles_relion_style`. Returns
+    the same ``(images, bg_means, bg_stds)`` triple, except ``images``
+    is the in-place mutated input rather than a fresh array.
+    """
+    images = np.asarray(images)
+    if images.ndim != 3:
+        raise ValueError(
+            f"streaming variant requires (N, H, W) input, got {images.shape}",
+        )
+    n_images, H, W = images.shape
+
+    if 2 * bg_radius_px > min(H, W):
+        raise ValueError(
+            f"bg_radius_px={bg_radius_px} is larger than half the image "
+            f"dimension ({min(H, W) // 2}); choose a smaller radius.",
+        )
+
+    yy, xx = np.indices((H, W))
+    cy, cx = H / 2 - 0.5, W / 2 - 0.5
+    bg_mask = ((yy - cy) ** 2 + (xx - cx) ** 2) > (bg_radius_px ** 2)
+    if bg_mask.sum() == 0:
+        raise ValueError(
+            f"Background mask is empty (bg_radius_px={bg_radius_px} too large).",
+        )
+
+    bg_means = np.empty(n_images, dtype=np.float64)
+    bg_stds = np.empty(n_images, dtype=np.float64)
+
+    for start in range(0, n_images, chunk_size):
+        end = min(start + chunk_size, n_images)
+        # Read chunk into RAM (mmap → ndarray copy via .astype, contiguous).
+        chunk = np.asarray(images[start:end]).astype(np.float64, copy=True)
+        bg_pixels = chunk[:, bg_mask]
+        bg_means_chunk = bg_pixels.mean(axis=1)
+        bg_stds_chunk = bg_pixels.std(axis=1)
+        bg_means[start:end] = bg_means_chunk
+        bg_stds[start:end] = bg_stds_chunk
+
+        bg_stds_safe = np.where(bg_stds_chunk > 1e-10, bg_stds_chunk, 1.0)
+        normalized_chunk = (
+            (chunk - bg_means_chunk[:, None, None])
+            / bg_stds_safe[:, None, None]
+        ).astype(dtype_out)
+        # Write back to mmap (or in-place into the input array).
+        images[start:end] = normalized_chunk
+
+    return images, bg_means, bg_stds
+
+
 def normalize_particles_relion_style(images, bg_radius_px):
     """Apply RELION's per-particle background normalization to a stack of 2D images.
 
@@ -484,6 +549,8 @@ def generate_synthetic_dataset(
     percent_tilt_series_outliers=0.0,
     relion_normalize=False,
     relion_bg_radius_px=None,
+    streaming_mmap=False,
+    streaming_chunk_size=1000,
 ):
     """Generate a synthetic cryo-EM particle dataset.
 
@@ -502,8 +569,53 @@ def generate_synthetic_dataset(
         Defaults to ``round(0.375 * grid_size)`` which matches the RELION GUI
         ``relion_preprocess`` extract job default for a particle that fills
         ~75% of the box.
+    streaming_mmap : bool, default False
+        If True, pre-allocate the output ``particles.{grid_size}.mrcs`` file
+        as an mmap'd MRC stack BEFORE simulation starts. The simulator then
+        writes batches directly to disk via the mmap, and the post-processing
+        (image offset, RELION normalization) operates on the mmap in chunks.
+        Bounds peak memory to ``streaming_chunk_size * H * W * 8`` bytes
+        (~2 GB for chunk_size=1000 at box=512) instead of holding the full
+        ``n_images * H * W * 4`` stack (~314 GB for 300k @ box 512).
+
+        Required for large datasets (≥100k particles at box ≥256). Forces
+        ``image_dtype=float32`` because the on-disk file is the same memory
+        as the simulator working buffer (no float16 cast at the end).
+
+        NOTE: incompatible with ``put_extra_particles=True`` and
+        ``percent_outliers > 0`` and ``rescale_noise`` (when
+        ``relion_normalize=False``) — those code paths build a SECOND
+        in-memory stack and add it to the main one, which defeats the
+        memory bound. The streaming path raises if these are set.
+    streaming_chunk_size : int, default 1000
+        Chunk size for the streaming post-processing (RELION normalization
+        and image offset). Memory peak per chunk is
+        ``chunk_size * H * W * 8 bytes``.
     """
     from recovar.output import output
+
+    if streaming_mmap:
+        if put_extra_particles:
+            raise ValueError(
+                "streaming_mmap is incompatible with put_extra_particles=True "
+                "(extra particles allocate a second full stack).",
+            )
+        if percent_outliers > 0:
+            raise ValueError(
+                "streaming_mmap is incompatible with percent_outliers > 0 "
+                "(outlier path allocates a second full stack).",
+            )
+        if not relion_normalize:
+            raise ValueError(
+                "streaming_mmap currently requires relion_normalize=True "
+                "(the rescale_noise probe path with relion_normalize=False "
+                "still allocates a full stack and a 10-image probe).",
+            )
+        if image_offset_n_std != 0.0:
+            raise ValueError(
+                "streaming_mmap is incompatible with image_offset_n_std != 0 "
+                "(the offset step needs the full mean over the stack).",
+            )
 
     output.mkdir_safe(output_folder)
     volumes = load_volumes_from_folder(volumes_path_root, grid_size, trailing_zero_format_in_vol_name, normalize=False)
@@ -525,6 +637,34 @@ def generate_synthetic_dataset(
     noise_variance = get_noise_model(noise_model, grid_size) / 50000 * noise_level
 
     mrc_file = None
+    streaming_particles_path = None
+    if streaming_mmap:
+        # Pre-allocate the output MRC stack as an mmap'd file. Subsequent
+        # calls to ``simulate_data`` will write directly to disk via the
+        # mmap and ``normalize_particles_relion_style_streaming`` will read
+        # / write back in fixed-size chunks. The on-disk dtype is float32
+        # (no float16 cast at the end) so the same memory page acts as
+        # both the simulator working buffer and the final output.
+        streaming_particles_path = output_folder + f"/particles.{grid_size}.mrcs"
+        if image_dtype != np.float32:
+            logger.info(
+                "streaming_mmap: forcing image_dtype to float32 (was %s); "
+                "the on-disk file is the simulator working buffer.",
+                image_dtype,
+            )
+            image_dtype = np.float32
+        logger.info(
+            "streaming_mmap: pre-allocating %s as %dx%dx%d float32 (~%.1f GB)",
+            streaming_particles_path, n_images, grid_size, grid_size,
+            n_images * grid_size * grid_size * 4 / 1024**3,
+        )
+        mrc_file = mrcfile.new_mmap(
+            streaming_particles_path,
+            shape=(n_images, grid_size, grid_size),
+            mrc_mode=2,  # float32
+            overwrite=True,
+        )
+        mrc_file.voxel_size = voxel_size
 
     # When relion_normalize is on, we skip the probe-based pre-rescale
     # (the scale will come from the per-particle bg statistics of the FULL
@@ -595,11 +735,21 @@ def generate_synthetic_dataset(
         )
         logger.info(
             "RELION-style normalization: per-particle bg subtract+scale "
-            "with bg_radius_px=%d", bg_radius_px,
+            "with bg_radius_px=%d (streaming=%s, chunk_size=%d)",
+            bg_radius_px, streaming_mmap, streaming_chunk_size,
         )
-        main_image_stack, bg_means, bg_stds = normalize_particles_relion_style(
-            main_image_stack, bg_radius_px,
-        )
+        if streaming_mmap:
+            # Operate on the mmap'd MRC data in fixed-size chunks. Memory
+            # peak: ~chunk_size * grid_size² * 8 bytes (float64 working
+            # copy). For chunk_size=1000 at box=512 that's ~2 GB.
+            main_image_stack, bg_means, bg_stds = normalize_particles_relion_style_streaming(
+                main_image_stack, bg_radius_px, chunk_size=streaming_chunk_size,
+                dtype_out=np.float32,
+            )
+        else:
+            main_image_stack, bg_means, bg_stds = normalize_particles_relion_style(
+                main_image_stack, bg_radius_px,
+            )
         mean_inv_std = float(np.mean(1.0 / np.maximum(bg_stds, 1e-10)))
         logger.info(
             "Per-particle bg stats: mean(bg_mean)=%.4e, std(bg_mean)=%.4e, "
@@ -640,9 +790,22 @@ def generate_synthetic_dataset(
     # Save outputs
     particles_file = output_folder + f"/particles.{grid_size}.mrcs"
 
-    with mrcfile.new(particles_file, overwrite=True) as mrc:
-        mrc.set_data(main_image_stack.astype(image_dtype))
-        mrc.voxel_size = voxel_size
+    if streaming_mmap:
+        # The mmap'd MRC has been written incrementally throughout
+        # simulation + post-processing. Just close it cleanly to flush
+        # the header / final pages.
+        mrc_file.flush()
+        mrc_file.close()
+        # Sanity check: file already exists at the expected path.
+        if streaming_particles_path != particles_file:
+            raise RuntimeError(
+                f"streaming MRC was created at {streaming_particles_path} "
+                f"but expected {particles_file}",
+            )
+    else:
+        with mrcfile.new(particles_file, overwrite=True) as mrc:
+            mrc.set_data(main_image_stack.astype(image_dtype))
+            mrc.voxel_size = voxel_size
     poses = (rots.astype(np.float32), trans.astype(np.float32))
     utils.pickle_dump(poses, output_folder + "/poses.pkl")
     save_ctf_params(output_folder, grid_size, ctf_params, voxel_size)
@@ -1240,10 +1403,11 @@ def simulate_data(
     logger.info("Discretizing with: %s", disc_type)
     logger.info("Done generating data")
 
-    if mrc_file is not None:
-        return mrc_file
-    else:
-        return output_array
+    # Always return the underlying ndarray (not the mrcfile object) so that
+    # downstream callers can do np.mean / slicing without special-casing.
+    # When mrc_file is provided, output_array is mrc_file.data which is
+    # already an mmap'd ndarray view; the file stays open via mrc_file.
+    return output_array
 
 
 def make_noise_batch(subkey, noise_image, images_batch_shape):
