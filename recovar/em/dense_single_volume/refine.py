@@ -183,6 +183,8 @@ def _run_grouped_local_search_em(
     image_batch_size,
     rotation_block_size,
     current_size,
+    *,
+    accumulate_noise=False,
 ):
     """Run batched exact local search on the fine HEALPix grid.
 
@@ -217,6 +219,12 @@ def _run_grouped_local_search_em(
         rotation_grid_size(healpix_order), dtype=np.float64,
     )
 
+    # Noise accumulation across chunks (RELION-parity for the noise update).
+    n_shells_local = experiment_dataset.image_shape[0] // 2 + 1
+    accum_noise_wsum = np.zeros(n_shells_local, dtype=np.float64) if accumulate_noise else None
+    accum_img_power = np.zeros(n_shells_local, dtype=np.float64) if accumulate_noise else None
+    accum_sumw = 0.0
+
     total_local_rotations = 0
     max_local_rotations = 0
     chunk_sizes = []
@@ -249,7 +257,7 @@ def _run_grouped_local_search_em(
         total_local_rotations += int(local_rotations.shape[0])
         max_local_rotations = max(max_local_rotations, int(local_rotations.shape[0]))
 
-        _, ha_local, Ft_y_g, Ft_ctf_g, stats_g = run_em_v2(
+        run_em_outputs = run_em_v2(
             experiment_dataset,
             mean,
             mean_variance,
@@ -265,7 +273,15 @@ def _run_grouped_local_search_em(
             image_indices=group_image_indices,
             score_with_masked_images=True,
             return_stats=True,
+            accumulate_noise=accumulate_noise,
         )
+        if accumulate_noise:
+            _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g = run_em_outputs
+            accum_noise_wsum += np.asarray(noise_stats_g.wsum_sigma2_noise, dtype=np.float64)
+            accum_img_power += np.asarray(noise_stats_g.wsum_img_power, dtype=np.float64)
+            accum_sumw += float(noise_stats_g.sumw)
+        else:
+            _, ha_local, Ft_y_g, Ft_ctf_g, stats_g = run_em_outputs
 
         Ft_y_total = Ft_y_total + Ft_y_g
         Ft_ctf_total = Ft_ctf_total + Ft_ctf_g
@@ -303,6 +319,14 @@ def _run_grouped_local_search_em(
         max_posterior_per_image=jnp.asarray(max_posterior),
         rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
     )
+    if accumulate_noise:
+        from recovar.em.dense_single_volume.types import NoiseStats
+        noise_stats = NoiseStats(
+            wsum_sigma2_noise=jnp.asarray(accum_noise_wsum, dtype=jnp.float32),
+            wsum_img_power=jnp.asarray(accum_img_power, dtype=jnp.float32),
+            sumw=float(accum_sumw),
+        )
+        return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats, noise_stats
     return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats
 
 
@@ -1548,7 +1572,7 @@ def _refine_relion_mode(
                     rotation_grid_size(local_search_order),
                     current_translations.shape[0],
                 )
-                Ft_y_k, Ft_ctf_k, ha_k, em_stats_k = _run_grouped_local_search_em(
+                Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k = _run_grouped_local_search_em(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
@@ -1565,7 +1589,9 @@ def _refine_relion_mode(
                     image_batch_size=safe_ibs,
                     rotation_block_size=safe_rbs,
                     current_size=cs_for_engine,
+                    accumulate_noise=True,
                 )
+                noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
                 coarse_ha[k] = ha_k
 
