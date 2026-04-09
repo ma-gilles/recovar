@@ -162,6 +162,10 @@ class RefinementState:
     ave_Pmax: float = 0.0
     acc_rot: float = float("inf")
     acc_trans: float = float("inf")
+    # Particle diameter in Å (used for the resolution-based acc_rot proxy
+    # in should_refine_angular_sampling). Set by the caller via
+    # update_refinement_state(..., particle_diameter_angstrom=...).
+    particle_diameter_angstrom: float = 0.0
 
     # Limits
     max_healpix_order: int = 7
@@ -214,6 +218,39 @@ class RefinementState:
     def should_do_local_search(self) -> bool:
         """True when HEALPix order is high enough for local search."""
         return self.healpix_order >= LOCAL_SEARCH_HEALPIX_ORDER
+
+    def crowther_angle_step_degrees(self) -> float:
+        """Resolution-driven angular step from RELION's Crowther formula.
+
+        Mirrors RELION ``ml_optimiser.cpp:9778``::
+
+            int nr_ang_steps = CEIL(PI * particle_diameter * mymodel.current_resolution)
+            myresol_angstep = 360. / nr_ang_steps
+
+        ``mymodel.current_resolution`` is in 1/Å, so
+
+            nr_ang_steps = ceil(pi * particle_diameter[Å] / resolution[Å])
+
+        Returns ``inf`` when ``particle_diameter_angstrom`` or
+        ``current_resolution`` are unset, so callers can fall back to the
+        legacy "always allow refinement" behavior.
+
+        Used as a per-iter proxy for ``acc_rot``: any angular step finer
+        than ``0.75 * crowther_step`` is finer than the resolution-driven
+        sampling requirement, so further bumping is unlikely to improve
+        anything.  This matches RELION's "stop when old_step <
+        0.75 * acc_rot" check (``ml_optimiser.cpp:9817``) for the cases
+        where the proper per-particle perturbation acc_rot is dominated
+        by the resolution limit (which is most cases at low/mid res).
+        """
+        pd = float(self.particle_diameter_angstrom)
+        res = float(self.current_resolution)
+        if pd <= 0.0 or not np.isfinite(res) or res <= 0.0:
+            return float("inf")
+        nr_ang_steps = int(np.ceil(np.pi * pd / res))
+        if nr_ang_steps <= 0:
+            return float("inf")
+        return 360.0 / float(nr_ang_steps)
 
 
 # ---------------------------------------------------------------------------
@@ -596,7 +633,11 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
                 and state.nr_iter_wo_resol_gain < EXTENDED_RESOL_STALL):
             return False
 
-    # Don't refine beyond 75% of estimated angular accuracy
+    # Don't refine beyond 75% of estimated angular accuracy.  Prefer the
+    # full per-particle estimate when populated; otherwise fall back to
+    # the resolution-driven Crowther step which is what RELION uses to
+    # decide whether to bump in `do_proceed_resolution` and as an upper
+    # bound on `acc_rot` in low/mid-resolution regimes.
     if state.acc_rot < float("inf"):
         if state.effective_step < 0.75 * state.acc_rot:
             logger.info(
@@ -604,6 +645,20 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
                 "not refining further",
                 state.effective_step,
                 state.acc_rot,
+            )
+            return False
+    else:
+        crowther_step = state.crowther_angle_step_degrees()
+        if (
+            np.isfinite(crowther_step)
+            and state.effective_step < 0.75 * crowther_step
+        ):
+            logger.info(
+                "Angular step %.2f deg < 75%% of resolution-driven "
+                "Crowther step %.2f deg (resolution=%.2f Å, "
+                "particle_diameter=%.1f Å); not refining further",
+                state.effective_step, crowther_step,
+                state.current_resolution, state.particle_diameter_angstrom,
             )
             return False
 
@@ -704,6 +759,7 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
         ave_Pmax=state.ave_Pmax,
         acc_rot=state.acc_rot,
         acc_trans=state.acc_trans,
+        particle_diameter_angstrom=state.particle_diameter_angstrom,
         max_healpix_order=state.max_healpix_order,
         fraction_changed=state.fraction_changed,
         changes_optimal_offsets=state.changes_optimal_offsets,
@@ -936,6 +992,7 @@ def update_refinement_state(
         ave_Pmax=ave_pmax,
         acc_rot=new_acc_rot,
         acc_trans=new_acc_trans,
+        particle_diameter_angstrom=state.particle_diameter_angstrom,
         max_healpix_order=state.max_healpix_order,
         fraction_changed=frac_changed,
         changes_optimal_offsets=trans_changes,
