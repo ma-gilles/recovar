@@ -694,52 +694,39 @@ def get_local_rotation_grid_fast(
 
     # For each prior P, compute axis-angle distance to every grid matrix G:
     #   d(P, G) = arccos((trace(P^T @ G) - 1) / 2)
-    # Vectorized:
-    #   diffs = einsum('pij,gjk->pgik', prior^T, grid)  # (n_priors, n_total, 3, 3)
-    # That's a (n_priors, n_total, 3, 3) tensor — too big for n_total=295k. Loop
-    # over priors instead, computing one (n_total, 3, 3) per prior.
-    log_prior_per_image = np.full(
-        (n_priors, n_total_grid), -1e30, dtype=np.float64,
-    )
-    selected_set: set = set()
+    #
+    # Key trick: trace(P^T @ G) = sum_{i,j} P[i,j] * G[i,j], i.e. the
+    # Frobenius inner product. So all (n_priors, n_total) traces collapse
+    # to a single (n_priors, 9) @ (9, n_total) matmul over the flattened
+    # 3x3 matrix entries — no need to form (n_priors, n_total, 3, 3).
     inv_two_sigma_sq = 1.0 / (2.0 * biggest_sigma * biggest_sigma)
+    cos_cutoff = float(np.cos(cone_rad))  # cos is monotonically decreasing
 
-    for i in range(n_priors):
-        P_T = prior_rotations[i].T  # (3, 3)
-        # Per-grid R_diff = P^T @ G_i, shape (n_total, 3, 3).
-        # einsum 'jk,nkl->njl' gives (n_total, 3, 3).
-        R_diff = np.einsum("jk,nkl->njl", P_T, all_grid_mats)
-        # Trace per matrix.
-        traces = np.trace(R_diff, axis1=1, axis2=2)
-        # Numerical clip for arccos domain.
-        cos_arg = (traces - 1.0) * 0.5
-        np.clip(cos_arg, -1.0, 1.0, out=cos_arg)
-        angles = np.arccos(cos_arg)  # (n_total,)
-        in_cone_mask = angles <= cone_rad
-        if in_cone_mask.any():
-            in_cone_idx = np.nonzero(in_cone_mask)[0]
-            selected_set.update(in_cone_idx.tolist())
-            log_prior_per_image[i, in_cone_idx] = (
-                -(angles[in_cone_idx] ** 2) * inv_two_sigma_sq
-            )
+    priors_flat = prior_rotations.reshape(n_priors, 9)            # (n_priors, 9)
+    grid_flat = all_grid_mats.reshape(n_total_grid, 9)            # (n_total, 9)
+    traces_all = priors_flat @ grid_flat.T                        # (n_priors, n_total)
+    cos_arg_all = (traces_all - 1.0) * 0.5
+    # Mask without arccos: angle <= cone_rad <=> cos(angle) >= cos(cone_rad).
+    in_cone_all = cos_arg_all >= cos_cutoff                       # (n_priors, n_total)
+    union_in_cone = np.any(in_cone_all, axis=0)                   # (n_total,)
+    selected_indices = np.flatnonzero(union_in_cone).astype(np.int64)
 
-    if not selected_set:
+    if selected_indices.size == 0:
         # Fallback: pick the single closest grid matrix for each prior so
-        # we never return an empty selection. Distance reuse from above
-        # would be cleaner but this path is rare; keep it simple.
-        for i in range(n_priors):
-            P_T = prior_rotations[i].T
-            R_diff = np.einsum("jk,nkl->njl", P_T, all_grid_mats)
-            traces = np.trace(R_diff, axis1=1, axis2=2)
-            best = int(np.argmax(traces))
-            selected_set.add(best)
-            angle = float(np.arccos(np.clip((traces[best] - 1.0) * 0.5, -1.0, 1.0)))
-            log_prior_per_image[i, best] = -(angle ** 2) * inv_two_sigma_sq
+        # we never return an empty selection.
+        best_per_prior = np.argmax(cos_arg_all, axis=1)            # (n_priors,)
+        selected_indices = np.unique(best_per_prior).astype(np.int64)
 
-    selected_indices = np.array(sorted(selected_set), dtype=np.int64)
-
-    # Restrict to selected union, dropping the giant -1e30 columns.
-    log_prior = log_prior_per_image[:, selected_indices]  # (n_priors, n_selected)
+    # Restrict cos_arg to the selected union and compute the log-prior only
+    # there. arccos is the costly trig op; do it once on the small slice.
+    cos_arg_sel = cos_arg_all[:, selected_indices]                 # (n_priors, n_selected)
+    np.clip(cos_arg_sel, -1.0, 1.0, out=cos_arg_sel)
+    angles_sel = np.arccos(cos_arg_sel)
+    log_prior = np.where(
+        cos_arg_sel >= cos_cutoff,
+        -(angles_sel ** 2) * inv_two_sigma_sq,
+        -1e30,
+    )
 
     if per_image:
         out_log_prior = log_prior.astype(np.float32)

@@ -1043,6 +1043,50 @@ RELION's stays constant). Possible secondary causes:
 These should be investigated next, but they are SMALL effects compared to the 30% jump from
 the original bug.
 
+## ✅ Major parity bug fixed 2026-04-09 (Task #101 part 2, commit `ae8bcc3`)
+
+### Bug: Task #100's "view direction" formula was wrong for recovar's grid
+
+The Task #100 fix replaced `hp.query_disc` with a "matrix view direction" computation,
+intending to use the actual grid matrix positions (not HEALPix pixel centers) to find
+in-cone candidates. However, the formula it used was the standard ZYZ view formula:
+
+    view = (sin(tilt)*cos(rot), sin(tilt)*sin(rot), cos(tilt))
+
+This is WRONG for recovar's grid. `R_from_relion` uses extrinsic ZXZ with offsets
+`[rot+90, tilt, psi-90]` and a frame-adjust matrix
+`[[1,-1,1],[-1,1,-1],[1,-1,1]]`. The actual third row of `R[2,:]` (which is the view
+direction in matrix-times-vector convention) is:
+
+    view = (-cos(psi)*sin(tilt), sin(psi)*sin(tilt), cos(tilt))
+
+Notice the dependence on `psi`, not just `(rot, tilt)`. Empirically, on the order-3 grid
+the standard formula has RMS error of 1.02 vs the actual matrices, while the recovar
+formula has RMS error 2.4e-16. Worse, ~49% of priors had <10% cone overlap with the
+true SO(3) cone, and the catastrophic case `(rot=270°, tilt=90°, psi=0°)` had 0%
+overlap (the buggy cone landed on the antipodal set).
+
+### The fix
+Bypass the view-direction approach entirely and compute axis-angle SO(3) distance
+directly between matrices:
+
+    d(P, G) = arccos((trace(P^T @ G) - 1) / 2)
+
+This is invariant under the Euler convention. For each prior P we compute the distance
+to all grid matrices via a single batched einsum, then select within the cone radius.
+The full grid of matrices is cached per healpix_order so the cost is one matmul per
+prior (~64 priors × 295k matrices at order 4, sub-millisecond on CPU/GPU).
+
+The log-prior is computed as a single Gaussian in axis-angle distance with sigma
+`max(sigma_rot, sigma_psi)`, matching RELION's "biggest_sigma" convention in
+`selectOrientationsWithNonZeroPriorProbability` (`healpix_sampling.cpp:769`).
+
+**Verification**: 8 challenging test priors all show 100% true-cone coverage with
+0 extras, including the catastrophic case `(rot=270°, tilt=90°, psi=0°)` that had
+0% coverage before. All 105 unit tests still pass.
+
+See commit `ae8bcc3` for the full change.
+
 ## References
 
 - `relion/src/ml_optimiser.cpp` (the canonical algorithm)
