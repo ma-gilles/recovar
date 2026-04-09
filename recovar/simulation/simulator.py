@@ -938,7 +938,11 @@ def simulate_data(
         elif "cubic" in disc_type:
             from recovar.core import cubic_interpolation
 
-            volume = cubic_interpolation.calculate_spline_coefficients(vol.reshape(experiment_dataset.volume_shape))
+            volume = core.VolumeRepr(
+                cubic_interpolation.calculate_spline_coefficients(vol.reshape(experiment_dataset.volume_shape)),
+                disc_type="cubic",
+                prefiltered=True,
+            )
         else:
             volume = vol
 

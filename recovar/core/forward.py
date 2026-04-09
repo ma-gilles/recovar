@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images
 from recovar.core.slicing import (
+    VolumeRepr,
     adjoint_slice_volume,
     slice_volume,
 )
@@ -29,7 +30,7 @@ def forward_model(
     rotation_matrices: jax.Array,
     skip_ctf: bool = False,
     half_image: bool = False,
-    half_volume: bool = False,
+    half_volume: bool | None = None,
 ) -> jax.Array:
     """Project volume into images via slice-and-CTF forward model.
 
@@ -38,9 +39,14 @@ def forward_model(
     half_image : bool
         If True, return rfft-packed half-spectrum images and use
         ``config.compute_ctf_half`` for CTF, roughly halving memory and compute.
-    half_volume : bool
+    half_volume : bool | None
         If True, *volume* is an rfft-packed half-volume ``(N0*N1*(N2//2+1),)``.
+        When *volume* is a :class:`~recovar.core.slicing.VolumeRepr`, ``None``
+        means "use the layout stored in the wrapper".
     """
+    if half_volume is None:
+        half_volume = volume.half_volume if isinstance(volume, VolumeRepr) else False
+
     slices = slice_volume(
         volume,
         rotation_matrices,

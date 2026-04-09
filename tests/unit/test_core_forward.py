@@ -5,6 +5,7 @@ pytest.importorskip("jax")
 import jax
 import recovar.core
 import recovar.core.forward as core_forward
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 
 pytestmark = pytest.mark.unit
@@ -56,6 +57,24 @@ def test_adjoint_forward_model_shape():
 
     out = np.asarray(core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True))
     assert out.shape == (config.volume_size,)
+
+
+def test_forward_model_accepts_prefiltered_cubic_volume_repr():
+    config = _make_config(image_shape=(8, 8), volume_shape=(8, 8, 8), disc_type="cubic")
+    rng = np.random.default_rng(123)
+    real_volume = rng.standard_normal(config.volume_shape).astype(np.float32)
+    volume = np.asarray(fourier_transform_utils.get_dft3(real_volume)).reshape(-1)
+    coeffs = recovar.core.precompute_cubic_coefficients(volume, config.volume_shape)
+    wrapped = recovar.core.VolumeRepr(coeffs, disc_type="cubic", prefiltered=True)
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+
+    raw_out = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True))
+    wrapped_out = np.asarray(
+        core_forward.forward_model(config, wrapped, ctf_params, rotation_matrices, skip_ctf=True)
+    )
+
+    np.testing.assert_allclose(wrapped_out, raw_out, atol=1e-5, rtol=1e-5)
 
 
 def test_forward_model_applies_ctf_when_enabled():

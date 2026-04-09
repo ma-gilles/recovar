@@ -19,6 +19,7 @@ RELION-style JAX reference: :mod:`recovar.core.relion_interp`.
 import functools
 import logging
 
+import equinox as eqx
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -107,6 +108,82 @@ def _use_cuda_backproject(order):
 
 def _is_complex(arr):
     return jnp.issubdtype(arr.dtype, jnp.complexfloating)
+
+
+class VolumeRepr(eqx.Module):
+    """Light wrapper for projection inputs with interpolation metadata."""
+
+    values: jax.Array
+    disc_type: str = eqx.field(static=True)
+    half_volume: bool = eqx.field(static=True, default=False)
+    prefiltered: bool = eqx.field(static=True, default=False)
+
+
+def _coerce_volume_repr(volume, disc_type, half_volume):
+    if isinstance(volume, VolumeRepr):
+        if disc_type is not None and disc_type != volume.disc_type:
+            raise ValueError(
+                f"disc_type={disc_type!r} does not match VolumeRepr.disc_type={volume.disc_type!r}"
+            )
+        if half_volume is not None and bool(half_volume) != volume.half_volume:
+            raise ValueError(
+                f"half_volume={half_volume!r} does not match VolumeRepr.half_volume={volume.half_volume!r}"
+            )
+        return volume
+
+    if disc_type is None:
+        raise ValueError("disc_type must be provided when passing a raw volume array")
+
+    return VolumeRepr(
+        values=jnp.asarray(volume),
+        disc_type=disc_type,
+        half_volume=bool(False if half_volume is None else half_volume),
+        prefiltered=False,
+    )
+
+
+def _calculate_spline_coefficients(volume):
+    from recovar.core import cubic_interpolation
+
+    return cubic_interpolation.calculate_spline_coefficients(volume)
+
+
+_batch_calculate_spline_coefficients = jax.vmap(_calculate_spline_coefficients, in_axes=0, out_axes=0)
+
+
+def _prefilter_cubic_single(volume, volume_shape, half_volume):
+    if half_volume:
+        half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+        full_volume = ftu.half_volume_to_full_volume(volume.reshape(half_shape), volume_shape)
+    else:
+        full_volume = volume.reshape(volume_shape)
+
+    coeffs = _calculate_spline_coefficients(full_volume.reshape(volume_shape))
+    if half_volume:
+        coeffs = ftu.full_volume_to_half_volume(coeffs, volume_shape)
+    return coeffs.reshape(-1)
+
+
+def _prefilter_cubic_batch(volumes, volume_shape, half_volume):
+    volumes = jnp.asarray(volumes)
+    if half_volume:
+        half_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
+        full_volumes = jax.vmap(
+            lambda hv: ftu.half_volume_to_full_volume(hv.reshape(half_shape), volume_shape),
+            in_axes=0,
+            out_axes=0,
+        )(volumes.reshape((-1, *half_shape)))
+    else:
+        full_volumes = volumes.reshape((-1, *volume_shape))
+
+    coeffs = _batch_calculate_spline_coefficients(full_volumes)
+    if half_volume:
+        coeffs = jax.vmap(
+            lambda c: ftu.full_volume_to_half_volume(c, volume_shape),
+            in_axes=0,
+            out_axes=0,
+        )(coeffs)
+    return coeffs.reshape(volumes.shape[0], -1)
 
 
 def _normalize_volume(volume, volume_shape, half_volume):
@@ -215,7 +292,7 @@ def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, 
 
 
 def slice_volume(
-    volume, rotation_matrices, image_shape, volume_shape, disc_type, half_volume=False, half_image=False, max_r=_AUTO
+    volume, rotation_matrices, image_shape, volume_shape, disc_type=None, half_volume=None, half_image=False, max_r=_AUTO
 ):
     """Project volume to images via interpolation.
 
@@ -228,7 +305,12 @@ def slice_volume(
     max_r : sphere clipping radius.  Default (``_AUTO``) uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable clipping.
     """
-    volume = _normalize_volume(volume, volume_shape, half_volume)
+    volume_repr = _coerce_volume_repr(volume, disc_type, half_volume)
+    disc_type = volume_repr.disc_type
+    half_volume = volume_repr.half_volume
+    volume = _normalize_volume(volume_repr.values, volume_shape, half_volume)
+    if disc_type == "cubic" and not volume_repr.prefiltered:
+        volume = _prefilter_cubic_single(volume, volume_shape, half_volume)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
 
@@ -278,7 +360,7 @@ def slice_volume(
 
 
 def batch_slice_volume(
-    volumes, rotation_matrices, image_shape, volume_shape, disc_type, half_volume=False, half_image=False, max_r=_AUTO
+    volumes, rotation_matrices, image_shape, volume_shape, disc_type=None, half_volume=None, half_image=False, max_r=_AUTO
 ):
     """Project a batch of volumes to images.
 
@@ -291,7 +373,12 @@ def batch_slice_volume(
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
-    volumes = jnp.asarray(volumes)
+    volume_repr = _coerce_volume_repr(volumes, disc_type, half_volume)
+    disc_type = volume_repr.disc_type
+    half_volume = volume_repr.half_volume
+    volumes = jnp.asarray(volume_repr.values)
+    if disc_type == "cubic" and not volume_repr.prefiltered:
+        volumes = _prefilter_cubic_batch(volumes, volume_shape, half_volume)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
     if _use_cuda(order):
@@ -312,12 +399,15 @@ def batch_slice_volume(
         )
     return jax.vmap(
         lambda v: slice_volume(
-            v,
+            VolumeRepr(
+                v,
+                disc_type=disc_type,
+                half_volume=half_volume,
+                prefiltered=volume_repr.prefiltered,
+            ),
             rotation_matrices,
             image_shape,
             volume_shape,
-            disc_type,
-            half_volume=half_volume,
             half_image=half_image,
             max_r=max_r,
         )
@@ -596,6 +686,7 @@ def slice_from_cubic_coefficients(coeffs, rotation_matrices, image_shape, volume
 
 
 __all__ = [
+    "VolumeRepr",
     "decide_order",
     "slice_volume",
     "batch_slice_volume",

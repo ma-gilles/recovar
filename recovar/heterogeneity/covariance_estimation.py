@@ -523,8 +523,13 @@ def _variance_relion_kernel_trilinear_explicit(
     half_ctf = config.compute_ctf_half(ctf_params)
     CTF_squared = half_ctf**2
 
+    mean_volume = (
+        core.VolumeRepr(mean_estimate, disc_type=config.disc_type, prefiltered=True)
+        if config.disc_type == "cubic"
+        else mean_estimate
+    )
     mean_slice_half = core.slice_volume(
-        mean_estimate,
+        mean_volume,
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
@@ -858,8 +863,13 @@ def preprocess_covariance_batch(
         image_mask = jnp.ones((rotation_matrices.shape[0], *config.image_shape), dtype=jnp.float32)
 
     # 2. Center images: y_i - A_i * mu
+    mean_volume = (
+        core.VolumeRepr(mean_estimate, disc_type=config.disc_type, prefiltered=True)
+        if config.disc_type == "cubic"
+        else mean_estimate
+    )
     images = covariance_core.subtract_projected_mean(
-        config, images, mean_estimate, ctf_params, rotation_matrices, translations
+        config, images, mean_volume, ctf_params, rotation_matrices, translations
     )
 
     # 3. Apply image masks (skip FFT pair when mask is all ones)
@@ -1585,9 +1595,19 @@ def _reduce_covariance_inner_explicit(
 
     mean_half_volume = _mean_is_half_volume(model.mean_estimate, config.volume_shape)
     basis_half_volume = _basis_is_half_volume(model.basis, config.volume_shape)
+    mean_volume = (
+        core.VolumeRepr(
+            model.mean_estimate,
+            disc_type=config.disc_type,
+            half_volume=mean_half_volume,
+            prefiltered=True,
+        )
+        if config.disc_type == "cubic"
+        else model.mean_estimate
+    )
     projected_mean = core_forward.forward_model(
         config,
-        model.mean_estimate,
+        mean_volume,
         ctf_params,
         rotation_matrices,
         half_image=_use_half_proj,
@@ -1604,9 +1624,19 @@ def _reduce_covariance_inner_explicit(
     basis = model.basis
     assert basis is not None
     config_u = config.replace(disc_type=opts.disc_type_u)
+    basis_volume = (
+        core.VolumeRepr(
+            basis,
+            disc_type=opts.disc_type_u,
+            half_volume=basis_half_volume,
+            prefiltered=True,
+        )
+        if opts.disc_type_u == "cubic"
+        else basis
+    )
     AUs = covariance_core.batch_vol_forward_from_map(
         config_u,
-        basis,
+        basis_volume,
         ctf_params,
         rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
