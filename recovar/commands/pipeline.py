@@ -433,6 +433,18 @@ def add_args(parser: argparse.ArgumentParser):
         help="Inverse-Wishart-style ridge strength on B in RefitB (0 = unregularised).",
     )
     adv.add_argument(
+        "--ppca-effective-zdim",
+        dest="ppca_effective_zdim",
+        type=int,
+        default=0,
+        help=(
+            "Use only the top K PCs at embedding time (trailing eigenvalues are "
+            "floored to ~0, so the per-image MAP gives z≈0 for those dims). "
+            "PPCA still fits the full --ppca-zdim basis; this only changes how "
+            "the embedding solver weights the components. 0 = use all (default)."
+        ),
+    )
+    adv.add_argument(
         "--test-covar-options",
         dest="test_covar_options",
         action="store_true",
@@ -1041,7 +1053,27 @@ def _run_ppca_refinement(
         ).T
     U_full = _as_pipeline_basis_dtype(U_full)
     u = {"rescaled": U_full, "real": None}
-    s = {"rescaled": np.asarray(S_ppca, dtype=np.float32), "real": None}
+
+    # ── Optional: truncate trailing PCs at embed time (off by default) ──
+    # When --ppca-effective-zdim K is set with 0 < K < basis_size, floor the
+    # trailing eigenvalues to a tiny value so the per-image MAP gives z≈0
+    # for those dimensions. PPCA still fit the full basis_size basis; this
+    # only changes the embedding solver's prior precision per direction.
+    # Motivation: at low SNR, PPCA EM redistributes variance into the
+    # trailing (noise-dominated) PCs as iters increase, and the embedding
+    # solver lets that noise leak in via large prior variance. Killing the
+    # trailing PCs at embed time recovers a cleaner embedding without
+    # touching the basis itself (so pc_metric is unchanged).
+    s_for_embed = np.asarray(S_ppca, dtype=np.float32).copy()
+    eff_zdim = int(getattr(args, "ppca_effective_zdim", 0))
+    if eff_zdim > 0 and eff_zdim < basis_size:
+        s_for_embed[eff_zdim:] = 1e-12
+        logger.info(
+            "PPCA: --ppca-effective-zdim=%d; floored trailing %d eigenvalues for embedding",
+            eff_zdim, basis_size - eff_zdim,
+        )
+
+    s = {"rescaled": s_for_embed, "real": None}
     (
         latent_coords,
         latent_coords_noreg,
@@ -1504,6 +1536,7 @@ def standard_recovar_pipeline(args):
                 "ppca_refitb_start": int(getattr(args, "ppca_refitb_start", 0)),
                 "ppca_refitb_inner_iters": int(getattr(args, "ppca_refitb_inner_iters", 3)),
                 "ppca_refitb_kappa": float(getattr(args, "ppca_refitb_kappa", 0.0)),
+                "ppca_effective_zdim": int(getattr(args, "ppca_effective_zdim", 0)),
                 "embedding_source": ppca_result["embedding_source"],
             }
         else:
