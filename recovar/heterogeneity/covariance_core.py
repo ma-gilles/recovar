@@ -183,18 +183,21 @@ def batch_vol_forward_from_map(
     volumes : Volume or raw array
         Batch of volumes. Raw arrays are wrapped using ``config.disc_type`` and
         layout is inferred from shape. Cubic raw inputs are converted once at
-        the API boundary.
+        the slicing boundary.
     half_image : bool | None
         If True, project directly to rfft-packed half-spectrum images and use
         ``config.compute_ctf_half`` for CTF; roughly halves memory and compute
         vs the default full-spectrum path. ``None`` defaults to
         ``volumes.half_volume``.
     """
-    volumes = core.as_volume(volumes, config.disc_type, config.volume_shape)
-    if half_image is None:
-        half_image = volumes.half_volume
-
-    slices = core.batch_slice_volume(volumes, rotation_matrices, config.image_shape, config.volume_shape, half_image=half_image)
+    slices = core.batch_slice_volume(
+        volumes,
+        rotation_matrices,
+        config.image_shape,
+        config.volume_shape,
+        disc_type=config.disc_type,
+        half_image=half_image,
+    )
     if not skip_ctf:
         ctf = config.compute_ctf(ctf_params, half_image=half_image)
         slices = slices * ctf[jnp.newaxis]

@@ -121,9 +121,12 @@ class Volume(eqx.Module):
     disc_type: str = eqx.field(static=True)
     half_volume: bool = eqx.field(static=True, default=False)
 
-
-VolumeInput = Volume
-VolumeRepr = Volume
+    def with_values(self, values):
+        return type(self)(
+            values=jnp.asarray(values),
+            disc_type=self.disc_type,
+            half_volume=self.half_volume,
+        )
 
 
 def _expected_volume_shape(volume_shape, half_volume):
@@ -185,7 +188,7 @@ def _volume_array_layout(volume, volume_shape, half_volume=None):
     )
 
 
-def as_volume(volume, disc_type, volume_shape, half_volume=None):
+def _coerce_volume(volume, disc_type, volume_shape, half_volume=None):
     """Return a validated :class:`Volume` for raw values or wrapped inputs.
 
     Raw arrays have their layout inferred from shape/size when ``half_volume``
@@ -215,10 +218,6 @@ def as_volume(volume, disc_type, volume_shape, half_volume=None):
         disc_type=disc_type,
         half_volume=bool(half_volume),
     )
-
-
-as_volume_input = as_volume
-as_volume_repr = as_volume_input
 
 
 def _calculate_spline_coefficients(volume):
@@ -449,16 +448,17 @@ def slice_volume(
 
     Parameters
     ----------
-    volume : array, flat ``(vol_size,)`` or grid-shaped.
-        Real or complex.  Promoted to complex for the CUDA kernel.
-    half_volume : if True, *volume* is rfft-packed ``(N0*N1*(N2//2+1),)``.
+    volume : Volume or raw array.
+        Raw arrays are interpreted using ``disc_type`` and ``half_volume``.
+        Real inputs are promoted to complex for the CUDA kernel.
+    half_volume : if True, raw *volume* is rfft-packed ``(N0*N1*(N2//2+1),)``.
     half_image : bool | None
         If True, output images are rfft-packed ``(n, H*(W//2+1))``. ``None``
-        defaults to ``half_volume``.
+        defaults to ``volume.half_volume`` after coercion.
     max_r : sphere clipping radius.  Default (``_AUTO``) uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable clipping.
     """
-    wrapped_volume = as_volume(volume, disc_type, volume_shape, half_volume=half_volume)
+    wrapped_volume = _coerce_volume(volume, disc_type, volume_shape, half_volume=half_volume)
     disc_type = wrapped_volume.disc_type
     half_volume = wrapped_volume.half_volume
     half_image = _resolve_half_image(half_image, half_volume)
@@ -525,16 +525,17 @@ def batch_slice_volume(
 
     Parameters
     ----------
-    volumes : array ``(batch, vol_size)``.
-        Real or complex.  Promoted to complex for the CUDA kernel.
-    half_volume : if True, *volumes* are rfft-packed half-volumes.
+    volumes : Volume or raw batched array.
+        Raw arrays are interpreted using ``disc_type`` and ``half_volume``.
+        Real inputs are promoted to complex for the CUDA kernel.
+    half_volume : if True, raw *volumes* are rfft-packed half-volumes.
     half_image : bool | None
         If True, output images are rfft-packed. ``None`` defaults to
-        ``half_volume``.
+        ``volumes.half_volume`` after coercion.
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
-    wrapped_volume = as_volume(volumes, disc_type, volume_shape, half_volume=half_volume)
+    wrapped_volume = _coerce_volume(volumes, disc_type, volume_shape, half_volume=half_volume)
     disc_type = wrapped_volume.disc_type
     half_volume = wrapped_volume.half_volume
     half_image = _resolve_half_image(half_image, half_volume)
@@ -559,11 +560,7 @@ def batch_slice_volume(
         )
     return jax.vmap(
         lambda v: slice_volume(
-            Volume(
-                v,
-                disc_type=disc_type,
-                half_volume=half_volume,
-            ),
+            wrapped_volume.with_values(v),
             rotation_matrices,
             image_shape,
             volume_shape,
@@ -598,6 +595,8 @@ def adjoint_slice_volume(
         If True, output uses rfft-packed half-volume layout. When *volume* is a
         :class:`Volume`, ``None`` means "use the wrapper's layout".
     volume : optional accumulator to add the result into.
+        When provided as a :class:`Volume`, its metadata controls the output
+        layout and interpolation type.
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
@@ -769,7 +768,9 @@ def batch_adjoint_slice_volume(
     slices : shape ``(batch, n_images, n_pixels)``.
         Real or complex.  Promoted to match *volumes* dtype (and vice versa).
     rotation_matrices : shape ``(n_images, 3, 3)`` — shared across batch.
-    volumes : optional ``(batch, vol_flat_size)`` accumulators.
+    volumes : optional batched accumulators.
+        When provided as a :class:`Volume`, its metadata controls the output
+        layout and interpolation type.
     half_image, half_volume : same semantics as ``adjoint_slice_volume``.
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
@@ -827,7 +828,7 @@ def batch_adjoint_slice_volume(
             image_shape,
             volume_shape,
             disc_type=disc_type,
-            volume=Volume(vol, disc_type=disc_type, half_volume=half_volume) if wrapped_volume is not None else vol,
+            volume=wrapped_volume.with_values(vol) if wrapped_volume is not None else vol,
             half_image=half_image,
             half_volume=half_volume,
             max_r=max_r,
@@ -901,11 +902,6 @@ def slice_from_cubic_coefficients(coeffs, rotation_matrices, image_shape, volume
 
 __all__ = [
     "Volume",
-    "VolumeInput",
-    "VolumeRepr",
-    "as_volume",
-    "as_volume_input",
-    "as_volume_repr",
     "to_cubic",
     "decide_order",
     "slice_volume",

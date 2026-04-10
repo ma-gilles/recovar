@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images
 from recovar.core.slicing import (
+    _coerce_volume,
     adjoint_slice_volume,
-    as_volume,
     slice_volume,
 )
 
@@ -44,7 +44,7 @@ def forward_model(
         ``config.compute_ctf_half`` for CTF, roughly halving memory and compute.
         ``None`` defaults to ``volume.half_volume``.
     """
-    volume = as_volume(volume, config.disc_type, config.volume_shape)
+    volume = _coerce_volume(volume, config.disc_type, config.volume_shape)
     if half_image is None:
         half_image = volume.half_volume
 
@@ -91,7 +91,7 @@ def adjoint_forward_model(
     half_image : if True, *slices* are rfft-packed half-spectrum images.
         CTF is computed in half-spectrum format when ``skip_ctf=False``.
     """
-    volume_obj = None if volume is None else as_volume(volume, config.disc_type, config.volume_shape)
+    volume_obj = None if volume is None else _coerce_volume(volume, config.disc_type, config.volume_shape)
     if half_image is None:
         half_image = volume_obj.half_volume if volume_obj is not None else False
 
