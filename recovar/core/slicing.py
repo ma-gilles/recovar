@@ -122,7 +122,53 @@ class VolumeRepr(eqx.Module):
     half_volume: bool = eqx.field(static=True, default=False)
 
 
-def _coerce_volume_repr(volume, disc_type, half_volume):
+def _infer_half_volume(volume, volume_shape):
+    volume = jnp.asarray(volume)
+    full_shape = tuple(int(s) for s in volume_shape)
+    half_shape = tuple(int(s) for s in ftu.volume_shape_to_half_volume_shape(volume_shape))
+    full_size = int(np.prod(full_shape))
+    half_size = int(np.prod(half_shape))
+    matches = []
+
+    if volume.ndim == 1:
+        if volume.size == full_size:
+            matches.append(False)
+        if volume.size == half_size:
+            matches.append(True)
+    elif tuple(volume.shape) == full_shape:
+        matches.append(False)
+    elif tuple(volume.shape) == half_shape:
+        matches.append(True)
+    elif volume.ndim == 2:
+        if volume.shape[-1] == full_size:
+            matches.append(False)
+        if volume.shape[-1] == half_size:
+            matches.append(True)
+    elif volume.ndim == len(full_shape) + 1:
+        trailing = tuple(volume.shape[-len(full_shape) :])
+        if trailing == full_shape:
+            matches.append(False)
+        if trailing == half_shape:
+            matches.append(True)
+
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) == 0:
+        raise ValueError(
+            f"Could not infer half-volume layout from shape {tuple(volume.shape)} for volume_shape={volume_shape}"
+        )
+    raise ValueError(
+        f"Ambiguous volume layout for shape {tuple(volume.shape)} and volume_shape={volume_shape}; "
+        "pass a VolumeRepr with explicit half_volume metadata"
+    )
+
+
+def as_volume_repr(volume, disc_type, volume_shape, half_volume=None):
+    """Return a validated :class:`VolumeRepr` for raw values or wrapped inputs.
+
+    Raw arrays have their layout inferred from shape/size when ``half_volume``
+    is omitted. Cubic raw inputs are converted to cubic coefficients.
+    """
     if isinstance(volume, VolumeRepr):
         if disc_type is not None and disc_type != volume.disc_type:
             raise ValueError(
@@ -137,10 +183,16 @@ def _coerce_volume_repr(volume, disc_type, half_volume):
     if disc_type is None:
         raise ValueError("disc_type must be provided when passing a raw volume array")
 
+    if half_volume is None:
+        half_volume = _infer_half_volume(volume, volume_shape)
+
+    if disc_type == "cubic":
+        return to_cubic(volume, volume_shape, half_volume=half_volume)
+
     return VolumeRepr(
         values=jnp.asarray(volume),
         disc_type=disc_type,
-        half_volume=bool(False if half_volume is None else half_volume),
+        half_volume=bool(half_volume),
     )
 
 
@@ -259,7 +311,9 @@ def to_cubic(volume, volume_shape, half_volume=None):
         half_volume = volume.half_volume
     else:
         values = volume
-        half_volume = bool(False if half_volume is None else half_volume)
+        if half_volume is None:
+            half_volume = _infer_half_volume(values, volume_shape)
+        half_volume = bool(half_volume)
 
     expected_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
     layout = _volume_array_layout(values, expected_shape)
@@ -409,10 +463,7 @@ def slice_volume(
     max_r : sphere clipping radius.  Default (``_AUTO``) uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable clipping.
     """
-    wrapped_input = isinstance(volume, VolumeRepr)
-    volume_repr = _coerce_volume_repr(volume, disc_type, half_volume)
-    if volume_repr.disc_type == "cubic" and not wrapped_input:
-        volume_repr = to_cubic(volume_repr.values, volume_shape, half_volume=volume_repr.half_volume)
+    volume_repr = as_volume_repr(volume, disc_type, volume_shape, half_volume=half_volume)
     disc_type = volume_repr.disc_type
     half_volume = volume_repr.half_volume
     half_image = _resolve_half_image(half_image, half_volume)
@@ -488,10 +539,7 @@ def batch_slice_volume(
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
-    wrapped_input = isinstance(volumes, VolumeRepr)
-    volume_repr = _coerce_volume_repr(volumes, disc_type, half_volume)
-    if volume_repr.disc_type == "cubic" and not wrapped_input:
-        volume_repr = to_cubic(volume_repr.values, volume_shape, half_volume=volume_repr.half_volume)
+    volume_repr = as_volume_repr(volumes, disc_type, volume_shape, half_volume=half_volume)
     disc_type = volume_repr.disc_type
     half_volume = volume_repr.half_volume
     half_image = _resolve_half_image(half_image, half_volume)
@@ -858,6 +906,7 @@ def slice_from_cubic_coefficients(coeffs, rotation_matrices, image_shape, volume
 
 __all__ = [
     "VolumeRepr",
+    "as_volume_repr",
     "to_cubic",
     "decide_order",
     "slice_volume",

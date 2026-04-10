@@ -1466,7 +1466,6 @@ def _reduce_covariance_inner_reference(config, batch_data, model, opts, image_ma
         ctf_params,
         rotation_matrices,
         half_image=False,
-        half_volume=False,
     )
 
     if do_mask_images:
@@ -1483,7 +1482,6 @@ def _reduce_covariance_inner_reference(config, batch_data, model, opts, image_ma
         rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
         half_image=False,
-        half_volume=False,
     )
 
     if do_mask_images:
@@ -1631,7 +1629,10 @@ def test_reduce_covariance_inner_uses_half_volume_for_half_volume_model(monkeypa
     n_images = batch_data.images.shape[0]
     n_basis = model_half.basis.shape[0]
     half_image_size = int(np.prod(fourier_transform_utils.image_shape_to_half_image_shape(config.image_shape)))
-    seen = {"mean_half_volume": False, "basis_half_volume": False}
+    expected_half_volume_size = int(
+        np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(config.volume_shape))
+    )
+    seen = {"mean_volume_size": 0, "basis_volume_size": 0}
 
     def fake_forward_model(
         config,
@@ -1640,9 +1641,8 @@ def test_reduce_covariance_inner_uses_half_volume_for_half_volume_model(monkeypa
         rotation_matrices,
         skip_ctf=False,
         half_image=False,
-        half_volume=False,
     ):
-        seen["mean_half_volume"] = half_volume
+        seen["mean_volume_size"] = volume.shape[-1]
         n_pixels = half_image_size if half_image else int(np.prod(config.image_shape))
         return jnp.zeros((n_images, n_pixels), dtype=jnp.complex64)
 
@@ -1653,9 +1653,8 @@ def test_reduce_covariance_inner_uses_half_volume_for_half_volume_model(monkeypa
         rotation_matrices,
         skip_ctf=False,
         half_image=False,
-        half_volume=False,
     ):
-        seen["basis_half_volume"] = half_volume
+        seen["basis_volume_size"] = volumes.shape[-1]
         n_pixels = half_image_size if half_image else int(np.prod(config.image_shape))
         return jnp.zeros((n_basis, n_images, n_pixels), dtype=jnp.complex64)
 
@@ -1671,8 +1670,8 @@ def test_reduce_covariance_inner_uses_half_volume_for_half_volume_model(monkeypa
         hermitian_weights=hermitian_weights,
     )
 
-    assert seen["mean_half_volume"] is True
-    assert seen["basis_half_volume"] is True
+    assert seen["mean_volume_size"] == expected_half_volume_size
+    assert seen["basis_volume_size"] == expected_half_volume_size
 
 def test_solve_projected_covariance_system_raises_on_nonfinite_output(monkeypatch):
     def fake_solve(lhs, rhs, assume_a="pos"):

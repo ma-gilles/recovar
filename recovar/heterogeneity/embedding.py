@@ -509,7 +509,6 @@ def _compute_batch_coords_p1(
         rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
         half_image=half,
-        half_volume=mean_half_volume,
     )
     # AUs: (n_basis, n_images, n_pix[_half])
     basis_volume = (
@@ -528,7 +527,6 @@ def _compute_batch_coords_p1(
         rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
         half_image=half,
-        half_volume=basis_half_volume,
     )
 
     if half:

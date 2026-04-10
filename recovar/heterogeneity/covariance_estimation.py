@@ -1610,7 +1610,6 @@ def _reduce_covariance_inner_explicit(
         ctf_params,
         rotation_matrices,
         half_image=_use_half_proj,
-        half_volume=mean_half_volume,
     )
 
     if do_mask_images:
@@ -1639,7 +1638,6 @@ def _reduce_covariance_inner_explicit(
         rotation_matrices,
         skip_ctf=config.premultiplied_ctf,
         half_image=_use_half_proj,
-        half_volume=basis_half_volume,
     )
 
     if do_mask_images:

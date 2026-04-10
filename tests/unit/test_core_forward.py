@@ -76,6 +76,30 @@ def test_forward_model_accepts_precomputed_cubic_volume_repr():
     np.testing.assert_allclose(wrapped_out, raw_out, atol=1e-5, rtol=1e-5)
 
 
+def test_forward_model_infers_half_volume_layout_from_raw_input():
+    config = _make_config(image_shape=(8, 8), volume_shape=(8, 8, 8), disc_type="linear_interp")
+    rng = np.random.default_rng(124)
+    real_volume = rng.standard_normal(config.volume_shape).astype(np.float32)
+    full_volume = np.asarray(fourier_transform_utils.get_dft3(real_volume)).reshape(-1)
+    half_volume = np.asarray(
+        fourier_transform_utils.full_volume_to_half_volume(full_volume, config.volume_shape)
+    ).reshape(-1)
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+
+    out = np.asarray(core_forward.forward_model(config, half_volume, ctf_params, rotation_matrices, skip_ctf=True))
+    ref = np.asarray(
+        recovar.core.slice_volume(
+            recovar.core.VolumeRepr(half_volume, disc_type="linear_interp", half_volume=True),
+            rotation_matrices,
+            config.image_shape,
+            config.volume_shape,
+        )
+    )
+
+    np.testing.assert_allclose(out, ref, atol=1e-5, rtol=1e-5)
+
+
 def test_forward_model_applies_ctf_when_enabled():
     config = _make_config(ctf_fun=_twos_ctf)
     volume = np.ones(config.volume_size, dtype=np.float32)
