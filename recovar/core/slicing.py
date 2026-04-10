@@ -111,15 +111,15 @@ def _is_complex(arr):
 
 
 class Volume(eqx.Module):
-    """Light wrapper for projection inputs with interpolation metadata.
-
-    For ``disc_type="cubic"``, ``values`` are precomputed spline coefficients.
-    Use :func:`to_cubic` to convert raw volumes into that representation.
-    """
+    """Thin wrapper for non-cubic projection inputs."""
 
     values: jax.Array
     disc_type: str = eqx.field(static=True)
     half_volume: bool = eqx.field(static=True, default=False)
+
+    def __check_init__(self):
+        if self.disc_type == "cubic":
+            raise ValueError("Use CubicVolume(...) for precomputed cubic coefficients")
 
     def with_values(self, values):
         return type(self)(
@@ -127,6 +127,27 @@ class Volume(eqx.Module):
             disc_type=self.disc_type,
             half_volume=self.half_volume,
         )
+
+
+class CubicVolume(eqx.Module):
+    """Thin wrapper for precomputed cubic spline coefficients."""
+
+    values: jax.Array
+    half_volume: bool = eqx.field(static=True, default=False)
+    disc_type: str = eqx.field(static=True, default="cubic")
+
+    def __check_init__(self):
+        if self.disc_type != "cubic":
+            raise ValueError("CubicVolume must use disc_type='cubic'")
+
+    def with_values(self, values):
+        return type(self)(
+            values=jnp.asarray(values),
+            half_volume=self.half_volume,
+        )
+
+
+_VOLUME_TYPES = (Volume, CubicVolume)
 
 
 def _expected_volume_shape(volume_shape, half_volume):
@@ -192,8 +213,19 @@ def _coerce_volume(volume, disc_type, volume_shape, half_volume=None):
     """Return a validated :class:`Volume` for raw values or wrapped inputs.
 
     Raw arrays have their layout inferred from shape/size when ``half_volume``
-    is omitted. Cubic raw inputs are converted to cubic coefficients.
+    is omitted. Cubic inputs must be passed explicitly as :class:`CubicVolume`.
     """
+    if isinstance(volume, CubicVolume):
+        if disc_type is not None and disc_type != "cubic":
+            raise ValueError(
+                f"disc_type={disc_type!r} does not match CubicVolume.disc_type={volume.disc_type!r}"
+            )
+        if half_volume is not None and bool(half_volume) != volume.half_volume:
+            raise ValueError(
+                f"half_volume={half_volume!r} does not match CubicVolume.half_volume={volume.half_volume!r}"
+            )
+        return volume
+
     if isinstance(volume, Volume):
         if disc_type is not None and disc_type != volume.disc_type:
             raise ValueError(
@@ -211,7 +243,7 @@ def _coerce_volume(volume, disc_type, volume_shape, half_volume=None):
     _layout, half_volume = _volume_array_layout(volume, volume_shape, half_volume=half_volume)
 
     if disc_type == "cubic":
-        return to_cubic(volume, volume_shape, half_volume=half_volume)
+        raise TypeError("Raw cubic inputs are not allowed; use to_cubic(...) or CubicVolume(...)")
 
     return Volume(
         values=jnp.asarray(volume),
@@ -287,25 +319,30 @@ def to_cubic(volume, volume_shape, half_volume=None):
 
     Parameters
     ----------
-    volume : array or Volume
+    volume : array or CubicVolume
         Raw full/half volume values, optionally batched. If already a cubic
-        :class:`Volume`, it is returned unchanged after layout validation.
+        :class:`CubicVolume`, it is returned unchanged after layout validation.
     volume_shape : tuple[int, int, int]
         Full-grid volume shape.
     half_volume : bool | None
         Whether *volume* uses the Hermitian-packed half-volume layout. If
-        ``volume`` is already a :class:`Volume`, ``None`` means "use the
+        ``volume`` is already a :class:`CubicVolume`, ``None`` means "use the
         stored layout".
     """
+    if isinstance(volume, CubicVolume):
+        if half_volume is not None and bool(half_volume) != volume.half_volume:
+            raise ValueError(
+                f"half_volume={half_volume!r} does not match CubicVolume.half_volume={volume.half_volume!r}"
+            )
+        return volume
     if isinstance(volume, Volume):
         if half_volume is not None and bool(half_volume) != volume.half_volume:
             raise ValueError(
                 f"half_volume={half_volume!r} does not match Volume.half_volume={volume.half_volume!r}"
             )
-        if volume.disc_type == "cubic":
-            return volume
         values = volume.values
         half_volume = volume.half_volume
+        layout = _match_volume_array_layout(values, _expected_volume_shape(volume_shape, half_volume))
     else:
         values = volume
         layout, half_volume = _volume_array_layout(values, volume_shape, half_volume=half_volume)
@@ -322,9 +359,8 @@ def to_cubic(volume, volume_shape, half_volume=None):
     else:
         coeffs = _precompute_cubic_batch(values.reshape(values.shape[0], -1), volume_shape, half_volume)
 
-    return Volume(
+    return CubicVolume(
         values=_reshape_cubic_values(coeffs, layout, expected_shape),
-        disc_type="cubic",
         half_volume=half_volume,
     )
 
@@ -448,7 +484,7 @@ def slice_volume(
 
     Parameters
     ----------
-    volume : Volume or raw array.
+    volume : Volume, CubicVolume, or raw array.
         Raw arrays are interpreted using ``disc_type`` and ``half_volume``.
         Real inputs are promoted to complex for the CUDA kernel.
     half_volume : if True, raw *volume* is rfft-packed ``(N0*N1*(N2//2+1),)``.
@@ -525,7 +561,7 @@ def batch_slice_volume(
 
     Parameters
     ----------
-    volumes : Volume or raw batched array.
+    volumes : Volume, CubicVolume, or raw batched array.
         Raw arrays are interpreted using ``disc_type`` and ``half_volume``.
         Real inputs are promoted to complex for the CUDA kernel.
     half_volume : if True, raw *volumes* are rfft-packed half-volumes.
@@ -595,12 +631,12 @@ def adjoint_slice_volume(
         If True, output uses rfft-packed half-volume layout. When *volume* is a
         :class:`Volume`, ``None`` means "use the wrapper's layout".
     volume : optional accumulator to add the result into.
-        When provided as a :class:`Volume`, its metadata controls the output
-        layout and interpolation type.
+        When provided as a wrapped volume object, its metadata controls the
+        output layout and interpolation type.
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
-    wrapped_volume = volume if isinstance(volume, Volume) else None
+    wrapped_volume = volume if isinstance(volume, _VOLUME_TYPES) else None
     if wrapped_volume is not None:
         if disc_type is not None and disc_type != wrapped_volume.disc_type:
             raise ValueError(
@@ -769,13 +805,13 @@ def batch_adjoint_slice_volume(
         Real or complex.  Promoted to match *volumes* dtype (and vice versa).
     rotation_matrices : shape ``(n_images, 3, 3)`` — shared across batch.
     volumes : optional batched accumulators.
-        When provided as a :class:`Volume`, its metadata controls the output
-        layout and interpolation type.
+        When provided as a wrapped volume object, its metadata controls the
+        output layout and interpolation type.
     half_image, half_volume : same semantics as ``adjoint_slice_volume``.
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
-    wrapped_volume = volumes if isinstance(volumes, Volume) else None
+    wrapped_volume = volumes if isinstance(volumes, _VOLUME_TYPES) else None
     if wrapped_volume is not None:
         if disc_type is not None and disc_type != wrapped_volume.disc_type:
             raise ValueError(
@@ -902,6 +938,7 @@ def slice_from_cubic_coefficients(coeffs, rotation_matrices, image_shape, volume
 
 __all__ = [
     "Volume",
+    "CubicVolume",
     "to_cubic",
     "decide_order",
     "slice_volume",

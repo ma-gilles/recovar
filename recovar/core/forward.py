@@ -35,10 +35,11 @@ def forward_model(
 
     Parameters
     ----------
-    volume : Volume or raw array
+    volume : Volume, CubicVolume, or raw array
         Projection input. Raw arrays are wrapped using ``config.disc_type`` and
-        layout is inferred from shape. Cubic raw inputs are converted to cubic
-        coefficients before projection.
+        layout is inferred from shape. Cubic inputs must be passed as a
+        ``CubicVolume`` produced explicitly by ``to_cubic(...)`` or
+        ``CubicVolume(...)``.
     half_image : bool | None
         If True, return rfft-packed half-spectrum images and use
         ``config.compute_ctf_half`` for CTF, roughly halving memory and compute.

@@ -51,6 +51,7 @@ from recovar.core.forward import (
 from recovar.core.slicing import (
     _AUTO,
     _default_max_r,
+    CubicVolume,
     Volume,
     adjoint_slice_volume,
     batch_adjoint_slice_volume,
@@ -65,6 +66,7 @@ from recovar.core.slicing import (
 
 __all__ = [
     "CTFEvaluator",
+    "CubicVolume",
     "Volume",
     "CTFMode",
     "CTFParamIndex",
