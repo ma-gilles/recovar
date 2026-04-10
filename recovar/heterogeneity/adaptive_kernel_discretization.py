@@ -737,14 +737,24 @@ def batch_im_adjoint_forward(config, slices, ctf_params, rotation_matrices, half
 
     Returns shape (n_bins, volume_size) — batch axis first.
     """
+    def _volume_seed(dtype):
+        if not half_volume:
+            return None
+        half_shape = volume_shape_to_half_volume_shape(config.volume_shape)
+        return core.VolumeRepr(
+            jnp.zeros(int(np.prod(half_shape)), dtype=dtype),
+            disc_type=config.disc_type,
+            half_volume=True,
+        )
+
     return jax.vmap(
         lambda s: core_forward.adjoint_forward_model(
             config,
             s,
             ctf_params,
             rotation_matrices,
+            volume=_volume_seed(s.dtype),
             half_image=half_image,
-            half_volume=half_volume,
         ),
         in_axes=-1,
     )(slices)
