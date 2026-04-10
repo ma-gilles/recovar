@@ -17,7 +17,7 @@ from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images
 from recovar.core.slicing import (
     adjoint_slice_volume,
-    as_volume_repr,
+    as_volume,
     slice_volume,
 )
 
@@ -35,7 +35,7 @@ def forward_model(
 
     Parameters
     ----------
-    volume : VolumeRepr or raw array
+    volume : Volume or raw array
         Projection input. Raw arrays are wrapped using ``config.disc_type`` and
         layout is inferred from shape. Cubic raw inputs are converted to cubic
         coefficients before projection.
@@ -44,7 +44,7 @@ def forward_model(
         ``config.compute_ctf_half`` for CTF, roughly halving memory and compute.
         ``None`` defaults to ``volume.half_volume``.
     """
-    volume = as_volume_repr(volume, config.disc_type, config.volume_shape)
+    volume = as_volume(volume, config.disc_type, config.volume_shape)
     if half_image is None:
         half_image = volume.half_volume
 
@@ -85,20 +85,20 @@ def adjoint_forward_model(
 
     Parameters
     ----------
-    volume : optional accumulator array or VolumeRepr to add into.
-        When a :class:`~recovar.core.slicing.VolumeRepr` is supplied, its
+    volume : optional accumulator array or Volume to add into.
+        When a :class:`~recovar.core.slicing.Volume` is supplied, its
         ``half_volume`` layout controls the output layout.
     half_image : if True, *slices* are rfft-packed half-spectrum images.
         CTF is computed in half-spectrum format when ``skip_ctf=False``.
     """
-    volume_repr = None if volume is None else as_volume_repr(volume, config.disc_type, config.volume_shape)
+    volume_obj = None if volume is None else as_volume(volume, config.disc_type, config.volume_shape)
     if half_image is None:
-        half_image = volume_repr.half_volume if volume_repr is not None else False
+        half_image = volume_obj.half_volume if volume_obj is not None else False
 
     if not skip_ctf:
         slices = slices * config.compute_ctf(ctf_params, half_image=half_image)
-    adjoint_kwargs = dict(volume=volume_repr, half_image=half_image)
-    if volume_repr is None:
+    adjoint_kwargs = dict(volume=volume_obj, half_image=half_image)
+    if volume_obj is None:
         adjoint_kwargs["disc_type"] = config.disc_type
     return adjoint_slice_volume(slices, rotation_matrices, config.image_shape, config.volume_shape, **adjoint_kwargs)
 

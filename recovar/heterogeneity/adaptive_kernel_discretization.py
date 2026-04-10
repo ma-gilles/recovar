@@ -741,7 +741,7 @@ def batch_im_adjoint_forward(config, slices, ctf_params, rotation_matrices, half
         if not half_volume:
             return None
         half_shape = volume_shape_to_half_volume_shape(config.volume_shape)
-        return core.VolumeRepr(
+        return core.Volume(
             jnp.zeros(int(np.prod(half_shape)), dtype=dtype),
             disc_type=config.disc_type,
             half_volume=True,

@@ -494,7 +494,7 @@ def _compute_batch_coords_p1(
     mean_half_volume = half and _mean_is_half_volume(model.mean_estimate, config.volume_shape)
     basis_half_volume = half and _basis_is_half_volume(basis, config.volume_shape)
     mean_volume = (
-        core.VolumeRepr(
+        core.Volume(
             model.mean_estimate,
             disc_type=config.disc_type,
             half_volume=mean_half_volume,
@@ -512,7 +512,7 @@ def _compute_batch_coords_p1(
     )
     # AUs: (n_basis, n_images, n_pix[_half])
     basis_volume = (
-        core.VolumeRepr(
+        core.Volume(
             basis,
             disc_type=config.disc_type,
             half_volume=basis_half_volume,
@@ -901,7 +901,7 @@ def _legacy_forward_model_from_map(
     skip_ctf=False,
 ):
     if disc_type == "cubic":
-        volume = core.VolumeRepr(volume, disc_type=disc_type)
+        volume = core.Volume(volume, disc_type=disc_type)
     slices = core.slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type)
     if not skip_ctf:
         slices = slices * ctf_fun(ctf_params, image_shape, voxel_size)

@@ -160,7 +160,7 @@ def test_slice_volume_cubic_with_precomputed_spline_coefficients():
     # slice_from_cubic_coefficients which does not apply clipping.
     slices = np.asarray(
         core_slicing.slice_volume(
-            core_slicing.VolumeRepr(coeffs, disc_type="cubic"),
+            core_slicing.Volume(coeffs, disc_type="cubic"),
             rots,
             image_shape=image_shape,
             volume_shape=volume_shape,
@@ -203,7 +203,7 @@ def test_slice_volume_cubic_flat_and_precomputed_agree():
     # slice_from_cubic_coefficients which does not apply clipping.
     slices_api = np.asarray(
         core_slicing.slice_volume(
-            core_slicing.VolumeRepr(coeffs, disc_type="cubic"),
+            core_slicing.Volume(coeffs, disc_type="cubic"),
             rots,
             image_shape=image_shape,
             volume_shape=volume_shape,
@@ -219,7 +219,7 @@ def test_slice_volume_cubic_flat_and_precomputed_agree():
     assert np.any(np.abs(slices_api) > 1e-6), "Cubic slices are unexpectedly all zero"
 
 
-def test_batch_slice_volume_cubic_volume_repr_matches_single(monkeypatch):
+def test_batch_slice_volume_cubic_volume_matches_single(monkeypatch):
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
 
     rng = np.random.default_rng(430)
@@ -243,7 +243,7 @@ def test_batch_slice_volume_cubic_volume_repr_matches_single(monkeypatch):
 
     batch_out = np.asarray(
         core_slicing.batch_slice_volume(
-            core_slicing.VolumeRepr(coeffs, disc_type="cubic"),
+            core_slicing.Volume(coeffs, disc_type="cubic"),
             rots,
             image_shape,
             volume_shape,
@@ -255,7 +255,7 @@ def test_batch_slice_volume_cubic_volume_repr_matches_single(monkeypatch):
     for i in range(coeffs.shape[0]):
         single_out = np.asarray(
             core_slicing.slice_volume(
-                core_slicing.VolumeRepr(coeffs[i], disc_type="cubic"),
+                core_slicing.Volume(coeffs[i], disc_type="cubic"),
                 rots,
                 image_shape,
                 volume_shape,
@@ -299,7 +299,7 @@ def test_adjoint_slice_volume_cubic_adjointness():
     # A v  (forward slice using pre-computed coefficients)
     Av = np.asarray(
         core_slicing.slice_volume(
-            core_slicing.VolumeRepr(coeffs, disc_type="cubic"),
+            core_slicing.Volume(coeffs, disc_type="cubic"),
             rots,
             image_shape=image_shape,
             volume_shape=volume_shape,
@@ -338,7 +338,7 @@ def test_to_cubic_matches_precompute_helper():
     np.testing.assert_allclose(np.asarray(wrapped.values), direct, atol=1e-6, rtol=1e-6)
 
 
-def test_slice_volume_defaults_half_image_from_half_volume_repr():
+def test_slice_volume_defaults_half_image_from_half_volume():
     rng = np.random.default_rng(46)
     image_shape = (8, 8)
     volume_shape = (8, 8, 8)
@@ -347,7 +347,7 @@ def test_slice_volume_defaults_half_image_from_half_volume_repr():
     real_vol = rng.standard_normal(volume_shape).astype(np.float32)
     full_vol = np.asarray(fourier_transform_utils.get_dft3(real_vol)).reshape(-1)
     half_vol = np.asarray(fourier_transform_utils.full_volume_to_half_volume(full_vol, volume_shape)).reshape(-1)
-    wrapped = core_slicing.VolumeRepr(half_vol, disc_type="linear_interp", half_volume=True)
+    wrapped = core_slicing.Volume(half_vol, disc_type="linear_interp", half_volume=True)
 
     default_out = np.asarray(core_slicing.slice_volume(wrapped, rots, image_shape, volume_shape))
     explicit_out = np.asarray(core_slicing.slice_volume(wrapped, rots, image_shape, volume_shape, half_image=True))
@@ -356,7 +356,7 @@ def test_slice_volume_defaults_half_image_from_half_volume_repr():
     np.testing.assert_allclose(default_out, explicit_out, atol=1e-6, rtol=1e-6)
 
 
-def test_adjoint_slice_volume_cubic_volume_repr_accumulates_in_coefficient_space():
+def test_adjoint_slice_volume_cubic_volume_accumulates_in_coefficient_space():
     rng = np.random.default_rng(47)
     image_shape = (8, 8)
     volume_shape = (8, 8, 8)
@@ -378,7 +378,7 @@ def test_adjoint_slice_volume_cubic_volume_repr_accumulates_in_coefficient_space
             rots,
             image_shape,
             volume_shape,
-            volume=core_slicing.VolumeRepr(np.zeros_like(coeffs), disc_type="cubic"),
+            volume=core_slicing.Volume(np.zeros_like(coeffs), disc_type="cubic"),
         )
     )
     ref = np.asarray(

@@ -180,7 +180,7 @@ def batch_vol_forward_from_map(
 
     Parameters
     ----------
-    volumes : VolumeRepr or raw array
+    volumes : Volume or raw array
         Batch of volumes. Raw arrays are wrapped using ``config.disc_type`` and
         layout is inferred from shape. Cubic raw inputs are converted once at
         the API boundary.
@@ -190,7 +190,7 @@ def batch_vol_forward_from_map(
         vs the default full-spectrum path. ``None`` defaults to
         ``volumes.half_volume``.
     """
-    volumes = core.as_volume_repr(volumes, config.disc_type, config.volume_shape)
+    volumes = core.as_volume(volumes, config.disc_type, config.volume_shape)
     if half_image is None:
         half_image = volumes.half_volume
 
