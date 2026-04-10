@@ -126,43 +126,61 @@ class VolumeRepr(eqx.Module):
     half_volume: bool = eqx.field(static=True, default=False)
 
 
-def _infer_half_volume(volume, volume_shape):
-    volume = jnp.asarray(volume)
-    full_shape = tuple(int(s) for s in volume_shape)
-    half_shape = tuple(int(s) for s in ftu.volume_shape_to_half_volume_shape(volume_shape))
-    full_size = int(np.prod(full_shape))
-    half_size = int(np.prod(half_shape))
-    matches = []
+def _expected_volume_shape(volume_shape, half_volume):
+    return ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else tuple(int(s) for s in volume_shape)
+
+
+def _match_volume_array_layout(volume, expected_shape):
+    expected_rank = len(expected_shape)
+    expected_size = int(np.prod(expected_shape))
 
     if volume.ndim == 1:
-        if volume.size == full_size:
-            matches.append(False)
-        if volume.size == half_size:
-            matches.append(True)
-    elif tuple(volume.shape) == full_shape:
-        matches.append(False)
-    elif tuple(volume.shape) == half_shape:
-        matches.append(True)
-    elif volume.ndim == 2:
-        if volume.shape[-1] == full_size:
-            matches.append(False)
-        if volume.shape[-1] == half_size:
-            matches.append(True)
-    elif volume.ndim == len(full_shape) + 1:
-        trailing = tuple(volume.shape[-len(full_shape) :])
-        if trailing == full_shape:
-            matches.append(False)
-        if trailing == half_shape:
-            matches.append(True)
+        if volume.size != expected_size:
+            raise ValueError(f"Expected flat volume with {expected_size} elements, got shape {tuple(volume.shape)}")
+        return "single_flat"
+
+    if tuple(volume.shape) == expected_shape:
+        return "single_grid"
+
+    if volume.ndim == 2:
+        if volume.shape[-1] != expected_size:
+            raise ValueError(
+                f"Expected batched flat volumes with trailing size {expected_size}, got shape {tuple(volume.shape)}"
+            )
+        return "batch_flat"
+
+    if volume.ndim == expected_rank + 1 and tuple(volume.shape[-expected_rank:]) == expected_shape:
+        return "batch_grid"
+
+    raise ValueError(
+        f"Unsupported volume shape {tuple(volume.shape)} for expected per-volume shape {expected_shape}"
+    )
+
+
+def _volume_array_layout(volume, volume_shape, half_volume=None):
+    volume = jnp.asarray(volume)
+    if half_volume is not None:
+        half_volume = bool(half_volume)
+        expected_shape = _expected_volume_shape(volume_shape, half_volume)
+        return _match_volume_array_layout(volume, expected_shape), half_volume
+
+    matches = []
+    for candidate in (False, True):
+        expected_shape = _expected_volume_shape(volume_shape, candidate)
+        try:
+            layout = _match_volume_array_layout(volume, expected_shape)
+        except ValueError:
+            continue
+        matches.append((layout, candidate))
 
     if len(matches) == 1:
         return matches[0]
     if len(matches) == 0:
         raise ValueError(
-            f"Could not infer half-volume layout from shape {tuple(volume.shape)} for volume_shape={volume_shape}"
+            f"Could not infer volume layout from shape {tuple(volume.shape)} for volume_shape={tuple(volume_shape)}"
         )
     raise ValueError(
-        f"Ambiguous volume layout for shape {tuple(volume.shape)} and volume_shape={volume_shape}; "
+        f"Ambiguous volume layout for shape {tuple(volume.shape)} and volume_shape={tuple(volume_shape)}; "
         "pass a VolumeRepr with explicit half_volume metadata"
     )
 
@@ -187,8 +205,7 @@ def as_volume_repr(volume, disc_type, volume_shape, half_volume=None):
     if disc_type is None:
         raise ValueError("disc_type must be provided when passing a raw volume array")
 
-    if half_volume is None:
-        half_volume = _infer_half_volume(volume, volume_shape)
+    _layout, half_volume = _volume_array_layout(volume, volume_shape, half_volume=half_volume)
 
     if disc_type == "cubic":
         return to_cubic(volume, volume_shape, half_volume=half_volume)
@@ -244,33 +261,6 @@ def _precompute_cubic_batch(volumes, volume_shape, half_volume):
     return coeffs.reshape(volumes.shape[0], -1)
 
 
-def _volume_array_layout(volume, expected_shape):
-    expected_size = int(np.prod(expected_shape))
-    volume = jnp.asarray(volume)
-
-    if volume.ndim == 1:
-        if volume.size != expected_size:
-            raise ValueError(f"Expected flat volume with {expected_size} elements, got shape {tuple(volume.shape)}")
-        return "single_flat"
-
-    if tuple(volume.shape) == expected_shape:
-        return "single_grid"
-
-    if volume.ndim == 2:
-        if volume.shape[-1] != expected_size:
-            raise ValueError(
-                f"Expected batched flat volumes with trailing size {expected_size}, got shape {tuple(volume.shape)}"
-            )
-        return "batch_flat"
-
-    if volume.ndim == len(expected_shape) + 1 and tuple(volume.shape[-len(expected_shape) :]) == expected_shape:
-        return "batch_grid"
-
-    raise ValueError(
-        f"Unsupported volume shape {tuple(volume.shape)} for expected per-volume shape {expected_shape}"
-    )
-
-
 def _reshape_cubic_values(coeffs, layout, expected_shape):
     if layout == "single_flat":
         return coeffs.reshape(-1)
@@ -315,12 +305,9 @@ def to_cubic(volume, volume_shape, half_volume=None):
         half_volume = volume.half_volume
     else:
         values = volume
-        if half_volume is None:
-            half_volume = _infer_half_volume(values, volume_shape)
-        half_volume = bool(half_volume)
+        layout, half_volume = _volume_array_layout(values, volume_shape, half_volume=half_volume)
 
-    expected_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
-    layout = _volume_array_layout(values, expected_shape)
+    expected_shape = _expected_volume_shape(volume_shape, half_volume)
     values = jnp.asarray(values)
 
     if layout == "single_flat":
