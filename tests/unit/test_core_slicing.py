@@ -133,7 +133,7 @@ def test_slice_volume_cubic_with_precomputed_spline_coefficients():
     # slice_from_cubic_coefficients which does not apply clipping.
     slices = np.asarray(
         core_slicing.slice_volume(
-            core_slicing.Volume(coeffs, disc_type="cubic"),
+            core_slicing.CubicVolume(coeffs),
             rots,
             image_shape=image_shape,
             volume_shape=volume_shape,
@@ -177,7 +177,7 @@ def test_slice_volume_cubic_flat_and_precomputed_agree():
     # slice_from_cubic_coefficients which does not apply clipping.
     slices_api = np.asarray(
         core_slicing.slice_volume(
-            core_slicing.Volume(coeffs, disc_type="cubic"),
+            core_slicing.CubicVolume(coeffs),
             rots,
             image_shape=image_shape,
             volume_shape=volume_shape,
@@ -217,7 +217,7 @@ def test_batch_slice_volume_cubic_volume_matches_single(monkeypatch):
 
     batch_out = np.asarray(
         core_slicing.batch_slice_volume(
-            core_slicing.Volume(coeffs, disc_type="cubic"),
+            core_slicing.CubicVolume(coeffs),
             rots,
             image_shape,
             volume_shape,
@@ -229,7 +229,7 @@ def test_batch_slice_volume_cubic_volume_matches_single(monkeypatch):
     for i in range(coeffs.shape[0]):
         single_out = np.asarray(
             core_slicing.slice_volume(
-                core_slicing.Volume(coeffs[i], disc_type="cubic"),
+                core_slicing.CubicVolume(coeffs[i]),
                 rots,
                 image_shape,
                 volume_shape,
@@ -274,7 +274,7 @@ def test_adjoint_slice_volume_cubic_adjointness():
     # A v  (forward slice using pre-computed coefficients)
     Av = np.asarray(
         core_slicing.slice_volume(
-            core_slicing.Volume(coeffs, disc_type="cubic"),
+            core_slicing.CubicVolume(coeffs),
             rots,
             image_shape=image_shape,
             volume_shape=volume_shape,
@@ -308,9 +308,22 @@ def test_to_cubic_matches_precompute_helper():
     wrapped = core_slicing.to_cubic(vol_ft, volume_shape)
     direct = np.asarray(core_slicing.precompute_cubic_coefficients(vol_ft, volume_shape))
 
+    assert isinstance(wrapped, core_slicing.CubicVolume)
     assert wrapped.disc_type == "cubic"
     assert wrapped.half_volume is False
     np.testing.assert_allclose(np.asarray(wrapped.values), direct, atol=1e-6, rtol=1e-6)
+
+
+def test_slice_volume_rejects_raw_cubic_input():
+    rng = np.random.default_rng(451)
+    image_shape = (8, 8)
+    volume_shape = (8, 8, 8)
+    rots = np.stack([np.eye(3, dtype=np.float32)], axis=0)
+    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+    vol_ft = np.asarray(fourier_transform_utils.get_dft3(real_vol)).reshape(-1)
+
+    with pytest.raises(TypeError, match="Raw cubic inputs are not allowed"):
+        core_slicing.slice_volume(vol_ft, rots, image_shape, volume_shape, disc_type="cubic")
 
 
 def test_slice_volume_defaults_half_image_from_half_volume():
@@ -353,7 +366,7 @@ def test_adjoint_slice_volume_cubic_volume_accumulates_in_coefficient_space():
             rots,
             image_shape,
             volume_shape,
-            volume=core_slicing.Volume(np.zeros_like(coeffs), disc_type="cubic"),
+            volume=core_slicing.CubicVolume(np.zeros_like(coeffs)),
         )
     )
     ref = np.asarray(

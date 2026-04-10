@@ -143,7 +143,7 @@ class TestCubicSlicingEquivalence:
         # Precompute coefficients (callers always do this for cubic)
         coeffs = slicing.precompute_cubic_coefficients(vol, volume_shape)
 
-        coeff_volume = slicing.Volume(coeffs, disc_type="cubic")
+        coeff_volume = slicing.CubicVolume(coeffs)
         full_slices = slicing.slice_volume(
             coeff_volume,
             rots,
@@ -185,7 +185,7 @@ class TestCubicSlicingEquivalence:
 
         # slice_volume with pre-computed coefficients
         direct = slicing.slice_volume(
-            slicing.Volume(coeffs, disc_type="cubic"),
+            slicing.CubicVolume(coeffs),
             rots,
             image_shape,
             volume_shape,
@@ -250,24 +250,21 @@ class TestCubicSlicingEquivalence:
         vol = _make_hermitian_volume(N, rng, dtype=np.complex128)
 
         rots = self._random_rotations(2, rng)
+        full_coeffs = slicing.precompute_cubic_coefficients(vol, volume_shape)
 
         result_full = slicing.slice_volume(
-            vol.ravel(),
+            slicing.CubicVolume(full_coeffs),
             rots,
             image_shape,
             volume_shape,
-            "cubic",
-            half_volume=False,
             max_r=None,
         )
-        half_vol = ftu.full_volume_to_half_volume(vol, volume_shape).ravel()
+        half_coeffs = slicing.precompute_cubic_coefficients_half(vol, volume_shape)
         result_half = slicing.slice_volume(
-            half_vol,
+            slicing.CubicVolume(half_coeffs, half_volume=True),
             rots,
             image_shape,
             volume_shape,
-            "cubic",
-            half_volume=True,
             half_image=False,
             max_r=None,
         )

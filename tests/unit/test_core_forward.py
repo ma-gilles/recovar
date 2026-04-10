@@ -68,12 +68,26 @@ def test_forward_model_accepts_precomputed_cubic_volume():
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    raw_out = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True))
     wrapped_out = np.asarray(
         core_forward.forward_model(config, wrapped, ctf_params, rotation_matrices, skip_ctf=True)
     )
+    ref_out = np.asarray(
+        recovar.core.slice_volume(wrapped, rotation_matrices, config.image_shape, config.volume_shape)
+    )
 
-    np.testing.assert_allclose(wrapped_out, raw_out, atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(wrapped_out, ref_out, atol=1e-5, rtol=1e-5)
+
+
+def test_forward_model_rejects_raw_cubic_volume():
+    config = _make_config(image_shape=(8, 8), volume_shape=(8, 8, 8), disc_type="cubic")
+    rng = np.random.default_rng(1223)
+    real_volume = rng.standard_normal(config.volume_shape).astype(np.float32)
+    volume = np.asarray(fourier_transform_utils.get_dft3(real_volume)).reshape(-1)
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+
+    with pytest.raises(TypeError, match="Raw cubic inputs are not allowed"):
+        core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True)
 
 
 def test_forward_model_infers_half_volume_layout_from_raw_input():

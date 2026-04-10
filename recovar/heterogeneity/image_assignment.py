@@ -72,7 +72,7 @@ def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_
     ) in experiment_dataset.iter_batches(batch_size):
         images = _process_images_if_available(experiment_dataset, images)
         for volume_ind in range(volumes.shape[0]):
-            volume = core.Volume(volumes[volume_ind], disc_type=disc_type) if disc_type == "cubic" else volumes[volume_ind]
+            volume = core.CubicVolume(volumes[volume_ind]) if disc_type == "cubic" else volumes[volume_ind]
             residuals[volume_ind, particle_indices] = compute_residual(
                 images,
                 ctf_params,
@@ -102,7 +102,7 @@ def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, ba
         raise ValueError(f"Only two volumes are supported, got {volumes.shape[0]}")
     difference = volumes[0] - volumes[1]
     if disc_type == "cubic":
-        difference = core.Volume(difference, disc_type=disc_type)
+        difference = core.CubicVolume(difference)
     for (
         images,
         rotation_matrices,
