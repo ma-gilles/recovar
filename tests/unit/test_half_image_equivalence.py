@@ -328,7 +328,15 @@ def test_project_from_half_volume(N, n_images):
     from recovar.core.slicing import slice_volume
 
     proj_full = slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
-    proj_half = slice_volume(vol_half, rots, image_shape, volume_shape, "linear_interp", half_volume=True)
+    proj_half = slice_volume(
+        vol_half,
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        half_volume=True,
+        half_image=False,
+    )
 
     assert_close(proj_full, proj_half, "project from half volume", rtol=1e-4)
 
@@ -352,7 +360,15 @@ def test_project_map_from_half_volume(N, n_images):
     from recovar.core.slicing import slice_volume
 
     proj_full = slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
-    proj_half = slice_volume(vol_half, rots, image_shape, volume_shape, "linear_interp", half_volume=True)
+    proj_half = slice_volume(
+        vol_half,
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        half_volume=True,
+        half_image=False,
+    )
 
     assert_close(proj_full, proj_half, "project map from half volume", rtol=1e-4)
 
@@ -397,7 +413,15 @@ def test_half_volume_vjp_consistency(N, n_images):
     vjp_full_ref = u_expand(vjp_full)[0]
 
     # VJP of half-volume project (composed: expand → project)
-    f_half = lambda hv: slice_volume(hv, rots, image_shape, volume_shape, "linear_interp", half_volume=True)
+    f_half = lambda hv: slice_volume(
+        hv,
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        half_volume=True,
+        half_image=False,
+    )
     _, u_half = jax.vjp(f_half, jnp.zeros(half_vol_size, dtype=jnp.complex64))
     vjp_half = u_half(images)[0]
 
@@ -440,7 +464,15 @@ def test_half_volume_jvp_consistency(N, n_images):
         volume_shape,
         "linear_interp",
     )
-    f_half = lambda x: slice_volume(x, rots, image_shape, volume_shape, "linear_interp", half_volume=True)
+    f_half = lambda x: slice_volume(
+        x,
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        half_volume=True,
+        half_image=False,
+    )
 
     y_ref, dy_ref = jax.jvp(f_ref, (hv,), (tangent,))
     y_half, dy_half = jax.jvp(f_half, (hv,), (tangent,))
