@@ -1344,7 +1344,7 @@ def _average_residual_square_explicit(
     # Per-image forward model: project volume[i] with CTF[i] and rotation[i]
     def _project_single(vol, ctf, rot):
         if config.disc_type == "cubic":
-            vol = core.VolumeRepr(vol, disc_type=config.disc_type)
+            vol = core.Volume(vol, disc_type=config.disc_type)
         return core_forward.forward_model(config, vol, ctf[None], rot[None])[0]
 
     projected_vols = jax.vmap(_project_single)(predicted_vols, ctf_params, rotation_matrices)

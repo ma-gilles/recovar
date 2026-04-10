@@ -59,7 +59,7 @@ def test_adjoint_forward_model_shape():
     assert out.shape == (config.volume_size,)
 
 
-def test_forward_model_accepts_precomputed_cubic_volume_repr():
+def test_forward_model_accepts_precomputed_cubic_volume():
     config = _make_config(image_shape=(8, 8), volume_shape=(8, 8, 8), disc_type="cubic")
     rng = np.random.default_rng(123)
     real_volume = rng.standard_normal(config.volume_shape).astype(np.float32)
@@ -90,7 +90,7 @@ def test_forward_model_infers_half_volume_layout_from_raw_input():
     out = np.asarray(core_forward.forward_model(config, half_volume, ctf_params, rotation_matrices, skip_ctf=True))
     ref = np.asarray(
         recovar.core.slice_volume(
-            recovar.core.VolumeRepr(half_volume, disc_type="linear_interp", half_volume=True),
+            recovar.core.Volume(half_volume, disc_type="linear_interp", half_volume=True),
             rotation_matrices,
             config.image_shape,
             config.volume_shape,

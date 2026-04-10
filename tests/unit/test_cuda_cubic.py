@@ -73,7 +73,7 @@ class TestCudaCubicProject:
 
                 cb._cuda_ok = None
                 jax_result = slicing.slice_volume(
-                    slicing.VolumeRepr(coeffs_g, disc_type="cubic"),
+                    slicing.Volume(coeffs_g, disc_type="cubic"),
                     rots_g,
                     image_shape,
                     volume_shape,
