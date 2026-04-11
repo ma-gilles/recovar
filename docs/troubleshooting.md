@@ -90,6 +90,21 @@ By default, JAX pre-allocates most GPU memory. On shared machines:
 XLA_PYTHON_CLIENT_PREALLOCATE=false recovar pipeline ...
 ```
 
+### CUDA extension build fails or `nvcc` is missing
+
+RECOVAR's custom CUDA backproject/project extension is built locally on first
+use. A working JAX GPU install alone is not enough to build that extension.
+
+If you want the custom CUDA kernels, make sure a local CUDA toolkit/compiler is
+available through one of these mechanisms:
+
+- `NVCC=/full/path/to/nvcc`
+- `CUDACXX=/full/path/to/nvcc`
+- `nvcc` available on `PATH`
+- `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH` pointing at a toolkit root
+
+If no compiler is available, RECOVAR will fall back to the JAX implementation.
+
 ## Pipeline issues
 
 ### Mean looks wrong

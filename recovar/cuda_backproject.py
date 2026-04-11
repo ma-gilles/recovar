@@ -53,6 +53,15 @@ def _build_lib():
         raise RuntimeError(f"Build failed — {_LIB_PATH} not found")
 
 
+def _cuda_fallback_warning(exc: BaseException) -> str:
+    return (
+        f"Could not build or load RECOVAR's CUDA extension ({exc}). "
+        "Falling back to the JAX implementation. JAX GPU support alone is not enough to build "
+        "this extension: ensure a local CUDA toolkit/compiler is available via NVCC or CUDACXX, "
+        "make sure nvcc is on PATH, or set LOCAL_CUDA_PATH/CUDA_HOME/CUDA_PATH."
+    )
+
+
 def _get_lib():
     global _lib_handle
     if _lib_handle is None:
@@ -117,7 +126,8 @@ def cuda_available() -> bool:
             logger.info("CUDA backproject/project kernels enabled")
     except (ImportError, OSError, RuntimeError, AttributeError, subprocess.SubprocessError) as e:
         _cuda_ok = False
-        logger.debug("CUDA backproject not available: %s", e)
+        logger.warning(_cuda_fallback_warning(e))
+        logger.debug("CUDA backproject not available", exc_info=True)
     return _cuda_ok
 
 
