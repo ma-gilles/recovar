@@ -18,7 +18,6 @@ RELION-style JAX reference: :mod:`recovar.core.relion_interp`.
 
 import functools
 import logging
-import os
 
 import jax
 import jax.numpy as jnp
@@ -27,8 +26,8 @@ from jax import vjp
 
 import recovar.core.fourier_transform_utils as ftu
 from recovar.core.geometry import (
-    rotations_to_grid_point_coords,
     _half_image_rotations_to_coords,
+    rotations_to_grid_point_coords,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,17 +82,18 @@ def _on_gpu():
 
 
 def _use_cuda(order):
-    """Return True if CUDA project should be used for forward projection."""
+    """Return True if the optional custom CUDA projector should be used."""
     if order not in (0, 1, 3) or not _on_gpu():
         return False
-    if os.environ.get("RECOVAR_DISABLE_CUDA", "0") == "1":
-        return False
-    from recovar.cuda_backproject import cuda_available
+    from recovar.cuda_backproject import cuda_available, custom_cuda_requested
 
+    if not custom_cuda_requested():
+        return False
     if not cuda_available():
         raise RuntimeError(
-            "CUDA backproject/project kernels required on GPU but not available. "
-            "Rebuild the CUDA library or set RECOVAR_DISABLE_CUDA=1 to force JAX fallback."
+            "RECOVAR_ENABLE_CUSTOM_CUDA=1 but RECOVAR's custom CUDA backproject/project kernels are not available. "
+            "Run `recovar build_custom_cuda`, ensure nvcc is available, or unset RECOVAR_ENABLE_CUSTOM_CUDA "
+            "to use the default JAX GPU implementation."
         )
     return True
 

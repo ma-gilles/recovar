@@ -19,20 +19,24 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. I
 
 ## Installation
 
-RECOVAR requires a GPU with CUDA support and Python 3.11.
+RECOVAR requires Python 3.11. A CUDA GPU is strongly recommended for real workloads, and a CPU-only path is available for testing.
 
 ### Quick install (pip)
 
 ```bash
-conda create --name recovar python=3.11 -y
-conda activate recovar
-pip install "recovar[cuda]"
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install "recovar[gpu]"
 ```
 
 Verify:
 ```bash
+python -c "import jax; print(jax.devices())"
 recovar run_test_dataset
 ```
+
+`recovar[cuda]` remains available as a compatibility alias.
 
 ### Development install
 
@@ -42,10 +46,11 @@ For the latest version or contributing:
 git clone https://github.com/ma-gilles/recovar.git
 cd recovar
 
-conda create --name recovar_dev python=3.11 -y
-conda activate recovar_dev
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
 
-pip install -e ".[cuda,dev]"
+pip install -e ".[gpu,dev]"
 
 # Verify
 python -c "import jax; print(jax.devices())"
@@ -57,9 +62,11 @@ recovar run_test_dataset
 For testing without a GPU (not practical for real datasets):
 
 ```bash
-conda create --name recovar python=3.11 -y
-conda activate recovar
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
 pip install recovar
+recovar run_test_dataset --cpu
 ```
 
 ### Pixi (alternative)
@@ -78,8 +85,8 @@ pixi run smoke-import-recovar
 
 RECOVAR ships two compiled extensions:
 
-- The fast-marching C++ extension is built during installation when a C++ compiler is available. If it cannot be built, RECOVAR falls back to the pure-Python implementation. You do not need to install `scikit-fmm`.
-- The CUDA backproject/project extension is built locally on first use. `recovar[cuda]` installs the CUDA-enabled JAX wheels, but it does not install `nvcc`. To use RECOVAR's custom CUDA kernels, make sure a local CUDA toolkit/compiler is available through `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`.
+- The fast-marching C++ extension is bundled in published Linux and macOS wheels for supported builds. Source and editable installs build it locally when a C++ compiler is available. If that build fails, RECOVAR falls back to the pure-Python implementation. You do not need to install `scikit-fmm`.
+- The CUDA backproject/project extension is an advanced optional accelerator. Installing `recovar[gpu]` gives you the CUDA-enabled JAX wheels, but it does not build RECOVAR's custom CUDA kernels. To use those kernels, make sure a local CUDA toolkit/compiler is available through `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`, then run `recovar build_custom_cuda` and set `RECOVAR_ENABLE_CUSTOM_CUDA=1`.
 
 ### Docker
 

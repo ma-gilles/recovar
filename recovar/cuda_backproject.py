@@ -21,6 +21,7 @@ from __future__ import annotations
 import ctypes
 import functools
 import logging
+import os
 import pathlib
 import subprocess
 import threading
@@ -37,36 +38,129 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────────────────
 
 _LIB_DIR = pathlib.Path(__file__).resolve().parent / "cuda"
-_LIB_PATH = _LIB_DIR / "libcuda_backproject.so"
+_PACKAGE_LIB_PATH = _LIB_DIR / "libcuda_backproject.so"
 _lib_handle = None  # ctypes CDLL
+_loaded_lib_path = None
+
+_ENABLE_CUSTOM_CUDA_ENV = "RECOVAR_ENABLE_CUSTOM_CUDA"
+_DISABLE_CUSTOM_CUDA_ENV = "RECOVAR_DISABLE_CUDA"
+_CUDA_LIB_ENV = "RECOVAR_CUDA_LIB"
+_CUDA_CACHE_DIR_ENV = "RECOVAR_CUDA_CACHE_DIR"
 
 
-def _build_lib():
-    if _LIB_PATH.exists():
-        return
+def _env_flag(name: str) -> bool:
+    value = os.environ.get(name, "")
+    return value.lower() not in {"", "0", "false", "no", "off"}
+
+
+def custom_cuda_requested() -> bool:
+    """Return True when the optional custom CUDA accelerator is enabled."""
+    if _env_flag(_DISABLE_CUSTOM_CUDA_ENV):
+        return False
+    return _env_flag(_ENABLE_CUSTOM_CUDA_ENV)
+
+
+def _cache_root() -> pathlib.Path:
+    override = os.environ.get(_CUDA_CACHE_DIR_ENV)
+    if override:
+        return pathlib.Path(override).expanduser()
+
+    xdg_cache_home = os.environ.get("XDG_CACHE_HOME")
+    if xdg_cache_home:
+        return pathlib.Path(xdg_cache_home).expanduser() / "recovar" / "cuda"
+
+    return pathlib.Path.home().expanduser() / ".cache" / "recovar" / "cuda"
+
+
+def _cached_lib_path() -> pathlib.Path:
+    return _cache_root() / "libcuda_backproject.so"
+
+
+def _configured_lib_path() -> pathlib.Path | None:
+    override = os.environ.get(_CUDA_LIB_ENV)
+    if not override:
+        return None
+    return pathlib.Path(override).expanduser()
+
+
+def _candidate_lib_paths() -> list[pathlib.Path]:
+    candidates = []
+    for path in (_configured_lib_path(), _cached_lib_path(), _PACKAGE_LIB_PATH):
+        if path is None:
+            continue
+        resolved = path.expanduser()
+        if resolved not in candidates:
+            candidates.append(resolved)
+    return candidates
+
+
+def _existing_lib_path() -> pathlib.Path | None:
+    for candidate in _candidate_lib_paths():
+        if candidate.exists():
+            return candidate.resolve()
+    return None
+
+
+def _default_build_lib_path() -> pathlib.Path:
+    configured = _configured_lib_path()
+    if configured is not None:
+        return configured.expanduser().resolve()
+    return _cached_lib_path().resolve()
+
+
+def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: bool = False) -> pathlib.Path:
+    """Build the optional custom CUDA extension and return its path."""
     import sys
 
-    logger.info("Building %s …", _LIB_PATH)
-    # Pass the current Python so the Makefile finds JAX headers correctly.
-    subprocess.check_call(["make", "-C", str(_LIB_DIR), f"PYTHON={sys.executable}"])
-    if not _LIB_PATH.exists():
-        raise RuntimeError(f"Build failed — {_LIB_PATH} not found")
+    global _cuda_ok, _ffi_registered, _lib_handle, _loaded_lib_path
+
+    lib_path = pathlib.Path(output_path).expanduser().resolve() if output_path else _default_build_lib_path()
+    if lib_path.exists() and not force:
+        logger.info("Using existing RECOVAR CUDA extension at %s", lib_path)
+        return lib_path
+
+    lib_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("Building %s", lib_path)
+    subprocess.check_call(["make", "-C", str(_LIB_DIR), f"PYTHON={sys.executable}", f"LIB={lib_path}"])
+    if not lib_path.exists():
+        raise RuntimeError(f"Build failed — {lib_path} not found")
+    _cuda_ok = None
+    _ffi_registered = False
+    _lib_handle = None
+    _loaded_lib_path = None
+    return lib_path
 
 
-def _cuda_fallback_warning(exc: BaseException) -> str:
+def _missing_lib_error() -> RuntimeError:
+    searched = ", ".join(str(path) for path in _candidate_lib_paths())
+    return RuntimeError(
+        "RECOVAR's custom CUDA extension is not available. "
+        "Run `recovar build_custom_cuda` to build it, or set RECOVAR_CUDA_LIB "
+        f"to an existing shared library. Searched: {searched}"
+    )
+
+
+def _cuda_unavailable_warning(exc: BaseException) -> str:
     return (
-        f"Could not build or load RECOVAR's CUDA extension ({exc}). "
-        "Falling back to the JAX implementation. JAX GPU support alone is not enough to build "
-        "this extension: ensure a local CUDA toolkit/compiler is available via NVCC or CUDACXX, "
+        f"RECOVAR's custom CUDA extension is unavailable ({exc}). "
+        "Falling back to the JAX implementation. Standard RECOVAR GPU usage does not require "
+        "this accelerator. To use it, run `recovar build_custom_cuda` and set "
+        "RECOVAR_ENABLE_CUSTOM_CUDA=1. JAX GPU support alone is not enough to build this "
+        "extension. Ensure a local CUDA toolkit/compiler is available via NVCC or CUDACXX, "
         "make sure nvcc is on PATH, or set LOCAL_CUDA_PATH/CUDA_HOME/CUDA_PATH."
     )
 
 
 def _get_lib():
-    global _lib_handle
-    if _lib_handle is None:
-        _build_lib()
-        _lib_handle = ctypes.CDLL(str(_LIB_PATH))
+    global _lib_handle, _loaded_lib_path
+    lib_path = _existing_lib_path()
+    if lib_path is None:
+        raise _missing_lib_error()
+    lib_path = pathlib.Path(lib_path).resolve()
+
+    if _lib_handle is None or _loaded_lib_path != lib_path:
+        _lib_handle = ctypes.CDLL(str(lib_path))
+        _loaded_lib_path = lib_path
     return _lib_handle
 
 
@@ -106,16 +200,16 @@ _cuda_ok = None  # cached result: None = not checked, True/False = result
 def cuda_available() -> bool:
     """Return True if CUDA backproject/project kernels can be used (cached).
 
-    Set env var ``RECOVAR_DISABLE_CUDA=1`` to force-disable.
+    Set ``RECOVAR_ENABLE_CUSTOM_CUDA=1`` to opt into slicing dispatch that
+    uses these kernels. Set ``RECOVAR_DISABLE_CUDA=1`` to force-disable.
     """
     global _cuda_ok
     if _cuda_ok is not None:
         return _cuda_ok
-    import os
 
-    if os.environ.get("RECOVAR_DISABLE_CUDA", "0") == "1":
+    if _env_flag(_DISABLE_CUSTOM_CUDA_ENV):
         _cuda_ok = False
-        logger.info("CUDA kernels disabled via RECOVAR_DISABLE_CUDA")
+        logger.info("CUDA kernels disabled via %s", _DISABLE_CUSTOM_CUDA_ENV)
         return _cuda_ok
     try:
         if not any(d.platform == "gpu" for d in jax.devices()):
@@ -126,7 +220,7 @@ def cuda_available() -> bool:
             logger.info("CUDA backproject/project kernels enabled")
     except (ImportError, OSError, RuntimeError, AttributeError, subprocess.SubprocessError) as e:
         _cuda_ok = False
-        logger.warning(_cuda_fallback_warning(e))
+        logger.warning(_cuda_unavailable_warning(e))
         logger.debug("CUDA backproject not available", exc_info=True)
     return _cuda_ok
 

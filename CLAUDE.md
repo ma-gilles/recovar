@@ -1,6 +1,6 @@
 # RECOVAR Development Guide
 
-RECOVAR analyzes conformational heterogeneity in cryo-EM/cryo-ET datasets using regularized covariance estimation and kernel regression. GPU-accelerated via JAX + custom CUDA kernels.
+RECOVAR analyzes conformational heterogeneity in cryo-EM/cryo-ET datasets using regularized covariance estimation and kernel regression. GPU-accelerated via JAX, with optional custom CUDA kernels.
 
 ## Engineering Priorities (in order)
 1. **Correctness** — new code must match or improve on baseline quality metrics. Add or run tests to verify.
@@ -17,7 +17,7 @@ recovar/
   reconstruction/  # Mean reconstruction, noise estimation, regularization
   output/          # Results serialization, metrics (FSC, locres, PCS), plotting
   commands/        # CLI entry points: pipeline.py is the main one
-  cuda/            # CUDA backprojection kernel (XLA FFI, auto-compiles)
+  cuda/            # CUDA backprojection kernel (XLA FFI, explicit opt-in build)
   simulation/      # Synthetic data generation for testing
   em/              # EM algorithm (E-step, M-step, heterogeneous state)
   gui_v2/          # Web GUI: FastAPI backend + React/TypeScript frontend
@@ -39,12 +39,12 @@ pixi run smoke-import-recovar   # verify import works
 
 **Alternative (pip)** — for end users:
 ```bash
-pip install "recovar[cuda]"
+pip install "recovar[gpu]"
 ```
 
 The fast-marching C++ extension is optional and builds automatically when a compiler is available. RECOVAR no longer needs a separate `scikit-fmm` install.
 
-CUDA kernels auto-compile on first use. `recovar[cuda]` installs the CUDA-enabled JAX wheels, but you still need a local CUDA toolkit/compiler (`nvcc`) for RECOVAR's custom CUDA extension. The Makefile uses the running Python to locate JAX FFI headers — always build/test through pixi or the correct Python.
+RECOVAR's custom CUDA kernels are optional and do not auto-build at runtime. `recovar[gpu]` installs the CUDA-enabled JAX wheels, but you still need a local CUDA toolkit/compiler (`nvcc`) for RECOVAR's custom CUDA extension. Build it explicitly with `recovar build_custom_cuda` or `PYTHON="$(pixi run which python)" make -C recovar/cuda clean all`. The Makefile uses the running Python to locate JAX FFI headers — always build/test through pixi or the correct Python.
 
 ## Testing
 

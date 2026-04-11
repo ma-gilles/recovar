@@ -6,9 +6,27 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from recovar.commands import compute_trajectory, make_test_dataset, run_test_dataset
+from recovar.commands import build_custom_cuda, compute_trajectory, make_test_dataset, run_test_dataset
 
 pytestmark = pytest.mark.unit
+
+
+def test_build_custom_cuda_main_parses_and_prints(monkeypatch, tmp_path, capsys):
+    expected = tmp_path / "libcuda_backproject.so"
+    captured = {}
+
+    def fake_build(output_path=None, force=False):
+        captured["output_path"] = output_path
+        captured["force"] = force
+        return expected
+
+    monkeypatch.setattr(build_custom_cuda.cuda_backproject, "build_custom_cuda", fake_build)
+    monkeypatch.setattr(sys, "argv", ["build_custom_cuda", "--output", str(expected), "--force"])
+
+    build_custom_cuda.main()
+
+    assert captured == {"output_path": str(expected), "force": True}
+    assert capsys.readouterr().out.strip() == str(expected)
 
 
 def test_make_test_dataset_non_tilt_passes_expected_generate_kwargs(monkeypatch, tmp_path):

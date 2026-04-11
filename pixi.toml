@@ -15,6 +15,8 @@ pip = "*"
 setuptools = "*"
 wheel = "*"
 git = "*"
+make = "*"
+cxx-compiler = "*"
 
 # Core scientific computing packages available in conda-forge
 numpy = ">=2.2.0,<2.3.0"
@@ -95,6 +97,7 @@ default = { features = ["cuda"] }
 # Install RECOVAR in editable mode without dependencies
 install-recovar = "pip install -e . --no-deps --no-build-isolation --ignore-installed"
 build-native-fmm = "pip install -e . --no-deps --no-build-isolation --force-reinstall --ignore-installed"
+build-custom-cuda = "python -m recovar.command_line build_custom_cuda"
 
 # Test installation
 test-recovar = "recovar run_test_dataset"

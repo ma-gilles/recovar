@@ -25,3 +25,32 @@ def test_psutil_declared_for_pixi_dev_env():
     dependencies = pixi["dependencies"]
 
     assert "psutil" in dependencies
+
+
+def test_gpu_extra_matches_cuda_alias():
+    pyproject = _load_toml(REPO_ROOT / "pyproject.toml")
+    extras = pyproject["project"]["optional-dependencies"]
+
+    assert extras["gpu"] == extras["cuda"]
+
+
+def test_gpu_flexible_extra_matches_cuda_flexible_alias():
+    pyproject = _load_toml(REPO_ROOT / "pyproject.toml")
+    extras = pyproject["project"]["optional-dependencies"]
+
+    assert extras["gpu-flexible"] == extras["cuda-flexible"]
+
+
+def test_all_extra_prefers_gpu_alias():
+    pyproject = _load_toml(REPO_ROOT / "pyproject.toml")
+    extras = pyproject["project"]["optional-dependencies"]
+
+    assert extras["all"] == ["recovar[gpu,interactive,gui,dev]"]
+
+
+def test_pixi_declares_build_tools_for_optional_native_extensions():
+    pixi = _load_toml(REPO_ROOT / "pixi.toml")
+    dependencies = pixi["dependencies"]
+
+    assert "cxx-compiler" in dependencies
+    assert "make" in dependencies

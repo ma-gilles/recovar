@@ -15,12 +15,14 @@ pixi run smoke-import-recovar
 # Option B: conda
 conda create --name recovar_dev python=3.11 -y
 conda activate recovar_dev
-pip install -e ".[cuda,dev]"
+pip install -e ".[gpu,dev]"
 ```
 
-`.[cuda]` installs CUDA-enabled JAX wheels. If you also want RECOVAR's custom
-CUDA extension, make sure `nvcc` is available locally. The fast-marching C++
-extension is optional and builds automatically when a compiler is present.
+`.[gpu]` installs CUDA-enabled JAX wheels, and `.[cuda]` remains as a
+compatibility alias. If you also want RECOVAR's custom CUDA extension, make
+sure `nvcc` is available locally, then run `recovar build_custom_cuda` and set
+`RECOVAR_ENABLE_CUSTOM_CUDA=1`. The fast-marching C++ extension is optional and
+builds automatically when a compiler is present for source installs.
 
 ## Workflow
 

@@ -31,7 +31,7 @@ CUDA_ARCH  ?= -gencode arch=compute_80,code=sm_80 \
 
 NVCC_FLAGS := -O3 -std=c++17 -Xcompiler -fPIC --shared $(CUDA_ARCH) -I$(XLA_INC)
 
-LIB := libcuda_backproject.so
+LIB ?= libcuda_backproject.so
 
 all: $(LIB)
 
@@ -44,6 +44,7 @@ check-nvcc:
 	fi
 
 $(LIB): cuda_backproject.cu | check-nvcc
+	@mkdir -p $(dir $@)
 	$(NVCC) $(NVCC_FLAGS) -o $@ $<
 
 clean:

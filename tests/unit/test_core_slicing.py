@@ -11,6 +11,18 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _enable_custom_cuda_for_gpu_marked_tests(request, monkeypatch):
+    if request.node.get_closest_marker("gpu") is None:
+        return
+
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+
 def _rotation_x(theta):
     c = np.cos(theta)
     s = np.sin(theta)

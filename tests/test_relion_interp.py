@@ -12,17 +12,14 @@ produce mathematically equivalent results but in different pixel orders.
 
 from unittest.mock import patch
 
-import numpy as np
-import pytest
-
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
 from jax import random
 
-from recovar.core import relion_interp
-from recovar.core import slicing
 from recovar.core import fourier_transform_utils as ftu
-
+from recovar.core import relion_interp, slicing
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -729,12 +726,16 @@ class TestCUDAMatch:
     @pytest.mark.parametrize("order", [0, 1])
     @pytest.mark.parametrize("half_volume", [False, True])
     @pytest.mark.parametrize("half_image", [False, True])
-    def test_cuda_project_vs_relion(self, N, order, half_volume, half_image):
+    def test_cuda_project_vs_relion(self, N, order, half_volume, half_image, monkeypatch):
         """CUDA and relion_interp forward projection should agree to FP precision."""
-        import jax
-
         if jax.default_backend() != "gpu":
             pytest.skip("No GPU available")
+
+        import recovar.cuda_backproject as cuda_backproject
+
+        monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
+        monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+        monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
 
         key = random.PRNGKey(42)
         volume_shape = (N, N, N)
@@ -787,8 +788,6 @@ class TestCUDAMatch:
     @pytest.mark.parametrize("half_image", [False, True])
     def test_cuda_backproject_vs_relion(self, N, order, half_volume, half_image):
         """CUDA and relion_interp backprojection should agree to FP precision."""
-        import jax
-
         if jax.default_backend() != "gpu":
             pytest.skip("No GPU available")
 
