@@ -34,6 +34,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from conftest import gpu_subprocess_env
+
 pytestmark = [pytest.mark.integration]
 
 # Force CPU for all subprocesses spawned by smoke tests (no GPU required).
@@ -490,8 +492,8 @@ _GPU_PCT_OUTLIERS = 0.20
 
 
 def _gpu_env():
-    """Env for GPU subprocesses: inherit CUDA_VISIBLE_DEVICES, disable preallocate."""
-    return dict(os.environ, PYTHONNOUSERSITE="1", XLA_PYTHON_CLIENT_PREALLOCATE="false")
+    """Env for GPU subprocesses with the test CUDA library when available."""
+    return gpu_subprocess_env()
 
 
 def _generate_gpu_dataset(
