@@ -42,6 +42,19 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(autouse=True)
+def _use_custom_cuda_lib(monkeypatch, custom_cuda_lib):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    monkeypatch.setattr(cuda_backproject, "_ffi_registered", False)
+    monkeypatch.setattr(cuda_backproject, "_lib_handle", None)
+    monkeypatch.setattr(cuda_backproject, "_loaded_lib_path", None)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
