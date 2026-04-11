@@ -21,6 +21,15 @@ import jax.numpy as jnp
 pytestmark = [pytest.mark.unit, pytest.mark.gpu]
 
 
+@pytest.fixture(autouse=True)
+def _use_custom_cuda_lib(monkeypatch, custom_cuda_lib):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -70,9 +79,9 @@ _N_IMAGES = [1, 5, 20]
 def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
     """CUDA project must match JAX map_coordinates for all mode combos."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import project
-    from recovar.core.slicing import _jax_slice, _jax_slice_half_image
     import recovar.core.fourier_transform_utils as ftu
+    from recovar.core.slicing import _jax_slice, _jax_slice_half_image
+    from recovar.cuda_backproject import project
 
     rng = np.random.default_rng(42)
     n_images = 10
@@ -151,9 +160,9 @@ def test_project_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
 def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
     """CUDA backproject must match JAX VJP adjoint for all mode combos."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import backproject
-    from recovar.core.slicing import _jax_slice, _jax_slice_half_image, adjoint_slice_volume
     import recovar.core.fourier_transform_utils as ftu
+    from recovar.core.slicing import _jax_slice
+    from recovar.cuda_backproject import backproject
 
     rng = np.random.default_rng(42)
     n_images = 10
@@ -247,8 +256,8 @@ def test_adjoint_consistency_cuda(order, half_vol, half_img, gpu_device):
     independent of any JAX comparison.
     """
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import backproject, project
     import recovar.core.fourier_transform_utils as ftu
+    from recovar.cuda_backproject import backproject, project
 
     rng = np.random.default_rng(123)
     N = 32
@@ -336,8 +345,8 @@ def test_adjoint_consistency_cuda(order, half_vol, half_img, gpu_device):
 def test_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkeypatch):
     """slice_volume on GPU (CUDA) must match slice_volume on CPU (JAX)."""
     _skip_if_no_cuda()
-    import recovar.core.slicing as core_slicing
     import recovar.core.fourier_transform_utils as ftu
+    import recovar.core.slicing as core_slicing
 
     rng = np.random.default_rng(77)
     N = 32
@@ -402,8 +411,8 @@ def test_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkeypatch):
 def test_adjoint_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkeypatch):
     """adjoint_slice_volume on GPU (CUDA) must match CPU (JAX VJP)."""
     _skip_if_no_cuda()
-    import recovar.core.slicing as core_slicing
     import recovar.core.fourier_transform_utils as ftu
+    import recovar.core.slicing as core_slicing
 
     rng = np.random.default_rng(77)
     N = 32
@@ -466,8 +475,8 @@ def test_adjoint_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkey
 def test_batch_project_matches_single(half_vol, half_img, gpu_device):
     """batch_project should match looped single project calls."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import project, batch_project
     import recovar.core.fourier_transform_utils as ftu
+    from recovar.cuda_backproject import batch_project, project
 
     rng = np.random.default_rng(99)
     N = 24
@@ -517,8 +526,8 @@ def test_batch_project_matches_single(half_vol, half_img, gpu_device):
 def test_batch_backproject_matches_single(half_vol, half_img, gpu_device):
     """batch_backproject should match looped single backproject calls."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import backproject, batch_backproject
     import recovar.core.fourier_transform_utils as ftu
+    from recovar.cuda_backproject import backproject, batch_backproject
 
     rng = np.random.default_rng(99)
     N = 24
@@ -583,8 +592,8 @@ def test_batch_backproject_matches_single(half_vol, half_img, gpu_device):
 def test_identity_rotation_project_cuda_vs_jax(gpu_device):
     """Identity rotation should produce identical slices on CUDA and JAX."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import project
     from recovar.core.slicing import _jax_slice
+    from recovar.cuda_backproject import project
 
     N = 32
     image_shape = (N, N)
@@ -610,8 +619,8 @@ def test_identity_rotation_project_cuda_vs_jax(gpu_device):
 def test_axis_rotations_project_cuda_vs_jax(gpu_device):
     """90-degree axis rotations should produce identical slices on CUDA and JAX."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import project
     from recovar.core.slicing import _jax_slice
+    from recovar.cuda_backproject import project
 
     N = 32
     image_shape = (N, N)
@@ -642,8 +651,8 @@ def test_axis_rotations_project_cuda_vs_jax(gpu_device):
 def test_many_random_rotations_cuda_vs_jax(gpu_device):
     """Many random rotations at realistic size (128x128) to stress-test."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import project, backproject
     from recovar.core.slicing import _jax_slice
+    from recovar.cuda_backproject import backproject, project
 
     N = 128
     n_images = 50
@@ -712,9 +721,9 @@ def test_many_random_rotations_cuda_vs_jax(gpu_device):
 def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
     """Real-valued CUDA backproject must match JAX VJP with real inputs."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import backproject
-    from recovar.core.slicing import _jax_slice
     import recovar.core.fourier_transform_utils as ftu
+    from recovar.core.slicing import _jax_slice
+    from recovar.cuda_backproject import backproject
 
     rng = np.random.default_rng(55)
     N = 32
@@ -791,8 +800,8 @@ def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
 def test_rectangular_images_cuda_vs_jax(gpu_device):
     """CUDA must handle non-square image shapes correctly."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import project, backproject
     from recovar.core.slicing import _jax_slice
+    from recovar.cuda_backproject import project
 
     # Non-square: 32x64
     H, W = 32, 64

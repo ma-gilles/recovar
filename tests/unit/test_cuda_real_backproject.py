@@ -13,10 +13,18 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
-import jax
 import jax.numpy as jnp
 
 pytestmark = [pytest.mark.unit, pytest.mark.gpu]
+
+
+@pytest.fixture(autouse=True)
+def _use_custom_cuda_lib(monkeypatch, custom_cuda_lib):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
 
 
 def _skip_if_no_cuda():
@@ -55,8 +63,8 @@ _COMBOS = [
 def test_real_backproject_matches_complex(order, half_vol, half_img):
     """Real backproject should match .real of complex backproject."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import backproject
     import recovar.core.fourier_transform_utils as ftu
+    from recovar.cuda_backproject import backproject
 
     N = 16
     image_shape = (N, N)
@@ -152,8 +160,8 @@ def test_real_backproject_accumulator():
 def test_real_batch_backproject_matches_complex(order, half_vol, half_img):
     """Real batch_backproject should match .real of complex batch_backproject."""
     _skip_if_no_cuda()
-    from recovar.cuda_backproject import batch_backproject
     import recovar.core.fourier_transform_utils as ftu
+    from recovar.cuda_backproject import batch_backproject
 
     N = 12
     image_shape = (N, N)

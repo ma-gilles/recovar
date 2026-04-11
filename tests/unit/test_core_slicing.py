@@ -4,9 +4,10 @@ import pytest
 pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
+
 import recovar.core as core
-import recovar.core.slicing as core_slicing
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.core.slicing as core_slicing
 
 pytestmark = pytest.mark.unit
 
@@ -18,6 +19,8 @@ def _enable_custom_cuda_for_gpu_marked_tests(request, monkeypatch):
 
     import recovar.cuda_backproject as cuda_backproject
 
+    lib_path = request.getfixturevalue("custom_cuda_lib")
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(lib_path))
     monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
@@ -54,9 +57,13 @@ def test_decide_order_values():
         core_slicing.decide_order("bad")
 
 
-def test_adjoint_slice_volume_half_image_matches_full():
+def test_adjoint_slice_volume_half_image_matches_full(monkeypatch):
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
     rng = np.random.default_rng(11)
-    image_shape = (4, 8)
+    # Exact half-image/full-image equivalence is defined on square grids in the
+    # dedicated half-image regression tests. Keep this smoke check on the same layout.
+    image_shape = (8, 8)
     volume_shape = (8, 8, 8)
     rots = np.stack(
         [
@@ -87,9 +94,11 @@ def test_adjoint_slice_volume_half_image_matches_full():
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
 
 
-def test_adjoint_slice_volume_half_image_matches_full_flat_input():
+def test_adjoint_slice_volume_half_image_matches_full_flat_input(monkeypatch):
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
+
     rng = np.random.default_rng(12)
-    image_shape = (4, 8)
+    image_shape = (8, 8)
     volume_shape = (8, 8, 8)
     rots = np.stack([np.eye(3, dtype=np.float32), np.eye(3, dtype=np.float32)], axis=0)
     real_images = rng.standard_normal((2,) + image_shape).astype(np.float32)
@@ -170,7 +179,6 @@ def test_slice_volume_cubic_flat_and_precomputed_agree():
 
     Both must agree.
     """
-    import recovar.core.cubic_interpolation as cubic_interpolation
 
     rng = np.random.default_rng(43)
     # Use square image to match pipeline convention (CUDA and JAX cubic
@@ -214,7 +222,6 @@ def test_adjoint_slice_volume_cubic_adjointness():
 
     This exercises the VJP code path that the rfft commits had broken.
     """
-    import recovar.core.cubic_interpolation as cubic_interpolation
 
     rng = np.random.default_rng(44)
     image_shape = (4, 8)

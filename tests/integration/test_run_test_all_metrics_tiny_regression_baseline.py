@@ -7,9 +7,7 @@ from pathlib import Path
 import mrcfile
 import numpy as np
 import pytest
-
 from helpers.metrics_regression import metric_direction
-
 
 pytestmark = [pytest.mark.integration, pytest.mark.slow, pytest.mark.gpu, pytest.mark.io, pytest.mark.tiny_metrics]
 
@@ -48,6 +46,8 @@ def _run_with_baseline(
     tol_frac: float,
     overwrite_baseline: bool,
 ):
+    from conftest import gpu_subprocess_env
+
     cmd = [
         sys.executable,
         "-m",
@@ -71,7 +71,7 @@ def _run_with_baseline(
     ]
     if overwrite_baseline:
         cmd.append("--overwrite-metrics-baseline")
-    subprocess.run(cmd, check=True)
+    subprocess.run(cmd, check=True, env=gpu_subprocess_env())
 
     scores_json = out_dir / "test_dataset" / "metrics_plot" / "all_scores.json"
     report_json = out_dir / "test_dataset" / "metrics_plot" / "metrics_regression_report.json"

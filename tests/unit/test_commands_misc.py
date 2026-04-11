@@ -1,5 +1,6 @@
 import argparse
 import pickle
+import shlex
 import sys
 from types import SimpleNamespace
 
@@ -422,6 +423,7 @@ def test_run_test_dataset_main_uses_cpu_flag_and_skips_gpu_check(monkeypatch, tm
     run_test_dataset.main()
 
     assert commands
+    assert commands[0].startswith(f"{shlex.quote(run_test_dataset.sys.executable)} -m recovar.command_line ")
     assert all("--accept-cpu" in cmd for cmd in commands if " pipeline " in cmd)
 
 

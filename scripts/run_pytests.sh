@@ -50,15 +50,15 @@ case "$MODE" in
     ;;
   gpu)
     shift
-    pytest --run-gpu -m "unit or gpu" "$@"
+    RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1 pytest --run-gpu -m "unit or gpu" "$@"
     ;;
   full)
     shift
-    pytest --run-integration --run-gpu --run-slow "$@"
+    RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1 pytest --run-integration --run-gpu --run-slow "$@"
     ;;
   tiny-metrics)
     shift || true
-    pytest --run-integration --run-gpu --run-slow --run-tiny-metrics "$@"
+    RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1 pytest --run-integration --run-gpu --run-slow --run-tiny-metrics "$@"
     ;;
   long-test)
     # Full quality regression suite: cryo-EM SPA, cryo-ET, pipeline with
@@ -66,11 +66,11 @@ case "$MODE" in
     # --long-test implies --run-integration, --run-gpu, --run-slow.
     # Tests skip gracefully when required env vars are absent.
     shift || true
-    pytest --long-test "$@"
+    RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1 pytest --long-test "$@"
     ;;
   full-long)
     shift || true
-    pytest --run-integration --run-gpu --run-slow --run-tiny-metrics "$@"
+    RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1 pytest --run-integration --run-gpu --run-slow --run-tiny-metrics "$@"
     ./scripts/run_long_metrics_regression.sh
     ;;
   real-regression)

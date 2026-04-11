@@ -56,9 +56,10 @@ def half_image(request):
 
 
 @pytest.fixture(autouse=True)
-def _enable_custom_cuda(monkeypatch):
+def _enable_custom_cuda(monkeypatch, custom_cuda_lib):
     import recovar.cuda_backproject as cuda_backproject
 
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
     monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)

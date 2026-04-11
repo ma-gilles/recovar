@@ -33,7 +33,7 @@ def main():
     run_on_cpu = args.cpu
     dataset_dir = args.output_dir
 
-    BASE_CMD = "recovar"
+    BASE_CMD = f"{shlex.quote(sys.executable)} -m recovar.command_line"
 
     passed_functions = []
     failed_functions = []

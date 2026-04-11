@@ -24,9 +24,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from helpers.metrics_regression import log_comparison_table
-from helpers.perf_regression import perf_snapshot, stage_perf, build_perf_record, check_perf_regression, run_tracked_subprocess
+from helpers.perf_regression import (
+    build_perf_record,
+    check_perf_regression,
+    perf_snapshot,
+    run_tracked_subprocess,
+    stage_perf,
+)
 
 pytestmark = [pytest.mark.integration, pytest.mark.gpu, pytest.mark.slow]
 
@@ -46,7 +51,9 @@ _BASELINE_DIR = _REPO_ROOT / "tests" / "baselines" / "downstream_commands"
 
 
 def _gpu_env():
-    return dict(os.environ, PYTHONNOUSERSITE="1", XLA_PYTHON_CLIENT_PREALLOCATE="false")
+    from conftest import gpu_subprocess_env
+
+    return gpu_subprocess_env()
 
 
 def _run(cmd, **kwargs):
@@ -152,9 +159,9 @@ def pipeline_output(dataset_dir, shared_dir):
     pipeline_out = shared_dir / "pipeline_output"
 
     # Compute GT union mask from synthetic volumes
-    from recovar.simulation import synthetic_dataset
-    from recovar.output import metrics
     from recovar import utils
+    from recovar.output import metrics
+    from recovar.simulation import synthetic_dataset
 
     sim_info_path = str(dataset_dir / "simulation_info.pkl")
     gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)

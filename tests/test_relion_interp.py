@@ -722,20 +722,23 @@ class TestAdjointHalfImage:
 class TestCUDAMatch:
     """Verify CUDA projection matches relion_interp (requires GPU)."""
 
+    @pytest.fixture(autouse=True)
+    def _enable_custom_cuda(self, monkeypatch, custom_cuda_lib):
+        import recovar.cuda_backproject as cuda_backproject
+
+        monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+        monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
+        monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+        monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
     @pytest.mark.parametrize("N", [16])
     @pytest.mark.parametrize("order", [0, 1])
     @pytest.mark.parametrize("half_volume", [False, True])
     @pytest.mark.parametrize("half_image", [False, True])
-    def test_cuda_project_vs_relion(self, N, order, half_volume, half_image, monkeypatch):
+    def test_cuda_project_vs_relion(self, N, order, half_volume, half_image):
         """CUDA and relion_interp forward projection should agree to FP precision."""
         if jax.default_backend() != "gpu":
             pytest.skip("No GPU available")
-
-        import recovar.cuda_backproject as cuda_backproject
-
-        monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
-        monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
-        monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
 
         key = random.PRNGKey(42)
         volume_shape = (N, N, N)

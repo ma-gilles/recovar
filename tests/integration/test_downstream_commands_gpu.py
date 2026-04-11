@@ -14,11 +14,8 @@ Run with:
 
 from __future__ import annotations
 
-import os
-import pickle
 import subprocess
 import sys
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -38,7 +35,9 @@ _N_CLUSTERS = 5
 
 def _gpu_env():
     """Env for GPU subprocesses: inherit CUDA_VISIBLE_DEVICES, disable preallocate."""
-    return dict(os.environ, PYTHONNOUSERSITE="1", XLA_PYTHON_CLIENT_PREALLOCATE="false")
+    from conftest import gpu_subprocess_env
+
+    return gpu_subprocess_env()
 
 
 def _run(cmd, **kwargs):
@@ -99,9 +98,9 @@ def pipeline_output(shared_dir):
     pipeline_out = shared_dir / "pipeline_output"
 
     # Compute GT union mask from synthetic volumes
-    from recovar.simulation import synthetic_dataset
-    from recovar.output import metrics
     from recovar import utils
+    from recovar.output import metrics
+    from recovar.simulation import synthetic_dataset
 
     sim_info_path = str(dataset_dir / "simulation_info.pkl")
     gt_thing = synthetic_dataset.load_heterogeneous_reconstruction(sim_info_path)
