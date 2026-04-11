@@ -39,12 +39,12 @@ _NATIVE = None
 _NATIVE_IMPORT_ERROR = None
 if not _FORCE_PYTHON:
     try:
-        from recovar import _fast_marching_native as _NATIVE
+        from recovar.trajectory import _fast_marching_native as _NATIVE
     except ImportError as exc:
         _NATIVE_IMPORT_ERROR = exc
         if _REQUIRE_NATIVE:
             raise ImportError(
-                "RECOVAR_REQUIRE_NATIVE_FMM=1 but recovar._fast_marching_native could not be imported"
+                "RECOVAR_REQUIRE_NATIVE_FMM=1 but recovar.trajectory._fast_marching_native could not be imported"
             ) from exc
 
 

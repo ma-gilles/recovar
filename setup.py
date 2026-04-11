@@ -21,8 +21,8 @@ def _env_flag(name: str) -> bool:
 
 def _native_extension() -> Extension:
     extension = Extension(
-        "recovar._fast_marching_native",
-        ["recovar/_fast_marching_native.cpp"],
+        "recovar.trajectory._fast_marching_native",
+        ["recovar/trajectory/_fast_marching_native.cpp"],
         include_dirs=[numpy.get_include()],
         extra_compile_args=["/std:c++17"] if sys.platform == "win32" else ["-std=c++17"],
         language="c++",
