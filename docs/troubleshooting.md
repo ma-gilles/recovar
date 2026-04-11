@@ -93,7 +93,8 @@ XLA_PYTHON_CLIENT_PREALLOCATE=false recovar pipeline ...
 ### CUDA extension build fails or `nvcc` is missing
 
 RECOVAR's custom CUDA backproject/project extension is built locally on first
-use. A working JAX GPU install alone is not enough to build that extension.
+use. Installing `recovar[cuda]` or `.[cuda]` gives you CUDA-enabled JAX wheels,
+but a working JAX GPU install alone is not enough to build that extension.
 
 If you want the custom CUDA kernels, make sure a local CUDA toolkit/compiler is
 available through one of these mechanisms:
@@ -154,13 +155,14 @@ Check `all_densities.png` and `Lcurve.png` to verify the optimal regularization 
 
 ## Installation issues
 
-### scikit-fmm build failure
+### Native fast-marching extension build failure
 
-Install from source:
+RECOVAR no longer depends on `scikit-fmm`. The in-tree C++ fast-marching
+extension is optional: if it cannot be compiled, installation still succeeds
+and RECOVAR uses the pure-Python fallback.
 
-```bash
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git
-```
+If you want the native backend, install a working C++ toolchain and then
+reinstall RECOVAR.
 
 ### JAX version conflicts
 

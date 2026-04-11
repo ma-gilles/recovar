@@ -26,7 +26,7 @@ RECOVAR requires a GPU with CUDA support and Python 3.11.
 ```bash
 conda create --name recovar python=3.11 -y
 conda activate recovar
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cuda12]"==0.9.0.1 recovar
+pip install "recovar[cuda]"
 ```
 
 Verify:
@@ -45,9 +45,7 @@ cd recovar
 conda create --name recovar_dev python=3.11 -y
 conda activate recovar_dev
 
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git
-pip install "jax[cuda12]"==0.9.0.1
-pip install -e ".[dev]"
+pip install -e ".[cuda,dev]"
 
 # Verify
 python -c "import jax; print(jax.devices())"
@@ -61,7 +59,7 @@ For testing without a GPU (not practical for real datasets):
 ```bash
 conda create --name recovar python=3.11 -y
 conda activate recovar
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cpu]"==0.9.0.1 recovar
+pip install recovar
 ```
 
 ### Pixi (alternative)
@@ -75,6 +73,13 @@ pixi install
 pixi run install-recovar
 pixi run smoke-import-recovar
 ```
+
+### Native extensions
+
+RECOVAR ships two compiled extensions:
+
+- The fast-marching C++ extension is built during installation when a C++ compiler is available. If it cannot be built, RECOVAR falls back to the pure-Python implementation. You do not need to install `scikit-fmm`.
+- The CUDA backproject/project extension is built locally on first use. `recovar[cuda]` installs the CUDA-enabled JAX wheels, but it does not install `nvcc`. To use RECOVAR's custom CUDA kernels, make sure a local CUDA toolkit/compiler is available through `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`.
 
 ### Docker
 

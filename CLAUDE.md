@@ -39,10 +39,12 @@ pixi run smoke-import-recovar   # verify import works
 
 **Alternative (pip)** — for end users:
 ```bash
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cuda12]"==0.9.0.1 recovar
+pip install "recovar[cuda]"
 ```
 
-CUDA kernels auto-compile on first use. The Makefile uses the running Python to locate JAX FFI headers — always build/test through pixi or the correct Python.
+The fast-marching C++ extension is optional and builds automatically when a compiler is available. RECOVAR no longer needs a separate `scikit-fmm` install.
+
+CUDA kernels auto-compile on first use. `recovar[cuda]` installs the CUDA-enabled JAX wheels, but you still need a local CUDA toolkit/compiler (`nvcc`) for RECOVAR's custom CUDA extension. The Makefile uses the running Python to locate JAX FFI headers — always build/test through pixi or the correct Python.
 
 ## Testing
 

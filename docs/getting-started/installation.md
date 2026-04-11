@@ -4,13 +4,12 @@ RECOVAR requires Python 3.11+ and [JAX](https://jax.readthedocs.io/en/latest/ind
 
 ## Quick install
 
-```bash
-git clone https://github.com/ma-gilles/recovar.git
-cd recovar
+Install the published package with CUDA-enabled JAX wheels:
 
+```bash
 conda create --name recovar python=3.11 -y
 conda activate recovar
-pip install ".[cuda]"
+pip install "recovar[cuda]"
 ```
 
 Verify:
@@ -20,6 +19,8 @@ recovar run_test_dataset
 ```
 
 All dependencies are pinned to exact versions for reliability. You should not encounter version conflicts.
+
+If you are installing from a local checkout instead of PyPI, use `pip install ".[cuda]"`.
 
 ## Pixi (fully reproducible)
 
@@ -56,6 +57,13 @@ pip install -e ".[flexible,cuda-flexible,dev]"
 python -c "import jax; print(jax.devices())"
 recovar run_test_dataset
 ```
+
+## Native extensions
+
+RECOVAR has two compiled extensions with different install behavior:
+
+- The fast-marching C++ extension is built during installation when a C++ compiler is available. If that build fails, installation still succeeds and RECOVAR uses the pure-Python fallback instead. No separate `scikit-fmm` install is required.
+- The CUDA backproject/project extension is built locally on first use. Installing `recovar[cuda]` or `.[cuda]` provides the CUDA-enabled JAX wheels, but not the CUDA compiler. To use RECOVAR's custom CUDA kernels, make sure `nvcc` is available via `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`.
 
 ## CPU-only install
 
