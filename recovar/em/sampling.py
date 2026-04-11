@@ -1,7 +1,9 @@
 import functools
-import jax
+
 import healpy as hp
+import jax
 import numpy as np
+
 from recovar import utils
 
 # Cache of full-grid rotation matrices keyed by healpix_order. Each entry has
@@ -24,7 +26,8 @@ def _get_full_grid_matrices(healpix_order: int) -> np.ndarray:
         return cached
     n_total = rotation_grid_size(int(healpix_order))
     mats = rotation_indices_to_matrices(
-        np.arange(n_total, dtype=np.int64), int(healpix_order),
+        np.arange(n_total, dtype=np.int64),
+        int(healpix_order),
     )
     _GRID_MATRIX_CACHE[int(healpix_order)] = mats
     return mats
@@ -32,20 +35,20 @@ def _get_full_grid_matrices(healpix_order: int) -> np.ndarray:
 
 def rotation_grid_n_in_planes(order: int) -> int:
     """Number of in-plane angles used by the RELION-style HEALPix grid."""
-    angle_res = 360.0 / (6.0 * 2 ** order)
+    angle_res = 360.0 / (6.0 * 2**order)
     return int(np.round(360.0 / angle_res))
 
 
 def rotation_grid_size(order: int) -> int:
     """Total number of rotations in the full HEALPix x psi grid."""
-    nside = 2 ** order
+    nside = 2**order
     return hp.nside2npix(nside) * rotation_grid_n_in_planes(order)
 
 
 def _split_rotation_indices(indices, healpix_order):
     """Split full-grid rotation indices into HEALPix pixel and psi components."""
     indices = np.asarray(indices, dtype=np.int64).reshape(-1)
-    n_pixels = hp.nside2npix(2 ** healpix_order)
+    n_pixels = hp.nside2npix(2**healpix_order)
     pixel_idx = indices % n_pixels
     psi_idx = indices // n_pixels
     return pixel_idx, psi_idx
@@ -55,7 +58,7 @@ def _combine_rotation_indices(pixel_idx, psi_idx, healpix_order):
     """Combine HEALPix pixel and psi components into full-grid indices."""
     pixel_idx = np.asarray(pixel_idx, dtype=np.int64).reshape(-1)
     psi_idx = np.asarray(psi_idx, dtype=np.int64).reshape(-1)
-    n_pixels = hp.nside2npix(2 ** healpix_order)
+    n_pixels = hp.nside2npix(2**healpix_order)
     return psi_idx * n_pixels + pixel_idx
 
 
@@ -84,7 +87,12 @@ def get_rotation_grid(nside_level, n_in_planes=None, matrices=False):
     angles = np.meshgrid(np.arange(m), in_angle_angles)
     theta = z[0][angles[0]]
     phi = z[1][angles[0]]
-    angles = np.stack([theta, phi, angles[1]], axis=-1)
+    # RELION convention: rot=phi (azimuthal), tilt=theta (polar).
+    # Previously swapped (theta→rot, phi→tilt) which produced a grid clustered
+    # 2.5x at the poles vs uniform SO(3) — documented in
+    # docs/math/task101_findings.md. The swap makes the grid uniform and
+    # makes pixel p's view direction match hp.pix2vec(p) exactly.
+    angles = np.stack([phi, theta, angles[1]], axis=-1)
     angles = angles.reshape(-1, 3)
     angles = angles / (2 * np.pi) * 360
     if matrices:
@@ -114,14 +122,17 @@ def rotation_indices_to_matrices(indices, healpix_order):
     flattened with psi as the slow axis and HEALPix pixel as the fast axis,
     so ``index = psi_idx * n_pixels + pixel_idx``.
     """
-    nside = 2 ** healpix_order
+    nside = 2**healpix_order
     n_psi = rotation_grid_n_in_planes(healpix_order)
     pixel_idx, psi_idx = _split_rotation_indices(indices, healpix_order)
 
     theta, phi = hp.pix2ang(nside, pixel_idx)
     psi = (2.0 * np.pi / n_psi) * psi_idx
+    # RELION convention: rot=phi (azimuthal), tilt=theta (polar). See
+    # get_rotation_grid for the same swap. The previous (theta→rot, phi→tilt)
+    # convention clustered the SO(3) grid 2.5x at the poles.
     angles = np.stack(
-        [np.rad2deg(theta), np.rad2deg(phi), np.rad2deg(psi)],
+        [np.rad2deg(phi), np.rad2deg(theta), np.rad2deg(psi)],
         axis=-1,
     )
     return utils.R_from_relion(angles).astype(np.float32)
@@ -138,12 +149,12 @@ def remap_rotation_indices_to_order(indices, src_order, dst_order):
         return indices.copy()
 
     src_n_psi = rotation_grid_n_in_planes(src_order)
-    dst_nside = 2 ** dst_order
+    dst_nside = 2**dst_order
     dst_n_psi = rotation_grid_n_in_planes(dst_order)
 
     src_pixel_idx, src_psi_idx = _split_rotation_indices(indices, src_order)
 
-    theta, phi = hp.pix2ang(2 ** src_order, src_pixel_idx)
+    theta, phi = hp.pix2ang(2**src_order, src_pixel_idx)
     dst_pixel_idx = hp.ang2pix(dst_nside, theta, phi)
 
     src_psi_deg = (360.0 / src_n_psi) * src_psi_idx
@@ -213,8 +224,9 @@ def get_oversampled_rotation_grid(parent_pixels, parent_nside_level, oversamplin
     pix_idx, ip_idx = np.meshgrid(np.arange(len(current_pixels)), np.arange(n_in_planes))
     pix_idx_flat = pix_idx.ravel()
 
+    # RELION convention: rot=phi (azimuthal), tilt=theta (polar).
     euler_angles = np.stack(
-        [theta[pix_idx_flat], phi[pix_idx_flat], in_plane_angles[ip_idx.ravel()]],
+        [phi[pix_idx_flat], theta[pix_idx_flat], in_plane_angles[ip_idx.ravel()]],
         axis=-1,
     )
     euler_angles = euler_angles / (2 * np.pi) * 360  # radians → degrees
@@ -266,7 +278,7 @@ def get_oversampled_rotation_grid_from_samples(
             return empty_rot, empty_map, empty_map.copy()
         return empty_rot, empty_map
 
-    coarse_nside = 2 ** parent_nside_level
+    coarse_nside = 2**parent_nside_level
     coarse_n_pixels = hp.nside2npix(coarse_nside)
     parent_pixels = parent_rotation_indices % coarse_n_pixels
     parent_psi = parent_rotation_indices // coarse_n_pixels
@@ -293,22 +305,21 @@ def get_oversampled_rotation_grid_from_samples(
     psi_child_angles = (
         current_parent_psi[:, None] * coarse_psi_step
         - 0.5 * coarse_psi_step
-        + (0.5 + np.arange(psi_factor, dtype=np.float64)[None, :])
-        * (coarse_psi_step / psi_factor)
+        + (0.5 + np.arange(psi_factor, dtype=np.float64)[None, :]) * (coarse_psi_step / psi_factor)
     )
-    nearest_child_psi = np.floor(
-        np.mod(psi_child_angles, 2.0 * np.pi) / fine_psi_step + 0.5
-    ).astype(np.int64) % fine_n_in_planes
+    nearest_child_psi = (
+        np.floor(np.mod(psi_child_angles, 2.0 * np.pi) / fine_psi_step + 0.5).astype(np.int64) % fine_n_in_planes
+    )
 
     child_pixels = np.repeat(current_pixels, psi_factor)
-    child_rotation_indices = (
-        nearest_child_psi.reshape(-1) * fine_n_pixels + child_pixels
-    )
+    child_rotation_indices = nearest_child_psi.reshape(-1) * fine_n_pixels + child_pixels
 
+    # RELION convention: rot=phi (azimuthal), tilt=theta (polar). See
+    # rotation_indices_to_matrices for the same swap.
     euler_angles = np.stack(
         [
-            np.repeat(theta, psi_factor),
             np.repeat(phi, psi_factor),
+            np.repeat(theta, psi_factor),
             psi_child_angles.reshape(-1),
         ],
         axis=-1,
@@ -388,8 +399,9 @@ def subdivide_healpix_pixels(pixels, nside_level):
     pix_idx, ip_idx = np.meshgrid(np.arange(len(child_pixels)), np.arange(n_in_planes))
     pix_idx_flat = pix_idx.ravel()
 
+    # RELION convention: rot=phi (azimuthal), tilt=theta (polar).
     angles = np.stack(
-        [theta[pix_idx_flat], phi[pix_idx_flat], in_plane_angles[ip_idx.ravel()]],
+        [phi[pix_idx_flat], theta[pix_idx_flat], in_plane_angles[ip_idx.ravel()]],
         axis=-1,
     )
     angles = angles / (2 * np.pi) * 360  # radians → degrees
@@ -555,7 +567,7 @@ def get_local_rotation_grid(
             selected_rotations[np.newaxis, :, :, :],
         )  # (chunk, n_selected)
 
-        weights = np.exp(-dists**2 / (2.0 * sigma_rot**2))
+        weights = np.exp(-(dists**2) / (2.0 * sigma_rot**2))
         weights[dists > cutoff_rad] = 0.0
         prior_weights[i_start:i_end] = weights
 
@@ -702,29 +714,29 @@ def get_local_rotation_grid_fast(
     inv_two_sigma_sq = 1.0 / (2.0 * biggest_sigma * biggest_sigma)
     cos_cutoff = float(np.cos(cone_rad))  # cos is monotonically decreasing
 
-    priors_flat = prior_rotations.reshape(n_priors, 9)            # (n_priors, 9)
-    grid_flat = all_grid_mats.reshape(n_total_grid, 9)            # (n_total, 9)
-    traces_all = priors_flat @ grid_flat.T                        # (n_priors, n_total)
+    priors_flat = prior_rotations.reshape(n_priors, 9)  # (n_priors, 9)
+    grid_flat = all_grid_mats.reshape(n_total_grid, 9)  # (n_total, 9)
+    traces_all = priors_flat @ grid_flat.T  # (n_priors, n_total)
     cos_arg_all = (traces_all - 1.0) * 0.5
     # Mask without arccos: angle <= cone_rad <=> cos(angle) >= cos(cone_rad).
-    in_cone_all = cos_arg_all >= cos_cutoff                       # (n_priors, n_total)
-    union_in_cone = np.any(in_cone_all, axis=0)                   # (n_total,)
+    in_cone_all = cos_arg_all >= cos_cutoff  # (n_priors, n_total)
+    union_in_cone = np.any(in_cone_all, axis=0)  # (n_total,)
     selected_indices = np.flatnonzero(union_in_cone).astype(np.int64)
 
     if selected_indices.size == 0:
         # Fallback: pick the single closest grid matrix for each prior so
         # we never return an empty selection.
-        best_per_prior = np.argmax(cos_arg_all, axis=1)            # (n_priors,)
+        best_per_prior = np.argmax(cos_arg_all, axis=1)  # (n_priors,)
         selected_indices = np.unique(best_per_prior).astype(np.int64)
 
     # Restrict cos_arg to the selected union and compute the log-prior only
     # there. arccos is the costly trig op; do it once on the small slice.
-    cos_arg_sel = cos_arg_all[:, selected_indices]                 # (n_priors, n_selected)
+    cos_arg_sel = cos_arg_all[:, selected_indices]  # (n_priors, n_selected)
     np.clip(cos_arg_sel, -1.0, 1.0, out=cos_arg_sel)
     angles_sel = np.arccos(cos_arg_sel)
     log_prior = np.where(
         cos_arg_sel >= cos_cutoff,
-        -(angles_sel ** 2) * inv_two_sigma_sq,
+        -(angles_sel**2) * inv_two_sigma_sq,
         -1e30,
     )
 
@@ -760,7 +772,7 @@ def get_healpix_neighbors(pixel_idx, nside_level, n_neighbors=8):
         Neighbor pixel indices.  Shape (8,) for scalar input or
         (8, n_pixels) for array input.  Missing neighbors are -1.
     """
-    nside = 2 ** nside_level
+    nside = 2**nside_level
     return hp.get_all_neighbours(nside, np.atleast_1d(pixel_idx))
 
 
