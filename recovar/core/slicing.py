@@ -82,19 +82,15 @@ def _on_gpu():
 
 
 def _use_cuda(order):
-    """Return True if the optional custom CUDA projector should be used."""
+    """Return True if RECOVAR's preferred custom CUDA projector should be used."""
     if order not in (0, 1, 3) or not _on_gpu():
         return False
-    from recovar.cuda_backproject import cuda_available, custom_cuda_requested
+    from recovar.cuda_backproject import cuda_available, cuda_unavailable_error, custom_cuda_requested
 
     if not custom_cuda_requested():
         return False
     if not cuda_available():
-        raise RuntimeError(
-            "RECOVAR_ENABLE_CUSTOM_CUDA=1 but RECOVAR's custom CUDA backproject/project kernels are not available. "
-            "Run `recovar build_custom_cuda`, ensure nvcc is available, or unset RECOVAR_ENABLE_CUSTOM_CUDA "
-            "to use the default JAX GPU implementation."
-        )
+        raise cuda_unavailable_error()
     return True
 
 

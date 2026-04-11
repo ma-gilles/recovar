@@ -85,8 +85,8 @@ pixi run smoke-import-recovar
 
 RECOVAR ships two compiled extensions:
 
-- The fast-marching C++ extension is bundled in published Linux and macOS wheels for supported builds. Source and editable installs build it locally when a C++ compiler is available. If that build fails, RECOVAR falls back to the pure-Python implementation. You do not need to install `scikit-fmm`.
-- The CUDA backproject/project extension is an advanced optional accelerator. Installing `recovar[gpu]` gives you the CUDA-enabled JAX wheels, but it does not build RECOVAR's custom CUDA kernels. To use those kernels, make sure a local CUDA toolkit/compiler is available through `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`, then run `recovar build_custom_cuda` and set `RECOVAR_ENABLE_CUSTOM_CUDA=1`.
+- The fast-marching C++ extension is bundled in published Linux and macOS wheels for supported builds. Source and editable installs build it locally when a C++ compiler is available. If that build fails, RECOVAR falls back to the pure-Python implementation.
+- Installing `recovar[gpu]` gives you the CUDA-enabled JAX wheels. On GPU, RECOVAR also tries to build and use its faster custom CUDA backproject/project extension by default. That requires a local CUDA toolkit/compiler reachable through `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`. You can prebuild it with `recovar build_custom_cuda`. If that custom CUDA build/load fails, RECOVAR stops with fix instructions. `RECOVAR_DISABLE_CUDA=1` forces the slower JAX GPU path as a temporary workaround, but that is not the preferred configuration.
 
 ### Docker
 

@@ -13,17 +13,23 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture(autouse=True)
-def _enable_custom_cuda_for_gpu_marked_tests(request, monkeypatch):
-    if request.node.get_closest_marker("gpu") is None:
-        return
-
+def _configure_custom_cuda_for_test(request, monkeypatch):
     import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setattr(cuda_backproject, "_auto_build_attempted", False)
+    monkeypatch.setattr(cuda_backproject, "_auto_build_error", None)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+
+    if request.node.get_closest_marker("gpu") is None:
+        monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+        monkeypatch.delenv("RECOVAR_ENABLE_CUSTOM_CUDA", raising=False)
+        monkeypatch.delenv("RECOVAR_CUDA_LIB", raising=False)
+        return
 
     lib_path = request.getfixturevalue("custom_cuda_lib")
     monkeypatch.setenv("RECOVAR_CUDA_LIB", str(lib_path))
     monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
-    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
 
 
 def _rotation_x(theta):

@@ -66,8 +66,8 @@ recovar run_test_dataset
 
 RECOVAR has two compiled extensions with different install behavior:
 
-- The fast-marching C++ extension is bundled in published Linux and macOS wheels for supported builds. Source and editable installs build it locally when a C++ compiler is available. If that build fails, installation still succeeds and RECOVAR uses the pure-Python fallback instead. No separate `scikit-fmm` install is required.
-- The CUDA backproject/project extension is optional and disabled by default. Installing `recovar[gpu]` or `.[gpu]` provides the CUDA-enabled JAX wheels, but not the CUDA compiler. To use RECOVAR's custom CUDA kernels, make sure `nvcc` is available via `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`, then run `recovar build_custom_cuda` and set `RECOVAR_ENABLE_CUSTOM_CUDA=1`.
+- The fast-marching C++ extension is bundled in published Linux and macOS wheels for supported builds. Source and editable installs build it locally when a C++ compiler is available. If that build fails, installation still succeeds and RECOVAR uses the pure-Python fallback instead.
+- RECOVAR's custom CUDA backproject/project extension is the default GPU path because it is substantially faster than the pure JAX fallback. Installing `recovar[gpu]` or `.[gpu]` provides the CUDA-enabled JAX wheels, but you still need a local CUDA compiler for RECOVAR's kernels. On first GPU use, RECOVAR will try to build and load the shared library automatically. You can also prebuild it with `recovar build_custom_cuda`. Make sure `nvcc` is available via `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`. If the custom CUDA build/load fails, RECOVAR stops with instructions to fix the compiler setup. `RECOVAR_DISABLE_CUDA=1` forces the slower JAX GPU path as a temporary workaround, but that is not the preferred configuration.
 
 ## CPU-only install
 

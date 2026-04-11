@@ -17,6 +17,25 @@ _CUDA_DIR = _MAKEFILE.parent
 _SYSTEM_PATH = [Path("/usr/bin"), Path("/bin")]
 
 
+@pytest.fixture(autouse=True)
+def _reset_cuda_backproject_module_state():
+    import recovar.cuda_backproject as cb
+
+    cb._auto_build_attempted = False
+    cb._auto_build_error = None
+    cb._cuda_ok = None
+    cb._ffi_registered = False
+    cb._lib_handle = None
+    cb._loaded_lib_path = None
+    yield
+    cb._auto_build_attempted = False
+    cb._auto_build_error = None
+    cb._cuda_ok = None
+    cb._ffi_registered = False
+    cb._lib_handle = None
+    cb._loaded_lib_path = None
+
+
 def _write_fake_executable(path: Path):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("#!/bin/sh\nexit 0\n")
@@ -151,12 +170,12 @@ def test_build_recipe_compiles_cuda_source_not_check_target(tmp_path):
     assert "check-nvcc" not in result.stdout.splitlines()[-1]
 
 
-def test_custom_cuda_requested_respects_enable_and_disable_flags(monkeypatch):
+def test_custom_cuda_requested_defaults_to_true_unless_disabled(monkeypatch):
     import recovar.cuda_backproject as cb
 
     monkeypatch.delenv("RECOVAR_ENABLE_CUSTOM_CUDA", raising=False)
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
-    assert cb.custom_cuda_requested() is False
+    assert cb.custom_cuda_requested() is True
 
     monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
     assert cb.custom_cuda_requested() is True
@@ -183,68 +202,85 @@ def test_build_custom_cuda_writes_requested_output(monkeypatch, tmp_path):
     assert captured["cmd"][-1] == f"LIB={target}"
 
 
-def test_get_lib_requires_explicit_build(monkeypatch, tmp_path):
+def test_ensure_lib_path_autobuilds_when_missing(monkeypatch, tmp_path):
     import recovar.cuda_backproject as cb
 
-    missing = tmp_path / "missing.so"
-    monkeypatch.setattr(cb, "_candidate_lib_paths", lambda: [missing])
-    monkeypatch.setattr(cb, "_lib_handle", None)
-    monkeypatch.setattr(cb, "_loaded_lib_path", None)
+    target = (tmp_path / "cache" / "libcuda_backproject.so").resolve()
+    calls = []
 
-    with pytest.raises(RuntimeError, match="build_custom_cuda"):
-        cb._get_lib()
+    monkeypatch.setattr(cb, "_auto_build_attempted", False)
+    monkeypatch.setattr(cb, "_auto_build_error", None)
+    monkeypatch.setattr(cb, "_default_build_lib_path", lambda: target)
+    monkeypatch.setattr(cb, "_existing_lib_path", lambda: target if target.exists() else None)
+
+    def fake_build_custom_cuda(output_path=None, force=False):
+        calls.append((output_path, force))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("stub")
+        return target
+
+    monkeypatch.setattr(cb, "build_custom_cuda", fake_build_custom_cuda)
+
+    assert cb._ensure_lib_path() == target
+    assert calls == [(target, False)]
 
 
-def test_cuda_available_logs_warning_when_extension_is_unavailable(monkeypatch, caplog):
+def test_cuda_available_records_load_error_for_followup_failure_message(monkeypatch):
     import recovar.cuda_backproject as cb
 
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cb, "_cuda_ok", None)
+    monkeypatch.setattr(cb, "_auto_build_error", None)
     monkeypatch.setattr(cb.jax, "devices", lambda: [types.SimpleNamespace(platform="gpu")])
+    error = OSError("dlopen failed")
 
     def _fail_ensure_ffi():
-        raise subprocess.CalledProcessError(2, ["make", "-C", str(cb._LIB_DIR)])
+        raise error
 
     monkeypatch.setattr(cb, "_ensure_ffi", _fail_ensure_ffi)
 
-    with caplog.at_level("WARNING"):
-        assert cb.cuda_available() is False
-
-    assert "RECOVAR's custom CUDA extension is unavailable" in caplog.text
-    assert "Falling back to the JAX implementation" in caplog.text
-    assert "build_custom_cuda" in caplog.text
+    assert cb.cuda_available() is False
+    assert cb._auto_build_error is error
+    assert "dlopen failed" in str(cb.cuda_unavailable_error())
 
 
-def test_slicing_uses_jax_by_default_on_gpu(monkeypatch):
-    import recovar.core.slicing as core_slicing
-
-    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: True)
-    monkeypatch.delenv("RECOVAR_ENABLE_CUSTOM_CUDA", raising=False)
-    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
-
-    assert core_slicing._use_cuda(1) is False
-
-
-def test_slicing_uses_custom_cuda_when_enabled_and_available(monkeypatch):
+def test_slicing_uses_custom_cuda_by_default_on_gpu(monkeypatch):
     import recovar.core.slicing as core_slicing
     import recovar.cuda_backproject as cb
 
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: True)
-    monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
+    monkeypatch.delenv("RECOVAR_ENABLE_CUSTOM_CUDA", raising=False)
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cb, "cuda_available", lambda: True)
 
     assert core_slicing._use_cuda(1) is True
 
 
-def test_slicing_raises_clear_error_when_custom_cuda_requested_but_unavailable(monkeypatch):
+def test_slicing_respects_explicit_cuda_disable(monkeypatch):
     import recovar.core.slicing as core_slicing
     import recovar.cuda_backproject as cb
 
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: True)
-    monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
+    monkeypatch.setenv("RECOVAR_DISABLE_CUDA", "1")
+
+    def _forbidden_cuda_available():
+        raise AssertionError("cuda_available should not be called when RECOVAR_DISABLE_CUDA=1")
+
+    monkeypatch.setattr(cb, "cuda_available", _forbidden_cuda_available)
+
+    assert core_slicing._use_cuda(1) is False
+
+
+def test_slicing_raises_clear_error_when_default_custom_cuda_is_unavailable(monkeypatch):
+    import recovar.core.slicing as core_slicing
+    import recovar.cuda_backproject as cb
+
+    monkeypatch.setattr(core_slicing, "_on_gpu", lambda: True)
+    monkeypatch.delenv("RECOVAR_ENABLE_CUSTOM_CUDA", raising=False)
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
     monkeypatch.setattr(cb, "cuda_available", lambda: False)
+    error = RuntimeError("Run `recovar build_custom_cuda` or set `RECOVAR_DISABLE_CUDA=1`.")
+    monkeypatch.setattr(cb, "cuda_unavailable_error", lambda: error)
 
     with pytest.raises(RuntimeError, match="build_custom_cuda"):
         core_slicing._use_cuda(1)

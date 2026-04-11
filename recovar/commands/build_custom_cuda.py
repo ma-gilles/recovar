@@ -1,4 +1,4 @@
-"""Build RECOVAR's optional custom CUDA extension."""
+"""Build RECOVAR's preferred custom CUDA extension."""
 
 import argparse
 import logging
@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build RECOVAR's optional custom CUDA extension")
+    parser = argparse.ArgumentParser(description="Build RECOVAR's preferred custom CUDA extension")
     parser.add_argument(
         "--output",
         default=None,
