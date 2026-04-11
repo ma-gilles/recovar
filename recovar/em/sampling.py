@@ -382,7 +382,8 @@ def subdivide_healpix_pixels(pixels, nside_level):
 
     Returns:
         angles: float (n_child_pixels * n_in_planes, 3) Euler angles in
-            degrees (theta, phi, psi) for each child orientation.
+            degrees (rot=phi_azim, tilt=theta_polar, psi) for each child
+            orientation, matching RELION's convention.
         child_pixels: int (n_child_pixels,) RING-ordered child pixel indices
             at level ``nside_level + 1``.
     """

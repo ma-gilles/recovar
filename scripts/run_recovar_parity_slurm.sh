@@ -38,6 +38,8 @@ MAX_ITER="${MAX_ITER:-8}"
 HEALPIX_ORDER="${HEALPIX_ORDER:-2}"
 ADAPTIVE_OVERSAMPLING="${ADAPTIVE_OVERSAMPLING:-0}"
 IMAGE_BATCH_SIZE="${IMAGE_BATCH_SIZE:-200}"
+PARTICLE_DIAMETER_ANG="${PARTICLE_DIAMETER_ANG:-}"
+MAX_HEALPIX_ORDER="${MAX_HEALPIX_ORDER:-7}"
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -46,14 +48,23 @@ echo "DATA_DIR=$DATA_DIR"
 echo "OUTPUT_DIR=$OUTPUT_DIR"
 echo "MAX_ITER=$MAX_ITER"
 echo "HEALPIX_ORDER=$HEALPIX_ORDER"
+echo "MAX_HEALPIX_ORDER=$MAX_HEALPIX_ORDER"
+echo "PARTICLE_DIAMETER_ANG=$PARTICLE_DIAMETER_ANG"
 echo "ADAPTIVE_OVERSAMPLING=$ADAPTIVE_OVERSAMPLING"
 test -f "$DATA_DIR/particles.star"
+
+PARTICLE_DIAM_ARG=""
+if [ -n "$PARTICLE_DIAMETER_ANG" ]; then
+    PARTICLE_DIAM_ARG="--particle_diameter_ang $PARTICLE_DIAMETER_ANG"
+fi
 
 cd "$REPO_DIR"
 pixi run python scripts/run_full_refinement.py \
   --data_dir "$DATA_DIR" \
   --output "$OUTPUT_DIR" \
   --mode relion --max_iter "$MAX_ITER" --healpix_order "$HEALPIX_ORDER" \
+  --max_healpix_order "$MAX_HEALPIX_ORDER" \
+  $PARTICLE_DIAM_ARG \
   --offset_range 3 --offset_step 1 --offset_sigma_angstrom 10.0 \
   --adaptive_oversampling "$ADAPTIVE_OVERSAMPLING" --adaptive_fraction 0.999 \
   --max_significants -1 --adaptive_skip_threshold 0.5 \
