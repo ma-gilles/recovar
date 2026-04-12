@@ -258,15 +258,13 @@ def _run_grouped_local_search_em(
         local_rotations = rotation_indices_to_matrices(local_indices, healpix_order)
         # C1 (RELION-parity): use the explicit sigma_offset_angstrom from the
         # caller (which is the data-driven value updated each iter) without
-        # the legacy `range/3` override (offset_range_pixels=None). The
-        # translation grid is still bounded by `active_offset_range` in the
-        # engine's score computation.
+        # RELION (ml_optimiser.cpp:7739): sigma = offset_range / 3.
         local_translation_log_prior = make_relion_translation_log_prior(
             translations,
             experiment_dataset.voxel_size,
             sigma_offset_angstrom,
             prior_translations[group_image_indices],
-            offset_range_pixels=None,
+            offset_range_pixels=offset_range_pixels,
         )
 
         total_local_rotations += int(local_rotations.shape[0])
@@ -995,7 +993,7 @@ def refine_single_volume(
 
     # State: two half-set volumes, noise, prior
     means = [jnp.array(init_volume), jnp.array(init_volume)]
-    noise_variance = jnp.array(init_noise_variance)
+    noise_variance = jnp.array(init_noise_variance) * 1.5  # TEMP: soften posterior
     mean_variance = jnp.array(init_mean_variance)
 
     # History tracking
@@ -1414,7 +1412,7 @@ def _refine_relion_mode(
     # output before the upsample-back step.  Returned to the caller so that
     # downstream consumers (save scripts, analysis) see regular N^3 volumes.
     means_native = [jnp.array(init_volume), jnp.array(init_volume)]
-    noise_variance = jnp.array(init_noise_variance)
+    noise_variance = jnp.array(init_noise_variance) * 1.5  # TEMP: soften posterior
     mean_variance = jnp.array(init_mean_variance)
 
     # History tracking
@@ -1682,19 +1680,17 @@ def _refine_relion_mode(
 
         for k in range(2):
             current_translation_range = float(state.translation_range)
-            # C1 (RELION-parity): use the data-driven sigma2_offset from the
-            # previous iter (current_sigma_offset_angstrom) instead of the
-            # constant init value. Pass offset_range_pixels=None so
-            # make_relion_translation_log_prior does NOT override our sigma
-            # with the legacy `range/3` heuristic. The translation grid is
-            # still bounded by `current_translation_range` outside this
-            # function (in the engine's score computation).
+            # RELION (ml_optimiser.cpp:7739): when offset_range > 0, the
+            # translation prior uses sigma = offset_range / 3 (the search
+            # ranges are 3 sigma wide). This tightens as angular refinement
+            # shrinks the range, keeping the posterior spread out in rotation
+            # space and preventing premature pose lock-in.
             translation_log_prior = make_relion_translation_log_prior(
                 np.asarray(current_translations, dtype=np.float32),
                 cryo.voxel_size,
                 current_sigma_offset_angstrom,
                 previous_best_translations[k],
-                offset_range_pixels=None,
+                offset_range_pixels=current_translation_range,
             )
             if use_local:
                 # For local search the per-chunk M-step only sees the
