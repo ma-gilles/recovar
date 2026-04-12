@@ -32,6 +32,14 @@ def _configure_custom_cuda_for_test(request, monkeypatch):
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
 
 
+def _project_volume(values, disc_type="linear_interp", half_volume=False):
+    if isinstance(values, (core_slicing.Volume, core_slicing.CubicVolume)):
+        return values
+    if disc_type == "cubic":
+        return core_slicing.CubicVolume(values, half_volume=half_volume)
+    return core_slicing.Volume(values, disc_type=disc_type, half_volume=half_volume)
+
+
 def _rotation_x(theta):
     c = np.cos(theta)
     s = np.sin(theta)
@@ -132,8 +140,8 @@ def test_adjoint_slice_volume_half_image_matches_full_flat_input(monkeypatch):
 def test_slice_volume_cubic_with_precomputed_spline_coefficients():
     """Periodic cubic: coefficients have same shape as volume (N^3, no padding).
 
-    slice_volume accepts raw volumes and precomputes coefficients internally.
-    For pre-computed coefficients, use slice_from_cubic_coefficients.
+    slice_volume projects explicit CubicVolume inputs without any hidden
+    coefficient precompute at the slicing boundary.
     """
     import recovar.core.cubic_interpolation as cubic_interpolation
 
@@ -176,14 +184,7 @@ def test_slice_volume_cubic_with_precomputed_spline_coefficients():
 
 
 def test_slice_volume_cubic_flat_and_precomputed_agree():
-    """slice_volume with raw volume must give same result as precomputed path.
-
-    The periodic cubic pipeline:
-    1. slice_volume(raw_vol, ...) → precomputes coefficients internally
-    2. precompute_cubic_coefficients + slice_from_cubic_coefficients → explicit path
-
-    Both must agree.
-    """
+    """CubicVolume(coeffs) agrees with the explicit slice_from_cubic_coefficients path."""
 
     rng = np.random.default_rng(43)
     # Use square image to match pipeline convention (CUDA and JAX cubic
@@ -339,7 +340,7 @@ def test_to_cubic_matches_precompute_helper():
     np.testing.assert_allclose(np.asarray(wrapped.values), direct, atol=1e-6, rtol=1e-6)
 
 
-def test_slice_volume_rejects_raw_cubic_input():
+def test_slice_volume_rejects_raw_projection_input():
     rng = np.random.default_rng(451)
     image_shape = (8, 8)
     volume_shape = (8, 8, 8)
@@ -347,7 +348,7 @@ def test_slice_volume_rejects_raw_cubic_input():
     real_vol = rng.standard_normal(volume_shape).astype(np.float32)
     vol_ft = np.asarray(fourier_transform_utils.get_dft3(real_vol)).reshape(-1)
 
-    with pytest.raises(TypeError, match="Raw cubic inputs are not allowed"):
+    with pytest.raises(TypeError, match="slice_volume requires a Volume or CubicVolume"):
         core_slicing.slice_volume(vol_ft, rots, image_shape, volume_shape, disc_type="cubic")
 
 
@@ -423,7 +424,7 @@ def test_slice_volume_jax_matches_expand(monkeypatch):
 
     out_direct = np.asarray(
         core_slicing.slice_volume(
-            half_vol,
+            _project_volume(half_vol, disc_type="linear_interp", half_volume=True),
             rots,
             image_shape=image_shape,
             volume_shape=volume_shape,
@@ -434,7 +435,10 @@ def test_slice_volume_jax_matches_expand(monkeypatch):
     )
     out_expand = np.asarray(
         core_slicing.slice_volume(
-            np.asarray(fourier_transform_utils.half_volume_to_full_volume(half_vol, volume_shape)).reshape(-1),
+            _project_volume(
+                np.asarray(fourier_transform_utils.half_volume_to_full_volume(half_vol, volume_shape)).reshape(-1),
+                disc_type="linear_interp",
+            ),
             rots,
             image_shape=image_shape,
             volume_shape=volume_shape,
@@ -475,17 +479,17 @@ def test_adjoint_slice_volume_half_volume_jax_vjp_consistency(monkeypatch):
             max_r=None,
         )
     )
-
-    def f_ref(hv):
-        return core_slicing.slice_volume(
+    f_ref = lambda hv: core_slicing.slice_volume(
+        _project_volume(
             fourier_transform_utils.half_volume_to_full_volume(hv, volume_shape),
-            rots,
-            image_shape,
-            volume_shape,
-            "linear_interp",
-            max_r=None,
-        )
-
+            disc_type="linear_interp",
+        ),
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        max_r=None,
+    )
     _, u_ref = jax.vjp(f_ref, jnp.zeros(half_size, dtype=jnp.complex64))
     out_full_ref = np.asarray(u_ref(jnp.asarray(full_imgs))[0])
     np.testing.assert_allclose(out_full_direct, out_full_ref, atol=1e-5, rtol=1e-5)
@@ -520,10 +524,18 @@ def test_slice_volume_matches_full():
     half_volume = np.asarray(fourier_transform_utils.full_volume_to_half_volume(volume_ft, volume_shape))
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
 
-    out_full = np.asarray(core_slicing.slice_volume(volume_ft, rotation_matrices, image_shape, volume_shape, "nearest"))
+    out_full = np.asarray(
+        core_slicing.slice_volume(
+            _project_volume(volume_ft, disc_type="nearest"),
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            "nearest",
+        )
+    )
     out_half = np.asarray(
         core_slicing.slice_volume(
-            half_volume,
+            _project_volume(half_volume, disc_type="nearest", half_volume=True),
             rotation_matrices,
             image_shape,
             volume_shape,
@@ -564,7 +576,7 @@ def test_slice_volume_half_image_jax(monkeypatch):
     # Reference: project from full volume directly to half-image
     ref_half = np.asarray(
         core_slicing.slice_volume(
-            vol_ft,
+            _project_volume(vol_ft, disc_type="linear_interp"),
             rots,
             image_shape,
             volume_shape,
@@ -576,7 +588,7 @@ def test_slice_volume_half_image_jax(monkeypatch):
     # New path: project from half volume directly to half image
     out_half = np.asarray(
         core_slicing.slice_volume(
-            half_vol,
+            _project_volume(half_vol, disc_type="linear_interp", half_volume=True),
             rots,
             image_shape,
             volume_shape,
@@ -616,7 +628,7 @@ def test_batch_slice_volume_jax(monkeypatch):
     # With half_image=False: batch == vmap of single
     batch_out = np.asarray(
         core_slicing.batch_slice_volume(
-            half_vols,
+            _project_volume(half_vols, disc_type="linear_interp", half_volume=True),
             rots,
             image_shape,
             volume_shape,
@@ -628,7 +640,7 @@ def test_batch_slice_volume_jax(monkeypatch):
     for i in range(n_volumes):
         single = np.asarray(
             core_slicing.slice_volume(
-                half_vols[i],
+                _project_volume(half_vols[i], disc_type="linear_interp", half_volume=True),
                 rots,
                 image_shape,
                 volume_shape,
@@ -642,7 +654,7 @@ def test_batch_slice_volume_jax(monkeypatch):
     # With half_image=True: batch == vmap of single
     batch_out_hi = np.asarray(
         core_slicing.batch_slice_volume(
-            half_vols,
+            _project_volume(half_vols, disc_type="linear_interp", half_volume=True),
             rots,
             image_shape,
             volume_shape,
@@ -654,7 +666,7 @@ def test_batch_slice_volume_jax(monkeypatch):
     for i in range(n_volumes):
         single_hi = np.asarray(
             core_slicing.slice_volume(
-                half_vols[i],
+                _project_volume(half_vols[i], disc_type="linear_interp", half_volume=True),
                 rots,
                 image_shape,
                 volume_shape,
@@ -840,11 +852,24 @@ def test_slice_from_half_volume_to_half_image_multiple_shapes_jax(monkeypatch):
         half_vol = np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape))
 
         ref = np.asarray(
-            core_slicing.slice_volume(vol_ft, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+            core_slicing.slice_volume(
+                _project_volume(vol_ft, disc_type="linear_interp"),
+                rots,
+                image_shape,
+                volume_shape,
+                "linear_interp",
+                half_image=True,
+            )
         )
         out = np.asarray(
             core_slicing.slice_volume(
-                half_vol, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
+                _project_volume(half_vol, disc_type="linear_interp", half_volume=True),
+                rots,
+                image_shape,
+                volume_shape,
+                "linear_interp",
+                half_volume=True,
+                half_image=True,
             )
         )
         np.testing.assert_allclose(
@@ -872,10 +897,25 @@ def test_slice_from_half_volume_to_half_image_nearest_jax(monkeypatch):
     vol_ft = np.asarray(fourier_transform_utils.get_dft3(jnp.array(real_vol))).reshape(-1)
     half_vol = np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape))
 
-    ref = np.asarray(core_slicing.slice_volume(vol_ft, rots, image_shape, volume_shape, "nearest", half_image=True))
+    ref = np.asarray(
+        core_slicing.slice_volume(
+            _project_volume(vol_ft, disc_type="nearest"),
+            rots,
+            image_shape,
+            volume_shape,
+            "nearest",
+            half_image=True,
+        )
+    )
     out = np.asarray(
         core_slicing.slice_volume(
-            half_vol, rots, image_shape, volume_shape, "nearest", half_volume=True, half_image=True
+            _project_volume(half_vol, disc_type="nearest", half_volume=True),
+            rots,
+            image_shape,
+            volume_shape,
+            "nearest",
+            half_volume=True,
+            half_image=True,
         )
     )
     np.testing.assert_allclose(out, ref, atol=1e-5, rtol=1e-5)
@@ -900,11 +940,15 @@ def test_slice_from_half_volume_to_half_image_vjp_finite_jax(monkeypatch):
     imag_g = rng.standard_normal((n_images,) + half_img_shape).astype(np.float32)
     g = jnp.array(real_g + 1j * imag_g).reshape(n_images, -1)
 
-    def f(v):
-        return core_slicing.slice_volume(
-            v, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
-        )
-
+    f = lambda v: core_slicing.slice_volume(
+        _project_volume(v, disc_type="linear_interp", half_volume=True),
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        half_volume=True,
+        half_image=True,
+    )
     _, vjp_fn = jax.vjp(f, half_vol)
     grad = np.asarray(vjp_fn(g)[0])
 
@@ -929,18 +973,29 @@ def test_slice_from_half_volume_to_half_image_vjp_vs_reference_jax(monkeypatch):
     half_imgs = jnp.asarray(fourier_transform_utils.get_dft2_real(real_imgs)).reshape(n_images, -1)
 
     # New function: half_vol → half_images (JAX path, CUDA off)
-    def f_new(hv):
-        return core_slicing.slice_volume(
-            hv, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
-        )
-
+    f_new = lambda hv: core_slicing.slice_volume(
+        _project_volume(hv, disc_type="linear_interp", half_volume=True),
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        half_volume=True,
+        half_image=True,
+    )
     _, vjp_new = jax.vjp(f_new, jnp.zeros(half_size, dtype=jnp.complex64))
     grad_new = np.asarray(vjp_new(half_imgs)[0])
 
     # Reference: expand half_vol → full_vol, then slice to half_img
     def f_ref(hv):
         full_vol = fourier_transform_utils.half_volume_to_full_volume(hv, volume_shape).reshape(-1)
-        return core_slicing.slice_volume(full_vol, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+        return core_slicing.slice_volume(
+            _project_volume(full_vol, disc_type="linear_interp"),
+            rots,
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            half_image=True,
+        )
 
     _, vjp_ref = jax.vjp(f_ref, jnp.zeros(half_size, dtype=jnp.complex64))
     grad_ref = np.asarray(vjp_ref(half_imgs)[0])
@@ -977,13 +1032,24 @@ def test_batch_slice_from_half_volume_to_half_image_vs_full_vol_batch_jax(monkey
     # Reference: batch project from full volumes to half images
     ref = np.asarray(
         core_slicing.batch_slice_volume(
-            jnp.array(full_vols), rots, image_shape, volume_shape, "linear_interp", half_image=True
+            _project_volume(jnp.array(full_vols), disc_type="linear_interp"),
+            rots,
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            half_image=True,
         )
     )
     # New path: batch project from half volumes to half images
     out = np.asarray(
         core_slicing.batch_slice_volume(
-            jnp.array(half_vols), rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
+            _project_volume(jnp.array(half_vols), disc_type="linear_interp", half_volume=True),
+            rots,
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            half_volume=True,
+            half_image=True,
         )
     )
 
@@ -1005,11 +1071,24 @@ def test_slice_from_half_volume_to_half_image_identity_rotation_jax(monkeypatch)
     half_vol = np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_ft, volume_shape))
 
     ref = np.asarray(
-        core_slicing.slice_volume(vol_ft, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+        core_slicing.slice_volume(
+            _project_volume(vol_ft, disc_type="linear_interp"),
+            rots,
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            half_image=True,
+        )
     )
     out = np.asarray(
         core_slicing.slice_volume(
-            half_vol, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
+            _project_volume(half_vol, disc_type="linear_interp", half_volume=True),
+            rots,
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            half_volume=True,
+            half_image=True,
         )
     )
     np.testing.assert_allclose(out, ref, atol=1e-5, rtol=1e-5)
@@ -1044,7 +1123,7 @@ def test_slice_from_half_volume_to_half_image_cuda_vs_jax(gpu_device):
             # Reference: CUDA full_vol → half_img (tested separately)
             ref_cuda = np.asarray(
                 core_slicing.slice_volume(
-                    jax.device_put(jnp.array(vol_ft)),
+                    _project_volume(jax.device_put(jnp.array(vol_ft)), disc_type="linear_interp"),
                     jax.device_put(rots),
                     image_shape,
                     volume_shape,
@@ -1055,7 +1134,11 @@ def test_slice_from_half_volume_to_half_image_cuda_vs_jax(gpu_device):
             # Under test: CUDA half_vol → half_img (direct kernel)
             out_cuda = np.asarray(
                 core_slicing.slice_volume(
-                    jax.device_put(jnp.array(half_vol)),
+                    _project_volume(
+                        jax.device_put(jnp.array(half_vol)),
+                        disc_type="linear_interp",
+                        half_volume=True,
+                    ),
                     jax.device_put(rots),
                     image_shape,
                     volume_shape,
@@ -1107,16 +1190,26 @@ def test_slice_from_half_volume_to_half_image_cuda_vjp_vs_ref(gpu_device):
         rots_d = jax.device_put(rots)
 
         # Function under test: direct CUDA half_vol → half_img kernel (custom_vjp)
-        def f_test(v):
-            return core_slicing.slice_volume(
-                v, rots_d, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
-            )
+        f_test = lambda v: core_slicing.slice_volume(
+            _project_volume(v, disc_type="linear_interp", half_volume=True),
+            rots_d,
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            half_volume=True,
+            half_image=True,
+        )
 
         # Reference: expand half_vol → full_vol, then CUDA full_vol → half_img
         def f_ref(v):
             full_vol = fourier_transform_utils.half_volume_to_full_volume(v, volume_shape).reshape(-1)
             return core_slicing.slice_volume(
-                full_vol, rots_d, image_shape, volume_shape, "linear_interp", half_image=True
+                _project_volume(full_vol, disc_type="linear_interp"),
+                rots_d,
+                image_shape,
+                volume_shape,
+                "linear_interp",
+                half_image=True,
             )
 
         _, vjp_test = jax.vjp(f_test, hv)
@@ -1175,7 +1268,7 @@ def test_batch_slice_from_half_volume_to_half_image_cuda_vs_jax(gpu_device):
         # Reference: CUDA full_vol → half_img (tested separately)
         ref_cuda = np.asarray(
             core_slicing.batch_slice_volume(
-                jax.device_put(jnp.array(full_vols)),
+                _project_volume(jax.device_put(jnp.array(full_vols)), disc_type="linear_interp"),
                 jax.device_put(rots),
                 image_shape,
                 volume_shape,
@@ -1186,7 +1279,11 @@ def test_batch_slice_from_half_volume_to_half_image_cuda_vs_jax(gpu_device):
         # Under test: CUDA half_vol → half_img (direct kernel)
         out_cuda = np.asarray(
             core_slicing.batch_slice_volume(
-                jax.device_put(jnp.array(half_vols)),
+                _project_volume(
+                    jax.device_put(jnp.array(half_vols)),
+                    disc_type="linear_interp",
+                    half_volume=True,
+                ),
                 jax.device_put(rots),
                 image_shape,
                 volume_shape,
@@ -1500,7 +1597,7 @@ def test_slice_volume_jax_half_image_flag(monkeypatch, disc_type, half_image):
 
     result = np.asarray(
         core_slicing.slice_volume(
-            vol,
+            _project_volume(vol, disc_type=disc_type),
             rots,
             image_shape,
             volume_shape,
@@ -1510,7 +1607,7 @@ def test_slice_volume_jax_half_image_flag(monkeypatch, disc_type, half_image):
     )
     ref_full = np.asarray(
         core_slicing.slice_volume(
-            vol,
+            _project_volume(vol, disc_type=disc_type),
             rots,
             image_shape,
             volume_shape,
@@ -1594,7 +1691,7 @@ def test_adjoint_dot_product_consistency(monkeypatch, disc_type, half_volume):
     # Forward: Ax
     fwd = np.asarray(
         core_slicing.slice_volume(
-            vol_in,
+            _project_volume(vol_in, disc_type=disc_type, half_volume=half_volume),
             rots,
             image_shape,
             volume_shape,

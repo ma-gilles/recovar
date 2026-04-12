@@ -241,10 +241,11 @@ def residual_relion_kernel_trilinear(
     """
     CTF = config.compute_ctf(ctf_params)
     images = core.translate_images(images, translations, config.image_shape)
+    mean_volume = core.Volume(mean_estimate, disc_type="linear_interp")
     images = (
         images
         - core.slice_volume(
-            mean_estimate,
+            mean_volume,
             rotation_matrices,
             config.image_shape,
             config.volume_shape,

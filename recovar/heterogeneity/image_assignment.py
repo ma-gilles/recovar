@@ -28,6 +28,8 @@ def compute_residual(
     config,
     noise_variance,
 ):
+    if not isinstance(mean_estimate, (core.Volume, core.CubicVolume)):
+        raise TypeError("compute_residual requires Volume(...) or CubicVolume(...)")
     images = core.translate_images(images, translations, config.image_shape)
 
     projected_mean = core_forward.forward_model(
@@ -72,7 +74,11 @@ def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_
     ) in experiment_dataset.iter_batches(batch_size):
         images = _process_images_if_available(experiment_dataset, images)
         for volume_ind in range(volumes.shape[0]):
-            volume = core.CubicVolume(volumes[volume_ind]) if disc_type == "cubic" else volumes[volume_ind]
+            volume = (
+                core.CubicVolume(volumes[volume_ind])
+                if disc_type == "cubic"
+                else core.Volume(volumes[volume_ind], disc_type=disc_type)
+            )
             residuals[volume_ind, particle_indices] = compute_residual(
                 images,
                 ctf_params,
@@ -103,6 +109,8 @@ def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, ba
     difference = volumes[0] - volumes[1]
     if disc_type == "cubic":
         difference = core.CubicVolume(difference)
+    else:
+        difference = core.Volume(difference, disc_type=disc_type)
     for (
         images,
         rotation_matrices,

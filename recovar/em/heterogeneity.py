@@ -355,9 +355,14 @@ def compute_H_B(
     n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     mean_projections = np.zeros((rotations.shape[0], image_size), dtype=np.complex64)
+    mean_volume = core.CubicVolume(mean) if mean_disc == "cubic" else core.Volume(mean, disc_type=mean_disc)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
         mean_projections[rot_indices] = core.slice_volume(
-            mean, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, mean_disc
+            mean_volume,
+            rotations[rot_indices],
+            experiment_dataset.image_shape,
+            experiment_dataset.volume_shape,
+            mean_disc,
         )
 
     picked_freq_coords = core.vec_indices_to_vol_indices(picked_frequency_indices, volume_shape)

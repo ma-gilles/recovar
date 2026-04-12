@@ -1137,6 +1137,10 @@ def simulate_batch(
 
     Simulate a batch of cryo-EM images from a volume using the Equinox API.
     """
+    if not isinstance(volume, (core.Volume, core.CubicVolume)):
+        if config.disc_type == "cubic":
+            raise TypeError("simulate_images_with_pose_batch requires CubicVolume(...) or to_cubic(...) for cubic")
+        volume = core.Volume(volume, disc_type=config.disc_type)
     CTF = config.compute_ctf(ctf_params)
     slices = core.slice_volume(volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type)
     if not skip_ctf:
