@@ -27,19 +27,31 @@ Notes on max_r and boundary clipping:
   In production, max_r is always set, so this is the relevant test case.
 """
 
-import numpy as np
-import pytest
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
 from scipy.spatial.transform import Rotation
 
 from recovar.core import relion_interp
-
 
 pytestmark = pytest.mark.skipif(
     jax.default_backend() != "gpu",
     reason="CUDA kernels require GPU",
 )
+
+
+@pytest.fixture(autouse=True)
+def _use_custom_cuda_lib(monkeypatch, custom_cuda_lib):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
+    monkeypatch.setattr(cuda_backproject, "_ffi_registered", False)
+    monkeypatch.setattr(cuda_backproject, "_lib_handle", None)
+    monkeypatch.setattr(cuda_backproject, "_loaded_lib_path", None)
 
 
 # ---------------------------------------------------------------------------

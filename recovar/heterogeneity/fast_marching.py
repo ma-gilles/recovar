@@ -8,8 +8,10 @@ platforms.
 from __future__ import annotations
 
 import heapq
+import importlib
 import math
 import os
+from types import ModuleType
 
 import numpy as np
 
@@ -35,16 +37,16 @@ _REQUIRE_NATIVE = _env_flag("RECOVAR_REQUIRE_NATIVE_FMM")
 if _FORCE_PYTHON and _REQUIRE_NATIVE:
     raise RuntimeError("RECOVAR_FORCE_PYTHON_FMM and RECOVAR_REQUIRE_NATIVE_FMM cannot both be enabled")
 
-_NATIVE = None
-_NATIVE_IMPORT_ERROR = None
+_NATIVE: ModuleType | None = None
+_NATIVE_IMPORT_ERROR: ImportError | None = None
 if not _FORCE_PYTHON:
     try:
-        from recovar import _fast_marching_native as _NATIVE
+        _NATIVE = importlib.import_module("recovar.trajectory._fast_marching_native")
     except ImportError as exc:
         _NATIVE_IMPORT_ERROR = exc
         if _REQUIRE_NATIVE:
             raise ImportError(
-                "RECOVAR_REQUIRE_NATIVE_FMM=1 but recovar._fast_marching_native could not be imported"
+                "RECOVAR_REQUIRE_NATIVE_FMM=1 but recovar.trajectory._fast_marching_native could not be imported"
             ) from exc
 
 

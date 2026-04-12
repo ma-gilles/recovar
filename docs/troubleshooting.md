@@ -63,7 +63,7 @@ print(jax.devices())
 If only CPU shows up, reinstall JAX with CUDA:
 
 ```bash
-pip install "jax[cuda12]"==0.9.0.1
+pip install "recovar[gpu]"
 ```
 
 On clusters, you may need to load CUDA modules first:
@@ -89,6 +89,37 @@ By default, JAX pre-allocates most GPU memory. On shared machines:
 ```bash
 XLA_PYTHON_CLIENT_PREALLOCATE=false recovar pipeline ...
 ```
+
+### Custom CUDA extension is unavailable or `nvcc` is missing
+
+RECOVAR prefers its custom CUDA backproject/project extension on GPU because it
+is substantially faster than the pure JAX fallback. Installing `recovar[gpu]`
+or `.[gpu]` gives you CUDA-enabled JAX wheels, but a working JAX GPU install
+alone is not enough to build that extension.
+
+If RECOVAR stops with a custom CUDA build/load error, make sure a local CUDA
+toolkit/compiler is available through one of these mechanisms:
+
+- `NVCC=/full/path/to/nvcc`
+- `CUDACXX=/full/path/to/nvcc`
+- `nvcc` available on `PATH`
+- `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH` pointing at a toolkit root
+
+Then either rerun RECOVAR so it can auto-build the shared library, or build it
+explicitly first:
+
+```bash
+recovar build_custom_cuda
+recovar ...
+```
+
+If you need to get unblocked temporarily, force the slower JAX GPU path:
+
+```bash
+RECOVAR_DISABLE_CUDA=1 recovar ...
+```
+
+That workaround is supported, but it is not the preferred configuration.
 
 ## Pipeline issues
 
@@ -139,20 +170,22 @@ Check `all_densities.png` and `Lcurve.png` to verify the optimal regularization 
 
 ## Installation issues
 
-### scikit-fmm build failure
+### Native fast-marching extension build failure
 
-Install from source:
+The in-tree C++ fast-marching extension is optional. Published Linux and macOS
+wheels include it on supported builds, while source installs compile it locally
+when a C++ toolchain is available. If that build fails, installation still
+succeeds and RECOVAR uses the pure-Python fallback.
 
-```bash
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git
-```
+If you want the native backend, install a working C++ toolchain and then
+reinstall RECOVAR.
 
 ### JAX version conflicts
 
 RECOVAR requires JAX 0.9.0.1. Pin the version:
 
 ```bash
-pip install "jax[cuda12]"==0.9.0.1
+pip install "recovar[gpu]"
 ```
 
 ### Multiple recovar installations

@@ -15,9 +15,17 @@ pixi run smoke-import-recovar
 # Option B: conda
 conda create --name recovar_dev python=3.11 -y
 conda activate recovar_dev
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cuda12]"==0.9.0.1
-pip install -e ".[dev]"
+pip install -e ".[gpu,dev]"
 ```
+
+`.[gpu]` installs CUDA-enabled JAX wheels, and `.[cuda]` remains as a
+compatibility alias. RECOVAR prefers its custom CUDA extension by default on
+GPU, so make sure `nvcc` is available locally and either let RECOVAR auto-build
+the shared library on first GPU use or prebuild it with `recovar build_custom_cuda`.
+If you need to debug without it, set `RECOVAR_DISABLE_CUDA=1`, but that is slower
+and not the preferred path. The fast-marching C++ extension builds automatically
+when a compiler is present for source installs and otherwise falls back to the
+pure-Python implementation.
 
 ## Workflow
 

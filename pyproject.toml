@@ -14,7 +14,9 @@ license = { text = "Princeton University Academic/Non-Commercial License (see LI
 requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
     "License :: Other/Proprietary License",
+    "Operating System :: MacOS :: MacOS X",
     "Operating System :: POSIX :: Linux"
 ]
 
@@ -47,12 +49,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# GPU acceleration (most users want this)
+# Standard GPU install (JAX CUDA wheels)
+gpu = [
+    "jax[cuda12]==0.9.0.1",
+]
+# Backwards-compatible alias
 cuda = [
     "jax[cuda12]==0.9.0.1",
 ]
 # Flexible bounds for developers who need to reconcile with other packages.
-# Usage: pip install -e "recovar[flexible]" or pip install "recovar[flexible,cuda-flexible]"
+# Usage: pip install -e "recovar[flexible]" or pip install "recovar[flexible,gpu-flexible]"
 # These REPLACE the pinned defaults — pip will use the loosest constraint.
 flexible = [
     "dataframe_image>=0.2.7",
@@ -79,6 +85,10 @@ flexible = [
     "typing_extensions>=4.10.0",
     "umap-learn[plot]>=0.5.5",
 ]
+gpu-flexible = [
+    "jax[cuda12]>=0.9.0,<0.10",
+]
+# Backwards-compatible alias
 cuda-flexible = [
     "jax[cuda12]>=0.9.0,<0.10",
 ]
@@ -109,7 +119,7 @@ dev = [
 ]
 # Everything (pinned)
 all = [
-    "recovar[cuda,interactive,gui,dev]",
+    "recovar[gpu,interactive,gui,dev]",
 ]
 
 [project.urls]

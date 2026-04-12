@@ -35,14 +35,11 @@ if [[ "$CONDA_DEFAULT_ENV" != "recovar_dev_test" ]]; then
     exit 1
 fi
 
-# Install key dependencies that don't play well with pip
+# Install recovar plus pinned CUDA-enabled JAX wheels. This does not install
+# nvcc; make sure a local CUDA toolkit is available if you want the custom
+# RECOVAR CUDA extension.
 echo "Installing dependencies..."
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git
-pip install "jax[cuda12]"==0.9.0.1    # or use "jax[cpu]"==0.9.0.1 if no NVIDIA GPU
-
-# Install recovar from the checked-out code in editable mode
-echo "Installing recovar..."
-pip install -e ".[dev]"
+pip install -e ".[cuda,dev]"
 
 # Run built-in test
 echo "Running test..."

@@ -139,6 +139,7 @@ cd ${WORKDIR}
 
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS=1
 export TMPDIR="${WORKDIR}/.tmp/slurm_\${SLURM_JOB_ID}"
 export PIXI_HOME="${WORKDIR}/.tmp/pixi_home_\${SLURM_JOB_ID}"
 export RATTLER_CACHE_DIR="${WORKDIR}/.tmp/rattler_cache_\${SLURM_JOB_ID}"

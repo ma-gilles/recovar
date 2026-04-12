@@ -1,10 +1,10 @@
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -12,6 +12,16 @@ if str(ROOT) not in sys.path:
 TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
+
+_REQUIRE_CUSTOM_CUDA_FOR_TESTS_ENV = "RECOVAR_REQUIRE_CUSTOM_CUDA_FOR_TESTS"
+_CUSTOM_CUDA_LIB_UNSET = object()
+_custom_cuda_test_lib = _CUSTOM_CUDA_LIB_UNSET
+_custom_cuda_test_error = None
+
+
+def _env_flag(name):
+    value = os.environ.get(name, "")
+    return value.lower() not in {"", "0", "false", "no", "off"}
 
 
 def _pick_most_free_gpu_index():
@@ -68,6 +78,13 @@ def gpu_subprocess_env():
         gpu_idx = _pick_most_free_gpu_index()
         if gpu_idx is not None:
             env["CUDA_VISIBLE_DEVICES"] = str(gpu_idx)
+
+    if not _env_flag("RECOVAR_DISABLE_CUDA"):
+        lib_path = _resolve_custom_cuda_test_lib(require=_env_flag(_REQUIRE_CUSTOM_CUDA_FOR_TESTS_ENV))
+        if lib_path is not None:
+            env["RECOVAR_CUDA_LIB"] = str(lib_path)
+            env["RECOVAR_ENABLE_CUSTOM_CUDA"] = "1"
+            env.pop("RECOVAR_DISABLE_CUDA", None)
     return env
 
 
@@ -123,6 +140,7 @@ def pytest_collection_modifyitems(config, items):
     gpu_available = False
     try:
         import jax
+
         gpu_available = any(d.platform == "gpu" for d in jax.devices())
     except Exception:
         pass
@@ -174,3 +192,90 @@ def _first_gpu_or_skip():
 def gpu_device():
     """Pytest fixture that provides a GPU device or skips the test."""
     return _first_gpu_or_skip()
+
+
+def _candidate_nvcc_paths():
+    candidates = []
+    for candidate in (
+        os.environ.get("NVCC"),
+        shutil.which("nvcc"),
+        "/usr/local/cuda-13.1/bin/nvcc",
+        "/usr/local/cuda-12.6/bin/nvcc",
+        "/usr/local/cuda/bin/nvcc",
+    ):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists() and str(path) not in candidates:
+            candidates.append(str(path))
+    return candidates
+
+
+def _custom_cuda_test_output_path():
+    return ROOT / ".tmp" / "pytest_custom_cuda" / "libcuda_backproject.so"
+
+
+def _custom_cuda_test_error_detail():
+    if _custom_cuda_test_error is None:
+        return ""
+    return f": {_custom_cuda_test_error}"
+
+
+def _resolve_custom_cuda_test_lib(*, require=False):
+    global _custom_cuda_test_error, _custom_cuda_test_lib
+
+    if _custom_cuda_test_lib is _CUSTOM_CUDA_LIB_UNSET:
+        import recovar.cuda_backproject as cuda_backproject
+
+        configured = os.environ.get("RECOVAR_CUDA_LIB")
+        if configured and Path(configured).exists():
+            _custom_cuda_test_lib = Path(configured).resolve()
+            _custom_cuda_test_error = None
+        else:
+            target = _custom_cuda_test_output_path()
+            if target.exists():
+                _custom_cuda_test_lib = target.resolve()
+                _custom_cuda_test_error = None
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                last_exc = None
+                old_nvcc = os.environ.get("NVCC")
+                old_cache_dir = os.environ.get("RECOVAR_CUDA_CACHE_DIR")
+                os.environ["RECOVAR_CUDA_CACHE_DIR"] = str(target.parent)
+                try:
+                    for nvcc_path in _candidate_nvcc_paths():
+                        os.environ["NVCC"] = nvcc_path
+                        try:
+                            _custom_cuda_test_lib = cuda_backproject.build_custom_cuda(output_path=target)
+                            _custom_cuda_test_error = None
+                            break
+                        except Exception as exc:  # pragma: no cover - exercised in GPU test envs
+                            last_exc = exc
+                            cuda_backproject._cuda_ok = None
+                    else:
+                        _custom_cuda_test_lib = None
+                        _custom_cuda_test_error = last_exc
+                finally:
+                    if old_nvcc is None:
+                        os.environ.pop("NVCC", None)
+                    else:
+                        os.environ["NVCC"] = old_nvcc
+                    if old_cache_dir is None:
+                        os.environ.pop("RECOVAR_CUDA_CACHE_DIR", None)
+                    else:
+                        os.environ["RECOVAR_CUDA_CACHE_DIR"] = old_cache_dir
+
+    if _custom_cuda_test_lib is None and require:
+        raise RuntimeError(f"Could not build RECOVAR custom CUDA test library{_custom_cuda_test_error_detail()}")
+
+    return _custom_cuda_test_lib
+
+
+@pytest.fixture(scope="session")
+def custom_cuda_lib():
+    """Build the optional RECOVAR CUDA extension for tests that need it."""
+    _first_gpu_or_skip()
+    lib_path = _resolve_custom_cuda_test_lib(require=_env_flag(_REQUIRE_CUSTOM_CUDA_FOR_TESTS_ENV))
+    if lib_path is None:
+        pytest.skip(f"Could not build RECOVAR custom CUDA test library{_custom_cuda_test_error_detail()}")
+    yield lib_path

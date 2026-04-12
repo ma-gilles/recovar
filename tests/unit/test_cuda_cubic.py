@@ -15,11 +15,19 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
-import recovar.core.cubic_interpolation as cubic_interp
 import recovar.core.fourier_transform_utils as ftu
 import recovar.core.slicing as slicing
 
 pytestmark = [pytest.mark.unit, pytest.mark.gpu]
+
+
+@pytest.fixture(autouse=True)
+def _use_custom_cuda_lib(monkeypatch, custom_cuda_lib):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
 
 
 def _make_hermitian_volume(N, rng, dtype=np.complex64):

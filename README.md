@@ -19,20 +19,24 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. I
 
 ## Installation
 
-RECOVAR requires a GPU with CUDA support and Python 3.11.
+RECOVAR requires Python 3.11. A CUDA GPU is strongly recommended for real workloads, and a CPU-only path is available for testing.
 
 ### Quick install (pip)
 
 ```bash
-conda create --name recovar python=3.11 -y
-conda activate recovar
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cuda12]"==0.9.0.1 recovar
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install "recovar[gpu]"
 ```
 
 Verify:
 ```bash
+python -c "import jax; print(jax.devices())"
 recovar run_test_dataset
 ```
+
+`recovar[cuda]` remains available as a compatibility alias.
 
 ### Development install
 
@@ -42,12 +46,11 @@ For the latest version or contributing:
 git clone https://github.com/ma-gilles/recovar.git
 cd recovar
 
-conda create --name recovar_dev python=3.11 -y
-conda activate recovar_dev
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
 
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git
-pip install "jax[cuda12]"==0.9.0.1
-pip install -e ".[dev]"
+pip install -e ".[gpu,dev]"
 
 # Verify
 python -c "import jax; print(jax.devices())"
@@ -59,9 +62,11 @@ recovar run_test_dataset
 For testing without a GPU (not practical for real datasets):
 
 ```bash
-conda create --name recovar python=3.11 -y
-conda activate recovar
-pip install git+https://github.com/scikit-fmm/scikit-fmm.git "jax[cpu]"==0.9.0.1 recovar
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install recovar
+recovar run_test_dataset --cpu
 ```
 
 ### Pixi (alternative)
@@ -75,6 +80,13 @@ pixi install
 pixi run install-recovar
 pixi run smoke-import-recovar
 ```
+
+### Native extensions
+
+RECOVAR ships two compiled extensions:
+
+- The fast-marching C++ extension is bundled in published Linux and macOS wheels for supported builds. Source and editable installs build it locally when a C++ compiler is available. If that build fails, RECOVAR falls back to the pure-Python implementation.
+- Installing `recovar[gpu]` gives you the CUDA-enabled JAX wheels. On GPU, RECOVAR also tries to build and use its faster custom CUDA backproject/project extension by default. That requires a local CUDA toolkit/compiler reachable through `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`. You can prebuild it with `recovar build_custom_cuda`. If that custom CUDA build/load fails, RECOVAR stops with fix instructions. `RECOVAR_DISABLE_CUDA=1` forces the slower JAX GPU path as a temporary workaround, but that is not the preferred configuration.
 
 ### Docker
 

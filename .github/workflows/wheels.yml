@@ -9,8 +9,11 @@ on:
       - ".github/workflows/wheels.yml"
       - "pyproject.toml"
       - "setup.py"
+      - "setup_helpers.py"
       - "MANIFEST.in"
-      - "recovar/_fast_marching_native.cpp"
+      - "recovar/cuda/Makefile"
+      - "recovar/cuda/cuda_backproject.cu"
+      - "recovar/trajectory/_fast_marching_native.cpp"
       - "recovar/heterogeneity/fast_marching.py"
       - "tests/unit/test_fast_marching.py"
       - "tests/unit/test_fast_marching_native.py"
@@ -19,8 +22,11 @@ on:
       - ".github/workflows/wheels.yml"
       - "pyproject.toml"
       - "setup.py"
+      - "setup_helpers.py"
       - "MANIFEST.in"
-      - "recovar/_fast_marching_native.cpp"
+      - "recovar/cuda/Makefile"
+      - "recovar/cuda/cuda_backproject.cu"
+      - "recovar/trajectory/_fast_marching_native.cpp"
       - "recovar/heterogeneity/fast_marching.py"
       - "tests/unit/test_fast_marching.py"
       - "tests/unit/test_fast_marching_native.py"
@@ -34,7 +40,6 @@ jobs:
         os:
           - ubuntu-latest
           - macos-latest
-          - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -47,7 +52,7 @@ jobs:
         uses: pypa/cibuildwheel@v2.23.3
         env:
           CIBW_BUILD: "cp311-*"
-          CIBW_SKIP: "*-win32 *-musllinux*"
+          CIBW_SKIP: "*-musllinux*"
 
       - name: Install smoke-test dependencies
         shell: bash
@@ -58,17 +63,44 @@ jobs:
         run: |
           python - <<'PY'
           import glob
+          import pathlib
           import subprocess
           import sys
+          import tempfile
+          import textwrap
 
           wheels = sorted(glob.glob("wheelhouse/*.whl"))
           if not wheels:
               raise SystemExit("no wheels produced")
           wheel = wheels[0]
+          smoke_dir = pathlib.Path(tempfile.mkdtemp(prefix="recovar-wheel-smoke-"))
+          smoke_test = smoke_dir / "test_fast_marching_wheel_smoke.py"
           print(f"installing {wheel}")
           subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-deps", wheel])
+          smoke_test.write_text(
+              textwrap.dedent(
+                  """
+                  import numpy as np
+                  from recovar.heterogeneity import fast_marching
+
+
+                  def test_fast_marching_native_backend_smoke():
+                      assert fast_marching.native_available(), "wheel did not include the native fast-marching extension"
+
+                      phi = np.ones((5, 5), dtype=np.float64)
+                      phi[2, 2] = -1.0
+                      speed = np.linspace(1.0, 2.0, num=25, dtype=np.float64).reshape(5, 5)
+                      dx = np.array([1.0, 1.0], dtype=np.float64)
+
+                      expected = fast_marching._python_travel_time(phi, speed, dx, order=2)
+                      got = fast_marching._native_travel_time(phi, speed, dx, order=2)
+                      np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+                  """
+              ),
+              encoding="utf-8",
+          )
+          subprocess.check_call([sys.executable, "-m", "pytest", str(smoke_test), "-q"], cwd=smoke_dir)
           PY
-          python -m pytest tests/unit/test_fast_marching.py tests/unit/test_fast_marching_native.py -q
 
       - uses: actions/upload-artifact@v4
         with:

@@ -7,14 +7,13 @@ Verifies:
   4. Batch kernels pass max_r correctly.
 """
 
-import numpy as np
-import pytest
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
 
-from recovar.core import relion_interp
 import recovar.core.fourier_transform_utils as ftu
-
+from recovar.core import relion_interp
 
 # Skip everything if not on GPU
 pytestmark = pytest.mark.skipif(
@@ -54,6 +53,16 @@ def half_volume(request):
 @pytest.fixture(params=[False, True], ids=["full_img", "half_img"])
 def half_image(request):
     return request.param
+
+
+@pytest.fixture(autouse=True)
+def _enable_custom_cuda(monkeypatch, custom_cuda_lib):
+    import recovar.cuda_backproject as cuda_backproject
+
+    monkeypatch.setenv("RECOVAR_CUDA_LIB", str(custom_cuda_lib))
+    monkeypatch.setenv("RECOVAR_ENABLE_CUSTOM_CUDA", "1")
+    monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
+    monkeypatch.setattr(cuda_backproject, "_cuda_ok", None)
 
 
 class TestProjectMaxR:
