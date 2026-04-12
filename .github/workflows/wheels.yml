@@ -67,6 +67,7 @@ jobs:
           import subprocess
           import sys
           import tempfile
+          import textwrap
 
           wheels = sorted(glob.glob("wheelhouse/*.whl"))
           if not wheels:
@@ -77,23 +78,25 @@ jobs:
           print(f"installing {wheel}")
           subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-deps", wheel])
           smoke_test.write_text(
-              '''
-import numpy as np
-from recovar.heterogeneity import fast_marching
+              textwrap.dedent(
+                  """
+                  import numpy as np
+                  from recovar.heterogeneity import fast_marching
 
 
-def test_fast_marching_native_backend_smoke():
-    assert fast_marching.native_available(), "wheel did not include the native fast-marching extension"
+                  def test_fast_marching_native_backend_smoke():
+                      assert fast_marching.native_available(), "wheel did not include the native fast-marching extension"
 
-    phi = np.ones((5, 5), dtype=np.float64)
-    phi[2, 2] = -1.0
-    speed = np.linspace(1.0, 2.0, num=25, dtype=np.float64).reshape(5, 5)
-    dx = np.array([1.0, 1.0], dtype=np.float64)
+                      phi = np.ones((5, 5), dtype=np.float64)
+                      phi[2, 2] = -1.0
+                      speed = np.linspace(1.0, 2.0, num=25, dtype=np.float64).reshape(5, 5)
+                      dx = np.array([1.0, 1.0], dtype=np.float64)
 
-    expected = fast_marching._python_travel_time(phi, speed, dx, order=2)
-    got = fast_marching._native_travel_time(phi, speed, dx, order=2)
-    np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
-''',
+                      expected = fast_marching._python_travel_time(phi, speed, dx, order=2)
+                      got = fast_marching._native_travel_time(phi, speed, dx, order=2)
+                      np.testing.assert_allclose(got, expected, rtol=1e-12, atol=1e-12)
+                  """
+              ),
               encoding="utf-8",
           )
           subprocess.check_call([sys.executable, "-m", "pytest", str(smoke_test), "-q"], cwd=smoke_dir)
