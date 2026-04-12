@@ -2550,12 +2550,39 @@ def _refine_relion_mode(
     # Reconstruct the final volume from the COMBINED Ft_y/Ft_ctf accumulators
     # at the full Nyquist resolution. With PADDING_FACTOR>1 the engine already
     # accumulates at (pf*N)^3, no zero-padding needed.
+    #
+    # RELION's updateSSNRarrays (backprojector.cpp:1110-1114) applies a
+    # correction when is_whole_instead_of_half=true (the final all-data
+    # iteration):  fsc_corrected = sqrt(2 * fsc / (fsc + 1)).
+    # This boosts the effective FSC for the doubled data, producing a
+    # larger tau2 (weaker regularization) that lets more high-frequency
+    # signal through. Without this, the final iter uses the half-map tau
+    # which over-regularizes the combined reconstruction.
+    #
+    # We apply the same correction to mean_variance via the FSC-to-tau
+    # formula: tau2 = SSNR * sigma2_noise, where SSNR = fsc/(1-fsc).
+    if fsc_history:
+        last_fsc = jnp.asarray(fsc_history[-1])
+        fsc_clamped = jnp.clip(last_fsc, 0.001, 0.999)
+        fsc_whole = jnp.sqrt(2.0 * fsc_clamped / (fsc_clamped + 1.0))
+        fsc_whole = jnp.clip(fsc_whole, 0.001, 0.999)
+        boost = (fsc_whole / (1.0 - fsc_whole)) / (fsc_clamped / (1.0 - fsc_clamped))
+        boost_3d = utils.make_radial_image(boost, volume_shape, extend_last_frequency=True)
+        final_tau = mean_variance * boost_3d
+        logger.info(
+            "Final iter: applied whole-data FSC correction (boost range: %.2f - %.2f)",
+            float(jnp.min(boost)),
+            float(jnp.max(boost)),
+        )
+    else:
+        final_tau = mean_variance
+
     merged_mean = relion_functions.post_process_from_filter_v2(
         final_ft_ctf,
         final_ft_y,
         volume_shape,
         PADDING_FACTOR,
-        tau=mean_variance,
+        tau=final_tau,
         kernel="triangular",
         use_spherical_mask=True,
         grid_correct=True,

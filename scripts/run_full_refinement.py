@@ -253,6 +253,29 @@ def main():
     if args.particle_diameter_ang is not None:
         particle_diameter_ang = float(args.particle_diameter_ang)
         logger.info("Overriding particle_diameter_ang from CLI: %.1f A", particle_diameter_ang)
+    # If in RELION mode with a particle_diameter but no optimiser STAR was
+    # found, apply the RELION-style image mask from the CLI diameter.  This
+    # replaces the default window_mask (0.85/0.99 linear taper) with the
+    # RELION-equivalent raised-cosine mask at radius = diam / (2 * Apix),
+    # matching RELION's softMaskOutsideMap with width_mask_edge=5.
+    if args.mode == "relion" and relion_mask_params is None and particle_diameter_ang is not None:
+        from recovar.core import mask as core_mask
+
+        relion_mask = core_mask.relion_soft_image_mask(
+            image_size=ds.image_shape[0],
+            pixel_size=ds.voxel_size,
+            particle_diameter_ang=particle_diameter_ang,
+            width_mask_edge_px=5,
+        )
+        ds.image_source.backend.image_mask = relion_mask
+        if hasattr(ds.image_source, "image_mask"):
+            ds.image_source.image_mask = relion_mask
+        radius_px = particle_diameter_ang / (2.0 * ds.voxel_size)
+        logger.info(
+            "Applied RELION scoring mask from CLI: particle_diameter=%.1f A, radius=%.2f px (was window_mask 0.85/0.99)",
+            particle_diameter_ang,
+            radius_px,
+        )
     logger.info("Dataset: %d images, image_shape=%s, voxel_size=%.3f A/px", ds.n_units, ds.image_shape, ds.voxel_size)
 
     # ---- Create half-sets ----
