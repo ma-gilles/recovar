@@ -1035,3 +1035,177 @@ def update_refinement_state(
         )
 
     return updated
+
+
+# ---------------------------------------------------------------------------
+# Per-particle angular accuracy estimation (RELION parity)
+# ---------------------------------------------------------------------------
+
+
+def calculate_expected_angular_errors(
+    mean_volume,
+    experiment_dataset,
+    noise_variance,
+    best_rotation_matrices,
+    disc_type="linear_interp",
+    current_size=None,
+    n_particles=200,
+    pvalue=4.60517,
+    seed=42,
+):
+    """Estimate angular and translational accuracy via perturbation analysis.
+
+    Mirrors RELION ``ml_optimiser.cpp:9291-9685``. For a sample of
+    particles, project the reference at the best orientation and at
+    perturbed orientations. The smallest perturbation that produces
+    SNR > ``pvalue`` (P=0.01) is the estimated accuracy.
+
+    Returns
+    -------
+    acc_rot : float
+        Estimated angular accuracy in degrees.
+    acc_trans : float
+        Estimated translational accuracy in Angstroms.
+    """
+    import jax.numpy as jnp
+    from scipy.spatial.transform import Rotation as R
+
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.core import slicing
+    from recovar.core.configs import ForwardModelConfig
+    from recovar.reconstruction.regularization import average_over_shells
+
+    image_shape = experiment_dataset.image_shape
+    volume_shape = experiment_dataset.volume_shape
+    voxel_size = experiment_dataset.voxel_size
+
+    config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
+
+    noise_shells = np.array(average_over_shells(jnp.asarray(noise_variance), image_shape))
+    noise_shells = np.concatenate([noise_shells, [noise_shells[-1]] * 10])
+
+    radii = (
+        np.array(
+            ftu.get_grid_of_radial_distances_real(
+                image_shape, voxel_size=1, scaled=False, frequency_shift=0, rounded=True
+            )
+        )
+        .reshape(-1)
+        .astype(int)
+    )
+    radii = np.minimum(radii, len(noise_shells) - 1)
+
+    max_shell = image_shape[0] // 2
+    if current_size is not None:
+        max_shell = min(max_shell, current_size // 2)
+    valid_mask = (radii > 0) & (radii < max_shell)
+
+    rng = np.random.RandomState(seed)
+    n_total = min(n_particles, len(best_rotation_matrices))
+    indices = rng.choice(len(best_rotation_matrices), n_total, replace=False)
+
+    mean_vol_jnp = jnp.asarray(mean_volume)
+    acc_rot_sum = 0.0
+    acc_trans_sum = 0.0
+
+    for idx in indices:
+        rot_mat = best_rotation_matrices[idx]
+        ctf_half = np.array(config.compute_ctf_half(jnp.asarray(experiment_dataset.CTF_params[idx : idx + 1])))[0]
+        noise_per_pixel = noise_shells[radii]
+
+        for imode in range(2):
+            ang_error = 0.0
+            sh_error = 0.0
+            my_snr = 0.0
+
+            while my_snr <= pvalue:
+                if ang_error < 0.2:
+                    ang_step = 0.05
+                elif ang_error < 1.0:
+                    ang_step = 0.1
+                elif ang_error < 2.0:
+                    ang_step = 0.2
+                elif ang_error < 5.0:
+                    ang_step = 0.5
+                elif ang_error < 10.0:
+                    ang_step = 1.0
+                elif ang_error < 20.0:
+                    ang_step = 2.0
+                else:
+                    ang_step = 5.0
+
+                if sh_error < 1.0:
+                    sh_step = 0.1
+                elif sh_error < 2.0:
+                    sh_step = 0.2
+                elif sh_error < 5.0:
+                    sh_step = 0.5
+                elif sh_error < 10.0:
+                    sh_step = 1.0
+                else:
+                    sh_step = 2.0
+
+                ang_error += ang_step
+                sh_error += sh_step
+
+                if (imode == 0 and ang_error > 30.0) or (imode == 1 and sh_error > 10.0):
+                    break
+
+                F1 = np.array(
+                    slicing.slice_volume(
+                        mean_vol_jnp,
+                        rot_mat[None],
+                        image_shape,
+                        volume_shape,
+                        disc_type,
+                        half_image=True,
+                    )
+                )[0]
+
+                if imode == 0:
+                    perturb = [0.0, 0.0, 0.0]
+                    perturb[rng.randint(3)] = ang_error
+                    delta_R = R.from_euler("ZYZ", perturb, degrees=True).as_matrix().astype(np.float32)
+                    rot2 = rot_mat @ delta_R
+                    F2 = np.array(
+                        slicing.slice_volume(
+                            mean_vol_jnp,
+                            rot2[None],
+                            image_shape,
+                            volume_shape,
+                            disc_type,
+                            half_image=True,
+                        )
+                    )[0]
+                else:
+                    shift = np.zeros((1, 2), dtype=np.float32)
+                    shift[0, rng.randint(2)] = sh_error
+                    from recovar import core
+
+                    F2 = np.array(
+                        core.translate_images(
+                            jnp.asarray(F1[None]),
+                            jnp.asarray(shift),
+                            image_shape,
+                            half_image=True,
+                        )
+                    )[0]
+
+                diff = (F1 - F2) * ctf_half
+                snr_per_pixel = np.abs(diff) ** 2 / (2.0 * noise_per_pixel + 1e-20)
+                my_snr = float(np.sum(snr_per_pixel[valid_mask]))
+
+            if imode == 0:
+                acc_rot_sum += ang_error
+            else:
+                acc_trans_sum += sh_error * voxel_size
+
+    acc_rot = acc_rot_sum / n_total
+    acc_trans = acc_trans_sum / n_total
+    logger.info(
+        "Estimated accuracy: angles=%.3f deg, offsets=%.3f A (from %d particles)",
+        acc_rot,
+        acc_trans,
+        n_total,
+    )
+    return acc_rot, acc_trans

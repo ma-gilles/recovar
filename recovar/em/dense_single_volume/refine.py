@@ -2403,6 +2403,32 @@ def _refine_relion_mode(
             cryo.image_shape[0],
             cryo.voxel_size,
         )
+        # --- Estimate angular accuracy (RELION parity) ---
+        # RELION's calculateExpectedAngularErrors computes how much
+        # angular perturbation is needed to produce a significant
+        # change in the projection. This controls when angular
+        # refinement stops (has_fine_enough_angular_sampling).
+        from recovar.em.dense_single_volume.convergence import (
+            calculate_expected_angular_errors,
+        )
+
+        iter_acc_rot = None
+        iter_acc_trans = None
+        if new_iter_best_rotations[0] is not None:
+            try:
+                iter_acc_rot, iter_acc_trans = calculate_expected_angular_errors(
+                    means_native[0],
+                    experiment_datasets[0],
+                    noise_variance,
+                    new_iter_best_rotations[0],
+                    disc_type=disc_type,
+                    current_size=cs,
+                    n_particles=min(200, experiment_datasets[0].n_units),
+                )
+                iter_acc_trans = iter_acc_trans / cryo.voxel_size
+            except Exception as exc:
+                logger.warning("Failed to estimate angular accuracy: %s", exc)
+
         state = update_refinement_state(
             state,
             current_assignments=current_combined_ha,
@@ -2412,6 +2438,8 @@ def _refine_relion_mode(
             translations=np.asarray(current_translations),
             new_resolution=new_res_angstrom,
             max_posterior_per_image=combined_max_posterior,
+            acc_rot=iter_acc_rot,
+            acc_trans=iter_acc_trans,
             current_rotation_matrices=current_rotation_matrices_combined,
             previous_rotation_matrices=previous_rotation_matrices_combined,
             current_translations_pixel=current_translations_pixel_combined,
