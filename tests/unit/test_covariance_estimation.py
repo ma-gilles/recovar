@@ -1111,12 +1111,13 @@ def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, i
     noise_variances = batch_data.noise_variance
     CTF = config.compute_ctf(batch_data.ctf_params)
     images = core.translate_images(images, batch_data.translations, config.image_shape)
+    mean_volume = core.Volume(mean_estimate, disc_type=config.disc_type)
 
     if config.premultiplied_ctf:
         images = (
             images
             - core.slice_volume(
-                mean_estimate, batch_data.rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+                mean_volume, batch_data.rotation_matrices, config.image_shape, config.volume_shape
             )
             * CTF**2
         )
@@ -1125,7 +1126,7 @@ def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, i
         images = (
             images
             - core.slice_volume(
-                mean_estimate, batch_data.rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+                mean_volume, batch_data.rotation_matrices, config.image_shape, config.volume_shape
             )
             * CTF
         )

@@ -7,7 +7,8 @@ Dispatch rules:
   - CPU + order 3   → JAX ``map_coordinates`` + VJP backproject
 
 Three core public functions handle all volume/image format combinations via
-``half_volume`` and ``half_image`` parameters:
+explicit :class:`Volume` / :class:`CubicVolume` inputs plus the optional
+``half_image`` parameter:
   - :func:`slice_volume`          (forward projection)
   - :func:`batch_slice_volume`    (batched forward)
   - :func:`adjoint_slice_volume`  (backprojection)
@@ -218,61 +219,8 @@ def _volume_array_layout(volume, volume_shape, half_volume=None):
     )
 
 
-def _coerce_volume(volume, disc_type, volume_shape, half_volume=None):
-    """Return a validated :class:`Volume` for raw values or wrapped inputs.
-
-    Raw arrays have their layout inferred from shape/size when ``half_volume``
-    is omitted. Cubic inputs must be passed explicitly as :class:`CubicVolume`.
-    """
-    if isinstance(volume, CubicVolume):
-        if disc_type is not None and disc_type != "cubic":
-            raise ValueError(
-                f"disc_type={disc_type!r} does not match CubicVolume.disc_type={volume.disc_type!r}"
-            )
-        if half_volume is not None and bool(half_volume) != volume.half_volume:
-            raise ValueError(
-                f"half_volume={half_volume!r} does not match CubicVolume.half_volume={volume.half_volume!r}"
-            )
-        return volume
-
-    if isinstance(volume, Volume):
-        if disc_type is not None and disc_type != volume.disc_type:
-            raise ValueError(
-                f"disc_type={disc_type!r} does not match Volume.disc_type={volume.disc_type!r}"
-            )
-        if half_volume is not None and bool(half_volume) != volume.half_volume:
-            raise ValueError(
-                f"half_volume={half_volume!r} does not match Volume.half_volume={volume.half_volume!r}"
-            )
-        return volume
-
-    if disc_type is None:
-        raise ValueError("disc_type must be provided when passing a raw volume array")
-
-    _layout, half_volume = _volume_array_layout(volume, volume_shape, half_volume=half_volume)
-
-    if disc_type == "cubic":
-        raise TypeError("Raw cubic inputs are not allowed; use to_cubic(...) or CubicVolume(...)")
-
-    return Volume(
-        values=jnp.asarray(volume),
-        disc_type=disc_type,
-        half_volume=bool(half_volume),
-    )
-
-
-def _projection_volume(volume, volume_shape, disc_type=None, half_volume=None, *, function_name):
+def _projection_volume(volume, volume_shape, *, function_name):
     wrapped_volume = _require_volume_object(volume, function_name=function_name)
-    if disc_type is not None and disc_type != wrapped_volume.disc_type:
-        raise ValueError(
-            f"disc_type={disc_type!r} does not match {type(wrapped_volume).__name__}.disc_type="
-            f"{wrapped_volume.disc_type!r}"
-        )
-    if half_volume is not None and bool(half_volume) != wrapped_volume.half_volume:
-        raise ValueError(
-            f"half_volume={half_volume!r} does not match {type(wrapped_volume).__name__}.half_volume="
-            f"{wrapped_volume.half_volume!r}"
-        )
     _match_volume_array_layout(
         jnp.asarray(wrapped_volume.values),
         _expected_volume_shape(volume_shape, wrapped_volume.half_volume),
@@ -503,8 +451,6 @@ def slice_volume(
     rotation_matrices,
     image_shape,
     volume_shape,
-    disc_type=None,
-    half_volume=None,
     half_image=None,
     max_r=_AUTO,
 ):
@@ -514,8 +460,6 @@ def slice_volume(
     ----------
     volume : Volume or CubicVolume.
         Projection input. Real inputs are promoted to complex for the CUDA kernel.
-    disc_type, half_volume : optional legacy validation arguments.
-        When provided, they must match the wrapped volume metadata exactly.
     half_image : bool | None
         If True, output images are rfft-packed ``(n, H*(W//2+1))``. ``None``
         defaults to ``volume.half_volume``.
@@ -525,8 +469,6 @@ def slice_volume(
     wrapped_volume = _projection_volume(
         volume,
         volume_shape,
-        disc_type=disc_type,
-        half_volume=half_volume,
         function_name="slice_volume",
     )
     disc_type = wrapped_volume.disc_type
@@ -586,8 +528,6 @@ def batch_slice_volume(
     rotation_matrices,
     image_shape,
     volume_shape,
-    disc_type=None,
-    half_volume=None,
     half_image=None,
     max_r=_AUTO,
 ):
@@ -597,8 +537,6 @@ def batch_slice_volume(
     ----------
     volumes : Volume or CubicVolume.
         Batched projection inputs. Real inputs are promoted to complex for the CUDA kernel.
-    disc_type, half_volume : optional legacy validation arguments.
-        When provided, they must match the wrapped volume metadata exactly.
     half_image : bool | None
         If True, output images are rfft-packed. ``None`` defaults to
         ``volumes.half_volume``.
@@ -608,8 +546,6 @@ def batch_slice_volume(
     wrapped_volume = _projection_volume(
         volumes,
         volume_shape,
-        disc_type=disc_type,
-        half_volume=half_volume,
         function_name="batch_slice_volume",
     )
     disc_type = wrapped_volume.disc_type

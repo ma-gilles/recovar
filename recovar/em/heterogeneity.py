@@ -355,14 +355,13 @@ def compute_H_B(
     n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     mean_projections = np.zeros((rotations.shape[0], image_size), dtype=np.complex64)
-    mean_volume = core.CubicVolume(mean) if mean_disc == "cubic" else core.Volume(mean, disc_type=mean_disc)
+    mean_volume = core.to_cubic(mean, experiment_dataset.volume_shape) if mean_disc == "cubic" else core.Volume(mean, disc_type=mean_disc)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
         mean_projections[rot_indices] = core.slice_volume(
             mean_volume,
             rotations[rot_indices],
             experiment_dataset.image_shape,
             experiment_dataset.volume_shape,
-            mean_disc,
         )
 
     picked_freq_coords = core.vec_indices_to_vol_indices(picked_frequency_indices, volume_shape)
@@ -599,8 +598,16 @@ def compute_projected_covariance_rhs_lhs(
     u_projections = np.empty((rotations.shape[0], n_principal_components, image_size), dtype=np.complex64)
     # Compute all mean and principal component projections
     mean_projections = np.empty((rotations.shape[0], image_size), dtype=np.complex64)
-    mean_volume = core.CubicVolume(mean) if disc_type_mean == "cubic" else mean
-    basis_volume = core.CubicVolume(basis) if disc_type_u == "cubic" else basis
+    mean_volume = (
+        core.to_cubic(mean, experiment_dataset.volume_shape)
+        if disc_type_mean == "cubic"
+        else core.Volume(mean, disc_type=disc_type_mean)
+    )
+    basis_volume = (
+        core.to_cubic(basis, experiment_dataset.volume_shape)
+        if disc_type_u == "cubic"
+        else core.Volume(basis, disc_type=disc_type_u)
+    )
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
         mean_projections[rot_indices] = core.slice_volume(
             mean_volume,

@@ -387,13 +387,20 @@ def test_new_api_compute_AtAv_on_gpu(gpu_device):
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
     cpu_out = np.asarray(
-        core_forward.compute_AtAv(config, volume, ctf_params, rotation_matrices, noise_variance=1.0, skip_ctf=True)[0]
+        core_forward.compute_AtAv(
+            config,
+            _volume(volume, disc_type=config.disc_type),
+            ctf_params,
+            rotation_matrices,
+            noise_variance=1.0,
+            skip_ctf=True,
+        )[0]
     )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_forward.compute_AtAv(
                 config,
-                jax.device_put(volume),
+                _volume(jax.device_put(volume), disc_type=config.disc_type),
                 jax.device_put(ctf_params),
                 jax.device_put(rotation_matrices),
                 noise_variance=1.0,
@@ -414,7 +421,7 @@ def test_forward_model_and_adjoint_roundtrip_on_gpu(gpu_device):
     with jax.default_device(gpu_device):
         slices, f_adj = core_forward.forward_model_and_adjoint(
             config,
-            jax.device_put(volume),
+            _volume(jax.device_put(volume), disc_type=config.disc_type),
             jax.device_put(ctf_params),
             jax.device_put(rotation_matrices),
             skip_ctf=True,

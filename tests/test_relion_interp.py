@@ -61,6 +61,16 @@ def _force_jax_path():
     return patch.object(slicing, "_on_gpu", return_value=False)
 
 
+def _slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type, half_volume=False, **kwargs):
+    wrapped = volume
+    if not isinstance(wrapped, (slicing.Volume, slicing.CubicVolume)):
+        if disc_type == "cubic":
+            wrapped = slicing.to_cubic(wrapped, volume_shape, half_volume=half_volume)
+        else:
+            wrapped = slicing.Volume(wrapped, disc_type=disc_type, half_volume=half_volume)
+    return slicing.slice_volume(wrapped, rotation_matrices, image_shape, volume_shape, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Test: projection agrees with existing implementation
 # ---------------------------------------------------------------------------
@@ -83,7 +93,7 @@ class TestProjectionAgreement:
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         with _force_jax_path():
-            existing = slicing.slice_volume(
+            existing = _slice_volume(
                 vol,
                 rots,
                 image_shape,
@@ -127,7 +137,7 @@ class TestProjectionAgreement:
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         with _force_jax_path():
-            existing = slicing.slice_volume(
+            existing = _slice_volume(
                 vol_half,
                 rots,
                 image_shape,
@@ -170,7 +180,7 @@ class TestProjectionAgreement:
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         with _force_jax_path():
-            existing = slicing.slice_volume(
+            existing = _slice_volume(
                 vol,
                 rots,
                 image_shape,
@@ -214,7 +224,7 @@ class TestProjectionAgreement:
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         with _force_jax_path():
-            existing = slicing.slice_volume(
+            existing = _slice_volume(
                 vol_half,
                 rots,
                 image_shape,
@@ -499,7 +509,7 @@ class TestIdentityRotation:
 
         # Compare with existing implementation using JAX path
         with _force_jax_path():
-            existing = slicing.slice_volume(
+            existing = _slice_volume(
                 vol.ravel(),
                 rots,
                 image_shape,
@@ -755,7 +765,7 @@ class TestCUDAMatch:
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         # CUDA path (through slicing which calls cuda_project)
-        cuda_result = slicing.slice_volume(
+        cuda_result = _slice_volume(
             vol,
             rots,
             image_shape,
@@ -866,7 +876,7 @@ class TestLargerVolume:
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(2)])
 
         with _force_jax_path():
-            existing = slicing.slice_volume(
+            existing = _slice_volume(
                 vol,
                 rots,
                 image_shape,
@@ -925,7 +935,7 @@ class TestSlicingDispatch:
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(2)])
 
         with _force_jax_path():
-            dispatch_result = slicing.slice_volume(
+            dispatch_result = _slice_volume(
                 vol,
                 rots,
                 image_shape,

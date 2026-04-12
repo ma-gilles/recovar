@@ -730,7 +730,7 @@ def estimate_noise_level_no_masks(
     mean_volume = None
     if mean_estimate is not None:
         mean_volume = (
-            core.CubicVolume(mean_estimate)
+            core.to_cubic(mean_estimate, config.volume_shape)
             if config.disc_type == "cubic"
             else core.Volume(mean_estimate, disc_type=config.disc_type)
         )
@@ -1350,9 +1350,12 @@ def _average_residual_square_explicit(
 
     # Per-image forward model: project volume[i] with CTF[i] and rotation[i]
     def _project_single(vol, ctf, rot):
-        if config.disc_type == "cubic":
-            vol = core.CubicVolume(vol)
-        return core_forward.forward_model(config, vol, ctf[None], rot[None])[0]
+        projection_volume = (
+            core.to_cubic(vol, config.volume_shape)
+            if config.disc_type == "cubic"
+            else core.Volume(vol, disc_type=config.disc_type)
+        )
+        return core_forward.forward_model(config, projection_volume, ctf[None], rot[None])[0]
 
     projected_vols = jax.vmap(_project_single)(predicted_vols, ctf_params, rotation_matrices)
 

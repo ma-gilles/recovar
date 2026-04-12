@@ -57,25 +57,21 @@ def get_per_image_tight_mask(
     soften=-1,
 ):
 
-    disc_type = "linear_interp"
+    if disc_type != "linear_interp":
+        logger.debug("get_per_image_tight_mask uses linear_interp internally, got disc_type=%s", disc_type)
 
-    if disc_type == "cubic":
-        extra_padding = 0
-        mask_ft = volume_mask
-    else:
-        # if padding is already there, do nothing else double image size.
-        extra_padding = grid_size if (padding == 0) else 0
-        # Do this in half precision? Shouldn't matter much.
-        volume_mask = volume_mask.reshape(volume_shape)
-        volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
-        mask_ft = fourier_transform_utils.get_dft3(volume_mask).reshape(-1)
+    # If padding is already there, do nothing; else double image size.
+    extra_padding = grid_size if (padding == 0) else 0
+    volume_mask = volume_mask.reshape(volume_shape)
+    volume_mask = pad.pad_volume_spatial_domain(volume_mask, extra_padding).real
+    mask_ft = fourier_transform_utils.get_dft3(volume_mask).reshape(-1)
 
     padded_image_shape = tuple(np.array(image_shape) + extra_padding)
     padded_volume_shape = tuple(np.array(volume_shape) + extra_padding)
     padded_grid_size = grid_size + extra_padding
 
-    mask_volume = core.CubicVolume(mask_ft) if disc_type == "cubic" else core.Volume(mask_ft, disc_type=disc_type)
-    proj_mask = core.slice_volume(mask_volume, rotation_matrices, padded_image_shape, padded_volume_shape, disc_type)
+    mask_volume = core.Volume(mask_ft, disc_type="linear_interp")
+    proj_mask = core.slice_volume(mask_volume, rotation_matrices, padded_image_shape, padded_volume_shape)
 
     proj_mask = fourier_transform_utils.get_idft2(proj_mask.reshape([-1] + list(padded_image_shape)))
 
@@ -197,7 +193,6 @@ def batch_vol_forward_from_map(
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
-        disc_type=config.disc_type,
         half_image=half_image,
     )
     if not skip_ctf:
@@ -216,7 +211,7 @@ def batch_vol_forward_from_map(
 def subtract_projected_mean(
     config: ForwardModelConfig,
     images: jax.Array,
-    mean: jax.Array,
+    mean_volume,
     ctf_params: jax.Array,
     rotation_matrices: jax.Array,
     translations: jax.Array,
@@ -227,11 +222,8 @@ def subtract_projected_mean(
     where z_i = y_i CTF_i.
     """
     translated = core.translate_images(images, translations, config.image_shape)
-    mean_volume = (
-        core.CubicVolume(mean)
-        if config.disc_type == "cubic"
-        else core.Volume(mean, disc_type=config.disc_type)
-    )
+    if not isinstance(mean_volume, (core.Volume, core.CubicVolume)):
+        raise TypeError("subtract_projected_mean requires Volume(...) or CubicVolume(...) for mean_volume")
     if config.premultiplied_ctf:
         projected = core_forward.forward_model(config, mean_volume, ctf_params, rotation_matrices, skip_ctf=True)
         centered = translated - projected * config.compute_ctf(ctf_params) ** 2

@@ -244,12 +244,13 @@ class TestSlicingDispatchMaxR:
     volume_shape = (N, N, N)
 
     def test_slice_volume_max_r(self):
-        from recovar.core.slicing import slice_volume
+        from recovar.core.slicing import Volume, slice_volume
 
         vol = _hermitian_volume(self.N)
         rots = _random_rotations(self.n_images)
-        out_none = slice_volume(vol, rots, self.image_shape, self.volume_shape, "linear_interp", max_r=None)
-        out_clip = slice_volume(vol, rots, self.image_shape, self.volume_shape, "linear_interp", max_r=5.0)
+        wrapped = Volume(vol, disc_type="linear_interp")
+        out_none = slice_volume(wrapped, rots, self.image_shape, self.volume_shape, max_r=None)
+        out_clip = slice_volume(wrapped, rots, self.image_shape, self.volume_shape, max_r=5.0)
         assert np.sum(np.abs(np.array(out_clip)) < 1e-30) > np.sum(np.abs(np.array(out_none)) < 1e-30)
 
     def test_adjoint_slice_volume_max_r(self):
