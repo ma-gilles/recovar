@@ -202,6 +202,27 @@ def test_build_custom_cuda_writes_requested_output(monkeypatch, tmp_path):
     assert captured["cmd"][-1] == f"LIB={target}"
 
 
+def test_build_custom_cuda_force_rebuilds_even_when_output_exists(monkeypatch, tmp_path):
+    import recovar.cuda_backproject as cb
+
+    target = (tmp_path / "cache" / "libcuda_backproject.so").resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("old")
+    captured = {}
+
+    def fake_check_call(cmd):
+        captured["cmd"] = cmd
+        target.write_text("new")
+
+    monkeypatch.setattr(cb.subprocess, "check_call", fake_check_call)
+    result = cb.build_custom_cuda(output_path=target, force=True)
+
+    assert result == target
+    assert target.read_text() == "new"
+    assert captured["cmd"][:3] == ["make", "-B", "-C"]
+    assert captured["cmd"][-1] == f"LIB={target}"
+
+
 def test_ensure_lib_path_autobuilds_when_missing(monkeypatch, tmp_path):
     import recovar.cuda_backproject as cb
 

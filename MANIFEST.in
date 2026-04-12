@@ -1,1 +1,2 @@
 include recovar/trajectory/_fast_marching_native.cpp
+include setup_helpers.py

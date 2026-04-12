@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import sys
 from pathlib import Path
@@ -8,10 +9,17 @@ from distutils import log
 import numpy
 from setuptools import setup
 from setuptools import Extension
+from setuptools.command.build import build
 from setuptools.command.build_ext import build_ext
 
 
 REPO_ROOT = Path(__file__).resolve().parent
+_HELPERS_SPEC = importlib.util.spec_from_file_location("recovar_setup_helpers", REPO_ROOT / "setup_helpers.py")
+if _HELPERS_SPEC is None or _HELPERS_SPEC.loader is None:  # pragma: no cover - packaging bootstrap failure
+    raise RuntimeError("Could not load setup_helpers.py")
+_HELPERS_MODULE = importlib.util.module_from_spec(_HELPERS_SPEC)
+_HELPERS_SPEC.loader.exec_module(_HELPERS_MODULE)
+remove_stale_fast_marching_build_artifacts = _HELPERS_MODULE.remove_stale_fast_marching_build_artifacts
 
 
 def _env_flag(name: str) -> bool:
@@ -33,6 +41,7 @@ def _native_extension() -> Extension:
 
 class OptionalBuildExt(build_ext):
     def run(self) -> None:
+        remove_stale_fast_marching_build_artifacts(self.build_lib, self.build_temp)
         try:
             super().run()
         except Exception as exc:  # pragma: no cover - exercised in packaging failures
@@ -49,7 +58,13 @@ class OptionalBuildExt(build_ext):
             log.warn("skipping optional extension %s: %s", ext.name, exc)
 
 
+class RecovarBuild(build):
+    def run(self) -> None:
+        remove_stale_fast_marching_build_artifacts(self.build_lib, self.build_temp)
+        super().run()
+
+
 setup(
     ext_modules=[_native_extension()],
-    cmdclass={"build_ext": OptionalBuildExt},
+    cmdclass={"build": RecovarBuild, "build_ext": OptionalBuildExt},
 )

@@ -144,7 +144,11 @@ def build_custom_cuda(output_path: str | os.PathLike[str] | None = None, force: 
 
     lib_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("Building %s", lib_path)
-    subprocess.check_call(["make", "-C", str(_LIB_DIR), f"PYTHON={sys.executable}", f"LIB={lib_path}"])
+    make_cmd = ["make"]
+    if force:
+        make_cmd.append("-B")
+    make_cmd.extend(["-C", str(_LIB_DIR), f"PYTHON={sys.executable}", f"LIB={lib_path}"])
+    subprocess.check_call(make_cmd)
     if not lib_path.exists():
         raise RuntimeError(f"Build failed — {lib_path} not found")
     _auto_build_attempted = True
