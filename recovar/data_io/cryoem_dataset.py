@@ -703,9 +703,10 @@ class CryoEMDataset:
         import recovar.core.forward as core_forward
 
         config = ForwardModelConfig.from_dataset(self, disc_type="linear_interp")
+        volume_obj = volume if isinstance(volume, (core.Volume, core.CubicVolume)) else core.Volume(volume)
         predicted_images = core_forward.forward_model(
             config,
-            volume,
+            volume_obj,
             self.CTF_params[indices],
             self.rotation_matrices[indices],
             skip_ctf=skip_ctf,

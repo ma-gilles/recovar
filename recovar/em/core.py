@@ -22,9 +22,27 @@ TRANS_AXIS = 3
 
 NORM_FFT = "backward"
 
-# batch volumes
-batch_vol_rot_slice_volume = jax.vmap(core.slice_volume, in_axes=(0, VOL_AXIS, None, None, None), out_axes=1)
-batch_vol_slice_volume = jax.vmap(core.slice_volume, in_axes=(0, None, None, None, None), out_axes=1)
+
+def _projection_volumes(volumes, disc_type):
+    if isinstance(volumes, (core.Volume, core.CubicVolume)):
+        return volumes
+    if disc_type == "cubic":
+        return core.CubicVolume(volumes)
+    return core.Volume(volumes, disc_type=disc_type)
+
+
+def batch_vol_rot_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type):
+    wrapped_volumes = _projection_volumes(volumes, disc_type)
+    return core.batch_slice_volume(wrapped_volumes, rotation_matrices, image_shape, volume_shape, disc_type)
+
+
+def batch_vol_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type):
+    wrapped_volumes = _projection_volumes(volumes, disc_type)
+    return jnp.swapaxes(
+        core.batch_slice_volume(wrapped_volumes, rotation_matrices, image_shape, volume_shape, disc_type),
+        0,
+        1,
+    )
 
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils

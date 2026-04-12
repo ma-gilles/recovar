@@ -74,7 +74,8 @@ def get_per_image_tight_mask(
     padded_volume_shape = tuple(np.array(volume_shape) + extra_padding)
     padded_grid_size = grid_size + extra_padding
 
-    proj_mask = core.slice_volume(mask_ft, rotation_matrices, padded_image_shape, padded_volume_shape, disc_type)
+    mask_volume = core.CubicVolume(mask_ft) if disc_type == "cubic" else core.Volume(mask_ft, disc_type=disc_type)
+    proj_mask = core.slice_volume(mask_volume, rotation_matrices, padded_image_shape, padded_volume_shape, disc_type)
 
     proj_mask = fourier_transform_utils.get_idft2(proj_mask.reshape([-1] + list(padded_image_shape)))
 
@@ -180,16 +181,17 @@ def batch_vol_forward_from_map(
 
     Parameters
     ----------
-    volumes : Volume or raw array
-        Batch of volumes. Raw arrays are wrapped using ``config.disc_type`` and
-        layout is inferred from shape. Cubic raw inputs are converted once at
-        the slicing boundary.
+    volumes : Volume or CubicVolume
+        Batch of projection-ready volumes.
     half_image : bool | None
         If True, project directly to rfft-packed half-spectrum images and use
         ``config.compute_ctf_half`` for CTF; roughly halves memory and compute
         vs the default full-spectrum path. ``None`` defaults to
         ``volumes.half_volume``.
     """
+    if half_image is None and isinstance(volumes, (core.Volume, core.CubicVolume)):
+        half_image = volumes.half_volume
+
     slices = core.batch_slice_volume(
         volumes,
         rotation_matrices,
@@ -225,11 +227,16 @@ def subtract_projected_mean(
     where z_i = y_i CTF_i.
     """
     translated = core.translate_images(images, translations, config.image_shape)
+    mean_volume = (
+        core.CubicVolume(mean)
+        if config.disc_type == "cubic"
+        else core.Volume(mean, disc_type=config.disc_type)
+    )
     if config.premultiplied_ctf:
-        projected = core_forward.forward_model(config, mean, ctf_params, rotation_matrices, skip_ctf=True)
+        projected = core_forward.forward_model(config, mean_volume, ctf_params, rotation_matrices, skip_ctf=True)
         centered = translated - projected * config.compute_ctf(ctf_params) ** 2
     else:
-        projected = core_forward.forward_model(config, mean, ctf_params, rotation_matrices, skip_ctf=False)
+        projected = core_forward.forward_model(config, mean_volume, ctf_params, rotation_matrices, skip_ctf=False)
         centered = translated - projected
     return centered
 

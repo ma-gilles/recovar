@@ -24,7 +24,7 @@ def test_compute_residual_uses_forward_model_translation_and_noise_scaling(monke
         ctf_params=None,
         rotation_matrices=None,
         translations=None,
-        mean_estimate=np.array([0.0], dtype=np.float32),
+        mean_estimate=ia.core.Volume(np.array([0.0], dtype=np.float32), disc_type="linear_interp"),
         config=config,
         noise_variance=np.array([4.0, 4.0], dtype=np.float32),
     )
@@ -67,7 +67,8 @@ class _MockDS:
 
 def test_compute_image_assignment_fills_residual_matrix(monkeypatch):
     def fake_compute_residual(images, _ctf_params, _rotation_matrices, _translations, mean_estimate, *_args, **_kwargs):
-        return np.full(images.shape[0], float(np.real(mean_estimate[0])), dtype=np.float32)
+        values = mean_estimate.values if hasattr(mean_estimate, "values") else mean_estimate
+        return np.full(images.shape[0], float(np.real(values[0])), dtype=np.float32)
 
     monkeypatch.setattr(ia, "compute_residual", fake_compute_residual)
 

@@ -17,6 +17,7 @@ from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images
 from recovar.core.slicing import (
     _coerce_volume,
+    _projection_volume,
     adjoint_slice_volume,
     slice_volume,
 )
@@ -35,17 +36,20 @@ def forward_model(
 
     Parameters
     ----------
-    volume : Volume, CubicVolume, or raw array
-        Projection input. Raw arrays are wrapped using ``config.disc_type`` and
-        layout is inferred from shape. Cubic inputs must be passed as a
-        ``CubicVolume`` produced explicitly by ``to_cubic(...)`` or
-        ``CubicVolume(...)``.
+    volume : Volume or CubicVolume
+        Projection input. Cubic inputs must be passed explicitly as a
+        ``CubicVolume`` produced by ``to_cubic(...)`` or ``CubicVolume(...)``.
     half_image : bool | None
         If True, return rfft-packed half-spectrum images and use
         ``config.compute_ctf_half`` for CTF, roughly halving memory and compute.
         ``None`` defaults to ``volume.half_volume``.
     """
-    volume = _coerce_volume(volume, config.disc_type, config.volume_shape)
+    volume = _projection_volume(
+        volume,
+        config.volume_shape,
+        disc_type=config.disc_type,
+        function_name="forward_model",
+    )
     if half_image is None:
         half_image = volume.half_volume
 
@@ -64,8 +68,14 @@ def forward_model_and_adjoint(
     skip_ctf: bool = False,
 ):
     """Forward model plus its VJP (adjoint) closure."""
-    f = lambda v: forward_model(config, v, ctf_params, rotation_matrices, skip_ctf)
-    slices, f_adj = vjp(f, volume)
+    volume = _projection_volume(
+        volume,
+        config.volume_shape,
+        disc_type=config.disc_type,
+        function_name="forward_model_and_adjoint",
+    )
+    f = lambda values: forward_model(config, volume.with_values(values), ctf_params, rotation_matrices, skip_ctf)
+    slices, f_adj = vjp(f, volume.values)
     return slices, f_adj
 
 
@@ -114,8 +124,14 @@ def compute_AtAv(
     skip_ctf: bool = False,
 ) -> jax.Array:
     """Compute A^T (A v / noise_variance) for normal equations."""
-    f = lambda v: forward_model(config, v, ctf_params, rotation_matrices, skip_ctf)
-    y, u = vjp(f, volume)
+    volume = _projection_volume(
+        volume,
+        config.volume_shape,
+        disc_type=config.disc_type,
+        function_name="compute_AtAv",
+    )
+    f = lambda values: forward_model(config, volume.with_values(values), ctf_params, rotation_matrices, skip_ctf)
+    y, u = vjp(f, volume.values)
     return u(y / noise_variance)
 
 

@@ -727,6 +727,13 @@ def estimate_noise_level_no_masks(
         batch_size,
         indices=image_subset,
     )
+    mean_volume = None
+    if mean_estimate is not None:
+        mean_volume = (
+            core.CubicVolume(mean_estimate)
+            if config.disc_type == "cubic"
+            else core.Volume(mean_estimate, disc_type=config.disc_type)
+        )
 
     n_images = image_subset.size if image_subset is not None else experiment_dataset.n_images
     for (
@@ -744,10 +751,10 @@ def estimate_noise_level_no_masks(
             ctf_params, experiment_dataset.image_shape, experiment_dataset.voxel_size
         )
 
-        if mean_estimate is not None:
+        if mean_volume is not None:
             projected_mean = core_forward.forward_model(
                 config,
-                mean_estimate,
+                mean_volume,
                 ctf_params,
                 rotation_matrices,
             )

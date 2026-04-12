@@ -118,7 +118,7 @@ class Volume(eqx.Module):
     """Thin wrapper for non-cubic projection inputs."""
 
     values: jax.Array
-    disc_type: str = eqx.field(static=True)
+    disc_type: str = eqx.field(static=True, default="linear_interp")
     half_volume: bool = eqx.field(static=True, default=False)
 
     def __check_init__(self):
@@ -152,6 +152,15 @@ class CubicVolume(eqx.Module):
 
 
 _VOLUME_TYPES = (Volume, CubicVolume)
+
+
+def _require_volume_object(volume, *, function_name):
+    if isinstance(volume, _VOLUME_TYPES):
+        return volume
+    raise TypeError(
+        f"{function_name} requires a Volume or CubicVolume; "
+        "wrap raw arrays explicitly with Volume(...), CubicVolume(...), or to_cubic(...)"
+    )
 
 
 def _expected_volume_shape(volume_shape, half_volume):
@@ -254,6 +263,25 @@ def _coerce_volume(volume, disc_type, volume_shape, half_volume=None):
         disc_type=disc_type,
         half_volume=bool(half_volume),
     )
+
+
+def _projection_volume(volume, volume_shape, disc_type=None, half_volume=None, *, function_name):
+    wrapped_volume = _require_volume_object(volume, function_name=function_name)
+    if disc_type is not None and disc_type != wrapped_volume.disc_type:
+        raise ValueError(
+            f"disc_type={disc_type!r} does not match {type(wrapped_volume).__name__}.disc_type="
+            f"{wrapped_volume.disc_type!r}"
+        )
+    if half_volume is not None and bool(half_volume) != wrapped_volume.half_volume:
+        raise ValueError(
+            f"half_volume={half_volume!r} does not match {type(wrapped_volume).__name__}.half_volume="
+            f"{wrapped_volume.half_volume!r}"
+        )
+    _match_volume_array_layout(
+        jnp.asarray(wrapped_volume.values),
+        _expected_volume_shape(volume_shape, wrapped_volume.half_volume),
+    )
+    return wrapped_volume
 
 
 def _calculate_spline_coefficients(volume):
@@ -488,17 +516,23 @@ def slice_volume(
 
     Parameters
     ----------
-    volume : Volume, CubicVolume, or raw array.
-        Raw arrays are interpreted using ``disc_type`` and ``half_volume``.
-        Real inputs are promoted to complex for the CUDA kernel.
-    half_volume : if True, raw *volume* is rfft-packed ``(N0*N1*(N2//2+1),)``.
+    volume : Volume or CubicVolume.
+        Projection input. Real inputs are promoted to complex for the CUDA kernel.
+    disc_type, half_volume : optional legacy validation arguments.
+        When provided, they must match the wrapped volume metadata exactly.
     half_image : bool | None
         If True, output images are rfft-packed ``(n, H*(W//2+1))``. ``None``
-        defaults to ``volume.half_volume`` after coercion.
+        defaults to ``volume.half_volume``.
     max_r : sphere clipping radius.  Default (``_AUTO``) uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable clipping.
     """
-    wrapped_volume = _coerce_volume(volume, disc_type, volume_shape, half_volume=half_volume)
+    wrapped_volume = _projection_volume(
+        volume,
+        volume_shape,
+        disc_type=disc_type,
+        half_volume=half_volume,
+        function_name="slice_volume",
+    )
     disc_type = wrapped_volume.disc_type
     half_volume = wrapped_volume.half_volume
     half_image = _resolve_half_image(half_image, half_volume)
@@ -565,17 +599,23 @@ def batch_slice_volume(
 
     Parameters
     ----------
-    volumes : Volume, CubicVolume, or raw batched array.
-        Raw arrays are interpreted using ``disc_type`` and ``half_volume``.
-        Real inputs are promoted to complex for the CUDA kernel.
-    half_volume : if True, raw *volumes* are rfft-packed half-volumes.
+    volumes : Volume or CubicVolume.
+        Batched projection inputs. Real inputs are promoted to complex for the CUDA kernel.
+    disc_type, half_volume : optional legacy validation arguments.
+        When provided, they must match the wrapped volume metadata exactly.
     half_image : bool | None
         If True, output images are rfft-packed. ``None`` defaults to
-        ``volumes.half_volume`` after coercion.
+        ``volumes.half_volume``.
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
-    wrapped_volume = _coerce_volume(volumes, disc_type, volume_shape, half_volume=half_volume)
+    wrapped_volume = _projection_volume(
+        volumes,
+        volume_shape,
+        disc_type=disc_type,
+        half_volume=half_volume,
+        function_name="batch_slice_volume",
+    )
     disc_type = wrapped_volume.disc_type
     half_volume = wrapped_volume.half_volume
     half_image = _resolve_half_image(half_image, half_volume)

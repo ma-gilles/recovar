@@ -14,6 +14,7 @@ from recovar.core.configs import (
     ForwardModelConfig,
     ModelState,
 )
+import recovar.core
 import recovar.core.forward as core_forward
 from recovar.core.ctf import as_ctf_evaluator
 
@@ -48,6 +49,12 @@ def _make_config(ctf_fun=_ones_ctf, disc_type="nearest"):
         premultiplied_ctf=False,
         volume_mask_threshold=0.25,
     )
+
+
+def _volume(values, disc_type="linear_interp", half_volume=False):
+    if disc_type == "cubic":
+        return recovar.core.CubicVolume(values, half_volume=half_volume)
+    return recovar.core.Volume(values, disc_type=disc_type, half_volume=half_volume)
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +161,15 @@ class TestNewForwardModelAPI:
         rots = np.eye(3, dtype=np.float32)[None, ...]
         ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-        out = np.asarray(core_forward.forward_model(config, volume, ctf_params, rots, skip_ctf=True))
+        out = np.asarray(
+            core_forward.forward_model(
+                config,
+                _volume(volume, disc_type=config.disc_type),
+                ctf_params,
+                rots,
+                skip_ctf=True,
+            )
+        )
         assert out.shape == (1, IMAGE_SHAPE[0] * IMAGE_SHAPE[1])
 
     def test_forward_model_applies_ctf(self):
@@ -163,8 +178,9 @@ class TestNewForwardModelAPI:
         rots = np.eye(3, dtype=np.float32)[None, ...]
         ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-        out_skip = np.asarray(core_forward.forward_model(config, volume, ctf_params, rots, skip_ctf=True))
-        out_ctf = np.asarray(core_forward.forward_model(config, volume, ctf_params, rots, skip_ctf=False))
+        wrapped = _volume(volume, disc_type=config.disc_type)
+        out_skip = np.asarray(core_forward.forward_model(config, wrapped, ctf_params, rots, skip_ctf=True))
+        out_ctf = np.asarray(core_forward.forward_model(config, wrapped, ctf_params, rots, skip_ctf=False))
         np.testing.assert_allclose(out_ctf, 2.0 * out_skip)
 
     def test_adjoint_forward_model_shape(self):
@@ -184,7 +200,7 @@ class TestNewForwardModelAPI:
 
         slices, adj = core_forward.forward_model_and_adjoint(
             config,
-            volume,
+            _volume(volume, disc_type=config.disc_type),
             ctf_params,
             rots,
             skip_ctf=True,
@@ -201,7 +217,7 @@ class TestNewForwardModelAPI:
 
         out = core_forward.compute_AtAv(
             config,
-            volume,
+            _volume(volume, disc_type=config.disc_type),
             ctf_params,
             rots,
             noise_variance=1.0,

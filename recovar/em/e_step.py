@@ -55,9 +55,14 @@ def E_with_precompute(
     batch_size = utils.safe_batch_size(utils.get_image_batch_size(experiment_dataset.grid_size, gpu_memory) * 5)
 
     projections = np.zeros((rotations.shape[0], image_size), dtype=np.complex64)
+    volume_obj = core.CubicVolume(volume) if disc_type == "cubic" else core.Volume(volume, disc_type=disc_type)
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
         projections[rot_indices] = core.slice_volume(
-            volume, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type
+            volume_obj,
+            rotations[rot_indices],
+            experiment_dataset.image_shape,
+            experiment_dataset.volume_shape,
+            disc_type,
         )
 
     logger.info("done with precomp proj, batch size %s", batch_size)

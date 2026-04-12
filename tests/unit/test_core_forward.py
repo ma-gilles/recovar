@@ -11,6 +11,12 @@ from recovar.core.configs import ForwardModelConfig
 pytestmark = pytest.mark.unit
 
 
+def _volume(values, disc_type="linear_interp", half_volume=False):
+    if disc_type == "cubic":
+        return recovar.core.CubicVolume(values, half_volume=half_volume)
+    return recovar.core.Volume(values, disc_type=disc_type, half_volume=half_volume)
+
+
 def _ones_ctf(ctf_params, image_shape, voxel_size, **kw):
     return np.ones((ctf_params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32)
 
@@ -45,7 +51,15 @@ def test_forward_model_skip_ctf():
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    out = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True))
+    out = np.asarray(
+        core_forward.forward_model(
+            config,
+            _volume(volume, disc_type=config.disc_type),
+            ctf_params,
+            rotation_matrices,
+            skip_ctf=True,
+        )
+    )
     assert out.shape == (1, config.image_size)
 
 
@@ -86,11 +100,11 @@ def test_forward_model_rejects_raw_cubic_volume():
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    with pytest.raises(TypeError, match="Raw cubic inputs are not allowed"):
+    with pytest.raises(TypeError, match="forward_model requires a Volume or CubicVolume"):
         core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True)
 
 
-def test_forward_model_infers_half_volume_layout_from_raw_input():
+def test_forward_model_accepts_half_volume_object():
     config = _make_config(image_shape=(8, 8), volume_shape=(8, 8, 8), disc_type="linear_interp")
     rng = np.random.default_rng(124)
     real_volume = rng.standard_normal(config.volume_shape).astype(np.float32)
@@ -101,10 +115,11 @@ def test_forward_model_infers_half_volume_layout_from_raw_input():
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    out = np.asarray(core_forward.forward_model(config, half_volume, ctf_params, rotation_matrices, skip_ctf=True))
+    wrapped = _volume(half_volume, disc_type="linear_interp", half_volume=True)
+    out = np.asarray(core_forward.forward_model(config, wrapped, ctf_params, rotation_matrices, skip_ctf=True))
     ref = np.asarray(
         recovar.core.slice_volume(
-            recovar.core.Volume(half_volume, disc_type="linear_interp", half_volume=True),
+            wrapped,
             rotation_matrices,
             config.image_shape,
             config.volume_shape,
@@ -120,8 +135,9 @@ def test_forward_model_applies_ctf_when_enabled():
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    out_skip = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True))
-    out_ctf = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=False))
+    wrapped = _volume(volume, disc_type=config.disc_type)
+    out_skip = np.asarray(core_forward.forward_model(config, wrapped, ctf_params, rotation_matrices, skip_ctf=True))
+    out_ctf = np.asarray(core_forward.forward_model(config, wrapped, ctf_params, rotation_matrices, skip_ctf=False))
     np.testing.assert_allclose(out_ctf, 2.0 * out_skip)
 
 
@@ -133,7 +149,7 @@ def test_forward_model_and_adjoint_contracts():
 
     slices, adj = core_forward.forward_model_and_adjoint(
         config,
-        volume,
+        _volume(volume, disc_type=config.disc_type),
         ctf_params,
         rotation_matrices,
         skip_ctf=True,
@@ -179,7 +195,7 @@ def test_compute_AtAv_returns_singleton_tuple():
 
     out = core_forward.compute_AtAv(
         config,
-        volume,
+        _volume(volume, disc_type=config.disc_type),
         ctf_params,
         rotation_matrices,
         noise_variance=1.0,
@@ -203,12 +219,20 @@ def test_forward_model_on_gpu(gpu_device):
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    cpu_out = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True))
+    cpu_out = np.asarray(
+        core_forward.forward_model(
+            config,
+            _volume(volume, disc_type=config.disc_type),
+            ctf_params,
+            rotation_matrices,
+            skip_ctf=True,
+        )
+    )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_forward.forward_model(
                 config,
-                jax.device_put(volume),
+                _volume(jax.device_put(volume), disc_type=config.disc_type),
                 jax.device_put(ctf_params),
                 jax.device_put(rotation_matrices),
                 skip_ctf=True,
@@ -252,7 +276,7 @@ def test_forward_model_applies_ctf_on_gpu(gpu_device):
         out_skip = np.asarray(
             core_forward.forward_model(
                 config,
-                jax.device_put(volume),
+                _volume(jax.device_put(volume), disc_type=config.disc_type),
                 jax.device_put(ctf_params),
                 jax.device_put(rotation_matrices),
                 skip_ctf=True,
@@ -261,7 +285,7 @@ def test_forward_model_applies_ctf_on_gpu(gpu_device):
         out_ctf = np.asarray(
             core_forward.forward_model(
                 config,
-                jax.device_put(volume),
+                _volume(jax.device_put(volume), disc_type=config.disc_type),
                 jax.device_put(ctf_params),
                 jax.device_put(rotation_matrices),
                 skip_ctf=False,
@@ -278,13 +302,20 @@ def test_compute_AtAv_on_gpu(gpu_device):
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
     cpu_out = np.asarray(
-        core_forward.compute_AtAv(config, volume, ctf_params, rotation_matrices, noise_variance=1.0, skip_ctf=True)[0]
+        core_forward.compute_AtAv(
+            config,
+            _volume(volume, disc_type=config.disc_type),
+            ctf_params,
+            rotation_matrices,
+            noise_variance=1.0,
+            skip_ctf=True,
+        )[0]
     )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_forward.compute_AtAv(
                 config,
-                jax.device_put(volume),
+                _volume(jax.device_put(volume), disc_type=config.disc_type),
                 jax.device_put(ctf_params),
                 jax.device_put(rotation_matrices),
                 noise_variance=1.0,
@@ -302,12 +333,20 @@ def test_new_api_forward_model_on_gpu(gpu_device):
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
-    cpu_out = np.asarray(core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True))
+    cpu_out = np.asarray(
+        core_forward.forward_model(
+            config,
+            _volume(volume, disc_type=config.disc_type),
+            ctf_params,
+            rotation_matrices,
+            skip_ctf=True,
+        )
+    )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core_forward.forward_model(
                 config,
-                jax.device_put(volume),
+                _volume(jax.device_put(volume), disc_type=config.disc_type),
                 jax.device_put(ctf_params),
                 jax.device_put(rotation_matrices),
                 skip_ctf=True,
