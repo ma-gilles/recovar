@@ -255,15 +255,16 @@ def test_slice_volume_on_gpu(gpu_device):
     volume = rng.standard_normal(np.prod(volume_shape)).astype(np.float32)
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
 
-    cpu_out = np.asarray(core.slice_volume(volume, rotation_matrices, image_shape, volume_shape, "nearest"))
+    cpu_out = np.asarray(
+        core.slice_volume(core.Volume(volume, disc_type="nearest"), rotation_matrices, image_shape, volume_shape)
+    )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
             core.slice_volume(
-                jax.device_put(volume),
+                core.Volume(jax.device_put(volume), disc_type="nearest"),
                 jax.device_put(rotation_matrices),
                 image_shape,
                 volume_shape,
-                "nearest",
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)

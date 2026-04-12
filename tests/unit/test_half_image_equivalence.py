@@ -61,6 +61,26 @@ def assert_close(a, b, name, rtol=1e-5, atol=1e-6):
     assert rel_err < rtol or max_err < atol, f"{name}: max_err={max_err:.2e}, rel_err={rel_err:.2e}"
 
 
+def _slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp", half_volume=False, **kwargs):
+    wrapped = volume
+    if not isinstance(wrapped, (core.Volume, core.CubicVolume)):
+        if disc_type == "cubic":
+            wrapped = core.to_cubic(wrapped, volume_shape, half_volume=half_volume)
+        else:
+            wrapped = core.Volume(wrapped, disc_type=disc_type, half_volume=half_volume)
+    return core.slice_volume(wrapped, rotation_matrices, image_shape, volume_shape, **kwargs)
+
+
+def _batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp", half_volume=False, **kwargs):
+    wrapped = volumes
+    if not isinstance(wrapped, (core.Volume, core.CubicVolume)):
+        if disc_type == "cubic":
+            wrapped = core.to_cubic(wrapped, volume_shape, half_volume=half_volume)
+        else:
+            wrapped = core.Volume(wrapped, disc_type=disc_type, half_volume=half_volume)
+    return core.batch_slice_volume(wrapped, rotation_matrices, image_shape, volume_shape, **kwargs)
+
+
 # ---------------------------------------------------------------------------
 # Test parameters
 # ---------------------------------------------------------------------------
@@ -249,11 +269,11 @@ def test_slice_volume_vjp_consistency(N, n_images):
     # Forward
     from recovar.core.slicing import slice_volume, adjoint_slice_volume
 
-    projected = slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
+    projected = _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
     assert projected.shape == (n_images, N * N)
 
     # Adjoint via VJP
-    f = lambda v: slice_volume(v, rots, image_shape, volume_shape, "linear_interp")
+    f = lambda v: _slice_volume(v, rots, image_shape, volume_shape, "linear_interp")
     _, u = jax.vjp(f, jnp.zeros(vol_size, dtype=jnp.complex64))
     vjp_result = u(images)[0]
 
@@ -327,8 +347,8 @@ def test_project_from_half_volume(N, n_images):
 
     from recovar.core.slicing import slice_volume
 
-    proj_full = slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
-    proj_half = slice_volume(
+    proj_full = _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
+    proj_half = _slice_volume(
         vol_half,
         rots,
         image_shape,
@@ -359,8 +379,8 @@ def test_project_map_from_half_volume(N, n_images):
 
     from recovar.core.slicing import slice_volume
 
-    proj_full = slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
-    proj_half = slice_volume(
+    proj_full = _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
+    proj_half = _slice_volume(
         vol_half,
         rots,
         image_shape,
@@ -401,7 +421,7 @@ def test_half_volume_vjp_consistency(N, n_images):
     from recovar.core.slicing import slice_volume
 
     # VJP of full-volume project
-    f_full = lambda v: slice_volume(v, rots, image_shape, volume_shape, "linear_interp")
+    f_full = lambda v: _slice_volume(v, rots, image_shape, volume_shape, "linear_interp")
     _, u_full = jax.vjp(f_full, jnp.zeros(vol_size, dtype=jnp.complex64))
     vjp_full = u_full(images)[0]
 
@@ -413,7 +433,7 @@ def test_half_volume_vjp_consistency(N, n_images):
     vjp_full_ref = u_expand(vjp_full)[0]
 
     # VJP of half-volume project (composed: expand → project)
-    f_half = lambda hv: slice_volume(
+    f_half = lambda hv: _slice_volume(
         hv,
         rots,
         image_shape,
@@ -457,14 +477,14 @@ def test_half_volume_jvp_consistency(N, n_images):
         dtype=jnp.complex64,
     )
 
-    f_ref = lambda x: slice_volume(
+    f_ref = lambda x: _slice_volume(
         fourier_transform_utils.half_volume_to_full_volume(x, volume_shape),
         rots,
         image_shape,
         volume_shape,
         "linear_interp",
     )
-    f_half = lambda x: slice_volume(
+    f_half = lambda x: _slice_volume(
         x,
         rots,
         image_shape,
@@ -506,11 +526,11 @@ def test_batch_project(N, n_images, batch):
 
     from recovar.core.slicing import batch_slice_volume, slice_volume
 
-    batch_result = batch_slice_volume(volumes, rots, image_shape, volume_shape, "linear_interp")
+    batch_result = _batch_slice_volume(volumes, rots, image_shape, volume_shape, "linear_interp")
     assert batch_result.shape == (batch, n_images, N * N)
 
     for b in range(batch):
-        ref = slice_volume(volumes[b], rots, image_shape, volume_shape, "linear_interp")
+        ref = _slice_volume(volumes[b], rots, image_shape, volume_shape, "linear_interp")
         assert_close(batch_result[b], ref, f"batch_project vol {b}", rtol=1e-5)
 
 

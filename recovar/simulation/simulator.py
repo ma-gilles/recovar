@@ -1007,9 +1007,15 @@ def simulate_data(
 
             elif disc_type == "linear_interp" or disc_type == "nearest" or disc_type == "cubic":
                 _sim_config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
+                projection_volume = volume
+                if not isinstance(projection_volume, (core.Volume, core.CubicVolume)):
+                    if disc_type == "cubic":
+                        projection_volume = core.to_cubic(projection_volume, _sim_config.volume_shape)
+                    else:
+                        projection_volume = core.Volume(projection_volume, disc_type=disc_type)
                 images_batch = simulate_batch(
                     _sim_config,
-                    volume,
+                    projection_volume,
                     rotation_matrices,
                     translations,
                     ctf_params,
@@ -1127,7 +1133,7 @@ def make_noise_batch(subkey, noise_image, images_batch_shape):
 @eqx.filter_jit
 def simulate_batch(
     config: ForwardModelConfig,
-    volume: jax.Array,
+    volume,
     rotation_matrices: jax.Array,
     translations: jax.Array,
     ctf_params: jax.Array,
@@ -1138,11 +1144,9 @@ def simulate_batch(
     Simulate a batch of cryo-EM images from a volume using the Equinox API.
     """
     if not isinstance(volume, (core.Volume, core.CubicVolume)):
-        if config.disc_type == "cubic":
-            raise TypeError("simulate_images_with_pose_batch requires CubicVolume(...) or to_cubic(...) for cubic")
-        volume = core.Volume(volume, disc_type=config.disc_type)
+        raise TypeError("simulate_batch requires Volume(...) or CubicVolume(...) inputs")
     CTF = config.compute_ctf(ctf_params)
-    slices = core.slice_volume(volume, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type)
+    slices = core.slice_volume(volume, rotation_matrices, config.image_shape, config.volume_shape)
     if not skip_ctf:
         slices = slices * CTF
     return core.translate_images(slices, -translations, config.image_shape)

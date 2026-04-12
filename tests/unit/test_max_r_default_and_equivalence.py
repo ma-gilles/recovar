@@ -60,6 +60,26 @@ def _random_slices(n_images, n_pix, seed=99):
     )
 
 
+def _slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp", half_volume=False, **kwargs):
+    wrapped = volume
+    if not isinstance(wrapped, (slicing.Volume, slicing.CubicVolume)):
+        if disc_type == "cubic":
+            wrapped = slicing.to_cubic(wrapped, volume_shape, half_volume=half_volume)
+        else:
+            wrapped = slicing.Volume(wrapped, disc_type=disc_type, half_volume=half_volume)
+    return slicing.slice_volume(wrapped, rotation_matrices, image_shape, volume_shape, **kwargs)
+
+
+def _batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp", half_volume=False, **kwargs):
+    wrapped = volumes
+    if not isinstance(wrapped, (slicing.Volume, slicing.CubicVolume)):
+        if disc_type == "cubic":
+            wrapped = slicing.to_cubic(wrapped, volume_shape, half_volume=half_volume)
+        else:
+            wrapped = slicing.Volume(wrapped, disc_type=disc_type, half_volume=half_volume)
+    return slicing.batch_slice_volume(wrapped, rotation_matrices, image_shape, volume_shape, **kwargs)
+
+
 # ── 1. Default max_r value ──────────────────────────────────────────
 
 
@@ -114,9 +134,9 @@ class TestDefaultMaxR:
         rots = _random_rotations(3)
 
         # Default (auto) — clips at N//2-1 = 7
-        out_default = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp"))
+        out_default = np.asarray(_slice_volume(vol, rots, image_shape, volume_shape, "linear_interp"))
         # Explicit None — no clipping
-        out_none = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
+        out_none = np.asarray(_slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
 
         n_zero_default = np.sum(np.abs(out_default) < 1e-30)
         n_zero_none = np.sum(np.abs(out_none) < 1e-30)
@@ -131,7 +151,7 @@ class TestDefaultMaxR:
         rots = _random_rotations(3)
 
         # max_r=None should produce no zeros from clipping (only from interpolation)
-        out = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
+        out = np.asarray(_slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
         # With a random volume, very few pixels should be exactly zero
         n_nonzero = np.sum(np.abs(out) > 1e-30)
         total = out.size
@@ -160,10 +180,10 @@ class TestHalfFullEquivalence:
         rots = _random_rotations(5, seed=10)
 
         out_full = np.asarray(
-            slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", half_image=False)
+            _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", half_image=False)
         )
         out_half = np.asarray(
-            slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+            _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", half_image=True)
         )
 
         # Convert full image to half using proper ftu conversion
@@ -186,10 +206,10 @@ class TestHalfFullEquivalence:
         rots = _random_rotations(5, seed=20)
 
         out_full = np.asarray(
-            slicing.slice_volume(vol_full, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+            _slice_volume(vol_full, rots, image_shape, volume_shape, "linear_interp", half_image=True)
         )
         out_half = np.asarray(
-            slicing.slice_volume(
+            _slice_volume(
                 vol_half, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
             )
         )
@@ -210,7 +230,7 @@ class TestHalfFullEquivalence:
         for hv, hi in [(False, False), (False, True), (True, False), (True, True)]:
             vol = vol_half if hv else vol_full
             out = np.asarray(
-                slicing.slice_volume(
+                _slice_volume(
                     vol, rots, image_shape, volume_shape, "linear_interp", half_volume=hv, half_image=hi
                 )
             )
@@ -319,7 +339,7 @@ class TestUpsamplingMaxR:
         vol = _hermitian_volume_rect(volume_shape)
         rots = _random_rotations(3, seed=60)
 
-        out = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp"))
+        out = np.asarray(_slice_volume(vol, rots, image_shape, volume_shape, "linear_interp"))
 
         assert out.shape == (3, image_shape[0] * image_shape[1])
         # Should have some nonzero pixels
@@ -333,10 +353,10 @@ class TestUpsamplingMaxR:
         rots = _random_rotations(3, seed=70)
 
         out_full = np.asarray(
-            slicing.slice_volume(vol_full, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+            _slice_volume(vol_full, rots, image_shape, volume_shape, "linear_interp", half_image=True)
         )
         out_half = np.asarray(
-            slicing.slice_volume(
+            _slice_volume(
                 vol_half, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
             )
         )
@@ -396,7 +416,7 @@ class TestUpsamplingMaxR:
         vol = _hermitian_volume_rect(volume_shape)
         rots = _random_rotations(3, seed=105)
 
-        out = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp"))
+        out = np.asarray(_slice_volume(vol, rots, image_shape, volume_shape, "linear_interp"))
         n_nonzero = np.sum(np.abs(out) > 1e-30)
         total = out.size
         # The inscribed circle of an N×N image at radius N//2-1 has area
@@ -415,8 +435,8 @@ class TestUpsamplingMaxR:
         rots = _random_rotations(3, seed=100)
 
         # Small max_r should clip aggressively
-        out_small = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=3.0))
-        out_none = np.asarray(slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
+        out_small = np.asarray(_slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=3.0))
+        out_none = np.asarray(_slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=None))
 
         n_zero_small = np.sum(np.abs(out_small) < 1e-30)
         n_zero_none = np.sum(np.abs(out_none) < 1e-30)
@@ -449,7 +469,7 @@ class TestAdjointnessWithMaxR:
         imgs = jnp.array(img_data)
 
         # Forward: Ax
-        Ax = slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
+        Ax = _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
         # Adjoint: A^T y
         ATy = slicing.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp")
 
@@ -476,7 +496,7 @@ class TestAdjointnessWithMaxR:
             (rng.standard_normal((n_images, N * N)) + 1j * rng.standard_normal((n_images, N * N))).astype(np.complex64)
         )
 
-        Ax = slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
+        Ax = _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
         ATy = slicing.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp")
 
         lhs = float(jnp.real(jnp.vdot(Ax, imgs)))
@@ -499,7 +519,7 @@ class TestAdjointnessWithMaxR:
             (rng.standard_normal((n_images, N * N)) + 1j * rng.standard_normal((n_images, N * N))).astype(np.complex64)
         )
 
-        Ax = slicing.slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=max_r)
+        Ax = _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=max_r)
         ATy = slicing.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp", max_r=max_r)
 
         lhs = float(jnp.real(jnp.vdot(Ax, imgs)))
@@ -528,11 +548,11 @@ class TestBatchDefaultMaxR:
         )
 
         # Batch call with default max_r
-        batch_out = np.asarray(slicing.batch_slice_volume(vols, rots, image_shape, volume_shape, "linear_interp"))
+        batch_out = np.asarray(_batch_slice_volume(vols, rots, image_shape, volume_shape, "linear_interp"))
 
         # Single calls with default max_r
         for i in range(n_vols):
-            single_out = np.asarray(slicing.slice_volume(vols[i], rots, image_shape, volume_shape, "linear_interp"))
+            single_out = np.asarray(_slice_volume(vols[i], rots, image_shape, volume_shape, "linear_interp"))
             np.testing.assert_allclose(
                 batch_out[i], single_out, atol=1e-5, rtol=1e-5, err_msg=f"Batch vol {i} differs from single"
             )

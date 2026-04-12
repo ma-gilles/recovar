@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 from recovar.core.configs import ForwardModelConfig
 from recovar.core.geometry import translate_images
 from recovar.core.slicing import (
-    _coerce_volume,
     _projection_volume,
+    _require_volume_object,
     adjoint_slice_volume,
     slice_volume,
 )
@@ -47,7 +47,6 @@ def forward_model(
     volume = _projection_volume(
         volume,
         config.volume_shape,
-        disc_type=config.disc_type,
         function_name="forward_model",
     )
     if half_image is None:
@@ -71,7 +70,6 @@ def forward_model_and_adjoint(
     volume = _projection_volume(
         volume,
         config.volume_shape,
-        disc_type=config.disc_type,
         function_name="forward_model_and_adjoint",
     )
     f = lambda values: forward_model(config, volume.with_values(values), ctf_params, rotation_matrices, skip_ctf)
@@ -96,13 +94,18 @@ def adjoint_forward_model(
 
     Parameters
     ----------
-    volume : optional accumulator array or Volume to add into.
-        When a :class:`~recovar.core.slicing.Volume` is supplied, its
-        ``half_volume`` layout controls the output layout.
+    volume : optional Volume or CubicVolume accumulator to add into.
+        When provided, its metadata controls the output layout.
     half_image : if True, *slices* are rfft-packed half-spectrum images.
         CTF is computed in half-spectrum format when ``skip_ctf=False``.
     """
-    volume_obj = None if volume is None else _coerce_volume(volume, config.disc_type, config.volume_shape)
+    volume_obj = None
+    if volume is not None:
+        volume_obj = _require_volume_object(volume, function_name="adjoint_forward_model")
+        if volume_obj.disc_type != config.disc_type:
+            raise ValueError(
+                f"volume.disc_type={volume_obj.disc_type!r} does not match config.disc_type={config.disc_type!r}"
+            )
     if half_image is None:
         half_image = volume_obj.half_volume if volume_obj is not None else False
 
@@ -127,7 +130,6 @@ def compute_AtAv(
     volume = _projection_volume(
         volume,
         config.volume_shape,
-        disc_type=config.disc_type,
         function_name="compute_AtAv",
     )
     f = lambda values: forward_model(config, volume.with_values(values), ctf_params, rotation_matrices, skip_ctf)

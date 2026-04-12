@@ -494,10 +494,7 @@ def _compute_batch_coords_p1(
     mean_half_volume = half and _mean_is_half_volume(model.mean_estimate, config.volume_shape)
     basis_half_volume = half and _basis_is_half_volume(basis, config.volume_shape)
     mean_volume = (
-        core.CubicVolume(
-            model.mean_estimate,
-            half_volume=mean_half_volume,
-        )
+        core.to_cubic(model.mean_estimate, config.volume_shape, half_volume=mean_half_volume)
         if config.disc_type == "cubic"
         else core.Volume(
             model.mean_estimate,
@@ -515,10 +512,7 @@ def _compute_batch_coords_p1(
     )
     # AUs: (n_basis, n_images, n_pix[_half])
     basis_volume = (
-        core.CubicVolume(
-            basis,
-            half_volume=basis_half_volume,
-        )
+        core.to_cubic(basis, config.volume_shape, half_volume=basis_half_volume)
         if config.disc_type == "cubic"
         else core.Volume(
             basis,
@@ -906,8 +900,12 @@ def _legacy_forward_model_from_map(
     disc_type,
     skip_ctf=False,
 ):
-    volume = core.CubicVolume(volume) if disc_type == "cubic" else core.Volume(volume, disc_type=disc_type)
-    slices = core.slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type)
+    volume = (
+        core.to_cubic(volume, volume_shape)
+        if disc_type == "cubic"
+        else core.Volume(volume, disc_type=disc_type)
+    )
+    slices = core.slice_volume(volume, rotation_matrices, image_shape, volume_shape)
     if not skip_ctf:
         slices = slices * ctf_fun(ctf_params, image_shape, voxel_size)
     return slices

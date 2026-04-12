@@ -42,6 +42,18 @@ def _random_rotations(n, rng):
     return q.astype(np.float32)
 
 
+def _slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp", half_volume=False, **kwargs):
+    import recovar.core.slicing as core_slicing
+
+    wrapped = volume
+    if not isinstance(wrapped, (core_slicing.Volume, core_slicing.CubicVolume)):
+        if disc_type == "cubic":
+            wrapped = core_slicing.to_cubic(wrapped, volume_shape, half_volume=half_volume)
+        else:
+            wrapped = core_slicing.Volume(wrapped, disc_type=disc_type, half_volume=half_volume)
+    return core_slicing.slice_volume(wrapped, rotation_matrices, image_shape, volume_shape, **kwargs)
+
+
 # ── Parametrization ──────────────────────────────────────────────────
 
 _ORDERS = [0, 1]
@@ -362,7 +374,7 @@ def test_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkeypatch):
     # affected by FP boundary differences between pre-rotation and
     # post-rotation clipping checks.
     with jax.default_device(gpu_device):
-        gpu_result = core_slicing.slice_volume(
+        gpu_result = _slice_volume(
             jax.device_put(vol),
             jax.device_put(rots),
             image_shape,
@@ -378,7 +390,7 @@ def test_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkeypatch):
     # Clear lru_cache
     core_slicing._on_gpu.cache_clear() if hasattr(core_slicing._on_gpu, "cache_clear") else None
 
-    cpu_result = core_slicing.slice_volume(
+    cpu_result = _slice_volume(
         vol,
         rots,
         image_shape,

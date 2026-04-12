@@ -524,16 +524,15 @@ def _variance_relion_kernel_trilinear_explicit(
     CTF_squared = half_ctf**2
 
     mean_volume = (
-        core.CubicVolume(mean_estimate)
+        core.to_cubic(mean_estimate, config.volume_shape)
         if config.disc_type == "cubic"
-        else mean_estimate
+        else core.Volume(mean_estimate, disc_type=config.disc_type)
     )
     mean_slice_half = core.slice_volume(
         mean_volume,
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
-        config.disc_type,
         half_image=True,
     )
 
@@ -864,9 +863,9 @@ def preprocess_covariance_batch(
 
     # 2. Center images: y_i - A_i * mu
     mean_volume = (
-        core.CubicVolume(mean_estimate)
+        core.to_cubic(mean_estimate, config.volume_shape)
         if config.disc_type == "cubic"
-        else mean_estimate
+        else core.Volume(mean_estimate, disc_type=config.disc_type)
     )
     images = covariance_core.subtract_projected_mean(
         config, images, mean_volume, ctf_params, rotation_matrices, translations
@@ -1596,12 +1595,9 @@ def _reduce_covariance_inner_explicit(
     mean_half_volume = _mean_is_half_volume(model.mean_estimate, config.volume_shape)
     basis_half_volume = _basis_is_half_volume(model.basis, config.volume_shape)
     mean_volume = (
-        core.CubicVolume(
-            model.mean_estimate,
-            half_volume=mean_half_volume,
-        )
+        core.to_cubic(model.mean_estimate, config.volume_shape, half_volume=mean_half_volume)
         if config.disc_type == "cubic"
-        else model.mean_estimate
+        else core.Volume(model.mean_estimate, disc_type=config.disc_type, half_volume=mean_half_volume)
     )
     projected_mean = core_forward.forward_model(
         config,
@@ -1622,12 +1618,9 @@ def _reduce_covariance_inner_explicit(
     assert basis is not None
     config_u = config.replace(disc_type=opts.disc_type_u)
     basis_volume = (
-        core.CubicVolume(
-            basis,
-            half_volume=basis_half_volume,
-        )
+        core.to_cubic(basis, config.volume_shape, half_volume=basis_half_volume)
         if opts.disc_type_u == "cubic"
-        else basis
+        else core.Volume(basis, disc_type=opts.disc_type_u, half_volume=basis_half_volume)
     )
     AUs = covariance_core.batch_vol_forward_from_map(
         config_u,

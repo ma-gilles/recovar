@@ -249,7 +249,6 @@ def residual_relion_kernel_trilinear(
             rotation_matrices,
             config.image_shape,
             config.volume_shape,
-            "linear_interp",
         )
         * CTF
     )
