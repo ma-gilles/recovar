@@ -2120,8 +2120,10 @@ def _refine_relion_mode(
 
             os.makedirs(save_intermediates_dir, exist_ok=True)
             for k_half in range(2):
+                # means[k] is at (upsampled_volume_shape)^3; use means_native
+                # which carries the native N^3 post-processed reconstruction.
                 save_volume(
-                    np.asarray(means[k_half]).reshape(-1),
+                    np.asarray(means_native[k_half]).reshape(-1),
                     os.path.join(
                         save_intermediates_dir,
                         f"it{iteration:03d}_half{k_half + 1}_reg",
