@@ -183,6 +183,7 @@ def _run_grouped_local_search_em(
     current_size,
     *,
     accumulate_noise=False,
+    volume_upsampling_factor=1,
 ):
     """Run batched exact local search on the fine HEALPix grid.
 
@@ -208,7 +209,14 @@ def _run_grouped_local_search_em(
         if offset_range_pixels is not None
         else float(np.max(np.linalg.norm(np.asarray(translations, dtype=np.float32), axis=1)))
     )
-    volume_size = experiment_dataset.volume_size
+    # When volume_upsampling_factor>1 the engine returns full-volume Ft_y/Ft_ctf
+    # at (uf*N)^3 (matching the homogeneous path); accumulate at that size.
+    base_vol_shape = experiment_dataset.volume_shape
+    if volume_upsampling_factor > 1:
+        accum_shape = tuple(s * int(volume_upsampling_factor) for s in base_vol_shape)
+        volume_size = int(np.prod(accum_shape))
+    else:
+        volume_size = experiment_dataset.volume_size
 
     Ft_y_total = jnp.zeros(volume_size, dtype=experiment_dataset.dtype)
     Ft_ctf_total = jnp.zeros(volume_size, dtype=experiment_dataset.dtype)
@@ -281,6 +289,8 @@ def _run_grouped_local_search_em(
             score_with_masked_images=True,
             return_stats=True,
             accumulate_noise=accumulate_noise,
+            half_spectrum_scoring=True,
+            volume_upsampling_factor=volume_upsampling_factor,
         )
         if accumulate_noise:
             _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g = run_em_outputs
@@ -1341,20 +1351,34 @@ def _refine_relion_mode(
         current_nside_level = current_healpix_order
     current_translations = jnp.asarray(translations, dtype=jnp.float32)
 
-    # NOTE: padding_factor=1 here (not 2) because the pf=2 path produces
-    # volumes with 1/pf^3 = 1/8 the amplitude compared to RELION when our
-    # native-resolution Ft_y/Ft_ctf accumulators are zero-padded to (pf*N)^3
-    # before post_process_from_filter_v2. Recovar's homogeneous code accumulates
-    # directly at the upsampled grid via relion_kernel_batch (which spreads
-    # values via the interpolation kernel), so its pf=2 path is consistent.
-    # Our engine accumulates at the native grid, so zero-padding leaves the
-    # padded grid sparse and the iFFT-by-(pf*N)^3 normalization gives a 1/8
-    # under-amplitude. The correct fix is to either accumulate at the upsampled
-    # grid or to multiply the reconstructed volume by pf^3 after iFFT — but
-    # the simplest correctness-first fix is to use pf=1 here, which matches
-    # RELION's iter-1 reconstruction amplitude and prevents the iter-2 noise
-    # blow-up. Verified 2026-04-08 against the tiny parity dataset.
-    PADDING_FACTOR = 1
+    # PADDING_FACTOR=2 matches RELION's --pad 2 default.
+    # The engine accumulates Ft_y/Ft_ctf at the (2N)^3 grid via dense
+    # trilinear spreading (matches relion_kernel_batch in the homogeneous
+    # path; verified to 1e-5 rel error on a 500-image standalone test).
+    # The mean is carried at (2N)^3 between iters via _upsample_volume_fourier
+    # (real-space zero-pad → DFT) so the next iter's projection reads the
+    # dense upsampled grid.
+    PADDING_FACTOR = 2
+
+    def _upsample_volume_fourier(vol_ft_native):
+        """Upsample a native-shape Fourier volume to (pf*N)^3 via real-space zero-pad.
+
+        Matches RELION's convention where the (2N)^3 volume lives in a
+        physical box twice the native extent (zero-padded real-space outside
+        the native region). The corresponding Fourier volume has half the
+        native bin width and is produced by FFT of the real-space pad.
+        """
+        if PADDING_FACTOR == 1:
+            return vol_ft_native
+        from recovar.core import fourier_transform_utils as _ftu
+        from recovar.core import padding as _padding
+
+        vol_real = _ftu.get_idft3(jnp.asarray(vol_ft_native).reshape(volume_shape)).real
+        pad = (PADDING_FACTOR - 1) * volume_shape[0]
+        vol_real_padded = _padding.pad_volume_spatial_domain(vol_real, pad)
+        return _ftu.get_dft3(vol_real_padded).reshape(-1)
+
+    upsampled_volume_shape = tuple(s * PADDING_FACTOR for s in volume_shape)
 
     def _safe_batch_sizes(n_rot, n_trans):
         """Reduce batch sizes for large pose grids to avoid GPU OOM.
@@ -1379,8 +1403,16 @@ def _refine_relion_mode(
         )
         return ibs, rbs
 
-    # State: two half-set volumes, noise, prior
-    means = [jnp.array(init_volume), jnp.array(init_volume)]
+    # State: two half-set volumes, noise, prior.
+    # At PADDING_FACTOR>1, the mean carried between iters is already at the
+    # upsampled (pf*N)^3 Fourier shape so that run_em_v2's forward projection
+    # reads from the dense upsampled grid (matching RELION).
+    init_volume_upsampled = _upsample_volume_fourier(init_volume)
+    means = [jnp.array(init_volume_upsampled), jnp.array(init_volume_upsampled)]
+    # Native-shape (N^3) half-maps, refreshed each iter from the post-process
+    # output before the upsample-back step.  Returned to the caller so that
+    # downstream consumers (save scripts, analysis) see regular N^3 volumes.
+    means_native = [jnp.array(init_volume), jnp.array(init_volume)]
     noise_variance = jnp.array(init_noise_variance)
     mean_variance = jnp.array(init_mean_variance)
 
@@ -1722,6 +1754,7 @@ def _refine_relion_mode(
                     rotation_block_size=safe_rbs,
                     current_size=cs_for_engine,
                     accumulate_noise=True,
+                    volume_upsampling_factor=PADDING_FACTOR,
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
@@ -1798,6 +1831,7 @@ def _refine_relion_mode(
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
+                        volume_upsampling_factor=PADDING_FACTOR,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     pose_rotations[k] = effective_rotations
@@ -1927,6 +1961,8 @@ def _refine_relion_mode(
                     score_with_masked_images=True,
                     return_stats=True,
                     accumulate_noise=True,
+                    half_spectrum_scoring=True,
+                    volume_upsampling_factor=PADDING_FACTOR,
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
@@ -1978,39 +2014,36 @@ def _refine_relion_mode(
                     grid_size,
                     cryo.voxel_size,
                 )
+        # With PADDING_FACTOR>1 the Ft_y/Ft_ctf accumulators are at the
+        # upsampled (pf*N)^3 shape. Shell index `r` now corresponds to
+        # frequency `r / (pf*N*voxel)` — the box is physically 2x extended
+        # so each shell is at half the physical frequency of the native grid.
+        # Pass grid_size = pf*N so lowres_r_max = pf * (N * voxel / myres).
         Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
             Ft_y_0,
             Ft_y_1,
             Ft_ctf_0,
             Ft_ctf_1,
-            volume_shape,
+            upsampled_volume_shape,
             cryo.voxel_size,
-            grid_size,
+            grid_size * PADDING_FACTOR,
             low_resol_join_halves_angstrom,
             current_resolution_angstrom=prev_res_angstrom,
         )
 
         # --- Now reconstruct the regularized per-half means from the
-        # (post-join) Ft_y / Ft_ctf accumulators. RELION reconstructs on a
-        # 2x padded Fourier grid to reduce interpolation artifacts.
+        # (post-join) Ft_y / Ft_ctf accumulators. With PADDING_FACTOR>1 the
+        # engine already accumulates at (pf*N)^3 via dense trilinear
+        # spreading (matches relion_kernel_batch), so no zero-padding
+        # is needed before post_process_from_filter_v2.
         for k in range(2):
             Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
             Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
-            Ft_ctf_k_padded = relion_functions.zero_pad_fourier_volume(
-                Ft_ctf_k_local,
-                volume_shape,
-                PADDING_FACTOR,
-            )
-            Ft_y_k_padded = relion_functions.zero_pad_fourier_volume(
-                Ft_y_k_local,
-                volume_shape,
-                PADDING_FACTOR,
-            )
             # RELION uses radial sinc² (projector.cpp:617); recovar's per-axis
             # sinc² product is mathematically more correct but we use radial for parity.
-            means[k] = relion_functions.post_process_from_filter_v2(
-                Ft_ctf_k_padded,
-                Ft_y_k_padded,
+            mean_k_native = relion_functions.post_process_from_filter_v2(
+                Ft_ctf_k_local,
+                Ft_y_k_local,
                 volume_shape,
                 PADDING_FACTOR,
                 tau=mean_variance,
@@ -2020,6 +2053,9 @@ def _refine_relion_mode(
                 gridding_correct="radial",
                 tau2_fudge=tau2_fudge,
             ).reshape(-1)
+            means_native[k] = mean_k_native
+            # Upsample back to (pf*N)^3 for next iter's forward projection.
+            means[k] = _upsample_volume_fourier(mean_k_native)
 
         significant_counts.append(iter_sig_counts)
 
@@ -2041,35 +2077,12 @@ def _refine_relion_mode(
         Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
 
         # --- Compute unregularized half-maps for FSC and prior ---
-        # RELION uses padding_factor=2 by default: the 3D Fourier grid is
-        # (2*N)^3 to reduce interpolation artifacts.  We zero-pad the
-        # native-size Ft_ctf/Ft_y into the padded grid, then
-        # post_process_from_filter_v2 does iDFT on the padded grid and
-        # crops back to native size in real space.
-        Ft_ctf_0_padded = relion_functions.zero_pad_fourier_volume(
-            Ft_ctf_0,
-            volume_shape,
-            PADDING_FACTOR,
-        )
-        Ft_y_0_padded = relion_functions.zero_pad_fourier_volume(
-            Ft_y_0,
-            volume_shape,
-            PADDING_FACTOR,
-        )
-        Ft_ctf_1_padded = relion_functions.zero_pad_fourier_volume(
-            Ft_ctf_1,
-            volume_shape,
-            PADDING_FACTOR,
-        )
-        Ft_y_1_padded = relion_functions.zero_pad_fourier_volume(
-            Ft_y_1,
-            volume_shape,
-            PADDING_FACTOR,
-        )
+        # With PADDING_FACTOR>1 the engine already accumulates at (pf*N)^3
+        # via dense trilinear spreading, so no zero-padding is needed.
         unreg_means = [
             relion_functions.post_process_from_filter_v2(
-                Ft_ctf_0_padded,
-                Ft_y_0_padded,
+                Ft_ctf_0,
+                Ft_y_0,
                 volume_shape,
                 PADDING_FACTOR,
                 tau=None,
@@ -2079,8 +2092,8 @@ def _refine_relion_mode(
                 gridding_correct="radial",
             ),
             relion_functions.post_process_from_filter_v2(
-                Ft_ctf_1_padded,
-                Ft_y_1_padded,
+                Ft_ctf_1,
+                Ft_y_1,
                 volume_shape,
                 PADDING_FACTOR,
                 tau=None,
@@ -2210,15 +2223,20 @@ def _refine_relion_mode(
         else:
             previous_combined_ha = None
 
-        # --- Update prior from the actual weighted reconstruction stats ---
-        mean_signal_variance, _ = regularization.compute_relion_prior_from_reconstruction_stats(
-            Ft_ctf_0,
-            Ft_ctf_1,
-            Ft_y_0,
-            Ft_y_1,
-            volume_shape,
-            mean_variance,
-            padding_factor=PADDING_FACTOR,
+        # --- Update prior (RELION-style tau^2 from FSC of native N^3 unreg
+        # half-maps).  The unreg_means above are post-processed at native N^3
+        # via post_process_from_filter_v2 (iDFT (2N)^3 → crop to N^3 → FFT),
+        # so we can feed them through compute_relion_prior — exactly the same
+        # path used by the working non-RELION mode at refine.py:1197 and the
+        # homogeneous mean reconstruction at homogeneous.py:111.  This avoids
+        # the central-Fourier-crop and downsample_lhs hacks that were causing
+        # tau growth at PADDING_FACTOR=2.
+        mean_signal_variance, _, _ = regularization.compute_relion_prior(
+            experiment_datasets,
+            noise_variance,
+            unreg_means[0],
+            unreg_means[1],
+            image_batch_size,
             tau2_fudge=tau2_fudge,
         )
         mean_variance = mean_signal_variance
@@ -2489,8 +2507,9 @@ def _refine_relion_mode(
     final_iter_t0 = time.time()
     logger.info("=== RELION final all-data Nyquist iteration (do_join_random_halves=True, do_use_all_data=True) ===")
     final_cs = grid_size  # = ori_size, full Nyquist
-    final_ft_y = jnp.zeros(cryo.volume_size, dtype=cryo.dtype)
-    final_ft_ctf = jnp.zeros(cryo.volume_size, dtype=cryo.dtype)
+    _final_vol_size = int(np.prod(upsampled_volume_shape))
+    final_ft_y = jnp.zeros(_final_vol_size, dtype=cryo.dtype)
+    final_ft_ctf = jnp.zeros(_final_vol_size, dtype=cryo.dtype)
     final_noise_wsum = np.zeros_like(np.asarray(noise_radial_trajectory[-1])) if noise_radial_trajectory else None
     final_img_power = np.zeros_like(np.asarray(noise_radial_trajectory[-1])) if noise_radial_trajectory else None
     final_sumw = 0.0
@@ -2516,6 +2535,8 @@ def _refine_relion_mode(
             score_with_masked_images=True,
             return_stats=True,
             accumulate_noise=True,
+            half_spectrum_scoring=True,
+            volume_upsampling_factor=PADDING_FACTOR,
         )
         final_ft_y = final_ft_y + Ft_y_k_final
         final_ft_ctf = final_ft_ctf + Ft_ctf_k_final
@@ -2525,21 +2546,11 @@ def _refine_relion_mode(
             final_sumw += float(noise_stats_k_final.sumw)
 
     # Reconstruct the final volume from the COMBINED Ft_y/Ft_ctf accumulators
-    # at the full Nyquist resolution. Skip the join_halves step (we're already
-    # combining the two halves into one dataset for this final iter).
-    final_ft_ctf_padded = relion_functions.zero_pad_fourier_volume(
-        final_ft_ctf,
-        volume_shape,
-        PADDING_FACTOR,
-    )
-    final_ft_y_padded = relion_functions.zero_pad_fourier_volume(
-        final_ft_y,
-        volume_shape,
-        PADDING_FACTOR,
-    )
+    # at the full Nyquist resolution. With PADDING_FACTOR>1 the engine already
+    # accumulates at (pf*N)^3, no zero-padding needed.
     merged_mean = relion_functions.post_process_from_filter_v2(
-        final_ft_ctf_padded,
-        final_ft_y_padded,
+        final_ft_ctf,
+        final_ft_y,
         volume_shape,
         PADDING_FACTOR,
         tau=mean_variance,
@@ -2559,7 +2570,7 @@ def _refine_relion_mode(
 
     return {
         "mean": merged_mean,
-        "means": means,
+        "means": means_native,
         "fsc": fsc_history[-1] if fsc_history else None,
         "hard_assignments": hard_assignments,
         "current_sizes": current_sizes,

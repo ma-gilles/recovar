@@ -6,10 +6,10 @@ import logging
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,13 @@ def compute_prior_quantites(halfset_datasets, cov_noise, batch_size, for_whiteni
 
 
 def compute_relion_prior(
-    halfset_datasets, cov_noise, image0, image1, batch_size, estimate_merged_SNR=False, noise_level=None,
+    halfset_datasets,
+    cov_noise,
+    image0,
+    image1,
+    batch_size,
+    estimate_merged_SNR=False,
+    noise_level=None,
     tau2_fudge=1.0,
 ):
     """Compute a RELION-style spectral prior from two half-set reconstructions.
@@ -304,7 +310,14 @@ def downsample_lhs(lhs, volume_shape, upsampling_factor=1):
 @functools.partial(jax.jit, static_argnums=[0, 6, 7])
 @nvtx.annotate("compute_fsc_prior_gpu_v2", color="cyan", domain=NVTX_DOMAIN_REG)
 def compute_fsc_prior_gpu_v2(
-    volume_shape, image0, image1, lhs, prior, frequency_shift, substract_shell_mean=False, upsampling_factor=1,
+    volume_shape,
+    image0,
+    image1,
+    lhs,
+    prior,
+    frequency_shift,
+    substract_shell_mean=False,
+    upsampling_factor=1,
     tau2_fudge=1.0,
 ):
     epsilon = jax_config.FSC_ZERO_THRESHOLD
@@ -426,6 +439,7 @@ def prior_iteration_relion_style(
 
     H_comb = (H0 + H1) / 2
     prior = init_regularization.real
+    _prior_dtype = prior.dtype
 
     def body_fun(prior, fsc):
         cov_col0 = relion_functions.post_process_from_filter_v2(
@@ -467,6 +481,10 @@ def prior_iteration_relion_style(
             tau2_fudge=tau2_fudge,
             upsampling_factor=volume_upsampling_factor,
         )
+        # Cast back to the input prior dtype so fori_loop carry types match
+        # (compute_fsc_prior_gpu_v2 promotes float32 prior → float64 via
+        # Python tau2_fudge scalar).
+        prior = prior.astype(_prior_dtype)
         return prior, fsc
 
     # Run body_fun without FSC for prior_iterations-1, then one final step with FSC
@@ -617,7 +635,7 @@ def compute_data_vs_prior(Ft_ctf, tau2, volume_shape, padding_factor=1, tau2_fud
         Per-shell data_vs_prior ratio.
     """
     avg_weight = average_over_shells(Ft_ctf.real, volume_shape)
-    oversampling_correction = padding_factor ** 3
+    oversampling_correction = padding_factor**3
     return avg_weight * tau2_fudge * tau2 * oversampling_correction
 
 
@@ -750,8 +768,7 @@ def update_relion_growth_state_from_fsc(
 # ---------------------------------------------------------------------------
 
 
-def compute_current_size_relion(resolution_shell, ori_size, ave_Pmax=0.0,
-                                has_high_fsc_at_limit=False, incr_size=10):
+def compute_current_size_relion(resolution_shell, ori_size, ave_Pmax=0.0, has_high_fsc_at_limit=False, incr_size=10):
     """Compute the next current_size using RELION's growth logic.
 
     RELION grows current_size beyond the current resolution limit.  If
@@ -887,9 +904,7 @@ def join_halves_at_low_resolution(
     # Effective joining resolution: the larger (lower-frequency) of
     # low_resol_join_halves and current_resolution.
     myres = float(low_resol_join_halves_angstrom)
-    if current_resolution_angstrom is not None and np.isfinite(
-        current_resolution_angstrom
-    ):
+    if current_resolution_angstrom is not None and np.isfinite(current_resolution_angstrom):
         myres = max(myres, float(current_resolution_angstrom))
 
     lowres_r_max = int(np.ceil(grid_size * voxel_size / myres))
@@ -899,9 +914,13 @@ def join_halves_at_low_resolution(
     # Build the radial-shell mask once. Centered Fourier volume → radial
     # distance from the center is the shell index.
     radial_dist_3d = fourier_transform_utils.get_grid_of_radial_distances(
-        volume_shape, voxel_size=1, scaled=False, frequency_shift=0, rounded=True,
+        volume_shape,
+        voxel_size=1,
+        scaled=False,
+        frequency_shift=0,
+        rounded=True,
     )
-    join_mask_3d = (radial_dist_3d <= lowres_r_max)
+    join_mask_3d = radial_dist_3d <= lowres_r_max
     join_mask_flat = join_mask_3d.reshape(-1)
 
     Ft_y_0_arr = jnp.asarray(Ft_y_0)

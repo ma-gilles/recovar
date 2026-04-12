@@ -35,23 +35,23 @@ Fourier windowing:
 """
 
 import logging
-import time
 from functools import partial
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import core, utils
-from recovar.core.configs import ForwardModelConfig
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar import core
+from recovar.core.configs import ForwardModelConfig
 
-from .types import MeanStats, NoiseStats, RelionStats
+from .types import NoiseStats, RelionStats
 
 logger = logging.getLogger(__name__)
 
 
 # -- Half-spectrum utilities -------------------------------------------------
+
 
 def make_half_image_weights(image_shape):
     """Return (N_half,) Hermitian weights for half-spectrum inner products.
@@ -68,9 +68,9 @@ def make_half_image_weights(image_shape):
     """
     H, W = image_shape
     w = 2.0 * jnp.ones((H, W // 2 + 1), dtype=jnp.float32)
-    w = w.at[:, 0].set(1.0)    # packed column 0 = DC
-    w = w.at[:, -1].set(1.0)   # packed column -1 = Nyquist
-    return w.reshape(-1)        # (N_half,)
+    w = w.at[:, 0].set(1.0)  # packed column 0 = DC
+    w = w.at[:, -1].set(1.0)  # packed column -1 = Nyquist
+    return w.reshape(-1)  # (N_half,)
 
 
 def make_shell_indices_half(image_shape):
@@ -81,12 +81,17 @@ def make_shell_indices_half(image_shape):
     """
     # get_grid_of_radial_distances_real returns shape (H, W//2+1) with rounded int distances
     radii = fourier_transform_utils.get_grid_of_radial_distances_real(
-        image_shape, voxel_size=1, scaled=False, frequency_shift=0, rounded=True,
+        image_shape,
+        voxel_size=1,
+        scaled=False,
+        frequency_shift=0,
+        rounded=True,
     )
     return radii.reshape(-1).astype(jnp.int32)
 
 
 # -- JIT-compiled kernels ---------------------------------------------------
+
 
 @partial(jax.jit, static_argnums=(5, 6, 7))
 def _preprocess_batch(
@@ -116,14 +121,16 @@ def _preprocess_batch(
     ctf_weighted = processed * CTF / noise_variance
     # Phase shifts operate on full spectrum (need all frequencies for correct shift)
     shifted = core.batch_trans_translate_images(
-        ctf_weighted, jnp.repeat(translations[None], n_images, axis=0), config.image_shape,
+        ctf_weighted,
+        jnp.repeat(translations[None], n_images, axis=0),
+        config.image_shape,
     )
     shifted_flat = shifted.reshape(n_images * n_trans, -1)
     # Convert to half-spectrum for all subsequent GEMMs
     shifted_half = fourier_transform_utils.full_image_to_half_image(shifted_flat, config.image_shape)
 
     batch_norm = jnp.linalg.norm(processed / jnp.sqrt(noise_variance), axis=-1, keepdims=True) ** 2
-    ctf2_over_nv = CTF ** 2 / noise_variance
+    ctf2_over_nv = CTF**2 / noise_variance
     # Also convert ctf2_over_nv to half for norm-term GEMM
     ctf2_over_nv_half = fourier_transform_utils.full_image_to_half_image(ctf2_over_nv, config.image_shape)
     return shifted_half, batch_norm, ctf2_over_nv_half
@@ -144,7 +151,9 @@ def _prepare_reconstruction_batch(
     processed = config.process_fn(batch, apply_image_mask=False)
     ctf_weighted = processed * CTF / noise_variance
     shifted = core.batch_trans_translate_images(
-        ctf_weighted, jnp.repeat(translations[None], n_images, axis=0), config.image_shape,
+        ctf_weighted,
+        jnp.repeat(translations[None], n_images, axis=0),
+        config.image_shape,
     )
     shifted_flat = shifted.reshape(n_images * n_trans, -1)
     return fourier_transform_utils.full_image_to_half_image(
@@ -154,10 +163,18 @@ def _prepare_reconstruction_batch(
 
 
 @partial(jax.jit, static_argnums=(6, 7, 8, 9))
-def _e_step_block_scores(shifted_half, batch_norm, ctf2_over_nv_half,
-                         proj_half_weighted, proj_abs2_half,
-                         half_weights,
-                         n_images, n_trans, image_shape, volume_shape):
+def _e_step_block_scores(
+    shifted_half,
+    batch_norm,
+    ctf2_over_nv_half,
+    proj_half_weighted,
+    proj_abs2_half,
+    half_weights,
+    n_images,
+    n_trans,
+    image_shape,
+    volume_shape,
+):
     """E-step for one rotation block using half-spectrum GEMMs.
 
     The cross-term GEMM uses weighted projections (half_weights absorbed into
@@ -198,10 +215,19 @@ def _e_step_block_scores(shifted_half, batch_norm, ctf2_over_nv_half,
 
 
 @partial(jax.jit, static_argnums=(6, 7, 8, 9, 10))
-def _e_step_block_scores_windowed(shifted_windowed, batch_norm, ctf2_over_nv_windowed,
-                                  proj_windowed_weighted, proj_abs2_windowed,
-                                  half_weights_windowed,
-                                  n_images, n_trans, n_windowed, image_shape, volume_shape):
+def _e_step_block_scores_windowed(
+    shifted_windowed,
+    batch_norm,
+    ctf2_over_nv_windowed,
+    proj_windowed_weighted,
+    proj_abs2_windowed,
+    half_weights_windowed,
+    n_images,
+    n_trans,
+    n_windowed,
+    image_shape,
+    volume_shape,
+):
     """E-step for one rotation block using windowed half-spectrum GEMMs.
 
     Same as _e_step_block_scores but operates on the windowed subset of the
@@ -232,10 +258,20 @@ def _e_step_block_scores_windowed(shifted_windowed, batch_norm, ctf2_over_nv_win
 
 
 @partial(jax.jit, static_argnums=(7, 8, 9, 10, 11))
-def _m_step_block_windowed(shifted_windowed, scores_block, log_Z, rotations_block,
-                           ctf2_over_nv_windowed,
-                           Ft_y, Ft_ctf,
-                           n_images, n_trans, n_windowed, image_shape, volume_shape):
+def _m_step_block_windowed(
+    shifted_windowed,
+    scores_block,
+    log_Z,
+    rotations_block,
+    ctf2_over_nv_windowed,
+    Ft_y,
+    Ft_ctf,
+    n_images,
+    n_trans,
+    n_windowed,
+    image_shape,
+    volume_shape,
+):
     """Normalize scores to probs and accumulate M-step for one rotation block (windowed).
 
     The M-step GEMM operates on the windowed subset (n_windowed dimension).
@@ -251,7 +287,7 @@ def _m_step_block_windowed(shifted_windowed, scores_block, log_Z, rotations_bloc
 
     # M-step GEMM on windowed subset: P @ shifted_windowed -> (rot_block, n_windowed)
     P = probs.swapaxes(0, 1).reshape(rot_block_size, n_images * n_trans)
-    summed_windowed = P @ shifted_windowed   # (rot_block, n_windowed)
+    summed_windowed = P @ shifted_windowed  # (rot_block, n_windowed)
 
     # CTF backprojection on windowed subset
     probs_sum_t = jnp.sum(probs, axis=-1)  # (n_images, rot_block)
@@ -270,15 +306,24 @@ def _update_logsumexp(max_s, sum_exp, scores_block):
     scores_flat = scores_block.reshape(scores_block.shape[0], -1)  # (n_images, block*trans)
     block_max = jnp.max(scores_flat, axis=1)  # (n_images,)
     new_max = jnp.maximum(max_s, block_max)
-    sum_exp = (sum_exp * jnp.exp(max_s - new_max)
-               + jnp.sum(jnp.exp(scores_flat - new_max[:, None]), axis=1))
+    sum_exp = sum_exp * jnp.exp(max_s - new_max) + jnp.sum(jnp.exp(scores_flat - new_max[:, None]), axis=1)
     return new_max, sum_exp
 
 
 @partial(jax.jit, static_argnums=(7, 8, 9, 10))
-def _m_step_block(shifted_half, scores_block, log_Z, rotations_block, ctf2_over_nv_half,
-                  Ft_y, Ft_ctf,
-                  n_images, n_trans, image_shape, volume_shape):
+def _m_step_block(
+    shifted_half,
+    scores_block,
+    log_Z,
+    rotations_block,
+    ctf2_over_nv_half,
+    Ft_y,
+    Ft_ctf,
+    n_images,
+    n_trans,
+    image_shape,
+    volume_shape,
+):
     """Normalize scores to probs and accumulate M-step for one rotation block.
 
     The M-step GEMM computes P @ shifted_half -> (rot_block, N_half).
@@ -294,19 +339,29 @@ def _m_step_block(shifted_half, scores_block, log_Z, rotations_block, ctf2_over_
     # M-step GEMM: P @ shifted_half -> (rot_block, N_half)
     # This sums shifted half-images weighted by probabilities -- already in half layout!
     P = probs.swapaxes(0, 1).reshape(rot_block_size, n_images * n_trans)
-    summed_half = P @ shifted_half   # (rot_block, N_half) -- directly in half layout
-    # No full_image_to_half_image conversion needed!
+    summed_half = P @ shifted_half  # (rot_block, N_half) -- directly in half layout
     Ft_y = core.adjoint_slice_volume(
-        summed_half, rotations_block, image_shape, volume_shape,
-        "linear_interp", volume=Ft_y, half_image=True,
+        summed_half,
+        rotations_block,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        volume=Ft_y,
+        half_image=True,
+        half_volume=True,
     )
     # CTF backprojection: probs_sum_t @ ctf2_over_nv_half -> (rot_block, N_half)
     probs_sum_t = jnp.sum(probs, axis=-1)  # (n_images, rot_block)
     ctf_probs_half = probs_sum_t.T @ ctf2_over_nv_half  # (rot_block, N_half)
-    # No full_image_to_half_image conversion needed!
     Ft_ctf = core.adjoint_slice_volume(
-        ctf_probs_half, rotations_block, image_shape, volume_shape,
-        "linear_interp", volume=Ft_ctf, half_image=True,
+        ctf_probs_half,
+        rotations_block,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        volume=Ft_ctf,
+        half_image=True,
+        half_volume=True,
     )
     # Hard assignment contribution: argmax over this block
     block_best = jnp.max(scores_block.reshape(n_images, -1), axis=1)
@@ -315,9 +370,9 @@ def _m_step_block(shifted_half, scores_block, log_Z, rotations_block, ctf2_over_
 
 
 @partial(jax.jit, static_argnums=(6,))
-def _compute_noise_block(proj_half, proj_abs2_half, summed_masked,
-                         ctf_probs, noise_variance_half, shell_indices,
-                         n_shells):
+def _compute_noise_block(
+    proj_half, proj_abs2_half, summed_masked, ctf_probs, noise_variance_half, shell_indices, n_shells
+):
     """Accumulate RELION-style posterior-weighted noise for one rotation block.
 
     Uses the decomposition::
@@ -390,9 +445,7 @@ def _compute_projections_block(volume, rotations_block, image_shape, volume_shap
 
     Returns (proj_half, |proj_half|^2) on device, both in half-spectrum layout.
     """
-    proj_half = core.slice_volume(
-        volume, rotations_block, image_shape, volume_shape, disc_type, half_image=True
-    )
+    proj_half = core.slice_volume(volume, rotations_block, image_shape, volume_shape, disc_type, half_image=True)
     proj_abs2_half = jnp.abs(proj_half) ** 2
     return proj_half, proj_abs2_half
 
@@ -417,6 +470,7 @@ def run_em_v2(
     return_stats: bool = False,
     accumulate_noise: bool = False,
     half_spectrum_scoring: bool = False,
+    volume_upsampling_factor: int = 1,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -466,20 +520,28 @@ def run_em_v2(
     """
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]
-    image_indices = (
-        np.arange(experiment_dataset.n_units)
-        if image_indices is None
-        else np.asarray(image_indices)
-    )
+    image_indices = np.arange(experiment_dataset.n_units) if image_indices is None else np.asarray(image_indices)
     n_images = image_indices.size
     image_shape = experiment_dataset.image_shape
-    volume_shape = experiment_dataset.volume_shape
+    # When volume_upsampling_factor > 1, both forward and backward use the
+    # upsampled (2N)^3 grid directly (dense trilinear spreading), matching
+    # RELION's --pad 2. The mean passed in must already be at the upsampled
+    # shape (flat length = (2N)^3).
+    base_volume_shape = experiment_dataset.volume_shape
+    if volume_upsampling_factor > 1:
+        uf = int(volume_upsampling_factor)
+        volume_shape = tuple(s * uf for s in base_volume_shape)
+    else:
+        volume_shape = base_volume_shape
 
     H, W = image_shape
     n_half = H * (W // 2 + 1)
 
     config = ForwardModelConfig.from_dataset(
-        experiment_dataset, disc_type=disc_type, process_fn=experiment_dataset.process_images,
+        experiment_dataset,
+        disc_type=disc_type,
+        process_fn=experiment_dataset.process_images,
+        upsampling_factor=volume_upsampling_factor if volume_upsampling_factor > 1 else None,
     )
 
     # Precompute half-spectrum weights for E-step scoring.
@@ -498,12 +560,16 @@ def run_em_v2(
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
         from .fourier_window import make_fourier_window_indices_np
+
         window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size)
         window_indices = jnp.asarray(window_indices_np)
         half_weights_windowed = half_weights[window_indices]
         logger.info(
             "Fourier windowing: current_size=%d, n_windowed=%d / n_half=%d (%.1f%% reduction)",
-            current_size, n_windowed, n_half, 100.0 * (1.0 - n_windowed / n_half),
+            current_size,
+            n_windowed,
+            n_half,
+            100.0 * (1.0 - n_windowed / n_half),
         )
     else:
         window_indices = None
@@ -514,9 +580,7 @@ def run_em_v2(
     n_rot_padded = n_blocks * rotation_block_size
     if n_rot_padded > n_rot:
         pad_size = n_rot_padded - n_rot
-        rotations_padded = np.concatenate([
-            rotations, np.tile(np.eye(3, dtype=np.float32), (pad_size, 1, 1))
-        ], axis=0)
+        rotations_padded = np.concatenate([rotations, np.tile(np.eye(3, dtype=np.float32), (pad_size, 1, 1))], axis=0)
     else:
         rotations_padded = rotations
 
@@ -539,8 +603,7 @@ def run_em_v2(
             per_image_log_prior = True
         else:
             raise ValueError(
-                "rotation_log_prior must be 1D or 2D, got "
-                f"{rotation_log_prior.ndim} dimensions",
+                f"rotation_log_prior must be 1D or 2D, got {rotation_log_prior.ndim} dimensions",
             )
         log_prior_padded_jnp = jnp.asarray(log_prior_padded)
         finite_prior = rotation_log_prior[np.isfinite(rotation_log_prior)]
@@ -562,8 +625,7 @@ def run_em_v2(
         if translation_log_prior.ndim == 1:
             if translation_log_prior.shape != (n_trans,):
                 raise ValueError(
-                    "translation_log_prior must have shape "
-                    f"({n_trans},), got {translation_log_prior.shape}",
+                    f"translation_log_prior must have shape ({n_trans},), got {translation_log_prior.shape}",
                 )
             translation_log_prior_jnp = jnp.asarray(translation_log_prior)
         elif translation_log_prior.ndim == 2:
@@ -577,8 +639,7 @@ def run_em_v2(
             per_image_translation_log_prior = True
         else:
             raise ValueError(
-                "translation_log_prior must be 1D or 2D, got "
-                f"{translation_log_prior.ndim} dimensions",
+                f"translation_log_prior must be 1D or 2D, got {translation_log_prior.ndim} dimensions",
             )
         finite_translation_prior = translation_log_prior[np.isfinite(translation_log_prior)]
         if finite_translation_prior.size == 0:
@@ -598,8 +659,7 @@ def run_em_v2(
         candidate_mask = np.asarray(rotation_translation_mask, dtype=bool)
         if candidate_mask.shape != (n_rot, n_trans):
             raise ValueError(
-                "rotation_translation_mask must have shape "
-                f"({n_rot}, {n_trans}), got {candidate_mask.shape}",
+                f"rotation_translation_mask must have shape ({n_rot}, {n_trans}), got {candidate_mask.shape}",
             )
         candidate_mask_padded = np.zeros((n_rot_padded, n_trans), dtype=bool)
         candidate_mask_padded[:n_rot] = candidate_mask
@@ -610,9 +670,15 @@ def run_em_v2(
             int(candidate_mask.size),
         )
 
-    # Initialize accumulators
-    Ft_y = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
-    Ft_ctf = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
+    # Initialize accumulators in half-volume layout so the CUDA backproject
+    # kernel can fold the Hermitian half-spectrum directly into a rfft-packed
+    # buffer (matches the homogeneous path in relion_functions.py).
+    # When volume_upsampling_factor > 1, volume_shape is the upsampled (2N)^3
+    # shape so the half-volume has size (2N) * (2N) * (N+1).
+    half_volume_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    vol_size = int(np.prod(half_volume_shape))
+    Ft_y = jnp.zeros(vol_size, dtype=experiment_dataset.dtype)
+    Ft_ctf = jnp.zeros(vol_size, dtype=experiment_dataset.dtype)
     hard_assignment = np.empty(n_images, dtype=np.int32)
     log_evidence_per_image = None
     best_log_score_per_image = None
@@ -639,7 +705,8 @@ def run_em_v2(
             shell_indices_noise = shell_indices_half
         # noise_variance in half-spectrum layout
         noise_variance_half = fourier_transform_utils.full_image_to_half_image(
-            noise_variance.reshape(1, -1), image_shape,
+            noise_variance.reshape(1, -1),
+            image_shape,
         ).squeeze()
         if use_window:
             noise_variance_windowed = noise_variance_half[window_indices]
@@ -652,8 +719,10 @@ def run_em_v2(
 
     start_idx = 0
 
-    for (batch_data, _, _, ctf_params, _, _, indices) in experiment_dataset.iter_batches(
-        image_batch_size, indices=image_indices, by_image=False,
+    for batch_data, _, _, ctf_params, _, _, indices in experiment_dataset.iter_batches(
+        image_batch_size,
+        indices=image_indices,
+        by_image=False,
     ):
         batch_size = len(indices)
         end_idx = start_idx + batch_size
@@ -661,13 +730,24 @@ def run_em_v2(
 
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data, ctf_params, noise_variance, translations, config,
-            batch_size, n_trans, score_with_masked_images,
+            batch_data,
+            ctf_params,
+            noise_variance,
+            translations,
+            config,
+            batch_size,
+            n_trans,
+            score_with_masked_images,
         )
         shifted_recon_half = (
             _prepare_reconstruction_batch(
-                batch_data, ctf_params, noise_variance, translations, config,
-                batch_size, n_trans,
+                batch_data,
+                ctf_params,
+                noise_variance,
+                translations,
+                config,
+                batch_size,
+                n_trans,
             )
             if score_with_masked_images
             else shifted_half
@@ -685,22 +765,37 @@ def run_em_v2(
         # In recovar's half-spectrum layout, DC is NOT at flat index 0.
         # Find the DC pixel by locating shell index 0 in the precomputed
         # shell_indices_half array.
+        #
+        # IMPORTANT: the scoring arrays (shifted_half_sc, ctf2_over_nv_half_sc)
+        # get DC zeroed out, but the M-step reconstruction MUST use the
+        # DC-intact version. The shifted_recon_half path already uses the
+        # unmasked image and is DC-intact; we must do the same for
+        # ctf2_over_nv_half, otherwise Ft_ctf[DC]=0 and the Wiener solve
+        # divides by tiny regularization (1/tau) producing a huge DC offset
+        # that pollutes the whole reconstruction.
         if half_spectrum_scoring:
             dc_shell_idx = make_shell_indices_half(image_shape)
-            dc_mask = (dc_shell_idx == 0)  # True at DC pixel(s)
-            # Zero out DC in SCORING arrays only
-            shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
-            ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
+            dc_mask = dc_shell_idx == 0  # True at DC pixel(s)
+            # Zero out DC in SCORING arrays only; keep M-step arrays intact.
+            shifted_half_sc = jnp.where(dc_mask[None, :], 0.0, shifted_half)
+            ctf2_over_nv_half_sc = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
+        else:
+            shifted_half_sc = shifted_half
+            ctf2_over_nv_half_sc = ctf2_over_nv_half
 
         # -- WINDOW gather (if active) --
+        # Scoring path uses DC-zeroed arrays; reconstruction path uses
+        # DC-intact arrays so Ft_ctf[DC] is correctly accumulated.
         if use_window:
-            shifted_windowed = shifted_half[:, window_indices]
+            shifted_windowed = shifted_half_sc[:, window_indices]
             shifted_recon_windowed = shifted_recon_half[:, window_indices]
-            ctf2_over_nv_windowed = ctf2_over_nv_half[:, window_indices]
+            ctf2_over_nv_windowed = ctf2_over_nv_half_sc[:, window_indices]
+            ctf2_over_nv_recon_windowed = ctf2_over_nv_half[:, window_indices]
         else:
-            shifted_windowed = shifted_half
+            shifted_windowed = shifted_half_sc
             shifted_recon_windowed = shifted_recon_half
-            ctf2_over_nv_windowed = ctf2_over_nv_half
+            ctf2_over_nv_windowed = ctf2_over_nv_half_sc
+            ctf2_over_nv_recon_windowed = ctf2_over_nv_half
 
         # -- Noise: precompute per-batch image power spectrum --
         if accumulate_noise:
@@ -708,7 +803,8 @@ def run_em_v2(
             # Use the masked processed images (score path).
             processed_masked = config.process_fn(batch_data, apply_image_mask=score_with_masked_images)
             processed_masked_half = fourier_transform_utils.full_image_to_half_image(
-                processed_masked, image_shape,
+                processed_masked,
+                image_shape,
             )
             # Sum |img|^2 over images in this batch, bin to shells (FULL spectrum, not windowed)
             batch_img_power = jnp.sum(jnp.abs(processed_masked_half) ** 2, axis=0)  # (N_half,)
@@ -733,7 +829,8 @@ def run_em_v2(
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean, rots_b, image_shape, volume_shape, disc_type)
+                mean, rots_b, image_shape, volume_shape, disc_type
+            )
 
             if use_window:
                 # Gather windowed subset from projections
@@ -743,10 +840,17 @@ def run_em_v2(
                 proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
 
                 scores = _e_step_block_scores_windowed(
-                    shifted_windowed, batch_norm, ctf2_over_nv_windowed,
-                    proj_windowed_weighted_b, proj_abs2_windowed_weighted_b,
+                    shifted_windowed,
+                    batch_norm,
+                    ctf2_over_nv_windowed,
+                    proj_windowed_weighted_b,
+                    proj_abs2_windowed_weighted_b,
                     half_weights_windowed,
-                    batch_size, n_trans, n_windowed, image_shape, volume_shape,
+                    batch_size,
+                    n_trans,
+                    n_windowed,
+                    image_shape,
+                    volume_shape,
                 )
             else:
                 # Full half-spectrum path (Phase 1 behavior)
@@ -754,9 +858,16 @@ def run_em_v2(
                 proj_abs2_weighted_b = proj_abs2_half_b * half_weights
 
                 scores = _e_step_block_scores(
-                    shifted_half, batch_norm, ctf2_over_nv_half,
-                    proj_half_weighted_b, proj_abs2_weighted_b, half_weights,
-                    batch_size, n_trans, image_shape, volume_shape,
+                    shifted_half_sc,
+                    batch_norm,
+                    ctf2_over_nv_half_sc,
+                    proj_half_weighted_b,
+                    proj_abs2_weighted_b,
+                    half_weights,
+                    batch_size,
+                    n_trans,
+                    image_shape,
+                    volume_shape,
                 )
 
             # Add rotation log-prior (Gaussian angular prior for local search)
@@ -799,7 +910,8 @@ def run_em_v2(
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean, rots_b, image_shape, volume_shape, disc_type)
+                mean, rots_b, image_shape, volume_shape, disc_type
+            )
 
             if use_window:
                 # Gather windowed subset
@@ -809,19 +921,33 @@ def run_em_v2(
                 proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
 
                 scores = _e_step_block_scores_windowed(
-                    shifted_windowed, batch_norm, ctf2_over_nv_windowed,
-                    proj_windowed_weighted_b, proj_abs2_windowed_weighted_b,
+                    shifted_windowed,
+                    batch_norm,
+                    ctf2_over_nv_windowed,
+                    proj_windowed_weighted_b,
+                    proj_abs2_windowed_weighted_b,
                     half_weights_windowed,
-                    batch_size, n_trans, n_windowed, image_shape, volume_shape,
+                    batch_size,
+                    n_trans,
+                    n_windowed,
+                    image_shape,
+                    volume_shape,
                 )
             else:
                 proj_half_weighted_b = proj_half_b * half_weights
                 proj_abs2_weighted_b = proj_abs2_half_b * half_weights
 
                 scores = _e_step_block_scores(
-                    shifted_half, batch_norm, ctf2_over_nv_half,
-                    proj_half_weighted_b, proj_abs2_weighted_b, half_weights,
-                    batch_size, n_trans, image_shape, volume_shape,
+                    shifted_half_sc,
+                    batch_norm,
+                    ctf2_over_nv_half_sc,
+                    proj_half_weighted_b,
+                    proj_abs2_weighted_b,
+                    half_weights,
+                    batch_size,
+                    n_trans,
+                    image_shape,
+                    volume_shape,
                 )
 
             # Add rotation log-prior (must match pass 1 exactly)
@@ -851,12 +977,24 @@ def run_em_v2(
                 scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
 
             if use_window:
-                # Windowed M-step: GEMM at reduced dimension, then scatter back
-                (Ft_y, Ft_ctf, probs, block_best, block_argmax,
-                 summed_windowed, ctf_probs_windowed) = _m_step_block_windowed(
-                    shifted_recon_windowed, scores, log_Z, rots_b, ctf2_over_nv_windowed,
-                    Ft_y, Ft_ctf,
-                    batch_size, n_trans, n_windowed, image_shape, volume_shape,
+                # Windowed M-step: GEMM at reduced dimension, then scatter back.
+                # M-step uses the DC-intact reconstruction arrays (not the
+                # DC-zeroed scoring arrays) so Ft_ctf[DC] accumulates correctly.
+                (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed) = (
+                    _m_step_block_windowed(
+                        shifted_recon_windowed,
+                        scores,
+                        log_Z,
+                        rots_b,
+                        ctf2_over_nv_recon_windowed,
+                        Ft_y,
+                        Ft_ctf,
+                        batch_size,
+                        n_trans,
+                        n_windowed,
+                        image_shape,
+                        volume_shape,
+                    )
                 )
                 # Scatter windowed GEMM results back to full half-spectrum
                 rot_block_size_actual = rots_b.shape[0]
@@ -865,21 +1003,42 @@ def run_em_v2(
                 ctf_probs_half = jnp.zeros((rot_block_size_actual, n_half), dtype=ctf_probs_windowed.dtype)
                 ctf_probs_half = ctf_probs_half.at[:, window_indices].set(ctf_probs_windowed)
 
-                # Adjoint slice at full resolution
+                # Adjoint slice at full resolution (half-volume layout)
                 Ft_y = core.adjoint_slice_volume(
-                    summed_half, rots_b, image_shape, volume_shape,
-                    "linear_interp", volume=Ft_y, half_image=True,
+                    summed_half,
+                    rots_b,
+                    image_shape,
+                    volume_shape,
+                    "linear_interp",
+                    volume=Ft_y,
+                    half_image=True,
+                    half_volume=True,
                 )
                 Ft_ctf = core.adjoint_slice_volume(
-                    ctf_probs_half, rots_b, image_shape, volume_shape,
-                    "linear_interp", volume=Ft_ctf, half_image=True,
+                    ctf_probs_half,
+                    rots_b,
+                    image_shape,
+                    volume_shape,
+                    "linear_interp",
+                    volume=Ft_ctf,
+                    half_image=True,
+                    half_volume=True,
                 )
             else:
-                (Ft_y, Ft_ctf, probs, block_best, block_argmax,
-                 summed_half_block, ctf_probs_half_block) = _m_step_block(
-                    shifted_recon_half, scores, log_Z, rots_b, ctf2_over_nv_half,
-                    Ft_y, Ft_ctf,
-                    batch_size, n_trans, image_shape, volume_shape,
+                (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half_block, ctf_probs_half_block) = (
+                    _m_step_block(
+                        shifted_recon_half,
+                        scores,
+                        log_Z,
+                        rots_b,
+                        ctf2_over_nv_half,  # M-step uses DC-intact (never zeroed)
+                        Ft_y,
+                        Ft_ctf,
+                        batch_size,
+                        n_trans,
+                        image_shape,
+                        volume_shape,
+                    )
                 )
 
             # -- Noise accumulation for this rotation block --
@@ -905,8 +1064,13 @@ def run_em_v2(
                     proj_abs2_for_noise = proj_abs2_half_b
 
                 block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
-                    proj_for_noise, proj_abs2_for_noise, summed_masked_noise,
-                    ctf_probs_for_noise, nv_for_noise, si_for_noise, n_shells,
+                    proj_for_noise,
+                    proj_abs2_for_noise,
+                    summed_masked_noise,
+                    ctf_probs_for_noise,
+                    nv_for_noise,
+                    si_for_noise,
+                    n_shells,
                 )
                 noise_wsum += np.asarray(block_noise_shells, dtype=np.float64)
                 noise_a2 += np.asarray(block_a2_shells, dtype=np.float64)
@@ -924,19 +1088,22 @@ def run_em_v2(
                         jnp.sum(probs[:, :actual_rot, :], axis=(0, 2)),
                         dtype=np.float64,
                     )
-                    rotation_posterior_sums[r0:r0 + actual_rot] += block_rotation_sums
+                    rotation_posterior_sums[r0 : r0 + actual_rot] += block_rotation_sums
 
         if return_stats:
             log_score_offset = -0.5 * jnp.squeeze(batch_norm, axis=1)
             pmax = jnp.exp(best_score - log_Z)
             log_evidence_per_image[start_idx:end_idx] = np.asarray(
-                log_Z + log_score_offset, dtype=np.float32,
+                log_Z + log_score_offset,
+                dtype=np.float32,
             )
             best_log_score_per_image[start_idx:end_idx] = np.asarray(
-                best_score + log_score_offset, dtype=np.float32,
+                best_score + log_score_offset,
+                dtype=np.float32,
             )
             max_posterior_per_image[start_idx:end_idx] = np.asarray(
-                pmax, dtype=np.float32,
+                pmax,
+                dtype=np.float32,
             )
 
         hard_assignment[start_idx:end_idx] = np.asarray(best_argmax)
@@ -944,9 +1111,35 @@ def run_em_v2(
 
     # -- SOLVE --
     from recovar.reconstruction import relion_functions
-    new_mean = relion_functions.post_process_from_filter(
-        experiment_dataset, Ft_ctf, Ft_y, tau=mean_variance, disc_type=disc_type,
-    ).reshape(-1)
+
+    # Expand half-volume accumulators to full volume (matches homogeneous
+    # path at relion_functions.py:167-169).
+    Ft_y_full = fourier_transform_utils.half_volume_to_full_volume(Ft_y, volume_shape).reshape(-1)
+    Ft_ctf_full = fourier_transform_utils.half_volume_to_full_volume(Ft_ctf, volume_shape).reshape(-1)
+
+    if volume_upsampling_factor > 1:
+        # When accumulating at (pf*N)^3, feed post_process_from_filter_v2
+        # the already-upsampled accumulators directly. The returned volume
+        # is at native N^3 Fourier (after crop + DFT).
+        new_mean = relion_functions.post_process_from_filter_v2(
+            Ft_ctf_full,
+            Ft_y_full,
+            base_volume_shape,
+            int(volume_upsampling_factor),
+            tau=mean_variance,
+            kernel="triangular",
+            use_spherical_mask=True,
+            grid_correct=True,
+            gridding_correct="radial",
+        ).reshape(-1)
+    else:
+        new_mean = relion_functions.post_process_from_filter(
+            experiment_dataset,
+            Ft_ctf_full,
+            Ft_y_full,
+            tau=mean_variance,
+            disc_type=disc_type,
+        ).reshape(-1)
 
     noise_stats = None
     if accumulate_noise:
@@ -956,7 +1149,9 @@ def run_em_v2(
             n_log_shells = min(6, len(noise_wsum))
             logger.info(
                 "[NOISE-DIAG] sumw=%.0f n_rot=%d use_window=%s",
-                float(noise_sumw), int(n_rot), bool(use_window),
+                float(noise_sumw),
+                int(n_rot),
+                bool(use_window),
             )
             logger.info(
                 "[NOISE-DIAG] A2 (first %d shells): %s",
@@ -986,6 +1181,9 @@ def run_em_v2(
             sumw=float(noise_sumw),
         )
 
+    # Return the full-volume expanded accumulators so downstream consumers
+    # (half-map join, prior computation, FSC) see a regular centered Fourier
+    # volume rather than the rfft-packed buffer used inside the loop.
     if return_stats:
         relion_stats = RelionStats(
             log_evidence_per_image=jnp.asarray(log_evidence_per_image),
@@ -994,13 +1192,13 @@ def run_em_v2(
             rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
         )
         if accumulate_noise:
-            return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats, noise_stats
-        return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats
+            return new_mean, hard_assignment, Ft_y_full, Ft_ctf_full, relion_stats, noise_stats
+        return new_mean, hard_assignment, Ft_y_full, Ft_ctf_full, relion_stats
 
     if accumulate_noise:
-        return new_mean, hard_assignment, Ft_y, Ft_ctf, noise_stats
+        return new_mean, hard_assignment, Ft_y_full, Ft_ctf_full, noise_stats
 
-    return new_mean, hard_assignment, Ft_y, Ft_ctf
+    return new_mean, hard_assignment, Ft_y_full, Ft_ctf_full
 
 
 def compute_e_step_weights(
@@ -1054,7 +1252,9 @@ def compute_e_step_weights(
     n_half = H * (W // 2 + 1)
 
     config = ForwardModelConfig.from_dataset(
-        experiment_dataset, disc_type=disc_type, process_fn=experiment_dataset.process_images,
+        experiment_dataset,
+        disc_type=disc_type,
+        process_fn=experiment_dataset.process_images,
     )
 
     half_weights = make_half_image_weights(image_shape)
@@ -1062,6 +1262,7 @@ def compute_e_step_weights(
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
         from .fourier_window import make_fourier_window_indices_np
+
         window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size)
         window_indices = jnp.asarray(window_indices_np)
         half_weights_windowed = half_weights[window_indices]
@@ -1073,9 +1274,7 @@ def compute_e_step_weights(
     n_rot_padded = n_blocks * rotation_block_size
     if n_rot_padded > n_rot:
         pad_size = n_rot_padded - n_rot
-        rotations_padded = np.concatenate([
-            rotations, np.tile(np.eye(3, dtype=np.float32), (pad_size, 1, 1))
-        ], axis=0)
+        rotations_padded = np.concatenate([rotations, np.tile(np.eye(3, dtype=np.float32), (pad_size, 1, 1))], axis=0)
     else:
         rotations_padded = rotations
 
@@ -1086,16 +1285,24 @@ def compute_e_step_weights(
     image_indices = np.arange(n_images)
     start_idx = 0
 
-    for (batch_data, _, _, ctf_params, _, _, indices) in experiment_dataset.iter_batches(
-        image_batch_size, indices=image_indices, by_image=False,
+    for batch_data, _, _, ctf_params, _, _, indices in experiment_dataset.iter_batches(
+        image_batch_size,
+        indices=image_indices,
+        by_image=False,
     ):
         batch_size = len(indices)
         end_idx = start_idx + batch_size
         batch_data = jnp.asarray(batch_data)
 
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data, ctf_params, noise_variance, translations, config,
-            batch_size, n_trans, score_with_masked_images,
+            batch_data,
+            ctf_params,
+            noise_variance,
+            translations,
+            config,
+            batch_size,
+            n_trans,
+            score_with_masked_images,
         )
 
         if use_window:
@@ -1115,7 +1322,8 @@ def compute_e_step_weights(
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean, rots_b, image_shape, volume_shape, disc_type)
+                mean, rots_b, image_shape, volume_shape, disc_type
+            )
 
             if use_window:
                 proj_windowed_b = proj_half_b[:, window_indices]
@@ -1123,18 +1331,32 @@ def compute_e_step_weights(
                 proj_windowed_weighted_b = proj_windowed_b * half_weights_windowed
                 proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
                 scores = _e_step_block_scores_windowed(
-                    shifted_windowed, batch_norm, ctf2_over_nv_windowed,
-                    proj_windowed_weighted_b, proj_abs2_windowed_weighted_b,
+                    shifted_windowed,
+                    batch_norm,
+                    ctf2_over_nv_windowed,
+                    proj_windowed_weighted_b,
+                    proj_abs2_windowed_weighted_b,
                     half_weights_windowed,
-                    batch_size, n_trans, n_windowed, image_shape, volume_shape,
+                    batch_size,
+                    n_trans,
+                    n_windowed,
+                    image_shape,
+                    volume_shape,
                 )
             else:
                 proj_half_weighted_b = proj_half_b * half_weights
                 proj_abs2_weighted_b = proj_abs2_half_b * half_weights
                 scores = _e_step_block_scores(
-                    shifted_half, batch_norm, ctf2_over_nv_half,
-                    proj_half_weighted_b, proj_abs2_weighted_b, half_weights,
-                    batch_size, n_trans, image_shape, volume_shape,
+                    shifted_half,
+                    batch_norm,
+                    ctf2_over_nv_half,
+                    proj_half_weighted_b,
+                    proj_abs2_weighted_b,
+                    half_weights,
+                    batch_size,
+                    n_trans,
+                    image_shape,
+                    volume_shape,
                 )
 
             if r1 > n_rot:
@@ -1157,7 +1379,8 @@ def compute_e_step_weights(
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean, rots_b, image_shape, volume_shape, disc_type)
+                mean, rots_b, image_shape, volume_shape, disc_type
+            )
 
             if use_window:
                 proj_windowed_b = proj_half_b[:, window_indices]
@@ -1165,18 +1388,32 @@ def compute_e_step_weights(
                 proj_windowed_weighted_b = proj_windowed_b * half_weights_windowed
                 proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
                 scores = _e_step_block_scores_windowed(
-                    shifted_windowed, batch_norm, ctf2_over_nv_windowed,
-                    proj_windowed_weighted_b, proj_abs2_windowed_weighted_b,
+                    shifted_windowed,
+                    batch_norm,
+                    ctf2_over_nv_windowed,
+                    proj_windowed_weighted_b,
+                    proj_abs2_windowed_weighted_b,
                     half_weights_windowed,
-                    batch_size, n_trans, n_windowed, image_shape, volume_shape,
+                    batch_size,
+                    n_trans,
+                    n_windowed,
+                    image_shape,
+                    volume_shape,
                 )
             else:
                 proj_half_weighted_b = proj_half_b * half_weights
                 proj_abs2_weighted_b = proj_abs2_half_b * half_weights
                 scores = _e_step_block_scores(
-                    shifted_half, batch_norm, ctf2_over_nv_half,
-                    proj_half_weighted_b, proj_abs2_weighted_b, half_weights,
-                    batch_size, n_trans, image_shape, volume_shape,
+                    shifted_half,
+                    batch_norm,
+                    ctf2_over_nv_half,
+                    proj_half_weighted_b,
+                    proj_abs2_weighted_b,
+                    half_weights,
+                    batch_size,
+                    n_trans,
+                    image_shape,
+                    volume_shape,
                 )
 
             if r1 > n_rot:

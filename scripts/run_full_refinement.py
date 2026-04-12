@@ -224,6 +224,11 @@ def main():
         default=7,
         help="Maximum HEALPix order for angular refinement. Default 7.",
     )
+    parser.add_argument(
+        "--save_intermediates",
+        action="store_true",
+        help="Save per-iteration half-maps + fsc/noise/tau2 to <output>/intermediates/",
+    )
     args = parser.parse_args()
 
     # Verify GPU
@@ -445,6 +450,7 @@ def main():
         init_translation_sigma_angstrom=args.offset_sigma_angstrom,
         particle_diameter_ang=particle_diameter_ang,
         tau2_fudge=args.tau2_fudge,
+        save_intermediates_dir=os.path.join(args.output, "intermediates") if args.save_intermediates else None,
     )
 
     total_time = time.time() - t_start
