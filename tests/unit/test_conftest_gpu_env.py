@@ -8,8 +8,9 @@ pytestmark = pytest.mark.unit
 
 _CONFTEST_PATH = Path(__file__).resolve().parents[1] / "conftest.py"
 _SPEC = importlib.util.spec_from_file_location("tests_conftest_module", _CONFTEST_PATH)
-_CONFTEST = importlib.util.module_from_spec(_SPEC)
+assert _SPEC is not None
 assert _SPEC.loader is not None
+_CONFTEST = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_CONFTEST)
 
 
@@ -52,7 +53,9 @@ def test_gpu_subprocess_env_preserves_existing_xla_flags(monkeypatch):
 def test_gpu_subprocess_env_enables_custom_cuda_when_test_lib_available(monkeypatch):
     monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     monkeypatch.delenv("RECOVAR_DISABLE_CUDA", raising=False)
-    monkeypatch.setattr(_CONFTEST, "_resolve_custom_cuda_test_lib", lambda require=False: Path("/tmp/libcuda_backproject.so"))
+    monkeypatch.setattr(
+        _CONFTEST, "_resolve_custom_cuda_test_lib", lambda require=False: Path("/tmp/libcuda_backproject.so")
+    )
 
     env = _CONFTEST.gpu_subprocess_env()
 

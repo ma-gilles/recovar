@@ -27,14 +27,13 @@ Notes on max_r and boundary clipping:
   In production, max_r is always set, so this is the relevant test case.
 """
 
-import numpy as np
-import pytest
 import jax
 import jax.numpy as jnp
+import numpy as np
+import pytest
 from scipy.spatial.transform import Rotation
 
 from recovar.core import relion_interp
-
 
 pytestmark = pytest.mark.skipif(
     jax.default_backend() != "gpu",

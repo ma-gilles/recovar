@@ -3,15 +3,13 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+from distutils import log
 from pathlib import Path
 
-from distutils import log
 import numpy
-from setuptools import setup
-from setuptools import Extension
+from setuptools import Extension, setup
 from setuptools.command.build import build
 from setuptools.command.build_ext import build_ext
-
 
 REPO_ROOT = Path(__file__).resolve().parent
 _HELPERS_SPEC = importlib.util.spec_from_file_location("recovar_setup_helpers", REPO_ROOT / "setup_helpers.py")

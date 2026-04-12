@@ -140,6 +140,7 @@ def pytest_collection_modifyitems(config, items):
     gpu_available = False
     try:
         import jax
+
         gpu_available = any(d.platform == "gpu" for d in jax.devices())
     except Exception:
         pass

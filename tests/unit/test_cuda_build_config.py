@@ -57,11 +57,7 @@ def _make_env(path_entries, **overrides):
 
 def _make_wrapper(tmp_path: Path):
     wrapper = tmp_path / "print_nvcc.mk"
-    wrapper.write_text(
-        f"include {_MAKEFILE}\n\n"
-        "print-nvcc:\n"
-        "\t@printf '%s\\n' '$(NVCC)'\n"
-    )
+    wrapper.write_text(f"include {_MAKEFILE}\n\nprint-nvcc:\n\t@printf '%s\\n' '$(NVCC)'\n")
     return wrapper
 
 

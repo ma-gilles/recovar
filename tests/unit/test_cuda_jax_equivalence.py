@@ -219,7 +219,9 @@ def test_backproject_cuda_vs_jax(order, half_vol, half_img, N, gpu_device):
                 return _jax_slice(full_v, rots_gpu, image_shape, volume_shape, order)
         else:
             vol_size = N**3
-            f = lambda v: _jax_slice(v, rots_gpu, image_shape, volume_shape, order)
+
+            def f(v):
+                return _jax_slice(v, rots_gpu, image_shape, volume_shape, order)
 
         _, vjp_fn = jax.vjp(f, jnp.zeros(vol_size, dtype=jnp.complex64))
         jax_out = vjp_fn(full_imgs_gpu)[0]
@@ -683,7 +685,9 @@ def test_many_random_rotations_cuda_vs_jax(gpu_device):
         vol_zero = jax.device_put(vol_zero)
         cuda_bp = backproject(vol_zero, imgs_gpu, rots_gpu, image_shape, volume_shape, order=1)
 
-        f = lambda v: _jax_slice(v, rots_gpu, image_shape, volume_shape, 1)
+        def f(v):
+            return _jax_slice(v, rots_gpu, image_shape, volume_shape, 1)
+
         _, vjp_fn = jax.vjp(f, jnp.zeros(N**3, dtype=jnp.complex64))
         jax_bp = vjp_fn(imgs_gpu)[0]
 
@@ -773,7 +777,9 @@ def test_real_backproject_cuda_vs_jax(half_vol, half_img, gpu_device):
                 return _jax_slice(full_v, rots_gpu, image_shape, volume_shape, 1)
         else:
             vol_size = N**3
-            f = lambda v: _jax_slice(v, rots_gpu, image_shape, volume_shape, 1)
+
+            def f(v):
+                return _jax_slice(v, rots_gpu, image_shape, volume_shape, 1)
 
         _, vjp_fn = jax.vjp(f, jnp.zeros(vol_size, dtype=jnp.complex64))
         jax_out = vjp_fn(full_imgs_c)[0].real

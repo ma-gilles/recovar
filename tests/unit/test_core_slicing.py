@@ -341,14 +341,17 @@ def test_adjoint_slice_volume_half_volume_jax_vjp_consistency(monkeypatch):
             max_r=None,
         )
     )
-    f_ref = lambda hv: core_slicing.slice_volume(
-        fourier_transform_utils.half_volume_to_full_volume(hv, volume_shape),
-        rots,
-        image_shape,
-        volume_shape,
-        "linear_interp",
-        max_r=None,
-    )
+
+    def f_ref(hv):
+        return core_slicing.slice_volume(
+            fourier_transform_utils.half_volume_to_full_volume(hv, volume_shape),
+            rots,
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            max_r=None,
+        )
+
     _, u_ref = jax.vjp(f_ref, jnp.zeros(half_size, dtype=jnp.complex64))
     out_full_ref = np.asarray(u_ref(jnp.asarray(full_imgs))[0])
     np.testing.assert_allclose(out_full_direct, out_full_ref, atol=1e-5, rtol=1e-5)
@@ -632,7 +635,11 @@ def test_cubic_half_coefficients_slice_vjp_finite():
     H, W = image_shape
     g = jnp.ones((n_images, H * W), dtype=jnp.complex64)
 
-    f = lambda c: core_slicing.slice_from_cubic_coefficients(c, rots, image_shape, volume_shape, half_image=False)
+    def f(coefficients):
+        return core_slicing.slice_from_cubic_coefficients(
+            coefficients, rots, image_shape, volume_shape, half_image=False
+        )
+
     _, vjp_fn = jax.vjp(f, jnp.asarray(coeffs))
     grad = np.asarray(vjp_fn(g)[0])
 
@@ -758,9 +765,11 @@ def test_slice_from_half_volume_to_half_image_vjp_finite_jax(monkeypatch):
     imag_g = rng.standard_normal((n_images,) + half_img_shape).astype(np.float32)
     g = jnp.array(real_g + 1j * imag_g).reshape(n_images, -1)
 
-    f = lambda v: core_slicing.slice_volume(
-        v, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
-    )
+    def f(v):
+        return core_slicing.slice_volume(
+            v, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
+        )
+
     _, vjp_fn = jax.vjp(f, half_vol)
     grad = np.asarray(vjp_fn(g)[0])
 
@@ -785,9 +794,11 @@ def test_slice_from_half_volume_to_half_image_vjp_vs_reference_jax(monkeypatch):
     half_imgs = jnp.asarray(fourier_transform_utils.get_dft2_real(real_imgs)).reshape(n_images, -1)
 
     # New function: half_vol → half_images (JAX path, CUDA off)
-    f_new = lambda hv: core_slicing.slice_volume(
-        hv, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
-    )
+    def f_new(hv):
+        return core_slicing.slice_volume(
+            hv, rots, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
+        )
+
     _, vjp_new = jax.vjp(f_new, jnp.zeros(half_size, dtype=jnp.complex64))
     grad_new = np.asarray(vjp_new(half_imgs)[0])
 
@@ -961,9 +972,10 @@ def test_slice_from_half_volume_to_half_image_cuda_vjp_vs_ref(gpu_device):
         rots_d = jax.device_put(rots)
 
         # Function under test: direct CUDA half_vol → half_img kernel (custom_vjp)
-        f_test = lambda v: core_slicing.slice_volume(
-            v, rots_d, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
-        )
+        def f_test(v):
+            return core_slicing.slice_volume(
+                v, rots_d, image_shape, volume_shape, "linear_interp", half_volume=True, half_image=True
+            )
 
         # Reference: expand half_vol → full_vol, then CUDA full_vol → half_img
         def f_ref(v):
@@ -1257,7 +1269,7 @@ def test_batch_adjoint_slice_volume_cuda_half_image(gpu_device):
 # ── Helpers for new tests ──────────────────────────────────────────────
 
 
-def _random_rotations(rng, n):
+def _random_rotations_half_image(rng, n):
     from scipy.spatial.transform import Rotation
 
     return Rotation.random(n, random_state=rng.integers(2**31)).as_matrix().astype(np.float32)
@@ -1269,7 +1281,7 @@ def _make_hermitian_volume(rng, volume_shape):
     return np.asarray(fourier_transform_utils.get_dft3(real_data)).ravel()
 
 
-def _random_complex_images(rng, n_images, image_shape):
+def _random_complex_images_half_image(rng, n_images, image_shape):
     n_pix = image_shape[0] * image_shape[1]
     return (rng.standard_normal((n_images, n_pix)) + 1j * rng.standard_normal((n_images, n_pix))).astype(np.complex64)
 
@@ -1286,7 +1298,7 @@ def test_jax_half_image_forward_matches_full_then_extract(monkeypatch, order):
     volume_shape = (8, 8, 8)
     image_shape = (8, 8)
     n_images = 3
-    rots = jnp.array(_random_rotations(rng, n_images))
+    rots = jnp.array(_random_rotations_half_image(rng, n_images))
     vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
 
     full = np.asarray(core_slicing._jax_slice(vol, rots, image_shape, volume_shape, order))
@@ -1305,7 +1317,7 @@ def test_jax_half_image_forward_matches_full_then_extract_rectangular(monkeypatc
     rng = np.random.default_rng(5001)
     volume_shape = (8, 8, 8)
     n_images = 3
-    rots = jnp.array(_random_rotations(rng, n_images))
+    rots = jnp.array(_random_rotations_half_image(rng, n_images))
     vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
 
     full = np.asarray(core_slicing._jax_slice(vol, rots, image_shape, volume_shape, order))
@@ -1324,7 +1336,7 @@ def test_jax_half_image_forward_cubic_matches_full_then_extract(monkeypatch):
     volume_shape = (8, 8, 8)
     image_shape = (8, 8)
     n_images = 3
-    rots = jnp.array(_random_rotations(rng, n_images))
+    rots = jnp.array(_random_rotations_half_image(rng, n_images))
     vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
     coeffs = cubic_interpolation.calculate_spline_coefficients(vol.reshape(volume_shape))
 
@@ -1348,7 +1360,7 @@ def test_slice_volume_jax_half_image_flag(monkeypatch, disc_type, half_image):
     volume_shape = (8, 8, 8)
     image_shape = (8, 8)
     n_images = 3
-    rots = jnp.array(_random_rotations(rng, n_images))
+    rots = jnp.array(_random_rotations_half_image(rng, n_images))
     vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
 
     result = np.asarray(
@@ -1391,9 +1403,9 @@ def test_adjoint_jax_half_image_matches_expand(monkeypatch, disc_type):
     volume_shape = (8, 8, 8)
     image_shape = (8, 8)
     n_images = 3
-    rots = jnp.array(_random_rotations(rng, n_images))
+    rots = jnp.array(_random_rotations_half_image(rng, n_images))
 
-    full_imgs = jnp.array(_random_complex_images(rng, n_images, image_shape))
+    full_imgs = jnp.array(_random_complex_images_half_image(rng, n_images, image_shape))
     half_imgs = jnp.array(np.asarray(fourier_transform_utils.full_image_to_half_image(full_imgs, image_shape)))
     expanded = jnp.array(np.asarray(fourier_transform_utils.half_image_to_full_image(half_imgs, image_shape)))
 
@@ -1434,7 +1446,7 @@ def test_adjoint_dot_product_consistency(monkeypatch, disc_type, half_volume):
     volume_shape = (8, 8, 8)
     image_shape = (8, 8)
     n_images = 3
-    rots = jnp.array(_random_rotations(rng, n_images))
+    rots = jnp.array(_random_rotations_half_image(rng, n_images))
 
     vol_full = _make_hermitian_volume(rng, volume_shape)
     if half_volume:
@@ -1457,7 +1469,7 @@ def test_adjoint_dot_product_consistency(monkeypatch, disc_type, half_volume):
         )
     )
 
-    img_in = jnp.array(_random_complex_images(rng, n_images, image_shape))
+    img_in = jnp.array(_random_complex_images_half_image(rng, n_images, image_shape))
 
     # Adjoint: A*y
     adj = np.asarray(
@@ -1496,11 +1508,11 @@ def test_adjoint_cubic_half_volume_includes_spline_coefficients(monkeypatch):
     volume_shape = (8, 8, 8)
     image_shape = (8, 8)
     n_images = 2
-    rots = jnp.array(_random_rotations(rng, n_images))
+    rots = jnp.array(_random_rotations_half_image(rng, n_images))
 
     vol_full = jnp.array(_make_hermitian_volume(rng, volume_shape))
     half_vol = jnp.array(np.asarray(fourier_transform_utils.full_volume_to_half_volume(vol_full, volume_shape)))
-    imgs = jnp.array(_random_complex_images(rng, n_images, image_shape))
+    imgs = jnp.array(_random_complex_images_half_image(rng, n_images, image_shape))
 
     # This should not crash and should produce finite values.
     result = np.asarray(
@@ -1529,7 +1541,7 @@ def test_cubic_slice_from_coeffs_half_image(monkeypatch):
     volume_shape = (8, 8, 8)
     image_shape = (8, 8)
     n_images = 3
-    rots = jnp.array(_random_rotations(rng, n_images))
+    rots = jnp.array(_random_rotations_half_image(rng, n_images))
     vol = jnp.array(_make_hermitian_volume(rng, volume_shape))
     coeffs = core_slicing.precompute_cubic_coefficients(vol, volume_shape)
 

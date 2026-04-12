@@ -33,7 +33,6 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-
 from conftest import gpu_subprocess_env
 
 pytestmark = [pytest.mark.integration]

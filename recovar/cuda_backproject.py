@@ -26,12 +26,15 @@ import pathlib
 import subprocess
 import threading
 from contextlib import contextmanager
+from types import ModuleType
 from typing import Tuple
 
 try:
-    import fcntl
+    import fcntl as _fcntl
 except ImportError:  # pragma: no cover - Windows does not support custom CUDA builds
-    fcntl = None
+    fcntl: ModuleType | None = None
+else:
+    fcntl = _fcntl
 
 import jax
 import jax.numpy as jnp
