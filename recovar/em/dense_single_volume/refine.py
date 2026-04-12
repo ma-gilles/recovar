@@ -1311,6 +1311,7 @@ def _refine_relion_mode(
     Corresponds to RELION's autoRefine iteration loop.
     See docs/relion5_auto_refine_algorithm.md.
     """
+    from recovar import utils
     from recovar.reconstruction import noise, regularization, relion_functions
 
     cryo = experiment_datasets[0]
