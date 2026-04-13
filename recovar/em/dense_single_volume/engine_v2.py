@@ -472,6 +472,9 @@ def run_em_v2(
     half_spectrum_scoring: bool = False,
     volume_upsampling_factor: int = 1,
     old_offsets: np.ndarray = None,
+    norm_correction: np.ndarray = None,
+    avg_norm_correction: float = 1.0,
+    scale_correction: np.ndarray = None,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -758,6 +761,16 @@ def run_em_v2(
                     dst_x = slice(max(0, dy), min(W, W + dy))
                     shifted_batch[i][..., dst_y, dst_x] = img[..., src_y, src_x]
             batch_data = jnp.asarray(shifted_batch)
+
+        # -- RELION norm_correction: per-image intensity normalization --
+        # RELION (ml_optimiser.cpp:6240): img *= avg_norm / normcorr_i
+        # This equalizes particle intensities before scoring, preventing
+        # bright particles from dominating the posterior.
+        if norm_correction is not None:
+            batch_nc = norm_correction[image_indices[start_idx:end_idx]]
+            safe_nc = np.maximum(batch_nc, 1e-8)
+            nc_scale = np.asarray(avg_norm_correction / safe_nc, dtype=np.float32)
+            batch_data = batch_data * jnp.asarray(nc_scale[:, None, None])
 
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(

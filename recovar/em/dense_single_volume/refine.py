@@ -185,6 +185,8 @@ def _run_grouped_local_search_em(
     accumulate_noise=False,
     volume_upsampling_factor=1,
     old_offsets=None,
+    norm_correction=None,
+    avg_norm_correction=1.0,
 ):
     """Run batched exact local search on the fine HEALPix grid.
 
@@ -296,6 +298,8 @@ def _run_grouped_local_search_em(
             half_spectrum_scoring=True,
             volume_upsampling_factor=volume_upsampling_factor,
             old_offsets=old_offsets,
+            norm_correction=norm_correction,
+            avg_norm_correction=avg_norm_correction,
         )
         if accumulate_noise:
             _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g = run_em_outputs
@@ -1439,6 +1443,35 @@ def _refine_relion_mode(
         np.zeros((experiment_datasets[0].n_units, 2), dtype=np.float32),
         np.zeros((experiment_datasets[1].n_units, 2), dtype=np.float32),
     ]
+    # RELION norm_correction: per-image intensity normalization.
+    # normcorr_i = sqrt(2 * sum|img_i(k)|^2), avg_norm = mean(normcorr).
+    # Images are scaled by avg_norm / normcorr_i before scoring.
+    # Initialize from the raw images (compute once at startup).
+    norm_corrections = [
+        np.ones(experiment_datasets[0].n_units, dtype=np.float32),
+        np.ones(experiment_datasets[1].n_units, dtype=np.float32),
+    ]
+    avg_norm_correction = 1.0
+    # Compute initial norm_corrections from image power
+    for k_init in range(2):
+        _ds_init = experiment_datasets[k_init]
+        _nc_list = []
+        for imgs, _, _, _, _, _, idx in _ds_init.iter_batches(image_batch_size, by_image=True):
+            processed = _ds_init.process_images(imgs, apply_image_mask=True)
+            img_power = np.sum(np.abs(np.array(processed)) ** 2, axis=-1)
+            _nc_list.append(np.sqrt(2.0 * img_power))
+            break  # first batch only for speed
+        if _nc_list:
+            _nc_arr = np.concatenate(_nc_list)
+            # Extend to full dataset (approximate from first batch)
+            norm_corrections[k_init][: len(_nc_arr)] = _nc_arr
+            norm_corrections[k_init][len(_nc_arr) :] = np.mean(_nc_arr)
+    avg_norm_correction = float(np.mean(np.concatenate(norm_corrections)))
+    logger.info(
+        "Initial norm_correction: avg=%.4f, std=%.4f",
+        avg_norm_correction,
+        float(np.std(np.concatenate(norm_corrections))),
+    )
     max_posterior_per_half = [None, None]
     rotation_posterior_per_half = [None, None]
     significant_counts = []
@@ -1787,6 +1820,8 @@ def _refine_relion_mode(
                     accumulate_noise=True,
                     volume_upsampling_factor=PADDING_FACTOR,
                     old_offsets=old_offsets[k],
+                    norm_correction=norm_corrections[k],
+                    avg_norm_correction=avg_norm_correction,
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
@@ -1996,6 +2031,8 @@ def _refine_relion_mode(
                     half_spectrum_scoring=True,
                     volume_upsampling_factor=PADDING_FACTOR,
                     old_offsets=old_offsets[k],
+                    norm_correction=norm_corrections[k],
+                    avg_norm_correction=avg_norm_correction,
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
