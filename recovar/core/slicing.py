@@ -124,39 +124,62 @@ class Volume(eqx.Module):
 
     def __check_init__(self):
         if self.disc_type == "cubic":
-            raise ValueError("Use to_cubic(...) for raw cubic inputs or CubicVolume(...) only for precomputed coefficients")
+            raise ValueError(
+                "Use to_cubic(...) for raw cubic inputs or CubicVolume.from_coeffs(...) for precomputed coefficients"
+            )
+        if self.disc_type not in {"nearest", "linear_interp"}:
+            raise ValueError(
+                "Volume disc_type must be 'nearest' or 'linear_interp'; use to_cubic(...) for cubic inputs"
+            )
 
-    def with_values(self, values):
+    @property
+    def array(self):
+        return self.values
+
+    def replace_array(self, array):
         return type(self)(
-            values=jnp.asarray(values),
+            values=jnp.asarray(array),
             disc_type=self.disc_type,
             half_volume=self.half_volume,
         )
+
+
+_CUBIC_VOLUME_INIT_TOKEN = object()
 
 
 class CubicVolume(eqx.Module):
     """Thin wrapper for precomputed cubic spline coefficients.
 
     Use :func:`to_cubic` for raw sampled Fourier volumes. Construct
-    :class:`CubicVolume` directly only when coefficients are already available.
+    :class:`CubicVolume` via :meth:`from_coeffs` when coefficients are already available.
     """
 
-    values: jax.Array
+    coeffs: jax.Array
     half_volume: bool = eqx.field(static=True, default=False)
     disc_type: str = eqx.field(static=True, default="cubic")
+    _init_token: object | None = eqx.field(static=True, default=None, repr=False)
 
     def __check_init__(self):
         if self.disc_type != "cubic":
             raise ValueError("CubicVolume must use disc_type='cubic'")
+        if self._init_token is not _CUBIC_VOLUME_INIT_TOKEN:
+            raise TypeError("Use CubicVolume.from_coeffs(...) for precomputed cubic coefficients")
 
     @property
-    def coeffs(self):
-        """Alias for the stored spline coefficients."""
-        return self.values
+    def array(self):
+        return self.coeffs
 
-    def with_values(self, values):
-        return type(self)(
-            values=jnp.asarray(values),
+    @classmethod
+    def from_coeffs(cls, coeffs, *, half_volume=False):
+        return cls(
+            coeffs=jnp.asarray(coeffs),
+            half_volume=half_volume,
+            _init_token=_CUBIC_VOLUME_INIT_TOKEN,
+        )
+
+    def replace_array(self, array):
+        return type(self).from_coeffs(
+            array,
             half_volume=self.half_volume,
         )
 
@@ -169,8 +192,23 @@ def _require_volume_object(volume, *, function_name):
         return volume
     raise TypeError(
         f"{function_name} requires a Volume or CubicVolume; wrap sampled arrays with Volume(...) "
-        "and raw cubic arrays with to_cubic(...). Use CubicVolume(...) only for precomputed coefficients."
+        "and raw cubic arrays with to_cubic(...). Use CubicVolume.from_coeffs(...) only for precomputed coefficients."
     )
+
+
+
+
+def _wrap_projection_array(array, *, disc_type, half_volume=False):
+    if disc_type == "cubic":
+        return CubicVolume.from_coeffs(array, half_volume=half_volume)
+    return Volume(array, disc_type=disc_type, half_volume=half_volume)
+
+
+def _zeros_projection_volume(volume_shape, *, disc_type, dtype, half_volume=False, batch_ndim=None):
+    expected_shape = _expected_volume_shape(volume_shape, half_volume)
+    flat = int(np.prod(expected_shape))
+    shape = (flat,) if batch_ndim is None else (*batch_ndim, flat)
+    return _wrap_projection_array(jnp.zeros(shape, dtype=dtype), disc_type=disc_type, half_volume=half_volume)
 
 
 def _expected_volume_shape(volume_shape, half_volume):
@@ -235,7 +273,7 @@ def _volume_array_layout(volume, volume_shape, half_volume=None):
 def _projection_volume(volume, volume_shape, *, function_name):
     wrapped_volume = _require_volume_object(volume, function_name=function_name)
     _match_volume_array_layout(
-        jnp.asarray(wrapped_volume.values),
+        jnp.asarray(wrapped_volume.array),
         _expected_volume_shape(volume_shape, wrapped_volume.half_volume),
     )
     return wrapped_volume
@@ -285,7 +323,7 @@ def _precompute_cubic_batch(volumes, volume_shape, half_volume):
     return coeffs.reshape(volumes.shape[0], -1)
 
 
-def _reshape_cubic_values(coeffs, layout, expected_shape):
+def _reshape_cubic_coeffs(coeffs, layout, expected_shape):
     if layout == "single_flat":
         return coeffs.reshape(-1)
     if layout == "single_grid":
@@ -311,8 +349,8 @@ def to_cubic(volume, volume_shape, half_volume=None):
     volume : array, Volume, or CubicVolume
         Raw full/half sampled values, optionally batched. If already a
         :class:`CubicVolume`, it is returned unchanged after layout validation.
-        Direct ``CubicVolume(...)`` construction is intended only for arrays
-        that already store spline coefficients.
+        Use ``CubicVolume.from_coeffs(...)`` only for arrays that already store
+        spline coefficients.
     volume_shape : tuple[int, int, int]
         Full-grid volume shape.
     half_volume : bool | None
@@ -331,7 +369,7 @@ def to_cubic(volume, volume_shape, half_volume=None):
             raise ValueError(
                 f"half_volume={half_volume!r} does not match Volume.half_volume={volume.half_volume!r}"
             )
-        values = volume.values
+        values = volume.array
         half_volume = volume.half_volume
         layout = _match_volume_array_layout(values, _expected_volume_shape(volume_shape, half_volume))
     else:
@@ -350,8 +388,8 @@ def to_cubic(volume, volume_shape, half_volume=None):
     else:
         coeffs = _precompute_cubic_batch(values.reshape(values.shape[0], -1), volume_shape, half_volume)
 
-    return CubicVolume(
-        values=_reshape_cubic_values(coeffs, layout, expected_shape),
+    return CubicVolume.from_coeffs(
+        _reshape_cubic_coeffs(coeffs, layout, expected_shape),
         half_volume=half_volume,
     )
 
@@ -489,7 +527,7 @@ def slice_volume(
     disc_type = wrapped_volume.disc_type
     half_volume = wrapped_volume.half_volume
     half_image = _resolve_half_image(half_image, half_volume)
-    volume = _normalize_volume(wrapped_volume.values, volume_shape, half_volume)
+    volume = _normalize_volume(wrapped_volume.array, volume_shape, half_volume)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
 
@@ -566,7 +604,7 @@ def batch_slice_volume(
     disc_type = wrapped_volume.disc_type
     half_volume = wrapped_volume.half_volume
     half_image = _resolve_half_image(half_image, half_volume)
-    volumes = jnp.asarray(wrapped_volume.values)
+    volumes = jnp.asarray(wrapped_volume.array)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
     if _use_cuda(order):
@@ -587,7 +625,7 @@ def batch_slice_volume(
         )
     return jax.vmap(
         lambda v: slice_volume(
-            wrapped_volume.with_values(v),
+            wrapped_volume.replace_array(v),
             rotation_matrices,
             image_shape,
             volume_shape,
@@ -602,10 +640,9 @@ def adjoint_slice_volume(
     rotation_matrices,
     image_shape,
     volume_shape,
-    disc_type=None,
-    volume=None,
+    *,
+    like,
     half_image=None,
-    half_volume=None,
     max_r=_AUTO,
 ):
     """Adjoint slice extraction (backprojection).
@@ -613,41 +650,24 @@ def adjoint_slice_volume(
     Parameters
     ----------
     slices : array ``(n_images, n_pixels)``.
-        Real or complex.  If *volume* is complex, slices are promoted
+        Real or complex. If ``like.array`` is complex, slices are promoted
         to match (and vice versa).
+    like : Volume or CubicVolume
+        Template/accumulator that fixes the output representation. The returned
+        array lives in the same representation as ``like`` and is added into
+        its stored array.
     half_image : bool | None
         If True, *slices* are rfft-packed half-spectrum images. ``None``
-        defaults to ``half_volume``.
-    half_volume : bool | None
-        If True, output uses rfft-packed half-volume layout. When *volume* is a
-        :class:`Volume`, ``None`` means "use the wrapper's layout".
-    volume : optional accumulator to add the result into.
-        When provided as a wrapped volume object, its metadata controls the
-        output layout and interpolation type. A ``CubicVolume`` accumulator
-        accumulates in coefficient space; omitting the accumulator with
-        ``disc_type="cubic"`` returns the historical adjoint with respect to
-        sampled values through coefficient precomputation.
+        defaults to ``like.half_volume``.
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
-    wrapped_volume = volume if isinstance(volume, _VOLUME_TYPES) else None
-    if wrapped_volume is not None:
-        if disc_type is not None and disc_type != wrapped_volume.disc_type:
-            raise ValueError(
-                f"disc_type={disc_type!r} does not match Volume.disc_type={wrapped_volume.disc_type!r}"
-            )
-        if half_volume is not None and bool(half_volume) != wrapped_volume.half_volume:
-            raise ValueError(
-                f"half_volume={half_volume!r} does not match Volume.half_volume={wrapped_volume.half_volume!r}"
-            )
-        disc_type = wrapped_volume.disc_type
-        half_volume = wrapped_volume.half_volume
-        volume = _normalize_volume(wrapped_volume.values, volume_shape, half_volume)
-    else:
-        if disc_type is None:
-            raise ValueError("disc_type must be provided when no Volume accumulator is supplied")
-        half_volume = bool(False if half_volume is None else half_volume)
-
+    wrapped_volume = _projection_volume(like, volume_shape, function_name="adjoint_slice_volume")
+    disc_type = wrapped_volume.disc_type
+    half_volume = wrapped_volume.half_volume
+    seed_array = jnp.asarray(wrapped_volume.array)
+    output_shape = seed_array.shape
+    volume = _normalize_volume(seed_array, volume_shape, half_volume)
     half_image = _resolve_half_image(half_image, half_volume)
     slices = _normalize_slices(slices, image_shape, half_image)
     max_r = _resolve_max_r(max_r, image_shape)
@@ -657,14 +677,11 @@ def adjoint_slice_volume(
     if _use_cuda_backproject(order):
         from recovar.cuda_backproject import backproject
 
-        vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
-        if volume is None:
-            volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
         # CUDA needs matching dtypes: if either is complex, promote both.
         out_dtype = jnp.result_type(slices, volume)
         slices = slices.astype(out_dtype)
         volume = volume.astype(out_dtype)
-        return backproject(
+        result = backproject(
             volume,
             slices,
             rotation_matrices,
@@ -675,6 +692,7 @@ def adjoint_slice_volume(
             half_volume=half_volume,
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
         )
+        return jnp.asarray(result).reshape(output_shape)
 
     # JAX order 0/1: RELION-style explicit scatter
     if order <= 1:
@@ -690,26 +708,20 @@ def adjoint_slice_volume(
             half_image=half_image,
             max_r=max_r,
         )
-        return result if volume is None else result + volume
+        return jnp.asarray(result).reshape(output_shape) + seed_array
 
-    # Cubic: if the accumulator is a cubic Volume, accumulate directly in
-    # coefficient space. Raw cubic arrays keep the historical adjoint w.r.t.
-    # the original volume values.
-    if wrapped_volume is not None:
-        result = _jax_adjoint_slice_from_coefficients(
-            slices,
-            rotation_matrices,
-            image_shape,
-            volume_shape,
-            half_volume=half_volume,
-            half_image=half_image,
-            max_r=max_r,
-        ).reshape(-1)
-    else:
-        result = _vjp_adjoint_cubic(
-            slices, rotation_matrices, image_shape, volume_shape, half_image=half_image, half_volume=half_volume
-        )
-    return result if volume is None else result + volume
+    # Cubic adjoints are representation-preserving: CubicVolume accumulates in
+    # coefficient space.
+    result = _jax_adjoint_slice_from_coefficients(
+        slices,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        half_volume=half_volume,
+        half_image=half_image,
+        max_r=max_r,
+    )
+    return jnp.asarray(result).reshape(output_shape) + seed_array
 
 
 def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape, half_image=False, half_volume=False):
@@ -785,10 +797,9 @@ def batch_adjoint_slice_volume(
     rotation_matrices,
     image_shape,
     volume_shape,
-    disc_type=None,
-    volumes=None,
+    *,
+    like,
     half_image=None,
-    half_volume=None,
     max_r=_AUTO,
 ):
     """Batch backprojection: per-volume image sets to batch of volumes.
@@ -798,40 +809,23 @@ def batch_adjoint_slice_volume(
     slices : shape ``(batch, n_images, n_pixels)``.
         Real or complex.  Promoted to match *volumes* dtype (and vice versa).
     rotation_matrices : shape ``(n_images, 3, 3)`` — shared across batch.
-    volumes : optional batched accumulators.
-        When provided as a wrapped volume object, its metadata controls the
-        output layout and interpolation type.
-    half_image, half_volume : same semantics as ``adjoint_slice_volume``.
+    like : Volume or CubicVolume
+        Batched template/accumulator fixing the output representation. The
+        returned arrays are added into its stored arrays.
+    half_image : same semantics as ``adjoint_slice_volume``.
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """
-    wrapped_volume = volumes if isinstance(volumes, _VOLUME_TYPES) else None
-    if wrapped_volume is not None:
-        if disc_type is not None and disc_type != wrapped_volume.disc_type:
-            raise ValueError(
-                f"disc_type={disc_type!r} does not match Volume.disc_type={wrapped_volume.disc_type!r}"
-            )
-        if half_volume is not None and bool(half_volume) != wrapped_volume.half_volume:
-            raise ValueError(
-                f"half_volume={half_volume!r} does not match Volume.half_volume={wrapped_volume.half_volume!r}"
-            )
-        disc_type = wrapped_volume.disc_type
-        half_volume = wrapped_volume.half_volume
-        volumes = jnp.asarray(wrapped_volume.values)
-    else:
-        if disc_type is None:
-            raise ValueError("disc_type must be provided when no Volume accumulator is supplied")
-        half_volume = bool(False if half_volume is None else half_volume)
-
+    wrapped_volume = _projection_volume(like, volume_shape, function_name="batch_adjoint_slice_volume")
+    disc_type = wrapped_volume.disc_type
+    half_volume = wrapped_volume.half_volume
+    volumes_array = jnp.asarray(wrapped_volume.array)
+    output_shape = volumes_array.shape
+    volumes = volumes_array.reshape(volumes_array.shape[0], -1) if volumes_array.ndim > 2 else volumes_array
     half_image = _resolve_half_image(half_image, half_volume)
     slices = jnp.asarray(slices)
     max_r = _resolve_max_r(max_r, image_shape)
     order = decide_order(disc_type)
-    vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
-    vol_flat = int(np.prod(vol_shape))
-    batch = slices.shape[0]
-    if volumes is None:
-        volumes = jnp.zeros((batch, vol_flat), dtype=slices.dtype)
     if _use_cuda_backproject(order):
         from recovar.cuda_backproject import batch_backproject
 
@@ -839,7 +833,7 @@ def batch_adjoint_slice_volume(
         out_dtype = jnp.result_type(slices, volumes)
         slices = slices.astype(out_dtype)
         volumes = volumes.astype(out_dtype)
-        return batch_backproject(
+        result = batch_backproject(
             volumes,
             slices,
             rotation_matrices,
@@ -850,6 +844,7 @@ def batch_adjoint_slice_volume(
             half_image=half_image,
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
         )
+        return jnp.asarray(result).reshape(output_shape)
     # JAX fallback: vmap single adjoint
     return jax.vmap(
         lambda sl, vol: adjoint_slice_volume(
@@ -857,10 +852,8 @@ def batch_adjoint_slice_volume(
             rotation_matrices,
             image_shape,
             volume_shape,
-            disc_type=disc_type,
-            volume=wrapped_volume.with_values(vol) if wrapped_volume is not None else vol,
+            like=wrapped_volume.replace_array(vol),
             half_image=half_image,
-            half_volume=half_volume,
             max_r=max_r,
         )
     )(slices, volumes)
@@ -939,9 +932,6 @@ __all__ = [
     "batch_slice_volume",
     "adjoint_slice_volume",
     "batch_adjoint_slice_volume",
-    "precompute_cubic_coefficients",
-    "precompute_cubic_coefficients_half",
-    "slice_from_cubic_coefficients",
     "_AUTO",
     "_default_max_r",
 ]

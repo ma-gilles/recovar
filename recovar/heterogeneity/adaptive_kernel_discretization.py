@@ -19,6 +19,7 @@ from recovar.reconstruction import noise, regularization, relion_functions
 from recovar.data_io import cryoem_dataset
 from recovar.core import linalg
 from recovar.core.configs import ForwardModelConfig
+from recovar.core.slicing import _wrap_projection_array, _zeros_projection_volume
 import recovar.core.forward as core_forward
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 
@@ -227,10 +228,17 @@ def _heterogeneity_kernel_batch_from_fft_explicit(
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
-        config.disc_type,
-        volume=Ft_y,
+        like=(
+            _wrap_projection_array(Ft_y, disc_type=config.disc_type, half_volume=True)
+            if Ft_y is not None
+            else _zeros_projection_volume(
+                config.volume_shape,
+                disc_type=config.disc_type,
+                dtype=half_images.dtype,
+                half_volume=True,
+            )
+        ),
         half_image=True,
-        half_volume=True,
         max_r=None,
     )
 
@@ -255,10 +263,17 @@ def _heterogeneity_kernel_batch_from_fft_explicit(
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
-        config.disc_type,
-        volume=Ft_ctf,
+        like=(
+            _wrap_projection_array(Ft_ctf, disc_type=config.disc_type, half_volume=True)
+            if Ft_ctf is not None
+            else _zeros_projection_volume(
+                config.volume_shape,
+                disc_type=config.disc_type,
+                dtype=ctf_half.dtype,
+                half_volume=True,
+            )
+        ),
         half_image=True,
-        half_volume=True,
         max_r=None,  # TODO: see above
     )
     return Ft_y, Ft_ctf.real
@@ -738,13 +753,11 @@ def batch_im_adjoint_forward(config, slices, ctf_params, rotation_matrices, half
     Returns shape (n_bins, volume_size) — batch axis first.
     """
     def _volume_seed(dtype):
-        if not half_volume:
-            return None
-        half_shape = volume_shape_to_half_volume_shape(config.volume_shape)
-        return core.Volume(
-            jnp.zeros(int(np.prod(half_shape)), dtype=dtype),
+        return _zeros_projection_volume(
+            config.volume_shape,
             disc_type=config.disc_type,
-            half_volume=True,
+            dtype=dtype,
+            half_volume=half_volume,
         )
 
     return jax.vmap(
@@ -753,7 +766,7 @@ def batch_im_adjoint_forward(config, slices, ctf_params, rotation_matrices, half
             s,
             ctf_params,
             rotation_matrices,
-            volume=_volume_seed(s.dtype),
+            like=_volume_seed(s.dtype),
             half_image=half_image,
         ),
         in_axes=-1,

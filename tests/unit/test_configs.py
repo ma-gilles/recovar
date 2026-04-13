@@ -53,8 +53,17 @@ def _make_config(ctf_fun=_ones_ctf, disc_type="nearest"):
 
 def _volume(values, disc_type="linear_interp", half_volume=False):
     if disc_type == "cubic":
-        return recovar.core.CubicVolume(values, half_volume=half_volume)
+        raise ValueError("Use recovar.core.to_cubic(...) for raw cubic test inputs")
     return recovar.core.Volume(values, disc_type=disc_type, half_volume=half_volume)
+
+
+def _adjoint_like(config, dtype, *, half_volume=False):
+    expected_shape = VOLUME_SHAPE[:2] + (VOLUME_SHAPE[2] // 2 + 1,) if half_volume else VOLUME_SHAPE
+    flat = int(np.prod(expected_shape))
+    zeros = jnp.zeros(flat, dtype=dtype)
+    if config.disc_type == "cubic":
+        return recovar.core.CubicVolume.from_coeffs(zeros, half_volume=half_volume)
+    return recovar.core.Volume(zeros, disc_type=config.disc_type, half_volume=half_volume)
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +198,7 @@ class TestNewForwardModelAPI:
         ctf_params = np.zeros((1, 9), dtype=np.float32)
         slices = np.zeros((1, IMAGE_SHAPE[0] * IMAGE_SHAPE[1]), dtype=np.float32)
 
-        out = np.asarray(core_forward.adjoint_forward_model(config, slices, ctf_params, rots, skip_ctf=True))
+        out = np.asarray(core_forward.adjoint_forward_model(config, slices, ctf_params, rots, skip_ctf=True, like=_adjoint_like(config, slices.dtype)))
         assert out.shape == (np.prod(VOLUME_SHAPE),)
 
     def test_forward_model_and_adjoint_contracts(self):

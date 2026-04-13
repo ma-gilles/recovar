@@ -143,7 +143,7 @@ class TestCubicSlicingEquivalence:
         # Precompute coefficients (callers always do this for cubic)
         coeffs = slicing.precompute_cubic_coefficients(vol, volume_shape)
 
-        coeff_volume = slicing.CubicVolume(coeffs)
+        coeff_volume = slicing.CubicVolume.from_coeffs(coeffs)
         full_slices = slicing.slice_volume(
             coeff_volume,
             rots,
@@ -185,7 +185,7 @@ class TestCubicSlicingEquivalence:
 
         # slice_volume with pre-computed coefficients
         direct = slicing.slice_volume(
-            slicing.CubicVolume(coeffs),
+            slicing.CubicVolume.from_coeffs(coeffs),
             rots,
             image_shape,
             volume_shape,
@@ -253,7 +253,7 @@ class TestCubicSlicingEquivalence:
         full_coeffs = slicing.precompute_cubic_coefficients(vol, volume_shape)
 
         result_full = slicing.slice_volume(
-            slicing.CubicVolume(full_coeffs),
+            slicing.CubicVolume.from_coeffs(full_coeffs),
             rots,
             image_shape,
             volume_shape,
@@ -261,7 +261,7 @@ class TestCubicSlicingEquivalence:
         )
         half_coeffs = slicing.precompute_cubic_coefficients_half(vol, volume_shape)
         result_half = slicing.slice_volume(
-            slicing.CubicVolume(half_coeffs, half_volume=True),
+            slicing.CubicVolume.from_coeffs(half_coeffs, half_volume=True),
             rots,
             image_shape,
             volume_shape,

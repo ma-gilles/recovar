@@ -9,6 +9,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.reconstruction import relion_functions, noise
 from recovar.heterogeneity import covariance_estimation, principal_components
 from recovar.core.configs import ForwardModelConfig
+from recovar.core.slicing import _wrap_projection_array, _zeros_projection_volume
 from .core import batch_vol_slice_volume
 from recovar.heterogeneity.principal_components import get_cov_svds, pca_by_projected_covariance
 from recovar.heterogeneity.covariance_estimation import compute_both_H_B, compute_covariance_regularization_relion_style
@@ -252,8 +253,11 @@ def sum_up_images_fixed_rots_covariance_with_precompute_eqx(
         rotations,
         config.image_shape,
         config.volume_shape,
-        "linear_interp",
-        volume=B,
+        like=(
+            _wrap_projection_array(B, disc_type="linear_interp")
+            if B is not None
+            else _zeros_projection_volume(config.volume_shape, disc_type="linear_interp", dtype=before_adj_B2_half.dtype)
+        ),
         half_image=True,
     )
 
@@ -267,8 +271,11 @@ def sum_up_images_fixed_rots_covariance_with_precompute_eqx(
         rotations,
         config.image_shape,
         config.volume_shape,
-        "linear_interp",
-        volume=H,
+        like=(
+            _wrap_projection_array(H, disc_type="linear_interp")
+            if H is not None
+            else _zeros_projection_volume(config.volume_shape, disc_type="linear_interp", dtype=H_before_adj_half.dtype)
+        ),
         half_image=True,
     )
 
@@ -355,7 +362,13 @@ def compute_H_B(
     n_batches = utils.get_number_of_index_batch(n_rotations, batch_size)
 
     mean_projections = np.zeros((rotations.shape[0], image_size), dtype=np.complex64)
-    mean_volume = core.to_cubic(mean, experiment_dataset.volume_shape) if mean_disc == "cubic" else core.Volume(mean, disc_type=mean_disc)
+    mean_volume = (
+        mean
+        if isinstance(mean, (core.Volume, core.CubicVolume))
+        else core.to_cubic(mean, experiment_dataset.volume_shape)
+        if mean_disc == "cubic"
+        else core.Volume(mean, disc_type=mean_disc)
+    )
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
         mean_projections[rot_indices] = core.slice_volume(
             mean_volume,
@@ -501,7 +514,16 @@ def sum_up_images_fixed_rots_covariance_with_precompute(
 
     before_adj_B2_half = fourier_transform_utils.full_image_to_half_image(before_adj_B2, image_shape)
     B = core.adjoint_slice_volume(
-        before_adj_B2_half, rotations, image_shape, volume_shape, "linear_interp", volume=B, half_image=True
+        before_adj_B2_half,
+        rotations,
+        image_shape,
+        volume_shape,
+        like=(
+            _wrap_projection_array(B, disc_type="linear_interp")
+            if B is not None
+            else _zeros_projection_volume(volume_shape, disc_type="linear_interp", dtype=before_adj_B2_half.dtype)
+        ),
+        half_image=True,
     )
 
     CTF_squared = CTF**2
@@ -511,7 +533,16 @@ def sum_up_images_fixed_rots_covariance_with_precompute(
 
     H_before_adj_half = fourier_transform_utils.full_image_to_half_image(H_before_adj, image_shape)
     H = core.adjoint_slice_volume(
-        H_before_adj_half, rotations, image_shape, volume_shape, "linear_interp", volume=H, half_image=True
+        H_before_adj_half,
+        rotations,
+        image_shape,
+        volume_shape,
+        like=(
+            _wrap_projection_array(H, disc_type="linear_interp")
+            if H is not None
+            else _zeros_projection_volume(volume_shape, disc_type="linear_interp", dtype=H_before_adj_half.dtype)
+        ),
+        half_image=True,
     )
     return H, B
 
@@ -599,12 +630,12 @@ def compute_projected_covariance_rhs_lhs(
     # Compute all mean and principal component projections
     mean_projections = np.empty((rotations.shape[0], image_size), dtype=np.complex64)
     mean_volume = (
-        core.to_cubic(mean, experiment_dataset.volume_shape)
+        core.CubicVolume.from_coeffs(mean)
         if disc_type_mean == "cubic"
         else core.Volume(mean, disc_type=disc_type_mean)
     )
     basis_volume = (
-        core.to_cubic(basis, experiment_dataset.volume_shape)
+        core.CubicVolume.from_coeffs(basis)
         if disc_type_u == "cubic"
         else core.Volume(basis, disc_type=disc_type_u)
     )

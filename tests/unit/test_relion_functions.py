@@ -10,6 +10,10 @@ from recovar import core
 from recovar.reconstruction import relion_functions as rf
 
 
+def _adjoint_like(config, dtype):
+    return core.Volume(jnp.zeros(int(np.prod(config.volume_shape)), dtype=dtype), disc_type=config.disc_type)
+
+
 def test_gridding_correct_invalid_order_raises():
     vol = np.ones((4, 4, 4), dtype=np.float32)
     with pytest.raises(ValueError):
@@ -388,7 +392,7 @@ def test_relion_kernel_batch_half_image_matches_full_reference():
             jnp.array(ctf_params),
             jnp.array(rots),
             skip_ctf=False,
-            volume=None,
+            like=_adjoint_like(config, full_images_normed.dtype),
             half_image=False,
         )
     )
@@ -399,7 +403,7 @@ def test_relion_kernel_batch_half_image_matches_full_reference():
             ctf_full,
             jnp.array(ctf_params),
             jnp.array(rots),
-            volume=None,
+            like=_adjoint_like(config, ctf_full.dtype),
             half_image=False,
         )
     )
@@ -472,7 +476,7 @@ def test_relion_kernel_batch_complex_input_matches_full_reference():
             jnp.array(ctf_params),
             rots,
             skip_ctf=False,
-            volume=None,
+            like=_adjoint_like(config, full_normed.dtype),
             half_image=False,
         )
     )
@@ -483,7 +487,7 @@ def test_relion_kernel_batch_complex_input_matches_full_reference():
             ctf_full,
             jnp.array(ctf_params),
             rots,
-            volume=None,
+            like=_adjoint_like(config, ctf_full.dtype),
             half_image=False,
         )
     )

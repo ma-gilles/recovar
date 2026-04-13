@@ -56,6 +56,11 @@ def E_with_precompute(
 
     projections = np.zeros((rotations.shape[0], image_size), dtype=np.complex64)
     volume_obj = core.to_cubic(volume, experiment_dataset.volume_shape) if disc_type == "cubic" else core.Volume(volume, disc_type=disc_type)
+    basis_volume = (
+        core.to_cubic(u, experiment_dataset.volume_shape)
+        if use_heterogeneous and disc_type == "cubic"
+        else core.Volume(u, disc_type=disc_type) if use_heterogeneous else None
+    )
     for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
         projections[rot_indices] = core.slice_volume(
             volume_obj,
@@ -115,7 +120,10 @@ def E_with_precompute(
         # Compute all mean and principal component projections
         for rot_indices in utils.index_batch_iter(n_rotations, batch_size):
             u_projections[rot_indices] = batch_vol_slice_volume(
-                u, rotations[rot_indices], experiment_dataset.image_shape, experiment_dataset.volume_shape, disc_type
+                basis_volume,
+                rotations[rot_indices],
+                experiment_dataset.image_shape,
+                experiment_dataset.volume_shape,
             )
 
         logger.info("done with u_proj %s", batch_size)
@@ -224,8 +232,15 @@ def compute_residuals_many_poses_eqx(
     translation_fn="fft",
 ):
     """Equinox version of compute_residuals_many_poses (12 → 8 params)."""
+    projection_volumes = (
+        volumes
+        if isinstance(volumes, (core.Volume, core.CubicVolume))
+        else core.to_cubic(volumes, config.volume_shape)
+        if config.disc_type == "cubic"
+        else core.Volume(volumes, disc_type=config.disc_type)
+    )
     projected_volumes = batch_vol_rot_slice_volume(
-        volumes, rotation_matrices, config.image_shape, config.volume_shape, config.disc_type
+        projection_volumes, rotation_matrices, config.image_shape, config.volume_shape
     )
     projected_volumes = projected_volumes * config.compute_ctf(ctf_params)[:, None, None, :]
 
@@ -271,7 +286,14 @@ def compute_residuals_many_poses(
     translation_fn="fft",
 ):
     # n_vols x rotations x image_size
-    projected_volumes = batch_vol_rot_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type)
+    projection_volumes = (
+        volumes
+        if isinstance(volumes, (core.Volume, core.CubicVolume))
+        else core.to_cubic(volumes, volume_shape)
+        if disc_type == "cubic"
+        else core.Volume(volumes, disc_type=disc_type)
+    )
+    projected_volumes = batch_vol_rot_slice_volume(projection_volumes, rotation_matrices, image_shape, volume_shape)
 
     # Broadcast CTF in volumes x rotations
     projected_volumes = projected_volumes * ctf(CTF_params, image_shape, voxel_size)[:, None, None, :]

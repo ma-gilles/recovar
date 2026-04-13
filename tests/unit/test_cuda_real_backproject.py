@@ -214,12 +214,13 @@ def test_real_adjoint_slice_volume():
     # Real slices (e.g. CTF^2)
     real_slices = jnp.array(rng.standard_normal((n_images, N * N)).astype(np.float32))
 
-    result = slicing.adjoint_slice_volume(real_slices, rots, (N, N), (N, N, N), "linear_interp")
+    like = slicing.Volume(jnp.zeros(N * N * N, dtype=real_slices.dtype), disc_type="linear_interp")
+    result = slicing.adjoint_slice_volume(real_slices, rots, (N, N), (N, N, N), like=like)
     assert result.dtype == jnp.float32
 
     # Compare to complex path
     complex_slices = real_slices.astype(jnp.complex64)
-    result_complex = slicing.adjoint_slice_volume(complex_slices, rots, (N, N), (N, N, N), "linear_interp")
+    result_complex = slicing.adjoint_slice_volume(complex_slices, rots, (N, N), (N, N, N), like=like.replace_array(jnp.zeros(N * N * N, dtype=complex_slices.dtype)))
     np.testing.assert_allclose(
         np.array(result),
         np.array(result_complex.real),

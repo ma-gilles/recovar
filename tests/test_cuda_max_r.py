@@ -13,6 +13,7 @@ import jax
 import jax.numpy as jnp
 
 from recovar.core import relion_interp
+from recovar.core import slicing
 import recovar.core.fourier_transform_utils as ftu
 
 
@@ -245,8 +246,6 @@ class TestSlicingDispatchMaxR:
         assert np.sum(np.abs(np.array(out_clip)) < 1e-30) > np.sum(np.abs(np.array(out_none)) < 1e-30)
 
     def test_adjoint_slice_volume_max_r(self):
-        from recovar.core.slicing import adjoint_slice_volume
-
         rng = np.random.default_rng(99)
         rots = _random_rotations(self.n_images, seed=99)
         slices = jnp.array(
@@ -255,8 +254,9 @@ class TestSlicingDispatchMaxR:
                 + 1j * rng.standard_normal((self.n_images, self.N * self.N))
             ).astype(np.complex64)
         )
-        out_none = adjoint_slice_volume(slices, rots, self.image_shape, self.volume_shape, "linear_interp", max_r=None)
-        out_clip = adjoint_slice_volume(slices, rots, self.image_shape, self.volume_shape, "linear_interp", max_r=5.0)
+        like = slicing.Volume(jnp.zeros(int(np.prod(self.volume_shape)), dtype=slices.dtype), disc_type="linear_interp")
+        out_none = slicing.adjoint_slice_volume(slices, rots, self.image_shape, self.volume_shape, like=like, max_r=None)
+        out_clip = slicing.adjoint_slice_volume(slices, rots, self.image_shape, self.volume_shape, like=like, max_r=5.0)
         n_nz_none = np.sum(np.abs(np.array(out_none)) > 1e-30)
         n_nz_clip = np.sum(np.abs(np.array(out_clip)) > 1e-30)
         assert n_nz_clip < n_nz_none

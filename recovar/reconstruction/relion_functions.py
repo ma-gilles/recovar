@@ -12,6 +12,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
 from recovar.core import mask, padding
 from recovar.core.configs import ForwardModelConfig
+from recovar.core.slicing import _wrap_projection_array, _zeros_projection_volume
 from recovar.reconstruction import noise, regularization
 
 logger = logging.getLogger(__name__)
@@ -203,21 +204,36 @@ def _relion_kernel_batch_half(
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
-        config.disc_type,
-        volume=Ft_y,
+        like=(
+            _wrap_projection_array(Ft_y, disc_type=config.disc_type, half_volume=True)
+            if Ft_y is not None
+            else _zeros_projection_volume(
+                config.volume_shape,
+                disc_type=config.disc_type,
+                dtype=images_weighted.dtype,
+                half_volume=True,
+            )
+        ),
         half_image=True,
-        half_volume=True,
     )
     Ft_ctf = core.adjoint_slice_volume(
         ctf_half**2 / noise_half,
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
-        config.disc_type,
-        volume=Ft_ctf,
+        like=(
+            _wrap_projection_array(Ft_ctf, disc_type=config.disc_type, half_volume=True)
+            if Ft_ctf is not None
+            else _zeros_projection_volume(
+                config.volume_shape,
+                disc_type=config.disc_type,
+                dtype=ctf_half.dtype,
+                half_volume=True,
+            )
+        ),
         half_image=True,
-        half_volume=True,
     )
+    return Ft_y, Ft_ctf
     return Ft_y, Ft_ctf
 
 
@@ -261,10 +277,17 @@ def residual_relion_kernel_trilinear(
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
-        "linear_interp",
-        volume=Ft_y,
+        like=(
+            _wrap_projection_array(Ft_y, disc_type="linear_interp", half_volume=True)
+            if Ft_y is not None
+            else _zeros_projection_volume(
+                config.volume_shape,
+                disc_type="linear_interp",
+                dtype=images_squared_half.dtype,
+                half_volume=True,
+            )
+        ),
         half_image=True,
-        half_volume=True,
     )
     CTF_fourth_half = fourier_transform_utils.full_image_to_half_image(CTF_fourth, config.image_shape)
     Ft_ctf = core.adjoint_slice_volume(
@@ -272,11 +295,19 @@ def residual_relion_kernel_trilinear(
         rotation_matrices,
         config.image_shape,
         config.volume_shape,
-        "linear_interp",
-        volume=Ft_ctf,
+        like=(
+            _wrap_projection_array(Ft_ctf, disc_type="linear_interp", half_volume=True)
+            if Ft_ctf is not None
+            else _zeros_projection_volume(
+                config.volume_shape,
+                disc_type="linear_interp",
+                dtype=CTF_fourth_half.dtype,
+                half_volume=True,
+            )
+        ),
         half_image=True,
-        half_volume=True,
     )
+    return Ft_y, Ft_ctf
     return Ft_y, Ft_ctf
 
 

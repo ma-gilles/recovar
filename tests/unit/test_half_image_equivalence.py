@@ -81,6 +81,60 @@ def _batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, d
     return core.batch_slice_volume(wrapped, rotation_matrices, image_shape, volume_shape, **kwargs)
 
 
+def _adjoint_like(volume_shape, disc_type="linear_interp", volume=None, half_volume=False, dtype=jnp.complex64, batch_shape=None):
+    if isinstance(volume, (core.Volume, core.CubicVolume)):
+        return volume
+    expected_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+    flat = int(np.prod(expected_shape))
+    if volume is None:
+        shape = (flat,) if batch_shape is None else (*batch_shape, flat)
+        if disc_type == "cubic":
+            return core.CubicVolume.from_coeffs(jnp.zeros(shape, dtype=dtype), half_volume=half_volume)
+        return core.Volume(jnp.zeros(shape, dtype=dtype), disc_type=disc_type, half_volume=half_volume)
+    if disc_type == "cubic":
+        return core.CubicVolume.from_coeffs(volume, half_volume=half_volume)
+    return core.Volume(volume, disc_type=disc_type, half_volume=half_volume)
+
+
+def _adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp", volume=None, half_image=None, half_volume=False, **kwargs):
+    like = _adjoint_like(
+        volume_shape,
+        disc_type=disc_type,
+        volume=volume,
+        half_volume=half_volume,
+        dtype=jnp.asarray(slices).dtype,
+    )
+    return core.adjoint_slice_volume(
+        slices,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        like=like,
+        half_image=half_image,
+        **kwargs,
+    )
+
+
+def _batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp", volumes=None, half_image=None, half_volume=False, **kwargs):
+    like = _adjoint_like(
+        volume_shape,
+        disc_type=disc_type,
+        volume=volumes,
+        half_volume=half_volume,
+        dtype=jnp.asarray(slices).dtype,
+        batch_shape=(jnp.asarray(slices).shape[0],) if volumes is None else None,
+    )
+    return core.batch_adjoint_slice_volume(
+        slices,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        like=like,
+        half_image=half_image,
+        **kwargs,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test parameters
 # ---------------------------------------------------------------------------
@@ -107,7 +161,7 @@ def n_images(request):
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 def test_adjoint_full_vs_half_images(N, n_images):
-    """adjoint_slice_volume(full) == adjoint_slice_volume(half, half_image=True)."""
+    """_adjoint_slice_volume(full) == _adjoint_slice_volume(half, half_image=True)."""
     rng = np.random.default_rng(42 + N)
     image_shape = (N, N)
     volume_shape = (N, N, N)
@@ -119,8 +173,8 @@ def test_adjoint_full_vs_half_images(N, n_images):
         adjoint_slice_volume,
     )
 
-    vol_full = adjoint_slice_volume(images_full, rots, image_shape, volume_shape, "linear_interp")
-    vol_half = adjoint_slice_volume(images_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+    vol_full = _adjoint_slice_volume(images_full, rots, image_shape, volume_shape, "linear_interp")
+    vol_half = _adjoint_slice_volume(images_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
 
     assert_close(vol_full, vol_half, "adjoint_map full vs half")
 
@@ -150,8 +204,8 @@ def test_adjoint_accumulate_full_vs_half(N, n_images):
         adjoint_slice_volume,
     )
 
-    vol_full = adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp", volume=seed)
-    vol_half = adjoint_slice_volume(
+    vol_full = _adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp", volume=seed)
+    vol_half = _adjoint_slice_volume(
         images_half, rots, image_shape, volume_shape, "linear_interp", volume=seed, half_image=True
     )
 
@@ -179,8 +233,8 @@ def test_adjoint_real_images_full_vs_half(N, n_images):
         adjoint_slice_volume,
     )
 
-    vol_full = adjoint_slice_volume(ctf_sq, rots, image_shape, volume_shape, "linear_interp")
-    vol_half = adjoint_slice_volume(ctf_sq_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+    vol_full = _adjoint_slice_volume(ctf_sq, rots, image_shape, volume_shape, "linear_interp")
+    vol_half = _adjoint_slice_volume(ctf_sq_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
 
     assert_close(vol_full, vol_half, "adjoint_map real images full vs half")
 
@@ -213,9 +267,9 @@ def test_mstep_backproject_full_vs_half(N):
         adjoint_slice_volume,
     )
 
-    vol_full = adjoint_slice_volume(summed_images, rots, image_shape, volume_shape, "linear_interp")
+    vol_full = _adjoint_slice_volume(summed_images, rots, image_shape, volume_shape, "linear_interp")
     summed_half = fourier_transform_utils.full_image_to_half_image(summed_images, image_shape)
-    vol_half = adjoint_slice_volume(summed_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+    vol_half = _adjoint_slice_volume(summed_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
 
     assert_close(vol_full, vol_half, "M-step backproject full vs half")
 
@@ -228,7 +282,7 @@ def test_mstep_backproject_full_vs_half(N):
 @pytest.mark.parametrize("N", SIZES)
 @pytest.mark.parametrize("n_images", N_IMAGES_LIST)
 def test_adjoint_map_full_vs_half(N, n_images):
-    """adjoint_slice_volume(linear_interp) full vs half_image=True."""
+    """_adjoint_slice_volume(linear_interp) full vs half_image=True."""
     rng = np.random.default_rng(66 + N)
     image_shape = (N, N)
     volume_shape = (N, N, N)
@@ -240,8 +294,8 @@ def test_adjoint_map_full_vs_half(N, n_images):
         adjoint_slice_volume,
     )
 
-    vol_full = adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp")
-    vol_half = adjoint_slice_volume(images_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+    vol_full = _adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp")
+    vol_half = _adjoint_slice_volume(images_half, rots, image_shape, volume_shape, "linear_interp", half_image=True)
 
     assert_close(vol_full, vol_half, "adjoint_map full vs half")
 
@@ -278,7 +332,7 @@ def test_slice_volume_vjp_consistency(N, n_images):
     vjp_result = u(images)[0]
 
     # Direct adjoint
-    direct_result = adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp")
+    direct_result = _adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp")
 
     assert_close(vjp_result, direct_result, "VJP vs direct adjoint", rtol=1e-4)
 
@@ -309,12 +363,12 @@ def test_batch_vol_adjoint_full_vs_half(N):
 
     # VOL_AXIS=0 here to match the (n_vols, ...) leading axis
     batch_full_jax = jax.vmap(
-        lambda imgs, rots: core.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp"),
+        lambda imgs, rots: _adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp"),
         in_axes=(0, 0),
         out_axes=0,
     )
     batch_half = jax.vmap(
-        lambda imgs, rots: core.adjoint_slice_volume(
+        lambda imgs, rots: _adjoint_slice_volume(
             imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True
         ),
         in_axes=(0, 0),
@@ -559,11 +613,11 @@ def test_batch_backproject(N, n_images, batch):
 
     from recovar.core.slicing import batch_adjoint_slice_volume
 
-    batch_result = batch_adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp")
+    batch_result = _batch_adjoint_slice_volume(images, rots, image_shape, volume_shape, "linear_interp")
     assert batch_result.shape == (batch, vol_size)
 
     for b in range(batch):
-        ref = adjoint_slice_volume(images[b], rots, image_shape, volume_shape, "linear_interp")
+        ref = _adjoint_slice_volume(images[b], rots, image_shape, volume_shape, "linear_interp")
         assert_close(batch_result[b], ref, f"batch_backproject vol {b}", rtol=1e-4)
 
 
@@ -594,10 +648,10 @@ def test_batch_backproject_with_seed(N, n_images):
 
     from recovar.core.slicing import adjoint_slice_volume, batch_adjoint_slice_volume
 
-    batch_result = batch_adjoint_slice_volume(
+    batch_result = _batch_adjoint_slice_volume(
         images, rots, image_shape, volume_shape, "linear_interp", volumes=seed_vols
     )
 
     for b in range(batch):
-        ref = adjoint_slice_volume(images[b], rots, image_shape, volume_shape, "linear_interp", volume=seed_vols[b])
+        ref = _adjoint_slice_volume(images[b], rots, image_shape, volume_shape, "linear_interp", volume=seed_vols[b])
         assert_close(batch_result[b], ref, f"batch_backproject_seed vol {b}", rtol=1e-4)

@@ -23,23 +23,13 @@ TRANS_AXIS = 3
 NORM_FFT = "backward"
 
 
-def _projection_volumes(volumes, disc_type, volume_shape):
-    if isinstance(volumes, (core.Volume, core.CubicVolume)):
-        return volumes
-    if disc_type == "cubic":
-        return core.to_cubic(volumes, volume_shape)
-    return core.Volume(volumes, disc_type=disc_type)
+def batch_vol_rot_slice_volume(volumes, rotation_matrices, image_shape, volume_shape):
+    return core.batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape)
 
 
-def batch_vol_rot_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type):
-    wrapped_volumes = _projection_volumes(volumes, disc_type, volume_shape)
-    return core.batch_slice_volume(wrapped_volumes, rotation_matrices, image_shape, volume_shape)
-
-
-def batch_vol_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, disc_type):
-    wrapped_volumes = _projection_volumes(volumes, disc_type, volume_shape)
+def batch_vol_slice_volume(volumes, rotation_matrices, image_shape, volume_shape):
     return jnp.swapaxes(
-        core.batch_slice_volume(wrapped_volumes, rotation_matrices, image_shape, volume_shape),
+        core.batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape),
         0,
         1,
     )

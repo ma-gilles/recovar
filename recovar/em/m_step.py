@@ -9,6 +9,7 @@ import equinox as eqx
 from recovar import core, utils
 from recovar.core.configs import ForwardModelConfig
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.core.slicing import _wrap_projection_array, _zeros_projection_volume
 from .sampling import translations_to_indices
 from .core import VOL_AXIS
 
@@ -67,14 +68,31 @@ def backproject_one_image(
 
 batch_vol_adjoint_slice_volume = jax.vmap(
     lambda images, rots, image_shape, volume_shape, volume: core.adjoint_slice_volume(
-        images, rots, image_shape, volume_shape, "linear_interp", volume=volume
+        images,
+        rots,
+        image_shape,
+        volume_shape,
+        like=(
+            _wrap_projection_array(volume, disc_type="linear_interp")
+            if volume is not None
+            else _zeros_projection_volume(volume_shape, disc_type="linear_interp", dtype=images.dtype)
+        ),
     ),
     in_axes=(VOL_AXIS, VOL_AXIS, None, None, None),
     out_axes=0,
 )
 batch_vol_adjoint_slice_volume_half = jax.vmap(
     lambda images, rots, image_shape, volume_shape, volume: core.adjoint_slice_volume(
-        images, rots, image_shape, volume_shape, "linear_interp", volume=volume, half_image=True
+        images,
+        rots,
+        image_shape,
+        volume_shape,
+        like=(
+            _wrap_projection_array(volume, disc_type="linear_interp")
+            if volume is not None
+            else _zeros_projection_volume(volume_shape, disc_type="linear_interp", dtype=images.dtype)
+        ),
+        half_image=True,
     ),
     in_axes=(VOL_AXIS, VOL_AXIS, None, None, None),
     out_axes=0,
@@ -146,7 +164,16 @@ def sum_up_images_fixed_rots_eqx(
     summed_images = P @ shifted_images
     summed_half = fourier_transform_utils.full_image_to_half_image(summed_images, config.image_shape)
     Ft_y = core.adjoint_slice_volume(
-        summed_half, rotations, config.image_shape, config.volume_shape, "linear_interp", volume=Ft_y, half_image=True
+        summed_half,
+        rotations,
+        config.image_shape,
+        config.volume_shape,
+        like=(
+            _wrap_projection_array(Ft_y, disc_type="linear_interp")
+            if Ft_y is not None
+            else _zeros_projection_volume(config.volume_shape, disc_type="linear_interp", dtype=summed_half.dtype)
+        ),
+        half_image=True,
     )
 
     probabilites_summed_over_translations = jnp.sum(probabilities, axis=-1)
@@ -157,8 +184,11 @@ def sum_up_images_fixed_rots_eqx(
         rotations,
         config.image_shape,
         config.volume_shape,
-        "linear_interp",
-        volume=Ft_ctf,
+        like=(
+            _wrap_projection_array(Ft_ctf, disc_type="linear_interp")
+            if Ft_ctf is not None
+            else _zeros_projection_volume(config.volume_shape, disc_type="linear_interp", dtype=CTF_probs_half.dtype)
+        ),
         half_image=True,
     )
 
@@ -207,7 +237,16 @@ def sum_up_images_fixed_rots(
 
     summed_half = fourier_transform_utils.full_image_to_half_image(summed_images, image_shape)
     Ft_y = core.adjoint_slice_volume(
-        summed_half, rotations, image_shape, volume_shape, "linear_interp", volume=Ft_y, half_image=True
+        summed_half,
+        rotations,
+        image_shape,
+        volume_shape,
+        like=(
+            _wrap_projection_array(Ft_y, disc_type="linear_interp")
+            if Ft_y is not None
+            else _zeros_projection_volume(volume_shape, disc_type="linear_interp", dtype=summed_half.dtype)
+        ),
+        half_image=True,
     )
 
     probabilites_summed_over_translations = jnp.sum(probabilities, axis=-1)
@@ -215,7 +254,16 @@ def sum_up_images_fixed_rots(
     CTF_probs = probabilites_summed_over_translations.T @ (CTF**2 / noise_variance)
     CTF_probs_half = fourier_transform_utils.full_image_to_half_image(CTF_probs, image_shape)
     Ft_ctf = core.adjoint_slice_volume(
-        CTF_probs_half, rotations, image_shape, volume_shape, "linear_interp", volume=Ft_ctf, half_image=True
+        CTF_probs_half,
+        rotations,
+        image_shape,
+        volume_shape,
+        like=(
+            _wrap_projection_array(Ft_ctf, disc_type="linear_interp")
+            if Ft_ctf is not None
+            else _zeros_projection_volume(volume_shape, disc_type="linear_interp", dtype=CTF_probs_half.dtype)
+        ),
+        half_image=True,
     )
 
     return Ft_y, Ft_ctf

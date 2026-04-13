@@ -18,6 +18,8 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
+import recovar.core.fourier_transform_utils as fourier_transform_utils
+
 pytestmark = [pytest.mark.unit, pytest.mark.gpu]
 
 
@@ -52,6 +54,23 @@ def _slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_typ
         else:
             wrapped = core_slicing.Volume(wrapped, disc_type=disc_type, half_volume=half_volume)
     return core_slicing.slice_volume(wrapped, rotation_matrices, image_shape, volume_shape, **kwargs)
+
+
+def _adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp", half_image=False, half_volume=False, max_r=None):
+    import recovar.core.slicing as core_slicing
+
+    expected_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+    flat = int(np.prod(expected_shape))
+    like = core_slicing.Volume(jnp.zeros(flat, dtype=jnp.asarray(slices).dtype), disc_type=disc_type, half_volume=half_volume)
+    return core_slicing.adjoint_slice_volume(
+        slices,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        like=like,
+        half_image=half_image,
+        max_r=max_r,
+    )
 
 
 # ── Parametrization ──────────────────────────────────────────────────
@@ -436,7 +455,7 @@ def test_adjoint_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkey
 
     # GPU path (CUDA) — use max_r=None to avoid FP boundary clipping differences.
     with jax.default_device(gpu_device):
-        gpu_result = core_slicing.adjoint_slice_volume(
+        gpu_result = _adjoint_slice_volume(
             jax.device_put(imgs),
             jax.device_put(rots),
             image_shape,
@@ -451,7 +470,7 @@ def test_adjoint_slice_volume_cuda_vs_cpu(half_vol, half_img, gpu_device, monkey
     monkeypatch.setattr(core_slicing, "_on_gpu", lambda: False)
     core_slicing._on_gpu.cache_clear() if hasattr(core_slicing._on_gpu, "cache_clear") else None
 
-    cpu_result = core_slicing.adjoint_slice_volume(
+    cpu_result = _adjoint_slice_volume(
         imgs,
         rots,
         image_shape,

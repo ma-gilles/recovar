@@ -80,6 +80,60 @@ def _batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape, d
     return slicing.batch_slice_volume(wrapped, rotation_matrices, image_shape, volume_shape, **kwargs)
 
 
+def _adjoint_like(volume_shape, disc_type="linear_interp", volume=None, half_volume=False, dtype=jnp.complex64, batch_shape=None):
+    if isinstance(volume, (slicing.Volume, slicing.CubicVolume)):
+        return volume
+    expected_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+    flat = int(np.prod(expected_shape))
+    if volume is None:
+        shape = (flat,) if batch_shape is None else (*batch_shape, flat)
+        if disc_type == "cubic":
+            return slicing.CubicVolume.from_coeffs(jnp.zeros(shape, dtype=dtype), half_volume=half_volume)
+        return slicing.Volume(jnp.zeros(shape, dtype=dtype), disc_type=disc_type, half_volume=half_volume)
+    if disc_type == "cubic":
+        return slicing.CubicVolume.from_coeffs(volume, half_volume=half_volume)
+    return slicing.Volume(volume, disc_type=disc_type, half_volume=half_volume)
+
+
+def _adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp", volume=None, half_image=None, half_volume=False, **kwargs):
+    like = _adjoint_like(
+        volume_shape,
+        disc_type=disc_type,
+        volume=volume,
+        half_volume=half_volume,
+        dtype=jnp.asarray(slices).dtype,
+    )
+    return slicing.adjoint_slice_volume(
+        slices,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        like=like,
+        half_image=half_image,
+        **kwargs,
+    )
+
+
+def _batch_adjoint_slice_volume(slices, rotation_matrices, image_shape, volume_shape, disc_type="linear_interp", volumes=None, half_image=None, half_volume=False, **kwargs):
+    like = _adjoint_like(
+        volume_shape,
+        disc_type=disc_type,
+        volume=volumes,
+        half_volume=half_volume,
+        dtype=jnp.asarray(slices).dtype,
+        batch_shape=(jnp.asarray(slices).shape[0],) if volumes is None else None,
+    )
+    return slicing.batch_adjoint_slice_volume(
+        slices,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        like=like,
+        half_image=half_image,
+        **kwargs,
+    )
+
+
 # ── 1. Default max_r value ──────────────────────────────────────────
 
 
@@ -263,10 +317,10 @@ class TestHalfFullEquivalence:
         half_imgs = jnp.array(ftu.get_dft2_real(jnp.array(real_imgs))).reshape(5, -1)
 
         out_full = np.asarray(
-            slicing.adjoint_slice_volume(full_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=False)
+            _adjoint_slice_volume(full_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=False)
         )
         out_half = np.asarray(
-            slicing.adjoint_slice_volume(half_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True)
+            _adjoint_slice_volume(half_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True)
         )
 
         np.testing.assert_allclose(
@@ -293,12 +347,12 @@ class TestHalfFullEquivalence:
 
         # Full-vol output from full-img vs half-img should match
         out_ff = np.asarray(
-            slicing.adjoint_slice_volume(
+            _adjoint_slice_volume(
                 full_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=False, half_volume=False
             )
         )
         out_hf = np.asarray(
-            slicing.adjoint_slice_volume(
+            _adjoint_slice_volume(
                 half_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True, half_volume=False
             )
         )
@@ -372,7 +426,7 @@ class TestUpsamplingMaxR:
         n_pix = image_shape[0] * image_shape[1]
         slices = _random_slices(3, n_pix, seed=80)
 
-        out = np.asarray(slicing.adjoint_slice_volume(slices, rots, image_shape, volume_shape, "linear_interp"))
+        out = np.asarray(_adjoint_slice_volume(slices, rots, image_shape, volume_shape, "linear_interp"))
 
         vol_size = int(np.prod(volume_shape))
         assert out.shape == (vol_size,)
@@ -391,12 +445,12 @@ class TestUpsamplingMaxR:
         half_imgs = jnp.array(ftu.get_dft2_real(jnp.array(real_imgs))).reshape(3, -1)
 
         out_full = np.asarray(
-            slicing.adjoint_slice_volume(
+            _adjoint_slice_volume(
                 full_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=False, half_volume=False
             )
         )
         out_half = np.asarray(
-            slicing.adjoint_slice_volume(
+            _adjoint_slice_volume(
                 half_imgs, rots, image_shape, volume_shape, "linear_interp", half_image=True, half_volume=False
             )
         )
@@ -471,7 +525,7 @@ class TestAdjointnessWithMaxR:
         # Forward: Ax
         Ax = _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
         # Adjoint: A^T y
-        ATy = slicing.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp")
+        ATy = _adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp")
 
         # <Ax, y>
         lhs = float(jnp.real(jnp.vdot(Ax, imgs)))
@@ -497,7 +551,7 @@ class TestAdjointnessWithMaxR:
         )
 
         Ax = _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp")
-        ATy = slicing.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp")
+        ATy = _adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp")
 
         lhs = float(jnp.real(jnp.vdot(Ax, imgs)))
         rhs = float(jnp.real(jnp.vdot(vol, ATy)))
@@ -520,7 +574,7 @@ class TestAdjointnessWithMaxR:
         )
 
         Ax = _slice_volume(vol, rots, image_shape, volume_shape, "linear_interp", max_r=max_r)
-        ATy = slicing.adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp", max_r=max_r)
+        ATy = _adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "linear_interp", max_r=max_r)
 
         lhs = float(jnp.real(jnp.vdot(Ax, imgs)))
         rhs = float(jnp.real(jnp.vdot(vol, ATy)))
@@ -568,12 +622,12 @@ class TestBatchDefaultMaxR:
         batch_slices = jnp.stack([slices_data] * n_vols)
 
         batch_out = np.asarray(
-            slicing.batch_adjoint_slice_volume(batch_slices, rots, image_shape, volume_shape, "linear_interp")
+            _batch_adjoint_slice_volume(batch_slices, rots, image_shape, volume_shape, "linear_interp")
         )
 
         for i in range(n_vols):
             single_out = np.asarray(
-                slicing.adjoint_slice_volume(slices_data, rots, image_shape, volume_shape, "linear_interp")
+                _adjoint_slice_volume(slices_data, rots, image_shape, volume_shape, "linear_interp")
             )
             np.testing.assert_allclose(
                 batch_out[i], single_out, atol=1e-5, rtol=1e-5, err_msg=f"Batch vol {i} differs from single"

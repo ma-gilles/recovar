@@ -41,13 +41,61 @@ def _volume_layout_sizes(volume_shape):
     return full_size, half_size
 
 
+def _is_projection_volume(volume):
+    return isinstance(volume, (core.Volume, core.CubicVolume))
+
+
+def _projection_array(volume):
+    return volume.array if _is_projection_volume(volume) else volume
+
+
+def _cast_projection_input(volume, dtype):
+    if _is_projection_volume(volume):
+        return _wrap_projection_like(
+            volume,
+            jnp.asarray(volume.array, dtype=dtype),
+            disc_type=volume.disc_type,
+            half_volume=volume.half_volume,
+        )
+    return jnp.asarray(volume, dtype=dtype)
+
+
+def _wrap_projection_like(volume, array, *, disc_type, half_volume):
+    array = jnp.asarray(array)
+    if isinstance(volume, core.CubicVolume) or disc_type == "cubic":
+        return core.CubicVolume.from_coeffs(array, half_volume=half_volume)
+    if isinstance(volume, core.Volume):
+        disc_type = volume.disc_type
+    return core.Volume(array, disc_type=disc_type, half_volume=half_volume)
+
+
+def _as_projection_volume(volume, *, disc_type, volume_shape, half_volume):
+    if _is_projection_volume(volume):
+        if volume.disc_type != disc_type:
+            raise ValueError(f"Expected projection volume with disc_type={disc_type!r}, got {volume.disc_type!r}")
+        return volume
+    if disc_type == "cubic":
+        return core.to_cubic(volume, volume_shape, half_volume=half_volume)
+    return core.Volume(volume, disc_type=disc_type, half_volume=half_volume)
+
+
 def _mean_is_half_volume(mean_estimate, volume_shape):
+    if _is_projection_volume(mean_estimate):
+        return mean_estimate.half_volume
+    if volume_shape is None:
+        return False
     _, half_size = _volume_layout_sizes(volume_shape)
+    mean_estimate = _projection_array(mean_estimate)
     return int(np.prod(mean_estimate.shape)) == half_size
 
 
 def _basis_is_half_volume(basis, volume_shape):
+    if basis is None:
+        return False
+    if _is_projection_volume(basis):
+        return basis.half_volume
     _, half_size = _volume_layout_sizes(volume_shape)
+    basis = _projection_array(basis)
     if basis.ndim < 1:
         return False
     per_vec_size = int(np.prod(basis.shape[1:])) if basis.shape[0] != 0 else 0
@@ -58,10 +106,11 @@ def _prepare_model_half_volumes(config, mean_estimate, basis):
     """Convert full Fourier volumes to half-volume layout when supported."""
     full_size, half_size = _volume_layout_sizes(config.volume_shape)
 
-    mean_size = int(np.prod(mean_estimate.shape))
+    mean_array = _projection_array(mean_estimate)
+    mean_size = int(np.prod(mean_array.shape))
     if mean_size == full_size:
-        mean_estimate = ftu.full_volume_to_half_volume(
-            mean_estimate.reshape(config.volume_shape),
+        mean_array = ftu.full_volume_to_half_volume(
+            mean_array.reshape(config.volume_shape),
             config.volume_shape,
         ).reshape(-1)
     elif mean_size != half_size:
@@ -72,13 +121,23 @@ def _prepare_model_half_volumes(config, mean_estimate, basis):
             full_size,
             half_size,
         )
+    mean_estimate = _wrap_projection_like(
+        mean_estimate,
+        mean_array,
+        disc_type=config.disc_type,
+        half_volume=_mean_is_half_volume(mean_array, config.volume_shape),
+    )
 
-    if basis.ndim >= 1 and basis.shape[0] > 0:
-        basis_size = int(np.prod(basis.shape[1:]))
+    if basis is None:
+        return mean_estimate, None
+
+    basis_array = _projection_array(basis)
+    if basis_array.ndim >= 1 and basis_array.shape[0] > 0:
+        basis_size = int(np.prod(basis_array.shape[1:]))
         if basis_size == full_size:
-            n_basis = basis.shape[0]
-            basis = ftu.full_volume_to_half_volume(
-                basis.reshape(n_basis, *config.volume_shape),
+            n_basis = basis_array.shape[0]
+            basis_array = ftu.full_volume_to_half_volume(
+                basis_array.reshape(n_basis, *config.volume_shape),
                 config.volume_shape,
             ).reshape(n_basis, -1)
         elif basis_size != half_size:
@@ -90,6 +149,12 @@ def _prepare_model_half_volumes(config, mean_estimate, basis):
                 half_size,
             )
 
+    basis = _wrap_projection_like(
+        basis,
+        basis_array,
+        disc_type=config.disc_type,
+        half_volume=_basis_is_half_volume(basis_array, config.volume_shape),
+    )
     return mean_estimate, basis
 
 
@@ -207,12 +272,15 @@ def get_per_image_embedding(
         from recovar.heterogeneity import covariance_estimation
 
         basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory=None)
+        mean = core.CubicVolume.from_coeffs(mean)
+        basis = core.CubicVolume.from_coeffs(basis)
 
+    basis_count = _projection_array(basis).shape[0]
     zs, cov_zs, est_contrasts, bias = get_coords_in_basis_and_contrast_3(
         dataset,
         mean,
         basis,
-        eigenvalues[: basis.shape[0]],
+        eigenvalues[:basis_count],
         volume_mask,
         contrast_grid,
         batch_size,
@@ -258,10 +326,11 @@ def get_coords_in_basis_and_contrast_3(
     shared_label = experiment_dataset.tilt_series_flag and not force_not_shared_label
     n_units = experiment_dataset.n_units if not force_not_shared_label else experiment_dataset.n_images
 
-    # Transfer arrays to GPU once before the batch loop
-    basis = jnp.asarray(basis, dtype=experiment_dataset.dtype)
+    # Transfer arrays to GPU once before the batch loop while preserving
+    # explicit projection representation wrappers when callers already provide them.
+    basis = _cast_projection_input(basis, experiment_dataset.dtype)
     volume_mask = jnp.asarray(volume_mask, dtype=experiment_dataset.dtype_real)
-    mean_estimate = jnp.asarray(mean_estimate, dtype=experiment_dataset.dtype)
+    mean_estimate = _cast_projection_input(mean_estimate, experiment_dataset.dtype)
     eigenvalues = jnp.asarray(eigenvalues, dtype=experiment_dataset.dtype)
     contrast_grid = contrast_grid.astype(experiment_dataset.dtype_real)
 
@@ -274,11 +343,12 @@ def get_coords_in_basis_and_contrast_3(
     # Embedding uses half-spectrum inner products by default; pre-convert model
     # Fourier volumes once so forward passes can use native half-volume kernels.
     mean_estimate, basis = _prepare_model_half_volumes(config, mean_estimate, basis)
+    basis_array = _projection_array(basis)
     model = ModelState(
         mean_estimate=mean_estimate,
         volume_mask=volume_mask,
         basis=basis,
-        eigenvalues=eigenvalues[: basis.shape[0]],
+        eigenvalues=eigenvalues[: basis_array.shape[0]],
     )
     opts = EmbeddingOpts(
         compute_covariances=compute_covariances,
@@ -287,16 +357,17 @@ def get_coords_in_basis_and_contrast_3(
         contrast_shared_across_tilt_series=contrast_shared_across_tilt_series,
     )
 
-    basis_size = basis.shape[0]
+    basis_size = basis_array.shape[0]
+    basis_dtype = basis_array.dtype
 
-    xs = np.zeros((n_units, basis_size), dtype=basis.dtype)
+    xs = np.zeros((n_units, basis_size), dtype=basis_dtype)
     image_latent_precisions = (
-        np.zeros((n_units, basis_size, basis_size), dtype=basis.dtype) if compute_covariances else None
+        np.zeros((n_units, basis_size, basis_size), dtype=basis_dtype) if compute_covariances else None
     )
-    image_latent_bias = np.zeros((n_units, basis_size, basis_size), dtype=basis.dtype) if compute_bias else None
+    image_latent_bias = np.zeros((n_units, basis_size, basis_size), dtype=basis_dtype) if compute_bias else None
 
     contrast_units = n_units if contrast_shared_across_tilt_series else experiment_dataset.n_images
-    estimated_contrasts = np.zeros(contrast_units, dtype=basis.dtype).real
+    estimated_contrasts = np.zeros(contrast_units, dtype=basis_dtype).real
 
     # Precompute half-spectrum Hermitian weights once — halves memory and
     # compute cost of the inner-product step inside compute_batch_coords.
@@ -491,16 +562,13 @@ def _compute_batch_coords_p1(
     basis = model.basis
     assert basis is not None
 
-    mean_half_volume = half and _mean_is_half_volume(model.mean_estimate, config.volume_shape)
-    basis_half_volume = half and _basis_is_half_volume(basis, config.volume_shape)
-    mean_volume = (
-        core.to_cubic(model.mean_estimate, config.volume_shape, half_volume=mean_half_volume)
-        if config.disc_type == "cubic"
-        else core.Volume(
-            model.mean_estimate,
-            disc_type=config.disc_type,
-            half_volume=mean_half_volume,
-        )
+    mean_half_volume = _mean_is_half_volume(model.mean_estimate, config.volume_shape)
+    basis_half_volume = _basis_is_half_volume(basis, config.volume_shape)
+    mean_volume = _as_projection_volume(
+        model.mean_estimate,
+        disc_type=config.disc_type,
+        volume_shape=config.volume_shape,
+        half_volume=mean_half_volume,
     )
     projected_mean = core_forward.forward_model(
         config,
@@ -511,14 +579,11 @@ def _compute_batch_coords_p1(
         half_image=half,
     )
     # AUs: (n_basis, n_images, n_pix[_half])
-    basis_volume = (
-        core.to_cubic(basis, config.volume_shape, half_volume=basis_half_volume)
-        if config.disc_type == "cubic"
-        else core.Volume(
-            basis,
-            disc_type=config.disc_type,
-            half_volume=basis_half_volume,
-        )
+    basis_volume = _as_projection_volume(
+        basis,
+        disc_type=config.disc_type,
+        volume_shape=config.volume_shape,
+        half_volume=basis_half_volume,
     )
     AUs = covariance_core.batch_vol_forward_from_map(
         config,
@@ -886,7 +951,7 @@ def _compute_grouped_shared_batch_coords_explicit(
 
 @functools.partial(
     jax.jit,
-    static_argnums=[3, 4, 5, 6, 7, 8],
+    static_argnums=[3, 4, 5, 6],
     static_argnames=["skip_ctf"],
 )
 def _legacy_forward_model_from_map(
@@ -897,14 +962,10 @@ def _legacy_forward_model_from_map(
     volume_shape,
     voxel_size,
     ctf_fun,
-    disc_type,
     skip_ctf=False,
 ):
-    volume = (
-        core.to_cubic(volume, volume_shape)
-        if disc_type == "cubic"
-        else core.Volume(volume, disc_type=disc_type)
-    )
+    if not _is_projection_volume(volume):
+        raise TypeError("_legacy_forward_model_from_map requires Volume(...) or CubicVolume(...)")
     slices = core.slice_volume(volume, rotation_matrices, image_shape, volume_shape)
     if not skip_ctf:
         slices = slices * ctf_fun(ctf_params, image_shape, voxel_size)
@@ -919,23 +980,22 @@ def _legacy_batch_over_vol_forward_model_from_map(
     volume_shape,
     voxel_size,
     ctf_fun,
-    disc_type,
     skip_ctf=False,
 ):
+    if not _is_projection_volume(volumes):
+        raise TypeError("_legacy_batch_over_vol_forward_model_from_map requires Volume(...) or CubicVolume(...)")
     return jax.vmap(
-        _legacy_forward_model_from_map,
-        in_axes=(0, None, None, None, None, None, None, None, None),
-    )(
-        volumes,
-        ctf_params,
-        rotation_matrices,
-        image_shape,
-        volume_shape,
-        voxel_size,
-        ctf_fun,
-        disc_type,
-        skip_ctf,
-    )
+        lambda array: _legacy_forward_model_from_map(
+            volumes.replace_array(array),
+            ctf_params,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            voxel_size,
+            ctf_fun,
+            skip_ctf,
+        )
+    )(_projection_array(volumes))
 
 
 @functools.partial(
@@ -1118,26 +1178,37 @@ def _compute_single_batch_coords_p1_legacy(
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations, image_shape)
 
-    projected_mean = _legacy_forward_model_from_map(
+    mean_volume = _as_projection_volume(
         mean_estimate,
+        disc_type=disc_type,
+        volume_shape=volume_shape,
+        half_volume=_mean_is_half_volume(mean_estimate, volume_shape),
+    )
+    basis_volume = _as_projection_volume(
+        basis,
+        disc_type=disc_type,
+        volume_shape=volume_shape,
+        half_volume=_basis_is_half_volume(basis, volume_shape),
+    )
+
+    projected_mean = _legacy_forward_model_from_map(
+        mean_volume,
         ctf_params,
         rotation_matrices,
         image_shape,
         volume_shape,
         voxel_size,
         ctf_fun,
-        disc_type,
         skip_ctf=premultiplied_ctf,
     )
     AUs = _legacy_batch_over_vol_forward_model_from_map(
-        basis,
+        basis_volume,
         ctf_params,
         rotation_matrices,
         image_shape,
         volume_shape,
         voxel_size,
         ctf_fun,
-        disc_type,
         skip_ctf=premultiplied_ctf,
     )
     AUs = AUs.transpose(1, 2, 0)

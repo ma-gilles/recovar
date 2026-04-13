@@ -74,6 +74,21 @@ def _slice_volume(volume, rotation_matrices, image_shape, volume_shape, disc_typ
     return slicing.slice_volume(wrapped, rotation_matrices, image_shape, volume_shape, **kwargs)
 
 
+def _adjoint_slice_volume(images, rotation_matrices, image_shape, volume_shape, disc_type, half_image=False, half_volume=False, max_r=None):
+    expected_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+    flat = int(np.prod(expected_shape))
+    like = slicing.Volume(jnp.zeros(flat, dtype=jnp.asarray(images).dtype), disc_type=disc_type, half_volume=half_volume)
+    return slicing.adjoint_slice_volume(
+        images,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        like=like,
+        half_image=half_image,
+        max_r=max_r,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Test: projection agrees with existing implementation
 # ---------------------------------------------------------------------------
@@ -278,7 +293,7 @@ class TestBackprojectionAgreement:
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         with _force_jax_path():
-            existing = slicing.adjoint_slice_volume(
+            existing = _adjoint_slice_volume(
                 imgs,
                 rots,
                 image_shape,
@@ -320,7 +335,7 @@ class TestBackprojectionAgreement:
         rots = jnp.stack([_random_rotation(random.fold_in(k2, i)) for i in range(3)])
 
         with _force_jax_path():
-            existing = slicing.adjoint_slice_volume(
+            existing = _adjoint_slice_volume(
                 imgs,
                 rots,
                 image_shape,
