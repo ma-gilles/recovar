@@ -46,24 +46,24 @@ def compute_residual(
 
 def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_size, disc_type="cubic"):
 
-    projection_values = volumes
+    projection_coeffs = volumes
     if disc_type == "cubic":
         from recovar.heterogeneity import covariance_estimation
 
-        projection_values = covariance_estimation.compute_spline_coeffs_in_batch(
-            projection_values, experiment_dataset.volume_shape, gpu_memory=None
+        projection_coeffs = covariance_estimation.compute_spline_coeffs_in_batch(
+            projection_coeffs, experiment_dataset.volume_shape, gpu_memory=None
         )
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
     logger.info(
         "Computing image assignment: %d volumes, %d images, batch_size=%d",
-        projection_values.shape[0],
+        projection_coeffs.shape[0],
         experiment_dataset.n_units,
         batch_size,
     )
-    projection_values = jnp.asarray(projection_values, dtype=experiment_dataset.dtype)
-    residuals = np.zeros((projection_values.shape[0], experiment_dataset.n_units), dtype=experiment_dataset.dtype_real)
+    projection_coeffs = jnp.asarray(projection_coeffs, dtype=experiment_dataset.dtype)
+    residuals = np.zeros((projection_coeffs.shape[0], experiment_dataset.n_units), dtype=experiment_dataset.dtype_real)
     for (
         images,
         rotation_matrices,
@@ -74,11 +74,11 @@ def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_
         image_indices,
     ) in experiment_dataset.iter_batches(batch_size):
         images = _process_images_if_available(experiment_dataset, images)
-        for volume_ind in range(projection_values.shape[0]):
+        for volume_ind in range(projection_coeffs.shape[0]):
             projection_volume = (
-                core.CubicVolume(projection_values[volume_ind])
+                core.CubicVolume.from_coeffs(projection_coeffs[volume_ind])
                 if disc_type == "cubic"
-                else core.Volume(projection_values[volume_ind], disc_type=disc_type)
+                else core.Volume(projection_coeffs[volume_ind], disc_type=disc_type)
             )
             residuals[volume_ind, particle_indices] = compute_residual(
                 images,
@@ -94,23 +94,23 @@ def compute_image_assignment(experiment_dataset, volumes, noise_variance, batch_
 
 def estimate_false_positive_rate(experiment_dataset, volumes, noise_variance, batch_size, disc_type="cubic"):
 
-    projection_values = volumes
+    projection_coeffs = volumes
     if disc_type == "cubic":
         from recovar.heterogeneity import covariance_estimation
 
-        projection_values = covariance_estimation.compute_spline_coeffs_in_batch(
-            projection_values, experiment_dataset.volume_shape, gpu_memory=None
+        projection_coeffs = covariance_estimation.compute_spline_coeffs_in_batch(
+            projection_coeffs, experiment_dataset.volume_shape, gpu_memory=None
         )
 
     config = ForwardModelConfig.from_dataset(experiment_dataset, disc_type=disc_type)
 
-    projection_values = jnp.asarray(projection_values, dtype=experiment_dataset.dtype)
+    projection_coeffs = jnp.asarray(projection_coeffs, dtype=experiment_dataset.dtype)
     alphas = np.zeros((experiment_dataset.n_units,), dtype=experiment_dataset.dtype_real)
-    if projection_values.shape[0] != 2:
-        raise ValueError(f"Only two volumes are supported, got {projection_values.shape[0]}")
-    difference_coeffs = projection_values[0] - projection_values[1]
+    if projection_coeffs.shape[0] != 2:
+        raise ValueError(f"Only two volumes are supported, got {projection_coeffs.shape[0]}")
+    difference_coeffs = projection_coeffs[0] - projection_coeffs[1]
     if disc_type == "cubic":
-        difference = core.CubicVolume(difference_coeffs)
+        difference = core.CubicVolume.from_coeffs(difference_coeffs)
     else:
         difference = core.Volume(difference_coeffs, disc_type=disc_type)
     for (

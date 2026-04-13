@@ -110,7 +110,7 @@ def test_compute_H_B_small_rotation_count_avoids_zero_internal_batches(monkeypat
     monkeypatch.setattr(
         hetero.core,
         "slice_volume",
-        lambda _mean, rot, _image_shape, _volume_shape, _disc: np.zeros((len(rot), 4), dtype=np.complex64),
+        lambda _mean, rot, _image_shape, _volume_shape: np.zeros((len(rot), 4), dtype=np.complex64),
     )
     monkeypatch.setattr(
         hetero.core,
@@ -223,13 +223,14 @@ def test_compute_projected_covariance_rhs_lhs_small_rotation_count_avoids_zero_b
     monkeypatch.setattr(
         hetero.core,
         "slice_volume",
-        lambda _mean, rot, _image_shape, _volume_shape, _disc: np.zeros((len(rot), 4), dtype=np.complex64),
+        lambda _mean, rot, _image_shape, _volume_shape: np.zeros((len(rot), 4), dtype=np.complex64),
     )
     monkeypatch.setattr(
         hetero,
         "batch_vol_slice_volume",
-        lambda basis_local, rot, _image_shape, _volume_shape, _disc: np.zeros(
-            (len(rot), basis_local.shape[0], 4), dtype=np.complex64
+        lambda basis_local, rot, _image_shape, _volume_shape: np.zeros(
+            (len(rot), basis_local.array.shape[0] if hasattr(basis_local, "array") else basis_local.shape[0], 4),
+            dtype=np.complex64,
         ),
     )
     monkeypatch.setattr(

@@ -14,6 +14,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config, utils
 from recovar.core import cubic_interpolation, linalg
 from recovar.core.configs import CovarianceOpts, CovColumnOpts, ForwardModelConfig, ModelState
+from recovar.core.slicing import _wrap_projection_array, _zeros_projection_volume
 from recovar.heterogeneity import covariance_core
 from recovar.jax_config import _to_cpu
 from recovar.reconstruction import noise, regularization, relion_functions
@@ -523,10 +524,11 @@ def _variance_relion_kernel_trilinear_explicit(
     half_ctf = config.compute_ctf_half(ctf_params)
     CTF_squared = half_ctf**2
 
-    mean_volume = (
-        core.to_cubic(mean_estimate, config.volume_shape)
-        if config.disc_type == "cubic"
-        else core.Volume(mean_estimate, disc_type=config.disc_type)
+    mean_volume = _as_projection_volume(
+        mean_estimate,
+        disc_type=config.disc_type,
+        volume_shape=config.volume_shape,
+        half_volume=_mean_is_half_volume(mean_estimate, config.volume_shape),
     )
     mean_slice_half = core.slice_volume(
         mean_volume,
@@ -579,10 +581,17 @@ def _variance_relion_kernel_trilinear_explicit(
             rotation_matrices,
             config.image_shape,
             config.volume_shape,
-            "linear_interp",
-            volume=volume,
+            like=(
+                _wrap_projection_array(volume, disc_type="linear_interp", half_volume=True)
+                if volume is not None
+                else _zeros_projection_volume(
+                    config.volume_shape,
+                    disc_type="linear_interp",
+                    dtype=half_imgs.dtype,
+                    half_volume=True,
+                )
+            ),
             half_image=True,
-            half_volume=True,
         )
 
     Ft_y = _backproject(images_squared, Ft_y)
@@ -762,8 +771,10 @@ def compute_both_H_B(
     for halfset_id, halfset_dataset in enumerate(halfset_datasets):
         mean = means.combined if options["use_combined_mean"] else means.corrected(halfset_id)
         if options.get("disc_type") == "cubic":
-            mean = cubic_interpolation.calculate_spline_coefficients(
-                jnp.array(mean).reshape(halfset_dataset.volume_shape)
+            mean = core.CubicVolume.from_coeffs(
+                cubic_interpolation.calculate_spline_coefficients(
+                    jnp.array(mean).reshape(halfset_dataset.volume_shape)
+                )
             )
         if use_multi_gpu:
             H, B = _compute_H_B_multi_gpu(
@@ -862,10 +873,11 @@ def preprocess_covariance_batch(
         image_mask = jnp.ones((rotation_matrices.shape[0], *config.image_shape), dtype=jnp.float32)
 
     # 2. Center images: y_i - A_i * mu
-    mean_volume = (
-        core.to_cubic(mean_estimate, config.volume_shape)
-        if config.disc_type == "cubic"
-        else core.Volume(mean_estimate, disc_type=config.disc_type)
+    mean_volume = _as_projection_volume(
+        mean_estimate,
+        disc_type=config.disc_type,
+        volume_shape=config.volume_shape,
+        half_volume=_mean_is_half_volume(mean_estimate, config.volume_shape),
     )
     images = covariance_core.subtract_projected_mean(
         config, images, mean_volume, ctf_params, rotation_matrices, translations
@@ -1018,9 +1030,13 @@ def compute_H_B_for_halfset(
     volume_size = cryo.volume_size
 
     disc_type = "cubic" if options["disc_type"] == "cubic" else "linear_interp"
-    mean_estimate = jnp.asarray(mean_estimate)
-
     config = ForwardModelConfig.from_dataset(cryo, disc_type=disc_type)
+    mean_estimate = _as_projection_volume(
+        mean_estimate,
+        disc_type=disc_type,
+        volume_shape=config.volume_shape,
+        half_volume=_mean_is_half_volume(mean_estimate, config.volume_shape),
+    )
     opts = CovColumnOpts(
         right_kernel=options["right_kernel"],
         left_kernel=options["left_kernel"],
@@ -1197,14 +1213,49 @@ def _volume_layout_sizes(volume_shape):
     return full_size, half_size
 
 
+def _is_projection_volume(volume):
+    return isinstance(volume, (core.Volume, core.CubicVolume))
+
+
+def _projection_array(volume):
+    return volume.array if _is_projection_volume(volume) else volume
+
+
+def _wrap_projection_like(volume, array, *, disc_type, half_volume):
+    array = jnp.asarray(array)
+    if isinstance(volume, core.CubicVolume) or disc_type == "cubic":
+        return core.CubicVolume.from_coeffs(array, half_volume=half_volume)
+    if isinstance(volume, core.Volume):
+        disc_type = volume.disc_type
+    return core.Volume(array, disc_type=disc_type, half_volume=half_volume)
+
+
+def _as_projection_volume(volume, *, disc_type, volume_shape, half_volume):
+    if _is_projection_volume(volume):
+        if volume.disc_type != disc_type:
+            raise ValueError(f"Expected projection volume with disc_type={disc_type!r}, got {volume.disc_type!r}")
+        return volume
+    if disc_type == "cubic":
+        return core.to_cubic(volume, volume_shape, half_volume=half_volume)
+    return core.Volume(volume, disc_type=disc_type, half_volume=half_volume)
+
+
 def _mean_is_half_volume(mean_estimate, volume_shape):
+    if _is_projection_volume(mean_estimate):
+        return mean_estimate.half_volume
     _, half_size = _volume_layout_sizes(volume_shape)
+    mean_estimate = _projection_array(mean_estimate)
     return int(np.prod(mean_estimate.shape)) == half_size
 
 
 def _basis_is_half_volume(basis, volume_shape):
+    if basis is None:
+        return False
+    if _is_projection_volume(basis):
+        return basis.half_volume
     _, half_size = _volume_layout_sizes(volume_shape)
-    if basis is None or basis.ndim < 1:
+    basis = _projection_array(basis)
+    if basis.ndim < 1:
         return False
     per_vec_size = int(np.prod(basis.shape[1:])) if basis.shape[0] != 0 else 0
     return per_vec_size == half_size
@@ -1241,11 +1292,12 @@ def _prepare_model_half_volumes(volume_shape, mean_estimate, basis, mean_disc_ty
     """
     full_size, half_size = _volume_layout_sizes(volume_shape)
 
-    mean_size = int(np.prod(mean_estimate.shape))
+    mean_array = _projection_array(mean_estimate)
+    mean_size = int(np.prod(mean_array.shape))
     if mean_disc_type == "cubic":
         if mean_size == half_size:
-            mean_estimate = fourier_transform_utils.half_volume_to_full_volume(
-                mean_estimate.reshape(fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)),
+            mean_array = fourier_transform_utils.half_volume_to_full_volume(
+                mean_array.reshape(fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)),
                 volume_shape,
             ).reshape(-1)
     elif mean_size not in (full_size, half_size):
@@ -1257,19 +1309,34 @@ def _prepare_model_half_volumes(volume_shape, mean_estimate, basis, mean_disc_ty
             half_size,
         )
 
-    if basis is not None and basis.ndim >= 1 and basis.shape[0] > 0:
-        basis_size = int(np.prod(basis.shape[1:]))
-        if basis_disc_type == "cubic":
-            if basis_size == half_size:
-                basis = _convert_half_volumes_to_full_in_batch(basis, volume_shape, gpu_memory=gpu_memory)
-        elif basis_size not in (full_size, half_size):
-            logger.warning(
-                "Unexpected basis vector size %d for volume_shape %s; expected %d (full) or %d (half).",
-                basis_size,
-                volume_shape,
-                full_size,
-                half_size,
-            )
+    mean_estimate = _wrap_projection_like(
+        mean_estimate,
+        mean_array,
+        disc_type=mean_disc_type,
+        half_volume=_mean_is_half_volume(mean_array, volume_shape),
+    )
+
+    if basis is not None:
+        basis_array = _projection_array(basis)
+        if basis_array.ndim >= 1 and basis_array.shape[0] > 0:
+            basis_size = int(np.prod(basis_array.shape[1:]))
+            if basis_disc_type == "cubic":
+                if basis_size == half_size:
+                    basis_array = _convert_half_volumes_to_full_in_batch(basis_array, volume_shape, gpu_memory=gpu_memory)
+            elif basis_size not in (full_size, half_size):
+                logger.warning(
+                    "Unexpected basis vector size %d for volume_shape %s; expected %d (full) or %d (half).",
+                    basis_size,
+                    volume_shape,
+                    full_size,
+                    half_size,
+                )
+        basis = _wrap_projection_like(
+            basis,
+            basis_array,
+            disc_type=basis_disc_type,
+            half_volume=_basis_is_half_volume(basis_array, volume_shape),
+        )
 
     return mean_estimate, basis
 
@@ -1594,10 +1661,11 @@ def _reduce_covariance_inner_explicit(
 
     mean_half_volume = _mean_is_half_volume(model.mean_estimate, config.volume_shape)
     basis_half_volume = _basis_is_half_volume(model.basis, config.volume_shape)
-    mean_volume = (
-        core.to_cubic(model.mean_estimate, config.volume_shape, half_volume=mean_half_volume)
-        if config.disc_type == "cubic"
-        else core.Volume(model.mean_estimate, disc_type=config.disc_type, half_volume=mean_half_volume)
+    mean_volume = _as_projection_volume(
+        model.mean_estimate,
+        disc_type=config.disc_type,
+        volume_shape=config.volume_shape,
+        half_volume=mean_half_volume,
     )
     projected_mean = core_forward.forward_model(
         config,
@@ -1617,10 +1685,11 @@ def _reduce_covariance_inner_explicit(
     basis = model.basis
     assert basis is not None
     config_u = config.replace(disc_type=opts.disc_type_u)
-    basis_volume = (
-        core.to_cubic(basis, config.volume_shape, half_volume=basis_half_volume)
-        if opts.disc_type_u == "cubic"
-        else core.Volume(basis, disc_type=opts.disc_type_u, half_volume=basis_half_volume)
+    basis_volume = _as_projection_volume(
+        basis,
+        disc_type=opts.disc_type_u,
+        volume_shape=config.volume_shape,
+        half_volume=basis_half_volume,
     )
     AUs = covariance_core.batch_vol_forward_from_map(
         config_u,
@@ -1830,10 +1899,29 @@ def adjoint_kernel_slice(images, rotation_matrices, image_shape, volume_shape, k
     if kernel not in ("triangular", "square"):
         raise ValueError("Kernel not implemented")
     if images.ndim == 3:
-        return core.batch_adjoint_slice_volume(
-            images, rotation_matrices, image_shape, volume_shape, disc_type, volumes=volumes
+        like = (
+            _wrap_projection_array(volumes, disc_type=disc_type)
+            if volumes is not None
+            else _zeros_projection_volume(
+                volume_shape,
+                disc_type=disc_type,
+                dtype=images.dtype,
+                batch_ndim=(images.shape[0],),
+            )
         )
-    return core.adjoint_slice_volume(images, rotation_matrices, image_shape, volume_shape, disc_type, volume=volumes)
+        return core.batch_adjoint_slice_volume(
+            images,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            like=like,
+        )
+    like = (
+        _wrap_projection_array(volumes, disc_type=disc_type)
+        if volumes is not None
+        else _zeros_projection_volume(volume_shape, disc_type=disc_type, dtype=images.dtype)
+    )
+    return core.adjoint_slice_volume(images, rotation_matrices, image_shape, volume_shape, like=like)
 
 
 def _compute_noise_from_kernel_vals(

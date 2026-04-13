@@ -1351,7 +1351,7 @@ def _average_residual_square_explicit(
     # Per-image forward model: project volume[i] with CTF[i] and rotation[i]
     def _project_single(vol, ctf, rot):
         projection_volume = (
-            core.to_cubic(vol, config.volume_shape)
+            core.CubicVolume.from_coeffs(vol)
             if config.disc_type == "cubic"
             else core.Volume(vol, disc_type=config.disc_type)
         )

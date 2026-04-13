@@ -1161,8 +1161,9 @@ def _reference_variance_kernel(config, batch_data, mean_estimate, volume_mask, i
         images_squared *= CTF_squared
 
     def _bp(arr):
+        like = core.Volume(jnp.zeros(config.volume_size, dtype=jnp.asarray(arr).dtype), disc_type="linear_interp")
         return core.adjoint_slice_volume(
-            arr, batch_data.rotation_matrices, config.image_shape, config.volume_shape, "linear_interp"
+            arr, batch_data.rotation_matrices, config.image_shape, config.volume_shape, like=like
         )
 
     return _bp(images_squared), _bp(CTF_squared**2), _bp(img_power_full), _bp(noise_p_variance_ctf)
@@ -1643,7 +1644,8 @@ def test_reduce_covariance_inner_uses_half_volume_for_half_volume_model(monkeypa
         skip_ctf=False,
         half_image=False,
     ):
-        seen["mean_volume_size"] = volume.shape[-1]
+        volume_array = volume.array if hasattr(volume, "array") else volume
+        seen["mean_volume_size"] = volume_array.shape[-1]
         n_pixels = half_image_size if half_image else int(np.prod(config.image_shape))
         return jnp.zeros((n_images, n_pixels), dtype=jnp.complex64)
 
@@ -1655,7 +1657,8 @@ def test_reduce_covariance_inner_uses_half_volume_for_half_volume_model(monkeypa
         skip_ctf=False,
         half_image=False,
     ):
-        seen["basis_volume_size"] = volumes.shape[-1]
+        volume_array = volumes.array if hasattr(volumes, "array") else volumes
+        seen["basis_volume_size"] = volume_array.shape[-1]
         n_pixels = half_image_size if half_image else int(np.prod(config.image_shape))
         return jnp.zeros((n_basis, n_images, n_pixels), dtype=jnp.complex64)
 
@@ -1758,8 +1761,12 @@ def test_compute_projected_covariance_preserves_full_volume_model_layout(monkeyp
         rhs=None,
         tilt_labels=None,
     ):
-        seen["mean_size"] = int(np.prod(model.mean_estimate.shape))
-        seen["basis_size"] = int(np.prod(model.basis.shape[1:]))
+        mean_arr = model.mean_estimate.array if hasattr(model.mean_estimate, "array") else model.mean_estimate
+        basis_arr = model.basis.array if hasattr(model.basis, "array") else model.basis
+        seen["mean_size"] = int(np.prod(mean_arr.shape))
+        seen["basis_size"] = int(np.prod(basis_arr.shape[1:]))
+        seen["mean_is_volume"] = isinstance(model.mean_estimate, core.Volume)
+        seen["basis_is_volume"] = isinstance(model.basis, core.Volume)
         return lhs, rhs
 
     monkeypatch.setattr(cov_est, "reduce_covariance_inner", fake_reduce_covariance_inner)
@@ -1777,6 +1784,8 @@ def test_compute_projected_covariance_preserves_full_volume_model_layout(monkeyp
 
     assert seen["mean_size"] == cryo.volume_size
     assert seen["basis_size"] == cryo.volume_size
+    assert seen["mean_is_volume"]
+    assert seen["basis_is_volume"]
     np.testing.assert_allclose(np.asarray(covar), np.zeros((3, 3), dtype=np.float32), atol=1e-7, rtol=1e-7)
 
 
@@ -1809,10 +1818,12 @@ def test_prepare_model_half_volumes_keeps_cubic_coefficients_full():
         axis=0,
     )
 
-    assert mean_full.shape == (cryo.volume_size,)
-    assert basis_full.shape == (3, cryo.volume_size)
-    np.testing.assert_allclose(np.asarray(mean_full), expected_mean, atol=1e-6, rtol=1e-6)
-    np.testing.assert_allclose(np.asarray(basis_full), expected_basis, atol=1e-6, rtol=1e-6)
+    assert isinstance(mean_full, core.CubicVolume)
+    assert isinstance(basis_full, core.CubicVolume)
+    assert mean_full.array.shape == (cryo.volume_size,)
+    assert basis_full.array.shape == (3, cryo.volume_size)
+    np.testing.assert_allclose(np.asarray(mean_full.array), expected_mean, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(basis_full.array), expected_basis, atol=1e-6, rtol=1e-6)
 
 
 def test_prepare_model_half_volumes_preserves_linear_full_layout():
@@ -1831,8 +1842,10 @@ def test_prepare_model_half_volumes_preserves_linear_full_layout():
         basis_disc_type="linear_interp",
     )
 
-    np.testing.assert_allclose(np.asarray(mean_out), mean, atol=1e-6, rtol=1e-6)
-    np.testing.assert_allclose(np.asarray(basis_out), basis, atol=1e-6, rtol=1e-6)
+    assert isinstance(mean_out, core.Volume)
+    assert isinstance(basis_out, core.Volume)
+    np.testing.assert_allclose(np.asarray(mean_out.array), mean, atol=1e-6, rtol=1e-6)
+    np.testing.assert_allclose(np.asarray(basis_out.array), basis, atol=1e-6, rtol=1e-6)
 
 
 def test_compute_projected_covariance_preserves_packed_half_volume_model_layout(monkeypatch):
@@ -1857,8 +1870,12 @@ def test_compute_projected_covariance_preserves_packed_half_volume_model_layout(
         rhs=None,
         tilt_labels=None,
     ):
-        seen["mean_size"] = int(np.prod(model.mean_estimate.shape))
-        seen["basis_size"] = int(np.prod(model.basis.shape[1:]))
+        mean_arr = model.mean_estimate.array if hasattr(model.mean_estimate, "array") else model.mean_estimate
+        basis_arr = model.basis.array if hasattr(model.basis, "array") else model.basis
+        seen["mean_size"] = int(np.prod(mean_arr.shape))
+        seen["basis_size"] = int(np.prod(basis_arr.shape[1:]))
+        seen["mean_is_volume"] = isinstance(model.mean_estimate, core.Volume)
+        seen["basis_is_volume"] = isinstance(model.basis, core.Volume)
         return lhs, rhs
 
     monkeypatch.setattr(cov_est, "reduce_covariance_inner", fake_reduce_covariance_inner)
@@ -1876,6 +1893,8 @@ def test_compute_projected_covariance_preserves_packed_half_volume_model_layout(
 
     assert seen["mean_size"] == half_size
     assert seen["basis_size"] == half_size
+    assert seen["mean_is_volume"]
+    assert seen["basis_is_volume"]
     np.testing.assert_allclose(np.asarray(covar), np.zeros((3, 3), dtype=np.float32), atol=1e-7, rtol=1e-7)
 
 

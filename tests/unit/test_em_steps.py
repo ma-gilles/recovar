@@ -34,7 +34,7 @@ def test_compute_probability_from_residual_normal_squared_vmap_normalizes_each_s
 
 
 def test_compute_residuals_many_poses_fft_branch_uses_translation_indices(monkeypatch):
-    def _fake_slice(_volumes, _rotations, _image_shape, _volume_shape, _disc_type):
+    def _fake_slice(_volumes, _rotations, _image_shape, _volume_shape):
         return jnp.ones((2, 1, 2, 4), dtype=jnp.complex64)
 
     def _fake_norm_squared(_projected_volumes, _images, _image_shape):

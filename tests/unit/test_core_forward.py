@@ -17,6 +17,19 @@ def _volume(values, disc_type="linear_interp", half_volume=False):
     return recovar.core.Volume(values, disc_type=disc_type, half_volume=half_volume)
 
 
+def _adjoint_like(config, dtype, *, half_volume=False):
+    volume_shape = (
+        fourier_transform_utils.volume_shape_to_half_volume_shape(config.volume_shape)
+        if half_volume
+        else config.volume_shape
+    )
+    flat = int(np.prod(volume_shape))
+    zeros = np.zeros(flat, dtype=np.dtype(dtype))
+    if config.disc_type == "cubic":
+        return recovar.core.CubicVolume.from_coeffs(zeros, half_volume=half_volume)
+    return recovar.core.Volume(zeros, disc_type=config.disc_type, half_volume=half_volume)
+
+
 def _ones_ctf(ctf_params, image_shape, voxel_size, **kw):
     return np.ones((ctf_params.shape[0], image_shape[0] * image_shape[1]), dtype=np.float32)
 
@@ -69,7 +82,7 @@ def test_adjoint_forward_model_shape():
     ctf_params = np.zeros((1, 9), dtype=np.float32)
     slices = np.zeros((1, config.image_size), dtype=np.float32)
 
-    out = np.asarray(core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True))
+    out = np.asarray(core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True, like=_adjoint_like(config, slices.dtype)))
     assert out.shape == (config.volume_size,)
 
 
@@ -102,6 +115,22 @@ def test_forward_model_rejects_raw_cubic_volume():
 
     with pytest.raises(TypeError, match="forward_model requires a Volume or CubicVolume"):
         core_forward.forward_model(config, volume, ctf_params, rotation_matrices, skip_ctf=True)
+
+
+def test_forward_model_rejects_disc_type_mismatch():
+    config = _make_config(disc_type="linear_interp")
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+    coeffs = np.zeros(config.volume_size, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="volume.disc_type=.*config.disc_type"):
+        core_forward.forward_model(
+            config,
+            recovar.core.CubicVolume.from_coeffs(coeffs),
+            ctf_params,
+            rotation_matrices,
+            skip_ctf=True,
+        )
 
 
 def test_forward_model_accepts_half_volume_object():
@@ -165,7 +194,7 @@ def test_adjoint_forward_model_linear_interp_shape():
     rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
     ctf_params = np.zeros((1, 9), dtype=np.float32)
     slices = np.ones((1, config.image_size), dtype=np.float32)
-    out = np.asarray(core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True))
+    out = np.asarray(core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True, like=_adjoint_like(config, slices.dtype)))
     assert out.shape == (config.volume_size,)
     assert np.all(np.isfinite(out))
 
@@ -179,10 +208,10 @@ def test_adjoint_forward_model_linear_interp_applies_ctf():
     slices = np.ones((1, config_2x.image_size), dtype=np.float32)
 
     out_1x = np.asarray(
-        core_forward.adjoint_forward_model(config_1x, slices, ctf_params, rotation_matrices, skip_ctf=False)
+        core_forward.adjoint_forward_model(config_1x, slices, ctf_params, rotation_matrices, skip_ctf=False, like=_adjoint_like(config_1x, slices.dtype))
     )
     out_2x = np.asarray(
-        core_forward.adjoint_forward_model(config_2x, slices, ctf_params, rotation_matrices, skip_ctf=False)
+        core_forward.adjoint_forward_model(config_2x, slices, ctf_params, rotation_matrices, skip_ctf=False, like=_adjoint_like(config_2x, slices.dtype))
     )
     np.testing.assert_allclose(out_2x, 2.0 * out_1x)
 
@@ -204,6 +233,23 @@ def test_compute_AtAv_returns_singleton_tuple():
     assert isinstance(out, tuple)
     assert len(out) == 1
     assert np.asarray(out[0]).shape == (config.volume_size,)
+
+
+def test_compute_AtAv_rejects_disc_type_mismatch():
+    config = _make_config(disc_type="linear_interp")
+    rotation_matrices = np.eye(3, dtype=np.float32)[None, ...]
+    ctf_params = np.zeros((1, 9), dtype=np.float32)
+    coeffs = np.zeros(config.volume_size, dtype=np.float32)
+
+    with pytest.raises(ValueError, match="volume.disc_type=.*config.disc_type"):
+        core_forward.compute_AtAv(
+            config,
+            recovar.core.CubicVolume.from_coeffs(coeffs),
+            ctf_params,
+            rotation_matrices,
+            noise_variance=1.0,
+            skip_ctf=True,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -250,7 +296,7 @@ def test_adjoint_forward_model_on_gpu(gpu_device):
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
     cpu_out = np.asarray(
-        core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True)
+        core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True, like=_adjoint_like(config, slices.dtype))
     )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
@@ -260,6 +306,7 @@ def test_adjoint_forward_model_on_gpu(gpu_device):
                 jax.device_put(ctf_params),
                 jax.device_put(rotation_matrices),
                 skip_ctf=True,
+                like=_adjoint_like(config, slices.dtype),
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)
@@ -364,7 +411,7 @@ def test_new_api_adjoint_forward_model_on_gpu(gpu_device):
     ctf_params = np.zeros((1, 9), dtype=np.float32)
 
     cpu_out = np.asarray(
-        core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True)
+        core_forward.adjoint_forward_model(config, slices, ctf_params, rotation_matrices, skip_ctf=True, like=_adjoint_like(config, slices.dtype))
     )
     with jax.default_device(gpu_device):
         gpu_out = np.asarray(
@@ -374,6 +421,7 @@ def test_new_api_adjoint_forward_model_on_gpu(gpu_device):
                 jax.device_put(ctf_params),
                 jax.device_put(rotation_matrices),
                 skip_ctf=True,
+                like=_adjoint_like(config, slices.dtype),
             )
         )
     np.testing.assert_allclose(gpu_out, cpu_out, atol=1e-5, rtol=1e-5)

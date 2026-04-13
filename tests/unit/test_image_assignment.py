@@ -67,7 +67,7 @@ class _MockDS:
 
 def test_compute_image_assignment_fills_residual_matrix(monkeypatch):
     def fake_compute_residual(images, _ctf_params, _rotation_matrices, _translations, mean_estimate, *_args, **_kwargs):
-        values = mean_estimate.values if hasattr(mean_estimate, "values") else mean_estimate
+        values = mean_estimate.array if hasattr(mean_estimate, "array") else mean_estimate
         return np.full(images.shape[0], float(np.real(values[0])), dtype=np.float32)
 
     monkeypatch.setattr(ia, "compute_residual", fake_compute_residual)
