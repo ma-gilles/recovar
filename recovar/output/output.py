@@ -537,7 +537,7 @@ def _load_embeddings_per_zdim(paths):
 
 
 def write_metadata_json(paths, result):
-    """Write a human-readable JSON manifest alongside the pickle files.
+    """Write a human-readable JSON manifest alongside the model files.
 
     This file is not loaded by the pipeline -- it exists for users to quickly
     inspect run parameters without unpickling.
@@ -573,7 +573,8 @@ def write_metadata_json(paths, result):
         'original_particles_file': original_particles,
         'files': {
             'params': 'model/params.pkl',
-            'embeddings': 'model/embeddings.pkl',
+            'embeddings': 'model/zdim_{N}/{latent_coords,latent_precision,contrasts}.npy',
+            'embeddings_legacy': 'model/embeddings.pkl',
             'covariance_cols': 'model/covariance_cols.pkl',
             'halfsets': 'model/halfsets.pkl',
             'particles_halfsets': 'model/particles_halfsets.pkl',
@@ -777,10 +778,7 @@ def plot_loglikelihood_over_scatter(path_subsampled, zs, cov_zs, save_path):
 
 def load_results_new(datadir):
     model_folder = datadir +'model'  + '/'
-    output_folder = datadir +'output'  + '/'
-    with open(model_folder + 'results.pkl', 'rb') as f:
-        results = pickle.load(f)
-    return results
+    return utils.pickle_load(model_folder + 'results.pkl')
 
 
 class PipelineOutput:

@@ -4,6 +4,7 @@ import functools
 import logging
 import os
 import pickle
+import warnings
 from dataclasses import dataclass
 
 import jax
@@ -366,6 +367,11 @@ def pickle_dump(object, file):
 
 
 def pickle_load(file):
+    warnings.warn(
+        "Loading legacy RECOVAR pickle files is deprecated; prefer .npy/.npz-based outputs when available.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     with open(file, "rb") as f:
         return pickle.load(f)
 

@@ -118,7 +118,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--latent-points",
         type=os.path.abspath,
         required=True,
-        help="path to latent points (.txt file). E.g., you can use the output of k-means and input output/analysis_2/centers.txt from analyze.py. Or you can make your own latent points. It should be a .txt file with shape (n_points, zdim).",
+        help="Path to latent points (.txt/.npy/.npz/.pkl). E.g. output/analysis_2/centers.txt from analyze.py, or your own array with shape (n_points, zdim).",
     )
     parser.add_argument(
         "--save-all-estimates",

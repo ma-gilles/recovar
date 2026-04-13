@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import pickle
+import warnings
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
@@ -83,8 +84,15 @@ def load_index_like(value):
             return [archive[key] for key in files]
     if suffix == ".txt":
         return np.loadtxt(path, dtype=np.int64)
-    with open(path, "rb") as handle:
-        return pickle.load(handle)
+    if suffix == ".pkl":
+        warnings.warn(
+            "Loading legacy pickle index files is deprecated; prefer .npy/.npz/.txt index files.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        with open(path, "rb") as handle:
+            return pickle.load(handle)
+    raise ValueError("Indices should be provided as a .pkl, .npy, .npz, or .txt file")
 
 
 def normalize_image_indices(values, *, n_total: Optional[int] = None, name: str = "indices"):

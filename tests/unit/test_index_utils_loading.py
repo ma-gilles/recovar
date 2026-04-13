@@ -1,3 +1,5 @@
+import pickle
+
 import numpy as np
 import pytest
 
@@ -36,3 +38,23 @@ def test_load_index_like_accepts_txt(tmp_path):
     out = load_index_like(str(path))
 
     np.testing.assert_array_equal(out, np.array([2, 4, 6], dtype=np.int64))
+
+
+def test_load_index_like_warns_for_legacy_pickle(tmp_path):
+    indices = np.array([0, 4, 8], dtype=np.int32)
+    path = tmp_path / "indices.pkl"
+    with open(path, "wb") as handle:
+        pickle.dump(indices, handle)
+
+    with pytest.warns(DeprecationWarning, match="legacy pickle index files"):
+        out = load_index_like(str(path))
+
+    np.testing.assert_array_equal(out, indices)
+
+
+def test_load_index_like_rejects_unknown_suffix(tmp_path):
+    path = tmp_path / "indices.bin"
+    path.write_bytes(b"not-a-supported-index-file")
+
+    with pytest.raises(ValueError, match=r"\.pkl, \.npy, \.npz, or \.txt"):
+        load_index_like(str(path))

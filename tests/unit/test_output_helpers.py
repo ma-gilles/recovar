@@ -1,10 +1,13 @@
+import json
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
-from types import SimpleNamespace
 
 pytest.importorskip("jax")
 from recovar import utils
 from recovar.output import output
+from recovar.output.output_paths import ResultPaths
 
 pytestmark = pytest.mark.unit
 
@@ -259,6 +262,26 @@ def test_pipeline_output_get_u_real_caps_to_50_saved_eigenvectors(tmp_path, monk
     u_real = po.get("u_real")
     assert u_real.shape == (50, 2, 2, 2)
     assert len(calls) == 50
+
+
+def test_write_metadata_json_advertises_per_zdim_embeddings(tmp_path):
+    result_path = tmp_path / "pipeline_output"
+    paths = ResultPaths(str(result_path))
+    paths.ensure_model_dir()
+
+    output.write_metadata_json(
+        paths,
+        {
+            "version": "0.2",
+            "input_args": SimpleNamespace(zdim=[2, 4]),
+            "volume_shape": (8, 8, 8),
+            "voxel_size": 1.5,
+        },
+    )
+
+    metadata = json.loads((result_path / "model" / "metadata.json").read_text())
+    assert metadata["files"]["embeddings"] == "model/zdim_{N}/{latent_coords,latent_precision,contrasts}.npy"
+    assert metadata["files"]["embeddings_legacy"] == "model/embeddings.pkl"
 
 
 def test_pipeline_output_get_u_real_raises_when_no_eigenvectors_saved(tmp_path):

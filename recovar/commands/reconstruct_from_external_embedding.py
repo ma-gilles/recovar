@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import time
+import warnings
 
 import numpy as np
 
@@ -42,6 +43,37 @@ def _load_external_embeddings(path):
     return zs
 
 
+def _load_target_points(path):
+    """Load target latent points from text, pickle, or NumPy-native formats."""
+    suffix = os.path.splitext(os.fspath(path))[1].lower()
+    if suffix not in (".txt", ".pkl", ".npy", ".npz"):
+        raise ValueError("Target latent points should be a .txt, .pkl, .npy, or .npz file")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=UserWarning)
+        target = utils.load_serialized_payload(
+            path,
+            name="target latent points",
+            allow_text=True,
+            npz_keys=("target", "targets", "latent_points", "target_zs", "zs", "points"),
+        )
+
+    target = np.asarray(target)
+    try:
+        target = target.astype(np.float32, copy=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Target latent points must be numeric.") from exc
+    if target.ndim == 0:
+        target = target.reshape(1)
+    if target.size == 0:
+        raise ValueError("Target latent points array is empty.")
+    if not np.all(np.isfinite(target)):
+        raise ValueError("Target latent points contain non-finite values (NaN/Inf).")
+    if target.ndim > 2:
+        raise ValueError(f"Target latent points must be 1D or 2D; got {target.shape}")
+    return target
+
+
 def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "particles",
@@ -80,16 +112,16 @@ def add_args(parser: argparse.ArgumentParser):
     group.add_argument(
         "--ind",
         type=os.path.abspath,
-        metavar="PKL",
-        help="Filter particles by these indices",
+        metavar="FILE",
+        help="Filter particles by these indices (.pkl/.npy/.npz/.txt)",
     )
 
     group.add_argument(
         "--particle-ind",
         dest="tilt_ind",
         type=os.path.abspath,
-        metavar="PKL",
-        help="Filter particles by these indices (only for tilt-series/cryo-ET)",
+        metavar="FILE",
+        help="Filter particles by these indices (.pkl/.npy/.npz/.txt; only for tilt-series/cryo-ET)",
     )
 
     group.add_argument(
@@ -158,7 +190,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--target",
         type=os.path.abspath,
         required=True,
-        help="Target latent points to evaluate kernel regression (.txt)",
+        help="Target latent points to evaluate kernel regression (.txt/.pkl/.npy/.npz)",
     )
 
     parser.add_argument(
@@ -238,7 +270,7 @@ def generate(args):
     # External embeddings are expected in dataset-local (original) order.
     zs = _load_external_embeddings(args.embedding)
 
-    target = np.loadtxt(args.target)
+    target = _load_target_points(args.target)
 
     if args.zdim1:
         target = target[:, None]

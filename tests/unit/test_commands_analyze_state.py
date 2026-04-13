@@ -1609,6 +1609,8 @@ def test_compute_state_add_args_requires_latent_points():
     import argparse
 
     parser = compute_state_cmd.add_args(argparse.ArgumentParser())
+    action = parser._option_string_actions["--latent-points"]
+    assert ".txt/.npy/.npz/.pkl" in action.help
     parsed = parser.parse_args(
         [
             "/tmp/result_dir",
