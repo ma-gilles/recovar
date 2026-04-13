@@ -471,6 +471,7 @@ def run_em_v2(
     accumulate_noise: bool = False,
     half_spectrum_scoring: bool = False,
     volume_upsampling_factor: int = 1,
+    old_offsets: np.ndarray = None,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -727,6 +728,36 @@ def run_em_v2(
         batch_size = len(indices)
         end_idx = start_idx + batch_size
         batch_data = jnp.asarray(batch_data)
+
+        # -- RELION old_offset: integer pre-shift in real space --
+        # RELION (ml_optimiser.cpp:6085-6120, 6247) rounds each image's
+        # previous-best translation to integer pixels and shifts the raw
+        # image BEFORE masking and FFT. This introduces deliberate sub-pixel
+        # imprecision that keeps the translation posterior spread, preventing
+        # premature pose lock-in.
+        # TODO: old_offset pre-centering is implemented but disabled pending
+        # norm_correction and scale_correction (Features 2+4). Without those,
+        # the iter-1 translations are too noisy and the pre-shift locks in
+        # wrong offsets for zero-offset simulated data. Enable after Features
+        # 2+4 stabilize initial translations.
+        if False and old_offsets is not None:
+            batch_offsets = old_offsets[image_indices[start_idx:end_idx]]
+            batch_int_offsets = np.round(batch_offsets).astype(int)
+            shifted_batch = np.zeros_like(np.array(batch_data))
+            for i in range(batch_size):
+                dx, dy = int(batch_int_offsets[i, 0]), int(batch_int_offsets[i, 1])
+                if dx == 0 and dy == 0:
+                    shifted_batch[i] = np.array(batch_data[i])
+                else:
+                    # RELION uses DONT_WRAP: zero-fill at boundaries
+                    img = np.array(batch_data[i])
+                    H, W = img.shape[-2], img.shape[-1]
+                    src_y = slice(max(0, -dx), min(H, H - dx))
+                    dst_y = slice(max(0, dx), min(H, H + dx))
+                    src_x = slice(max(0, -dy), min(W, W - dy))
+                    dst_x = slice(max(0, dy), min(W, W + dy))
+                    shifted_batch[i][..., dst_y, dst_x] = img[..., src_y, src_x]
+            batch_data = jnp.asarray(shifted_batch)
 
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(

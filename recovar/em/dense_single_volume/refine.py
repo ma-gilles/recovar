@@ -184,6 +184,7 @@ def _run_grouped_local_search_em(
     *,
     accumulate_noise=False,
     volume_upsampling_factor=1,
+    old_offsets=None,
 ):
     """Run batched exact local search on the fine HEALPix grid.
 
@@ -256,8 +257,13 @@ def _run_grouped_local_search_em(
             per_image=True,
         )
         local_rotations = rotation_indices_to_matrices(local_indices, healpix_order)
-        # C1 (RELION-parity): use the explicit sigma_offset_angstrom from the
-        # caller (which is the data-driven value updated each iter) without
+        # RELION (ml_optimiser.cpp:7921): pdf_orientation /= pdf_orientation_mean
+        # Normalize per-image log-prior by subtracting the log-mean per image.
+        if local_log_prior is not None and local_log_prior.ndim == 2:
+            import scipy.special
+
+            _lm = scipy.special.logsumexp(local_log_prior, axis=1, keepdims=True) - np.log(local_log_prior.shape[1])
+            local_log_prior = local_log_prior - _lm
         # RELION (ml_optimiser.cpp:7739): sigma = offset_range / 3.
         local_translation_log_prior = make_relion_translation_log_prior(
             translations,
@@ -289,6 +295,7 @@ def _run_grouped_local_search_em(
             accumulate_noise=accumulate_noise,
             half_spectrum_scoring=True,
             volume_upsampling_factor=volume_upsampling_factor,
+            old_offsets=old_offsets,
         )
         if accumulate_noise:
             _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g = run_em_outputs
@@ -993,7 +1000,7 @@ def refine_single_volume(
 
     # State: two half-set volumes, noise, prior
     means = [jnp.array(init_volume), jnp.array(init_volume)]
-    noise_variance = jnp.array(init_noise_variance) * 1.5  # TEMP: soften posterior
+    noise_variance = jnp.array(init_noise_variance)
     mean_variance = jnp.array(init_mean_variance)
 
     # History tracking
@@ -1412,7 +1419,7 @@ def _refine_relion_mode(
     # output before the upsample-back step.  Returned to the caller so that
     # downstream consumers (save scripts, analysis) see regular N^3 volumes.
     means_native = [jnp.array(init_volume), jnp.array(init_volume)]
-    noise_variance = jnp.array(init_noise_variance) * 1.5  # TEMP: soften posterior
+    noise_variance = jnp.array(init_noise_variance)
     mean_variance = jnp.array(init_mean_variance)
 
     # History tracking
@@ -1424,6 +1431,14 @@ def _refine_relion_mode(
     previous_assignments = [None, None]
     previous_best_rotations = [None, None]
     previous_best_translations = [None, None]
+    # RELION old_offset: per-image integer pixel offsets applied to raw
+    # images before mask/FFT.  Initialized to zero; updated each iter
+    # to round(previous_best_translation).  The translation search grid
+    # then covers only the sub-pixel residual.
+    old_offsets = [
+        np.zeros((experiment_datasets[0].n_units, 2), dtype=np.float32),
+        np.zeros((experiment_datasets[1].n_units, 2), dtype=np.float32),
+    ]
     max_posterior_per_half = [None, None]
     rotation_posterior_per_half = [None, None]
     significant_counts = []
@@ -1616,8 +1631,17 @@ def _refine_relion_mode(
                 global_direction_prior,
                 current_healpix_order,
             )
+            # RELION (ml_optimiser.cpp:7816-7922): normalizes pdf_orientation
+            # by its mean (pdf_orientation /= pdf_orientation_mean) to prevent
+            # the prior from over-concentrating probability. In log space this
+            # is subtracting the log-mean.
+            import scipy.special
+
+            _lp = rotation_log_prior
+            _log_mean = scipy.special.logsumexp(_lp) - np.log(len(_lp))
+            rotation_log_prior = _lp - _log_mean
             logger.info(
-                "Using learned global direction prior: %d directions at healpix_order=%d",
+                "Using learned global direction prior: %d directions at healpix_order=%d (mean-normalized)",
                 global_direction_prior.shape[0],
                 current_healpix_order,
             )
@@ -1685,11 +1709,17 @@ def _refine_relion_mode(
             # ranges are 3 sigma wide). This tightens as angular refinement
             # shrinks the range, keeping the posterior spread out in rotation
             # space and preventing premature pose lock-in.
+            # With old_offset pre-centering, the translation search is
+            # RELATIVE to old_offset. The prior center is the residual:
+            # prior_center = previous_best_translation - old_offset.
+            _prior_trans_k = previous_best_translations[k]
+            if _prior_trans_k is not None and old_offsets[k] is not None:
+                _prior_trans_k = _prior_trans_k - old_offsets[k]
             translation_log_prior = make_relion_translation_log_prior(
                 np.asarray(current_translations, dtype=np.float32),
                 cryo.voxel_size,
                 current_sigma_offset_angstrom,
-                previous_best_translations[k],
+                _prior_trans_k,
                 offset_range_pixels=current_translation_range,
             )
             if use_local:
@@ -1733,6 +1763,10 @@ def _refine_relion_mode(
                     safe_ibs,
                     safe_rbs,
                 )
+                # Adjust prior_translations to residual for old_offset
+                _local_prior_trans = previous_best_translations[k]
+                if _local_prior_trans is not None and old_offsets[k] is not None:
+                    _local_prior_trans = _local_prior_trans - old_offsets[k]
                 Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k = _run_grouped_local_search_em(
                     experiment_datasets[k],
                     means[k],
@@ -1743,7 +1777,7 @@ def _refine_relion_mode(
                     sigma_rot,
                     sigma_psi,
                     current_translations,
-                    previous_best_translations[k],
+                    _local_prior_trans,
                     current_sigma_offset_angstrom,
                     current_translation_range,
                     disc_type,
@@ -1752,6 +1786,7 @@ def _refine_relion_mode(
                     current_size=cs_for_engine,
                     accumulate_noise=True,
                     volume_upsampling_factor=PADDING_FACTOR,
+                    old_offsets=old_offsets[k],
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
@@ -1960,6 +1995,7 @@ def _refine_relion_mode(
                     accumulate_noise=True,
                     half_spectrum_scoring=True,
                     volume_upsampling_factor=PADDING_FACTOR,
+                    old_offsets=old_offsets[k],
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
@@ -2289,10 +2325,16 @@ def _refine_relion_mode(
                     pose_translations[k],
                 )
             new_iter_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
-            new_iter_best_translations[k] = np.asarray(best_trans, dtype=np.float32)
+            # best_trans from the E-step are RELATIVE to old_offsets[k]
+            # (because the images were pre-shifted by old_offsets). Convert
+            # to absolute: absolute_trans = old_offset + search_trans.
+            abs_best_trans = np.asarray(best_trans, dtype=np.float32) + old_offsets[k]
+            new_iter_best_translations[k] = abs_best_trans
             previous_best_rotations[k] = new_iter_best_rotations[k]
             previous_best_translations[k] = new_iter_best_translations[k]
-            experiment_datasets[k].update_poses(best_rots, best_trans)
+            # Update old_offsets for next iter: round absolute to integer
+            old_offsets[k] = np.round(abs_best_trans).astype(np.float32)
+            experiment_datasets[k].update_poses(best_rots, abs_best_trans)
 
         # --- RELION-exact change tracking inputs (B3 / B4) ---
         # Combine both half-sets in the same image order as
