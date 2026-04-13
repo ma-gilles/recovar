@@ -1,9 +1,9 @@
 """
-Utilities for loading CTF parameters and pose information from pickle files.
-Equivalent to cryodrgn/load
+Utilities for loading CTF parameters and pose information from pickle/NumPy files.
 """
 
 import logging
+import os
 from typing import List, Optional, Tuple, Union
 
 import numpy as np
@@ -12,6 +12,52 @@ from recovar import utils
 from recovar.data_io._index_utils import normalize_indices
 
 logger = logging.getLogger(__name__)
+
+
+def _load_npz_arrays(path: str) -> tuple[list[str], dict[str, np.ndarray]]:
+    with np.load(path, allow_pickle=False) as archive:
+        files = list(archive.files)
+        if not files:
+            raise ValueError(f"NPZ file is empty: {path}")
+        arrays = {key: archive[key] for key in files}
+    return files, arrays
+
+
+def _load_single_array_path(path: str, *, name: str, npz_keys=()):
+    suffix = os.path.splitext(path)[1].lower()
+    if suffix == ".npy":
+        return np.load(path, allow_pickle=False)
+    if suffix == ".npz":
+        files, arrays = _load_npz_arrays(path)
+        for key in npz_keys:
+            if key in arrays:
+                return arrays[key]
+        if len(files) == 1:
+            return arrays[files[0]]
+        raise ValueError(f"{name} .npz must contain a single array or one of keys {tuple(npz_keys)}")
+    return utils.pickle_load(path)
+
+
+def _load_pose_bundle(path: str):
+    suffix = os.path.splitext(path)[1].lower()
+    if suffix != ".npz":
+        return _load_single_array_path(path, name="poses", npz_keys=("poses", "rots", "rotations"))
+
+    files, arrays = _load_npz_arrays(path)
+    rot_key = next((key for key in ("rots", "rotations", "poses") if key in arrays), None)
+    trans_key = next((key for key in ("trans", "translations") if key in arrays), None)
+    if rot_key is not None:
+        if trans_key is None:
+            return arrays[rot_key]
+        return arrays[rot_key], arrays[trans_key]
+    if len(files) == 1:
+        return arrays[files[0]]
+    if len(files) == 2:
+        return arrays[files[0]], arrays[files[1]]
+    raise ValueError(
+        "poses .npz must contain a single rotation array, rotation+translation arrays, "
+        "or named keys like rots/trans"
+    )
 
 
 def _normalize_pose_indices(ind: np.ndarray, n_total: int) -> np.ndarray:
@@ -53,8 +99,8 @@ def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:
     if D % 2 != 0:
         raise ValueError(f"Image dimension D must be even, got {D}")
 
-    # Load parameters from pickle
-    ctf_params = np.asarray(utils.pickle_load(ctf_params_pkl))
+    # Load parameters from pickle/NumPy payloads.
+    ctf_params = np.asarray(_load_single_array_path(ctf_params_pkl, name="CTF parameters", npz_keys=("ctf_params", "ctf")))
     if ctf_params.ndim != 2:
         raise ValueError(f"CTF parameters must be a 2D array of shape (N, 9), got ndim={ctf_params.ndim}")
     if ctf_params.shape[0] == 0:
@@ -112,15 +158,15 @@ def load_poses(
     if len(infile) not in (1, 2):
         raise ValueError(f"Expected 1 or 2 input files, got {len(infile)}")
 
-    # Load data from pickle file(s)
+    # Load data from pickle/NumPy file(s).
     if len(infile) == 2:
         # Separate rotation and translation files
-        rot_data = utils.pickle_load(infile[0])
-        trans_data = utils.pickle_load(infile[1])
+        rot_data = _load_single_array_path(infile[0], name="rotations", npz_keys=("rots", "rotations"))
+        trans_data = _load_single_array_path(infile[1], name="translations", npz_keys=("trans", "translations"))
         poses = (rot_data, trans_data)
     else:
         # Single file - may contain tuple or just rotations
-        poses = utils.pickle_load(infile[0])
+        poses = _load_pose_bundle(infile[0])
         if not isinstance(poses, tuple):
             poses = (poses,)
 

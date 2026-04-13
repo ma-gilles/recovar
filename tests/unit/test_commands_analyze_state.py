@@ -785,7 +785,7 @@ def test_compute_state_rejects_unknown_latent_extension(monkeypatch, tmp_path):
         fsc_mask_edgewidth=None,
     )
 
-    with pytest.raises(ValueError, match="Target zs should be a .txt or .pkl file"):
+    with pytest.raises(ValueError, match=r"Target zs should be a \.txt, \.npy, \.npz, or \.pkl file"):
         compute_state_cmd.compute_state(args)
 
 
@@ -933,7 +933,7 @@ def test_compute_state_rejects_missing_latent_points_file(monkeypatch, tmp_path)
         fsc_mask_radius=None,
         fsc_mask_edgewidth=None,
     )
-    with pytest.raises(FileNotFoundError, match="Latent points file not found"):
+    with pytest.raises(FileNotFoundError, match="Target zs file not found"):
         compute_state_cmd.compute_state(args)
 
 
@@ -1388,6 +1388,26 @@ def test_compute_state_rejects_missing_contrasts_or_cov_zs_key(monkeypatch, tmp_
     )
     with pytest.raises(ValueError, match="zdim 2 from provided latent points is not found"):
         compute_state_cmd.compute_state(args)
+
+
+def test_load_latent_points_accepts_npy(tmp_path):
+    latent_points = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
+    latent_path = tmp_path / "latent.npy"
+    np.save(latent_path, latent_points)
+
+    out = compute_state_cmd._load_latent_points(str(latent_path))
+
+    np.testing.assert_array_equal(out, latent_points)
+
+
+def test_load_latent_points_accepts_npz_named_key(tmp_path):
+    latent_points = np.array([[0.5, 1.5]], dtype=np.float32)
+    latent_path = tmp_path / "latent.npz"
+    np.savez(latent_path, latent_points=latent_points)
+
+    out = compute_state_cmd._load_latent_points(str(latent_path))
+
+    np.testing.assert_array_equal(out, latent_points)
 
 
 def test_compute_state_rejects_missing_cov_zs_key(monkeypatch, tmp_path):

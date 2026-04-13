@@ -13,6 +13,35 @@ from recovar.reconstruction import noise
 logger = logging.getLogger(__name__)
 
 
+def _load_external_embeddings(path):
+    """Load external latent coordinates from pickle or NumPy-native formats."""
+    suffix = os.path.splitext(os.fspath(path))[1].lower()
+    if suffix not in (".pkl", ".npy", ".npz"):
+        raise ValueError("Embedding should be a .pkl, .npy, or .npz file")
+    zs = utils.load_serialized_payload(
+        path,
+        name="embedding",
+        npz_keys=("latent_coords", "embedding", "embeddings", "zs"),
+    )
+
+    zs = np.asarray(zs)
+    if not np.issubdtype(zs.dtype, np.number):
+        raise ValueError("Embedding array must be numeric.")
+    try:
+        zs = zs.astype(np.float32, copy=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Embedding array must be numeric.") from exc
+    if zs.size == 0:
+        raise ValueError("Embedding array is empty.")
+    if not np.all(np.isfinite(zs)):
+        raise ValueError("Embedding array contains non-finite values (NaN/Inf).")
+    if zs.ndim == 1:
+        zs = zs[:, None]
+    if zs.ndim != 2:
+        raise ValueError(f"Embedding array must have shape (n_images, zdim); got {zs.shape}")
+    return zs
+
+
 def add_args(parser: argparse.ArgumentParser):
     parser.add_argument(
         "particles",
@@ -38,8 +67,14 @@ def add_args(parser: argparse.ArgumentParser):
         help="Dimensions of latent variable. Default=1,2,4,10,20",
     )
 
-    parser.add_argument("--poses", type=os.path.abspath, required=True, help="Image poses (.pkl)")
-    parser.add_argument("--ctf", metavar="pkl", type=os.path.abspath, required=True, help="CTF parameters (.pkl)")
+    parser.add_argument("--poses", type=os.path.abspath, required=True, help="Image poses (.pkl/.npy/.npz)")
+    parser.add_argument(
+        "--ctf",
+        metavar="pkl|npy|npz",
+        type=os.path.abspath,
+        required=True,
+        help="CTF parameters (.pkl/.npy/.npz)",
+    )
 
     group = parser.add_argument_group("Dataset loading")
     group.add_argument(
@@ -92,7 +127,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--halfsets",
         default=None,
         type=os.path.abspath,
-        help="Halfset indices (.pkl). If omitted, reads _rlnRandomSubset from star file, or splits randomly",
+        help="Halfset indices (.pkl/.npy/.npz/.txt). If omitted, reads _rlnRandomSubset from star file, or splits randomly",
     )
 
     group.add_argument(
@@ -116,7 +151,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--embedding",
         type=os.path.abspath,
         required=True,
-        help="Image embeddings (.pkl), e.g. z.24.pkl from cryoDRGN",
+        help="Image embeddings (.pkl/.npy/.npz), e.g. z.24.pkl from cryoDRGN or model/zdim_N/latent_coords.npy",
     )
 
     parser.add_argument(
@@ -201,7 +236,7 @@ def generate(args):
     ds = halfsets.load_halfset_dataset(dataset_spec, ind_split=ind_split)
 
     # External embeddings are expected in dataset-local (original) order.
-    zs = utils.pickle_load(args.embedding)
+    zs = _load_external_embeddings(args.embedding)
 
     target = np.loadtxt(args.target)
 

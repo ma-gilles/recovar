@@ -370,6 +370,56 @@ def pickle_load(file):
         return pickle.load(f)
 
 
+def load_serialized_payload(file, *, name="payload", allow_text=False, npz_keys=(), allow_multiple=False):
+    """Load a backward-compatible payload from pickle or NumPy-native formats.
+
+    Parameters
+    ----------
+    file : path-like
+        Input file to load.
+    name : str
+        Human-readable name used in error messages.
+    allow_text : bool
+        Whether ``.txt`` files are accepted via ``np.loadtxt``.
+    npz_keys : sequence of str
+        Preferred keys to use when loading ``.npz`` archives.
+    allow_multiple : bool
+        Whether ``.npz`` archives with multiple arrays may return a list of
+        arrays when no preferred key is present.
+    """
+    path = os.fspath(file)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"{name} file not found: {path}")
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".pkl":
+        return pickle_load(path)
+    if ext == ".npy":
+        return np.load(path, allow_pickle=False)
+    if ext == ".npz":
+        with np.load(path, allow_pickle=False) as archive:
+            files = list(archive.files)
+            if not files:
+                raise ValueError(f"{name} .npz file is empty: {path}")
+            for key in npz_keys:
+                if key in archive:
+                    return archive[key]
+            if len(files) == 1:
+                return archive[files[0]]
+            if allow_multiple:
+                return [archive[key] for key in files]
+            raise ValueError(
+                f"{name} .npz file must contain a single array or one of the keys {tuple(npz_keys)}"
+            )
+    if ext == ".txt" and allow_text:
+        return np.loadtxt(path)
+
+    allowed = [".pkl", ".npy", ".npz"]
+    if allow_text:
+        allowed.append(".txt")
+    raise ValueError(f"{name} should be a {'/'.join(allowed)} file")
+
+
 def get_variances(covariance_cols, picked_frequencies=None):
     volume_shape = guess_vol_shape_from_vol_size(covariance_cols.shape[-1])
 

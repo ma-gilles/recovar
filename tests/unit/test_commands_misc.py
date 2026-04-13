@@ -449,6 +449,7 @@ def test_run_test_dataset_tilt_only_emits_tilt_commands(monkeypatch, tmp_path):
     assert any("make_test_dataset" in cmd and "--tilt-series" in cmd for cmd in commands)
     assert any("pipeline" in cmd and "--tilt-series" in cmd for cmd in commands)
     assert any("reconstruct_from_external_embedding" in cmd and "--tilt-series" in cmd for cmd in commands)
+    assert any("model/zdim_2/latent_coords.npy" in cmd for cmd in commands if "reconstruct_from_external_embedding" in cmd)
     assert not any("estimate_conformational_density" in cmd for cmd in commands)
 
 
@@ -583,6 +584,8 @@ def test_run_test_dataset_all_tests_bad_embeddings_payload_skips_reconstruct(mon
 
     embeddings_path = tmp_path / "test_dataset" / "pipeline_output" / "model" / "embeddings.pkl"
     embeddings_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(embeddings_path.parent / "params.pkl", "wb") as f:
+        pickle.dump({"input_args": SimpleNamespace(zdim=[2])}, f)
     with open(embeddings_path, "wb") as f:
         # Missing "latent_coords" key should cause reconstruction prep to fail gracefully.
         pickle.dump({"not_latent_coords": {}}, f)
@@ -785,7 +788,7 @@ def test_run_test_dataset_all_tests_quotes_reconstruct_paths_with_spaces(monkeyp
 
     reconstruct_cmds = [c for c in commands if "reconstruct_from_external_embedding" in c]
     assert reconstruct_cmds
-    quoted_embedding = shlex.quote(str(outdir / "test_dataset" / "embedding_2.pkl"))
+    quoted_embedding = shlex.quote(str(outdir / "test_dataset" / "embedding_2.npy"))
     quoted_target = shlex.quote(str(outdir / "test_dataset" / "target.txt"))
     assert any(f"--embedding {quoted_embedding} " in c for c in reconstruct_cmds)
     assert any(f"--target {quoted_target} " in c for c in reconstruct_cmds)

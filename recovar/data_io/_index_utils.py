@@ -14,6 +14,7 @@ series and expands to one or more local images.
 
 from __future__ import annotations
 
+import os
 import pickle
 from dataclasses import dataclass
 from typing import Iterable, Optional
@@ -63,12 +64,26 @@ def normalize_indices(
 
 
 def load_index_like(value):
-    """Return an in-memory index selection from an array-like or pickle path."""
+    """Return an in-memory index selection from an array-like or serialized path."""
     if value is None:
         return None
     if isinstance(value, (np.ndarray, list, tuple)):
         return value
-    with open(value, "rb") as handle:
+    path = os.fspath(value)
+    suffix = os.path.splitext(path)[1].lower()
+    if suffix == ".npy":
+        return np.load(path, allow_pickle=False)
+    if suffix == ".npz":
+        with np.load(path, allow_pickle=False) as archive:
+            files = list(archive.files)
+            if not files:
+                raise ValueError(f"indices .npz file is empty: {path}")
+            if len(files) == 1:
+                return archive[files[0]]
+            return [archive[key] for key in files]
+    if suffix == ".txt":
+        return np.loadtxt(path, dtype=np.int64)
+    with open(path, "rb") as handle:
         return pickle.load(handle)
 
 
