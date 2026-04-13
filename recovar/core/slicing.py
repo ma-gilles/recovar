@@ -120,7 +120,7 @@ class Volume(eqx.Module):
 
     def __check_init__(self):
         if self.disc_type == "cubic":
-            raise ValueError("Use CubicVolume(...) for precomputed cubic coefficients")
+            raise ValueError("Use to_cubic(...) for raw cubic inputs or CubicVolume(...) only for precomputed coefficients")
 
     def with_values(self, values):
         return type(self)(
@@ -131,7 +131,11 @@ class Volume(eqx.Module):
 
 
 class CubicVolume(eqx.Module):
-    """Thin wrapper for precomputed cubic spline coefficients."""
+    """Thin wrapper for precomputed cubic spline coefficients.
+
+    Use :func:`to_cubic` for raw sampled Fourier volumes. Construct
+    :class:`CubicVolume` directly only when coefficients are already available.
+    """
 
     values: jax.Array
     half_volume: bool = eqx.field(static=True, default=False)
@@ -140,6 +144,11 @@ class CubicVolume(eqx.Module):
     def __check_init__(self):
         if self.disc_type != "cubic":
             raise ValueError("CubicVolume must use disc_type='cubic'")
+
+    @property
+    def coeffs(self):
+        """Alias for the stored spline coefficients."""
+        return self.values
 
     def with_values(self, values):
         return type(self)(
@@ -155,8 +164,8 @@ def _require_volume_object(volume, *, function_name):
     if isinstance(volume, _VOLUME_TYPES):
         return volume
     raise TypeError(
-        f"{function_name} requires a Volume or CubicVolume; "
-        "wrap raw arrays explicitly with Volume(...), CubicVolume(...), or to_cubic(...)"
+        f"{function_name} requires a Volume or CubicVolume; wrap sampled arrays with Volume(...) "
+        "and raw cubic arrays with to_cubic(...). Use CubicVolume(...) only for precomputed coefficients."
     )
 
 
@@ -295,9 +304,11 @@ def to_cubic(volume, volume_shape, half_volume=None):
 
     Parameters
     ----------
-    volume : array or CubicVolume
-        Raw full/half volume values, optionally batched. If already a cubic
+    volume : array, Volume, or CubicVolume
+        Raw full/half sampled values, optionally batched. If already a
         :class:`CubicVolume`, it is returned unchanged after layout validation.
+        Direct ``CubicVolume(...)`` construction is intended only for arrays
+        that already store spline coefficients.
     volume_shape : tuple[int, int, int]
         Full-grid volume shape.
     half_volume : bool | None
@@ -608,7 +619,10 @@ def adjoint_slice_volume(
         :class:`Volume`, ``None`` means "use the wrapper's layout".
     volume : optional accumulator to add the result into.
         When provided as a wrapped volume object, its metadata controls the
-        output layout and interpolation type.
+        output layout and interpolation type. A ``CubicVolume`` accumulator
+        accumulates in coefficient space; omitting the accumulator with
+        ``disc_type="cubic"`` returns the historical adjoint with respect to
+        sampled values through coefficient precomputation.
     max_r : sphere clipping radius.  Default uses
         ``image_shape[0]//2 - 1``.  Pass ``None`` to disable.
     """

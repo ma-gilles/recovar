@@ -36,7 +36,7 @@ def _project_volume(values, disc_type="linear_interp", half_volume=False):
     if isinstance(values, (core_slicing.Volume, core_slicing.CubicVolume)):
         return values
     if disc_type == "cubic":
-        return core_slicing.CubicVolume(values, half_volume=half_volume)
+        raise ValueError("Use core_slicing.to_cubic(...) for raw cubic test inputs")
     return core_slicing.Volume(values, disc_type=disc_type, half_volume=half_volume)
 
 

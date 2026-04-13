@@ -37,8 +37,9 @@ def forward_model(
     Parameters
     ----------
     volume : Volume or CubicVolume
-        Projection input. Cubic inputs must be passed explicitly as a
-        ``CubicVolume`` produced by ``to_cubic(...)`` or ``CubicVolume(...)``.
+        Projection input. Raw cubic inputs must be converted with
+        ``to_cubic(...)``. Direct ``CubicVolume(...)`` construction is for
+        already-precomputed spline coefficients.
     half_image : bool | None
         If True, return rfft-packed half-spectrum images and use
         ``config.compute_ctf_half`` for CTF, roughly halving memory and compute.

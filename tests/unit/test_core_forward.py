@@ -13,7 +13,7 @@ pytestmark = pytest.mark.unit
 
 def _volume(values, disc_type="linear_interp", half_volume=False):
     if disc_type == "cubic":
-        return recovar.core.CubicVolume(values, half_volume=half_volume)
+        raise ValueError("Use recovar.core.to_cubic(...) for raw cubic test inputs")
     return recovar.core.Volume(values, disc_type=disc_type, half_volume=half_volume)
 
 
