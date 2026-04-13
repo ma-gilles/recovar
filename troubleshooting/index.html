@@ -1587,6 +1587,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#custom-cuda-extension-is-unavailable-or-nvcc-is-missing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom CUDA extension is unavailable or nvcc is missing
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1694,10 +1705,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#scikit-fmm-build-failure" class="md-nav__link">
+  <a href="#native-fast-marching-extension-build-failure" class="md-nav__link">
     <span class="md-ellipsis">
       
-        scikit-fmm build failure
+        Native fast-marching extension build failure
       
     </span>
   </a>
@@ -1860,6 +1871,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#custom-cuda-extension-is-unavailable-or-nvcc-is-missing" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Custom CUDA extension is unavailable or nvcc is missing
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -1967,10 +1989,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#scikit-fmm-build-failure" class="md-nav__link">
+  <a href="#native-fast-marching-extension-build-failure" class="md-nav__link">
     <span class="md-ellipsis">
       
-        scikit-fmm build failure
+        Native fast-marching extension build failure
       
     </span>
   </a>
@@ -2067,7 +2089,7 @@
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="nb">print</span><span class="p">(</span><span class="n">jax</span><span class="o">.</span><span class="n">devices</span><span class="p">())</span>
 </code></pre></div>
 <p>If only CPU shows up, reinstall JAX with CUDA:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;jax[cuda12]&quot;</span><span class="o">==</span><span class="m">0</span>.9.0.1
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;recovar[gpu]&quot;</span>
 </code></pre></div>
 <p>On clusters, you may need to load CUDA modules first:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>module<span class="w"> </span>load<span class="w"> </span>cudatoolkit/12.3
@@ -2085,6 +2107,28 @@
 <p>By default, JAX pre-allocates most GPU memory. On shared machines:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="nv">XLA_PYTHON_CLIENT_PREALLOCATE</span><span class="o">=</span><span class="nb">false</span><span class="w"> </span>recovar<span class="w"> </span>pipeline<span class="w"> </span>...
 </code></pre></div>
+<h3 id="custom-cuda-extension-is-unavailable-or-nvcc-is-missing">Custom CUDA extension is unavailable or <code>nvcc</code> is missing<a class="headerlink" href="#custom-cuda-extension-is-unavailable-or-nvcc-is-missing" title="Permanent link">&para;</a></h3>
+<p>RECOVAR prefers its custom CUDA backproject/project extension on GPU because it
+is substantially faster than the pure JAX fallback. Installing <code>recovar[gpu]</code>
+or <code>.[gpu]</code> gives you CUDA-enabled JAX wheels, but a working JAX GPU install
+alone is not enough to build that extension.</p>
+<p>If RECOVAR stops with a custom CUDA build/load error, make sure a local CUDA
+toolkit/compiler is available through one of these mechanisms:</p>
+<ul>
+<li><code>NVCC=/full/path/to/nvcc</code></li>
+<li><code>CUDACXX=/full/path/to/nvcc</code></li>
+<li><code>nvcc</code> available on <code>PATH</code></li>
+<li><code>LOCAL_CUDA_PATH</code>, <code>CUDA_HOME</code>, or <code>CUDA_PATH</code> pointing at a toolkit root</li>
+</ul>
+<p>Then either rerun RECOVAR so it can auto-build the shared library, or build it
+explicitly first:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>recovar<span class="w"> </span>build_custom_cuda
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>recovar<span class="w"> </span>...
+</code></pre></div>
+<p>If you need to get unblocked temporarily, force the slower JAX GPU path:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">RECOVAR_DISABLE_CUDA</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>recovar<span class="w"> </span>...
+</code></pre></div>
+<p>That workaround is supported, but it is not the preferred configuration.</p>
 <h2 id="pipeline-issues">Pipeline issues<a class="headerlink" href="#pipeline-issues" title="Permanent link">&para;</a></h2>
 <h3 id="mean-looks-wrong">Mean looks wrong<a class="headerlink" href="#mean-looks-wrong" title="Permanent link">&para;</a></h3>
 <ol>
@@ -2111,30 +2155,33 @@
 <h2 id="analysis-issues">Analysis issues<a class="headerlink" href="#analysis-issues" title="Permanent link">&para;</a></h2>
 <h3 id="umap-is-slow">UMAP is slow<a class="headerlink" href="#umap-is-slow" title="Permanent link">&para;</a></h3>
 <p>For large datasets (&gt;200k particles), UMAP can take a long time:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>output<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span>--skip-umap
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>output<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span>--skip-umap
 </code></pre></div>
 <p>You can run UMAP separately later on a subset of particles.</p>
 <h3 id="density-estimation-runtime">Density estimation runtime<a class="headerlink" href="#density-estimation-runtime" title="Permanent link">&para;</a></h3>
 <p>Runtime scales as O(N^pca_dim). Keep <code>--pca_dim</code> at 4 or below:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>recovar<span class="w"> </span>estimate_conformational_density<span class="w"> </span>output<span class="w"> </span>--pca_dim<span class="w"> </span><span class="m">3</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>recovar<span class="w"> </span>estimate_conformational_density<span class="w"> </span>output<span class="w"> </span>--pca_dim<span class="w"> </span><span class="m">3</span>
 </code></pre></div>
 <p>Check <code>all_densities.png</code> and <code>Lcurve.png</code> to verify the optimal regularization was selected correctly.</p>
 <h2 id="installation-issues">Installation issues<a class="headerlink" href="#installation-issues" title="Permanent link">&para;</a></h2>
-<h3 id="scikit-fmm-build-failure">scikit-fmm build failure<a class="headerlink" href="#scikit-fmm-build-failure" title="Permanent link">&para;</a></h3>
-<p>Install from source:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>pip<span class="w"> </span>install<span class="w"> </span>git+https://github.com/scikit-fmm/scikit-fmm.git
-</code></pre></div>
+<h3 id="native-fast-marching-extension-build-failure">Native fast-marching extension build failure<a class="headerlink" href="#native-fast-marching-extension-build-failure" title="Permanent link">&para;</a></h3>
+<p>The in-tree C++ fast-marching extension is optional. Published Linux and macOS
+wheels include it on supported builds, while source installs compile it locally
+when a C++ toolchain is available. If that build fails, installation still
+succeeds and RECOVAR uses the pure-Python fallback.</p>
+<p>If you want the native backend, install a working C++ toolchain and then
+reinstall RECOVAR.</p>
 <h3 id="jax-version-conflicts">JAX version conflicts<a class="headerlink" href="#jax-version-conflicts" title="Permanent link">&para;</a></h3>
 <p>RECOVAR requires JAX 0.9.0.1. Pin the version:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;jax[cuda12]&quot;</span><span class="o">==</span><span class="m">0</span>.9.0.1
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;recovar[gpu]&quot;</span>
 </code></pre></div>
 <h3 id="multiple-recovar-installations">Multiple recovar installations<a class="headerlink" href="#multiple-recovar-installations" title="Permanent link">&para;</a></h3>
 <p>If you have multiple editable installs, the wrong one may be imported:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># Check which recovar is active</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import recovar; print(recovar.__file__)&quot;</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="c1"># Force isolation</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONNOUSERSITE</span><span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Check which recovar is active</span>
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import recovar; print(recovar.__file__)&quot;</span>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># Force isolation</span>
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONNOUSERSITE</span><span class="o">=</span><span class="m">1</span>
 </code></pre></div>
 
 
