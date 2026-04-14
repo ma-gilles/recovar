@@ -56,33 +56,33 @@ def add_args(parser: argparse.ArgumentParser):
         "--poses",
         type=os.path.abspath,
         default=None,
-        help="Image poses (.pkl). Auto-extracted from .star/.cs if omitted",
+        help="Image poses (.pkl/.npy/.npz). Auto-extracted from .star/.cs if omitted",
     )
     data.add_argument(
         "--ctf",
-        metavar="pkl",
+        metavar="FILE",
         type=os.path.abspath,
         default=None,
-        help="CTF parameters (.pkl). Auto-extracted from .star/.cs if omitted",
+        help="CTF parameters (.pkl/.npy/.npz). Auto-extracted from .star/.cs if omitted",
     )
     data.add_argument(
         "--ind",
         type=os.path.abspath,
-        metavar="PKL",
-        help="Filter images by these indices",
+        metavar="FILE",
+        help="Filter images by these indices (.pkl/.npy/.npz/.txt)",
     )
     data.add_argument(
         "--particle-ind",
         dest="tilt_ind",
         type=os.path.abspath,
-        metavar="PKL",
-        help="Filter particles by these indices (tilt-series only)",
+        metavar="FILE",
+        help="Filter particles by these indices (.pkl/.npy/.npz/.txt; tilt-series only)",
     )
     data.add_argument(
         "--halfsets",
         default=None,
         type=os.path.abspath,
-        help="Halfset indices (.pkl). If omitted, reads _rlnRandomSubset from star file, or splits randomly",
+        help="Halfset indices (.pkl/.npy/.npz/.txt). If omitted, reads _rlnRandomSubset from star file, or splits randomly",
     )
     data.add_argument(
         "--datadir",
@@ -703,7 +703,7 @@ def standard_recovar_pipeline(args):
         if ext not in ("star", "cs"):
             raise ValueError(
                 "--poses and --ctf are required when particles file is not .star or .cs. "
-                "Provide --poses and --ctf, or use a .star/.cs particles file."
+                "Provide --poses (.pkl/.npy/.npz) and --ctf (.pkl/.npy/.npz), or use a .star/.cs particles file."
             )
         if args.poses is None:
             logger.info("No --poses provided; will auto-extract from %s", args.particles)

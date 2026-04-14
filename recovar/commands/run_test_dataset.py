@@ -1,13 +1,13 @@
 import argparse
 import logging
 import os
-import pickle
 import shlex
 import shutil
 import subprocess
 import sys
 
 import jax
+import numpy as np
 
 from recovar.output import output
 
@@ -113,7 +113,7 @@ def main():
         )
 
         run_command(
-            f"{BASE_CMD} reconstruct_from_external_embedding {_pq('tilt_test', 'test_dataset', 'particles.star')} --poses {_pq('tilt_test', 'test_dataset', 'poses.pkl')} --ctf {_pq('tilt_test', 'test_dataset', 'ctf.pkl')} --tilt-series --embedding {_pq('tilt_test', 'test_dataset', 'pipeline_tilt_output', 'embeddings.pkl')} --target {_pq('tilt_test', 'test_dataset', 'target.txt')} -o {_pq('tilt_test', 'test_dataset', 'reconstruct_tilt_output')}",
+            f"{BASE_CMD} reconstruct_from_external_embedding {_pq('tilt_test', 'test_dataset', 'particles.star')} --poses {_pq('tilt_test', 'test_dataset', 'poses.pkl')} --ctf {_pq('tilt_test', 'test_dataset', 'ctf.pkl')} --tilt-series --embedding {_pq('tilt_test', 'test_dataset', 'pipeline_tilt_output', 'model', 'zdim_2', 'latent_coords.npy')} --target {_pq('tilt_test', 'test_dataset', 'target.txt')} -o {_pq('tilt_test', 'test_dataset', 'reconstruct_tilt_output')}",
             "Test reconstruct_from_external_embedding with tilt series",
             "reconstruct_tilt",
         )
@@ -190,7 +190,7 @@ def main():
             )
 
             pipeline_output_path = _p("test_dataset", "pipeline_output")
-            embedding_2_path = _p("test_dataset", "embedding_2.pkl")
+            embedding_2_path = _p("test_dataset", "embedding_2.npy")
             if not os.path.exists(pipeline_output_path):
                 logger.error("Failed: prepare embedding for reconstruction (missing %s)", pipeline_output_path)
                 failed_functions.append("prepare_embedding_for_reconstruct")
@@ -198,8 +198,7 @@ def main():
                 try:
                     po_tmp = output.PipelineOutput(pipeline_output_path)
                     latent_coords_2 = po_tmp.get_embedding_component("latent_coords", 2)
-                    with open(embedding_2_path, "wb") as f:
-                        pickle.dump(latent_coords_2, f)
+                    np.save(embedding_2_path, latent_coords_2)
                     del po_tmp
                 except Exception as e:
                     logger.error("Failed: prepare embedding for reconstruction (%s)", e)

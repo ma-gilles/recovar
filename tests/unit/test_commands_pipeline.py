@@ -73,6 +73,15 @@ def test_pipeline_registers_ctf():
     assert "--ctf" in actions
 
 
+def test_pipeline_help_strings_list_numpy_and_text_fallbacks():
+    actions = _parser_with_pipeline_args()._option_string_actions
+    assert ".pkl/.npy/.npz" in actions["--poses"].help
+    assert ".pkl/.npy/.npz" in actions["--ctf"].help
+    assert ".pkl/.npy/.npz/.txt" in actions["--ind"].help
+    assert ".pkl/.npy/.npz/.txt" in actions["--particle-ind"].help
+    assert ".pkl/.npy/.npz/.txt" in actions["--halfsets"].help
+
+
 def test_pipeline_registers_mask():
     actions = _parser_with_pipeline_args()._option_string_actions
     assert "--mask" in actions

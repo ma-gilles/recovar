@@ -4,6 +4,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+# ruff: noqa: E402
 jax = pytest.importorskip("jax")
 jnp = pytest.importorskip("jax.numpy")
 pytest.importorskip("mrcfile")
@@ -197,7 +198,8 @@ def test_options_and_pickle_helpers(tmp_path):
     path = tmp_path / "obj.pkl"
     obj = {"a": 1, "b": [1, 2]}
     utils.pickle_dump(obj, path)
-    assert utils.pickle_load(path) == obj
+    with pytest.warns(DeprecationWarning, match="legacy RECOVAR pickle files"):
+        assert utils.pickle_load(path) == obj
 
 
 def test_get_variances_and_batch_index_helpers():

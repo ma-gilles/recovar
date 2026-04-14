@@ -1,10 +1,12 @@
 """
 Unit tests for recovar.commands.reconstruct_from_external_embedding.
 
-Covers argument registration via add_args() only – no actual reconstruction.
+Covers argument registration and external embedding loading helpers.
 """
 
 import argparse
+
+import numpy as np
 import pytest
 
 pytest.importorskip("jax")  # module imports jax at top level
@@ -54,6 +56,15 @@ def test_registers_target_arg():
     assert "--target" in _parser()._option_string_actions
 
 
+def test_reconstruct_help_strings_list_supported_serialized_formats():
+    actions = _parser()._option_string_actions
+    assert ".pkl/.npy/.npz" in actions["--poses"].help
+    assert ".pkl/.npy/.npz" in actions["--ctf"].help
+    assert ".pkl/.npy/.npz/.txt" in actions["--ind"].help
+    assert ".pkl/.npy/.npz/.txt" in actions["--particle-ind"].help
+    assert ".txt/.pkl/.npy/.npz" in actions["--target"].help
+
+
 # ---------------------------------------------------------------------------
 # Optional arguments with sensible defaults
 # ---------------------------------------------------------------------------
@@ -82,3 +93,52 @@ def test_tilt_series_is_boolean_flag():
     if action is None:
         pytest.skip("--tilt-series not in parser")
     assert action.const is True  # store_true
+
+
+def test_load_external_embeddings_accepts_npy(tmp_path):
+    emb = np.array([[0.0, 1.0], [2.0, 3.0]], dtype=np.float32)
+    path = tmp_path / "embedding.npy"
+    np.save(path, emb)
+
+    out = rfe_cmd._load_external_embeddings(str(path))
+
+    np.testing.assert_array_equal(out, emb)
+
+
+def test_load_external_embeddings_accepts_npz_named_key(tmp_path):
+    emb = np.array([[1.0, 2.0]], dtype=np.float32)
+    path = tmp_path / "embedding.npz"
+    np.savez(path, latent_coords=emb)
+
+    out = rfe_cmd._load_external_embeddings(str(path))
+
+    np.testing.assert_array_equal(out, emb)
+
+
+def test_load_external_embeddings_rejects_bad_shape(tmp_path):
+    emb = np.zeros((2, 2, 2), dtype=np.float32)
+    path = tmp_path / "embedding.npy"
+    np.save(path, emb)
+
+    with pytest.raises(ValueError, match="must have shape"):
+        rfe_cmd._load_external_embeddings(str(path))
+
+
+def test_load_target_points_accepts_npy(tmp_path):
+    target = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32)
+    path = tmp_path / "target.npy"
+    np.save(path, target)
+
+    out = rfe_cmd._load_target_points(str(path))
+
+    np.testing.assert_array_equal(out, target)
+
+
+def test_load_target_points_accepts_npz_named_key(tmp_path):
+    target = np.array([0.5, 1.5], dtype=np.float32)
+    path = tmp_path / "target.npz"
+    np.savez(path, target=target)
+
+    out = rfe_cmd._load_target_points(str(path))
+
+    np.testing.assert_array_equal(out, target)

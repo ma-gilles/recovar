@@ -3,9 +3,10 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar.data_io import load_utils
 from helpers import tiny_synthetic
+
 from recovar import utils
+from recovar.data_io import load_utils
 
 pytestmark = pytest.mark.unit
 
@@ -78,6 +79,28 @@ def test_load_ctf_params_rejects_nonfinite_payload(monkeypatch):
         load_utils.load_ctf_params(D=64, ctf_params_pkl="dummy.pkl")
 
 
+def test_load_ctf_params_accepts_npy(tmp_path):
+    ctf = np.array([[128, 1.5, 10000, 11000, 0.0, 300, 2.7, 0.1, 0.0]], dtype=np.float32)
+    path = tmp_path / "ctf.npy"
+    np.save(path, ctf)
+
+    out = load_utils.load_ctf_params(D=64, ctf_params_pkl=str(path))
+
+    assert out.shape == (1, 8)
+    assert np.allclose(out[:, 0], 3.0)
+
+
+def test_load_ctf_params_accepts_npz_named_key(tmp_path):
+    ctf = np.array([[128, 1.5, 10000, 11000, 0.0, 300, 2.7, 0.1, 0.0]], dtype=np.float32)
+    path = tmp_path / "ctf.npz"
+    np.savez(path, ctf_params=ctf)
+
+    out = load_utils.load_ctf_params(D=64, ctf_params_pkl=str(path))
+
+    assert out.shape == (1, 8)
+    assert np.allclose(out[:, 0], 3.0)
+
+
 def test_load_poses_single_file_with_translations_scales_by_D(monkeypatch):
     rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 3, axis=0)
     trans_frac = np.array([[0.0, 0.5], [1.0, 0.25], [0.1, 0.2]], dtype=np.float32)
@@ -106,6 +129,31 @@ def test_load_poses_two_file_input(monkeypatch):
     rots_out, trans_out, _ = load_utils.load_poses(["rots.pkl", "trans.pkl"], Nimg=2, D=64)
     assert np.allclose(rots_out, rots)
     assert np.allclose(trans_out, trans_frac * 64)
+
+
+def test_load_poses_accepts_single_npy_rotation_file(tmp_path):
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
+    path = tmp_path / "rots.npy"
+    np.save(path, rots)
+
+    rots_out, trans_out, D_out = load_utils.load_poses(str(path), Nimg=2, D=64)
+
+    assert D_out == 64
+    assert trans_out is None
+    np.testing.assert_allclose(rots_out, rots)
+
+
+def test_load_poses_accepts_single_npz_bundle(tmp_path):
+    rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
+    trans_frac = np.array([[0.25, 0.75], [0.5, 0.5]], dtype=np.float32)
+    path = tmp_path / "poses.npz"
+    np.savez(path, rots=rots, trans=trans_frac)
+
+    rots_out, trans_out, D_out = load_utils.load_poses(str(path), Nimg=2, D=64)
+
+    assert D_out == 64
+    np.testing.assert_allclose(rots_out, rots)
+    np.testing.assert_allclose(trans_out, trans_frac * 64)
 
 
 def test_load_poses_accepts_list_payload_and_applies_indices(monkeypatch):

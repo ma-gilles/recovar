@@ -4,12 +4,14 @@ import functools
 import logging
 import os
 import pickle
+import warnings
+from collections import namedtuple
 from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
-import mrcfile
 import more_itertools
+import mrcfile
 import numpy as np
 import pandas as pd
 import psutil
@@ -300,8 +302,6 @@ def get_column_batch_size(grid_size, gpu_memory):
     return int(batch_size)
 
 
-from collections import namedtuple
-
 BatchSizes = namedtuple("BatchSizes", ["image", "volume", "column"])
 
 
@@ -366,8 +366,61 @@ def pickle_dump(object, file):
 
 
 def pickle_load(file):
+    warnings.warn(
+        "Loading legacy RECOVAR pickle files is deprecated; prefer .npy/.npz-based outputs when available.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     with open(file, "rb") as f:
         return pickle.load(f)
+
+
+def load_serialized_payload(file, *, name="payload", allow_text=False, npz_keys=(), allow_multiple=False):
+    """Load a backward-compatible payload from pickle or NumPy-native formats.
+
+    Parameters
+    ----------
+    file : path-like
+        Input file to load.
+    name : str
+        Human-readable name used in error messages.
+    allow_text : bool
+        Whether ``.txt`` files are accepted via ``np.loadtxt``.
+    npz_keys : sequence of str
+        Preferred keys to use when loading ``.npz`` archives.
+    allow_multiple : bool
+        Whether ``.npz`` archives with multiple arrays may return a list of
+        arrays when no preferred key is present.
+    """
+    path = os.fspath(file)
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"{name} file not found: {path}")
+
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".pkl":
+        return pickle_load(path)
+    if ext == ".npy":
+        return np.load(path, allow_pickle=False)
+    if ext == ".npz":
+        with np.load(path, allow_pickle=False) as archive:
+            files = list(archive.files)
+            if not files:
+                raise ValueError(f"{name} .npz file is empty: {path}")
+            for key in npz_keys:
+                if key in archive:
+                    return archive[key]
+            if len(files) == 1:
+                return archive[files[0]]
+            if allow_multiple:
+                return [archive[key] for key in files]
+            raise ValueError(f"{name} .npz file must contain a single array or one of the keys {tuple(npz_keys)}")
+    if ext == ".txt" and allow_text:
+        return np.loadtxt(path)
+
+    allowed = [".pkl", ".npy", ".npz"]
+    if allow_text:
+        allowed.append(".txt")
+    raise ValueError(f"{name} should be a {'/'.join(allowed)} file")
 
 
 def get_variances(covariance_cols, picked_frequencies=None):

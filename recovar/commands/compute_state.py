@@ -1,14 +1,16 @@
-import recovar.jax_config
+import argparse
 import logging
-import numpy as np
+import os
 import warnings
-from recovar.output import output as o
+
+import numpy as np
+
+from recovar import utils
 from recovar.heterogeneity import embedding
-import pickle
-import os, argparse
+from recovar.output import output as o
+from recovar.utils import parser_args
 
 logger = logging.getLogger(__name__)
-from recovar.utils import parser_args
 
 _PATH_REMAP_ATTRS = (
     "particles",
@@ -61,22 +63,21 @@ def _auto_remap_paths(input_args, actual_result_dir: str):
 
 
 def _load_latent_points(latent_points_path):
-    """Load latent points from txt/pkl and validate numeric finite contents."""
+    """Load latent points from txt/npy/npz/pkl and validate numeric finite contents."""
     latent_points_path = os.fspath(latent_points_path)
-    if latent_points_path.endswith(".pkl"):
-        if not os.path.isfile(latent_points_path):
-            raise FileNotFoundError(f"Latent points file not found: {latent_points_path}")
-        with open(latent_points_path, "rb") as f:
-            target_zs = pickle.load(f)
-    elif latent_points_path.endswith(".txt"):
-        if not os.path.isfile(latent_points_path):
-            raise FileNotFoundError(f"Latent points file not found: {latent_points_path}")
-        with warnings.catch_warnings():
-            # Empty text files produce a UserWarning; we handle emptiness explicitly below.
-            warnings.simplefilter("ignore", category=UserWarning)
-            target_zs = np.loadtxt(latent_points_path)
-    else:
-        raise ValueError("Target zs should be a .txt or .pkl file")
+    suffix = os.path.splitext(latent_points_path)[1].lower()
+    if suffix not in (".txt", ".npy", ".npz", ".pkl"):
+        raise ValueError("Target zs should be a .txt, .npy, .npz, or .pkl file")
+
+    with warnings.catch_warnings():
+        # Empty text files produce a UserWarning; we handle emptiness explicitly below.
+        warnings.simplefilter("ignore", category=UserWarning)
+        target_zs = utils.load_serialized_payload(
+            latent_points_path,
+            name="Target zs",
+            allow_text=True,
+            npz_keys=("latent_points", "target_zs", "zs", "points"),
+        )
 
     target_zs = np.asarray(target_zs)
     try:
@@ -119,7 +120,7 @@ def add_args(parser: argparse.ArgumentParser):
         "--latent-points",
         type=os.path.abspath,
         required=True,
-        help="path to latent points (.txt file). E.g., you can use the output of k-means and input output/analysis_2/centers.txt from analyze.py. Or you can make your own latent points. It should be a .txt file with shape (n_points, zdim).",
+        help="Path to latent points (.txt/.npy/.npz/.pkl). E.g. output/analysis_2/centers.txt from analyze.py, or your own array with shape (n_points, zdim).",
     )
     parser.add_argument(
         "--save-all-estimates",
