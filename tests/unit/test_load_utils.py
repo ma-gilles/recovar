@@ -3,9 +3,10 @@ import pytest
 
 pytest.importorskip("jax")
 
-from recovar.data_io import load_utils
 from helpers import tiny_synthetic
+
 from recovar import utils
+from recovar.data_io import load_utils
 
 pytestmark = pytest.mark.unit
 

@@ -5,12 +5,13 @@ import logging
 import os
 import pickle
 import warnings
+from collections import namedtuple
 from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
-import mrcfile
 import more_itertools
+import mrcfile
 import numpy as np
 import pandas as pd
 import psutil
@@ -301,8 +302,6 @@ def get_column_batch_size(grid_size, gpu_memory):
     return int(batch_size)
 
 
-from collections import namedtuple
-
 BatchSizes = namedtuple("BatchSizes", ["image", "volume", "column"])
 
 
@@ -414,9 +413,7 @@ def load_serialized_payload(file, *, name="payload", allow_text=False, npz_keys=
                 return archive[files[0]]
             if allow_multiple:
                 return [archive[key] for key in files]
-            raise ValueError(
-                f"{name} .npz file must contain a single array or one of the keys {tuple(npz_keys)}"
-            )
+            raise ValueError(f"{name} .npz file must contain a single array or one of the keys {tuple(npz_keys)}")
     if ext == ".txt" and allow_text:
         return np.loadtxt(path)
 

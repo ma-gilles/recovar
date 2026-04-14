@@ -1,14 +1,16 @@
-import recovar.jax_config
+import argparse
 import logging
-import numpy as np
+import os
 import warnings
+
+import numpy as np
+
 from recovar import utils
-from recovar.output import output as o
 from recovar.heterogeneity import embedding
-import os, argparse
+from recovar.output import output as o
+from recovar.utils import parser_args
 
 logger = logging.getLogger(__name__)
-from recovar.utils import parser_args
 
 _PATH_REMAP_ATTRS = (
     "particles",

@@ -449,7 +449,9 @@ def test_run_test_dataset_tilt_only_emits_tilt_commands(monkeypatch, tmp_path):
     assert any("make_test_dataset" in cmd and "--tilt-series" in cmd for cmd in commands)
     assert any("pipeline" in cmd and "--tilt-series" in cmd for cmd in commands)
     assert any("reconstruct_from_external_embedding" in cmd and "--tilt-series" in cmd for cmd in commands)
-    assert any("model/zdim_2/latent_coords.npy" in cmd for cmd in commands if "reconstruct_from_external_embedding" in cmd)
+    assert any(
+        "model/zdim_2/latent_coords.npy" in cmd for cmd in commands if "reconstruct_from_external_embedding" in cmd
+    )
     assert not any("estimate_conformational_density" in cmd for cmd in commands)
 
 

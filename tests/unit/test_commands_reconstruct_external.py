@@ -5,6 +5,7 @@ Covers argument registration and external embedding loading helpers.
 """
 
 import argparse
+
 import numpy as np
 import pytest
 

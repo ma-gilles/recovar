@@ -55,8 +55,7 @@ def _load_pose_bundle(path: str):
     if len(files) == 2:
         return arrays[files[0]], arrays[files[1]]
     raise ValueError(
-        "poses .npz must contain a single rotation array, rotation+translation arrays, "
-        "or named keys like rots/trans"
+        "poses .npz must contain a single rotation array, rotation+translation arrays, or named keys like rots/trans"
     )
 
 
@@ -100,7 +99,9 @@ def load_ctf_params(D: int, ctf_params_pkl: str) -> np.ndarray:
         raise ValueError(f"Image dimension D must be even, got {D}")
 
     # Load parameters from pickle/NumPy payloads.
-    ctf_params = np.asarray(_load_single_array_path(ctf_params_pkl, name="CTF parameters", npz_keys=("ctf_params", "ctf")))
+    ctf_params = np.asarray(
+        _load_single_array_path(ctf_params_pkl, name="CTF parameters", npz_keys=("ctf_params", "ctf"))
+    )
     if ctf_params.ndim != 2:
         raise ValueError(f"CTF parameters must be a 2D array of shape (N, 9), got ndim={ctf_params.ndim}")
     if ctf_params.shape[0] == 0:
@@ -159,6 +160,7 @@ def load_poses(
         raise ValueError(f"Expected 1 or 2 input files, got {len(infile)}")
 
     # Load data from pickle/NumPy file(s).
+    poses: tuple[object, ...]
     if len(infile) == 2:
         # Separate rotation and translation files
         rot_data = _load_single_array_path(infile[0], name="rotations", npz_keys=("rots", "rotations"))
@@ -176,6 +178,7 @@ def load_poses(
         raise ValueError("Rotation array must be numeric")
     if not np.all(np.isfinite(rots)):
         raise ValueError("Rotation array contains non-finite values (NaN/Inf)")
+    rot_count = int(rots.shape[0])
 
     # Validate rotation shape
     expected_rot_shape = (Nimg, 3, 3)
@@ -198,10 +201,8 @@ def load_poses(
         if not np.all(np.isfinite(trans)):
             raise ValueError("Translation array contains non-finite values (NaN/Inf)")
 
-        if len(poses[0]) != len(trans):
-            raise ValueError(
-                f"Rotation/translation count mismatch: {len(poses[0])} rotations vs {len(trans)} translations"
-            )
+        if rot_count != len(trans):
+            raise ValueError(f"Rotation/translation count mismatch: {rot_count} rotations vs {len(trans)} translations")
 
         # Apply the same pose subset as rotations to preserve row alignment.
         if pose_ind is not None:
