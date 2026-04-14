@@ -446,8 +446,8 @@ def decide_order(disc_type):
 # ── JAX interpolation engine ────────────────────────────────────────
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3, 4])
-def _jax_slice(volume, rotation_matrices, image_shape, volume_shape, order):
+@functools.partial(jax.jit, static_argnums=[2, 3, 4, 5])
+def _jax_slice(volume, rotation_matrices, image_shape, volume_shape, order, max_r=None):
     """Project volume to images using JAX map_coordinates.
 
     Expects *volume* as a flat 1-D complex array with
@@ -457,20 +457,22 @@ def _jax_slice(volume, rotation_matrices, image_shape, volume_shape, order):
     if order == 3:
         from recovar.core import cubic_interpolation
 
-        return cubic_interpolation.map_coordinates_with_cubic_spline(
+        values = cubic_interpolation.map_coordinates_with_cubic_spline(
             volume.reshape(volume_shape), coords, mode="wrap", cval=0.0
         ).reshape(og_shape[:-1])
-    return jax.scipy.ndimage.map_coordinates(
-        volume.reshape(volume_shape),
-        coords,
-        order=order,
-        mode="constant",
-        cval=0.0,
-    ).reshape(og_shape[:-1])
+    else:
+        values = jax.scipy.ndimage.map_coordinates(
+            volume.reshape(volume_shape),
+            coords,
+            order=order,
+            mode="constant",
+            cval=0.0,
+        ).reshape(og_shape[:-1])
+    return _apply_image_space_radius_mask(values, image_shape, half_image=False, max_r=max_r)
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3, 4])
-def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, order):
+@functools.partial(jax.jit, static_argnums=[2, 3, 4, 5])
+def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, order, max_r=None):
     """Project volume to half-images (rfft-packed) directly.
 
     Like ``_jax_slice`` but generates coordinates for only the H*(W//2+1)
@@ -480,16 +482,37 @@ def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, 
     if order == 3:
         from recovar.core import cubic_interpolation
 
-        return cubic_interpolation.map_coordinates_with_cubic_spline(
+        values = cubic_interpolation.map_coordinates_with_cubic_spline(
             volume.reshape(volume_shape), coords, mode="wrap", cval=0.0
         ).reshape(og_shape[:-1])
-    return jax.scipy.ndimage.map_coordinates(
-        volume.reshape(volume_shape),
-        coords,
-        order=order,
-        mode="constant",
-        cval=0.0,
-    ).reshape(og_shape[:-1])
+    else:
+        values = jax.scipy.ndimage.map_coordinates(
+            volume.reshape(volume_shape),
+            coords,
+            order=order,
+            mode="constant",
+            cval=0.0,
+        ).reshape(og_shape[:-1])
+    return _apply_image_space_radius_mask(values, image_shape, half_image=True, max_r=max_r)
+
+
+def _image_space_radius_mask(image_shape, *, half_image, max_r):
+    if max_r is None:
+        return None
+    if half_image:
+        pixel_freqs = ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False)
+    else:
+        pixel_freqs = ftu.get_k_coordinate_of_each_pixel(image_shape, voxel_size=1, scaled=False)
+    pixel_freqs = jnp.asarray(pixel_freqs)
+    max_r2 = float(max_r) * float(max_r)
+    return jnp.asarray(np.sum(pixel_freqs**2, axis=-1) <= max_r2)
+
+
+def _apply_image_space_radius_mask(values, image_shape, *, half_image, max_r):
+    mask = _image_space_radius_mask(image_shape, half_image=half_image, max_r=max_r)
+    if mask is None:
+        return values
+    return values * mask.reshape((1, -1))
 
 
 # ── Public API ───────────────────────────────────────────────────────
@@ -568,8 +591,8 @@ def slice_volume(
     if half_volume:
         volume = ftu.half_volume_to_full_volume(volume, volume_shape)
     if half_image:
-        return _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, order)
-    return _jax_slice(volume, rotation_matrices, image_shape, volume_shape, order)
+        return _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, order, max_r)
+    return _jax_slice(volume, rotation_matrices, image_shape, volume_shape, order, max_r)
 
 
 def batch_slice_volume(
@@ -720,7 +743,9 @@ def adjoint_slice_volume(
     return jnp.asarray(result).reshape(output_shape) + seed_array
 
 
-def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape, half_image=False, half_volume=False):
+def _vjp_adjoint_cubic(
+    slices, rotation_matrices, image_shape, volume_shape, half_image=False, half_volume=False, max_r=None
+):
     """VJP-based cubic backprojection: gradient of original volume through
     coefficient computation + slice.
     """
@@ -738,7 +763,7 @@ def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape, hal
             from recovar.core import cubic_interpolation
 
             coeffs = cubic_interpolation.calculate_spline_coefficients(full_v.reshape(volume_shape))
-            return _slice_fn(coeffs, rotation_matrices, image_shape, volume_shape, 3)
+            return _slice_fn(coeffs, rotation_matrices, image_shape, volume_shape, 3, max_r)
     else:
         vol_size = int(np.prod(volume_shape))
 
@@ -746,7 +771,7 @@ def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape, hal
             from recovar.core import cubic_interpolation
 
             coeffs = cubic_interpolation.calculate_spline_coefficients(v.reshape(volume_shape))
-            return _slice_fn(coeffs, rotation_matrices, image_shape, volume_shape, 3)
+            return _slice_fn(coeffs, rotation_matrices, image_shape, volume_shape, 3, max_r)
 
     _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
     return u(slices)[0]
@@ -774,7 +799,7 @@ def _jax_adjoint_slice_from_coefficients(
 
         def f(half_coeffs_flat):
             full_coeffs = ftu.half_volume_to_full_volume(half_coeffs_flat.reshape(half_shape), volume_shape)
-            return _slice_fn(full_coeffs, rotation_matrices, image_shape, volume_shape, 3)
+            return _slice_fn(full_coeffs, rotation_matrices, image_shape, volume_shape, 3, max_r)
 
         _, u = vjp(f, jnp.zeros(half_size, dtype=slices.dtype))
         return u(slices)[0].reshape(half_shape)
@@ -782,7 +807,7 @@ def _jax_adjoint_slice_from_coefficients(
         vol_size = int(np.prod(volume_shape))
 
         def f(coeffs_flat):
-            return _slice_fn(coeffs_flat, rotation_matrices, image_shape, volume_shape, 3)
+            return _slice_fn(coeffs_flat, rotation_matrices, image_shape, volume_shape, 3, max_r)
 
         _, u = vjp(f, jnp.zeros(vol_size, dtype=slices.dtype))
         return u(slices)[0].reshape(volume_shape)

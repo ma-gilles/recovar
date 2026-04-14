@@ -25,7 +25,7 @@ class _FakeAtoms:
 def test_make_spike_main_uses_utils_pickle_dump(monkeypatch, tmp_path):
     from recovar.commands import make_spike_datasets as msd
 
-    calls = {"pickle_paths": [], "assignment_disc_type": None, "dataset_lazy": None}
+    calls = {"pickle_paths": [], "assignment_disc_type": None, "assignment_wrapper": None, "dataset_lazy": None}
 
     monkeypatch.setattr(msd.ssp, "_parsePDB", lambda _path: _FakeAtoms())
     monkeypatch.setattr(msd.ssp, "get_center_coord_offset", lambda _coords: np.zeros(3, dtype=np.float32))
@@ -61,7 +61,7 @@ def test_make_spike_main_uses_utils_pickle_dump(monkeypatch, tmp_path):
 
     def _fake_load_dataset(**kwargs):
         calls["dataset_lazy"] = kwargs.get("lazy", True)
-        return SimpleNamespace(image_shape=(2, 2))
+        return SimpleNamespace(image_shape=(2, 2), volume_shape=(2, 2, 2))
 
     monkeypatch.setattr(msd.cryoem_dataset, "load_dataset", _fake_load_dataset)
     monkeypatch.setattr(
@@ -69,9 +69,15 @@ def test_make_spike_main_uses_utils_pickle_dump(monkeypatch, tmp_path):
         "make_radial_noise",
         lambda *_args, **_kwargs: np.ones((2, 2), dtype=np.float32),
     )
+    monkeypatch.setattr(
+        msd.core,
+        "to_cubic",
+        lambda vols, _volume_shape, **_kwargs: msd.core.CubicVolume.from_coeffs(np.asarray(vols)),
+    )
 
-    def _fake_compute_image_assignment(_cryo, _vols, _noise_cov, _batch_size, disc_type=None):
-        calls["assignment_disc_type"] = disc_type
+    def _fake_compute_image_assignment(_cryo, _vols, _noise_cov, _batch_size):
+        calls["assignment_disc_type"] = getattr(_vols, "disc_type", None)
+        calls["assignment_wrapper"] = type(_vols).__name__
         return np.array([[0.1, 0.9], [0.9, 0.1]], dtype=np.float32)
 
     monkeypatch.setattr(msd.image_assignment, "compute_image_assignment", _fake_compute_image_assignment)
@@ -89,5 +95,6 @@ def test_make_spike_main_uses_utils_pickle_dump(monkeypatch, tmp_path):
 
     assert calls["dataset_lazy"] is False
     assert calls["assignment_disc_type"] == "cubic"
+    assert calls["assignment_wrapper"] == "CubicVolume"
     assert any(path.endswith("dataset0/result.pkl") for path in calls["pickle_paths"])
     assert any(path.endswith("curve.pkl") for path in calls["pickle_paths"])

@@ -23,13 +23,21 @@ TRANS_AXIS = 3
 NORM_FFT = "backward"
 
 
+def _require_projection_volumes(volumes, *, function_name):
+    if not isinstance(volumes, (core.Volume, core.CubicVolume)):
+        raise TypeError(f"{function_name} requires batched Volume(...) or CubicVolume(...)")
+    return volumes
+
+
 def batch_vol_rot_slice_volume(volumes, rotation_matrices, image_shape, volume_shape):
-    return core.batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape)
+    projection_volumes = _require_projection_volumes(volumes, function_name="batch_vol_rot_slice_volume")
+    return core.batch_slice_volume(projection_volumes, rotation_matrices, image_shape, volume_shape)
 
 
 def batch_vol_slice_volume(volumes, rotation_matrices, image_shape, volume_shape):
+    projection_volumes = _require_projection_volumes(volumes, function_name="batch_vol_slice_volume")
     return jnp.swapaxes(
-        core.batch_slice_volume(volumes, rotation_matrices, image_shape, volume_shape),
+        core.batch_slice_volume(projection_volumes, rotation_matrices, image_shape, volume_shape),
         0,
         1,
     )

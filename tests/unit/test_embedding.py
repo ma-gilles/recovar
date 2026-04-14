@@ -63,6 +63,23 @@ def _call_compute_batch_coords(
     )
 
 
+def _projection_volume(values, *, disc_type="linear_interp", half_volume=False):
+    if isinstance(values, (embedding.core.Volume, embedding.core.CubicVolume)):
+        return values
+    if disc_type == "cubic":
+        return embedding.core.CubicVolume.from_coeffs(jnp.asarray(values), half_volume=half_volume)
+    return embedding.core.Volume(jnp.asarray(values), disc_type=disc_type, half_volume=half_volume)
+
+
+def _model_state(mean_estimate, volume_mask, basis=None, eigenvalues=None, *, disc_type="linear_interp", half_volume=False):
+    return ModelState(
+        mean_estimate=_projection_volume(mean_estimate, disc_type=disc_type, half_volume=half_volume),
+        volume_mask=volume_mask,
+        basis=None if basis is None else _projection_volume(basis, disc_type=disc_type, half_volume=half_volume),
+        eigenvalues=eigenvalues,
+    )
+
+
 class _Cryo:
     def __init__(self, n_images):
         self.n_images = n_images
@@ -98,6 +115,58 @@ def test_generate_conformation_from_reprojection_linear_combination():
     )
     assert out.shape == expected.shape
     assert np.allclose(out, expected)
+
+
+def test_get_coords_in_basis_and_contrast_3_converts_raw_cubic_inputs_at_entry(monkeypatch):
+    class _Dataset:
+        tilt_series_flag = False
+        n_units = 1
+        n_images = 1
+        volume_shape = (4, 4, 4)
+        dtype = np.complex64
+        dtype_real = np.float32
+
+        @staticmethod
+        def process_images(images):
+            return images
+
+    calls = []
+
+    def fake_to_cubic(volume, volume_shape, *, half_volume=None):
+        calls.append((tuple(np.asarray(volume).shape), tuple(volume_shape), half_volume))
+        return embedding.core.CubicVolume.from_coeffs(jnp.asarray(volume), half_volume=bool(half_volume))
+
+    class _Stop(RuntimeError):
+        pass
+
+    def fake_prepare(config, mean_estimate, basis):
+        assert isinstance(mean_estimate, embedding.core.CubicVolume)
+        assert isinstance(basis, embedding.core.CubicVolume)
+        raise _Stop
+
+    monkeypatch.setattr(embedding.core, "to_cubic", fake_to_cubic)
+    monkeypatch.setattr(
+        embedding.ForwardModelConfig,
+        "from_dataset",
+        classmethod(lambda cls, _dataset, disc_type="linear_interp", process_fn=None, upsampling_factor=None: SimpleNamespace(volume_shape=(4, 4, 4), disc_type=disc_type)),
+    )
+    monkeypatch.setattr(embedding, "_prepare_model_half_volumes", fake_prepare)
+
+    with pytest.raises(_Stop):
+        embedding.get_coords_in_basis_and_contrast_3(
+            _Dataset(),
+            mean_estimate=np.ones((64,), dtype=np.complex64),
+            basis=np.ones((2, 64), dtype=np.complex64),
+            eigenvalues=np.ones((2,), dtype=np.float32),
+            volume_mask=np.ones((64,), dtype=np.float32),
+            contrast_grid=np.array([1.0], dtype=np.float32),
+            batch_size=1,
+            disc_type="cubic",
+            compute_covariances=False,
+            compute_bias=False,
+        )
+
+    assert calls == [((64,), (4, 4, 4), False), ((2, 64), (4, 4, 4), False)]
 
 
 # ---------------------------------------------------------------------------
@@ -158,7 +227,6 @@ def test_get_per_image_embedding_clamps_batch_size_to_at_least_one(monkeypatch):
     s = np.ones((2,), dtype=np.float32)
     volume_mask = np.ones((4,), dtype=np.float32)
 
-    monkeypatch.setattr(embedding, "USE_CUBIC", False)
     monkeypatch.setattr(embedding.utils, "get_embedding_batch_size", lambda *_args, **_kwargs: 0)
 
     captured = {"batch_sizes": []}
@@ -219,7 +287,6 @@ def test_get_per_image_embedding_ignore_zero_frequency_overrides_volume_mask(mon
     s = np.ones((1,), dtype=np.float32)
     volume_mask = np.array([0.0, 1.0, 0.0, 1.0], dtype=np.float32)
 
-    monkeypatch.setattr(embedding, "USE_CUBIC", False)
     monkeypatch.setattr(embedding.utils, "get_embedding_batch_size", lambda *_args, **_kwargs: 10)
 
     captured = {"masks": [], "contrast_grid_size": []}
@@ -292,7 +359,6 @@ def test_get_per_image_embedding_iterates_full_dataset_for_tilt_series(monkeypat
     volume_mask = np.ones((4,), dtype=np.float32)
 
     calls = []
-    monkeypatch.setattr(embedding, "USE_CUBIC", False)
     monkeypatch.setattr(embedding.utils, "get_embedding_batch_size", lambda *_args, **_kwargs: 10)
     monkeypatch.setattr(
         embedding,
@@ -339,7 +405,6 @@ def test_get_per_image_embedding_supports_single_cryo_list(monkeypatch):
     s = np.ones((1,), dtype=np.float32)
     volume_mask = np.ones((4,), dtype=np.float32)
 
-    monkeypatch.setattr(embedding, "USE_CUBIC", False)
     monkeypatch.setattr(embedding.utils, "get_embedding_batch_size", lambda *_args, **_kwargs: 10)
     monkeypatch.setattr(
         embedding,
@@ -601,7 +666,7 @@ def test_compute_grouped_shared_batch_coords_matches_per_particle_loop():
         ).astype(np.complex64)
     )
     mean_estimate, basis = embedding._prepare_model_half_volumes(config, mean_estimate, basis)
-    model = ModelState(
+    model = _model_state(
         mean_estimate=mean_estimate,
         volume_mask=jnp.ones(cryo.volume_shape, dtype=cryo.dtype_real),
         basis=basis,
@@ -1057,7 +1122,7 @@ def test_compute_batch_coords_p1_half_matches_full(H, W, noise_type, monkeypatch
         ctf_params=jnp.zeros((n_images, 9)),
         noise_variance=noise_var,
     )
-    model = ModelState(
+    model = _model_state(
         mean_estimate=jnp.zeros((H**3,), dtype=jnp.complex64),
         volume_mask=jnp.ones((H**3,), dtype=jnp.float32),
         basis=jnp.zeros((n_basis, H**3), dtype=jnp.complex64),
@@ -1140,7 +1205,7 @@ def test_compute_batch_coords_p1_premult_ctf_half_matches_full(H, W, monkeypatch
         ctf_params=jnp.array(ctf_std),
         noise_variance=noise_var,
     )
-    model = ModelState(
+    model = _model_state(
         mean_estimate=jnp.zeros((H**3,), dtype=jnp.complex64),
         volume_mask=jnp.ones((H**3,), dtype=jnp.float32),
         basis=jnp.zeros((n_basis, H**3), dtype=jnp.complex64),
@@ -1215,7 +1280,7 @@ def test_compute_batch_coords_p1_half_matches_full_float64(H, W, monkeypatch):
             ctf_params=jnp.zeros((n_images, 9)),
             noise_variance=noise_var,
         )
-        model = ModelState(
+        model = _model_state(
             mean_estimate=jnp.zeros((H**3,), dtype=jnp.complex128),
             volume_mask=jnp.ones((H**3,), dtype=jnp.float64),
             basis=jnp.zeros((n_basis, H**3), dtype=jnp.complex128),
@@ -1321,7 +1386,7 @@ def _run_half_vs_full_compute_batch_coords(H=16, W=16, n_images=32, n_basis=6):
         ctf_params=ctf_params,
         noise_variance=noise_var,
     )
-    model = ModelState(
+    model = _model_state(
         mean_estimate=mean_estimate,
         volume_mask=jnp.ones((H**3,), dtype=jnp.float32),
         basis=basis,
@@ -1407,7 +1472,7 @@ def test_compute_batch_coords_half_vs_full_gpu(gpu_device, monkeypatch):
             ctf_params=jnp.zeros((n_images, 9)),
             noise_variance=noise_var,
         )
-        model = ModelState(
+        model = _model_state(
             mean_estimate=jnp.zeros((H**3,), dtype=jnp.complex64),
             volume_mask=jnp.ones((H**3,), dtype=jnp.float32),
             basis=jnp.zeros((n_basis, H**3), dtype=jnp.complex64),
@@ -1488,7 +1553,7 @@ def test_compute_batch_coords_half_vs_full_cpu(monkeypatch):
         ctf_params=jnp.zeros((n_images, 9)),
         noise_variance=noise_var,
     )
-    model = ModelState(
+    model = _model_state(
         mean_estimate=jnp.zeros((H**3,), dtype=jnp.complex64),
         volume_mask=jnp.ones((H**3,), dtype=jnp.float32),
         basis=jnp.zeros((n_basis, H**3), dtype=jnp.complex64),

@@ -211,6 +211,21 @@ class TestDefaultMaxR:
         total = out.size
         assert n_nonzero > 0.8 * total, f"max_r=None should leave most pixels nonzero: {n_nonzero}/{total}"
 
+    def test_cubic_default_clips_more_than_none(self):
+        """Cubic JAX projection should respect the same default image-space clipping."""
+        N = 16
+        image_shape = (N, N)
+        volume_shape = (N, N, N)
+        vol = _hermitian_volume(N, seed=7)
+        rots = _random_rotations(3, seed=7)
+
+        out_default = np.asarray(_slice_volume(vol, rots, image_shape, volume_shape, "cubic"))
+        out_none = np.asarray(_slice_volume(vol, rots, image_shape, volume_shape, "cubic", max_r=None))
+
+        n_zero_default = np.sum(np.abs(out_default) < 1e-30)
+        n_zero_none = np.sum(np.abs(out_none) < 1e-30)
+        assert n_zero_default > n_zero_none, f"Default should clip more: {n_zero_default} zeros vs {n_zero_none}"
+
 
 # ── 2. Half-vol/half-img equivalence under default max_r ────────────
 
@@ -581,6 +596,30 @@ class TestAdjointnessWithMaxR:
 
         rel_err = abs(lhs - rhs) / (abs(lhs) + abs(rhs) + 1e-30)
         assert rel_err < 1e-4, f"Adjointness failed: lhs={lhs}, rhs={rhs}, rel_err={rel_err}"
+
+    def test_cubic_adjointness_explicit_max_r(self, N):
+        """Coefficient-space cubic adjointness should hold with explicit clipping."""
+        image_shape = (N, N)
+        volume_shape = (N, N, N)
+        max_r = N // 4
+        n_images = 5
+        rots = _random_rotations(n_images, seed=131)
+
+        rng = np.random.default_rng(131)
+        vol = jnp.array((rng.standard_normal(N**3) + 1j * rng.standard_normal(N**3)).astype(np.complex64))
+        coeffs = slicing.to_cubic(vol, volume_shape)
+        imgs = jnp.array(
+            (rng.standard_normal((n_images, N * N)) + 1j * rng.standard_normal((n_images, N * N))).astype(np.complex64)
+        )
+
+        Ax = _slice_volume(coeffs, rots, image_shape, volume_shape, "cubic", max_r=max_r)
+        ATy = _adjoint_slice_volume(imgs, rots, image_shape, volume_shape, "cubic", max_r=max_r)
+
+        lhs = float(jnp.real(jnp.vdot(Ax, imgs)))
+        rhs = float(jnp.real(jnp.vdot(coeffs.array, ATy)))
+
+        rel_err = abs(lhs - rhs) / (abs(lhs) + abs(rhs) + 1e-30)
+        assert rel_err < 1e-4, f"Cubic adjointness failed: lhs={lhs}, rhs={rhs}, rel_err={rel_err}"
 
 
 # ── 5. Batch functions respect default max_r ─────────────────────────

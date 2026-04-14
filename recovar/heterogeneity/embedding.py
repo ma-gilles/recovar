@@ -21,7 +21,6 @@ logger = logging.getLogger(__name__)
 
 # NVTX domain for embedding/latent variable operations
 NVTX_DOMAIN_EMBED = "embedding"
-USE_CUBIC = True
 
 
 _rfft2_hermitian_weights = linalg.rfft2_hermitian_weights
@@ -62,10 +61,12 @@ def _cast_projection_input(volume, dtype):
 
 def _wrap_projection_like(volume, array, *, disc_type, half_volume):
     array = jnp.asarray(array)
-    if isinstance(volume, core.CubicVolume) or disc_type == "cubic":
+    if isinstance(volume, core.CubicVolume):
         return core.CubicVolume.from_coeffs(array, half_volume=half_volume)
     if isinstance(volume, core.Volume):
         disc_type = volume.disc_type
+    elif disc_type == "cubic":
+        raise TypeError("Raw cubic arrays must be converted with core.to_cubic(...) before layout changes")
     return core.Volume(array, disc_type=disc_type, half_volume=half_volume)
 
 
@@ -77,6 +78,12 @@ def _as_projection_volume(volume, *, disc_type, volume_shape, half_volume):
     if disc_type == "cubic":
         return core.to_cubic(volume, volume_shape, half_volume=half_volume)
     return core.Volume(volume, disc_type=disc_type, half_volume=half_volume)
+
+
+def _require_projection_volume(volume, *, function_name):
+    if not _is_projection_volume(volume):
+        raise TypeError(f"{function_name} requires Volume(...) or CubicVolume(...)")
+    return volume
 
 
 def _mean_is_half_volume(mean_estimate, volume_shape):
@@ -264,16 +271,9 @@ def get_per_image_embedding(
 
     logger.info("ignore_zero_frequency? %s", ignore_zero_frequency)
 
-    if USE_CUBIC:
-        disc_type = "cubic"
-        from recovar.core import cubic_interpolation
-
-        mean = cubic_interpolation.calculate_spline_coefficients(mean.reshape(dataset.volume_shape))
-        from recovar.heterogeneity import covariance_estimation
-
-        basis = covariance_estimation.compute_spline_coeffs_in_batch(basis, dataset.volume_shape, gpu_memory=None)
-        mean = core.CubicVolume.from_coeffs(mean)
-        basis = core.CubicVolume.from_coeffs(basis)
+    if disc_type == "cubic":
+        mean = core.to_cubic(mean, dataset.volume_shape)
+        basis = core.to_cubic(basis, dataset.volume_shape)
 
     basis_count = _projection_array(basis).shape[0]
     zs, cov_zs, est_contrasts, bias = get_coords_in_basis_and_contrast_3(
@@ -325,6 +325,19 @@ def get_coords_in_basis_and_contrast_3(
 
     shared_label = experiment_dataset.tilt_series_flag and not force_not_shared_label
     n_units = experiment_dataset.n_units if not force_not_shared_label else experiment_dataset.n_images
+
+    mean_estimate = _as_projection_volume(
+        mean_estimate,
+        disc_type=disc_type,
+        volume_shape=experiment_dataset.volume_shape,
+        half_volume=_mean_is_half_volume(mean_estimate, experiment_dataset.volume_shape),
+    )
+    basis = _as_projection_volume(
+        basis,
+        disc_type=disc_type,
+        volume_shape=experiment_dataset.volume_shape,
+        half_volume=_basis_is_half_volume(basis, experiment_dataset.volume_shape),
+    )
 
     # Transfer arrays to GPU once before the batch loop while preserving
     # explicit projection representation wrappers when callers already provide them.
@@ -562,13 +575,9 @@ def _compute_batch_coords_p1(
     basis = model.basis
     assert basis is not None
 
-    mean_half_volume = _mean_is_half_volume(model.mean_estimate, config.volume_shape)
-    basis_half_volume = _basis_is_half_volume(basis, config.volume_shape)
-    mean_volume = _as_projection_volume(
+    mean_volume = _require_projection_volume(
         model.mean_estimate,
-        disc_type=config.disc_type,
-        volume_shape=config.volume_shape,
-        half_volume=mean_half_volume,
+        function_name="_compute_batch_coords_p1",
     )
     projected_mean = core_forward.forward_model(
         config,
@@ -579,11 +588,9 @@ def _compute_batch_coords_p1(
         half_image=half,
     )
     # AUs: (n_basis, n_images, n_pix[_half])
-    basis_volume = _as_projection_volume(
+    basis_volume = _require_projection_volume(
         basis,
-        disc_type=config.disc_type,
-        volume_shape=config.volume_shape,
-        half_volume=basis_half_volume,
+        function_name="_compute_batch_coords_p1",
     )
     AUs = covariance_core.batch_vol_forward_from_map(
         config,
@@ -1178,17 +1185,13 @@ def _compute_single_batch_coords_p1_legacy(
     batch = process_fn(batch)
     batch = core.translate_images(batch, translations, image_shape)
 
-    mean_volume = _as_projection_volume(
+    mean_volume = _require_projection_volume(
         mean_estimate,
-        disc_type=disc_type,
-        volume_shape=volume_shape,
-        half_volume=_mean_is_half_volume(mean_estimate, volume_shape),
+        function_name="_compute_single_batch_coords_p1_legacy",
     )
-    basis_volume = _as_projection_volume(
+    basis_volume = _require_projection_volume(
         basis,
-        disc_type=disc_type,
-        volume_shape=volume_shape,
-        half_volume=_basis_is_half_volume(basis, volume_shape),
+        function_name="_compute_single_batch_coords_p1_legacy",
     )
 
     projected_mean = _legacy_forward_model_from_map(

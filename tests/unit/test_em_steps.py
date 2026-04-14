@@ -4,7 +4,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em import e_step, m_step
+from recovar.em import core as em_core, e_step, m_step
 
 pytestmark = pytest.mark.unit
 
@@ -364,3 +364,11 @@ def test_compute_probability_vmap_gpu(gpu_device):
         gpu_out = np.asarray(e_step.compute_probability_from_residual_normal_squared(residual_g))
 
     np.testing.assert_allclose(cpu_out, gpu_out, atol=1e-5, rtol=1e-5)
+
+
+def test_batch_vol_slice_volume_requires_wrapped_volumes():
+    rotations = jnp.zeros((1, 1, 3, 3), dtype=jnp.float32)
+    with pytest.raises(TypeError, match="Volume"):
+        em_core.batch_vol_rot_slice_volume(jnp.zeros((1, 8), dtype=jnp.complex64), rotations, (2, 2), (2, 2, 2))
+    with pytest.raises(TypeError, match="Volume"):
+        em_core.batch_vol_slice_volume(jnp.zeros((1, 8), dtype=jnp.complex64), rotations, (2, 2), (2, 2, 2))

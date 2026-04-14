@@ -72,10 +72,8 @@ def test_compute_image_assignment_fills_residual_matrix(monkeypatch):
 
     monkeypatch.setattr(ia, "compute_residual", fake_compute_residual)
 
-    volumes = np.array([[10.0], [20.0], [30.0]], dtype=np.float32)
-    out = ia.compute_image_assignment(
-        _MockDS(), volumes, noise_variance=np.array([1.0]), batch_size=2, disc_type="nearest"
-    )
+    volumes = ia.core.Volume(np.array([[10.0], [20.0], [30.0]], dtype=np.float32), disc_type="nearest")
+    out = ia.compute_image_assignment(_MockDS(), volumes, noise_variance=np.array([1.0]), batch_size=2)
 
     assert out.shape == (3, 4)
     assert np.allclose(out[:, 1], [10.0, 20.0, 30.0])
@@ -106,11 +104,26 @@ def test_estimate_false_positive_rate_from_mocked_residual(monkeypatch):
             )
 
     monkeypatch.setattr(ia, "compute_residual", lambda *_args, **_kwargs: np.array([4.0, 9.0], dtype=np.float32))
-    vols = np.array([[1.0], [2.0]], dtype=np.float32)
-    gamma = ia.estimate_false_positive_rate(
-        _DS2(), vols, noise_variance=np.array([1.0]), batch_size=2, disc_type="nearest"
-    )
+    vols = ia.core.Volume(np.array([[1.0], [2.0]], dtype=np.float32), disc_type="nearest")
+    gamma = ia.estimate_false_positive_rate(_DS2(), vols, noise_variance=np.array([1.0]), batch_size=2)
 
     expected_alphas = 0.5 * np.sqrt(np.array([4.0, 9.0]))
     expected_gamma = 1 - np.mean(scipy.stats.norm.cdf(expected_alphas))
     assert np.isclose(gamma, expected_gamma)
+
+def test_image_assignment_requires_wrapped_candidate_volumes():
+    with pytest.raises(TypeError, match="Volume"):
+        ia.compute_image_assignment(
+            _MockDS(),
+            np.array([[1.0], [2.0]], dtype=np.float32),
+            noise_variance=np.array([1.0], dtype=np.float32),
+            batch_size=2,
+        )
+
+    with pytest.raises(TypeError, match="Volume"):
+        ia.estimate_false_positive_rate(
+            _MockDS(),
+            np.array([[1.0], [2.0]], dtype=np.float32),
+            noise_variance=np.array([1.0], dtype=np.float32),
+            batch_size=2,
+        )

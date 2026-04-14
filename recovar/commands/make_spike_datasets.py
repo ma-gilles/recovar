@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.metrics import confusion_matrix
 
-from recovar import utils
+from recovar import core, utils
 from recovar.data_io import cryoem_dataset
 from recovar.heterogeneity import image_assignment
 from recovar.output import output
@@ -114,8 +114,13 @@ def main(
         # Compute hard-assignment
         batch_size = 1000
         image_cov_noise = np.asarray(noise.make_radial_noise(sim_info["noise_variance"], cryo.image_shape))
+        projection_volumes = (
+            core.to_cubic(gt_volumes, cryo.volume_shape)
+            if disc_type_infer == "cubic"
+            else core.Volume(gt_volumes, disc_type=disc_type_infer)
+        )
         log_likelihoods = image_assignment.compute_image_assignment(
-            cryo, gt_volumes, image_cov_noise, batch_size, disc_type=disc_type_infer
+            cryo, projection_volumes, image_cov_noise, batch_size
         )
         assignments = np.argmin(np.asarray(log_likelihoods), axis=0)
 
@@ -127,7 +132,7 @@ def main(
             error_observed[idx] = 0
 
         error_predicted[idx] = image_assignment.estimate_false_positive_rate(
-            cryo, gt_volumes, image_cov_noise, batch_size, disc_type=disc_type_infer
+            cryo, projection_volumes, image_cov_noise, batch_size
         )
         logger.info("observed errors: %s", error_observed[: idx + 1])
         logger.info("predicted errors: %s", error_predicted[: idx + 1])
