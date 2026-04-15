@@ -131,6 +131,9 @@ Issues = "https://github.com/ma-gilles/recovar/issues"
 where = ["."]
 include = ["recovar*"]
 
+[tool.setuptools.package-data]
+recovar = ["cuda/Makefile", "cuda/cuda_backproject.cu"]
+
 [tool.setuptools_scm]
 write_to = "recovar/_version.py"
 local_scheme = "no-local-version"

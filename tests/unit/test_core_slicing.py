@@ -476,6 +476,7 @@ def test_adjoint_slice_volume_cubic_volume_accumulates_in_coefficient_space():
             rots,
             image_shape,
             volume_shape,
+            max_r=core_slicing._default_max_r(image_shape),
         )
     )
 

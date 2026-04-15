@@ -1,2 +1,4 @@
 include recovar/trajectory/_fast_marching_native.cpp
 include setup_helpers.py
+include recovar/cuda/Makefile
+include recovar/cuda/cuda_backproject.cu
