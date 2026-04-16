@@ -171,11 +171,17 @@ Two ceilings bound what the loop can achieve:
    joint loop also updates μ, which drifts away from μ_true toward the ML fixed
    point under model misspecification.
 
-2. **Joint-loop ceiling (honest):** N joint μ+U steps from (μ_true, U_true).  This
-   IS the reachable target: even starting from perfect parameters, the EM loop
-   converges to this fixed point.  If the achieved result matches this ceiling,
-   the only way to improve is to change the model (larger q, different grid, etc.),
-   not improve the initialization or optimization.
+2. **Joint-loop ceiling (non-annealed reference):** N joint μ+U steps from
+   (μ_true, U_true) with the true noise variance.  This is a strong reference,
+   but an annealed training run follows a different update map and can land in
+   a different basin.  Results that exceed this reference are legitimate but
+   should be compared against the matched annealed ceiling (below).
+
+3. **Annealed oracle ceiling (matched reference):** Same as (2) but with the
+   same annealing schedule used during training.  When comparing annealed runs,
+   this is the honest matched reference.  On Ribosembly, both ceilings are
+   similar.  On IgG-RL, the annealed ceiling is much lower (annealing from
+   truth hurts on continuous manifolds).
 
 ---
 
@@ -199,20 +205,20 @@ that the oracle init doesn't find.
 
 #### q=4
 
-| Setting | cac | hun | ari | nmi | Gap to ceiling (hun) |
-|---------|-----|-----|-----|-----|---------------------|
-| **Old** unweighted SVD warmstart | 0.73 | 0.62 | 0.65 | 0.84 | −0.10 |
-| **New** weighted SVD warmstart, no anneal | 0.76 | 0.78 | — | — | +0.06 (beats) |
-| **New** weighted SVD + log1000, seed 1 | — | 0.81 | 0.80 | — | +0.10 (beats) |
-| **New** weighted SVD + log1000, seed 2 | — | 0.79 | 0.79 | — | +0.08 (beats) |
-| **New** weighted SVD + log1000, seed 3 | — | 0.81 | 0.78 | — | +0.10 (beats) |
-| Joint-loop ceiling (30 iters) | 0.74 | 0.72 | 0.67 | 0.85 | — |
+| Setting | cac | hun | ari | nmi | vs non-anneal ref | vs anneal ref |
+|---------|-----|-----|-----|-----|-------------------|---------------|
+| **Old** unweighted SVD + ortho M-step | 0.73 | 0.62 | 0.65 | 0.84 | −0.10 | — |
+| Weighted SVD, no anneal (pre-gauge-fix) | 0.76 | 0.78 | — | — | +0.06 | — |
+| Weighted SVD + log1000, pre-gauge-fix | — | 0.81 | 0.80 | — | +0.09 | — |
+| **Weighted SVD + log1000, post-gauge-fix** | — | **0.87** | **0.83** | **0.93** | **+0.07** | **+0.08** |
+| Non-annealed reference (30 iters from truth) | 0.81 | 0.79 | 0.77 | 0.91 | — | — |
+| Annealed reference (30 iters from truth, log1000) | 0.81 | 0.79 | 0.77 | 0.90 | — | — |
 
-The weighted SVD warmstart is the key improvement: it lifts q=4 from
-hun≈0.62 to hun≈0.78 without annealing.  With log1000 annealing, all 3
-seeds reach hun ≥ 0.79.  The method consistently beats the joint-loop
-oracle ceiling because the oracle init (μ_true, U_true) is NOT the ML
-optimum — the EM loop moves away from truth.
+Two improvements stack: (1) weighted SVD warmstart lifts q=4 from
+hun≈0.62 to hun≈0.78; (2) removing the post-solve orthonormalization
+(gauge fix, see Section 9.1) further lifts to hun≈0.87.  The method
+exceeds both truth-start references because the warmstart + annealing
+combination finds a better basin than truth-start EM.
 
 #### q=8 (partial results)
 
@@ -233,22 +239,25 @@ regression from the default changes.
 
 ### 5.3 IgG-RL (100 continuous states, rotational trajectory)
 
-| Setting | cac | hun | ari | nmi | Gap to ceiling (hun) |
-|---------|-----|-----|-----|-----|---------------------|
+| Setting | cac | hun | ari | nmi | vs non-anneal ref |
+|---------|-----|-----|-----|-----|-------------------|
 | Weighted SVD, no anneal | 0.096 | 0.229 | 0.076 | 0.574 | +0.002 |
-| Weighted SVD + log1000 anneal | 0.010 | 0.180 | 0.027 | 0.513 | +0.051 (worse!) |
-| Joint-loop ceiling | 0.126 | 0.231 | 0.080 | 0.572 | — |
+| Weighted SVD + log1000 full anneal | 0.010 | 0.180 | 0.027 | 0.513 | +0.051 (worse!) |
+| **Weighted SVD + log1000 factor-only anneal** | — | **0.232** | **0.081** | **0.573** | **+0.004** |
+| Non-annealed reference (30 iters from truth) | 0.105 | 0.229 | 0.075 | 0.570 | — |
+| Annealed reference (30 iters from truth, log1000) | 0.014 | 0.180 | 0.026 | 0.520 | — |
 
 q=2 on 100 continuous states is heavily misspecified (ceiling itself is
 very low: hun=0.23).  The weighted SVD warmstart without annealing
 reaches the ceiling (gap +0.002 on Hungarian).
 
-**Log1000 annealing HURTS IgG-RL** — it causes FRE divergence (final
-fre_truth = 1.02, meaning μ drifted farther from truth than the zero
-volume).  This is because heavy annealing flattens the posterior so much
-that μ updates lose signal on this 100-state continuous manifold.
-Annealing should NOT be the default; it helps only on Ribosembly-type
-discrete-state datasets.
+**Full log1000 annealing HURTS IgG-RL** — it causes FRE divergence
+because heavy annealing flattens the posterior and the μ update loses
+signal.  **Factor-only annealing fixes this**: annealing only the factor
+M-step keeps the mean update sharp (fre_truth stays at 0.38, near
+oracle floor) while still giving the factor update the exploration
+benefit.  Factor-only annealing reaches the ceiling on IgG-RL
+(hun=0.232) while preserving the Ribosembly benefits.
 
 ---
 
@@ -282,10 +291,12 @@ discrete-state datasets.
 
 ### 6.2 What doesn't work / known limitations
 
-1. **Annealing is dataset-dependent.** Log1000 annealing is essential
-   on Ribosembly q≥8 (rescues from lazy basin) but harmful on IgG-RL
-   (causes FRE divergence on continuous manifolds).  There is no
-   universal default.
+1. **Full annealing is dataset-dependent.** Log1000 full annealing is
+   essential on Ribosembly q≥8 (rescues from lazy basin) but harmful
+   on IgG-RL (causes FRE divergence on continuous manifolds).
+   **Factor-only annealing** (`--anneal-factor-only`) fixes this: it
+   preserves sharp mean updates while still giving the factor M-step
+   the exploration benefit.  This should be the default annealing mode.
 
 2. **Model misspecification at small q.** When q ≪ n_states, the PPCA
    subspace cannot capture all discrete conformations and clustering
@@ -429,14 +440,40 @@ in agent memory for the full table.
 
 ## 9. Key mathematical insights
 
-### 9.1 Weighted SVD = matching the gauge
+### 9.1 Gauge consistency: no orthonormalization in the M-step
 
-The half-volume rfft layout has frequency-dependent weights w_k.  The
-downstream orthonormalization step (`real_volume_orthonormalize_half`)
-works in the weighted inner product ⟨a, b⟩ = Σ_k w_k conj(a_k) b_k.
+**The problem:** The closed-form M-step solves a per-voxel q×q system
+to get U_raw.  An earlier version then applied `real_volume_orthonormalize_half`,
+which computes the weighted Gram G = U_raw W U_raw^H, Cholesky-factors
+G = L L^H, and returns L^{-1} U_raw.  This is a GL(q) transform (not
+just O(q)), so the represented covariance U diag(s) U^H changes.  With
+s frozen at truth, there is no compensating update — the returned
+(U_new, s_frozen) represents a DIFFERENT model than the exact M-step
+solution.
+
+**The fix:** Remove orthonormalization from the M-step.  Keep only the
+real-volume Hermitian projection (`project_to_real_volume_subspace_batch`).
+The E-step, M-step, and all metrics handle non-orthonormal U correctly.
+Orthonormalization is still applied at initialization (warmstart SVD,
+random init) where there is no previous s to be consistent with.
+
+**Impact:** On Ribosembly q=4, removing the orthonormalization lifted
+Hungarian from 0.81 to 0.87 (+7.5%).  The Cholesky whitening was
+distorting the M-step solution at each iteration, accumulating gauge
+drift over the 30-iteration loop.
+
+**Future:** When eigenvalue estimation is added (s no longer frozen),
+the correct approach is: orthonormalize U_new = L^{-1} U_raw, then
+update s via Λ_new = L^T Λ L → eigendecompose → new diagonal s and
+additional rotation applied to U.  This preserves the model while
+keeping the orthonormal-row gauge.
+
+### 9.2 Weighted SVD warmstart = matching the metric
+
+The half-volume rfft layout has frequency-dependent weights w_k.
 If the SVD is done in the unweighted ℓ² (raw complex entries), the
 top-q SVD directions are optimal for unweighted ℓ² but NOT for the
-weighted ℓ² that the rest of the code uses.
+weighted ℓ² that the real-volume inner product uses.
 
 The fix: before SVD, multiply each residual by sqrt(w_k).  Then the
 SVD's ℓ² objective IS the weighted ℓ², and the top-q directions are
@@ -446,7 +483,7 @@ to get back to the half-volume convention.
 This is analogous to doing PCA on a dataset with non-identity metric:
 you pre-whiten by the metric, do standard PCA, then un-whiten.
 
-### 9.2 The PPCA ML fixed point ≠ the data-generating truth
+### 9.3 The PPCA ML fixed point ≠ the data-generating truth
 
 Under model misspecification (q < n_states for discrete data, or any
 finite-q model for continuous manifolds), the PPCA ML optimum is NOT
@@ -463,7 +500,7 @@ Concretely on Ribosembly q=4: pre-EM oracle has hun=0.90; after 30
 joint EM iters from truth, hun drops to 0.72.  This is not a bug —
 it's the ML fixed point under q=4 misspecification.
 
-### 9.3 Multi-basin landscape
+### 9.4 Multi-basin landscape
 
 On Ribosembly q≥4, the PPCA landscape has multiple basins:
 - The "good basin" corresponds to a U that separates most conformations
@@ -476,7 +513,7 @@ M-step explore broadly before committing.  Multi-restart with
 argmax(lm) selection provides an alternative.  The two approaches
 can be combined.
 
-### 9.4 Convergence depth depends on q
+### 9.5 Convergence depth depends on q
 
 | q | Ribosembly iters to ceiling | Notes |
 |---|---------------------------|-------|

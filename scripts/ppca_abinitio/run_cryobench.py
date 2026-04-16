@@ -496,6 +496,51 @@ def compute_joint_loop_oracle_ceiling(cfg, ds, q, n_joint_steps=30):
     return summarize_discrete_embedding(cfg, ds, cur)
 
 
+def compute_joint_loop_oracle_ceiling_annealed(
+    cfg, ds, q, n_joint_steps=30, anneal_schedule="log1000", anneal_iters=30
+):
+    """Same as compute_joint_loop_oracle_ceiling but with an annealing schedule.
+
+    This is the matched reference for annealed training runs.  Without this,
+    "beats the non-annealed ceiling" is ambiguous — the annealed run follows
+    a different update map than the non-annealed truth-start reference.
+    """
+    if ds.state_label_true is None or ds.state_coords_true is None:
+        return None
+    s_kernel = jnp.maximum(ds.s_true, _S_FLOOR)
+    cur = PPCAInit(
+        mu=ds.mu_half_true.astype(jnp.complex128),
+        U=ds.U_half_true.astype(jnp.complex128),
+        s=s_kernel,
+        volume_shape=tuple(int(x) for x in cfg.volume_shape),
+    )
+    schedule = build_anneal_schedule(anneal_schedule, anneal_iters, n_joint_steps)
+    for it in range(n_joint_steps):
+        factor = float(schedule[it])
+        nv_iter = ds.noise_variance_full * factor
+        mres = update_mu_residualized(
+            cfg,
+            cur,
+            ds.batch_full,
+            ds.rotations,
+            ds.translations,
+            ds.ctf_params,
+            nv_iter,
+            tau=0.0,
+        )
+        cur = PPCAInit(mu=mres.mu_half, U=cur.U, s=cur.s, volume_shape=cur.volume_shape)
+        cur = update_factor_closed_form(
+            cfg,
+            cur,
+            ds.batch_full,
+            ds.rotations,
+            ds.translations,
+            ds.ctf_params,
+            nv_iter,
+        )
+    return summarize_discrete_embedding(cfg, ds, cur)
+
+
 def resolve_n_burnin(external_mode: str, n_burnin: int | None) -> int:
     """Default burn-in by benchmark mode.
 
@@ -1029,6 +1074,34 @@ def main():
                 f"  remaining gap to joint-loop ceiling: cac={gap_cac:+.4f} hun={gap_hun:+.4f} ari={gap_ari:+.4f}",
                 flush=True,
             )
+
+        if args.anneal_schedule != "none":
+            print()
+            print(
+                f"  computing annealed oracle ceiling ({args.n_joint} joint steps from truth, "
+                f"schedule={args.anneal_schedule})...",
+                flush=True,
+            )
+            anneal_ceil = compute_joint_loop_oracle_ceiling_annealed(
+                cfg,
+                ds,
+                q=args.q,
+                n_joint_steps=args.n_joint,
+                anneal_schedule=args.anneal_schedule,
+                anneal_iters=args.anneal_iters,
+            )
+            if anneal_ceil is not None:
+                print(f"  annealed oracle ceiling (q={args.q}, matched reference):", flush=True)
+                print(f"    centroid acc:           {anneal_ceil['centroid_acc']:.4f}", flush=True)
+                print(f"    clust acc (Hungarian):  {anneal_ceil['clust_acc_hungarian']:.4f}", flush=True)
+                print(f"    ARI:                    {anneal_ceil['ari']:.4f}", flush=True)
+                print(f"    NMI:                    {anneal_ceil['nmi']:.4f}", flush=True)
+                a_gap_hun = anneal_ceil["clust_acc_hungarian"] - discrete_summary["clust_acc_hungarian"]
+                a_gap_ari = anneal_ceil["ari"] - discrete_summary["ari"]
+                print(
+                    f"  gap to annealed ceiling: hun={a_gap_hun:+.4f} ari={a_gap_ari:+.4f}",
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":

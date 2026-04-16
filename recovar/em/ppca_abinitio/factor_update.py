@@ -540,10 +540,11 @@ def update_factor_closed_form(
          system per voxel.
 
     No PCG, no preconditioner, no learning rate, no line search, and
-    no band-limit. After the direct solve we still project back to the
-    real-volume half-spectrum subspace and real-space orthonormalize
-    the rows, because the rest of the fixed-`s` PPCA code assumes that
-    gauge.
+    no band-limit. After the direct solve we project back to the
+    real-volume half-spectrum subspace but do NOT orthonormalize,
+    because with frozen s the Cholesky whitening would change the
+    represented covariance U diag(s) U^H.  The E-step and all
+    downstream metrics handle non-orthonormal U correctly.
 
     Parameters
     ----------
@@ -692,9 +693,10 @@ def update_factor_closed_form(
 
     U_per_voxel = jax.vmap(jnp.linalg.solve)(M_per_voxel, B_per_voxel)  # (V_half, q)
     U_new = jnp.moveaxis(U_per_voxel, 0, -1).astype(jnp.complex128)  # (q, V_half)
-    weights_half_volume = make_half_volume_weights(volume_shape)
     U_new = project_to_real_volume_subspace_batch(U_new, volume_shape)
-    U_new = real_volume_orthonormalize_half(U_new, weights_half_volume, int(np.prod(volume_shape)))
+    # No orthonormalization here: with s frozen, L^{-1} whitening would
+    # change the represented covariance U diag(s) U^H.  The E-step,
+    # M-step, and all metrics handle non-orthonormal U correctly.
 
     return PPCAInit(
         mu=init.mu,
