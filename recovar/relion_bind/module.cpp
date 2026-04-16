@@ -14,9 +14,17 @@ namespace py = pybind11;
 
 // Forward declarations — each .cpp file registers its own submodule
 void init_projector_bindings(py::module_ &m);
+void init_ctf_bindings(py::module_ &m);
+void init_fftw_bindings(py::module_ &m);
+void init_sampling_bindings(py::module_ &m);
+void init_backprojector_bindings(py::module_ &m);
 
 PYBIND11_MODULE(_relion_bind_core, m) {
     m.doc() = "RELION C++ subfunctions exposed to Python for parity testing";
 
     init_projector_bindings(m);
+    init_ctf_bindings(m);
+    init_fftw_bindings(m);
+    init_sampling_bindings(m);
+    init_backprojector_bindings(m);
 }

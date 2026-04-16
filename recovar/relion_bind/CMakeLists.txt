@@ -64,18 +64,32 @@ set(RELION_SOURCES
     ${RELION_SRC_DIR}/CPlot2D.cpp
     ${RELION_SRC_DIR}/time.cpp
     ${RELION_SRC_DIR}/pipeline_control.cpp
+    ${RELION_SRC_DIR}/ctf.cpp
+    ${RELION_SRC_DIR}/transformations.cpp
+    ${RELION_SRC_DIR}/matrix1d.cpp
+    ${RELION_SRC_DIR}/matrix2d.cpp
+    ${RELION_SRC_DIR}/numerical_recipes.cpp
+    ${RELION_SRC_DIR}/healpix_sampling.cpp
+    ${RELION_SRC_DIR}/Healpix_2.15a/healpix_base.cc
+    ${RELION_SRC_DIR}/Healpix_2.15a/cxxutils.cc
 )
 
 # ── The pybind11 module ─────────────────────────────────────────────
 pybind11_add_module(_relion_bind_core
     ${CMAKE_CURRENT_SOURCE_DIR}/module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/projector_bind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ctf_bind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fftw_bind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/sampling_bind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/backprojector_bind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/obs_model_stub.cpp
     ${RELION_SOURCES}
 )
 
 target_include_directories(_relion_bind_core PRIVATE
     # RELION headers use #include "src/xxx.h" — so include the parent
     "${RELION_SRC_DIR}/.."
+    "${RELION_SRC_DIR}/Healpix_2.15a"
     "${FFTW3_INCLUDE_DIR}"
 )
 

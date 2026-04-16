@@ -33,9 +33,9 @@ Update this file every time a binding validates or disproves parity.
 | 5 | selfTranslate (beam-tilt phase ramp) | ml_optimiser.cpp:5935 | No | — | — | Zero effect for SPA w/o beam tilt |
 | 6 | demodulatePhase (aberration correction) | ml_optimiser.cpp:5940 | No | — | — | Zero for standard optics |
 | 7 | divideByMtf (detector MTF correction) | ml_optimiser.cpp:5945 | No | — | — | Not provided in simulated data |
-| 8 | CTF image (2× padded box → downsample) | ctf.cpp:314 | No | recovar computes at image size directly | — | **Known divergence** — binding P1 |
+| 8 | CTF image (2× padded box → downsample) | ctf.cpp:314 | No | recovar computes at image size directly | **DIVERGENT** | Binding P1: sign convention CTF_relion=-CTF_recovar (cancels with vol sign flip); 2× padding produces max diff ~1.0 vs unpadded; padded CTF exceeds [-1,1] at small boxes |
 | 9 | 1/σ² noise weighting per pixel | ml_optimiser.cpp:5960 | Yes | `engine_v2.py` sigma2_noise weighting | — | |
-| 10 | windowFourierTransform (current_size crop) | fftw.h:809 | Yes | `fourier_window.py` index-based | — | Different strategy — binding P3 |
+| 10 | windowFourierTransform (current_size crop) | fftw.h:809 | Yes | `fourier_window.py` index-based | **DIVERGENT** | Binding P3: RELION uses rectangular crop (2112 px), recovar uses radial mask (1689 px) for same current_size=64 — 20% pixel count difference. RELION padding uses radial mask (kp²+ip²+jp²≤max_r²) |
 
 ## Projector Setup
 
@@ -49,8 +49,8 @@ Update this file every time a binding validates or disproves parity.
 
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
-| 14 | Phase-shift images (translations) | fftw.cpp:762 | Yes | `geometry.py:translate_images:167` | — | RELION uses tab sin/cos — binding E3 |
-| 15 | ‖img − CTF·proj‖²/σ² per shell | ml_optimiser.cpp:7098 | Yes | `engine_v2.py:_e_step_block_scores` | — | binding E4 |
+| 14 | Phase-shift images (translations) | fftw.cpp:762 | Yes | `geometry.py:translate_images:167` | ✓ | Binding E3: RELION vs numpy <1e-12; RELION vs recovar <1e-10 (excl. Nyquist ky sign ambiguity) |
+| 15 | ‖img − CTF·proj‖²/σ² per shell | ml_optimiser.cpp:7098 | Yes | `engine_v2.py:_e_step_block_scores` | ✓ | Binding E4: diff2 decomposition exact (rel_err<1e-15); cross-term GEMM formula matches per-pixel (<1e-15); Parseval (translation invariance of batch_norm) verified. |
 | 16 | First-iter CC scoring (hard assignment) | ml_optimiser.cpp:7414 | No | — | — | recovar uses soft Bayesian iter 1 |
 | 17 | exp(−diff2) × priors → posteriors | ml_optimiser.cpp:7704 | Yes | `engine_v2.py:_update_logsumexp` | — | binding E5 |
 | 18 | pdf_orientation prior term | ml_optimiser.cpp:7780 | Yes | `engine_v2.py` rotation_log_prior | — | |
@@ -71,7 +71,7 @@ Update this file every time a binding validates or disproves parity.
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
 | 25 | Symmetrise Fourier accumulators | backprojector.cpp:1200 | N/A | C1 symmetry only | — | |
-| 26 | Enforce Hermitian symmetry | backprojector.cpp:2207 | Yes | `half_volume_to_full_volume` | — | binding M8 |
+| 26 | Enforce Hermitian symmetry | backprojector.cpp:2207 | Yes | `half_volume_to_full_volume` | ✓ | Phase 4: round-trip corr>0.8 (192 proj), FSC half-sets >0.5 |
 | 27 | Blob deconvolution (iterative) | backprojector.cpp:1400 | No | direct Wiener instead | — | Different strategy — binding M2 |
 | 28 | IFFT → crop to ori_size | backprojector.cpp:2589 | Yes | iDFT + unpad | — | binding M7 |
 | 29 | Gridding correction (radial sinc²) | projector.cpp:595 | Yes | `relion_functions.py:64` | ✓ | Validated Phase 1: max diff 1.6e-5 (float k-coords vs int) |
@@ -82,7 +82,7 @@ Update this file every time a binding validates or disproves parity.
 
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
-| 32 | Gold-standard FSC between half-maps | backprojector.cpp:998 | Yes | `regularization.py:get_fsc_gpu:132` | — | binding M3 |
+| 32 | Gold-standard FSC between half-maps | backprojector.cpp:998 | Yes | `regularization.py:get_fsc_gpu:132` | ✓ | Phase 4: same-vol FSC[1]>0.5, diff-vol FSC[mid]<0.5 |
 | 33 | updateSSNRarrays (tau2, data_vs_prior) | backprojector.cpp:1044 | Yes | `regularization.py:compute_data_vs_prior` | — | binding M4 |
 | 34 | updateCurrentResolution | ml_optimiser.cpp:5579 | Yes | `regularization.py:resolution_from_data_vs_prior:624` | — | binding M5 |
 | 35 | Noise update (σ² per shell) | ml_optimiser.cpp:5090 | Partial | hard-assignment in `refine.py` | — | See #22 |
@@ -93,11 +93,11 @@ Update this file every time a binding validates or disproves parity.
 
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
-| 38 | HEALPix orientation grid | healpix_sampling.cpp:1832 | Yes | `sampling.py:get_rotation_grid_at_order:530` | — | binding S1 |
-| 39 | Oversampled sub-grid (psi children) | healpix_sampling.cpp:1850 | Yes | `sampling.py` adaptive OS | — | |
-| 40 | Translation grid | healpix_sampling.cpp:1724 | Yes | `sampling.py:get_translation_grid:100` | — | binding S2 |
-| 41 | Perturbation (per-iter rigid rotation) | healpix_sampling.cpp:1909 | Yes | `sampling.py:apply_relion_rotation_perturbation` | — | binding S3 |
-| 42 | 3σ cone prior filtering | healpix_sampling.cpp:695 | Yes | `sampling.py` sigma_cutoff=3.0 | — | binding S4 |
+| 38 | HEALPix orientation grid | healpix_sampling.cpp:1832 | Yes | `sampling.py:get_rotation_grid_at_order:530` | ✓ | Binding S1: direction count, direction set, rotation matrices all match (21 tests). NEST vs RING pixel order differs but same sphere coverage. |
+| 39 | Oversampled sub-grid (psi children) | healpix_sampling.cpp:1850 | Yes | `sampling.py` adaptive OS | ✓ | Binding S1: oversampled count, OS=0→coarse, within-cell radius all verified. |
+| 40 | Translation grid | healpix_sampling.cpp:1724 | Yes | `sampling.py:get_translation_grid:100` | ✓ | Binding S2: coarse grid exact match, circular boundary, oversampled count/centering/spacing all verified (12 tests). |
+| 41 | Perturbation (per-iter rigid rotation) | healpix_sampling.cpp:1909 | Yes | `sampling.py:apply_relion_rotation_perturbation` | ✓ | Binding S1/S3: RELION vs recovar perturbation diff < 1e-15. |
+| 42 | 3σ cone prior filtering | healpix_sampling.cpp:695 | Yes | `sampling.py` sigma_cutoff=3.0 | — | binding S4 (not yet bound) |
 
 ## Convergence & Loop Control
 
@@ -118,7 +118,7 @@ Update this file every time a binding validates or disproves parity.
 | Ported (partial/broken) | 4 | 4,11,22,35 |
 | Not ported | 11 | 2,5,6,7,8,16,23,24,27,30,31 |
 | Not applicable | 1 | 25 |
-| **Binding-validated** | **3** | **12 (projector storage), 13 (trilinear projection), 29 (gridding correction)** |
+| **Binding-validated** | **10** | **12 (projector storage), 13 (trilinear projection), 14 (phase shift), 15 (diff2 scoring), 26 (backproject+reconstruct round-trip), 29 (gridding correction), 38 (HEALPix grid), 39 (oversampled sub-grid), 40 (translation grid), 41 (perturbation)** |
 
 ---
 
@@ -126,5 +126,9 @@ Update this file every time a binding validates or disproves parity.
 
 | Date | Change |
 |------|--------|
+| 2026-04-16 | Phase 4 complete: BackProjector bindings validated (6 tests). Round-trip project→backproject→reconstruct corr>0.8 (192 evenly-spaced orientations). FSC half-sets validated. Key findings: (1) RELION's `reconstruct` applies CenterFFTbySign before iFFT — projections from RELION Projector already carry compatible sign decoration; (2) tau2 regularization (1/tau2 term in Wiener) must be weak for round-trip tests (tau2≫1 or do_map=False); (3) pad_size = 2*ROUND(pf*r_max)+3, not pf*N. |
+| 2026-04-16 | Phase 3 E4 complete: diff2 scoring composite validated (5 tests). Decomposition identity (diff2 = batch_norm + cross + proj_norm) exact to 1e-16. Cross-term GEMM formula (recovar's approach) matches per-pixel formula to 1e-16. Parseval invariance of batch_norm under translation verified. |
+| 2026-04-16 | Phase 5 S1+S2 complete: sampling bindings validated (33 tests). Orientations: direction grid, rotation matrices (via R_from_relion frame conversion), oversampled sub-grid, perturbation all at parity. Translations: coarse grid, oversampled, perturbation all exact match. |
+| 2026-04-16 | Phase 3 E3 complete: shift binding validated (8 tests). RELION vs recovar shift matches to <1e-10 excluding Nyquist ky row (sign ambiguity: FFTW ky=+N/2 vs recovar ky=-N/2). |
 | 2026-04-16 | Initial audit. Phase 0+1 complete: layout conversions validated (61 tests), M1 gridding bound and validated (14 tests). |
 | 2026-04-15 | Phase 2b complete: E1 projector storage + E2 projection bound and validated (10 tests). Key finding: CenterFFTbySign uses (-1)^(k+i+j) on physical indices (fftw.h:400), not linear-index parity. RELION forward FFT normalizes by 1/N^3 (fftw.cpp:358). |
