@@ -18,6 +18,7 @@ void init_ctf_bindings(py::module_ &m);
 void init_fftw_bindings(py::module_ &m);
 void init_sampling_bindings(py::module_ &m);
 void init_backprojector_bindings(py::module_ &m);
+void init_estep_bindings(py::module_ &m);
 
 PYBIND11_MODULE(_relion_bind_core, m) {
     m.doc() = "RELION C++ subfunctions exposed to Python for parity testing";
@@ -27,4 +28,5 @@ PYBIND11_MODULE(_relion_bind_core, m) {
     init_fftw_bindings(m);
     init_sampling_bindings(m);
     init_backprojector_bindings(m);
+    init_estep_bindings(m);
 }

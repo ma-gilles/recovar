@@ -247,6 +247,162 @@ get_backprojector_data(
 }
 
 
+/**
+ * M6: getDownsampledAverage — downsample padded Fourier data to ori_size grid.
+ *
+ * Takes accumulated backprojector data and returns the downsampled average
+ * complex array (ori_size+1 cube, half-complex).
+ */
+static py::array_t<std::complex<double>> get_downsampled_average(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> images,
+    py::array_t<double, py::array::c_style | py::array::forcecast> rotations,
+    py::array_t<double, py::array::c_style | py::array::forcecast> weights,
+    int ori_size,
+    int padding_factor,
+    int interpolator,
+    bool divide
+) {
+    auto img_buf = images.request();
+    auto rot_buf = rotations.request();
+    auto wt_buf = weights.request();
+
+    long n_images = img_buf.shape[0];
+    long ny = img_buf.shape[1];
+    long nx = img_buf.shape[2];
+
+    bool has_weights = (wt_buf.ndim == 3 && wt_buf.shape[0] == n_images);
+
+    BackProjector bp(ori_size, 3, "C1", interpolator, (float)padding_factor,
+                     10, 0, 1.9, 15, 2, false);
+    bp.initZeros(-1);
+
+    for (long i = 0; i < n_images; i++) {
+        MultidimArray<Complex> img_arr(ny, nx);
+        std::complex<double>* src = (std::complex<double>*)img_buf.ptr + i * ny * nx;
+        std::memcpy(img_arr.data, src, ny * nx * sizeof(Complex));
+
+        Matrix2D<RFLOAT> A(3, 3);
+        double* rot_ptr = (double*)rot_buf.ptr + i * 9;
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                MAT_ELEM(A, r, c) = rot_ptr[r * 3 + c];
+
+        if (has_weights) {
+            MultidimArray<RFLOAT> wt_arr(ny, nx);
+            double* wt_ptr = (double*)wt_buf.ptr + i * ny * nx;
+            std::memcpy(wt_arr.data, wt_ptr, ny * nx * sizeof(RFLOAT));
+            bp.set2DFourierTransform(img_arr, A, &wt_arr);
+        } else {
+            bp.set2DFourierTransform(img_arr, A);
+        }
+    }
+
+    MultidimArray<Complex> avg;
+    bp.getDownsampledAverage(avg, divide);
+
+    long az = ZSIZE(avg);
+    long ay = YSIZE(avg);
+    long ax = XSIZE(avg);
+    py::array_t<std::complex<double>> result({az, ay, ax});
+    std::memcpy(result.request().ptr, avg.data,
+                az * ay * ax * sizeof(std::complex<double>));
+    return result;
+}
+
+
+/**
+ * M4: updateSSNRarrays — compute tau2, sigma2, data_vs_prior, fourier_coverage.
+ *
+ * Takes backprojected data (via images+rotations), FSC curve, tau2, and flags.
+ * Returns (tau2, sigma2, data_vs_prior, fourier_coverage) per shell.
+ */
+static py::tuple update_ssnr_arrays(
+    py::array_t<std::complex<double>, py::array::c_style | py::array::forcecast> images,
+    py::array_t<double, py::array::c_style | py::array::forcecast> rotations,
+    py::array_t<double, py::array::c_style | py::array::forcecast> weights,
+    py::array_t<double, py::array::c_style | py::array::forcecast> fsc_in,
+    py::array_t<double, py::array::c_style | py::array::forcecast> tau2_in,
+    int ori_size,
+    int padding_factor,
+    int interpolator,
+    RFLOAT tau2_fudge,
+    bool update_tau2_with_fsc,
+    bool is_whole_instead_of_half
+) {
+    auto img_buf = images.request();
+    auto rot_buf = rotations.request();
+    auto wt_buf = weights.request();
+
+    long n_images = img_buf.shape[0];
+    long ny = img_buf.shape[1];
+    long nx = img_buf.shape[2];
+
+    bool has_weights = (wt_buf.ndim == 3 && wt_buf.shape[0] == n_images);
+
+    BackProjector bp(ori_size, 3, "C1", interpolator, (float)padding_factor,
+                     10, 0, 1.9, 15, 2, false);
+    bp.initZeros(-1);
+
+    for (long i = 0; i < n_images; i++) {
+        MultidimArray<Complex> img_arr(ny, nx);
+        std::complex<double>* src = (std::complex<double>*)img_buf.ptr + i * ny * nx;
+        std::memcpy(img_arr.data, src, ny * nx * sizeof(Complex));
+
+        Matrix2D<RFLOAT> A(3, 3);
+        double* rot_ptr = (double*)rot_buf.ptr + i * 9;
+        for (int r = 0; r < 3; r++)
+            for (int c = 0; c < 3; c++)
+                MAT_ELEM(A, r, c) = rot_ptr[r * 3 + c];
+
+        if (has_weights) {
+            MultidimArray<RFLOAT> wt_arr(ny, nx);
+            double* wt_ptr = (double*)wt_buf.ptr + i * ny * nx;
+            std::memcpy(wt_arr.data, wt_ptr, ny * nx * sizeof(RFLOAT));
+            bp.set2DFourierTransform(img_arr, A, &wt_arr);
+        } else {
+            bp.set2DFourierTransform(img_arr, A);
+        }
+    }
+
+    long n_shells = ori_size / 2 + 1;
+
+    // Copy FSC input
+    MultidimArray<RFLOAT> fsc(n_shells);
+    auto fsc_buf = fsc_in.request();
+    double* fsc_ptr = (double*)fsc_buf.ptr;
+    for (long s = 0; s < n_shells && s < fsc_buf.shape[0]; s++)
+        DIRECT_A1D_ELEM(fsc, s) = fsc_ptr[s];
+
+    // Copy tau2 input
+    MultidimArray<RFLOAT> tau2(n_shells);
+    auto tau_buf = tau2_in.request();
+    double* tau_ptr = (double*)tau_buf.ptr;
+    for (long s = 0; s < n_shells && s < tau_buf.shape[0]; s++)
+        DIRECT_A1D_ELEM(tau2, s) = tau_ptr[s];
+
+    MultidimArray<RFLOAT> sigma2(n_shells);
+    MultidimArray<RFLOAT> data_vs_prior(n_shells);
+    MultidimArray<RFLOAT> fourier_coverage(n_shells);
+    MultidimArray<RFLOAT> dummy_avgctf2(n_shells);
+    dummy_avgctf2.initConstant(1.0);
+
+    bp.updateSSNRarrays(tau2_fudge, tau2, sigma2, data_vs_prior,
+                        fourier_coverage, fsc, dummy_avgctf2,
+                        update_tau2_with_fsc, is_whole_instead_of_half,
+                        false);
+
+    // Copy outputs to numpy
+    auto make_arr = [&](MultidimArray<RFLOAT>& src) {
+        py::array_t<double> out(n_shells);
+        std::memcpy(out.request().ptr, src.data, n_shells * sizeof(double));
+        return out;
+    };
+
+    return py::make_tuple(make_arr(tau2), make_arr(sigma2),
+                          make_arr(data_vs_prior), make_arr(fourier_coverage));
+}
+
+
 void init_backprojector_bindings(py::module_ &m) {
     m.def("backproject_and_reconstruct", &backproject_and_reconstruct,
           py::arg("images"),
@@ -293,5 +449,35 @@ Returns per-shell FSC values.
 Raw backprojection: returns (data, weight) arrays before Wiener solve.
 data: complex (pf*ori_size, pf*ori_size, pf*ori_size/2+1) projector-centered
 weight: real, same shape
+)doc");
+
+    m.def("get_downsampled_average", &get_downsampled_average,
+          py::arg("images"),
+          py::arg("rotations"),
+          py::arg("weights"),
+          py::arg("ori_size"),
+          py::arg("padding_factor") = 2,
+          py::arg("interpolator") = TRILINEAR,
+          py::arg("divide") = true,
+          R"doc(
+M6: Downsample padded Fourier data to ori_size grid.
+Returns complex array of shape (2*r_max+3, 2*r_max+3, r_max+2).
+)doc");
+
+    m.def("update_ssnr_arrays", &update_ssnr_arrays,
+          py::arg("images"),
+          py::arg("rotations"),
+          py::arg("weights"),
+          py::arg("fsc"),
+          py::arg("tau2"),
+          py::arg("ori_size"),
+          py::arg("padding_factor") = 2,
+          py::arg("interpolator") = TRILINEAR,
+          py::arg("tau2_fudge") = 1.0,
+          py::arg("update_tau2_with_fsc") = true,
+          py::arg("is_whole_instead_of_half") = false,
+          R"doc(
+M4: Compute tau2, sigma2, data_vs_prior, fourier_coverage per shell.
+Returns (tau2, sigma2, data_vs_prior, fourier_coverage) tuple.
 )doc");
 }

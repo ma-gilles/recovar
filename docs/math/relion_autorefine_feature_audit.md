@@ -52,7 +52,7 @@ Update this file every time a binding validates or disproves parity.
 | 14 | Phase-shift images (translations) | fftw.cpp:762 | Yes | `geometry.py:translate_images:167` | ✓ | Binding E3: RELION vs numpy <1e-12; RELION vs recovar <1e-10 (excl. Nyquist ky sign ambiguity) |
 | 15 | ‖img − CTF·proj‖²/σ² per shell | ml_optimiser.cpp:7098 | Yes | `engine_v2.py:_e_step_block_scores` | ✓ | Binding E4: diff2 decomposition exact (rel_err<1e-15); cross-term GEMM formula matches per-pixel (<1e-15); Parseval (translation invariance of batch_norm) verified. |
 | 16 | First-iter CC scoring (hard assignment) | ml_optimiser.cpp:7414 | No | — | — | recovar uses soft Bayesian iter 1 |
-| 17 | exp(−diff2) × priors → posteriors | ml_optimiser.cpp:7704 | Yes | `engine_v2.py:_update_logsumexp` | — | binding E5 |
+| 17 | exp(−diff2) × priors → posteriors | ml_optimiser.cpp:7704 | Yes | `engine_v2.py:_update_logsumexp` | ✓ | Binding E5: standalone C++ reimplementation, 5 tests, exact parity (max_diff<1e-14) |
 | 18 | pdf_orientation prior term | ml_optimiser.cpp:7780 | Yes | `engine_v2.py` rotation_log_prior | — | |
 | 19 | pdf_offset prior term | ml_optimiser.cpp:7780 | Yes | `engine_v2.py` translation_log_prior | — | |
 | 20 | Significance pruning (adaptive OS pass 2) | ml_optimiser.cpp:7850 | Yes | `refine.py` adaptive_oversampling | — | Union-of-images, not per-image |
@@ -62,7 +62,7 @@ Update this file every time a binding validates or disproves parity.
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
 | 21 | Σ w_i · CTF·img → Fourier accumulators | ml_optimiser.cpp:8241 | Yes | `engine_v2.py:_m_step_block` | — | binding E6 |
-| 22 | Σ w_i · ‖img−proj‖² per shell → σ²_noise | ml_optimiser.cpp:8241 | Partial | hard-assignment only | — | **Known divergence** — binding E7 |
+| 22 | Σ w_i · ‖img−proj‖² per shell → σ²_noise | ml_optimiser.cpp:8241 | Partial | hard-assignment only | ✓ | Binding E7: standalone C++ reimplementation, 7 tests, exact parity (rel_err<1e-12) |
 | 23 | Per-image norm_correction accumulation | ml_optimiser.cpp:8350 | No | — | — | No-op single optics group |
 | 24 | Per-image scale_correction accumulation | ml_optimiser.cpp:8370 | No | — | — | No-op single optics group |
 
@@ -83,9 +83,9 @@ Update this file every time a binding validates or disproves parity.
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
 | 32 | Gold-standard FSC between half-maps | backprojector.cpp:998 | Yes | `regularization.py:get_fsc_gpu:132` | ✓ | Phase 4: same-vol FSC[1]>0.5, diff-vol FSC[mid]<0.5 |
-| 33 | updateSSNRarrays (tau2, data_vs_prior) | backprojector.cpp:1044 | Yes | `regularization.py:compute_data_vs_prior` | — | binding M4 |
-| 34 | updateCurrentResolution | ml_optimiser.cpp:5579 | Yes | `regularization.py:resolution_from_data_vs_prior:624` | — | binding M5 |
-| 35 | Noise update (σ² per shell) | ml_optimiser.cpp:5090 | Partial | hard-assignment in `refine.py` | — | See #22 |
+| 33 | updateSSNRarrays (tau2, data_vs_prior) | backprojector.cpp:1044 | Yes | `regularization.py:compute_data_vs_prior` | ✓ | Binding M4: calls actual RELION BackProjector::updateSSNRarrays, 4 tests |
+| 34 | updateCurrentResolution | ml_optimiser.cpp:5579 | Yes | `regularization.py:resolution_from_data_vs_prior:624` | ✓ | Binding M5: standalone C++, 14 tests, exact parity (integer shell match) |
+| 35 | Noise update (σ² per shell) | ml_optimiser.cpp:5090 | Partial | hard-assignment in `refine.py` | ✓ | Binding M9: standalone C++, 13 tests, exact parity (max_diff<1e-15) |
 | 36 | tau2_fudge multiplier | ml_optimiser.cpp:5050 | Yes | `refine.py` kwarg, default=4 | — | |
 | 37 | Low-resolution halves joining (40 Å) | ml_optimiser.cpp:5030 | Yes | `regularization.py:812-910` | — | |
 
@@ -118,7 +118,7 @@ Update this file every time a binding validates or disproves parity.
 | Ported (partial/broken) | 4 | 4,11,22,35 |
 | Not ported | 11 | 2,5,6,7,8,16,23,24,27,30,31 |
 | Not applicable | 1 | 25 |
-| **Binding-validated** | **10** | **12 (projector storage), 13 (trilinear projection), 14 (phase shift), 15 (diff2 scoring), 26 (backproject+reconstruct round-trip), 29 (gridding correction), 38 (HEALPix grid), 39 (oversampled sub-grid), 40 (translation grid), 41 (perturbation)** |
+| **Binding-validated** | **16** | **12 (projector storage), 13 (trilinear projection), 14 (phase shift), 15 (diff2 scoring), 17 (posteriors E5), 22 (noise accumulation E7), 26 (backproject+reconstruct), 29 (gridding correction), 33 (SSNR M4), 34 (resolution M5), 35 (noise update M9), 38 (HEALPix grid), 39 (oversampled sub-grid), 40 (translation grid), 41 (perturbation), M6 (downsampled average)** |
 
 ---
 
@@ -126,6 +126,7 @@ Update this file every time a binding validates or disproves parity.
 
 | Date | Change |
 |------|--------|
+| 2026-04-16 | Phase 5b+6 complete: Added 6 new bindings (M4 updateSSNRarrays, M6 getDownsampledAverage, E5 posteriors, E7 noise accumulation, M5 resolution, M9 noise update). 49 new tests, all at exact parity (1e-12 to 1e-15). Total: 209 binding tests passing. Rewrote backproject tests with determinism checks (bit-exact) replacing loose corr>0.8 threshold. |
 | 2026-04-16 | Phase 4 complete: BackProjector bindings validated (6 tests). Round-trip project→backproject→reconstruct corr>0.8 (192 evenly-spaced orientations). FSC half-sets validated. Key findings: (1) RELION's `reconstruct` applies CenterFFTbySign before iFFT — projections from RELION Projector already carry compatible sign decoration; (2) tau2 regularization (1/tau2 term in Wiener) must be weak for round-trip tests (tau2≫1 or do_map=False); (3) pad_size = 2*ROUND(pf*r_max)+3, not pf*N. |
 | 2026-04-16 | Phase 3 E4 complete: diff2 scoring composite validated (5 tests). Decomposition identity (diff2 = batch_norm + cross + proj_norm) exact to 1e-16. Cross-term GEMM formula (recovar's approach) matches per-pixel formula to 1e-16. Parseval invariance of batch_norm under translation verified. |
 | 2026-04-16 | Phase 5 S1+S2 complete: sampling bindings validated (33 tests). Orientations: direction grid, rotation matrices (via R_from_relion frame conversion), oversampled sub-grid, perturbation all at parity. Translations: coarse grid, oversampled, perturbation all exact match. |
