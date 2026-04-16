@@ -514,6 +514,55 @@ def update_factor_full_ecm(
 # ===========================================================================
 
 
+def _update_eigenvalues(gamma, m, Hinv, n_img):
+    """Tipping-Bishop eigenvalue update from E-step moments.
+
+    s_new[k] = (1/n_img) Σ_{i,g,t} γ_{i,g,t} (m²_{i,g,t,k} + H⁻¹_{i,g,kk})
+
+    γ sums to 1 over (g,t) per image, so the effective sample size is n_img.
+    """
+    m2 = jnp.sum(gamma[..., None] * m**2, axis=(1, 2))  # (n_img, q)
+    Hinv_diag = jnp.diagonal(Hinv, axis1=-2, axis2=-1)  # (n_img, n_rot, q)
+    gamma_rot = jnp.sum(gamma, axis=2)  # (n_img, n_rot) — sum over translations
+    cov_term = jnp.sum(gamma_rot[..., None] * Hinv_diag, axis=1)  # (n_img, q)
+    s_new = jnp.mean(m2 + cov_term, axis=0)  # (q,)
+    return jnp.maximum(s_new, 1e-10)
+
+
+def _orthonormalize_and_update_s(U_half, s, weights, volume_size):
+    """Orthonormalize U and absorb the gauge transform into s.
+
+    Given U_raw with non-identity weighted Gram G = L L^H:
+    1. U_orth = L^{-1} U_raw  (orthonormal rows)
+    2. Λ_new = L Λ L^H  (absorb the inverse transform into s)
+    3. Eigendecompose Λ_new = V D V^T, apply V^T to U_orth
+
+    The result (V^T L^{-1} U_raw, diag(D)) represents the same
+    covariance as (U_raw, diag(s)) but with orthonormal rows and
+    a diagonal latent covariance.
+    """
+    q = U_half.shape[0]
+    Uw = U_half * weights[None, :].astype(U_half.dtype)
+    G = (Uw @ U_half.conj().T).real / float(volume_size)  # (q, q)
+    G = G + 1e-12 * jnp.eye(q, dtype=G.dtype)
+    L = jnp.linalg.cholesky(G)
+
+    # Absorb L into s: Λ_new = L diag(s) L^T
+    Lambda_new = L * s[None, :] @ L.T  # (q, q)
+
+    # Eigendecompose to get new diagonal s and rotation
+    eigvals, V = jnp.linalg.eigh(Lambda_new)
+    # eigh returns ascending order; flip to descending
+    eigvals = eigvals[::-1]
+    V = V[:, ::-1]
+
+    # U_orth = L^{-1} U_raw, then rotate by V^T
+    U_orth = jax.scipy.linalg.solve_triangular(L, U_half, lower=True)
+    U_new = V.T @ U_orth
+
+    return U_new, jnp.maximum(eigvals, 1e-10)
+
+
 def update_factor_closed_form(
     config,
     init: PPCAInit,
@@ -524,6 +573,7 @@ def update_factor_closed_form(
     noise_variance_full,
     *,
     ridge_lambda: float = 1e-4,
+    update_s: bool = False,
 ) -> PPCAInit:
     """Closed-form per-voxel M-step for the PPCA factor U.
 
@@ -538,6 +588,11 @@ def update_factor_closed_form(
       3. q*q + q half-volume `adjoint_slice_volume` calls,
       4. `vmap(jnp.linalg.solve)` over the V_half voxels of a q×q
          system per voxel.
+
+    When ``update_s=False`` (default): no orthonormalization, s frozen.
+    When ``update_s=True``: Tipping-Bishop eigenvalue update from the
+    E-step moments, then joint orthonormalization that absorbs the
+    gauge transform into s (see ``_orthonormalize_and_update_s``).
 
     No PCG, no preconditioner, no learning rate, no line search, and
     no band-limit. After the direct solve we project back to the
@@ -694,13 +749,26 @@ def update_factor_closed_form(
     U_per_voxel = jax.vmap(jnp.linalg.solve)(M_per_voxel, B_per_voxel)  # (V_half, q)
     U_new = jnp.moveaxis(U_per_voxel, 0, -1).astype(jnp.complex128)  # (q, V_half)
     U_new = project_to_real_volume_subspace_batch(U_new, volume_shape)
-    # No orthonormalization here: with s frozen, L^{-1} whitening would
-    # change the represented covariance U diag(s) U^H.  The E-step,
-    # M-step, and all metrics handle non-orthonormal U correctly.
 
+    if not update_s:
+        # With s frozen, L^{-1} whitening would change the represented
+        # covariance U diag(s) U^H.  Skip orthonormalization.
+        return PPCAInit(
+            mu=init.mu,
+            U=U_new,
+            s=init.s,
+            volume_shape=init.volume_shape,
+        )
+
+    # --- Joint orthonormalization + eigenvalue update ---
+    # Orthonormalize U, then absorb the gauge transform into s so the
+    # represented covariance U diag(s) U^H is preserved.
+    s_new = _update_eigenvalues(gamma, m, Hinv, n_img)
+    weights_half_volume = make_half_volume_weights(volume_shape)
+    U_new, s_new = _orthonormalize_and_update_s(U_new, s_new, weights_half_volume, int(np.prod(volume_shape)))
     return PPCAInit(
         mu=init.mu,
         U=U_new,
-        s=init.s,
+        s=s_new,
         volume_shape=init.volume_shape,
     )

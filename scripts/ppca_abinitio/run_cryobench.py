@@ -619,6 +619,7 @@ def run_two_stage(
     anneal_iters=30,
     u_init_kind="svd",
     anneal_factor_only=False,
+    update_eigenvalues=False,
 ):
     """Two-stage loop with selectable mu init.
 
@@ -766,7 +767,16 @@ def run_two_stage(
             cfg, cur, ds.batch_full, ds.rotations, ds.translations, ds.ctf_params, nv_mu, tau=0.0
         )
         cur = PPCAInit(mu=mres.mu_half, U=cur.U, s=cur.s, volume_shape=cur.volume_shape)
-        cur = update_factor_closed_form(cfg, cur, ds.batch_full, ds.rotations, ds.translations, ds.ctf_params, nv_iter)
+        cur = update_factor_closed_form(
+            cfg,
+            cur,
+            ds.batch_full,
+            ds.rotations,
+            ds.translations,
+            ds.ctf_params,
+            nv_iter,
+            update_s=update_eigenvalues,
+        )
         jax.block_until_ready(cur.U)
         ft = _fre_truth(cur.mu)
         ff = _fre_fp(cur.mu)
@@ -778,8 +788,9 @@ def run_two_stage(
         lm_traj.append(lm)
         dlm = lm - lm_traj[-2]
         anneal_tag = f" f={factor:.2f}" if anneal_schedule != "none" else ""
+        s_tag = f" s=[{', '.join(f'{v:.3g}' for v in cur.s)}]" if update_eigenvalues else ""
         print(
-            f"  joint {it}{anneal_tag}: fre_truth={ft:.4f} fre_fp={ff:.4f} pe={pe:.4f} lm={lm:.2f} dlm={dlm:+.2f} ({time.perf_counter() - t0:.1f}s)",
+            f"  joint {it}{anneal_tag}: fre_truth={ft:.4f} fre_fp={ff:.4f} pe={pe:.4f} lm={lm:.2f} dlm={dlm:+.2f}{s_tag} ({time.perf_counter() - t0:.1f}s)",
             flush=True,
         )
 
@@ -887,12 +898,26 @@ def main():
     ap.add_argument(
         "--anneal-factor-only",
         action="store_true",
-        help="Anneal noise_variance only for the factor M-step; the mean "
-        "M-step always uses the real noise_variance. This lets the mean "
-        "update maintain sharp pose posteriors while factors still benefit "
-        "from annealing.",
+        default=True,
+        help="(Default) Anneal noise_variance only for the factor M-step; "
+        "the mean M-step always uses the real noise_variance.",
+    )
+    ap.add_argument(
+        "--anneal-mu-too",
+        action="store_true",
+        help="Also anneal the mean update (old behavior). Harmful on "
+        "continuous manifolds like IgG-RL where it causes FRE divergence.",
+    )
+    ap.add_argument(
+        "--update-eigenvalues",
+        action="store_true",
+        help="Estimate eigenvalues s from the E-step posterior moments "
+        "(Tipping-Bishop update) instead of freezing them at the GT values. "
+        "Also enables joint orthonormalization of U with s update.",
     )
     args = ap.parse_args()
+    if args.anneal_mu_too:
+        args.anneal_factor_only = False
     init_seed = args.init_seed if args.init_seed is not None else args.seed
     n_burnin = resolve_n_burnin(args.external_mode, args.n_burnin)
 
@@ -961,6 +986,7 @@ def main():
             anneal_iters=args.anneal_iters,
             u_init_kind=args.u_init,
             anneal_factor_only=args.anneal_factor_only,
+            update_eigenvalues=args.update_eigenvalues,
         )
     else:
         print(
@@ -987,6 +1013,7 @@ def main():
                 anneal_iters=args.anneal_iters,
                 u_init_kind=args.u_init,
                 anneal_factor_only=args.anneal_factor_only,
+                update_eigenvalues=args.update_eigenvalues,
             )
             if fre_floor is None:
                 fre_floor = fre_floor_k
