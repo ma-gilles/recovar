@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # Fourier volume zero-padding for reconstruction with padding_factor > 1
 # ---------------------------------------------------------------------------
 
+
 def zero_pad_fourier_volume(vol_flat, native_shape, padding_factor):
     """Zero-pad a flat centered Fourier volume to a larger grid.
 
@@ -64,7 +65,7 @@ def zero_pad_fourier_volume(vol_flat, native_shape, padding_factor):
 def griddingCorrect(vol_in, ori_size, padding_factor, order=0):
     """Radial sinc gridding correction."""
     og_shape = vol_in.shape
-    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False) + 0.0
+    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False).astype(np.float64)
     r = np.linalg.norm(pixels, axis=-1)
     safe_rval = np.where(r > 0, r / (ori_size * padding_factor), 1.0)
     sinc = np.where(r > 0, np.sin(np.pi * safe_rval) / (np.pi * safe_rval), 1.0)
@@ -80,7 +81,7 @@ def griddingCorrect(vol_in, ori_size, padding_factor, order=0):
 def griddingCorrect_square(vol_in, ori_size, padding_factor, order=0):
     """Per-axis sinc product gridding correction (Fourier transform of trilinear interpolator)."""
     og_shape = vol_in.shape
-    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False)
+    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False).astype(np.float64)
     pixels_rescaled = pixels / (ori_size * padding_factor)
 
     def sinc(ar):
@@ -394,7 +395,12 @@ def _as_flat_single_volume(arr, volume_shape):
 
 
 def adjust_regularization_relion_style(
-    filter, volume_shape, tau=None, padding_factor=1, max_res_shell=None, half_volume=False,
+    filter,
+    volume_shape,
+    tau=None,
+    padding_factor=1,
+    max_res_shell=None,
+    half_volume=False,
     tau2_fudge=1.0,
 ):
     """Adjust the RELION-style regularization filter.
