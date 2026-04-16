@@ -2137,7 +2137,8 @@ def _refine_relion_mode(
                 kernel="triangular",
                 use_spherical_mask=True,
                 grid_correct=True,
-                gridding_correct="square",
+                # RELION uses radial sinc² (projector.cpp:617)
+                gridding_correct="radial",
                 tau2_fudge=tau2_fudge,
             ).reshape(-1)
 
@@ -2196,7 +2197,7 @@ def _refine_relion_mode(
                 kernel="triangular",
                 use_spherical_mask=True,
                 grid_correct=True,
-                gridding_correct="square",
+                gridding_correct="radial",
             ),
             relion_functions.post_process_from_filter_v2(
                 Ft_ctf_1_padded,
@@ -2207,7 +2208,7 @@ def _refine_relion_mode(
                 kernel="triangular",
                 use_spherical_mask=True,
                 grid_correct=True,
-                gridding_correct="square",
+                gridding_correct="radial",
             ),
         ]
 
@@ -2664,7 +2665,7 @@ def _refine_relion_mode(
         kernel="triangular",
         use_spherical_mask=True,
         grid_correct=True,
-        gridding_correct="square",
+        gridding_correct="radial",
         tau2_fudge=tau2_fudge,
     ).reshape(-1)
     final_iter_elapsed = time.time() - final_iter_t0
