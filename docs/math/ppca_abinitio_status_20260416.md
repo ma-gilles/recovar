@@ -468,7 +468,43 @@ update s via Λ_new = L^T Λ L → eigendecompose → new diagonal s and
 additional rotation applied to U.  This preserves the model while
 keeping the orthonormal-row gauge.
 
-### 9.2 Weighted SVD warmstart = matching the metric
+### 9.2 Eigenvalue update experiment (2026-04-15)
+
+Implemented the Tipping-Bishop eigenvalue update:
+
+    s_new[k] = (1/N) Σ_{i,g,t} γ_{i,g,t} (m²_{i,g,t,k} + H⁻¹_{i,g,kk})
+
+plus joint orthonormalization (Section 9.1's "future" approach), gated
+behind `--update-eigenvalues`.
+
+**Result: harmful under annealing, mildly harmful without.**
+
+Ribosembly q=4 (vol=32, n=1024, σ=0.01, log1000 factor-only annealing):
+
+| Metric     | s update ON | s frozen (baseline) | Joint-loop ceiling |
+|------------|------------|--------------------|--------------------|
+| Hungarian  | 0.6631     | **0.8447**         | 0.7617             |
+| ARI        | 0.6188     | **0.8403**         | 0.7462             |
+| NMI        | 0.8578     | **0.9401**         | 0.8967             |
+
+IgG-RL q=2 (vol=32, n=1024, σ=0.1, no annealing):
+
+| Metric     | s update ON | s frozen (previous) | Ceiling |
+|------------|------------|--------------------|---------| 
+| Hungarian  | 0.2158     | 0.2285             | 0.2305  |
+
+**Root cause:** During annealing, the E-step uses noise_variance × f
+(f = 1000→1). The posterior moments (m, H⁻¹) are computed under this
+inflated noise, so Tipping-Bishop estimates the *effective* latent
+variance under the annealed model, not the true signal variance.  Final
+estimated s = [7.35, 6.01, 4.36, 3.62] vs true std ≈ [2.85, 1.60,
+1.34, 1.08] — up to 4× inflation.
+
+**Implication:** Eigenvalue estimation should be a **post-annealing
+refinement** phase (apply at f=1 only), not during the annealing
+schedule. This is the next experiment to try.
+
+### 9.3 Weighted SVD warmstart = matching the metric (was 9.2)
 
 The half-volume rfft layout has frequency-dependent weights w_k.
 If the SVD is done in the unweighted ℓ² (raw complex entries), the
@@ -483,7 +519,7 @@ to get back to the half-volume convention.
 This is analogous to doing PCA on a dataset with non-identity metric:
 you pre-whiten by the metric, do standard PCA, then un-whiten.
 
-### 9.3 The PPCA ML fixed point ≠ the data-generating truth
+### 9.4 The PPCA ML fixed point ≠ the data-generating truth
 
 Under model misspecification (q < n_states for discrete data, or any
 finite-q model for continuous manifolds), the PPCA ML optimum is NOT
@@ -500,7 +536,7 @@ Concretely on Ribosembly q=4: pre-EM oracle has hun=0.90; after 30
 joint EM iters from truth, hun drops to 0.72.  This is not a bug —
 it's the ML fixed point under q=4 misspecification.
 
-### 9.4 Multi-basin landscape
+### 9.5 Multi-basin landscape
 
 On Ribosembly q≥4, the PPCA landscape has multiple basins:
 - The "good basin" corresponds to a U that separates most conformations
@@ -513,7 +549,7 @@ M-step explore broadly before committing.  Multi-restart with
 argmax(lm) selection provides an alternative.  The two approaches
 can be combined.
 
-### 9.5 Convergence depth depends on q
+### 9.6 Convergence depth depends on q
 
 | q | Ribosembly iters to ceiling | Notes |
 |---|---------------------------|-------|
