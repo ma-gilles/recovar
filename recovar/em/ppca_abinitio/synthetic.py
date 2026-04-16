@@ -44,6 +44,9 @@ on this batch:
 - `alpha_true` — per-image latent coordinates
 - `volume_shape`, `image_shape`
 - `train_idx`, `val_idx` — train/validation split (per spec Q6)
+- `state_label_true`, `state_coords_true` — optional discrete-state
+  labels / centroid coordinates for diagnostics based on external
+  volume ensembles
 """
 
 from __future__ import annotations
@@ -99,6 +102,10 @@ class SyntheticDataset:
 
     # Optional per-image contrast factors. Only set for family D.
     contrast_true: np.ndarray | None = None
+    # Optional per-image discrete state label and per-state centroid
+    # coordinates in the true q-D external-volume PC basis.
+    state_label_true: np.ndarray | None = None
+    state_coords_true: np.ndarray | None = None
 
     @property
     def n_img(self) -> int:
@@ -115,6 +122,53 @@ class SyntheticDataset:
     @property
     def q(self) -> int:
         return int(self.U_half_true.shape[0])
+
+
+def subset_synthetic_dataset(dataset: SyntheticDataset, indices) -> SyntheticDataset:
+    """Return a per-image subset as a self-contained dataset view.
+
+    The returned dataset keeps the same ground-truth model state and
+    scoring grid, but slices all per-image arrays down to `indices`.
+    Its internal split is reset so the subset can be used directly as
+    a training set without carrying the parent's train/validation
+    bookkeeping along with it.
+    """
+    idx = np.asarray(indices, dtype=np.int32)
+    if idx.ndim != 1:
+        raise ValueError(f"indices must be 1D, got shape {idx.shape}")
+    if idx.size == 0:
+        raise ValueError("indices must be non-empty")
+    if np.any(idx < 0) or np.any(idx >= dataset.n_img):
+        raise IndexError(f"indices out of bounds for dataset of size {dataset.n_img}")
+
+    idx_jax = jnp.asarray(idx, dtype=jnp.int32)
+    train_idx = np.arange(idx.size, dtype=np.int32)
+    empty_val = np.empty(0, dtype=np.int32)
+
+    contrast_true = None if dataset.contrast_true is None else np.asarray(dataset.contrast_true)[idx]
+    state_label_true = None if dataset.state_label_true is None else np.asarray(dataset.state_label_true)[idx]
+
+    return SyntheticDataset(
+        family=dataset.family,
+        image_shape=dataset.image_shape,
+        volume_shape=dataset.volume_shape,
+        mu_half_true=dataset.mu_half_true,
+        U_half_true=dataset.U_half_true,
+        s_true=dataset.s_true,
+        batch_full=dataset.batch_full[idx_jax],
+        ctf_params=dataset.ctf_params[idx_jax],
+        noise_variance_full=dataset.noise_variance_full,
+        rotations=dataset.rotations,
+        translations=dataset.translations,
+        r_true_idx=np.asarray(dataset.r_true_idx)[idx],
+        t_true_idx=np.asarray(dataset.t_true_idx)[idx],
+        alpha_true=np.asarray(dataset.alpha_true)[idx],
+        train_idx=train_idx,
+        val_idx=empty_val,
+        contrast_true=contrast_true,
+        state_label_true=state_label_true,
+        state_coords_true=None if dataset.state_coords_true is None else np.asarray(dataset.state_coords_true),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +330,8 @@ def make_synthetic_fixed_grid_dataset(
     pose_jitter_deg_range: tuple = (1.0, 2.0),
     pose_jitter_trans_range: tuple = (0.25, 0.5),
     contrast_range: tuple = (0.8, 1.2),
+    external_volumes_real=None,
+    external_sampling_mode: str = "gaussian_pc",
 ) -> SyntheticDataset:
     """Build a synthetic dataset for one of the v0 families.
 
@@ -294,22 +350,79 @@ def make_synthetic_fixed_grid_dataset(
       `c_i ∈ contrast_range` multiplies the clean projection
       before noise. Recorded in `contrast_true`.
     - **E** (CTF_ZERO_HET) — not implemented in v0.
+
+    Parameters
+    ----------
+    external_volumes_real : optional ndarray of shape (K, N0, N1, N2)
+        If provided, the ground-truth `mu_real` and `U_real` are
+        computed from this real-space volume ensemble (mu = mean,
+        U = top-q PCs across the K volumes), instead of the default
+        Gaussian blob + sinusoidal PCs. The ensemble must already be
+        at the requested `volume_shape` (caller is responsible for
+        downsampling). Use this to test the v0 ab-initio loop on a
+        realistic biological conformation manifold (e.g. cryobench
+        gt vols) while keeping the v0 forward model.
+    external_sampling_mode : {"gaussian_pc", "discrete_volumes"}
+        Controls how images are generated when `external_volumes_real`
+        is provided.
+
+        - `"gaussian_pc"` (default): fit a q-D PPCA manifold to the
+          external volumes, then sample continuous Gaussian latent
+          coordinates `alpha_true ~ N(0, diag(s_true))`.
+        - `"discrete_volumes"`: sample a discrete external volume
+          index per image, generate the clean image from that actual
+          real-space volume through the existing simulator, and record
+          the corresponding q-D PC coordinate in `alpha_true`. This is
+          the right mode for latent clustering diagnostics on a fixed
+          external conformation set.
     """
     if family is SyntheticFamily.CTF_ZERO_HET:
         raise NotImplementedError(
             f"Family {family.value} (CTF-zero-localized heterogeneity) is not yet implemented in v0."
         )
+    if external_sampling_mode not in {"gaussian_pc", "discrete_volumes"}:
+        raise ValueError(
+            f"external_sampling_mode must be 'gaussian_pc' or 'discrete_volumes', got {external_sampling_mode!r}"
+        )
+    if external_sampling_mode != "gaussian_pc" and external_volumes_real is None:
+        raise ValueError("external_sampling_mode requires external_volumes_real")
 
     rng = np.random.default_rng(seed)
     n_img = n_images_train + n_images_val
 
     # Ground-truth real-space mu and U
-    mu_real = _gaussian_blob_volume(volume_shape, sigma=0.4)
-    U_real = _sinusoidal_pcs_real(volume_shape, q)  # (q, N0, N1, N2)
+    ext = None
+    state_coords_true = None
+    if external_volumes_real is not None:
+        ext = np.asarray(external_volumes_real, dtype=np.float64)
+        if ext.ndim != 4:
+            raise ValueError(f"external_volumes_real must be 4D (K, N0, N1, N2), got shape {ext.shape}")
+        if tuple(ext.shape[1:]) != tuple(int(x) for x in volume_shape):
+            raise ValueError(
+                f"external_volumes_real spatial shape {tuple(ext.shape[1:])} != volume_shape {tuple(volume_shape)}"
+            )
+        K = ext.shape[0]
+        mu_real = ext.mean(axis=0)
+        centered_flat = (ext - mu_real[None]).reshape(K, -1)
+        # Top-q right-singular-vectors are the volume PCs (real space).
+        _U_img, S_svd, Vh = np.linalg.svd(centered_flat, full_matrices=False)
+        if q > Vh.shape[0]:
+            raise ValueError(f"q={q} exceeds available PCs from external volumes ({Vh.shape[0]})")
+        U_real = Vh[:q].reshape((q,) + tuple(int(x) for x in volume_shape))
+        # Use the empirical spectrum (rescaled per-conformation variance)
+        s_emp = (S_svd[:q] ** 2 / max(K - 1, 1)).astype(np.float64)
+        state_coords_true = (centered_flat @ Vh[:q].T).astype(np.float64)
+    else:
+        mu_real = _gaussian_blob_volume(volume_shape, sigma=0.4)
+        U_real = _sinusoidal_pcs_real(volume_shape, q)  # (q, N0, N1, N2)
+        s_emp = None
 
     # Spectrum
     if family is SyntheticFamily.NULL:
         s_true = np.zeros(q, dtype=np.float64)
+    elif s_emp is not None:
+        # External-volumes path: use the empirical spectrum
+        s_true = s_emp
     else:
         s_true = (1.0 / (np.arange(q) + 1.0)).astype(np.float64)
 
@@ -318,8 +431,12 @@ def make_synthetic_fixed_grid_dataset(
     U_half = jnp.stack([_real_volume_to_half_flat(U_real[k]) for k in range(q)])
 
     # Sample per-image latents and pose indices
+    state_label_true = None
     if family is SyntheticFamily.NULL:
         alpha_true = np.zeros((n_img, q), dtype=np.float64)
+    elif ext is not None and external_sampling_mode == "discrete_volumes":
+        state_label_true = rng.integers(low=0, high=ext.shape[0], size=n_img).astype(np.int32)
+        alpha_true = state_coords_true[state_label_true].astype(np.float64, copy=True)
     else:
         alpha_true = (rng.standard_normal((n_img, q)) * np.sqrt(s_true)).astype(np.float64)
 
@@ -344,20 +461,29 @@ def make_synthetic_fixed_grid_dataset(
 
     rotations_per_image = jnp.asarray(rotations_per_image_np, dtype=jnp.float64)
 
-    mean_proj_full = _slice_half_volume_through_rotations(
-        mu_half, rotations_per_image, image_shape, volume_shape
-    )  # (n_img, N_full)
-    u_proj_full = jnp.stack(
-        [
-            _slice_half_volume_through_rotations(U_half[k], rotations_per_image, image_shape, volume_shape)
-            for k in range(q)
-        ]
-    )  # (q, n_img, N_full)
-    u_proj_full_per_img = jnp.transpose(u_proj_full, (1, 0, 2))  # (n_img, q, N_full)
+    if ext is not None and external_sampling_mode == "discrete_volumes" and family is not SyntheticFamily.NULL:
+        selected_real_volumes = ext[state_label_true]
+        clean_full = _slice_real_volumes_to_full_image(
+            selected_real_volumes,
+            rotations_per_image,
+            image_shape,
+            volume_shape,
+        )
+    else:
+        mean_proj_full = _slice_half_volume_through_rotations(
+            mu_half, rotations_per_image, image_shape, volume_shape
+        )  # (n_img, N_full)
+        u_proj_full = jnp.stack(
+            [
+                _slice_half_volume_through_rotations(U_half[k], rotations_per_image, image_shape, volume_shape)
+                for k in range(q)
+            ]
+        )  # (q, n_img, N_full)
+        u_proj_full_per_img = jnp.transpose(u_proj_full, (1, 0, 2))  # (n_img, q, N_full)
 
-    # Linear combination (heterogeneity contribution)
-    alpha_jax = jnp.asarray(alpha_true)
-    clean_full = mean_proj_full + jnp.einsum("iq,iqn->in", alpha_jax, u_proj_full_per_img)
+        # Linear combination (heterogeneity contribution)
+        alpha_jax = jnp.asarray(alpha_true)
+        clean_full = mean_proj_full + jnp.einsum("iq,iqn->in", alpha_jax, u_proj_full_per_img)
 
     # Family D: per-particle contrast multiply (BEFORE translation/noise so the
     # contrast scales the entire image including the heterogeneity contribution).
@@ -424,4 +550,6 @@ def make_synthetic_fixed_grid_dataset(
         train_idx=np.asarray(train_idx),
         val_idx=np.asarray(val_idx),
         contrast_true=contrast_true_arr,
+        state_label_true=None if state_label_true is None else np.asarray(state_label_true),
+        state_coords_true=None if state_coords_true is None else np.asarray(state_coords_true),
     )

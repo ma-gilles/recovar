@@ -11,11 +11,14 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
+import recovar.core.fourier_transform_utils as ftu
 from recovar.em.ppca_abinitio.grid import build_fixed_grid
+from recovar.em.ppca_abinitio.metrics import projector_frobenius_error
 from recovar.em.ppca_abinitio.synthetic import (
     SyntheticDataset,
     SyntheticFamily,
     make_synthetic_fixed_grid_dataset,
+    subset_synthetic_dataset,
 )
 
 pytestmark = pytest.mark.unit
@@ -29,6 +32,29 @@ N_HALF_VOL = VOLUME_SHAPE[0] * VOLUME_SHAPE[1] * (VOLUME_SHAPE[2] // 2 + 1)
 
 def _make_grid():
     return build_fixed_grid(healpix_order=2, max_shift=1)
+
+
+def _make_external_volumes(K=5):
+    z = np.linspace(-1.0, 1.0, VOLUME_SHAPE[0])
+    y = np.linspace(-1.0, 1.0, VOLUME_SHAPE[1])
+    x = np.linspace(-1.0, 1.0, VOLUME_SHAPE[2])
+    Z, Y, X = np.meshgrid(z, y, x, indexing="ij")
+    base = np.exp(-(X**2 + Y**2 + Z**2) / (2 * 0.45**2))
+    pc1 = X * base
+    pc2 = (Y - 0.3 * Z) * base
+    coeffs = np.array(
+        [
+            [-1.0, -0.4],
+            [-0.4, 0.2],
+            [0.0, 0.0],
+            [0.7, -0.1],
+            [1.2, 0.5],
+        ],
+        dtype=np.float64,
+    )
+    coeffs = coeffs[:K]
+    vols = np.stack([base + a * pc1 + b * pc2 for a, b in coeffs], axis=0)
+    return vols.astype(np.float64)
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +213,146 @@ def test_family_B_batch_is_hermitian_symmetric():
         assert imag_frac < 1e-12, f"image {i} has imag fraction {imag_frac}"
 
 
+def test_external_volumes_real_sets_mu_U_and_empirical_spectrum():
+    grid = _make_grid()
+    ext = _make_external_volumes(K=5)
+    q = 2
+    ds = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.MATCHED_GRID_HET,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=q,
+        n_images_train=16,
+        n_images_val=4,
+        sigma_real=0.2,
+        seed=0,
+        external_volumes_real=ext,
+    )
+
+    mu_real = ext.mean(axis=0)
+    centered_flat = (ext - mu_real[None]).reshape(ext.shape[0], -1)
+    _u_img, s_svd, vh = np.linalg.svd(centered_flat, full_matrices=False)
+    mu_half_expected = ftu.get_dft3_real(jnp.asarray(mu_real)).reshape(-1)
+    U_half_expected = jnp.stack(
+        [
+            ftu.get_dft3_real(jnp.asarray(vh[k].reshape(VOLUME_SHAPE))).reshape(-1)
+            for k in range(q)
+        ]
+    )
+    s_expected = (s_svd[:q] ** 2 / (ext.shape[0] - 1)).astype(np.float64)
+
+    np.testing.assert_allclose(np.asarray(ds.mu_half_true), np.asarray(mu_half_expected), rtol=1e-10, atol=1e-10)
+    np.testing.assert_allclose(np.asarray(ds.s_true), s_expected, rtol=1e-10, atol=1e-10)
+    assert projector_frobenius_error(ds.U_half_true, U_half_expected, VOLUME_SHAPE) < 1e-10
+
+
+def test_external_volumes_real_null_family_still_zeroes_s():
+    grid = _make_grid()
+    ds = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.NULL,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=8,
+        n_images_val=4,
+        seed=0,
+        external_volumes_real=_make_external_volumes(K=4),
+    )
+    np.testing.assert_array_equal(np.asarray(ds.s_true), np.zeros(2))
+
+
+def test_external_volumes_real_validates_shape_and_available_rank():
+    grid = _make_grid()
+    with pytest.raises(ValueError, match="must be 4D"):
+        make_synthetic_fixed_grid_dataset(
+            SyntheticFamily.MATCHED_GRID_HET,
+            volume_shape=VOLUME_SHAPE,
+            image_shape=IMAGE_SHAPE,
+            grid=grid,
+            q=2,
+            n_images_train=4,
+            n_images_val=2,
+            seed=0,
+            external_volumes_real=np.zeros(VOLUME_SHAPE, dtype=np.float64),
+        )
+
+    with pytest.raises(ValueError, match="spatial shape"):
+        make_synthetic_fixed_grid_dataset(
+            SyntheticFamily.MATCHED_GRID_HET,
+            volume_shape=VOLUME_SHAPE,
+            image_shape=IMAGE_SHAPE,
+            grid=grid,
+            q=2,
+            n_images_train=4,
+            n_images_val=2,
+            seed=0,
+            external_volumes_real=np.zeros((3, 6, 6, 6), dtype=np.float64),
+        )
+
+    with pytest.raises(ValueError, match="exceeds available PCs"):
+        make_synthetic_fixed_grid_dataset(
+            SyntheticFamily.MATCHED_GRID_HET,
+            volume_shape=VOLUME_SHAPE,
+            image_shape=IMAGE_SHAPE,
+            grid=grid,
+            q=3,
+            n_images_train=4,
+            n_images_val=2,
+            seed=0,
+            external_volumes_real=_make_external_volumes(K=2),
+        )
+
+
+def test_external_volumes_discrete_mode_records_labels_and_coords():
+    grid = _make_grid()
+    ext = _make_external_volumes(K=5)
+    q = 2
+    ds = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.MATCHED_GRID_HET,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=q,
+        n_images_train=12,
+        n_images_val=4,
+        sigma_real=0.0,
+        seed=0,
+        external_volumes_real=ext,
+        external_sampling_mode="discrete_volumes",
+    )
+
+    centered_flat = (ext - ext.mean(axis=0, keepdims=True)).reshape(ext.shape[0], -1)
+    _u_img, _s_svd, vh = np.linalg.svd(centered_flat, full_matrices=False)
+    coords_expected = centered_flat @ vh[:q].T
+
+    assert ds.state_label_true is not None
+    assert ds.state_coords_true is not None
+    assert ds.state_label_true.shape == (16,)
+    assert ds.state_coords_true.shape == (5, q)
+    np.testing.assert_allclose(ds.state_coords_true, coords_expected, rtol=1e-10, atol=1e-10)
+    np.testing.assert_allclose(ds.alpha_true, ds.state_coords_true[ds.state_label_true], rtol=1e-10, atol=1e-10)
+    assert int(ds.state_label_true.min()) >= 0
+    assert int(ds.state_label_true.max()) < ext.shape[0]
+
+
+def test_external_sampling_mode_validates_inputs():
+    grid = _make_grid()
+    with pytest.raises(ValueError, match="external_sampling_mode"):
+        make_synthetic_fixed_grid_dataset(
+            SyntheticFamily.MATCHED_GRID_HET,
+            volume_shape=VOLUME_SHAPE,
+            image_shape=IMAGE_SHAPE,
+            grid=grid,
+            q=2,
+            n_images_train=4,
+            n_images_val=2,
+            seed=0,
+            external_sampling_mode="bad_mode",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Family A (null) — negative control
 # ---------------------------------------------------------------------------
@@ -265,6 +431,50 @@ def test_train_val_split_sizes_and_disjoint():
     assert overlap.size == 0
     union = np.union1d(ds.train_idx, ds.val_idx)
     assert union.size == 28
+
+
+def test_subset_synthetic_dataset_slices_per_image_fields_and_resets_split():
+    grid = _make_grid()
+    ds = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.MATCHED_GRID_HET,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=20,
+        n_images_val=8,
+        seed=0,
+    )
+    sub = subset_synthetic_dataset(ds, ds.train_idx[:5])
+
+    assert sub.n_img == 5
+    np.testing.assert_array_equal(sub.train_idx, np.arange(5, dtype=np.int32))
+    assert sub.val_idx.shape == (0,)
+    np.testing.assert_allclose(np.asarray(sub.batch_full), np.asarray(ds.batch_full)[ds.train_idx[:5]])
+    np.testing.assert_array_equal(sub.r_true_idx, ds.r_true_idx[ds.train_idx[:5]])
+    np.testing.assert_array_equal(sub.t_true_idx, ds.t_true_idx[ds.train_idx[:5]])
+    np.testing.assert_allclose(sub.alpha_true, ds.alpha_true[ds.train_idx[:5]])
+    np.testing.assert_allclose(np.asarray(sub.mu_half_true), np.asarray(ds.mu_half_true))
+    np.testing.assert_allclose(np.asarray(sub.U_half_true), np.asarray(ds.U_half_true))
+
+
+def test_subset_synthetic_dataset_validates_indices():
+    grid = _make_grid()
+    ds = make_synthetic_fixed_grid_dataset(
+        SyntheticFamily.MATCHED_GRID_HET,
+        volume_shape=VOLUME_SHAPE,
+        image_shape=IMAGE_SHAPE,
+        grid=grid,
+        q=2,
+        n_images_train=8,
+        n_images_val=4,
+        seed=0,
+    )
+
+    with pytest.raises(ValueError, match="non-empty"):
+        subset_synthetic_dataset(ds, [])
+    with pytest.raises(IndexError, match="out of bounds"):
+        subset_synthetic_dataset(ds, [ds.n_img])
 
 
 def test_seed_reproducibility():

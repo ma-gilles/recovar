@@ -20,6 +20,8 @@ diverge (FRE growing without bound) or oscillate, this test fires.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -165,3 +167,52 @@ def test_loop_n_iters_drift_is_sublinear():
     assert fre8 <= 1.5 * fre4 + 0.05, (
         f"trajectory drift is super-linear: iter4={fre4:.4f}, iter8={fre8:.4f}. Full traj: {fre_traj}"
     )
+
+
+def test_loop_mean_update_uses_training_split_only(monkeypatch):
+    ds = _make_dataset(n_train=12, n_val=5)
+    cfg = _SyntheticConfig(image_shape=IMAGE_SHAPE, volume_shape=VOLUME_SHAPE, voxel_size=1.0)
+    init = init_truth_perturbed(
+        mu_half_true=ds.mu_half_true,
+        U_half_true=ds.U_half_true,
+        s_true=ds.s_true,
+        volume_shape=VOLUME_SHAPE,
+        eps_mu=0.3,
+        eps_U=0.0,
+        seed=0,
+    )
+    cfg_run = PPCAConfig(n_iters=1, update_mu=True, update_factor=False, ridge_lambda=0.0)
+    seen_batch_sizes = []
+
+    def _fake_update(_config, current_init, batch_full, rotations, translations, ctf_params, noise_variance_full, tau):
+        seen_batch_sizes.append(int(batch_full.shape[0]))
+        return SimpleNamespace(mu_half=current_init.mu)
+
+    monkeypatch.setattr("recovar.em.ppca_abinitio.loop.update_mu_residualized", _fake_update)
+    run_fixed_grid_ppca(cfg, ds, init, cfg_run, weights_half=make_half_volume_weights(VOLUME_SHAPE))
+
+    assert seen_batch_sizes == [len(ds.train_idx)]
+
+
+def test_loop_factor_callback_receives_training_subset_only():
+    ds = _make_dataset(n_train=9, n_val=4)
+    cfg = _SyntheticConfig(image_shape=IMAGE_SHAPE, volume_shape=VOLUME_SHAPE, voxel_size=1.0)
+    init = init_truth_perturbed(
+        mu_half_true=ds.mu_half_true,
+        U_half_true=ds.U_half_true,
+        s_true=ds.s_true,
+        volume_shape=VOLUME_SHAPE,
+        eps_mu=0.0,
+        eps_U=0.2,
+        seed=0,
+    )
+    cfg_run = PPCAConfig(n_iters=2, update_mu=False, update_factor=True, ridge_lambda=0.0)
+    seen = []
+
+    def _factor_step(_config, current_init, train_dataset):
+        seen.append((train_dataset.n_img, int(len(train_dataset.val_idx))))
+        return current_init
+
+    run_fixed_grid_ppca(cfg, ds, init, cfg_run, weights_half=make_half_volume_weights(VOLUME_SHAPE), factor_update_fn=_factor_step)
+
+    assert seen == [(len(ds.train_idx), 0), (len(ds.train_idx), 0)]

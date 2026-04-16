@@ -60,6 +60,7 @@ from recovar.em.ppca_abinitio.metrics import projector_frobenius_error
 from recovar.em.ppca_abinitio.synthetic import (
     SyntheticFamily,
     make_synthetic_fixed_grid_dataset,
+    subset_synthetic_dataset,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,16 +160,17 @@ def _run_one(
     )
 
     init_proj = float(projector_frobenius_error(init.U, ds.U_half_true, volume_shape))
+    train_ds = subset_synthetic_dataset(ds, ds.train_idx)
 
     # 1C reference: fixed K=3 inner steps
     out_1c = update_factor_one_outer_step(
         config,
         init,
-        ds.batch_full,
-        ds.rotations,
-        ds.translations,
-        ds.ctf_params,
-        ds.noise_variance_full,
+        train_ds.batch_full,
+        train_ds.rotations,
+        train_ds.translations,
+        train_ds.ctf_params,
+        train_ds.noise_variance_full,
         inner_steps=factor_inner_steps_1c,
         lr=factor_lr_1c,
         k_max=factor_k_max,
@@ -180,11 +182,11 @@ def _run_one(
     out_1d, info_1d = update_factor_full_ecm(
         config,
         init,
-        ds.batch_full,
-        ds.rotations,
-        ds.translations,
-        ds.ctf_params,
-        ds.noise_variance_full,
+        train_ds.batch_full,
+        train_ds.rotations,
+        train_ds.translations,
+        train_ds.ctf_params,
+        train_ds.noise_variance_full,
         max_inner_steps=ecm_max_inner_steps,
         lr=ecm_lr,
         grad_norm_tol=ecm_grad_tol,

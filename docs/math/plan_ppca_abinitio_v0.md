@@ -449,6 +449,7 @@ tests/ppca_abinitio/
 
 ```
 scripts/ppca_abinitio/
+    run_cryobench.py                      # non-gating upper-bound diagnostic on GT-volume manifolds
     run_stage_0b_oracle_score.py
     run_stage_1a_factor_perturbation.py
     run_stage_1b_residualized_mean.py
@@ -841,6 +842,21 @@ gates.
   complex unitary). Isolates the latent posterior from pose errors.
 - **Marginal embedding error.** Use `α̂_i = Σ_g γ_{i,g} m_{i,g}`
   and compare to `α_true_i` after orthogonal Procrustes.
+- **CryoBench GT-volume runs.** For the aligned-manifold upper-bound
+  diagnostic (for example `run_cryobench.py`), the operational
+  question is whether the latent coordinates induced by the learned
+  `U` separate the underlying conformations in latent space. For
+  `Ribosembly` in particular, report at least one cluster/separation
+  view of the embedding (for example ARI, NMI, kNN purity, or a
+  clearly labeled qualitative clustering plot). The exact statistic
+  is less important than whether the conformation manifold is
+  visibly/usefully organized.
+- `projector_frobenius_error`, `fourier_relative_error(μ)`, and
+  other raw volume/PC overlap metrics remain useful sanity checks,
+  but are **secondary** for CryoBench GT-volume runs until we have a
+  rotation-aware comparison that treats two solutions as equivalent
+  when they differ only by a global 3D rotation, handedness choice,
+  or per-PC sign.
 
 ### 10.6 Optimization
 
@@ -1027,6 +1043,17 @@ path.
 
 **Goal.** Test basin-of-attraction reachability from a non-oracle
 mean.
+
+**Related but non-gating diagnostic.** `run_cryobench.py` is not a
+Phase-2 bootstrap claim and does not graduate any stage. It uses
+CryoBench GT volumes only to define a perfectly aligned synthetic
+conformation manifold under the same inference grid and forward
+model. The right interpretation is therefore **upper bound**, not
+"what ab-initio should reach in practice." We use it to estimate the
+ceiling of the current PPCA loop when pose/CTF/convention mismatch is
+removed. Failing to match this diagnostic does not, by itself, prove
+the bootstrap path is broken; matching it does not, by itself, prove
+bootstrap success.
 
 **Initialization order** (lowest convention risk first):
 
@@ -1246,6 +1273,12 @@ does not re-run the experiment as part of `test-fast`.
 | `run_phase_2_external_mean_bootstrap.py` | Phase 2 | external mean source, family B | as 1C |
 | `run_phase_3_atlas_bootstrap.py` | Phase 3 | RELION K-class output dir | as 1C plus atlas alignment audit |
 
+`run_cryobench.py` is intentionally omitted from this table because it
+is a **non-gating diagnostic**, not a stage-graduation script. It is
+used to estimate an aligned-manifold upper bound and to inspect
+latent-space organization on realistic CryoBench-derived manifolds,
+especially `Ribosembly`.
+
 ---
 
 ## 14. Known failure modes and mitigations
@@ -1347,5 +1380,11 @@ The previous draft's open questions are now resolved in Section
   is the placeholder. The final value will be set when 1C runs
   produce ill-conditioned cases.
 - **Stage 1D primary metric.** Will be added when 1C is green.
+- **Rotation-aware volume/PC comparison for CryoBench-style runs.**
+  We still lack a principled metric that identifies two recovered
+  volumes or PC directions as equivalent up to global 3D rotation,
+  handedness, and per-PC sign. Until that exists, aligned-manifold
+  CryoBench diagnostics should prioritize latent-space
+  clustering/separability over raw voxel/PC overlap.
 
 When any of these is resolved, update this doc in the same PR.

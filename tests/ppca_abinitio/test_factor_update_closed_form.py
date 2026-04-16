@@ -39,6 +39,10 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 from recovar.em.ppca_abinitio.factor_update import update_factor_closed_form
 from recovar.em.ppca_abinitio.grid import build_fixed_grid
+from recovar.em.ppca_abinitio.half_volume import (
+    half_real_space_gram,
+    make_half_volume_weights,
+)
 from recovar.em.ppca_abinitio.init import init_oracle, init_truth_perturbed
 from recovar.em.ppca_abinitio.metrics import projector_frobenius_error
 from recovar.em.ppca_abinitio.synthetic import (
@@ -180,3 +184,23 @@ def test_closed_form_returns_valid_ppca_init():
     assert jnp.all(out.mu == init.mu), "mu must be preserved by the M-step"
     assert jnp.all(out.s == init.s), "s must be preserved by the M-step"
     assert jnp.all(jnp.isfinite(out.U))
+
+
+def test_closed_form_output_is_real_space_orthonormal():
+    """The closed-form update must return U in the same real-space
+    orthonormal gauge used by the rest of the fixed-s PPCA code."""
+    ds = _make_dataset(sigma=0.01, n_train=512)
+    cfg = _Cfg(image_shape=IMAGE_SHAPE, volume_shape=VOLUME_SHAPE, voxel_size=1.0)
+    init = init_truth_perturbed(
+        mu_half_true=ds.mu_half_true,
+        U_half_true=ds.U_half_true,
+        s_true=ds.s_true,
+        volume_shape=VOLUME_SHAPE,
+        eps_mu=0.0,
+        eps_U=0.3,
+        seed=0,
+    )
+    out = _call(cfg, ds, init)
+    weights = make_half_volume_weights(VOLUME_SHAPE)
+    gram = np.asarray(half_real_space_gram(out.U, weights, int(np.prod(VOLUME_SHAPE))))
+    np.testing.assert_allclose(gram, np.eye(2), atol=1e-8, rtol=1e-8)

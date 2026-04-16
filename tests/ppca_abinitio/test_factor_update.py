@@ -18,7 +18,10 @@ import equinox as eqx
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
-from recovar.em.ppca_abinitio.factor_update import update_factor_one_outer_step
+from recovar.em.ppca_abinitio.factor_update import (
+    _expected_nll_half,
+    update_factor_one_outer_step,
+)
 from recovar.em.ppca_abinitio.grid import build_fixed_grid
 from recovar.em.ppca_abinitio.half_volume import (
     half_real_space_gram,
@@ -26,6 +29,13 @@ from recovar.em.ppca_abinitio.half_volume import (
 )
 from recovar.em.ppca_abinitio.init import init_random_lowpass, init_truth_perturbed
 from recovar.em.ppca_abinitio.metrics import projector_frobenius_error
+from recovar.em.ppca_abinitio.posterior import (
+    _preprocess_batch_to_half,
+    _slice_mu_half,
+    _slice_U_half,
+    make_half_image_weights,
+    score_from_half_image_projections,
+)
 from recovar.em.ppca_abinitio.synthetic import (
     SyntheticFamily,
     make_synthetic_fixed_grid_dataset,
@@ -263,3 +273,80 @@ def test_factor_update_random_lowpass_does_not_blow_up():
     weights = make_half_volume_weights(VOLUME_SHAPE)
     G = np.asarray(half_real_space_gram(out.U, weights, N_FULL))
     np.testing.assert_allclose(G, np.eye(out.q), rtol=1e-9, atol=1e-9)
+
+
+def test_expected_nll_uses_frozen_posterior_moments():
+    """Zeroing the frozen posterior moments must change the Stage 1C loss."""
+    ds = _make_dataset(seed=0, sigma=0.2, n_train=32, n_val=8)
+    cfg = _make_config()
+    init = init_truth_perturbed(
+        mu_half_true=ds.mu_half_true,
+        U_half_true=ds.U_half_true,
+        s_true=ds.s_true,
+        volume_shape=VOLUME_SHAPE,
+        eps_mu=0.0,
+        eps_U=0.3,
+        seed=0,
+    )
+
+    weights_half = make_half_image_weights(IMAGE_SHAPE)
+    mean_proj_half = _slice_mu_half(init.mu, ds.rotations, IMAGE_SHAPE, VOLUME_SHAPE).astype(jnp.complex128)
+    u_proj_half = _slice_U_half(init.U, ds.rotations, IMAGE_SHAPE, VOLUME_SHAPE).astype(jnp.complex128)
+    shifted_half, ctf2_over_nv_half, _ = _preprocess_batch_to_half(
+        cfg, ds.batch_full, ds.translations, ds.ctf_params, ds.noise_variance_full
+    )
+    stats = score_from_half_image_projections(
+        mean_proj_half, u_proj_half, init.s, shifted_half, ctf2_over_nv_half, weights_half
+    )
+
+    loss_ref = float(
+        _expected_nll_half(
+            init.U,
+            init.mu,
+            init.s,
+            ds.rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            shifted_half,
+            ctf2_over_nv_half,
+            weights_half,
+            stats.log_resp,
+            stats.post_mean,
+            stats.post_Hinv,
+        )
+    )
+    loss_no_mean = float(
+        _expected_nll_half(
+            init.U,
+            init.mu,
+            init.s,
+            ds.rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            shifted_half,
+            ctf2_over_nv_half,
+            weights_half,
+            stats.log_resp,
+            jnp.zeros_like(stats.post_mean),
+            stats.post_Hinv,
+        )
+    )
+    loss_no_cov = float(
+        _expected_nll_half(
+            init.U,
+            init.mu,
+            init.s,
+            ds.rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            shifted_half,
+            ctf2_over_nv_half,
+            weights_half,
+            stats.log_resp,
+            stats.post_mean,
+            jnp.zeros_like(stats.post_Hinv),
+        )
+    )
+
+    assert abs(loss_ref - loss_no_mean) > 1e-6
+    assert abs(loss_ref - loss_no_cov) > 1e-6

@@ -32,7 +32,7 @@ from .metrics import (
     score_diagnostic_one_seed,
 )
 from .posterior import score_and_posterior_moments_eqx
-from .synthetic import SyntheticDataset
+from .synthetic import SyntheticDataset, subset_synthetic_dataset
 from .types import PPCAConfig, PPCAInit
 
 
@@ -209,8 +209,12 @@ def run_fixed_grid_ppca(
     state beyond the current `(mu, U, s)` and the per-iteration
     metrics list.
     """
+    if len(dataset.train_idx) == 0:
+        raise ValueError("run_fixed_grid_ppca requires a non-empty training split")
+
     cur = init
     iter_metrics: list[IterationMetrics] = []
+    train_dataset = subset_synthetic_dataset(dataset, dataset.train_idx)
 
     # Iter 0 — record metrics at the initialization
     fre_0, mass_0 = _val_metrics_for_init(config, cur, dataset, weights_half=weights_half)
@@ -222,11 +226,11 @@ def run_fixed_grid_ppca(
             mean_res: MeanUpdateResult = updater(
                 config,
                 cur,
-                dataset.batch_full,
-                dataset.rotations,
-                dataset.translations,
-                dataset.ctf_params,
-                dataset.noise_variance_full,
+                train_dataset.batch_full,
+                train_dataset.rotations,
+                train_dataset.translations,
+                train_dataset.ctf_params,
+                train_dataset.noise_variance_full,
                 tau=cfg.ridge_lambda,
             )
             cur = PPCAInit(
@@ -242,7 +246,7 @@ def run_fixed_grid_ppca(
                     "cfg.update_factor=True requires a `factor_update_fn` callback. "
                     "Stage 1C plugs this in via factor_update.py."
                 )
-            cur = factor_update_fn(config, cur, dataset)
+            cur = factor_update_fn(config, cur, train_dataset)
 
         fre_it, mass_it = _val_metrics_for_init(config, cur, dataset, weights_half=weights_half)
         iter_metrics.append(IterationMetrics(iter=it, fre_mu_val=fre_it, true_state_mass_val=mass_it))

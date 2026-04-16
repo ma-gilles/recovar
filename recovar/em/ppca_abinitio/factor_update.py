@@ -97,30 +97,30 @@ def _expected_nll_half(
     -------
     loss : scalar float64
     """
+    del s  # In the frozen-posterior M-step, the latent prior term is constant in U.
+
     mean_proj_half = _slice_mu_half(mu_half, rotations, image_shape, volume_shape).astype(jnp.complex128)
     u_proj_half = _slice_U_half(U_half, rotations, image_shape, volume_shape).astype(jnp.complex128)
 
-    # Re-score with the candidate U: this gives us the model under
-    # the current U for the (i, g) likelihood. The factor update IS
-    # supposed to take the gradient through this.
-    stats = score_from_half_image_projections(
-        mean_proj_half, u_proj_half, s, shifted_half, ctf2_over_nv_half, weights_half
-    )
+    gamma = jnp.exp(jnp.asarray(log_resp))  # (n_img, n_rot, n_trans)
+    mean_proj = mean_proj_half[None, :, None, :]  # (1, n_rot, 1, n_half)
 
-    # The expected complete-data NLL under (γ, m, Hinv) from the
-    # *current* E-step is:
-    #   sum_{i,g} γ * (-log_score_under_new_U) + const
-    # where -log_score is `-2 log_scores` rounded into NLL form.
-    # Equivalently, we minimize the expected `-log_score` weighted
-    # by the responsibilities. For v0, use this form: it is
-    # mathematically the same up to a constant in U.
-    #
-    # Production EM-style M-step would derivatize the residual form
-    # explicitly, but for the gradient direction the two are
-    # equivalent (and JAX-autodiff handles the `re-score` chain).
-    log_resp_jax = jnp.asarray(log_resp)
-    gamma = jnp.exp(log_resp_jax)
-    nll = -jnp.sum(gamma * stats.log_scores)
+    # Candidate mean projection under the frozen posterior means.
+    pred_het = jnp.einsum("irtk,rkp->irtp", post_mean, u_proj_half)
+    pred = mean_proj + pred_het  # (n_img, n_rot, n_trans, n_half)
+
+    shifted_conj_w = jnp.conj(shifted_half) * weights_half[None, None, :]
+    cross = -2.0 * jnp.einsum("itp,irtp->irt", shifted_conj_w, pred).real
+
+    ctf2_w = ctf2_over_nv_half * weights_half[None, :]
+    pred_abs2 = jnp.abs(pred) ** 2
+    norm = jnp.einsum("ip,irtp->irt", ctf2_w, pred_abs2)
+
+    # Trace term from the frozen posterior covariance.
+    u_Hinv_u = jnp.einsum("rkp,irkl,rlp->irp", jnp.conj(u_proj_half), post_Hinv, u_proj_half).real
+    cov = jnp.einsum("ip,irp->ir", ctf2_w, u_Hinv_u)[:, :, None]
+
+    nll = 0.5 * jnp.sum(gamma * (cross + norm + cov))
 
     # Ridge prior on U (per Section 8.3.4)
     if ridge_lambda > 0.0:
@@ -539,9 +539,11 @@ def update_factor_closed_form(
       4. `vmap(jnp.linalg.solve)` over the V_half voxels of a q×q
          system per voxel.
 
-    No PCG, no preconditioner, no learning rate, no line search, no
-    Hermitian projection, no gauge fix, no band-limit. The M-step is
-    a single direct solve.
+    No PCG, no preconditioner, no learning rate, no line search, and
+    no band-limit. After the direct solve we still project back to the
+    real-volume half-spectrum subspace and real-space orthonormalize
+    the rows, because the rest of the fixed-`s` PPCA code assumes that
+    gauge.
 
     Parameters
     ----------
@@ -690,6 +692,9 @@ def update_factor_closed_form(
 
     U_per_voxel = jax.vmap(jnp.linalg.solve)(M_per_voxel, B_per_voxel)  # (V_half, q)
     U_new = jnp.moveaxis(U_per_voxel, 0, -1).astype(jnp.complex128)  # (q, V_half)
+    weights_half_volume = make_half_volume_weights(volume_shape)
+    U_new = project_to_real_volume_subspace_batch(U_new, volume_shape)
+    U_new = real_volume_orthonormalize_half(U_new, weights_half_volume, int(np.prod(volume_shape)))
 
     return PPCAInit(
         mu=init.mu,

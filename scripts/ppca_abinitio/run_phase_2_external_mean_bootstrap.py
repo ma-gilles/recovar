@@ -62,6 +62,7 @@ from recovar.em.ppca_abinitio.metrics import (
 from recovar.em.ppca_abinitio.synthetic import (
     SyntheticFamily,
     make_synthetic_fixed_grid_dataset,
+    subset_synthetic_dataset,
 )
 from recovar.em.ppca_abinitio.types import PPCAConfig, PPCAInit
 
@@ -210,16 +211,17 @@ def _run_one(
         ridge_lambda=ridge_lambda,
     )
     weights = make_half_volume_weights(volume_shape)
+    train_ds = subset_synthetic_dataset(ds, ds.train_idx)
 
-    def _factor_step(_config, current_init, _dataset):
+    def _factor_step(loop_config, current_init, train_dataset):
         return update_factor_one_outer_step(
-            config,
+            loop_config,
             current_init,
-            ds.batch_full,
-            ds.rotations,
-            ds.translations,
-            ds.ctf_params,
-            ds.noise_variance_full,
+            train_dataset.batch_full,
+            train_dataset.rotations,
+            train_dataset.translations,
+            train_dataset.ctf_params,
+            train_dataset.noise_variance_full,
             inner_steps=factor_inner_steps,
             lr=factor_lr,
             k_max=factor_k_max,
@@ -241,11 +243,11 @@ def _run_one(
         config,
         init.mu,
         s_floor=float(_S_FLOOR),
-        batch_full=ds.batch_full,
-        rotations=ds.rotations,
-        translations=ds.translations,
-        ctf_params=ds.ctf_params,
-        noise_variance_full=ds.noise_variance_full,
+        batch_full=train_ds.batch_full,
+        rotations=train_ds.rotations,
+        translations=train_ds.translations,
+        ctf_params=train_ds.ctf_params,
+        noise_variance_full=train_ds.noise_variance_full,
         q=q,
     )
     baseline_proj_err = float(projector_frobenius_error(baseline_init.U, ds.U_half_true, volume_shape))
