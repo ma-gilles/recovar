@@ -152,6 +152,132 @@ def remap_rotation_indices_to_order(indices, src_order, dst_order):
     return _combine_rotation_indices(dst_pixel_idx, dst_psi_idx, dst_order)
 
 
+def relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0):
+    """RELION's getAngularSampling() for 3D: 360 / (6 * 2^(order+adaptive_oversampling)).
+
+    Ref: healpix_sampling.cpp:1589-1598.
+    """
+    order = int(healpix_order) + int(adaptive_oversampling)
+    return 360.0 / (6 * 2**order)
+
+
+def advance_relion_perturbation(prev_random_perturbation, perturbation_factor, rng):
+    """Update the RELION per-iteration perturbation state.
+
+    Ports `HealpixSampling::resetRandomlyPerturbedSampling` (healpix_sampling.cpp:167-174):
+        random_perturbation += rnd_unif(0.5 * perturbation_factor, perturbation_factor)
+        random_perturbation = realWRAP(random_perturbation, -pf, +pf)
+
+    Parameters
+    ----------
+    prev_random_perturbation : float
+        Previous iteration's random_perturbation (initialize to 0.0 before iter 1).
+    perturbation_factor : float
+        Typically 0.5 (RELION default `--perturb 0.5`).
+    rng : np.random.Generator
+
+    Returns
+    -------
+    float : new random_perturbation, wrapped to [-pf, +pf].
+    """
+    pf = float(perturbation_factor)
+    new = prev_random_perturbation + rng.uniform(0.5 * pf, pf)
+    # realWRAP — map to [-pf, +pf]
+    while new > pf:
+        new -= 2 * pf
+    while new < -pf:
+        new += 2 * pf
+    return float(new)
+
+
+def apply_relion_rotation_perturbation(rotations, random_perturbation, angular_sampling_deg):
+    """Port of RELION's 3D grid perturbation (healpix_sampling.cpp:1909-1934).
+
+    For each rotation matrix A in `rotations`, replace it with ``A @ R_perturb``
+    where ``R_perturb = R_from_relion([myperturb, myperturb, myperturb])`` and
+    ``myperturb = random_perturbation * angular_sampling_deg``. Applied AFTER
+    oversampling, before scoring.
+
+    Parameters
+    ----------
+    rotations : np.ndarray, shape (N, 3, 3)
+    random_perturbation : float
+        Current iteration's value in [-pf, +pf].
+    angular_sampling_deg : float
+        The nominal step at the coarse healpix order (pre-oversampling) in degrees.
+        Use ``relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0)``.
+
+    Returns
+    -------
+    np.ndarray, shape (N, 3, 3)
+    """
+    if abs(random_perturbation) < 1e-12:
+        return rotations
+    myperturb = float(random_perturbation) * float(angular_sampling_deg)
+    R_perturb = utils.R_from_relion(np.array([[myperturb, myperturb, myperturb]], dtype=np.float64))[0]
+    R_perturb = R_perturb.astype(rotations.dtype)
+    # RELION: A = A * R  (right multiply, each matrix independently)
+    return np.einsum("nij,jk->nik", rotations, R_perturb)
+
+
+def apply_relion_translation_perturbation(translations, random_perturbation, offset_step_pixels):
+    """Port of RELION's translation perturbation (healpix_sampling.cpp:1810-1820).
+
+    Adds ``myperturb = random_perturbation * offset_step_pixels`` to both axes
+    of each translation vector.
+    """
+    if abs(random_perturbation) < 1e-12:
+        return translations
+    myperturb = float(random_perturbation) * float(offset_step_pixels)
+    return translations + np.asarray(myperturb, dtype=translations.dtype)
+
+
+def read_relion_perturbation_from_sampling_star(sampling_star_path):
+    """Read _rlnSamplingPerturbInstance and _rlnSamplingPerturbFactor from a RELION sampling.star.
+
+    Used for exact parity replay: feed recovar the same perturbation RELION used at iter N.
+
+    Returns
+    -------
+    (random_perturbation, perturbation_factor) : tuple of float
+    """
+    import re
+
+    text = open(sampling_star_path).read()
+    m_inst = re.search(r"_rlnSamplingPerturbInstance\s+(\S+)", text)
+    m_fac = re.search(r"_rlnSamplingPerturbFactor\s+(\S+)", text)
+    if not m_inst or not m_fac:
+        raise ValueError(f"Missing perturb fields in {sampling_star_path}")
+    return float(m_inst.group(1)), float(m_fac.group(1))
+
+
+def read_relion_sampling_metadata(sampling_star_path):
+    """Read the full set of RELION sampling metadata needed for replay:
+    ``(random_perturbation, perturbation_factor, healpix_order, offset_range, offset_step)``.
+
+    ``offset_range`` and ``offset_step`` are in the same units RELION writes
+    (Angstroms at scale-0, or as configured). ``healpix_order`` is the order
+    RELION actually used at that iter.
+    """
+    import re
+
+    text = open(sampling_star_path).read()
+
+    def _grab(name, cast=float):
+        m = re.search(rf"_{name}\s+(\S+)", text)
+        if not m:
+            raise ValueError(f"Missing {name} in {sampling_star_path}")
+        return cast(m.group(1))
+
+    return dict(
+        random_perturbation=_grab("rlnSamplingPerturbInstance"),
+        perturbation_factor=_grab("rlnSamplingPerturbFactor"),
+        healpix_order=_grab("rlnHealpixOrder", int),
+        offset_range=_grab("rlnOffsetRange"),
+        offset_step=_grab("rlnOffsetStep"),
+    )
+
+
 def get_healpix_children(parent_pixels, parent_nside_level):
     """Return the 4 child HEALPix pixel indices for each parent pixel.
 
