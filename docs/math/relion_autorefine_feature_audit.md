@@ -34,8 +34,8 @@ Update this file every time a binding validates or disproves parity.
 | 6 | demodulatePhase (aberration correction) | ml_optimiser.cpp:5940 | No | — | — | Zero for standard optics |
 | 7 | divideByMtf (detector MTF correction) | ml_optimiser.cpp:5945 | No | — | — | Not provided in simulated data |
 | 8 | CTF image (2× padded box → downsample) | ctf.cpp:314 | No | recovar computes at image size directly | **DIVERGENT** | Binding P1: sign convention CTF_relion=-CTF_recovar (cancels with vol sign flip); 2× padding produces max diff ~1.0 vs unpadded; padded CTF exceeds [-1,1] at small boxes |
-| 9 | 1/σ² noise weighting per pixel | ml_optimiser.cpp:5960 | Yes | `engine_v2.py` sigma2_noise weighting | — | |
-| 10 | windowFourierTransform (current_size crop) | fftw.h:809 | Yes | `fourier_window.py` index-based | **DIVERGENT** | Binding P3: RELION uses rectangular crop (2112 px), recovar uses radial mask (1689 px) for same current_size=64 — 20% pixel count difference. RELION padding uses radial mask (kp²+ip²+jp²≤max_r²) |
+| 9 | 1/σ² noise weighting per pixel | ml_optimiser.cpp:5960 | Yes | `engine_v2.py` sigma2_noise weighting | ✓ | Composite test: RELION Minvsigma2=1/(2σ²) vs recovar 1/σ² with -0.5 score factor → identical posteriors (max_diff=1e-17) |
+| 10 | windowFourierTransform (current_size crop) | fftw.h:809 | Yes | `fourier_window.py` index-based | ✓ | Binding P3: RELION rectangular crop (2112 px) + Mresol_fine radial mask = 1683 scored px; recovar radial mask = 1689 px — only 6-pixel (0.4%) Nyquist boundary diff |
 
 ## Projector Setup
 
@@ -118,7 +118,7 @@ Update this file every time a binding validates or disproves parity.
 | Ported (partial/broken) | 4 | 4,11,22,35 |
 | Not ported | 11 | 2,5,6,7,8,16,23,24,27,30,31 |
 | Not applicable | 1 | 25 |
-| **Binding-validated** | **16** | **12 (projector storage), 13 (trilinear projection), 14 (phase shift), 15 (diff2 scoring), 17 (posteriors E5), 22 (noise accumulation E7), 26 (backproject+reconstruct), 29 (gridding correction), 33 (SSNR M4), 34 (resolution M5), 35 (noise update M9), 38 (HEALPix grid), 39 (oversampled sub-grid), 40 (translation grid), 41 (perturbation), M6 (downsampled average)** |
+| **Binding-validated** | **18** | **9 (noise weighting), 10 (windowing), 12 (projector storage), 13 (trilinear projection), 14 (phase shift), 15 (diff2 scoring), 17 (posteriors E5), 22 (noise accumulation E7), 26 (backproject+reconstruct), 29 (gridding correction), 33 (SSNR M4), 34 (resolution M5), 35 (noise update M9), 38 (HEALPix grid), 39 (oversampled sub-grid), 40 (translation grid), 41 (perturbation), M6 (downsampled average)** |
 
 ---
 
@@ -126,6 +126,7 @@ Update this file every time a binding validates or disproves parity.
 
 | Date | Change |
 |------|--------|
+| 2026-04-16 | **E-step composite parity**: end-to-end scoring+posterior test confirms EXACT parity (max_diff=1e-17) when using all-1 half-spectrum weights (half_spectrum_scoring=True) and RELION's Minvsigma2=1/(2σ²) convention. Windowing divergence reduced from 20% to 0.4% (6 Nyquist-boundary pixels). Hermitian weights (w=2 for interior) make posteriors ~2x too peaked vs RELION — half_spectrum_scoring=True is correct. DC exclusion verified exact. Items #9, #10 promoted to ✓. Validated count: 18. |
 | 2026-04-16 | Phase 5b+6 complete: Added 6 new bindings (M4 updateSSNRarrays, M6 getDownsampledAverage, E5 posteriors, E7 noise accumulation, M5 resolution, M9 noise update). 49 new tests, all at exact parity (1e-12 to 1e-15). Total: 209 binding tests passing. Rewrote backproject tests with determinism checks (bit-exact) replacing loose corr>0.8 threshold. |
 | 2026-04-16 | Phase 4 complete: BackProjector bindings validated (6 tests). Round-trip project→backproject→reconstruct corr>0.8 (192 evenly-spaced orientations). FSC half-sets validated. Key findings: (1) RELION's `reconstruct` applies CenterFFTbySign before iFFT — projections from RELION Projector already carry compatible sign decoration; (2) tau2 regularization (1/tau2 term in Wiener) must be weak for round-trip tests (tau2≫1 or do_map=False); (3) pad_size = 2*ROUND(pf*r_max)+3, not pf*N. |
 | 2026-04-16 | Phase 3 E4 complete: diff2 scoring composite validated (5 tests). Decomposition identity (diff2 = batch_norm + cross + proj_norm) exact to 1e-16. Cross-term GEMM formula (recovar's approach) matches per-pixel formula to 1e-16. Parseval invariance of batch_norm under translation verified. |
