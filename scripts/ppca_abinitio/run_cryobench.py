@@ -497,7 +497,13 @@ def compute_joint_loop_oracle_ceiling(cfg, ds, q, n_joint_steps=30):
 
 
 def compute_joint_loop_oracle_ceiling_annealed(
-    cfg, ds, q, n_joint_steps=30, anneal_schedule="log1000", anneal_iters=30
+    cfg,
+    ds,
+    q,
+    n_joint_steps=30,
+    anneal_schedule="log1000",
+    anneal_iters=30,
+    anneal_factor_only=False,
 ):
     """Same as compute_joint_loop_oracle_ceiling but with an annealing schedule.
 
@@ -518,6 +524,7 @@ def compute_joint_loop_oracle_ceiling_annealed(
     for it in range(n_joint_steps):
         factor = float(schedule[it])
         nv_iter = ds.noise_variance_full * factor
+        nv_mu = ds.noise_variance_full if anneal_factor_only else nv_iter
         mres = update_mu_residualized(
             cfg,
             cur,
@@ -525,7 +532,7 @@ def compute_joint_loop_oracle_ceiling_annealed(
             ds.rotations,
             ds.translations,
             ds.ctf_params,
-            nv_iter,
+            nv_mu,
             tau=0.0,
         )
         cur = PPCAInit(mu=mres.mu_half, U=cur.U, s=cur.s, volume_shape=cur.volume_shape)
@@ -620,6 +627,7 @@ def run_two_stage(
     u_init_kind="svd",
     anneal_factor_only=False,
     update_eigenvalues=False,
+    post_anneal_s_iters=0,
 ):
     """Two-stage loop with selectable mu init.
 
@@ -794,6 +802,53 @@ def run_two_stage(
             flush=True,
         )
 
+    # -----------------------------------------------------------------
+    # Post-annealing eigenvalue refinement (optional)
+    # -----------------------------------------------------------------
+    if post_anneal_s_iters > 0:
+        print(
+            f"=== POST-ANNEAL S REFINEMENT ({post_anneal_s_iters} iters at f=1) ===",
+            flush=True,
+        )
+        for it in range(1, post_anneal_s_iters + 1):
+            t0 = time.perf_counter()
+            mres = update_mu_residualized(
+                cfg,
+                cur,
+                ds.batch_full,
+                ds.rotations,
+                ds.translations,
+                ds.ctf_params,
+                ds.noise_variance_full,
+                tau=0.0,
+            )
+            cur = PPCAInit(mu=mres.mu_half, U=cur.U, s=cur.s, volume_shape=cur.volume_shape)
+            cur = update_factor_closed_form(
+                cfg,
+                cur,
+                ds.batch_full,
+                ds.rotations,
+                ds.translations,
+                ds.ctf_params,
+                ds.noise_variance_full,
+                update_s=True,
+            )
+            jax.block_until_ready(cur.U)
+            ft = _fre_truth(cur.mu)
+            ff = _fre_fp(cur.mu)
+            pe = float(projector_frobenius_error(cur.U, ds.U_half_true, cfg.volume_shape))
+            lm = _log_marginal_sum(cfg, cur, ds)
+            fre_truth_traj.append(ft)
+            fre_fp_traj.append(ff)
+            pe_traj.append(pe)
+            lm_traj.append(lm)
+            dlm = lm - lm_traj[-2]
+            s_tag = f" s=[{', '.join(f'{v:.3g}' for v in cur.s)}]"
+            print(
+                f"  refine {it}: fre_truth={ft:.4f} fre_fp={ff:.4f} pe={pe:.4f} lm={lm:.2f} dlm={dlm:+.2f}{s_tag} ({time.perf_counter() - t0:.1f}s)",
+                flush=True,
+            )
+
     return cur, fre_truth_traj, fre_fp_traj, pe_traj, fre_ofp_vs_truth, lm_traj
 
 
@@ -915,6 +970,15 @@ def main():
         "(Tipping-Bishop update) instead of freezing them at the GT values. "
         "Also enables joint orthonormalization of U with s update.",
     )
+    ap.add_argument(
+        "--post-anneal-s-iters",
+        type=int,
+        default=0,
+        help="After the main joint loop completes, run this many additional "
+        "iterations at f=1 with eigenvalue estimation enabled. This avoids "
+        "the annealing-induced eigenvalue inflation while still allowing s "
+        "to converge to the ML estimate. 0 = disabled (default).",
+    )
     args = ap.parse_args()
     if args.anneal_mu_too:
         args.anneal_factor_only = False
@@ -987,6 +1051,7 @@ def main():
             u_init_kind=args.u_init,
             anneal_factor_only=args.anneal_factor_only,
             update_eigenvalues=args.update_eigenvalues,
+            post_anneal_s_iters=args.post_anneal_s_iters,
         )
     else:
         print(
@@ -1014,6 +1079,7 @@ def main():
                 u_init_kind=args.u_init,
                 anneal_factor_only=args.anneal_factor_only,
                 update_eigenvalues=args.update_eigenvalues,
+                post_anneal_s_iters=args.post_anneal_s_iters,
             )
             if fre_floor is None:
                 fre_floor = fre_floor_k
@@ -1116,6 +1182,7 @@ def main():
                 n_joint_steps=args.n_joint,
                 anneal_schedule=args.anneal_schedule,
                 anneal_iters=args.anneal_iters,
+                anneal_factor_only=args.anneal_factor_only,
             )
             if anneal_ceil is not None:
                 print(f"  annealed oracle ceiling (q={args.q}, matched reference):", flush=True)
