@@ -65,10 +65,10 @@ def zero_pad_fourier_volume(vol_flat, native_shape, padding_factor):
 def griddingCorrect(vol_in, ori_size, padding_factor, order=0):
     """Radial sinc gridding correction."""
     og_shape = vol_in.shape
-    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False).astype(np.float64)
-    r = np.linalg.norm(pixels, axis=-1)
-    safe_rval = np.where(r > 0, r / (ori_size * padding_factor), 1.0)
-    sinc = np.where(r > 0, np.sin(np.pi * safe_rval) / (np.pi * safe_rval), 1.0)
+    pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(og_shape, 1, scaled=False).astype(jnp.float64)
+    r = jnp.sqrt(jnp.sum(pixels**2, axis=-1))
+    safe_rval = jnp.where(r > 0, r / (ori_size * padding_factor), 1.0)
+    sinc = jnp.where(r > 0, jnp.sin(jnp.pi * safe_rval) / (jnp.pi * safe_rval), 1.0)
     if order == 0:
         kernel = sinc
     elif order == 1:
