@@ -266,7 +266,8 @@ def init_U_from_residual_svd(cfg, ds, mu_half, s_kernel, q, weighted=True):
         _, S_svd, Vh = np.linalg.svd(residual_volumes, full_matrices=False)
         print(f"    residual SVD top-{q} singular values (unweighted): {S_svd[:q]}", flush=True)
     U_init = jnp.asarray(Vh[:q], dtype=jnp.complex128)
-    return real_volume_orthonormalize_half(U_init, jnp.asarray(weights_v), int(np.prod(volume_shape)))
+    U_orth = real_volume_orthonormalize_half(U_init, jnp.asarray(weights_v), int(np.prod(volume_shape)))
+    return U_orth, S_svd[:q]
 
 
 # ---------------------------------------------------------------------------
@@ -628,6 +629,7 @@ def run_two_stage(
     anneal_factor_only=False,
     update_eigenvalues=False,
     post_anneal_s_iters=0,
+    s_init_kind="truth",
 ):
     """Two-stage loop with selectable mu init.
 
@@ -645,7 +647,10 @@ def run_two_stage(
     """
     weights_v = make_half_volume_weights(cfg.volume_shape)
     half_vol_size = ds.mu_half_true.shape[0]
-    s_kernel = jnp.maximum(ds.s_true, _S_FLOOR)
+    if s_init_kind == "truth":
+        s_kernel = jnp.maximum(ds.s_true, _S_FLOOR)
+    else:
+        s_kernel = jnp.ones(q, dtype=jnp.float64)
     # The slicer ignores voxels at r > max_r, so we only score the
     # part of mu the M-step can actually reach.
     slicer_max_r = cfg.volume_shape[0] // 2 - 1
@@ -740,8 +745,11 @@ def run_two_stage(
         )
 
     print(f"=== STAGE B: U init (kind={u_init_kind}) ===", flush=True)
+    svd_singular_values = None
     if u_init_kind == "svd":
-        U_init = init_U_from_residual_svd(cfg, ds, cur.mu, s_kernel=s_kernel, q=q, weighted=weighted_svd)
+        U_init, svd_singular_values = init_U_from_residual_svd(
+            cfg, ds, cur.mu, s_kernel=s_kernel, q=q, weighted=weighted_svd
+        )
     elif u_init_kind == "random":
         U_init = _random_orthonormal_U(q, cfg.volume_shape, seed=seed + 42)
     elif u_init_kind == "zero":
@@ -749,7 +757,19 @@ def run_two_stage(
         U_init = jnp.zeros((q, half_vol_size), dtype=jnp.complex128)
     else:
         raise ValueError(f"unknown u_init_kind: {u_init_kind}")
-    cur = PPCAInit(mu=cur.mu, U=U_init, s=cur.s, volume_shape=cur.volume_shape)
+
+    if s_init_kind == "svd":
+        if svd_singular_values is None:
+            raise ValueError("--s-init=svd requires --u-init=svd")
+        n_img = ds.batch_full.shape[0]
+        s_kernel = jnp.array(svd_singular_values**2 / n_img, dtype=jnp.float64)
+        print(f"  s init (svd): {[f'{v:.4g}' for v in s_kernel]}", flush=True)
+    elif s_init_kind == "flat":
+        s_kernel = jnp.ones(q, dtype=jnp.float64)
+        print(f"  s init (flat): {[f'{v:.4g}' for v in s_kernel]}", flush=True)
+    elif s_init_kind == "truth":
+        print(f"  s init (truth): {[f'{v:.4g}' for v in s_kernel]}", flush=True)
+    cur = PPCAInit(mu=cur.mu, U=U_init, s=s_kernel, volume_shape=cur.volume_shape)
     pe = float(projector_frobenius_error(cur.U, ds.U_half_true, cfg.volume_shape))
     print(f"  U init: pe = {pe:.4f}", flush=True)
 
@@ -964,6 +984,16 @@ def main():
         "continuous manifolds like IgG-RL where it causes FRE divergence.",
     )
     ap.add_argument(
+        "--s-init",
+        choices=["truth", "flat", "svd"],
+        default="flat",
+        help="How to initialize eigenvalues s. 'flat' (default) sets s=1 for all "
+        "components — the prior is negligible at cryo-EM SNR so s doesn't affect "
+        "the EM trajectory (validated on Ribosembly, IgG-1D, IgG-RL). 'truth' uses "
+        "ground-truth eigenvalues (cheating baseline). 'svd' uses sample covariance "
+        "eigenvalues from the residual SVD (requires --u-init=svd).",
+    )
+    ap.add_argument(
         "--update-eigenvalues",
         action="store_true",
         help="Estimate eigenvalues s from the E-step posterior moments "
@@ -1052,6 +1082,7 @@ def main():
             anneal_factor_only=args.anneal_factor_only,
             update_eigenvalues=args.update_eigenvalues,
             post_anneal_s_iters=args.post_anneal_s_iters,
+            s_init_kind=args.s_init,
         )
     else:
         print(
@@ -1080,6 +1111,7 @@ def main():
                 anneal_factor_only=args.anneal_factor_only,
                 update_eigenvalues=args.update_eigenvalues,
                 post_anneal_s_iters=args.post_anneal_s_iters,
+                s_init_kind=args.s_init,
             )
             if fre_floor is None:
                 fre_floor = fre_floor_k
