@@ -20,7 +20,6 @@ Environment variables:
 import argparse
 import logging
 import os
-import pickle
 import re
 import sys
 import time
@@ -28,7 +27,6 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
-import mrcfile
 import numpy as np
 
 from recovar.core import fourier_transform_utils as ftu
@@ -123,8 +121,7 @@ def _maybe_apply_relion_image_mask(ds, args):
 
     radius_px = particle_diameter_ang / (2.0 * ds.voxel_size)
     logger.info(
-        "Applied RELION scoring mask from %s: particle_diameter=%.1f A, "
-        "width_mask_edge=%.1f px, radius=%.2f px",
+        "Applied RELION scoring mask from %s: particle_diameter=%.1f A, width_mask_edge=%.1f px, radius=%.2f px",
         optimiser_star,
         particle_diameter_ang,
         width_mask_edge_px,
@@ -157,8 +154,8 @@ def main():
         type=int,
         default=3,
         help="HEALPix order for the evaluated orientation grid. In RELION mode "
-             "this is the finest order; the coarse pass-1 order is "
-             "healpix_order - adaptive_oversampling.",
+        "this is the finest order; the coarse pass-1 order is "
+        "healpix_order - adaptive_oversampling.",
     )
     parser.add_argument("--offset_range", type=float, default=3.0, help="Translation search range (pixels)")
     parser.add_argument("--offset_step", type=float, default=1.0, help="Translation step (pixels)")
@@ -175,37 +172,61 @@ def main():
         type=int,
         default=None,
         help="Max significant samples per image. Use <=0 for RELION-style uncapped mode. "
-             "If omitted in RELION mode, read _rlnMaximumSignificantPoses from the optimiser STAR.",
+        "If omitted in RELION mode, read _rlnMaximumSignificantPoses from the optimiser STAR.",
     )
     parser.add_argument(
         "--adaptive_skip_threshold",
         type=float,
         default=0.5,
         help="Skip adaptive pass 2 when the mean significant-sample fraction "
-             "is at least this value. Use a negative value to disable the shortcut.",
+        "is at least this value. Use a negative value to disable the shortcut.",
     )
     parser.add_argument(
         "--tau2_fudge",
         type=float,
-        default=1.0,
-        help="RELION tau2_fudge regularization strength (default 1.0). "
-             "Higher values produce smoother volumes (stronger prior).",
+        default=4.0,
+        help="RELION tau2_fudge regularization strength (default 4.0, "
+        "matching RELION's 3D auto-refine default at "
+        "ml_optimiser.cpp:~1070 `tau2_fudge_factor = 4`). "
+        "Higher values produce smoother volumes (stronger prior).",
+    )
+    parser.add_argument(
+        "--perturb_factor",
+        type=float,
+        default=0.5,
+        help="RELION SamplingPerturbation factor (default 0.5 matching "
+        "RELION GUI `--perturb 0.5`). Applies a per-iter random rigid "
+        "rotation of the SO(3) trial grid and translation shift, ported "
+        "from healpix_sampling.cpp:167-174 / 1909-1934 / 1810-1820. "
+        "Set to 0 to disable.",
+    )
+    parser.add_argument(
+        "--perturb_seed",
+        type=int,
+        default=None,
+        help="Optional deterministic seed for the SamplingPerturbation RNG. "
+        "If unset, uses np.random.default_rng() (non-reproducible).",
     )
     parser.add_argument("--init_resolution", type=float, default=30.0, help="Initial resolution (Angstrom)")
     parser.add_argument("--image_batch_size", type=int, default=500, help="Images per GPU batch")
-    parser.add_argument("--rotation_block_size", type=int, default=40000, help="Rotations per block (larger = faster, less Python overhead)")
+    parser.add_argument(
+        "--rotation_block_size",
+        type=int,
+        default=40000,
+        help="Rotations per block (larger = faster, less Python overhead)",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed for half-set split")
     parser.add_argument(
         "--relion_half_sets",
         default=None,
         help="Path to a RELION data STAR file with rlnRandomSubset column. "
-             "If given, use RELION's half-set assignments instead of random seed.",
+        "If given, use RELION's half-set assignments instead of random seed.",
     )
     parser.add_argument(
         "--relion_current_sizes",
         default=None,
         help="Comma-separated list of per-iteration current_sizes from RELION "
-             "(oracle mode). Example: '0,56,30,50,70,98,98,92,88,90'",
+        "(oracle mode). Example: '0,56,30,50,70,98,98,92,88,90'",
     )
     args = parser.parse_args()
 
@@ -228,8 +249,7 @@ def main():
     )
     relion_mask_params = _maybe_apply_relion_image_mask(ds, args)
     particle_diameter_ang = None if relion_mask_params is None else float(relion_mask_params[0])
-    logger.info("Dataset: %d images, image_shape=%s, voxel_size=%.3f A/px",
-                ds.n_units, ds.image_shape, ds.voxel_size)
+    logger.info("Dataset: %d images, image_shape=%s, voxel_size=%.3f A/px", ds.n_units, ds.image_shape, ds.voxel_size)
 
     # ---- Create half-sets ----
     n_images = ds.n_units
@@ -238,16 +258,17 @@ def main():
         # Use RELION's half-set split from rlnRandomSubset
         logger.info("Loading RELION half-set assignments from %s", args.relion_half_sets)
         import re
+
         import starfile as _starfile
 
         relion_data = _starfile.read(args.relion_half_sets)
-        relion_particles = relion_data['particles']
-        relion_subsets = np.array(relion_particles['rlnRandomSubset'])
-        relion_names = list(relion_particles['rlnImageName'])
+        relion_particles = relion_data["particles"]
+        relion_subsets = np.array(relion_particles["rlnRandomSubset"])
+        relion_names = list(relion_particles["rlnImageName"])
 
         # Build mapping: particle stack index -> subset
         def _image_name_to_stack_idx(name):
-            m = re.match(r'(\d+)@', name)
+            m = re.match(r"(\d+)@", name)
             return int(m.group(1)) if m else -1
 
         relion_idx_to_subset = {}
@@ -258,23 +279,19 @@ def main():
         # Our dataset loads in stack order 1,2,3,...
         # Map to RELION's subset assignments
         our_star = _starfile.read(os.path.join(args.data_dir, "particles.star"))
-        our_particles = our_star['particles'] if isinstance(our_star, dict) else our_star
-        our_names = list(our_particles['rlnImageName'])
-        our_subsets = np.array([
-            relion_idx_to_subset[_image_name_to_stack_idx(name)]
-            for name in our_names
-        ])
+        our_particles = our_star["particles"] if isinstance(our_star, dict) else our_star
+        our_names = list(our_particles["rlnImageName"])
+        our_subsets = np.array([relion_idx_to_subset[_image_name_to_stack_idx(name)] for name in our_names])
 
         half1_idx = np.where(our_subsets == 1)[0]
         half2_idx = np.where(our_subsets == 2)[0]
-        logger.info("Using RELION half-set split: %d (subset=1) + %d (subset=2)",
-                    len(half1_idx), len(half2_idx))
+        logger.info("Using RELION half-set split: %d (subset=1) + %d (subset=2)", len(half1_idx), len(half2_idx))
     else:
         indices = np.arange(n_images)
         rng = np.random.RandomState(args.seed)
         rng.shuffle(indices)
-        half1_idx = np.sort(indices[:n_images // 2])
-        half2_idx = np.sort(indices[n_images // 2:])
+        half1_idx = np.sort(indices[: n_images // 2])
+        half2_idx = np.sort(indices[n_images // 2 :])
 
     ds_half1 = ds.subset(half1_idx)
     ds_half2 = ds.subset(half2_idx)
@@ -302,15 +319,12 @@ def main():
     # Nyquist as if it were DC and projections are off by ~2400x in amplitude
     # at low frequencies.
     from recovar.utils.helpers import load_mrc as _load_mrc
+
     init_mrc_path = os.path.join(args.data_dir, "reference_init.mrc")
     init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
-    assert init_vol_real.shape == ds.volume_shape, (
-        f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
-    )
+    assert init_vol_real.shape == ds.volume_shape, f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
     # Convert to centered Fourier space using the proper helper.
-    init_vol_ft = np.array(
-        ftu.get_dft3(jnp.asarray(init_vol_real))
-    ).astype(np.complex64).reshape(-1)
+    init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)
     logger.info("Initial volume loaded: shape=%s", init_vol_real.shape)
 
     # ---- Set up rotation and translation grids ----
@@ -321,7 +335,9 @@ def main():
         rotation_grid_order = init_healpix_order
         logger.info(
             "RELION grid orders: coarse=%d, finest=%d (adaptive_oversampling=%d)",
-            init_healpix_order, args.healpix_order, args.adaptive_oversampling,
+            init_healpix_order,
+            args.healpix_order,
+            args.adaptive_oversampling,
         )
     else:
         init_healpix_order = args.healpix_order
@@ -329,10 +345,13 @@ def main():
 
     rotations = get_rotation_grid(rotation_grid_order, matrices=True).astype(np.float32)
     translations = get_translation_grid(args.offset_range, args.offset_step).astype(np.float32)
-    logger.info("Rotation grid: %d rotations (healpix_order=%d)",
-                rotations.shape[0], rotation_grid_order)
-    logger.info("Translation grid: %d translations (range=%.1f, step=%.1f)",
-                translations.shape[0], args.offset_range, args.offset_step)
+    logger.info("Rotation grid: %d rotations (healpix_order=%d)", rotations.shape[0], rotation_grid_order)
+    logger.info(
+        "Translation grid: %d translations (range=%.1f, step=%.1f)",
+        translations.shape[0],
+        args.offset_range,
+        args.offset_step,
+    )
 
     # ---- Initialize noise and prior ----
     # Use a RELION-style initial sigma2 estimate from particle power spectra
@@ -366,16 +385,17 @@ def main():
 
     # Compute initial signal prior from init volume (weak prior)
     from recovar.reconstruction.regularization import average_over_shells
+
     init_PS = average_over_shells(jnp.abs(jnp.asarray(init_vol_ft)) ** 2, ds.volume_shape)
     from recovar import utils
+
     init_prior = utils.make_radial_image(init_PS, ds.volume_shape, extend_last_frequency=True)
     # Scale by a factor to provide regularization without being too strong
     mean_variance = jnp.asarray(init_prior * 0.5 + jnp.max(init_prior) * 1e-4)
 
     # Compute initial current_size from init_resolution
     init_current_size = max(32, int(2 * ds.voxel_size * ds.grid_size / args.init_resolution))
-    logger.info("Initial current_size from resolution %.1f A: %d pixels",
-                args.init_resolution, init_current_size)
+    logger.info("Initial current_size from resolution %.1f A: %d pixels", args.init_resolution, init_current_size)
 
     # ---- Run refinement ----
     from recovar.em.dense_single_volume.refine import refine_single_volume
@@ -384,8 +404,12 @@ def main():
     translations_jnp = jnp.asarray(translations)
 
     logger.info("=" * 70)
-    logger.info("Starting refinement: mode=%s, max_iter=%d, adaptive_oversampling=%d",
-                args.mode, args.max_iter, args.adaptive_oversampling)
+    logger.info(
+        "Starting refinement: mode=%s, max_iter=%d, adaptive_oversampling=%d",
+        args.mode,
+        args.max_iter,
+        args.adaptive_oversampling,
+    )
     logger.info("=" * 70)
 
     # Parse oracle current_sizes if provided
@@ -421,6 +445,8 @@ def main():
         init_translation_sigma_angstrom=args.offset_sigma_angstrom,
         particle_diameter_ang=particle_diameter_ang,
         tau2_fudge=args.tau2_fudge,
+        perturb_factor=args.perturb_factor,
+        perturb_seed=args.perturb_seed,
     )
 
     total_time = time.time() - t_start
@@ -448,29 +474,25 @@ def main():
         "max_significants": args.max_significants,
         "adaptive_skip_threshold": args.adaptive_skip_threshold,
         "offset_sigma_angstrom": args.offset_sigma_angstrom,
-        "particle_diameter_ang": (
-            np.float64(particle_diameter_ang)
-            if particle_diameter_ang is not None
-            else np.nan
-        ),
+        "particle_diameter_ang": (np.float64(particle_diameter_ang) if particle_diameter_ang is not None else np.nan),
         "half1_indices": half1_idx,
         "half2_indices": half2_idx,
     }
 
     if "healpix_order_trajectory" in result:
         save_dict["healpix_order_trajectory"] = np.asarray(
-            result["healpix_order_trajectory"], dtype=np.int32,
+            result["healpix_order_trajectory"],
+            dtype=np.int32,
         )
     if "ave_Pmax_trajectory" in result:
         save_dict["ave_Pmax_trajectory"] = np.asarray(
-            result["ave_Pmax_trajectory"], dtype=np.float64,
+            result["ave_Pmax_trajectory"],
+            dtype=np.float64,
         )
     if "convergence_state" in result:
         state = result["convergence_state"]
         save_dict["convergence_iteration"] = np.int32(state.iteration)
-        save_dict["convergence_current_resolution"] = np.float64(
-            state.current_resolution
-        )
+        save_dict["convergence_current_resolution"] = np.float64(state.current_resolution)
         save_dict["convergence_ave_Pmax"] = np.float64(state.ave_Pmax)
         save_dict["convergence_healpix_order"] = np.int32(state.healpix_order)
         save_dict["convergence_has_converged"] = np.bool_(state.has_converged)
@@ -522,10 +544,9 @@ def main():
     # Also save final merged volume as MRC for visual inspection.
     # Use the canonical idiom: get_idft3 + write_mrc (handles axis transpose).
     from recovar.utils.helpers import write_mrc as _write_mrc
+
     final_mean_ft = np.asarray(result["mean"]).reshape(ds.volume_shape)
-    final_mean_real = np.real(
-        np.array(ftu.get_idft3(jnp.asarray(final_mean_ft)))
-    ).astype(np.float32)
+    final_mean_real = np.real(np.array(ftu.get_idft3(jnp.asarray(final_mean_ft)))).astype(np.float32)
     mrc_path = os.path.join(args.output, "final_merged.mrc")
     _write_mrc(mrc_path, final_mean_real, voxel_size=ds.voxel_size)
     logger.info("Final merged volume saved to %s", mrc_path)
@@ -533,10 +554,8 @@ def main():
     # Save per-half volumes as MRC
     for k in range(2):
         half_ft = np.asarray(result["means"][k]).reshape(ds.volume_shape)
-        half_real = np.real(
-            np.array(ftu.get_idft3(jnp.asarray(half_ft)))
-        ).astype(np.float32)
-        half_mrc_path = os.path.join(args.output, f"final_half{k+1}.mrc")
+        half_real = np.real(np.array(ftu.get_idft3(jnp.asarray(half_ft)))).astype(np.float32)
+        half_mrc_path = os.path.join(args.output, f"final_half{k + 1}.mrc")
         _write_mrc(half_mrc_path, half_real, voxel_size=ds.voxel_size)
         logger.info("Half-%d volume saved to %s", k + 1, half_mrc_path)
 
@@ -555,7 +574,7 @@ def main():
         pr = result["pixel_resolutions"][i]
         res_a = _shell_index_to_resolution_angstrom(pr, ds.image_shape[0], ds.voxel_size)
         wt = result["wall_times"][i]
-        line = f"{i+1:4d}  {cs:8d}  {pr:8.1f}  {res_a:8.2f}  {wt:8.1f}"
+        line = f"{i + 1:4d}  {cs:8d}  {pr:8.1f}  {res_a:8.2f}  {wt:8.1f}"
         if result["significant_counts"][i] is not None:
             med_sig = int(np.median(np.asarray(result["significant_counts"][i])))
             line += f"  {med_sig:8d}"
