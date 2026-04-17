@@ -46,14 +46,14 @@ def map_translation_log_prior_to_fine_grid(
     if translation_log_prior.ndim == 2:
         return translation_log_prior[:, fine_translation_parent]
     raise ValueError(
-        "translation_log_prior must be 1D or 2D, got "
-        f"{translation_log_prior.ndim} dimensions",
+        f"translation_log_prior must be 1D or 2D, got {translation_log_prior.ndim} dimensions",
     )
 
 
 # ---------------------------------------------------------------------------
 # Significance pruning
 # ---------------------------------------------------------------------------
+
 
 @partial(jax.jit, static_argnums=(1, 2))
 def find_significant_mask(weights_flat, adaptive_fraction=0.999, max_significants=500):
@@ -111,9 +111,7 @@ def find_significant_mask(weights_flat, adaptive_fraction=0.999, max_significant
     return mask, n_significant
 
 
-def find_significant_rotations(weights_flat, n_rot, n_trans,
-                               adaptive_fraction=0.999,
-                               max_significants=500):
+def find_significant_rotations(weights_flat, n_rot, n_trans, adaptive_fraction=0.999, max_significants=500):
     """Find significant coarse rotations per image from (rot x trans) weights.
 
     This extracts the unique rotation indices that have at least one
@@ -143,7 +141,8 @@ def find_significant_rotations(weights_flat, n_rot, n_trans,
         Total significant (rot x trans) samples per image.
     """
     sig_mask, n_significant = find_significant_mask(
-        weights_flat, adaptive_fraction=adaptive_fraction,
+        weights_flat,
+        adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )
 
@@ -158,6 +157,7 @@ def find_significant_rotations(weights_flat, n_rot, n_trans,
 # ---------------------------------------------------------------------------
 # Pass 2: sparse oversampled evaluation
 # ---------------------------------------------------------------------------
+
 
 def compute_pass2_stats(
     experiment_dataset,
@@ -182,6 +182,7 @@ def compute_pass2_stats(
     translation_log_prior=None,
     accumulate_noise=False,
     half_spectrum_scoring=False,
+    projection_padding_factor=1,
 ):
     """Pass 2: evaluate oversampled children of significant coarse rotations.
 
@@ -260,8 +261,8 @@ def compute_pass2_stats(
     from recovar.em.sampling import (
         get_oversampled_rotation_grid_from_samples,
         get_oversampled_translation_grid,
-        rotation_grid_size,
     )
+
     from .engine_v2 import run_em_v2
 
     n_images = experiment_dataset.n_units
@@ -297,7 +298,7 @@ def compute_pass2_stats(
             return Ft_y, Ft_ctf, ha, coarse_rotations[:0], empty_indices
         return Ft_y, Ft_ctf, ha, coarse_rotations[:0]
 
-    angle_res = 360 / (6 * 2 ** nside_level)
+    angle_res = 360 / (6 * 2**nside_level)
     n_in_planes = int(np.round(360 / angle_res))
 
     # Preserve the full coarse orientation sample identity (direction + psi),
@@ -305,12 +306,14 @@ def compute_pass2_stats(
     # child orientations for each significant coarse sample.
     max_union_rotations = max_union_pixels * n_in_planes
     if len(sig_rot_indices) > max_union_rotations:
-        n_oversampled_would_be = len(sig_rot_indices) * (8 ** oversampling_order)
+        n_oversampled_would_be = len(sig_rot_indices) * (8**oversampling_order)
         logger.warning(
             "Pass 2: union has %d significant coarse rotations (> cap %d), "
             "which would produce %d oversampled rotations. "
             "Falling back to pass-1-only mode.",
-            len(sig_rot_indices), max_union_rotations, n_oversampled_would_be,
+            len(sig_rot_indices),
+            max_union_rotations,
+            n_oversampled_would_be,
         )
         if return_stats:
             if return_rotation_indices:
@@ -321,10 +324,9 @@ def compute_pass2_stats(
         return None, None, None, None
 
     logger.info(
-        "Pass 2: %d significant coarse orientations -> generating %d "
-        "oversampled child orientations (order=%d)",
+        "Pass 2: %d significant coarse orientations -> generating %d oversampled child orientations (order=%d)",
         len(sig_rot_indices),
-        len(sig_rot_indices) * (8 ** oversampling_order),
+        len(sig_rot_indices) * (8**oversampling_order),
         oversampling_order,
     )
 
@@ -348,7 +350,8 @@ def compute_pass2_stats(
 
     logger.info(
         "Pass 2: %d oversampled rotations (from %d parent coarse orientations)",
-        len(oversampled_rots), len(sig_rot_indices),
+        len(oversampled_rots),
+        len(sig_rot_indices),
     )
 
     translations_np = np.asarray(translations, dtype=np.float32)
@@ -369,7 +372,8 @@ def compute_pass2_stats(
     )
     logger.info(
         "Pass 2: %d oversampled translations (from %d coarse translations)",
-        len(oversampled_translations), len(translations_np),
+        len(oversampled_translations),
+        len(translations_np),
     )
 
     # Run a full dense E+M at the oversampled grid
@@ -393,6 +397,7 @@ def compute_pass2_stats(
         return_stats=return_stats,
         accumulate_noise=accumulate_noise,
         half_spectrum_scoring=half_spectrum_scoring,
+        projection_padding_factor=projection_padding_factor,
     )
 
     # Unpack: run_em_v2 returns (mean, ha, Ft_y, Ft_ctf, [relion_stats], [noise_stats])
@@ -455,6 +460,7 @@ def compute_pass2_stats_sparse(
     translation_log_prior=None,
     accumulate_noise=False,
     half_spectrum_scoring=False,
+    projection_padding_factor=1,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -467,8 +473,8 @@ def compute_pass2_stats_sparse(
         get_oversampled_translation_grid,
         rotation_grid_size,
     )
-    from .engine_v2 import run_em_v2
 
+    from .engine_v2 import run_em_v2
     from .types import NoiseStats
 
     n_images = experiment_dataset.n_units
@@ -530,26 +536,20 @@ def compute_pass2_stats_sparse(
         else:
             sig_samples = np.asarray(sig_samples, dtype=np.int32).reshape(-1)
             if sig_samples.size == 0:
-                raise ValueError(
-                    f"Image {image_idx} has no significant coarse samples for sparse pass 2"
-                )
+                raise ValueError(f"Image {image_idx} has no significant coarse samples for sparse pass 2")
             coarse_rot = sig_samples // n_coarse_trans
             coarse_trans = sig_samples % n_coarse_trans
             unique_rot = np.unique(coarse_rot)
             use_full_candidate_mask = False
 
         if unique_rot.size == 0:
-            raise ValueError(
-                f"Image {image_idx} has no significant coarse samples for sparse pass 2"
-            )
+            raise ValueError(f"Image {image_idx} has no significant coarse samples for sparse pass 2")
 
-        oversampled_rots, parent_map, oversampled_rot_indices = (
-            get_oversampled_rotation_grid_from_samples(
-                unique_rot,
-                nside_level,
-                oversampling_order=oversampling_order,
-                return_rotation_indices=True,
-            )
+        oversampled_rots, parent_map, oversampled_rot_indices = get_oversampled_rotation_grid_from_samples(
+            unique_rot,
+            nside_level,
+            oversampling_order=oversampling_order,
+            return_rotation_indices=True,
         )
         oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
         parent_map = np.asarray(parent_map, dtype=np.int32)
@@ -561,15 +561,16 @@ def compute_pass2_stats_sparse(
 
         if use_full_candidate_mask:
             candidate_mask = np.ones(
-                (oversampled_rots.shape[0], n_fine_trans), dtype=bool,
+                (oversampled_rots.shape[0], n_fine_trans),
+                dtype=bool,
             )
         else:
             sig_trans_by_rot = {
-                int(rot_idx): set(coarse_trans[coarse_rot == rot_idx].tolist())
-                for rot_idx in unique_rot
+                int(rot_idx): set(coarse_trans[coarse_rot == rot_idx].tolist()) for rot_idx in unique_rot
             }
             candidate_mask = np.zeros(
-                (oversampled_rots.shape[0], n_fine_trans), dtype=bool,
+                (oversampled_rots.shape[0], n_fine_trans),
+                dtype=bool,
             )
             for parent_local_idx, coarse_rot_idx in enumerate(unique_rot):
                 row_mask = parent_map == parent_local_idx
@@ -578,9 +579,7 @@ def compute_pass2_stats_sparse(
                 candidate_mask[row_mask, :] = col_mask[None, :]
 
         if not np.any(candidate_mask):
-            raise ValueError(
-                f"Image {image_idx} has no valid sparse pass-2 candidates after oversampling"
-            )
+            raise ValueError(f"Image {image_idx} has no valid sparse pass-2 candidates after oversampling")
 
         local_rot_counts.append(int(oversampled_rots.shape[0]))
         valid_candidate_counts.append(int(candidate_mask.sum()))
@@ -600,7 +599,7 @@ def compute_pass2_stats_sparse(
             translation_log_prior=(
                 None
                 if fine_translation_prior is None
-                else np.asarray(fine_translation_prior[image_idx:image_idx + 1], dtype=np.float32)
+                else np.asarray(fine_translation_prior[image_idx : image_idx + 1], dtype=np.float32)
                 if np.asarray(fine_translation_prior).ndim == 2
                 else fine_translation_prior
             ),
@@ -610,6 +609,7 @@ def compute_pass2_stats_sparse(
             return_stats=return_stats,
             accumulate_noise=accumulate_noise,
             half_spectrum_scoring=half_spectrum_scoring,
+            projection_padding_factor=projection_padding_factor,
         )
 
         # Unpack return based on flags
@@ -649,8 +649,7 @@ def compute_pass2_stats_sparse(
         best_rotation_indices[image_idx] = oversampled_rot_indices[rot_idx]
 
     logger.info(
-        "Sparse pass 2: median local rotations=%d, mean local rotations=%.1f, "
-        "median valid candidates/image=%d",
+        "Sparse pass 2: median local rotations=%d, mean local rotations=%.1f, median valid candidates/image=%d",
         int(np.median(local_rot_counts)) if local_rot_counts else 0,
         float(np.mean(local_rot_counts)) if local_rot_counts else 0.0,
         int(np.median(valid_candidate_counts)) if valid_candidate_counts else 0,
@@ -697,5 +696,3 @@ def compute_pass2_stats_sparse(
     if accumulate_noise:
         result = result + (merged_noise_stats,)
     return result
-
-

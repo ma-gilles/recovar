@@ -53,7 +53,7 @@ def healpix_angular_step(order: int) -> float:
     float
         Angular step in degrees.
     """
-    return 360.0 / (6.0 * (2 ** order))
+    return 360.0 / (6.0 * (2**order))
 
 
 def effective_angular_step(order: int, adaptive_oversampling: int = 0) -> float:
@@ -71,7 +71,7 @@ def effective_angular_step(order: int, adaptive_oversampling: int = 0) -> float:
     float
         Effective angular step in degrees.
     """
-    return healpix_angular_step(order) / (2 ** adaptive_oversampling)
+    return healpix_angular_step(order) / (2**adaptive_oversampling)
 
 
 @dataclass
@@ -216,10 +216,7 @@ class RefinementState:
         Fires when one of:
         - ``healpix_order`` has reached ``max_healpix_order`` (hard cap), or
         - the per-particle ``acc_rot`` estimate is populated and
-          ``effective_step < 0.75 * acc_rot``, or
-        - the resolution-driven Crowther step is populated and
-          ``effective_step < 0.75 * crowther_step`` (A6 proxy for
-          ``acc_rot``).
+          ``effective_step < 0.75 * acc_rot``.
 
         Mirrors RELION ``ml_optimiser.cpp:9817`` which sets
         ``has_fine_enough_angular_sampling = true`` when the old step is
@@ -230,13 +227,6 @@ class RefinementState:
             return True
         if self.acc_rot < float("inf"):
             if self.effective_step < 0.75 * self.acc_rot:
-                return True
-        else:
-            crowther_step = self.crowther_angle_step_degrees()
-            if (
-                np.isfinite(crowther_step)
-                and self.effective_step < 0.75 * crowther_step
-            ):
                 return True
         return False
 
@@ -390,9 +380,7 @@ def compute_translation_changes(
     return rms
 
 
-def relion_angular_distance_per_particle(
-    M_current: np.ndarray, M_previous: np.ndarray
-) -> np.ndarray:
+def relion_angular_distance_per_particle(M_current: np.ndarray, M_previous: np.ndarray) -> np.ndarray:
     """Per-particle RELION-style angular distance between two rotation matrices.
 
     Implements ``HealpixSampling::calculateAngularDistance`` (see
@@ -421,13 +409,10 @@ def relion_angular_distance_per_particle(
     M_previous = np.asarray(M_previous, dtype=np.float64)
     if M_current.shape != M_previous.shape:
         raise ValueError(
-            f"M_current and M_previous must have the same shape, got "
-            f"{M_current.shape} vs {M_previous.shape}"
+            f"M_current and M_previous must have the same shape, got {M_current.shape} vs {M_previous.shape}"
         )
     if M_current.ndim != 3 or M_current.shape[-2:] != (3, 3):
-        raise ValueError(
-            f"Expected (N, 3, 3) rotation matrices, got {M_current.shape}"
-        )
+        raise ValueError(f"Expected (N, 3, 3) rotation matrices, got {M_current.shape}")
 
     # Per-particle dot product of corresponding rows.
     # einsum 'nij,nij->ni' gives shape (N, 3) where entry [n, i] is the
@@ -465,9 +450,7 @@ def compute_relion_orientation_changes(
         return float("inf")
     if current_rotations.size == 0:
         return 0.0
-    per_particle = relion_angular_distance_per_particle(
-        current_rotations, previous_rotations
-    )
+    per_particle = relion_angular_distance_per_particle(current_rotations, previous_rotations)
     return float(np.mean(per_particle))
 
 
@@ -499,10 +482,7 @@ def compute_relion_offset_changes_angstrom(
     voxel_size : float
         Pixel size in angstroms (e.g. 4.25 for the 5k benchmark).
     """
-    if (
-        current_translations_pixel is None
-        or previous_translations_pixel is None
-    ):
+    if current_translations_pixel is None or previous_translations_pixel is None:
         return float("inf")
     current_translations_pixel = np.asarray(current_translations_pixel)
     previous_translations_pixel = np.asarray(previous_translations_pixel)
@@ -512,9 +492,55 @@ def compute_relion_offset_changes_angstrom(
         return 0.0
     diffs_pixel = current_translations_pixel - previous_translations_pixel
     diffs_ang = diffs_pixel * float(voxel_size)
-    sum_sq_per_particle = np.sum(diffs_ang ** 2, axis=-1)  # (N,)
+    sum_sq_per_particle = np.sum(diffs_ang**2, axis=-1)  # (N,)
     n = sum_sq_per_particle.shape[0]
     return float(np.sqrt(sum_sq_per_particle.sum() / (2.0 * n)))
+
+
+def calculate_expected_angular_errors(
+    healpix_order: int,
+    nr_significant_per_image: np.ndarray,
+    n_translations: int = 1,
+) -> tuple[float, float]:
+    """Estimate angular and translational accuracy from the posterior.
+
+    Port of RELION's ``calculateExpectedAngularErrors()``
+    (``ml_optimiser.cpp:9534-9564``).  The angular precision is estimated
+    from the number of significant orientations per image::
+
+        sigma2_rot  = step^2 / (3 * n_sig)
+        sigma2_tilt = step^2 / (3 * n_sig)
+        sigma2_psi  = step^2 / n_sig
+        acc_rot = RAD2DEG(sqrt(sigma2_rot + sigma2_tilt))
+
+    where ``step = DEG2RAD(healpix_angular_step(order))``.
+
+    Parameters
+    ----------
+    healpix_order : int
+        Current HEALPix order (base, NOT oversampled).
+    nr_significant_per_image : np.ndarray, shape (n_images,)
+        Number of significant orientation samples per image.
+    n_translations : int
+        Number of translations in the grid (used to factor out
+        translations from n_significant).
+
+    Returns
+    -------
+    acc_rot : float
+        Estimated angular accuracy in degrees.
+    acc_trans : float
+        Placeholder (returns inf — proper acc_trans requires
+        translation-specific significant counts).
+    """
+    nr_sig = np.asarray(nr_significant_per_image, dtype=np.float64)
+    nr_sig_rot = nr_sig / max(1, n_translations)
+    nr_sig_rot = np.maximum(nr_sig_rot, 1.0)
+    step_rad = np.deg2rad(healpix_angular_step(healpix_order))
+    sigma2_per_image = 2.0 * step_rad**2 / (3.0 * nr_sig_rot)
+    acc_rot_per_image = np.rad2deg(np.sqrt(sigma2_per_image))
+    acc_rot = float(np.mean(acc_rot_per_image))
+    return acc_rot, float("inf")
 
 
 def compute_ave_Pmax(max_posterior_per_image: np.ndarray) -> float:
@@ -577,16 +603,10 @@ def check_convergence(state: RefinementState) -> bool:
     # legacy fraction-based counter for backwards compatibility.
     relion_changes_seen = state.smallest_changes_optimal_orientations < SMALLEST_CHANGES_INIT_ORIENTATIONS
     if relion_changes_seen:
-        if (
-            state.nr_iter_wo_large_hidden_variable_changes
-            < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
-        ):
+        if state.nr_iter_wo_large_hidden_variable_changes < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES:
             return False
     else:
-        if (
-            state.nr_iter_wo_assignment_changes
-            < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
-        ):
+        if state.nr_iter_wo_assignment_changes < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES:
             return False
 
     return True
@@ -643,48 +663,25 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
     # (`nr_iter_wo_large_hidden_variable_changes`) when available.  Fall
     # back to the legacy `nr_iter_wo_assignment_changes` plus the extended
     # resol-stall escape hatch only when B3+B4 hasn't been populated.
-    relion_changes_seen = (
-        state.smallest_changes_optimal_orientations
-        < SMALLEST_CHANGES_INIT_ORIENTATIONS
-    )
+    relion_changes_seen = state.smallest_changes_optimal_orientations < SMALLEST_CHANGES_INIT_ORIENTATIONS
     if relion_changes_seen:
-        if (
-            state.nr_iter_wo_large_hidden_variable_changes
-            < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
-        ):
+        if state.nr_iter_wo_large_hidden_variable_changes < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES:
             return False
     else:
         EXTENDED_RESOL_STALL = 5
-        if (state.nr_iter_wo_assignment_changes < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
-                and state.nr_iter_wo_resol_gain < EXTENDED_RESOL_STALL):
+        if (
+            state.nr_iter_wo_assignment_changes < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES
+            and state.nr_iter_wo_resol_gain < EXTENDED_RESOL_STALL
+        ):
             return False
 
-    # Don't refine beyond 75% of estimated angular accuracy.  Prefer the
-    # full per-particle estimate when populated; otherwise fall back to
-    # the resolution-driven Crowther step which is what RELION uses to
-    # decide whether to bump in `do_proceed_resolution` and as an upper
-    # bound on `acc_rot` in low/mid-resolution regimes.
+    # Don't refine beyond 75% of estimated angular accuracy.
     if state.acc_rot < float("inf"):
         if state.effective_step < 0.75 * state.acc_rot:
             logger.info(
-                "Angular step %.2f deg < 75%% of acc_rot %.2f deg; "
-                "not refining further",
+                "Angular step %.2f deg < 75%% of acc_rot %.2f deg; not refining further",
                 state.effective_step,
                 state.acc_rot,
-            )
-            return False
-    else:
-        crowther_step = state.crowther_angle_step_degrees()
-        if (
-            np.isfinite(crowther_step)
-            and state.effective_step < 0.75 * crowther_step
-        ):
-            logger.info(
-                "Angular step %.2f deg < 75%% of resolution-driven "
-                "Crowther step %.2f deg (resolution=%.2f Å, "
-                "particle_diameter=%.1f Å); not refining further",
-                state.effective_step, crowther_step,
-                state.current_resolution, state.particle_diameter_angstrom,
             )
             return False
 
@@ -717,7 +714,7 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
 
     # Update translation step: RELION formula
     if state.acc_trans < float("inf"):
-        new_trans_step = min(1.5, 0.75 * state.acc_trans) * (2 ** state.adaptive_oversampling)
+        new_trans_step = min(1.5, 0.75 * state.acc_trans) * (2**state.adaptive_oversampling)
     else:
         # Fall back to halving the current step
         new_trans_step = state.translation_step / 2.0
@@ -738,9 +735,7 @@ def refine_angular_sampling(state: RefinementState) -> RefinementState:
     # Compute sigma for local search: sigma2 = 2 * 2 * angular_step^2
     # (RELION convention, angular_step in degrees, sigma in radians for storage)
     if do_local:
-        step_rad = np.deg2rad(
-            new_angular_step / (2 ** state.adaptive_oversampling)
-        )
+        step_rad = np.deg2rad(new_angular_step / (2**state.adaptive_oversampling))
         sigma_rad = np.sqrt(2.0 * 2.0) * step_rad
     else:
         sigma_rad = 0.0
@@ -886,7 +881,8 @@ def update_refinement_state(
 
     # --- Compute RELION-exact change tracking (B3) ---
     current_changes_orientations = compute_relion_orientation_changes(
-        current_rotation_matrices, previous_rotation_matrices,
+        current_rotation_matrices,
+        previous_rotation_matrices,
     )
     current_changes_offsets_angstrom = compute_relion_offset_changes_angstrom(
         current_translations_pixel,
@@ -937,22 +933,18 @@ def update_refinement_state(
     # When the inputs are missing (early iters before per-particle data is
     # collected), we conservatively skip the relion counter and fall back
     # to the legacy nr_iter_wo_assignment_changes path.
-    nr_iter_wo_large_hidden_variable_changes = (
-        state.nr_iter_wo_large_hidden_variable_changes
-    )
+    nr_iter_wo_large_hidden_variable_changes = state.nr_iter_wo_large_hidden_variable_changes
     smallest_orient = state.smallest_changes_optimal_orientations
     smallest_offsets = state.smallest_changes_optimal_offsets_angstrom
     smallest_classes = state.smallest_changes_optimal_classes
-    if (
-        np.isfinite(current_changes_orientations)
-        and np.isfinite(current_changes_offsets_angstrom)
-    ):
+    if np.isfinite(current_changes_orientations) and np.isfinite(current_changes_offsets_angstrom):
         # Sampling steps used as the "small enough" denominator. RELION uses
         # the ANGULAR SAMPLING STEP (in degrees, after oversampling) for the
         # orientation ratio and the TRANSLATION SAMPLING STEP (in pixels)
         # for the offset ratio. Convert offsets to pixels for the ratio.
         rot_step_deg = effective_angular_step(
-            state.healpix_order, state.adaptive_oversampling,
+            state.healpix_order,
+            state.adaptive_oversampling,
         )
         # offset RMS is in angstroms; convert to pixels for the ratio
         # comparison against the translation sampling step (also in pixels).
@@ -961,24 +953,12 @@ def update_refinement_state(
         else:
             offsets_pixels = current_changes_offsets_angstrom
         trans_step = state.translation_step
-        ratio_orient_changes = (
-            current_changes_orientations / rot_step_deg
-            if rot_step_deg > 0
-            else float("inf")
-        )
-        ratio_trans_changes = (
-            offsets_pixels / trans_step if trans_step > 0 else float("inf")
-        )
+        ratio_orient_changes = current_changes_orientations / rot_step_deg if rot_step_deg > 0 else float("inf")
+        ratio_trans_changes = offsets_pixels / trans_step if trans_step > 0 else float("inf")
 
         class_ok = 1.03 * current_changes_classes >= smallest_classes
-        trans_ok = (
-            ratio_trans_changes < 0.40
-            or 1.03 * current_changes_offsets_angstrom >= smallest_offsets
-        )
-        rot_ok = (
-            ratio_orient_changes < 0.40
-            or 1.03 * current_changes_orientations >= smallest_orient
-        )
+        trans_ok = ratio_trans_changes < 0.40 or 1.03 * current_changes_offsets_angstrom >= smallest_offsets
+        rot_ok = ratio_orient_changes < 0.40 or 1.03 * current_changes_orientations >= smallest_orient
 
         if class_ok and trans_ok and rot_ok:
             nr_iter_wo_large_hidden_variable_changes += 1
@@ -1043,12 +1023,8 @@ def update_refinement_state(
         nr_iter_wo_assignment_changes,
         nr_iter_wo_large_hidden_variable_changes,
         ave_pmax,
-        current_changes_orientations
-        if np.isfinite(current_changes_orientations)
-        else float("nan"),
-        current_changes_offsets_angstrom
-        if np.isfinite(current_changes_offsets_angstrom)
-        else float("nan"),
+        current_changes_orientations if np.isfinite(current_changes_orientations) else float("nan"),
+        current_changes_offsets_angstrom if np.isfinite(current_changes_offsets_angstrom) else float("nan"),
     )
 
     # --- Check if we should refine angular sampling ---

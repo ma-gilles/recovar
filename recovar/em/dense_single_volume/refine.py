@@ -189,6 +189,7 @@ def _run_grouped_local_search_em(
     current_size,
     *,
     accumulate_noise=False,
+    projection_padding_factor=1,
 ):
     """Run batched exact local search on the fine HEALPix grid.
 
@@ -287,6 +288,7 @@ def _run_grouped_local_search_em(
             score_with_masked_images=True,
             return_stats=True,
             accumulate_noise=accumulate_noise,
+            projection_padding_factor=projection_padding_factor,
         )
         if accumulate_noise:
             _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g = run_em_outputs
@@ -1322,6 +1324,31 @@ def _refine_relion_mode(
     volume_shape = cryo.volume_shape
     grid_size = cryo.image_shape[0]  # ori_size in RELION terms
 
+    # --- RELION image mask (softMaskOutsideMap on particles) ---
+    # RELION masks images to particle_diameter/(2*pixel_size) with a 5-pixel
+    # cosine taper before E-step scoring (ml_optimiser.cpp:6288).  The default
+    # edge-taper mask (window_mask(D, 0.85, 0.99)) is too tight — it tapers
+    # at 54 px vs RELION's 64 px for a 128-px box.
+    RELION_WIDTH_MASK_EDGE = 5
+    if particle_diameter_ang is not None and particle_diameter_ang > 0:
+        from recovar.core import mask
+        from recovar.core.mask import relion_soft_image_mask
+
+        relion_mask = relion_soft_image_mask(
+            image_size=grid_size,
+            pixel_size=cryo.voxel_size,
+            particle_diameter_ang=particle_diameter_ang,
+            width_mask_edge_px=RELION_WIDTH_MASK_EDGE,
+        )
+        for ds in experiment_datasets:
+            ds.image_source.backend.image_mask = relion_mask
+        logger.info(
+            "RELION mode: image mask radius=%.1f px (particle_diameter=%.1f A, edge=%d px)",
+            particle_diameter_ang / (2.0 * cryo.voxel_size),
+            particle_diameter_ang,
+            RELION_WIDTH_MASK_EDGE,
+        )
+
     # --- Initialize RefinementState ---
     # Corresponds to RELION's initialiseSamplingVectors + initialLowPassFilterReferences
     state = RefinementState(
@@ -1360,20 +1387,14 @@ def _refine_relion_mode(
     # perturbs a fresh copy rather than compounding prior perturbations.
     base_translations = current_translations
 
-    # NOTE: padding_factor=1 here (not 2) because the pf=2 path produces
-    # volumes with 1/pf^3 = 1/8 the amplitude compared to RELION when our
-    # native-resolution Ft_y/Ft_ctf accumulators are zero-padded to (pf*N)^3
-    # before post_process_from_filter_v2. Recovar's homogeneous code accumulates
-    # directly at the upsampled grid via relion_kernel_batch (which spreads
-    # values via the interpolation kernel), so its pf=2 path is consistent.
-    # Our engine accumulates at the native grid, so zero-padding leaves the
-    # padded grid sparse and the iFFT-by-(pf*N)^3 normalization gives a 1/8
-    # under-amplitude. The correct fix is to either accumulate at the upsampled
-    # grid or to multiply the reconstructed volume by pf^3 after iFFT — but
-    # the simplest correctness-first fix is to use pf=1 here, which matches
-    # RELION's iter-1 reconstruction amplitude and prevents the iter-2 noise
-    # blow-up. Verified 2026-04-08 against the tiny parity dataset.
+    # Reconstruction stays at native N³ (pf=1) since engine_v2 backprojects
+    # at native resolution.  Projection padding is handled separately inside
+    # run_em_v2 via real-space zero-padding (iDFT → pad → DFT), matching
+    # RELION's Projector which pads in real space before FFT.
     PADDING_FACTOR = 1
+    # RELION uses pf=2 for projection (projector.cpp:340) — smoother trilinear
+    # interpolation from a (2N)³ Fourier grid.
+    PROJECTION_PADDING_FACTOR = 2
 
     def _safe_batch_sizes(n_rot, n_trans):
         """Reduce batch sizes for large pose grids to avoid GPU OOM.
@@ -1844,6 +1865,7 @@ def _refine_relion_mode(
                     rotation_block_size=safe_rbs,
                     current_size=cs_for_engine,
                     accumulate_noise=True,
+                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
@@ -1920,6 +1942,7 @@ def _refine_relion_mode(
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
+                        projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     pose_rotations[k] = effective_rotations
@@ -1949,6 +1972,7 @@ def _refine_relion_mode(
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
+                        projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     )
                     Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots_k, em_stats_k, noise_stats_k = pass2_outputs
                     noise_stats_per_half[k] = noise_stats_k
@@ -1999,6 +2023,7 @@ def _refine_relion_mode(
                         return_stats=True,
                         accumulate_noise=True,
                         half_spectrum_scoring=True,
+                        projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     dt_pass2 = time.time() - t_pass2
@@ -2049,6 +2074,7 @@ def _refine_relion_mode(
                     score_with_masked_images=True,
                     return_stats=True,
                     accumulate_noise=True,
+                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
@@ -2137,10 +2163,23 @@ def _refine_relion_mode(
                 kernel="triangular",
                 use_spherical_mask=True,
                 grid_correct=True,
-                # RELION uses radial sinc² (projector.cpp:617)
                 gridding_correct="radial",
                 tau2_fudge=tau2_fudge,
+                gridding_padding_factor=PROJECTION_PADDING_FACTOR,
             ).reshape(-1)
+
+            # RELION's solventFlatten (ml_optimiser.cpp:5469): mask the
+            # reconstructed reference outside particle_diameter to remove
+            # solvent noise before the next E-step's projections.
+            if particle_diameter_ang is not None and particle_diameter_ang > 0:
+                flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
+                vol_real = fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
+                vol_real, _ = mask.soft_mask_outside_map(
+                    vol_real,
+                    radius=flatten_radius,
+                    cosine_width=RELION_WIDTH_MASK_EDGE,
+                )
+                means[k] = fourier_transform_utils.get_dft3(vol_real).reshape(-1)
 
         significant_counts.append(iter_sig_counts)
 
@@ -2198,6 +2237,7 @@ def _refine_relion_mode(
                 use_spherical_mask=True,
                 grid_correct=True,
                 gridding_correct="radial",
+                gridding_padding_factor=PROJECTION_PADDING_FACTOR,
             ),
             relion_functions.post_process_from_filter_v2(
                 Ft_ctf_1_padded,
@@ -2209,6 +2249,7 @@ def _refine_relion_mode(
                 use_spherical_mask=True,
                 grid_correct=True,
                 gridding_correct="radial",
+                gridding_padding_factor=PROJECTION_PADDING_FACTOR,
             ),
         ]
 
@@ -2501,6 +2542,22 @@ def _refine_relion_mode(
             cryo.image_shape[0],
             cryo.voxel_size,
         )
+
+        # RELION's calculateExpectedAngularErrors (ml_optimiser.cpp:9534)
+        iter_acc_rot = None
+        if iter_sig_counts is not None and len(iter_sig_counts) > 0:
+            iter_acc_rot, _ = calculate_expected_angular_errors(
+                state.healpix_order,
+                iter_sig_counts,
+                n_translations=n_trans_current,
+            )
+            logger.info(
+                "acc_rot=%.3f deg (from %d images, mean n_sig=%.1f)",
+                iter_acc_rot,
+                len(iter_sig_counts),
+                float(np.mean(iter_sig_counts)),
+            )
+
         state = update_refinement_state(
             state,
             current_assignments=current_combined_ha,
@@ -2510,6 +2567,7 @@ def _refine_relion_mode(
             translations=np.asarray(current_translations),
             new_resolution=new_res_angstrom,
             max_posterior_per_image=combined_max_posterior,
+            acc_rot=iter_acc_rot,
             current_rotation_matrices=current_rotation_matrices_combined,
             previous_rotation_matrices=previous_rotation_matrices_combined,
             current_translations_pixel=current_translations_pixel_combined,
@@ -2635,6 +2693,7 @@ def _refine_relion_mode(
             score_with_masked_images=True,
             return_stats=True,
             accumulate_noise=True,
+            projection_padding_factor=PROJECTION_PADDING_FACTOR,
         )
         final_ft_y = final_ft_y + Ft_y_k_final
         final_ft_ctf = final_ft_ctf + Ft_ctf_k_final
@@ -2667,6 +2726,7 @@ def _refine_relion_mode(
         grid_correct=True,
         gridding_correct="radial",
         tau2_fudge=tau2_fudge,
+        gridding_padding_factor=PROJECTION_PADDING_FACTOR,
     ).reshape(-1)
     final_iter_elapsed = time.time() - final_iter_t0
     logger.info(

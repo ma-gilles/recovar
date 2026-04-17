@@ -22,6 +22,42 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
+def pad_volume_for_projection(vol_ft_flat, volume_shape, padding_factor):
+    """Pad a Fourier volume via real-space zero-padding for smoother projection.
+
+    RELION pads volumes in REAL SPACE before FFT so that trilinear
+    interpolation operates on a (pf*N)³ grid.  This is NOT the same as
+    Fourier zero-padding (which leaves stride-pf gaps that degrade
+    interpolation).
+
+    Parameters
+    ----------
+    vol_ft_flat : jnp.ndarray, shape (N³,)
+        Flat centered Fourier volume at native resolution.
+    volume_shape : tuple of int, (N, N, N)
+        Native volume shape.
+    padding_factor : int
+        Padding factor (typically 2).
+
+    Returns
+    -------
+    padded_ft_flat : jnp.ndarray, shape ((pf*N)³,)
+        Fourier volume on the (pf*N)³ grid, ready for slice_volume.
+    padded_shape : tuple of int
+        (pf*N, pf*N, pf*N).
+    """
+    if padding_factor == 1:
+        return vol_ft_flat, volume_shape
+
+    N = volume_shape[0]
+    vol_real = fourier_transform_utils.get_idft3(jnp.asarray(vol_ft_flat).reshape(volume_shape))
+    pad_amount = N * (padding_factor - 1)
+    vol_real_padded = padding.pad_volume_spatial_domain(vol_real, pad_amount)
+    padded_shape = tuple(s * padding_factor for s in volume_shape)
+    vol_ft_padded = fourier_transform_utils.get_dft3(vol_real_padded)
+    return vol_ft_padded.reshape(-1), padded_shape
+
+
 def zero_pad_fourier_volume(vol_flat, native_shape, padding_factor):
     """Zero-pad a flat centered Fourier volume to a larger grid.
 
@@ -533,6 +569,7 @@ def post_process_from_filter_v2(
     return_half_volume=False,
     input_half_volume=None,
     tau2_fudge=1.0,
+    gridding_padding_factor=None,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -592,9 +629,8 @@ def post_process_from_filter_v2(
     if grid_correct:
         order = 1 if kernel == "triangular" else 0
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
-        vol, _ = grid_fn(
-            vol.reshape(og_volume_shape), og_volume_shape[0], volume_upsampling_factor / kernel_width, order=order
-        )
+        gc_pf = gridding_padding_factor if gridding_padding_factor is not None else volume_upsampling_factor
+        vol, _ = grid_fn(vol.reshape(og_volume_shape), og_volume_shape[0], gc_pf / kernel_width, order=order)
 
     if return_real_space:
         return vol.real.astype(Ft_ctf2.real.dtype)
