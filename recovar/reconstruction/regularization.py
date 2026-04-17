@@ -6,10 +6,10 @@ import logging
 import jax
 import jax.numpy as jnp
 import numpy as np
-from recovar.utils.nvtx_shim import nvtx
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core, jax_config
+from recovar.utils.nvtx_shim import nvtx
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +73,13 @@ def compute_prior_quantites(halfset_datasets, cov_noise, batch_size, for_whiteni
 
 
 def compute_relion_prior(
-    halfset_datasets, cov_noise, image0, image1, batch_size, estimate_merged_SNR=False, noise_level=None,
+    halfset_datasets,
+    cov_noise,
+    image0,
+    image1,
+    batch_size,
+    estimate_merged_SNR=False,
+    noise_level=None,
     tau2_fudge=1.0,
 ):
     """Compute a RELION-style spectral prior from two half-set reconstructions.
@@ -304,7 +310,14 @@ def downsample_lhs(lhs, volume_shape, upsampling_factor=1):
 @functools.partial(jax.jit, static_argnums=[0, 6, 7])
 @nvtx.annotate("compute_fsc_prior_gpu_v2", color="cyan", domain=NVTX_DOMAIN_REG)
 def compute_fsc_prior_gpu_v2(
-    volume_shape, image0, image1, lhs, prior, frequency_shift, substract_shell_mean=False, upsampling_factor=1,
+    volume_shape,
+    image0,
+    image1,
+    lhs,
+    prior,
+    frequency_shift,
+    substract_shell_mean=False,
+    upsampling_factor=1,
     tau2_fudge=1.0,
 ):
     epsilon = jax_config.FSC_ZERO_THRESHOLD
@@ -561,6 +574,79 @@ def compute_relion_prior_from_reconstruction_stats(
     return prior, fsc
 
 
+def compute_relion_tau2_from_weights(
+    Ft_ctf_0,
+    Ft_ctf_1,
+    fsc,
+    volume_shape,
+    *,
+    tau2_fudge=1.0,
+    padding_factor=1,
+):
+    """Compute tau2 from CTF weights and external FSC (RELION's updateSSNRarrays).
+
+    RELION computes tau2 = SSNR * sigma2 where:
+    - SSNR = fsc / (1 - fsc) * tau2_fudge
+    - sigma2 = count_per_shell / (pf³ * sum_weight_per_shell)
+      which is the inverse of the average weight per shell
+
+    When padding_factor > 1, Ft_ctf arrays are at (pf*N)³ but volume_shape
+    is the native (N,N,N).  Shell averages are computed at native resolution
+    (clamping padded radial indices to ori_size/2), matching RELION's
+    updateSSNRarrays which uses ``ires = MIN(ires, ori_size/2)``.
+    Output tau2 is at native N³ resolution.
+    """
+    prior_dtype = jnp.float32
+
+    H0 = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
+    H1 = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
+    H_comb = (H0 + H1) / jnp.asarray(2.0, dtype=prior_dtype)
+
+    ori_half = volume_shape[0] // 2
+
+    if padding_factor > 1:
+        padded_shape = tuple(d * padding_factor for d in volume_shape)
+        padded_radial = (
+            jnp.round(
+                fourier_transform_utils.get_grid_of_radial_distances(padded_shape, scaled=False, frequency_shift=0)
+            )
+            .astype(jnp.int32)
+            .reshape(-1)
+        )
+        native_shells = jnp.minimum(padded_radial, ori_half)
+        n_native_shells = ori_half + 1
+        shell_sum = jnp.zeros(n_native_shells, dtype=prior_dtype)
+        shell_count = jnp.zeros(n_native_shells, dtype=prior_dtype)
+        shell_sum = shell_sum.at[native_shells].add(H_comb)
+        shell_count = shell_count.at[native_shells].add(1.0)
+        bottom_avg = jnp.where(shell_count > 0, shell_sum / shell_count, 0.0)
+    else:
+        bottom_avg = average_over_shells(H_comb, volume_shape, frequency_shift=0)
+
+    n_shells = bottom_avg.shape[0]
+
+    fsc_raw = jnp.asarray(fsc, dtype=prior_dtype)
+    fsc_indices = jnp.minimum(jnp.arange(n_shells), fsc_raw.shape[0] - 1)
+    fsc_arr = fsc_raw[fsc_indices]
+    epsilon = jax_config.FSC_ZERO_THRESHOLD
+    fsc_clamped = jnp.clip(fsc_arr, epsilon, 1.0 - epsilon)
+    ssnr = fsc_clamped / (1.0 - fsc_clamped) * jnp.asarray(tau2_fudge, dtype=prior_dtype)
+
+    # RELION backprojector.cpp:1061,1075 — updateSSNRarrays multiplies each
+    # weight by oversampling_correction = pf³ before shell-averaging, because
+    # padding dilutes the per-voxel weight by that factor.  Match here.
+    oversampling_correction = jnp.asarray(padding_factor**3, dtype=prior_dtype)
+    prior_avg = jnp.where(bottom_avg > 0, ssnr / (oversampling_correction * bottom_avg), jax_config.EPSILON)
+
+    radial_distances = (
+        fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled=False, frequency_shift=0)
+        .astype(int)
+        .reshape(-1)
+    )
+    prior = prior_avg[radial_distances]
+    return prior, fsc_clamped
+
+
 def downsample_from_fsc(array, fsc, volume_shape):
     from recovar.heterogeneity import locres
 
@@ -617,7 +703,7 @@ def compute_data_vs_prior(Ft_ctf, tau2, volume_shape, padding_factor=1, tau2_fud
         Per-shell data_vs_prior ratio.
     """
     avg_weight = average_over_shells(Ft_ctf.real, volume_shape)
-    oversampling_correction = padding_factor ** 3
+    oversampling_correction = padding_factor**3
     return avg_weight * tau2_fudge * tau2 * oversampling_correction
 
 
@@ -750,8 +836,7 @@ def update_relion_growth_state_from_fsc(
 # ---------------------------------------------------------------------------
 
 
-def compute_current_size_relion(resolution_shell, ori_size, ave_Pmax=0.0,
-                                has_high_fsc_at_limit=False, incr_size=10):
+def compute_current_size_relion(resolution_shell, ori_size, ave_Pmax=0.0, has_high_fsc_at_limit=False, incr_size=10):
     """Compute the next current_size using RELION's growth logic.
 
     RELION grows current_size beyond the current resolution limit.  If
@@ -887,21 +972,30 @@ def join_halves_at_low_resolution(
     # Effective joining resolution: the larger (lower-frequency) of
     # low_resol_join_halves and current_resolution.
     myres = float(low_resol_join_halves_angstrom)
-    if current_resolution_angstrom is not None and np.isfinite(
-        current_resolution_angstrom
-    ):
+    if current_resolution_angstrom is not None and np.isfinite(current_resolution_angstrom):
         myres = max(myres, float(current_resolution_angstrom))
 
     lowres_r_max = int(np.ceil(grid_size * voxel_size / myres))
     if lowres_r_max <= 0:
         return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
 
+    # RELION ml_optimiser_mpi.cpp:3161 scales the comparison radius by
+    # padding_factor when operating on the padded backprojector grid:
+    #   if (kp*kp + ip*ip + jp*jp <= lowres_r_max*lowres_r_max * pf*pf)
+    # Since volume_shape here is the padded grid, scale lowres_r_max.
+    pf = volume_shape[0] // grid_size if volume_shape[0] > grid_size else 1
+    lowres_r_max_padded = lowres_r_max * pf
+
     # Build the radial-shell mask once. Centered Fourier volume → radial
     # distance from the center is the shell index.
     radial_dist_3d = fourier_transform_utils.get_grid_of_radial_distances(
-        volume_shape, voxel_size=1, scaled=False, frequency_shift=0, rounded=True,
+        volume_shape,
+        voxel_size=1,
+        scaled=False,
+        frequency_shift=0,
+        rounded=True,
     )
-    join_mask_3d = (radial_dist_3d <= lowres_r_max)
+    join_mask_3d = radial_dist_3d <= lowres_r_max_padded
     join_mask_flat = join_mask_3d.reshape(-1)
 
     Ft_y_0_arr = jnp.asarray(Ft_y_0)
