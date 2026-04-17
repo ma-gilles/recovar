@@ -159,18 +159,10 @@ def extract_relion_scalars(relion_iter):
     if opt:
         out["current_iter"] = int(opt.get("rlnCurrentIteration", 0) or 0)
         out["best_resolution_so_far"] = float(opt.get("rlnBestResolutionThusFar", float("nan")))
-        out["smallest_change_angles"] = float(
-            opt.get("rlnSmallestChangesOrientations", float("nan"))
-        )
-        out["smallest_change_offsets"] = float(
-            opt.get("rlnSmallestChangesOffsets", float("nan"))
-        )
-        out["smallest_change_classes"] = float(
-            opt.get("rlnSmallestChangesClasses", float("nan"))
-        )
-        out["n_iter_no_resolution_gain"] = int(
-            opt.get("rlnNumberOfIterWithoutResolutionGain", 0) or 0
-        )
+        out["smallest_change_angles"] = float(opt.get("rlnSmallestChangesOrientations", float("nan")))
+        out["smallest_change_offsets"] = float(opt.get("rlnSmallestChangesOffsets", float("nan")))
+        out["smallest_change_classes"] = float(opt.get("rlnSmallestChangesClasses", float("nan")))
+        out["n_iter_no_resolution_gain"] = int(opt.get("rlnNumberOfIterWithoutResolutionGain", 0) or 0)
         out["has_high_fsc_at_limit"] = int(opt.get("rlnHasHighFscAtResolLimit", 0) or 0)
         out["has_converged"] = int(opt.get("rlnHasConverged", 0) or 0)
         out["increment_image_size"] = int(opt.get("rlnIncrementImageSize", 0) or 0)
@@ -250,7 +242,10 @@ def extract_recovar_per_shell(recovar, it):
     if dvp_key in recovar.files:
         out["DataVsPriorRatio"] = np.asarray(recovar[dvp_key], dtype=np.float64)
     if sig_key in recovar.files:
-        out["_sig_counts"] = np.asarray(recovar[sig_key], dtype=np.float64)
+        try:
+            out["_sig_counts"] = np.asarray(recovar[sig_key], dtype=np.float64)
+        except ValueError:
+            pass
     if noise_key in recovar.files:
         out["Sigma2Noise"] = np.asarray(recovar[noise_key], dtype=np.float64)
     if tau2_key in recovar.files:
@@ -275,10 +270,14 @@ def main():
     parser.add_argument("--relion_dir", required=True)
     parser.add_argument("--recovar_dir", required=True)
     parser.add_argument("--max_iter", type=int, default=10)
-    parser.add_argument("--tol", type=float, default=0.05,
-                        help="Relative tolerance for green/yellow/red coloring")
-    parser.add_argument("--shells", type=int, default=12,
-                        help="How many low-frequency shells to print per-shell")
+    parser.add_argument(
+        "--relion_start_iter",
+        type=int,
+        default=0,
+        help="RELION iteration that recovar's iter 0 corresponds to (e.g. 3 if started from RELION iter 3)",
+    )
+    parser.add_argument("--tol", type=float, default=0.05, help="Relative tolerance for green/yellow/red coloring")
+    parser.add_argument("--shells", type=int, default=12, help="How many low-frequency shells to print per-shell")
     args = parser.parse_args()
 
     relion_dir = Path(args.relion_dir)
@@ -291,40 +290,40 @@ def main():
 
     voxel_size = float(recovar["voxel_size"])
     grid_size = int(recovar["volume_shape"][0])
-    logger.info("Loaded recovar npz: %d files, voxel_size=%.3f, grid=%d",
-                len(recovar.files), voxel_size, grid_size)
+    logger.info("Loaded recovar npz: %d files, voxel_size=%.3f, grid=%d", len(recovar.files), voxel_size, grid_size)
 
-    print(f"\n{BOLD}{'='*100}{RESET}")
+    print(f"\n{BOLD}{'=' * 100}{RESET}")
     print(f"{BOLD}RELION  vs  recovar  per-iter parity diff{RESET}")
     print(f"  RELION dir : {relion_dir}")
     print(f"  recovar dir: {recovar_dir}")
     print(f"  voxel_size : {voxel_size} Å/px,   grid: {grid_size}")
     print(f"  legend     : {GREEN}match{RESET} | {YELLOW}small diff{RESET} | {RED}LARGE DIFF{RESET}")
-    print(f"{BOLD}{'='*100}{RESET}\n")
+    print(f"{BOLD}{'=' * 100}{RESET}\n")
 
     # Find which iters RELION actually wrote
-    relion_iters = sorted({
-        int(p.stem.split("_it")[1].split("_")[0])
-        for p in relion_dir.glob("run_it*_optimiser.star")
-    })
+    relion_iters = sorted(
+        {int(p.stem.split("_it")[1].split("_")[0]) for p in relion_dir.glob("run_it*_optimiser.star")}
+    )
     logger.info("RELION wrote iters: %s", relion_iters)
 
+    relion_offset = args.relion_start_iter
     n_iters_to_check = min(args.max_iter, max(relion_iters) + 1)
 
     for it in range(n_iters_to_check):
-        relion_iter = load_relion_iter(relion_dir, it)
+        relion_it = it + relion_offset
+        relion_iter = load_relion_iter(relion_dir, relion_it)
         rsc = extract_relion_scalars(relion_iter)
         rps = extract_relion_per_shell(relion_iter, half=1)
 
-        # recovar's iter 0 = RELION's iter 1 (recovar's "iteration N" log
-        # corresponds to the N-th E-M cycle, while RELION's it000 is the
-        # initialization step that just splits halves and writes init).
-        # We compare RELION_iterX against recovar_iter(X-1).
+        # When --relion_start_iter=S, recovar iter 0 maps to RELION iter S+1
+        # (RELION iter S is the init state that recovar loaded).
         recovar_iter_index = it - 1  # may be negative for it=0
         rec_sc = extract_recovar_scalars(recovar, recovar_iter_index) if recovar_iter_index >= 0 else {}
         rec_ps = extract_recovar_per_shell(recovar, recovar_iter_index) if recovar_iter_index >= 0 else None
 
-        print(f"{BOLD}{CYAN}── iter {it} (recovar idx {recovar_iter_index}) ─────────────────────────────{RESET}")
+        print(
+            f"{BOLD}{CYAN}── RELION iter {relion_it} (recovar idx {recovar_iter_index}) ─────────────────────────────{RESET}"
+        )
 
         if not rsc:
             print(f"  [no RELION optimiser.star at iter {it}, skipping]")
@@ -334,13 +333,10 @@ def main():
         print(f"  {'field':<28s} {'RELION':>16s}  {'recovar':>16s}")
 
         scalars_to_compare = [
-            ("current_size",          rsc.get("current_size"),
-                                       rec_sc.get("current_size")),
-            ("ave_Pmax",              rsc.get("ave_Pmax"),
-                                       rec_sc.get("ave_Pmax")),
-            ("current_resolution Å",  rsc.get("current_resolution"),
-                                       None),
-            ("healpix_order",         None, rec_sc.get("healpix_order")),
+            ("current_size", rsc.get("current_size"), rec_sc.get("current_size")),
+            ("ave_Pmax", rsc.get("ave_Pmax"), rec_sc.get("ave_Pmax")),
+            ("current_resolution Å", rsc.get("current_resolution"), None),
+            ("healpix_order", None, rec_sc.get("healpix_order")),
         ]
 
         for label, rv, vv in scalars_to_compare:
@@ -350,15 +346,15 @@ def main():
         # RELION-only state (per-iter)
         print(f"  {'RELION-only state:':<28s}")
         for f, label in [
-            ("log_likelihood",       "log_likelihood"),
-            ("norm_correction_avg",  "norm_correction_avg"),
-            ("sigma_offsets_angst",  "sigma_offsets_Å"),
+            ("log_likelihood", "log_likelihood"),
+            ("norm_correction_avg", "norm_correction_avg"),
+            ("sigma_offsets_angst", "sigma_offsets_Å"),
             ("best_resolution_so_far", "best_res_so_far_(1/Å)"),
             ("smallest_change_angles", "smallest_chg_angles_°"),
             ("smallest_change_offsets", "smallest_chg_offsets_px"),
             ("n_iter_no_resolution_gain", "n_iter_no_res_gain"),
             ("has_high_fsc_at_limit", "has_high_fsc_at_limit"),
-            ("has_converged",        "has_converged"),
+            ("has_converged", "has_converged"),
         ]:
             v = rsc.get(f)
             if v is not None and not (isinstance(v, float) and np.isnan(v)):
