@@ -18,6 +18,8 @@
 #include <algorithm>
 #include <vector>
 #include <src/macros.h>
+#include <src/multidim_array.h>
+#include <src/mask.h>
 
 namespace py = pybind11;
 
@@ -237,6 +239,47 @@ static py::array_t<double> update_noise_estimate(
 }
 
 
+/**
+ * P2: Apply RELION's softMaskOutsideMap to a 2D image.
+ *
+ * Wraps mask.cpp:43 (softMaskOutsideMap). Takes a 2D real-space image,
+ * applies the raised-cosine mask at the given radius, and returns the
+ * masked image. Uses do_zero_mask=true semantics (Mnoise=NULL, so the
+ * exterior is replaced with the average background value).
+ */
+static py::array_t<double> soft_mask_outside_map_2d(
+    py::array_t<double, py::array::c_style | py::array::forcecast> image_in,
+    double radius,
+    double cosine_width
+) {
+    auto buf = image_in.request();
+    if (buf.ndim != 2)
+        throw std::runtime_error("image must be 2D (ny, nx)");
+
+    long ny = buf.shape[0];
+    long nx = buf.shape[1];
+    double* in_ptr = (double*)buf.ptr;
+
+    // Create a MultidimArray (3D with zdim=1) and copy data
+    MultidimArray<RFLOAT> vol(1, ny, nx);
+    for (long i = 0; i < ny; i++)
+        for (long j = 0; j < nx; j++)
+            DIRECT_A3D_ELEM(vol, 0, i, j) = in_ptr[i * nx + j];
+
+    // Call RELION's softMaskOutsideMap (mask.cpp:43)
+    softMaskOutsideMap(vol, radius, cosine_width, NULL);
+
+    // Copy result back to numpy
+    py::array_t<double> result({ny, nx});
+    double* out_ptr = (double*)result.request().ptr;
+    for (long i = 0; i < ny; i++)
+        for (long j = 0; j < nx; j++)
+            out_ptr[i * nx + j] = DIRECT_A3D_ELEM(vol, 0, i, j);
+
+    return result;
+}
+
+
 void init_estep_bindings(py::module_ &m) {
     m.def("convert_squared_differences_to_weights",
           &convert_squared_differences_to_weights,
@@ -287,5 +330,17 @@ Returns shell index (int).
 M9: Update noise estimate from weighted residuals.
 sigma2[n] = wsum_sigma2[n] / (2 * sum_weight * npix_per_shell[n])
 Returns: (n_shells,) noise variance per shell.
+)doc");
+
+    m.def("soft_mask_outside_map_2d", &soft_mask_outside_map_2d,
+          py::arg("image"),
+          py::arg("radius"),
+          py::arg("cosine_width"),
+          R"doc(
+P2: Apply RELION's softMaskOutsideMap to a 2D image.
+image: (ny, nx) real-space image
+radius: mask radius in pixels
+cosine_width: width of cosine taper in pixels
+Returns: (ny, nx) masked image with exterior replaced by avg background.
 )doc");
 }
