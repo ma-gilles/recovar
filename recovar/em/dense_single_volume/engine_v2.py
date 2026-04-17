@@ -471,6 +471,7 @@ def run_em_v2(
     accumulate_noise: bool = False,
     half_spectrum_scoring: bool = False,
     projection_padding_factor: int = 1,
+    reconstruction_padding_factor: int = 1,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -526,8 +527,6 @@ def run_em_v2(
     volume_shape = experiment_dataset.volume_shape
 
     # Pad volume in real space for smoother trilinear projection (RELION pf=2).
-    # Backprojection stays at native volume_shape; only forward projection uses
-    # the padded grid.
     if projection_padding_factor > 1:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
 
@@ -535,6 +534,15 @@ def run_em_v2(
     else:
         mean_for_proj = mean
         proj_volume_shape = volume_shape
+
+    # Backprojection padding: accumulate into a (pf*N)³ grid for finer
+    # trilinear interpolation, matching RELION's --pad flag.
+    if reconstruction_padding_factor > 1:
+        recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
+        recon_volume_size = int(np.prod(recon_volume_shape))
+    else:
+        recon_volume_shape = volume_shape
+        recon_volume_size = int(np.prod(volume_shape))
 
     H, W = image_shape
     n_half = H * (W // 2 + 1)
@@ -671,9 +679,9 @@ def run_em_v2(
             int(candidate_mask.size),
         )
 
-    # Initialize accumulators
-    Ft_y = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
-    Ft_ctf = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
+    # Initialize accumulators (at padded resolution for pf>1 backprojection)
+    Ft_y = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
+    Ft_ctf = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
     hard_assignment = np.empty(n_images, dtype=np.int32)
     log_evidence_per_image = None
     best_log_score_per_image = None
@@ -981,12 +989,12 @@ def run_em_v2(
                 ctf_probs_half = jnp.zeros((rot_block_size_actual, n_half), dtype=ctf_probs_windowed.dtype)
                 ctf_probs_half = ctf_probs_half.at[:, window_indices].set(ctf_probs_windowed)
 
-                # Adjoint slice at full resolution
+                # Adjoint slice at reconstruction resolution (pf>1 → finer grid)
                 Ft_y = core.adjoint_slice_volume(
                     summed_half,
                     rots_b,
                     image_shape,
-                    volume_shape,
+                    recon_volume_shape,
                     "linear_interp",
                     volume=Ft_y,
                     half_image=True,
@@ -995,7 +1003,7 @@ def run_em_v2(
                     ctf_probs_half,
                     rots_b,
                     image_shape,
-                    volume_shape,
+                    recon_volume_shape,
                     "linear_interp",
                     volume=Ft_ctf,
                     half_image=True,
@@ -1013,7 +1021,7 @@ def run_em_v2(
                         batch_size,
                         n_trans,
                         image_shape,
-                        volume_shape,
+                        recon_volume_shape,
                     )
                 )
 
@@ -1088,13 +1096,16 @@ def run_em_v2(
     # -- SOLVE --
     from recovar.reconstruction import relion_functions
 
-    new_mean = relion_functions.post_process_from_filter(
-        experiment_dataset,
-        Ft_ctf,
-        Ft_y,
-        tau=mean_variance,
-        disc_type=disc_type,
-    ).reshape(-1)
+    if reconstruction_padding_factor > 1:
+        new_mean = None
+    else:
+        new_mean = relion_functions.post_process_from_filter(
+            experiment_dataset,
+            Ft_ctf,
+            Ft_y,
+            tau=mean_variance,
+            disc_type=disc_type,
+        ).reshape(-1)
 
     noise_stats = None
     if accumulate_noise:

@@ -183,6 +183,7 @@ def compute_pass2_stats(
     accumulate_noise=False,
     half_spectrum_scoring=False,
     projection_padding_factor=1,
+    reconstruction_padding_factor=1,
 ):
     """Pass 2: evaluate oversampled children of significant coarse rotations.
 
@@ -280,8 +281,9 @@ def compute_pass2_stats(
 
     if len(sig_rot_indices) == 0:
         logger.warning("No significant rotations found; skipping pass 2")
-        Ft_y = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
-        Ft_ctf = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
+        recon_vol_size = experiment_dataset.volume_size * reconstruction_padding_factor**3
+        Ft_y = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
+        Ft_ctf = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
         ha = np.zeros(n_images, dtype=np.int32)
         empty_indices = np.empty((0,), dtype=np.int64)
         if return_stats:
@@ -398,6 +400,7 @@ def compute_pass2_stats(
         accumulate_noise=accumulate_noise,
         half_spectrum_scoring=half_spectrum_scoring,
         projection_padding_factor=projection_padding_factor,
+        reconstruction_padding_factor=reconstruction_padding_factor,
     )
 
     # Unpack: run_em_v2 returns (mean, ha, Ft_y, Ft_ctf, [relion_stats], [noise_stats])
@@ -461,6 +464,7 @@ def compute_pass2_stats_sparse(
     accumulate_noise=False,
     half_spectrum_scoring=False,
     projection_padding_factor=1,
+    reconstruction_padding_factor=1,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -480,8 +484,9 @@ def compute_pass2_stats_sparse(
     n_images = experiment_dataset.n_units
     n_coarse_trans = int(np.asarray(translations).shape[0])
     n_coarse_rot = rotation_grid_size(nside_level)
-    Ft_y_total = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
-    Ft_ctf_total = jnp.zeros(experiment_dataset.volume_size, dtype=experiment_dataset.dtype)
+    recon_vol_size = experiment_dataset.volume_size * reconstruction_padding_factor**3
+    Ft_y_total = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
+    Ft_ctf_total = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
     hard_assignment = np.empty(n_images, dtype=np.int32)
     best_rotations = np.empty((n_images, 3, 3), dtype=np.float32)
     best_rotation_indices = np.empty(n_images, dtype=np.int64)
@@ -610,6 +615,7 @@ def compute_pass2_stats_sparse(
             accumulate_noise=accumulate_noise,
             half_spectrum_scoring=half_spectrum_scoring,
             projection_padding_factor=projection_padding_factor,
+            reconstruction_padding_factor=reconstruction_padding_factor,
         )
 
         # Unpack return based on flags
