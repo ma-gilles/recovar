@@ -606,14 +606,12 @@ def compute_relion_tau2_from_weights(
 
     if padding_factor > 1:
         padded_shape = tuple(d * padding_factor for d in volume_shape)
-        padded_radial = (
-            jnp.round(
-                fourier_transform_utils.get_grid_of_radial_distances(padded_shape, scaled=False, frequency_shift=0)
-            )
-            .astype(jnp.int32)
-            .reshape(-1)
-        )
-        native_shells = jnp.minimum(padded_radial, ori_half)
+        # RELION backprojector.cpp:1074 — ires = ROUND(sqrt(r2) / padding_factor)
+        # Divide continuous distance by pf BEFORE rounding to get native shell.
+        padded_dist = fourier_transform_utils.get_grid_of_radial_distances(
+            padded_shape, scaled=False, frequency_shift=0
+        ).reshape(-1)
+        native_shells = jnp.minimum(jnp.round(padded_dist / padding_factor).astype(jnp.int32), ori_half)
         n_native_shells = ori_half + 1
         shell_sum = jnp.zeros(n_native_shells, dtype=prior_dtype)
         shell_count = jnp.zeros(n_native_shells, dtype=prior_dtype)
