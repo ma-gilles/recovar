@@ -570,6 +570,7 @@ def post_process_from_filter_v2(
     input_half_volume=None,
     tau2_fudge=1.0,
     gridding_padding_factor=None,
+    gridding_order=None,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -627,7 +628,7 @@ def post_process_from_filter_v2(
         vol = vol * volume_mask
 
     if grid_correct:
-        order = 1 if kernel == "triangular" else 0
+        order = gridding_order if gridding_order is not None else (1 if kernel == "triangular" else 0)
         grid_fn = griddingCorrect_square if gridding_correct == "square" else griddingCorrect
         gc_pf = gridding_padding_factor if gridding_padding_factor is not None else volume_upsampling_factor
         vol, _ = grid_fn(vol.reshape(og_volume_shape), og_volume_shape[0], gc_pf / kernel_width, order=order)
