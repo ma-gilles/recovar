@@ -248,7 +248,7 @@ def _compute_sketches_half(
 
 
 class SketchedNormalOperator:
-    """Sketched products of G(X) = A*(A(X) - b) [+ lam * D^2 X].
+    """Sketched products of G(X) = A*(A(X) - b) [+ D^2 X].
 
     U, S, Q inputs are real-space.  Mean is Fourier (complex) or real.
 
@@ -264,16 +264,14 @@ class SketchedNormalOperator:
     disc_type : str
         Interpolation type (default "linear_interp").
     D2_fourier : (vol_size,) real, optional
-        Fourier-diagonal D^2 for the radial Fourier prior R(X) = (lam/2)||D X||_F^2.
-        If provided together with ``prior_lambda > 0``, the analytic prior gradient
-        lam * D^2 X is added to all matvecs:  (D^2 X) Q and S (D^2 X).
-        D is Fourier-diagonal so D^2 U is computed as IFFT(D2_fourier * FFT(U_col))
-        per column of U.
-    prior_lambda : float, default 0.0
-        Strength of the radial Fourier prior.  Zero disables the prior.
+        Fourier-diagonal D^2 for the radial Fourier prior.  When supplied, the
+        analytic prior gradient  D^2 X  is added directly to every matvec
+        ((D^2 X) Q and S (D^2 X)) with no additional scalar — the prior
+        magnitude is fully specified by D^2 itself.  D is Fourier-diagonal so
+        D^2 U is computed as IFFT(D2_fourier * FFT(U_col)) per column of U.
     """
 
-    def __init__(self, cryo, mean, batch_size=500, disc_type="linear_interp", D2_fourier=None, prior_lambda=0.0):
+    def __init__(self, cryo, mean, batch_size=500, disc_type="linear_interp", D2_fourier=None):
         self.cryo = cryo
         self.vs = cryo.volume_shape
         self.vol_size = int(np.prod(self.vs))
@@ -281,6 +279,13 @@ class SketchedNormalOperator:
         self.n_images = cryo.n_images
         self.batch_size = batch_size
         self.disc_type = disc_type
+        # The raw left output of _compute_sketches_half is inflated by this factor
+        # relative to the right output; callers divide by it to put both sides on
+        # the same scale (see notebook left_matvec_scaled).  The prior contribution
+        # is added on the "correct" (right-side) scale, so we have to pre-inflate
+        # the prior_left by the same factor or the downstream division will
+        # silently zero the prior on the left.
+        self.left_scale = self.vol_size / 2.0
 
         # Mean: accept Fourier (complex, from pipeline) or real-space (real)
         mean_flat = np.asarray(mean).reshape(-1)
@@ -294,8 +299,7 @@ class SketchedNormalOperator:
             # Real-space mean
             self.mean_half = _real_vols_to_half_fourier(mean_flat.reshape(1, -1), self.vs)[0]
 
-        # Optional radial Fourier prior
-        self.prior_lambda = float(prior_lambda)
+        # Optional radial Fourier prior — the magnitude is fully encoded in D^2.
         if D2_fourier is not None:
             D2 = np.asarray(D2_fourier).reshape(-1).astype(np.float32)
             if D2.size != self.vol_size:
@@ -323,18 +327,22 @@ class SketchedNormalOperator:
         )
 
     def _prior_right(self, U, s, V, Q):
-        """Prior contribution to right_matvec: lam * (D^2 U) diag(s) V^T Q."""
-        if self.prior_lambda == 0.0 or self.D2_fourier is None or len(s) == 0:
+        """Prior contribution to right_matvec: (D^2 U) diag(s) V^T Q."""
+        if self.D2_fourier is None or len(s) == 0:
             return 0.0
         D2U = self._D2U_real(U)
-        return self.prior_lambda * ((D2U * s) @ (V.T @ np.asarray(Q, dtype=np.float32)))
+        return (D2U * s) @ (V.T @ np.asarray(Q, dtype=np.float32))
 
     def _prior_left(self, U, s, V, S):
-        """Prior contribution to left_matvec: lam * S (D^2 U) diag(s) V^T."""
-        if self.prior_lambda == 0.0 or self.D2_fourier is None or len(s) == 0:
+        """Prior contribution to left_matvec: S (D^2 U) diag(s) V^T.
+
+        Pre-inflated by self.left_scale so that downstream callers who divide
+        op.left_matvec by left_scale recover the correct prior magnitude.
+        """
+        if self.D2_fourier is None or len(s) == 0:
             return 0.0
         D2U = self._D2U_real(U)
-        return self.prior_lambda * ((np.asarray(S, dtype=np.float32) @ (D2U * s)) @ V.T)
+        return self.left_scale * ((np.asarray(S, dtype=np.float32) @ (D2U * s)) @ V.T)
 
     def _to_U_half(self, U):
         """(vol_size, rank) real → (half_vol, rank) complex."""
@@ -450,11 +458,12 @@ class SketchedNormalOperator:
             disc_type=self.disc_type,
             disc_type_mean=self.disc_type,
         )
-        if self.prior_lambda != 0.0 and self.D2_fourier is not None and len(s) > 0:
+        if self.D2_fourier is not None and len(s) > 0:
             D2U = self._D2U_real(U)
             S_np = np.asarray(S, dtype=np.float32)
             Q_np = np.asarray(Q, dtype=np.float32)
-            left_prior = self.prior_lambda * ((S_np @ (D2U * s)) @ V.T)
-            right_prior = self.prior_lambda * ((D2U * s) @ (V.T @ Q_np))
+            # left_prior pre-inflated by left_scale so downstream division cancels (see _prior_left)
+            left_prior = self.left_scale * ((S_np @ (D2U * s)) @ V.T)
+            right_prior = (D2U * s) @ (V.T @ Q_np)
             return np.asarray(left) + left_prior, self._right_to_real(right_half) + right_prior
         return np.asarray(left), self._right_to_real(right_half)
