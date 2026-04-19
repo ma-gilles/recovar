@@ -248,7 +248,7 @@ def _compute_sketches_half(
 
 
 class SketchedNormalOperator:
-    """Sketched products of G(X) = A*(A(X) - b).
+    """Sketched products of G(X) = A*(A(X) - b) [+ lam * D^2 X].
 
     U, S, Q inputs are real-space.  Mean is Fourier (complex) or real.
 
@@ -263,9 +263,17 @@ class SketchedNormalOperator:
         Images per GPU batch.
     disc_type : str
         Interpolation type (default "linear_interp").
+    D2_fourier : (vol_size,) real, optional
+        Fourier-diagonal D^2 for the radial Fourier prior R(X) = (lam/2)||D X||_F^2.
+        If provided together with ``prior_lambda > 0``, the analytic prior gradient
+        lam * D^2 X is added to all matvecs:  (D^2 X) Q and S (D^2 X).
+        D is Fourier-diagonal so D^2 U is computed as IFFT(D2_fourier * FFT(U_col))
+        per column of U.
+    prior_lambda : float, default 0.0
+        Strength of the radial Fourier prior.  Zero disables the prior.
     """
 
-    def __init__(self, cryo, mean, batch_size=500, disc_type="linear_interp"):
+    def __init__(self, cryo, mean, batch_size=500, disc_type="linear_interp", D2_fourier=None, prior_lambda=0.0):
         self.cryo = cryo
         self.vs = cryo.volume_shape
         self.vol_size = int(np.prod(self.vs))
@@ -285,6 +293,48 @@ class SketchedNormalOperator:
         else:
             # Real-space mean
             self.mean_half = _real_vols_to_half_fourier(mean_flat.reshape(1, -1), self.vs)[0]
+
+        # Optional radial Fourier prior
+        self.prior_lambda = float(prior_lambda)
+        if D2_fourier is not None:
+            D2 = np.asarray(D2_fourier).reshape(-1).astype(np.float32)
+            if D2.size != self.vol_size:
+                raise ValueError(f"D2_fourier must have size vol_size={self.vol_size}, got {D2.size}")
+            self.D2_fourier = D2
+        else:
+            self.D2_fourier = None
+
+    def _D2U_real(self, U):
+        """Apply diagonal Fourier operator D^2 to each column of real-space U.
+
+        Returns (vol_size, rank) real.  Computed as IFFT(D2_fourier * FFT(U_col))
+        per column; the result is real because D^2 is real and Hermitian-diagonal.
+        """
+        if self.D2_fourier is None or U.shape[1] == 0:
+            return U
+        from recovar.core import linalg as _linalg
+
+        U_j = jnp.asarray(U, dtype=jnp.float32)
+        U_f = np.asarray(_linalg.batch_dft3(U_j, self.vs, U.shape[1]))  # (V, rank) complex
+        U_fw = U_f * self.D2_fourier[:, None]
+        U_w_vol = U_fw.T.reshape(U.shape[1], *self.vs)  # (rank, *vs) complex
+        return (
+            np.asarray(ftu.get_idft3(jnp.asarray(U_w_vol))).real.reshape(U.shape[1], self.vol_size).T.astype(np.float32)
+        )
+
+    def _prior_right(self, U, s, V, Q):
+        """Prior contribution to right_matvec: lam * (D^2 U) diag(s) V^T Q."""
+        if self.prior_lambda == 0.0 or self.D2_fourier is None or len(s) == 0:
+            return 0.0
+        D2U = self._D2U_real(U)
+        return self.prior_lambda * ((D2U * s) @ (V.T @ np.asarray(Q, dtype=np.float32)))
+
+    def _prior_left(self, U, s, V, S):
+        """Prior contribution to left_matvec: lam * S (D^2 U) diag(s) V^T."""
+        if self.prior_lambda == 0.0 or self.D2_fourier is None or len(s) == 0:
+            return 0.0
+        D2U = self._D2U_real(U)
+        return self.prior_lambda * ((np.asarray(S, dtype=np.float32) @ (D2U * s)) @ V.T)
 
     def _to_U_half(self, U):
         """(vol_size, rank) real → (half_vol, rank) complex."""
@@ -346,7 +396,8 @@ class SketchedNormalOperator:
             disc_type=self.disc_type,
             disc_type_mean=self.disc_type,
         )
-        return self._right_to_real(right_half)
+        base = self._right_to_real(right_half)
+        return base + self._prior_right(U, s, V, Q)
 
     def left_matvec(self, U, s, V, S):
         """Compute S @ G(X).
@@ -375,7 +426,7 @@ class SketchedNormalOperator:
             disc_type=self.disc_type,
             disc_type_mean=self.disc_type,
         )
-        return np.asarray(left)
+        return np.asarray(left) + self._prior_left(U, s, V, S)
 
     def both_matvecs(self, U, s, V, S, Q):
         """Compute S @ G(X) and G(X) @ Q in one pass.
@@ -399,4 +450,11 @@ class SketchedNormalOperator:
             disc_type=self.disc_type,
             disc_type_mean=self.disc_type,
         )
+        if self.prior_lambda != 0.0 and self.D2_fourier is not None and len(s) > 0:
+            D2U = self._D2U_real(U)
+            S_np = np.asarray(S, dtype=np.float32)
+            Q_np = np.asarray(Q, dtype=np.float32)
+            left_prior = self.prior_lambda * ((S_np @ (D2U * s)) @ V.T)
+            right_prior = self.prior_lambda * ((D2U * s) @ (V.T @ Q_np))
+            return np.asarray(left) + left_prior, self._right_to_real(right_half) + right_prior
         return np.asarray(left), self._right_to_real(right_half)
