@@ -302,11 +302,21 @@ def _m_step_block_windowed(
 
 @partial(jax.jit, static_argnums=())
 def _update_logsumexp(max_s, sum_exp, scores_block):
-    """Streaming logsumexp update: accumulate normalization stats from one block."""
+    """Streaming logsumexp update: accumulate normalization stats from one block.
+
+    Accumulates in float64 to avoid underflow when the posterior is sharp
+    (e.g. with RELION's narrow translation prior sigma ~ 0.3 px, most
+    candidates get exp(score - max) < float32 epsilon).
+    """
     scores_flat = scores_block.reshape(scores_block.shape[0], -1)  # (n_images, block*trans)
     block_max = jnp.max(scores_flat, axis=1)  # (n_images,)
     new_max = jnp.maximum(max_s, block_max)
-    sum_exp = sum_exp * jnp.exp(max_s - new_max) + jnp.sum(jnp.exp(scores_flat - new_max[:, None]), axis=1)
+    # Use float64 for the exponential sums to avoid underflow
+    exp_terms = jnp.sum(
+        jnp.exp((scores_flat - new_max[:, None]).astype(jnp.float64)),
+        axis=1,
+    )
+    sum_exp = sum_exp * jnp.exp((max_s - new_max).astype(jnp.float64)) + exp_terms
     return new_max, sum_exp
 
 
@@ -472,6 +482,9 @@ def run_em_v2(
     half_spectrum_scoring: bool = False,
     projection_padding_factor: int = 1,
     reconstruction_padding_factor: int = 1,
+    image_corrections: np.ndarray = None,
+    scale_corrections: np.ndarray = None,
+    image_pre_shifts: np.ndarray = None,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -518,6 +531,30 @@ def run_em_v2(
         per-image log normalizer, best score, maximum posterior
         probability, and additive posterior mass per rotation computed
         during the E-step.
+    image_corrections : np.ndarray or None, shape (n_images,)
+        Per-image multiplicative correction applied to Fourier images
+        before scoring and M-step accumulation.  For RELION parity this
+        is ``(avg_norm / normcorr[i]) * scale[group_id[i]]`` — RELION
+        applies ``img *= avg_norm_correction / normcorr`` before FFT
+        (ml_optimiser.cpp:6240) and scale to the reference
+        (ml_optimiser.cpp:7298).  See ``scale_corrections`` for the
+        companion norm-term / denominator fix.
+    scale_corrections : np.ndarray or None, shape (n_images,)
+        Per-image scale correction (``rlnGroupScaleCorrection``).
+        RELION applies scale to the *reference* (``Frefctf *= myscale``
+        at ml_optimiser.cpp:7298 and ``Mctf *= myscale`` at
+        ml_optimiser.cpp:8516).  This means the E-step norm-term and
+        the M-step CTF denominator must both carry a ``scale**2``
+        factor.  When provided, ``ctf2_over_nv`` is multiplied by
+        ``scale**2`` per image to match RELION's convention.
+    image_pre_shifts : np.ndarray or None, shape (n_images, 2)
+        Per-image translation (in pixels) applied to the processed
+        Fourier-space images before scoring.  RELION pre-centers each
+        image by its ``old_offset`` (rlnOriginXAngst/pixel_size) via
+        ``selfTranslate`` before scoring (ml_optimiser.cpp:6225).
+        The equivalent Fourier-space operation is multiplication by
+        ``exp(-2πi k·shift)``.  The candidate translations from the
+        grid are then relative to this centered position.
     """
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]
@@ -756,6 +793,50 @@ def run_em_v2(
             else shifted_half
         )
 
+        # -- Per-image corrections (RELION parity: avg_norm/normcorr * scale) --
+        # RELION: img *= avg_norm_correction / normcorr  (ml_optimiser.cpp:6240)
+        # then   Frefctf *= scale                        (ml_optimiser.cpp:7298)
+        # The image-side multiplier is (avg_norm/normcorr)*scale.
+        # shifted_half has shape (batch_size * n_trans, N_half) — broadcast
+        # the per-image correction across n_trans copies.
+        if image_corrections is not None:
+            batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
+            # Expand to (batch_size * n_trans,) by repeating each correction n_trans times
+            corr_expanded = jnp.repeat(batch_corr, n_trans)
+            shifted_half = shifted_half * corr_expanded[:, None]
+            shifted_recon_half = shifted_recon_half * corr_expanded[:, None]
+            # batch_norm also scales: ||img * corr / sqrt(sigma)||^2 = corr^2 * ||img / sqrt(sigma)||^2
+            batch_norm = batch_norm * (batch_corr**2)[:, None]
+
+        # -- Per-image scale correction on CTF²/σ² (RELION parity) --
+        # RELION applies scale_correction to the REFERENCE: Frefctf *= myscale
+        # (ml_optimiser.cpp:7298) and Mctf *= myscale (ml_optimiser.cpp:8516).
+        # This means both the E-step norm-term (ctf²/σ² @ |proj|²) and the
+        # M-step denominator (Σ γ·ctf²/σ²) carry scale².  Apply it here so
+        # all downstream uses of ctf2_over_nv_half see the correct factor.
+        if scale_corrections is not None:
+            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
+            ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+
+        # -- Per-image pre-centering (RELION parity: old_offset phase shift) --
+        # RELION pre-centers each image by its stored translation (old_offset)
+        # before scoring.  In Fourier space this is multiplication by
+        # exp(-2πi k·shift).  Phase-shift the half-spectrum images so that
+        # the translation grid searches relative to the centered position.
+        # batch_norm is unaffected (|exp(iθ)| = 1).
+        if image_pre_shifts is not None:
+            batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
+            # Compute per-pixel phase factors in half-spectrum layout
+            lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+                image_shape, voxel_size=1, scaled=True
+            )
+            # phase_factors: (batch_size, N_half) complex
+            phase_factors = jnp.exp(-2j * jnp.pi * (lattice_half @ batch_shifts.T)).T
+            # Expand to (batch_size * n_trans, N_half)
+            phase_expanded = jnp.repeat(phase_factors, n_trans, axis=0)
+            shifted_half = shifted_half * phase_expanded
+            shifted_recon_half = shifted_recon_half * phase_expanded
+
         # -- Save pre-DC-exclusion arrays for noise accumulation --
         # RELION excludes DC from scores but INCLUDES DC in noise estimation.
         # We save the original arrays before zeroing DC so the noise path
@@ -809,7 +890,7 @@ def run_em_v2(
 
         # -- PASS 1: streaming logsumexp over rotation blocks --
         max_s = jnp.full(batch_size, -jnp.inf)
-        sum_exp = jnp.zeros(batch_size)
+        sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
 
         for b in range(n_blocks):
             r0 = b * rotation_block_size
@@ -1277,7 +1358,7 @@ def compute_e_step_weights(
 
         # Pass 1: streaming logsumexp
         max_s = jnp.full(batch_size, -jnp.inf)
-        sum_exp = jnp.zeros(batch_size)
+        sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
 
         for b in range(n_blocks):
             r0 = b * rotation_block_size
