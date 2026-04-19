@@ -345,10 +345,14 @@ class SketchedSolver:
             delta = delta * shrink
             if delta < 1e-10:
                 break
-        # Bailed out: take last step anyway, note failure
+        # Bailed out: every retry violates Armijo, so none are safe to accept.
+        # Stall at the current iterate — keep (U, s, V) and its cached f/grad —
+        # so the outer loop can try again next round with a fresh (smaller δ) step.
+        # Accepting the last rejected step here was the cause of late-iter blow-ups
+        # on GPUs where fp drift pushed the trajectory near the Armijo cliff.
         delta_state["delta"] = max(delta, 1e-10)
         info = {"trials": max_retries, "accepted": False, "last": last_trial}
-        return U_new, s_new, V_new, sb, delta, delta_state, f_new, (GV_new, G0V_new), info
+        return U, s, V, sb, delta, delta_state, f_old, (GV_old_cache, G0V_old_cache), info
 
     def _right(self, U, s, V, Q):
         return np.asarray(self.op.right_matvec(U, s, V, Q), dtype=np.float32)
@@ -721,9 +725,19 @@ def run_iterations_backtracking_dmetric(
     for it in range(n_iter):
         delta_state["delta"] = float(np.clip(delta_state["delta"], delta_min, delta_max))
         U_new, s_new, V_new, sb, delta_used, delta_state, f_new, caches, info = solver.step_with_backtracking(
-            U_Y, s, V, cfg_y, rng, delta_state,
-            armijo_c=armijo_c, shrink=shrink, grow=grow, max_retries=max_retries,
-            f_old=f_cache, GV_old_cache=GV_cache, G0V_old_cache=G0V_cache,
+            U_Y,
+            s,
+            V,
+            cfg_y,
+            rng,
+            delta_state,
+            armijo_c=armijo_c,
+            shrink=shrink,
+            grow=grow,
+            max_retries=max_retries,
+            f_old=f_cache,
+            GV_old_cache=GV_cache,
+            G0V_old_cache=G0V_cache,
         )
         U_Y, s, V = U_new, s_new, V_new
         f_cache = f_new
