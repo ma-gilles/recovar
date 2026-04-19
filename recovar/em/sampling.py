@@ -281,6 +281,30 @@ def read_relion_sampling_metadata(sampling_star_path):
     )
 
 
+def read_relion_model_metadata(model_star_path):
+    """Read RELION model star fields needed for replay.
+
+    Returns ``current_image_size`` and ``current_resolution`` from the
+    model star file.  These are written by ``updateCurrentResolution`` +
+    ``updateImageSizeAndResolutionPointers`` at the start of each RELION
+    iteration and stored in the ``data_model_general`` table.
+    """
+    import re
+
+    text = open(model_star_path).read()
+
+    def _grab(name, cast=float):
+        m = re.search(rf"_{name}\s+(\S+)", text)
+        if not m:
+            raise ValueError(f"Missing {name} in {model_star_path}")
+        return cast(m.group(1))
+
+    return dict(
+        current_image_size=_grab("rlnCurrentImageSize", int),
+        current_resolution=_grab("rlnCurrentResolution"),
+    )
+
+
 def get_healpix_children(parent_pixels, parent_nside_level):
     """Return the 4 child HEALPix pixel indices for each parent pixel.
 
