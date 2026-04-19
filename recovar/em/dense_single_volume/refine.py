@@ -854,6 +854,11 @@ def refine_single_volume(
     init_fsc=None,
     init_ave_Pmax=None,
     init_has_high_fsc_at_limit=None,
+    init_relion_iteration=0,
+    init_image_corrections=None,
+    init_scale_corrections=None,
+    init_direction_prior=None,
+    init_previous_best_translations=None,
 ):
     """Multi-iteration EM refinement with FSC-driven resolution management.
 
@@ -994,6 +999,11 @@ def refine_single_volume(
             init_fsc=init_fsc,
             init_ave_Pmax=init_ave_Pmax,
             init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
+            init_relion_iteration=init_relion_iteration,
+            init_image_corrections=init_image_corrections,
+            init_scale_corrections=init_scale_corrections,
+            init_direction_prior=init_direction_prior,
+            init_previous_best_translations=init_previous_best_translations,
         )
 
     # ===================================================================
@@ -1317,6 +1327,11 @@ def _refine_relion_mode(
     init_fsc=None,
     init_ave_Pmax=None,
     init_has_high_fsc_at_limit=None,
+    init_relion_iteration=0,
+    init_image_corrections=None,
+    init_scale_corrections=None,
+    init_direction_prior=None,
+    init_previous_best_translations=None,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -1454,7 +1469,17 @@ def _refine_relion_mode(
     hard_assignments = [None, None]
     previous_assignments = [None, None]
     previous_best_rotations = [None, None]
-    previous_best_translations = [None, None]
+    if init_previous_best_translations is not None:
+        previous_best_translations = [
+            np.asarray(init_previous_best_translations[0], dtype=np.float32)
+            if init_previous_best_translations[0] is not None
+            else None,
+            np.asarray(init_previous_best_translations[1], dtype=np.float32)
+            if init_previous_best_translations[1] is not None
+            else None,
+        ]
+    else:
+        previous_best_translations = [None, None]
     max_posterior_per_half = [None, None]
     rotation_posterior_per_half = [None, None]
     significant_counts = []
@@ -1483,6 +1508,67 @@ def _refine_relion_mode(
     relion_has_high_fsc_at_limit = bool(init_has_high_fsc_at_limit) if init_has_high_fsc_at_limit is not None else False
     global_direction_prior = None
     global_direction_prior_order = None
+
+    # --- Per-image corrections (RELION parity: avg_norm/normcorr * scale) ---
+    # RELION applies img *= avg_norm_correction/normcorr (ml_optimiser.cpp:6240)
+    # and scale_correction to the reference (line 7298).  The caller must
+    # compute (avg_norm/normcorr)*scale and pass it here.  Passed through to
+    # run_em_v2's image_corrections parameter.
+    # The arrays are indexed by the HALF-SET dataset order (not global particle
+    # order), matching experiment_datasets[k].
+    image_corrections_per_half = [None, None]
+    if init_image_corrections is not None:
+        image_corrections_per_half = init_image_corrections
+        for k in range(2):
+            if image_corrections_per_half[k] is not None:
+                ic = np.asarray(image_corrections_per_half[k], dtype=np.float32)
+                logger.info(
+                    "RELION mode: image_corrections half-%d: mean=%.4f, std=%.4f, min=%.4f, max=%.4f (%d images)",
+                    k + 1,
+                    ic.mean(),
+                    ic.std(),
+                    ic.min(),
+                    ic.max(),
+                    len(ic),
+                )
+                image_corrections_per_half[k] = ic
+
+    # --- Per-image scale corrections (RELION parity: reference side) ---
+    # RELION applies rlnGroupScaleCorrection to the REFERENCE, not the image
+    # (ml_optimiser.cpp:7295-7298).  This means the E-step norm-term and
+    # M-step denominator carry scale².  Passed to run_em_v2's
+    # scale_corrections parameter to multiply ctf²/σ² by scale².
+    scale_corrections_per_half = [None, None]
+    if init_scale_corrections is not None:
+        scale_corrections_per_half = init_scale_corrections
+        for k in range(2):
+            if scale_corrections_per_half[k] is not None:
+                sc = np.asarray(scale_corrections_per_half[k], dtype=np.float32)
+                logger.info(
+                    "RELION mode: scale_corrections half-%d: mean=%.4f, std=%.4f, min=%.4f, max=%.4f (%d images)",
+                    k + 1,
+                    sc.mean(),
+                    sc.std(),
+                    sc.min(),
+                    sc.max(),
+                    len(sc),
+                )
+                scale_corrections_per_half[k] = sc
+
+    # --- Direction prior from snapshot ---
+    # When starting from a RELION snapshot, the previous iteration's
+    # pdf_orientation is a non-uniform prior over HEALPix directions.
+    # RELION applies this in the next E-step.  recovar must do the same.
+    if init_direction_prior is not None:
+        global_direction_prior = np.asarray(init_direction_prior, dtype=np.float32)
+        global_direction_prior_order = init_healpix_order
+        logger.info(
+            "RELION mode: loaded init direction prior: %d directions, range=[%.6f, %.6f], %d zero-probability",
+            len(global_direction_prior),
+            global_direction_prior.min(),
+            global_direction_prior.max(),
+            int(np.sum(global_direction_prior == 0)),
+        )
 
     # Extract a per-shell radial profile from the input pixel-array
     # noise_variance for diagnostic logging only ("noise update per shell:
@@ -1608,7 +1694,7 @@ def _refine_relion_mode(
         if perturb_replay_relion_dir is not None:
             _star = os.path.join(
                 perturb_replay_relion_dir,
-                f"run_it{iteration + 1:03d}_sampling.star",
+                f"run_it{init_relion_iteration + iteration + 1:03d}_sampling.star",
             )
             _replay_meta = read_relion_sampling_metadata(_star)
             _relion_hp = int(_replay_meta["healpix_order"])
@@ -1839,18 +1925,26 @@ def _refine_relion_mode(
 
         for k in range(2):
             current_translation_range = float(state.translation_range)
-            # C1 (RELION-parity): use the data-driven sigma2_offset from the
-            # previous iter (current_sigma_offset_angstrom) instead of the
-            # constant init value. Pass offset_range_pixels=None so
-            # make_relion_translation_log_prior does NOT override our sigma
-            # with the legacy `range/3` heuristic. The translation grid is
-            # still bounded by `current_translation_range` outside this
-            # function (in the engine's score computation).
+            # RELION translation prior sigma (ml_optimiser.cpp:7737-7746):
+            # RELION checks `offset_range_x` (rlnOffsetRangeX in optimiser.star),
+            # NOT the search-grid `offset_range` (rlnOffsetRange in sampling.star).
+            # When offset_range_x > 0: sigma² = range_x²/9 (per-axis override)
+            # When offset_range_x <= 0: sigma² = model.sigma2_offset (learned)
+            # For this dataset, rlnOffsetRangeX = -1 → model sigma is used.
+            # We always use current_sigma_offset_angstrom (from model star).
+            #
+            # RELION evaluates the translation prior on the TOTAL offset:
+            # diff = myprior - (old_offset + delta). With myprior=0
+            # (no rlnOriginXPriorAngst set), this is -(old_offset+delta).
+            # After pre-centering the image by old_offset, the search
+            # variable is delta (relative). To get |old_offset + delta|²
+            # from |delta - center|², set center = -old_offset.
+            trans_prior_center = -previous_best_translations[k] if previous_best_translations[k] is not None else None
             translation_log_prior = make_relion_translation_log_prior(
                 np.asarray(current_translations, dtype=np.float32),
                 cryo.voxel_size,
                 current_sigma_offset_angstrom,
-                previous_best_translations[k],
+                trans_prior_center,
                 offset_range_pixels=None,
             )
             if use_local:
@@ -1992,6 +2086,9 @@ def _refine_relion_mode(
                         half_spectrum_scoring=True,
                         projection_padding_factor=PROJECTION_PADDING_FACTOR,
                         reconstruction_padding_factor=PADDING_FACTOR,
+                        image_corrections=image_corrections_per_half[k],
+                        scale_corrections=scale_corrections_per_half[k],
+                        image_pre_shifts=previous_best_translations[k],
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     pose_rotations[k] = effective_rotations
@@ -2023,6 +2120,9 @@ def _refine_relion_mode(
                         half_spectrum_scoring=True,
                         projection_padding_factor=PROJECTION_PADDING_FACTOR,
                         reconstruction_padding_factor=PADDING_FACTOR,
+                        image_corrections=image_corrections_per_half[k],
+                        scale_corrections=scale_corrections_per_half[k],
+                        image_pre_shifts=previous_best_translations[k],
                     )
                     Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots_k, em_stats_k, noise_stats_k = pass2_outputs
                     noise_stats_per_half[k] = noise_stats_k
@@ -2075,6 +2175,9 @@ def _refine_relion_mode(
                         half_spectrum_scoring=True,
                         projection_padding_factor=PROJECTION_PADDING_FACTOR,
                         reconstruction_padding_factor=PADDING_FACTOR,
+                        image_corrections=image_corrections_per_half[k],
+                        scale_corrections=scale_corrections_per_half[k],
+                        image_pre_shifts=previous_best_translations[k],
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     dt_pass2 = time.time() - t_pass2
@@ -2125,8 +2228,12 @@ def _refine_relion_mode(
                     score_with_masked_images=True,
                     return_stats=True,
                     accumulate_noise=True,
+                    half_spectrum_scoring=True,
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
+                    image_corrections=image_corrections_per_half[k],
+                    scale_corrections=scale_corrections_per_half[k],
+                    image_pre_shifts=previous_best_translations[k],
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
@@ -2472,7 +2579,13 @@ def _refine_relion_mode(
                     pose_translations[k],
                 )
             new_iter_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
-            new_iter_best_translations[k] = np.asarray(best_trans, dtype=np.float32)
+            # When image_pre_shifts is used, best_trans is RELATIVE to the
+            # pre-shifted position.  Store the total (absolute) translation
+            # so the next iteration pre-centers by the updated offset.
+            total_trans = np.asarray(best_trans, dtype=np.float32)
+            if previous_best_translations[k] is not None:
+                total_trans = total_trans + previous_best_translations[k]
+            new_iter_best_translations[k] = total_trans
             previous_best_rotations[k] = new_iter_best_rotations[k]
             previous_best_translations[k] = new_iter_best_translations[k]
             experiment_datasets[k].update_poses(best_rots, best_trans)
@@ -2734,8 +2847,12 @@ def _refine_relion_mode(
             score_with_masked_images=True,
             return_stats=True,
             accumulate_noise=True,
+            half_spectrum_scoring=True,
             projection_padding_factor=PROJECTION_PADDING_FACTOR,
             reconstruction_padding_factor=PADDING_FACTOR,
+            image_corrections=image_corrections_per_half[k],
+            scale_corrections=scale_corrections_per_half[k],
+            image_pre_shifts=previous_best_translations[k],
         )
         final_ft_y = final_ft_y + Ft_y_k_final
         final_ft_ctf = final_ft_ctf + Ft_ctf_k_final

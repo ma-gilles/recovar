@@ -612,34 +612,53 @@ def compute_relion_tau2_from_weights(
     if padding_factor > 1:
         padded_shape = tuple(d * padding_factor for d in volume_shape)
         # RELION backprojector.cpp:1074 — ires = ROUND(sqrt(r2) / padding_factor)
-        # Divide continuous distance by pf BEFORE rounding to get native shell.
+        # Two conventions to match:
+        # 1. Single round on continuous distance (not double-round via pre-rounded grid)
+        # 2. RELION ROUND(x) = (int)(x + 0.5) which rounds 0.5 UP,
+        #    while jnp.round uses banker's rounding (0.5 → nearest even).
+        #    Use floor(x + 0.5) to match RELION.
         padded_dist = fourier_transform_utils.get_grid_of_radial_distances(
-            padded_shape, scaled=False, frequency_shift=0
+            padded_shape, scaled=False, frequency_shift=0, rounded=False
         ).reshape(-1)
-        native_shells = jnp.minimum(jnp.round(padded_dist / padding_factor).astype(jnp.int32), ori_half)
+        native_shells = jnp.minimum(jnp.floor(padded_dist / padding_factor + 0.5).astype(jnp.int32), ori_half)
         n_native_shells = ori_half + 1
-        shell_sum = jnp.zeros(n_native_shells, dtype=prior_dtype)
-        shell_count = jnp.zeros(n_native_shells, dtype=prior_dtype)
-        shell_sum = shell_sum.at[native_shells].add(H_comb)
-        shell_count = shell_count.at[native_shells].add(1.0)
+        # RELION updateSSNRarrays (backprojector.cpp:1044) iterates over the
+        # half-complex array (kx >= 0 only).  recovar stores weights in
+        # centered-full layout.  To match RELION's per-shell averages, mask
+        # out the conjugate-half voxels (kx < 0, excluding Nyquist kx=-N/2).
+        pf_N = padded_shape[-1]
+        kx_idx = jnp.arange(H_comb.shape[0]) % pf_N
+        # Centered layout: idx=0 → kx=-N/2 (Nyquist), idx=N/2 → kx=0.
+        # Half-complex includes kx=0,...,N/2 → centered idx in {0} ∪ {N/2,...,N-1}.
+        half_mask = ((kx_idx == 0) | (kx_idx >= pf_N // 2)).astype(jnp.float64)
+        # Accumulate in float64 to avoid scatter-add rounding at high shell counts.
+        H_comb_f64 = H_comb.astype(jnp.float64)
+        shell_sum = jnp.zeros(n_native_shells, dtype=jnp.float64)
+        shell_count = jnp.zeros(n_native_shells, dtype=jnp.float64)
+        shell_sum = shell_sum.at[native_shells].add(H_comb_f64 * half_mask)
+        shell_count = shell_count.at[native_shells].add(half_mask)
         bottom_avg = jnp.where(shell_count > 0, shell_sum / shell_count, 0.0)
     else:
         bottom_avg = average_over_shells(H_comb, volume_shape, frequency_shift=0)
+        bottom_avg = bottom_avg.astype(jnp.float64)
 
     n_shells = bottom_avg.shape[0]
 
-    fsc_raw = jnp.asarray(fsc, dtype=prior_dtype)
+    # Compute SSNR in float64 to avoid catastrophic cancellation in
+    # 1 - fsc when fsc is clamped near 0.999 (float32 loses ~3 digits).
+    fsc_raw = jnp.asarray(fsc, dtype=jnp.float64)
     fsc_indices = jnp.minimum(jnp.arange(n_shells), fsc_raw.shape[0] - 1)
     fsc_arr = fsc_raw[fsc_indices]
     epsilon = jax_config.FSC_ZERO_THRESHOLD
     fsc_clamped = jnp.clip(fsc_arr, epsilon, 1.0 - epsilon)
-    ssnr = fsc_clamped / (1.0 - fsc_clamped) * jnp.asarray(tau2_fudge, dtype=prior_dtype)
+    ssnr = fsc_clamped / (1.0 - fsc_clamped) * tau2_fudge
 
     # RELION backprojector.cpp:1061,1075 — updateSSNRarrays multiplies each
     # weight by oversampling_correction = pf³ before shell-averaging, because
     # padding dilutes the per-voxel weight by that factor.  Match here.
-    oversampling_correction = jnp.asarray(padding_factor**3, dtype=prior_dtype)
+    oversampling_correction = padding_factor**3
     prior_avg = jnp.where(bottom_avg > 0, ssnr / (oversampling_correction * bottom_avg), jax_config.EPSILON)
+    prior_avg = prior_avg.astype(prior_dtype)
 
     radial_distances = (
         fourier_transform_utils.get_grid_of_radial_distances(volume_shape, scaled=False, frequency_shift=0)
