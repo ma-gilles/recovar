@@ -8,14 +8,12 @@ import jax.numpy as jnp
 
 import recovar.core as core
 import recovar.core.fourier_transform_utils as ftu
-from recovar.core.configs import ForwardModelConfig
-from recovar.ppca.sketched_normal import (
-    SketchedNormalOperator,
-    _sketched_normal_batch,
-    _real_vols_to_half_fourier,
-    _half_fourier_to_real_vols,
-)
 from recovar.ppca.ppca import batch_over_vol_slice_volume_half
+from recovar.ppca.sketched_normal import (
+    _half_fourier_to_real_vols,
+    _real_vols_to_half_fourier,
+    _sketched_normal_batch,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -23,6 +21,7 @@ pytestmark = pytest.mark.unit
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _ones_ctf(ctf_params, image_shape, voxel_size, **kw):
     half_image = kw.get("half_image", False)
@@ -32,7 +31,7 @@ def _ones_ctf(ctf_params, image_shape, voxel_size, **kw):
 
 def _setup(rng, grid_size=8, n_images=4, rank=2, sketch_rank=3, qrank=2):
     vs = (grid_size,) * 3
-    vol_size = grid_size ** 3
+    vol_size = grid_size**3
     half_vs = ftu.volume_shape_to_half_volume_shape(vs)
     half_vol_size = int(np.prod(half_vs))
     image_shape = (grid_size, grid_size)
@@ -54,9 +53,9 @@ def _setup(rng, grid_size=8, n_images=4, rank=2, sketch_rank=3, qrank=2):
     # Half-image data
     images_real = rng.normal(size=(n_images, *image_shape)).astype(np.float32)
     images_ft = np.fft.fft2(np.fft.fftshift(images_real, axes=(-2, -1)))
-    images_half = np.asarray(ftu.full_image_to_half_image(
-        images_ft.reshape(n_images, -1).astype(np.complex64), image_shape
-    ))
+    images_half = np.asarray(
+        ftu.full_image_to_half_image(images_ft.reshape(n_images, -1).astype(np.complex64), image_shape)
+    )
 
     rotations = []
     mats = rng.normal(size=(n_images, 3, 3)).astype(np.float32)
@@ -67,11 +66,20 @@ def _setup(rng, grid_size=8, n_images=4, rank=2, sketch_rank=3, qrank=2):
     rotations = np.stack(rotations)
 
     return dict(
-        vs=vs, vol_size=vol_size, half_vol_size=half_vol_size,
-        image_shape=image_shape, half_im_size=half_im_size,
-        U_real=U_real, sigma=sigma, V=V, mean_real=mean_real,
-        S_real=S_real, Q=Q,
-        U_half=U_half, mean_half=mean_half, S_half=S_half,
+        vs=vs,
+        vol_size=vol_size,
+        half_vol_size=half_vol_size,
+        image_shape=image_shape,
+        half_im_size=half_im_size,
+        U_real=U_real,
+        sigma=sigma,
+        V=V,
+        mean_real=mean_real,
+        S_real=S_real,
+        Q=Q,
+        U_half=U_half,
+        mean_half=mean_half,
+        S_half=S_half,
         images_half=jnp.array(images_half),
         rotations=jnp.array(rotations),
         translations=jnp.zeros((n_images, 2), dtype=np.float32),
@@ -83,11 +91,21 @@ def _setup(rng, grid_size=8, n_images=4, rank=2, sketch_rank=3, qrank=2):
 
 def _call_kernel(s, S_half=None, Q=None):
     return _sketched_normal_batch(
-        s["images_half"], s["mean_half"],
-        jnp.array(s["U_half"]), jnp.array(s["sigma"]), s["V"],
-        s["ctf_params"], s["rotations"], s["translations"],
-        s["noise_half"], 1.0,
-        s["image_shape"], s["vs"], s["ctf"], "linear_interp", "linear_interp",
+        s["images_half"],
+        s["mean_half"],
+        jnp.array(s["U_half"]),
+        jnp.array(s["sigma"]),
+        s["V"],
+        s["ctf_params"],
+        s["rotations"],
+        s["translations"],
+        s["noise_half"],
+        1.0,
+        s["image_shape"],
+        s["vs"],
+        s["ctf"],
+        "linear_interp",
+        "linear_interp",
         S_left_half=jnp.array(S_half) if S_half is not None else None,
         Q_batch=jnp.array(Q) if Q is not None else None,
     )
@@ -96,6 +114,7 @@ def _call_kernel(s, S_half=None, Q=None):
 # ---------------------------------------------------------------------------
 # Test: real ↔ half-Fourier roundtrip
 # ---------------------------------------------------------------------------
+
 
 def test_real_half_fourier_roundtrip():
     rng = np.random.default_rng(0)
@@ -110,6 +129,7 @@ def test_real_half_fourier_roundtrip():
 # Test: right sketch vs per-image reference
 # ---------------------------------------------------------------------------
 
+
 def test_right_sketch_vs_per_column():
     rng = np.random.default_rng(42)
     s = _setup(rng)
@@ -120,9 +140,9 @@ def test_right_sketch_vs_per_column():
     _, left_ref = _call_kernel(s)  # just to get residual shape
     # Re-run to get bp directly — use a trivial Q=[1] per image
     n = s["V"].shape[0]
-    ref = np.zeros((s["half_vol_size"], s["Q"].shape[1]), dtype=np.float32)
+    ref = np.zeros((s["half_vol_size"], s["Q"].shape[1]), dtype=np.complex64)
     for j in range(s["Q"].shape[1]):
-        Q_col = s["Q"][:, j:j+1]
+        Q_col = s["Q"][:, j : j + 1]
         r_j, _ = _call_kernel(s, Q=Q_col)
         ref[:, j] = np.asarray(r_j).reshape(-1)
 
@@ -133,6 +153,7 @@ def test_right_sketch_vs_per_column():
 # Test: left sketch vs per-image reference
 # ---------------------------------------------------------------------------
 
+
 def test_left_sketch_vs_per_row():
     rng = np.random.default_rng(7)
     s = _setup(rng)
@@ -142,7 +163,7 @@ def test_left_sketch_vs_per_row():
     # Reference: one row at a time
     ref = np.zeros_like(np.asarray(left))
     for si in range(s["S_half"].shape[0]):
-        _, left_row = _call_kernel(s, S_half=s["S_half"][si:si+1])
+        _, left_row = _call_kernel(s, S_half=s["S_half"][si : si + 1])
         ref[si] = np.asarray(left_row).reshape(-1)
 
     np.testing.assert_allclose(np.asarray(left), ref, atol=2.0, rtol=5e-3)
@@ -151,6 +172,7 @@ def test_left_sketch_vs_per_row():
 # ---------------------------------------------------------------------------
 # Test: zero residual → zero output
 # ---------------------------------------------------------------------------
+
 
 def test_zero_residual():
     rng = np.random.default_rng(99)
@@ -162,21 +184,42 @@ def test_zero_residual():
     C = s["V"] * s["sigma"][None, :]
 
     PU = batch_over_vol_slice_volume_half(
-        U_half, s["rotations"], s["image_shape"], s["vs"], "linear_interp",
+        U_half,
+        s["rotations"],
+        s["image_shape"],
+        s["vs"],
+        "linear_interp",
     )
     predicted = jnp.einsum("bri,br->bi", PU, jnp.array(C))
     P_mean = core.slice_volume(
-        mean_half, s["rotations"], s["image_shape"], s["vs"],
-        "linear_interp", half_image=True, half_volume=True,
+        mean_half,
+        s["rotations"],
+        s["image_shape"],
+        s["vs"],
+        "linear_interp",
+        half_image=True,
+        half_volume=True,
     )
     exact_images = predicted + P_mean
 
     right, left = _sketched_normal_batch(
-        exact_images, mean_half, U_half, jnp.array(s["sigma"]), jnp.array(s["V"]),
-        s["ctf_params"], s["rotations"], s["translations"],
-        s["noise_half"], 1.0,
-        s["image_shape"], s["vs"], s["ctf"], "linear_interp", "linear_interp",
-        S_left_half=jnp.array(s["S_half"]), Q_batch=jnp.array(s["Q"]),
+        exact_images,
+        mean_half,
+        U_half,
+        jnp.array(s["sigma"]),
+        jnp.array(s["V"]),
+        s["ctf_params"],
+        s["rotations"],
+        s["translations"],
+        s["noise_half"],
+        1.0,
+        s["image_shape"],
+        s["vs"],
+        s["ctf"],
+        "linear_interp",
+        "linear_interp",
+        S_left_half=jnp.array(s["S_half"]),
+        Q_batch=jnp.array(s["Q"]),
     )
 
     np.testing.assert_allclose(np.asarray(right), 0.0, atol=1e-4)
@@ -186,6 +229,7 @@ def test_zero_residual():
 # ---------------------------------------------------------------------------
 # Test: linearity (scale data → scale output)
 # ---------------------------------------------------------------------------
+
 
 def test_linearity():
     rng = np.random.default_rng(123)
@@ -200,11 +244,23 @@ def test_linearity():
 
     def run(imgs):
         return _sketched_normal_batch(
-            imgs, mean_zero, U_zero, s_zero, V_zero,
-            s["ctf_params"], s["rotations"], s["translations"],
-            s["noise_half"], 1.0,
-            s["image_shape"], s["vs"], s["ctf"], "linear_interp", "linear_interp",
-            S_left_half=jnp.array(s["S_half"]), Q_batch=jnp.array(s["Q"]),
+            imgs,
+            mean_zero,
+            U_zero,
+            s_zero,
+            V_zero,
+            s["ctf_params"],
+            s["rotations"],
+            s["translations"],
+            s["noise_half"],
+            1.0,
+            s["image_shape"],
+            s["vs"],
+            s["ctf"],
+            "linear_interp",
+            "linear_interp",
+            S_left_half=jnp.array(s["S_half"]),
+            Q_batch=jnp.array(s["Q"]),
         )
 
     r1, l1 = run(s["images_half"])
