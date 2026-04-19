@@ -54,6 +54,7 @@ from recovar.em.sampling import (
     get_oversampled_translation_grid,
     get_relion_rotation_grid,
     get_translation_grid,
+    read_relion_model_metadata,
     read_relion_sampling_metadata,
     relion_angular_sampling_deg,
     rotation_grid_n_in_planes,
@@ -192,6 +193,7 @@ def _run_grouped_local_search_em(
     accumulate_noise=False,
     projection_padding_factor=1,
     reconstruction_padding_factor=1,
+    use_float64_scoring=False,
 ):
     """Run batched exact local search on the fine HEALPix grid.
 
@@ -293,6 +295,7 @@ def _run_grouped_local_search_em(
             accumulate_noise=accumulate_noise,
             projection_padding_factor=projection_padding_factor,
             reconstruction_padding_factor=reconstruction_padding_factor,
+            use_float64_scoring=use_float64_scoring,
         )
         if accumulate_noise:
             _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g = run_em_outputs
@@ -1724,6 +1727,28 @@ def _refine_relion_mode(
                 state.translation_range = _relion_offset_range
                 state.translation_step = _relion_offset_step
 
+            # Override current_size from RELION model star.
+            # RELION stores the current_size it used for each iteration in
+            # _rlnCurrentImageSize. recovar's FSC-based resolution_from_data_vs_prior
+            # returns a different (usually higher) shell than RELION's stored
+            # current_resolution, causing recovar to grow cs too aggressively
+            # (e.g. 80→110→128 vs RELION 80→80→80).
+            _model_star = os.path.join(
+                perturb_replay_relion_dir,
+                f"run_it{init_relion_iteration + iteration + 1:03d}_half1_model.star",
+            )
+            if os.path.exists(_model_star):
+                _model_meta = read_relion_model_metadata(_model_star)
+                _relion_cs = int(_model_meta["current_image_size"])
+                if cs != _relion_cs:
+                    logger.info(
+                        "Replay override: current_size %d -> %d (from %s)",
+                        cs,
+                        _relion_cs,
+                        _model_star,
+                    )
+                    cs = _relion_cs
+
         current_sizes.append(cs)
         healpix_order_trajectory.append(state.healpix_order)
 
@@ -2008,6 +2033,7 @@ def _refine_relion_mode(
                     accumulate_noise=True,
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
+                    use_float64_scoring=True,
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
@@ -2089,6 +2115,7 @@ def _refine_relion_mode(
                         image_corrections=image_corrections_per_half[k],
                         scale_corrections=scale_corrections_per_half[k],
                         image_pre_shifts=previous_best_translations[k],
+                        use_float64_scoring=True,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     pose_rotations[k] = effective_rotations
@@ -2123,6 +2150,7 @@ def _refine_relion_mode(
                         image_corrections=image_corrections_per_half[k],
                         scale_corrections=scale_corrections_per_half[k],
                         image_pre_shifts=previous_best_translations[k],
+                        use_float64_scoring=True,
                     )
                     Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots_k, em_stats_k, noise_stats_k = pass2_outputs
                     noise_stats_per_half[k] = noise_stats_k
@@ -2178,6 +2206,7 @@ def _refine_relion_mode(
                         image_corrections=image_corrections_per_half[k],
                         scale_corrections=scale_corrections_per_half[k],
                         image_pre_shifts=previous_best_translations[k],
+                        use_float64_scoring=True,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     dt_pass2 = time.time() - t_pass2
@@ -2234,6 +2263,7 @@ def _refine_relion_mode(
                     image_corrections=image_corrections_per_half[k],
                     scale_corrections=scale_corrections_per_half[k],
                     image_pre_shifts=previous_best_translations[k],
+                    use_float64_scoring=True,
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
@@ -2853,6 +2883,7 @@ def _refine_relion_mode(
             image_corrections=image_corrections_per_half[k],
             scale_corrections=scale_corrections_per_half[k],
             image_pre_shifts=previous_best_translations[k],
+            use_float64_scoring=True,
         )
         final_ft_y = final_ft_y + Ft_y_k_final
         final_ft_ctf = final_ft_ctf + Ft_ctf_k_final

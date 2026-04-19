@@ -485,6 +485,7 @@ def run_em_v2(
     image_corrections: np.ndarray = None,
     scale_corrections: np.ndarray = None,
     image_pre_shifts: np.ndarray = None,
+    use_float64_scoring: bool = False,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -620,6 +621,12 @@ def run_em_v2(
     else:
         window_indices = None
         n_windowed = n_half
+
+    # Upcast half_weights to float64 when scoring in double precision
+    if use_float64_scoring:
+        half_weights = half_weights.astype(jnp.float64)
+        if use_window:
+            half_weights_windowed = half_weights[window_indices]
 
     # Pad rotations to multiple of block size for fixed shapes
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
@@ -887,6 +894,26 @@ def run_em_v2(
                 shifted_masked_for_noise = shifted_half_with_dc[:, window_indices]
             else:
                 shifted_masked_for_noise = shifted_half_with_dc
+
+        # -- Float64 scoring upcast (RELION parity: RFLOAT=double) --
+        # RELION uses double precision for all scoring arithmetic
+        # (macros.h:77: RFLOAT=double unless RELION_SINGLE_PRECISION).
+        # Upcast the scoring arrays to float64/complex128 before the GEMMs
+        # so that accumulation over ~4900 windowed elements matches RELION.
+        if use_float64_scoring:
+            shifted_half = shifted_half.astype(jnp.complex128)
+            ctf2_over_nv_half = ctf2_over_nv_half.astype(jnp.float64)
+            if use_window:
+                shifted_windowed = shifted_windowed.astype(jnp.complex128)
+                ctf2_over_nv_windowed = ctf2_over_nv_windowed.astype(jnp.float64)
+            else:
+                shifted_windowed = shifted_half
+                ctf2_over_nv_windowed = ctf2_over_nv_half
+            shifted_recon_half = shifted_recon_half.astype(jnp.complex128)
+            if use_window:
+                shifted_recon_windowed = shifted_recon_windowed.astype(jnp.complex128)
+            else:
+                shifted_recon_windowed = shifted_recon_half
 
         # -- PASS 1: streaming logsumexp over rotation blocks --
         max_s = jnp.full(batch_size, -jnp.inf)
