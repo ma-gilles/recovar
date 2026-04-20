@@ -486,6 +486,11 @@ def run_em_v2(
     scale_corrections: np.ndarray = None,
     image_pre_shifts: np.ndarray = None,
     use_float64_scoring: bool = False,
+    use_float64_projections: bool = False,
+    do_gridding_correction: bool = False,
+    square_window: bool = False,
+    debug_dump_dir: str = None,
+    debug_dump_particles: list = None,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -568,10 +573,21 @@ def run_em_v2(
     if projection_padding_factor > 1:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
 
-        mean_for_proj, proj_volume_shape = pad_volume_for_projection(mean, volume_shape, projection_padding_factor)
+        mean_for_proj, proj_volume_shape = pad_volume_for_projection(
+            mean,
+            volume_shape,
+            projection_padding_factor,
+            do_gridding_correction=do_gridding_correction,
+            current_size=current_size,
+        )
     else:
         mean_for_proj = mean
         proj_volume_shape = volume_shape
+
+    # NOTE: float64 projections tested (Slurm 7174969) — identical results to float32.
+    # The 0.0074 Pmax gap is NOT float precision; it's boundary handling in trilinear interp.
+    if use_float64_projections:
+        mean_for_proj = jnp.asarray(mean_for_proj, dtype=jnp.complex128)
 
     # Backprojection padding: accumulate into a (pf*N)³ grid for finer
     # trilinear interpolation, matching RELION's --pad flag.
@@ -608,11 +624,13 @@ def run_em_v2(
     if use_window:
         from .fourier_window import make_fourier_window_indices_np
 
-        window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size)
+        window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size, square=square_window)
         window_indices = jnp.asarray(window_indices_np)
         half_weights_windowed = half_weights[window_indices]
+        window_desc = "square" if square_window else "circular"
         logger.info(
-            "Fourier windowing: current_size=%d, n_windowed=%d / n_half=%d (%.1f%% reduction)",
+            "Fourier windowing (%s): current_size=%d, n_windowed=%d / n_half=%d (%.1f%% reduction)",
+            window_desc,
             current_size,
             n_windowed,
             n_half,
@@ -764,6 +782,33 @@ def run_em_v2(
         noise_a2 = np.zeros(n_shells, dtype=np.float64)
         noise_xa = np.zeros(n_shells, dtype=np.float64)
 
+    # -- Debug dump setup (Phase 2 of RELION-parity plan) --
+    _dump_active = debug_dump_dir is not None
+    if _dump_active:
+        import os as _os
+
+        _os.makedirs(debug_dump_dir, exist_ok=True)
+        _dump_particles = set(debug_dump_particles) if debug_dump_particles is not None else None
+        # Dump global state: priors, window indices, config
+        np.savez(
+            _os.path.join(debug_dump_dir, "global_state.npz"),
+            rotation_log_prior=np.asarray(rotation_log_prior) if rotation_log_prior is not None else np.array([]),
+            translation_log_prior=np.asarray(translation_log_prior)
+            if translation_log_prior is not None
+            else np.array([]),
+            window_indices=np.asarray(window_indices) if window_indices is not None else np.array([]),
+            n_windowed=np.int32(n_windowed),
+            n_rot=np.int32(n_rot),
+            n_trans=np.int32(n_trans),
+            current_size=np.int32(current_size) if current_size is not None else np.int32(-1),
+            half_spectrum_scoring=np.bool_(half_spectrum_scoring),
+            use_float64_scoring=np.bool_(use_float64_scoring),
+        )
+        # Per-particle score accumulators: collect all blocks per particle
+        _dump_scores_raw = {}  # image_global_idx -> list of (block_n_rot, n_trans) arrays
+        _dump_scores_with_prior = {}
+        logger.info("Debug dump active: dir=%s, particles=%s", debug_dump_dir, _dump_particles)
+
     start_idx = 0
 
     for batch_data, _, _, ctf_params, _, _, indices in experiment_dataset.iter_batches(
@@ -814,6 +859,10 @@ def run_em_v2(
             shifted_recon_half = shifted_recon_half * corr_expanded[:, None]
             # batch_norm also scales: ||img * corr / sqrt(sigma)||^2 = corr^2 * ||img / sqrt(sigma)||^2
             batch_norm = batch_norm * (batch_corr**2)[:, None]
+
+        # -- Save pre-scale CTF²/σ² for debug dump --
+        if _dump_active:
+            _ctf2_over_nv_half_pre_scale = ctf2_over_nv_half
 
         # -- Per-image scale correction on CTF²/σ² (RELION parity) --
         # RELION applies scale_correction to the REFERENCE: Frefctf *= myscale
@@ -915,6 +964,66 @@ def run_em_v2(
             else:
                 shifted_recon_windowed = shifted_recon_half
 
+        # -- Debug dump: preprocessing per particle --
+        if _dump_active:
+            for local_i in range(batch_size):
+                global_i = int(np.asarray(indices)[local_i])
+                if _dump_particles is not None and global_i not in _dump_particles:
+                    continue
+                _pp_dir = _os.path.join(debug_dump_dir, "preprocess")
+                _os.makedirs(_pp_dir, exist_ok=True)
+                # shifted_windowed has shape (batch_size * n_trans, N_windowed)
+                # Extract the n_trans rows for this particle
+                _s_rows = np.asarray(shifted_windowed[local_i * n_trans : (local_i + 1) * n_trans])
+                _c_row = np.asarray(ctf2_over_nv_windowed[local_i])
+                _bn = float(np.asarray(batch_norm[local_i]))
+                # Phase 1.1 operands for cross-code comparison
+                # shifted_half_with_dc: post-correction, pre-DC-exclusion
+                _sh_with_dc = np.asarray(shifted_half_with_dc[local_i * n_trans : (local_i + 1) * n_trans])
+                # ctf2_over_nv pre-scale: before scale_corrections applied
+                _c_pre_scale = np.asarray(_ctf2_over_nv_half_pre_scale[local_i])
+                # DC exclusion mask
+                _dc_indices = (
+                    np.where(np.asarray(dc_mask))[0] if half_spectrum_scoring else np.array([], dtype=np.int32)
+                )
+                # Recompute raw processed image + CTF for this particle
+                # (outside JIT, only for debug particles — acceptable cost)
+                _raw_processed = np.asarray(
+                    config.process_fn(batch_data[local_i : local_i + 1], apply_image_mask=score_with_masked_images)
+                )[0]
+                _raw_processed_half = np.asarray(
+                    fourier_transform_utils.full_image_to_half_image(jnp.asarray(_raw_processed)[None], image_shape)
+                )[0]
+                _raw_ctf = np.asarray(config.compute_ctf(ctf_params[local_i : local_i + 1]))[0]
+                _raw_ctf_half = np.asarray(
+                    fourier_transform_utils.full_image_to_half_image(jnp.asarray(_raw_ctf)[None], image_shape)
+                )[0]
+                _inv_sigma2_half = np.asarray(
+                    fourier_transform_utils.full_image_to_half_image((1.0 / noise_variance)[None], image_shape)
+                )[0]
+
+                np.savez(
+                    _os.path.join(_pp_dir, f"particle_{global_i:05d}.npz"),
+                    shifted_windowed=_s_rows,  # (n_trans, N_windowed) complex
+                    ctf2_over_nv_windowed=_c_row,  # (N_windowed,) float
+                    batch_norm=np.float64(_bn),
+                    global_index=np.int32(global_i),
+                    image_correction=np.float64(image_corrections[global_i])
+                    if image_corrections is not None
+                    else np.float64(1.0),
+                    pre_shift=np.asarray(image_pre_shifts[global_i]) if image_pre_shifts is not None else np.zeros(2),
+                    # Phase 1.1 extended operands
+                    processed_unweighted=_raw_processed_half,  # (N_half,) complex
+                    ctf_array=_raw_ctf_half,  # (N_half,) float
+                    inv_sigma2_map=_inv_sigma2_half,  # (N_half,) float
+                    shifted_half_post_correction=_sh_with_dc,  # (n_trans, N_half) complex
+                    ctf2_over_nv_half_pre_scale=_c_pre_scale,  # (N_half,) float
+                    dc_exclusion_indices=_dc_indices,  # indices zeroed at DC
+                    scale_correction=np.float64(scale_corrections[global_i])
+                    if scale_corrections is not None
+                    else np.float64(1.0),
+                )
+
         # -- PASS 1: streaming logsumexp over rotation blocks --
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
@@ -966,6 +1075,49 @@ def run_em_v2(
                     volume_shape,
                 )
 
+            # -- Debug dump: raw scores (before priors) --
+            if _dump_active:
+                actual_rot = min(rotation_block_size, n_rot - r0) if r1 > n_rot else rotation_block_size
+                # Phase 1.2: save block-0 projections + cross/norm terms
+                if b == 0:
+                    _proj_dir = _os.path.join(debug_dump_dir, "projections")
+                    _os.makedirs(_proj_dir, exist_ok=True)
+                    np.savez(
+                        _os.path.join(_proj_dir, "block0.npz"),
+                        proj_half=np.asarray(proj_half_b[:actual_rot], dtype=np.complex64),
+                        proj_abs2_half=np.asarray(proj_abs2_half_b[:actual_rot], dtype=np.float32),
+                    )
+                    # Recompute cross/norm for debug particles
+                    if use_window:
+                        _pw = proj_half_b[:actual_rot, :][:, window_indices] * half_weights_windowed
+                        _pa = proj_abs2_half_b[:actual_rot, :][:, window_indices]
+                        _cross = -2.0 * (jnp.conj(shifted_windowed) @ _pw.T).real
+                        _cross = _cross.reshape(batch_size, n_trans, actual_rot).swapaxes(1, 2)
+                        _norms = ctf2_over_nv_windowed @ _pa.T
+                    else:
+                        _pw = proj_half_b[:actual_rot] * half_weights
+                        _pa = proj_abs2_half_b[:actual_rot]
+                        _cross = -2.0 * (jnp.conj(shifted_half) @ _pw.T).real
+                        _cross = _cross.reshape(batch_size, n_trans, actual_rot).swapaxes(1, 2)
+                        _norms = ctf2_over_nv_half @ _pa.T
+                    for local_i in range(batch_size):
+                        global_i = int(np.asarray(indices)[local_i])
+                        if _dump_particles is not None and global_i not in _dump_particles:
+                            continue
+                        np.savez(
+                            _os.path.join(_proj_dir, f"cross_norm_particle_{global_i:05d}.npz"),
+                            cross_term=np.asarray(_cross[local_i], dtype=np.float64),
+                            norm_term=np.asarray(_norms[local_i], dtype=np.float64),
+                        )
+
+                for local_i in range(batch_size):
+                    global_i = int(np.asarray(indices)[local_i])
+                    if _dump_particles is not None and global_i not in _dump_particles:
+                        continue
+                    _dump_scores_raw.setdefault(global_i, []).append(
+                        np.asarray(scores[local_i, :actual_rot, :], dtype=np.float32)
+                    )
+
             # Add rotation log-prior (Gaussian angular prior for local search)
             if log_prior_padded_jnp is not None:
                 if per_image_log_prior:
@@ -992,9 +1144,41 @@ def run_em_v2(
                 mask = jnp.arange(rotation_block_size) < valid
                 scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
 
+            # -- Debug dump: scores with priors --
+            if _dump_active:
+                for local_i in range(batch_size):
+                    global_i = int(np.asarray(indices)[local_i])
+                    if _dump_particles is not None and global_i not in _dump_particles:
+                        continue
+                    _dump_scores_with_prior.setdefault(global_i, []).append(
+                        np.asarray(scores[local_i, :actual_rot, :], dtype=np.float32)
+                    )
+
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
 
         log_Z = max_s + jnp.log(sum_exp)  # (batch_size,)
+
+        # -- Debug dump: write per-particle score tensors + posterior stats --
+        if _dump_active:
+            _sc_dir = _os.path.join(debug_dump_dir, "scores")
+            _os.makedirs(_sc_dir, exist_ok=True)
+            for local_i in range(batch_size):
+                global_i = int(np.asarray(indices)[local_i])
+                if _dump_particles is not None and global_i not in _dump_particles:
+                    continue
+                # Concatenate rotation blocks → full (n_rot, n_trans) tensor
+                raw_full = np.concatenate(_dump_scores_raw.pop(global_i), axis=0)
+                prior_full = np.concatenate(_dump_scores_with_prior.pop(global_i), axis=0)
+                _lz = float(np.asarray(log_Z[local_i]))
+                _ms = float(np.asarray(max_s[local_i]))
+                np.savez(
+                    _os.path.join(_sc_dir, f"particle_{global_i:05d}.npz"),
+                    scores_raw=raw_full,  # (n_rot, n_trans) float32
+                    scores_with_prior=prior_full,  # (n_rot, n_trans) float32
+                    log_Z=np.float64(_lz),
+                    max_score=np.float64(_ms),
+                    batch_norm=np.float64(float(np.asarray(batch_norm[local_i]))),
+                )
 
         # -- PASS 2: recompute scores, normalize, accumulate M-step --
         best_score = jnp.full(batch_size, -jnp.inf)
@@ -1197,6 +1381,23 @@ def run_em_v2(
                 pmax,
                 dtype=np.float32,
             )
+
+        # -- Debug dump: posterior per particle --
+        if _dump_active:
+            _post_dir = _os.path.join(debug_dump_dir, "posterior")
+            _os.makedirs(_post_dir, exist_ok=True)
+            _pmax_vals = jnp.exp(best_score - log_Z)
+            for local_i in range(batch_size):
+                global_i = int(np.asarray(indices)[local_i])
+                if _dump_particles is not None and global_i not in _dump_particles:
+                    continue
+                np.savez(
+                    _os.path.join(_post_dir, f"particle_{global_i:05d}.npz"),
+                    pmax=np.float64(float(np.asarray(_pmax_vals[local_i]))),
+                    best_argmax=np.int32(int(np.asarray(best_argmax[local_i]))),
+                    best_score=np.float64(float(np.asarray(best_score[local_i]))),
+                    log_Z=np.float64(float(np.asarray(log_Z[local_i]))),
+                )
 
         hard_assignment[start_idx:end_idx] = np.asarray(best_argmax)
         start_idx = end_idx

@@ -22,13 +22,63 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def pad_volume_for_projection(vol_ft_flat, volume_shape, padding_factor):
+def _gridding_correct_trilinear(vol_real, ori_size, padding_factor):
+    """Apply RELION-style gridding correction for trilinear interpolation.
+
+    Divides each real-space voxel by sinc²(r / (N·pf)) where
+    r = sqrt(x² + y² + z²) is the radial distance from the volume center.
+    Matches RELION's ``Projector::griddingCorrect()`` (projector.cpp:27-60)
+    for ``interpolator == TRILINEAR``.
+
+    RELION uses a RADIAL sinc² correction (not separable per-axis).
+
+    Parameters
+    ----------
+    vol_real : jnp.ndarray, shape (N, N, N)
+        Real-space volume with origin at array center.
+    ori_size : int
+        Original box size (N).
+    padding_factor : int
+        Padding factor (1 or 2).
+
+    Returns
+    -------
+    vol_corrected : jnp.ndarray, shape (N, N, N)
+    """
+    N = vol_real.shape[0]
+    coords = jnp.arange(N, dtype=jnp.float64) - N / 2.0
+    # 3D radial distance
+    r = jnp.sqrt(coords[:, None, None] ** 2 + coords[None, :, None] ** 2 + coords[None, None, :] ** 2)
+    arg = r / (ori_size * padding_factor)
+    # sinc(x) = sin(πx)/(πx), sinc(0) = 1
+    sinc_r = jnp.where(arg < 1e-15, 1.0, jnp.sin(jnp.pi * arg) / (jnp.pi * arg))
+    sinc2_r = sinc_r**2
+    return vol_real / sinc2_r
+
+
+def pad_volume_for_projection(
+    vol_ft_flat, volume_shape, padding_factor, do_gridding_correction=False, current_size=None
+):
     """Pad a Fourier volume via real-space zero-padding for smoother projection.
 
     RELION pads volumes in REAL SPACE before FFT so that trilinear
     interpolation operates on a (pf*N)³ grid.  This is NOT the same as
     Fourier zero-padding (which leaves stride-pf gaps that degrade
     interpolation).
+
+    When ``do_gridding_correction=True``, applies RELION's gridding correction
+    (``Projector::griddingCorrect``) to the real-space volume before padding.
+    This compensates for the smoothing inherent in trilinear Fourier-slice
+    interpolation, matching RELION's projector behaviour.
+
+    When ``current_size`` is provided, applies a spherical mask at
+    ``r_max_ref = padding_factor * current_size // 2`` to the padded Fourier
+    volume.  This matches RELION's ``Projector::computeFourierTransformMap``
+    which calls ``decenter(data, Faux, max_r2)`` — only copying Fourier
+    coefficients within ``r_max_ref`` and leaving everything beyond as zero.
+    Without this mask, JAX's trilinear interpolation near the scoring-window
+    boundary produces different (non-attenuated) values compared to RELION,
+    because RELION's trilinear blends real data with zeros at the boundary.
 
     Parameters
     ----------
@@ -38,6 +88,12 @@ def pad_volume_for_projection(vol_ft_flat, volume_shape, padding_factor):
         Native volume shape.
     padding_factor : int
         Padding factor (typically 2).
+    do_gridding_correction : bool, optional
+        If True, apply gridding correction before padding (default False).
+    current_size : int, optional
+        RELION's current resolution size.  When set, applies a spherical
+        Fourier mask at radius ``padding_factor * current_size // 2`` to
+        match RELION's projector data boundary.
 
     Returns
     -------
@@ -51,10 +107,24 @@ def pad_volume_for_projection(vol_ft_flat, volume_shape, padding_factor):
 
     N = volume_shape[0]
     vol_real = fourier_transform_utils.get_idft3(jnp.asarray(vol_ft_flat).reshape(volume_shape))
+    if do_gridding_correction:
+        vol_real = _gridding_correct_trilinear(vol_real, N, padding_factor)
     pad_amount = N * (padding_factor - 1)
     vol_real_padded = padding.pad_volume_spatial_domain(vol_real, pad_amount)
     padded_shape = tuple(s * padding_factor for s in volume_shape)
     vol_ft_padded = fourier_transform_utils.get_dft3(vol_real_padded)
+
+    if current_size is not None:
+        # Match RELION's Projector::computeFourierTransformMap decenter behaviour:
+        # zero all Fourier coefficients beyond r_max_ref = pf * (cs // 2).
+        r_max_ref = padding_factor * (current_size // 2)
+        pN = padded_shape[0]
+        coords = jnp.arange(pN, dtype=jnp.float32) - pN / 2.0
+        r2_3d = coords[:, None, None] ** 2 + coords[None, :, None] ** 2 + coords[None, None, :] ** 2
+        sphere_mask = (r2_3d <= r_max_ref**2).astype(vol_ft_padded.dtype)
+        vol_ft_padded = vol_ft_padded.reshape(padded_shape) * sphere_mask
+        vol_ft_padded = vol_ft_padded.reshape(-1)
+
     return vol_ft_padded.reshape(-1), padded_shape
 
 

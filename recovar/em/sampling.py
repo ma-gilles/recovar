@@ -196,10 +196,11 @@ def advance_relion_perturbation(prev_random_perturbation, perturbation_factor, r
 def apply_relion_rotation_perturbation(rotations, random_perturbation, angular_sampling_deg):
     """Port of RELION's 3D grid perturbation (healpix_sampling.cpp:1909-1934).
 
-    For each rotation matrix A in `rotations`, replace it with ``A @ R_perturb``
-    where ``R_perturb = R_from_relion([myperturb, myperturb, myperturb])`` and
-    ``myperturb = random_perturbation * angular_sampling_deg``. Applied AFTER
-    oversampling, before scoring.
+    RELION computes ``A_perturbed = A @ Euler_angles2matrix(p, p, p)`` where
+    ``p = random_perturbation * angular_sampling``. Since recovar's grid uses
+    ``R_from_relion(theta, phi, psi) = Euler_angles2matrix(phi, theta, psi)``
+    and ``R_from_relion(p, p, p) = Euler_angles2matrix(p, p, p)`` (symmetric),
+    the correct implementation is right-multiply by ``R_from_relion(p, p, p)``.
 
     Parameters
     ----------
