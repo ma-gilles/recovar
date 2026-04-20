@@ -47,7 +47,7 @@ def make_frequency_radius_map_half(image_shape):
     coords = ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False)
     # coords[:, 0] is x (col direction), coords[:, 1] is y (row direction)
     # due to indexing="xy" in meshgrid
-    return jnp.sqrt(jnp.sum(coords ** 2, axis=-1))
+    return jnp.sqrt(jnp.sum(coords**2, axis=-1))
 
 
 def make_fourier_window_indices(image_shape, current_size):
@@ -72,8 +72,7 @@ def make_fourier_window_indices(image_shape, current_size):
     radii = make_frequency_radius_map_half(image_shape)
     # Use rounded radii for RELION-compatible shell assignment
     mask = jnp.round(radii).astype(jnp.int32) <= r_max
-    return jnp.where(mask, size=_max_window_size(image_shape, current_size),
-                     fill_value=0)[0]
+    return jnp.where(mask, size=_max_window_size(image_shape, current_size), fill_value=0)[0]
 
 
 def _max_window_size(image_shape, current_size):
@@ -88,13 +87,13 @@ def _max_window_size(image_shape, current_size):
     # Compute on host with numpy for the size parameter
     # Use the same coordinate computation as make_frequency_radius_map_half
     coords_np = np.array(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
-    radii_np = np.sqrt(np.sum(coords_np ** 2, axis=-1))
+    radii_np = np.sqrt(np.sum(coords_np**2, axis=-1))
     # Use rounded radii, matching RELION's ROUND() convention
     radii_rounded = np.round(radii_np).astype(np.int32)
     return int(np.sum(radii_rounded <= r_max))
 
 
-def make_fourier_window_indices_np(image_shape, current_size):
+def make_fourier_window_indices_np(image_shape, current_size, square=False):
     """NumPy version of make_fourier_window_indices for host-side precomputation.
 
     This avoids JIT compilation overhead and is suitable for precomputing
@@ -108,18 +107,37 @@ def make_fourier_window_indices_np(image_shape, current_size):
     ----------
     image_shape : tuple (H, W)
     current_size : int
+    square : bool, optional
+        If True, use a square window of (current_size, current_size//2+1)
+        pixels in the centered half-spectrum, matching RELION's Fourier-crop
+        convention.  If False (default), use circular windowing with a
+        frequency-radius cutoff.
 
     Returns
     -------
     indices : np.ndarray of int32, sorted
     n_windowed : int
     """
-    r_max = current_size // 2
-    coords_np = np.array(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
-    radii_np = np.sqrt(np.sum(coords_np ** 2, axis=-1))
-    # Use rounded radii for shell assignment, matching RELION's ROUND() convention
-    radii_rounded = np.round(radii_np).astype(np.int32)
-    mask = radii_rounded <= r_max
+    H, W = image_shape
+    if square:
+        # RELION square window: (current_size) rows × (current_size//2+1) cols
+        # in centered half-spectrum layout (DC at row H//2, col 0).
+        cs = current_size
+        half_cs = cs // 2
+        n_cols = W // 2 + 1  # total columns in half-spectrum
+        r_start = H // 2 - half_cs  # first row included
+        r_end = H // 2 + half_cs  # last row + 1
+        c_end = half_cs + 1  # columns 0..half_cs
+        mask_2d = np.zeros((H, n_cols), dtype=bool)
+        mask_2d[r_start:r_end, :c_end] = True
+        mask = mask_2d.ravel()
+    else:
+        r_max = current_size // 2
+        coords_np = np.array(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
+        radii_np = np.sqrt(np.sum(coords_np**2, axis=-1))
+        # Use rounded radii for shell assignment, matching RELION's ROUND() convention
+        radii_rounded = np.round(radii_np).astype(np.int32)
+        mask = radii_rounded <= r_max
     indices = np.where(mask)[0].astype(np.int32)
     return indices, len(indices)
 

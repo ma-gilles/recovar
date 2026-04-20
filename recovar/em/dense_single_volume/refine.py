@@ -2118,6 +2118,7 @@ def _refine_relion_mode(
                         scale_corrections=scale_corrections_per_half[k],
                         image_pre_shifts=previous_best_translations[k],
                         use_float64_scoring=True,
+                        use_float64_projections=False,
                         do_gridding_correction=True,
                         square_window=False,
                     )
@@ -2268,6 +2269,7 @@ def _refine_relion_mode(
                     scale_corrections=scale_corrections_per_half[k],
                     image_pre_shifts=previous_best_translations[k],
                     use_float64_scoring=True,
+                    use_float64_projections=False,
                     do_gridding_correction=True,
                     square_window=False,
                 )
@@ -2932,6 +2934,7 @@ def _refine_relion_mode(
             scale_corrections=scale_corrections_per_half[k],
             image_pre_shifts=previous_best_translations[k],
             use_float64_scoring=True,
+            use_float64_projections=False,
             do_gridding_correction=True,
             square_window=False,
         )
