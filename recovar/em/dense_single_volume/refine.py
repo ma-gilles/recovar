@@ -1728,14 +1728,16 @@ def _refine_relion_mode(
                 state.translation_step = _relion_offset_step
 
             # Override current_size from RELION model star.
-            # RELION stores the current_size it used for each iteration in
-            # _rlnCurrentImageSize. recovar's FSC-based resolution_from_data_vs_prior
-            # returns a different (usually higher) shell than RELION's stored
-            # current_resolution, causing recovar to grow cs too aggressively
-            # (e.g. 80→110→128 vs RELION 80→80→80).
+            # RELION's iterate() writes the model star AFTER updateCurrentResolution(),
+            # so run_itNNN_model.star records the current_size that will be used by
+            # iter NNN+1's E-step, NOT by iter NNN's E-step.  The E-step at iter N
+            # uses the current_size from the PREVIOUS iteration's model star.
+            # Therefore, to replay RELION iter (init_relion_iteration + iteration + 1),
+            # read current_size from iter (init_relion_iteration + iteration)'s model.
+            _cs_iter = init_relion_iteration + iteration
             _model_star = os.path.join(
                 perturb_replay_relion_dir,
-                f"run_it{init_relion_iteration + iteration + 1:03d}_half1_model.star",
+                f"run_it{_cs_iter:03d}_half1_model.star",
             )
             if os.path.exists(_model_star):
                 _model_meta = read_relion_model_metadata(_model_star)
@@ -2116,6 +2118,8 @@ def _refine_relion_mode(
                         scale_corrections=scale_corrections_per_half[k],
                         image_pre_shifts=previous_best_translations[k],
                         use_float64_scoring=True,
+                        do_gridding_correction=True,
+                        square_window=False,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     pose_rotations[k] = effective_rotations
@@ -2264,11 +2268,55 @@ def _refine_relion_mode(
                     scale_corrections=scale_corrections_per_half[k],
                     image_pre_shifts=previous_best_translations[k],
                     use_float64_scoring=True,
+                    do_gridding_correction=True,
+                    square_window=False,
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
                 pose_translations[k] = np.asarray(current_translations, dtype=np.float32)
                 coarse_ha[k] = ha_k  # same grid, no oversampling
+
+                # --- Manifest dump for deterministic replay (Phase 0.1) ---
+                if save_intermediates_dir is not None:
+                    _manifest_path = os.path.join(
+                        save_intermediates_dir,
+                        f"manifest_iter{iteration}_half{k}.npz",
+                    )
+                    _manifest = {
+                        "effective_rotations": np.asarray(effective_rotations, dtype=np.float32),
+                        "current_translations": np.asarray(current_translations, dtype=np.float32),
+                        "rotation_log_prior": np.asarray(rotation_log_prior, dtype=np.float64)
+                        if rotation_log_prior is not None
+                        else np.array([]),
+                        "translation_log_prior": np.asarray(translation_log_prior, dtype=np.float64)
+                        if translation_log_prior is not None
+                        else np.array([]),
+                        "image_corrections": np.asarray(image_corrections_per_half[k], dtype=np.float64)
+                        if image_corrections_per_half[k] is not None
+                        else np.array([]),
+                        "scale_corrections": np.asarray(scale_corrections_per_half[k], dtype=np.float64)
+                        if scale_corrections_per_half[k] is not None
+                        else np.array([]),
+                        "image_pre_shifts": np.asarray(previous_best_translations[k], dtype=np.float32)
+                        if previous_best_translations[k] is not None
+                        else np.array([]),
+                        "mean_vol_ft": np.asarray(means[k]),
+                        "mean_variance": np.asarray(mean_variance),
+                        "noise_variance": np.asarray(noise_variance),
+                        "current_size": np.int32(cs_for_engine) if cs_for_engine is not None else np.int32(-1),
+                        "half_spectrum_scoring": np.bool_(True),
+                        "use_float64_scoring": np.bool_(True),
+                        "projection_padding_factor": np.int32(PROJECTION_PADDING_FACTOR),
+                        "reconstruction_padding_factor": np.int32(PADDING_FACTOR),
+                        "score_with_masked_images": np.bool_(True),
+                        "perturbation_instance": np.float64(random_perturbation),
+                        "perturbation_factor": np.float64(perturb_factor),
+                        "iteration": np.int32(iteration),
+                        "half_index": np.int32(k),
+                        "ave_Pmax": np.float64(float(np.mean(em_stats_k.max_posterior_per_image))),
+                    }
+                    np.savez(_manifest_path, **_manifest)
+                    logger.info("Manifest dumped: %s", _manifest_path)
 
             # NOTE: means[k] reconstruction is DEFERRED until after the
             # low_resol_join_halves step below — we need both halves'
@@ -2884,7 +2932,46 @@ def _refine_relion_mode(
             scale_corrections=scale_corrections_per_half[k],
             image_pre_shifts=previous_best_translations[k],
             use_float64_scoring=True,
+            do_gridding_correction=True,
+            square_window=False,
         )
+        # --- Manifest dump for final all-data iteration (Phase 0.1) ---
+        if save_intermediates_dir is not None:
+            _manifest_path = os.path.join(
+                save_intermediates_dir,
+                f"manifest_final_half{k}.npz",
+            )
+            _manifest = {
+                "effective_rotations": np.asarray(current_rotations, dtype=np.float32),
+                "current_translations": np.asarray(current_translations, dtype=np.float32),
+                "rotation_log_prior": np.array([]),
+                "translation_log_prior": np.array([]),
+                "image_corrections": np.asarray(image_corrections_per_half[k], dtype=np.float64)
+                if image_corrections_per_half[k] is not None
+                else np.array([]),
+                "scale_corrections": np.asarray(scale_corrections_per_half[k], dtype=np.float64)
+                if scale_corrections_per_half[k] is not None
+                else np.array([]),
+                "image_pre_shifts": np.asarray(previous_best_translations[k], dtype=np.float32)
+                if previous_best_translations[k] is not None
+                else np.array([]),
+                "mean_vol_ft": np.asarray(final_join_means[k]),
+                "mean_variance": np.asarray(mean_variance),
+                "noise_variance": np.asarray(noise_variance),
+                "current_size": np.int32(final_cs),
+                "half_spectrum_scoring": np.bool_(True),
+                "use_float64_scoring": np.bool_(True),
+                "projection_padding_factor": np.int32(PROJECTION_PADDING_FACTOR),
+                "reconstruction_padding_factor": np.int32(PADDING_FACTOR),
+                "score_with_masked_images": np.bool_(True),
+                "perturbation_instance": np.float64(random_perturbation),
+                "perturbation_factor": np.float64(perturb_factor),
+                "iteration": np.int32(-1),
+                "half_index": np.int32(k),
+            }
+            np.savez(_manifest_path, **_manifest)
+            logger.info("Final manifest dumped: %s", _manifest_path)
+
         final_ft_y = final_ft_y + Ft_y_k_final
         final_ft_ctf = final_ft_ctf + Ft_ctf_k_final
         if noise_stats_k_final is not None and final_noise_wsum is not None:
