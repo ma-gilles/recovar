@@ -26,10 +26,12 @@ import logging
 import os
 import time
 
+import healpy as hp
 import jax.numpy as jnp
 import numpy as np
 import scipy.special
 
+from recovar import utils
 from recovar.em.core import hard_assignment_idx_to_pose
 from recovar.em.dense_single_volume.adaptive import (
     compute_pass2_stats,
@@ -38,6 +40,7 @@ from recovar.em.dense_single_volume.adaptive import (
 
 # RELION-parity building blocks (used only by mode="relion")
 from recovar.em.dense_single_volume.convergence import (
+    LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
     calculate_expected_angular_errors,
     healpix_angular_step,
@@ -50,16 +53,18 @@ from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,
     apply_relion_translation_perturbation,
+    build_local_search_grid_metadata,
     get_local_rotation_grid_fast,
     get_oversampled_translation_grid,
     get_relion_rotation_grid,
+    get_relion_rotation_grid_eulers,
     get_translation_grid,
+    read_relion_direction_prior,
     read_relion_model_metadata,
     read_relion_sampling_metadata,
     relion_angular_sampling_deg,
     rotation_grid_n_in_planes,
     rotation_grid_size,
-    rotation_indices_to_matrices,
 )
 from recovar.reconstruction.regularization import (
     compute_current_size_relion,
@@ -131,6 +136,21 @@ def compute_coarse_image_size(
     return coarse_size
 
 
+def clamp_relion_coarse_image_size(coarse_size, current_size, ori_size):
+    """Clamp pass-1 image size the way RELION does.
+
+    RELION computes ``image_coarse_size`` from the angular step and particle
+    diameter, then clamps it to ``image_current_size`` rather than forcing a
+    smaller fallback. See ``ml_optimiser.cpp`` around the
+    ``image_coarse_size = XMIPP_MIN(image_current_size, image_coarse_size)``
+    update.
+    """
+    coarse_size = quantize_current_size(int(coarse_size), ori_size=ori_size)
+    if current_size is None:
+        return coarse_size
+    return min(int(current_size), coarse_size)
+
+
 def should_skip_adaptive_pass2(
     significant_counts,
     n_rotations,
@@ -178,6 +198,8 @@ def _run_grouped_local_search_em(
     mean_variance,
     noise_variance,
     prior_rotations,
+    rotation_grid_rotations,
+    rotation_grid_eulers,
     healpix_order,
     sigma_rot,
     sigma_psi,
@@ -194,17 +216,30 @@ def _run_grouped_local_search_em(
     projection_padding_factor=1,
     reconstruction_padding_factor=1,
     use_float64_scoring=False,
+    debug_output_dir=None,
+    debug_prefix=None,
 ):
     """Run batched exact local search on the fine HEALPix grid.
 
-    Each image carries its own exact prior rotation from the previous
-    iteration. Images are processed in chunks; each chunk evaluates the union
-    of its local neighborhoods with an image-specific rotation prior.
+    Each image carries its own exact prior orientation from the previous
+    iteration. ``prior_rotations`` may be either RELION Euler angles
+    ``(rot, tilt, psi)`` or rotation matrices. Images are processed in
+    chunks; each chunk evaluates the union of its local neighborhoods with
+    an image-specific rotation prior.
     """
-    prior_rotations = np.asarray(prior_rotations, dtype=np.float32).reshape(-1, 3, 3)
+    prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
+    if prior_rotations.ndim == 3:
+        n_prior = prior_rotations.shape[0]
+    elif prior_rotations.ndim == 2 and prior_rotations.shape[1] == 3:
+        n_prior = prior_rotations.shape[0]
+    else:
+        raise ValueError(f"prior_rotations must have shape (n,3,3) or (n,3), got {prior_rotations.shape}")
+    # The local-search translation prior is evaluated on the RELION-relative
+    # delta grid after pre-centering by the previous best offset, so the prior
+    # center must already be in "delta coordinates" (typically -old_offset).
     if prior_translations is None:
         prior_translations = np.zeros(
-            (prior_rotations.shape[0], np.asarray(translations).shape[1]),
+            (n_prior, np.asarray(translations).shape[1]),
             dtype=np.float32,
         )
     else:
@@ -214,6 +249,18 @@ def _run_grouped_local_search_em(
         )
     n_images = experiment_dataset.n_units
     n_trans = int(np.asarray(translations).shape[0])
+    rotation_grid_rotations = np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)
+    rotation_grid_eulers = np.asarray(rotation_grid_eulers, dtype=np.float32).reshape(-1, 3)
+    if rotation_grid_rotations.shape[0] != rotation_grid_size(healpix_order):
+        raise ValueError(
+            f"rotation_grid_rotations must have shape ({rotation_grid_size(healpix_order)}, 3, 3), "
+            f"got {rotation_grid_rotations.shape}",
+        )
+    if rotation_grid_eulers.shape[0] != rotation_grid_rotations.shape[0]:
+        raise ValueError(
+            f"rotation_grid_eulers must match rotation_grid_rotations, got "
+            f"{rotation_grid_eulers.shape} vs {rotation_grid_rotations.shape}",
+        )
     active_offset_range = (
         float(offset_range_pixels)
         if offset_range_pixels is not None
@@ -243,6 +290,12 @@ def _run_grouped_local_search_em(
     max_local_rotations = 0
     chunk_sizes = []
     n_chunks = 0
+    # The local-search selector must operate on the actual trial grid that will
+    # be scored for this iteration. When the caller has already applied
+    # SamplingPerturbation to `rotation_grid_eulers`, using canonical unperturbed
+    # metadata lets the selected support drift away from the true per-image
+    # neighborhood on the perturbed grid.
+    local_grid_metadata = build_local_search_grid_metadata(healpix_order, grid_eulers=rotation_grid_eulers)
 
     chunk_size = max(1, min(image_batch_size, 64))
     for chunk_start in range(0, n_images, chunk_size):
@@ -258,8 +311,23 @@ def _run_grouped_local_search_em(
             healpix_order,
             sigma_cutoff=3.0,
             per_image=True,
+            grid_metadata=local_grid_metadata,
         )
-        local_rotations = rotation_indices_to_matrices(local_indices, healpix_order)
+        local_rotations = rotation_grid_rotations[local_indices]
+        if debug_output_dir is not None and debug_prefix is not None and n_chunks <= 2:
+            np.savez(
+                os.path.join(
+                    debug_output_dir,
+                    f"{debug_prefix}_local_chunk{n_chunks - 1:02d}_selector.npz",
+                ),
+                group_image_indices=group_image_indices,
+                prior_rotations=prior_rotations[group_image_indices],
+                selected_indices=local_indices,
+                selected_rotation_eulers=rotation_grid_eulers[local_indices],
+                rotation_log_prior=local_log_prior,
+                sigma_rot=np.float32(sigma_rot),
+                sigma_psi=np.float32(sigma_psi),
+            )
         # C1 (RELION-parity): use the explicit sigma_offset_angstrom from the
         # caller (which is the data-driven value updated each iter) without
         # the legacy `range/3` override (offset_range_pixels=None). The
@@ -311,6 +379,20 @@ def _run_grouped_local_search_em(
         local_rot_idx = ha_local // n_trans
         trans_idx = ha_local % n_trans
         hard_assignment[group_image_indices] = (local_indices[local_rot_idx] * n_trans + trans_idx).astype(np.int32)
+        if debug_output_dir is not None and debug_prefix is not None and n_chunks <= 2:
+            np.savez(
+                os.path.join(
+                    debug_output_dir,
+                    f"{debug_prefix}_local_chunk{n_chunks - 1:02d}_assignments.npz",
+                ),
+                group_image_indices=group_image_indices,
+                hard_assignment_local=np.asarray(ha_local, dtype=np.int32),
+                hard_assignment_global=np.asarray(hard_assignment[group_image_indices], dtype=np.int32),
+                decoded_rotation_indices=np.asarray(local_indices[local_rot_idx], dtype=np.int32),
+                decoded_translation_indices=np.asarray(trans_idx, dtype=np.int32),
+                decoded_rotation_eulers=np.asarray(rotation_grid_eulers[local_indices[local_rot_idx]], dtype=np.float32),
+                max_posterior=np.asarray(stats_g.max_posterior_per_image, dtype=np.float32),
+            )
         log_evidence[group_image_indices] = np.asarray(
             stats_g.log_evidence_per_image,
             dtype=np.float32,
@@ -376,7 +458,12 @@ def _compute_significance_batched(
     return_significant_sample_indices=False,
     rotation_log_prior=None,
     translation_log_prior=None,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
     half_spectrum_scoring=False,
+    projection_padding_factor=1,
+    use_float64_scoring=False,
 ):
     """Run coarse E-step and find significant rotations in a memory-efficient way.
 
@@ -401,6 +488,7 @@ def _compute_significance_batched(
         ``rot_idx * n_trans + trans_idx`` entries kept for image ``i``.
     """
     from recovar.core.configs import ForwardModelConfig
+    from recovar.core import fourier_transform_utils
     from recovar.em.dense_single_volume.adaptive import find_significant_rotations as _find_sig
     from recovar.em.dense_single_volume.engine_v2 import (
         _compute_projections_block,
@@ -410,6 +498,20 @@ def _compute_significance_batched(
         _update_logsumexp,
         make_half_image_weights,
     )
+
+    if projection_padding_factor > 1:
+        from recovar.reconstruction.relion_functions import pad_volume_for_projection
+
+        mean_for_proj, proj_volume_shape = pad_volume_for_projection(
+            mean,
+            experiment_dataset.volume_shape,
+            projection_padding_factor,
+            do_gridding_correction=False,
+            current_size=current_size,
+        )
+    else:
+        mean_for_proj = mean
+        proj_volume_shape = experiment_dataset.volume_shape
 
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]
@@ -442,6 +544,11 @@ def _compute_significance_batched(
     else:
         window_indices = None
         n_windowed = n_half
+
+    if use_float64_scoring:
+        half_weights = half_weights.astype(jnp.float64)
+        if use_window:
+            half_weights_windowed = half_weights[window_indices]
 
     # Pad rotations
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
@@ -526,6 +633,27 @@ def _compute_significance_batched(
             score_with_masked_images,
         )
 
+        if image_corrections is not None:
+            batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
+            corr_expanded = jnp.repeat(batch_corr, n_trans)
+            shifted_half = shifted_half * corr_expanded[:, None]
+            batch_norm = batch_norm * (batch_corr**2)[:, None]
+
+        if scale_corrections is not None:
+            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
+            ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+
+        if image_pre_shifts is not None:
+            batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
+            lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+                image_shape,
+                voxel_size=1,
+                scaled=True,
+            )
+            phase_factors = jnp.exp(-2j * jnp.pi * (lattice_half @ batch_shifts.T)).T
+            phase_expanded = jnp.repeat(phase_factors, n_trans, axis=0)
+            shifted_half = shifted_half * phase_expanded
+
         # DC exclusion (RELION parity: Minvsigma2[0] = 0)
         if half_spectrum_scoring:
             from recovar.em.dense_single_volume.engine_v2 import make_shell_indices_half as _mshi
@@ -542,6 +670,16 @@ def _compute_significance_batched(
             shifted_data = shifted_half
             ctf2_data = ctf2_over_nv_half
 
+        if use_float64_scoring:
+            shifted_half = shifted_half.astype(jnp.complex128)
+            ctf2_over_nv_half = ctf2_over_nv_half.astype(jnp.float64)
+            if use_window:
+                shifted_data = shifted_data.astype(jnp.complex128)
+                ctf2_data = ctf2_data.astype(jnp.float64)
+            else:
+                shifted_data = shifted_half
+                ctf2_data = ctf2_over_nv_half
+
         # Pass 1: streaming logsumexp
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size)
@@ -552,7 +690,7 @@ def _compute_significance_batched(
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean, rots_b, image_shape, volume_shape, disc_type
+                mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
             )
 
             if use_window:
@@ -614,7 +752,7 @@ def _compute_significance_batched(
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean, rots_b, image_shape, volume_shape, disc_type
+                mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
             )
 
             if use_window:
@@ -770,8 +908,50 @@ def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, heal
     return direction_weights.astype(np.float32)
 
 
-def make_relion_direction_log_prior(direction_prior, healpix_order):
-    """Expand RELION's learned ``pdf_direction`` onto the full rotation grid."""
+def infer_direction_prior_healpix_order(direction_prior):
+    """Infer HEALPix order from a RELION direction-prior vector length."""
+    n_pixels = int(np.asarray(direction_prior).reshape(-1).shape[0])
+    order = 0
+    while hp.nside2npix(2**order) < n_pixels:
+        order += 1
+    if hp.nside2npix(2**order) != n_pixels:
+        raise ValueError(f"Cannot infer healpix order from direction prior of length {n_pixels}")
+    return order
+
+
+def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order):
+    """Remap a RELION direction prior between HEALPix orders."""
+    direction_prior = np.asarray(direction_prior, dtype=np.float64).reshape(-1)
+    if src_order == dst_order:
+        out = direction_prior.copy()
+    elif src_order > dst_order:
+        theta, phi = hp.pix2ang(2**src_order, np.arange(direction_prior.shape[0], dtype=np.int64))
+        dst_idx = hp.ang2pix(2**dst_order, theta, phi)
+        out = np.zeros(hp.nside2npix(2**dst_order), dtype=np.float64)
+        np.add.at(out, dst_idx, direction_prior)
+    else:
+        theta, phi = hp.pix2ang(2**dst_order, np.arange(hp.nside2npix(2**dst_order), dtype=np.int64))
+        src_idx = hp.ang2pix(2**src_order, theta, phi)
+        out = direction_prior[src_idx]
+    total = float(out.sum())
+    if total <= 0.0 or not np.isfinite(total):
+        out.fill(1.0 / max(out.shape[0], 1))
+    else:
+        out /= total
+    return out.astype(np.float32)
+
+
+def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=None):
+    """Expand RELION's learned ``pdf_direction`` onto a rotation grid.
+
+    When ``rotations`` is omitted, the prior is expanded onto RELION's
+    canonical sample-index ordering. This matches RELION's global
+    ``pdf_direction`` handling: the prior is looked up by coarse direction
+    index and only then are perturbation / oversampling applied to generate the
+    actual trial orientations. The optional ``rotations`` mode is therefore a
+    geometry-based expansion helper for diagnostics only, not the RELION-parity
+    path used in refinement.
+    """
     direction_prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
     n_rot = rotation_grid_size(healpix_order)
     n_pixels = n_rot // rotation_grid_n_in_planes(healpix_order)
@@ -781,7 +961,24 @@ def make_relion_direction_log_prior(direction_prior, healpix_order):
         )
 
     safe_prior = np.clip(direction_prior, np.finfo(np.float32).tiny, None)
-    pixel_idx = np.arange(n_rot, dtype=np.int64) % n_pixels
+    if rotations is None:
+        pixel_idx = np.arange(n_rot, dtype=np.int64) % n_pixels
+    else:
+        rotations = np.asarray(rotations, dtype=np.float32).reshape(-1, 3, 3)
+        if rotations.shape[0] != n_rot:
+            raise ValueError(
+                f"rotations must have shape ({n_rot}, 3, 3), got {rotations.shape}",
+            )
+        view_dirs = rotations[:, :, 2].astype(np.float64)
+        norms = np.linalg.norm(view_dirs, axis=1, keepdims=True)
+        norms = np.where(norms > 1e-12, norms, 1.0)
+        view_dirs = view_dirs / norms
+        pixel_idx = hp.vec2pix(
+            2**healpix_order,
+            view_dirs[:, 0],
+            view_dirs[:, 1],
+            view_dirs[:, 2],
+        )
     return np.log(safe_prior[pixel_idx]).astype(np.float32)
 
 
@@ -864,6 +1061,7 @@ def refine_single_volume(
     init_scale_corrections=None,
     init_direction_prior=None,
     init_previous_best_translations=None,
+    replay_iteration_overrides=None,
     skip_final_iteration=False,
 ):
     """Multi-iteration EM refinement with FSC-driven resolution management.
@@ -1010,6 +1208,7 @@ def refine_single_volume(
             init_scale_corrections=init_scale_corrections,
             init_direction_prior=init_direction_prior,
             init_previous_best_translations=init_previous_best_translations,
+            replay_iteration_overrides=replay_iteration_overrides,
             skip_final_iteration=skip_final_iteration,
         )
 
@@ -1339,6 +1538,7 @@ def _refine_relion_mode(
     init_scale_corrections=None,
     init_direction_prior=None,
     init_previous_best_translations=None,
+    replay_iteration_overrides=None,
     skip_final_iteration=False,
 ):
     """RELION-parity refinement loop with convergence detection.
@@ -1463,12 +1663,15 @@ def _refine_relion_mode(
                 current_healpix_order,
             )
         current_rotations = get_relion_rotation_grid(current_healpix_order).astype(np.float32)
+        current_rotation_eulers = get_relion_rotation_grid_eulers(current_healpix_order).astype(np.float32)
         current_nside_level = current_healpix_order
     elif rotations is not None:
         current_rotations = np.asarray(rotations, dtype=np.float32)
+        current_rotation_eulers = utils.R_to_relion(np.asarray(current_rotations), degrees=True).astype(np.float32)
         current_nside_level = current_healpix_order
     else:
         current_rotations = get_relion_rotation_grid(current_healpix_order).astype(np.float32)
+        current_rotation_eulers = get_relion_rotation_grid_eulers(current_healpix_order).astype(np.float32)
         current_nside_level = current_healpix_order
     if translations is None:
         current_translations = jnp.asarray(
@@ -1480,6 +1683,8 @@ def _refine_relion_mode(
     # a perturbed copy (SamplingPerturbation). Keep the base so each iter
     # perturbs a fresh copy rather than compounding prior perturbations.
     base_translations = current_translations
+    if save_intermediates_dir is not None:
+        os.makedirs(save_intermediates_dir, exist_ok=True)
 
     # RELION uses pf=2 for both projection and reconstruction (--pad 2).
     # Projection: real-space zero-pad N³→(2N)³, DFT, then trilinear slice.
@@ -1530,6 +1735,7 @@ def _refine_relion_mode(
     hard_assignments = [None, None]
     previous_assignments = [None, None]
     previous_best_rotations = [None, None]
+    previous_best_rotation_eulers = [None, None]
     if init_previous_best_translations is not None:
         previous_best_translations = [
             np.asarray(init_previous_best_translations[0], dtype=np.float32)
@@ -1554,6 +1760,12 @@ def _refine_relion_mode(
     # per shell after iter i's signal-prior update.
     noise_radial_trajectory = []
     tau2_radial_trajectory = []
+    tau2_sigma2_trajectory = []
+    tau2_avg_weight_trajectory = []
+    tau2_shell_sum_trajectory = []
+    tau2_shell_count_trajectory = []
+    tau2_fsc_used_trajectory = []
+    tau2_ssnr_trajectory = []
     # C1 (RELION-parity): per-iter sigma2_offset update from data. Initialized
     # from `init_translation_sigma_angstrom`; updated each iter to the
     # MAP-based RMS of per-particle translation deviations from the prior
@@ -1564,7 +1776,14 @@ def _refine_relion_mode(
     # changes to the engine's M-step accumulation; the difference is small
     # for concentrated posteriors (Pmax > 0.8 typical at iter 6+).
     current_sigma_offset_angstrom = float(init_translation_sigma_angstrom)
+    sigma_offset_used_trajectory = []
     sigma_offset_trajectory = []
+    frac_changed_trajectory = []
+    acc_rot_trajectory = []
+    smallest_change_angles_trajectory = []
+    smallest_change_offsets_trajectory = []
+    best_rotation_eulers_history = []
+    best_translations_history = []
     relion_incr_size = 10  # RELION default
     relion_has_high_fsc_at_limit = bool(init_has_high_fsc_at_limit) if init_has_high_fsc_at_limit is not None else False
     global_direction_prior = None
@@ -1622,7 +1841,7 @@ def _refine_relion_mode(
     # RELION applies this in the next E-step.  recovar must do the same.
     if init_direction_prior is not None:
         global_direction_prior = np.asarray(init_direction_prior, dtype=np.float32)
-        global_direction_prior_order = init_healpix_order
+        global_direction_prior_order = infer_direction_prior_healpix_order(global_direction_prior)
         logger.info(
             "RELION mode: loaded init direction prior: %d directions, range=[%.6f, %.6f], %d zero-probability",
             len(global_direction_prior),
@@ -1669,6 +1888,9 @@ def _refine_relion_mode(
     iteration = 0
     while not state.has_converged and iteration < max_iter:
         t0 = time.time()
+        iter_replay_override = None
+        if replay_iteration_overrides is not None and iteration < len(replay_iteration_overrides):
+            iter_replay_override = replay_iteration_overrides[iteration]
 
         # --- Determine current_size using RELION's FSC-derived SSNR (C4/C5) ---
         # At iteration 0, no previous half-map FSC exists yet; use the initial
@@ -1782,6 +2004,18 @@ def _refine_relion_mode(
                         _star,
                     )
                 state.healpix_order = _capped_hp
+            _replay_do_local = bool(state.healpix_order >= LOCAL_SEARCH_HEALPIX_ORDER)
+            if state.do_local_search != _replay_do_local:
+                logger.info(
+                    "Replay override: local_search %s -> %s (healpix_order=%d)",
+                    state.do_local_search,
+                    _replay_do_local,
+                    state.healpix_order,
+                )
+                state.do_local_search = _replay_do_local
+                if _replay_do_local:
+                    state.sigma_rot = 0.0
+                    state.sigma_psi = 0.0
             if (
                 abs(float(state.translation_range) - _relion_offset_range) > 1e-6
                 or abs(float(state.translation_step) - _relion_offset_step) > 1e-6
@@ -1820,6 +2054,137 @@ def _refine_relion_mode(
                     )
                     cs = _relion_cs
 
+            if iteration > 0:
+                _prior_iter = init_relion_iteration + iteration
+                _prior_star = os.path.join(
+                    perturb_replay_relion_dir,
+                    f"run_it{_prior_iter:03d}_half1_model.star",
+                )
+                if os.path.exists(_prior_star) and (
+                    iter_replay_override is None or iter_replay_override.get("direction_prior") is None
+                ):
+                    _relion_direction_prior = read_relion_direction_prior(_prior_star)
+                    _relion_direction_prior_order = infer_direction_prior_healpix_order(_relion_direction_prior)
+                    if _relion_direction_prior_order != state.healpix_order:
+                        logger.info(
+                            "Replay override: remapping direction prior from healpix_order=%d to %d",
+                            _relion_direction_prior_order,
+                            state.healpix_order,
+                        )
+                        _relion_direction_prior = remap_direction_prior_to_healpix_order(
+                            _relion_direction_prior,
+                            _relion_direction_prior_order,
+                            state.healpix_order,
+                        )
+                        _relion_direction_prior_order = state.healpix_order
+                    global_direction_prior = _relion_direction_prior
+                    global_direction_prior_order = _relion_direction_prior_order
+                    logger.info(
+                        "Replay override: direction prior <- %s (%d directions, range=[%.6f, %.6f], zeros=%d)",
+                        _prior_star,
+                        len(global_direction_prior),
+                        float(global_direction_prior.min()),
+                        float(global_direction_prior.max()),
+                        int(np.sum(global_direction_prior == 0)),
+                    )
+
+        if iter_replay_override is not None:
+            _replay_sigma = iter_replay_override.get("translation_sigma_angstrom")
+            if _replay_sigma is not None:
+                current_sigma_offset_angstrom = float(_replay_sigma)
+                logger.info(
+                    "Replay override: sigma_offset <- %.4f A (iter=%d)",
+                    current_sigma_offset_angstrom,
+                    iteration + 1,
+                )
+            _replay_prev_trans = iter_replay_override.get("previous_best_translations")
+            if _replay_prev_trans is not None:
+                previous_best_translations = [
+                    np.asarray(_replay_prev_trans[0], dtype=np.float32)
+                    if _replay_prev_trans[0] is not None
+                    else None,
+                    np.asarray(_replay_prev_trans[1], dtype=np.float32)
+                    if _replay_prev_trans[1] is not None
+                    else None,
+                ]
+                logger.info(
+                    "Replay override: previous_best_translations <- half1=%s half2=%s",
+                    "set" if previous_best_translations[0] is not None else "none",
+                    "set" if previous_best_translations[1] is not None else "none",
+                )
+            _replay_prev_rots = iter_replay_override.get("previous_best_rotations")
+            if _replay_prev_rots is not None:
+                previous_best_rotations = [
+                    np.asarray(_replay_prev_rots[0], dtype=np.float32) if _replay_prev_rots[0] is not None else None,
+                    np.asarray(_replay_prev_rots[1], dtype=np.float32) if _replay_prev_rots[1] is not None else None,
+                ]
+                logger.info(
+                    "Replay override: previous_best_rotations <- half1=%s half2=%s",
+                    "set" if previous_best_rotations[0] is not None else "none",
+                    "set" if previous_best_rotations[1] is not None else "none",
+                )
+            _replay_prev_eulers = iter_replay_override.get("previous_best_rotation_eulers")
+            if _replay_prev_eulers is not None:
+                previous_best_rotation_eulers = [
+                    np.asarray(_replay_prev_eulers[0], dtype=np.float32)
+                    if _replay_prev_eulers[0] is not None
+                    else None,
+                    np.asarray(_replay_prev_eulers[1], dtype=np.float32)
+                    if _replay_prev_eulers[1] is not None
+                    else None,
+                ]
+                logger.info(
+                    "Replay override: previous_best_rotation_eulers <- half1=%s half2=%s",
+                    "set" if previous_best_rotation_eulers[0] is not None else "none",
+                    "set" if previous_best_rotation_eulers[1] is not None else "none",
+                )
+            _replay_img_corr = iter_replay_override.get("image_corrections")
+            if _replay_img_corr is not None:
+                image_corrections_per_half = [
+                    np.asarray(_replay_img_corr[0], dtype=np.float32) if _replay_img_corr[0] is not None else None,
+                    np.asarray(_replay_img_corr[1], dtype=np.float32) if _replay_img_corr[1] is not None else None,
+                ]
+                logger.info(
+                    "Replay override: image_corrections <- half1=%s half2=%s",
+                    "set" if image_corrections_per_half[0] is not None else "none",
+                    "set" if image_corrections_per_half[1] is not None else "none",
+                )
+            _replay_scale_corr = iter_replay_override.get("scale_corrections")
+            if _replay_scale_corr is not None:
+                scale_corrections_per_half = [
+                    np.asarray(_replay_scale_corr[0], dtype=np.float32) if _replay_scale_corr[0] is not None else None,
+                    np.asarray(_replay_scale_corr[1], dtype=np.float32) if _replay_scale_corr[1] is not None else None,
+                ]
+                logger.info(
+                    "Replay override: scale_corrections <- half1=%s half2=%s",
+                    "set" if scale_corrections_per_half[0] is not None else "none",
+                    "set" if scale_corrections_per_half[1] is not None else "none",
+                )
+            _replay_dir_prior = iter_replay_override.get("direction_prior")
+            if _replay_dir_prior is not None:
+                global_direction_prior = np.asarray(_replay_dir_prior, dtype=np.float32)
+                global_direction_prior_order = infer_direction_prior_healpix_order(global_direction_prior)
+                if global_direction_prior_order != state.healpix_order:
+                    logger.info(
+                        "Replay override: remapping provided direction prior from healpix_order=%d to %d",
+                        global_direction_prior_order,
+                        state.healpix_order,
+                    )
+                    global_direction_prior = remap_direction_prior_to_healpix_order(
+                        global_direction_prior,
+                        global_direction_prior_order,
+                        state.healpix_order,
+                    )
+                    global_direction_prior_order = state.healpix_order
+                logger.info(
+                    "Replay override: direction prior <- provided override (%d directions, range=[%.6f, %.6f], zeros=%d)",
+                    len(global_direction_prior),
+                    float(global_direction_prior.min()),
+                    float(global_direction_prior.max()),
+                    int(np.sum(global_direction_prior == 0)),
+                )
+
+        sigma_offset_used_trajectory.append(float(current_sigma_offset_angstrom))
         current_sizes.append(cs)
         healpix_order_trajectory.append(state.healpix_order)
 
@@ -1849,6 +2214,7 @@ def _refine_relion_mode(
                     new_order,
                 )
                 current_rotations = get_relion_rotation_grid(new_order).astype(np.float32)
+                current_rotation_eulers = get_relion_rotation_grid_eulers(new_order).astype(np.float32)
                 current_healpix_order = new_order
                 global_direction_prior = None
                 global_direction_prior_order = None
@@ -1900,6 +2266,7 @@ def _refine_relion_mode(
         # exact rotations selected in the previous iteration, not the nearest
         # snapped grid indices.
         effective_rotations = current_rotations
+        effective_rotation_eulers = np.asarray(current_rotation_eulers, dtype=np.float32)
         # --- Apply RELION SamplingPerturbation to the trial grid for this iter ---
         # healpix_sampling.cpp:1909-1934 (rotations) + 1810-1820 (translations)
         # Perturbation is a rigid rotation of SO(3): A := A @ R_perturb applied
@@ -1927,6 +2294,9 @@ def _refine_relion_mode(
                 random_perturbation,
                 angsamp_deg,
             ).astype(np.float32)
+            effective_rotation_eulers = utils.R_to_relion(np.asarray(effective_rotations), degrees=True).astype(
+                np.float32
+            )
             _perturbed_translations = apply_relion_translation_perturbation(
                 np.asarray(base_translations),
                 random_perturbation,
@@ -1934,8 +2304,14 @@ def _refine_relion_mode(
             )
             current_translations = jnp.asarray(_perturbed_translations, dtype=jnp.float32)
         rotation_log_prior = None
-        use_local = state.do_local_search and all(rot is not None for rot in previous_best_rotations) and iteration > 0
+        use_local = (
+            state.do_local_search
+            and all(eulers is not None for eulers in previous_best_rotation_eulers)
+            and iteration > 0
+        )
         local_search_order = None
+        local_search_rotations = None
+        local_search_rotation_eulers = None
         sigma_rot = state.sigma_rot
         sigma_psi = state.sigma_psi if state.sigma_psi > 0 else sigma_rot
         if use_local and sigma_rot <= 0:
@@ -1945,6 +2321,18 @@ def _refine_relion_mode(
 
         if use_local:
             local_search_order = state.healpix_order + state.adaptive_oversampling
+            if effective_rotations.shape[0] != rotation_grid_size(local_search_order):
+                logger.info(
+                    "Generating fine local-search grid: order=%d (%d rotations) from capped base order=%d",
+                    local_search_order,
+                    rotation_grid_size(local_search_order),
+                    current_healpix_order,
+                )
+                local_search_rotations = get_relion_rotation_grid(local_search_order).astype(np.float32)
+                local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(np.float32)
+            else:
+                local_search_rotations = effective_rotations
+                local_search_rotation_eulers = effective_rotation_eulers
             logger.info(
                 "Local search (batched exact): fine_order=%d, sigma_rot=%.4f rad (%.2f deg), sigma_psi=%.4f rad",
                 local_search_order,
@@ -1975,15 +2363,18 @@ def _refine_relion_mode(
         # When adaptive oversampling is active, ha_k indices refer to the
         # oversampled grid (from pass 2), not effective_rotations.
         pose_rotations = [None, None]  # rotations to use with ha for poses
+        pose_rotation_eulers = [None, None]
         pose_translations = [
             np.asarray(current_translations, dtype=np.float32),
             np.asarray(current_translations, dtype=np.float32),
         ]
         best_pose_rotations = [None, None]
+        best_pose_rotation_eulers = [None, None]
         best_pose_translations = [None, None]
         # Coarse-grid assignments for local search tracking (always indexed
         # into effective_rotations, even when adaptive oversampling is used).
         coarse_ha = [None, None]
+        adaptive_pass1_diag = [None, None]
 
         if use_adaptive:
             # --- TWO-PASS ADAPTIVE OVERSAMPLING (RELION parity) ---
@@ -2001,11 +2392,11 @@ def _refine_relion_mode(
                 grid_size,
                 particle_diameter=particle_diameter_ang,
             )
-            coarse_size = quantize_current_size(coarse_size, ori_size=grid_size)
-            # Coarse size must be smaller than full current_size
-            if cs_for_engine is not None and coarse_size >= cs:
-                coarse_size = max(8, cs // 2)
-                coarse_size = quantize_current_size(coarse_size, ori_size=grid_size)
+            coarse_size = clamp_relion_coarse_image_size(
+                coarse_size,
+                cs if cs_for_engine is not None else None,
+                grid_size,
+            )
             coarse_cs = coarse_size if coarse_size < grid_size else None
 
             logger.info(
@@ -2089,12 +2480,14 @@ def _refine_relion_mode(
                     means[k],
                     mean_variance,
                     noise_variance,
-                    previous_best_rotations[k],
+                    previous_best_rotation_eulers[k],
+                    local_search_rotations,
+                    local_search_rotation_eulers,
                     local_search_order,
                     sigma_rot,
                     sigma_psi,
                     current_translations,
-                    previous_best_translations[k],
+                    trans_prior_center,
                     current_sigma_offset_angstrom,
                     current_translation_range,
                     disc_type,
@@ -2105,6 +2498,8 @@ def _refine_relion_mode(
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
                     use_float64_scoring=True,
+                    debug_output_dir=save_intermediates_dir,
+                    debug_prefix=f"it{iteration:03d}_half{k + 1}",
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
@@ -2134,8 +2529,24 @@ def _refine_relion_mode(
                     return_significant_sample_indices=True,
                     rotation_log_prior=rotation_log_prior,
                     translation_log_prior=translation_log_prior,
+                    image_corrections=image_corrections_per_half[k],
+                    scale_corrections=scale_corrections_per_half[k],
+                    image_pre_shifts=previous_best_translations[k],
                     half_spectrum_scoring=True,
+                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                    use_float64_scoring=True,
                 )
+                total_coarse_samples = int(
+                    effective_rotations.shape[0] * current_translations.shape[0],
+                )
+                adaptive_pass1_diag[k] = {
+                    "n_significant_per_image": np.asarray(n_sig_batch, dtype=np.int32),
+                    "significant_rotation_union_mask": np.asarray(sig_rot_any, dtype=bool),
+                    "coarse_hard_assignment": np.asarray(ha_coarse, dtype=np.int32),
+                    "coarse_size": -1 if coarse_cs is None else int(coarse_cs),
+                    "total_coarse_samples": total_coarse_samples,
+                    "significant_rotation_union_count": int(np.sum(sig_rot_any)),
+                }
                 n_sig_total = int(np.sum(sig_rot_any))
                 dt_pass1 = time.time() - t_pass1
 
@@ -2154,7 +2565,6 @@ def _refine_relion_mode(
                     current_translations.shape[0],
                     threshold=adaptive_pass2_skip_threshold,
                 )
-                total_coarse_samples = effective_rotations.shape[0] * current_translations.shape[0]
 
                 if skip_pass2:
                     logger.info(
@@ -2193,6 +2603,7 @@ def _refine_relion_mode(
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     pose_rotations[k] = effective_rotations
+                    pose_rotation_eulers[k] = effective_rotation_eulers
                     pose_translations[k] = np.asarray(current_translations, dtype=np.float32)
                     coarse_ha[k] = ha_k
                 elif np.all(np.asarray(n_sig_batch) == total_coarse_samples):
@@ -2225,6 +2636,7 @@ def _refine_relion_mode(
                         scale_corrections=scale_corrections_per_half[k],
                         image_pre_shifts=previous_best_translations[k],
                         use_float64_scoring=True,
+                        random_perturbation=random_perturbation,
                     )
                     Ft_y_k, Ft_ctf_k, ha_k, oversampled_rots_k, em_stats_k, noise_stats_k = pass2_outputs
                     noise_stats_per_half[k] = noise_stats_k
@@ -2235,6 +2647,10 @@ def _refine_relion_mode(
                         dt_pass2,
                     )
                     pose_rotations[k] = np.asarray(oversampled_rots_k, dtype=np.float32)
+                    pose_rotation_eulers[k] = utils.R_to_relion(
+                        np.asarray(oversampled_rots_k),
+                        degrees=True,
+                    ).astype(np.float32)
                     oversampled_translations, _ = get_oversampled_translation_grid(
                         np.asarray(current_translations, dtype=np.float32),
                         state.translation_step,
@@ -2281,6 +2697,7 @@ def _refine_relion_mode(
                         scale_corrections=scale_corrections_per_half[k],
                         image_pre_shifts=previous_best_translations[k],
                         use_float64_scoring=True,
+                        random_perturbation=random_perturbation,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     dt_pass2 = time.time() - t_pass2
@@ -2290,6 +2707,10 @@ def _refine_relion_mode(
                         dt_pass2,
                     )
                     best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
+                    best_pose_rotation_eulers[k] = utils.R_to_relion(
+                        np.asarray(best_rots_k),
+                        degrees=True,
+                    ).astype(np.float32)
                     best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
                     oversampled_translations, _ = get_oversampled_translation_grid(
                         np.asarray(current_translations, dtype=np.float32),
@@ -2344,6 +2765,7 @@ def _refine_relion_mode(
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
+                pose_rotation_eulers[k] = effective_rotation_eulers
                 pose_translations[k] = np.asarray(current_translations, dtype=np.float32)
                 coarse_ha[k] = ha_k  # same grid, no oversampling
 
@@ -2455,14 +2877,16 @@ def _refine_relion_mode(
             prev_fsc_for_tau2 = fsc_history[-1]
         elif init_fsc is not None:
             prev_fsc_for_tau2 = init_fsc
+        tau2_update_details = None
         if prev_fsc_for_tau2 is not None:
-            mean_signal_variance, _ = regularization.compute_relion_tau2_from_weights(
+            mean_signal_variance, _, tau2_update_details = regularization.compute_relion_tau2_from_weights(
                 Ft_ctf_0,
                 Ft_ctf_1,
                 prev_fsc_for_tau2,
                 volume_shape,
                 tau2_fudge=tau2_fudge,
                 padding_factor=PADDING_FACTOR,
+                return_details=True,
             )
             logger.info(
                 "Pre-Wiener tau2 update from %s FSC: old_max=%.4e new_max=%.4e",
@@ -2636,6 +3060,24 @@ def _refine_relion_mode(
                 os.path.join(save_intermediates_dir, f"it{iteration:03d}_translations.npy"),
                 np.asarray(current_translations),
             )
+            for k_half in range(2):
+                if coarse_ha[k_half] is not None:
+                    np.save(
+                        os.path.join(
+                            save_intermediates_dir,
+                            f"it{iteration:03d}_coarse_ha_half{k_half + 1}.npy",
+                        ),
+                        np.asarray(coarse_ha[k_half], dtype=np.int32),
+                    )
+                pass1_diag = adaptive_pass1_diag[k_half]
+                if pass1_diag is not None:
+                    np.savez_compressed(
+                        os.path.join(
+                            save_intermediates_dir,
+                            f"it{iteration:03d}_half{k_half + 1}_pass1_diag.npz",
+                        ),
+                        **pass1_diag,
+                    )
             logger.info(
                 "Saved intermediate volumes to %s (iteration %d)",
                 save_intermediates_dir,
@@ -2702,27 +3144,39 @@ def _refine_relion_mode(
             np.asarray(trans).copy() if trans is not None else None for trans in previous_best_translations
         ]
         new_iter_best_rotations = [None, None]
+        new_iter_best_rotation_eulers = [None, None]
         new_iter_best_translations = [None, None]
         for k in range(2):
             if best_pose_rotations[k] is not None:
                 best_rots = np.asarray(best_pose_rotations[k], dtype=np.float32)
+                best_eulers = (
+                    np.asarray(best_pose_rotation_eulers[k], dtype=np.float32)
+                    if best_pose_rotation_eulers[k] is not None
+                    else utils.R_to_relion(best_rots, degrees=True).astype(np.float32)
+                )
                 best_trans = np.asarray(best_pose_translations[k], dtype=np.float32)
             elif use_local:
                 rot_idx = hard_assignments[k] // current_translations.shape[0]
                 trans_idx = hard_assignments[k] % current_translations.shape[0]
-                best_rots = rotation_indices_to_matrices(
-                    rot_idx,
-                    local_search_order,
-                )
+                if local_search_rotations is None or local_search_rotation_eulers is None:
+                    raise ValueError("Local-search hard assignments require the fine local-search grid")
+                best_rots = np.asarray(local_search_rotations, dtype=np.float32)[rot_idx]
+                best_eulers = np.asarray(local_search_rotation_eulers, dtype=np.float32)[rot_idx]
                 best_trans = np.asarray(current_translations)[trans_idx]
             else:
                 # Global search uses the dense grid in pose_rotations[k].
+                rot_idx = hard_assignments[k] // current_translations.shape[0]
                 best_rots, best_trans = hard_assignment_idx_to_pose(
                     hard_assignments[k],
                     pose_rotations[k],
                     pose_translations[k],
                 )
+                if pose_rotation_eulers[k] is not None:
+                    best_eulers = np.asarray(pose_rotation_eulers[k], dtype=np.float32)[rot_idx]
+                else:
+                    best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
             new_iter_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
+            new_iter_best_rotation_eulers[k] = np.asarray(best_eulers, dtype=np.float32)
             # When image_pre_shifts is used, best_trans is RELATIVE to the
             # pre-shifted position.  Store the total (absolute) translation
             # so the next iteration pre-centers by the updated offset.
@@ -2731,8 +3185,61 @@ def _refine_relion_mode(
                 total_trans = total_trans + previous_best_translations[k]
             new_iter_best_translations[k] = total_trans
             previous_best_rotations[k] = new_iter_best_rotations[k]
+            previous_best_rotation_eulers[k] = new_iter_best_rotation_eulers[k]
             previous_best_translations[k] = new_iter_best_translations[k]
             experiment_datasets[k].update_poses(best_rots, best_trans)
+
+        try:
+            best_rotation_eulers_history.append(
+                np.concatenate(new_iter_best_rotation_eulers, axis=0).astype(np.float32)
+            )
+            best_translations_history.append(
+                np.concatenate(new_iter_best_translations, axis=0).astype(np.float32)
+            )
+        except (ValueError, TypeError):
+            best_rotation_eulers_history.append(None)
+            best_translations_history.append(None)
+
+        if save_intermediates_dir is not None:
+            for k_half in range(2):
+                np.save(
+                    os.path.join(
+                        save_intermediates_dir,
+                        f"it{iteration:03d}_best_rotation_eulers_half{k_half + 1}.npy",
+                    ),
+                    np.asarray(new_iter_best_rotation_eulers[k_half], dtype=np.float32),
+                )
+                np.save(
+                    os.path.join(
+                        save_intermediates_dir,
+                        f"it{iteration:03d}_best_translations_half{k_half + 1}.npy",
+                    ),
+                    np.asarray(new_iter_best_translations[k_half], dtype=np.float32),
+                )
+                if prior_iter_best_rotations[k_half] is not None:
+                    np.save(
+                        os.path.join(
+                            save_intermediates_dir,
+                            f"it{iteration:03d}_prev_rotation_matrices_half{k_half + 1}.npy",
+                        ),
+                        np.asarray(prior_iter_best_rotations[k_half], dtype=np.float32),
+                    )
+                if prior_iter_best_translations[k_half] is not None:
+                    np.save(
+                        os.path.join(
+                            save_intermediates_dir,
+                            f"it{iteration:03d}_prev_translations_half{k_half + 1}.npy",
+                        ),
+                        np.asarray(prior_iter_best_translations[k_half], dtype=np.float32),
+                    )
+            np.save(
+                os.path.join(save_intermediates_dir, f"it{iteration:03d}_effective_rotations.npy"),
+                np.asarray(effective_rotations, dtype=np.float32),
+            )
+            np.save(
+                os.path.join(save_intermediates_dir, f"it{iteration:03d}_effective_rotation_eulers.npy"),
+                np.asarray(effective_rotation_eulers, dtype=np.float32),
+            )
 
         # --- RELION-exact change tracking inputs (B3 / B4) ---
         # Combine both half-sets in the same image order as
@@ -2804,23 +3311,24 @@ def _refine_relion_mode(
         noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
 
         # Save per-iter per-shell sigma2 (after this iter's noise update) and
-        # tau2-equivalent (radial average of mean_variance over voxels) so the
-        # RELION-parity diff script can compare them shell-by-shell.
+        # the exact shell-wise tau2 ingredients used in the Wiener update.
         noise_radial_trajectory.append(np.asarray(noise_from_res, dtype=np.float64))
-        try:
-            from recovar.reconstruction.regularization import average_over_shells
-
-            tau2_radial = np.asarray(
-                average_over_shells(
-                    np.asarray(mean_variance, dtype=np.float64),
-                    volume_shape,
-                ),
-                dtype=np.float64,
-            )
-            tau2_radial_trajectory.append(tau2_radial)
-        except Exception as exc:
-            logger.warning("tau2 radial average failed: %s", exc)
+        if tau2_update_details is not None:
+            tau2_radial_trajectory.append(np.asarray(tau2_update_details["prior_shells"], dtype=np.float64))
+            tau2_sigma2_trajectory.append(np.asarray(tau2_update_details["sigma2_shells"], dtype=np.float64))
+            tau2_avg_weight_trajectory.append(np.asarray(tau2_update_details["avg_weight_shells"], dtype=np.float64))
+            tau2_shell_sum_trajectory.append(np.asarray(tau2_update_details["shell_sum"], dtype=np.float64))
+            tau2_shell_count_trajectory.append(np.asarray(tau2_update_details["shell_count"], dtype=np.float64))
+            tau2_fsc_used_trajectory.append(np.asarray(tau2_update_details["fsc_shells"], dtype=np.float64))
+            tau2_ssnr_trajectory.append(np.asarray(tau2_update_details["ssnr_shells"], dtype=np.float64))
+        else:
             tau2_radial_trajectory.append(None)
+            tau2_sigma2_trajectory.append(None)
+            tau2_avg_weight_trajectory.append(None)
+            tau2_shell_sum_trajectory.append(None)
+            tau2_shell_count_trajectory.append(None)
+            tau2_fsc_used_trajectory.append(None)
+            tau2_ssnr_trajectory.append(None)
 
         # --- Update convergence state ---
         # This checks assignment changes, resolution stalls, and may trigger
@@ -2883,6 +3391,7 @@ def _refine_relion_mode(
             current_healpix_order,
         )
         state._last_frac_changed = frac_changed
+        frac_changed_trajectory.append(float(frac_changed))
 
         # --- C1 (RELION-parity): update sigma2_offset from data ---
         # MAP-based approximation of RELION's
@@ -2906,6 +3415,9 @@ def _refine_relion_mode(
                 min_sigma_angstrom,
             )
         sigma_offset_trajectory.append(float(current_sigma_offset_angstrom))
+        acc_rot_trajectory.append(float(iter_acc_rot) if iter_acc_rot is not None else np.nan)
+        smallest_change_angles_trajectory.append(float(state.current_changes_optimal_orientations))
+        smallest_change_offsets_trajectory.append(float(state.current_changes_optimal_offsets_angstrom))
 
         # Save assignments for next iteration's change tracking.
         # Use coarse_ha (indexed into effective_rotations/current_rotations)
@@ -2966,7 +3478,20 @@ def _refine_relion_mode(
             "pmax_per_image_history": pmax_per_image_history,
             "noise_radial_trajectory": noise_radial_trajectory,
             "tau2_radial_trajectory": tau2_radial_trajectory,
+            "tau2_sigma2_trajectory": tau2_sigma2_trajectory,
+            "tau2_avg_weight_trajectory": tau2_avg_weight_trajectory,
+            "tau2_shell_sum_trajectory": tau2_shell_sum_trajectory,
+            "tau2_shell_count_trajectory": tau2_shell_count_trajectory,
+            "tau2_fsc_used_trajectory": tau2_fsc_used_trajectory,
+            "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
+            "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
             "sigma_offset_trajectory": sigma_offset_trajectory,
+            "frac_changed_trajectory": frac_changed_trajectory,
+            "acc_rot_trajectory": acc_rot_trajectory,
+            "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
+            "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
+            "best_rotation_eulers_history": best_rotation_eulers_history,
+            "best_translations_history": best_translations_history,
         }
 
     # --- RELION's final iteration: do_join_random_halves + do_use_all_data ---
@@ -3106,5 +3631,18 @@ def _refine_relion_mode(
         "pmax_per_image_history": pmax_per_image_history,
         "noise_radial_trajectory": noise_radial_trajectory,
         "tau2_radial_trajectory": tau2_radial_trajectory,
+        "tau2_sigma2_trajectory": tau2_sigma2_trajectory,
+        "tau2_avg_weight_trajectory": tau2_avg_weight_trajectory,
+        "tau2_shell_sum_trajectory": tau2_shell_sum_trajectory,
+        "tau2_shell_count_trajectory": tau2_shell_count_trajectory,
+        "tau2_fsc_used_trajectory": tau2_fsc_used_trajectory,
+        "tau2_ssnr_trajectory": tau2_ssnr_trajectory,
+        "sigma_offset_used_trajectory": sigma_offset_used_trajectory,
         "sigma_offset_trajectory": sigma_offset_trajectory,
+        "frac_changed_trajectory": frac_changed_trajectory,
+        "acc_rot_trajectory": acc_rot_trajectory,
+        "smallest_change_angles_trajectory": smallest_change_angles_trajectory,
+        "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
+        "best_rotation_eulers_history": best_rotation_eulers_history,
+        "best_translations_history": best_translations_history,
     }

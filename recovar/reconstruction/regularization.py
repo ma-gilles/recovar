@@ -579,6 +579,84 @@ def compute_relion_prior_from_reconstruction_stats(
     return prior, fsc
 
 
+def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1):
+    """Match RELION's shell-wise weight averaging for tau2 diagnostics.
+
+    Parameters
+    ----------
+    weight : array-like
+        Combined Fourier weight volume (typically ``(Ft_ctf_0 + Ft_ctf_1) / 2``).
+        Accepts flat or grid-shaped centered-full arrays.
+    volume_shape : tuple[int, int, int]
+        Native reconstruction shape ``(N, N, N)``.
+    padding_factor : int
+        Fourier padding factor. When ``> 1``, ``weight`` must live on the
+        padded grid ``(pf*N)^3``.
+
+    Returns
+    -------
+    dict
+        ``shell_sum``, ``shell_count``, and ``avg_weight_shells`` arrays with
+        RELION-matching shell indexing.
+    """
+    volume_shape = tuple(int(s) for s in volume_shape)
+    ori_half = volume_shape[0] // 2
+    n_shells = ori_half + 1
+
+    weight = jnp.asarray(weight).real.reshape(-1).astype(jnp.float64)
+
+    if padding_factor > 1:
+        padded_shape = tuple(d * padding_factor for d in volume_shape)
+        expected_size = int(np.prod(padded_shape))
+        if weight.size != expected_size:
+            raise ValueError(
+                f"Expected padded weight with {expected_size} voxels for volume_shape={volume_shape} "
+                f"and padding_factor={padding_factor}, got {weight.size}"
+            )
+
+        padded_dist = fourier_transform_utils.get_grid_of_radial_distances(
+            padded_shape,
+            scaled=False,
+            frequency_shift=0,
+            rounded=False,
+        ).reshape(-1)
+        shell_index = jnp.minimum(jnp.floor(padded_dist / padding_factor + 0.5).astype(jnp.int32), ori_half)
+
+        # RELION iterates the half-complex x-axis (kx >= 0) only.
+        pf_n = padded_shape[-1]
+        kx_idx = jnp.arange(weight.size) % pf_n
+        included = ((kx_idx == 0) | (kx_idx >= pf_n // 2)).astype(jnp.float64)
+    else:
+        expected_size = int(np.prod(volume_shape))
+        if weight.size != expected_size:
+            raise ValueError(
+                f"Expected native weight with {expected_size} voxels for volume_shape={volume_shape}, "
+                f"got {weight.size}"
+            )
+        shell_index = (
+            fourier_transform_utils.get_grid_of_radial_distances(
+                volume_shape,
+                scaled=False,
+                frequency_shift=0,
+            )
+            .astype(jnp.int32)
+            .reshape(-1)
+        )
+        shell_index = jnp.minimum(shell_index, ori_half)
+        included = jnp.ones(weight.shape[0], dtype=jnp.float64)
+
+    shell_sum = jnp.zeros(n_shells, dtype=jnp.float64)
+    shell_count = jnp.zeros(n_shells, dtype=jnp.float64)
+    shell_sum = shell_sum.at[shell_index].add(weight * included)
+    shell_count = shell_count.at[shell_index].add(included)
+    avg_weight = jnp.where(shell_count > 0, shell_sum / shell_count, 0.0)
+    return {
+        "shell_sum": shell_sum,
+        "shell_count": shell_count,
+        "avg_weight_shells": avg_weight,
+    }
+
+
 def compute_relion_tau2_from_weights(
     Ft_ctf_0,
     Ft_ctf_1,
@@ -587,6 +665,7 @@ def compute_relion_tau2_from_weights(
     *,
     tau2_fudge=1.0,
     padding_factor=1,
+    return_details=False,
 ):
     """Compute tau2 from CTF weights and external FSC (RELION's updateSSNRarrays).
 
@@ -606,41 +685,14 @@ def compute_relion_tau2_from_weights(
     H0 = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
     H1 = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
     H_comb = (H0 + H1) / jnp.asarray(2.0, dtype=prior_dtype)
-
-    ori_half = volume_shape[0] // 2
-
-    if padding_factor > 1:
-        padded_shape = tuple(d * padding_factor for d in volume_shape)
-        # RELION backprojector.cpp:1074 — ires = ROUND(sqrt(r2) / padding_factor)
-        # Two conventions to match:
-        # 1. Single round on continuous distance (not double-round via pre-rounded grid)
-        # 2. RELION ROUND(x) = (int)(x + 0.5) which rounds 0.5 UP,
-        #    while jnp.round uses banker's rounding (0.5 → nearest even).
-        #    Use floor(x + 0.5) to match RELION.
-        padded_dist = fourier_transform_utils.get_grid_of_radial_distances(
-            padded_shape, scaled=False, frequency_shift=0, rounded=False
-        ).reshape(-1)
-        native_shells = jnp.minimum(jnp.floor(padded_dist / padding_factor + 0.5).astype(jnp.int32), ori_half)
-        n_native_shells = ori_half + 1
-        # RELION updateSSNRarrays (backprojector.cpp:1044) iterates over the
-        # half-complex array (kx >= 0 only).  recovar stores weights in
-        # centered-full layout.  To match RELION's per-shell averages, mask
-        # out the conjugate-half voxels (kx < 0, excluding Nyquist kx=-N/2).
-        pf_N = padded_shape[-1]
-        kx_idx = jnp.arange(H_comb.shape[0]) % pf_N
-        # Centered layout: idx=0 → kx=-N/2 (Nyquist), idx=N/2 → kx=0.
-        # Half-complex includes kx=0,...,N/2 → centered idx in {0} ∪ {N/2,...,N-1}.
-        half_mask = ((kx_idx == 0) | (kx_idx >= pf_N // 2)).astype(jnp.float64)
-        # Accumulate in float64 to avoid scatter-add rounding at high shell counts.
-        H_comb_f64 = H_comb.astype(jnp.float64)
-        shell_sum = jnp.zeros(n_native_shells, dtype=jnp.float64)
-        shell_count = jnp.zeros(n_native_shells, dtype=jnp.float64)
-        shell_sum = shell_sum.at[native_shells].add(H_comb_f64 * half_mask)
-        shell_count = shell_count.at[native_shells].add(half_mask)
-        bottom_avg = jnp.where(shell_count > 0, shell_sum / shell_count, 0.0)
-    else:
-        bottom_avg = average_over_shells(H_comb, volume_shape, frequency_shift=0)
-        bottom_avg = bottom_avg.astype(jnp.float64)
+    shell_stats = _compute_relion_weight_shell_stats(
+        H_comb,
+        volume_shape,
+        padding_factor=padding_factor,
+    )
+    shell_sum = shell_stats["shell_sum"]
+    shell_count = shell_stats["shell_count"]
+    bottom_avg = shell_stats["avg_weight_shells"]
 
     n_shells = bottom_avg.shape[0]
 
@@ -657,7 +709,8 @@ def compute_relion_tau2_from_weights(
     # weight by oversampling_correction = pf³ before shell-averaging, because
     # padding dilutes the per-voxel weight by that factor.  Match here.
     oversampling_correction = padding_factor**3
-    prior_avg = jnp.where(bottom_avg > 0, ssnr / (oversampling_correction * bottom_avg), jax_config.EPSILON)
+    sigma2_shells = jnp.where(bottom_avg > 0, 1.0 / (oversampling_correction * bottom_avg), 0.0)
+    prior_avg = jnp.where(bottom_avg > 0, ssnr * sigma2_shells, jax_config.EPSILON)
     prior_avg = prior_avg.astype(prior_dtype)
 
     radial_distances = (
@@ -666,7 +719,20 @@ def compute_relion_tau2_from_weights(
         .reshape(-1)
     )
     prior = prior_avg[radial_distances]
-    return prior, fsc_clamped
+    if not return_details:
+        return prior, fsc_clamped
+
+    details = {
+        "prior_shells": prior_avg,
+        "sigma2_shells": sigma2_shells.astype(prior_dtype),
+        "avg_weight_shells": bottom_avg.astype(prior_dtype),
+        "shell_sum": shell_sum,
+        "shell_count": shell_count,
+        "fsc_shells": fsc_clamped,
+        "ssnr_shells": ssnr.astype(prior_dtype),
+        "oversampling_correction": jnp.asarray(oversampling_correction, dtype=prior_dtype),
+    }
+    return prior, fsc_clamped, details
 
 
 def downsample_from_fsc(array, fsc, volume_shape):

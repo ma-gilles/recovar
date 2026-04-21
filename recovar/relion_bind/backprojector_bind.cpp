@@ -37,7 +37,8 @@ static py::array_t<double> backproject_and_reconstruct(
     bool do_map,
     int max_iter_preweight,
     RFLOAT tau2_fudge,
-    bool skip_gridding
+    bool skip_gridding,
+    int current_size
 ) {
     auto img_buf = images.request();
     auto rot_buf = rotations.request();
@@ -61,7 +62,7 @@ static py::array_t<double> backproject_and_reconstruct(
     // Create BackProjector (C1 symmetry)
     BackProjector bp(ori_size, 3, "C1", interpolator, (float)padding_factor,
                      10, 0, 1.9, 15, 2, skip_gridding);
-    bp.initZeros(-1);
+    bp.initZeros(current_size);
 
     // Accumulate images
     for (long i = 0; i < n_images; i++) {
@@ -416,12 +417,14 @@ void init_backprojector_bindings(py::module_ &m) {
           py::arg("max_iter_preweight") = 10,
           py::arg("tau2_fudge") = 1.0,
           py::arg("skip_gridding") = false,
+          py::arg("current_size") = -1,
           R"doc(
 Backproject 2D Fourier images and reconstruct a 3D volume.
 images: (N, ori_size, ori_size/2+1) complex
 rotations: (N, 3, 3) rotation matrices (RELION convention)
 weights: (N, ori_size, ori_size/2+1) or empty — per-pixel weights (CTF²/σ²)
 tau2: per-shell regularization values
+current_size: optional RELION current image size used for initZeros()
 Returns: (ori_size, ori_size, ori_size) real-space volume
 )doc");
 

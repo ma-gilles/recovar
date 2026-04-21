@@ -128,6 +128,8 @@ def load_relion_iter(relion_dir, it):
     out["optimiser"] = parse_relion_optimiser(relion_dir / f"run_it{nnn}_optimiser.star")
     out["model_h1"] = parse_relion_model(relion_dir / f"run_it{nnn}_half1_model.star")
     out["model_h2"] = parse_relion_model(relion_dir / f"run_it{nnn}_half2_model.star")
+    data_path = relion_dir / f"run_it{nnn}_data.star"
+    out["data"] = starfile.read(str(data_path)) if data_path.exists() else None
     return out
 
 
@@ -214,6 +216,13 @@ def extract_recovar_scalars(recovar, it):
     pr_arr = recovar.get("pixel_resolutions")
     pmax_arr = recovar.get("ave_Pmax_trajectory")
     hpx_arr = recovar.get("healpix_order_trajectory")
+    sigma_offset_arr = recovar.get("sigma_offset_used_trajectory")
+    if sigma_offset_arr is None:
+        sigma_offset_arr = recovar.get("sigma_offset_trajectory")
+    frac_changed_arr = recovar.get("frac_changed_trajectory")
+    acc_rot_arr = recovar.get("acc_rot_trajectory")
+    smallest_change_angles_arr = recovar.get("smallest_change_angles_trajectory")
+    smallest_change_offsets_arr = recovar.get("smallest_change_offsets_trajectory")
     out = {}
     if cs_arr is not None and it < len(cs_arr):
         out["current_size"] = int(cs_arr[it])
@@ -223,6 +232,16 @@ def extract_recovar_scalars(recovar, it):
         out["current_resolution_pix"] = int(pr_arr[it])
     if hpx_arr is not None and it < len(hpx_arr):
         out["healpix_order"] = int(hpx_arr[it])
+    if sigma_offset_arr is not None and it < len(sigma_offset_arr):
+        out["sigma_offsets_angst"] = float(sigma_offset_arr[it])
+    if frac_changed_arr is not None and it < len(frac_changed_arr):
+        out["fraction_changed"] = float(frac_changed_arr[it])
+    if acc_rot_arr is not None and it < len(acc_rot_arr):
+        out["acc_rot"] = float(acc_rot_arr[it])
+    if smallest_change_angles_arr is not None and it < len(smallest_change_angles_arr):
+        out["smallest_change_angles"] = float(smallest_change_angles_arr[it])
+    if smallest_change_offsets_arr is not None and it < len(smallest_change_offsets_arr):
+        out["smallest_change_offsets"] = float(smallest_change_offsets_arr[it])
     return out
 
 
@@ -237,6 +256,9 @@ def extract_recovar_per_shell(recovar, it):
     sig_key = f"sig_counts_iter_{nnn}"
     noise_key = f"noise_radial_iter_{nnn}"
     tau2_key = f"tau2_radial_iter_{nnn}"
+    sigma2_key = f"tau2_sigma2_iter_{nnn}"
+    tau2_fsc_key = f"tau2_fsc_used_iter_{nnn}"
+    ssnr_key = f"tau2_ssnr_iter_{nnn}"
     if fsc_key in recovar.files:
         out["FSC_gold_std"] = np.asarray(recovar[fsc_key], dtype=np.float64)
     if dvp_key in recovar.files:
@@ -250,6 +272,14 @@ def extract_recovar_per_shell(recovar, it):
         out["Sigma2Noise"] = np.asarray(recovar[noise_key], dtype=np.float64)
     if tau2_key in recovar.files:
         out["ReferenceTau2"] = np.asarray(recovar[tau2_key], dtype=np.float64)
+    if sigma2_key in recovar.files:
+        out["ReferenceSigma2"] = np.asarray(recovar[sigma2_key], dtype=np.float64)
+    if tau2_fsc_key in recovar.files:
+        out["Tau2FscUsed"] = np.asarray(recovar[tau2_fsc_key], dtype=np.float64)
+        out["FSC_gold_std"] = out["Tau2FscUsed"]
+    if ssnr_key in recovar.files:
+        out["SsnrMap"] = np.asarray(recovar[ssnr_key], dtype=np.float64)
+        out["DataVsPriorRatio"] = out["SsnrMap"]
     return out if out else None
 
 
@@ -263,6 +293,61 @@ def fsc_resolution_angstrom(fsc, voxel_size, grid_size, threshold=0.143):
     if shell == 0:
         return float("inf")
     return float(grid_size) * float(voxel_size) / shell
+
+
+def summarize_metric(arr):
+    arr = np.asarray(arr, dtype=np.float64)
+    if arr.size == 0:
+        return None
+    q90, q95, q99 = np.percentile(arr, [90, 95, 99])
+    return {
+        "mean": float(arr.mean()),
+        "median": float(np.median(arr)),
+        "p90": float(q90),
+        "p95": float(q95),
+        "p99": float(q99),
+        "max": float(arr.max()),
+    }
+
+
+def fraction_within(arr, thresholds):
+    arr = np.asarray(arr, dtype=np.float64)
+    if arr.size == 0:
+        return None
+    return {
+        float(thr): float(np.mean(arr <= thr))
+        for thr in thresholds
+    }
+
+
+def load_saved_gt_metrics(recovar_dir, it):
+    path = recovar_dir / f"gt_comparison_iter{it:03d}.npz"
+    if not path.exists():
+        return None
+    return np.load(path, allow_pickle=False)
+
+
+def print_metric_block(prefix, pose_npz, metric_specs):
+    for key, label, thresholds in metric_specs:
+        if key not in pose_npz.files:
+            continue
+        summary = summarize_metric(pose_npz[key])
+        fractions = fraction_within(pose_npz[key], thresholds)
+        if summary is None or fractions is None:
+            continue
+        fraction_terms = ", ".join(
+            f"<= {thr:g}: {100.0 * frac:5.1f}%"
+            for thr, frac in fractions.items()
+        )
+        print(
+            f"    {prefix}{label:<14s} "
+            f"mean={summary['mean']:.4f}, "
+            f"median={summary['median']:.4f}, "
+            f"p90={summary['p90']:.4f}, "
+            f"p95={summary['p95']:.4f}, "
+            f"p99={summary['p99']:.4f}, "
+            f"max={summary['max']:.4f} | {fraction_terms}"
+        )
 
 
 def main():
@@ -291,6 +376,7 @@ def main():
     voxel_size = float(recovar["voxel_size"])
     grid_size = int(recovar["volume_shape"][0])
     logger.info("Loaded recovar npz: %d files, voxel_size=%.3f, grid=%d", len(recovar.files), voxel_size, grid_size)
+    recovar_half1_particles = int(recovar["n_half1_particles"]) if "n_half1_particles" in recovar.files else None
 
     print(f"\n{BOLD}{'=' * 100}{RESET}")
     print(f"{BOLD}RELION  vs  recovar  per-iter parity diff{RESET}")
@@ -329,19 +415,41 @@ def main():
             print(f"  [no RELION optimiser.star at iter {it}, skipping]")
             continue
 
+        relion_half1_particles = None
+        if relion_iter.get("data") is not None:
+            relion_df = relion_iter["data"]["particles"] if isinstance(relion_iter["data"], dict) else relion_iter["data"]
+            if "rlnRandomSubset" in relion_df.columns:
+                relion_half1_particles = int(np.sum(np.asarray(relion_df["rlnRandomSubset"]) == 1))
+        particle_scale = (
+            float(relion_half1_particles) / float(recovar_half1_particles)
+            if relion_half1_particles is not None and recovar_half1_particles not in (None, 0)
+            else 1.0
+        )
+
         # ---- Scalar comparison table ----
         print(f"  {'field':<28s} {'RELION':>16s}  {'recovar':>16s}")
 
         scalars_to_compare = [
             ("current_size", rsc.get("current_size"), rec_sc.get("current_size")),
             ("ave_Pmax", rsc.get("ave_Pmax"), rec_sc.get("ave_Pmax")),
+            ("sigma_offsets_Å", rsc.get("sigma_offsets_angst"), rec_sc.get("sigma_offsets_angst")),
+            ("smallest_chg_angles_°", rsc.get("smallest_change_angles"), rec_sc.get("smallest_change_angles")),
+            ("smallest_chg_offsets", rsc.get("smallest_change_offsets"), rec_sc.get("smallest_change_offsets")),
             ("current_resolution Å", rsc.get("current_resolution"), None),
             ("healpix_order", None, rec_sc.get("healpix_order")),
+            ("frac_changed", None, rec_sc.get("fraction_changed")),
+            ("acc_rot_°", None, rec_sc.get("acc_rot")),
         ]
 
         for label, rv, vv in scalars_to_compare:
             color = color_diff(rv, vv, tol=args.tol)
             print(f"  {label:<28s} {fmt(rv, 16):>16s}  {color}{fmt(vv, 16):>16s}{RESET}")
+        if particle_scale != 1.0:
+            print(
+                f"  {'halfset particle scale':<28s} {fmt(relion_half1_particles, 16):>16s}  "
+                f"{fmt(recovar_half1_particles, 16):>16s}  "
+                f"(RELION tau2/sigma2 scaled by {particle_scale:.3f})"
+            )
 
         # RELION-only state (per-iter)
         print(f"  {'RELION-only state:':<28s}")
@@ -367,34 +475,117 @@ def main():
                 f"    {'shell':>4s}  {'res_Å':>6s}  "
                 f"{'tau2_R':>10s} {'tau2_V':>10s}  "
                 f"{'sig2_R':>10s} {'sig2_V':>10s}  "
-                f"{'FSC_R':>7s} {'FSC_V':>7s}"
+                f"{'FSC_R':>7s} {'FSC_V':>7s}  "
+                f"{'SSNR_R':>9s} {'SSNR_V':>9s}"
             )
             print(header)
             n_shells = min(args.shells, rps.get("_n_shells", 0))
             res = rps.get("AngstromResolution")
             tau2_r = rps.get("ReferenceTau2")
-            sigma2_r = rps.get("Sigma2Noise")
+            sigma2_r = rps.get("ReferenceSigma2")
             fsc_r = rps.get("GoldStandardFsc")
+            ssnr_r = rps.get("SsnrMap")
             tau2_v = rec_ps.get("ReferenceTau2") if rec_ps else None
-            sigma2_v = rec_ps.get("Sigma2Noise") if rec_ps else None
+            sigma2_v = rec_ps.get("ReferenceSigma2") if rec_ps else None
             fsc_v = rec_ps.get("FSC_gold_std") if rec_ps else None
+            ssnr_v = rec_ps.get("SsnrMap") if rec_ps else None
+            n4 = grid_size**4
             for s in range(n_shells):
                 r = float(res[s]) if res is not None else None
-                tr = float(tau2_r[s]) if tau2_r is not None else None
+                tr = float(tau2_r[s]) * n4 * particle_scale if tau2_r is not None else None
                 tv = float(tau2_v[s]) if tau2_v is not None and s < len(tau2_v) else None
-                sr = float(sigma2_r[s]) if sigma2_r is not None and s < len(sigma2_r) else None
+                sr = float(sigma2_r[s]) * n4 * particle_scale if sigma2_r is not None and s < len(sigma2_r) else None
                 sv = float(sigma2_v[s]) if sigma2_v is not None and s < len(sigma2_v) else None
                 f1 = float(fsc_r[s]) if fsc_r is not None else None
                 f2 = float(fsc_v[s]) if fsc_v is not None and s < len(fsc_v) else None
+                ssr = float(ssnr_r[s]) if ssnr_r is not None and s < len(ssnr_r) else None
+                ssv = float(ssnr_v[s]) if ssnr_v is not None and s < len(ssnr_v) else None
                 tcol = color_diff(tr, tv, tol=args.tol)
                 scol = color_diff(sr, sv, tol=args.tol)
                 fcol = color_diff(f1, f2, tol=args.tol)
+                sscol = color_diff(ssr, ssv, tol=args.tol)
                 print(
                     f"    {s:>4d}  {fmt(r, 6, prec=1):>6s}  "
                     f"{fmt(tr, 10):>10s} {tcol}{fmt(tv, 10):>10s}{RESET}  "
                     f"{fmt(sr, 10):>10s} {scol}{fmt(sv, 10):>10s}{RESET}  "
-                    f"{fmt(f1, 7, prec=3):>7s} {fcol}{fmt(f2, 7, prec=3):>7s}{RESET}"
+                    f"{fmt(f1, 7, prec=3):>7s} {fcol}{fmt(f2, 7, prec=3):>7s}{RESET}  "
+                    f"{fmt(ssr, 9, prec=3):>9s} {sscol}{fmt(ssv, 9, prec=3):>9s}{RESET}"
                 )
+
+        if recovar_iter_index >= 0:
+            pose_path = recovar_dir / f"pose_comparison_iter{recovar_iter_index:03d}.npz"
+            if pose_path.exists():
+                pose = np.load(pose_path, allow_pickle=False)
+                print(f"\n  {BOLD}pose refinement metrics:{RESET}")
+                pose_specs = [
+                    ("angular_error_deg", "full_angle_°", [5, 10, 20]),
+                    ("view_direction_error_deg", "view_dir_°", [2, 5, 10]),
+                    ("inplane_error_deg", "in_plane_°", [2, 5, 10]),
+                    ("translation_error_px", "trans_px", [0.25, 0.5, 1.0]),
+                ]
+                print_metric_block("", pose, pose_specs)
+                gt_pose_specs = [
+                    ("recovar_vs_gt_angular_error_deg", "rec_gt_full_°", [2, 5, 10]),
+                    ("recovar_vs_gt_view_direction_error_deg", "rec_gt_view_°", [2, 5, 10]),
+                    ("recovar_vs_gt_inplane_error_deg", "rec_gt_psi_°", [2, 5, 10]),
+                    ("relion_vs_gt_angular_error_deg", "rel_gt_full_°", [2, 5, 10]),
+                    ("relion_vs_gt_view_direction_error_deg", "rel_gt_view_°", [2, 5, 10]),
+                    ("relion_vs_gt_inplane_error_deg", "rel_gt_psi_°", [2, 5, 10]),
+                ]
+                if any(key in pose.files for key, _, _ in gt_pose_specs):
+                    print(f"\n  {BOLD}pose accuracy vs GT:{RESET}")
+                    print_metric_block("", pose, gt_pose_specs)
+
+            gt_metrics = load_saved_gt_metrics(recovar_dir, recovar_iter_index)
+            if gt_metrics is not None:
+                print(f"\n  {BOLD}map quality vs GT:{RESET}")
+                print(
+                    f"    {'series':<18s} {'corr_vs_gt':>12s} {'FSC<0.5':>10s} "
+                    f"{'FSC<0.143':>10s}"
+                )
+                gt_rows = [
+                    ("recovar_reg", "recovar_reg_merged"),
+                    ("RELION", "relion_merged"),
+                    ("recovar_unreg", "recovar_unreg_merged"),
+                ]
+                rel_corr = (
+                    float(gt_metrics["relion_merged_corr_vs_gt"])
+                    if "relion_merged_corr_vs_gt" in gt_metrics.files
+                    else None
+                )
+                rel_shell_05 = (
+                    int(gt_metrics["relion_merged_shell_05"])
+                    if "relion_merged_shell_05" in gt_metrics.files
+                    else None
+                )
+                rel_shell_0143 = (
+                    int(gt_metrics["relion_merged_shell_0143"])
+                    if "relion_merged_shell_0143" in gt_metrics.files
+                    else None
+                )
+                for label, prefix in gt_rows:
+                    corr_key = f"{prefix}_corr_vs_gt"
+                    shell05_key = f"{prefix}_shell_05"
+                    shell0143_key = f"{prefix}_shell_0143"
+                    if corr_key not in gt_metrics.files:
+                        continue
+                    corr_v = float(gt_metrics[corr_key])
+                    shell05_v = int(gt_metrics[shell05_key])
+                    shell0143_v = int(gt_metrics[shell0143_key])
+                    ccol = color_diff(rel_corr, corr_v, tol=args.tol) if label != "RELION" else GREEN
+                    s05col = color_diff(rel_shell_05, shell05_v, tol=args.tol) if label != "RELION" else GREEN
+                    s143col = color_diff(rel_shell_0143, shell0143_v, tol=args.tol) if label != "RELION" else GREEN
+                    print(
+                        f"    {label:<18s} "
+                        f"{ccol}{corr_v:12.6f}{RESET} "
+                        f"{s05col}{shell05_v:10d}{RESET} "
+                        f"{s143col}{shell0143_v:10d}{RESET}"
+                    )
+                if "recovar_reg_merged_corr_vs_relion" in gt_metrics.files:
+                    print(
+                        f"    {'recovar-vs-RELION':<18s} "
+                        f"corr={float(gt_metrics['recovar_reg_merged_corr_vs_relion']):.6f}"
+                    )
 
         print()
 

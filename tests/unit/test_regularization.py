@@ -202,6 +202,52 @@ def test_compute_relion_prior_from_reconstruction_stats_matches_direct_weight_fo
     np.testing.assert_allclose(fsc, np.asarray(expected_fsc), rtol=1e-5, atol=1e-5)
 
 
+@pytest.mark.parametrize(
+    ("padding_factor", "weight_value", "expected_sigma2"),
+    [
+        (1, 2.0, 1.0 / 2.0),
+        (2, 2.0, 1.0 / (2.0 * 8.0)),
+    ],
+)
+def test_compute_relion_tau2_from_weights_constant_weight_details(padding_factor, weight_value, expected_sigma2):
+    shape = (8, 8, 8)
+    n_shells = shape[0] // 2 + 1
+    padded_shape = tuple(s * padding_factor for s in shape)
+    weight = np.full(np.prod(padded_shape), weight_value, dtype=np.float32)
+    fsc = np.full(n_shells, 0.5, dtype=np.float32)  # SSNR = 1
+
+    prior, fsc_out, details = regularization.compute_relion_tau2_from_weights(
+        weight,
+        weight,
+        fsc,
+        shape,
+        padding_factor=padding_factor,
+        return_details=True,
+    )
+
+    np.testing.assert_allclose(np.asarray(fsc_out), 0.5, atol=1e-7)
+    np.testing.assert_allclose(np.asarray(details["avg_weight_shells"]), weight_value, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(details["sigma2_shells"]), expected_sigma2, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(details["prior_shells"]), expected_sigma2, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(prior), expected_sigma2, atol=1e-6)
+    assert np.asarray(details["shell_count"]).shape == (n_shells,)
+    assert np.all(np.asarray(details["shell_count"]) > 0)
+
+
+def test_compute_relion_tau2_from_weights_rejects_wrong_grid_size():
+    shape = (8, 8, 8)
+    fsc = np.full(shape[0] // 2 + 1, 0.5, dtype=np.float32)
+    bad_weight = np.ones(np.prod(shape) - 1, dtype=np.float32)
+    with pytest.raises(ValueError, match="Expected native weight"):
+        regularization.compute_relion_tau2_from_weights(
+            bad_weight,
+            bad_weight,
+            fsc,
+            shape,
+            padding_factor=1,
+        )
+
+
 # ---------------------------------------------------------------------------
 # covariance_update_col tests
 # ---------------------------------------------------------------------------

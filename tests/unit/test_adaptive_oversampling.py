@@ -664,13 +664,13 @@ class TestOversampledGridGeneration:
         assert rotation_grid_size(nside_level) > parent_rotations.max()
         assert not np.allclose(matrices[:8], matrices[8:])
 
-    def test_oversampled_rotation_grid_from_samples_matches_relion_midpoints(self):
-        """Child orientations should follow RELION's midpoint psi oversampling."""
+    def test_oversampled_rotation_grid_from_samples_matches_relion_binding(self):
+        """Child orientations should match RELION's oversampled local-search grid."""
         from recovar.em.sampling import (
-            get_healpix_children,
             get_oversampled_rotation_grid_from_samples,
             rotation_grid_n_in_planes,
         )
+        from recovar.relion_bind._relion_bind_core import get_oversampled_orientations
         from recovar import utils
         import healpy as hp
 
@@ -686,7 +686,7 @@ class TestOversampledGridGeneration:
         coarse_n_pixels = hp.nside2npix(2 ** nside_level)
         parent_pixels = parent_rotations % coarse_n_pixels
         parent_psi = parent_rotations // coarse_n_pixels
-        child_pixels = get_healpix_children(parent_pixels, nside_level)
+        child_pixels = 4 * np.repeat(parent_pixels, 4) + np.tile(np.arange(4, dtype=np.int64), len(parent_pixels))
         coarse_psi_step = 2.0 * np.pi / rotation_grid_n_in_planes(nside_level)
         psi_factor = 2
         child_psi = (
@@ -695,19 +695,75 @@ class TestOversampledGridGeneration:
             + (0.5 + np.arange(psi_factor, dtype=np.float64)[None, :])
             * (coarse_psi_step / psi_factor)
         ).reshape(-1)
-        theta, phi = hp.pix2ang(2 ** (nside_level + 1), child_pixels)
-        expected_angles = np.stack(
-            [
-                np.repeat(theta, psi_factor),
-                np.repeat(phi, psi_factor),
-                child_psi,
-            ],
-            axis=-1,
-        )
-        expected_matrices = utils.R_from_relion(np.rad2deg(expected_angles))
+        fine_n_pixels = hp.nside2npix(2 ** (nside_level + 1))
+        fine_psi_step = 2.0 * np.pi / rotation_grid_n_in_planes(nside_level + 1)
+        expected_child_indices = (
+            np.floor(np.mod(child_psi, 2.0 * np.pi) / fine_psi_step + 0.5).astype(np.int64)
+            % rotation_grid_n_in_planes(nside_level + 1)
+        ) * fine_n_pixels + np.repeat(child_pixels, psi_factor)
+
+        expected_blocks = []
+        for parent_rotation_index in parent_rotations:
+            idir = int(parent_rotation_index % coarse_n_pixels)
+            ipsi = int(parent_rotation_index // coarse_n_pixels)
+            expected_blocks.append(
+                utils.R_from_relion(
+                    np.asarray(
+                        get_oversampled_orientations(nside_level, 1, idir, ipsi, 0.0),
+                        dtype=np.float64,
+                    ),
+                    degrees=True,
+                )
+            )
+        expected_matrices = np.concatenate(expected_blocks, axis=0)
 
         np.testing.assert_allclose(matrices, expected_matrices, atol=1e-6, rtol=1e-6)
+        np.testing.assert_array_equal(child_indices, expected_child_indices)
         assert np.all(child_indices >= 0)
+        for p_idx in range(len(parent_rotations)):
+            assert np.sum(parent_map == p_idx) == 8
+
+    def test_oversampled_rotation_grid_from_samples_matches_relion_binding_with_perturbation(self):
+        """RELION perturbation must also be applied to oversampled child orientations."""
+        from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
+        from recovar.relion_bind._relion_bind_core import get_oversampled_orientations
+        from recovar import utils
+        import healpy as hp
+
+        nside_level = 3
+        parent_rotations = np.array([0, 1, 777, 1025], dtype=np.int64)
+        coarse_n_pixels = hp.nside2npix(2 ** nside_level)
+        random_perturbation = 0.37
+
+        matrices, parent_map = get_oversampled_rotation_grid_from_samples(
+            parent_rotations,
+            nside_level,
+            oversampling_order=1,
+            random_perturbation=random_perturbation,
+        )
+
+        expected_blocks = []
+        for parent_rotation_index in parent_rotations:
+            idir = int(parent_rotation_index % coarse_n_pixels)
+            ipsi = int(parent_rotation_index // coarse_n_pixels)
+            expected_blocks.append(
+                utils.R_from_relion(
+                    np.asarray(
+                        get_oversampled_orientations(
+                            nside_level,
+                            1,
+                            idir,
+                            ipsi,
+                            random_perturbation,
+                        ),
+                        dtype=np.float64,
+                    ),
+                    degrees=True,
+                )
+            )
+        expected_matrices = np.concatenate(expected_blocks, axis=0)
+
+        np.testing.assert_allclose(matrices, expected_matrices, atol=1e-6, rtol=1e-6)
         for p_idx in range(len(parent_rotations)):
             assert np.sum(parent_map == p_idx) == 8
 

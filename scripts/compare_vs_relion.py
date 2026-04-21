@@ -320,11 +320,14 @@ def compare_wall_times(our_data, n_iter):
 
     wall_times = our_data["wall_times"]
     current_sizes = our_data["current_sizes"]
+    n_rows = min(n_iter, len(wall_times), len(current_sizes))
 
     print(f"{'Iter':>4s}  {'CurSize':>8s}  {'Time(s)':>8s}")
     print("-" * 30)
-    for i in range(min(n_iter, len(wall_times))):
+    for i in range(n_rows):
         print(f"{i+1:4d}  {int(current_sizes[i]):8d}  {float(wall_times[i]):8.1f}")
+    if n_rows < min(n_iter, max(len(wall_times), len(current_sizes))):
+        print(f"[wall-time table truncated to {n_rows} shared iterations]")
 
     total = float(our_data.get("total_time", np.sum(wall_times)))
     print("-" * 30)

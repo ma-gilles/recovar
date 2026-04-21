@@ -489,6 +489,16 @@ def main():
             result["ave_Pmax_trajectory"],
             dtype=np.float64,
         )
+    if "sigma_offset_trajectory" in result:
+        save_dict["sigma_offset_trajectory"] = np.asarray(
+            result["sigma_offset_trajectory"],
+            dtype=np.float64,
+        )
+    if "sigma_offset_used_trajectory" in result:
+        save_dict["sigma_offset_used_trajectory"] = np.asarray(
+            result["sigma_offset_used_trajectory"],
+            dtype=np.float64,
+        )
     if "convergence_state" in result:
         state = result["convergence_state"]
         save_dict["convergence_iteration"] = np.int32(state.iteration)
@@ -519,6 +529,18 @@ def main():
         for i, t2 in enumerate(result["tau2_radial_trajectory"]):
             if t2 is not None:
                 save_dict[f"tau2_radial_iter_{i:03d}"] = np.asarray(t2, dtype=np.float64)
+    for result_key, prefix in [
+        ("tau2_sigma2_trajectory", "tau2_sigma2_iter"),
+        ("tau2_avg_weight_trajectory", "tau2_avg_weight_iter"),
+        ("tau2_shell_sum_trajectory", "tau2_shell_sum_iter"),
+        ("tau2_shell_count_trajectory", "tau2_shell_count_iter"),
+        ("tau2_fsc_used_trajectory", "tau2_fsc_used_iter"),
+        ("tau2_ssnr_trajectory", "tau2_ssnr_iter"),
+    ]:
+        if result_key in result:
+            for i, arr in enumerate(result[result_key]):
+                if arr is not None:
+                    save_dict[f"{prefix}_{i:03d}"] = np.asarray(arr, dtype=np.float64)
 
     # Save per-image Pmax per iteration (if available)
     if "pmax_per_image_history" in result:

@@ -121,24 +121,17 @@ class TestRotationMatrices:
     def test_rotation_matrices_match_recovar(self, order):
         """RELION and recovar grids cover the same set of SO(3) orientations.
 
-        RELION's Euler_angles2matrix(rot, tilt, psi) produces matrices in
-        RELION's coordinate frame. recovar's R_from_relion applies a frame
-        adjustment (volume axis flip + sign). To compare, we convert RELION's
-        [rot, tilt, psi] → healpy [tilt, rot, psi] and pass through
-        R_from_relion, then match as unordered sets.
+        After the RELION-grid convention fix, ``get_rotation_grid`` now
+        emits Euler angles in the same ``[rot, tilt, psi]`` convention that
+        ``R_from_relion`` expects.  Compare the two grids directly as
+        unordered sets of matrices.
         """
         from recovar.em.sampling import get_rotation_grid
         from recovar.utils.helpers import R_from_relion
 
         relion_coarse = get_coarse_orientations(order)
         n_total = relion_coarse.shape[0]
-
-        # RELION returns [rot=phi, tilt=theta, psi]; R_from_relion expects
-        # [theta, phi, psi] (healpy convention) — swap columns 0,1.
-        healpy_angles = relion_coarse.copy()
-        healpy_angles[:, 0] = relion_coarse[:, 1]  # tilt → theta
-        healpy_angles[:, 1] = relion_coarse[:, 0]  # rot → phi
-        relion_mats = R_from_relion(healpy_angles)
+        relion_mats = R_from_relion(relion_coarse)
 
         recovar_mats = np.array(get_rotation_grid(order, matrices=True))
 

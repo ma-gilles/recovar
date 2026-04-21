@@ -236,6 +236,20 @@ RELION 5.0.1 on same hardware/data: ~163s per iteration (includes CPU M-step + o
 
 4. **Significant weight pruning**: only top-K orientations per image get the expensive fine-resolution evaluation.
 
+### Known correctness debt (post-parity)
+
+1. **Half-spectrum Hermitian weights (TODO RELION-parity-debt)**: RELION sums
+   over the rfft half-image with weight=1 for ALL pixels. The mathematically
+   correct approach uses weight=2 for interior frequencies (which have a
+   conjugate partner) and weight=1 for DC/Nyquist (self-conjugate). RELION's
+   approach computes ~half the true Gaussian log-likelihood, making posteriors
+   softer than the true Bayesian posterior. The MAP orientation is unchanged
+   (same ranking). We match RELION for parity; switching to correct weights
+   (`make_half_image_weights`) is a post-parity improvement that would sharpen
+   posteriors and may improve convergence speed. Code location:
+   `engine_v2.py:run_em_v2()` where `half_spectrum_scoring=True` sets
+   `half_weights = ones(...)`.
+
 ## Testing
 
 - `tests/unit/test_dense_em_equivalence.py` — 12 numerical equivalence tests pinning all refactored functions
