@@ -65,6 +65,13 @@ def make_half_image_weights(image_shape):
         w = 2 for all interior pixels (each represents itself and its conjugate)
         w = 1 for packed column 0 (DC) -- has no conjugate partner
         w = 1 for packed column -1 (Nyquist, even W only) -- self-conjugate
+
+    NOTE: These are the CORRECT Hermitian weights for Parseval-preserving inner
+    products.  RELION does NOT use these — it sums with w=1 everywhere, computing
+    roughly half the true likelihood.  The ``half_spectrum_scoring=True`` path in
+    run_em_v2 uses ones() to match RELION.  This function is used by the
+    non-RELION-parity path (``half_spectrum_scoring=False``).
+    See TODO(RELION-parity-debt) in run_em_v2 for details.
     """
     H, W = image_shape
     w = 2.0 * jnp.ones((H, W // 2 + 1), dtype=jnp.float32)
@@ -608,11 +615,22 @@ def run_em_v2(
     )
 
     # Precompute half-spectrum weights for E-step scoring.
-    # RELION sums over independent half-complex modes (no Hermitian doubling).
-    # Using all-1 weights matches RELION's convention: each independent mode
-    # counted once.  The full-spectrum Hermitian weights (2 for interior pixels)
-    # double-count conjugate pairs, making the score ~2x too large and the
-    # posterior exponentially more peaked than RELION's.
+    #
+    # TODO(RELION-parity-debt): RELION sums over the rfft half-image with
+    # weight=1 for ALL pixels — no Hermitian doubling.  This is mathematically
+    # INCORRECT: for a real-valued signal, the half-spectrum inner product
+    # should use weight=2 for interior frequencies (which represent both +k
+    # and the conjugate -k) and weight=1 for DC and Nyquist (self-conjugate).
+    # By using w=1 everywhere, RELION effectively computes HALF the true
+    # Gaussian log-likelihood.  Consequences:
+    #   - Posterior is softer (Pmax lower) than the true Bayesian posterior
+    #   - MAP orientation is UNCHANGED (same ranking, just scaled score)
+    #   - Resolution-dependent signal weighting is slightly wrong at
+    #     DC/Nyquist boundaries (negligible in practice)
+    # We match RELION exactly here for parity.  Once parity is confirmed,
+    # switching to correct Hermitian weights (make_half_image_weights) would
+    # sharpen posteriors and may improve convergence speed.  This is tracked
+    # as a post-parity improvement.
     if half_spectrum_scoring:
         H_w, W_w = image_shape
         half_weights = jnp.ones(H_w * (W_w // 2 + 1), dtype=jnp.float32)
@@ -893,10 +911,10 @@ def run_em_v2(
             shifted_half = shifted_half * phase_expanded
             shifted_recon_half = shifted_recon_half * phase_expanded
 
-        # -- Save pre-DC-exclusion arrays for noise accumulation --
-        # RELION excludes DC from scores but INCLUDES DC in noise estimation.
-        # We save the original arrays before zeroing DC so the noise path
-        # can use them with DC intact.
+        # -- Save pre-DC-exclusion arrays for M-step + noise accumulation --
+        # RELION excludes DC from likelihood scores (Minvsigma2[0]=0) but
+        # INCLUDES DC in reconstruction weights (backprojector CTF^2) and
+        # noise estimation.  Save original arrays before DC zeroing.
         shifted_half_with_dc = shifted_half
         ctf2_over_nv_half_with_dc = ctf2_over_nv_half
 
@@ -913,14 +931,19 @@ def run_em_v2(
             ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
 
         # -- WINDOW gather (if active) --
+        # DC-zeroed arrays for scoring, with-DC arrays for M-step accumulation.
+        # RELION excludes DC from likelihood (Minvsigma2[0]=0) but includes
+        # it in reconstruction weights (backprojector CTF^2 weight at DC).
         if use_window:
             shifted_windowed = shifted_half[:, window_indices]
             shifted_recon_windowed = shifted_recon_half[:, window_indices]
             ctf2_over_nv_windowed = ctf2_over_nv_half[:, window_indices]
+            ctf2_over_nv_windowed_mstep = ctf2_over_nv_half_with_dc[:, window_indices]
         else:
             shifted_windowed = shifted_half
             shifted_recon_windowed = shifted_recon_half
             ctf2_over_nv_windowed = ctf2_over_nv_half
+            ctf2_over_nv_windowed_mstep = ctf2_over_nv_half_with_dc
 
         # -- Noise: precompute per-batch image power spectrum --
         if accumulate_noise:
@@ -1258,13 +1281,15 @@ def run_em_v2(
 
             if use_window:
                 # Windowed M-step: GEMM at reduced dimension, then scatter back
+                # Use with-DC ctf2 for M-step accumulation (DC is excluded
+                # from scoring but must be included in reconstruction weights).
                 (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed) = (
                     _m_step_block_windowed(
                         shifted_recon_windowed,
                         scores,
                         log_Z,
                         rots_b,
-                        ctf2_over_nv_windowed,
+                        ctf2_over_nv_windowed_mstep,
                         Ft_y,
                         Ft_ctf,
                         batch_size,
@@ -1301,13 +1326,14 @@ def run_em_v2(
                     half_image=True,
                 )
             else:
+                # Non-windowed path: use with-DC ctf2 for M-step accumulation
                 (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half_block, ctf_probs_half_block) = (
                     _m_step_block(
                         shifted_recon_half,
                         scores,
                         log_Z,
                         rots_b,
-                        ctf2_over_nv_half,
+                        ctf2_over_nv_half_with_dc,
                         Ft_y,
                         Ft_ctf,
                         batch_size,
