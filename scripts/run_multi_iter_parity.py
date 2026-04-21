@@ -10,6 +10,7 @@ Usage:
 """
 
 import argparse
+import logging
 import os
 import re
 import sys
@@ -17,6 +18,34 @@ import time
 from pathlib import Path
 
 import numpy as np
+
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s", stream=sys.stdout)
+
+
+def stack_index_from_image_name(name: str) -> int:
+    """Return the zero-based stack row encoded in a RELION image name."""
+    m = re.match(r"(\d+)@", str(name))
+    return int(m.group(1)) - 1 if m else -1
+
+
+def map_pose_arrays_to_particle_order(our_names, gt_rot_all, gt_trans_all=None):
+    """Map pose arrays indexed by stack row onto the current particle ordering."""
+    n_total = len(our_names)
+    gt_rotations_orig = np.full((n_total, 3, 3), np.nan, dtype=np.float64)
+    gt_translations_orig = (
+        np.full((n_total, 2), np.nan, dtype=np.float64)
+        if gt_trans_all is not None
+        else None
+    )
+    for j, name in enumerate(our_names):
+        pose_idx = stack_index_from_image_name(name)
+        if 0 <= pose_idx < len(gt_rot_all):
+            gt_rotations_orig[j] = gt_rot_all[pose_idx]
+        if gt_translations_orig is not None and 0 <= pose_idx < len(gt_trans_all):
+            gt_translations_orig[j] = gt_trans_all[pose_idx]
+    return gt_rotations_orig, gt_translations_orig
 
 
 def main():
@@ -30,6 +59,34 @@ def main():
         "--save_intermediates_dir", type=str, default=None, help="Directory for manifest NPZ dumps (for replay)"
     )
     parser.add_argument("--max_healpix_order", type=int, default=8)
+    parser.add_argument("--skip_final_iteration", action="store_true", help="Skip the final combined-data Nyquist iter")
+    parser.add_argument(
+        "--max_particles", type=int, default=None, help="Subsample to at most N particles (N/2 per half)"
+    )
+    parser.add_argument(
+        "--gt_volume",
+        type=str,
+        default=None,
+        help="Optional recovar-frame GT MRC for FSC/correlation checks. Defaults to sibling reference_gt.mrc if present.",
+    )
+    parser.add_argument(
+        "--force_oversampling",
+        type=int,
+        default=None,
+        help="Override RELION's adaptive oversampling order for debugging ablations.",
+    )
+    parser.add_argument(
+        "--max_significants",
+        type=int,
+        default=None,
+        help="Override RELION's maximum significant poses. Default: read _rlnMaximumSignificantPoses from optimiser.star.",
+    )
+    parser.add_argument(
+        "--adaptive_fraction",
+        type=float,
+        default=None,
+        help="Override RELION's adaptive oversample fraction. Default: read _rlnAdaptiveOversampleFraction from optimiser.star.",
+    )
     args = parser.parse_args()
 
     import jax.numpy as jnp
@@ -39,8 +96,116 @@ def main():
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
     from recovar.em.dense_single_volume.refine import refine_single_volume
+    from recovar.output.output import save_volume
     from recovar.reconstruction import noise as recon_noise
+    from recovar.reconstruction import regularization
     from recovar.utils import helpers
+
+    def _rotation_matrices_from_eulers_deg(eulers_deg):
+        return utils.R_from_relion(np.asarray(eulers_deg, dtype=np.float64))
+
+    def _angular_distance_from_dots(dot_vals):
+        return np.rad2deg(np.arccos(np.clip(np.asarray(dot_vals, dtype=np.float64), -1.0, 1.0)))
+
+    def _angular_error_deg_from_rotations(lhs_rot, rhs_rot):
+        lhs_rot = np.asarray(lhs_rot, dtype=np.float64)
+        rhs_rot = np.asarray(rhs_rot, dtype=np.float64)
+        rdiff = np.einsum("nij,njk->nik", np.transpose(lhs_rot, (0, 2, 1)), rhs_rot)
+        traces = np.trace(rdiff, axis1=1, axis2=2)
+        return _angular_distance_from_dots((traces - 1.0) / 2.0)
+
+    def _normalize_rows(vectors):
+        vectors = np.asarray(vectors, dtype=np.float64)
+        norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+        norms = np.where(norms > 1e-12, norms, 1.0)
+        return vectors / norms
+
+    def _view_direction_error_deg_from_rotations(lhs_rot, rhs_rot):
+        lhs_view = _normalize_rows(np.asarray(lhs_rot, dtype=np.float64)[:, :, 2])
+        rhs_view = _normalize_rows(np.asarray(rhs_rot, dtype=np.float64)[:, :, 2])
+        return _angular_distance_from_dots(np.sum(lhs_view * rhs_view, axis=1))
+
+    def _inplane_error_deg_from_rotations(lhs_rot, rhs_rot):
+        lhs_rot = np.asarray(lhs_rot, dtype=np.float64)
+        rhs_rot = np.asarray(rhs_rot, dtype=np.float64)
+        rhs_view = _normalize_rows(rhs_rot[:, :, 2])
+
+        lhs_x = lhs_rot[:, :, 0]
+        rhs_x = rhs_rot[:, :, 0]
+        lhs_x = lhs_x - np.sum(lhs_x * rhs_view, axis=1, keepdims=True) * rhs_view
+        rhs_x = rhs_x - np.sum(rhs_x * rhs_view, axis=1, keepdims=True) * rhs_view
+        lhs_x = _normalize_rows(lhs_x)
+        rhs_x = _normalize_rows(rhs_x)
+
+        cross = np.cross(rhs_x, lhs_x)
+        signed = np.rad2deg(
+            np.arctan2(
+                np.sum(rhs_view * cross, axis=1),
+                np.sum(rhs_x * lhs_x, axis=1),
+            )
+        )
+        return np.abs(signed)
+
+    def _angular_error_deg_from_eulers(lhs_eulers_deg, rhs_eulers_deg):
+        return _angular_error_deg_from_rotations(
+            _rotation_matrices_from_eulers_deg(lhs_eulers_deg),
+            _rotation_matrices_from_eulers_deg(rhs_eulers_deg),
+        )
+
+    def _view_direction_error_deg_from_eulers(lhs_eulers_deg, rhs_eulers_deg):
+        return _view_direction_error_deg_from_rotations(
+            _rotation_matrices_from_eulers_deg(lhs_eulers_deg),
+            _rotation_matrices_from_eulers_deg(rhs_eulers_deg),
+        )
+
+    def _inplane_error_deg_from_eulers(lhs_eulers_deg, rhs_eulers_deg):
+        return _inplane_error_deg_from_rotations(
+            _rotation_matrices_from_eulers_deg(lhs_eulers_deg),
+            _rotation_matrices_from_eulers_deg(rhs_eulers_deg),
+        )
+
+    def _rotations_in_gt_frame_from_relion_eulers(eulers_deg, transpose_relion_convention):
+        rot = _rotation_matrices_from_eulers_deg(eulers_deg)
+        if transpose_relion_convention:
+            rot = np.transpose(rot, (0, 2, 1))
+        return rot
+
+    def _format_error_summary(values, unit, thresholds):
+        values = np.asarray(values, dtype=np.float64)
+        percentiles = np.percentile(values, [90, 95, 99])
+        frac_terms = [
+            f"<= {thr:g}{unit}: {(100.0 * np.mean(values <= thr)):.1f}%"
+            for thr in thresholds
+        ]
+        return (
+            f"mean={values.mean():.4f}{unit}, "
+            f"median={np.median(values):.4f}{unit}, "
+            f"p90={percentiles[0]:.4f}{unit}, "
+            f"p95={percentiles[1]:.4f}{unit}, "
+            f"p99={percentiles[2]:.4f}{unit}, "
+            f"max={values.max():.4f}{unit}; "
+            + ", ".join(frac_terms)
+        )
+
+    def _first_shell_below_threshold(fsc_values, threshold):
+        fsc_values = np.asarray(fsc_values, dtype=np.float64)
+        below = np.where(fsc_values < float(threshold))[0]
+        return int(below[0]) if below.size else None
+
+    def _shell_to_resolution_angstrom(shell_idx):
+        if shell_idx is None or shell_idx <= 0:
+            return np.nan
+        return float(N * pixel_size) / float(shell_idx)
+
+    def _compute_fsc_vs_gt(volume_ft_flat, gt_ft_flat):
+        return np.asarray(
+            regularization.get_fsc_gpu(
+                jnp.asarray(volume_ft_flat),
+                jnp.asarray(gt_ft_flat),
+                (N, N, N),
+            ),
+            dtype=np.float64,
+        )
 
     relion_dir = Path(args.relion_dir)
     iteration = args.iter
@@ -64,6 +229,10 @@ def main():
     particle_diameter = float(m_pd.group(1)) if m_pd else 544.0
     m_os = re.search(r"_rlnAdaptiveOversampleOrder\s+(\d+)", opt_text)
     oversampling = int(m_os.group(1)) if m_os else 0
+    m_af = re.search(r"_rlnAdaptiveOversampleFraction\s+(\S+)", opt_text)
+    adaptive_fraction = float(m_af.group(1)) if m_af else 0.999
+    m_ms = re.search(r"_rlnMaximumSignificantPoses\s+(-?\d+)", opt_text)
+    max_significants = int(m_ms.group(1)) if m_ms else 500
 
     samp_text = (relion_dir / f"run_it{iteration:03d}_sampling.star").read_text()
     m_hp = re.search(r"_rlnHealpixOrder\s+(\d+)", samp_text)
@@ -101,7 +270,19 @@ def main():
 
     print(f"RELION state: N={N}, hp={hp_order}, os={oversampling}, cs={current_size}")
     print(f"  pixel_size={pixel_size}, particle_diameter={particle_diameter}")
-    print(f"  ave_Pmax={ave_Pmax:.4f}, has_high_fsc_at_limit={has_high_fsc_at_limit}")
+    print(
+        f"  ave_Pmax={ave_Pmax:.4f}, has_high_fsc_at_limit={has_high_fsc_at_limit}, "
+        f"adaptive_fraction={adaptive_fraction:.6f}, max_significants={max_significants}"
+    )
+    if args.force_oversampling is not None:
+        print(f"  Oversampling override: {oversampling} -> {args.force_oversampling}")
+        oversampling = int(args.force_oversampling)
+    if args.adaptive_fraction is not None:
+        print(f"  Adaptive fraction override: {adaptive_fraction} -> {args.adaptive_fraction}")
+        adaptive_fraction = float(args.adaptive_fraction)
+    if args.max_significants is not None:
+        print(f"  Max significants override: {max_significants} -> {args.max_significants}")
+        max_significants = int(args.max_significants)
 
     # ---- Init volumes ----
     # RELION FFT normalization: F_relion = FFT(img)/N^d, so sigma2/tau2 from
@@ -128,11 +309,25 @@ def main():
     our_names = list(our_particles["rlnImageName"])
 
     def _idx(name):
-        m = re.match(r"(\d+)@", name)
-        return int(m.group(1)) - 1 if m else -1
+        return stack_index_from_image_name(name)
 
     relion_idx_map = {_idx(relion_names[i]): relion_subsets[i] for i in range(len(relion_names))}
     our_subsets = np.array([relion_idx_map.get(_idx(n), 0) for n in our_names])
+
+    # Subsample if requested (for fast debugging)
+    if args.max_particles is not None:
+        rng = np.random.RandomState(42)
+        h1_idx = np.where(our_subsets == 1)[0]
+        h2_idx = np.where(our_subsets == 2)[0]
+        n_per_half = args.max_particles // 2
+        if n_per_half < len(h1_idx):
+            drop_h1 = rng.choice(h1_idx, size=len(h1_idx) - n_per_half, replace=False)
+            our_subsets[drop_h1] = 0
+        if n_per_half < len(h2_idx):
+            drop_h2 = rng.choice(h2_idx, size=len(h2_idx) - n_per_half, replace=False)
+            our_subsets[drop_h2] = 0
+        print(f"  Subsampled to max_particles={args.max_particles}")
+
     ds_half1 = ds.subset(np.where(our_subsets == 1)[0])
     ds_half2 = ds.subset(np.where(our_subsets == 2)[0])
     print(f"  Half-sets: {len(np.where(our_subsets == 1)[0])} + {len(np.where(our_subsets == 2)[0])}")
@@ -218,10 +413,142 @@ def main():
         direction_prior = None
         print("  direction_prior: None (not found in model star)")
 
+    def _load_relion_iteration_override(relion_iteration):
+        iter_prefix = relion_dir / f"run_it{relion_iteration:03d}"
+        model_h1_iter = starfile.read(f"{iter_prefix}_half1_model.star")
+        model_h2_iter = starfile.read(f"{iter_prefix}_half2_model.star")
+        relion_iter_data = starfile.read(f"{iter_prefix}_data.star")
+        relion_iter_df = relion_iter_data["particles"] if isinstance(relion_iter_data, dict) else relion_iter_data
+
+        general_iter = model_h1_iter["model_general"]
+        avg_norm_iter = float(
+            general_iter["rlnNormCorrectionAverage"]
+            if isinstance(general_iter, dict)
+            else general_iter["rlnNormCorrectionAverage"].iloc[0]
+        )
+        sigma_offset_iter = float(
+            general_iter["rlnSigmaOffsetsAngst"]
+            if isinstance(general_iter, dict)
+            else general_iter["rlnSigmaOffsetsAngst"].iloc[0]
+        )
+
+        normcorr_iter = np.array(relion_iter_df["rlnNormCorrection"], dtype=np.float64)
+        groups_h1_iter = model_h1_iter.get("model_groups", None)
+        groups_h2_iter = model_h2_iter.get("model_groups", None)
+        scale_h1_iter = (
+            np.array(groups_h1_iter["rlnGroupScaleCorrection"], dtype=np.float64)
+            if groups_h1_iter is not None and "rlnGroupScaleCorrection" in groups_h1_iter.columns
+            else np.array([1.0])
+        )
+        scale_h2_iter = (
+            np.array(groups_h2_iter["rlnGroupScaleCorrection"], dtype=np.float64)
+            if groups_h2_iter is not None and "rlnGroupScaleCorrection" in groups_h2_iter.columns
+            else np.array([1.0])
+        )
+        iter_group_numbers = (
+            np.array(relion_iter_df["rlnGroupNumber"], dtype=int)
+            if "rlnGroupNumber" in relion_iter_df.columns
+            else np.ones(len(relion_iter_df), dtype=int)
+        )
+        pp_scale_h1_iter = scale_h1_iter[np.clip(iter_group_numbers - 1, 0, len(scale_h1_iter) - 1)]
+        pp_scale_h2_iter = scale_h2_iter[np.clip(iter_group_numbers - 1, 0, len(scale_h2_iter) - 1)]
+        combined_h1_iter = (avg_norm_iter / normcorr_iter) * pp_scale_h1_iter
+        combined_h2_iter = (avg_norm_iter / normcorr_iter) * pp_scale_h2_iter
+
+        corr_h1_iter = np.array([combined_h1_iter[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
+        corr_h2_iter = np.array([combined_h2_iter[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+        scale_corr_h1_iter = np.array(
+            [pp_scale_h1_iter[relion_idx_to_pos[idx]] for idx in half1_our_idx],
+            dtype=np.float32,
+        )
+        scale_corr_h2_iter = np.array(
+            [pp_scale_h2_iter[relion_idx_to_pos[idx]] for idx in half2_our_idx],
+            dtype=np.float32,
+        )
+
+        if "rlnOriginXAngst" in relion_iter_df.columns:
+            offsets_x_iter = np.array(relion_iter_df["rlnOriginXAngst"], dtype=np.float64) / pixel_size
+            offsets_y_iter = np.array(relion_iter_df["rlnOriginYAngst"], dtype=np.float64) / pixel_size
+            offsets_iter = np.stack([offsets_x_iter, offsets_y_iter], axis=1)
+            trans_h1_iter = np.array([offsets_iter[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
+            trans_h2_iter = np.array([offsets_iter[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+        else:
+            trans_h1_iter = None
+            trans_h2_iter = None
+
+        rot_h1_iter = None
+        rot_h2_iter = None
+        euler_h1_iter = None
+        euler_h2_iter = None
+        angle_cols = ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"]
+        if all(col in relion_iter_df.columns for col in angle_cols):
+            eulers_iter = np.stack([np.array(relion_iter_df[col], dtype=np.float64) for col in angle_cols], axis=1)
+            rotations_iter = utils.R_from_relion(eulers_iter).astype(np.float32)
+            rot_h1_iter = np.array([rotations_iter[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
+            rot_h2_iter = np.array([rotations_iter[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+            euler_h1_iter = np.array([eulers_iter[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
+            euler_h2_iter = np.array([eulers_iter[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+
+        pdf_iter = None
+        if pdf_orient_key in model_h1_iter:
+            pdf_iter = np.array(model_h1_iter[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32)
+
+        return {
+            "translation_sigma_angstrom": np.float32(sigma_offset_iter),
+            "image_corrections": [corr_h1_iter, corr_h2_iter],
+            "scale_corrections": [scale_corr_h1_iter, scale_corr_h2_iter],
+            "previous_best_translations": [trans_h1_iter, trans_h2_iter],
+            "previous_best_rotations": [rot_h1_iter, rot_h2_iter],
+            "previous_best_rotation_eulers": [euler_h1_iter, euler_h2_iter],
+            "direction_prior": pdf_iter,
+        }
+
+    replay_iteration_overrides = [None] * args.max_iter
+    for recovar_iter in range(1, args.max_iter):
+        relion_prev_iter = iteration + recovar_iter
+        if not (relion_dir / f"run_it{relion_prev_iter:03d}_data.star").exists():
+            print(
+                f"  Replay state for recovar iter {recovar_iter + 1}: RELION iter {relion_prev_iter:03d} not found, leaving override unset"
+            )
+            continue
+        replay_iteration_overrides[recovar_iter] = _load_relion_iteration_override(relion_prev_iter)
+        override = replay_iteration_overrides[recovar_iter]
+        trans_msg = "none"
+        if override["previous_best_translations"][0] is not None:
+            trans_msg = (
+                f"h1 mean_abs={np.abs(override['previous_best_translations'][0]).mean():.3f} px, "
+                f"h2 mean_abs={np.abs(override['previous_best_translations'][1]).mean():.3f} px"
+            )
+        print(
+            f"  Replay state for recovar iter {recovar_iter + 1}: RELION iter {relion_prev_iter:03d}, "
+            f"sigma_offset={float(override['translation_sigma_angstrom']):.4f} A, "
+            f"corr means=({override['image_corrections'][0].mean():.4f}, {override['image_corrections'][1].mean():.4f}), "
+            f"pre-shifts={trans_msg}"
+        )
+
     # ---- Output directory ----
     out_dir = args.output_dir or str(relion_dir.parent / "_agent_scratch" / f"{args.max_iter}iter_parity")
     os.makedirs(out_dir, exist_ok=True)
     Path(out_dir).joinpath("SAFE_TO_DELETE").touch()
+    save_intermediates_dir = args.save_intermediates_dir or os.path.join(out_dir, "intermediates")
+    os.makedirs(save_intermediates_dir, exist_ok=True)
+    print(f"  Intermediate dumps: {save_intermediates_dir}")
+
+    gt_path = None
+    if args.gt_volume is not None:
+        gt_path = Path(args.gt_volume)
+    else:
+        candidate_gt = Path(args.data_star).with_name("reference_gt.mrc")
+        if candidate_gt.exists():
+            gt_path = candidate_gt
+    gt_real = None
+    gt_ft = None
+    if gt_path is not None and gt_path.exists():
+        gt_real = helpers.load_mrc(str(gt_path))
+        gt_ft = np.asarray(ftu.get_dft3(jnp.asarray(gt_real))).reshape(-1)
+        print(f"  GT volume: {gt_path}")
+    elif args.gt_volume is not None:
+        print(f"  GT volume requested but not found: {args.gt_volume}")
 
     # ---- Run ----
     print(f"\nRunning {args.max_iter} iterations...")
@@ -241,6 +568,8 @@ def main():
         init_current_size=current_size,
         fsc_threshold=1.0 / 7.0,
         adaptive_oversampling=oversampling,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
         init_healpix_order=hp_order,
         max_healpix_order=args.max_healpix_order,
         init_translation_range=offset_range / pixel_size,
@@ -258,7 +587,9 @@ def main():
         init_scale_corrections=[scale_corr_h1, scale_corr_h2],
         init_previous_best_translations=[trans_h1, trans_h2],
         init_direction_prior=direction_prior,
-        save_intermediates_dir=args.save_intermediates_dir,
+        replay_iteration_overrides=replay_iteration_overrides,
+        save_intermediates_dir=save_intermediates_dir,
+        skip_final_iteration=args.skip_final_iteration,
     )
     elapsed = time.time() - t0
     print(f"\nCompleted {args.max_iter} iterations in {elapsed:.1f}s")
@@ -269,6 +600,10 @@ def main():
         "voxel_size": np.float64(pixel_size),
         "current_sizes": np.array(result["current_sizes"]),
         "pixel_resolutions": np.array(result["pixel_resolutions"]),
+        "n_half1_particles": np.int32(len(np.where(our_subsets == 1)[0])),
+        "n_half2_particles": np.int32(len(np.where(our_subsets == 2)[0])),
+        "adaptive_fraction": np.float64(adaptive_fraction),
+        "max_significants": np.int32(max_significants),
     }
     if result.get("ave_Pmax_trajectory"):
         save_dict["ave_Pmax_trajectory"] = np.array(result["ave_Pmax_trajectory"])
@@ -277,20 +612,75 @@ def main():
             save_dict[f"pmax_per_image_iter_{i:03d}"] = np.array(pmax_arr, dtype=np.float32)
     if result.get("healpix_order_trajectory"):
         save_dict["healpix_order_trajectory"] = np.array(result["healpix_order_trajectory"])
+    if result.get("sigma_offset_trajectory"):
+        save_dict["sigma_offset_trajectory"] = np.array(result["sigma_offset_trajectory"], dtype=np.float64)
+    if result.get("sigma_offset_used_trajectory"):
+        save_dict["sigma_offset_used_trajectory"] = np.array(result["sigma_offset_used_trajectory"], dtype=np.float64)
+    for scalar_name in [
+        "frac_changed_trajectory",
+        "acc_rot_trajectory",
+        "smallest_change_angles_trajectory",
+        "smallest_change_offsets_trajectory",
+    ]:
+        if result.get(scalar_name):
+            save_dict[scalar_name] = np.array(result[scalar_name], dtype=np.float64)
     for traj_name, prefix_name in [
         ("fsc_history", "fsc_iter"),
         ("data_vs_prior_trajectory", "data_vs_prior_iter"),
         ("noise_radial_trajectory", "noise_radial_iter"),
         ("tau2_radial_trajectory", "tau2_radial_iter"),
+        ("tau2_sigma2_trajectory", "tau2_sigma2_iter"),
+        ("tau2_avg_weight_trajectory", "tau2_avg_weight_iter"),
+        ("tau2_shell_sum_trajectory", "tau2_shell_sum_iter"),
+        ("tau2_shell_count_trajectory", "tau2_shell_count_iter"),
+        ("tau2_fsc_used_trajectory", "tau2_fsc_used_iter"),
+        ("tau2_ssnr_trajectory", "tau2_ssnr_iter"),
         ("significant_counts", "sig_counts_iter"),
+        ]:
+        if result.get(traj_name):
+            for i, arr_i in enumerate(result[traj_name]):
+                if arr_i is not None:
+                    save_dict[f"{prefix_name}_{i:03d}"] = np.array(arr_i)
+    for traj_name, prefix_name in [
+        ("best_rotation_eulers_history", "best_rotation_eulers_iter"),
+        ("best_translations_history", "best_translations_iter"),
     ]:
         if result.get(traj_name):
             for i, arr_i in enumerate(result[traj_name]):
-                save_dict[f"{prefix_name}_{i:03d}"] = np.array(arr_i)
+                if arr_i is not None:
+                    save_dict[f"{prefix_name}_{i:03d}"] = np.array(arr_i, dtype=np.float32)
 
-    npz_path = os.path.join(out_dir, "refinement_results.npz")
-    np.savez(npz_path, **save_dict)
-    print(f"Saved: {npz_path}")
+    final_half1_ft = np.asarray(result["means"][0], dtype=np.complex64).reshape(-1)
+    final_half2_ft = np.asarray(result["means"][1], dtype=np.complex64).reshape(-1)
+    final_merged_ft = (final_half1_ft.astype(np.complex128) + final_half2_ft.astype(np.complex128)) / 2.0
+    final_merged_ft = final_merged_ft.astype(np.complex64)
+
+    save_dict["final_half1_ft"] = final_half1_ft
+    save_dict["final_half2_ft"] = final_half2_ft
+    save_dict["final_merged_ft"] = final_merged_ft
+
+    save_volume(
+        np.asarray(final_half1_ft),
+        os.path.join(out_dir, "recovar_final_half1"),
+        volume_shape=(N, N, N),
+        from_ft=True,
+        voxel_size=pixel_size,
+    )
+    save_volume(
+        np.asarray(final_half2_ft),
+        os.path.join(out_dir, "recovar_final_half2"),
+        volume_shape=(N, N, N),
+        from_ft=True,
+        voxel_size=pixel_size,
+    )
+    save_volume(
+        np.asarray(final_merged_ft),
+        os.path.join(out_dir, "recovar_final_merged"),
+        volume_shape=(N, N, N),
+        from_ft=True,
+        voxel_size=pixel_size,
+    )
+    print(f"Saved final volumes: {os.path.join(out_dir, 'recovar_final_half1.mrc')}, recovar_final_half2.mrc, recovar_final_merged.mrc")
 
     # ---- Summary table ----
     n_iters = len(result["current_sizes"])
@@ -322,6 +712,8 @@ def main():
 
     # ---- Compare final volume with RELION ----
     last_relion_it = iteration + args.max_iter
+    relion_final_real = {}
+    relion_final_ft = {}
     for k_half, label in [(0, "half1"), (1, "half2")]:
         target_path = str(relion_dir / f"run_it{last_relion_it:03d}_{label}_class001.mrc")
         if not Path(target_path).exists():
@@ -330,8 +722,80 @@ def main():
         recovar_vol_ft = np.asarray(result["means"][k_half])
         recovar_vol_real = np.real(np.array(ftu.get_idft3(jnp.asarray(recovar_vol_ft.reshape(N, N, N)))))
         relion_vol = helpers.load_relion_volume(target_path)
+        relion_final_real[label] = relion_vol
+        relion_final_ft[label] = np.asarray(ftu.get_dft3(jnp.asarray(relion_vol))).reshape(-1)
         corr = float(np.corrcoef(recovar_vol_real.ravel(), relion_vol.ravel())[0, 1])
         print(f"  Final {label} vs RELION it{last_relion_it:03d}: corr={corr:.6f}")
+        save_dict[f"final_{label}_corr_vs_relion"] = np.float64(corr)
+
+    relion_merged_ft = None
+    if "half1" in relion_final_ft and "half2" in relion_final_ft:
+        relion_merged_ft = (
+            relion_final_ft["half1"].astype(np.complex128) + relion_final_ft["half2"].astype(np.complex128)
+        ) / 2.0
+        save_volume(
+            np.asarray(relion_final_ft["half1"]),
+            os.path.join(out_dir, "relion_final_half1"),
+            volume_shape=(N, N, N),
+            from_ft=True,
+            voxel_size=pixel_size,
+        )
+        save_volume(
+            np.asarray(relion_final_ft["half2"]),
+            os.path.join(out_dir, "relion_final_half2"),
+            volume_shape=(N, N, N),
+            from_ft=True,
+            voxel_size=pixel_size,
+        )
+        save_volume(
+            np.asarray(relion_merged_ft.astype(np.complex64)),
+            os.path.join(out_dir, "relion_final_merged"),
+            volume_shape=(N, N, N),
+            from_ft=True,
+            voxel_size=pixel_size,
+        )
+        print(
+            "  Saved RELION-frame final volumes in recovar coordinates: "
+            f"{os.path.join(out_dir, 'relion_final_half1.mrc')}, relion_final_half2.mrc, relion_final_merged.mrc"
+        )
+
+    if gt_ft is not None:
+        print("\n=== Final FSC vs GT ===")
+        gt_summary = {}
+        recovar_final_series = {
+            "recovar_half1": final_half1_ft,
+            "recovar_half2": final_half2_ft,
+            "recovar_merged": final_merged_ft,
+        }
+        if relion_merged_ft is not None:
+            recovar_final_series["relion_half1"] = relion_final_ft["half1"]
+            recovar_final_series["relion_half2"] = relion_final_ft["half2"]
+            recovar_final_series["relion_merged"] = relion_merged_ft.astype(np.complex64)
+
+        for label, vol_ft in recovar_final_series.items():
+            fsc_vs_gt = _compute_fsc_vs_gt(vol_ft, gt_ft)
+            shell_05 = _first_shell_below_threshold(fsc_vs_gt, 0.5)
+            shell_0143 = _first_shell_below_threshold(fsc_vs_gt, 0.143)
+            real_vol = np.real(np.array(ftu.get_idft3(jnp.asarray(np.asarray(vol_ft).reshape(N, N, N)))))
+            corr_vs_gt = float(np.corrcoef(real_vol.ravel(), gt_real.ravel())[0, 1])
+            print(
+                f"  {label:<14s} corr={corr_vs_gt:.6f}, "
+                f"FSC<0.5 shell={shell_05}, res={_shell_to_resolution_angstrom(shell_05):.2f} A, "
+                f"FSC<0.143 shell={shell_0143}, res={_shell_to_resolution_angstrom(shell_0143):.2f} A"
+            )
+            gt_summary[f"{label}_fsc_vs_gt"] = fsc_vs_gt
+            gt_summary[f"{label}_corr_vs_gt"] = np.float64(corr_vs_gt)
+            gt_summary[f"{label}_shell_05"] = np.int32(-1 if shell_05 is None else shell_05)
+            gt_summary[f"{label}_shell_0143"] = np.int32(-1 if shell_0143 is None else shell_0143)
+
+        save_dict.update(gt_summary)
+        gt_npz_path = os.path.join(out_dir, "gt_comparison_final.npz")
+        np.savez(gt_npz_path, **gt_summary)
+        print(f"  Saved GT comparison: {gt_npz_path}")
+
+    npz_path = os.path.join(out_dir, "refinement_results.npz")
+    np.savez(npz_path, **save_dict)
+    print(f"Saved: {npz_path}")
 
     # ---- Per-particle Pmax comparison with RELION ----
     # pmax_per_image_history entries are in (half1, half2) concatenated order.
@@ -339,6 +803,23 @@ def main():
     half1_indices = np.where(our_subsets == 1)[0]
     half2_indices = np.where(our_subsets == 2)[0]
     n_total = len(our_names)
+    gt_pose_path = Path(args.data_star).with_name("poses.pkl")
+    gt_rotations_orig = None
+    gt_translations_orig = None
+    gt_transpose_relion_convention = None
+    if gt_pose_path.exists():
+        gt_pose_data = utils.pickle_load(str(gt_pose_path))
+        if isinstance(gt_pose_data, tuple) and len(gt_pose_data) >= 1:
+            gt_rot_all = np.asarray(gt_pose_data[0], dtype=np.float64)
+            gt_trans_all = np.asarray(gt_pose_data[1], dtype=np.float64) if len(gt_pose_data) >= 2 else None
+            gt_rotations_orig, gt_translations_orig = map_pose_arrays_to_particle_order(
+                our_names,
+                gt_rot_all,
+                gt_trans_all,
+            )
+            print(f"  GT poses: {gt_pose_path}")
+        else:
+            print(f"  GT poses present but not in expected tuple format: {gt_pose_path}")
 
     if result.get("pmax_per_image_history"):
         for i_iter, pmax_arr in enumerate(result["pmax_per_image_history"]):
@@ -355,6 +836,7 @@ def main():
 
             # Map RELION particles to original ordering by stack index
             relion_names_it = list(relion_df_it["rlnImageName"])
+            relion_idx_to_pos = {_idx(relion_names_it[j]): j for j in range(len(relion_names_it))}
             relion_pmax_map = {_idx(relion_names_it[j]): relion_pmax_raw[j] for j in range(len(relion_names_it))}
 
             # Reconstruct recovar Pmax in original particle ordering
@@ -367,10 +849,39 @@ def main():
 
             # Build matched RELION array in original ordering
             relion_pmax_orig = np.full(n_total, np.nan, dtype=np.float64)
+            relion_eulers_orig = np.full((n_total, 3), np.nan, dtype=np.float64)
+            relion_trans_orig = np.full((n_total, 2), np.nan, dtype=np.float64)
+            has_relion_eulers = all(col in relion_df_it.columns for col in ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"])
+            has_relion_trans = all(col in relion_df_it.columns for col in ["rlnOriginXAngst", "rlnOriginYAngst"])
+            relion_eulers_raw = (
+                np.stack(
+                    [np.array(relion_df_it[col], dtype=np.float64) for col in ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"]],
+                    axis=1,
+                )
+                if has_relion_eulers
+                else None
+            )
+            relion_trans_raw = (
+                np.stack(
+                    [
+                        np.array(relion_df_it["rlnOriginXAngst"], dtype=np.float64) / pixel_size,
+                        np.array(relion_df_it["rlnOriginYAngst"], dtype=np.float64) / pixel_size,
+                    ],
+                    axis=1,
+                )
+                if has_relion_trans
+                else None
+            )
+            recovar_trans_orig = None
             for j, name in enumerate(our_names):
                 idx = _idx(name)
                 if idx in relion_pmax_map:
                     relion_pmax_orig[j] = relion_pmax_map[idx]
+                    rel_pos = relion_idx_to_pos[idx]
+                    if relion_eulers_raw is not None:
+                        relion_eulers_orig[j] = relion_eulers_raw[rel_pos]
+                    if relion_trans_raw is not None:
+                        relion_trans_orig[j] = relion_trans_raw[rel_pos]
 
             # Compare only particles present in both
             valid = ~(np.isnan(recovar_pmax_orig) | np.isnan(relion_pmax_orig))
@@ -406,6 +917,224 @@ def main():
                 half2_indices=half2_indices,
             )
             print(f"  Saved per-particle comparison: {comp_path}")
+
+            best_eulers_hist = result.get("best_rotation_eulers_history")
+            best_trans_hist = result.get("best_translations_history")
+            if best_eulers_hist and i_iter < len(best_eulers_hist) and best_eulers_hist[i_iter] is not None:
+                best_eulers_arr = np.asarray(best_eulers_hist[i_iter], dtype=np.float64)
+                recovar_eulers_orig = np.full((n_total, 3), np.nan, dtype=np.float64)
+                recovar_eulers_orig[half1_indices] = best_eulers_arr[:n_h1]
+                recovar_eulers_orig[half2_indices] = best_eulers_arr[n_h1:]
+                valid_angle = ~(np.isnan(recovar_eulers_orig).any(axis=1) | np.isnan(relion_eulers_orig).any(axis=1))
+                if np.any(valid_angle):
+                    ang_err_deg = _angular_error_deg_from_eulers(
+                        recovar_eulers_orig[valid_angle],
+                        relion_eulers_orig[valid_angle],
+                    )
+                    view_err_deg = _view_direction_error_deg_from_eulers(
+                        recovar_eulers_orig[valid_angle],
+                        relion_eulers_orig[valid_angle],
+                    )
+                    inplane_err_deg = _inplane_error_deg_from_eulers(
+                        recovar_eulers_orig[valid_angle],
+                        relion_eulers_orig[valid_angle],
+                    )
+                    print(f"  Angular error (deg): {_format_error_summary(ang_err_deg, '°', [5, 10, 20])}")
+                    print(f"  View-dir error (deg): {_format_error_summary(view_err_deg, '°', [2, 5, 10])}")
+                    print(f"  In-plane error (deg): {_format_error_summary(inplane_err_deg, '°', [2, 5, 10])}")
+                else:
+                    ang_err_deg = None
+                    view_err_deg = None
+                    inplane_err_deg = None
+
+                recovar_gt_ang_err_deg = None
+                recovar_gt_view_err_deg = None
+                recovar_gt_inplane_err_deg = None
+                relion_gt_ang_err_deg = None
+                relion_gt_view_err_deg = None
+                relion_gt_inplane_err_deg = None
+                if gt_rotations_orig is not None:
+                    valid_relion_gt = ~(np.isnan(relion_eulers_orig).any(axis=1) | np.isnan(gt_rotations_orig).any(axis=(1, 2)))
+                    if np.any(valid_relion_gt) and gt_transpose_relion_convention is None:
+                        relion_gt_direct = _rotation_matrices_from_eulers_deg(relion_eulers_orig[valid_relion_gt])
+                        direct_err = _angular_error_deg_from_rotations(
+                            relion_gt_direct,
+                            gt_rotations_orig[valid_relion_gt],
+                        )
+                        transpose_err = _angular_error_deg_from_rotations(
+                            np.transpose(relion_gt_direct, (0, 2, 1)),
+                            gt_rotations_orig[valid_relion_gt],
+                        )
+                        gt_transpose_relion_convention = bool(np.nanmedian(transpose_err) < np.nanmedian(direct_err))
+                        mode = "transpose" if gt_transpose_relion_convention else "direct"
+                        print(
+                            "  GT rotation convention: using "
+                            f"{mode} RELION-like rotations "
+                            f"(RELION-vs-GT median direct={np.nanmedian(direct_err):.4f}°, "
+                            f"transpose={np.nanmedian(transpose_err):.4f}°)"
+                        )
+
+                    valid_recovar_gt = ~(np.isnan(recovar_eulers_orig).any(axis=1) | np.isnan(gt_rotations_orig).any(axis=(1, 2)))
+                    if np.any(valid_recovar_gt):
+                        recovar_rot_gt = _rotations_in_gt_frame_from_relion_eulers(
+                            recovar_eulers_orig[valid_recovar_gt],
+                            gt_transpose_relion_convention if gt_transpose_relion_convention is not None else True,
+                        )
+                        gt_rot_valid = gt_rotations_orig[valid_recovar_gt]
+                        recovar_gt_ang_err_deg = _angular_error_deg_from_rotations(recovar_rot_gt, gt_rot_valid)
+                        recovar_gt_view_err_deg = _view_direction_error_deg_from_rotations(recovar_rot_gt, gt_rot_valid)
+                        recovar_gt_inplane_err_deg = _inplane_error_deg_from_rotations(recovar_rot_gt, gt_rot_valid)
+                        print(
+                            "  RECOVAR vs GT angle error: "
+                            f"{_format_error_summary(recovar_gt_ang_err_deg, '°', [2, 5, 10])}"
+                        )
+                        print(
+                            "  RECOVAR vs GT view-dir: "
+                            f"{_format_error_summary(recovar_gt_view_err_deg, '°', [2, 5, 10])}"
+                        )
+                        print(
+                            "  RECOVAR vs GT in-plane: "
+                            f"{_format_error_summary(recovar_gt_inplane_err_deg, '°', [2, 5, 10])}"
+                        )
+                    if np.any(valid_relion_gt):
+                        relion_rot_gt = _rotations_in_gt_frame_from_relion_eulers(
+                            relion_eulers_orig[valid_relion_gt],
+                            gt_transpose_relion_convention if gt_transpose_relion_convention is not None else True,
+                        )
+                        gt_rot_valid = gt_rotations_orig[valid_relion_gt]
+                        relion_gt_ang_err_deg = _angular_error_deg_from_rotations(relion_rot_gt, gt_rot_valid)
+                        relion_gt_view_err_deg = _view_direction_error_deg_from_rotations(relion_rot_gt, gt_rot_valid)
+                        relion_gt_inplane_err_deg = _inplane_error_deg_from_rotations(relion_rot_gt, gt_rot_valid)
+                        print(
+                            "  RELION  vs GT angle error: "
+                            f"{_format_error_summary(relion_gt_ang_err_deg, '°', [2, 5, 10])}"
+                        )
+                        print(
+                            "  RELION  vs GT view-dir: "
+                            f"{_format_error_summary(relion_gt_view_err_deg, '°', [2, 5, 10])}"
+                        )
+                        print(
+                            "  RELION  vs GT in-plane: "
+                            f"{_format_error_summary(relion_gt_inplane_err_deg, '°', [2, 5, 10])}"
+                        )
+                if best_trans_hist and i_iter < len(best_trans_hist) and best_trans_hist[i_iter] is not None:
+                    best_trans_arr = np.asarray(best_trans_hist[i_iter], dtype=np.float64)
+                    recovar_trans_orig = np.full((n_total, 2), np.nan, dtype=np.float64)
+                    recovar_trans_orig[half1_indices] = best_trans_arr[:n_h1]
+                    recovar_trans_orig[half2_indices] = best_trans_arr[n_h1:]
+                    recovar_gt_trans_err_px = None
+                    relion_gt_trans_err_px = None
+                    valid_trans = ~(np.isnan(recovar_trans_orig).any(axis=1) | np.isnan(relion_trans_orig).any(axis=1))
+                    if np.any(valid_trans):
+                        trans_err_px = np.linalg.norm(
+                            recovar_trans_orig[valid_trans] - relion_trans_orig[valid_trans],
+                            axis=1,
+                        )
+                        trans_err_ang = trans_err_px * pixel_size
+                        print(
+                            "  Translation error: "
+                            f"{_format_error_summary(trans_err_px, ' px', [0.25, 0.5, 1.0])} "
+                            f"(mean={trans_err_ang.mean():.4f} A)"
+                        )
+                    else:
+                        trans_err_px = None
+                    if gt_translations_orig is not None:
+                        valid_recovar_gt_trans = ~(
+                            np.isnan(recovar_trans_orig).any(axis=1) | np.isnan(gt_translations_orig).any(axis=1)
+                        )
+                        if np.any(valid_recovar_gt_trans):
+                            recovar_gt_trans_err_px = np.linalg.norm(
+                                recovar_trans_orig[valid_recovar_gt_trans] - gt_translations_orig[valid_recovar_gt_trans],
+                                axis=1,
+                            )
+                            print(
+                                "  RECOVAR vs GT translation: "
+                                f"{_format_error_summary(recovar_gt_trans_err_px, ' px', [0.25, 0.5, 1.0])}"
+                            )
+                        valid_relion_gt_trans = ~(
+                            np.isnan(relion_trans_orig).any(axis=1) | np.isnan(gt_translations_orig).any(axis=1)
+                        )
+                        if np.any(valid_relion_gt_trans):
+                            relion_gt_trans_err_px = np.linalg.norm(
+                                relion_trans_orig[valid_relion_gt_trans] - gt_translations_orig[valid_relion_gt_trans],
+                                axis=1,
+                            )
+                            print(
+                                "  RELION  vs GT translation: "
+                                f"{_format_error_summary(relion_gt_trans_err_px, ' px', [0.25, 0.5, 1.0])}"
+                            )
+                else:
+                    trans_err_px = None
+                    recovar_gt_trans_err_px = None
+                    relion_gt_trans_err_px = None
+
+                pose_path = os.path.join(out_dir, f"pose_comparison_iter{i_iter:03d}.npz")
+                np.savez(
+                    pose_path,
+                    recovar_eulers=recovar_eulers_orig,
+                    relion_eulers=relion_eulers_orig,
+                    angular_error_deg=ang_err_deg if ang_err_deg is not None else np.array([]),
+                    view_direction_error_deg=view_err_deg if view_err_deg is not None else np.array([]),
+                    inplane_error_deg=inplane_err_deg if inplane_err_deg is not None else np.array([]),
+                    gt_rotations=gt_rotations_orig if gt_rotations_orig is not None else np.array([]),
+                    gt_translations=gt_translations_orig if gt_translations_orig is not None else np.array([]),
+                    gt_transpose_relion_convention=np.array(
+                        gt_transpose_relion_convention if gt_transpose_relion_convention is not None else False,
+                        dtype=np.bool_,
+                    ),
+                    recovar_vs_gt_angular_error_deg=(
+                        recovar_gt_ang_err_deg if recovar_gt_ang_err_deg is not None else np.array([])
+                    ),
+                    recovar_vs_gt_view_direction_error_deg=(
+                        recovar_gt_view_err_deg if recovar_gt_view_err_deg is not None else np.array([])
+                    ),
+                    recovar_vs_gt_inplane_error_deg=(
+                        recovar_gt_inplane_err_deg if recovar_gt_inplane_err_deg is not None else np.array([])
+                    ),
+                    relion_vs_gt_angular_error_deg=(
+                        relion_gt_ang_err_deg if relion_gt_ang_err_deg is not None else np.array([])
+                    ),
+                    relion_vs_gt_view_direction_error_deg=(
+                        relion_gt_view_err_deg if relion_gt_view_err_deg is not None else np.array([])
+                    ),
+                    relion_vs_gt_inplane_error_deg=(
+                        relion_gt_inplane_err_deg if relion_gt_inplane_err_deg is not None else np.array([])
+                    ),
+                    recovar_translations=recovar_trans_orig if recovar_trans_orig is not None else np.array([]),
+                    relion_translations=relion_trans_orig,
+                    translation_error_px=trans_err_px if trans_err_px is not None else np.array([]),
+                    recovar_vs_gt_translation_error_px=(
+                        recovar_gt_trans_err_px if recovar_gt_trans_err_px is not None else np.array([])
+                    ),
+                    relion_vs_gt_translation_error_px=(
+                        relion_gt_trans_err_px if relion_gt_trans_err_px is not None else np.array([])
+                    ),
+                    half1_indices=half1_indices,
+                    half2_indices=half2_indices,
+                )
+                print(f"  Saved pose comparison: {pose_path}")
+
+    if gt_ft is not None:
+        print("\n=== Postprocessing per-iteration map quality vs GT/RELION ===")
+        import subprocess
+
+        subprocess.run(
+            [
+                sys.executable,
+                "scripts/postprocess_multi_iter_gt.py",
+                "--recovar_dir",
+                out_dir,
+                "--relion_dir",
+                str(relion_dir),
+                "--relion_start_iter",
+                str(iteration),
+                "--gt_volume",
+                str(gt_path),
+                "--max_iter",
+                str(args.max_iter),
+            ],
+            check=True,
+        )
 
     # ---- Run diff script ----
     print("\n=== Running diff_relion_recovar_per_iter.py ===")

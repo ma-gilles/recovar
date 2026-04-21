@@ -188,6 +188,7 @@ def compute_pass2_stats(
     scale_corrections=None,
     image_pre_shifts=None,
     use_float64_scoring=False,
+    random_perturbation=0.0,
 ):
     """Pass 2: evaluate oversampled children of significant coarse rotations.
 
@@ -341,6 +342,7 @@ def compute_pass2_stats(
         sig_rot_indices,
         nside_level,
         oversampling_order=oversampling_order,
+        random_perturbation=random_perturbation,
         return_rotation_indices=return_rotation_indices,
     )
     if return_rotation_indices:
@@ -477,6 +479,7 @@ def compute_pass2_stats_sparse(
     scale_corrections=None,
     image_pre_shifts=None,
     use_float64_scoring=False,
+    random_perturbation=0.0,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -566,6 +569,7 @@ def compute_pass2_stats_sparse(
             unique_rot,
             nside_level,
             oversampling_order=oversampling_order,
+            random_perturbation=random_perturbation,
             return_rotation_indices=True,
         )
         oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)

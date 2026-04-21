@@ -6,31 +6,180 @@ import numpy as np
 
 from recovar import utils
 
-# Cache of full-grid rotation matrices keyed by healpix_order. Each entry has
-# shape (n_pixels * n_psi, 3, 3) and is reused across calls to
-# get_local_rotation_grid_fast to avoid rebuilding the grid every chunk.
-# Cleared automatically when Python exits; we don't bother with manual eviction
-# because there are at most a handful of healpix orders in active use.
-_GRID_MATRIX_CACHE: "dict[int, np.ndarray]" = {}
+# Cached per-order geometry used by the exact RELION local-search selector.
+# For the RELION-parity grid, the flattened index is ``psi_idx * n_pixels +
+# pixel_idx`` with ``pixel_idx`` following RELION's NEST-ordered HEALPix
+# enumeration.
+_GRID_METADATA_CACHE: "dict[int, dict[str, np.ndarray]]" = {}
 
 
-def _get_full_grid_matrices(healpix_order: int) -> np.ndarray:
-    """Return all (n_pixels * n_psi, 3, 3) rotation matrices for one order.
-
-    Cached because the only inputs are integers (healpix_order) and the
-    output is deterministic. Used by ``get_local_rotation_grid_fast`` to
-    do axis-angle cone selection without rebuilding the grid each call.
-    """
-    cached = _GRID_MATRIX_CACHE.get(int(healpix_order))
+def _get_relion_grid_metadata(healpix_order: int) -> dict[str, np.ndarray]:
+    """Return cached ring-order HEALPix geometry for one rotation-grid order."""
+    healpix_order = int(healpix_order)
+    cached = _GRID_METADATA_CACHE.get(healpix_order)
     if cached is not None:
         return cached
-    n_total = rotation_grid_size(int(healpix_order))
-    mats = rotation_indices_to_matrices(
-        np.arange(n_total, dtype=np.int64),
-        int(healpix_order),
+
+    nside = 2**healpix_order
+    n_pixels = hp.nside2npix(nside)
+    n_psi = rotation_grid_n_in_planes(healpix_order)
+    grid_eulers = np.asarray(get_relion_rotation_grid_eulers(healpix_order), dtype=np.float32).reshape(n_psi, n_pixels, 3)
+    grid_rotations = np.asarray(get_relion_rotation_grid(healpix_order), dtype=np.float32).reshape(n_psi, n_pixels, 3, 3)
+
+    # Use the actual matrix view directions of the RELION grid rather than a
+    # closed-form HEALPix angle formula. This keeps the local-search selector
+    # aligned with the trial rotations that are actually scored.
+    rot_deg = np.asarray(grid_eulers[0, :, 0], dtype=np.float32)
+    tilt_deg = np.asarray(grid_eulers[0, :, 1], dtype=np.float32)
+    psi_deg = np.asarray(grid_eulers[:, 0, 2], dtype=np.float32)
+    dir_vecs = np.asarray(grid_rotations[0, :, :, 2], dtype=np.float32)
+    dir_norm = np.linalg.norm(dir_vecs, axis=1, keepdims=True)
+    dir_norm = np.where(dir_norm > 0.0, dir_norm, 1.0)
+    dir_vecs = dir_vecs / dir_norm
+
+    cached = {
+        "rot_deg": rot_deg,
+        "tilt_deg": tilt_deg,
+        "dir_vecs": dir_vecs,
+        "psi_deg": psi_deg,
+        "n_pixels": np.asarray(n_pixels, dtype=np.int64),
+        "n_psi": np.asarray(n_psi, dtype=np.int64),
+    }
+    _GRID_METADATA_CACHE[healpix_order] = cached
+    return cached
+
+
+def _relion_direction_vector(rot_deg: float, tilt_deg: float) -> np.ndarray:
+    """RELION's Euler_angles2direction for C1 symmetry."""
+    rot = np.deg2rad(rot_deg)
+    tilt = np.deg2rad(tilt_deg)
+    return np.array(
+        [
+            np.sin(tilt) * np.cos(rot),
+            np.sin(tilt) * np.sin(rot),
+            np.cos(tilt),
+        ],
+        dtype=np.float64,
     )
-    _GRID_MATRIX_CACHE[int(healpix_order)] = mats
-    return mats
+
+
+def _relion_direction_vectors(rot_deg: np.ndarray, tilt_deg: np.ndarray) -> np.ndarray:
+    """Vectorized RELION Euler_angles2direction for C1 symmetry."""
+    rot = np.deg2rad(np.asarray(rot_deg, dtype=np.float64))
+    tilt = np.deg2rad(np.asarray(tilt_deg, dtype=np.float64))
+    return np.stack(
+        [
+            np.sin(tilt) * np.cos(rot),
+            np.sin(tilt) * np.sin(rot),
+            np.cos(tilt),
+        ],
+        axis=-1,
+    ).astype(np.float32)
+
+
+def _wrapped_abs_diff_deg(values_deg: np.ndarray, ref_deg: np.ndarray | float) -> np.ndarray:
+    """Circular absolute difference in degrees, wrapped to [0, 180]."""
+    diff = np.abs(np.asarray(values_deg, dtype=np.float64) - np.asarray(ref_deg, dtype=np.float64))
+    return np.where(diff > 180.0, np.abs(diff - 360.0), diff)
+
+
+def _normalized_log_weights(diff_deg: np.ndarray, sigma_deg: float) -> np.ndarray:
+    """Return log Gaussian weights normalized to sum to one."""
+    if sigma_deg <= 0.0:
+        out = np.full(diff_deg.shape, -np.log(max(diff_deg.size, 1)), dtype=np.float64)
+        return out.astype(np.float32)
+
+    weights = np.exp(-0.5 * (np.asarray(diff_deg, dtype=np.float64) / float(sigma_deg)) ** 2)
+    total = float(weights.sum())
+    if total <= 0.0 or not np.isfinite(total):
+        weights.fill(1.0 / max(weights.size, 1))
+    else:
+        weights /= total
+    return np.log(np.clip(weights, np.finfo(np.float32).tiny, None)).astype(np.float32)
+
+
+def _normalize_log_weights(log_weights: np.ndarray) -> np.ndarray:
+    """Normalize log-weights so exp(out) sums to one."""
+    log_weights = np.asarray(log_weights, dtype=np.float64)
+    if log_weights.size == 0:
+        return np.asarray(log_weights, dtype=np.float32)
+    max_logw = float(np.max(log_weights))
+    weights = np.exp(log_weights - max_logw)
+    total = float(weights.sum())
+    if total <= 0.0 or not np.isfinite(total):
+        return np.full(log_weights.shape, -np.log(max(log_weights.size, 1)), dtype=np.float32)
+    return (log_weights - (max_logw + np.log(total))).astype(np.float32)
+
+
+def build_local_search_grid_metadata(healpix_order: int, grid_eulers: np.ndarray | None = None) -> dict[str, np.ndarray]:
+    """Prepare local-search metadata for either the canonical or a custom grid.
+
+    When ``grid_eulers`` is provided, it must be a full-grid table in the same
+    flattened index order as ``get_relion_rotation_grid_eulers`` / the live
+    trial grid. If the grid still factorizes into independent direction and psi
+    axes, return factorized metadata. Otherwise, fall back to full per-rotation
+    metadata.
+    """
+    healpix_order = int(healpix_order)
+    if grid_eulers is None:
+        meta = _get_relion_grid_metadata(healpix_order)
+        return {
+            "mode": "factorized",
+            "rot_deg": np.asarray(meta["rot_deg"], dtype=np.float32),
+            "tilt_deg": np.asarray(meta["tilt_deg"], dtype=np.float32),
+            "dir_vecs": np.asarray(meta["dir_vecs"], dtype=np.float32),
+            "psi_deg": np.asarray(meta["psi_deg"], dtype=np.float32),
+            "n_pixels": np.asarray(meta["n_pixels"], dtype=np.int64),
+            "n_psi": np.asarray(meta["n_psi"], dtype=np.int64),
+        }
+
+    n_pixels = hp.nside2npix(2**healpix_order)
+    n_psi = rotation_grid_n_in_planes(healpix_order)
+    expected = n_pixels * n_psi
+    grid_eulers = np.asarray(grid_eulers, dtype=np.float32).reshape(-1, 3)
+    if grid_eulers.shape[0] != expected:
+        raise ValueError(
+            f"grid_eulers must have shape ({expected}, 3) for healpix_order={healpix_order}, "
+            f"got {grid_eulers.shape}",
+        )
+
+    grid_3d = grid_eulers.reshape(n_psi, n_pixels, 3)
+    rot_deg_full = np.mod(grid_eulers[:, 0].astype(np.float64), 360.0)
+    tilt_deg_full = grid_eulers[:, 1].astype(np.float64)
+    psi_deg_full = np.mod(grid_eulers[:, 2].astype(np.float64), 360.0)
+    grid_rotations_full = utils.R_from_relion(grid_eulers, degrees=True).astype(np.float32)
+    dir_vecs_full = np.asarray(grid_rotations_full[:, :, 2], dtype=np.float32)
+    dir_norm = np.linalg.norm(dir_vecs_full, axis=1, keepdims=True)
+    dir_norm = np.where(dir_norm > 0.0, dir_norm, 1.0)
+    dir_vecs_full = dir_vecs_full / dir_norm
+
+    dir_vecs_3d = dir_vecs_full.reshape(n_psi, n_pixels, 3)
+    psi_3d = psi_deg_full.reshape(n_psi, n_pixels)
+
+    factorized_dirs = np.allclose(dir_vecs_3d, dir_vecs_3d[0:1], rtol=1e-6, atol=1e-6)
+    psi_ref = psi_3d[:, :1]
+    factorized_psi = float(np.max(_wrapped_abs_diff_deg(psi_3d, psi_ref))) < 1e-4
+
+    if factorized_dirs and factorized_psi:
+        return {
+            "mode": "factorized",
+            "rot_deg": np.asarray(grid_3d[0, :, 0], dtype=np.float32),
+            "tilt_deg": np.asarray(grid_3d[0, :, 1], dtype=np.float32),
+            "dir_vecs": np.asarray(dir_vecs_3d[0], dtype=np.float32),
+            "psi_deg": np.asarray(psi_3d[:, 0], dtype=np.float32),
+            "n_pixels": np.asarray(n_pixels, dtype=np.int64),
+            "n_psi": np.asarray(n_psi, dtype=np.int64),
+            "eulers_full": np.asarray(grid_eulers, dtype=np.float32),
+        }
+
+    return {
+        "mode": "full",
+        "dir_vecs_full": np.asarray(dir_vecs_full, dtype=np.float32),
+        "psi_deg_full": np.asarray(psi_deg_full, dtype=np.float32),
+        "n_pixels": np.asarray(n_pixels, dtype=np.int64),
+        "n_psi": np.asarray(n_psi, dtype=np.int64),
+        "eulers_full": np.asarray(grid_eulers, dtype=np.float32),
+    }
 
 
 def rotation_grid_n_in_planes(order: int) -> int:
@@ -87,7 +236,8 @@ def get_rotation_grid(nside_level, n_in_planes=None, matrices=False):
     angles = np.meshgrid(np.arange(m), in_angle_angles)
     theta = z[0][angles[0]]
     phi = z[1][angles[0]]
-    angles = np.stack([theta, phi, angles[1]], axis=-1)
+    # RELION convention: rot=phi (azimuth), tilt=theta (polar), psi=in-plane.
+    angles = np.stack([phi, theta, angles[1]], axis=-1)
     angles = angles.reshape(-1, 3)
     angles = angles / (2 * np.pi) * 360
     if matrices:
@@ -124,10 +274,24 @@ def rotation_indices_to_matrices(indices, healpix_order):
     theta, phi = hp.pix2ang(nside, pixel_idx)
     psi = (2.0 * np.pi / n_psi) * psi_idx
     angles = np.stack(
-        [np.rad2deg(theta), np.rad2deg(phi), np.rad2deg(psi)],
+        [np.rad2deg(phi), np.rad2deg(theta), np.rad2deg(psi)],
         axis=-1,
     )
     return utils.R_from_relion(angles).astype(np.float32)
+
+
+def rotation_indices_to_relion_eulers(indices, healpix_order):
+    """Convert ring-order full-grid indices to RELION Euler angles."""
+    meta = _get_relion_grid_metadata(int(healpix_order))
+    pixel_idx, psi_idx = _split_rotation_indices(indices, healpix_order)
+    return np.stack(
+        [
+            np.asarray(meta["rot_deg"], dtype=np.float32)[pixel_idx],
+            np.asarray(meta["tilt_deg"], dtype=np.float32)[pixel_idx],
+            np.asarray(meta["psi_deg"], dtype=np.float32)[psi_idx],
+        ],
+        axis=-1,
+    ).astype(np.float32)
 
 
 def remap_rotation_indices_to_order(indices, src_order, dst_order):
@@ -306,6 +470,20 @@ def read_relion_model_metadata(model_star_path):
     )
 
 
+def read_relion_direction_prior(model_star_path):
+    """Read RELION's saved orientation distribution from ``model.star``."""
+    import numpy as np
+    import starfile
+
+    data = starfile.read(str(model_star_path))
+    if not isinstance(data, dict) or "model_pdf_orient_class_1" not in data:
+        raise ValueError(f"Missing model_pdf_orient_class_1 in {model_star_path}")
+    df = data["model_pdf_orient_class_1"]
+    if "rlnOrientationDistribution" not in df.columns:
+        raise ValueError(f"Missing rlnOrientationDistribution in {model_star_path}")
+    return np.asarray(df["rlnOrientationDistribution"], dtype=np.float32)
+
+
 def get_healpix_children(parent_pixels, parent_nside_level):
     """Return the 4 child HEALPix pixel indices for each parent pixel.
 
@@ -368,7 +546,7 @@ def get_oversampled_rotation_grid(parent_pixels, parent_nside_level, oversamplin
     pix_idx_flat = pix_idx.ravel()
 
     euler_angles = np.stack(
-        [theta[pix_idx_flat], phi[pix_idx_flat], in_plane_angles[ip_idx.ravel()]],
+        [phi[pix_idx_flat], theta[pix_idx_flat], in_plane_angles[ip_idx.ravel()]],
         axis=-1,
     )
     euler_angles = euler_angles / (2 * np.pi) * 360  # radians → degrees
@@ -381,6 +559,7 @@ def get_oversampled_rotation_grid_from_samples(
     parent_nside_level,
     oversampling_order=1,
     *,
+    random_perturbation=0.0,
     return_rotation_indices=False,
 ):
     """Generate oversampled child orientations from coarse sample indices.
@@ -393,12 +572,17 @@ def get_oversampled_rotation_grid_from_samples(
     Parameters
     ----------
     parent_rotation_indices : array-like of int
-        Indices into the coarse rotation grid. Each index corresponds to a
-        specific ``(healpix_pixel, psi_index)`` sample.
+        Indices into the coarse RELION-parity rotation grid. Each index
+        corresponds to a specific ``(healpix_pixel, psi_index)`` sample with
+        ``healpix_pixel`` interpreted in RELION's NEST ordering.
     parent_nside_level : int
         HEALPix level of the coarse grid.
     oversampling_order : int
         Number of oversampling levels.
+    random_perturbation : float
+        RELION's per-iteration perturbation instance. When nonzero, the child
+        orientations are right-multiplied by the same perturbation rotation as
+        RELION's ``getOrientations``.
 
     Returns
     -------
@@ -420,15 +604,18 @@ def get_oversampled_rotation_grid_from_samples(
             return empty_rot, empty_map, empty_map.copy()
         return empty_rot, empty_map
 
-    coarse_nside = 2**parent_nside_level
-    coarse_n_pixels = hp.nside2npix(coarse_nside)
+    coarse_n_pixels = hp.nside2npix(2**parent_nside_level)
     parent_pixels = parent_rotation_indices % coarse_n_pixels
     parent_psi = parent_rotation_indices // coarse_n_pixels
 
     current_pixels = parent_pixels.copy()
     parent_map = np.arange(len(parent_rotation_indices), dtype=np.int64)
     for level in range(oversampling_order):
-        current_pixels = get_healpix_children(current_pixels, parent_nside_level + level)
+        del level
+        current_pixels = (
+            4 * np.repeat(current_pixels.astype(np.int64, copy=False), 4)
+            + np.tile(np.arange(4, dtype=np.int64), len(current_pixels))
+        )
         parent_map = np.repeat(parent_map, 4)
 
     psi_factor = 2**oversampling_order
@@ -440,7 +627,7 @@ def get_oversampled_rotation_grid_from_samples(
     fine_n_in_planes = rotation_grid_n_in_planes(fine_nside_level)
     fine_psi_step = 2.0 * np.pi / fine_n_in_planes
 
-    theta, phi = hp.pix2ang(fine_nside, current_pixels)
+    theta, phi = hp.pix2ang(fine_nside, current_pixels, nest=True)
     current_parent_psi = parent_psi[parent_map]
     # Match RELION's pushbackOversampledPsiAngles(): oversampled psi samples
     # are midpoints inside the parent psi bin, not rows of the fine global grid.
@@ -458,24 +645,30 @@ def get_oversampled_rotation_grid_from_samples(
 
     euler_angles = np.stack(
         [
-            np.repeat(theta, psi_factor),
             np.repeat(phi, psi_factor),
+            np.repeat(theta, psi_factor),
             psi_child_angles.reshape(-1),
         ],
         axis=-1,
     )
     euler_angles = euler_angles / (2 * np.pi) * 360
-    matrices = utils.R_from_relion(euler_angles)
+    matrices = utils.R_from_relion(euler_angles).astype(np.float32)
+    if abs(float(random_perturbation)) > 1e-12:
+        matrices = apply_relion_rotation_perturbation(
+            matrices,
+            random_perturbation,
+            relion_angular_sampling_deg(parent_nside_level, adaptive_oversampling=0),
+        ).astype(np.float32)
     parent_map = np.repeat(parent_map, psi_factor)
 
     if return_rotation_indices:
         return (
-            matrices.astype(np.float32),
+            matrices,
             parent_map,
             child_rotation_indices.astype(np.int64),
         )
 
-    return matrices.astype(np.float32), parent_map
+    return matrices, parent_map
 
 
 def get_oversampled_translation_grid(parent_translations, pixel_offset, oversampling_order=1):
@@ -522,7 +715,7 @@ def subdivide_healpix_pixels(pixels, nside_level):
 
     Returns:
         angles: float (n_child_pixels * n_in_planes, 3) Euler angles in
-            degrees (theta, phi, psi) for each child orientation.
+            degrees (rot, tilt, psi) for each child orientation.
         child_pixels: int (n_child_pixels,) RING-ordered child pixel indices
             at level ``nside_level + 1``.
     """
@@ -540,7 +733,7 @@ def subdivide_healpix_pixels(pixels, nside_level):
     pix_idx_flat = pix_idx.ravel()
 
     angles = np.stack(
-        [theta[pix_idx_flat], phi[pix_idx_flat], in_plane_angles[ip_idx.ravel()]],
+        [phi[pix_idx_flat], theta[pix_idx_flat], in_plane_angles[ip_idx.ravel()]],
         axis=-1,
     )
     angles = angles / (2 * np.pi) * 360  # radians → degrees
@@ -569,6 +762,21 @@ def get_relion_rotation_grid(order):
     n_dir = hp.nside2npix(2**order)
     n_psi = R.shape[0] // n_dir
     return R.reshape(n_dir, n_psi, 3, 3).transpose(1, 0, 2, 3).reshape(-1, 3, 3)
+
+
+def get_relion_rotation_grid_eulers(order):
+    """Return RELION Euler angles in the same index order as get_relion_rotation_grid."""
+    from recovar.relion_bind._relion_bind_core import get_coarse_orientations
+
+    relion_euler = get_coarse_orientations(order)
+    n_dir = hp.nside2npix(2**order)
+    n_psi = relion_euler.shape[0] // n_dir
+    return (
+        relion_euler.reshape(n_dir, n_psi, 3)
+        .transpose(1, 0, 2)
+        .reshape(-1, 3)
+        .astype(np.float32)
+    )
 
 
 def get_rotation_grid_at_order(order, n_in_planes=None, matrices=True):
@@ -744,58 +952,35 @@ def get_local_rotation_grid_fast(
     sigma_cutoff=3.0,
     *,
     per_image=False,
+    grid_metadata=None,
 ):
-    """Local rotation grid selection via SO(3) axis-angle distance.
+    """RELION-style local rotation selection for the C1 HEALPix x psi grid.
 
-    For each prior rotation matrix, find every grid rotation within
-    ``sigma_cutoff * max(sigma_rot, sigma_psi)`` axis-angle distance.
+    This mirrors the non-helical SPA path in
+    ``HealpixSampling::selectOrientationsWithNonZeroPriorProbability`` for
+    the common auto-refine case used on this branch:
 
-    **Implementation note (Task #101 fix, 2026-04-09):** earlier versions
-    of this function tried to factor the cone selection into independent
-    direction (HEALPix pixel) and psi (in-plane angle) components, then
-    score each candidate via ``log_prior_dir + log_prior_psi``. That
-    approach made two distinct mistakes:
+    - C1 symmetry only
+    - factored direction and psi priors
+    - ``sigma_tilt = sigma_rot``
+    - no bimodal psi search
+    - no multi-body extra priors
 
-    1. The "direction" of a recovar grid matrix is **not** the standard
-       ZYZ view formula `(sin(tilt)*cos(rot), sin(tilt)*sin(rot), cos(tilt))`.
-       Recovar's `R_from_relion` uses an extrinsic ZXZ convention with
-       offsets `[rot+90, tilt, psi-90]` and a `[[1,-1,1],[-1,1,-1],[1,-1,1]]`
-       frame-adjust multiply (`recovar/utils/helpers.py:717`). The actual
-       view direction is::
+    The selected set is the Cartesian product of:
 
-           view = (-cos(psi)*sin(tilt), sin(psi)*sin(tilt), cos(tilt))
+    - directions with ``diffang < sigma_cutoff * max(sigma_rot, sigma_tilt)``
+    - psi angles with ``diffpsi < sigma_cutoff * sigma_psi``
 
-       so it depends on **psi**, not just `(rot, tilt)`. The Task #100
-       fix used the standard formula and got x and y wrong; that left
-       ~49% of priors with <10% cone overlap, including some priors with
-       0 overlap (the cone landed on the antipodal set).
-
-    2. RELION factors the prior into `P(direction) * P(psi)`, but it
-       still requires both diffang and diffpsi to be small individually.
-       Trying to mimic this with a recovar-specific direction definition
-       compounds the bug above.
-
-    Both problems disappear when we work directly in SO(3): the axis-angle
-    distance between two rotation matrices is `arccos((trace(R1^T R2) - 1)/2)`,
-    invariant under the Euler convention. We compute it for every (prior,
-    grid_matrix) pair using a single batched einsum and select the
-    in-cone subset. The full grid of matrices is cached per healpix_order
-    so the cost is one matmul per call (~64 priors × 295k matrices at
-    order 4, well under a millisecond on GPU/CPU).
-
-    The log-prior is computed as a single Gaussian in axis-angle distance
-    with sigma `max(sigma_rot, sigma_psi)`, which matches RELION's
-    "biggest_sigma" convention in `selectOrientationsWithNonZeroPriorProbability`
-    (`healpix_sampling.cpp:769`). This is NOT a perfect match to RELION's
-    factored direction × psi prior, but the SELECTION is now correct
-    regardless of convention, which is the dominant source of error in
-    practice.
+    and the per-rotation log-prior is
+    ``log(direction_prior) + log(psi_prior)`` with both factors normalized
+    exactly as RELION does before the product.
 
     Parameters
     ----------
     prior_rotation_indices : np.ndarray
-        Either full-grid rotation indices of shape ``(n_priors,)`` or
-        exact prior rotation matrices of shape ``(n_priors, 3, 3)``.
+        Either full-grid rotation indices of shape ``(n_priors,)``,
+        explicit RELION Euler angles of shape ``(n_priors, 3)``, or exact
+        prior rotation matrices of shape ``(n_priors, 3, 3)``.
     sigma_rot : float
         Gaussian prior sigma for rotation, **radians**. Used as the
         cone radius scale and the log-prior denominator.
@@ -822,93 +1007,155 @@ def get_local_rotation_grid_fast(
         union, with out-of-cone entries set to ``-1e30``.
     """
     prior_rotation_indices = np.asarray(prior_rotation_indices)
-
-    # --- Reconstruct grid geometry (still needed for fallbacks) ---
-    n_total = rotation_grid_size(healpix_order)
+    healpix_order = int(healpix_order)
+    grid_metadata = build_local_search_grid_metadata(healpix_order) if grid_metadata is None else grid_metadata
+    mode = str(grid_metadata["mode"])
+    n_pixels = int(grid_metadata["n_pixels"])
+    n_psi = int(grid_metadata["n_psi"])
+    n_total = int(n_pixels * n_psi)
 
     if prior_rotation_indices.ndim == 0:
         prior_rotation_indices = prior_rotation_indices.reshape(1)
 
     if prior_rotation_indices.ndim == 1:
-        prior_rotations = rotation_indices_to_matrices(
-            prior_rotation_indices.astype(np.int64),
-            healpix_order,
-        )
-    else:
-        prior_rotations = np.asarray(
-            prior_rotation_indices,
-            dtype=np.float64,
-        ).reshape(-1, 3, 3)
-
-    n_priors = prior_rotations.shape[0]
-    prior_rotations = prior_rotations.astype(np.float64)
-
-    # --- Axis-angle cone selection ---
-    # Combined sigma matches RELION's `biggest_sigma = max(sigma_rot, sigma_tilt)`
-    # at healpix_sampling.cpp:769. The cone is in SO(3) axis-angle distance.
-    biggest_sigma = float(max(sigma_rot, sigma_psi))
-    if biggest_sigma <= 0:
-        # No cone -> include all rotations with zero log-prior.
-        selected_indices = np.arange(n_total, dtype=np.int64)
-        if per_image:
-            log_prior = np.zeros((n_priors, n_total), dtype=np.float32)
+        if "eulers_full" in grid_metadata:
+            prior_eulers = np.asarray(grid_metadata["eulers_full"], dtype=np.float32)[
+                prior_rotation_indices.astype(np.int64)
+            ]
         else:
-            log_prior = np.zeros(n_total, dtype=np.float32)
-        return selected_indices, log_prior
+            prior_eulers = rotation_indices_to_relion_eulers(prior_rotation_indices.astype(np.int64), healpix_order)
+        prior_rot_deg = prior_eulers[:, 0]
+        prior_tilt_deg = prior_eulers[:, 1]
+        prior_psi_deg = prior_eulers[:, 2]
+        prior_rotations = utils.R_from_relion(prior_eulers, degrees=True)
+    elif prior_rotation_indices.ndim == 2 and prior_rotation_indices.shape[-1] == 3:
+        prior_eulers = np.asarray(prior_rotation_indices, dtype=np.float64).reshape(-1, 3)
+        prior_rot_deg = prior_eulers[:, 0]
+        prior_tilt_deg = prior_eulers[:, 1]
+        prior_psi_deg = prior_eulers[:, 2]
+        prior_rotations = utils.R_from_relion(prior_eulers, degrees=True)
+    else:
+        prior_rotations = np.asarray(prior_rotation_indices, dtype=np.float64).reshape(-1, 3, 3)
+        prior_eulers = utils.R_to_relion(prior_rotations, degrees=True)
+        prior_rot_deg = prior_eulers[:, 0]
+        prior_tilt_deg = prior_eulers[:, 1]
+        prior_psi_deg = prior_eulers[:, 2]
 
-    cone_rad = float(sigma_cutoff) * biggest_sigma
+    prior_dir_vecs = np.asarray(prior_rotations[:, :, 2], dtype=np.float64)
+    prior_dir_norm = np.linalg.norm(prior_dir_vecs, axis=1, keepdims=True)
+    prior_dir_norm = np.where(prior_dir_norm > 0.0, prior_dir_norm, 1.0)
+    prior_dir_vecs = prior_dir_vecs / prior_dir_norm
 
-    # Cached full-grid matrices for this healpix order.
-    all_grid_mats = _get_full_grid_matrices(healpix_order)  # (n_total, 3, 3)
-    n_total_grid = all_grid_mats.shape[0]
+    n_priors = int(np.asarray(prior_rot_deg).reshape(-1).shape[0])
+    sigma_rot_deg = float(np.rad2deg(sigma_rot))
+    sigma_psi_deg = float(np.rad2deg(sigma_psi))
+    biggest_sigma_deg = float(max(sigma_rot_deg, sigma_psi_deg))
 
-    # For each prior P, compute axis-angle distance to every grid matrix G:
-    #   d(P, G) = arccos((trace(P^T @ G) - 1) / 2)
-    #
-    # Key trick: trace(P^T @ G) = sum_{i,j} P[i,j] * G[i,j], i.e. the
-    # Frobenius inner product. So all (n_priors, n_total) traces collapse
-    # to a single (n_priors, 9) @ (9, n_total) matmul over the flattened
-    # 3x3 matrix entries — no need to form (n_priors, n_total, 3, 3).
-    inv_two_sigma_sq = 1.0 / (2.0 * biggest_sigma * biggest_sigma)
-    cos_cutoff = float(np.cos(cone_rad))  # cos is monotonically decreasing
+    selected_union = set()
+    prior_entries: list[tuple[np.ndarray, np.ndarray]] = []
 
-    priors_flat = prior_rotations.reshape(n_priors, 9)  # (n_priors, 9)
-    grid_flat = all_grid_mats.reshape(n_total_grid, 9)  # (n_total, 9)
-    traces_all = priors_flat @ grid_flat.T  # (n_priors, n_total)
-    cos_arg_all = (traces_all - 1.0) * 0.5
-    # Mask without arccos: angle <= cone_rad <=> cos(angle) >= cos(cone_rad).
-    in_cone_all = cos_arg_all >= cos_cutoff  # (n_priors, n_total)
-    union_in_cone = np.any(in_cone_all, axis=0)  # (n_total,)
-    selected_indices = np.flatnonzero(union_in_cone).astype(np.int64)
+    if mode == "factorized":
+        dir_vecs = np.asarray(grid_metadata["dir_vecs"], dtype=np.float64)
+        psi_deg_grid = np.asarray(grid_metadata["psi_deg"], dtype=np.float64)
 
+        for i in range(n_priors):
+            if sigma_rot_deg > 0.0:
+                dots = np.clip(dir_vecs @ prior_dir_vecs[i], -1.0, 1.0)
+                diffang = np.rad2deg(np.arccos(dots))
+                dir_mask = diffang < float(sigma_cutoff) * biggest_sigma_deg
+                dir_indices = np.flatnonzero(dir_mask).astype(np.int64)
+                if dir_indices.size == 0:
+                    dir_indices = np.array([int(np.argmin(diffang))], dtype=np.int64)
+                    dir_log_prior = np.zeros(1, dtype=np.float32)
+                else:
+                    dir_log_prior = _normalized_log_weights(diffang[dir_indices], biggest_sigma_deg)
+            else:
+                dir_indices = np.arange(n_pixels, dtype=np.int64)
+                dir_log_prior = np.full(
+                    n_pixels,
+                    -np.log(max(n_pixels, 1)),
+                    dtype=np.float32,
+                )
+
+            if sigma_psi_deg > 0.0:
+                wrapped_prior_psi = float(np.mod(prior_psi_deg[i], 360.0))
+                diffpsi = _wrapped_abs_diff_deg(psi_deg_grid, wrapped_prior_psi)
+                psi_mask = diffpsi < float(sigma_cutoff) * sigma_psi_deg
+                psi_indices = np.flatnonzero(psi_mask).astype(np.int64)
+                if psi_indices.size == 0:
+                    psi_indices = np.array([int(np.argmin(diffpsi))], dtype=np.int64)
+                    psi_log_prior = np.zeros(1, dtype=np.float32)
+                else:
+                    psi_log_prior = _normalized_log_weights(diffpsi[psi_indices], sigma_psi_deg)
+            else:
+                psi_indices = np.arange(n_psi, dtype=np.int64)
+                psi_log_prior = np.full(
+                    n_psi,
+                    -np.log(max(n_psi, 1)),
+                    dtype=np.float32,
+                )
+
+            flat_indices = (psi_indices[:, None] * n_pixels + dir_indices[None, :]).reshape(-1)
+            flat_log_prior = (psi_log_prior[:, None] + dir_log_prior[None, :]).reshape(-1).astype(np.float32)
+            prior_entries.append((flat_indices.astype(np.int64), flat_log_prior))
+            selected_union.update(flat_indices.tolist())
+    else:
+        dir_vecs_full = np.asarray(grid_metadata["dir_vecs_full"], dtype=np.float64)
+        psi_deg_full = np.asarray(grid_metadata["psi_deg_full"], dtype=np.float64)
+        sigma_rot_scale = max(biggest_sigma_deg, np.finfo(np.float64).tiny)
+        sigma_psi_scale = max(sigma_psi_deg, np.finfo(np.float64).tiny)
+
+        for i in range(n_priors):
+            if sigma_rot_deg > 0.0:
+                dots = np.clip(dir_vecs_full @ prior_dir_vecs[i], -1.0, 1.0)
+                diffang = np.rad2deg(np.arccos(dots))
+                dir_mask = diffang < float(sigma_cutoff) * biggest_sigma_deg
+            else:
+                diffang = np.zeros(n_total, dtype=np.float64)
+                dir_mask = np.ones(n_total, dtype=bool)
+
+            if sigma_psi_deg > 0.0:
+                wrapped_prior_psi = float(np.mod(prior_psi_deg[i], 360.0))
+                diffpsi = _wrapped_abs_diff_deg(psi_deg_full, wrapped_prior_psi)
+                psi_mask = diffpsi < float(sigma_cutoff) * sigma_psi_deg
+            else:
+                diffpsi = np.zeros(n_total, dtype=np.float64)
+                psi_mask = np.ones(n_total, dtype=bool)
+
+            joint_mask = dir_mask & psi_mask
+            flat_indices = np.flatnonzero(joint_mask).astype(np.int64)
+            if flat_indices.size == 0:
+                joint_cost = np.zeros(n_total, dtype=np.float64)
+                if sigma_rot_deg > 0.0:
+                    joint_cost += (diffang / sigma_rot_scale) ** 2
+                if sigma_psi_deg > 0.0:
+                    joint_cost += (diffpsi / sigma_psi_scale) ** 2
+                flat_indices = np.array([int(np.argmin(joint_cost))], dtype=np.int64)
+                flat_log_prior = np.zeros(1, dtype=np.float32)
+            else:
+                joint_logw = np.zeros(flat_indices.shape[0], dtype=np.float64)
+                if sigma_rot_deg > 0.0:
+                    joint_logw += -0.5 * (diffang[flat_indices] / sigma_rot_scale) ** 2
+                if sigma_psi_deg > 0.0:
+                    joint_logw += -0.5 * (diffpsi[flat_indices] / sigma_psi_scale) ** 2
+                flat_log_prior = _normalize_log_weights(joint_logw)
+            prior_entries.append((flat_indices.astype(np.int64), flat_log_prior.astype(np.float32)))
+            selected_union.update(flat_indices.tolist())
+
+    selected_indices = np.array(sorted(selected_union), dtype=np.int64)
     if selected_indices.size == 0:
-        # Fallback: pick the single closest grid matrix for each prior so
-        # we never return an empty selection.
-        best_per_prior = np.argmax(cos_arg_all, axis=1)  # (n_priors,)
-        selected_indices = np.unique(best_per_prior).astype(np.int64)
+        selected_indices = np.arange(n_total, dtype=np.int64)
 
-    # Restrict cos_arg to the selected union and compute the log-prior only
-    # there. arccos is the costly trig op; do it once on the small slice.
-    cos_arg_sel = cos_arg_all[:, selected_indices]  # (n_priors, n_selected)
-    np.clip(cos_arg_sel, -1.0, 1.0, out=cos_arg_sel)
-    angles_sel = np.arccos(cos_arg_sel)
-    log_prior = np.where(
-        cos_arg_sel >= cos_cutoff,
-        -(angles_sel**2) * inv_two_sigma_sq,
-        -1e30,
-    )
+    index_to_pos = {int(idx): pos for pos, idx in enumerate(selected_indices.tolist())}
+    log_prior = np.full((n_priors, selected_indices.shape[0]), -1e30, dtype=np.float32)
+
+    for i, (flat_indices, flat_log_prior) in enumerate(prior_entries):
+        positions = np.array([index_to_pos[int(idx)] for idx in flat_indices], dtype=np.int64)
+        log_prior[i, positions] = flat_log_prior
 
     if per_image:
-        out_log_prior = log_prior.astype(np.float32)
-    else:
-        # Per-grid max log-prior across priors. Out-of-cone entries are
-        # -1e30 in every row, so the max over n_priors stays -1e30 for
-        # rotations no prior has selected. After the union restriction
-        # above, every selected index has at least one prior with a
-        # finite value, so the max is well-defined.
-        out_log_prior = np.max(log_prior, axis=0).astype(np.float32)
-
-    return selected_indices, out_log_prior
+        return selected_indices, log_prior
+    return selected_indices, np.max(log_prior, axis=0).astype(np.float32)
 
 
 def get_healpix_neighbors(pixel_idx, nside_level, n_neighbors=8):

@@ -23,3 +23,8 @@ from .adaptive import (
 from .engine_v2 import (
     compute_e_step_weights as compute_e_step_weights,
 )
+from .initial_model_vdam import (
+    GUI_INITIALMODEL_DEFAULTS as GUI_INITIALMODEL_DEFAULTS,
+    InitialModelRunPlan as InitialModelRunPlan,
+    build_initial_model_run_plan as build_initial_model_run_plan,
+)

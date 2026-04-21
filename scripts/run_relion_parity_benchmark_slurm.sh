@@ -38,6 +38,10 @@ HEALPIX_ORDER="${HEALPIX_ORDER:-3}"
 OFFSET_RANGE="${OFFSET_RANGE:-3.0}"
 OFFSET_STEP="${OFFSET_STEP:-1.0}"
 RELION_MPI_RANKS="${RELION_MPI_RANKS:-3}"
+N_IMAGES="${N_IMAGES:-5000}"
+GRID_SIZE="${GRID_SIZE:-128}"
+NOISE_LEVEL="${NOISE_LEVEL:-1.0}"
+RELION_NORMALIZE="${RELION_NORMALIZE:-0}"
 
 cd "$REPO_DIR"
 
@@ -57,11 +61,18 @@ pixi run smoke-import-recovar
 "$PIXI_PY" -c "import pathlib,recovar,jax; repo=pathlib.Path.cwd().resolve(); assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo)+'/'); assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve())"
 
 echo "=== Prepare benchmark dataset ==="
+PREPARE_ARGS=(
+  --output-dir "$DATA_DIR"
+  --n-images "$N_IMAGES"
+  --grid-size "$GRID_SIZE"
+  --noise-level "$NOISE_LEVEL"
+)
+if [ "$RELION_NORMALIZE" = "1" ]; then
+  PREPARE_ARGS+=(--relion-normalize)
+fi
+echo "  n_images=$N_IMAGES grid_size=$GRID_SIZE noise_level=$NOISE_LEVEL relion_normalize=$RELION_NORMALIZE"
 "$PIXI_PY" scripts/prepare_relion_parity_benchmark.py \
-  --output-dir "$DATA_DIR" \
-  --n-images 5000 \
-  --grid-size 128 \
-  --noise-level 1.0
+  "${PREPARE_ARGS[@]}"
 
 mkdir -p "$RELION_REF_DIR" "$RELION_REF_NPZ_DIR" "$OUTPUT_DIR" "$OUR_RESULTS_DIR"
 

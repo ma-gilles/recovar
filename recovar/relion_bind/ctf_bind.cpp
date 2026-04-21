@@ -69,6 +69,46 @@ static py::array_t<double> get_ctf_image(
     return out;
 }
 
+static py::array_t<double> get_ctf_image_resized(
+    double defU,
+    double defV,
+    double defAng,
+    double voltage,
+    double Cs,
+    double Q0,
+    double Bfac,
+    double angpix,
+    int orixdim,
+    int oriydim,
+    int out_xdim,
+    int out_ydim,
+    bool do_ctf_padding,
+    bool do_abs,
+    bool do_damping,
+    double phase_shift,
+    double scale
+) {
+    CTF ctf;
+    ctf.setValues(defU, defV, defAng, voltage, Cs, Q0, Bfac, scale,
+                  phase_shift, /*dose=*/-1.0);
+
+    MultidimArray<RFLOAT> result(out_ydim, out_xdim / 2 + 1);
+    ctf.getFftwImage(result, orixdim, oriydim, angpix,
+                     do_abs,
+                     /*do_only_flip_phases=*/false,
+                     /*do_intact_until_first_peak=*/false,
+                     do_damping,
+                     do_ctf_padding,
+                     /*do_intact_after_first_peak=*/false);
+
+    long ny = YSIZE(result);
+    long nx = XSIZE(result);
+    py::array_t<double> out({ny, nx});
+    auto buf = out.request();
+    std::memcpy(buf.ptr, result.data, ny * nx * sizeof(double));
+    return out;
+}
+
 /**
  * Compute the raw CTF value at a single frequency.
  *
@@ -149,6 +189,32 @@ phase_shift : float
     Phase plate shift in degrees.
 scale : float
     CTF scale factor.
+)doc");
+
+    m.def("get_ctf_image_resized", &get_ctf_image_resized,
+          py::arg("defU"),
+          py::arg("defV"),
+          py::arg("defAng"),
+          py::arg("voltage"),
+          py::arg("Cs"),
+          py::arg("Q0"),
+          py::arg("Bfac") = 0.0,
+          py::arg("angpix") = 1.0,
+          py::arg("orixdim") = 128,
+          py::arg("oriydim") = 128,
+          py::arg("out_xdim") = 128,
+          py::arg("out_ydim") = 128,
+          py::arg("do_ctf_padding") = false,
+          py::arg("do_abs") = false,
+          py::arg("do_damping") = false,
+          py::arg("phase_shift") = 0.0,
+          py::arg("scale") = 1.0,
+          R"doc(
+Compute a RELION FFTW-half CTF image on the original box/pixel scale but
+write it into a smaller output grid.
+
+This matches RELION InitialModel bootstrap, where ``result`` is resized to the
+current image size before calling ``CTF::getFftwImage(..., orixdim, oriydim, ...)``.
 )doc");
 
     m.def("get_ctf_value", &get_ctf_value,
