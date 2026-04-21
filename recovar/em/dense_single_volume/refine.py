@@ -426,6 +426,8 @@ def _compute_significance_batched(
         process_fn=experiment_dataset.process_images,
     )
 
+    # TODO(RELION-parity-debt): w=1 matches RELION's incorrect half-sum.
+    # See engine_v2.py for full explanation. Post-parity: use make_half_image_weights.
     half_weights = (
         jnp.ones(n_half, dtype=jnp.float32) if half_spectrum_scoring else make_half_image_weights(image_shape)
     )
@@ -862,6 +864,7 @@ def refine_single_volume(
     init_scale_corrections=None,
     init_direction_prior=None,
     init_previous_best_translations=None,
+    skip_final_iteration=False,
 ):
     """Multi-iteration EM refinement with FSC-driven resolution management.
 
@@ -1007,6 +1010,7 @@ def refine_single_volume(
             init_scale_corrections=init_scale_corrections,
             init_direction_prior=init_direction_prior,
             init_previous_best_translations=init_previous_best_translations,
+            skip_final_iteration=skip_final_iteration,
         )
 
     # ===================================================================
@@ -1335,6 +1339,7 @@ def _refine_relion_mode(
     init_scale_corrections=None,
     init_direction_prior=None,
     init_previous_best_translations=None,
+    skip_final_iteration=False,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -1350,6 +1355,59 @@ def _refine_relion_mode(
     See docs/relion5_auto_refine_algorithm.md.
     """
     from recovar.reconstruction import noise, regularization, relion_functions
+
+    def _reconstruct_volume_eager(
+        Ft_ctf,
+        Ft_y,
+        vol_shape,
+        padding_factor,
+        tau,
+        tau2_fudge,
+        projection_padding_factor,
+        use_spherical_mask=True,
+        grid_correct=True,
+    ):
+        """Eager (non-JIT) reconstruction matching post_process_from_filter_v2.
+
+        Avoids the massive XLA compilation overhead of JIT-compiling the full
+        256³ FFT + bincount + scatter pipeline as a single graph.  Each step
+        runs as its own small XLA op with negligible per-op compile time.
+        """
+        from recovar.core import fourier_transform_utils as ftu
+        from recovar.core import mask as _mask
+        from recovar.core import padding as _pad
+
+        upsampled_shape = tuple(3 * [vol_shape[0] * padding_factor])
+        valid_indices = (
+            _mask.get_radial_mask(upsampled_shape, radius=upsampled_shape[0] // 2 - 1)
+            .reshape(-1)
+            .astype(Ft_ctf.real.dtype)
+        )
+        Ft_ctf2 = relion_functions.adjust_regularization_relion_style(
+            Ft_ctf.real,
+            upsampled_shape,
+            tau=tau,
+            padding_factor=padding_factor,
+            tau2_fudge=tau2_fudge,
+        )
+        vol = (Ft_y * valid_indices) / Ft_ctf2
+        vol = ftu.get_idft3(vol.reshape(upsampled_shape))
+        vol = _pad.unpad_volume_spatial_domain(
+            vol,
+            upsampled_shape[0] - vol_shape[0],
+        )
+        if use_spherical_mask:
+            vol, _ = _mask.soft_mask_outside_map(vol, cosine_width=3)
+        if grid_correct:
+            gc_pf = projection_padding_factor  # kernel_width=1 for triangular
+            vol, _ = relion_functions.griddingCorrect(
+                vol.reshape(vol_shape),
+                vol_shape[0],
+                gc_pf,
+                order=1,
+            )
+        vol = ftu.get_dft3(vol.reshape(vol_shape))
+        return vol.astype(Ft_y.dtype)
 
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape
@@ -1705,14 +1763,25 @@ def _refine_relion_mode(
             _px = float(cryo.voxel_size) if cryo.voxel_size > 0 else 1.0
             _relion_offset_range = float(_replay_meta["offset_range"]) / _px
             _relion_offset_step = float(_replay_meta["offset_step"]) / _px
-            if state.healpix_order != _relion_hp:
-                logger.info(
-                    "Replay override: healpix_order %d -> %d (from %s)",
-                    state.healpix_order,
-                    _relion_hp,
-                    _star,
-                )
-                state.healpix_order = _relion_hp
+            _capped_hp = min(_relion_hp, state.max_healpix_order)
+            if state.healpix_order != _capped_hp:
+                if _capped_hp < _relion_hp:
+                    logger.info(
+                        "Replay override: healpix_order %d -> %d (RELION %d capped by max_healpix_order=%d, from %s)",
+                        state.healpix_order,
+                        _capped_hp,
+                        _relion_hp,
+                        state.max_healpix_order,
+                        _star,
+                    )
+                else:
+                    logger.info(
+                        "Replay override: healpix_order %d -> %d (from %s)",
+                        state.healpix_order,
+                        _capped_hp,
+                        _star,
+                    )
+                state.healpix_order = _capped_hp
             if (
                 abs(float(state.translation_range) - _relion_offset_range) > 1e-6
                 or abs(float(state.translation_step) - _relion_offset_step) > 1e-6
@@ -2403,24 +2472,27 @@ def _refine_relion_mode(
             )
             mean_variance = mean_signal_variance
 
+        # --- Free previous-iteration means to reclaim GPU memory ---
+        for k in range(2):
+            means[k] = None
+
         # --- Now reconstruct the regularized per-half means from the
         # (post-join) Ft_y / Ft_ctf accumulators.  When PADDING_FACTOR > 1,
         # the engine already backprojected into a (pf*N)³ grid.
+        # Use eager (non-JIT) reconstruction to avoid ~30 min XLA compile
+        # overhead for the monolithic 256³ graph in post_process_from_filter_v2.
+        _t_recon = time.time()
         for k in range(2):
             Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
             Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
-            means[k] = relion_functions.post_process_from_filter_v2(
+            means[k] = _reconstruct_volume_eager(
                 Ft_ctf_k_local,
                 Ft_y_k_local,
                 volume_shape,
                 PADDING_FACTOR,
                 tau=mean_variance,
-                kernel="triangular",
-                use_spherical_mask=True,
-                grid_correct=True,
-                gridding_correct="radial",
                 tau2_fudge=tau2_fudge,
-                gridding_padding_factor=PROJECTION_PADDING_FACTOR,
+                projection_padding_factor=PROJECTION_PADDING_FACTOR,
             ).reshape(-1)
 
             # RELION's solventFlatten (ml_optimiser.cpp:5469): mask the
@@ -2435,6 +2507,7 @@ def _refine_relion_mode(
                     cosine_width=RELION_WIDTH_MASK_EDGE,
                 )
                 means[k] = fourier_transform_utils.get_dft3(vol_real).reshape(-1)
+        logger.info("Regularized reconstruction (2 halves + flatten): %.1fs", time.time() - _t_recon)
 
         significant_counts.append(iter_sig_counts)
 
@@ -2451,40 +2524,31 @@ def _refine_relion_mode(
             global_direction_prior_order = current_healpix_order
 
         # --- Combined Fourier weights for data_vs_prior at next iteration ---
-        # RELION uses the combined (both half-sets) CTF^2 weight for
-        # data_vs_prior.  Store for use at the start of the next iteration.
         Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
 
         # --- Compute unregularized half-maps for FSC and prior ---
-        # With PADDING_FACTOR>1, Ft_ctf/Ft_y are already at (pf*N)³ from
-        # the engine.  post_process_from_filter_v2 does iDFT on the padded
-        # grid and crops back to native size in real space.
+        _t_unreg = time.time()
         unreg_means = [
-            relion_functions.post_process_from_filter_v2(
+            _reconstruct_volume_eager(
                 Ft_ctf_0,
                 Ft_y_0,
                 volume_shape,
                 PADDING_FACTOR,
                 tau=None,
-                kernel="triangular",
-                use_spherical_mask=True,
-                grid_correct=True,
-                gridding_correct="radial",
-                gridding_padding_factor=PROJECTION_PADDING_FACTOR,
+                tau2_fudge=tau2_fudge,
+                projection_padding_factor=PROJECTION_PADDING_FACTOR,
             ),
-            relion_functions.post_process_from_filter_v2(
+            _reconstruct_volume_eager(
                 Ft_ctf_1,
                 Ft_y_1,
                 volume_shape,
                 PADDING_FACTOR,
                 tau=None,
-                kernel="triangular",
-                use_spherical_mask=True,
-                grid_correct=True,
-                gridding_correct="radial",
-                gridding_padding_factor=PROJECTION_PADDING_FACTOR,
+                tau2_fudge=tau2_fudge,
+                projection_padding_factor=PROJECTION_PADDING_FACTOR,
             ),
         ]
+        logger.info("Unregularized reconstruction (2 halves): %.1fs", time.time() - _t_unreg)
 
         # --- Compute FSC between half-maps ---
         fsc = regularization.get_fsc_gpu(
@@ -2883,6 +2947,28 @@ def _refine_relion_mode(
 
         iteration += 1
 
+    if skip_final_iteration:
+        merged_mean = (means[0] + means[1]) / 2
+        return {
+            "mean": merged_mean,
+            "means": means,
+            "fsc": fsc_history[-1] if fsc_history else None,
+            "hard_assignments": hard_assignments,
+            "current_sizes": current_sizes,
+            "fsc_history": fsc_history,
+            "pixel_resolutions": pixel_resolutions,
+            "wall_times": wall_times,
+            "significant_counts": significant_counts,
+            "convergence_state": state,
+            "data_vs_prior_trajectory": data_vs_prior_trajectory,
+            "healpix_order_trajectory": healpix_order_trajectory,
+            "ave_Pmax_trajectory": ave_Pmax_trajectory,
+            "pmax_per_image_history": pmax_per_image_history,
+            "noise_radial_trajectory": noise_radial_trajectory,
+            "tau2_radial_trajectory": tau2_radial_trajectory,
+            "sigma_offset_trajectory": sigma_offset_trajectory,
+        }
+
     # --- RELION's final iteration: do_join_random_halves + do_use_all_data ---
     # After the EM loop finishes (either by convergence or max_iter), RELION
     # runs ONE more iter with:
@@ -2985,18 +3071,14 @@ def _refine_relion_mode(
     # Reconstruct the final volume from the COMBINED Ft_y/Ft_ctf accumulators
     # at the full Nyquist resolution. Skip the join_halves step (we're already
     # combining the two halves into one dataset for this final iter).
-    merged_mean = relion_functions.post_process_from_filter_v2(
+    merged_mean = _reconstruct_volume_eager(
         final_ft_ctf,
         final_ft_y,
         volume_shape,
         PADDING_FACTOR,
         tau=mean_variance,
-        kernel="triangular",
-        use_spherical_mask=True,
-        grid_correct=True,
-        gridding_correct="radial",
         tau2_fudge=tau2_fudge,
-        gridding_padding_factor=PROJECTION_PADDING_FACTOR,
+        projection_padding_factor=PROJECTION_PADDING_FACTOR,
     ).reshape(-1)
     final_iter_elapsed = time.time() - final_iter_t0
     logger.info(
