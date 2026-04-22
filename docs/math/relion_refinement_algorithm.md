@@ -66,10 +66,10 @@ the iteration loop.
 `ml_optimiser.cpp::initialiseGeneral()` (grid setup).
 
 **recovar code**:
-- `refine.py:1293` -- `refine_single_volume()`: public API, dispatches to `_refine_relion_mode`.
-- `refine.py:1776` -- `_refine_relion_mode()`: the iteration loop. Sets up initial
+- `refine.py:448` -- `refine_single_volume()`: public API, dispatches to `_refine_relion_mode`.
+- `refine.py:931` -- `_refine_relion_mode()`: the iteration loop. Sets up initial
   `RefinementState`, computes init FSC, bootstraps `current_size` via
-  `_bootstrap_current_size_relion()` (line 176).
+  `relion_init.py:110` -- `_bootstrap_current_size_relion()`.
 
 **Key state**:
 - `mean` (complex, flat): two half-set volumes in centered Fourier space.
@@ -193,7 +193,7 @@ speedup at early iterations (50x+ fewer pixels at order 2).
   computes the index set of half-spectrum pixels within the frequency window.
 - `fourier_window.py:145` -- `quantize_current_size()`: snaps current_size to an
   allowed grid for JIT cache efficiency.
-- `refine.py:1261` -- `fsc_to_current_size()`: converts an FSC curve to the
+- `relion_init.py:129` -- `fsc_to_current_size()`: converts an FSC curve to the
   current_size threshold (using FSC > 1/7).
 
 ---
@@ -305,13 +305,13 @@ three sub-steps:
 - `regularization.py:75` -- `compute_relion_prior()`: computes tau2 from the FSC
   between two half-set unregularized volumes. Matches RELION's
   `BackProjector::reconstruct()` prior computation.
-- `regularization.py:755` -- `compute_data_vs_prior()`: computes the per-shell
+- `regularization.py:671` -- `compute_data_vs_prior()`: computes the per-shell
   `Ft_ctf / tau2` ratio. Used to determine current resolution.
-- `regularization.py:793` -- `resolution_from_data_vs_prior()`: finds the shell
+- `regularization.py:709` -- `resolution_from_data_vs_prior()`: finds the shell
   where `data_vs_prior > 1` (signal dominates noise), returns current resolution.
 - `relion_functions.py:503` -- `adjust_regularization_relion_style()`: applies
   RELION's tau2 fudge factor and regularization adjustments.
-- `regularization.py:980` -- `join_halves_at_low_resolution()`: below a threshold
+- `regularization.py:895` -- `join_halves_at_low_resolution()`: below a threshold
   (40 A default), replaces each half-map with the average of both halves. Prevents
   half-set divergence at low frequencies.
 
@@ -411,7 +411,7 @@ local search transition), `healpix_sampling.cpp::getLocalSearchGrid()`.
 - `convergence.py:691` -- `refine_angular_sampling(state)`: increments healpix_order,
   updates angular_step, adjusts translation range/step, and enables local search
   when order >= 4.
-- `refine.py:354` -- `_run_grouped_local_search_em()`: the local-search EM iteration.
+- `refine.py:90` -- `_run_grouped_local_search_em()`: the local-search EM iteration.
   Groups images by their best prior orientation into GPU-friendly batches, builds
   per-group HEALPix neighborhoods, and runs `run_em_v2` with image-specific rotation
   priors.
@@ -420,12 +420,12 @@ local search transition), `healpix_sampling.cpp::getLocalSearchGrid()`.
   lookup to find all orientations within the search radius.
 - `sampling.py:102` -- `build_local_search_grid_metadata()`: precomputes the local
   search grid (neighbor lists + Gaussian prior weights) for a set of seed directions.
-- `refine.py:268` -- `_partition_local_search_groups()`: groups images by their
+- `local_search.py:92` -- `_partition_local_search_groups()`: groups images by their
   seed direction so that images with similar neighborhoods share the same rotation
   grid on the GPU.
-- `refine.py:1113` -- `make_relion_translation_log_prior()`: computes Gaussian
+- `relion_priors.py:16` -- `make_relion_translation_log_prior()`: computes Gaussian
   translation log-prior centered on each image's previous best translation.
-- `refine.py:1215` -- `make_relion_direction_log_prior()`: computes per-direction
+- `relion_priors.py:118` -- `make_relion_direction_log_prior()`: computes per-direction
   prior weights from the accumulated posterior over directions. Used for direction
   prior in local search.
 
@@ -468,7 +468,7 @@ per image), a 50-200x reduction.
   caller (`_refine_relion_mode` or `_run_grouped_local_search_em`), which calls
   `run_em_v2` twice: once for coarse scoring, once for fine scoring with the
   oversampled grid restricted to significant orientations.
-- `refine.py:708` -- `_compute_significance_batched()`: batched wrapper that calls
+- `significance.py:12` -- `_compute_significance_batched()`: batched wrapper that calls
   `find_significant_rotations` per image and collects the significant rotation
   indices for pass 2.
 
@@ -485,9 +485,9 @@ After convergence, the two half-set volumes are:
 iteration, followed by `ml_optimiser.cpp::writeOutput()`.
 
 **recovar code**:
-- `regularization.py:980` -- `join_halves_at_low_resolution()`: replaces each
+- `regularization.py:895` -- `join_halves_at_low_resolution()`: replaces each
   half-map with the average of both below the join threshold.
-- `refine.py:1776` -- `_refine_relion_mode()`: the final iteration block
+- `refine.py:931` -- `_refine_relion_mode()`: the final iteration block
   (after convergence) performs reconstruction, computes the final FSC, and
   returns the merged volume along with all refinement metadata.
 - `relion_functions.py:716` -- `relion_reconstruct()`: final Wiener
