@@ -121,17 +121,17 @@ def main():
         return vectors / norms
 
     def _view_direction_error_deg_from_rotations(lhs_rot, rhs_rot):
-        lhs_view = _normalize_rows(np.asarray(lhs_rot, dtype=np.float64)[:, :, 2])
-        rhs_view = _normalize_rows(np.asarray(rhs_rot, dtype=np.float64)[:, :, 2])
+        lhs_view = _normalize_rows(np.asarray(lhs_rot, dtype=np.float64)[:, 2, :])
+        rhs_view = _normalize_rows(np.asarray(rhs_rot, dtype=np.float64)[:, 2, :])
         return _angular_distance_from_dots(np.sum(lhs_view * rhs_view, axis=1))
 
     def _inplane_error_deg_from_rotations(lhs_rot, rhs_rot):
         lhs_rot = np.asarray(lhs_rot, dtype=np.float64)
         rhs_rot = np.asarray(rhs_rot, dtype=np.float64)
-        rhs_view = _normalize_rows(rhs_rot[:, :, 2])
+        rhs_view = _normalize_rows(rhs_rot[:, 2, :])
 
-        lhs_x = lhs_rot[:, :, 0]
-        rhs_x = rhs_rot[:, :, 0]
+        lhs_x = lhs_rot[:, 0, :]
+        rhs_x = rhs_rot[:, 0, :]
         lhs_x = lhs_x - np.sum(lhs_x * rhs_view, axis=1, keepdims=True) * rhs_view
         rhs_x = rhs_x - np.sum(rhs_x * rhs_view, axis=1, keepdims=True) * rhs_view
         lhs_x = _normalize_rows(lhs_x)
@@ -394,6 +394,8 @@ def main():
         trans_h1 = None
         trans_h2 = None
 
+    angle_cols = ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"]
+
     # ---- Sigma offset from model star ----
     general = model_h1["model_general"]
     sigma_offset_angst = float(
@@ -479,7 +481,6 @@ def main():
         rot_h2_iter = None
         euler_h1_iter = None
         euler_h2_iter = None
-        angle_cols = ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"]
         if all(col in relion_iter_df.columns for col in angle_cols):
             eulers_iter = np.stack([np.array(relion_iter_df[col], dtype=np.float64) for col in angle_cols], axis=1)
             rotations_iter = utils.R_from_relion(eulers_iter).astype(np.float32)
@@ -611,6 +612,8 @@ def main():
             save_dict[f"pmax_per_image_iter_{i:03d}"] = np.array(pmax_arr, dtype=np.float32)
     if result.get("healpix_order_trajectory"):
         save_dict["healpix_order_trajectory"] = np.array(result["healpix_order_trajectory"])
+    if result.get("wall_times"):
+        save_dict["wall_times_trajectory"] = np.array(result["wall_times"], dtype=np.float64)
     if result.get("sigma_offset_trajectory"):
         save_dict["sigma_offset_trajectory"] = np.array(result["sigma_offset_trajectory"], dtype=np.float64)
     if result.get("sigma_offset_used_trajectory"):

@@ -21,6 +21,8 @@ from recovar.em.dense_single_volume.engine_v2 import run_em_v2
 from recovar.em.dense_single_volume.refine import (
     _bootstrap_current_size_relion,
     _compute_significance_batched,
+    _local_search_chunk_size,
+    _local_search_rotation_block_size,
     clamp_relion_coarse_image_size,
     collapse_rotation_posterior_to_direction_prior,
     compute_coarse_image_size,
@@ -82,6 +84,20 @@ def _make_rotations(n, seed=42):
     det = np.linalg.det(q)
     q[det < 0] *= -1
     return q.astype(np.float32)
+
+
+def test_local_search_uses_single_image_chunks():
+    assert _local_search_chunk_size(1) == 1
+    assert _local_search_chunk_size(64) == 1
+    assert _local_search_chunk_size(512) == 1
+
+
+def test_local_search_rotation_block_size_uses_power_of_two_buckets():
+    assert _local_search_rotation_block_size(0, 5000) == 1
+    assert _local_search_rotation_block_size(12, 5000) == 16
+    assert _local_search_rotation_block_size(17, 5000) == 32
+    assert _local_search_rotation_block_size(3000, 5000) == 4096
+    assert _local_search_rotation_block_size(5001, 5000) == 5000
 
 
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):
@@ -237,7 +253,7 @@ class TestRelionModeSmokeTest:
         direction_prior = np.linspace(1.0, float(n_pixels), n_pixels, dtype=np.float32)
         direction_prior /= direction_prior.sum()
         rotations = np.asarray(get_relion_rotation_grid(order), dtype=np.float32)
-        view_dirs = rotations[:, :, 2].astype(np.float64)
+        view_dirs = rotations[:, 2, :].astype(np.float64)
         view_dirs /= np.linalg.norm(view_dirs, axis=1, keepdims=True)
         expected_pixels = hp.vec2pix(
             2**order,
@@ -266,7 +282,7 @@ class TestRelionModeSmokeTest:
             random_perturbation=0.3,
             angular_sampling_deg=360.0 / (6 * 2**order),
         ).astype(np.float32)
-        view_dirs = perturbed_rotations[:, :, 2].astype(np.float64)
+        view_dirs = perturbed_rotations[:, 2, :].astype(np.float64)
         view_dirs /= np.linalg.norm(view_dirs, axis=1, keepdims=True)
         expected_pixels = hp.vec2pix(
             2**order,

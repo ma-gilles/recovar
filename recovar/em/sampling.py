@@ -32,7 +32,9 @@ def _get_relion_grid_metadata(healpix_order: int) -> dict[str, np.ndarray]:
     rot_deg = np.asarray(grid_eulers[0, :, 0], dtype=np.float32)
     tilt_deg = np.asarray(grid_eulers[0, :, 1], dtype=np.float32)
     psi_deg = np.asarray(grid_eulers[:, 0, 2], dtype=np.float32)
-    dir_vecs = np.asarray(grid_rotations[0, :, :, 2], dtype=np.float32)
+    # RELION's viewing direction is the third ROW of the rotation matrix,
+    # not the third column.
+    dir_vecs = np.asarray(grid_rotations[0, :, 2, :], dtype=np.float32)
     dir_norm = np.linalg.norm(dir_vecs, axis=1, keepdims=True)
     dir_norm = np.where(dir_norm > 0.0, dir_norm, 1.0)
     dir_vecs = dir_vecs / dir_norm
@@ -111,7 +113,37 @@ def _normalize_log_weights(log_weights: np.ndarray) -> np.ndarray:
     return (log_weights - (max_logw + np.log(total))).astype(np.float32)
 
 
-def build_local_search_grid_metadata(healpix_order: int, grid_eulers: np.ndarray | None = None) -> dict[str, np.ndarray]:
+def relion_psi_from_rotation_matrices(rotations: np.ndarray) -> np.ndarray:
+    """Extract RELION psi angles from rotation matrices.
+
+    This avoids a full SciPy ZXZ decomposition for the common non-singular
+    case. Rows near the ZXZ singularity fall back to ``utils.R_to_relion``.
+    """
+    rotations = np.asarray(rotations, dtype=np.float64).reshape(-1, 3, 3)
+    frame_adjust = np.array([[1, -1, 1], [-1, 1, -1], [1, -1, 1]], dtype=np.float64)
+    adjusted = rotations * frame_adjust
+
+    psi = np.empty(rotations.shape[0], dtype=np.float64)
+    xy_norm = np.hypot(adjusted[:, 0, 2], adjusted[:, 1, 2])
+    nonsingular = xy_norm > 1e-12
+
+    if np.any(nonsingular):
+        psi[nonsingular] = np.rad2deg(
+            np.arctan2(adjusted[nonsingular, 0, 2], -adjusted[nonsingular, 1, 2])
+        ) + 90.0
+    if np.any(~nonsingular):
+        psi[~nonsingular] = utils.R_to_relion(rotations[~nonsingular], degrees=True)[:, 2]
+
+    psi = (psi + 180.0) % 360.0 - 180.0
+    return psi.astype(np.float32)
+
+
+def build_local_search_grid_metadata(
+    healpix_order: int,
+    grid_eulers: np.ndarray | None = None,
+    *,
+    grid_rotations: np.ndarray | None = None,
+) -> dict[str, np.ndarray]:
     """Prepare local-search metadata for either the canonical or a custom grid.
 
     When ``grid_eulers`` is provided, it must be a full-grid table in the same
@@ -136,6 +168,31 @@ def build_local_search_grid_metadata(healpix_order: int, grid_eulers: np.ndarray
     n_pixels = hp.nside2npix(2**healpix_order)
     n_psi = rotation_grid_n_in_planes(healpix_order)
     expected = n_pixels * n_psi
+    if grid_rotations is not None:
+        grid_rotations_full = np.asarray(grid_rotations, dtype=np.float32).reshape(-1, 3, 3)
+        if grid_rotations_full.shape[0] != expected:
+            raise ValueError(
+                f"grid_rotations must have shape ({expected}, 3, 3) for healpix_order={healpix_order}, "
+                f"got {grid_rotations_full.shape}",
+            )
+    else:
+        grid_rotations_full = None
+
+    if grid_eulers is None:
+        if grid_rotations_full is None:
+            raise ValueError("grid_eulers or grid_rotations must be provided for custom local-search metadata")
+        dir_vecs_full = np.asarray(grid_rotations_full[:, 2, :], dtype=np.float32)
+        dir_norm = np.linalg.norm(dir_vecs_full, axis=1, keepdims=True)
+        dir_norm = np.where(dir_norm > 0.0, dir_norm, 1.0)
+        dir_vecs_full = dir_vecs_full / dir_norm
+        return {
+            "mode": "full",
+            "dir_vecs_full": np.asarray(dir_vecs_full, dtype=np.float32),
+            "psi_deg_full": relion_psi_from_rotation_matrices(grid_rotations_full),
+            "n_pixels": np.asarray(n_pixels, dtype=np.int64),
+            "n_psi": np.asarray(n_psi, dtype=np.int64),
+        }
+
     grid_eulers = np.asarray(grid_eulers, dtype=np.float32).reshape(-1, 3)
     if grid_eulers.shape[0] != expected:
         raise ValueError(
@@ -144,11 +201,10 @@ def build_local_search_grid_metadata(healpix_order: int, grid_eulers: np.ndarray
         )
 
     grid_3d = grid_eulers.reshape(n_psi, n_pixels, 3)
-    rot_deg_full = np.mod(grid_eulers[:, 0].astype(np.float64), 360.0)
-    tilt_deg_full = grid_eulers[:, 1].astype(np.float64)
     psi_deg_full = np.mod(grid_eulers[:, 2].astype(np.float64), 360.0)
-    grid_rotations_full = utils.R_from_relion(grid_eulers, degrees=True).astype(np.float32)
-    dir_vecs_full = np.asarray(grid_rotations_full[:, :, 2], dtype=np.float32)
+    if grid_rotations_full is None:
+        grid_rotations_full = utils.R_from_relion(grid_eulers, degrees=True).astype(np.float32)
+    dir_vecs_full = np.asarray(grid_rotations_full[:, 2, :], dtype=np.float32)
     dir_norm = np.linalg.norm(dir_vecs_full, axis=1, keepdims=True)
     dir_norm = np.where(dir_norm > 0.0, dir_norm, 1.0)
     dir_vecs_full = dir_vecs_full / dir_norm
@@ -265,13 +321,14 @@ def rotation_indices_to_matrices(indices, healpix_order):
 
     The indexing convention matches :func:`get_rotation_grid`: the grid is
     flattened with psi as the slow axis and HEALPix pixel as the fast axis,
-    so ``index = psi_idx * n_pixels + pixel_idx``.
+    so ``index = psi_idx * n_pixels + pixel_idx`` with the pixel index in
+    RELION's NEST ordering.
     """
     nside = 2**healpix_order
     n_psi = rotation_grid_n_in_planes(healpix_order)
     pixel_idx, psi_idx = _split_rotation_indices(indices, healpix_order)
 
-    theta, phi = hp.pix2ang(nside, pixel_idx)
+    theta, phi = hp.pix2ang(nside, pixel_idx, nest=True)
     psi = (2.0 * np.pi / n_psi) * psi_idx
     angles = np.stack(
         [np.rad2deg(phi), np.rad2deg(theta), np.rad2deg(psi)],
@@ -1041,7 +1098,7 @@ def get_local_rotation_grid_fast(
         prior_tilt_deg = prior_eulers[:, 1]
         prior_psi_deg = prior_eulers[:, 2]
 
-    prior_dir_vecs = np.asarray(prior_rotations[:, :, 2], dtype=np.float64)
+    prior_dir_vecs = np.asarray(prior_rotations[:, 2, :], dtype=np.float64)
     prior_dir_norm = np.linalg.norm(prior_dir_vecs, axis=1, keepdims=True)
     prior_dir_norm = np.where(prior_dir_norm > 0.0, prior_dir_norm, 1.0)
     prior_dir_vecs = prior_dir_vecs / prior_dir_norm
@@ -1104,43 +1161,75 @@ def get_local_rotation_grid_fast(
         psi_deg_full = np.asarray(grid_metadata["psi_deg_full"], dtype=np.float64)
         sigma_rot_scale = max(biggest_sigma_deg, np.finfo(np.float64).tiny)
         sigma_psi_scale = max(sigma_psi_deg, np.finfo(np.float64).tiny)
+        log_prior_full = np.full((n_priors, n_total), -1e30, dtype=np.float32)
+        wrapped_prior_psi_deg = np.mod(np.asarray(prior_psi_deg, dtype=np.float64), 360.0)
+        cutoff_dir_deg = float(sigma_cutoff) * biggest_sigma_deg
+        cutoff_psi_deg = float(sigma_cutoff) * sigma_psi_deg
+        block_size = 8
 
-        for i in range(n_priors):
+        for start in range(0, n_priors, block_size):
+            stop = min(start + block_size, n_priors)
+            block = slice(start, stop)
+
             if sigma_rot_deg > 0.0:
-                dots = np.clip(dir_vecs_full @ prior_dir_vecs[i], -1.0, 1.0)
+                dots = np.clip(np.asarray(prior_dir_vecs[block], dtype=np.float64) @ dir_vecs_full.T, -1.0, 1.0)
                 diffang = np.rad2deg(np.arccos(dots))
-                dir_mask = diffang < float(sigma_cutoff) * biggest_sigma_deg
+                joint_mask = diffang < cutoff_dir_deg
             else:
-                diffang = np.zeros(n_total, dtype=np.float64)
-                dir_mask = np.ones(n_total, dtype=bool)
+                diffang = np.zeros((stop - start, n_total), dtype=np.float64)
+                joint_mask = np.ones((stop - start, n_total), dtype=bool)
 
             if sigma_psi_deg > 0.0:
-                wrapped_prior_psi = float(np.mod(prior_psi_deg[i], 360.0))
-                diffpsi = _wrapped_abs_diff_deg(psi_deg_full, wrapped_prior_psi)
-                psi_mask = diffpsi < float(sigma_cutoff) * sigma_psi_deg
+                diffpsi = _wrapped_abs_diff_deg(psi_deg_full[None, :], wrapped_prior_psi_deg[block, None])
+                joint_mask &= diffpsi < cutoff_psi_deg
             else:
-                diffpsi = np.zeros(n_total, dtype=np.float64)
-                psi_mask = np.ones(n_total, dtype=bool)
+                diffpsi = np.zeros((stop - start, n_total), dtype=np.float64)
 
-            joint_mask = dir_mask & psi_mask
-            flat_indices = np.flatnonzero(joint_mask).astype(np.int64)
-            if flat_indices.size == 0:
-                joint_cost = np.zeros(n_total, dtype=np.float64)
+            row_has_support = np.any(joint_mask, axis=1)
+            if np.any(row_has_support):
+                joint_logw = np.zeros((stop - start, n_total), dtype=np.float64)
                 if sigma_rot_deg > 0.0:
-                    joint_cost += (diffang / sigma_rot_scale) ** 2
+                    joint_logw += -0.5 * (diffang / sigma_rot_scale) ** 2
                 if sigma_psi_deg > 0.0:
-                    joint_cost += (diffpsi / sigma_psi_scale) ** 2
-                flat_indices = np.array([int(np.argmin(joint_cost))], dtype=np.int64)
-                flat_log_prior = np.zeros(1, dtype=np.float32)
-            else:
-                joint_logw = np.zeros(flat_indices.shape[0], dtype=np.float64)
+                    joint_logw += -0.5 * (diffpsi / sigma_psi_scale) ** 2
+
+                support_mask = joint_mask[row_has_support]
+                support_logw = joint_logw[row_has_support]
+                support_logw = np.where(support_mask, support_logw, -np.inf)
+                max_logw = np.max(support_logw, axis=1, keepdims=True)
+                weights = np.exp(support_logw - max_logw)
+                sums = np.sum(weights, axis=1, keepdims=True)
+                normalized = np.where(
+                    support_mask,
+                    support_logw - (max_logw + np.log(sums)),
+                    -1e30,
+                ).astype(np.float32)
+                block_prior = log_prior_full[block]
+                block_prior[row_has_support] = normalized
+                log_prior_full[block] = block_prior
+
+            if np.any(~row_has_support):
+                fallback_rows = np.flatnonzero(~row_has_support)
+                joint_cost = np.zeros((fallback_rows.shape[0], n_total), dtype=np.float64)
                 if sigma_rot_deg > 0.0:
-                    joint_logw += -0.5 * (diffang[flat_indices] / sigma_rot_scale) ** 2
+                    joint_cost += (diffang[fallback_rows] / sigma_rot_scale) ** 2
                 if sigma_psi_deg > 0.0:
-                    joint_logw += -0.5 * (diffpsi[flat_indices] / sigma_psi_scale) ** 2
-                flat_log_prior = _normalize_log_weights(joint_logw)
-            prior_entries.append((flat_indices.astype(np.int64), flat_log_prior.astype(np.float32)))
-            selected_union.update(flat_indices.tolist())
+                    joint_cost += (diffpsi[fallback_rows] / sigma_psi_scale) ** 2
+                fallback_indices = np.argmin(joint_cost, axis=1)
+                block_prior = log_prior_full[block]
+                block_prior[fallback_rows, fallback_indices] = 0.0
+                log_prior_full[block] = block_prior
+
+        selected_mask = np.any(log_prior_full > -1e29, axis=0)
+        selected_indices = np.flatnonzero(selected_mask).astype(np.int64)
+        if selected_indices.size == 0:
+            selected_indices = np.arange(n_total, dtype=np.int64)
+            log_prior = np.full((n_priors, n_total), -np.log(max(n_total, 1)), dtype=np.float32)
+        else:
+            log_prior = log_prior_full[:, selected_indices]
+        if per_image:
+            return selected_indices, log_prior
+        return selected_indices, np.max(log_prior, axis=0).astype(np.float32)
 
     selected_indices = np.array(sorted(selected_union), dtype=np.int64)
     if selected_indices.size == 0:
