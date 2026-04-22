@@ -193,16 +193,13 @@ def _bootstrap_current_size_relion(init_current_size: int, ori_size: int, incr_s
 
 
 def _local_search_chunk_size(image_batch_size: int) -> int:
-    """Return the exact local-search grouping size.
+    """Return the seed group size for exact local-search packing.
 
-    Using large image groups destroys local-search sparsity because the
-    union of many image-specific neighborhoods quickly approaches the full
-    HEALPix grid. Keeping the groups per-image preserves the exact same
-    candidate support while dramatically shrinking the rotations scored for
-    most particles.
+    We start from moderately sized orientation-sorted image groups and split
+    them recursively until the exact union of local rotations stays within
+    the hard cap enforced by `_local_search_max_union_rotations`.
     """
-    _ = image_batch_size
-    return 1
+    return int(max(1, min(int(image_batch_size), 64)))
 
 
 def _local_search_rotation_block_size(local_rotation_count: int, rotation_block_size: int) -> int:
@@ -231,6 +228,89 @@ def _local_search_engine_rotation_block_size(rotation_block_size: int) -> int:
     candidate set exact while making the compiled score kernels much smaller.
     """
     return int(max(64, min(int(rotation_block_size), 1024)))
+
+
+def _local_search_max_union_rotations(rotation_block_size: int) -> int:
+    """Return the largest exact local-search union allowed in one engine call."""
+    return int(4 * _local_search_engine_rotation_block_size(rotation_block_size))
+
+
+def _prior_rotations_to_relion_eulers(prior_rotations: np.ndarray) -> np.ndarray:
+    """Convert prior rotations to RELION Euler angles."""
+    prior_rotations = np.asarray(prior_rotations)
+    if prior_rotations.ndim == 2 and prior_rotations.shape[1] == 3:
+        return np.asarray(prior_rotations, dtype=np.float32).reshape(-1, 3)
+    if prior_rotations.ndim == 3 and prior_rotations.shape[1:] == (3, 3):
+        return utils.R_to_relion(np.asarray(prior_rotations, dtype=np.float32), degrees=True).astype(np.float32)
+    raise ValueError(f"prior_rotations must have shape (n,3) or (n,3,3), got {prior_rotations.shape}")
+
+
+def _local_search_sort_order(prior_rotations: np.ndarray, healpix_order: int) -> np.ndarray:
+    """Sort images by coarse viewing direction and psi to improve local support overlap."""
+    prior_eulers = _prior_rotations_to_relion_eulers(prior_rotations)
+    prior_rotation_mats = utils.R_from_relion(prior_eulers, degrees=True).astype(np.float32)
+    prior_dir_vecs = np.asarray(prior_rotation_mats[:, 2, :], dtype=np.float64)
+    prior_dir_norm = np.linalg.norm(prior_dir_vecs, axis=1, keepdims=True)
+    prior_dir_norm = np.where(prior_dir_norm > 0.0, prior_dir_norm, 1.0)
+    prior_dir_vecs = prior_dir_vecs / prior_dir_norm
+    dir_pixels = hp.vec2pix(
+        2**int(healpix_order),
+        prior_dir_vecs[:, 0],
+        prior_dir_vecs[:, 1],
+        prior_dir_vecs[:, 2],
+    )
+    n_psi = rotation_grid_n_in_planes(healpix_order)
+    psi_step = 360.0 / float(n_psi)
+    psi_bins = np.floor(np.mod(prior_eulers[:, 2], 360.0) / psi_step + 0.5).astype(np.int64) % n_psi
+    return np.lexsort((psi_bins, dir_pixels)).astype(np.int64)
+
+
+def _partition_local_search_groups(
+    prior_rotations: np.ndarray,
+    sigma_rot: float,
+    sigma_psi: float,
+    healpix_order: int,
+    image_batch_size: int,
+    rotation_block_size: int,
+    grid_metadata: dict[str, np.ndarray],
+) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
+    """Build exact local-search groups whose rotation unions stay below a hard cap."""
+    n_images = int(np.asarray(prior_rotations).shape[0])
+    if n_images == 0:
+        return []
+
+    seed_group_size = _local_search_chunk_size(image_batch_size)
+    max_union_rotations = _local_search_max_union_rotations(rotation_block_size)
+    processing_order = _local_search_sort_order(prior_rotations, healpix_order)
+    groups: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
+
+    def _split_group(group_image_indices: np.ndarray) -> None:
+        local_indices, local_log_prior = get_local_rotation_grid_fast(
+            np.asarray(prior_rotations)[group_image_indices],
+            sigma_rot,
+            sigma_psi,
+            healpix_order,
+            sigma_cutoff=3.0,
+            per_image=True,
+            grid_metadata=grid_metadata,
+        )
+        if group_image_indices.shape[0] <= 1 or int(local_indices.shape[0]) <= max_union_rotations:
+            groups.append(
+                (
+                    np.asarray(group_image_indices, dtype=np.int64),
+                    np.asarray(local_indices, dtype=np.int64),
+                    np.asarray(local_log_prior, dtype=np.float32),
+                )
+            )
+            return
+        mid = max(1, group_image_indices.shape[0] // 2)
+        _split_group(group_image_indices[:mid])
+        _split_group(group_image_indices[mid:])
+
+    for start in range(0, n_images, seed_group_size):
+        _split_group(processing_order[start : start + seed_group_size])
+
+    return groups
 
 
 def _pad_local_search_rotations(
@@ -389,24 +469,21 @@ def _run_grouped_local_search_em(
     )
     metadata_build_time = time.time() - metadata_t0
 
-    chunk_size = _local_search_chunk_size(image_batch_size)
-    for chunk_start in range(0, n_images, chunk_size):
-        chunk_stop = min(chunk_start + chunk_size, n_images)
-        group_image_indices = np.arange(chunk_start, chunk_stop, dtype=np.int64)
+    selector_t0 = time.time()
+    grouped_local_search = _partition_local_search_groups(
+        prior_rotations,
+        sigma_rot,
+        sigma_psi,
+        healpix_order,
+        image_batch_size,
+        rotation_block_size,
+        local_grid_metadata,
+    )
+    selector_time += time.time() - selector_t0
+
+    for group_image_indices, local_indices, local_log_prior in grouped_local_search:
         n_chunks += 1
         chunk_sizes.append(len(group_image_indices))
-
-        selector_t0 = time.time()
-        local_indices, local_log_prior = get_local_rotation_grid_fast(
-            prior_rotations[group_image_indices],
-            sigma_rot,
-            sigma_psi,
-            healpix_order,
-            sigma_cutoff=3.0,
-            per_image=True,
-            grid_metadata=local_grid_metadata,
-        )
-        selector_time += time.time() - selector_t0
         local_rotations = rotation_grid_rotations[local_indices]
         # C1 (RELION-parity): use the explicit sigma_offset_angstrom from the
         # caller (which is the data-driven value updated each iter) without
