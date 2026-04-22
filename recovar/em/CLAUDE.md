@@ -166,17 +166,21 @@ em/
 ├── iterations.py            # E_M_batches_2 orchestrator, split_E_M_v2
 ├── states.py                # EMState, SGDState, HeterogeneousEMState
 ├── sampling.py              # HEALPix rotation grids, translation grids
+├── noise.py                 # RELION-parity noise estimation
+├── regularization.py        # tau2 prior, FSC, Wiener regularization
 ├── heterogeneity.py         # Low-rank heterogeneity EM (H/B matrices, PCA)
-└── dense_single_volume/     # Clean extraction of the dense homogeneous path
-    ├── types.py             # DensePoseGrid, DenseEMPlan, MeanStats
-    ├── plan.py              # Centralized memory planner
-    ├── projection_cache.py  # Forward slice precomputation
-    ├── posterior.py          # E-step wrapper
-    ├── accumulate.py         # M-step wrapper
-    ├── solver.py             # RELION-style Wiener solve wrapper
-    ├── engine.py             # Original orchestrator (wraps old code path)
-    ├── engine_fused.py       # Fused E+M engine (2.5× faster)
-    └── engine_v2.py          # Two-pass JIT engine with blockwise normalization
+└── dense_single_volume/     # Dense homogeneous refinement (RELION-parity)
+    ├── refine.py            # Core loop: refine_single_volume, _refine_relion_mode
+    ├── engine_v2.py         # Two-pass JIT engine: E-step scoring + M-step accumulation
+    └── refine_dev_helpers/  # Supporting modules (black-box from algorithm perspective)
+        ├── types.py         # MeanStats, RelionStats, NoiseStats, EMProfileStats
+        ├── convergence.py   # Angular/translational convergence detection
+        ├── adaptive.py      # Two-pass adaptive oversampling (significance pruning)
+        ├── fourier_window.py# Fourier cropping to current resolution
+        ├── local_search.py  # Local search helper functions
+        ├── relion_priors.py # Prior construction for RELION mode
+        ├── relion_init.py   # Initialization / coarse-size helpers
+        └── significance.py  # Batched significance computation
 ```
 
 ## Key Computations
