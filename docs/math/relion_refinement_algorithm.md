@@ -452,9 +452,15 @@ the estimated angular accuracy (`acc_rot`, from the posterior width).
 
 ### 9c. How does local search work?
 
-In local search, instead of evaluating ALL rotations in the HEALPix grid for every
-image (which becomes infeasible at order >= 4 with 221k+ rotations), each image
-searches only in a neighborhood around its previous best orientation.
+Local search is still full soft-weighted EM — the same `run_em_v2` engine runs the
+two-pass E-step (scoring + logsumexp normalization) and M-step (weighted
+backprojection). The only change is **which rotations each image evaluates**: instead
+of ALL rotations in the grid (infeasible at order >= 4 with 221k+ rotations), each
+image scores only a ~100-1500 rotation neighborhood around its previous best
+orientation. The Gaussian rotation prior drives out-of-neighborhood rotations to
+zero posterior weight, so the soft posterior over the neighborhood is the effective
+posterior. The M-step accumulates `Ft_y` and `Ft_ctf` using these soft weights
+exactly as in global search.
 
 **Neighborhood construction** --
 [`sampling.py:772`](../../recovar/em/sampling.py#L772) -- `get_local_rotation_grid_fast()`:
