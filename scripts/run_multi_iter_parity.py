@@ -87,6 +87,36 @@ def main():
         default=None,
         help="Override RELION's adaptive oversample fraction. Default: read _rlnAdaptiveOversampleFraction from optimiser.star.",
     )
+    parser.add_argument(
+        "--local_search_profile",
+        choices=["auto", "on", "off"],
+        default="auto",
+        help="Control grouped local-search profile collection. 'auto' profiles only when intermediates are enabled.",
+    )
+    parser.add_argument(
+        "--local_search_projection_reuse",
+        choices=["on", "off"],
+        default="on",
+        help="Toggle pass-1 to pass-2 projection reuse in grouped exact local search.",
+    )
+    parser.add_argument(
+        "--local_search_fused_windowed_adjoint",
+        choices=["on", "off"],
+        default="on",
+        help="Toggle the fused windowed-adjoint path in grouped exact local search.",
+    )
+    parser.add_argument(
+        "--local_search_force_single_image_groups",
+        choices=["on", "off"],
+        default="off",
+        help="Force grouped exact local search to use one image per group for debugging.",
+    )
+    parser.add_argument(
+        "--local_search_bucket_rotation_blocks",
+        choices=["on", "off"],
+        default="on",
+        help="Toggle power-of-two local-rotation bucketing/padding in grouped exact local search.",
+    )
     args = parser.parse_args()
 
     import jax.numpy as jnp
@@ -561,6 +591,24 @@ def main():
     elif args.gt_volume is not None:
         print(f"  GT volume requested but not found: {args.gt_volume}")
 
+    local_search_return_profile = None
+    if args.local_search_profile == "on":
+        local_search_return_profile = True
+    elif args.local_search_profile == "off":
+        local_search_return_profile = False
+    local_search_reuse_pass1_projections = args.local_search_projection_reuse == "on"
+    local_search_fused_windowed_adjoint = args.local_search_fused_windowed_adjoint == "on"
+    local_search_force_single_image_groups = args.local_search_force_single_image_groups == "on"
+    local_search_bucket_rotation_blocks = args.local_search_bucket_rotation_blocks == "on"
+    print(
+        "  Local-search debug toggles: "
+        f"profile={args.local_search_profile}, "
+        f"projection_reuse={'on' if local_search_reuse_pass1_projections else 'off'}, "
+        f"fused_windowed_adjoint={'on' if local_search_fused_windowed_adjoint else 'off'}, "
+        f"single_image_groups={'on' if local_search_force_single_image_groups else 'off'}, "
+        f"bucket_rotation_blocks={'on' if local_search_bucket_rotation_blocks else 'off'}"
+    )
+
     # ---- Run ----
     print(f"\nRunning {args.max_iter} iterations...")
     t0 = time.time()
@@ -602,6 +650,11 @@ def main():
         replay_iteration_overrides=replay_iteration_overrides,
         save_intermediates_dir=save_intermediates_dir,
         skip_final_iteration=args.skip_final_iteration,
+        local_search_return_profile=local_search_return_profile,
+        local_search_reuse_pass1_projections=local_search_reuse_pass1_projections,
+        local_search_fused_windowed_adjoint=local_search_fused_windowed_adjoint,
+        local_search_force_single_image_groups=local_search_force_single_image_groups,
+        local_search_bucket_rotation_blocks=local_search_bucket_rotation_blocks,
     )
     elapsed = time.time() - t0
     print(f"\nCompleted {args.max_iter} iterations in {elapsed:.1f}s")
@@ -616,6 +669,11 @@ def main():
         "n_half2_particles": np.int32(len(np.where(our_subsets == 2)[0])),
         "adaptive_fraction": np.float64(adaptive_fraction),
         "max_significants": np.int32(max_significants),
+        "local_search_profile_mode": np.array(args.local_search_profile),
+        "local_search_projection_reuse": np.bool_(local_search_reuse_pass1_projections),
+        "local_search_fused_windowed_adjoint": np.bool_(local_search_fused_windowed_adjoint),
+        "local_search_force_single_image_groups": np.bool_(local_search_force_single_image_groups),
+        "local_search_bucket_rotation_blocks": np.bool_(local_search_bucket_rotation_blocks),
     }
     if result.get("ave_Pmax_trajectory"):
         save_dict["ave_Pmax_trajectory"] = np.array(result["ave_Pmax_trajectory"])
