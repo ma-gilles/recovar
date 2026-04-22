@@ -69,3 +69,32 @@ class NoiseStats(NamedTuple):
     wsum_sigma2_noise: jax.Array
     wsum_img_power: jax.Array
     sumw: float
+
+
+class EMProfileStats(NamedTuple):
+    """Host-side timing and work counters for one ``run_em_v2`` call.
+
+    These values are diagnostic only and are intended for profiling the
+    grouped local-search path without changing numerical behavior.
+    """
+
+    preprocess_s: float
+    pass1_projection_s: float
+    pass1_score_s: float
+    pass1_logsumexp_s: float
+    pass2_projection_s: float
+    pass2_score_s: float
+    mstep_s: float
+    window_scatter_s: float
+    adjoint_y_s: float
+    adjoint_ctf_s: float
+    noise_s: float
+    host_stats_s: float
+    n_images: int
+    n_trans: int
+    n_rot: int
+    n_rot_padded: int
+    n_blocks: int
+    n_windowed: int
+    use_window: bool
+    reused_pass1_projections: bool

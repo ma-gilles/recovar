@@ -375,6 +375,7 @@ def _run_grouped_local_search_em(
     projection_padding_factor=1,
     reconstruction_padding_factor=1,
     use_float64_scoring=False,
+    return_profile=False,
 ):
     """Run batched exact local search on the fine HEALPix grid.
 
@@ -456,6 +457,12 @@ def _run_grouped_local_search_em(
     em_time = 0.0
     total_bucket_rotations = 0
     max_bucket_rotations = 0
+    chunk_local_rotations = []
+    chunk_padded_rotations = []
+    chunk_valid_pairs = []
+    chunk_union_pairs = []
+    chunk_padded_pairs = []
+    em_phase_totals = None
     # The local-search selector must operate on the actual trial grid that will
     # be scored for this iteration. When the caller has already applied
     # SamplingPerturbation to `rotation_grid_eulers`, using canonical unperturbed
@@ -513,6 +520,14 @@ def _run_grouped_local_search_em(
             ((padded_rotations.shape[0] + local_rotation_block_size - 1) // local_rotation_block_size)
             * local_rotation_block_size
         )
+        valid_pair_count = int(np.count_nonzero(np.asarray(local_log_prior) > -1e20))
+        union_pair_count = int(len(group_image_indices) * actual_local_rotation_count)
+        padded_pair_count = int(len(group_image_indices) * padded_total_rotations)
+        chunk_local_rotations.append(int(actual_local_rotation_count))
+        chunk_padded_rotations.append(int(padded_total_rotations))
+        chunk_valid_pairs.append(valid_pair_count)
+        chunk_union_pairs.append(union_pair_count)
+        chunk_padded_pairs.append(padded_pair_count)
         total_bucket_rotations += padded_total_rotations
         max_bucket_rotations = max(max_bucket_rotations, int(local_rotation_block_size))
         run_em_outputs = run_em_v2(
@@ -535,15 +550,31 @@ def _run_grouped_local_search_em(
             projection_padding_factor=projection_padding_factor,
             reconstruction_padding_factor=reconstruction_padding_factor,
             use_float64_scoring=use_float64_scoring,
+            return_profile=return_profile,
+            reuse_pass1_projections=True,
+            fused_windowed_adjoint=True,
         )
         em_time += time.time() - em_t0
         if accumulate_noise:
-            _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g = run_em_outputs
+            if return_profile:
+                _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g, em_profile_g = run_em_outputs
+            else:
+                _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g = run_em_outputs
             accum_noise_wsum += np.asarray(noise_stats_g.wsum_sigma2_noise, dtype=np.float64)
             accum_img_power += np.asarray(noise_stats_g.wsum_img_power, dtype=np.float64)
             accum_sumw += float(noise_stats_g.sumw)
         else:
-            _, ha_local, Ft_y_g, Ft_ctf_g, stats_g = run_em_outputs
+            if return_profile:
+                _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, em_profile_g = run_em_outputs
+            else:
+                _, ha_local, Ft_y_g, Ft_ctf_g, stats_g = run_em_outputs
+
+        if return_profile:
+            profile_dict = em_profile_g._asdict()
+            if em_phase_totals is None:
+                em_phase_totals = {key: 0.0 for key in profile_dict}
+            for key, value in profile_dict.items():
+                em_phase_totals[key] += float(value)
 
         Ft_y_total = Ft_y_total + Ft_y_g
         Ft_ctf_total = Ft_ctf_total + Ft_ctf_g
@@ -605,8 +636,68 @@ def _run_grouped_local_search_em(
             wsum_img_power=jnp.asarray(accum_img_power, dtype=jnp.float32),
             sumw=float(accum_sumw),
         )
-        return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats, noise_stats
-    return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats
+        profile_summary = None
+        if return_profile:
+            total_valid_pairs = float(np.sum(chunk_valid_pairs))
+            total_union_pairs = float(np.sum(chunk_union_pairs))
+            total_padded_pairs = float(np.sum(chunk_padded_pairs))
+            profile_summary = {
+                "metadata_build_time_s": np.float64(metadata_build_time),
+                "selector_time_s": np.float64(selector_time),
+                "translation_prior_time_s": np.float64(translation_prior_time),
+                "em_time_s": np.float64(em_time),
+                "n_chunks": np.int32(n_chunks),
+                "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
+                "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
+                "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
+                "chunk_valid_pairs": np.asarray(chunk_valid_pairs, dtype=np.int64),
+                "chunk_union_pairs": np.asarray(chunk_union_pairs, dtype=np.int64),
+                "chunk_padded_pairs": np.asarray(chunk_padded_pairs, dtype=np.int64),
+                "union_waste_fraction": np.float64(
+                    0.0 if total_union_pairs == 0 else 1.0 - total_valid_pairs / total_union_pairs
+                ),
+                "padded_waste_fraction": np.float64(
+                    0.0 if total_padded_pairs == 0 else 1.0 - total_valid_pairs / total_padded_pairs
+                ),
+                "padding_only_waste_fraction": np.float64(
+                    0.0 if total_padded_pairs == 0 else (total_padded_pairs - total_union_pairs) / total_padded_pairs
+                ),
+            }
+            if em_phase_totals is not None:
+                for key, value in em_phase_totals.items():
+                    profile_summary[f"em_{key}"] = np.asarray(value)
+        return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats, noise_stats, profile_summary
+    profile_summary = None
+    if return_profile:
+        total_valid_pairs = float(np.sum(chunk_valid_pairs))
+        total_union_pairs = float(np.sum(chunk_union_pairs))
+        total_padded_pairs = float(np.sum(chunk_padded_pairs))
+        profile_summary = {
+            "metadata_build_time_s": np.float64(metadata_build_time),
+            "selector_time_s": np.float64(selector_time),
+            "translation_prior_time_s": np.float64(translation_prior_time),
+            "em_time_s": np.float64(em_time),
+            "n_chunks": np.int32(n_chunks),
+            "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
+            "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
+            "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
+            "chunk_valid_pairs": np.asarray(chunk_valid_pairs, dtype=np.int64),
+            "chunk_union_pairs": np.asarray(chunk_union_pairs, dtype=np.int64),
+            "chunk_padded_pairs": np.asarray(chunk_padded_pairs, dtype=np.int64),
+            "union_waste_fraction": np.float64(
+                0.0 if total_union_pairs == 0 else 1.0 - total_valid_pairs / total_union_pairs
+            ),
+            "padded_waste_fraction": np.float64(
+                0.0 if total_padded_pairs == 0 else 1.0 - total_valid_pairs / total_padded_pairs
+            ),
+            "padding_only_waste_fraction": np.float64(
+                0.0 if total_padded_pairs == 0 else (total_padded_pairs - total_union_pairs) / total_padded_pairs
+            ),
+        }
+        if em_phase_totals is not None:
+            for key, value in em_phase_totals.items():
+                profile_summary[f"em_{key}"] = np.asarray(value)
+    return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats, profile_summary
 
 
 # ---------------------------------------------------------------------------
@@ -2669,7 +2760,8 @@ def _refine_relion_mode(
                     safe_ibs,
                     safe_rbs,
                 )
-                Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k = _run_grouped_local_search_em(
+                grouped_local_profile_k = None
+                grouped_outputs = _run_grouped_local_search_em(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
@@ -2692,10 +2784,23 @@ def _refine_relion_mode(
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
                     use_float64_scoring=True,
+                    return_profile=save_intermediates_dir is not None,
                 )
+                if len(grouped_outputs) == 6:
+                    Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k, grouped_local_profile_k = grouped_outputs
+                else:
+                    Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k = grouped_outputs
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
                 coarse_ha[k] = ha_k
+                if save_intermediates_dir is not None and grouped_local_profile_k is not None:
+                    np.savez_compressed(
+                        os.path.join(
+                            save_intermediates_dir,
+                            f"it{iteration:03d}_half{k + 1}_local_profile.npz",
+                        ),
+                        **grouped_local_profile_k,
+                    )
 
             elif use_adaptive:
                 # --- PASS 1: Coarse significance pruning ---
