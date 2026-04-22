@@ -2,7 +2,7 @@
 
 These functions handle the mechanics of grouping images by their prior
 orientations and building GPU-friendly rotation grids for exact local
-angular search.  They are called exclusively by ``_run_grouped_local_search_em``
+angular search.  They are called exclusively by ``_run_local_search_iteration``
 in ``refine.py``.
 """
 
@@ -146,7 +146,7 @@ def _pad_local_search_rotations(
 
     The padded rotations are masked out with a ``-1e30`` log-prior so the
     posterior over the real candidates is unchanged. This lets the local
-    path reuse a small number of compiled ``run_em_v2`` shapes instead of
+    path reuse a small number of compiled ``run_em`` shapes instead of
     recompiling for every distinct neighborhood size.
     """
     local_rotations = np.asarray(local_rotations, dtype=np.float32).reshape(-1, 3, 3)

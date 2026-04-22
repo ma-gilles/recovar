@@ -16,12 +16,12 @@ pytest.importorskip("jax")
 import healpy as hp
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.engine_v2 import run_em_v2
-from recovar.em.dense_single_volume.refine import (
+from recovar.em.dense_single_volume.em_engine import run_em
+from recovar.em.dense_single_volume.iteration_loop import (
     refine_single_volume,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.convergence import RefinementState
-from recovar.em.dense_single_volume.refine_dev_helpers.local_search import (
+from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+from recovar.em.dense_single_volume.helpers.local_search import (
     _local_search_chunk_size,
     _local_search_engine_rotation_block_size,
     _local_search_max_union_rotations,
@@ -29,21 +29,21 @@ from recovar.em.dense_single_volume.refine_dev_helpers.local_search import (
     _pad_local_search_rotations,
     _partition_local_search_groups,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.relion_init import (
+from recovar.em.dense_single_volume.helpers.resolution import (
     _bootstrap_current_size_relion,
     clamp_relion_coarse_image_size,
     compute_coarse_image_size,
     should_skip_adaptive_pass2,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.relion_priors import (
+from recovar.em.dense_single_volume.helpers.orientation_priors import (
     collapse_rotation_posterior_to_direction_prior,
     make_relion_direction_log_prior,
     make_relion_translation_log_prior,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.significance import (
+from recovar.em.dense_single_volume.helpers.significance import (
     _compute_significance_batched,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.types import NoiseStats, RelionStats
+from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.sampling import (
     apply_relion_rotation_perturbation,
     get_relion_rotation_grid,
@@ -158,7 +158,7 @@ def test_pad_local_search_rotations_caps_large_neighborhoods_without_recompiling
 
 
 def test_partition_local_search_groups_keeps_small_exact_unions_together(monkeypatch):
-    import recovar.em.dense_single_volume.refine_dev_helpers.local_search as local_search_mod
+    import recovar.em.dense_single_volume.helpers.local_search as local_search_mod
 
     def fake_selector(
         prior_rotation_indices,
@@ -195,7 +195,7 @@ def test_partition_local_search_groups_keeps_small_exact_unions_together(monkeyp
 
 
 def test_partition_local_search_groups_splits_large_exact_unions(monkeypatch):
-    import recovar.em.dense_single_volume.refine_dev_helpers.local_search as local_search_mod
+    import recovar.em.dense_single_volume.helpers.local_search as local_search_mod
 
     def fake_selector(
         prior_rotation_indices,
@@ -531,7 +531,7 @@ class TestRelionModeSmokeTest:
 
         expected_per_half = []
         for dataset in half_datasets:
-            _, _, _, _, stats = run_em_v2(
+            _, _, _, _, stats = run_em(
                 dataset,
                 init_volume,
                 init_tau,
@@ -581,7 +581,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """Adaptive RELION mode should pass the explicit particle diameter through."""
-        import recovar.em.dense_single_volume.refine as refine_mod
+        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         recorded = {"particle_diameter": None}
         original_compute_coarse_image_size = refine_mod.compute_coarse_image_size
@@ -626,7 +626,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """Adaptive pass 1 must receive RELION image corrections and pre-shifts."""
-        import recovar.em.dense_single_volume.refine as refine_mod
+        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         recorded = {
             "image_corrections": [],
@@ -748,7 +748,7 @@ class TestRelionModeSmokeTest:
             dtype=jnp.float32,
         )
         half_datasets[0]._images = np.zeros_like(half_datasets[0]._images)
-        uniform_stats = run_em_v2(
+        uniform_stats = run_em(
             half_datasets[0],
             jnp.zeros_like(init_volume),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
@@ -761,7 +761,7 @@ class TestRelionModeSmokeTest:
             return_stats=True,
         )[4]
         biased_prior = np.log(np.array([100.0, 1.0, 1.0], dtype=np.float32))
-        biased_stats = run_em_v2(
+        biased_stats = run_em(
             half_datasets[0],
             jnp.zeros_like(init_volume),
             jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
@@ -831,7 +831,7 @@ class TestRelionModeSmokeTest:
         image_pre_shifts = np.array([[1.5, -0.5], [-1.0, 1.25]], dtype=np.float32)
         current_size = 6
 
-        _, expected_ha, _, _ = run_em_v2(
+        _, expected_ha, _, _ = run_em(
             dataset,
             init_volume,
             init_tau,
@@ -958,7 +958,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """RELION mode should derive current_size from FSC-derived SSNR logic."""
-        import recovar.em.dense_single_volume.refine as refine_mod
+        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         def fail_old_dvp(*args, **kwargs):
             raise AssertionError("RELION mode should not call compute_data_vs_prior")
@@ -1052,7 +1052,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """When pass-1 significance is dense, RELION mode should bypass sparse pass 2."""
-        import recovar.em.dense_single_volume.refine as refine_mod
+        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         rotations_many = _make_rotations(20, seed=123)
         captured = {"n_rot": None}
@@ -1111,7 +1111,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """Exact mode should batch dense pass 2 instead of calling sparse per image."""
-        import recovar.em.dense_single_volume.refine as refine_mod
+        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         rotations_many = _make_rotations(20, seed=456)
         dense_calls = {"count": 0}
@@ -1129,7 +1129,7 @@ class TestRelionModeSmokeTest:
             )
 
         def fake_dense_pass2(*args, **kwargs):
-            from recovar.em.dense_single_volume.refine_dev_helpers.types import NoiseStats
+            from recovar.em.dense_single_volume.helpers.types import NoiseStats
 
             dataset = args[0]
             n_images = dataset.n_units
@@ -1198,7 +1198,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """RELION mode should forward adaptive pruning kwargs to pass 1."""
-        import recovar.em.dense_single_volume.refine as refine_mod
+        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         rotations_many = _make_rotations(20, seed=321)
         captured = {}
@@ -1251,7 +1251,7 @@ class TestRelionModeSmokeTest:
         monkeypatch,
     ):
         """Pass 1 should start from the coarse RELION HEALPix order, not a fine caller grid."""
-        import recovar.em.dense_single_volume.refine as refine_mod
+        import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
         captured = {"grid_order": None}
 
@@ -1379,7 +1379,7 @@ def test_local_search_uses_fine_rotation_grid_when_oversampling_is_enabled(
     monkeypatch,
 ):
     """Local search must use the fine-order grid when oversampling is enabled."""
-    import recovar.em.dense_single_volume.refine as refine_mod
+    import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     grid_calls = []
@@ -1448,7 +1448,7 @@ def test_local_search_uses_fine_rotation_grid_when_oversampling_is_enabled(
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "_run_grouped_local_search_em", fake_grouped_local_search)
+    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
@@ -1496,7 +1496,7 @@ def test_local_search_uses_negative_rounded_previous_offsets_for_translation_pri
     monkeypatch,
 ):
     """Local-search translation priors must be centered at -ROUND(old_offset)."""
-    import recovar.em.dense_single_volume.refine as refine_mod
+    import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     prev_h1 = np.array([[0.5, -0.25], [1.0, 0.75]], dtype=np.float32)
@@ -1514,7 +1514,7 @@ def test_local_search_uses_negative_rounded_previous_offsets_for_translation_pri
         order = int(order)
         return np.zeros((order_sizes[order], 3), dtype=np.float32)
 
-    def fake_run_em_v2(
+    def fake_run_em(
         experiment_dataset,
         mean,
         mean_variance,
@@ -1608,8 +1608,8 @@ def test_local_search_uses_negative_rounded_previous_offsets_for_translation_pri
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "run_em_v2", fake_run_em_v2)
-    monkeypatch.setattr(refine_mod, "_run_grouped_local_search_em", fake_grouped_local_search)
+    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
+    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         refine_mod,
         "_compute_significance_batched",
@@ -1665,14 +1665,14 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
     monkeypatch,
 ):
     """hp4 should enter local search immediately when previous best rotations exist."""
-    import recovar.em.dense_single_volume.refine as refine_mod
+    import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     dense_calls = []
     local_calls = []
     prev_h1 = np.zeros((half_datasets[0].n_units, 3), dtype=np.float32)
     prev_h2 = np.zeros((half_datasets[1].n_units, 3), dtype=np.float32)
 
-    def fake_run_em_v2(
+    def fake_run_em(
         experiment_dataset,
         mean,
         mean_variance,
@@ -1767,8 +1767,8 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
             ),
         )
 
-    monkeypatch.setattr(refine_mod, "run_em_v2", fake_run_em_v2)
-    monkeypatch.setattr(refine_mod, "_run_grouped_local_search_em", fake_grouped_local_search)
+    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
+    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
@@ -1822,14 +1822,14 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
     monkeypatch,
 ):
     """Initial previous-best eulers should skip the dense hp4 bootstrap."""
-    import recovar.em.dense_single_volume.refine as refine_mod
+    import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     dense_calls = []
     local_calls = []
     prev_h1 = np.zeros((half_datasets[0].n_units, 3), dtype=np.float32)
     prev_h2 = np.zeros((half_datasets[1].n_units, 3), dtype=np.float32)
 
-    def fake_run_em_v2(
+    def fake_run_em(
         experiment_dataset,
         mean,
         mean_variance,
@@ -1924,8 +1924,8 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
             ),
         )
 
-    monkeypatch.setattr(refine_mod, "run_em_v2", fake_run_em_v2)
-    monkeypatch.setattr(refine_mod, "_run_grouped_local_search_em", fake_grouped_local_search)
+    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
+    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
@@ -1973,13 +1973,13 @@ def test_relion_mode_writes_absolute_translations_from_rounded_previous_offset(
     monkeypatch,
 ):
     """RELION-mode writeback should use ROUND(old_offset) + delta."""
-    import recovar.em.dense_single_volume.refine as refine_mod
+    import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     prev_h1 = np.array([[0.5, -0.25], [0.0, 0.75]], dtype=np.float32)
     prev_h2 = np.array([[-0.4, 0.3], [0.6, -0.2]], dtype=np.float32)
     chosen_trans = np.asarray(translations[1], dtype=np.float32)
 
-    def fake_run_em_v2(
+    def fake_run_em(
         experiment_dataset,
         mean,
         mean_variance,
@@ -2011,7 +2011,7 @@ def test_relion_mode_writes_absolute_translations_from_rounded_previous_offset(
             ),
         )
 
-    monkeypatch.setattr(refine_mod, "run_em_v2", fake_run_em_v2)
+    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
 
     result = refine_single_volume(
         half_datasets,
@@ -2056,7 +2056,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     monkeypatch,
 ):
     """Oversampled local-search assignments must be decoded on the fine grid."""
-    import recovar.em.dense_single_volume.refine as refine_mod
+    import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
     fine_idx = order_sizes[5] - 1
@@ -2077,7 +2077,7 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         vals = np.arange(order_sizes[order], dtype=np.float32)
         return np.stack([vals, vals + 100.0, vals + 200.0], axis=1)
 
-    def fake_run_em_v2(
+    def fake_run_em(
         experiment_dataset,
         mean,
         mean_variance,
@@ -2175,8 +2175,8 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "run_em_v2", fake_run_em_v2)
-    monkeypatch.setattr(refine_mod, "_run_grouped_local_search_em", fake_grouped_local_search)
+    monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
+    monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",

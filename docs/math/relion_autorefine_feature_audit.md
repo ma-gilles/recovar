@@ -27,14 +27,14 @@ Update this file every time a binding validates or disproves parity.
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
 | 1 | Read image + apply gain/defect | ml_optimiser.cpp:5840 | Partial | `data_io/` handles gain | — | recovar skips defect correction |
-| 2 | Soft circular mask (particle_diameter) | ml_optimiser.cpp:5893 | Yes | `core/mask.py:relion_soft_image_mask`, `refine.py` | �� | Binding P2: 93 tests, RELION C++ softMaskOutsideMap vs recovar smooth_circular_mask at atol=1e-12. Wired into `_refine_relion_mode` via image_mask override. |
-| 3 | FFT of masked image (for E-step) | ml_optimiser.cpp:5920 | Yes | `engine_v2.py` FFT in preprocess | — | |
+| 2 | Soft circular mask (particle_diameter) | ml_optimiser.cpp:5893 | Yes | `core/mask.py:relion_soft_image_mask`, `refine.py` | �� | Binding P2: 93 tests, RELION C++ softMaskOutsideMap vs recovar smooth_circular_mask at atol=1e-12. Wired into `_run_relion_iteration_loop` via image_mask override. |
+| 3 | FFT of masked image (for E-step) | ml_optimiser.cpp:5920 | Yes | `em_engine.py` FFT in preprocess | — | |
 | 4 | FFT of unmasked image (for M-step) | ml_optimiser.cpp:5927 | No | — | — | recovar uses same image for both |
 | 5 | selfTranslate (beam-tilt phase ramp) | ml_optimiser.cpp:5935 | No | — | — | Zero effect for SPA w/o beam tilt |
 | 6 | demodulatePhase (aberration correction) | ml_optimiser.cpp:5940 | No | — | — | Zero for standard optics |
 | 7 | divideByMtf (detector MTF correction) | ml_optimiser.cpp:5945 | No | — | — | Not provided in simulated data |
 | 8 | CTF image (2× padded box → downsample) | ctf.cpp:314 | No | recovar computes at image size directly | **DIVERGENT** | Binding P1: sign convention CTF_relion=-CTF_recovar (cancels with vol sign flip); 2× padding produces max diff ~1.0 vs unpadded; padded CTF exceeds [-1,1] at small boxes |
-| 9 | 1/σ² noise weighting per pixel | ml_optimiser.cpp:5960 | Yes | `engine_v2.py` sigma2_noise weighting | ✓ | Composite test: RELION Minvsigma2=1/(2σ²) vs recovar 1/σ² with -0.5 score factor → identical posteriors (max_diff=1e-17) |
+| 9 | 1/σ² noise weighting per pixel | ml_optimiser.cpp:5960 | Yes | `em_engine.py` sigma2_noise weighting | ✓ | Composite test: RELION Minvsigma2=1/(2σ²) vs recovar 1/σ² with -0.5 score factor → identical posteriors (max_diff=1e-17) |
 | 10 | windowFourierTransform (current_size crop) | fftw.h:809 | Yes | `fourier_window.py` index-based | ✓ | Binding P3: RELION rectangular crop (2112 px) + Mresol_fine radial mask = 1683 scored px; recovar radial mask = 1689 px — only 6-pixel (0.4%) Nyquist boundary diff |
 
 ## Projector Setup
@@ -50,18 +50,18 @@ Update this file every time a binding validates or disproves parity.
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
 | 14 | Phase-shift images (translations) | fftw.cpp:762 | Yes | `geometry.py:translate_images:167` | ✓ | Binding E3: RELION vs numpy <1e-12; RELION vs recovar <1e-10 (excl. Nyquist ky sign ambiguity) |
-| 15 | ‖img − CTF·proj‖²/σ² per shell | ml_optimiser.cpp:7098 | Yes | `engine_v2.py:_e_step_block_scores` | ✓ | Binding E4: diff2 decomposition exact (rel_err<1e-15); cross-term GEMM formula matches per-pixel (<1e-15); Parseval (translation invariance of batch_norm) verified. |
+| 15 | ‖img − CTF·proj‖²/σ² per shell | ml_optimiser.cpp:7098 | Yes | `em_engine.py:_e_step_block_scores` | ✓ | Binding E4: diff2 decomposition exact (rel_err<1e-15); cross-term GEMM formula matches per-pixel (<1e-15); Parseval (translation invariance of batch_norm) verified. |
 | 16 | First-iter CC scoring (hard assignment) | ml_optimiser.cpp:7414 | No | — | — | recovar uses soft Bayesian iter 1 |
-| 17 | exp(−diff2) × priors → posteriors | ml_optimiser.cpp:7704 | Yes | `engine_v2.py:_update_logsumexp` | ✓ | Binding E5: standalone C++ reimplementation, 5 tests, exact parity (max_diff<1e-14) |
-| 18 | pdf_orientation prior term | ml_optimiser.cpp:7780 | Yes | `engine_v2.py` rotation_log_prior | — | |
-| 19 | pdf_offset prior term | ml_optimiser.cpp:7780 | Yes | `engine_v2.py` translation_log_prior | — | |
+| 17 | exp(−diff2) × priors → posteriors | ml_optimiser.cpp:7704 | Yes | `em_engine.py:_update_logsumexp` | ✓ | Binding E5: standalone C++ reimplementation, 5 tests, exact parity (max_diff<1e-14) |
+| 18 | pdf_orientation prior term | ml_optimiser.cpp:7780 | Yes | `em_engine.py` rotation_log_prior | — | |
+| 19 | pdf_offset prior term | ml_optimiser.cpp:7780 | Yes | `em_engine.py` translation_log_prior | — | |
 | 20 | Significance pruning (adaptive OS pass 2) | ml_optimiser.cpp:7850 | Yes | `refine.py` adaptive_oversampling | — | Union-of-images, not per-image |
 
 ## E-step: Accumulation (storeWeightedSums)
 
 | # | RELION operation | RELION source | Ported? | recovar location | Validated? | Notes |
 |---|-----------------|---------------|---------|------------------|------------|-------|
-| 21 | Σ w_i · CTF·img → Fourier accumulators | ml_optimiser.cpp:8241 | Yes | `engine_v2.py:_m_step_block` | — | binding E6 |
+| 21 | Σ w_i · CTF·img → Fourier accumulators | ml_optimiser.cpp:8241 | Yes | `em_engine.py:_m_step_block` | — | binding E6 |
 | 22 | Σ w_i · ‖img−proj‖² per shell → σ²_noise | ml_optimiser.cpp:8241 | Partial | hard-assignment only | ✓ | Binding E7: standalone C++ reimplementation, 7 tests, exact parity (rel_err<1e-12) |
 | 23 | Per-image norm_correction accumulation | ml_optimiser.cpp:8350 | No | — | — | No-op single optics group |
 | 24 | Per-image scale_correction accumulation | ml_optimiser.cpp:8370 | No | — | — | No-op single optics group |
@@ -75,7 +75,7 @@ Update this file every time a binding validates or disproves parity.
 | 27 | Blob deconvolution (iterative) | backprojector.cpp:1400 | No | direct Wiener instead | — | Different strategy — binding M2 |
 | 28 | IFFT → crop to ori_size | backprojector.cpp:2589 | Yes | iDFT + unpad | ✓ | Binding M7: 21 pass, 6 xfail (layout conversion). Output shape, determinism, self-consistency verified. Covered by BackProjector round-trip + M4/M5 bindings. |
 | 29 | Gridding correction (radial sinc²) | projector.cpp:595 | Yes | `relion_functions.py:64` | ✓ | Validated Phase 1: max diff 1.6e-5 (float k-coords vs int) |
-| 30 | Flatten solvent (mask volume exterior) | ml_optimiser.cpp:5100 | Yes | `refine.py:_refine_relion_mode` post-reconstruction | — | Uses `soft_mask_outside_map(radius=particle_diameter/(2*pixel_size), cosine_width=5)` |
+| 30 | Flatten solvent (mask volume exterior) | ml_optimiser.cpp:5100 | Yes | `iteration_loop.py:_run_relion_iteration_loop` post-reconstruction | — | Uses `soft_mask_outside_map(radius=particle_diameter/(2*pixel_size), cosine_width=5)` |
 | 31 | Zero mask (zero exterior instead of noise) | ml_optimiser.cpp:5110 | Yes | Handled by #2 (soft mask replaces exterior with avg_bg) | — | Automatic with softMaskOutsideMap do_zero_mask path |
 
 ## M-step: Statistics & Resolution

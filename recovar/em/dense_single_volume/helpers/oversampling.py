@@ -269,7 +269,7 @@ def compute_pass2_stats(
         get_oversampled_translation_grid,
     )
 
-    from ..engine_v2 import run_em_v2
+    from ..em_engine import run_em
 
     n_images = experiment_dataset.n_units
     n_coarse_rot = coarse_rotations.shape[0]
@@ -388,7 +388,7 @@ def compute_pass2_stats(
     # This is correct: we evaluate all oversampled rotations for all images.
     # The significance pruning's benefit is that len(oversampled_rots) <<
     # len(coarse_rotations) * 4^oversampling_order.
-    run_em_outputs = run_em_v2(
+    run_em_outputs = run_em(
         experiment_dataset,
         volume,
         mean_variance,
@@ -413,7 +413,7 @@ def compute_pass2_stats(
         use_float64_scoring=use_float64_scoring,
     )
 
-    # Unpack: run_em_v2 returns (mean, ha, Ft_y, Ft_ctf, [relion_stats], [noise_stats])
+    # Unpack: run_em returns (mean, ha, Ft_y, Ft_ctf, [relion_stats], [noise_stats])
     # depending on return_stats and accumulate_noise flags.
     noise_stats = None
     if return_stats and accumulate_noise:
@@ -493,7 +493,7 @@ def compute_pass2_stats_sparse(
         rotation_grid_size,
     )
 
-    from ..engine_v2 import run_em_v2
+    from ..em_engine import run_em
     from .types import NoiseStats
 
     n_images = experiment_dataset.n_units
@@ -605,7 +605,7 @@ def compute_pass2_stats_sparse(
         local_rot_counts.append(int(oversampled_rots.shape[0]))
         valid_candidate_counts.append(int(candidate_mask.sum()))
 
-        run_em_outputs = run_em_v2(
+        run_em_outputs = run_em(
             experiment_dataset,
             volume,
             mean_variance,

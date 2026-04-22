@@ -46,7 +46,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 
-from .refine_dev_helpers.types import EMProfileStats, NoiseStats, RelionStats
+from .helpers.types import EMProfileStats, NoiseStats, RelionStats
 
 logger = logging.getLogger(__name__)
 
@@ -70,9 +70,9 @@ def make_half_image_weights(image_shape):
     NOTE: These are the CORRECT Hermitian weights for Parseval-preserving inner
     products.  RELION does NOT use these — it sums with w=1 everywhere, computing
     roughly half the true likelihood.  The ``half_spectrum_scoring=True`` path in
-    run_em_v2 uses ones() to match RELION.  This function is used by the
+    run_em uses ones() to match RELION.  This function is used by the
     non-RELION-parity path (``half_spectrum_scoring=False``).
-    See TODO(RELION-parity-debt) in run_em_v2 for details.
+    See TODO(RELION-parity-debt) in run_em for details.
     """
     H, W = image_shape
     w = 2.0 * jnp.ones((H, W // 2 + 1), dtype=jnp.float32)
@@ -500,7 +500,7 @@ def _compute_projections_block(volume, rotations_block, image_shape, volume_shap
     return proj_half, proj_abs2_half
 
 
-def run_em_v2(
+def run_em(
     experiment_dataset,
     mean,
     mean_variance,
@@ -675,7 +675,7 @@ def run_em_v2(
     # Precompute window indices if current_size is set
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
-        from .refine_dev_helpers.fourier_window import make_fourier_window_indices_np
+        from .helpers.fourier_window import make_fourier_window_indices_np
 
         window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size, square=square_window)
         window_indices = jnp.asarray(window_indices_np)
@@ -1490,7 +1490,7 @@ def compute_e_step_weights(
 
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
-        from .refine_dev_helpers.fourier_window import make_fourier_window_indices_np
+        from .helpers.fourier_window import make_fourier_window_indices_np
 
         window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size)
         window_indices = jnp.asarray(window_indices_np)

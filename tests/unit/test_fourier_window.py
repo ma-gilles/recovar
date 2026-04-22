@@ -6,7 +6,7 @@ Tests:
 3. test_windowed_e_step_matches_full: At current_size=128, windowed path == non-windowed.
 4. test_windowed_m_step_roundtrip: Project -> window -> GEMM -> scatter -> adjoint.
 5. test_adjoint_dot_product_windowed: <Ax, y> == <x, A*y> for windowed operator.
-6. test_iteration_at_each_current_size: One run_em_v2 at current_size=32,64,128.
+6. test_iteration_at_each_current_size: One run_em at current_size=32,64,128.
 """
 
 import math
@@ -21,16 +21,16 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.engine_v2 import (
+from recovar.em.dense_single_volume.em_engine import (
     _compute_projections_block,
     _e_step_block_scores,
     _e_step_block_scores_windowed,
     _m_step_block_windowed,
     _preprocess_batch,
     make_half_image_weights,
-    run_em_v2,
+    run_em,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import (
+from recovar.em.dense_single_volume.helpers.fourier_window import (
     ALLOWED_CURRENT_SIZES,
     make_fourier_window_indices_np,
     make_frequency_radius_map_half,
@@ -190,7 +190,7 @@ class TestWindowIndicesFullResolution:
     RELION's rlnCurrentImageSize=N means a circular mask at radius N//2,
     excluding the square-grid corners.
 
-    In run_em_v2, when current_size >= image_shape[0], use_window=False
+    In run_em, when current_size >= image_shape[0], use_window=False
     (no windowing at all), so the full half-spectrum is used.
     """
 
@@ -608,11 +608,11 @@ class TestAdjointDotProductWindowed:
 
 
 class TestIterationAtEachCurrentSize:
-    """Run one full run_em_v2 iteration at each allowed current_size."""
+    """Run one full run_em iteration at each allowed current_size."""
 
     @pytest.mark.parametrize("current_size", [4, 6, 8])
     def test_iteration_produces_finite_results(self, seeded_inputs, current_size):
-        """run_em_v2 with current_size produces finite outputs and valid hard assignments."""
+        """run_em with current_size produces finite outputs and valid hard assignments."""
         s = seeded_inputs
         ds = s["dataset"]
         volume = s["volume"]
@@ -621,7 +621,7 @@ class TestIterationAtEachCurrentSize:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        new_mean, ha, Ft_y, Ft_ctf = run_em_v2(
+        new_mean, ha, Ft_y, Ft_ctf = run_em(
             ds,
             volume,
             mean_variance,
@@ -655,7 +655,7 @@ class TestIterationAtEachCurrentSize:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         # No windowing
-        new_mean_none, ha_none, Ft_y_none, _ = run_em_v2(
+        new_mean_none, ha_none, Ft_y_none, _ = run_em(
             ds,
             volume,
             mean_variance,
@@ -669,7 +669,7 @@ class TestIterationAtEachCurrentSize:
         )
 
         # current_size = 8 (full resolution for 8x8)
-        new_mean_8, ha_8, Ft_y_8, _ = run_em_v2(
+        new_mean_8, ha_8, Ft_y_8, _ = run_em(
             ds,
             volume,
             mean_variance,
@@ -784,7 +784,7 @@ class TestWindowedMultipleBlocks:
         current_size = 4
 
         # All rotations in one block
-        new_mean_1, ha_1, Ft_y_1, _ = run_em_v2(
+        new_mean_1, ha_1, Ft_y_1, _ = run_em(
             ds,
             volume,
             mean_variance,
@@ -798,7 +798,7 @@ class TestWindowedMultipleBlocks:
         )
 
         # Split into blocks of 2
-        new_mean_2, ha_2, Ft_y_2, _ = run_em_v2(
+        new_mean_2, ha_2, Ft_y_2, _ = run_em(
             ds,
             volume,
             mean_variance,

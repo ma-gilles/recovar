@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 
 # Re-import so callers can get it from this module.
-from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import quantize_current_size
+from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
 from recovar.reconstruction.regularization import compute_current_size_relion
 
 

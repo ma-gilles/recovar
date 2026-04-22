@@ -39,7 +39,7 @@ RELION_AVAILABLE = os.path.exists(os.path.join(RELION_REF_NPZ, "iteration_001.np
 def _setup_refinement(n_iter=5, adaptive_oversampling=1, seed=42):
     """Common setup for refinement tests. Returns (result, dataset_info)."""
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.dense_single_volume.refine import refine_single_volume
+    from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
     from recovar.em.sampling import get_rotation_grid, get_translation_grid
     from recovar.reconstruction.regularization import average_over_shells
     from recovar import utils

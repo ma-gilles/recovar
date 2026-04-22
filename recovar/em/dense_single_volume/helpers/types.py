@@ -25,7 +25,7 @@ class RelionStats(NamedTuple):
 
     These fields are not additive like :class:`MeanStats`; they are emitted
     per iteration so convergence and current-size logic can reuse the exact
-    normalization already computed inside ``run_em_v2``.
+    normalization already computed inside ``run_em``.
 
     Attributes:
         log_evidence_per_image: Log normalizer ``log_Z`` for each image.
@@ -45,7 +45,7 @@ class RelionStats(NamedTuple):
 class NoiseStats(NamedTuple):
     """Posterior-weighted noise shell statistics (RELION parity).
 
-    Accumulated during the M-step pass of ``run_em_v2`` when
+    Accumulated during the M-step pass of ``run_em`` when
     ``accumulate_noise=True``.  These are additive over image batches
     and across half-sets, matching RELION's ``wsum_sigma2_noise``.
 
@@ -72,7 +72,7 @@ class NoiseStats(NamedTuple):
 
 
 class EMProfileStats(NamedTuple):
-    """Host-side timing and work counters for one ``run_em_v2`` call.
+    """Host-side timing and work counters for one ``run_em`` call.
 
     These values are diagnostic only and are intended for profiling the
     grouped local-search path without changing numerical behavior.

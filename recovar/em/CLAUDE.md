@@ -121,7 +121,7 @@ if ((iter == 1 && do_firstiter_cc) || do_always_cc) {
 So `ave_Pmax = 1.0` is by construction at iter 1, not because RELION's
 inference is "sharper". The CC scoring (line 7414) is also scale-invariant,
 specifically to absorb intensity-scale mismatch from non-RELION init
-volumes. **Do not add a hard-CC iter-1 path to recovar's `_refine_relion_mode`**
+volumes. **Do not add a hard-CC iter-1 path to recovar's `_run_relion_iteration_loop`**
 to match this number — it's RELION's hack, not its model.
 
 The compounding effect on iter 2+ via the iter-1 volume IS real, though:
@@ -152,7 +152,7 @@ prevent the same drift.
 **Read `docs/math/plan_relion_parity.md` before making any changes to this module.**
 
 The plan describes a 7-phase effort to bring this module to RELION feature parity.
-All new work targets `dense_single_volume/engine_v2.py`. Do not modify the legacy
+All new work targets `dense_single_volume/em_engine.py`. Do not modify the legacy
 `core.py`/`m_step.py` path unless needed for shared utilities. Do not modify
 `heterogeneity.py` (separate owners).
 
@@ -170,16 +170,16 @@ em/
 ├── regularization.py        # tau2 prior, FSC, Wiener regularization
 ├── heterogeneity.py         # Low-rank heterogeneity EM (H/B matrices, PCA)
 └── dense_single_volume/     # Dense homogeneous refinement (RELION-parity)
-    ├── refine.py            # Core loop: refine_single_volume, _refine_relion_mode
-    ├── engine_v2.py         # Two-pass JIT engine: E-step scoring + M-step accumulation
-    └── refine_dev_helpers/  # Supporting modules (black-box from algorithm perspective)
+    ├── iteration_loop.py            # Core loop: refine_single_volume, _run_relion_iteration_loop
+    ├── em_engine.py         # Two-pass JIT engine: E-step scoring + M-step accumulation
+    └── helpers/  # Supporting modules (black-box from algorithm perspective)
         ├── types.py         # MeanStats, RelionStats, NoiseStats, EMProfileStats
         ├── convergence.py   # Angular/translational convergence detection
-        ├── adaptive.py      # Two-pass adaptive oversampling (significance pruning)
+        ├── oversampling.py      # Two-pass adaptive oversampling (significance pruning)
         ├── fourier_window.py# Fourier cropping to current resolution
         ├── local_search.py  # Local search helper functions
-        ├── relion_priors.py # Prior construction for RELION mode
-        ├── relion_init.py   # Initialization / coarse-size helpers
+        ├── orientation_priors.py # Prior construction for RELION mode
+        ├── resolution.py   # Initialization / coarse-size helpers
         └── significance.py  # Batched significance computation
 ```
 
@@ -225,7 +225,7 @@ Benchmarked on A100-80GB, 5000 images, 128px, order 3 (36,864 rotations), 7×7 t
 |---|---|---|
 | Old (E_with_precompute + M_with_precompute) | 68s | 1× |
 | engine_fused.py | 26s | 2.6× |
-| engine_v2.py | 29s | 2.3× |
+| em_engine.py | 29s | 2.3× |
 | Half-spectrum GEMMs (benchmarked, not integrated) | 19s | 3.6× |
 
 RELION 5.0.1 on same hardware/data: ~163s per iteration (includes CPU M-step + overhead).
@@ -251,7 +251,7 @@ RELION 5.0.1 on same hardware/data: ~163s per iteration (includes CPU M-step + o
    (same ranking). We match RELION for parity; switching to correct weights
    (`make_half_image_weights`) is a post-parity improvement that would sharpen
    posteriors and may improve convergence speed. Code location:
-   `engine_v2.py:run_em_v2()` where `half_spectrum_scoring=True` sets
+   `em_engine.py:run_em()` where `half_spectrum_scoring=True` sets
    `half_weights = ones(...)`.
 
 ## Testing

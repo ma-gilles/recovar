@@ -253,7 +253,7 @@ inflation.
 
 ### Calls to `get_local_rotation_grid_fast` in the pipeline
 
-From `recovar/em/dense_single_volume/refine.py:169` (`_run_grouped_local_search_em`):
+From `recovar/em/dense_single_volume/iteration_loop.py:169` (`_run_local_search_iteration`):
 
 ```python
 chunk_size = max(1, min(image_batch_size, 64))    # = 64 in practice
@@ -266,7 +266,7 @@ for chunk_start in range(0, n_images, chunk_size):
         per_image=True,
     )
     local_rotations = rotation_indices_to_matrices(local_indices, healpix_order)
-    # ... run_em_v2 with rotation_log_prior=local_log_prior (shape (64, n_union))
+    # ... run_em with rotation_log_prior=local_log_prior (shape (64, n_union))
 ```
 
 So the local search is chunk-batched over 64 particles, each chunk scoring
@@ -455,8 +455,8 @@ projections.
   — `rotation_indices_to_matrices` (the grid-construction root cause)
 - `/scratch/gpfs/GILLES/mg6942/recovar_relion_parity_audit/recovar/em/sampling.py:37`
   — `get_rotation_grid` (same convention)
-- `/scratch/gpfs/GILLES/mg6942/recovar_relion_parity_audit/recovar/em/dense_single_volume/refine.py:169`
-  — `_run_grouped_local_search_em` (the chunk-union caller)
+- `/scratch/gpfs/GILLES/mg6942/recovar_relion_parity_audit/recovar/em/dense_single_volume/iteration_loop.py:169`
+  — `_run_local_search_iteration` (the chunk-union caller)
 - `/home/mg6942/myscratch/relion/src/healpix_sampling.cpp:695`
   — RELION's `selectOrientationsWithNonZeroPriorProbability`
 - `/home/mg6942/myscratch/relion/src/acc/acc_ml_optimiser_impl.h:119`

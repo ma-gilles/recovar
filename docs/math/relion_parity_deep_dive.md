@@ -81,8 +81,8 @@ This audit was built from:
 - `/scratch/gpfs/GILLES/mg6942/relion5_auto_refine_algorithm.md`
 - RELION 5 source in `/home/mg6942/myscratch/relion/src/`
 - The recovar RELION-mode path centered on:
-  - `recovar/em/dense_single_volume/refine.py`
-  - `recovar/em/dense_single_volume/engine_v2.py`
+  - `recovar/em/dense_single_volume/iteration_loop.py`
+  - `recovar/em/dense_single_volume/em_engine.py`
   - `recovar/em/dense_single_volume/adaptive.py`
   - `recovar/em/dense_single_volume/convergence.py`
   - `recovar/reconstruction/regularization.py`
@@ -96,14 +96,14 @@ the local experimental fixes that may exist in other working trees.
 
 | RELION function | Role in RELION | recovar counterpart | Status | Main mismatch |
 | --- | --- | --- | --- | --- |
-| `MlOptimiser::iterate()` | Top-level auto-refine loop | `refine.py::_refine_relion_mode()` | Partial | Same overall loop shape, but final joined-halves iteration, metadata propagation, and exact convergence behavior are missing. |
+| `MlOptimiser::iterate()` | Top-level auto-refine loop | `iteration_loop.py::_run_relion_iteration_loop()` | Partial | Same overall loop shape, but final joined-halves iteration, metadata propagation, and exact convergence behavior are missing. |
 | `updateCurrentResolution()` | Convert `data_vs_prior` to current resolution | `regularization.compute_data_vs_prior()` + `resolution_from_data_vs_prior()` | Partial | RELION uses true reconstruction weights from the backprojector; we use shell averages from our accumulated `Ft_ctf`, which are only exact if upstream stats are exact. |
 | `updateImageSizeAndResolutionPointers()` | Grow `current_size`, set coarse/fine image sizes | `compute_current_size_relion()` + `compute_coarse_image_size()` + `quantize_current_size()` | Partial | Growth rule exists, but quantization is still not exact RELION behavior and the final `do_use_all_data` Nyquist iteration is missing. |
-| `getFourierTransformsAndCtfs()` | Image preprocessing, masking, priors, high-res residual term | `engine_v2._preprocess_batch()` plus parts of `refine.py` | Partial | recovar now has masked-scoring and unmasked-reconstruction paths, the benchmark harness now applies RELION's particle-diameter mask geometry, and RELION mode now uses the actual particle diameter in the adaptive coarse-size formula. It still does not emit RELION's explicit `exp_power_img` / `exp_highres_Xi2_img` bookkeeping or the full metadata-driven prior state. |
+| `getFourierTransformsAndCtfs()` | Image preprocessing, masking, priors, high-res residual term | `em_engine._preprocess_batch()` plus parts of `refine.py` | Partial | recovar now has masked-scoring and unmasked-reconstruction paths, the benchmark harness now applies RELION's particle-diameter mask geometry, and RELION mode now uses the actual particle diameter in the adaptive coarse-size formula. It still does not emit RELION's explicit `exp_power_img` / `exp_highres_Xi2_img` bookkeeping or the full metadata-driven prior state. |
 | `precalculateShiftedImagesCtfsAndInvSigma2s()` | Shifted masked/unmasked images, resized CTFs, inverse sigma2 | No direct equivalent | Missing | recovar recomputes a simpler path on the fly and does not expose the same sufficient statistics. |
-| `getAllSquaredDifferences()` | Compute likelihood terms over hidden states | `engine_v2.run_em_v2()` and `refine._compute_significance_batched()` | Partial | No exact `highres_Xi2`; current-size truncation differs; benchmark mask geometry is now closer, but the general RELION-mode path still does not source RELION mask parameters automatically and the exact score scale still differs. |
-| `convertAllSquaredDifferencesToWeights()` | Convert diff2 to posterior weights, keep significant samples, set `Pmax` | `run_em_v2()` softmax plus `adaptive.find_significant_mask()` | Partial | recovar now persists per-image `Pmax`, supports uncapped significance, carries RELION-style translation priors in the score path, and reuses a learned global direction prior outside local search. It still lacks RELION's exact prior damping/normalization and the full metadata-coupled prior update path. |
-| `storeWeightedSums()` | Weighted backprojection, noise accumulation, scale/norm stats, metadata update | `run_em_v2()` plus post-hoc updates in `refine.py` | Partial | RELION accumulates many coupled statistics in one pass: masked residual spectra, unmasked backprojection, `Pmax`, `dLL`, scale/norm sums, and prior updates. recovar still reconstructs mainly `Ft_y` and `Ft_ctf`, then approximates the rest later. |
+| `getAllSquaredDifferences()` | Compute likelihood terms over hidden states | `em_engine.run_em()` and `refine._compute_significance_batched()` | Partial | No exact `highres_Xi2`; current-size truncation differs; benchmark mask geometry is now closer, but the general RELION-mode path still does not source RELION mask parameters automatically and the exact score scale still differs. |
+| `convertAllSquaredDifferencesToWeights()` | Convert diff2 to posterior weights, keep significant samples, set `Pmax` | `run_em()` softmax plus `adaptive.find_significant_mask()` | Partial | recovar now persists per-image `Pmax`, supports uncapped significance, carries RELION-style translation priors in the score path, and reuses a learned global direction prior outside local search. It still lacks RELION's exact prior damping/normalization and the full metadata-coupled prior update path. |
+| `storeWeightedSums()` | Weighted backprojection, noise accumulation, scale/norm stats, metadata update | `run_em()` plus post-hoc updates in `refine.py` | Partial | RELION accumulates many coupled statistics in one pass: masked residual spectra, unmasked backprojection, `Pmax`, `dLL`, scale/norm sums, and prior updates. recovar still reconstructs mainly `Ft_y` and `Ft_ctf`, then approximates the rest later. |
 | `maximizationOtherParameters()` | Update `sigma2_noise`, `ave_Pmax`, scale, norm, priors | `noise.estimate_noise_level_no_masks()` + `compute_relion_prior()` + convergence state updates | Missing/partial | `ave_Pmax` is now aggregated from both half-sets, but noise, scale, norm, and prior updates are still not derived from the same weighted sums RELION uses. |
 | `BackProjector::updateSSNRarrays()` | Update `tau2`, `sigma2_ref`, `data_vs_prior`, Fourier coverage | `compute_relion_prior()` and `compute_data_vs_prior()` | Partial | recovar uses different denominators and does not currently mirror the exact shell statistics from the actual reconstruction weights. |
 | `BackProjector::reconstruct()` | Apply Wiener term and reconstruct at pad 2 | `relion_functions.post_process_from_filter_v2()` | Partial | The solver is close, but parity still depends on exact padding, exact input weights, and exact tau2. |
@@ -114,10 +114,10 @@ the local experimental fixes that may exist in other working trees.
 
 These pieces are good building blocks and should be preserved:
 
-- A fast half-spectrum GEMM engine in `engine_v2.py`.
+- A fast half-spectrum GEMM engine in `em_engine.py`.
 - Coordinate-preserving Fourier windowing for `current_size`.
 - RELION-style reconstruction helpers in `relion_functions.py`.
-- A RELION-mode top-level loop in `_refine_relion_mode()`.
+- A RELION-mode top-level loop in `_run_relion_iteration_loop()`.
 - Local-search and adaptive-oversampling scaffolding.
 - RELION reference extraction utilities in `scripts/extract_relion_reference.py`.
 - Comparison helpers in `tests/integration/test_relion_comparison.py`.
@@ -128,7 +128,7 @@ signals that RELION uses internally.
 
 ## Current Parity Blockers
 
-### 1. `run_em_v2()` does not emit the statistics RELION actually optimizes
+### 1. `run_em()` does not emit the statistics RELION actually optimizes
 
 RELION's `storeWeightedSums()` simultaneously accumulates:
 
@@ -140,7 +140,7 @@ RELION's `storeWeightedSums()` simultaneously accumulates:
 - per-image best pose metadata
 - class and direction weighted sums
 
-Our `run_em_v2()` mainly returns:
+Our `run_em()` mainly returns:
 
 - `Ft_y`
 - `Ft_ctf`
@@ -156,7 +156,7 @@ RELION explicitly uses:
 - masked image Fourier data for alignment and likelihood
 - unmasked image Fourier data for reconstruction
 
-recovar now mirrors that split in `engine_v2.py`, which was a necessary parity
+recovar now mirrors that split in `em_engine.py`, which was a necessary parity
 step. The remaining mismatch is that RELION also stores:
 
 - `exp_power_img`
@@ -350,7 +350,7 @@ Implementation:
 
 - Add a structured result object for the RELION-mode E/M pass, for example:
   `EMIterationStats`.
-- Extend `run_em_v2()` so it can return:
+- Extend `run_em()` so it can return:
   - `Ft_y`
   - `Ft_ctf`
   - per-image `log_Z`
@@ -366,7 +366,7 @@ Implementation:
 
 Files:
 
-- `recovar/em/dense_single_volume/engine_v2.py`
+- `recovar/em/dense_single_volume/em_engine.py`
 - `recovar/em/dense_single_volume/types.py` or a new result container module
 
 Exit criteria:
@@ -391,7 +391,7 @@ Implementation:
 
 Files:
 
-- `recovar/em/dense_single_volume/engine_v2.py`
+- `recovar/em/dense_single_volume/em_engine.py`
 - potentially a new helper module if preprocessing becomes too large
 
 Exit criteria:
@@ -421,8 +421,8 @@ Implementation:
 Files:
 
 - `recovar/em/dense_single_volume/adaptive.py`
-- `recovar/em/dense_single_volume/engine_v2.py`
-- `recovar/em/dense_single_volume/refine.py`
+- `recovar/em/dense_single_volume/em_engine.py`
+- `recovar/em/dense_single_volume/iteration_loop.py`
 
 Exit criteria:
 
@@ -446,8 +446,8 @@ Implementation:
 
 Files:
 
-- `recovar/em/dense_single_volume/engine_v2.py`
-- `recovar/em/dense_single_volume/refine.py`
+- `recovar/em/dense_single_volume/em_engine.py`
+- `recovar/em/dense_single_volume/iteration_loop.py`
 - `recovar/em/dense_single_volume/convergence.py`
 
 Exit criteria:
@@ -469,7 +469,7 @@ Implementation:
 
 Files:
 
-- `recovar/em/dense_single_volume/refine.py`
+- `recovar/em/dense_single_volume/iteration_loop.py`
 - `recovar/reconstruction/noise.py`
 - new helper module if the update logic becomes large
 
@@ -496,7 +496,7 @@ Files:
 
 - `recovar/reconstruction/regularization.py`
 - `recovar/reconstruction/relion_functions.py`
-- `recovar/em/dense_single_volume/refine.py`
+- `recovar/em/dense_single_volume/iteration_loop.py`
 
 Exit criteria:
 
@@ -520,7 +520,7 @@ Implementation:
 Files:
 
 - `recovar/reconstruction/relion_functions.py`
-- `recovar/em/dense_single_volume/refine.py`
+- `recovar/em/dense_single_volume/iteration_loop.py`
 - tests for padding and reconstruction
 
 Exit criteria:
@@ -543,7 +543,7 @@ Implementation:
 Files:
 
 - `recovar/em/dense_single_volume/convergence.py`
-- `recovar/em/dense_single_volume/refine.py`
+- `recovar/em/dense_single_volume/iteration_loop.py`
 
 Exit criteria:
 
@@ -596,7 +596,7 @@ If we are executing this plan from the current codebase, the next concrete
 sequence should be:
 
 1. Put the zero-padding fix on the actual parity branch.
-2. Refactor `run_em_v2()` so RELION mode receives structured E/M statistics
+2. Refactor `run_em()` so RELION mode receives structured E/M statistics
    instead of only `Ft_y`, `Ft_ctf`, and hard assignments.
 3. Finish the remaining exact score bookkeeping around masked/unmasked
    preprocessing and `highres_Xi2`.

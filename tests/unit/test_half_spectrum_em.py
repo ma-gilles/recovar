@@ -1,13 +1,13 @@
 """Half-spectrum EM equivalence tests (Phase 1 of RELION-parity plan).
 
-Verifies that the half-spectrum GEMM engine in engine_v2.py produces
+Verifies that the half-spectrum GEMM engine in em_engine.py produces
 numerically identical results to the full-spectrum reference implementation.
 
 Tests:
 1. test_half_inner_product_correctness: weighted half-spectrum dot product == full
 2. test_e_step_half_matches_full: half-spectrum E-step scores match full-spectrum
 3. test_m_step_half_matches_full: half-spectrum M-step Ft_y, Ft_ctf match full-spectrum
-4. test_full_iteration_half_matches: one complete run_em_v2 iteration matches reference
+4. test_full_iteration_half_matches: one complete run_em iteration matches reference
 """
 
 import numpy as np
@@ -20,14 +20,14 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-from recovar.em.dense_single_volume.engine_v2 import (
+from recovar.em.dense_single_volume.em_engine import (
     _compute_projections_block,
     _e_step_block_scores,
     _m_step_block,
     _preprocess_batch,
     _update_logsumexp,
     make_half_image_weights,
-    run_em_v2,
+    run_em,
 )
 
 pytestmark = pytest.mark.unit
@@ -562,19 +562,19 @@ class TestMStepHalfMatchesFull:
 
 
 # ===========================================================================
-# Test 4: Full iteration half matches (run_em_v2)
+# Test 4: Full iteration half matches (run_em)
 # ===========================================================================
 
 
 class TestFullIterationHalfMatches:
-    """One complete run_em_v2 iteration should produce correct results.
+    """One complete run_em iteration should produce correct results.
 
     We compare against a manually-computed reference using the old full-spectrum
     em.core functions, verifying hard assignments and mean volume match.
     """
 
     def test_full_iteration_self_consistency(self, seeded_inputs):
-        """run_em_v2 produces identical results on two calls with same inputs."""
+        """run_em produces identical results on two calls with same inputs."""
         s = seeded_inputs
         ds = s["dataset"]
         volume = s["volume"]
@@ -583,7 +583,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        new_mean1, ha1, Ft_y1, Ft_ctf1 = run_em_v2(
+        new_mean1, ha1, Ft_y1, Ft_ctf1 = run_em(
             ds,
             volume,
             mean_variance,
@@ -595,7 +595,7 @@ class TestFullIterationHalfMatches:
             rotation_block_size=N_ROTATIONS,
         )
 
-        new_mean2, ha2, Ft_y2, Ft_ctf2 = run_em_v2(
+        new_mean2, ha2, Ft_y2, Ft_ctf2 = run_em(
             ds,
             volume,
             mean_variance,
@@ -622,7 +622,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        _, ha, _, _ = run_em_v2(
+        _, ha, _, _ = run_em(
             ds,
             volume,
             mean_variance,
@@ -648,7 +648,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        new_mean, ha, Ft_y, Ft_ctf = run_em_v2(
+        new_mean, ha, Ft_y, Ft_ctf = run_em(
             ds,
             volume,
             mean_variance,
@@ -674,7 +674,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        _, hard_assignments, _, _, stats = run_em_v2(
+        _, hard_assignments, _, _, stats = run_em(
             ds,
             volume,
             mean_variance,
@@ -775,7 +775,7 @@ class TestFullIterationHalfMatches:
         translations = np.array(s["translations"])
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
-        _, _, _, _, stats = run_em_v2(
+        _, _, _, _, stats = run_em(
             ds,
             volume,
             mean_variance,
@@ -856,7 +856,7 @@ class TestFullIterationHalfMatches:
         rotations = np.asarray(_make_rotations(2, seed=9))
         translations = np.array([[0.0, 0.0]], dtype=np.float32)
 
-        _, _, Ft_y, _, stats = run_em_v2(
+        _, _, Ft_y, _, stats = run_em(
             ds,
             mean,
             mean_variance,
@@ -930,7 +930,7 @@ class TestFullIterationHalfMatches:
 
         ds_subset = _SubsetDataset(ds, subset)
 
-        mean_subset, ha_subset, Ft_y_subset, Ft_ctf_subset = run_em_v2(
+        mean_subset, ha_subset, Ft_y_subset, Ft_ctf_subset = run_em(
             ds,
             volume,
             mean_variance,
@@ -943,7 +943,7 @@ class TestFullIterationHalfMatches:
             image_indices=subset,
         )
 
-        mean_restricted, ha_restricted, Ft_y_restricted, Ft_ctf_restricted = run_em_v2(
+        mean_restricted, ha_restricted, Ft_y_restricted, Ft_ctf_restricted = run_em(
             ds_subset,
             volume,
             mean_variance,
@@ -961,7 +961,7 @@ class TestFullIterationHalfMatches:
         np.testing.assert_allclose(np.array(Ft_ctf_subset), np.array(Ft_ctf_restricted), atol=1e-5)
 
     def test_image_specific_rotation_log_prior_controls_assignments(self, seeded_inputs):
-        """run_em_v2 should support image-specific rotation priors."""
+        """run_em should support image-specific rotation priors."""
         s = seeded_inputs
         log_prior = np.array(
             [
@@ -973,7 +973,7 @@ class TestFullIterationHalfMatches:
             dtype=np.float32,
         )
 
-        _, hard_assignments, _, _, stats = run_em_v2(
+        _, hard_assignments, _, _, stats = run_em(
             s["dataset"],
             s["volume"],
             np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0,
@@ -1004,7 +1004,7 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         # All rotations in one block
-        new_mean_1, ha_1, Ft_y_1, Ft_ctf_1 = run_em_v2(
+        new_mean_1, ha_1, Ft_y_1, Ft_ctf_1 = run_em(
             ds,
             volume,
             mean_variance,
@@ -1017,7 +1017,7 @@ class TestFullIterationHalfMatches:
         )
 
         # Rotations split into blocks of 2 (5 rots -> 3 blocks: 2+2+1, padded to 2+2+2)
-        new_mean_2, ha_2, Ft_y_2, Ft_ctf_2 = run_em_v2(
+        new_mean_2, ha_2, Ft_y_2, Ft_ctf_2 = run_em(
             ds,
             volume,
             mean_variance,
@@ -1064,7 +1064,7 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         # All images in one batch
-        new_mean_1, ha_1, Ft_y_1, Ft_ctf_1 = run_em_v2(
+        new_mean_1, ha_1, Ft_y_1, Ft_ctf_1 = run_em(
             ds,
             volume,
             mean_variance,
@@ -1077,7 +1077,7 @@ class TestFullIterationHalfMatches:
         )
 
         # Images in batches of 1
-        new_mean_2, ha_2, Ft_y_2, Ft_ctf_2 = run_em_v2(
+        new_mean_2, ha_2, Ft_y_2, Ft_ctf_2 = run_em(
             ds,
             volume,
             mean_variance,
