@@ -97,3 +97,53 @@ Interpretation:
 
 The resubmitted long jobs remain live and are tracked separately in
 `docs/memory/long_run_resubmissions_2026_04_22.md`.
+
+## Fixed-Assignment M-step Floor
+
+New calibration script:
+
+- `scripts/benchmark_relion_pose_mstep.py`
+
+Purpose:
+
+- benchmark the RELION-pose, fixed-assignment M-step floor without the
+  local E-step
+- use RELION per-iteration poses/translations mapped into RECOVAR's
+  particle order
+- measure the irreducible backprojection / accumulator cost on the same
+  dataset family used in the hp4 parity runs
+
+### 64-particle smoke
+
+Command:
+
+`CUDA_VISIBLE_DEVICES=1 pixi run python scripts/benchmark_relion_pose_mstep.py --relion_dir /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0 --data_star /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.star --iter 6 --max_particles 64 --batch_size 32 --output_dir _agent_scratch/relion_pose_mstep_smoke64_it006_v1`
+
+Result:
+
+- warmup: `0.757s`
+- run: `0.086s` total (`32 + 32` particles)
+- wall: `3.85s`
+
+### Full 5k floor
+
+Command:
+
+`CUDA_VISIBLE_DEVICES=1 pixi run python scripts/benchmark_relion_pose_mstep.py --relion_dir /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0 --data_star /scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.star --iter 6 --batch_size 500 --output_dir _agent_scratch/relion_pose_mstep_full5k_it006_v1`
+
+Result:
+
+- warmup: `0.842s`
+- run: `3.375s` total (`2515 + 2485` particles)
+- half 1 run: `1.747s`
+- half 2 run: `1.628s`
+- wall: `17.71s`
+
+Interpretation:
+
+- the fixed-assignment backprojection floor is only a few seconds on the
+  5k benchmark
+- that is far below the current grouped local-search EM times, so the
+  remaining gap is not explained by adjoint accumulation alone
+- the next optimization work should focus on the E-step / grouped-EM
+  execution shape, not on minor selector plumbing
