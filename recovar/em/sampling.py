@@ -23,8 +23,12 @@ def _get_relion_grid_metadata(healpix_order: int) -> dict[str, np.ndarray]:
     nside = 2**healpix_order
     n_pixels = hp.nside2npix(nside)
     n_psi = rotation_grid_n_in_planes(healpix_order)
-    grid_eulers = np.asarray(get_relion_rotation_grid_eulers(healpix_order), dtype=np.float32).reshape(n_psi, n_pixels, 3)
-    grid_rotations = np.asarray(get_relion_rotation_grid(healpix_order), dtype=np.float32).reshape(n_psi, n_pixels, 3, 3)
+    grid_eulers = np.asarray(get_relion_rotation_grid_eulers(healpix_order), dtype=np.float32).reshape(
+        n_psi, n_pixels, 3
+    )
+    grid_rotations = np.asarray(get_relion_rotation_grid(healpix_order), dtype=np.float32).reshape(
+        n_psi, n_pixels, 3, 3
+    )
 
     # Use the actual matrix view directions of the RELION grid rather than a
     # closed-form HEALPix angle formula. This keeps the local-search selector
@@ -51,34 +55,6 @@ def _get_relion_grid_metadata(healpix_order: int) -> dict[str, np.ndarray]:
     return cached
 
 
-def _relion_direction_vector(rot_deg: float, tilt_deg: float) -> np.ndarray:
-    """RELION's Euler_angles2direction for C1 symmetry."""
-    rot = np.deg2rad(rot_deg)
-    tilt = np.deg2rad(tilt_deg)
-    return np.array(
-        [
-            np.sin(tilt) * np.cos(rot),
-            np.sin(tilt) * np.sin(rot),
-            np.cos(tilt),
-        ],
-        dtype=np.float64,
-    )
-
-
-def _relion_direction_vectors(rot_deg: np.ndarray, tilt_deg: np.ndarray) -> np.ndarray:
-    """Vectorized RELION Euler_angles2direction for C1 symmetry."""
-    rot = np.deg2rad(np.asarray(rot_deg, dtype=np.float64))
-    tilt = np.deg2rad(np.asarray(tilt_deg, dtype=np.float64))
-    return np.stack(
-        [
-            np.sin(tilt) * np.cos(rot),
-            np.sin(tilt) * np.sin(rot),
-            np.cos(tilt),
-        ],
-        axis=-1,
-    ).astype(np.float32)
-
-
 def _wrapped_abs_diff_deg(values_deg: np.ndarray, ref_deg: np.ndarray | float) -> np.ndarray:
     """Circular absolute difference in degrees, wrapped to [0, 180]."""
     diff = np.abs(np.asarray(values_deg, dtype=np.float64) - np.asarray(ref_deg, dtype=np.float64))
@@ -100,19 +76,6 @@ def _normalized_log_weights(diff_deg: np.ndarray, sigma_deg: float) -> np.ndarra
     return np.log(np.clip(weights, np.finfo(np.float32).tiny, None)).astype(np.float32)
 
 
-def _normalize_log_weights(log_weights: np.ndarray) -> np.ndarray:
-    """Normalize log-weights so exp(out) sums to one."""
-    log_weights = np.asarray(log_weights, dtype=np.float64)
-    if log_weights.size == 0:
-        return np.asarray(log_weights, dtype=np.float32)
-    max_logw = float(np.max(log_weights))
-    weights = np.exp(log_weights - max_logw)
-    total = float(weights.sum())
-    if total <= 0.0 or not np.isfinite(total):
-        return np.full(log_weights.shape, -np.log(max(log_weights.size, 1)), dtype=np.float32)
-    return (log_weights - (max_logw + np.log(total))).astype(np.float32)
-
-
 def relion_psi_from_rotation_matrices(rotations: np.ndarray) -> np.ndarray:
     """Extract RELION psi angles from rotation matrices.
 
@@ -128,9 +91,7 @@ def relion_psi_from_rotation_matrices(rotations: np.ndarray) -> np.ndarray:
     nonsingular = xy_norm > 1e-12
 
     if np.any(nonsingular):
-        psi[nonsingular] = np.rad2deg(
-            np.arctan2(adjusted[nonsingular, 0, 2], -adjusted[nonsingular, 1, 2])
-        ) + 90.0
+        psi[nonsingular] = np.rad2deg(np.arctan2(adjusted[nonsingular, 0, 2], -adjusted[nonsingular, 1, 2])) + 90.0
     if np.any(~nonsingular):
         psi[~nonsingular] = utils.R_to_relion(rotations[~nonsingular], degrees=True)[:, 2]
 
@@ -196,8 +157,7 @@ def build_local_search_grid_metadata(
     grid_eulers = np.asarray(grid_eulers, dtype=np.float32).reshape(-1, 3)
     if grid_eulers.shape[0] != expected:
         raise ValueError(
-            f"grid_eulers must have shape ({expected}, 3) for healpix_order={healpix_order}, "
-            f"got {grid_eulers.shape}",
+            f"grid_eulers must have shape ({expected}, 3) for healpix_order={healpix_order}, got {grid_eulers.shape}",
         )
 
     grid_3d = grid_eulers.reshape(n_psi, n_pixels, 3)
@@ -301,11 +261,6 @@ def get_rotation_grid(nside_level, n_in_planes=None, matrices=False):
     return angles
 
 
-def get_angle_resolution(nside_level):
-    nside = 2**nside_level
-    return hp.nside2resol(nside, arcmin=True) / 60
-
-
 def get_translation_grid(max_pixel, pixel_offset):
     gridded_max_pixel = (max_pixel // pixel_offset) * pixel_offset
     xrange = np.arange(-gridded_max_pixel, gridded_max_pixel + 1, pixel_offset)
@@ -314,27 +269,6 @@ def get_translation_grid(max_pixel, pixel_offset):
     norm_res = np.linalg.norm(grid, axis=1) <= max_pixel + 0.001
     grid = grid[norm_res]
     return grid
-
-
-def rotation_indices_to_matrices(indices, healpix_order):
-    """Convert full-grid rotation indices to rotation matrices.
-
-    The indexing convention matches :func:`get_rotation_grid`: the grid is
-    flattened with psi as the slow axis and HEALPix pixel as the fast axis,
-    so ``index = psi_idx * n_pixels + pixel_idx`` with the pixel index in
-    RELION's NEST ordering.
-    """
-    nside = 2**healpix_order
-    n_psi = rotation_grid_n_in_planes(healpix_order)
-    pixel_idx, psi_idx = _split_rotation_indices(indices, healpix_order)
-
-    theta, phi = hp.pix2ang(nside, pixel_idx, nest=True)
-    psi = (2.0 * np.pi / n_psi) * psi_idx
-    angles = np.stack(
-        [np.rad2deg(phi), np.rad2deg(theta), np.rad2deg(psi)],
-        axis=-1,
-    )
-    return utils.R_from_relion(angles).astype(np.float32)
 
 
 def rotation_indices_to_relion_eulers(indices, healpix_order):
@@ -349,31 +283,6 @@ def rotation_indices_to_relion_eulers(indices, healpix_order):
         ],
         axis=-1,
     ).astype(np.float32)
-
-
-def remap_rotation_indices_to_order(indices, src_order, dst_order):
-    """Map full-grid rotation indices between HEALPix orders.
-
-    The mapped indices correspond to the nearest direction/pixel center on the
-    destination grid together with the nearest in-plane sample.
-    """
-    indices = np.asarray(indices, dtype=np.int64).reshape(-1)
-    if src_order == dst_order:
-        return indices.copy()
-
-    src_n_psi = rotation_grid_n_in_planes(src_order)
-    dst_nside = 2**dst_order
-    dst_n_psi = rotation_grid_n_in_planes(dst_order)
-
-    src_pixel_idx, src_psi_idx = _split_rotation_indices(indices, src_order)
-
-    theta, phi = hp.pix2ang(2**src_order, src_pixel_idx)
-    dst_pixel_idx = hp.ang2pix(dst_nside, theta, phi)
-
-    src_psi_deg = (360.0 / src_n_psi) * src_psi_idx
-    dst_psi_idx = np.round(src_psi_deg / (360.0 / dst_n_psi)).astype(np.int64) % dst_n_psi
-
-    return _combine_rotation_indices(dst_pixel_idx, dst_psi_idx, dst_order)
 
 
 def relion_angular_sampling_deg(healpix_order, adaptive_oversampling=0):
@@ -669,9 +578,8 @@ def get_oversampled_rotation_grid_from_samples(
     parent_map = np.arange(len(parent_rotation_indices), dtype=np.int64)
     for level in range(oversampling_order):
         del level
-        current_pixels = (
-            4 * np.repeat(current_pixels.astype(np.int64, copy=False), 4)
-            + np.tile(np.arange(4, dtype=np.int64), len(current_pixels))
+        current_pixels = 4 * np.repeat(current_pixels.astype(np.int64, copy=False), 4) + np.tile(
+            np.arange(4, dtype=np.int64), len(current_pixels)
         )
         parent_map = np.repeat(parent_map, 4)
 
@@ -828,12 +736,7 @@ def get_relion_rotation_grid_eulers(order):
     relion_euler = get_coarse_orientations(order)
     n_dir = hp.nside2npix(2**order)
     n_psi = relion_euler.shape[0] // n_dir
-    return (
-        relion_euler.reshape(n_dir, n_psi, 3)
-        .transpose(1, 0, 2)
-        .reshape(-1, 3)
-        .astype(np.float32)
-    )
+    return relion_euler.reshape(n_dir, n_psi, 3).transpose(1, 0, 2).reshape(-1, 3).astype(np.float32)
 
 
 def get_rotation_grid_at_order(order, n_in_planes=None, matrices=True):
@@ -864,141 +767,6 @@ def get_rotation_grid_at_order(order, n_in_planes=None, matrices=True):
 # ---------------------------------------------------------------------------
 # Local angular search
 # ---------------------------------------------------------------------------
-
-
-def _angular_distance_matrices(R1, R2):
-    """Geodesic distance in radians between two sets of rotation matrices.
-
-    Parameters
-    ----------
-    R1 : np.ndarray, shape (..., 3, 3)
-    R2 : np.ndarray, shape (..., 3, 3)
-
-    Returns
-    -------
-    np.ndarray, shape (...)
-        Geodesic angle in radians, in [0, pi].
-    """
-    # R_rel = R1^T @ R2; angle = arccos((trace(R_rel) - 1) / 2)
-    R_rel = np.einsum("...ij,...ik->...jk", R1, R2)
-    # Trace along last two dims
-    trace_val = np.trace(R_rel, axis1=-2, axis2=-1)
-    # Clamp to [-1, 3] to handle numerical noise
-    cos_angle = np.clip((trace_val - 1.0) / 2.0, -1.0, 1.0)
-    return np.arccos(cos_angle)
-
-
-def get_local_rotation_grid(
-    prior_rotations,
-    sigma_rot,
-    grid_order=None,
-    grid_rotations=None,
-    sigma_cutoff=3.0,
-):
-    """Generate local rotation grids around prior orientations.
-
-    For each prior rotation, selects neighbors from the full HEALPix grid
-    that lie within ``sigma_cutoff * sigma_rot`` geodesic distance.
-    Returns the UNION of all selected rotations (Approach A: batched union),
-    plus a mapping from each grid rotation back to the prior indices
-    it is a neighbor of, and the Gaussian prior weights.
-
-    Parameters
-    ----------
-    prior_rotations : np.ndarray, shape (n_images, 3, 3)
-        Per-image best rotation matrices from the previous iteration.
-    sigma_rot : float
-        Gaussian prior sigma in radians.
-    grid_order : int or None
-        HEALPix order for the search grid.  Exactly one of ``grid_order``
-        or ``grid_rotations`` must be provided.
-    grid_rotations : np.ndarray, shape (n_grid, 3, 3), or None
-        Pre-computed rotation grid.  If provided, ``grid_order`` is ignored.
-    sigma_cutoff : float
-        Only include grid points within ``sigma_cutoff * sigma_rot``
-        of at least one prior (default 3.0).
-
-    Returns
-    -------
-    selected_rotations : np.ndarray, shape (n_selected, 3, 3)
-        Union of local rotation grid points across all priors.
-    selected_indices : np.ndarray, shape (n_selected,), dtype int
-        Indices into the full grid for each selected rotation.
-    prior_weights : np.ndarray, shape (n_images, n_selected)
-        Gaussian prior weight for each (image, selected_rotation) pair.
-        ``prior_weights[i, j] = exp(-d^2 / (2 * sigma_rot^2))``
-        where d is the geodesic distance between prior_rotations[i] and
-        selected_rotations[j].  Zero if beyond sigma_cutoff.
-
-    Raises
-    ------
-    ValueError
-        If neither ``grid_order`` nor ``grid_rotations`` is provided.
-    """
-    if grid_rotations is None and grid_order is None:
-        raise ValueError("Exactly one of grid_order or grid_rotations must be provided")
-
-    if grid_rotations is None:
-        grid_rotations = get_rotation_grid(grid_order, matrices=True)
-    grid_rotations = np.asarray(grid_rotations, dtype=np.float64)
-
-    prior_rotations = np.asarray(prior_rotations, dtype=np.float64)
-    if prior_rotations.ndim == 2:
-        prior_rotations = prior_rotations[np.newaxis]
-
-    n_images = prior_rotations.shape[0]
-    n_grid = grid_rotations.shape[0]
-    cutoff_rad = sigma_cutoff * sigma_rot
-
-    # Compute pairwise geodesic distances: (n_images, n_grid)
-    # For memory efficiency with large grids, process in chunks
-    CHUNK = 5000
-    selected_mask = np.zeros(n_grid, dtype=bool)
-
-    # First pass: find the union of all neighbors
-    for i_start in range(0, n_images, CHUNK):
-        i_end = min(i_start + CHUNK, n_images)
-        priors_chunk = prior_rotations[i_start:i_end]  # (chunk, 3, 3)
-
-        # (chunk, n_grid): geodesic distance
-        dists = _angular_distance_matrices(
-            priors_chunk[:, np.newaxis, :, :],
-            grid_rotations[np.newaxis, :, :, :],
-        )
-        within = np.any(dists <= cutoff_rad, axis=0)
-        selected_mask |= within
-
-    selected_indices = np.where(selected_mask)[0]
-    n_selected = len(selected_indices)
-
-    if n_selected == 0:
-        # Fallback: if sigma is too tight, return the full grid
-        selected_indices = np.arange(n_grid)
-        n_selected = n_grid
-
-    selected_rotations = grid_rotations[selected_indices]  # (n_selected, 3, 3)
-
-    # Second pass: compute prior weights for the selected subset
-    prior_weights = np.zeros((n_images, n_selected), dtype=np.float64)
-
-    for i_start in range(0, n_images, CHUNK):
-        i_end = min(i_start + CHUNK, n_images)
-        priors_chunk = prior_rotations[i_start:i_end]  # (chunk, 3, 3)
-
-        dists = _angular_distance_matrices(
-            priors_chunk[:, np.newaxis, :, :],
-            selected_rotations[np.newaxis, :, :, :],
-        )  # (chunk, n_selected)
-
-        weights = np.exp(-(dists**2) / (2.0 * sigma_rot**2))
-        weights[dists > cutoff_rad] = 0.0
-        prior_weights[i_start:i_end] = weights
-
-    return (
-        selected_rotations.astype(np.float32),
-        selected_indices,
-        prior_weights.astype(np.float32),
-    )
 
 
 def get_local_rotation_grid_fast(
@@ -1245,29 +1013,6 @@ def get_local_rotation_grid_fast(
     if per_image:
         return selected_indices, log_prior
     return selected_indices, np.max(log_prior, axis=0).astype(np.float32)
-
-
-def get_healpix_neighbors(pixel_idx, nside_level, n_neighbors=8):
-    """Return the neighbor HEALPix pixel indices for a given pixel.
-
-    Uses healpy's ``get_all_neighbours`` which returns 8 neighboring pixels
-    (or fewer at poles, with -1 for missing neighbors).
-
-    Parameters
-    ----------
-    pixel_idx : int or array-like
-        RING-ordered HEALPix pixel index (or array of indices).
-    nside_level : int
-        HEALPix level (nside = 2^nside_level).
-
-    Returns
-    -------
-    np.ndarray
-        Neighbor pixel indices.  Shape (8,) for scalar input or
-        (8, n_pixels) for array input.  Missing neighbors are -1.
-    """
-    nside = 2**nside_level
-    return hp.get_all_neighbours(nside, np.atleast_1d(pixel_idx))
 
 
 @functools.partial(jax.jit, static_argnums=[1])

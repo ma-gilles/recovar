@@ -17,17 +17,16 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
+import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-import recovar.core.fourier_transform_utils as ftu
-import recovar.em.dense_single_volume.engine_v2 as engine_v2_mod
 from recovar.em.dense_single_volume.engine_v2 import (
-    make_half_image_weights,
-    _preprocess_batch,
+    _compute_projections_block,
     _e_step_block_scores,
     _m_step_block,
-    _compute_projections_block,
+    _preprocess_batch,
     _update_logsumexp,
+    make_half_image_weights,
     run_em_v2,
 )
 
@@ -43,7 +42,7 @@ VOLUME_SHAPE = (8, 8, 8)
 VOLUME_SIZE = 512
 H, W = IMAGE_SHAPE
 N_HALF = H * (W // 2 + 1)  # 8 * 5 = 40
-N_FULL = H * W               # 8 * 8 = 64
+N_FULL = H * W  # 8 * 8 = 64
 N_ROTATIONS = 5
 N_TRANSLATIONS = 3
 N_IMAGES = 4
@@ -53,6 +52,7 @@ SEED = 42
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _hermitian_image_2d(image_shape, seed=42):
     """Generate a Hermitian-symmetric 2D spectrum (DFT of real data), centered."""
@@ -180,9 +180,7 @@ def seeded_inputs(rng, mock_dataset):
     """Deterministic inputs for equivalence tests."""
     volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
     rotations = _make_rotations(N_ROTATIONS, seed=12)
-    translations = jnp.array(
-        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32
-    )
+    translations = jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32)
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
 
     config = ForwardModelConfig.from_dataset(
@@ -250,8 +248,10 @@ class TestHalfInnerProductCorrectness:
         half_result = (jnp.conj(A_half) @ B_half_weighted.T).real  # (n_a, n_b)
 
         np.testing.assert_allclose(
-            np.array(full_result), np.array(half_result),
-            rtol=1e-5, atol=1e-4,
+            np.array(full_result),
+            np.array(half_result),
+            rtol=1e-5,
+            atol=1e-4,
             err_msg="Batched half-spectrum GEMM does not match full GEMM",
         )
 
@@ -302,9 +302,7 @@ class TestEStepHalfMatchesFull:
         from recovar.em import core as em_core
 
         # Full-spectrum projections
-        proj_full = core.slice_volume(
-            volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=False
-        )
+        proj_full = core.slice_volume(volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=False)
         proj_abs2_full = jnp.abs(proj_full) ** 2
 
         # Cross-term via existing function
@@ -312,16 +310,19 @@ class TestEStepHalfMatchesFull:
             config, proj_full, batch_data, translations, ctf_params, noise_variance
         )
         # Norm-term
-        norm_term = em_core.compute_CTFed_proj_norms_eqx(
-            config, proj_abs2_full, ctf_params, noise_variance
-        )
+        norm_term = em_core.compute_CTFed_proj_norms_eqx(config, proj_abs2_full, ctf_params, noise_variance)
         # Full residual: scores = -0.5 * (cross + norm)
         scores_full = -0.5 * (cross_term + norm_term[..., None])
 
         # === HALF-SPECTRUM path ===
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data, ctf_params, noise_variance, translations, config,
-            n_images, n_trans,
+            batch_data,
+            ctf_params,
+            noise_variance,
+            translations,
+            config,
+            n_images,
+            n_trans,
         )
 
         proj_half, proj_abs2_half = _compute_projections_block(
@@ -332,9 +333,16 @@ class TestEStepHalfMatchesFull:
         proj_abs2_weighted = proj_abs2_half * half_weights
 
         scores_half = _e_step_block_scores(
-            shifted_half, batch_norm, ctf2_over_nv_half,
-            proj_half_weighted, proj_abs2_weighted, half_weights,
-            n_images, n_trans, IMAGE_SHAPE, VOLUME_SHAPE,
+            shifted_half,
+            batch_norm,
+            ctf2_over_nv_half,
+            proj_half_weighted,
+            proj_abs2_weighted,
+            half_weights,
+            n_images,
+            n_trans,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
         )
 
         score_offset = 0.5 * np.asarray(batch_norm).reshape(n_images, 1, 1)
@@ -365,16 +373,13 @@ class TestEStepHalfMatchesFull:
 
         # Full-spectrum scores
         from recovar.em import core as em_core
-        proj_full = core.slice_volume(
-            volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=False
-        )
+
+        proj_full = core.slice_volume(volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=False)
         proj_abs2_full = jnp.abs(proj_full) ** 2
         cross_term = em_core.compute_dot_products_eqx(
             config, proj_full, batch_data, translations, ctf_params, noise_variance
         )
-        norm_term = em_core.compute_CTFed_proj_norms_eqx(
-            config, proj_abs2_full, ctf_params, noise_variance
-        )
+        norm_term = em_core.compute_CTFed_proj_norms_eqx(config, proj_abs2_full, ctf_params, noise_variance)
         scores_full = -0.5 * (cross_term + norm_term[..., None])
         # Softmax
         scores_flat = scores_full.reshape(n_images, -1)
@@ -383,8 +388,13 @@ class TestEStepHalfMatchesFull:
 
         # Half-spectrum scores
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data, ctf_params, noise_variance, translations, config,
-            n_images, n_trans,
+            batch_data,
+            ctf_params,
+            noise_variance,
+            translations,
+            config,
+            n_images,
+            n_trans,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
             volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp"
@@ -394,9 +404,16 @@ class TestEStepHalfMatchesFull:
         proj_abs2_weighted = proj_abs2_half * half_weights
 
         scores_half = _e_step_block_scores(
-            shifted_half, batch_norm, ctf2_over_nv_half,
-            proj_half_weighted, proj_abs2_weighted, half_weights,
-            n_images, n_trans, IMAGE_SHAPE, VOLUME_SHAPE,
+            shifted_half,
+            batch_norm,
+            ctf2_over_nv_half,
+            proj_half_weighted,
+            proj_abs2_weighted,
+            half_weights,
+            n_images,
+            n_trans,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
         )
         scores_h_flat = scores_half.reshape(n_images, -1)
         log_Z_half = jax.scipy.special.logsumexp(scores_h_flat, axis=1)
@@ -438,8 +455,13 @@ class TestMStepHalfMatchesFull:
 
         # -- Compute shared probabilities using half-spectrum path (already verified) --
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data, ctf_params, noise_variance, translations, config,
-            n_images, n_trans,
+            batch_data,
+            ctf_params,
+            noise_variance,
+            translations,
+            config,
+            n_images,
+            n_trans,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
             volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp"
@@ -449,9 +471,16 @@ class TestMStepHalfMatchesFull:
         proj_abs2_weighted = proj_abs2_half * half_weights
 
         scores = _e_step_block_scores(
-            shifted_half, batch_norm, ctf2_over_nv_half,
-            proj_half_weighted, proj_abs2_weighted, half_weights,
-            n_images, n_trans, IMAGE_SHAPE, VOLUME_SHAPE,
+            shifted_half,
+            batch_norm,
+            ctf2_over_nv_half,
+            proj_half_weighted,
+            proj_abs2_weighted,
+            half_weights,
+            n_images,
+            n_trans,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
         )
         scores_flat = scores.reshape(n_images, -1)
         log_Z = jax.scipy.special.logsumexp(scores_flat, axis=1)
@@ -461,9 +490,17 @@ class TestMStepHalfMatchesFull:
         Ft_ctf_half = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
 
         Ft_y_half, Ft_ctf_half, probs, _, _, _, _ = _m_step_block(
-            shifted_half, scores, log_Z, rotations, ctf2_over_nv_half,
-            Ft_y_half, Ft_ctf_half,
-            n_images, n_trans, IMAGE_SHAPE, VOLUME_SHAPE,
+            shifted_half,
+            scores,
+            log_Z,
+            rotations,
+            ctf2_over_nv_half,
+            Ft_y_half,
+            Ft_ctf_half,
+            n_images,
+            n_trans,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
         )
 
         # -- Full-spectrum reference M-step --
@@ -472,10 +509,12 @@ class TestMStepHalfMatchesFull:
         processed = config.process_fn(batch_data, apply_image_mask=False)
         ctf_weighted = processed * CTF / noise_variance
         shifted_full = core.batch_trans_translate_images(
-            ctf_weighted, jnp.repeat(translations[None], n_images, axis=0), IMAGE_SHAPE,
+            ctf_weighted,
+            jnp.repeat(translations[None], n_images, axis=0),
+            IMAGE_SHAPE,
         )
         shifted_full_flat = shifted_full.reshape(n_images * n_trans, -1)
-        ctf2_over_nv_full = CTF ** 2 / noise_variance
+        ctf2_over_nv_full = CTF**2 / noise_variance
 
         Ft_y_full = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
         Ft_ctf_full = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
@@ -486,16 +525,26 @@ class TestMStepHalfMatchesFull:
         summed_full = P @ shifted_full_flat  # (rot_block, N_full)
         summed_half_ref = ftu.full_image_to_half_image(summed_full, IMAGE_SHAPE)
         Ft_y_full = core.adjoint_slice_volume(
-            summed_half_ref, rotations, IMAGE_SHAPE, VOLUME_SHAPE,
-            "linear_interp", volume=Ft_y_full, half_image=True,
+            summed_half_ref,
+            rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            "linear_interp",
+            volume=Ft_y_full,
+            half_image=True,
         )
 
         probs_sum_t = jnp.sum(probs, axis=-1)
         ctf_probs_full = probs_sum_t.T @ ctf2_over_nv_full
         ctf_half_ref = ftu.full_image_to_half_image(ctf_probs_full, IMAGE_SHAPE)
         Ft_ctf_full = core.adjoint_slice_volume(
-            ctf_half_ref, rotations, IMAGE_SHAPE, VOLUME_SHAPE,
-            "linear_interp", volume=Ft_ctf_full, half_image=True,
+            ctf_half_ref,
+            rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            "linear_interp",
+            volume=Ft_ctf_full,
+            half_image=True,
         )
 
         np.testing.assert_allclose(
@@ -535,15 +584,25 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         new_mean1, ha1, Ft_y1, Ft_ctf1 = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
 
         new_mean2, ha2, Ft_y2, Ft_ctf2 = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
@@ -564,8 +623,13 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         _, ha, _, _ = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
@@ -585,8 +649,13 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         new_mean, ha, Ft_y, Ft_ctf = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
@@ -606,8 +675,13 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         _, hard_assignments, _, _, stats = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             return_stats=True,
@@ -617,7 +691,9 @@ class TestFullIterationHalfMatches:
             ds.iter_batches(N_IMAGES, indices=np.arange(N_IMAGES), by_image=False)
         )
         config = ForwardModelConfig.from_dataset(
-            ds, disc_type="linear_interp", process_fn=ds.process_images,
+            ds,
+            disc_type="linear_interp",
+            process_fn=ds.process_images,
         )
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
             jnp.asarray(batch_data),
@@ -629,7 +705,11 @@ class TestFullIterationHalfMatches:
             N_TRANSLATIONS,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
-            volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp",
+            volume,
+            rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            "linear_interp",
         )
         half_weights = make_half_image_weights(IMAGE_SHAPE)
         scores = _e_step_block_scores(
@@ -647,9 +727,7 @@ class TestFullIterationHalfMatches:
         scores_flat = np.asarray(scores).reshape(N_IMAGES, -1)
         expected_best = np.max(scores_flat, axis=1)
         max_scores = np.max(scores_flat, axis=1, keepdims=True)
-        expected_log_z = max_scores[:, 0] + np.log(
-            np.sum(np.exp(scores_flat - max_scores), axis=1)
-        )
+        expected_log_z = max_scores[:, 0] + np.log(np.sum(np.exp(scores_flat - max_scores), axis=1))
         log_score_offset = -0.5 * np.asarray(batch_norm).reshape(N_IMAGES)
         expected_pmax = np.exp(expected_best - expected_log_z)
 
@@ -698,8 +776,13 @@ class TestFullIterationHalfMatches:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         _, _, _, _, stats = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             return_stats=True,
@@ -709,7 +792,9 @@ class TestFullIterationHalfMatches:
             ds.iter_batches(N_IMAGES, indices=np.arange(N_IMAGES), by_image=False)
         )
         config = ForwardModelConfig.from_dataset(
-            ds, disc_type="linear_interp", process_fn=ds.process_images,
+            ds,
+            disc_type="linear_interp",
+            process_fn=ds.process_images,
         )
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
             jnp.asarray(batch_data),
@@ -721,7 +806,11 @@ class TestFullIterationHalfMatches:
             N_TRANSLATIONS,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
-            volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp",
+            volume,
+            rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            "linear_interp",
         )
         half_weights = make_half_image_weights(IMAGE_SHAPE)
 
@@ -737,9 +826,7 @@ class TestFullIterationHalfMatches:
         rel_scores_flat = rel_scores.reshape(N_IMAGES, -1)
         rel_best = np.max(rel_scores_flat, axis=1)
         rel_max = np.max(rel_scores_flat, axis=1, keepdims=True)
-        rel_log_z = rel_max[:, 0] + np.log(
-            np.sum(np.exp(rel_scores_flat - rel_max), axis=1)
-        )
+        rel_log_z = rel_max[:, 0] + np.log(np.sum(np.exp(rel_scores_flat - rel_max), axis=1))
         expected_pmax = np.exp(rel_best - rel_log_z)
 
         uniform_pmax = np.full_like(
@@ -918,34 +1005,51 @@ class TestFullIterationHalfMatches:
 
         # All rotations in one block
         new_mean_1, ha_1, Ft_y_1, Ft_ctf_1 = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
 
         # Rotations split into blocks of 2 (5 rots -> 3 blocks: 2+2+1, padded to 2+2+2)
         new_mean_2, ha_2, Ft_y_2, Ft_ctf_2 = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=2,
         )
 
         np.testing.assert_allclose(
-            np.array(new_mean_1), np.array(new_mean_2), atol=1e-4,
+            np.array(new_mean_1),
+            np.array(new_mean_2),
+            atol=1e-4,
             err_msg="Mean differs between single-block and multi-block rotation processing",
         )
         np.testing.assert_array_equal(
-            ha_1, ha_2,
+            ha_1,
+            ha_2,
             err_msg="Hard assignments differ between single-block and multi-block rotation processing",
         )
         np.testing.assert_allclose(
-            np.array(Ft_y_1), np.array(Ft_y_2), atol=1e-4,
+            np.array(Ft_y_1),
+            np.array(Ft_y_2),
+            atol=1e-4,
             err_msg="Ft_y differs between single-block and multi-block rotation processing",
         )
         np.testing.assert_allclose(
-            np.array(Ft_ctf_1), np.array(Ft_ctf_2), atol=1e-4,
+            np.array(Ft_ctf_1),
+            np.array(Ft_ctf_2),
+            atol=1e-4,
             err_msg="Ft_ctf differs between single-block and multi-block rotation processing",
         )
 
@@ -961,97 +1065,42 @@ class TestFullIterationHalfMatches:
 
         # All images in one batch
         new_mean_1, ha_1, Ft_y_1, Ft_ctf_1 = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
         )
 
         # Images in batches of 1
         new_mean_2, ha_2, Ft_y_2, Ft_ctf_2 = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=1,
             rotation_block_size=N_ROTATIONS,
         )
 
         np.testing.assert_allclose(
-            np.array(new_mean_1), np.array(new_mean_2), atol=1e-4,
+            np.array(new_mean_1),
+            np.array(new_mean_2),
+            atol=1e-4,
             err_msg="Mean differs between single-batch and multi-batch image processing",
         )
         # Hard assignments should match (same probabilities -> same argmax)
         np.testing.assert_array_equal(
-            ha_1, ha_2,
+            ha_1,
+            ha_2,
             err_msg="Hard assignments differ between single-batch and multi-batch image processing",
         )
-
-    def test_profile_and_projection_reuse_preserve_outputs(self, seeded_inputs, monkeypatch):
-        """Reusing pass-1 projections should not change EM outputs."""
-        s = seeded_inputs
-        ds = s["dataset"]
-        volume = s["volume"]
-        noise_variance = s["noise_variance"]
-        rotations = np.array(s["rotations"])
-        translations = np.array(s["translations"])
-        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
-
-        original_compute = engine_v2_mod._compute_projections_block
-
-        call_count = {"n": 0}
-
-        def counted_compute(*args, **kwargs):
-            call_count["n"] += 1
-            return original_compute(*args, **kwargs)
-
-        monkeypatch.setattr(engine_v2_mod, "_compute_projections_block", counted_compute)
-        new_mean_1, ha_1, Ft_y_1, Ft_ctf_1, stats_1, profile_1 = run_em_v2(
-            ds,
-            volume,
-            mean_variance,
-            noise_variance,
-            rotations,
-            translations,
-            "linear_interp",
-            image_batch_size=N_IMAGES,
-            rotation_block_size=2,
-            return_stats=True,
-            return_profile=True,
-            reuse_pass1_projections=False,
-        )
-        calls_without_reuse = call_count["n"]
-
-        call_count["n"] = 0
-        new_mean_2, ha_2, Ft_y_2, Ft_ctf_2, stats_2, profile_2 = run_em_v2(
-            ds,
-            volume,
-            mean_variance,
-            noise_variance,
-            rotations,
-            translations,
-            "linear_interp",
-            image_batch_size=N_IMAGES,
-            rotation_block_size=2,
-            return_stats=True,
-            return_profile=True,
-            reuse_pass1_projections=True,
-        )
-        calls_with_reuse = call_count["n"]
-
-        np.testing.assert_allclose(np.asarray(new_mean_1), np.asarray(new_mean_2), atol=1e-5)
-        np.testing.assert_array_equal(ha_1, ha_2)
-        np.testing.assert_allclose(np.asarray(Ft_y_1), np.asarray(Ft_y_2), atol=1e-5)
-        np.testing.assert_allclose(np.asarray(Ft_ctf_1), np.asarray(Ft_ctf_2), atol=1e-5)
-        np.testing.assert_allclose(
-            np.asarray(stats_1.rotation_posterior_sums),
-            np.asarray(stats_2.rotation_posterior_sums),
-            atol=1e-5,
-        )
-        assert calls_without_reuse == 6
-        assert calls_with_reuse == 3
-        assert profile_1.reused_pass1_projections is False
-        assert profile_2.reused_pass1_projections is True
-        assert profile_2.n_blocks == 3
-        assert profile_2.pass2_projection_s == pytest.approx(0.0, abs=1e-9)
 
 
 # ===========================================================================
@@ -1101,8 +1150,7 @@ class TestStreamingLogsumexp:
 
         # Create 3 blocks of scores
         blocks = [
-            jnp.array(rng.standard_normal((n_images, n_rot_per_block, n_trans)).astype(np.float32))
-            for _ in range(3)
+            jnp.array(rng.standard_normal((n_images, n_rot_per_block, n_trans)).astype(np.float32)) for _ in range(3)
         ]
 
         # Direct: concatenate all and compute

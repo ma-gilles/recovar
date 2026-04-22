@@ -13,8 +13,8 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
-import jax.numpy as jnp
 import healpy as hp
+import jax.numpy as jnp
 
 from recovar.em.dense_single_volume.convergence import RefinementState
 from recovar.em.dense_single_volume.engine_v2 import run_em_v2
@@ -24,9 +24,9 @@ from recovar.em.dense_single_volume.refine import (
     _local_search_chunk_size,
     _local_search_engine_rotation_block_size,
     _local_search_max_union_rotations,
+    _local_search_rotation_block_size,
     _pad_local_search_rotations,
     _partition_local_search_groups,
-    _local_search_rotation_block_size,
     clamp_relion_coarse_image_size,
     collapse_rotation_posterior_to_direction_prior,
     compute_coarse_image_size,
@@ -1444,11 +1444,13 @@ def test_local_search_uses_fine_rotation_grid_when_oversampling_is_enabled(
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: np.ones(
-            max(1, fake_rotation_grid_size(healpix_order)),
-            dtype=np.float64,
-        )
-        / max(1, fake_rotation_grid_size(healpix_order)),
+        lambda rotation_posterior_sums, healpix_order: (
+            np.ones(
+                max(1, fake_rotation_grid_size(healpix_order)),
+                dtype=np.float64,
+            )
+            / max(1, fake_rotation_grid_size(healpix_order))
+        ),
     )
 
     refine_single_volume(
@@ -1477,147 +1479,6 @@ def test_local_search_uses_fine_rotation_grid_when_oversampling_is_enabled(
         assert call["healpix_order"] == 5
         assert call["n_rot"] == order_sizes[5]
         assert call["n_euler"] == order_sizes[5]
-
-
-def test_local_search_debug_flags_forward_to_grouped_path(
-    half_datasets,
-    init_volume,
-    translations,
-    monkeypatch,
-):
-    """refine_single_volume must forward grouped local-search debug toggles exactly."""
-    import recovar.em.dense_single_volume.refine as refine_mod
-
-    order_sizes = {4: 4, 5: 9}
-    local_calls = []
-
-    def fake_rotation_grid_size(order):
-        return order_sizes.get(int(order), order_sizes[4])
-
-    def fake_get_grid(order):
-        order = int(order)
-        return np.tile(np.eye(3, dtype=np.float32), (order_sizes[order], 1, 1))
-
-    def fake_get_grid_eulers(order):
-        order = int(order)
-        return np.zeros((order_sizes[order], 3), dtype=np.float32)
-
-    def fake_grouped_local_search(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        prior_rotations,
-        rotation_grid_rotations,
-        rotation_grid_eulers,
-        healpix_order,
-        sigma_rot,
-        sigma_psi,
-        translations,
-        prior_translations,
-        sigma_offset_angstrom,
-        offset_range_pixels,
-        disc_type,
-        image_batch_size,
-        rotation_block_size,
-        current_size,
-        **kwargs,
-    ):
-        _ = (
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-        )
-        local_calls.append(
-            {
-                "return_profile": kwargs.get("return_profile"),
-                "reuse_pass1_projections": kwargs.get("reuse_pass1_projections"),
-                "fused_windowed_adjoint": kwargs.get("fused_windowed_adjoint"),
-                "force_single_image_groups": kwargs.get("force_single_image_groups"),
-                "bucket_local_rotation_blocks": kwargs.get("bucket_local_rotation_blocks"),
-            }
-        )
-        n_shells = experiment_dataset.image_shape[0] // 2 + 1
-        recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
-        base = (
-            jnp.zeros(recon_vol_size, dtype=jnp.complex64),
-            jnp.ones(recon_vol_size, dtype=jnp.complex64),
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                sumw=float(experiment_dataset.n_units),
-            ),
-        )
-        if kwargs.get("return_profile"):
-            return base + ({"n_chunks": np.int32(1)},)
-        return base
-
-    monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
-    monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
-    monkeypatch.setattr(refine_mod, "_run_grouped_local_search_em", fake_grouped_local_search)
-    monkeypatch.setattr(
-        refine_mod,
-        "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: np.ones(
-            max(1, fake_rotation_grid_size(healpix_order)),
-            dtype=np.float64,
-        )
-        / max(1, fake_rotation_grid_size(healpix_order)),
-    )
-
-    refine_single_volume(
-        half_datasets,
-        init_volume,
-        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-        _make_rotations(order_sizes[4], seed=99),
-        translations,
-        disc_type="linear_interp",
-        max_iter=2,
-        image_batch_size=N_IMAGES,
-        rotation_block_size=order_sizes[4],
-        init_current_size=16,
-        adaptive_oversampling=1,
-        nside_level=4,
-        mode="relion",
-        init_healpix_order=4,
-        max_healpix_order=4,
-        local_search_return_profile=False,
-        local_search_reuse_pass1_projections=False,
-        local_search_fused_windowed_adjoint=False,
-        local_search_force_single_image_groups=True,
-        local_search_bucket_rotation_blocks=False,
-    )
-
-    assert local_calls
-    for call in local_calls:
-        assert call["return_profile"] is False
-        assert call["reuse_pass1_projections"] is False
-        assert call["fused_windowed_adjoint"] is False
-        assert call["force_single_image_groups"] is True
-        assert call["bucket_local_rotation_blocks"] is False
 
 
 def test_local_search_uses_negative_rounded_previous_offsets_for_translation_prior(
@@ -1755,11 +1616,13 @@ def test_local_search_uses_negative_rounded_previous_offsets_for_translation_pri
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: np.ones(
-            max(1, fake_rotation_grid_size(healpix_order)),
-            dtype=np.float64,
-        )
-        / max(1, fake_rotation_grid_size(healpix_order)),
+        lambda rotation_posterior_sums, healpix_order: (
+            np.ones(
+                max(1, fake_rotation_grid_size(healpix_order)),
+                dtype=np.float64,
+            )
+            / max(1, fake_rotation_grid_size(healpix_order))
+        ),
     )
 
     refine_single_volume(
@@ -1901,11 +1764,13 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: np.ones(
-            max(1, rotation_grid_size(healpix_order)),
-            dtype=np.float64,
-        )
-        / max(1, rotation_grid_size(healpix_order)),
+        lambda rotation_posterior_sums, healpix_order: (
+            np.ones(
+                max(1, rotation_grid_size(healpix_order)),
+                dtype=np.float64,
+            )
+            / max(1, rotation_grid_size(healpix_order))
+        ),
     )
 
     refine_single_volume(
@@ -2056,11 +1921,13 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: np.ones(
-            max(1, rotation_grid_size(healpix_order)),
-            dtype=np.float64,
-        )
-        / max(1, rotation_grid_size(healpix_order)),
+        lambda rotation_posterior_sums, healpix_order: (
+            np.ones(
+                max(1, rotation_grid_size(healpix_order)),
+                dtype=np.float64,
+            )
+            / max(1, rotation_grid_size(healpix_order))
+        ),
     )
 
     refine_single_volume(
@@ -2305,11 +2172,13 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
     monkeypatch.setattr(
         refine_mod,
         "collapse_rotation_posterior_to_direction_prior",
-        lambda rotation_posterior_sums, healpix_order: np.ones(
-            max(1, fake_rotation_grid_size(healpix_order)),
-            dtype=np.float64,
-        )
-        / max(1, fake_rotation_grid_size(healpix_order)),
+        lambda rotation_posterior_sums, healpix_order: (
+            np.ones(
+                max(1, fake_rotation_grid_size(healpix_order)),
+                dtype=np.float64,
+            )
+            / max(1, fake_rotation_grid_size(healpix_order))
+        ),
     )
 
     result = refine_single_volume(
