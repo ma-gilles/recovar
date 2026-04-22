@@ -54,15 +54,15 @@ new command/job metadata, and final outcome.
 ### 11-iteration 5k replay
 
 - Git commit:
-  `PENDING`
+  `e08d92da`
 - Command / script:
-  `PENDING`
+  `sbatch /scratch/gpfs/GILLES/mg6942/tmp/codex_resubmit_jobs_20260422_085035_21094/parity_5k11_e08d92da.sbatch`
 - Job id:
-  `PENDING`
+  `7240804`
 - Output dir:
-  `PENDING`
+  `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/_agent_scratch/multi_iter_11_full_e08d92da_grouped4096_gt`
 - Log:
-  `PENDING`
+  `/scratch/gpfs/GILLES/mg6942/slurmo/parity-5k11-v2-7240804.out`
 - Status:
   `PENDING`
 - Final metrics:
@@ -74,15 +74,15 @@ new command/job metadata, and final outcome.
 ### 20k benchmark, noise `1.0`
 
 - Git commit:
-  `PENDING`
+  `e08d92da`
 - Command / script:
-  `PENDING`
+  `sbatch --job-name=parity-20k-bench-v2 --output=/scratch/gpfs/GILLES/mg6942/slurmo/parity-20k-bench-v2-%j.out --export=ALL,REPO_DIR=/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar,DATA_DIR=/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_20k_benchmark,OUTPUT_DIR=/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_20k_benchmark/comparison_results_v2,OUR_RESULTS_DIR=/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_20k_benchmark/our_results_relion_v2,N_IMAGES=20000,GRID_SIZE=128,NOISE_LEVEL=1.0,MAX_ITER=10 scripts/run_relion_parity_benchmark_slurm.sh`
 - Job id:
-  `PENDING`
+  `7240805`
 - Data dir:
-  `PENDING`
+  `/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_20k_benchmark`
 - Log:
-  `PENDING`
+  `/scratch/gpfs/GILLES/mg6942/slurmo/parity-20k-bench-v2-7240805.out`
 - Status:
   `PENDING`
 - Final metrics:
@@ -94,15 +94,15 @@ new command/job metadata, and final outcome.
 ### 20k benchmark, noise `0.1`
 
 - Git commit:
-  `PENDING`
+  `e08d92da`
 - Command / script:
-  `PENDING`
+  `sbatch --job-name=parity-20k-n0p1-v2 --output=/scratch/gpfs/GILLES/mg6942/slurmo/parity-20k-n0p1-v2-%j.out --export=ALL,REPO_DIR=/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar,DATA_DIR=/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise0p1_20k_benchmark,OUTPUT_DIR=/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise0p1_20k_benchmark/comparison_results_v2,OUR_RESULTS_DIR=/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise0p1_20k_benchmark/our_results_relion_v2,N_IMAGES=20000,GRID_SIZE=128,NOISE_LEVEL=0.1,MAX_ITER=15 scripts/run_relion_parity_benchmark_slurm.sh`
 - Job id:
-  `PENDING`
+  `7240806`
 - Data dir:
-  `PENDING`
+  `/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise0p1_20k_benchmark`
 - Log:
-  `PENDING`
+  `/scratch/gpfs/GILLES/mg6942/slurmo/parity-20k-n0p1-v2-7240806.out`
 - Status:
   `PENDING`
 - Final metrics:
