@@ -221,6 +221,56 @@ def _local_search_rotation_block_size(local_rotation_count: int, rotation_block_
     return int(min(bucket, rotation_block_size))
 
 
+def _local_search_engine_rotation_block_size(rotation_block_size: int) -> int:
+    """Cap the exact local-search engine block size.
+
+    Local search already reduces the candidate set per image from the full
+    HEALPix grid down to a few thousand rotations. Reusing the dense-search
+    5k rotation tile size here creates oversized XLA kernels whose compile
+    time dominates the first local-search iteration. A 1k cap keeps the
+    candidate set exact while making the compiled score kernels much smaller.
+    """
+    return int(max(64, min(int(rotation_block_size), 1024)))
+
+
+def _pad_local_search_rotations(
+    local_rotations: np.ndarray,
+    local_log_prior: np.ndarray,
+    rotation_block_size: int,
+) -> tuple[np.ndarray, np.ndarray, int, int]:
+    """Pad one exact local neighborhood to a compile-friendly bucket.
+
+    The padded rotations are masked out with a `-1e30` log-prior so the
+    posterior over the real candidates is unchanged. This lets the local
+    path reuse a small number of compiled `run_em_v2` shapes instead of
+    recompiling for every distinct neighborhood size.
+    """
+    local_rotations = np.asarray(local_rotations, dtype=np.float32).reshape(-1, 3, 3)
+    local_log_prior = np.asarray(local_log_prior, dtype=np.float32)
+    actual_count = int(local_rotations.shape[0])
+    block_size = _local_search_rotation_block_size(actual_count, int(rotation_block_size))
+    if block_size <= actual_count:
+        return local_rotations, local_log_prior, actual_count, block_size
+
+    pad_count = block_size - actual_count
+    padded_rotations = np.concatenate(
+        [
+            local_rotations,
+            np.broadcast_to(np.eye(3, dtype=np.float32), (pad_count, 3, 3)).copy(),
+        ],
+        axis=0,
+    )
+    pad_shape = local_log_prior.shape[:-1] + (pad_count,)
+    padded_log_prior = np.concatenate(
+        [
+            local_log_prior,
+            np.full(pad_shape, -1e30, dtype=np.float32),
+        ],
+        axis=-1,
+    )
+    return padded_rotations, padded_log_prior, actual_count, block_size
+
+
 def _run_grouped_local_search_em(
     experiment_dataset,
     mean,
@@ -254,6 +304,7 @@ def _run_grouped_local_search_em(
     chunks; each chunk evaluates the union of its local neighborhoods with
     an image-specific rotation prior.
     """
+    rotation_block_size = _local_search_engine_rotation_block_size(rotation_block_size)
     prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
     if prior_rotations.ndim == 3:
         n_prior = prior_rotations.shape[0]
@@ -323,6 +374,8 @@ def _run_grouped_local_search_em(
     selector_time = 0.0
     translation_prior_time = 0.0
     em_time = 0.0
+    total_bucket_rotations = 0
+    max_bucket_rotations = 0
     # The local-search selector must operate on the actual trial grid that will
     # be scored for this iteration. When the caller has already applied
     # SamplingPerturbation to `rotation_grid_eulers`, using canonical unperturbed
@@ -374,22 +427,29 @@ def _run_grouped_local_search_em(
         max_local_rotations = max(max_local_rotations, int(local_rotations.shape[0]))
 
         em_t0 = time.time()
-        local_rotation_block_size = _local_search_rotation_block_size(
-            int(local_rotations.shape[0]),
+        padded_rotations, padded_log_prior, actual_local_rotation_count, local_rotation_block_size = _pad_local_search_rotations(
+            local_rotations,
+            local_log_prior,
             int(rotation_block_size),
         )
+        padded_total_rotations = int(
+            ((padded_rotations.shape[0] + local_rotation_block_size - 1) // local_rotation_block_size)
+            * local_rotation_block_size
+        )
+        total_bucket_rotations += padded_total_rotations
+        max_bucket_rotations = max(max_bucket_rotations, int(local_rotation_block_size))
         run_em_outputs = run_em_v2(
             experiment_dataset,
             mean,
             mean_variance,
             noise_variance,
-            local_rotations,
+            padded_rotations,
             translations,
             disc_type,
             image_batch_size=image_batch_size,
             rotation_block_size=local_rotation_block_size,
             current_size=current_size,
-            rotation_log_prior=local_log_prior,
+            rotation_log_prior=padded_log_prior,
             translation_log_prior=local_translation_log_prior,
             image_indices=group_image_indices,
             score_with_masked_images=True,
@@ -413,6 +473,11 @@ def _run_grouped_local_search_em(
 
         local_rot_idx = ha_local // n_trans
         trans_idx = ha_local % n_trans
+        if np.any(local_rot_idx >= actual_local_rotation_count):
+            raise RuntimeError(
+                "Padded local-search rotation selected despite masked prior; "
+                f"got index {int(np.max(local_rot_idx))} with actual_count={actual_local_rotation_count}"
+            )
         hard_assignment[group_image_indices] = (local_indices[local_rot_idx] * n_trans + trans_idx).astype(np.int32)
         log_evidence[group_image_indices] = np.asarray(
             stats_g.log_evidence_per_image,
@@ -427,16 +492,19 @@ def _run_grouped_local_search_em(
             dtype=np.float32,
         )
         rotation_posterior_sums[local_indices] += np.asarray(
-            stats_g.rotation_posterior_sums,
+            stats_g.rotation_posterior_sums[:actual_local_rotation_count],
             dtype=np.float64,
         )
 
     logger.info(
-        "Batched local search: %d chunks, median chunk size=%d, mean local rotations=%.1f, max local rotations=%d",
+        "Batched local search: %d chunks, median chunk size=%d, mean local rotations=%.1f, max local rotations=%d, "
+        "mean bucket rotations=%.1f, max bucket rotations=%d",
         n_chunks,
         int(np.median(chunk_sizes)) if chunk_sizes else 0,
         float(total_local_rotations / max(n_chunks, 1)),
         max_local_rotations,
+        float(total_bucket_rotations / max(n_chunks, 1)),
+        max_bucket_rotations,
     )
     logger.info(
         "Batched local search timings: metadata=%.2fs, selector=%.2fs, translation_prior=%.2fs, em=%.2fs",
@@ -1096,6 +1164,7 @@ def refine_single_volume(
     init_scale_corrections=None,
     init_direction_prior=None,
     init_previous_best_translations=None,
+    init_previous_best_rotation_eulers=None,
     replay_iteration_overrides=None,
     skip_final_iteration=False,
 ):
@@ -1243,6 +1312,7 @@ def refine_single_volume(
             init_scale_corrections=init_scale_corrections,
             init_direction_prior=init_direction_prior,
             init_previous_best_translations=init_previous_best_translations,
+            init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
             replay_iteration_overrides=replay_iteration_overrides,
             skip_final_iteration=skip_final_iteration,
         )
@@ -1573,6 +1643,7 @@ def _refine_relion_mode(
     init_scale_corrections=None,
     init_direction_prior=None,
     init_previous_best_translations=None,
+    init_previous_best_rotation_eulers=None,
     replay_iteration_overrides=None,
     skip_final_iteration=False,
 ):
@@ -1779,6 +1850,15 @@ def _refine_relion_mode(
             else None,
             np.asarray(init_previous_best_translations[1], dtype=np.float32)
             if init_previous_best_translations[1] is not None
+            else None,
+        ]
+    if init_previous_best_rotation_eulers is not None:
+        previous_best_rotation_eulers = [
+            np.asarray(init_previous_best_rotation_eulers[0], dtype=np.float32)
+            if init_previous_best_rotation_eulers[0] is not None
+            else None,
+            np.asarray(init_previous_best_rotation_eulers[1], dtype=np.float32)
+            if init_previous_best_rotation_eulers[1] is not None
             else None,
         ]
     max_posterior_per_half = [None, None]
@@ -2305,7 +2385,6 @@ def _refine_relion_mode(
         use_local = (
             state.do_local_search
             and all(eulers is not None for eulers in previous_best_rotation_eulers)
-            and iteration > 0
         )
         # --- Apply RELION SamplingPerturbation to the trial grid for this iter ---
         # healpix_sampling.cpp:1909-1934 (rotations) + 1810-1820 (translations)

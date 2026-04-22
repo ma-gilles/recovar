@@ -395,6 +395,17 @@ def main():
         trans_h2 = None
 
     angle_cols = ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"]
+    euler_h1 = None
+    euler_h2 = None
+    if all(col in relion_df.columns for col in angle_cols):
+        eulers = np.stack([np.array(relion_df[col], dtype=np.float64) for col in angle_cols], axis=1)
+        euler_h1 = np.array([eulers[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
+        euler_h2 = np.array([eulers[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+        print(
+            f"  Previous best eulers: h1={euler_h1.shape[0]} particles, h2={euler_h2.shape[0]} particles"
+        )
+    else:
+        print("  Previous best eulers: None (angle columns not found)")
 
     # ---- Sigma offset from model star ----
     general = model_h1["model_general"]
@@ -586,6 +597,7 @@ def main():
         init_image_corrections=[corr_h1, corr_h2],
         init_scale_corrections=[scale_corr_h1, scale_corr_h2],
         init_previous_best_translations=[trans_h1, trans_h2],
+        init_previous_best_rotation_eulers=[euler_h1, euler_h2],
         init_direction_prior=direction_prior,
         replay_iteration_overrides=replay_iteration_overrides,
         save_intermediates_dir=save_intermediates_dir,
