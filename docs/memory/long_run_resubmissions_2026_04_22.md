@@ -64,7 +64,12 @@ new command/job metadata, and final outcome.
 - Log:
   `/scratch/gpfs/GILLES/mg6942/slurmo/parity-5k11-v2-7240804.out`
 - Status:
-  `PENDING`
+  `RUNNING`
+- Live note:
+  as of 2026-04-22 09:18 ET, the job is running on `della-h20g5`
+  (`squeue` elapsed `26:07`). The log still contains the old
+  `pip uninstall -y recovar` traceback near the top, but the job is
+  past bootstrap and actively running RECOVAR local-search EM.
 - Final metrics:
   - half-map FSC `0.143`: `PENDING`
   - merged-vs-GT FSC `0.5`: `PENDING`
@@ -84,7 +89,12 @@ new command/job metadata, and final outcome.
 - Log:
   `/scratch/gpfs/GILLES/mg6942/slurmo/parity-20k-bench-v2-7240805.out`
 - Status:
-  `PENDING`
+  `RUNNING`
+- Live note:
+  as of 2026-04-22 09:18 ET, the job is running on `della-h20g1`
+  (`squeue` elapsed `26:07`). The log still contains the old
+  `pip uninstall -y recovar` traceback near the top, but the job is
+  past bootstrap and actively running RECOVAR EM.
 - Final metrics:
   - half-map FSC `0.143`: `PENDING`
   - merged-vs-GT FSC `0.5`: `PENDING`
@@ -104,7 +114,11 @@ new command/job metadata, and final outcome.
 - Log:
   `/scratch/gpfs/GILLES/mg6942/slurmo/parity-20k-n0p1-v2-7240806.out`
 - Status:
-  `PENDING`
+  `RUNNING`
+- Live note:
+  as of 2026-04-22 09:18 ET, the job is running on `della-h20g2`
+  (`squeue` elapsed `26:07`) and is already through RECOVAR EM with no
+  bootstrap traceback at the top of the log.
 - Final metrics:
   - half-map FSC `0.143`: `PENDING`
   - merged-vs-GT FSC `0.5`: `PENDING`

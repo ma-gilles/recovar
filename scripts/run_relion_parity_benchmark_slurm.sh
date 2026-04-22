@@ -53,9 +53,8 @@ git status --short
 
 echo "=== Pixi setup ==="
 pixi install
+pixi run install-recovar
 PIXI_PY="$(pixi run which python)"
-"$PIXI_PY" -m pip uninstall -y recovar || true
-"$PIXI_PY" -m pip install -e . --no-deps --no-build-isolation --ignore-installed
 PYTHON="$PIXI_PY" make -C recovar/cuda clean all
 pixi run smoke-import-recovar
 "$PIXI_PY" -c "import pathlib,recovar,jax; repo=pathlib.Path.cwd().resolve(); assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo)+'/'); assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve())"

@@ -20,6 +20,7 @@ import jax.numpy as jnp
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 import recovar.core.fourier_transform_utils as ftu
+import recovar.em.dense_single_volume.engine_v2 as engine_v2_mod
 from recovar.em.dense_single_volume.engine_v2 import (
     make_half_image_weights,
     _preprocess_batch,
@@ -983,6 +984,74 @@ class TestFullIterationHalfMatches:
             ha_1, ha_2,
             err_msg="Hard assignments differ between single-batch and multi-batch image processing",
         )
+
+    def test_profile_and_projection_reuse_preserve_outputs(self, seeded_inputs, monkeypatch):
+        """Reusing pass-1 projections should not change EM outputs."""
+        s = seeded_inputs
+        ds = s["dataset"]
+        volume = s["volume"]
+        noise_variance = s["noise_variance"]
+        rotations = np.array(s["rotations"])
+        translations = np.array(s["translations"])
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+
+        original_compute = engine_v2_mod._compute_projections_block
+
+        call_count = {"n": 0}
+
+        def counted_compute(*args, **kwargs):
+            call_count["n"] += 1
+            return original_compute(*args, **kwargs)
+
+        monkeypatch.setattr(engine_v2_mod, "_compute_projections_block", counted_compute)
+        new_mean_1, ha_1, Ft_y_1, Ft_ctf_1, stats_1, profile_1 = run_em_v2(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=2,
+            return_stats=True,
+            return_profile=True,
+            reuse_pass1_projections=False,
+        )
+        calls_without_reuse = call_count["n"]
+
+        call_count["n"] = 0
+        new_mean_2, ha_2, Ft_y_2, Ft_ctf_2, stats_2, profile_2 = run_em_v2(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=2,
+            return_stats=True,
+            return_profile=True,
+            reuse_pass1_projections=True,
+        )
+        calls_with_reuse = call_count["n"]
+
+        np.testing.assert_allclose(np.asarray(new_mean_1), np.asarray(new_mean_2), atol=1e-5)
+        np.testing.assert_array_equal(ha_1, ha_2)
+        np.testing.assert_allclose(np.asarray(Ft_y_1), np.asarray(Ft_y_2), atol=1e-5)
+        np.testing.assert_allclose(np.asarray(Ft_ctf_1), np.asarray(Ft_ctf_2), atol=1e-5)
+        np.testing.assert_allclose(
+            np.asarray(stats_1.rotation_posterior_sums),
+            np.asarray(stats_2.rotation_posterior_sums),
+            atol=1e-5,
+        )
+        assert calls_without_reuse == 6
+        assert calls_with_reuse == 3
+        assert profile_1.reused_pass1_projections is False
+        assert profile_2.reused_pass1_projections is True
+        assert profile_2.n_blocks == 3
+        assert profile_2.pass2_projection_s == pytest.approx(0.0, abs=1e-9)
 
 
 # ===========================================================================

@@ -35,6 +35,7 @@ Fourier windowing:
 """
 
 import logging
+import time
 from functools import partial
 
 import jax
@@ -45,9 +46,16 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 
-from .types import NoiseStats, RelionStats
+from .types import EMProfileStats, NoiseStats, RelionStats
 
 logger = logging.getLogger(__name__)
+
+
+def _block_until_ready(*arrays):
+    """Synchronize JAX arrays before timing continues."""
+    for arr in arrays:
+        if hasattr(arr, "block_until_ready"):
+            arr.block_until_ready()
 
 
 # -- Half-spectrum utilities -------------------------------------------------
@@ -307,6 +315,38 @@ def _m_step_block_windowed(
     return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed
 
 
+@partial(jax.jit, static_argnums=(4, 5, 6, 7))
+def _adjoint_slice_volume_windowed(
+    windowed_half,
+    window_indices,
+    rotations_block,
+    volume,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_image,
+):
+    """Scatter a windowed half-spectrum into a full half-grid and adjoint-slice.
+
+    This keeps the scatter inside a single jitted helper so the grouped local
+    path does not bounce back through Python between the windowed GEMM output
+    and the adjoint accumulation.
+    """
+    H, W = image_shape
+    n_half = H * (W // 2 + 1)
+    full_half = jnp.zeros((windowed_half.shape[0], n_half), dtype=windowed_half.dtype)
+    full_half = full_half.at[:, window_indices].set(windowed_half)
+    return core.adjoint_slice_volume(
+        full_half,
+        rotations_block,
+        image_shape,
+        volume_shape,
+        disc_type,
+        volume=volume,
+        half_image=half_image,
+    )
+
+
 @partial(jax.jit, static_argnums=())
 def _update_logsumexp(max_s, sum_exp, scores_block):
     """Streaming logsumexp update: accumulate normalization stats from one block.
@@ -496,6 +536,9 @@ def run_em_v2(
     use_float64_projections: bool = False,
     do_gridding_correction: bool = False,
     square_window: bool = False,
+    return_profile: bool = False,
+    reuse_pass1_projections: bool = False,
+    fused_windowed_adjoint: bool = False,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -566,6 +609,16 @@ def run_em_v2(
         The equivalent Fourier-space operation is multiplication by
         ``exp(-2πi k·shift)``.  The candidate translations from the
         grid are then relative to this centered position.
+    return_profile : bool
+        When True, append an :class:`EMProfileStats` timing summary to the
+        return tuple.  This is diagnostic only.
+    reuse_pass1_projections : bool
+        Reuse pass-1 projection blocks during pass 2 instead of slicing the
+        same rotation block twice. Intended for the grouped local-search path.
+    fused_windowed_adjoint : bool
+        For windowed M-step accumulation, keep the windowed scatter inside a
+        jitted helper before adjoint slicing instead of doing the scatter in
+        Python/JAX outside the accumulator path.
     """
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]
@@ -670,6 +723,19 @@ def run_em_v2(
         rotations_padded = np.concatenate([rotations, np.tile(np.eye(3, dtype=np.float32), (pad_size, 1, 1))], axis=0)
     else:
         rotations_padded = rotations
+
+    preprocess_time = 0.0
+    pass1_projection_time = 0.0
+    pass1_score_time = 0.0
+    pass1_logsumexp_time = 0.0
+    pass2_projection_time = 0.0
+    pass2_score_time = 0.0
+    mstep_time = 0.0
+    window_scatter_time = 0.0
+    adjoint_y_time = 0.0
+    adjoint_ctf_time = 0.0
+    noise_time = 0.0
+    host_stats_time = 0.0
 
     # Prepare per-rotation log-prior (pad to match rotations_padded)
     per_image_log_prior = False
@@ -808,8 +874,10 @@ def run_em_v2(
         batch_size = len(indices)
         end_idx = start_idx + batch_size
         batch_data = jnp.asarray(batch_data)
+        projection_cache = [] if reuse_pass1_projections else None
 
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
+        preprocess_t0 = time.time()
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
             batch_data,
             ctf_params,
@@ -833,6 +901,8 @@ def run_em_v2(
             if score_with_masked_images
             else shifted_half
         )
+        _block_until_ready(shifted_half, batch_norm, ctf2_over_nv_half, shifted_recon_half)
+        preprocess_time += time.time() - preprocess_t0
 
         # -- Per-image corrections (RELION parity: avg_norm/normcorr * scale) --
         # RELION: img *= avg_norm_correction / normcorr  (ml_optimiser.cpp:6240)
@@ -963,10 +1033,16 @@ def run_em_v2(
             r1 = r0 + rotation_block_size
             rots_b = rotations_padded[r0:r1]
 
+            proj_t0 = time.time()
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
                 mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
             )
+            _block_until_ready(proj_half_b, proj_abs2_half_b)
+            pass1_projection_time += time.time() - proj_t0
+            if projection_cache is not None:
+                projection_cache.append((proj_half_b, proj_abs2_half_b))
 
+            score_t0 = time.time()
             if use_window:
                 # Gather windowed subset from projections
                 proj_windowed_b = proj_half_b[:, window_indices]
@@ -1005,6 +1081,9 @@ def run_em_v2(
                     volume_shape,
                 )
 
+            _block_until_ready(scores)
+            pass1_score_time += time.time() - score_t0
+
             # Add rotation log-prior (Gaussian angular prior for local search)
             if log_prior_padded_jnp is not None:
                 if per_image_log_prior:
@@ -1031,7 +1110,10 @@ def run_em_v2(
                 mask = jnp.arange(rotation_block_size) < valid
                 scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
 
+            logsumexp_t0 = time.time()
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
+            _block_until_ready(max_s, sum_exp)
+            pass1_logsumexp_time += time.time() - logsumexp_t0
 
         log_Z = max_s + jnp.log(sum_exp)  # (batch_size,)
 
@@ -1044,10 +1126,17 @@ def run_em_v2(
             r1 = r0 + rotation_block_size
             rots_b = rotations_padded[r0:r1]
 
-            proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
-            )
+            if projection_cache is not None:
+                proj_half_b, proj_abs2_half_b = projection_cache[b]
+            else:
+                proj_t0 = time.time()
+                proj_half_b, proj_abs2_half_b = _compute_projections_block(
+                    mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
+                )
+                _block_until_ready(proj_half_b, proj_abs2_half_b)
+                pass2_projection_time += time.time() - proj_t0
 
+            score_t0 = time.time()
             if use_window:
                 # Gather windowed subset
                 proj_windowed_b = proj_half_b[:, window_indices]
@@ -1085,6 +1174,9 @@ def run_em_v2(
                     volume_shape,
                 )
 
+            _block_until_ready(scores)
+            pass2_score_time += time.time() - score_t0
+
             # Add rotation log-prior (must match pass 1 exactly)
             if log_prior_padded_jnp is not None:
                 if per_image_log_prior:
@@ -1115,6 +1207,7 @@ def run_em_v2(
                 # Windowed M-step: GEMM at reduced dimension, then scatter back
                 # Use with-DC ctf2 for M-step accumulation (DC is excluded
                 # from scoring but must be included in reconstruction weights).
+                mstep_t0 = time.time()
                 (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed) = (
                     _m_step_block_windowed(
                         shifted_recon_windowed,
@@ -1131,34 +1224,74 @@ def run_em_v2(
                         volume_shape,
                     )
                 )
-                # Scatter windowed GEMM results back to full half-spectrum
-                rot_block_size_actual = rots_b.shape[0]
-                summed_half = jnp.zeros((rot_block_size_actual, n_half), dtype=summed_windowed.dtype)
-                summed_half = summed_half.at[:, window_indices].set(summed_windowed)
-                ctf_probs_half = jnp.zeros((rot_block_size_actual, n_half), dtype=ctf_probs_windowed.dtype)
-                ctf_probs_half = ctf_probs_half.at[:, window_indices].set(ctf_probs_windowed)
+                _block_until_ready(probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed)
+                mstep_time += time.time() - mstep_t0
+                if fused_windowed_adjoint:
+                    adjoint_y_t0 = time.time()
+                    Ft_y = _adjoint_slice_volume_windowed(
+                        summed_windowed,
+                        window_indices,
+                        rots_b,
+                        Ft_y,
+                        image_shape,
+                        recon_volume_shape,
+                        "linear_interp",
+                        True,
+                    )
+                    _block_until_ready(Ft_y)
+                    adjoint_y_time += time.time() - adjoint_y_t0
 
-                # Adjoint slice at reconstruction resolution (pf>1 → finer grid)
-                Ft_y = core.adjoint_slice_volume(
-                    summed_half,
-                    rots_b,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    volume=Ft_y,
-                    half_image=True,
-                )
-                Ft_ctf = core.adjoint_slice_volume(
-                    ctf_probs_half,
-                    rots_b,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    volume=Ft_ctf,
-                    half_image=True,
-                )
+                    adjoint_ctf_t0 = time.time()
+                    Ft_ctf = _adjoint_slice_volume_windowed(
+                        ctf_probs_windowed,
+                        window_indices,
+                        rots_b,
+                        Ft_ctf,
+                        image_shape,
+                        recon_volume_shape,
+                        "linear_interp",
+                        True,
+                    )
+                    _block_until_ready(Ft_ctf)
+                    adjoint_ctf_time += time.time() - adjoint_ctf_t0
+                else:
+                    scatter_t0 = time.time()
+                    rot_block_size_actual = rots_b.shape[0]
+                    summed_half = jnp.zeros((rot_block_size_actual, n_half), dtype=summed_windowed.dtype)
+                    summed_half = summed_half.at[:, window_indices].set(summed_windowed)
+                    ctf_probs_half = jnp.zeros((rot_block_size_actual, n_half), dtype=ctf_probs_windowed.dtype)
+                    ctf_probs_half = ctf_probs_half.at[:, window_indices].set(ctf_probs_windowed)
+                    _block_until_ready(summed_half, ctf_probs_half)
+                    window_scatter_time += time.time() - scatter_t0
+
+                    adjoint_y_t0 = time.time()
+                    Ft_y = core.adjoint_slice_volume(
+                        summed_half,
+                        rots_b,
+                        image_shape,
+                        recon_volume_shape,
+                        "linear_interp",
+                        volume=Ft_y,
+                        half_image=True,
+                    )
+                    _block_until_ready(Ft_y)
+                    adjoint_y_time += time.time() - adjoint_y_t0
+
+                    adjoint_ctf_t0 = time.time()
+                    Ft_ctf = core.adjoint_slice_volume(
+                        ctf_probs_half,
+                        rots_b,
+                        image_shape,
+                        recon_volume_shape,
+                        "linear_interp",
+                        volume=Ft_ctf,
+                        half_image=True,
+                    )
+                    _block_until_ready(Ft_ctf)
+                    adjoint_ctf_time += time.time() - adjoint_ctf_t0
             else:
                 # Non-windowed path: use with-DC ctf2 for M-step accumulation
+                mstep_t0 = time.time()
                 (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half_block, ctf_probs_half_block) = (
                     _m_step_block(
                         shifted_recon_half,
@@ -1174,9 +1307,12 @@ def run_em_v2(
                         recon_volume_shape,
                     )
                 )
+                _block_until_ready(Ft_y, Ft_ctf, probs, block_best, block_argmax)
+                mstep_time += time.time() - mstep_t0
 
             # -- Noise accumulation for this rotation block --
             if accumulate_noise:
+                noise_t0 = time.time()
                 rot_block_size_actual = rots_b.shape[0]
                 # Compute masked GEMM: P @ shifted_masked (with DC intact)
                 P_noise = probs.swapaxes(0, 1).reshape(rot_block_size_actual, batch_size * n_trans)
@@ -1206,9 +1342,11 @@ def run_em_v2(
                     si_for_noise,
                     n_shells,
                 )
+                _block_until_ready(block_noise_shells, block_a2_shells, block_xa_shells)
                 noise_wsum += np.asarray(block_noise_shells, dtype=np.float64)
                 noise_a2 += np.asarray(block_a2_shells, dtype=np.float64)
                 noise_xa += np.asarray(block_xa_shells, dtype=np.float64)
+                noise_time += time.time() - noise_t0
 
             # Track global hard assignment
             improved = block_best > best_score
@@ -1216,6 +1354,7 @@ def run_em_v2(
             best_argmax = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax)
 
             if return_stats:
+                host_stats_t0 = time.time()
                 actual_rot = max(0, min(rotation_block_size, n_rot - r0))
                 if actual_rot > 0:
                     block_rotation_sums = np.asarray(
@@ -1223,6 +1362,7 @@ def run_em_v2(
                         dtype=np.float64,
                     )
                     rotation_posterior_sums[r0 : r0 + actual_rot] += block_rotation_sums
+                host_stats_time += time.time() - host_stats_t0
 
         if return_stats:
             log_score_offset = -0.5 * jnp.squeeze(batch_norm, axis=1)
@@ -1297,20 +1437,57 @@ def run_em_v2(
             sumw=float(noise_sumw),
         )
 
+    em_profile = None
+    if return_profile:
+        em_profile = EMProfileStats(
+            preprocess_s=float(preprocess_time),
+            pass1_projection_s=float(pass1_projection_time),
+            pass1_score_s=float(pass1_score_time),
+            pass1_logsumexp_s=float(pass1_logsumexp_time),
+            pass2_projection_s=float(pass2_projection_time),
+            pass2_score_s=float(pass2_score_time),
+            mstep_s=float(mstep_time),
+            window_scatter_s=float(window_scatter_time),
+            adjoint_y_s=float(adjoint_y_time),
+            adjoint_ctf_s=float(adjoint_ctf_time),
+            noise_s=float(noise_time),
+            host_stats_s=float(host_stats_time),
+            n_images=int(n_images),
+            n_trans=int(n_trans),
+            n_rot=int(n_rot),
+            n_rot_padded=int(n_rot_padded),
+            n_blocks=int(n_blocks),
+            n_windowed=int(n_windowed),
+            use_window=bool(use_window),
+            reused_pass1_projections=bool(reuse_pass1_projections),
+        )
+
     if return_stats:
+        host_stats_t0 = time.time()
         relion_stats = RelionStats(
             log_evidence_per_image=jnp.asarray(log_evidence_per_image),
             best_log_score_per_image=jnp.asarray(best_log_score_per_image),
             max_posterior_per_image=jnp.asarray(max_posterior_per_image),
             rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
         )
+        host_stats_time += time.time() - host_stats_t0
+        if em_profile is not None:
+            em_profile = em_profile._replace(host_stats_s=float(host_stats_time))
         if accumulate_noise:
+            if return_profile:
+                return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats, noise_stats, em_profile
             return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats, noise_stats
+        if return_profile:
+            return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats, em_profile
         return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats
 
     if accumulate_noise:
+        if return_profile:
+            return new_mean, hard_assignment, Ft_y, Ft_ctf, noise_stats, em_profile
         return new_mean, hard_assignment, Ft_y, Ft_ctf, noise_stats
 
+    if return_profile:
+        return new_mean, hard_assignment, Ft_y, Ft_ctf, em_profile
     return new_mean, hard_assignment, Ft_y, Ft_ctf
 
 
