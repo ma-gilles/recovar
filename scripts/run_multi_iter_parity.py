@@ -293,8 +293,7 @@ def main():
     mean_variance = jnp.asarray(utils.make_radial_image(tau2 * n4, (N, N, N), extend_last_frequency=True))
 
     # Volume: get_dft3(vol_real) produces the unnormalized centered DFT.
-    # This is the convention run_em_v2 expects (confirmed by
-    # diagnose_estep_corrections.py achieving Pmax=0.9657 without /N).
+    # This matches the internal convention expected by the refinement code.
     vol_h1 = helpers.load_relion_volume(f"{prefix}_half1_class001.mrc")
     vol_h2 = helpers.load_relion_volume(f"{prefix}_half2_class001.mrc")
     vol_ft_h1 = np.array(ftu.get_dft3(jnp.array(vol_h1))).reshape(-1)
