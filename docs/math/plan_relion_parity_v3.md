@@ -734,7 +734,7 @@ best (rot, trans) is snapshotted in `_refine_relion_mode` BEFORE the
 per-half loop overwrites them, so the deltas are computed against the
 correct K-1 state.
 
-**Files**: `recovar/em/dense_single_volume/convergence.py`,
+**Files**: `recovar/em/dense_single_volume/refine_dev_helpers/convergence.py`,
 `recovar/em/dense_single_volume/refine.py`.
 
 ### B4. Convergence criterion (uses B3 and A1) — ✅ DONE (commit `3ca66d4`)
@@ -755,7 +755,7 @@ else:
 `refine_angular_sampling` resets the sticky trackers when the healpix
 order is bumped, matching RELION's behavior at the same boundary.
 
-**Files**: `recovar/em/dense_single_volume/convergence.py`.
+**Files**: `recovar/em/dense_single_volume/refine_dev_helpers/convergence.py`.
 
 ### B5. Final joined-halves iteration after convergence
 

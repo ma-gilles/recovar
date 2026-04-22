@@ -507,13 +507,13 @@ iteration, followed by `ml_optimiser.cpp::writeOutput()`.
 |--------|------|---------|
 | refine | `recovar/em/dense_single_volume/refine.py` | Top-level refinement loop and local search |
 | engine_v2 | `recovar/em/dense_single_volume/engine_v2.py` | Two-pass EM engine (E-step + M-step) |
-| convergence | `recovar/em/dense_single_volume/convergence.py` | Convergence detection and angular refinement |
-| adaptive | `recovar/em/dense_single_volume/adaptive.py` | Significant weight selection for oversampling |
+| convergence | `recovar/em/dense_single_volume/refine_dev_helpers/convergence.py` | Convergence detection and angular refinement |
+| adaptive | `recovar/em/dense_single_volume/refine_dev_helpers/adaptive.py` | Significant weight selection for oversampling |
 | sampling | `recovar/em/sampling.py` | HEALPix/translation grid generation |
 | regularization | `recovar/reconstruction/regularization.py` | Tau2 prior estimation and Wiener filter |
 | relion_functions | `recovar/reconstruction/relion_functions.py` | RELION-parity reconstruction helpers |
 | noise | `recovar/reconstruction/noise.py` | Noise variance estimation |
-| fourier_window | `recovar/em/dense_single_volume/fourier_window.py` | Fourier windowing (current_size) |
+| fourier_window | `recovar/em/dense_single_volume/refine_dev_helpers/fourier_window.py` | Fourier windowing (current_size) |
 
 ## Known Parity Gaps
 
