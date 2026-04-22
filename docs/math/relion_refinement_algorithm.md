@@ -411,50 +411,115 @@ been refined to the finest level (i.e., there's nothing left to try).
 
 ---
 
-## 9. Angular Refinement
+## 9. Angular Refinement and Local Search
 
-When the algorithm detects that it has converged at the current angular sampling
-(resolution stalled + assignments stable), it increases the HEALPix order by 1,
-doubles the number of directions, halves the angular step, and adjusts the
-translation grid correspondingly.
+### 9a. When does angular refinement trigger?
 
-When `healpix_order >= 4` (angular step <= 2.8 deg), the algorithm switches from
-global search to **local search**: each image searches only in a neighborhood
-around its current best orientation, using a Gaussian prior with sigma estimated
-from the posterior width.
+After each iteration, `update_refinement_state` updates two stall counters:
 
-**RELION source**: `ml_optimiser.cpp::updateAngularSampling()` (order increment +
-local search transition), `healpix_sampling.cpp::getLocalSearchGrid()`.
+- `nr_iter_wo_resol_gain`: increments when `current_resolution` did not improve over
+  `previous_resolution`. Resets to 0 on any resolution gain.
+- `nr_iter_wo_large_hidden_variable_changes`: increments when the per-particle
+  angular change (median of `|R_new - R_old|` in degrees) AND per-particle
+  translation change (RMS in Angstroms) AND class assignment change are all below
+  RELION's hardcoded thresholds (`smallest_changes_optimal_orientations` etc.).
+  Resets to 0 if any of the three exceeds its current sticky minimum.
 
-**recovar code**:
-- [`convergence.py:620`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L620) -- `should_refine_angular_sampling(state)`: returns True
-  when resolution has stalled and assignments are stable, matching RELION's trigger
-  conditions.
-- [`convergence.py:691`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L691) -- `refine_angular_sampling(state)`: increments healpix_order,
-  updates angular_step, adjusts translation range/step, and enables local search
-  when order >= 4.
-- [`refine.py:90`](../../recovar/em/dense_single_volume/refine.py#L90) -- `_run_grouped_local_search_em()`: the local-search EM iteration.
-  Groups images by their best prior orientation into GPU-friendly batches, builds
-  per-group HEALPix neighborhoods, and runs `run_em_v2` with image-specific rotation
-  priors.
-- [`sampling.py:772`](../../recovar/em/sampling.py#L772) -- `get_local_rotation_grid_fast()`: generates the HEALPix
-  neighborhood for a single direction at a given order. Uses exact pixel neighbor
-  lookup to find all orientations within the search radius.
-- [`sampling.py:102`](../../recovar/em/sampling.py#L102) -- `build_local_search_grid_metadata()`: precomputes the local
-  search grid (neighbor lists + Gaussian prior weights) for a set of seed directions.
-- [`local_search.py:92`](../../recovar/em/dense_single_volume/refine_dev_helpers/local_search.py#L92) -- `_partition_local_search_groups()`: groups images by their
-  seed direction so that images with similar neighborhoods share the same rotation
-  grid on the GPU.
-- [`relion_priors.py:16`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_priors.py#L16) -- `make_relion_translation_log_prior()`: computes Gaussian
-  translation log-prior centered on each image's previous best translation.
-- [`relion_priors.py:118`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_priors.py#L118) -- `make_relion_direction_log_prior()`: computes per-direction
-  prior weights from the accumulated posterior over directions. Used for direction
-  prior in local search.
+`should_refine_angular_sampling` returns True when BOTH counters have stalled
+for at least 1 iteration AND the angular step has not yet exceeded 75% of
+the estimated angular accuracy (`acc_rot`, from the posterior width).
 
-**Key insight**: in local search, each image sees a different rotation grid (its
-own neighborhood). To exploit GPU parallelism, images are grouped by seed direction
-so that images in the same group share the same rotation grid and can be processed
-in a single batched GEMM.
+**RELION source**: `ml_optimiser.cpp:9772-9790` (`updateAngularSampling`),
+`ml_optimiser.cpp:10135-10204` (`checkConvergence`).
+
+### 9b. What happens when refinement triggers?
+
+[`convergence.py:691`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L691) -- `refine_angular_sampling(state)`:
+1. **HEALPix order += 1**: doubles the number of directions (e.g. 768 -> 3072),
+   halves the angular step (e.g. 5.625 -> 2.8125 deg).
+2. **Translation step update**: `new_step = min(1.5, 0.75 * acc_trans) * 2^oversampling`.
+   This uses the accuracy estimated from the posterior width, not a fixed halving.
+3. **Translation range update**: `new_range = 5 * changes_optimal_offsets`, capped at
+   1.3x the previous range. `changes_optimal_offsets` is the RMS offset change from
+   the last iteration, so the search window shrinks as translations converge.
+4. **Stall counters reset**: both `nr_iter_wo_resol_gain` and
+   `nr_iter_wo_large_hidden_variable_changes` go back to 0, along with all sticky
+   per-particle change baselines. This gives the new finer grid time to converge
+   before the next refinement can trigger.
+5. **Local search activation**: when `new_order >= 4` (angular step <= 2.8 deg),
+   `do_local_search = True`. The initial local-search sigma is
+   `sigma = sqrt(8) * angular_step / 2^oversampling` (in radians).
+
+### 9c. How does local search work?
+
+In local search, instead of evaluating ALL rotations in the HEALPix grid for every
+image (which becomes infeasible at order >= 4 with 221k+ rotations), each image
+searches only in a neighborhood around its previous best orientation.
+
+**Neighborhood construction** --
+[`sampling.py:772`](../../recovar/em/sampling.py#L772) -- `get_local_rotation_grid_fast()`:
+
+For each image with prior orientation `(rot_i, tilt_i, psi_i)`:
+1. **Direction selection**: compute the angular distance between the image's prior
+   viewing direction (z-column of its rotation matrix) and every HEALPix direction
+   on the grid. Keep all directions within `3 * max(sigma_rot, sigma_psi)` degrees.
+   Typically 20-100 directions out of 3072+ at order 4.
+2. **Psi selection**: keep all in-plane angles within `3 * sigma_psi` of the image's
+   prior psi. Typically 5-15 psi angles out of 72.
+3. **Cartesian product**: the selected rotations are `{selected_directions} x {selected_psi}`,
+   typically 100-1500 rotations per image (vs 221k for the full grid).
+4. **Gaussian log-prior**: each selected rotation gets a factored prior
+   `log_prior[d,p] = log_gauss(diffang_d, sigma_rot) + log_gauss(diffpsi_p, sigma_psi)`,
+   normalized so the prior sums to 1. Unselected rotations get `-1e30` (zero weight).
+
+**Grouping for GPU efficiency** --
+[`local_search.py:92`](../../recovar/em/dense_single_volume/refine_dev_helpers/local_search.py#L92) -- `_partition_local_search_groups()`:
+
+Different images have different prior orientations, so their neighborhoods differ.
+But the engine (`run_em_v2`) processes all images in a batch against the same set
+of rotations. To reconcile:
+1. Sort images by their prior HEALPix pixel (so nearby orientations are adjacent).
+2. Form chunks of ~`image_batch_size` images.
+3. For each chunk, compute the **union** of all per-image neighborhoods. This union
+   becomes the rotation grid for the whole chunk. Each image's log-prior is
+   `(n_images_in_chunk, n_union_rotations)` -- entries outside image `i`'s own
+   neighborhood are `-1e30`.
+4. If the union is too large (> `rotation_block_size`), recursively split the chunk
+   in half until each sub-chunk's union fits.
+5. Pad the union to a JIT-friendly size (multiple of `rotation_block_size`), with
+   padding rotations masked to `-1e30` prior.
+
+**Per-chunk EM iteration** --
+[`refine.py:90`](../../recovar/em/dense_single_volume/refine.py#L90) -- `_run_grouped_local_search_em()`:
+
+For each chunk `(group_image_indices, local_rotation_indices, local_log_prior)`:
+1. Build a per-image Gaussian translation log-prior centered on each image's
+   previous best translation, with `sigma = sigma_offset_angstrom` (data-driven,
+   updated each iteration from the MAP translation changes).
+2. Call `run_em_v2` with:
+   - `rotations = rotation_grid[local_rotation_indices]` (the union subset)
+   - `rotation_log_prior = local_log_prior` (per-image, `-1e30` outside each image's cone)
+   - `translation_log_prior = per-image Gaussian` centered on previous best
+   - Only the images in `group_image_indices`
+3. Accumulate `Ft_y`, `Ft_ctf`, noise stats, hard assignments, and per-direction
+   posterior sums across all chunks.
+
+The per-direction posterior sums feed back into `make_relion_direction_log_prior`
+for the next iteration's direction prior (RELION's `pdf_direction`).
+
+**RELION source**: `ml_optimiser.cpp::updateAngularSampling()`,
+`healpix_sampling.cpp::selectOrientationsWithNonZeroPriorProbability()`,
+`ml_optimiser.cpp::expectationOneParticle()`.
+
+**recovar code summary**:
+- [`convergence.py:620`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L620) -- `should_refine_angular_sampling()`: trigger check
+- [`convergence.py:691`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L691) -- `refine_angular_sampling()`: order bump + parameter update
+- [`sampling.py:772`](../../recovar/em/sampling.py#L772) -- `get_local_rotation_grid_fast()`: per-image neighborhood with Gaussian prior
+- [`sampling.py:102`](../../recovar/em/sampling.py#L102) -- `build_local_search_grid_metadata()`: precomputes direction vectors + psi grid for fast neighbor lookup
+- [`local_search.py:92`](../../recovar/em/dense_single_volume/refine_dev_helpers/local_search.py#L92) -- `_partition_local_search_groups()`: sort-and-split grouping
+- [`refine.py:90`](../../recovar/em/dense_single_volume/refine.py#L90) -- `_run_grouped_local_search_em()`: per-chunk EM with per-image priors
+- [`relion_priors.py:16`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_priors.py#L16) -- `make_relion_translation_log_prior()`: Gaussian translation prior from `sigma_offset_angstrom` and previous best offset
+- [`relion_priors.py:118`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_priors.py#L118) -- `make_relion_direction_log_prior()`: accumulates per-direction posterior across iterations for the direction prior
 
 ---
 
