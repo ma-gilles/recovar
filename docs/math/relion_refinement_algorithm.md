@@ -67,9 +67,13 @@ the iteration loop.
 `ml_optimiser.cpp::initialiseGeneral()` (grid setup).
 
 **recovar code**:
-- [`refine.py:448`](../../recovar/em/dense_single_volume/refine.py#L448) -- `refine_single_volume()`: public API, dispatches to `_refine_relion_mode`.
-- [`refine.py:931`](../../recovar/em/dense_single_volume/refine.py#L931) -- `_refine_relion_mode()`: the iteration loop. Sets up initial
-  `RefinementState`, computes init FSC, bootstraps `current_size` via
+- [`refine.py:448`](../../recovar/em/dense_single_volume/refine.py#L448) -- `refine_single_volume()`: public entry point.
+  Accepts init volume, noise, dataset; dispatches to `_refine_relion_mode` when
+  `relion_mode=True`, otherwise runs legacy dense-grid EM.
+- [`refine.py:931`](../../recovar/em/dense_single_volume/refine.py#L931) -- `_refine_relion_mode()`: the main iteration loop.
+  Each iteration: build grids with perturbation, call `run_em_v2` for E+M step,
+  reconstruct via `relion_reconstruct`, update noise/convergence, check stopping.
+  Bootstraps `current_size` from init-FSC via
   [`relion_init.py:110`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_init.py#L110) -- `_bootstrap_current_size_relion()`.
 
 **Key state**:
@@ -97,23 +101,39 @@ around significant orientations.
 `healpix_sampling.cpp::selectOrientationsWithPerturbation()`.
 
 **recovar code**:
-- [`sampling.py:713`](../../recovar/em/sampling.py#L713) -- `get_relion_rotation_grid(order)`: generates the coarse
-  HEALPix grid at a given order. Returns rotation matrices.
-- [`sampling.py:523`](../../recovar/em/sampling.py#L523) -- `get_oversampled_rotation_grid_from_samples(parent_pixels,
-  ...)`: subdivides parent HEALPix pixels into child orientations at finer
-  oversampling. Used in pass 2 of adaptive oversampling.
-- [`sampling.py:264`](../../recovar/em/sampling.py#L264) -- `get_translation_grid(max_pixel, pixel_offset)`: Cartesian
-  translation grid in pixel units.
-- [`sampling.py:639`](../../recovar/em/sampling.py#L639) -- `get_oversampled_translation_grid(parent_translations, ...)`:
-  subdivides parent translations for pass-2 oversampling.
+- [`sampling.py:713`](../../recovar/em/sampling.py#L713) -- `get_relion_rotation_grid(order)`: calls the C++ binding
+  `get_coarse_orientations` to produce RELION's exact HEALPix grid, then reindexes
+  from RELION's (direction-slow, psi-fast) to recovar's (psi-slow, direction-fast)
+  so that `index % n_pixels` gives the HEALPix pixel. Returns `(N, 3, 3)` rotation
+  matrices in recovar's frame.
+- [`sampling.py:523`](../../recovar/em/sampling.py#L523) -- `get_oversampled_rotation_grid_from_samples(...)`: given
+  coarse-grid rotation indices, generates oversampled children. Each parent HEALPix
+  pixel splits into 4 child pixels (via NEST indexing: `child = 4*parent + {0,1,2,3}`),
+  and each parent psi bin splits into 2 midpoint sub-bins (matching RELION's
+  `pushbackOversampledPsiAngles`), yielding 8 children per parent. Returns child
+  matrices + a `parent_map` array linking each child back to its parent index.
+- [`sampling.py:264`](../../recovar/em/sampling.py#L264) -- `get_translation_grid(max_pixel, pixel_offset)`: builds a
+  Cartesian 2D grid of (dx, dy) shifts within a circular mask of radius `max_pixel`,
+  spaced at `pixel_offset` pixels.
+- [`sampling.py:639`](../../recovar/em/sampling.py#L639) -- `get_oversampled_translation_grid(...)`: subdivides each
+  parent translation cell into `4^oversampling_order` children (2x2 sub-grid per
+  level), halving the step size. Returns child translations + parent_map.
 
 **Perturbation** (RELION `_rlnSamplingPerturbFactor`):
-- [`sampling.py:297`](../../recovar/em/sampling.py#L297) -- `advance_relion_perturbation()`: generates per-iteration
-  random perturbation parameters, matching RELION's `selectOrientationsWithPerturbation`.
-- [`sampling.py:326`](../../recovar/em/sampling.py#L326) -- `apply_relion_rotation_perturbation()`: applies random
-  rotation perturbation to the HEALPix grid.
-- [`sampling.py:357`](../../recovar/em/sampling.py#L357) -- `apply_relion_translation_perturbation()`: applies random
-  translation perturbation.
+
+RELION randomly shifts the entire HEALPix grid each iteration to break
+discretization bias. The perturbation is a scalar `p` (in units of angular step)
+that right-multiplies every rotation matrix by `R(p, p, p)` and adds `p * step`
+to every translation. The scalar accumulates across iterations with random increments,
+wrapped to `[-pf, +pf]`.
+
+- [`sampling.py:297`](../../recovar/em/sampling.py#L297) -- `advance_relion_perturbation()`: `p += uniform(0.5*pf, pf)`,
+  then wrap to `[-pf, +pf]`. Ports `HealpixSampling::resetRandomlyPerturbedSampling`.
+- [`sampling.py:326`](../../recovar/em/sampling.py#L326) -- `apply_relion_rotation_perturbation(R, p, step)`: computes
+  `R_perturbed = R @ R_from_relion(p*step, p*step, p*step)` for every rotation.
+  Ports `healpix_sampling.cpp:1909-1934`.
+- [`sampling.py:357`](../../recovar/em/sampling.py#L357) -- `apply_relion_translation_perturbation(T, p, step)`: adds
+  `p * step` to both x and y of every translation. Ports `healpix_sampling.cpp:1810-1820`.
 
 **Grid sizes** (order -> number of rotations):
 | Order | Directions | Psi steps | Total rotations | Angular step |
