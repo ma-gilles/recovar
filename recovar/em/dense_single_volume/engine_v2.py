@@ -51,13 +51,6 @@ from .types import EMProfileStats, NoiseStats, RelionStats
 logger = logging.getLogger(__name__)
 
 
-def _block_until_ready(*arrays):
-    """Synchronize JAX arrays before timing continues."""
-    for arr in arrays:
-        if hasattr(arr, "block_until_ready"):
-            arr.block_until_ready()
-
-
 # -- Half-spectrum utilities -------------------------------------------------
 
 
@@ -537,8 +530,6 @@ def run_em_v2(
     do_gridding_correction: bool = False,
     square_window: bool = False,
     return_profile: bool = False,
-    reuse_pass1_projections: bool = False,
-    fused_windowed_adjoint: bool = False,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -612,13 +603,6 @@ def run_em_v2(
     return_profile : bool
         When True, append an :class:`EMProfileStats` timing summary to the
         return tuple.  This is diagnostic only.
-    reuse_pass1_projections : bool
-        Reuse pass-1 projection blocks during pass 2 instead of slicing the
-        same rotation block twice. Intended for the grouped local-search path.
-    fused_windowed_adjoint : bool
-        For windowed M-step accumulation, keep the windowed scatter inside a
-        jitted helper before adjoint slicing instead of doing the scatter in
-        Python/JAX outside the accumulator path.
     """
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]
@@ -874,7 +858,7 @@ def run_em_v2(
         batch_size = len(indices)
         end_idx = start_idx + batch_size
         batch_data = jnp.asarray(batch_data)
-        projection_cache = [] if reuse_pass1_projections else None
+        projection_cache = []
 
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
         preprocess_t0 = time.time()
@@ -901,7 +885,7 @@ def run_em_v2(
             if score_with_masked_images
             else shifted_half
         )
-        _block_until_ready(shifted_half, batch_norm, ctf2_over_nv_half, shifted_recon_half)
+
         preprocess_time += time.time() - preprocess_t0
 
         # -- Per-image corrections (RELION parity: avg_norm/normcorr * scale) --
@@ -1037,7 +1021,6 @@ def run_em_v2(
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
                 mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
             )
-            _block_until_ready(proj_half_b, proj_abs2_half_b)
             pass1_projection_time += time.time() - proj_t0
             if projection_cache is not None:
                 projection_cache.append((proj_half_b, proj_abs2_half_b))
@@ -1081,7 +1064,6 @@ def run_em_v2(
                     volume_shape,
                 )
 
-            _block_until_ready(scores)
             pass1_score_time += time.time() - score_t0
 
             # Add rotation log-prior (Gaussian angular prior for local search)
@@ -1112,7 +1094,6 @@ def run_em_v2(
 
             logsumexp_t0 = time.time()
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
-            _block_until_ready(max_s, sum_exp)
             pass1_logsumexp_time += time.time() - logsumexp_t0
 
         log_Z = max_s + jnp.log(sum_exp)  # (batch_size,)
@@ -1133,7 +1114,6 @@ def run_em_v2(
                 proj_half_b, proj_abs2_half_b = _compute_projections_block(
                     mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
                 )
-                _block_until_ready(proj_half_b, proj_abs2_half_b)
                 pass2_projection_time += time.time() - proj_t0
 
             score_t0 = time.time()
@@ -1174,7 +1154,6 @@ def run_em_v2(
                     volume_shape,
                 )
 
-            _block_until_ready(scores)
             pass2_score_time += time.time() - score_t0
 
             # Add rotation log-prior (must match pass 1 exactly)
@@ -1224,71 +1203,33 @@ def run_em_v2(
                         volume_shape,
                     )
                 )
-                _block_until_ready(probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed)
                 mstep_time += time.time() - mstep_t0
-                if fused_windowed_adjoint:
-                    adjoint_y_t0 = time.time()
-                    Ft_y = _adjoint_slice_volume_windowed(
-                        summed_windowed,
-                        window_indices,
-                        rots_b,
-                        Ft_y,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        True,
-                    )
-                    _block_until_ready(Ft_y)
-                    adjoint_y_time += time.time() - adjoint_y_t0
 
-                    adjoint_ctf_t0 = time.time()
-                    Ft_ctf = _adjoint_slice_volume_windowed(
-                        ctf_probs_windowed,
-                        window_indices,
-                        rots_b,
-                        Ft_ctf,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        True,
-                    )
-                    _block_until_ready(Ft_ctf)
-                    adjoint_ctf_time += time.time() - adjoint_ctf_t0
-                else:
-                    scatter_t0 = time.time()
-                    rot_block_size_actual = rots_b.shape[0]
-                    summed_half = jnp.zeros((rot_block_size_actual, n_half), dtype=summed_windowed.dtype)
-                    summed_half = summed_half.at[:, window_indices].set(summed_windowed)
-                    ctf_probs_half = jnp.zeros((rot_block_size_actual, n_half), dtype=ctf_probs_windowed.dtype)
-                    ctf_probs_half = ctf_probs_half.at[:, window_indices].set(ctf_probs_windowed)
-                    _block_until_ready(summed_half, ctf_probs_half)
-                    window_scatter_time += time.time() - scatter_t0
+                adjoint_y_t0 = time.time()
+                Ft_y = _adjoint_slice_volume_windowed(
+                    summed_windowed,
+                    window_indices,
+                    rots_b,
+                    Ft_y,
+                    image_shape,
+                    recon_volume_shape,
+                    "linear_interp",
+                    True,
+                )
+                adjoint_y_time += time.time() - adjoint_y_t0
 
-                    adjoint_y_t0 = time.time()
-                    Ft_y = core.adjoint_slice_volume(
-                        summed_half,
-                        rots_b,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        volume=Ft_y,
-                        half_image=True,
-                    )
-                    _block_until_ready(Ft_y)
-                    adjoint_y_time += time.time() - adjoint_y_t0
-
-                    adjoint_ctf_t0 = time.time()
-                    Ft_ctf = core.adjoint_slice_volume(
-                        ctf_probs_half,
-                        rots_b,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        volume=Ft_ctf,
-                        half_image=True,
-                    )
-                    _block_until_ready(Ft_ctf)
-                    adjoint_ctf_time += time.time() - adjoint_ctf_t0
+                adjoint_ctf_t0 = time.time()
+                Ft_ctf = _adjoint_slice_volume_windowed(
+                    ctf_probs_windowed,
+                    window_indices,
+                    rots_b,
+                    Ft_ctf,
+                    image_shape,
+                    recon_volume_shape,
+                    "linear_interp",
+                    True,
+                )
+                adjoint_ctf_time += time.time() - adjoint_ctf_t0
             else:
                 # Non-windowed path: use with-DC ctf2 for M-step accumulation
                 mstep_t0 = time.time()
@@ -1307,7 +1248,6 @@ def run_em_v2(
                         recon_volume_shape,
                     )
                 )
-                _block_until_ready(Ft_y, Ft_ctf, probs, block_best, block_argmax)
                 mstep_time += time.time() - mstep_t0
 
             # -- Noise accumulation for this rotation block --
@@ -1342,7 +1282,6 @@ def run_em_v2(
                     si_for_noise,
                     n_shells,
                 )
-                _block_until_ready(block_noise_shells, block_a2_shells, block_xa_shells)
                 noise_wsum += np.asarray(block_noise_shells, dtype=np.float64)
                 noise_a2 += np.asarray(block_a2_shells, dtype=np.float64)
                 noise_xa += np.asarray(block_xa_shells, dtype=np.float64)
@@ -1459,7 +1398,7 @@ def run_em_v2(
             n_blocks=int(n_blocks),
             n_windowed=int(n_windowed),
             use_window=bool(use_window),
-            reused_pass1_projections=bool(reuse_pass1_projections),
+            reused_pass1_projections=True,
         )
 
     if return_stats:

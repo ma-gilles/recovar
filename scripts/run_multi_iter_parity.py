@@ -34,11 +34,7 @@ def map_pose_arrays_to_particle_order(our_names, gt_rot_all, gt_trans_all=None):
     """Map pose arrays indexed by stack row onto the current particle ordering."""
     n_total = len(our_names)
     gt_rotations_orig = np.full((n_total, 3, 3), np.nan, dtype=np.float64)
-    gt_translations_orig = (
-        np.full((n_total, 2), np.nan, dtype=np.float64)
-        if gt_trans_all is not None
-        else None
-    )
+    gt_translations_orig = np.full((n_total, 2), np.nan, dtype=np.float64) if gt_trans_all is not None else None
     for j, name in enumerate(our_names):
         pose_idx = stack_index_from_image_name(name)
         if 0 <= pose_idx < len(gt_rot_all):
@@ -92,30 +88,6 @@ def main():
         choices=["auto", "on", "off"],
         default="auto",
         help="Control grouped local-search profile collection. 'auto' profiles only when intermediates are enabled.",
-    )
-    parser.add_argument(
-        "--local_search_projection_reuse",
-        choices=["on", "off"],
-        default="on",
-        help="Toggle pass-1 to pass-2 projection reuse in grouped exact local search.",
-    )
-    parser.add_argument(
-        "--local_search_fused_windowed_adjoint",
-        choices=["on", "off"],
-        default="on",
-        help="Toggle the fused windowed-adjoint path in grouped exact local search.",
-    )
-    parser.add_argument(
-        "--local_search_force_single_image_groups",
-        choices=["on", "off"],
-        default="off",
-        help="Force grouped exact local search to use one image per group for debugging.",
-    )
-    parser.add_argument(
-        "--local_search_bucket_rotation_blocks",
-        choices=["on", "off"],
-        default="on",
-        help="Toggle power-of-two local-rotation bucketing/padding in grouped exact local search.",
     )
     args = parser.parse_args()
 
@@ -203,18 +175,14 @@ def main():
     def _format_error_summary(values, unit, thresholds):
         values = np.asarray(values, dtype=np.float64)
         percentiles = np.percentile(values, [90, 95, 99])
-        frac_terms = [
-            f"<= {thr:g}{unit}: {(100.0 * np.mean(values <= thr)):.1f}%"
-            for thr in thresholds
-        ]
+        frac_terms = [f"<= {thr:g}{unit}: {(100.0 * np.mean(values <= thr)):.1f}%" for thr in thresholds]
         return (
             f"mean={values.mean():.4f}{unit}, "
             f"median={np.median(values):.4f}{unit}, "
             f"p90={percentiles[0]:.4f}{unit}, "
             f"p95={percentiles[1]:.4f}{unit}, "
             f"p99={percentiles[2]:.4f}{unit}, "
-            f"max={values.max():.4f}{unit}; "
-            + ", ".join(frac_terms)
+            f"max={values.max():.4f}{unit}; " + ", ".join(frac_terms)
         )
 
     def _first_shell_below_threshold(fsc_values, threshold):
@@ -431,9 +399,7 @@ def main():
         eulers = np.stack([np.array(relion_df[col], dtype=np.float64) for col in angle_cols], axis=1)
         euler_h1 = np.array([eulers[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
         euler_h2 = np.array([eulers[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
-        print(
-            f"  Previous best eulers: h1={euler_h1.shape[0]} particles, h2={euler_h2.shape[0]} particles"
-        )
+        print(f"  Previous best eulers: h1={euler_h1.shape[0]} particles, h2={euler_h2.shape[0]} particles")
     else:
         print("  Previous best eulers: None (angle columns not found)")
 
@@ -591,23 +557,7 @@ def main():
     elif args.gt_volume is not None:
         print(f"  GT volume requested but not found: {args.gt_volume}")
 
-    local_search_return_profile = None
-    if args.local_search_profile == "on":
-        local_search_return_profile = True
-    elif args.local_search_profile == "off":
-        local_search_return_profile = False
-    local_search_reuse_pass1_projections = args.local_search_projection_reuse == "on"
-    local_search_fused_windowed_adjoint = args.local_search_fused_windowed_adjoint == "on"
-    local_search_force_single_image_groups = args.local_search_force_single_image_groups == "on"
-    local_search_bucket_rotation_blocks = args.local_search_bucket_rotation_blocks == "on"
-    print(
-        "  Local-search debug toggles: "
-        f"profile={args.local_search_profile}, "
-        f"projection_reuse={'on' if local_search_reuse_pass1_projections else 'off'}, "
-        f"fused_windowed_adjoint={'on' if local_search_fused_windowed_adjoint else 'off'}, "
-        f"single_image_groups={'on' if local_search_force_single_image_groups else 'off'}, "
-        f"bucket_rotation_blocks={'on' if local_search_bucket_rotation_blocks else 'off'}"
-    )
+    print(f"  Local-search profile: {args.local_search_profile}")
 
     # ---- Run ----
     print(f"\nRunning {args.max_iter} iterations...")
@@ -650,11 +600,6 @@ def main():
         replay_iteration_overrides=replay_iteration_overrides,
         save_intermediates_dir=save_intermediates_dir,
         skip_final_iteration=args.skip_final_iteration,
-        local_search_return_profile=local_search_return_profile,
-        local_search_reuse_pass1_projections=local_search_reuse_pass1_projections,
-        local_search_fused_windowed_adjoint=local_search_fused_windowed_adjoint,
-        local_search_force_single_image_groups=local_search_force_single_image_groups,
-        local_search_bucket_rotation_blocks=local_search_bucket_rotation_blocks,
     )
     elapsed = time.time() - t0
     print(f"\nCompleted {args.max_iter} iterations in {elapsed:.1f}s")
@@ -670,10 +615,6 @@ def main():
         "adaptive_fraction": np.float64(adaptive_fraction),
         "max_significants": np.int32(max_significants),
         "local_search_profile_mode": np.array(args.local_search_profile),
-        "local_search_projection_reuse": np.bool_(local_search_reuse_pass1_projections),
-        "local_search_fused_windowed_adjoint": np.bool_(local_search_fused_windowed_adjoint),
-        "local_search_force_single_image_groups": np.bool_(local_search_force_single_image_groups),
-        "local_search_bucket_rotation_blocks": np.bool_(local_search_bucket_rotation_blocks),
     }
     if result.get("ave_Pmax_trajectory"):
         save_dict["ave_Pmax_trajectory"] = np.array(result["ave_Pmax_trajectory"])
@@ -708,7 +649,7 @@ def main():
         ("tau2_fsc_used_trajectory", "tau2_fsc_used_iter"),
         ("tau2_ssnr_trajectory", "tau2_ssnr_iter"),
         ("significant_counts", "sig_counts_iter"),
-        ]:
+    ]:
         if result.get(traj_name):
             for i, arr_i in enumerate(result[traj_name]):
                 if arr_i is not None:
@@ -752,7 +693,9 @@ def main():
         from_ft=True,
         voxel_size=pixel_size,
     )
-    print(f"Saved final volumes: {os.path.join(out_dir, 'recovar_final_half1.mrc')}, recovar_final_half2.mrc, recovar_final_merged.mrc")
+    print(
+        f"Saved final volumes: {os.path.join(out_dir, 'recovar_final_half1.mrc')}, recovar_final_half2.mrc, recovar_final_merged.mrc"
+    )
 
     # ---- Summary table ----
     n_iters = len(result["current_sizes"])
@@ -923,11 +866,16 @@ def main():
             relion_pmax_orig = np.full(n_total, np.nan, dtype=np.float64)
             relion_eulers_orig = np.full((n_total, 3), np.nan, dtype=np.float64)
             relion_trans_orig = np.full((n_total, 2), np.nan, dtype=np.float64)
-            has_relion_eulers = all(col in relion_df_it.columns for col in ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"])
+            has_relion_eulers = all(
+                col in relion_df_it.columns for col in ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"]
+            )
             has_relion_trans = all(col in relion_df_it.columns for col in ["rlnOriginXAngst", "rlnOriginYAngst"])
             relion_eulers_raw = (
                 np.stack(
-                    [np.array(relion_df_it[col], dtype=np.float64) for col in ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"]],
+                    [
+                        np.array(relion_df_it[col], dtype=np.float64)
+                        for col in ["rlnAngleRot", "rlnAngleTilt", "rlnAnglePsi"]
+                    ],
                     axis=1,
                 )
                 if has_relion_eulers
@@ -1026,7 +974,9 @@ def main():
                 relion_gt_view_err_deg = None
                 relion_gt_inplane_err_deg = None
                 if gt_rotations_orig is not None:
-                    valid_relion_gt = ~(np.isnan(relion_eulers_orig).any(axis=1) | np.isnan(gt_rotations_orig).any(axis=(1, 2)))
+                    valid_relion_gt = ~(
+                        np.isnan(relion_eulers_orig).any(axis=1) | np.isnan(gt_rotations_orig).any(axis=(1, 2))
+                    )
                     if np.any(valid_relion_gt) and gt_transpose_relion_convention is None:
                         relion_gt_direct = _rotation_matrices_from_eulers_deg(relion_eulers_orig[valid_relion_gt])
                         direct_err = _angular_error_deg_from_rotations(
@@ -1046,7 +996,9 @@ def main():
                             f"transpose={np.nanmedian(transpose_err):.4f}°)"
                         )
 
-                    valid_recovar_gt = ~(np.isnan(recovar_eulers_orig).any(axis=1) | np.isnan(gt_rotations_orig).any(axis=(1, 2)))
+                    valid_recovar_gt = ~(
+                        np.isnan(recovar_eulers_orig).any(axis=1) | np.isnan(gt_rotations_orig).any(axis=(1, 2))
+                    )
                     if np.any(valid_recovar_gt):
                         recovar_rot_gt = _rotations_in_gt_frame_from_relion_eulers(
                             recovar_eulers_orig[valid_recovar_gt],
@@ -1116,7 +1068,8 @@ def main():
                         )
                         if np.any(valid_recovar_gt_trans):
                             recovar_gt_trans_err_px = np.linalg.norm(
-                                recovar_trans_orig[valid_recovar_gt_trans] - gt_translations_orig[valid_recovar_gt_trans],
+                                recovar_trans_orig[valid_recovar_gt_trans]
+                                - gt_translations_orig[valid_recovar_gt_trans],
                                 axis=1,
                             )
                             print(
