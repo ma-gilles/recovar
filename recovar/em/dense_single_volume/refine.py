@@ -1,60 +1,64 @@
-"""FSC-driven multi-iteration refinement loop for dense single-volume EM.
+"""Core refinement loop for dense single-volume EM.
 
-Wires FSC -> current_size -> Fourier window into the iteration loop,
-implementing Phases 4 and 5 of the RELION-parity plan.
+This file contains the three core algorithm functions:
+- ``refine_single_volume`` — public entry point
+- ``_refine_relion_mode`` — RELION-parity iteration loop
+- ``_run_grouped_local_search_em`` — exact local angular search
 
-The loop:
-1. Compute FSC between half-maps -> determine current_size
-2. Quantize current_size to allowed values
-3. Run engine_v2 E+M on each half-set at that current_size
-4. Optionally: two-pass adaptive oversampling (Phase 5):
-   - Pass 1 (coarse): dense E-step at coarse resolution, find significant
-     (rotation, translation) pairs per image.
-   - Pass 2 (fine): oversampled E+M at finer resolution for significant
-     rotations only.
-5. Wiener-solve each half-map
-6. Estimate noise, update prior
-7. Log progress
-
-Supports oracle mode: inject RELION's per-iteration current_sizes to
-isolate windowing from the statistical model.
-
-See docs/math/plan_relion_parity.md, Phases 4 and 5.
+All supporting helpers live in ``refine_dev_helpers/``.
+See ``docs/math/relion_refinement_algorithm.md`` for the full algorithm map.
 """
 
 import logging
 import os
 import time
 
-import healpy as hp
 import jax.numpy as jnp
 import numpy as np
-import scipy.special
 
 from recovar import utils
 from recovar.em.core import hard_assignment_idx_to_pose
-from recovar.em.dense_single_volume.adaptive import (
+from recovar.em.dense_single_volume.engine_v2 import run_em_v2
+from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import (
     compute_pass2_stats,
     compute_pass2_stats_sparse,
 )
-
-# RELION-parity building blocks (used only by mode="relion")
-from recovar.em.dense_single_volume.convergence import (
+from recovar.em.dense_single_volume.refine_dev_helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
     calculate_expected_angular_errors,
     healpix_angular_step,
     update_refinement_state,
 )
-from recovar.em.dense_single_volume.engine_v2 import run_em_v2
-from recovar.em.dense_single_volume.fourier_window import quantize_current_size
-from recovar.em.dense_single_volume.types import RelionStats
+from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import quantize_current_size
+from recovar.em.dense_single_volume.refine_dev_helpers.local_search import (
+    _local_search_engine_rotation_block_size,
+    _pad_local_search_rotations,
+    _partition_local_search_groups,
+)
+from recovar.em.dense_single_volume.refine_dev_helpers.relion_init import (
+    ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
+    _bootstrap_current_size_relion,
+    clamp_relion_coarse_image_size,
+    compute_coarse_image_size,
+    fsc_to_current_size,
+    shell_index_to_resolution_angstrom,
+    should_skip_adaptive_pass2,
+)
+from recovar.em.dense_single_volume.refine_dev_helpers.relion_priors import (
+    collapse_rotation_posterior_to_direction_prior,
+    infer_direction_prior_healpix_order,
+    make_relion_direction_log_prior,
+    make_relion_translation_log_prior,
+    relion_translation_search_base,
+    remap_direction_prior_to_healpix_order,
+)
+from recovar.em.dense_single_volume.refine_dev_helpers.types import RelionStats
 from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,
     apply_relion_translation_perturbation,
     build_local_search_grid_metadata,
-    get_local_rotation_grid_fast,
     get_oversampled_translation_grid,
     get_relion_rotation_grid,
     get_relion_rotation_grid_eulers,
@@ -63,7 +67,6 @@ from recovar.em.sampling import (
     read_relion_model_metadata,
     read_relion_sampling_metadata,
     relion_angular_sampling_deg,
-    rotation_grid_n_in_planes,
     rotation_grid_size,
 )
 from recovar.reconstruction.regularization import (
@@ -75,280 +78,13 @@ from recovar.reconstruction.regularization import (
 
 logger = logging.getLogger(__name__)
 
-ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION = 0.5
 
-
-def shell_index_to_resolution_angstrom(shell_index, ori_size, voxel_size):
-    """Convert a Fourier shell index into a real-space resolution in Angstrom."""
-    if voxel_size <= 0:
-        return float(shell_index)
-    shell_index = float(shell_index)
-    if shell_index <= 0:
-        return float("inf")
-    return float(ori_size) * float(voxel_size) / shell_index
-
-
-# ---------------------------------------------------------------------------
-# Coarse image size for adaptive oversampling (RELION parity)
-# ---------------------------------------------------------------------------
-
-
-def compute_coarse_image_size(
-    angular_step_deg,
-    pixel_size,
-    ori_size,
-    particle_diameter=None,
-):
-    """Compute the coarse image size for pass 1 of adaptive oversampling.
-
-    RELION formula (expectation.cpp line 5760):
-        rotated_distance = (angular_step / 360) * pi * particle_diameter
-        coarse_resolution = rotated_distance / 1.2       (3D)
-        image_coarse_size = 2 * ceil(pixel_size * ori_size / coarse_resolution)
-
-    Parameters
-    ----------
-    angular_step_deg : float
-        Effective angular step in degrees (after oversampling).
-    pixel_size : float
-        Pixel size in Angstrom.
-    ori_size : int
-        Original image box size in pixels.
-    particle_diameter : float or None
-        Particle diameter in Angstrom.  If None, use box_size * pixel_size.
-
-    Returns
-    -------
-    coarse_size : int
-        Coarse image size (diameter in pixels), clamped to [8, ori_size].
-    """
-    if particle_diameter is None:
-        particle_diameter = ori_size * pixel_size
-
-    rotated_distance = (angular_step_deg / 360.0) * np.pi * particle_diameter
-    coarse_resolution = rotated_distance / 1.2  # keepsafe_factor for 3D
-
-    if coarse_resolution <= 0:
-        return ori_size
-
-    coarse_size = int(2 * np.ceil(pixel_size * ori_size / coarse_resolution))
-    coarse_size = max(8, min(coarse_size, ori_size))
-    return coarse_size
-
-
-def clamp_relion_coarse_image_size(coarse_size, current_size, ori_size):
-    """Clamp pass-1 image size the way RELION does.
-
-    RELION computes ``image_coarse_size`` from the angular step and particle
-    diameter, then clamps it to ``image_current_size`` rather than forcing a
-    smaller fallback. See ``ml_optimiser.cpp`` around the
-    ``image_coarse_size = XMIPP_MIN(image_current_size, image_coarse_size)``
-    update.
-    """
-    coarse_size = quantize_current_size(int(coarse_size), ori_size=ori_size)
-    if current_size is None:
-        return coarse_size
-    return min(int(current_size), coarse_size)
-
-
-def should_skip_adaptive_pass2(
-    significant_counts,
-    n_rotations,
-    n_translations,
-    *,
-    threshold=ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
-):
-    """Return whether adaptive pass 2 should be skipped for this batch.
-
-    RELION's two-pass search only helps when significance pruning is actually
-    selective. If most coarse samples remain significant, the fine pass is pure
-    overhead. We therefore disable pass 2 whenever the mean fraction of
-    significant coarse samples is at least ``threshold``.
-    """
-    if threshold is None or float(threshold) < 0.0:
-        return False, 0.0
-    total_samples = max(int(n_rotations) * int(n_translations), 1)
-    sig_counts = np.asarray(significant_counts, dtype=np.float32)
-    mean_fraction = float(np.mean(sig_counts) / total_samples)
-    return mean_fraction >= float(threshold), mean_fraction
-
-
-def _bootstrap_current_size_relion(init_current_size: int, ori_size: int, incr_size: int = 10) -> int:
-    """Match RELION's first expectation-time current_size growth step.
-
-    RELION seeds the initial resolution from ``--ini_high`` and then immediately
-    calls ``updateImageSizeAndResolutionPointers()`` before the first E-step.
-    At startup ``ave_Pmax == 0`` and ``has_high_fsc_at_limit == false``, so the
-    first current_size is the initial resolution shell plus ``incr_size``.
-    """
-    init_shell = max(0, int(np.ceil(init_current_size / 2.0)))
-    raw_cs = compute_current_size_relion(
-        init_shell,
-        ori_size,
-        ave_Pmax=0.0,
-        has_high_fsc_at_limit=False,
-        incr_size=incr_size,
-    )
-    return quantize_current_size(raw_cs, ori_size=ori_size)
-
-
-def _local_search_chunk_size(image_batch_size: int) -> int:
-    """Return the seed group size for exact local-search packing.
-
-    We start from moderately sized orientation-sorted image groups and split
-    them recursively until the exact union of local rotations stays within
-    the hard cap enforced by `_local_search_max_union_rotations`.
-    """
-    return int(max(1, min(int(image_batch_size), 64)))
-
-
-def _local_search_rotation_block_size(local_rotation_count: int, rotation_block_size: int) -> int:
-    """Bucket local-search rotation blocks to reduce JIT shape churn.
-
-    For small exact local neighborhoods, padding up to the next power of two
-    is much cheaper than recompiling for every distinct candidate count. For
-    larger supports we fall back to the caller's cap so the engine still
-    tiles large neighborhoods across multiple blocks.
-    """
-    if local_rotation_count <= 0:
-        return 1
-    if local_rotation_count >= rotation_block_size:
-        return int(rotation_block_size)
-    bucket = 1 << max(int(local_rotation_count - 1).bit_length(), 4)
-    return int(min(bucket, rotation_block_size))
-
-
-def _local_search_engine_rotation_block_size(rotation_block_size: int) -> int:
-    """Cap the exact local-search engine block size.
-
-    Local search already reduces the candidate set per image from the full
-    HEALPix grid down to a few thousand rotations. Reusing the dense-search
-    5k rotation tile size here creates oversized XLA kernels whose compile
-    time dominates the first local-search iteration. A 1k cap keeps the
-    candidate set exact while making the compiled score kernels much smaller.
-    """
-    return int(max(64, min(int(rotation_block_size), 1024)))
-
-
-def _local_search_max_union_rotations(rotation_block_size: int) -> int:
-    """Return the largest exact local-search union allowed in one engine call."""
-    return int(4 * _local_search_engine_rotation_block_size(rotation_block_size))
-
-
-def _prior_rotations_to_relion_eulers(prior_rotations: np.ndarray) -> np.ndarray:
-    """Convert prior rotations to RELION Euler angles."""
-    prior_rotations = np.asarray(prior_rotations)
-    if prior_rotations.ndim == 2 and prior_rotations.shape[1] == 3:
-        return np.asarray(prior_rotations, dtype=np.float32).reshape(-1, 3)
-    if prior_rotations.ndim == 3 and prior_rotations.shape[1:] == (3, 3):
-        return utils.R_to_relion(np.asarray(prior_rotations, dtype=np.float32), degrees=True).astype(np.float32)
-    raise ValueError(f"prior_rotations must have shape (n,3) or (n,3,3), got {prior_rotations.shape}")
-
-
-def _local_search_sort_order(prior_rotations: np.ndarray, healpix_order: int) -> np.ndarray:
-    """Sort images by coarse viewing direction and psi to improve local support overlap."""
-    prior_eulers = _prior_rotations_to_relion_eulers(prior_rotations)
-    prior_rotation_mats = utils.R_from_relion(prior_eulers, degrees=True).astype(np.float32)
-    prior_dir_vecs = np.asarray(prior_rotation_mats[:, 2, :], dtype=np.float64)
-    prior_dir_norm = np.linalg.norm(prior_dir_vecs, axis=1, keepdims=True)
-    prior_dir_norm = np.where(prior_dir_norm > 0.0, prior_dir_norm, 1.0)
-    prior_dir_vecs = prior_dir_vecs / prior_dir_norm
-    dir_pixels = hp.vec2pix(
-        2 ** int(healpix_order),
-        prior_dir_vecs[:, 0],
-        prior_dir_vecs[:, 1],
-        prior_dir_vecs[:, 2],
-    )
-    n_psi = rotation_grid_n_in_planes(healpix_order)
-    psi_step = 360.0 / float(n_psi)
-    psi_bins = np.floor(np.mod(prior_eulers[:, 2], 360.0) / psi_step + 0.5).astype(np.int64) % n_psi
-    return np.lexsort((psi_bins, dir_pixels)).astype(np.int64)
-
-
-def _partition_local_search_groups(
-    prior_rotations: np.ndarray,
-    sigma_rot: float,
-    sigma_psi: float,
-    healpix_order: int,
-    image_batch_size: int,
-    rotation_block_size: int,
-    grid_metadata: dict[str, np.ndarray],
-) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """Build exact local-search groups whose rotation unions stay below a hard cap."""
-    n_images = int(np.asarray(prior_rotations).shape[0])
-    if n_images == 0:
-        return []
-
-    seed_group_size = _local_search_chunk_size(image_batch_size)
-    max_union_rotations = _local_search_max_union_rotations(rotation_block_size)
-    processing_order = _local_search_sort_order(prior_rotations, healpix_order)
-    groups: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
-
-    def _split_group(group_image_indices: np.ndarray) -> None:
-        local_indices, local_log_prior = get_local_rotation_grid_fast(
-            np.asarray(prior_rotations)[group_image_indices],
-            sigma_rot,
-            sigma_psi,
-            healpix_order,
-            sigma_cutoff=3.0,
-            per_image=True,
-            grid_metadata=grid_metadata,
-        )
-        if group_image_indices.shape[0] <= 1 or int(local_indices.shape[0]) <= max_union_rotations:
-            groups.append(
-                (
-                    np.asarray(group_image_indices, dtype=np.int64),
-                    np.asarray(local_indices, dtype=np.int64),
-                    np.asarray(local_log_prior, dtype=np.float32),
-                )
-            )
-            return
-        mid = max(1, group_image_indices.shape[0] // 2)
-        _split_group(group_image_indices[:mid])
-        _split_group(group_image_indices[mid:])
-
-    for start in range(0, n_images, seed_group_size):
-        _split_group(processing_order[start : start + seed_group_size])
-
-    return groups
-
-
-def _pad_local_search_rotations(
-    local_rotations: np.ndarray,
-    local_log_prior: np.ndarray,
-    rotation_block_size: int,
-) -> tuple[np.ndarray, np.ndarray, int, int]:
-    """Pad one exact local neighborhood to a compile-friendly bucket.
-
-    The padded rotations are masked out with a `-1e30` log-prior so the
-    posterior over the real candidates is unchanged. This lets the local
-    path reuse a small number of compiled `run_em_v2` shapes instead of
-    recompiling for every distinct neighborhood size.
-    """
-    local_rotations = np.asarray(local_rotations, dtype=np.float32).reshape(-1, 3, 3)
-    local_log_prior = np.asarray(local_log_prior, dtype=np.float32)
-    actual_count = int(local_rotations.shape[0])
-    block_size = _local_search_rotation_block_size(actual_count, int(rotation_block_size))
-    if block_size <= actual_count:
-        return local_rotations, local_log_prior, actual_count, block_size
-
-    pad_count = block_size - actual_count
-    padded_rotations = np.concatenate(
-        [
-            local_rotations,
-            np.broadcast_to(np.eye(3, dtype=np.float32), (pad_count, 3, 3)).copy(),
-        ],
-        axis=0,
-    )
-    pad_shape = local_log_prior.shape[:-1] + (pad_count,)
-    padded_log_prior = np.concatenate(
-        [
-            local_log_prior,
-            np.full(pad_shape, -1e30, dtype=np.float32),
-        ],
-        axis=-1,
-    )
-    return padded_rotations, padded_log_prior, actual_count, block_size
+# ---- Extracted helpers live in refine_dev_helpers/ ----
+# local_search.py: _partition_local_search_groups, _pad_local_search_rotations, etc.
+# relion_priors.py: make_relion_translation_log_prior, make_relion_direction_log_prior, etc.
+# relion_init.py: shell_index_to_resolution_angstrom, compute_coarse_image_size, fsc_to_current_size, etc.
+# convergence.py: RefinementState, check_convergence, update_refinement_state, etc.
+# adaptive.py: find_significant_rotations, compute_pass2_stats, etc.
 
 
 def _run_grouped_local_search_em(
@@ -629,7 +365,7 @@ def _run_grouped_local_search_em(
         rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
     )
     if accumulate_noise:
-        from recovar.em.dense_single_volume.types import NoiseStats
+        from recovar.em.dense_single_volume.refine_dev_helpers.types import NoiseStats
 
         noise_stats = NoiseStats(
             wsum_sigma2_noise=jnp.asarray(accum_noise_wsum, dtype=jnp.float32),
@@ -700,590 +436,9 @@ def _run_grouped_local_search_em(
     return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats, profile_summary
 
 
-# ---------------------------------------------------------------------------
-# Batched significance pruning (avoids materializing full weight matrix)
-# ---------------------------------------------------------------------------
-
-
-def _compute_significance_batched(
-    experiment_dataset,
-    mean,
-    noise_variance,
-    rotations,
-    translations,
-    disc_type,
-    adaptive_fraction,
-    max_significants,
-    image_batch_size,
-    rotation_block_size,
-    current_size,
-    *,
-    score_with_masked_images=False,
-    return_significant_sample_indices=False,
-    rotation_log_prior=None,
-    translation_log_prior=None,
-    image_corrections=None,
-    scale_corrections=None,
-    image_pre_shifts=None,
-    half_spectrum_scoring=False,
-    projection_padding_factor=1,
-    use_float64_scoring=False,
-):
-    """Run coarse E-step and find significant rotations in a memory-efficient way.
-
-    Instead of materializing the full (n_images, n_rot * n_trans) weight matrix,
-    this processes one image batch at a time: for each batch, it computes the
-    posterior weights, finds significance, and accumulates the union of significant
-    rotation indices.
-
-    Parameters
-    ----------
-    Returns
-    -------
-    sig_rot_any : np.ndarray, shape (n_rot,), dtype bool
-        True for rotations that are significant for at least one image.
-    n_sig_all : np.ndarray, shape (n_images,), dtype int32
-        Per-image count of significant (rot x trans) samples.
-    hard_assignments : np.ndarray, shape (n_images,), dtype int32
-        Best (rot_idx * n_trans + trans_idx) per image from coarse pass.
-    significant_sample_indices : list[np.ndarray], optional
-        Returned only when ``return_significant_sample_indices=True``.
-        ``significant_sample_indices[i]`` stores flattened
-        ``rot_idx * n_trans + trans_idx`` entries kept for image ``i``.
-    """
-    from recovar.core import fourier_transform_utils
-    from recovar.core.configs import ForwardModelConfig
-    from recovar.em.dense_single_volume.adaptive import find_significant_rotations as _find_sig
-    from recovar.em.dense_single_volume.engine_v2 import (
-        _compute_projections_block,
-        _e_step_block_scores,
-        _e_step_block_scores_windowed,
-        _preprocess_batch,
-        _update_logsumexp,
-        make_half_image_weights,
-    )
-
-    if projection_padding_factor > 1:
-        from recovar.reconstruction.relion_functions import pad_volume_for_projection
-
-        mean_for_proj, proj_volume_shape = pad_volume_for_projection(
-            mean,
-            experiment_dataset.volume_shape,
-            projection_padding_factor,
-            do_gridding_correction=False,
-            current_size=current_size,
-        )
-    else:
-        mean_for_proj = mean
-        proj_volume_shape = experiment_dataset.volume_shape
-
-    n_rot = rotations.shape[0]
-    n_trans = translations.shape[0]
-    n_images = experiment_dataset.n_units
-    image_shape = experiment_dataset.image_shape
-    volume_shape = experiment_dataset.volume_shape
-
-    H, W = image_shape
-    n_half = H * (W // 2 + 1)
-
-    config = ForwardModelConfig.from_dataset(
-        experiment_dataset,
-        disc_type=disc_type,
-        process_fn=experiment_dataset.process_images,
-    )
-
-    # TODO(RELION-parity-debt): w=1 matches RELION's incorrect half-sum.
-    # See engine_v2.py for full explanation. Post-parity: use make_half_image_weights.
-    half_weights = (
-        jnp.ones(n_half, dtype=jnp.float32) if half_spectrum_scoring else make_half_image_weights(image_shape)
-    )
-
-    use_window = current_size is not None and current_size < image_shape[0]
-    if use_window:
-        from .fourier_window import make_fourier_window_indices_np
-
-        window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size)
-        window_indices = jnp.asarray(window_indices_np)
-        half_weights_windowed = half_weights[window_indices]
-    else:
-        window_indices = None
-        n_windowed = n_half
-
-    if use_float64_scoring:
-        half_weights = half_weights.astype(jnp.float64)
-        if use_window:
-            half_weights_windowed = half_weights[window_indices]
-
-    # Pad rotations
-    n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
-    n_rot_padded = n_blocks * rotation_block_size
-    if n_rot_padded > n_rot:
-        pad_size = n_rot_padded - n_rot
-        rotations_padded = np.concatenate([rotations, np.tile(np.eye(3, dtype=np.float32), (pad_size, 1, 1))], axis=0)
-    else:
-        rotations_padded = rotations
-
-    # Accumulate results
-    sig_rot_any = np.zeros(n_rot, dtype=bool)
-    n_sig_all = np.empty(n_images, dtype=np.int32)
-    hard_assignment = np.empty(n_images, dtype=np.int32)
-    significant_sample_indices = [None] * n_images if return_significant_sample_indices else None
-
-    if translation_log_prior is not None:
-        translation_log_prior = np.asarray(translation_log_prior, dtype=np.float32)
-        if translation_log_prior.ndim == 1:
-            if translation_log_prior.shape != (n_trans,):
-                raise ValueError(
-                    f"translation_log_prior must have shape ({n_trans},), got {translation_log_prior.shape}",
-                )
-        elif translation_log_prior.ndim == 2:
-            if translation_log_prior.shape != (n_images, n_trans):
-                raise ValueError(
-                    "translation_log_prior must have shape "
-                    f"({n_images}, {n_trans}) when image-specific, got "
-                    f"{translation_log_prior.shape}",
-                )
-        else:
-            raise ValueError(
-                f"translation_log_prior must be 1D or 2D, got {translation_log_prior.ndim} dimensions",
-            )
-
-    if rotation_log_prior is not None:
-        rotation_log_prior = np.asarray(rotation_log_prior, dtype=np.float32)
-        if rotation_log_prior.shape != (n_rot,):
-            raise ValueError(
-                f"rotation_log_prior must have shape ({n_rot},), got {rotation_log_prior.shape}",
-            )
-        if n_rot_padded > n_rot:
-            rotation_log_prior_padded = np.concatenate(
-                [
-                    rotation_log_prior,
-                    np.zeros(n_rot_padded - n_rot, dtype=np.float32),
-                ]
-            )
-        else:
-            rotation_log_prior_padded = rotation_log_prior
-    else:
-        rotation_log_prior_padded = None
-
-    image_indices = np.arange(n_images)
-    start_idx = 0
-
-    for batch_data, _, _, ctf_params, _, _, indices in experiment_dataset.iter_batches(
-        image_batch_size,
-        indices=image_indices,
-        by_image=False,
-    ):
-        batch_size = len(indices)
-        end_idx = start_idx + batch_size
-        batch_data = jnp.asarray(batch_data)
-        if translation_log_prior is None:
-            batch_translation_log_prior = None
-        elif translation_log_prior.ndim == 1:
-            batch_translation_log_prior = jnp.asarray(translation_log_prior)
-        else:
-            batch_translation_log_prior = jnp.asarray(
-                translation_log_prior[start_idx:end_idx],
-            )
-
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data,
-            ctf_params,
-            noise_variance,
-            translations,
-            config,
-            batch_size,
-            n_trans,
-            score_with_masked_images,
-        )
-
-        if image_corrections is not None:
-            batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
-            corr_expanded = jnp.repeat(batch_corr, n_trans)
-            shifted_half = shifted_half * corr_expanded[:, None]
-            batch_norm = batch_norm * (batch_corr**2)[:, None]
-
-        if scale_corrections is not None:
-            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
-            ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
-
-        if image_pre_shifts is not None:
-            batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
-            lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-                image_shape,
-                voxel_size=1,
-                scaled=True,
-            )
-            phase_factors = jnp.exp(-2j * jnp.pi * (lattice_half @ batch_shifts.T)).T
-            phase_expanded = jnp.repeat(phase_factors, n_trans, axis=0)
-            shifted_half = shifted_half * phase_expanded
-
-        # DC exclusion (RELION parity: Minvsigma2[0] = 0)
-        if half_spectrum_scoring:
-            from recovar.em.dense_single_volume.engine_v2 import make_shell_indices_half as _mshi
-
-            dc_shell = _mshi(image_shape)
-            dc_mask = dc_shell == 0
-            shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
-            ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
-
-        if use_window:
-            shifted_data = shifted_half[:, window_indices]
-            ctf2_data = ctf2_over_nv_half[:, window_indices]
-        else:
-            shifted_data = shifted_half
-            ctf2_data = ctf2_over_nv_half
-
-        if use_float64_scoring:
-            shifted_half = shifted_half.astype(jnp.complex128)
-            ctf2_over_nv_half = ctf2_over_nv_half.astype(jnp.float64)
-            if use_window:
-                shifted_data = shifted_data.astype(jnp.complex128)
-                ctf2_data = ctf2_data.astype(jnp.float64)
-            else:
-                shifted_data = shifted_half
-                ctf2_data = ctf2_over_nv_half
-
-        # Pass 1: streaming logsumexp
-        max_s = jnp.full(batch_size, -jnp.inf)
-        sum_exp = jnp.zeros(batch_size)
-
-        for b in range(n_blocks):
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
-            rots_b = rotations_padded[r0:r1]
-
-            proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
-            )
-
-            if use_window:
-                proj_w = proj_half_b[:, window_indices]
-                proj_abs2_w = proj_abs2_half_b[:, window_indices]
-                scores = _e_step_block_scores_windowed(
-                    shifted_data,
-                    batch_norm,
-                    ctf2_data,
-                    proj_w * half_weights_windowed,
-                    proj_abs2_w * half_weights_windowed,
-                    half_weights_windowed,
-                    batch_size,
-                    n_trans,
-                    n_windowed,
-                    image_shape,
-                    volume_shape,
-                )
-            else:
-                scores = _e_step_block_scores(
-                    shifted_data,
-                    batch_norm,
-                    ctf2_data,
-                    proj_half_b * half_weights,
-                    proj_abs2_half_b * half_weights,
-                    half_weights,
-                    batch_size,
-                    n_trans,
-                    image_shape,
-                    volume_shape,
-                )
-
-            if r1 > n_rot:
-                valid = n_rot - r0
-                mask = jnp.arange(rotation_block_size) < valid
-                scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
-
-            if rotation_log_prior_padded is not None:
-                scores = scores + jnp.asarray(rotation_log_prior_padded[r0:r1])[None, :, None]
-
-            if batch_translation_log_prior is not None:
-                if translation_log_prior.ndim == 1:
-                    scores = scores + batch_translation_log_prior[None, None, :]
-                else:
-                    scores = scores + batch_translation_log_prior[:, None, :]
-
-            max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
-
-        log_Z = max_s + jnp.log(sum_exp)
-
-        # Pass 2: recompute scores, normalize -> batch weights
-        best_score = jnp.full(batch_size, -jnp.inf)
-        best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
-        batch_weights_blocks = []
-
-        for b in range(n_blocks):
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
-            rots_b = rotations_padded[r0:r1]
-
-            proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
-            )
-
-            if use_window:
-                proj_w = proj_half_b[:, window_indices]
-                proj_abs2_w = proj_abs2_half_b[:, window_indices]
-                scores = _e_step_block_scores_windowed(
-                    shifted_data,
-                    batch_norm,
-                    ctf2_data,
-                    proj_w * half_weights_windowed,
-                    proj_abs2_w * half_weights_windowed,
-                    half_weights_windowed,
-                    batch_size,
-                    n_trans,
-                    n_windowed,
-                    image_shape,
-                    volume_shape,
-                )
-            else:
-                scores = _e_step_block_scores(
-                    shifted_data,
-                    batch_norm,
-                    ctf2_data,
-                    proj_half_b * half_weights,
-                    proj_abs2_half_b * half_weights,
-                    half_weights,
-                    batch_size,
-                    n_trans,
-                    image_shape,
-                    volume_shape,
-                )
-
-            if r1 > n_rot:
-                valid = n_rot - r0
-                pmask = jnp.arange(rotation_block_size) < valid
-                scores = jnp.where(pmask[None, :, None], scores, -jnp.inf)
-
-            if rotation_log_prior_padded is not None:
-                scores = scores + jnp.asarray(rotation_log_prior_padded[r0:r1])[None, :, None]
-
-            if batch_translation_log_prior is not None:
-                if translation_log_prior.ndim == 1:
-                    scores = scores + batch_translation_log_prior[None, None, :]
-                else:
-                    scores = scores + batch_translation_log_prior[:, None, :]
-
-            probs = jnp.exp(scores - log_Z[:, None, None])
-
-            block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
-            block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
-            improved = block_best > best_score
-            best_score = jnp.where(improved, block_best, best_score)
-            best_argmax = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax)
-
-            actual_rot = min(rotation_block_size, n_rot - r0)
-            block_probs = probs[:, :actual_rot, :]
-            batch_weights_blocks.append(np.asarray(block_probs.reshape(batch_size, -1)))
-
-        hard_assignment[start_idx:end_idx] = np.asarray(best_argmax)
-
-        # Concatenate this batch's weights -> (batch_size, n_rot * n_trans)
-        batch_weights = np.concatenate(batch_weights_blocks, axis=1)
-
-        # Find significance for this batch
-        batch_sig_mask, batch_sig_rot_mask, batch_n_sig = _find_sig(
-            jnp.asarray(batch_weights),
-            n_rot,
-            n_trans,
-            adaptive_fraction=adaptive_fraction,
-            max_significants=max_significants,
-        )
-
-        # Accumulate global union of significant rotations
-        batch_sig_rot_any = np.asarray(jnp.any(batch_sig_rot_mask, axis=0))
-        sig_rot_any |= batch_sig_rot_any
-
-        n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig)
-        if return_significant_sample_indices:
-            batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
-            for local_idx, global_idx in enumerate(indices):
-                if np.all(batch_sig_mask_np[local_idx]):
-                    significant_sample_indices[int(global_idx)] = None
-                else:
-                    significant_sample_indices[int(global_idx)] = np.flatnonzero(batch_sig_mask_np[local_idx]).astype(
-                        np.int32
-                    )
-        start_idx = end_idx
-
-    if return_significant_sample_indices:
-        return sig_rot_any, n_sig_all, hard_assignment, significant_sample_indices
-    return sig_rot_any, n_sig_all, hard_assignment
-
-
-def make_relion_translation_log_prior(
-    translations,
-    voxel_size,
-    sigma_offset_angstrom,
-    prior_centers=None,
-    *,
-    offset_range_pixels=None,
-):
-    """Return RELION-style normalized log-priors over a translation grid."""
-    translations = np.asarray(translations, dtype=np.float32)
-    if translations.ndim != 2:
-        raise ValueError(
-            f"translations must have shape (n_trans, dim), got {translations.shape}",
-        )
-    sigma_offset_angstrom = float(sigma_offset_angstrom)
-    voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
-    if offset_range_pixels is not None and float(offset_range_pixels) > 0.0:
-        # RELION's score path uses sigma = offset_range / 3 while an explicit
-        # translational search range is active.
-        sigma_offset_angstrom = float(offset_range_pixels) * voxel_size / 3.0
-    n_trans = translations.shape[0]
-
-    if prior_centers is None:
-        centers = np.zeros((1, translations.shape[1]), dtype=np.float32)
-        shared = True
-    else:
-        centers = np.asarray(prior_centers, dtype=np.float32).reshape(-1, translations.shape[1])
-        shared = False
-
-    if sigma_offset_angstrom <= 0.0:
-        zeros = np.zeros((centers.shape[0], n_trans), dtype=np.float32)
-        return zeros[0] if shared else zeros
-
-    diffs_ang = (translations[None, :, :] - centers[:, None, :]) * voxel_size
-    sqdist_ang = np.sum(diffs_ang**2, axis=-1)
-    log_prior = -0.5 * sqdist_ang / (sigma_offset_angstrom**2)
-    log_prior -= scipy.special.logsumexp(log_prior, axis=1, keepdims=True)
-    log_prior += np.log(float(n_trans))
-    log_prior = log_prior.astype(np.float32)
-    return log_prior[0] if shared else log_prior
-
-
-def relion_translation_search_base(previous_best_translations):
-    """Return the RELION translation-search base for stored absolute offsets."""
-    if previous_best_translations is None:
-        return None
-    return np.rint(np.asarray(previous_best_translations, dtype=np.float32)).astype(np.float32)
-
-
-def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
-    """Collapse per-rotation posterior mass onto RELION's HEALPix directions."""
-    rotation_posterior_sums = np.asarray(rotation_posterior_sums, dtype=np.float64).reshape(-1)
-    n_rot = rotation_grid_size(healpix_order)
-    if rotation_posterior_sums.shape[0] != n_rot:
-        raise ValueError(
-            f"rotation_posterior_sums must have shape ({n_rot},), got {rotation_posterior_sums.shape}",
-        )
-
-    n_pixels = n_rot // rotation_grid_n_in_planes(healpix_order)
-    direction_weights = np.zeros(n_pixels, dtype=np.float64)
-    np.add.at(direction_weights, np.arange(n_rot, dtype=np.int64) % n_pixels, rotation_posterior_sums)
-    total = float(direction_weights.sum())
-    if total <= 0.0 or not np.isfinite(total):
-        direction_weights.fill(1.0 / max(n_pixels, 1))
-    else:
-        direction_weights /= total
-    return direction_weights.astype(np.float32)
-
-
-def infer_direction_prior_healpix_order(direction_prior):
-    """Infer HEALPix order from a RELION direction-prior vector length."""
-    n_pixels = int(np.asarray(direction_prior).reshape(-1).shape[0])
-    order = 0
-    while hp.nside2npix(2**order) < n_pixels:
-        order += 1
-    if hp.nside2npix(2**order) != n_pixels:
-        raise ValueError(f"Cannot infer healpix order from direction prior of length {n_pixels}")
-    return order
-
-
-def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order):
-    """Remap a RELION direction prior between HEALPix orders."""
-    direction_prior = np.asarray(direction_prior, dtype=np.float64).reshape(-1)
-    if src_order == dst_order:
-        out = direction_prior.copy()
-    elif src_order > dst_order:
-        theta, phi = hp.pix2ang(2**src_order, np.arange(direction_prior.shape[0], dtype=np.int64))
-        dst_idx = hp.ang2pix(2**dst_order, theta, phi)
-        out = np.zeros(hp.nside2npix(2**dst_order), dtype=np.float64)
-        np.add.at(out, dst_idx, direction_prior)
-    else:
-        theta, phi = hp.pix2ang(2**dst_order, np.arange(hp.nside2npix(2**dst_order), dtype=np.int64))
-        src_idx = hp.ang2pix(2**src_order, theta, phi)
-        out = direction_prior[src_idx]
-    total = float(out.sum())
-    if total <= 0.0 or not np.isfinite(total):
-        out.fill(1.0 / max(out.shape[0], 1))
-    else:
-        out /= total
-    return out.astype(np.float32)
-
-
-def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=None):
-    """Expand RELION's learned ``pdf_direction`` onto a rotation grid.
-
-    When ``rotations`` is omitted, the prior is expanded onto RELION's
-    canonical sample-index ordering. This matches RELION's global
-    ``pdf_direction`` handling: the prior is looked up by coarse direction
-    index and only then are perturbation / oversampling applied to generate the
-    actual trial orientations. The optional ``rotations`` mode is therefore a
-    geometry-based expansion helper for diagnostics only, not the RELION-parity
-    path used in refinement.
-    """
-    direction_prior = np.asarray(direction_prior, dtype=np.float32).reshape(-1)
-    n_rot = rotation_grid_size(healpix_order)
-    n_pixels = n_rot // rotation_grid_n_in_planes(healpix_order)
-    if direction_prior.shape[0] != n_pixels:
-        raise ValueError(
-            f"direction_prior must have shape ({n_pixels},), got {direction_prior.shape}",
-        )
-
-    safe_prior = np.clip(direction_prior, np.finfo(np.float32).tiny, None)
-    if rotations is None:
-        pixel_idx = np.arange(n_rot, dtype=np.int64) % n_pixels
-    else:
-        rotations = np.asarray(rotations, dtype=np.float32).reshape(-1, 3, 3)
-        if rotations.shape[0] != n_rot:
-            raise ValueError(
-                f"rotations must have shape ({n_rot}, 3, 3), got {rotations.shape}",
-            )
-        view_dirs = rotations[:, 2, :].astype(np.float64)
-        norms = np.linalg.norm(view_dirs, axis=1, keepdims=True)
-        norms = np.where(norms > 1e-12, norms, 1.0)
-        view_dirs = view_dirs / norms
-        pixel_idx = hp.vec2pix(
-            2**healpix_order,
-            view_dirs[:, 0],
-            view_dirs[:, 1],
-            view_dirs[:, 2],
-        )
-    return np.log(safe_prior[pixel_idx]).astype(np.float32)
-
-
-# ---------------------------------------------------------------------------
-# FSC -> current_size conversion
-# ---------------------------------------------------------------------------
-
-
-def fsc_to_current_size(fsc, threshold=1.0 / 7.0, min_size=32):
-    """Convert an FSC curve to a current_size (diameter in pixels).
-
-    Parameters
-    ----------
-    fsc : array-like, shape (n_shells,)
-        FSC curve between half-maps.
-    threshold : float
-        FSC threshold for resolution cutoff.  Default 1/7 ~ 0.143.
-    min_size : int
-        Minimum returned size (prevents collapse to 0 at first iteration).
-
-    Returns
-    -------
-    int
-        Raw current_size = 2 * shell_index.  Needs quantization before use.
-    """
-    from recovar.heterogeneity.locres import find_fsc_resol
-
-    fsc_arr = jnp.asarray(fsc)
-    pixel_res = float(find_fsc_resol(fsc_arr, threshold=threshold))
-
-    # current_size = 2 * shell_index (Nyquist: need 2 pixels per cycle)
-    raw_size = int(2 * pixel_res)
-    return max(raw_size, min_size)
-
+from recovar.em.dense_single_volume.refine_dev_helpers.significance import (
+    _compute_significance_batched,
+)
 
 # ---------------------------------------------------------------------------
 # Main refinement loop
@@ -3675,7 +2830,7 @@ def _refine_relion_mode(
         )
 
         # Track frac_changed for local search fallback
-        from recovar.em.dense_single_volume.convergence import compute_assignment_changes
+        from recovar.em.dense_single_volume.refine_dev_helpers.convergence import compute_assignment_changes
 
         frac_changed = compute_assignment_changes(
             current_combined_ha,

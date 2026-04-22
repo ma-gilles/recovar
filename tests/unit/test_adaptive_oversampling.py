@@ -15,17 +15,15 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
-import jax
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.adaptive import (
-    find_significant_mask,
-    find_significant_rotations,
-)
 from recovar.em.dense_single_volume.engine_v2 import (
-    make_half_image_weights,
     compute_e_step_weights,
     run_em_v2,
+)
+from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import (
+    find_significant_mask,
+    find_significant_rotations,
 )
 
 pytestmark = pytest.mark.unit
@@ -45,6 +43,7 @@ SEED = 42
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _hermitian_image_2d(image_shape, seed=42):
     """Generate a Hermitian-symmetric 2D spectrum."""
@@ -110,18 +109,14 @@ class MockDataset:
         self.process_images = staticmethod(_identity_process)
 
         # Per-image poses (needed by compute_relion_prior, noise estimation)
-        self.rotation_matrices = np.tile(
-            np.eye(3, dtype=np.float32), (n_images, 1, 1)
-        )
+        self.rotation_matrices = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
         self.translations = np.zeros((n_images, 2), dtype=np.float32)
         self.premultiplied_ctf = False
 
         rng = np.random.default_rng(seed)
         self._images = np.zeros((n_images, IMAGE_SIZE), dtype=np.complex64)
         for i in range(n_images):
-            self._images[i] = _hermitian_image_2d(
-                IMAGE_SHAPE, seed=rng.integers(10000)
-            ).reshape(-1)
+            self._images[i] = _hermitian_image_2d(IMAGE_SHAPE, seed=rng.integers(10000)).reshape(-1)
 
         class _ImageSource:
             process_images = staticmethod(_identity_process)
@@ -204,9 +199,7 @@ class TestSignificanceMaskFraction:
             # For uniform weights, all are equal so the mask includes all
             # that are >= the threshold.  Due to equal weights, the result
             # may keep more or fewer depending on boundary effects.
-            assert kept_frac >= 0.5 - 1e-6, (
-                f"Image {i}: kept fraction {kept_frac:.4f} < 0.5"
-            )
+            assert kept_frac >= 0.5 - 1e-6, f"Image {i}: kept fraction {kept_frac:.4f} < 0.5"
 
     def test_single_dominant(self):
         """When one sample has ~100% weight, mask should select just that one."""
@@ -214,8 +207,8 @@ class TestSignificanceMaskFraction:
         n_samples = 50
 
         w = jnp.ones((n_images, n_samples), dtype=jnp.float32) * 1e-10
-        w = w.at[0, 7].set(1.0)    # image 0: sample 7 dominant
-        w = w.at[1, 42].set(1.0)   # image 1: sample 42 dominant
+        w = w.at[0, 7].set(1.0)  # image 0: sample 7 dominant
+        w = w.at[1, 42].set(1.0)  # image 1: sample 42 dominant
         w = w / w.sum(axis=-1, keepdims=True)
 
         mask, n_sig = find_significant_mask(w, adaptive_fraction=0.999, max_significants=50)
@@ -263,9 +256,7 @@ class TestSignificanceMaskCap:
         raw_w = rng.exponential(scale=1.0, size=(n_images, n_samples)).astype(np.float32)
         w_nonuniform = jnp.array(raw_w) / raw_w.sum(axis=-1, keepdims=True)
 
-        mask2, n_sig2 = find_significant_mask(
-            w_nonuniform, adaptive_fraction=0.999, max_significants=10
-        )
+        mask2, n_sig2 = find_significant_mask(w_nonuniform, adaptive_fraction=0.999, max_significants=10)
 
         # The threshold is from position 10, so typically few extras from ties
         for i in range(n_images):
@@ -304,10 +295,14 @@ class TestSignificanceMaskCap:
         w = jnp.array(raw_w / raw_w.sum(axis=-1, keepdims=True))
 
         _, n_sig_capped = find_significant_mask(
-            w, adaptive_fraction=0.90, max_significants=2,
+            w,
+            adaptive_fraction=0.90,
+            max_significants=2,
         )
         mask_uncapped, n_sig_uncapped = find_significant_mask(
-            w, adaptive_fraction=0.90, max_significants=-1,
+            w,
+            adaptive_fraction=0.90,
+            max_significants=-1,
         )
 
         assert int(n_sig_capped[0]) == 2
@@ -343,7 +338,11 @@ class TestSignificantCountsReasonable:
         noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
 
         weights, ha = compute_e_step_weights(
-            ds, volume, noise_variance, rotations, translations,
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
             "linear_interp",
             image_batch_size=n_images,
             rotation_block_size=n_rot,
@@ -351,21 +350,20 @@ class TestSignificantCountsReasonable:
 
         weights_jnp = jnp.asarray(weights)
         sig_mask, sig_rot_mask, n_sig = find_significant_rotations(
-            weights_jnp, n_rot, n_trans,
-            adaptive_fraction=0.999, max_significants=500,
+            weights_jnp,
+            n_rot,
+            n_trans,
+            adaptive_fraction=0.999,
+            max_significants=500,
         )
 
         n_sig_np = np.asarray(n_sig)
 
         # All counts should be >= 1 (at least the best sample)
-        assert np.all(n_sig_np >= 1), (
-            f"Some images have 0 significant samples: {n_sig_np}"
-        )
+        assert np.all(n_sig_np >= 1), f"Some images have 0 significant samples: {n_sig_np}"
 
         # All counts should be <= n_samples
-        assert np.all(n_sig_np <= n_samples), (
-            f"Some images exceed total samples: {n_sig_np}"
-        )
+        assert np.all(n_sig_np <= n_samples), f"Some images exceed total samples: {n_sig_np}"
 
         # Not ALL images should have n_samples significant (pruning should help)
         # This depends on the data; for random data many might be significant
@@ -382,12 +380,17 @@ class TestSignificantCountsReasonable:
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
         rotations = _make_rotations(n_rot, seed=12)
         translations = jnp.array(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32,
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=jnp.float32,
         )
         noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
 
         weights, ha = compute_e_step_weights(
-            ds, volume, noise_variance, rotations, translations,
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
             "linear_interp",
             image_batch_size=n_images,
             rotation_block_size=n_rot,
@@ -395,7 +398,8 @@ class TestSignificantCountsReasonable:
 
         row_sums = weights.sum(axis=1)
         np.testing.assert_allclose(
-            row_sums, np.ones(n_images, dtype=np.float32),
+            row_sums,
+            np.ones(n_images, dtype=np.float32),
             atol=1e-4,
             err_msg="Posterior weights do not sum to 1 per image",
         )
@@ -410,12 +414,17 @@ class TestSignificantCountsReasonable:
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
         rotations = _make_rotations(n_rot, seed=12)
         translations = jnp.array(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32,
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=jnp.float32,
         )
         noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
 
         weights, ha = compute_e_step_weights(
-            ds, volume, noise_variance, rotations, translations,
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
             "linear_interp",
             image_batch_size=n_images,
             rotation_block_size=n_rot,
@@ -423,7 +432,8 @@ class TestSignificantCountsReasonable:
 
         expected_ha = np.argmax(weights, axis=1)
         np.testing.assert_array_equal(
-            ha, expected_ha,
+            ha,
+            expected_ha,
             err_msg="Hard assignments do not match argmax of weights",
         )
 
@@ -438,7 +448,11 @@ class TestSignificantCountsReasonable:
         w = jnp.array(raw_w) / raw_w.sum(axis=-1, keepdims=True)
 
         sig_mask, sig_rot_mask, n_sig = find_significant_rotations(
-            w, n_rot, n_trans, adaptive_fraction=0.999, max_significants=500,
+            w,
+            n_rot,
+            n_trans,
+            adaptive_fraction=0.999,
+            max_significants=500,
         )
 
         # Verify consistency: sig_rot_mask[i, r] should be True iff
@@ -447,7 +461,8 @@ class TestSignificantCountsReasonable:
         expected_rot_mask = np.any(sig_2d, axis=-1)
 
         np.testing.assert_array_equal(
-            np.asarray(sig_rot_mask), expected_rot_mask,
+            np.asarray(sig_rot_mask),
+            expected_rot_mask,
             err_msg="sig_rot_mask inconsistent with sig_mask",
         )
 
@@ -512,7 +527,7 @@ class TestSignificantCountsReasonable:
 
     def test_sparse_pass2_runs_with_full_candidate_lists(self):
         """Sparse pass 2 should handle the ``sig_samples is None`` full-grid case."""
-        from recovar.em.dense_single_volume.adaptive import compute_pass2_stats_sparse
+        from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import compute_pass2_stats_sparse
 
         n_images = 2
         nside_level = 1
@@ -583,25 +598,21 @@ class TestOversampledGridGeneration:
 
     def test_oversampled_rotation_grid_size(self):
         """get_oversampled_rotation_grid should produce the right number of matrices."""
+
         from recovar.em.sampling import get_oversampled_rotation_grid
-        import healpy as hp
 
         nside_level = 2
         parent_pixels = np.array([0, 5, 10])
 
-        matrices, parent_map = get_oversampled_rotation_grid(
-            parent_pixels, nside_level, oversampling_order=1
-        )
+        matrices, parent_map = get_oversampled_rotation_grid(parent_pixels, nside_level, oversampling_order=1)
 
         # At order 1: 4 children per pixel, each with n_in_planes in-plane angles
         fine_nside_level = nside_level + 1
-        angle_res = 360 / (6 * 2 ** fine_nside_level)
+        angle_res = 360 / (6 * 2**fine_nside_level)
         n_in_planes = int(np.round(360 / angle_res))
         expected_n = 4 * len(parent_pixels) * n_in_planes
 
-        assert matrices.shape[0] == expected_n, (
-            f"Expected {expected_n} oversampled rotations, got {matrices.shape[0]}"
-        )
+        assert matrices.shape[0] == expected_n, f"Expected {expected_n} oversampled rotations, got {matrices.shape[0]}"
         assert matrices.shape == (expected_n, 3, 3)
         assert parent_map.shape == (expected_n,)
 
@@ -612,9 +623,7 @@ class TestOversampledGridGeneration:
         nside_level = 2
         parent_pixels = np.array([0, 3, 7])
 
-        matrices, parent_map = get_oversampled_rotation_grid(
-            parent_pixels, nside_level, oversampling_order=1
-        )
+        matrices, parent_map = get_oversampled_rotation_grid(parent_pixels, nside_level, oversampling_order=1)
 
         # parent_map values should be in [0, len(parent_pixels))
         assert np.all(parent_map >= 0)
@@ -633,7 +642,9 @@ class TestOversampledGridGeneration:
         parent_rotations = np.array([0, 5, 10])
 
         matrices, parent_map = get_oversampled_rotation_grid_from_samples(
-            parent_rotations, nside_level, oversampling_order=1,
+            parent_rotations,
+            nside_level,
+            oversampling_order=1,
         )
 
         expected_n = 8 * len(parent_rotations)
@@ -644,18 +655,21 @@ class TestOversampledGridGeneration:
 
     def test_oversampled_rotation_grid_from_samples_preserves_psi_identity(self):
         """Two coarse samples on the same pixel but different psi get distinct children."""
+        import healpy as hp
+
         from recovar.em.sampling import (
             get_oversampled_rotation_grid_from_samples,
             rotation_grid_size,
         )
-        import healpy as hp
 
         nside_level = 2
-        n_pixels = hp.nside2npix(2 ** nside_level)
+        n_pixels = hp.nside2npix(2**nside_level)
         parent_rotations = np.array([0, n_pixels], dtype=np.int64)
 
         matrices, parent_map = get_oversampled_rotation_grid_from_samples(
-            parent_rotations, nside_level, oversampling_order=1,
+            parent_rotations,
+            nside_level,
+            oversampling_order=1,
         )
 
         assert matrices.shape == (16, 3, 3)
@@ -666,13 +680,14 @@ class TestOversampledGridGeneration:
 
     def test_oversampled_rotation_grid_from_samples_matches_relion_binding(self):
         """Child orientations should match RELION's oversampled local-search grid."""
+        import healpy as hp
+        from recovar.relion_bind._relion_bind_core import get_oversampled_orientations
+
+        from recovar import utils
         from recovar.em.sampling import (
             get_oversampled_rotation_grid_from_samples,
             rotation_grid_n_in_planes,
         )
-        from recovar.relion_bind._relion_bind_core import get_oversampled_orientations
-        from recovar import utils
-        import healpy as hp
 
         nside_level = 2
         parent_rotations = np.array([0, 5, 10, 193], dtype=np.int64)
@@ -683,7 +698,7 @@ class TestOversampledGridGeneration:
             oversampling_order=1,
             return_rotation_indices=True,
         )
-        coarse_n_pixels = hp.nside2npix(2 ** nside_level)
+        coarse_n_pixels = hp.nside2npix(2**nside_level)
         parent_pixels = parent_rotations % coarse_n_pixels
         parent_psi = parent_rotations // coarse_n_pixels
         child_pixels = 4 * np.repeat(parent_pixels, 4) + np.tile(np.arange(4, dtype=np.int64), len(parent_pixels))
@@ -692,8 +707,7 @@ class TestOversampledGridGeneration:
         child_psi = (
             np.repeat(parent_psi, 4)[:, None] * coarse_psi_step
             - 0.5 * coarse_psi_step
-            + (0.5 + np.arange(psi_factor, dtype=np.float64)[None, :])
-            * (coarse_psi_step / psi_factor)
+            + (0.5 + np.arange(psi_factor, dtype=np.float64)[None, :]) * (coarse_psi_step / psi_factor)
         ).reshape(-1)
         fine_n_pixels = hp.nside2npix(2 ** (nside_level + 1))
         fine_psi_step = 2.0 * np.pi / rotation_grid_n_in_planes(nside_level + 1)
@@ -725,14 +739,15 @@ class TestOversampledGridGeneration:
 
     def test_oversampled_rotation_grid_from_samples_matches_relion_binding_with_perturbation(self):
         """RELION perturbation must also be applied to oversampled child orientations."""
-        from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
-        from recovar.relion_bind._relion_bind_core import get_oversampled_orientations
-        from recovar import utils
         import healpy as hp
+        from recovar.relion_bind._relion_bind_core import get_oversampled_orientations
+
+        from recovar import utils
+        from recovar.em.sampling import get_oversampled_rotation_grid_from_samples
 
         nside_level = 3
         parent_rotations = np.array([0, 1, 777, 1025], dtype=np.int64)
-        coarse_n_pixels = hp.nside2npix(2 ** nside_level)
+        coarse_n_pixels = hp.nside2npix(2**nside_level)
         random_perturbation = 0.37
 
         matrices, parent_map = get_oversampled_rotation_grid_from_samples(
@@ -779,9 +794,7 @@ class TestOversampledGridGeneration:
         )
 
         # order=1 -> 2x2 = 4 children per parent
-        assert fine_trans.shape == (3 * 4, 2), (
-            f"Expected shape (12, 2), got {fine_trans.shape}"
-        )
+        assert fine_trans.shape == (3 * 4, 2), f"Expected shape (12, 2), got {fine_trans.shape}"
         assert parent_map.shape == (12,)
 
     def test_oversampled_translation_grid_centering(self):
@@ -823,7 +836,9 @@ class TestOversampledGridGeneration:
         np.testing.assert_array_equal(parent_map, np.zeros(4, dtype=np.int64))
 
         np.testing.assert_allclose(
-            fine_trans.mean(axis=0), [0.0, 0.0], atol=1e-10,
+            fine_trans.mean(axis=0),
+            [0.0, 0.0],
+            atol=1e-10,
             err_msg="Child translations not centered on parent",
         )
 
@@ -846,7 +861,8 @@ class TestRefineWithAdaptive:
         nside_level = 1  # 48 rotations at level 1
         rotations = get_rotation_grid(nside_level, matrices=True).astype(np.float32)
         translations = jnp.array(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32,
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=jnp.float32,
         )
 
         ds1 = MockDataset(n_images=n_images, seed=42)
@@ -927,22 +943,32 @@ class TestRefineWithAdaptive:
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
         rotations = _make_rotations(n_rot, seed=12)
         translations = jnp.array(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32,
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=jnp.float32,
         )
         noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
         mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
 
         # Standard path
         new_mean_std, ha_std, Ft_y_std, Ft_ctf_std = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=n_images,
             rotation_block_size=n_rot,
         )
 
         # Weights path
         weights, ha_w = compute_e_step_weights(
-            ds, volume, noise_variance, rotations, translations,
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
             "linear_interp",
             image_batch_size=n_images,
             rotation_block_size=n_rot,
@@ -950,7 +976,8 @@ class TestRefineWithAdaptive:
 
         # Hard assignments should match
         np.testing.assert_array_equal(
-            ha_std, ha_w,
+            ha_std,
+            ha_w,
             err_msg="E-step weights hard assignments differ from run_em_v2",
         )
 
@@ -973,7 +1000,8 @@ class TestEStepWeightsWindowed:
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
         rotations = _make_rotations(n_rot, seed=12)
         translations = jnp.array(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32,
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=jnp.float32,
         )
         noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
 
@@ -981,7 +1009,11 @@ class TestEStepWeightsWindowed:
         # Note: for 8x8 images, current_size must be a valid size
         # Let's use None (no windowing) vs the full test
         weights, ha = compute_e_step_weights(
-            ds, volume, noise_variance, rotations, translations,
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
             "linear_interp",
             image_batch_size=n_images,
             rotation_block_size=n_rot,
@@ -990,7 +1022,8 @@ class TestEStepWeightsWindowed:
 
         row_sums = weights.sum(axis=1)
         np.testing.assert_allclose(
-            row_sums, np.ones(n_images, dtype=np.float32),
+            row_sums,
+            np.ones(n_images, dtype=np.float32),
             atol=1e-4,
             err_msg="Windowed posterior weights do not sum to 1",
         )
@@ -1005,13 +1038,18 @@ class TestEStepWeightsWindowed:
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
         rotations = _make_rotations(n_rot, seed=12)
         translations = jnp.array(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32,
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=jnp.float32,
         )
         noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
 
         # All rotations in one block
         weights_1, ha_1 = compute_e_step_weights(
-            ds, volume, noise_variance, rotations, translations,
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
             "linear_interp",
             image_batch_size=n_images,
             rotation_block_size=n_rot,
@@ -1019,18 +1057,25 @@ class TestEStepWeightsWindowed:
 
         # Split into blocks of 3 (10 rots -> 4 blocks: 3+3+3+1)
         weights_2, ha_2 = compute_e_step_weights(
-            ds, volume, noise_variance, rotations, translations,
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
             "linear_interp",
             image_batch_size=n_images,
             rotation_block_size=3,
         )
 
         np.testing.assert_allclose(
-            weights_1, weights_2, atol=1e-5,
+            weights_1,
+            weights_2,
+            atol=1e-5,
             err_msg="Weights differ between single-block and multi-block",
         )
         np.testing.assert_array_equal(
-            ha_1, ha_2,
+            ha_1,
+            ha_2,
             err_msg="Hard assignments differ between block sizes",
         )
 
@@ -1044,13 +1089,18 @@ class TestEStepWeightsWindowed:
         volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
         rotations = _make_rotations(n_rot, seed=12)
         translations = jnp.array(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32,
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=jnp.float32,
         )
         noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
 
         # All images in one batch
         weights_1, ha_1 = compute_e_step_weights(
-            ds, volume, noise_variance, rotations, translations,
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
             "linear_interp",
             image_batch_size=n_images,
             rotation_block_size=n_rot,
@@ -1058,18 +1108,25 @@ class TestEStepWeightsWindowed:
 
         # Images in batches of 2
         weights_2, ha_2 = compute_e_step_weights(
-            ds, volume, noise_variance, rotations, translations,
+            ds,
+            volume,
+            noise_variance,
+            rotations,
+            translations,
             "linear_interp",
             image_batch_size=2,
             rotation_block_size=n_rot,
         )
 
         np.testing.assert_allclose(
-            weights_1, weights_2, atol=1e-5,
+            weights_1,
+            weights_2,
+            atol=1e-5,
             err_msg="Weights differ between batch sizes",
         )
         np.testing.assert_array_equal(
-            ha_1, ha_2,
+            ha_1,
+            ha_2,
             err_msg="Hard assignments differ between batch sizes",
         )
 
@@ -1141,7 +1198,7 @@ class TestUnionCap:
     def test_returns_none_when_union_exceeds_cap(self):
         """When the union of significant rotations exceeds max_union_pixels,
         compute_pass2_stats should return (None, None, None, None)."""
-        from recovar.em.dense_single_volume.adaptive import compute_pass2_stats
+        from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import compute_pass2_stats
         from recovar.em.sampling import get_rotation_grid
 
         # Use a proper HEALPix grid so the pixel/in-plane decomposition works
@@ -1160,8 +1217,12 @@ class TestUnionCap:
         sig_rot_mask = np.ones(n_rot, dtype=bool)
 
         Ft_y, Ft_ctf, ha, oversampled = compute_pass2_stats(
-            ds, volume, mean_variance, noise_variance,
-            np.asarray(rotations), translations,
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            np.asarray(rotations),
+            translations,
             sig_rot_mask,
             nside_level=nside_level,
             disc_type="linear_interp",
@@ -1178,7 +1239,7 @@ class TestUnionCap:
 
     def test_proceeds_when_within_cap(self):
         """When the union is within the cap, pass 2 should proceed normally."""
-        from recovar.em.dense_single_volume.adaptive import compute_pass2_stats
+        from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import compute_pass2_stats
         from recovar.em.sampling import get_rotation_grid
 
         nside_level = 1
@@ -1197,8 +1258,12 @@ class TestUnionCap:
         sig_rot_mask[:3] = True  # just 3 rotations
 
         Ft_y, Ft_ctf, ha, oversampled = compute_pass2_stats(
-            ds, volume, mean_variance, noise_variance,
-            np.asarray(rotations), translations,
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            np.asarray(rotations),
+            translations,
             sig_rot_mask,
             nside_level=nside_level,
             disc_type="linear_interp",
@@ -1215,8 +1280,8 @@ class TestUnionCap:
 
     def test_pass2_oversamples_translation_grid(self, monkeypatch):
         """Pass 2 should evaluate on oversampled translations, not the coarse grid."""
-        from recovar.em.dense_single_volume import adaptive as adaptive_mod
         from recovar.em.dense_single_volume import engine_v2 as engine_mod
+        from recovar.em.dense_single_volume.refine_dev_helpers import adaptive as adaptive_mod
         from recovar.em.sampling import get_rotation_grid
 
         nside_level = 1
@@ -1228,7 +1293,8 @@ class TestUnionCap:
         mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
         noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
         translations = jnp.array(
-            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32,
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=jnp.float32,
         )
         sig_rot_mask = np.zeros(n_rot, dtype=bool)
         sig_rot_mask[:2] = True
@@ -1245,8 +1311,13 @@ class TestUnionCap:
             **kwargs,
         ):
             _ = (
-                experiment_dataset, mean, mean_variance, noise_variance, rotations,
-                disc_type, kwargs,
+                experiment_dataset,
+                mean,
+                mean_variance,
+                noise_variance,
+                rotations,
+                disc_type,
+                kwargs,
             )
             captured["translations"] = np.asarray(translations)
             n_images = ds.n_units

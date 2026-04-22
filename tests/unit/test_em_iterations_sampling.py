@@ -53,38 +53,6 @@ def test_get_rotation_grid_shapes_with_and_without_matrices():
     assert np.isfinite(mats).all()
 
 
-def test_rotation_indices_to_matrices_matches_full_grid_rows():
-    order = 2
-    indices = np.array([0, 7, 191, 192, 387, 1024], dtype=np.int64)
-    expected = em_sampling.get_relion_rotation_grid(order)[indices]
-    actual = em_sampling.rotation_indices_to_matrices(indices, order)
-    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
-
-
-def test_remap_rotation_indices_to_finer_order_preserves_pixel_centers_and_psi():
-    src_order = 1
-    dst_order = 2
-    src_nside = 2 ** src_order
-    src_npix = hp.nside2npix(src_nside)
-    dst_nside = 2 ** dst_order
-    dst_npix = hp.nside2npix(dst_nside)
-
-    src_indices = np.array(
-        [0, src_npix + 5, 3 * src_npix + 7, 11 * src_npix + 13],
-        dtype=np.int64,
-    )
-    dst_indices = em_sampling.remap_rotation_indices_to_order(
-        src_indices, src_order, dst_order,
-    )
-
-    theta, phi = hp.pix2ang(src_nside, src_indices % src_npix)
-    expected_pixels = hp.ang2pix(dst_nside, theta, phi)
-    expected_psi = (src_indices // src_npix) * 2
-
-    np.testing.assert_array_equal(dst_indices % dst_npix, expected_pixels)
-    np.testing.assert_array_equal(dst_indices // dst_npix, expected_psi)
-
-
 def test_local_rotation_grid_fast_uses_exact_prior_rotation_angles():
     """Local search with a tiny sigma must select the grid pixel whose
     matrix is angularly closest to the prior matrix.
@@ -100,8 +68,8 @@ def test_local_rotation_grid_fast_uses_exact_prior_rotation_angles():
     matches the prior. The test now uses axis-angle distance to verify
     the selected pixels are actually close.
     """
+
     from recovar import utils
-    from scipy.spatial.transform import Rotation as SciPyRot
 
     coarse_order = 2
     fine_order = 3
@@ -123,12 +91,11 @@ def test_local_rotation_grid_fast_uses_exact_prior_rotation_angles():
     )
 
     # Selected matrices must be angularly close to the prior matrix.
-    n_pixels = hp.nside2npix(2 ** fine_order)
+    n_pixels = hp.nside2npix(2**fine_order)
     M_prior = prior_rotation[0]
 
-    selected_matrices = em_sampling.rotation_indices_to_matrices(
-        selected_indices, fine_order,
-    )
+    full_grid = em_sampling.get_rotation_grid(fine_order, matrices=True)
+    selected_matrices = full_grid[selected_indices]
     # Axis-angle distance: ||log(M_prior^T @ M_sel)||
     R_diffs = np.einsum("ij,kjl->kil", M_prior.T, selected_matrices)
     traces = np.trace(R_diffs, axis1=1, axis2=2)
@@ -138,17 +105,13 @@ def test_local_rotation_grid_fast_uses_exact_prior_rotation_angles():
     # sigma=0.2 deg cone, but the order-3 grid has 7.5 deg pixel spacing,
     # so the closest grid pixel can be up to ~3.75 deg away in direction
     # plus a small psi offset).
-    assert np.all(angles_deg < 6.0), (
-        f"Some selected matrices are too far from prior: max={angles_deg.max():.2f} deg"
-    )
+    assert np.all(angles_deg < 6.0), f"Some selected matrices are too far from prior: max={angles_deg.max():.2f} deg"
 
     # The selected pixels should be the unique pixel index closest to the
     # prior, with at least one selected psi value.
     same_pixel_indices = selected_indices % n_pixels
     unique_pixels = np.unique(same_pixel_indices)
-    assert len(unique_pixels) == 1, (
-        f"Expected 1 closest pixel, got {len(unique_pixels)}: {unique_pixels}"
-    )
+    assert len(unique_pixels) == 1, f"Expected 1 closest pixel, got {len(unique_pixels)}: {unique_pixels}"
 
     # The log_prior values for the selected indices should be finite (not
     # the -1e30 mask sentinel) for at least one psi.
@@ -460,9 +423,10 @@ def test_local_rotation_grid_fast_uses_max_of_sigma_rot_and_sigma_psi_for_direct
 
 def test_local_rotation_grid_fast_per_image_priors_prefer_each_image_peak():
     fine_order = 3
-    n_pixels = hp.nside2npix(2 ** fine_order)
+    n_pixels = hp.nside2npix(2**fine_order)
     prior_indices = np.array([0, n_pixels], dtype=np.int64)
-    prior_rotations = em_sampling.rotation_indices_to_matrices(prior_indices, fine_order)
+    full_grid = em_sampling.get_rotation_grid(fine_order, matrices=True)
+    prior_rotations = full_grid[prior_indices]
 
     selected_indices, log_prior = em_sampling.get_local_rotation_grid_fast(
         prior_rotations,
@@ -699,8 +663,8 @@ def test_split_E_M_v2_updates_state_means_noise_and_pose_assignments(monkeypatch
         ),
     )
 
-    from recovar.reconstruction import regularization, noise
     from recovar.heterogeneity import locres
+    from recovar.reconstruction import noise, regularization
 
     monkeypatch.setattr(regularization, "get_fsc_gpu", lambda *_args, **_kwargs: np.array([0.9, 0.7], dtype=np.float32))
     monkeypatch.setattr(
@@ -814,8 +778,8 @@ def test_split_E_M_v2_heterogeneous_branch_updates_covariance_prior_and_masks_u(
         ),
     )
 
-    from recovar.reconstruction import regularization, relion_functions, noise
     from recovar.heterogeneity import locres
+    from recovar.reconstruction import noise, regularization, relion_functions
 
     monkeypatch.setattr(
         relion_functions,

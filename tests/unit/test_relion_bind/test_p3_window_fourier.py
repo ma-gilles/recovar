@@ -156,7 +156,7 @@ class TestWindowVsRecovarFourierWindow:
 
     def test_compare_selected_pixels(self):
         """Compare which pixels survive: RELION rectangular vs recovar radial."""
-        from recovar.em.dense_single_volume.fourier_window import (
+        from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import (
             make_fourier_window_indices_np,
         )
 

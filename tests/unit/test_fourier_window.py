@@ -10,6 +10,7 @@ Tests:
 """
 
 import math
+
 import numpy as np
 import pytest
 
@@ -17,25 +18,22 @@ pytest.importorskip("jax")
 import jax
 import jax.numpy as jnp
 
+import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-import recovar.core.fourier_transform_utils as ftu
 from recovar.em.dense_single_volume.engine_v2 import (
-    make_half_image_weights,
-    _preprocess_batch,
+    _compute_projections_block,
     _e_step_block_scores,
     _e_step_block_scores_windowed,
-    _m_step_block,
     _m_step_block_windowed,
-    _compute_projections_block,
-    _update_logsumexp,
+    _preprocess_batch,
+    make_half_image_weights,
     run_em_v2,
 )
-from recovar.em.dense_single_volume.fourier_window import (
+from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import (
     ALLOWED_CURRENT_SIZES,
-    make_frequency_radius_map_half,
-    make_fourier_window_indices,
     make_fourier_window_indices_np,
+    make_frequency_radius_map_half,
     quantize_current_size,
 )
 
@@ -51,7 +49,7 @@ VOLUME_SHAPE = (8, 8, 8)
 VOLUME_SIZE = 512
 H, W = IMAGE_SHAPE
 N_HALF = H * (W // 2 + 1)  # 8 * 5 = 40
-N_FULL = H * W               # 8 * 8 = 64
+N_FULL = H * W  # 8 * 8 = 64
 N_ROTATIONS = 5
 N_TRANSLATIONS = 3
 N_IMAGES = 4
@@ -61,6 +59,7 @@ SEED = 42
 # ---------------------------------------------------------------------------
 # Helpers (reused from test_half_spectrum_em.py)
 # ---------------------------------------------------------------------------
+
 
 def _hermitian_image_2d(image_shape, seed=42):
     rng = np.random.default_rng(seed)
@@ -122,6 +121,7 @@ class MockDataset:
 
         class _ImageSource:
             process_images = staticmethod(_identity_process)
+
         self.image_source = _ImageSource()
 
     def iter_batches(self, batch_size, *, indices=None, by_image=False, **kwargs):
@@ -134,9 +134,12 @@ class MockDataset:
             idx = np.asarray(indices[chunk_start:chunk_end])
             yield (
                 jnp.asarray(self._images[idx]),
-                None, None,
+                None,
+                None,
                 jnp.asarray(self.CTF_params[idx]),
-                None, idx, idx,
+                None,
+                idx,
+                idx,
             )
 
     def get_valid_frequency_indices(self, pixel_res):
@@ -157,12 +160,12 @@ def mock_dataset(rng):
 def seeded_inputs(rng, mock_dataset):
     volume = _hermitian_volume(VOLUME_SHAPE, seed=42)
     rotations = _make_rotations(N_ROTATIONS, seed=12)
-    translations = jnp.array(
-        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32
-    )
+    translations = jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32)
     noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
     config = ForwardModelConfig.from_dataset(
-        mock_dataset, disc_type="linear_interp", process_fn=_identity_process,
+        mock_dataset,
+        disc_type="linear_interp",
+        process_fn=_identity_process,
     )
     return {
         "volume": volume,
@@ -177,6 +180,7 @@ def seeded_inputs(rng, mock_dataset):
 # ===========================================================================
 # Test 1: Window indices at full resolution
 # ===========================================================================
+
 
 class TestWindowIndicesFullResolution:
     """At current_size=image_shape[0], window selects a circular band with radius N//2.
@@ -212,6 +216,7 @@ class TestWindowIndicesFullResolution:
 # Test 2: Window indices subset
 # ===========================================================================
 
+
 class TestWindowIndicesSubset:
     """At current_size < full, indices should be a strict subset."""
 
@@ -227,8 +232,7 @@ class TestWindowIndicesSubset:
         indices, n = make_fourier_window_indices_np(shape_128, current_size=32)
         expected_approx = math.pi * 16**2 / 2  # half of circular area
         # Allow 20% tolerance since we're comparing discrete count to continuous area
-        assert abs(n - expected_approx) / expected_approx < 0.20, \
-            f"Expected ~{expected_approx:.0f} indices, got {n}"
+        assert abs(n - expected_approx) / expected_approx < 0.20, f"Expected ~{expected_approx:.0f} indices, got {n}"
 
     def test_indices_sorted(self):
         """Indices should be sorted."""
@@ -254,6 +258,7 @@ class TestWindowIndicesSubset:
 # Test 3: Windowed E-step matches full at current_size=full
 # ===========================================================================
 
+
 class TestWindowedEStepMatchesFull:
     """When using ALL half-spectrum indices as window, windowed path matches full exactly."""
 
@@ -275,8 +280,13 @@ class TestWindowedEStepMatchesFull:
 
         # Preprocess
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data, ctf_params, noise_variance, translations, config,
-            n_images, n_trans,
+            batch_data,
+            ctf_params,
+            noise_variance,
+            translations,
+            config,
+            n_images,
+            n_trans,
         )
 
         # Projections
@@ -289,9 +299,16 @@ class TestWindowedEStepMatchesFull:
 
         # Non-windowed E-step
         scores_full = _e_step_block_scores(
-            shifted_half, batch_norm, ctf2_over_nv_half,
-            proj_half_weighted, proj_abs2_weighted, half_weights,
-            n_images, n_trans, IMAGE_SHAPE, VOLUME_SHAPE,
+            shifted_half,
+            batch_norm,
+            ctf2_over_nv_half,
+            proj_half_weighted,
+            proj_abs2_weighted,
+            half_weights,
+            n_images,
+            n_trans,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
         )
 
         # Windowed E-step using ALL indices (identity window)
@@ -307,14 +324,24 @@ class TestWindowedEStepMatchesFull:
         proj_abs2_w_weighted = proj_abs2_w * hw
 
         scores_windowed = _e_step_block_scores_windowed(
-            shifted_w, batch_norm, ctf2_w,
-            proj_w_weighted, proj_abs2_w_weighted, hw,
-            n_images, n_trans, n_windowed, IMAGE_SHAPE, VOLUME_SHAPE,
+            shifted_w,
+            batch_norm,
+            ctf2_w,
+            proj_w_weighted,
+            proj_abs2_w_weighted,
+            hw,
+            n_images,
+            n_trans,
+            n_windowed,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
         )
 
         np.testing.assert_allclose(
-            np.array(scores_full), np.array(scores_windowed),
-            atol=1e-4, rtol=1e-5,
+            np.array(scores_full),
+            np.array(scores_windowed),
+            atol=1e-4,
+            rtol=1e-5,
             err_msg="Windowed E-step with all indices should match non-windowed",
         )
 
@@ -322,6 +349,7 @@ class TestWindowedEStepMatchesFull:
 # ===========================================================================
 # Test 4: Windowed M-step roundtrip
 # ===========================================================================
+
 
 class TestWindowedMStepRoundtrip:
     """Project -> window -> GEMM -> scatter -> adjoint: energy only at low freq."""
@@ -346,8 +374,13 @@ class TestWindowedMStepRoundtrip:
 
         # Preprocess
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data, ctf_params, noise_variance, translations, config,
-            n_images, n_trans,
+            batch_data,
+            ctf_params,
+            noise_variance,
+            translations,
+            config,
+            n_images,
+            n_trans,
         )
 
         # Window
@@ -369,9 +402,17 @@ class TestWindowedMStepRoundtrip:
 
         # E-step to get scores
         scores = _e_step_block_scores_windowed(
-            shifted_w, batch_norm, ctf2_w,
-            proj_w_weighted, proj_abs2_w_weighted, hw,
-            n_images, n_trans, n_windowed, IMAGE_SHAPE, VOLUME_SHAPE,
+            shifted_w,
+            batch_norm,
+            ctf2_w,
+            proj_w_weighted,
+            proj_abs2_w_weighted,
+            hw,
+            n_images,
+            n_trans,
+            n_windowed,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
         )
         scores_flat = scores.reshape(n_images, -1)
         log_Z = jax.scipy.special.logsumexp(scores_flat, axis=1)
@@ -381,9 +422,18 @@ class TestWindowedMStepRoundtrip:
         Ft_ctf = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
 
         (Ft_y, Ft_ctf, probs, _, _, summed_w, ctf_probs_w) = _m_step_block_windowed(
-            shifted_w, scores, log_Z, rotations, ctf2_w,
-            Ft_y, Ft_ctf,
-            n_images, n_trans, n_windowed, IMAGE_SHAPE, VOLUME_SHAPE,
+            shifted_w,
+            scores,
+            log_Z,
+            rotations,
+            ctf2_w,
+            Ft_y,
+            Ft_ctf,
+            n_images,
+            n_trans,
+            n_windowed,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
         )
 
         # Scatter back to full half-spectrum
@@ -393,8 +443,13 @@ class TestWindowedMStepRoundtrip:
 
         # Adjoint
         Ft_y = core.adjoint_slice_volume(
-            summed_half, rotations, IMAGE_SHAPE, VOLUME_SHAPE,
-            "linear_interp", volume=Ft_y, half_image=True,
+            summed_half,
+            rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            "linear_interp",
+            volume=Ft_y,
+            half_image=True,
         )
 
         # The volume Ft_y should have non-zero values (the adjoint distributes energy)
@@ -405,6 +460,7 @@ class TestWindowedMStepRoundtrip:
 # ===========================================================================
 # Test 5: Adjoint dot product test for windowed operator
 # ===========================================================================
+
 
 class TestAdjointDotProductWindowed:
     """For the windowed operator (project -> window, and window -> scatter -> adjoint),
@@ -452,30 +508,32 @@ class TestAdjointDotProductWindowed:
         rotations = _make_rotations(n_rot, seed=99)
 
         y_half = jnp.array(
-            (rng.standard_normal((n_rot, N_HALF)) +
-             1j * rng.standard_normal((n_rot, N_HALF))).astype(np.complex64)
+            (rng.standard_normal((n_rot, N_HALF)) + 1j * rng.standard_normal((n_rot, N_HALF))).astype(np.complex64)
         )
 
         half_weights = make_half_image_weights(IMAGE_SHAPE)
 
         # Forward (half)
-        proj_half = core.slice_volume(
-            x, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=True
-        )
+        proj_half = core.slice_volume(x, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=True)
 
         # <proj_half, y_half>_hw
         ip_Ax_y = jnp.sum(jnp.conj(proj_half) * half_weights * y_half).real
 
         # Adjoint (half_image=True includes Hermitian fold)
         Aty = core.adjoint_slice_volume(
-            y_half, rotations, IMAGE_SHAPE, VOLUME_SHAPE,
-            "linear_interp", half_image=True,
+            y_half,
+            rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            "linear_interp",
+            half_image=True,
         )
 
         ip_x_Aty = jnp.sum(jnp.conj(x) * Aty).real
 
         np.testing.assert_allclose(
-            float(ip_Ax_y), float(ip_x_Aty),
+            float(ip_Ax_y),
+            float(ip_x_Aty),
             rtol=1e-4,
             err_msg="Full adjoint dot product test failed: <Ax, y>_hw != <x, A*y>",
         )
@@ -506,17 +564,16 @@ class TestAdjointDotProductWindowed:
         rotations = _make_rotations(n_rot, seed=99)
 
         y_windowed = jnp.array(
-            (rng.standard_normal((n_rot, n_windowed)) +
-             1j * rng.standard_normal((n_rot, n_windowed))).astype(np.complex64)
+            (rng.standard_normal((n_rot, n_windowed)) + 1j * rng.standard_normal((n_rot, n_windowed))).astype(
+                np.complex64
+            )
         )
 
         half_weights = make_half_image_weights(IMAGE_SHAPE)
         hw_w = half_weights[wi]
 
         # Forward: project at full res, then gather windowed indices
-        proj_half = core.slice_volume(
-            x, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=True
-        )
+        proj_half = core.slice_volume(x, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=True)
         Ax_windowed = proj_half[:, wi]
 
         # <Ax_w, y_w>_hw_w = Re[sum(conj(Ax_w) * hw_w * y_w)]
@@ -527,14 +584,19 @@ class TestAdjointDotProductWindowed:
         z_half = jnp.zeros((n_rot, N_HALF), dtype=y_windowed.dtype)
         z_half = z_half.at[:, wi].set(y_windowed)
         Aty = core.adjoint_slice_volume(
-            z_half, rotations, IMAGE_SHAPE, VOLUME_SHAPE,
-            "linear_interp", half_image=True,
+            z_half,
+            rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            "linear_interp",
+            half_image=True,
         )
 
         ip_x_Aty = jnp.sum(jnp.conj(x) * Aty).real
 
         np.testing.assert_allclose(
-            float(ip_Ax_y), float(ip_x_Aty),
+            float(ip_Ax_y),
+            float(ip_x_Aty),
             rtol=1e-4,
             err_msg="Windowed adjoint dot product failed: <Ax_w, y_w>_hw != <x, A*(y_w)>",
         )
@@ -543,6 +605,7 @@ class TestAdjointDotProductWindowed:
 # ===========================================================================
 # Test 6: Full iteration at each current_size
 # ===========================================================================
+
 
 class TestIterationAtEachCurrentSize:
     """Run one full run_em_v2 iteration at each allowed current_size."""
@@ -559,8 +622,13 @@ class TestIterationAtEachCurrentSize:
         mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
 
         new_mean, ha, Ft_y, Ft_ctf = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             current_size=current_size,
@@ -588,8 +656,13 @@ class TestIterationAtEachCurrentSize:
 
         # No windowing
         new_mean_none, ha_none, Ft_y_none, _ = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             current_size=None,
@@ -597,8 +670,13 @@ class TestIterationAtEachCurrentSize:
 
         # current_size = 8 (full resolution for 8x8)
         new_mean_8, ha_8, Ft_y_8, _ = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             current_size=8,
@@ -607,7 +685,9 @@ class TestIterationAtEachCurrentSize:
         # current_size=8 for 8x8 images is NOT windowed (use_window is False
         # when current_size >= image_shape[0]), so these should be identical
         np.testing.assert_allclose(
-            np.array(new_mean_none), np.array(new_mean_8), atol=1e-5,
+            np.array(new_mean_none),
+            np.array(new_mean_8),
+            atol=1e-5,
             err_msg="current_size=8 should match no windowing for 8x8 images",
         )
         np.testing.assert_array_equal(ha_none, ha_8)
@@ -616,6 +696,7 @@ class TestIterationAtEachCurrentSize:
 # ===========================================================================
 # Test 7: Quantize current_size
 # ===========================================================================
+
 
 class TestQuantizeCurrentSize:
     """Test the quantize_current_size helper."""
@@ -658,6 +739,7 @@ class TestQuantizeCurrentSize:
 # Test 8: Frequency radius map
 # ===========================================================================
 
+
 class TestFrequencyRadiusMap:
     """Test make_frequency_radius_map_half."""
 
@@ -686,6 +768,7 @@ class TestFrequencyRadiusMap:
 # Test 9: Multiple rotation blocks with windowing
 # ===========================================================================
 
+
 class TestWindowedMultipleBlocks:
     """Results should be identical regardless of rotation block size with windowing."""
 
@@ -702,8 +785,13 @@ class TestWindowedMultipleBlocks:
 
         # All rotations in one block
         new_mean_1, ha_1, Ft_y_1, _ = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             current_size=current_size,
@@ -711,15 +799,22 @@ class TestWindowedMultipleBlocks:
 
         # Split into blocks of 2
         new_mean_2, ha_2, Ft_y_2, _ = run_em_v2(
-            ds, volume, mean_variance, noise_variance,
-            rotations, translations, "linear_interp",
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
             image_batch_size=N_IMAGES,
             rotation_block_size=2,
             current_size=current_size,
         )
 
         np.testing.assert_allclose(
-            np.array(new_mean_1), np.array(new_mean_2), atol=1e-4,
+            np.array(new_mean_1),
+            np.array(new_mean_2),
+            atol=1e-4,
             err_msg="Mean differs between single-block and multi-block with windowing",
         )
         np.testing.assert_array_equal(ha_1, ha_2)
