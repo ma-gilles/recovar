@@ -273,13 +273,14 @@ def _partition_local_search_groups(
     image_batch_size: int,
     rotation_block_size: int,
     grid_metadata: dict[str, np.ndarray],
+    force_single_image_groups: bool = False,
 ) -> list[tuple[np.ndarray, np.ndarray, np.ndarray]]:
     """Build exact local-search groups whose rotation unions stay below a hard cap."""
     n_images = int(np.asarray(prior_rotations).shape[0])
     if n_images == 0:
         return []
 
-    seed_group_size = _local_search_chunk_size(image_batch_size)
+    seed_group_size = 1 if force_single_image_groups else _local_search_chunk_size(image_batch_size)
     max_union_rotations = _local_search_max_union_rotations(rotation_block_size)
     processing_order = _local_search_sort_order(prior_rotations, healpix_order)
     groups: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
@@ -317,6 +318,8 @@ def _pad_local_search_rotations(
     local_rotations: np.ndarray,
     local_log_prior: np.ndarray,
     rotation_block_size: int,
+    *,
+    bucket_local_rotations: bool = True,
 ) -> tuple[np.ndarray, np.ndarray, int, int]:
     """Pad one exact local neighborhood to a compile-friendly bucket.
 
@@ -328,6 +331,8 @@ def _pad_local_search_rotations(
     local_rotations = np.asarray(local_rotations, dtype=np.float32).reshape(-1, 3, 3)
     local_log_prior = np.asarray(local_log_prior, dtype=np.float32)
     actual_count = int(local_rotations.shape[0])
+    if not bucket_local_rotations:
+        return local_rotations, local_log_prior, actual_count, max(actual_count, 1)
     block_size = _local_search_rotation_block_size(actual_count, int(rotation_block_size))
     if block_size <= actual_count:
         return local_rotations, local_log_prior, actual_count, block_size
@@ -376,6 +381,10 @@ def _run_grouped_local_search_em(
     reconstruction_padding_factor=1,
     use_float64_scoring=False,
     return_profile=False,
+    reuse_pass1_projections=True,
+    fused_windowed_adjoint=True,
+    force_single_image_groups=False,
+    bucket_local_rotation_blocks=True,
 ):
     """Run batched exact local search on the fine HEALPix grid.
 
@@ -485,6 +494,7 @@ def _run_grouped_local_search_em(
         image_batch_size,
         rotation_block_size,
         local_grid_metadata,
+        force_single_image_groups=force_single_image_groups,
     )
     selector_time += time.time() - selector_t0
 
@@ -515,6 +525,7 @@ def _run_grouped_local_search_em(
             local_rotations,
             local_log_prior,
             int(rotation_block_size),
+            bucket_local_rotations=bucket_local_rotation_blocks,
         )
         padded_total_rotations = int(
             ((padded_rotations.shape[0] + local_rotation_block_size - 1) // local_rotation_block_size)
@@ -551,8 +562,8 @@ def _run_grouped_local_search_em(
             reconstruction_padding_factor=reconstruction_padding_factor,
             use_float64_scoring=use_float64_scoring,
             return_profile=return_profile,
-            reuse_pass1_projections=True,
-            fused_windowed_adjoint=True,
+            reuse_pass1_projections=reuse_pass1_projections,
+            fused_windowed_adjoint=fused_windowed_adjoint,
         )
         em_time += time.time() - em_t0
         if accumulate_noise:
@@ -1335,6 +1346,11 @@ def refine_single_volume(
     init_previous_best_rotation_eulers=None,
     replay_iteration_overrides=None,
     skip_final_iteration=False,
+    local_search_return_profile=None,
+    local_search_reuse_pass1_projections=True,
+    local_search_fused_windowed_adjoint=True,
+    local_search_force_single_image_groups=False,
+    local_search_bucket_rotation_blocks=True,
 ):
     """Multi-iteration EM refinement with FSC-driven resolution management.
 
@@ -1483,6 +1499,11 @@ def refine_single_volume(
             init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
             replay_iteration_overrides=replay_iteration_overrides,
             skip_final_iteration=skip_final_iteration,
+            local_search_return_profile=local_search_return_profile,
+            local_search_reuse_pass1_projections=local_search_reuse_pass1_projections,
+            local_search_fused_windowed_adjoint=local_search_fused_windowed_adjoint,
+            local_search_force_single_image_groups=local_search_force_single_image_groups,
+            local_search_bucket_rotation_blocks=local_search_bucket_rotation_blocks,
         )
 
     # ===================================================================
@@ -1814,6 +1835,11 @@ def _refine_relion_mode(
     init_previous_best_rotation_eulers=None,
     replay_iteration_overrides=None,
     skip_final_iteration=False,
+    local_search_return_profile=None,
+    local_search_reuse_pass1_projections=True,
+    local_search_fused_windowed_adjoint=True,
+    local_search_force_single_image_groups=False,
+    local_search_bucket_rotation_blocks=True,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -2784,7 +2810,15 @@ def _refine_relion_mode(
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
                     use_float64_scoring=True,
-                    return_profile=save_intermediates_dir is not None,
+                    return_profile=(
+                        save_intermediates_dir is not None
+                        if local_search_return_profile is None
+                        else bool(local_search_return_profile)
+                    ),
+                    reuse_pass1_projections=local_search_reuse_pass1_projections,
+                    fused_windowed_adjoint=local_search_fused_windowed_adjoint,
+                    force_single_image_groups=local_search_force_single_image_groups,
+                    bucket_local_rotation_blocks=local_search_bucket_rotation_blocks,
                 )
                 if len(grouped_outputs) == 6:
                     Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k, grouped_local_profile_k = grouped_outputs
