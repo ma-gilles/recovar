@@ -23,7 +23,9 @@ from recovar.em.dense_single_volume.refine import (
     _compute_significance_batched,
     _local_search_chunk_size,
     _local_search_engine_rotation_block_size,
+    _local_search_max_union_rotations,
     _pad_local_search_rotations,
+    _partition_local_search_groups,
     _local_search_rotation_block_size,
     clamp_relion_coarse_image_size,
     collapse_rotation_posterior_to_direction_prior,
@@ -88,10 +90,10 @@ def _make_rotations(n, seed=42):
     return q.astype(np.float32)
 
 
-def test_local_search_uses_single_image_chunks():
+def test_local_search_chunk_size_caps_seed_groups_at_64_images():
     assert _local_search_chunk_size(1) == 1
-    assert _local_search_chunk_size(64) == 1
-    assert _local_search_chunk_size(512) == 1
+    assert _local_search_chunk_size(64) == 64
+    assert _local_search_chunk_size(512) == 64
 
 
 def test_local_search_rotation_block_size_uses_power_of_two_buckets():
@@ -106,6 +108,12 @@ def test_local_search_engine_rotation_block_size_caps_dense_tiles():
     assert _local_search_engine_rotation_block_size(64) == 64
     assert _local_search_engine_rotation_block_size(1024) == 1024
     assert _local_search_engine_rotation_block_size(5000) == 1024
+
+
+def test_local_search_max_union_rotations_tracks_engine_cap():
+    assert _local_search_max_union_rotations(64) == 256
+    assert _local_search_max_union_rotations(1024) == 4096
+    assert _local_search_max_union_rotations(5000) == 4096
 
 
 def test_pad_local_search_rotations_masks_padding_with_large_negative_prior():
@@ -139,6 +147,81 @@ def test_pad_local_search_rotations_caps_large_neighborhoods_without_recompiling
     assert padded_rotations.shape == (6000, 3, 3)
     assert padded_log_prior.shape == (1, 6000)
     np.testing.assert_allclose(padded_log_prior, 0.0)
+
+
+def test_partition_local_search_groups_keeps_small_exact_unions_together(monkeypatch):
+    import recovar.em.dense_single_volume.refine as refine_mod
+
+    def fake_selector(
+        prior_rotation_indices,
+        sigma_rot,
+        sigma_psi,
+        healpix_order,
+        sigma_cutoff=3.0,
+        *,
+        per_image=False,
+        grid_metadata=None,
+    ):
+        _ = (sigma_rot, sigma_psi, healpix_order, sigma_cutoff, grid_metadata)
+        n = np.asarray(prior_rotation_indices).shape[0]
+        assert per_image
+        return np.arange(12, dtype=np.int64), np.zeros((n, 12), dtype=np.float32)
+
+    monkeypatch.setattr(refine_mod, "get_local_rotation_grid_fast", fake_selector)
+
+    groups = _partition_local_search_groups(
+        np.zeros((4, 3), dtype=np.float32),
+        sigma_rot=np.deg2rad(7.5),
+        sigma_psi=np.deg2rad(7.5),
+        healpix_order=4,
+        image_batch_size=4,
+        rotation_block_size=5000,
+        grid_metadata={"mode": "factorized", "n_pixels": np.int64(192), "n_psi": np.int64(1536)},
+    )
+
+    assert len(groups) == 1
+    group_indices, local_indices, local_log_prior = groups[0]
+    np.testing.assert_array_equal(np.sort(group_indices), np.array([0, 1, 2, 3], dtype=np.int64))
+    assert local_indices.shape == (12,)
+    assert local_log_prior.shape == (4, 12)
+
+
+def test_partition_local_search_groups_splits_large_exact_unions(monkeypatch):
+    import recovar.em.dense_single_volume.refine as refine_mod
+
+    def fake_selector(
+        prior_rotation_indices,
+        sigma_rot,
+        sigma_psi,
+        healpix_order,
+        sigma_cutoff=3.0,
+        *,
+        per_image=False,
+        grid_metadata=None,
+    ):
+        _ = (sigma_rot, sigma_psi, healpix_order, sigma_cutoff, grid_metadata)
+        n = np.asarray(prior_rotation_indices).shape[0]
+        assert per_image
+        n_union = 5000 if n > 1 else 1200
+        return np.arange(n_union, dtype=np.int64), np.zeros((n, n_union), dtype=np.float32)
+
+    monkeypatch.setattr(refine_mod, "get_local_rotation_grid_fast", fake_selector)
+
+    groups = _partition_local_search_groups(
+        np.zeros((4, 3), dtype=np.float32),
+        sigma_rot=np.deg2rad(7.5),
+        sigma_psi=np.deg2rad(7.5),
+        healpix_order=4,
+        image_batch_size=4,
+        rotation_block_size=5000,
+        grid_metadata={"mode": "factorized", "n_pixels": np.int64(192), "n_psi": np.int64(1536)},
+    )
+
+    assert len(groups) == 4
+    for group_indices, local_indices, local_log_prior in groups:
+        assert group_indices.shape == (1,)
+        assert local_indices.shape == (1200,)
+        assert local_log_prior.shape == (1, 1200)
 
 
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):
