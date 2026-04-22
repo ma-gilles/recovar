@@ -527,6 +527,48 @@ for the next iteration's direction prior (RELION's `pdf_direction`).
 - [`relion_priors.py:16`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_priors.py#L16) -- `make_relion_translation_log_prior()`: Gaussian translation prior from `sigma_offset_angstrom` and previous best offset
 - [`relion_priors.py:118`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_priors.py#L118) -- `make_relion_direction_log_prior()`: accumulates per-direction posterior across iterations for the direction prior
 
+### 9d. Greedy commitment and the hard-assignment seed
+
+Although local search uses soft EM weights for the M-step, the **neighborhood
+center** for each image at iteration `t+1` is determined by the hard MAP
+assignment from iteration `t` (the single rotation with the highest posterior
+weight). This creates a greedy commitment:
+
+1. At the first local-search iteration, each image's neighborhood is centered on
+   its best rotation from the last global-search iteration.
+2. After one local EM iteration, the new MAP rotation becomes the next center.
+3. If the true orientation lies outside the initial 3-sigma cone, it is never
+   evaluated and the image is permanently committed to a local basin.
+
+The soft weights within the neighborhood do NOT prevent this — they only affect
+the M-step contribution, not the neighborhood placement. Two rotations that tie
+at iteration `t` are broken by first-encountered ordering
+([`engine_v2.py:1291`](../../recovar/em/dense_single_volume/engine_v2.py#L1291):
+`improved = block_best > best_score`, strict inequality), and the loser's
+neighborhood is never explored.
+
+This is identical to RELION's behavior. Both codes commit to a single local
+basin per image once local search begins. The Gaussian prior softens the
+within-basin posterior but does not maintain alternative basins.
+
+**Mitigation factors**: (1) the transition from global to local search happens
+at order >= 4 (angular step <= 2.8 deg), where most images have already
+converged to a narrow posterior peak; (2) the Gaussian sigma starts wide
+(`sqrt(8) * angular_step`) and the neighborhood covers 3 sigma, so the initial
+cone is typically 15-25 degrees; (3) RELION's 20+ years of production use
+suggest this greedy commitment works well in practice for single-class
+refinement.
+
+**Design alternative — hierarchical refinement**: instead of committing to one
+neighborhood center, maintain the top-K candidate orientations per image across
+angular refinements. At each order increment, expand only the surviving
+candidates' children and re-prune. This is a natural generalization of the
+two-pass oversampling (Section 10) — the fine pass is already one level of
+hierarchical refinement; recursing it would prune dead branches early instead
+of expanding all children at once. The cost would be ~K evaluations per level
+instead of 8^(oversampling_order) per significant parent. Not implemented in
+either RELION or recovar; flagged as a post-parity design consideration.
+
 ---
 
 ## 10. Adaptive Two-Pass Oversampling
@@ -538,13 +580,16 @@ Identify the "significant" orientations whose posterior weight exceeds a thresho
 (`adaptive_fraction`, default 0.999 of cumulative weight).
 
 **Fine pass (pass 2)**: for each significant coarse orientation, generate child
-orientations at the oversampled resolution (32 children per parent at
-`adaptive_oversampling=1`). Re-evaluate only these children in the E-step and
-use their weights for the M-step.
+orientations at the oversampled resolution. At `adaptive_oversampling=1` (RELION
+default), each parent produces 4 child HEALPix pixels × 2 child psi midpoints =
+8 children. At `adaptive_oversampling=K`, subdivision recurses K times: 4^K child
+pixels × 2^K child psi = 8^K children per parent (64 at K=2, 512 at K=3). All K
+levels are expanded in one shot — there is no intermediate pruning between levels.
 
-This reduces the effective number of fine orientations from `n_rot * 32` (all
-children) to `n_significant * 32` (typically 100-500 significant orientations
-per image), a 50-200x reduction.
+This reduces the effective number of fine orientations from `n_rot * 8^K` (all
+children) to `n_significant * 8^K` (typically 100-500 significant orientations
+per image), a 50-200x reduction. The lack of intermediate pruning means the cost
+grows exponentially with K, which is why RELION uses K=1 in practice.
 
 **RELION source**: `ml_optimiser.cpp::expectationOneParticle()` (two-pass logic,
 `exp_ipass` loop), `healpix_sampling.cpp::getOrientations()` (child generation).
@@ -623,3 +668,24 @@ iteration, followed by `ml_optimiser.cpp::writeOutput()`.
    backprojection. recovar uses the same trilinear kernel but applies the correction
    at reconstruction time rather than insertion time. Both produce identical results
    when the volume is resolved (tested to rel_err < 1e-12).
+
+## Post-Parity Design Considerations
+
+1. **Hierarchical refinement**: replace the flat coarse→fine expansion (Section 10)
+   and greedy local-search commitment (Section 9d) with recursive prune-and-expand.
+   At each angular refinement level, expand only the top-K surviving candidates per
+   image, score them, prune, and recurse. This is strictly cheaper than increasing
+   `adaptive_oversampling` (which expands 8^K children without intermediate pruning)
+   and avoids the greedy commitment problem where a single hard MAP assignment locks
+   each image into one local basin. The two-pass oversampling is already one level
+   of this hierarchy — the generalization is to recurse it. Trade-off: requires
+   maintaining per-image candidate lists across iterations (memory) and complicates
+   the GPU batching strategy (different images have different candidate counts).
+
+2. **Correct Hermitian weights**: see Known Parity Gap #1. Enabling
+   `make_half_image_weights` would sharpen posteriors without changing MAP rankings.
+
+3. **Soft local-search seeding**: use the top-K posterior peaks (not just the MAP)
+   to seed multiple overlapping neighborhoods per image. Combined with hierarchical
+   refinement, this would let local search explore alternative basins that the
+   current greedy commitment discards.
