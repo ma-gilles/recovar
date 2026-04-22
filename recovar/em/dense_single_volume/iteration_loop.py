@@ -2,10 +2,10 @@
 
 This file contains the three core algorithm functions:
 - ``refine_single_volume`` — public entry point
-- ``_refine_relion_mode`` — RELION-parity iteration loop
-- ``_run_grouped_local_search_em`` — exact local angular search
+- ``_run_relion_iteration_loop`` — RELION-parity iteration loop
+- ``_run_local_search_iteration`` — exact local angular search
 
-All supporting helpers live in ``refine_dev_helpers/``.
+All supporting helpers live in ``helpers/``.
 See ``docs/math/relion_refinement_algorithm.md`` for the full algorithm map.
 """
 
@@ -18,25 +18,33 @@ import numpy as np
 
 from recovar import utils
 from recovar.em.core import hard_assignment_idx_to_pose
-from recovar.em.dense_single_volume.engine_v2 import run_em_v2
-from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import (
-    compute_pass2_stats,
-    compute_pass2_stats_sparse,
-)
-from recovar.em.dense_single_volume.refine_dev_helpers.convergence import (
+from recovar.em.dense_single_volume.em_engine import run_em
+from recovar.em.dense_single_volume.helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
     calculate_expected_angular_errors,
     healpix_angular_step,
     update_refinement_state,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import quantize_current_size
-from recovar.em.dense_single_volume.refine_dev_helpers.local_search import (
+from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
+from recovar.em.dense_single_volume.helpers.local_search import (
     _local_search_engine_rotation_block_size,
     _pad_local_search_rotations,
     _partition_local_search_groups,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.relion_init import (
+from recovar.em.dense_single_volume.helpers.orientation_priors import (
+    collapse_rotation_posterior_to_direction_prior,
+    infer_direction_prior_healpix_order,
+    make_relion_direction_log_prior,
+    make_relion_translation_log_prior,
+    relion_translation_search_base,
+    remap_direction_prior_to_healpix_order,
+)
+from recovar.em.dense_single_volume.helpers.oversampling import (
+    compute_pass2_stats,
+    compute_pass2_stats_sparse,
+)
+from recovar.em.dense_single_volume.helpers.resolution import (
     ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
     _bootstrap_current_size_relion,
     clamp_relion_coarse_image_size,
@@ -45,15 +53,7 @@ from recovar.em.dense_single_volume.refine_dev_helpers.relion_init import (
     shell_index_to_resolution_angstrom,
     should_skip_adaptive_pass2,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.relion_priors import (
-    collapse_rotation_posterior_to_direction_prior,
-    infer_direction_prior_healpix_order,
-    make_relion_direction_log_prior,
-    make_relion_translation_log_prior,
-    relion_translation_search_base,
-    remap_direction_prior_to_healpix_order,
-)
-from recovar.em.dense_single_volume.refine_dev_helpers.types import RelionStats
+from recovar.em.dense_single_volume.helpers.types import RelionStats
 from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,
@@ -79,15 +79,15 @@ from recovar.reconstruction.regularization import (
 logger = logging.getLogger(__name__)
 
 
-# ---- Extracted helpers live in refine_dev_helpers/ ----
+# ---- Extracted helpers live in helpers/ ----
 # local_search.py: _partition_local_search_groups, _pad_local_search_rotations, etc.
-# relion_priors.py: make_relion_translation_log_prior, make_relion_direction_log_prior, etc.
-# relion_init.py: shell_index_to_resolution_angstrom, compute_coarse_image_size, fsc_to_current_size, etc.
+# orientation_priors.py: make_relion_translation_log_prior, make_relion_direction_log_prior, etc.
+# resolution.py: shell_index_to_resolution_angstrom, compute_coarse_image_size, fsc_to_current_size, etc.
 # convergence.py: RefinementState, check_convergence, update_refinement_state, etc.
-# adaptive.py: find_significant_rotations, compute_pass2_stats, etc.
+# oversampling.py: find_significant_rotations, compute_pass2_stats, etc.
 
 
-def _run_grouped_local_search_em(
+def _run_local_search_iteration(
     experiment_dataset,
     mean,
     mean_variance,
@@ -268,7 +268,7 @@ def _run_grouped_local_search_em(
         chunk_padded_pairs.append(padded_pair_count)
         total_bucket_rotations += padded_total_rotations
         max_bucket_rotations = max(max_bucket_rotations, int(local_rotation_block_size))
-        run_em_outputs = run_em_v2(
+        run_em_outputs = run_em(
             experiment_dataset,
             mean,
             mean_variance,
@@ -365,7 +365,7 @@ def _run_grouped_local_search_em(
         rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
     )
     if accumulate_noise:
-        from recovar.em.dense_single_volume.refine_dev_helpers.types import NoiseStats
+        from recovar.em.dense_single_volume.helpers.types import NoiseStats
 
         noise_stats = NoiseStats(
             wsum_sigma2_noise=jnp.asarray(accum_noise_wsum, dtype=jnp.float32),
@@ -436,7 +436,7 @@ def _run_grouped_local_search_em(
     return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats, profile_summary
 
 
-from recovar.em.dense_single_volume.refine_dev_helpers.significance import (
+from recovar.em.dense_single_volume.helpers.significance import (
     _compute_significance_batched,
 )
 
@@ -525,7 +525,7 @@ def refine_single_volume(
     image_batch_size : int
         Number of images per GPU batch.
     rotation_block_size : int
-        Number of rotations per block in engine_v2.
+        Number of rotations per block in em_engine.
     relion_current_sizes : list of int or None
         Oracle mode: if provided, use these current_sizes instead of
         computing from FSC.  relion_current_sizes[i] is used at iteration i.
@@ -597,7 +597,7 @@ def refine_single_volume(
         raise ValueError(f"Unknown mode={mode!r}; expected 'legacy' or 'relion'")
 
     if mode == "relion":
-        return _refine_relion_mode(
+        return _run_relion_iteration_loop(
             experiment_datasets=experiment_datasets,
             init_volume=init_volume,
             init_noise_variance=init_noise_variance,
@@ -710,7 +710,7 @@ def refine_single_volume(
         for k in range(2):
             if not use_adaptive:
                 # Standard single-pass E+M (Phase 4 behavior)
-                new_mean_k, ha_k, Ft_y_k, Ft_ctf_k = run_em_v2(
+                new_mean_k, ha_k, Ft_y_k, Ft_ctf_k = run_em(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
@@ -780,7 +780,7 @@ def refine_single_volume(
                         "Half %d: pass 2 skipped, running pass-1-only E+M",
                         k,
                     )
-                    new_mean_k, ha_k, Ft_y_k, Ft_ctf_k = run_em_v2(
+                    new_mean_k, ha_k, Ft_y_k, Ft_ctf_k = run_em(
                         experiment_datasets[k],
                         means[k],
                         mean_variance,
@@ -928,7 +928,7 @@ def refine_single_volume(
 # ---------------------------------------------------------------------------
 
 
-def _refine_relion_mode(
+def _run_relion_iteration_loop(
     experiment_datasets,
     init_volume,
     init_noise_variance,
@@ -1230,7 +1230,7 @@ def _refine_relion_mode(
     # RELION applies img *= avg_norm_correction/normcorr (ml_optimiser.cpp:6240)
     # and scale_correction to the reference (line 7298).  The caller must
     # compute (avg_norm/normcorr)*scale and pass it here.  Passed through to
-    # run_em_v2's image_corrections parameter.
+    # run_em's image_corrections parameter.
     # The arrays are indexed by the HALF-SET dataset order (not global particle
     # order), matching experiment_datasets[k].
     image_corrections_per_half = [None, None]
@@ -1253,7 +1253,7 @@ def _refine_relion_mode(
     # --- Per-image scale corrections (RELION parity: reference side) ---
     # RELION applies rlnGroupScaleCorrection to the REFERENCE, not the image
     # (ml_optimiser.cpp:7295-7298).  This means the E-step norm-term and
-    # M-step denominator carry scale².  Passed to run_em_v2's
+    # M-step denominator carry scale².  Passed to run_em's
     # scale_corrections parameter to multiply ctf²/σ² by scale².
     scale_corrections_per_half = [None, None]
     if init_scale_corrections is not None:
@@ -1909,7 +1909,7 @@ def _refine_relion_mode(
                     safe_rbs,
                 )
                 grouped_local_profile_k = None
-                grouped_outputs = _run_grouped_local_search_em(
+                grouped_outputs = _run_local_search_iteration(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
@@ -2019,7 +2019,7 @@ def _refine_relion_mode(
                         sig_fraction,
                         ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
                     )
-                    _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em_v2(
+                    _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
                         experiment_datasets[k],
                         means[k],
                         mean_variance,
@@ -2181,7 +2181,7 @@ def _refine_relion_mode(
                     effective_rotations.shape[0],
                     current_translations.shape[0],
                 )
-                _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em_v2(
+                _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
@@ -2830,7 +2830,7 @@ def _refine_relion_mode(
         )
 
         # Track frac_changed for local search fallback
-        from recovar.em.dense_single_volume.refine_dev_helpers.convergence import compute_assignment_changes
+        from recovar.em.dense_single_volume.helpers.convergence import compute_assignment_changes
 
         frac_changed = compute_assignment_changes(
             current_combined_ha,
@@ -2973,7 +2973,7 @@ def _refine_relion_mode(
             current_rotations.shape[0],
             current_translations.shape[0],
         )
-        _, ha_k_final, Ft_y_k_final, Ft_ctf_k_final, _, noise_stats_k_final = run_em_v2(
+        _, ha_k_final, Ft_y_k_final, Ft_ctf_k_final, _, noise_stats_k_final = run_em(
             experiment_datasets[k],
             final_join_means[k],
             mean_variance,

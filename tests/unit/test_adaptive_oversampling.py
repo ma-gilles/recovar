@@ -17,11 +17,11 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.engine_v2 import (
+from recovar.em.dense_single_volume.em_engine import (
     compute_e_step_weights,
-    run_em_v2,
+    run_em,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import (
+from recovar.em.dense_single_volume.helpers.oversampling import (
     find_significant_mask,
     find_significant_rotations,
 )
@@ -468,7 +468,7 @@ class TestSignificantCountsReasonable:
 
     def test_batched_significance_returns_sparse_sample_lists(self):
         """The batched coarse pass should preserve per-image significant samples."""
-        from recovar.em.dense_single_volume.refine import _compute_significance_batched
+        from recovar.em.dense_single_volume.iteration_loop import _compute_significance_batched
 
         n_images = 6
         n_rot = 12
@@ -527,7 +527,7 @@ class TestSignificantCountsReasonable:
 
     def test_sparse_pass2_runs_with_full_candidate_lists(self):
         """Sparse pass 2 should handle the ``sig_samples is None`` full-grid case."""
-        from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import compute_pass2_stats_sparse
+        from recovar.em.dense_single_volume.helpers.oversampling import compute_pass2_stats_sparse
 
         n_images = 2
         nside_level = 1
@@ -854,7 +854,7 @@ class TestRefineWithAdaptive:
     def test_completes_and_valid_output(self):
         """refine_single_volume with adaptive_oversampling=1 should complete
         and produce valid (finite, non-zero) outputs."""
-        from recovar.em.dense_single_volume.refine import refine_single_volume
+        from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
         from recovar.em.sampling import get_rotation_grid
 
         n_images = 8
@@ -910,7 +910,7 @@ class TestRefineWithAdaptive:
 
     def test_requires_nside_level(self):
         """adaptive_oversampling > 0 should require nside_level."""
-        from recovar.em.dense_single_volume.refine import refine_single_volume
+        from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
 
         ds1 = MockDataset(n_images=2, seed=42)
         ds2 = MockDataset(n_images=2, seed=99)
@@ -950,7 +950,7 @@ class TestRefineWithAdaptive:
         mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
 
         # Standard path
-        new_mean_std, ha_std, Ft_y_std, Ft_ctf_std = run_em_v2(
+        new_mean_std, ha_std, Ft_y_std, Ft_ctf_std = run_em(
             ds,
             volume,
             mean_variance,
@@ -978,7 +978,7 @@ class TestRefineWithAdaptive:
         np.testing.assert_array_equal(
             ha_std,
             ha_w,
-            err_msg="E-step weights hard assignments differ from run_em_v2",
+            err_msg="E-step weights hard assignments differ from run_em",
         )
 
 
@@ -1132,7 +1132,7 @@ class TestEStepWeightsWindowed:
 
 
 class TestMaskedCartesianGrid:
-    """Verify run_em_v2 respects sparse candidate masks."""
+    """Verify run_em respects sparse candidate masks."""
 
     def test_rotation_translation_mask_matches_manual_masking(self):
         ds = MockDataset(n_images=1, seed=5)
@@ -1164,7 +1164,7 @@ class TestMaskedCartesianGrid:
         expected_argmax = int(masked_weights.reshape(-1).argmax())
         expected_pmax = float(masked_weights.max())
 
-        _, masked_ha, _, _, masked_stats = run_em_v2(
+        _, masked_ha, _, _, masked_stats = run_em(
             ds,
             volume,
             mean_variance,
@@ -1198,7 +1198,7 @@ class TestUnionCap:
     def test_returns_none_when_union_exceeds_cap(self):
         """When the union of significant rotations exceeds max_union_pixels,
         compute_pass2_stats should return (None, None, None, None)."""
-        from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import compute_pass2_stats
+        from recovar.em.dense_single_volume.helpers.oversampling import compute_pass2_stats
         from recovar.em.sampling import get_rotation_grid
 
         # Use a proper HEALPix grid so the pixel/in-plane decomposition works
@@ -1239,7 +1239,7 @@ class TestUnionCap:
 
     def test_proceeds_when_within_cap(self):
         """When the union is within the cap, pass 2 should proceed normally."""
-        from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import compute_pass2_stats
+        from recovar.em.dense_single_volume.helpers.oversampling import compute_pass2_stats
         from recovar.em.sampling import get_rotation_grid
 
         nside_level = 1
@@ -1280,8 +1280,8 @@ class TestUnionCap:
 
     def test_pass2_oversamples_translation_grid(self, monkeypatch):
         """Pass 2 should evaluate on oversampled translations, not the coarse grid."""
-        from recovar.em.dense_single_volume import engine_v2 as engine_mod
-        from recovar.em.dense_single_volume.refine_dev_helpers import adaptive as adaptive_mod
+        from recovar.em.dense_single_volume import em_engine as engine_mod
+        from recovar.em.dense_single_volume.helpers import oversampling as adaptive_mod
         from recovar.em.sampling import get_rotation_grid
 
         nside_level = 1
@@ -1300,7 +1300,7 @@ class TestUnionCap:
         sig_rot_mask[:2] = True
         captured = {}
 
-        def fake_run_em_v2(
+        def fake_run_em(
             experiment_dataset,
             mean,
             mean_variance,
@@ -1326,7 +1326,7 @@ class TestUnionCap:
             Ft_ctf = jnp.zeros(ds.volume_size, dtype=ds.dtype)
             return jnp.zeros(ds.volume_size, dtype=ds.dtype), ha, Ft_y, Ft_ctf
 
-        monkeypatch.setattr(engine_mod, "run_em_v2", fake_run_em_v2)
+        monkeypatch.setattr(engine_mod, "run_em", fake_run_em)
 
         Ft_y, Ft_ctf, ha, oversampled = adaptive_mod.compute_pass2_stats(
             ds,

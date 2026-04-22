@@ -67,14 +67,14 @@ the iteration loop.
 `ml_optimiser.cpp::initialiseGeneral()` (grid setup).
 
 **recovar code**:
-- [`refine.py:448`](../../recovar/em/dense_single_volume/refine.py#L448) -- `refine_single_volume()`: public entry point.
-  Accepts init volume, noise, dataset; dispatches to `_refine_relion_mode` when
+- [`iteration_loop.py:448`](../../recovar/em/dense_single_volume/iteration_loop.py#L448) -- `refine_single_volume()`: public entry point.
+  Accepts init volume, noise, dataset; dispatches to `_run_relion_iteration_loop` when
   `relion_mode=True`, otherwise runs legacy dense-grid EM.
-- [`refine.py:931`](../../recovar/em/dense_single_volume/refine.py#L931) -- `_refine_relion_mode()`: the main iteration loop.
-  Each iteration: build grids with perturbation, call `run_em_v2` for E+M step,
+- [`iteration_loop.py:931`](../../recovar/em/dense_single_volume/iteration_loop.py#L931) -- `_run_relion_iteration_loop()`: the main iteration loop.
+  Each iteration: build grids with perturbation, call `run_em` for E+M step,
   reconstruct via `relion_reconstruct`, update noise/convergence, check stopping.
   Bootstraps `current_size` from init-FSC via
-  [`relion_init.py:110`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_init.py#L110) -- `_bootstrap_current_size_relion()`.
+  [`resolution.py:110`](../../recovar/em/dense_single_volume/helpers/resolution.py#L110) -- `_bootstrap_current_size_relion()`.
 
 **Key state**:
 - `mean` (complex, flat): two half-set volumes in centered Fourier space.
@@ -183,16 +183,16 @@ rotations, giving 200x better data reuse than FFT-based cross-correlation.
 `projector.cpp::get2DFourierTransform()` (projection via trilinear interpolation).
 
 **recovar code**:
-- [`engine_v2.py:503`](../../recovar/em/dense_single_volume/engine_v2.py#L503) -- `run_em_v2()`: orchestrates the two-pass EM iteration.
+- [`em_engine.py:503`](../../recovar/em/dense_single_volume/em_engine.py#L503) -- `run_em()`: orchestrates the two-pass EM iteration.
   Pass 1 computes scores and collects normalization statistics (logsumexp).
   Pass 2 recomputes scores and applies normalized weights to the M-step.
-- [`engine_v2.py:174`](../../recovar/em/dense_single_volume/engine_v2.py#L174) -- `_e_step_block_scores()`: computes cross + norm terms for a
+- [`em_engine.py:174`](../../recovar/em/dense_single_volume/em_engine.py#L174) -- `_e_step_block_scores()`: computes cross + norm terms for a
   block of rotations against all images. Full-resolution path.
-- [`engine_v2.py:226`](../../recovar/em/dense_single_volume/engine_v2.py#L226) -- `_e_step_block_scores_windowed()`: same computation but
+- [`em_engine.py:226`](../../recovar/em/dense_single_volume/em_engine.py#L226) -- `_e_step_block_scores_windowed()`: same computation but
   restricted to the Fourier window defined by `current_size` (Section 3a).
-- [`engine_v2.py:493`](../../recovar/em/dense_single_volume/engine_v2.py#L493) -- `_compute_projections_block()`: forward-projects the volume
+- [`em_engine.py:493`](../../recovar/em/dense_single_volume/em_engine.py#L493) -- `_compute_projections_block()`: forward-projects the volume
   at a block of rotations via `slice_volume(half_image=True)`.
-- [`engine_v2.py:105`](../../recovar/em/dense_single_volume/engine_v2.py#L105) -- `_preprocess_batch()`: loads and preprocesses an image batch
+- [`em_engine.py:105`](../../recovar/em/dense_single_volume/em_engine.py#L105) -- `_preprocess_batch()`: loads and preprocesses an image batch
   (CTF weighting, noise normalization, translation phase shifts).
 
 **Half-spectrum optimization**: all GEMMs operate on the rfft half-image layout
@@ -211,11 +211,11 @@ speedup at early iterations (50x+ fewer pixels at order 2).
 `backprojector.cpp::get2DFourierTransform()` (window projections).
 
 **recovar code**:
-- [`fourier_window.py:53`](../../recovar/em/dense_single_volume/refine_dev_helpers/fourier_window.py#L53) -- `make_fourier_window_indices(image_shape, current_size)`:
+- [`fourier_window.py:53`](../../recovar/em/dense_single_volume/helpers/fourier_window.py#L53) -- `make_fourier_window_indices(image_shape, current_size)`:
   computes the index set of half-spectrum pixels within the frequency window.
-- [`fourier_window.py:145`](../../recovar/em/dense_single_volume/refine_dev_helpers/fourier_window.py#L145) -- `quantize_current_size()`: snaps current_size to an
+- [`fourier_window.py:145`](../../recovar/em/dense_single_volume/helpers/fourier_window.py#L145) -- `quantize_current_size()`: snaps current_size to an
   allowed grid for JIT cache efficiency.
-- [`relion_init.py:129`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_init.py#L129) -- `fsc_to_current_size()`: converts an FSC curve to the
+- [`resolution.py:129`](../../recovar/em/dense_single_volume/helpers/resolution.py#L129) -- `fsc_to_current_size()`: converts an FSC curve to the
   current_size threshold (using FSC > 1/7).
 
 ---
@@ -230,7 +230,7 @@ gamma(i, r, t) = exp(score(i,r,t) - logsumexp_i) * prior(r) * prior(t)
 
 Computing `logsumexp_i = log sum_{r,t} exp(score(i,r,t))` requires seeing all
 scores for image `i` before normalizing. Since the full `(n_img, n_rot, n_trans)`
-tensor is too large to materialize (~100 GB at order 3), `run_em_v2` uses a
+tensor is too large to materialize (~100 GB at order 3), `run_em` uses a
 streaming two-pass approach:
 
 **Pass 1** (normalization): iterate over all rotation blocks, computing scores and
@@ -247,9 +247,9 @@ normalize using the logsumexp from pass 1, and accumulate into the M-step.
 explicit weight storage), `ml_optimiser.cpp::convertAllSquaredDifferencesToWeights()`.
 
 **recovar code**:
-- [`engine_v2.py:344`](../../recovar/em/dense_single_volume/engine_v2.py#L344) -- `_update_logsumexp(max_s, sum_exp, scores_block)`: streaming
+- [`em_engine.py:344`](../../recovar/em/dense_single_volume/em_engine.py#L344) -- `_update_logsumexp(max_s, sum_exp, scores_block)`: streaming
   logsumexp update. Called once per rotation block in pass 1.
-- [`engine_v2.py:503`](../../recovar/em/dense_single_volume/engine_v2.py#L503) -- `run_em_v2()`: lines ~680-750 (pass 1 loop), lines ~760-850
+- [`em_engine.py:503`](../../recovar/em/dense_single_volume/em_engine.py#L503) -- `run_em()`: lines ~680-750 (pass 1 loop), lines ~760-850
   (pass 2 loop).
 
 **Key difference from RELION**: RELION stores the full weight tensor in memory
@@ -280,15 +280,15 @@ images), then each resulting rotation slice is backprojected into the 3D Fourier
 `backprojector.cpp::set2DFourierTransform()` (backprojection via trilinear insertion).
 
 **recovar code**:
-- [`engine_v2.py:364`](../../recovar/em/dense_single_volume/engine_v2.py#L364) -- `_m_step_block()`: accumulates Ft_y and Ft_ctf for a block
+- [`em_engine.py:364`](../../recovar/em/dense_single_volume/em_engine.py#L364) -- `_m_step_block()`: accumulates Ft_y and Ft_ctf for a block
   of rotations. Full-resolution path. Computes `weights @ shifted_images` GEMM,
   then `adjoint_slice_volume` per rotation.
-- [`engine_v2.py:269`](../../recovar/em/dense_single_volume/engine_v2.py#L269) -- `_m_step_block_windowed()`: same but restricted to the
+- [`em_engine.py:269`](../../recovar/em/dense_single_volume/em_engine.py#L269) -- `_m_step_block_windowed()`: same but restricted to the
   Fourier window indices. Uses windowed adjoint for the backprojection.
-- [`engine_v2.py:312`](../../recovar/em/dense_single_volume/engine_v2.py#L312) -- `_adjoint_slice_volume_windowed()`: backprojects a windowed
+- [`em_engine.py:312`](../../recovar/em/dense_single_volume/em_engine.py#L312) -- `_adjoint_slice_volume_windowed()`: backprojects a windowed
   1D slice into the full 3D Fourier grid, inserting only at the window indices.
 
-**Data flow**: `run_em_v2()` returns `(Ft_y, Ft_ctf)` as flat complex arrays of
+**Data flow**: `run_em()` returns `(Ft_y, Ft_ctf)` as flat complex arrays of
 shape `(volume_size,)` in centered Fourier space. These are the inputs to the
 reconstruction step (Section 6).
 
@@ -360,15 +360,15 @@ statistic (`wsum_sigma2_noise`) that tracks the weighted sum of squared residual
 `ml_optimiser.cpp::updateOtherParams()` (normalizes to per-shell noise variance).
 
 **recovar code**:
-- [`engine_v2.py:423`](../../recovar/em/dense_single_volume/engine_v2.py#L423) -- `_compute_noise_block()`: accumulates the noise sufficient
-  statistic for a block of rotations during pass 2 of `run_em_v2`. Enabled when
+- [`em_engine.py:423`](../../recovar/em/dense_single_volume/em_engine.py#L423) -- `_compute_noise_block()`: accumulates the noise sufficient
+  statistic for a block of rotations during pass 2 of `run_em`. Enabled when
   `accumulate_noise=True`.
 - [`noise.py:898`](../../recovar/reconstruction/noise.py#L898) -- `normalize_wsum_to_sigma2_noise()`: normalizes the accumulated
   `wsum_sigma2_noise` by the total posterior weight to get the per-shell noise
   variance estimate.
 
-**Data flow**: `run_em_v2()` returns `wsum_sigma2_noise` and `wsum_img_power` alongside
-`(Ft_y, Ft_ctf)`. The caller (`_refine_relion_mode`) normalizes via
+**Data flow**: `run_em()` returns `wsum_sigma2_noise` and `wsum_img_power` alongside
+`(Ft_y, Ft_ctf)`. The caller (`_run_relion_iteration_loop`) normalizes via
 `normalize_wsum_to_sigma2_noise` and updates the noise model for the next iteration.
 
 ---
@@ -391,21 +391,21 @@ been refined to the finest level (i.e., there's nothing left to try).
 `ml_optimiser.cpp::updateAngularSampling()` (angular refinement trigger).
 
 **recovar code**:
-- [`convergence.py:78`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L78) -- `RefinementState`: dataclass tracking all convergence
+- [`convergence.py:78`](../../recovar/em/dense_single_volume/helpers/convergence.py#L78) -- `RefinementState`: dataclass tracking all convergence
   state. Fields include `nr_iter_wo_resol_gain`, `nr_iter_wo_assignment_changes`,
   `has_converged`, `do_local_search`, `fraction_changed`, etc.
-- [`convergence.py:570`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L570) -- `check_convergence(state)`: returns True when convergence
+- [`convergence.py:570`](../../recovar/em/dense_single_volume/helpers/convergence.py#L570) -- `check_convergence(state)`: returns True when convergence
   criteria are met. Matches RELION's three-condition check.
-- [`convergence.py:803`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L803) -- `update_refinement_state()`: called after each iteration
+- [`convergence.py:803`](../../recovar/em/dense_single_volume/helpers/convergence.py#L803) -- `update_refinement_state()`: called after each iteration
   to update the state with new assignments, resolution, and angular/translational
   changes. This is the main bookkeeping function.
-- [`convergence.py:277`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L277) -- `compute_assignment_changes()`: computes the fraction of
+- [`convergence.py:277`](../../recovar/em/dense_single_volume/helpers/convergence.py#L277) -- `compute_assignment_changes()`: computes the fraction of
   images whose best rotation changed by more than one HEALPix angular step.
-- [`convergence.py:333`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L333) -- `compute_translation_changes()`: computes RMS change in
+- [`convergence.py:333`](../../recovar/em/dense_single_volume/helpers/convergence.py#L333) -- `compute_translation_changes()`: computes RMS change in
   best translations between iterations.
-- [`convergence.py:546`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L546) -- `compute_ave_Pmax()`: mean of per-image maximum posterior
+- [`convergence.py:546`](../../recovar/em/dense_single_volume/helpers/convergence.py#L546) -- `compute_ave_Pmax()`: mean of per-image maximum posterior
   probability. Used by RELION to modulate `current_size` growth.
-- [`convergence.py:500`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L500) -- `calculate_expected_angular_errors()`: estimates angular
+- [`convergence.py:500`](../../recovar/em/dense_single_volume/helpers/convergence.py#L500) -- `calculate_expected_angular_errors()`: estimates angular
   and translational accuracy from the posterior distribution. Used for local
   search sigma estimation.
 
@@ -434,7 +434,7 @@ the estimated angular accuracy (`acc_rot`, from the posterior width).
 
 ### 9b. What happens when refinement triggers?
 
-[`convergence.py:691`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L691) -- `refine_angular_sampling(state)`:
+[`convergence.py:691`](../../recovar/em/dense_single_volume/helpers/convergence.py#L691) -- `refine_angular_sampling(state)`:
 1. **HEALPix order += 1**: doubles the number of directions (e.g. 768 -> 3072),
    halves the angular step (e.g. 5.625 -> 2.8125 deg).
 2. **Translation step update**: `new_step = min(1.5, 0.75 * acc_trans) * 2^oversampling`.
@@ -452,7 +452,7 @@ the estimated angular accuracy (`acc_rot`, from the posterior width).
 
 ### 9c. How does local search work?
 
-Local search is still full soft-weighted EM — the same `run_em_v2` engine runs the
+Local search is still full soft-weighted EM — the same `run_em` engine runs the
 two-pass E-step (scoring + logsumexp normalization) and M-step (weighted
 backprojection). The only change is **which rotations each image evaluates**: instead
 of ALL rotations in the grid (infeasible at order >= 4 with 221k+ rotations), each
@@ -479,10 +479,10 @@ For each image with prior orientation `(rot_i, tilt_i, psi_i)`:
    normalized so the prior sums to 1. Unselected rotations get `-1e30` (zero weight).
 
 **Grouping for GPU efficiency** --
-[`local_search.py:92`](../../recovar/em/dense_single_volume/refine_dev_helpers/local_search.py#L92) -- `_partition_local_search_groups()`:
+[`local_search.py:92`](../../recovar/em/dense_single_volume/helpers/local_search.py#L92) -- `_partition_local_search_groups()`:
 
 Different images have different prior orientations, so their neighborhoods differ.
-But the engine (`run_em_v2`) processes all images in a batch against the same set
+But the engine (`run_em`) processes all images in a batch against the same set
 of rotations. To reconcile:
 1. Sort images by their prior HEALPix pixel (so nearby orientations are adjacent).
 2. Form chunks of ~`image_batch_size` images.
@@ -496,13 +496,13 @@ of rotations. To reconcile:
    padding rotations masked to `-1e30` prior.
 
 **Per-chunk EM iteration** --
-[`refine.py:90`](../../recovar/em/dense_single_volume/refine.py#L90) -- `_run_grouped_local_search_em()`:
+[`iteration_loop.py:90`](../../recovar/em/dense_single_volume/iteration_loop.py#L90) -- `_run_local_search_iteration()`:
 
 For each chunk `(group_image_indices, local_rotation_indices, local_log_prior)`:
 1. Build a per-image Gaussian translation log-prior centered on each image's
    previous best translation, with `sigma = sigma_offset_angstrom` (data-driven,
    updated each iteration from the MAP translation changes).
-2. Call `run_em_v2` with:
+2. Call `run_em` with:
    - `rotations = rotation_grid[local_rotation_indices]` (the union subset)
    - `rotation_log_prior = local_log_prior` (per-image, `-1e30` outside each image's cone)
    - `translation_log_prior = per-image Gaussian` centered on previous best
@@ -518,14 +518,14 @@ for the next iteration's direction prior (RELION's `pdf_direction`).
 `ml_optimiser.cpp::expectationOneParticle()`.
 
 **recovar code summary**:
-- [`convergence.py:620`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L620) -- `should_refine_angular_sampling()`: trigger check
-- [`convergence.py:691`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py#L691) -- `refine_angular_sampling()`: order bump + parameter update
+- [`convergence.py:620`](../../recovar/em/dense_single_volume/helpers/convergence.py#L620) -- `should_refine_angular_sampling()`: trigger check
+- [`convergence.py:691`](../../recovar/em/dense_single_volume/helpers/convergence.py#L691) -- `refine_angular_sampling()`: order bump + parameter update
 - [`sampling.py:772`](../../recovar/em/sampling.py#L772) -- `get_local_rotation_grid_fast()`: per-image neighborhood with Gaussian prior
 - [`sampling.py:102`](../../recovar/em/sampling.py#L102) -- `build_local_search_grid_metadata()`: precomputes direction vectors + psi grid for fast neighbor lookup
-- [`local_search.py:92`](../../recovar/em/dense_single_volume/refine_dev_helpers/local_search.py#L92) -- `_partition_local_search_groups()`: sort-and-split grouping
-- [`refine.py:90`](../../recovar/em/dense_single_volume/refine.py#L90) -- `_run_grouped_local_search_em()`: per-chunk EM with per-image priors
-- [`relion_priors.py:16`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_priors.py#L16) -- `make_relion_translation_log_prior()`: Gaussian translation prior from `sigma_offset_angstrom` and previous best offset
-- [`relion_priors.py:118`](../../recovar/em/dense_single_volume/refine_dev_helpers/relion_priors.py#L118) -- `make_relion_direction_log_prior()`: accumulates per-direction posterior across iterations for the direction prior
+- [`local_search.py:92`](../../recovar/em/dense_single_volume/helpers/local_search.py#L92) -- `_partition_local_search_groups()`: sort-and-split grouping
+- [`iteration_loop.py:90`](../../recovar/em/dense_single_volume/iteration_loop.py#L90) -- `_run_local_search_iteration()`: per-chunk EM with per-image priors
+- [`orientation_priors.py:16`](../../recovar/em/dense_single_volume/helpers/orientation_priors.py#L16) -- `make_relion_translation_log_prior()`: Gaussian translation prior from `sigma_offset_angstrom` and previous best offset
+- [`orientation_priors.py:118`](../../recovar/em/dense_single_volume/helpers/orientation_priors.py#L118) -- `make_relion_direction_log_prior()`: accumulates per-direction posterior across iterations for the direction prior
 
 ### 9d. Greedy commitment and the hard-assignment seed
 
@@ -543,7 +543,7 @@ weight). This creates a greedy commitment:
 The soft weights within the neighborhood do NOT prevent this — they only affect
 the M-step contribution, not the neighborhood placement. Two rotations that tie
 at iteration `t` are broken by first-encountered ordering
-([`engine_v2.py:1291`](../../recovar/em/dense_single_volume/engine_v2.py#L1291):
+([`em_engine.py:1291`](../../recovar/em/dense_single_volume/em_engine.py#L1291):
 `improved = block_best > best_score`, strict inequality), and the loser's
 neighborhood is never explored.
 
@@ -595,18 +595,18 @@ grows exponentially with K, which is why RELION uses K=1 in practice.
 `exp_ipass` loop), `healpix_sampling.cpp::getOrientations()` (child generation).
 
 **recovar code**:
-- [`adaptive.py:59`](../../recovar/em/dense_single_volume/refine_dev_helpers/adaptive.py#L59) -- `find_significant_mask()`: given a flat weight array, returns
+- [`oversampling.py:59`](../../recovar/em/dense_single_volume/helpers/oversampling.py#L59) -- `find_significant_mask()`: given a flat weight array, returns
   a boolean mask of entries whose cumulative weight covers `adaptive_fraction` of
   the total. Used to select significant (rotation, translation) pairs.
-- [`adaptive.py:114`](../../recovar/em/dense_single_volume/refine_dev_helpers/adaptive.py#L114) -- `find_significant_rotations()`: maps the significant mask
+- [`oversampling.py:114`](../../recovar/em/dense_single_volume/helpers/oversampling.py#L114) -- `find_significant_rotations()`: maps the significant mask
   from the flat `(n_rot * n_trans)` space back to unique rotation indices.
-- [`adaptive.py:162`](../../recovar/em/dense_single_volume/refine_dev_helpers/adaptive.py#L162) -- `compute_pass2_stats()`: computes statistics for pass 2
+- [`oversampling.py:162`](../../recovar/em/dense_single_volume/helpers/oversampling.py#L162) -- `compute_pass2_stats()`: computes statistics for pass 2
   (number of significant orientations, child grid metadata).
-- [`engine_v2.py:503`](../../recovar/em/dense_single_volume/engine_v2.py#L503) -- `run_em_v2()`: the pass-1 / pass-2 logic is handled by the
-  caller (`_refine_relion_mode` or `_run_grouped_local_search_em`), which calls
-  `run_em_v2` twice: once for coarse scoring, once for fine scoring with the
+- [`em_engine.py:503`](../../recovar/em/dense_single_volume/em_engine.py#L503) -- `run_em()`: the pass-1 / pass-2 logic is handled by the
+  caller (`_run_relion_iteration_loop` or `_run_local_search_iteration`), which calls
+  `run_em` twice: once for coarse scoring, once for fine scoring with the
   oversampled grid restricted to significant orientations.
-- [`significance.py:12`](../../recovar/em/dense_single_volume/refine_dev_helpers/significance.py#L12) -- `_compute_significance_batched()`: batched wrapper that calls
+- [`significance.py:12`](../../recovar/em/dense_single_volume/helpers/significance.py#L12) -- `_compute_significance_batched()`: batched wrapper that calls
   `find_significant_rotations` per image and collects the significant rotation
   indices for pass 2.
 
@@ -625,7 +625,7 @@ iteration, followed by `ml_optimiser.cpp::writeOutput()`.
 **recovar code**:
 - [`regularization.py:895`](../../recovar/reconstruction/regularization.py#L895) -- `join_halves_at_low_resolution()`: replaces each
   half-map with the average of both below the join threshold.
-- [`refine.py:931`](../../recovar/em/dense_single_volume/refine.py#L931) -- `_refine_relion_mode()`: the final iteration block
+- [`iteration_loop.py:931`](../../recovar/em/dense_single_volume/iteration_loop.py#L931) -- `_run_relion_iteration_loop()`: the final iteration block
   (after convergence) performs reconstruction, computes the final FSC, and
   returns the merged volume along with all refinement metadata.
 - [`relion_functions.py:716`](../../recovar/reconstruction/relion_functions.py#L716) -- `relion_reconstruct()`: final Wiener
@@ -643,22 +643,26 @@ iteration, followed by `ml_optimiser.cpp::writeOutput()`.
 
 | Module | Path | Purpose |
 |--------|------|---------|
-| refine | [`recovar/em/dense_single_volume/refine.py`](../../recovar/em/dense_single_volume/refine.py) | Top-level refinement loop and local search |
-| engine_v2 | [`recovar/em/dense_single_volume/engine_v2.py`](../../recovar/em/dense_single_volume/engine_v2.py) | Two-pass EM engine (E-step + M-step) |
-| convergence | [`recovar/em/dense_single_volume/refine_dev_helpers/convergence.py`](../../recovar/em/dense_single_volume/refine_dev_helpers/convergence.py) | Convergence detection and angular refinement |
-| adaptive | [`recovar/em/dense_single_volume/refine_dev_helpers/adaptive.py`](../../recovar/em/dense_single_volume/refine_dev_helpers/adaptive.py) | Significant weight selection for oversampling |
+| iteration_loop | [`recovar/em/dense_single_volume/iteration_loop.py`](../../recovar/em/dense_single_volume/iteration_loop.py) | Top-level refinement loop and local search |
+| em_engine | [`recovar/em/dense_single_volume/em_engine.py`](../../recovar/em/dense_single_volume/em_engine.py) | Two-pass EM engine (E-step + M-step) |
+| convergence | [`recovar/em/dense_single_volume/helpers/convergence.py`](../../recovar/em/dense_single_volume/helpers/convergence.py) | Convergence detection and angular refinement |
+| oversampling | [`recovar/em/dense_single_volume/helpers/oversampling.py`](../../recovar/em/dense_single_volume/helpers/oversampling.py) | Two-pass adaptive oversampling (significance pruning) |
 | sampling | [`recovar/em/sampling.py`](../../recovar/em/sampling.py) | HEALPix/translation grid generation |
 | regularization | [`recovar/reconstruction/regularization.py`](../../recovar/reconstruction/regularization.py) | Tau2 prior estimation and Wiener filter |
 | relion_functions | [`recovar/reconstruction/relion_functions.py`](../../recovar/reconstruction/relion_functions.py) | RELION-parity reconstruction helpers |
 | noise | [`recovar/reconstruction/noise.py`](../../recovar/reconstruction/noise.py) | Noise variance estimation |
-| fourier_window | [`recovar/em/dense_single_volume/refine_dev_helpers/fourier_window.py`](../../recovar/em/dense_single_volume/refine_dev_helpers/fourier_window.py) | Fourier windowing (current_size) |
+| fourier_window | [`recovar/em/dense_single_volume/helpers/fourier_window.py`](../../recovar/em/dense_single_volume/helpers/fourier_window.py) | Fourier windowing (current_size) |
+| local_search | [`recovar/em/dense_single_volume/helpers/local_search.py`](../../recovar/em/dense_single_volume/helpers/local_search.py) | Per-image neighborhood grouping for GPU batching |
+| orientation_priors | [`recovar/em/dense_single_volume/helpers/orientation_priors.py`](../../recovar/em/dense_single_volume/helpers/orientation_priors.py) | Direction and translation prior construction |
+| resolution | [`recovar/em/dense_single_volume/helpers/resolution.py`](../../recovar/em/dense_single_volume/helpers/resolution.py) | FSC-to-resolution, coarse image size computation |
+| significance | [`recovar/em/dense_single_volume/helpers/significance.py`](../../recovar/em/dense_single_volume/helpers/significance.py) | Batched significance computation for pass 2 |
 
 ## Known Parity Gaps
 
 1. **Hermitian weights**: RELION uses `w=1` for all half-spectrum pixels. The correct
    approach uses `w=2` for interior frequencies (which have a conjugate partner) and
    `w=1` for DC/Nyquist. We match RELION for parity; the fix (`make_half_image_weights`
-   in [`engine_v2.py:57`](../../recovar/em/dense_single_volume/engine_v2.py#L57)) is ready but not yet enabled.
+   in [`em_engine.py:57`](../../recovar/em/dense_single_volume/em_engine.py#L57)) is ready but not yet enabled.
 
 2. **Iter-1 hard CC**: RELION binarizes posterior weights at iter 1 when
    `--firstiter_cc` is set (winner-take-all). recovar uses soft Bayesian posterior

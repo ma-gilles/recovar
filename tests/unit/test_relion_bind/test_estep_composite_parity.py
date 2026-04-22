@@ -1,4 +1,4 @@
-"""End-to-end E-step parity: RELION bindings vs recovar engine_v2 on identical inputs.
+"""End-to-end E-step parity: RELION bindings vs recovar em_engine on identical inputs.
 
 Convention bridge (the critical insight):
   RELION uses Minvsigma2 = 1/(2*sigma2) in the diff2 sum, then exp(-diff2).
@@ -9,7 +9,7 @@ Convention bridge (the critical insight):
   With Hermitian weights (w=2 for interior): the half-spectrum sum recovers
   the FULL-spectrum inner product, which is ~2x the half-complex sum.
   This makes the posterior exponentially more peaked — wrong for RELION parity.
-  _refine_relion_mode correctly uses half_spectrum_scoring=True.
+  _run_relion_iteration_loop correctly uses half_spectrum_scoring=True.
 
 Exact parity required: rel_err < 1e-10.
 """
@@ -300,7 +300,7 @@ class TestPosteriorParity:
         jax.config.update("jax_enable_x64", True)
         import jax.numpy as jnp
 
-        from recovar.em.dense_single_volume.engine_v2 import _e_step_block_scores
+        from recovar.em.dense_single_volume.em_engine import _e_step_block_scores
 
         s = _setup_scenario()
         N = s["N"]
@@ -473,7 +473,7 @@ class TestPosteriorParity:
             diff2_relion.min(),
         )
 
-        # recovar with DC zeroed in preprocessing (matching engine_v2 DC exclusion)
+        # recovar with DC zeroed in preprocessing (matching em_engine DC exclusion)
         inv_s2_noDC = s["inv_sigma2_2d"].copy()
         inv_s2_noDC[dc_mask] = 0.0
 
@@ -517,7 +517,7 @@ class TestWindowingDivergence:
         relion_pixels = current_size * (current_size // 2 + 1)
 
         # recovar: radial mask on (N, N//2+1) half-spectrum
-        from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import make_fourier_window_indices_np
+        from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
 
         _, n_windowed = make_fourier_window_indices_np((N, N), current_size)
 

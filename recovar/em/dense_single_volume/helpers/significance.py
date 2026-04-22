@@ -2,7 +2,7 @@
 
 Runs a coarse E-step and identifies significant (rotation, translation)
 pairs per image without materializing the full weight matrix.
-Called by ``refine_single_volume`` and ``_refine_relion_mode`` in ``refine.py``.
+Called by ``refine_single_volume`` and ``_run_relion_iteration_loop`` in ``refine.py``.
 """
 
 import jax.numpy as jnp
@@ -55,7 +55,7 @@ def _compute_significance_batched(
     """
     from recovar.core import fourier_transform_utils
     from recovar.core.configs import ForwardModelConfig
-    from recovar.em.dense_single_volume.engine_v2 import (
+    from recovar.em.dense_single_volume.em_engine import (
         _compute_projections_block,
         _e_step_block_scores,
         _e_step_block_scores_windowed,
@@ -63,7 +63,7 @@ def _compute_significance_batched(
         _update_logsumexp,
         make_half_image_weights,
     )
-    from recovar.em.dense_single_volume.refine_dev_helpers.adaptive import (
+    from recovar.em.dense_single_volume.helpers.oversampling import (
         find_significant_rotations as _find_sig,
     )
 
@@ -97,14 +97,14 @@ def _compute_significance_batched(
     )
 
     # TODO(RELION-parity-debt): w=1 matches RELION's incorrect half-sum.
-    # See engine_v2.py for full explanation. Post-parity: use make_half_image_weights.
+    # See em_engine.py for full explanation. Post-parity: use make_half_image_weights.
     half_weights = (
         jnp.ones(n_half, dtype=jnp.float32) if half_spectrum_scoring else make_half_image_weights(image_shape)
     )
 
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
-        from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import (
+        from recovar.em.dense_single_volume.helpers.fourier_window import (
             make_fourier_window_indices_np,
         )
 
@@ -226,7 +226,7 @@ def _compute_significance_batched(
 
         # DC exclusion (RELION parity: Minvsigma2[0] = 0)
         if half_spectrum_scoring:
-            from recovar.em.dense_single_volume.engine_v2 import make_shell_indices_half as _mshi
+            from recovar.em.dense_single_volume.em_engine import make_shell_indices_half as _mshi
 
             dc_shell = _mshi(image_shape)
             dc_mask = dc_shell == 0

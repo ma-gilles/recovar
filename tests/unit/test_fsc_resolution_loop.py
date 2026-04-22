@@ -13,11 +13,11 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.refine import (
+from recovar.em.dense_single_volume.iteration_loop import (
     fsc_to_current_size,
     refine_single_volume,
 )
-from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import (
+from recovar.em.dense_single_volume.helpers.fourier_window import (
     quantize_current_size,
 )
 
@@ -86,7 +86,7 @@ def _identity_process(batch, apply_image_mask=False):
 class MockDataset:
     """Minimal mock of CryoEMDataset for unit testing the refinement loop.
 
-    Supports the subset of the dataset API needed by run_em_v2, noise
+    Supports the subset of the dataset API needed by run_em, noise
     estimation, prior computation, and pose updates.
     """
 

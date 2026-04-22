@@ -48,8 +48,8 @@ RELION references are from `/home/mg6942/myscratch/relion/src/`, mainly:
 
 recovar references are mainly:
 
-- `recovar/em/dense_single_volume/refine.py`
-- `recovar/em/dense_single_volume/engine_v2.py`
+- `recovar/em/dense_single_volume/iteration_loop.py`
+- `recovar/em/dense_single_volume/em_engine.py`
 - `recovar/em/dense_single_volume/adaptive.py`
 - `recovar/em/dense_single_volume/convergence.py`
 - `recovar/em/sampling.py`
@@ -591,7 +591,7 @@ The correct implementation strategy is:
 3. add the constant back *only* when reporting absolute log-evidence values
 
 As of 2026-04-03, recovar now follows that strategy in
-`engine_v2.py`. This was a major prerequisite for any meaningful adaptive
+`em_engine.py`. This was a major prerequisite for any meaningful adaptive
 search comparison, because before that fix the code could not even represent
 the posterior sharply enough for significance pruning to work.
 
@@ -636,10 +636,10 @@ side.
 - Exact dense oversampled pass when every coarse sample is significant.
 - RELION-mode skip of adaptive pass 2 when the significant fraction is high.
 - RELION-style uncapped significant-sample mode (`max_significants <= 0`).
-- RELION-mode per-image `Pmax` plumbing from `run_em_v2`.
+- RELION-mode per-image `Pmax` plumbing from `run_em`.
 - RELION-style translation prior in the score path, including reuse of the
   coarse translation prior on oversampled translation children.
-- Masked-scoring / unmasked-reconstruction split in `engine_v2.run_em_v2()`.
+- Masked-scoring / unmasked-reconstruction split in `em_engine.run_em()`.
 - Numerical-stability fix for E-step scores: image-constant `||y||^2` terms are
   omitted from relative scores and added back only for absolute log-evidence
   reporting.
@@ -826,7 +826,7 @@ What is still missing is the full RELION coupling between:
 
 ## recovar File Map
 
-### `recovar/em/dense_single_volume/engine_v2.py`
+### `recovar/em/dense_single_volume/em_engine.py`
 
 This is the critical fast path.
 
@@ -846,7 +846,7 @@ It does *not yet* emit all RELION sufficient statistics, especially:
 - scale and norm accumulators
 - weighted direction sums needed for RELION's learned global `pdf_direction`
 
-### `recovar/em/dense_single_volume/refine.py`
+### `recovar/em/dense_single_volume/iteration_loop.py`
 
 This is the RELION-mode control loop.
 

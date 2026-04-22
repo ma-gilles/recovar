@@ -2,7 +2,7 @@
 
 **Date**: 2026-04-08
 **Supersedes**: `plan_relion_parity.md` (v1, 2026-03), `plan_relion_parity_v2.md` (v2, 2026-04-02)
-**Goal**: Bit-by-bit parity between recovar's `_refine_relion_mode` and
+**Goal**: Bit-by-bit parity between recovar's `_run_relion_iteration_loop` and
 RELION 5.0.1 `relion_refine_mpi --auto_refine` on a single benchmark
 dataset.
 
@@ -28,7 +28,7 @@ differences. Specifically:
 After fixing all five issues, the actual per-iter trajectories are
 much closer than we thought, and most of the remaining gap comes from
 a **small number of well-defined algorithmic differences** in
-`_refine_relion_mode`. v3 is built on top of those clean baselines and
+`_run_relion_iteration_loop`. v3 is built on top of those clean baselines and
 on a fresh read of RELION's source.
 
 This v3 plan is the ONLY plan to follow going forward. v1 and v2 have
@@ -204,17 +204,17 @@ After re-reading the actual code in
 `/scratch/gpfs/GILLES/mg6942/recovar_relion_parity_audit/` against
 RELION 5.0.1 source line by line, the following items the original
 audit (and the v2 plan) flagged as "MISSING" or "PARTIAL" are
-**actually fully implemented** in the current `_refine_relion_mode`.
+**actually fully implemented** in the current `_run_relion_iteration_loop`.
 The earlier audit was based on stale info, conflated the legacy and
 relion modes, or both.
 
 | Item | Verdict | Where in worktree | RELION ref | Verification |
 |---|---|---|---|---|
-| **A2: τ² from real reconstruction weights** | ✅ DONE | `refine.py:2006` calls `compute_relion_prior_from_reconstruction_stats(Ft_ctf_0, Ft_ctf_1, Ft_y_0, Ft_y_1, ...)` | `backprojector.cpp:1096-1125` | The audit was looking at the legacy-mode path; relion-mode already uses real weights |
-| **A5: padding factor 2 + zero_pad_fourier_volume** | ✅ DONE | `refine.py:1241 PADDING_FACTOR = 2`; `relion_functions.zero_pad_fourier_volume` | RELION default `--pad 2` | Standalone test: 8³ → 16³ → crop, DC at center, round-trip CC = 1.0. The "known geometry bug" mentioned in earlier audit was fixed at some prior commit |
-| **A1: data_vs_prior resolution criterion** | ✅ DONE (equivalent) | `refine.py:2018-2024`: `dvp_iter = fsc_to_relion_ssnr(fsc); resolution_from_data_vs_prior(dvp)` | `ml_optimiser.cpp:5600-5648` | recovar uses `SSNR<1` ⇔ `FSC<0.5`, equivalent to RELION's `data_vs_prior<1` to leading order. The exact RELION formula has an extra `(sum_weight/Npix)²` factor that recovar omits, but it's a small second-order correction |
-| **`--low_resol_join_halves` in recovar M-step** | ✅ DONE | `refine.py:1800-1807` calls `regularization.join_halves_at_low_resolution`; helper at `regularization.py:812` | `ml_optimiser_mpi.cpp:3112-3219` | Implemented commit `ebfd2a9`. **Empirically verified NOT to be the dominant cause** of the recovar-vs-RELION FSC gap on the 5k benchmark. With/without join: ΔPmax < 0.0001 per iter, identical `current_size` growth. The joining radius is shell 14 (40 Å) but recovar's FSC drops at shell 21, well past the joining region. The fix is correct and matches RELION; just don't expect it to close the convergence-speed gap on this benchmark. |
-| **A4: posterior-weighted σ²_noise (formula)** | ✅ DONE (formula matches) | `engine_v2._compute_noise_block` accumulates the A2−2·XA decomposition, plus per-image P_img; `noise.normalize_wsum_to_sigma2_noise` divides by `2·sumw·Npix_per_shell` | `ml_optimiser.cpp:8634-8638` (`wsum += weight·\|residual\|²`); `5268-5270` (`σ² = wsum/(2·sumw·Npix)`) | Mathematically equivalent: recovar's `A2 − 2·XA + P_img = E_w[\|CTF·proj − img\|²]` is exactly the expected per-pose squared residual, summed over the same posterior weights RELION uses. The maximization formula matches exactly. (Open: are recovar's accumulators using **masked** images per RELION line 8633 "Use FT of masked image for noise estimation!"? See B1 below — the noise accumulator code path uses `summed_masked` from the M-step GEMM, suggesting masking IS used; needs explicit verification.) |
+| **A2: τ² from real reconstruction weights** | ✅ DONE | `iteration_loop.py:2006` calls `compute_relion_prior_from_reconstruction_stats(Ft_ctf_0, Ft_ctf_1, Ft_y_0, Ft_y_1, ...)` | `backprojector.cpp:1096-1125` | The audit was looking at the legacy-mode path; relion-mode already uses real weights |
+| **A5: padding factor 2 + zero_pad_fourier_volume** | ✅ DONE | `iteration_loop.py:1241 PADDING_FACTOR = 2`; `relion_functions.zero_pad_fourier_volume` | RELION default `--pad 2` | Standalone test: 8³ → 16³ → crop, DC at center, round-trip CC = 1.0. The "known geometry bug" mentioned in earlier audit was fixed at some prior commit |
+| **A1: data_vs_prior resolution criterion** | ✅ DONE (equivalent) | `iteration_loop.py:2018-2024`: `dvp_iter = fsc_to_relion_ssnr(fsc); resolution_from_data_vs_prior(dvp)` | `ml_optimiser.cpp:5600-5648` | recovar uses `SSNR<1` ⇔ `FSC<0.5`, equivalent to RELION's `data_vs_prior<1` to leading order. The exact RELION formula has an extra `(sum_weight/Npix)²` factor that recovar omits, but it's a small second-order correction |
+| **`--low_resol_join_halves` in recovar M-step** | ✅ DONE | `iteration_loop.py:1800-1807` calls `regularization.join_halves_at_low_resolution`; helper at `regularization.py:812` | `ml_optimiser_mpi.cpp:3112-3219` | Implemented commit `ebfd2a9`. **Empirically verified NOT to be the dominant cause** of the recovar-vs-RELION FSC gap on the 5k benchmark. With/without join: ΔPmax < 0.0001 per iter, identical `current_size` growth. The joining radius is shell 14 (40 Å) but recovar's FSC drops at shell 21, well past the joining region. The fix is correct and matches RELION; just don't expect it to close the convergence-speed gap on this benchmark. |
+| **A4: posterior-weighted σ²_noise (formula)** | ✅ DONE (formula matches) | `em_engine._compute_noise_block` accumulates the A2−2·XA decomposition, plus per-image P_img; `noise.normalize_wsum_to_sigma2_noise` divides by `2·sumw·Npix_per_shell` | `ml_optimiser.cpp:8634-8638` (`wsum += weight·\|residual\|²`); `5268-5270` (`σ² = wsum/(2·sumw·Npix)`) | Mathematically equivalent: recovar's `A2 − 2·XA + P_img = E_w[\|CTF·proj − img\|²]` is exactly the expected per-pose squared residual, summed over the same posterior weights RELION uses. The maximization formula matches exactly. (Open: are recovar's accumulators using **masked** images per RELION line 8633 "Use FT of masked image for noise estimation!"? See B1 below — the noise accumulator code path uses `summed_masked` from the M-step GEMM, suggesting masking IS used; needs explicit verification.) |
 
 **Implications for the remaining work:**
 1. We do **NOT** need to "wire `data_vs_prior`" — already wired.
@@ -259,7 +259,7 @@ so σ² was 3-6× too big (7-32× at high shells), making χ² 3-6× too
 small and collapsing the iter-1 posterior. Fix: thread `apply_image_mask`
 through `process_images` in the bootstrap function.
 
-**Bug 2 (FIXED): `_refine_relion_mode` used `PADDING_FACTOR=2`, but the
+**Bug 2 (FIXED): `_run_relion_iteration_loop` used `PADDING_FACTOR=2`, but the
 zero-padding path leaves the padded grid sparse, so the iFFT divides
 by `(pf*N)^3` even though only `N^3` worth of energy is present.**
 This produced a real-space volume `1/pf^3 = 1/8` the correct amplitude.
@@ -367,11 +367,11 @@ worse at shells 14-17? Hypotheses (in order of suspected impact):
   particle-power approach); RELION's iter-1 noise is set differently.
 
 ## Engine speed problem (the slow `_compute_significance_batched` and
-   `run_em_v2` two-pass code)
+   `run_em` two-pass code)
 
-Both `recovar/em/dense_single_volume/refine.py:313`
+Both `recovar/em/dense_single_volume/iteration_loop.py:313`
 (`_compute_significance_batched`) and
-`recovar/em/dense_single_volume/engine_v2.py:643` (`run_em_v2`)
+`recovar/em/dense_single_volume/em_engine.py:643` (`run_em`)
 contain **TWO Python `for b in range(n_blocks)` loops over rotation
 blocks per image batch**, recomputing the same forward slices and
 scoring GEMMs twice each iteration. This makes the engine ~2× slower
@@ -489,8 +489,8 @@ This is **NOT FSC < 0.143** — it's **FSC < 0.5** in the equivalent
 SSNR formulation, computed from the actual reconstruction weights
 (`Ft_ctf` accumulator), not from a half-map FSC.
 
-**What recovar does**: `_refine_relion_mode` at
-`refine.py:~1320` computes
+**What recovar does**: `_run_relion_iteration_loop` at
+`iteration_loop.py:~1320` computes
 `data_vs_prior_iter = fsc_to_relion_ssnr(fsc_prev)` from the previous
 iter's FSC, but the current_size growth heuristic is fed pixel-shell
 values from this. The helpers `compute_data_vs_prior` and
@@ -507,7 +507,7 @@ as RELION does.
 3. Verify the resolution shell drives `compute_current_size_relion`
    correctly.
 
-**Files**: `recovar/em/dense_single_volume/refine.py`,
+**Files**: `recovar/em/dense_single_volume/iteration_loop.py`,
 `recovar/reconstruction/regularization.py`
 
 **Verification**: per-iter `current_resolution` (Å) should match
@@ -544,7 +544,7 @@ identified this as a Phase C2 gap.
 `compute_relion_prior_from_reconstruction_stats`. The function already
 exists; just rewire the call site.
 
-**Files**: `recovar/em/dense_single_volume/refine.py:~1965`
+**Files**: `recovar/em/dense_single_volume/iteration_loop.py:~1965`
 
 **Verification**: per-iter `tau²[shell]` should match RELION's
 `_rlnReferenceTau2` from `model_class_1` within ~5%.
@@ -553,14 +553,14 @@ exists; just rewire the call site.
 
 ### A3. Pass `tau²_fudge` parameter through the Wiener solve — ✅ DONE (commit `6ef6215`)
 
-`tau2_fudge` is now plumbed through `_refine_relion_mode` to
+`tau2_fudge` is now plumbed through `_run_relion_iteration_loop` to
 `compute_relion_prior_from_reconstruction_stats` and
 `post_process_from_filter_v2`. Also (commit `9ef1536`) passed to the
 two `fsc_to_relion_ssnr` call sites that produce `data_vs_prior` for
 the resolution criterion, matching RELION's
 `backprojector.cpp:1117-1123`.
 
-**Files**: `recovar/em/dense_single_volume/refine.py`.
+**Files**: `recovar/em/dense_single_volume/iteration_loop.py`.
 
 ### A4. Posterior-weighted σ²_noise from the M-step accumulator (with momentum)
 
@@ -583,14 +583,14 @@ smoothing). But the formula includes BOTH halves, BOTH passes
 (coarse + fine), and ALL particles. And the residual is from the
 MASKED Fimg.
 
-**What recovar does**: `engine_v2.py` already accumulates a
+**What recovar does**: `em_engine.py` already accumulates a
 `NoiseStats` object with `wsum_sigma2_noise`, but:
 - It only uses pass-2 (the fine) accumulator
 - The masking choice is unclear
 - The post-loop normalization in `noise.normalize_wsum_to_sigma2_noise`
   may differ from RELION's exact formula
 
-**Fix**: cross-check `engine_v2._compute_noise_block` and
+**Fix**: cross-check `em_engine._compute_noise_block` and
 `noise.normalize_wsum_to_sigma2_noise` line-by-line against RELION's
 code. Specifically:
 1. The residual should be `Frefctf − Fimg_shift_masked` (not
@@ -601,7 +601,7 @@ code. Specifically:
    is the count of significant samples × per-particle weight sum (RELION
    typically gets this from `wsum_BPref.weight.sum()`).
 
-**Files**: `recovar/em/dense_single_volume/engine_v2.py`,
+**Files**: `recovar/em/dense_single_volume/em_engine.py`,
 `recovar/reconstruction/noise.py`
 
 **Verification**: per-iter `σ²_noise[shell]` should match RELION's
@@ -620,7 +620,7 @@ solve happens on this padded grid; the volume is then cropped back to
 critical for the final FSC shape at high resolution.
 
 **What recovar does**: `PADDING_FACTOR = 1` is hardcoded in
-`_refine_relion_mode` because `relion_functions.zero_pad_fourier_volume`
+`_run_relion_iteration_loop` because `relion_functions.zero_pad_fourier_volume`
 has a known geometry bug. Effectively recovar runs at half RELION's
 internal resolution.
 
@@ -649,7 +649,7 @@ volume, the DC stays at the center and shells map correctly.
 - `Fimg_nomask`: from the unmasked (background-subtracted) particle.
   This is what enters the M-step backprojection (`Pᵀ y`).
 
-**Status**: ✅ ALREADY IMPLEMENTED in current `engine_v2.run_em_v2`
+**Status**: ✅ ALREADY IMPLEMENTED in current `em_engine.run_em`
 (verified 2026-04-09). The earlier audit was stale.
 
 Concretely:
@@ -661,15 +661,15 @@ Concretely:
   the **unmasked** `shifted_recon_half` that is fed to
   `_m_step_block*` for the y backprojection.
 - The `score_with_masked_images=True` flag is wired into every
-  `run_em_v2` call inside `_refine_relion_mode` (8+ call sites)
+  `run_em` call inside `_run_relion_iteration_loop` (8+ call sites)
   and into `_compute_significance_batched` for the relion-mode
   coarse pass.
 - `process_images(images, apply_image_mask=True)` multiplies by the
   RELION soft circular mask (`image_backends.py:152-158`); when False,
   no mask. Dataset side is correct.
 
-**Files**: `recovar/em/dense_single_volume/engine_v2.py:92-153`,
-`recovar/em/dense_single_volume/refine.py` (`run_em_v2(..., score_with_masked_images=True)`).
+**Files**: `recovar/em/dense_single_volume/em_engine.py:92-153`,
+`recovar/em/dense_single_volume/iteration_loop.py` (`run_em(..., score_with_masked_images=True)`).
 
 ### B2. `exp_highres_Xi2_img` high-freq residual term — ✅ DONE (mathematically equivalent)
 
@@ -685,7 +685,7 @@ particle `i`. It doesn't change Pmax or the M-step (cancels in
 softmax), but it DOES affect absolute log-likelihood and
 `_rlnLogLikelihood`.
 
-**Status**: ✅ EQUIVALENT formulation already in `engine_v2.run_em_v2`
+**Status**: ✅ EQUIVALENT formulation already in `em_engine.run_em`
 (verified 2026-04-09).
 
 Recovar tracks `batch_norm[i] = ||processed_image||^2 / noise_variance`
@@ -717,7 +717,7 @@ discrepancy that is tracked under D1.
 constant (D1). Pmax is unaffected by per-image constants and matches
 exactly.
 
-**Files**: `recovar/em/dense_single_volume/engine_v2.py:125,916`
+**Files**: `recovar/em/dense_single_volume/em_engine.py:125,916`
 (`batch_norm` definition and the `log_score_offset` application).
 
 ### B3. Per-iter `changes_orientations` / `changes_offsets` tracking — ✅ DONE (commit `3ca66d4`)
@@ -730,12 +730,12 @@ in pixels then converted to Å. The state object now carries
 `current_changes_optimal_orientations`, `current_changes_optimal_offsets_angstrom`,
 sticky `smallest_changes_optimal_*`, and the
 `nr_iter_wo_large_hidden_variable_changes` counter. The previous iter's
-best (rot, trans) is snapshotted in `_refine_relion_mode` BEFORE the
+best (rot, trans) is snapshotted in `_run_relion_iteration_loop` BEFORE the
 per-half loop overwrites them, so the deltas are computed against the
 correct K-1 state.
 
-**Files**: `recovar/em/dense_single_volume/refine_dev_helpers/convergence.py`,
-`recovar/em/dense_single_volume/refine.py`.
+**Files**: `recovar/em/dense_single_volume/helpers/convergence.py`,
+`recovar/em/dense_single_volume/iteration_loop.py`.
 
 ### B4. Convergence criterion (uses B3 and A1) — ✅ DONE (commit `3ca66d4`)
 
@@ -755,7 +755,7 @@ else:
 `refine_angular_sampling` resets the sticky trackers when the healpix
 order is bumped, matching RELION's behavior at the same boundary.
 
-**Files**: `recovar/em/dense_single_volume/refine_dev_helpers/convergence.py`.
+**Files**: `recovar/em/dense_single_volume/helpers/convergence.py`.
 
 ### B5. Final joined-halves iteration after convergence
 
@@ -772,7 +772,7 @@ iteration.
 iteration with `current_size := grid_size` and all particles in a
 single E+M sweep (or continue per-half then average).
 
-**Files**: `recovar/em/dense_single_volume/refine.py`.
+**Files**: `recovar/em/dense_single_volume/iteration_loop.py`.
 
 **Verification**: final volume FSC should match RELION's
 `run_class001.mrc` within CC > 0.99.
@@ -791,7 +791,7 @@ RELION's `min_sigma2_offset = 2 px^2` clamp from
 `ml_optimiser.cpp:9272`. Trajectory of `sigma_offset_trajectory` is
 stored in the result dict.
 
-**Files**: `recovar/em/dense_single_volume/refine.py`.
+**Files**: `recovar/em/dense_single_volume/iteration_loop.py`.
 
 ### C2. `scale_correction[group]` per-optics-group update
 
@@ -973,7 +973,7 @@ the same dataset shows the noise spectrum essentially constant across the transi
 The fix moves recovar from "completely broken at iter 6+" (severe regression) to "mostly working"
 (small residual <5% noise gap, no resolution regression). RELION's σ² is constant at 2.483e-5
 throughout. Recovar still has a small residual gap that may come from secondary issues (e.g.,
-the cartesian-product chunk-union structure of `_run_grouped_local_search_em` includes more
+the cartesian-product chunk-union structure of `_run_local_search_iteration` includes more
 rotations per chunk than RELION's per-particle local search, so the per-image priors are very
 sparse and may have numerical effects). But the dominant bug is fixed.
 
@@ -1052,8 +1052,8 @@ See commit `ae8bcc3` for the full change.
   convergence)
 - `relion/src/backprojector.cpp` (Wiener filter, tau² update,
   data_vs_prior)
-- `recovar/em/dense_single_volume/refine.py` (`_refine_relion_mode`)
-- `recovar/em/dense_single_volume/engine_v2.py` (E+M kernels)
+- `recovar/em/dense_single_volume/iteration_loop.py` (`_run_relion_iteration_loop`)
+- `recovar/em/dense_single_volume/em_engine.py` (E+M kernels)
 - `recovar/reconstruction/regularization.py` (resolution criterion,
   prior, growth heuristic, low_resol_join_halves)
 - `recovar/reconstruction/noise.py` (noise normalization)
