@@ -53,6 +53,21 @@ def image_name_to_stack_idx(name):
     return int(m.group(1)) if m else -1
 
 
+def _resolve_relion_ref_dir(data_dir, explicit_dir=None):
+    """Return the RELION reference directory for a benchmark dataset."""
+    if explicit_dir:
+        return explicit_dir
+
+    candidates = [
+        os.path.join(data_dir, "relion_ref"),
+        os.path.join(data_dir, "relion_ref_benchmark"),
+    ]
+    for candidate in candidates:
+        if os.path.exists(os.path.join(candidate, "run_it001_data.star")):
+            return candidate
+    return candidates[0]
+
+
 def load_relion_half_sets(relion_star_path, our_star_path):
     """Load RELION's rlnRandomSubset and map to our particle ordering.
 
@@ -255,6 +270,13 @@ def main():
     parser.add_argument("--data_dir", default=DATA_DIR)
     parser.add_argument("--output", default=OUTPUT_DIR)
     parser.add_argument(
+        "--relion_ref_dir",
+        default=None,
+        help="Path to the RELION refinement directory. If omitted, prefer "
+             "<data_dir>/relion_ref when present, otherwise fall back to "
+             "<data_dir>/relion_ref_benchmark.",
+    )
+    parser.add_argument(
         "--mode",
         choices=["legacy", "relion"],
         default="relion",
@@ -286,9 +308,10 @@ def main():
     args = parser.parse_args()
 
     DATA_DIR = args.data_dir
-    RELION_REF = os.path.join(DATA_DIR, "relion_ref")
+    RELION_REF = _resolve_relion_ref_dir(DATA_DIR, args.relion_ref_dir)
     OUTPUT_DIR = args.output
     os.makedirs(OUTPUT_DIR, exist_ok=True)
+    logger.info("Resolved RELION reference directory: %s", RELION_REF)
 
     # Verify GPU
     devices = jax.devices()

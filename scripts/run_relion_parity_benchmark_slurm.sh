@@ -21,7 +21,7 @@ mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR" /scratch/gpfs/GILLES/mg6942
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 unset LD_LIBRARY_PATH
 
-REPO_DIR="${REPO_DIR:-/home/mg6942/recovar_dev/recovar}"
+REPO_DIR="${REPO_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 DATA_DIR="${DATA_DIR:-/scratch/gpfs/GILLES/mg6942/tmp/em_profile/data}"
 OUTPUT_DIR="${OUTPUT_DIR:-${DATA_DIR}/comparison_results}"
 OUR_RESULTS_DIR="${OUR_RESULTS_DIR:-${DATA_DIR}/our_results_relion}"
@@ -164,6 +164,7 @@ echo "=== Compare recovar refinement against RELION reference ==="
 echo "=== Run head-to-head comparison (own FSC + oracle) ==="
 "$PIXI_PY" scripts/run_comparison.py \
   --data_dir "$DATA_DIR" \
+  --relion_ref_dir "$RELION_REF_DIR" \
   --output "$OUTPUT_DIR" \
   --mode relion \
   --max_iter "$MAX_ITER" \
