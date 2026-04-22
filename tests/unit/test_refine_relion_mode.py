@@ -16,26 +16,34 @@ pytest.importorskip("jax")
 import healpy as hp
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.convergence import RefinementState
 from recovar.em.dense_single_volume.engine_v2 import run_em_v2
 from recovar.em.dense_single_volume.refine import (
-    _bootstrap_current_size_relion,
-    _compute_significance_batched,
+    refine_single_volume,
+)
+from recovar.em.dense_single_volume.refine_dev_helpers.convergence import RefinementState
+from recovar.em.dense_single_volume.refine_dev_helpers.local_search import (
     _local_search_chunk_size,
     _local_search_engine_rotation_block_size,
     _local_search_max_union_rotations,
     _local_search_rotation_block_size,
     _pad_local_search_rotations,
     _partition_local_search_groups,
+)
+from recovar.em.dense_single_volume.refine_dev_helpers.relion_init import (
+    _bootstrap_current_size_relion,
     clamp_relion_coarse_image_size,
-    collapse_rotation_posterior_to_direction_prior,
     compute_coarse_image_size,
-    make_relion_direction_log_prior,
-    make_relion_translation_log_prior,
-    refine_single_volume,
     should_skip_adaptive_pass2,
 )
-from recovar.em.dense_single_volume.types import NoiseStats, RelionStats
+from recovar.em.dense_single_volume.refine_dev_helpers.relion_priors import (
+    collapse_rotation_posterior_to_direction_prior,
+    make_relion_direction_log_prior,
+    make_relion_translation_log_prior,
+)
+from recovar.em.dense_single_volume.refine_dev_helpers.significance import (
+    _compute_significance_batched,
+)
+from recovar.em.dense_single_volume.refine_dev_helpers.types import NoiseStats, RelionStats
 from recovar.em.sampling import (
     apply_relion_rotation_perturbation,
     get_relion_rotation_grid,
@@ -150,7 +158,7 @@ def test_pad_local_search_rotations_caps_large_neighborhoods_without_recompiling
 
 
 def test_partition_local_search_groups_keeps_small_exact_unions_together(monkeypatch):
-    import recovar.em.dense_single_volume.refine as refine_mod
+    import recovar.em.dense_single_volume.refine_dev_helpers.local_search as local_search_mod
 
     def fake_selector(
         prior_rotation_indices,
@@ -167,7 +175,7 @@ def test_partition_local_search_groups_keeps_small_exact_unions_together(monkeyp
         assert per_image
         return np.arange(12, dtype=np.int64), np.zeros((n, 12), dtype=np.float32)
 
-    monkeypatch.setattr(refine_mod, "get_local_rotation_grid_fast", fake_selector)
+    monkeypatch.setattr(local_search_mod, "get_local_rotation_grid_fast", fake_selector)
 
     groups = _partition_local_search_groups(
         np.zeros((4, 3), dtype=np.float32),
@@ -187,7 +195,7 @@ def test_partition_local_search_groups_keeps_small_exact_unions_together(monkeyp
 
 
 def test_partition_local_search_groups_splits_large_exact_unions(monkeypatch):
-    import recovar.em.dense_single_volume.refine as refine_mod
+    import recovar.em.dense_single_volume.refine_dev_helpers.local_search as local_search_mod
 
     def fake_selector(
         prior_rotation_indices,
@@ -205,7 +213,7 @@ def test_partition_local_search_groups_splits_large_exact_unions(monkeypatch):
         n_union = 5000 if n > 1 else 1200
         return np.arange(n_union, dtype=np.int64), np.zeros((n, n_union), dtype=np.float32)
 
-    monkeypatch.setattr(refine_mod, "get_local_rotation_grid_fast", fake_selector)
+    monkeypatch.setattr(local_search_mod, "get_local_rotation_grid_fast", fake_selector)
 
     groups = _partition_local_search_groups(
         np.zeros((4, 3), dtype=np.float32),
@@ -1121,7 +1129,7 @@ class TestRelionModeSmokeTest:
             )
 
         def fake_dense_pass2(*args, **kwargs):
-            from recovar.em.dense_single_volume.types import NoiseStats
+            from recovar.em.dense_single_volume.refine_dev_helpers.types import NoiseStats
 
             dataset = args[0]
             n_images = dataset.n_units

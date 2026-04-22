@@ -517,7 +517,7 @@ class TestWindowingDivergence:
         relion_pixels = current_size * (current_size // 2 + 1)
 
         # recovar: radial mask on (N, N//2+1) half-spectrum
-        from recovar.em.dense_single_volume.fourier_window import make_fourier_window_indices_np
+        from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import make_fourier_window_indices_np
 
         _, n_windowed = make_fourier_window_indices_np((N, N), current_size)
 

@@ -46,7 +46,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 
-from .types import EMProfileStats, NoiseStats, RelionStats
+from .refine_dev_helpers.types import EMProfileStats, NoiseStats, RelionStats
 
 logger = logging.getLogger(__name__)
 
@@ -675,7 +675,7 @@ def run_em_v2(
     # Precompute window indices if current_size is set
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
-        from .fourier_window import make_fourier_window_indices_np
+        from .refine_dev_helpers.fourier_window import make_fourier_window_indices_np
 
         window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size, square=square_window)
         window_indices = jnp.asarray(window_indices_np)
@@ -1490,7 +1490,7 @@ def compute_e_step_weights(
 
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
-        from .fourier_window import make_fourier_window_indices_np
+        from .refine_dev_helpers.fourier_window import make_fourier_window_indices_np
 
         window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size)
         window_indices = jnp.asarray(window_indices_np)

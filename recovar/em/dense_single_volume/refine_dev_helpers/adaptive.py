@@ -269,7 +269,7 @@ def compute_pass2_stats(
         get_oversampled_translation_grid,
     )
 
-    from .engine_v2 import run_em_v2
+    from ..engine_v2 import run_em_v2
 
     n_images = experiment_dataset.n_units
     n_coarse_rot = coarse_rotations.shape[0]
@@ -493,7 +493,7 @@ def compute_pass2_stats_sparse(
         rotation_grid_size,
     )
 
-    from .engine_v2 import run_em_v2
+    from ..engine_v2 import run_em_v2
     from .types import NoiseStats
 
     n_images = experiment_dataset.n_units

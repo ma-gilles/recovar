@@ -11,18 +11,15 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
-import jax
 import jax.numpy as jnp
 
-from recovar.em.dense_single_volume.fourier_window import (
-    ALLOWED_CURRENT_SIZES,
-    quantize_current_size,
-)
 from recovar.em.dense_single_volume.refine import (
     fsc_to_current_size,
     refine_single_volume,
 )
-from recovar.em.dense_single_volume.engine_v2 import run_em_v2
+from recovar.em.dense_single_volume.refine_dev_helpers.fourier_window import (
+    quantize_current_size,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -45,6 +42,7 @@ SEED = 42
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _hermitian_image_2d(image_shape, seed=42):
     rng = np.random.default_rng(seed)
@@ -109,16 +107,12 @@ class MockDataset:
 
         self._images = np.zeros((n_images, IMAGE_SIZE), dtype=np.complex64)
         for i in range(n_images):
-            self._images[i] = _hermitian_image_2d(
-                IMAGE_SHAPE, seed=rng.integers(10000)
-            ).reshape(-1)
+            self._images[i] = _hermitian_image_2d(IMAGE_SHAPE, seed=rng.integers(10000)).reshape(-1)
 
         # Stored poses (updated by update_poses).
         # These are also exposed as rotation_matrices/translations properties
         # for compute_prior_quantites which accesses them as dataset attributes.
-        self.rotation_matrices = np.tile(
-            np.eye(3, dtype=np.float32), (n_images, 1, 1)
-        )
+        self.rotation_matrices = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
         self.translations = np.zeros((n_images, 2), dtype=np.float32)
 
         class _ImageSource:
@@ -140,8 +134,8 @@ class MockDataset:
                 self.translations[idx],
                 jnp.asarray(self.CTF_params[idx]),
                 None,  # noise_variance
-                idx,   # particle_indices
-                idx,   # image_indices
+                idx,  # particle_indices
+                idx,  # image_indices
             )
 
     def update_poses(self, rots, trans):
@@ -182,14 +176,13 @@ def rotations():
 
 @pytest.fixture
 def translations():
-    return jnp.array(
-        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32
-    )
+    return jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32)
 
 
 # ===========================================================================
 # Test 1: fsc_to_current_size
 # ===========================================================================
+
 
 class TestFscToCurrentSize:
     """Verify the FSC -> shell -> current_size mapping."""
@@ -210,10 +203,12 @@ class TestFscToCurrentSize:
 
     def test_partial_fsc_gives_reasonable_size(self):
         """FSC that drops at shell 20 -> current_size ~ 40."""
-        fsc = jnp.concatenate([
-            jnp.ones(20),           # high FSC up to shell 19
-            jnp.zeros(44),          # drops to 0 after
-        ])
+        fsc = jnp.concatenate(
+            [
+                jnp.ones(20),  # high FSC up to shell 19
+                jnp.zeros(44),  # drops to 0 after
+            ]
+        )
         cs = fsc_to_current_size(fsc, threshold=1.0 / 7.0)
         # Should be approximately 2 * 20 = 40
         assert 32 <= cs <= 50, f"Expected ~40, got {cs}"
@@ -239,6 +234,7 @@ class TestFscToCurrentSize:
 # Test 2: Oracle mode matches RELION trajectory
 # ===========================================================================
 
+
 class TestOracleMode:
     """Run refinement with RELION's current_sizes injected."""
 
@@ -261,9 +257,7 @@ class TestOracleMode:
         )
 
         # On the tiny 8px mock dataset these values all saturate at full resolution.
-        assert result["current_sizes"] == [8, 8, 8], (
-            f"Oracle sizes not used: {result['current_sizes']}"
-        )
+        assert result["current_sizes"] == [8, 8, 8], f"Oracle sizes not used: {result['current_sizes']}"
 
     def test_oracle_with_zero_first(self, half_datasets, init_volume, rotations, translations):
         """RELION iteration 0 has current_size=0; should use init_current_size."""
@@ -323,6 +317,7 @@ class TestOracleMode:
 # ===========================================================================
 # Test 3: Resolution improves (or at least doesn't collapse)
 # ===========================================================================
+
 
 class TestResolutionProgression:
     """Run a few iterations without oracle; verify stability."""
@@ -396,6 +391,7 @@ class TestResolutionProgression:
 # ===========================================================================
 # Test 4: One iteration with windowing
 # ===========================================================================
+
 
 class TestOneIterationWithWindowing:
     """Run a single iteration at a small current_size."""

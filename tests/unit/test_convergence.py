@@ -22,7 +22,7 @@ pytestmark = pytest.mark.unit
 # Import targets
 # ---------------------------------------------------------------------------
 
-from recovar.em.dense_single_volume.convergence import (
+from recovar.em.dense_single_volume.refine_dev_helpers.convergence import (
     MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
     MAX_NR_ITER_WO_RESOL_GAIN,
     RefinementState,
