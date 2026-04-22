@@ -164,14 +164,15 @@ and `eps_i ~ N(0, sigma^2_i)` is per-image Gaussian noise.
 The log-likelihood for a single (i, r, t) decomposes into:
 
 ```
-log p(y_i | r, t) = -1/(2*sigma^2) * ||y_i - S_t C_i P_r mu||^2
-                  = cross(i,r,t) + norm(r) + data(i)
+log p(y_i | r, t) = -1/2 * sum_k |y_i[k] - S_t[k] C_i[k] (P_r mu)[k]|^2 / sigma^2_i[k]
+                  = cross(i,r,t) + norm(i,r) + data(i)
 ```
 
-where:
-- **cross term**: `-2 Re <y_i / sigma^2, S_t C_i P_r mu>` -- the expensive GEMM
-- **norm term**: `||C_i P_r mu||^2 / sigma^2` -- depends on (r) only via projections
-- **data term**: `||y_i||^2 / sigma^2` -- constant w.r.t. (r, t), cancels in softmax
+where `sigma^2_i[k]` is the per-group, per-shell noise power spectrum (one spectrum
+per optics group in RELION; one per half-set in recovar), and:
+- **cross term**: `sum_k -2 Re( y_i[k]^* S_t[k] C_i[k] (P_r mu)[k] ) / sigma^2_i[k]` -- the expensive GEMM
+- **norm term**: `sum_k |C_i[k] (P_r mu)[k]|^2 / sigma^2_i[k]` -- depends on (i, r) since sigma^2 is per-image
+- **data term**: `sum_k |y_i[k]|^2 / sigma^2_i[k]` -- constant w.r.t. (r, t), cancels in softmax
 
 The cross term is computed as a matrix multiply: images (shifted by all translations)
 form the LHS matrix of shape `(n_img * n_trans, N_pix)`, projections form the RHS
