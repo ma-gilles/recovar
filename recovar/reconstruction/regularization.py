@@ -386,36 +386,6 @@ def covariance_update_col_with_mask(H, B, prior, volume_mask, valid_idx, volume_
     return cov
 
 
-@functools.partial(jax.jit, static_argnums=[6, 7, 8])
-def prior_iteration(
-    H0, H1, B0, B1, frequency_shift, init_regularization, substract_shell_mean, volume_shape, prior_iterations
-):
-
-    H_comb = (H0 + H1) / 2
-    prior = init_regularization
-
-    # Unrolled iterations (see prior_iteration_relion_style for fori_loop variant)
-
-    cov_col0 = covariance_update_col(H0, B0, prior)
-    cov_col1 = covariance_update_col(H1, B1, prior)
-    prior, fsc, _ = compute_fsc_prior_gpu_v2(
-        volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift=frequency_shift
-    )
-
-    cov_col0 = covariance_update_col(H0, B0, prior)
-    cov_col1 = covariance_update_col(H1, B1, prior)
-    prior, fsc, _ = compute_fsc_prior_gpu_v2(
-        volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift=frequency_shift
-    )
-    cov_col0 = covariance_update_col(H0, B0, prior)
-    cov_col1 = covariance_update_col(H1, B1, prior)
-    prior, fsc, _ = compute_fsc_prior_gpu_v2(
-        volume_shape, cov_col0, cov_col1, H_comb, prior, frequency_shift=frequency_shift
-    )
-
-    return prior, fsc
-
-
 from recovar.reconstruction import relion_functions
 
 
@@ -526,59 +496,6 @@ def prior_iteration_relion_style(
     return cov_col0.reshape(-1), prior, fsc
 
 
-def compute_relion_prior_from_reconstruction_stats(
-    Ft_ctf_0,
-    Ft_ctf_1,
-    Ft_y_0,
-    Ft_y_1,
-    volume_shape,
-    init_regularization,
-    *,
-    padding_factor=1,
-    prior_iterations=3,
-    tau2_fudge=1.0,
-):
-    """Estimate RELION-style tau2 directly from accumulated reconstruction stats.
-
-    This mirrors RELION's `BackProjector::updateSSNRarrays()` path more closely
-    than `compute_relion_prior(...)` because it uses the actual backprojected
-    CTF weight volumes from the current E/M step instead of reconstructing a
-    surrogate denominator from the dataset's stored poses.
-
-    The homogeneous RELION update is a direct shell-wise FSC/SNR calculation
-    on the unregularized half-maps combined with the shell-averaged
-    reconstruction weights. It does not iterate tau2 against the previous
-    regularization estimate, so ``prior_iterations`` is retained only for API
-    stability and intentionally ignored here.
-    """
-    _ = prior_iterations
-
-    prior_dtype = jnp.asarray(init_regularization).real.dtype
-    complex_dtype = jnp.complex64 if prior_dtype == jnp.float32 else jnp.complex128
-
-    # RELION computes FSC for tau2 on raw Fourier-domain data/weight ratios
-    # (via getDownsampledAverage), NOT on fully post-processed real-space
-    # volumes. Simple Fourier-domain division at native resolution.
-    H0 = jnp.asarray(Ft_ctf_0).real.astype(prior_dtype)
-    H1 = jnp.asarray(Ft_ctf_1).real.astype(prior_dtype)
-    B0 = jnp.asarray(Ft_y_0).astype(complex_dtype)
-    B1 = jnp.asarray(Ft_y_1).astype(complex_dtype)
-
-    weight_floor = jnp.float32(1e-10)
-    unreg_half0 = B0 / jnp.maximum(H0, weight_floor)
-    unreg_half1 = B1 / jnp.maximum(H1, weight_floor)
-
-    H_comb = (H0 + H1) / jnp.asarray(2.0, dtype=prior_dtype)
-    prior, fsc, _ = compute_fsc_prior_gpu(
-        volume_shape,
-        unreg_half0,
-        unreg_half1,
-        H_comb,
-        tau2_fudge=jnp.asarray(tau2_fudge, dtype=prior_dtype),
-    )
-    return prior, fsc
-
-
 def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1):
     """Match RELION's shell-wise weight averaging for tau2 diagnostics.
 
@@ -630,8 +547,7 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
         expected_size = int(np.prod(volume_shape))
         if weight.size != expected_size:
             raise ValueError(
-                f"Expected native weight with {expected_size} voxels for volume_shape={volume_shape}, "
-                f"got {weight.size}"
+                f"Expected native weight with {expected_size} voxels for volume_shape={volume_shape}, got {weight.size}"
             )
         shell_index = (
             fourier_transform_utils.get_grid_of_radial_distances(
@@ -965,7 +881,6 @@ def compute_current_size_relion(resolution_shell, ori_size, ave_Pmax=0.0, has_hi
     return min(2 * maxres, ori_size)
 
 
-prior_iteration_batch = jax.vmap(prior_iteration, in_axes=(0, 0, 0, 0, 0, 0, None, None, None))
 prior_iteration_relion_style_batch = jax.vmap(
     prior_iteration_relion_style,
     # 14 positional args from
