@@ -192,6 +192,35 @@ def _bootstrap_current_size_relion(init_current_size: int, ori_size: int, incr_s
     return quantize_current_size(raw_cs, ori_size=ori_size)
 
 
+def _local_search_chunk_size(image_batch_size: int) -> int:
+    """Return the exact local-search grouping size.
+
+    Using large image groups destroys local-search sparsity because the
+    union of many image-specific neighborhoods quickly approaches the full
+    HEALPix grid. Keeping the groups per-image preserves the exact same
+    candidate support while dramatically shrinking the rotations scored for
+    most particles.
+    """
+    _ = image_batch_size
+    return 1
+
+
+def _local_search_rotation_block_size(local_rotation_count: int, rotation_block_size: int) -> int:
+    """Bucket local-search rotation blocks to reduce JIT shape churn.
+
+    For small exact local neighborhoods, padding up to the next power of two
+    is much cheaper than recompiling for every distinct candidate count. For
+    larger supports we fall back to the caller's cap so the engine still
+    tiles large neighborhoods across multiple blocks.
+    """
+    if local_rotation_count <= 0:
+        return 1
+    if local_rotation_count >= rotation_block_size:
+        return int(rotation_block_size)
+    bucket = 1 << max(int(local_rotation_count - 1).bit_length(), 4)
+    return int(min(bucket, rotation_block_size))
+
+
 def _run_grouped_local_search_em(
     experiment_dataset,
     mean,
@@ -249,13 +278,14 @@ def _run_grouped_local_search_em(
     n_images = experiment_dataset.n_units
     n_trans = int(np.asarray(translations).shape[0])
     rotation_grid_rotations = np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)
-    rotation_grid_eulers = np.asarray(rotation_grid_eulers, dtype=np.float32).reshape(-1, 3)
     if rotation_grid_rotations.shape[0] != rotation_grid_size(healpix_order):
         raise ValueError(
             f"rotation_grid_rotations must have shape ({rotation_grid_size(healpix_order)}, 3, 3), "
             f"got {rotation_grid_rotations.shape}",
         )
-    if rotation_grid_eulers.shape[0] != rotation_grid_rotations.shape[0]:
+    if rotation_grid_eulers is not None:
+        rotation_grid_eulers = np.asarray(rotation_grid_eulers, dtype=np.float32).reshape(-1, 3)
+    if rotation_grid_eulers is not None and rotation_grid_eulers.shape[0] != rotation_grid_rotations.shape[0]:
         raise ValueError(
             f"rotation_grid_eulers must match rotation_grid_rotations, got "
             f"{rotation_grid_eulers.shape} vs {rotation_grid_rotations.shape}",
@@ -289,20 +319,31 @@ def _run_grouped_local_search_em(
     max_local_rotations = 0
     chunk_sizes = []
     n_chunks = 0
+    metadata_build_time = 0.0
+    selector_time = 0.0
+    translation_prior_time = 0.0
+    em_time = 0.0
     # The local-search selector must operate on the actual trial grid that will
     # be scored for this iteration. When the caller has already applied
     # SamplingPerturbation to `rotation_grid_eulers`, using canonical unperturbed
     # metadata lets the selected support drift away from the true per-image
     # neighborhood on the perturbed grid.
-    local_grid_metadata = build_local_search_grid_metadata(healpix_order, grid_eulers=rotation_grid_eulers)
+    metadata_t0 = time.time()
+    local_grid_metadata = build_local_search_grid_metadata(
+        healpix_order,
+        grid_eulers=rotation_grid_eulers,
+        grid_rotations=rotation_grid_rotations,
+    )
+    metadata_build_time = time.time() - metadata_t0
 
-    chunk_size = max(1, min(image_batch_size, 64))
+    chunk_size = _local_search_chunk_size(image_batch_size)
     for chunk_start in range(0, n_images, chunk_size):
         chunk_stop = min(chunk_start + chunk_size, n_images)
         group_image_indices = np.arange(chunk_start, chunk_stop, dtype=np.int64)
         n_chunks += 1
         chunk_sizes.append(len(group_image_indices))
 
+        selector_t0 = time.time()
         local_indices, local_log_prior = get_local_rotation_grid_fast(
             prior_rotations[group_image_indices],
             sigma_rot,
@@ -312,12 +353,14 @@ def _run_grouped_local_search_em(
             per_image=True,
             grid_metadata=local_grid_metadata,
         )
+        selector_time += time.time() - selector_t0
         local_rotations = rotation_grid_rotations[local_indices]
         # C1 (RELION-parity): use the explicit sigma_offset_angstrom from the
         # caller (which is the data-driven value updated each iter) without
         # the legacy `range/3` override (offset_range_pixels=None). The
         # translation grid is still bounded by `active_offset_range` in the
         # engine's score computation.
+        translation_prior_t0 = time.time()
         local_translation_log_prior = make_relion_translation_log_prior(
             translations,
             experiment_dataset.voxel_size,
@@ -325,10 +368,16 @@ def _run_grouped_local_search_em(
             prior_translations[group_image_indices],
             offset_range_pixels=None,
         )
+        translation_prior_time += time.time() - translation_prior_t0
 
         total_local_rotations += int(local_rotations.shape[0])
         max_local_rotations = max(max_local_rotations, int(local_rotations.shape[0]))
 
+        em_t0 = time.time()
+        local_rotation_block_size = _local_search_rotation_block_size(
+            int(local_rotations.shape[0]),
+            int(rotation_block_size),
+        )
         run_em_outputs = run_em_v2(
             experiment_dataset,
             mean,
@@ -338,7 +387,7 @@ def _run_grouped_local_search_em(
             translations,
             disc_type,
             image_batch_size=image_batch_size,
-            rotation_block_size=min(rotation_block_size, max(1, local_rotations.shape[0])),
+            rotation_block_size=local_rotation_block_size,
             current_size=current_size,
             rotation_log_prior=local_log_prior,
             translation_log_prior=local_translation_log_prior,
@@ -350,6 +399,7 @@ def _run_grouped_local_search_em(
             reconstruction_padding_factor=reconstruction_padding_factor,
             use_float64_scoring=use_float64_scoring,
         )
+        em_time += time.time() - em_t0
         if accumulate_noise:
             _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g = run_em_outputs
             accum_noise_wsum += np.asarray(noise_stats_g.wsum_sigma2_noise, dtype=np.float64)
@@ -387,6 +437,13 @@ def _run_grouped_local_search_em(
         int(np.median(chunk_sizes)) if chunk_sizes else 0,
         float(total_local_rotations / max(n_chunks, 1)),
         max_local_rotations,
+    )
+    logger.info(
+        "Batched local search timings: metadata=%.2fs, selector=%.2fs, translation_prior=%.2fs, em=%.2fs",
+        metadata_build_time,
+        selector_time,
+        translation_prior_time,
+        em_time,
     )
 
     relion_stats = RelionStats(
@@ -947,7 +1004,7 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
             raise ValueError(
                 f"rotations must have shape ({n_rot}, 3, 3), got {rotations.shape}",
             )
-        view_dirs = rotations[:, :, 2].astype(np.float64)
+        view_dirs = rotations[:, 2, :].astype(np.float64)
         norms = np.linalg.norm(view_dirs, axis=1, keepdims=True)
         norms = np.where(norms > 1e-12, norms, 1.0)
         view_dirs = view_dirs / norms
@@ -1712,6 +1769,7 @@ def _refine_relion_mode(
     wall_times = []
     hard_assignments = [None, None]
     previous_assignments = [None, None]
+    previous_best_translations = [None, None]
     previous_best_rotations = [None, None]
     previous_best_rotation_eulers = [None, None]
     if init_previous_best_translations is not None:
@@ -1723,8 +1781,6 @@ def _refine_relion_mode(
             if init_previous_best_translations[1] is not None
             else None,
         ]
-    else:
-        previous_best_translations = [None, None]
     max_posterior_per_half = [None, None]
     rotation_posterior_per_half = [None, None]
     significant_counts = []
@@ -2245,6 +2301,12 @@ def _refine_relion_mode(
         # snapped grid indices.
         effective_rotations = current_rotations
         effective_rotation_eulers = np.asarray(current_rotation_eulers, dtype=np.float32)
+        rotation_log_prior = None
+        use_local = (
+            state.do_local_search
+            and all(eulers is not None for eulers in previous_best_rotation_eulers)
+            and iteration > 0
+        )
         # --- Apply RELION SamplingPerturbation to the trial grid for this iter ---
         # healpix_sampling.cpp:1909-1934 (rotations) + 1810-1820 (translations)
         # Perturbation is a rigid rotation of SO(3): A := A @ R_perturb applied
@@ -2272,21 +2334,16 @@ def _refine_relion_mode(
                 random_perturbation,
                 angsamp_deg,
             ).astype(np.float32)
-            effective_rotation_eulers = utils.R_to_relion(np.asarray(effective_rotations), degrees=True).astype(
-                np.float32
-            )
+            if not use_local:
+                effective_rotation_eulers = utils.R_to_relion(np.asarray(effective_rotations), degrees=True).astype(
+                    np.float32
+                )
             _perturbed_translations = apply_relion_translation_perturbation(
                 np.asarray(base_translations),
                 random_perturbation,
                 float(state.translation_step),
             )
             current_translations = jnp.asarray(_perturbed_translations, dtype=jnp.float32)
-        rotation_log_prior = None
-        use_local = (
-            state.do_local_search
-            and all(eulers is not None for eulers in previous_best_rotation_eulers)
-            and iteration > 0
-        )
         local_search_order = None
         local_search_rotations = None
         local_search_rotation_eulers = None
@@ -2310,7 +2367,7 @@ def _refine_relion_mode(
                 local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(np.float32)
             else:
                 local_search_rotations = effective_rotations
-                local_search_rotation_eulers = effective_rotation_eulers
+                local_search_rotation_eulers = None
             logger.info(
                 "Local search (batched exact): fine_order=%d, sigma_rot=%.4f rad (%.2f deg), sigma_psi=%.4f rad",
                 local_search_order,
@@ -3140,10 +3197,13 @@ def _refine_relion_mode(
             elif use_local:
                 rot_idx = hard_assignments[k] // current_translations.shape[0]
                 trans_idx = hard_assignments[k] % current_translations.shape[0]
-                if local_search_rotations is None or local_search_rotation_eulers is None:
+                if local_search_rotations is None:
                     raise ValueError("Local-search hard assignments require the fine local-search grid")
                 best_rots = np.asarray(local_search_rotations, dtype=np.float32)[rot_idx]
-                best_eulers = np.asarray(local_search_rotation_eulers, dtype=np.float32)[rot_idx]
+                if local_search_rotation_eulers is not None:
+                    best_eulers = np.asarray(local_search_rotation_eulers, dtype=np.float32)[rot_idx]
+                else:
+                    best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
                 best_trans = np.asarray(current_translations)[trans_idx]
             else:
                 # Global search uses the dense grid in pose_rotations[k].

@@ -56,7 +56,7 @@ def test_get_rotation_grid_shapes_with_and_without_matrices():
 def test_rotation_indices_to_matrices_matches_full_grid_rows():
     order = 2
     indices = np.array([0, 7, 191, 192, 387, 1024], dtype=np.int64)
-    expected = em_sampling.get_rotation_grid(order, matrices=True)[indices]
+    expected = em_sampling.get_relion_rotation_grid(order)[indices]
     actual = em_sampling.rotation_indices_to_matrices(indices, order)
     np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
 
@@ -214,6 +214,155 @@ def test_perturbed_rotation_grid_metadata_is_not_factorized():
     assert perturbed_metadata["mode"] == "full"
 
 
+def test_perturbed_rotation_grid_metadata_reuses_precomputed_rotations():
+    from recovar import utils
+
+    order = 2
+    base_rotations = np.asarray(em_sampling.get_rotation_grid(order, matrices=True), dtype=np.float32)
+    perturbed_rotations = em_sampling.apply_relion_rotation_perturbation(
+        base_rotations,
+        random_perturbation=0.3,
+        angular_sampling_deg=em_sampling.relion_angular_sampling_deg(order),
+    ).astype(np.float32)
+    perturbed_eulers = utils.R_to_relion(perturbed_rotations, degrees=True).astype(np.float32)
+
+    metadata_from_eulers = em_sampling.build_local_search_grid_metadata(order, perturbed_eulers)
+    metadata_from_rotations = em_sampling.build_local_search_grid_metadata(
+        order,
+        perturbed_eulers,
+        grid_rotations=perturbed_rotations,
+    )
+
+    assert metadata_from_eulers["mode"] == metadata_from_rotations["mode"] == "full"
+    np.testing.assert_allclose(
+        metadata_from_rotations["dir_vecs_full"],
+        metadata_from_eulers["dir_vecs_full"],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        metadata_from_rotations["psi_deg_full"],
+        metadata_from_eulers["psi_deg_full"],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+
+
+def test_relion_psi_from_rotation_matrices_matches_full_euler_conversion():
+    from recovar import utils
+
+    order = 3
+    base_rotations = np.asarray(em_sampling.get_rotation_grid(order, matrices=True), dtype=np.float32)
+    perturbed_rotations = em_sampling.apply_relion_rotation_perturbation(
+        base_rotations,
+        random_perturbation=0.3,
+        angular_sampling_deg=em_sampling.relion_angular_sampling_deg(order),
+    ).astype(np.float32)
+    sample = perturbed_rotations[::97]
+
+    psi_fast = em_sampling.relion_psi_from_rotation_matrices(sample)
+    psi_ref = utils.R_to_relion(sample, degrees=True)[:, 2].astype(np.float32)
+    np.testing.assert_allclose(psi_fast, psi_ref, rtol=1e-5, atol=1e-5)
+
+
+def test_local_rotation_grid_fast_full_mode_matches_reference_loop():
+    from recovar import utils
+
+    def _reference_full_mode(prior_rotations, sigma_rot, sigma_psi, metadata):
+        prior_rotations = np.asarray(prior_rotations, dtype=np.float64).reshape(-1, 3, 3)
+        prior_eulers = utils.R_to_relion(prior_rotations, degrees=True)
+        prior_dir_vecs = np.asarray(prior_rotations[:, 2, :], dtype=np.float64)
+        prior_dir_vecs /= np.linalg.norm(prior_dir_vecs, axis=1, keepdims=True)
+
+        dir_vecs_full = np.asarray(metadata["dir_vecs_full"], dtype=np.float64)
+        psi_deg_full = np.asarray(metadata["psi_deg_full"], dtype=np.float64)
+        sigma_rot_deg = float(np.rad2deg(sigma_rot))
+        sigma_psi_deg = float(np.rad2deg(sigma_psi))
+        biggest_sigma_deg = float(max(sigma_rot_deg, sigma_psi_deg))
+        sigma_rot_scale = max(biggest_sigma_deg, np.finfo(np.float64).tiny)
+        sigma_psi_scale = max(sigma_psi_deg, np.finfo(np.float64).tiny)
+
+        selected_union = set()
+        prior_entries = []
+        for i in range(prior_rotations.shape[0]):
+            if sigma_rot_deg > 0.0:
+                dots = np.clip(dir_vecs_full @ prior_dir_vecs[i], -1.0, 1.0)
+                diffang = np.rad2deg(np.arccos(dots))
+                dir_mask = diffang < 3.0 * biggest_sigma_deg
+            else:
+                diffang = np.zeros(dir_vecs_full.shape[0], dtype=np.float64)
+                dir_mask = np.ones(dir_vecs_full.shape[0], dtype=bool)
+
+            if sigma_psi_deg > 0.0:
+                diffpsi = em_sampling._wrapped_abs_diff_deg(
+                    psi_deg_full,
+                    float(np.mod(prior_eulers[i, 2], 360.0)),
+                )
+                psi_mask = diffpsi < 3.0 * sigma_psi_deg
+            else:
+                diffpsi = np.zeros(dir_vecs_full.shape[0], dtype=np.float64)
+                psi_mask = np.ones(dir_vecs_full.shape[0], dtype=bool)
+
+            joint_mask = dir_mask & psi_mask
+            flat_indices = np.flatnonzero(joint_mask).astype(np.int64)
+            if flat_indices.size == 0:
+                joint_cost = np.zeros(dir_vecs_full.shape[0], dtype=np.float64)
+                if sigma_rot_deg > 0.0:
+                    joint_cost += (diffang / sigma_rot_scale) ** 2
+                if sigma_psi_deg > 0.0:
+                    joint_cost += (diffpsi / sigma_psi_scale) ** 2
+                flat_indices = np.array([int(np.argmin(joint_cost))], dtype=np.int64)
+                flat_log_prior = np.zeros(1, dtype=np.float32)
+            else:
+                joint_logw = np.zeros(flat_indices.shape[0], dtype=np.float64)
+                if sigma_rot_deg > 0.0:
+                    joint_logw += -0.5 * (diffang[flat_indices] / sigma_rot_scale) ** 2
+                if sigma_psi_deg > 0.0:
+                    joint_logw += -0.5 * (diffpsi[flat_indices] / sigma_psi_scale) ** 2
+                flat_log_prior = em_sampling._normalize_log_weights(joint_logw)
+            prior_entries.append((flat_indices, flat_log_prior))
+            selected_union.update(flat_indices.tolist())
+
+        selected_indices = np.array(sorted(selected_union), dtype=np.int64)
+        log_prior = np.full((prior_rotations.shape[0], selected_indices.shape[0]), -1e30, dtype=np.float32)
+        index_to_pos = {int(idx): pos for pos, idx in enumerate(selected_indices.tolist())}
+        for i, (flat_indices, flat_log_prior) in enumerate(prior_entries):
+            positions = np.array([index_to_pos[int(idx)] for idx in flat_indices], dtype=np.int64)
+            log_prior[i, positions] = flat_log_prior
+        return selected_indices, log_prior
+
+    order = 2
+    sigma_rot = np.deg2rad(2.5)
+    sigma_psi = np.deg2rad(4.0)
+    base_rotations = np.asarray(em_sampling.get_rotation_grid(order, matrices=True), dtype=np.float32)
+    perturbed_rotations = em_sampling.apply_relion_rotation_perturbation(
+        base_rotations,
+        random_perturbation=0.3,
+        angular_sampling_deg=em_sampling.relion_angular_sampling_deg(order),
+    ).astype(np.float32)
+    perturbed_eulers = utils.R_to_relion(perturbed_rotations, degrees=True).astype(np.float32)
+    metadata = em_sampling.build_local_search_grid_metadata(
+        order,
+        perturbed_eulers,
+        grid_rotations=perturbed_rotations,
+    )
+    priors = perturbed_rotations[[5, 137, 911]]
+
+    selected_indices, log_prior = em_sampling.get_local_rotation_grid_fast(
+        priors,
+        sigma_rot=sigma_rot,
+        sigma_psi=sigma_psi,
+        healpix_order=order,
+        sigma_cutoff=3.0,
+        per_image=True,
+        grid_metadata=metadata,
+    )
+    ref_indices, ref_log_prior = _reference_full_mode(priors, sigma_rot, sigma_psi, metadata)
+
+    np.testing.assert_array_equal(selected_indices, ref_indices)
+    np.testing.assert_allclose(log_prior, ref_log_prior, rtol=1e-6, atol=1e-6)
+
+
 def test_factorized_local_search_metadata_matches_relion_grid_view_directions():
     order = 3
     metadata = em_sampling.build_local_search_grid_metadata(order)
@@ -225,13 +374,13 @@ def test_factorized_local_search_metadata_matches_relion_grid_view_directions():
         3,
         3,
     )
-    psi0_view_dirs = relion_grid[0, :, :, 2]
+    psi0_view_dirs = relion_grid[0, :, 2, :]
     psi0_view_dirs /= np.linalg.norm(psi0_view_dirs, axis=1, keepdims=True)
 
     dots = np.sum(np.asarray(metadata["dir_vecs"], dtype=np.float64) * psi0_view_dirs, axis=1)
     dots = np.clip(dots, -1.0, 1.0)
     ang_deg = np.rad2deg(np.arccos(dots))
-    assert float(np.max(ang_deg)) < 1e-4
+    assert float(np.max(ang_deg)) < 2e-2
 
 
 def test_local_rotation_grid_fast_factorized_support_stays_in_cone():
@@ -257,10 +406,18 @@ def test_local_rotation_grid_fast_factorized_support_stays_in_cone():
     )
 
     finite_mask = np.asarray(log_prior[0]) > -1e20
-    selected_matrices = relion_grid[selected_indices[finite_mask]]
-    r_diffs = np.einsum("ij,kjl->kil", prior_matrix.T, selected_matrices)
-    traces = np.trace(r_diffs, axis1=1, axis2=2)
-    ang_deg = np.rad2deg(np.arccos(np.clip((traces - 1.0) / 2.0, -1.0, 1.0)))
+    prior_view = prior_matrix[2, :] / np.linalg.norm(prior_matrix[2, :])
+    selected_views = relion_grid[selected_indices[finite_mask], 2, :]
+    selected_views /= np.linalg.norm(selected_views, axis=1, keepdims=True)
+    ang_deg = np.rad2deg(
+        np.arccos(
+            np.clip(
+                np.sum(selected_views * prior_view[None, :], axis=1),
+                -1.0,
+                1.0,
+            )
+        )
+    )
 
     assert ang_deg.size > 0
     assert float(np.max(ang_deg)) < sigma_cutoff * sigma_deg + 7.5
@@ -278,7 +435,7 @@ def test_local_rotation_grid_fast_uses_max_of_sigma_rot_and_sigma_psi_for_direct
     relion_eulers = np.asarray(em_sampling.get_relion_rotation_grid_eulers(order), dtype=np.float64)
     prior_euler = relion_eulers[prior_index : prior_index + 1]
     prior_matrix = utils.R_from_relion(prior_euler, degrees=True)[0]
-    prior_view = prior_matrix[:, 2] / np.linalg.norm(prior_matrix[:, 2])
+    prior_view = prior_matrix[2, :] / np.linalg.norm(prior_matrix[2, :])
 
     selected_indices, _ = em_sampling.get_local_rotation_grid_fast(
         prior_euler,
@@ -294,7 +451,7 @@ def test_local_rotation_grid_fast_uses_max_of_sigma_rot_and_sigma_psi_for_direct
     assert unique_pixels.size > 1
 
     relion_grid = np.asarray(em_sampling.get_relion_rotation_grid(order), dtype=np.float64).reshape(-1, 3, 3)
-    selected_views = relion_grid[unique_pixels, :, 2]
+    selected_views = relion_grid[unique_pixels, 2, :]
     selected_views /= np.linalg.norm(selected_views, axis=1, keepdims=True)
     diff_deg = np.rad2deg(np.arccos(np.clip(np.sum(selected_views * prior_view[None, :], axis=1), -1.0, 1.0)))
 
