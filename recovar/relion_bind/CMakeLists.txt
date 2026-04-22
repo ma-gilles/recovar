@@ -83,7 +83,6 @@ pybind11_add_module(_relion_bind_core
     ${CMAKE_CURRENT_SOURCE_DIR}/sampling_bind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/backprojector_bind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/estep_bind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/initialmodel_bind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/obs_model_stub.cpp
     ${RELION_SOURCES}
 )

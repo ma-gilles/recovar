@@ -216,8 +216,6 @@ def _run_grouped_local_search_em(
     projection_padding_factor=1,
     reconstruction_padding_factor=1,
     use_float64_scoring=False,
-    debug_output_dir=None,
-    debug_prefix=None,
 ):
     """Run batched exact local search on the fine HEALPix grid.
 
@@ -235,8 +233,9 @@ def _run_grouped_local_search_em(
     else:
         raise ValueError(f"prior_rotations must have shape (n,3,3) or (n,3), got {prior_rotations.shape}")
     # The local-search translation prior is evaluated on the RELION-relative
-    # delta grid after pre-centering by the previous best offset, so the prior
-    # center must already be in "delta coordinates" (typically -old_offset).
+    # delta grid after pre-centering by the rounded previous offset, so the
+    # prior center must already be in "delta coordinates" (typically
+    # -ROUND(old_offset)).
     if prior_translations is None:
         prior_translations = np.zeros(
             (n_prior, np.asarray(translations).shape[1]),
@@ -314,20 +313,6 @@ def _run_grouped_local_search_em(
             grid_metadata=local_grid_metadata,
         )
         local_rotations = rotation_grid_rotations[local_indices]
-        if debug_output_dir is not None and debug_prefix is not None and n_chunks <= 2:
-            np.savez(
-                os.path.join(
-                    debug_output_dir,
-                    f"{debug_prefix}_local_chunk{n_chunks - 1:02d}_selector.npz",
-                ),
-                group_image_indices=group_image_indices,
-                prior_rotations=prior_rotations[group_image_indices],
-                selected_indices=local_indices,
-                selected_rotation_eulers=rotation_grid_eulers[local_indices],
-                rotation_log_prior=local_log_prior,
-                sigma_rot=np.float32(sigma_rot),
-                sigma_psi=np.float32(sigma_psi),
-            )
         # C1 (RELION-parity): use the explicit sigma_offset_angstrom from the
         # caller (which is the data-driven value updated each iter) without
         # the legacy `range/3` override (offset_range_pixels=None). The
@@ -379,20 +364,6 @@ def _run_grouped_local_search_em(
         local_rot_idx = ha_local // n_trans
         trans_idx = ha_local % n_trans
         hard_assignment[group_image_indices] = (local_indices[local_rot_idx] * n_trans + trans_idx).astype(np.int32)
-        if debug_output_dir is not None and debug_prefix is not None and n_chunks <= 2:
-            np.savez(
-                os.path.join(
-                    debug_output_dir,
-                    f"{debug_prefix}_local_chunk{n_chunks - 1:02d}_assignments.npz",
-                ),
-                group_image_indices=group_image_indices,
-                hard_assignment_local=np.asarray(ha_local, dtype=np.int32),
-                hard_assignment_global=np.asarray(hard_assignment[group_image_indices], dtype=np.int32),
-                decoded_rotation_indices=np.asarray(local_indices[local_rot_idx], dtype=np.int32),
-                decoded_translation_indices=np.asarray(trans_idx, dtype=np.int32),
-                decoded_rotation_eulers=np.asarray(rotation_grid_eulers[local_indices[local_rot_idx]], dtype=np.float32),
-                max_posterior=np.asarray(stats_g.max_posterior_per_image, dtype=np.float32),
-            )
         log_evidence[group_image_indices] = np.asarray(
             stats_g.log_evidence_per_image,
             dtype=np.float32,
@@ -886,6 +857,13 @@ def make_relion_translation_log_prior(
     log_prior += np.log(float(n_trans))
     log_prior = log_prior.astype(np.float32)
     return log_prior[0] if shared else log_prior
+
+
+def relion_translation_search_base(previous_best_translations):
+    """Return the RELION translation-search base for stored absolute offsets."""
+    if previous_best_translations is None:
+        return None
+    return np.rint(np.asarray(previous_best_translations, dtype=np.float32)).astype(np.float32)
 
 
 def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
@@ -2371,6 +2349,7 @@ def _refine_relion_mode(
         best_pose_rotations = [None, None]
         best_pose_rotation_eulers = [None, None]
         best_pose_translations = [None, None]
+        translation_search_bases = [None, None]
         # Coarse-grid assignments for local search tracking (always indexed
         # into effective_rotations, even when adaptive oversampling is used).
         coarse_ha = [None, None]
@@ -2411,6 +2390,8 @@ def _refine_relion_mode(
         noise_stats_per_half = [None, None]
 
         for k in range(2):
+            translation_search_base = relion_translation_search_base(previous_best_translations[k])
+            translation_search_bases[k] = translation_search_base
             current_translation_range = float(state.translation_range)
             # RELION translation prior sigma (ml_optimiser.cpp:7737-7746):
             # RELION checks `offset_range_x` (rlnOffsetRangeX in optimiser.star),
@@ -2421,12 +2402,12 @@ def _refine_relion_mode(
             # We always use current_sigma_offset_angstrom (from model star).
             #
             # RELION evaluates the translation prior on the TOTAL offset:
-            # diff = myprior - (old_offset + delta). With myprior=0
-            # (no rlnOriginXPriorAngst set), this is -(old_offset+delta).
-            # After pre-centering the image by old_offset, the search
-            # variable is delta (relative). To get |old_offset + delta|²
-            # from |delta - center|², set center = -old_offset.
-            trans_prior_center = -previous_best_translations[k] if previous_best_translations[k] is not None else None
+            # diff = myprior - (ROUND(old_offset) + delta). With myprior=0
+            # (no rlnOriginXPriorAngst set), this is -(ROUND(old_offset)+delta).
+            # After pre-centering the image by ROUND(old_offset), the search
+            # variable is delta (relative). To get |ROUND(old_offset) + delta|²
+            # from |delta - center|², set center = -ROUND(old_offset).
+            trans_prior_center = -translation_search_base if translation_search_base is not None else None
             translation_log_prior = make_relion_translation_log_prior(
                 np.asarray(current_translations, dtype=np.float32),
                 cryo.voxel_size,
@@ -2498,8 +2479,6 @@ def _refine_relion_mode(
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
                     use_float64_scoring=True,
-                    debug_output_dir=save_intermediates_dir,
-                    debug_prefix=f"it{iteration:03d}_half{k + 1}",
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
@@ -2531,7 +2510,7 @@ def _refine_relion_mode(
                     translation_log_prior=translation_log_prior,
                     image_corrections=image_corrections_per_half[k],
                     scale_corrections=scale_corrections_per_half[k],
-                    image_pre_shifts=previous_best_translations[k],
+                    image_pre_shifts=translation_search_base,
                     half_spectrum_scoring=True,
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     use_float64_scoring=True,
@@ -2595,7 +2574,7 @@ def _refine_relion_mode(
                         reconstruction_padding_factor=PADDING_FACTOR,
                         image_corrections=image_corrections_per_half[k],
                         scale_corrections=scale_corrections_per_half[k],
-                        image_pre_shifts=previous_best_translations[k],
+                        image_pre_shifts=translation_search_base,
                         use_float64_scoring=True,
                         use_float64_projections=False,
                         do_gridding_correction=True,
@@ -2634,7 +2613,7 @@ def _refine_relion_mode(
                         reconstruction_padding_factor=PADDING_FACTOR,
                         image_corrections=image_corrections_per_half[k],
                         scale_corrections=scale_corrections_per_half[k],
-                        image_pre_shifts=previous_best_translations[k],
+                        image_pre_shifts=translation_search_base,
                         use_float64_scoring=True,
                         random_perturbation=random_perturbation,
                     )
@@ -2695,7 +2674,7 @@ def _refine_relion_mode(
                         reconstruction_padding_factor=PADDING_FACTOR,
                         image_corrections=image_corrections_per_half[k],
                         scale_corrections=scale_corrections_per_half[k],
-                        image_pre_shifts=previous_best_translations[k],
+                        image_pre_shifts=translation_search_base,
                         use_float64_scoring=True,
                         random_perturbation=random_perturbation,
                     )
@@ -2757,7 +2736,7 @@ def _refine_relion_mode(
                     reconstruction_padding_factor=PADDING_FACTOR,
                     image_corrections=image_corrections_per_half[k],
                     scale_corrections=scale_corrections_per_half[k],
-                    image_pre_shifts=previous_best_translations[k],
+                    image_pre_shifts=translation_search_base,
                     use_float64_scoring=True,
                     use_float64_projections=False,
                     do_gridding_correction=True,
@@ -2790,7 +2769,10 @@ def _refine_relion_mode(
                         "scale_corrections": np.asarray(scale_corrections_per_half[k], dtype=np.float64)
                         if scale_corrections_per_half[k] is not None
                         else np.array([]),
-                        "image_pre_shifts": np.asarray(previous_best_translations[k], dtype=np.float32)
+                        "image_pre_shifts": np.asarray(translation_search_base, dtype=np.float32)
+                        if translation_search_base is not None
+                        else np.array([]),
+                        "absolute_previous_translations": np.asarray(previous_best_translations[k], dtype=np.float32)
                         if previous_best_translations[k] is not None
                         else np.array([]),
                         "mean_vol_ft": np.asarray(means[k]),
@@ -3178,16 +3160,16 @@ def _refine_relion_mode(
             new_iter_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
             new_iter_best_rotation_eulers[k] = np.asarray(best_eulers, dtype=np.float32)
             # When image_pre_shifts is used, best_trans is RELATIVE to the
-            # pre-shifted position.  Store the total (absolute) translation
+            # rounded pre-shift base. Store the total (absolute) translation
             # so the next iteration pre-centers by the updated offset.
             total_trans = np.asarray(best_trans, dtype=np.float32)
-            if previous_best_translations[k] is not None:
-                total_trans = total_trans + previous_best_translations[k]
+            if translation_search_bases[k] is not None:
+                total_trans = total_trans + translation_search_bases[k]
             new_iter_best_translations[k] = total_trans
             previous_best_rotations[k] = new_iter_best_rotations[k]
             previous_best_rotation_eulers[k] = new_iter_best_rotation_eulers[k]
             previous_best_translations[k] = new_iter_best_translations[k]
-            experiment_datasets[k].update_poses(best_rots, best_trans)
+            experiment_datasets[k].update_poses(best_rots, total_trans)
 
         try:
             best_rotation_eulers_history.append(
@@ -3543,7 +3525,7 @@ def _refine_relion_mode(
             reconstruction_padding_factor=PADDING_FACTOR,
             image_corrections=image_corrections_per_half[k],
             scale_corrections=scale_corrections_per_half[k],
-            image_pre_shifts=previous_best_translations[k],
+            image_pre_shifts=relion_translation_search_base(previous_best_translations[k]),
             use_float64_scoring=True,
             use_float64_projections=False,
             do_gridding_correction=True,
@@ -3566,7 +3548,10 @@ def _refine_relion_mode(
                 "scale_corrections": np.asarray(scale_corrections_per_half[k], dtype=np.float64)
                 if scale_corrections_per_half[k] is not None
                 else np.array([]),
-                "image_pre_shifts": np.asarray(previous_best_translations[k], dtype=np.float32)
+                "image_pre_shifts": np.asarray(relion_translation_search_base(previous_best_translations[k]), dtype=np.float32)
+                if previous_best_translations[k] is not None
+                else np.array([]),
+                "absolute_previous_translations": np.asarray(previous_best_translations[k], dtype=np.float32)
                 if previous_best_translations[k] is not None
                 else np.array([]),
                 "mean_vol_ft": np.asarray(final_join_means[k]),
