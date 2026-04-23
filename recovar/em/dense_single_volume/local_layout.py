@@ -16,8 +16,10 @@ def _exact_bucket_rotation_size(local_rotation_count: int, rotation_block_size: 
 
     Unlike the grouped-union path, the exact local engine cannot safely cap the
     bucket size below the true per-image neighborhood cardinality. Use the same
-    power-of-two style padding for smaller neighborhoods, but keep larger exact
-    neighborhoods intact.
+    power-of-two style padding for smaller neighborhoods. For larger exact
+    neighborhoods, round up to a coarse fixed quantum so nearby local-support
+    sizes reuse the same compiled shapes instead of each exact count generating
+    its own XLA program.
     """
     local_rotation_count = int(local_rotation_count)
     if local_rotation_count <= 0:
@@ -26,7 +28,8 @@ def _exact_bucket_rotation_size(local_rotation_count: int, rotation_block_size: 
     if local_rotation_count <= engine_cap:
         bucket = 1 << max(int(local_rotation_count - 1).bit_length(), 4)
         return int(max(local_rotation_count, min(bucket, engine_cap)))
-    return int(local_rotation_count)
+    large_bucket_quantum = max(64, engine_cap // 8)
+    return int(((local_rotation_count + large_bucket_quantum - 1) // large_bucket_quantum) * large_bucket_quantum)
 
 
 @dataclass(frozen=True)

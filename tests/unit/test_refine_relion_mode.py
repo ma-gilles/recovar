@@ -302,6 +302,33 @@ def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_supp
     np.testing.assert_array_equal(buckets[0].local_rotation_ids[1, :3], np.array([2, 4, 5], dtype=np.int32))
 
 
+def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods():
+    layout = LocalHypothesisLayout(
+        n_global_rotations=2000,
+        rotation_offsets=np.array([0, 1368, 2760, 4176], dtype=np.int64),
+        rotation_ids_flat=np.arange(4176, dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (4176, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(4176, dtype=np.float32),
+        rotation_counts=np.array([1368, 1392, 1416], dtype=np.int32),
+        translation_grid=np.zeros((9, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((3, 9), dtype=np.float32),
+    )
+
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=10,
+        rotation_block_size=5000,
+        max_hypotheses_per_microbatch=65536,
+    )
+
+    bucket_sizes = sorted(int(bucket.bucket_rotation_count) for bucket in buckets)
+    assert bucket_sizes == [1408, 1536]
+    np.testing.assert_array_equal(buckets[0].actual_rotation_counts, np.array([1368, 1392], dtype=np.int32))
+    np.testing.assert_array_equal(buckets[1].actual_rotation_counts, np.array([1416], dtype=np.int32))
+    assert buckets[0].local_rotation_mask[0, :1368].all()
+    assert not buckets[0].local_rotation_mask[0, 1368:].any()
+
+
 def test_run_local_search_iteration_dispatches_exact_engine(monkeypatch, rng):
     mock_dataset = MockDataset(N_IMAGES, rng)
     called = {"engine": None}
