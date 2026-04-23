@@ -78,18 +78,29 @@ class EMProfileStats(NamedTuple):
     grouped local-search path without changing numerical behavior.
     """
 
+    batch_fetch_s: float
     preprocess_s: float
+    score_prep_s: float
     pass1_projection_s: float
     pass1_score_s: float
+    pass1_postprocess_s: float
     pass1_logsumexp_s: float
+    pass2_skipmask_s: float
     pass2_projection_s: float
     pass2_score_s: float
+    pass2_postprocess_s: float
     mstep_s: float
     window_scatter_s: float
     adjoint_y_s: float
     adjoint_ctf_s: float
     noise_s: float
+    assignment_s: float
+    stats_finalize_s: float
     host_stats_s: float
+    solve_s: float
+    accounted_s: float
+    total_wall_s: float
+    unattributed_s: float
     n_images: int
     n_trans: int
     n_rot: int
@@ -98,3 +109,8 @@ class EMProfileStats(NamedTuple):
     n_windowed: int
     use_window: bool
     reused_pass1_projections: bool
+    sparse_pass2_total_blocks: int
+    sparse_pass2_skipped_blocks: int
+    sparse_pass2_omitted_mass_upper_mean: float
+    sparse_pass2_omitted_mass_upper_max: float
+    sparse_pass2_omitted_mass_upper_sum: float

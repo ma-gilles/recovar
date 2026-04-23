@@ -9,6 +9,8 @@ Verifies:
 6. data_vs_prior_trajectory and ave_Pmax_trajectory are populated
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -16,7 +18,14 @@ pytest.importorskip("jax")
 import healpy as hp
 import jax.numpy as jnp
 
+import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume.em_engine import run_em
+from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
+from recovar.em.dense_single_volume.local_layout import (
+    LocalHypothesisLayout,
+    build_local_hypothesis_layout,
+    bucket_local_hypothesis_layout,
+)
 from recovar.em.dense_single_volume.iteration_loop import (
     refine_single_volume,
 )
@@ -230,6 +239,241 @@ def test_partition_local_search_groups_splits_large_exact_unions(monkeypatch):
         assert group_indices.shape == (1,)
         assert local_indices.shape == (1200,)
         assert local_log_prior.shape == (1, 1200)
+
+
+def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_support(monkeypatch):
+    import recovar.em.dense_single_volume.local_layout as local_layout_mod
+
+    call_count = {"value": 0}
+
+    def fake_selector(
+        prior_rotation_indices,
+        sigma_rot,
+        sigma_psi,
+        healpix_order,
+        sigma_cutoff=3.0,
+        *,
+        per_image=False,
+        grid_metadata=None,
+    ):
+        _ = (prior_rotation_indices, sigma_rot, sigma_psi, healpix_order, sigma_cutoff, grid_metadata)
+        assert per_image
+        image_idx = call_count["value"]
+        call_count["value"] += 1
+        if image_idx == 0:
+            return np.array([1, 3], dtype=np.int64), np.array([[0.0, -1.0]], dtype=np.float32)
+        return np.array([2, 4, 5], dtype=np.int64), np.array([[0.0, -1.0, -2.0]], dtype=np.float32)
+
+    monkeypatch.setattr(local_layout_mod, "get_local_rotation_grid_fast", fake_selector)
+    monkeypatch.setattr(
+        local_layout_mod,
+        "make_relion_translation_log_prior",
+        lambda *args, **kwargs: np.zeros((2, 3), dtype=np.float32),
+    )
+
+    prior_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 2, axis=0)
+    rotation_grid_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 8, axis=0)
+    translations = np.zeros((3, 2), dtype=np.float32)
+    prior_translations = np.zeros((2, 2), dtype=np.float32)
+
+    layout = build_local_hypothesis_layout(
+        prior_rotations,
+        rotation_grid_rotations,
+        sigma_rot=np.deg2rad(7.5),
+        sigma_psi=np.deg2rad(7.5),
+        healpix_order=4,
+        translations=translations,
+        prior_translations=prior_translations,
+        sigma_offset_angstrom=1.0,
+        offset_range_pixels=1.0,
+        voxel_size=1.0,
+        grid_metadata={"mode": "factorized"},
+    )
+
+    np.testing.assert_array_equal(layout.rotation_offsets, np.array([0, 2, 5], dtype=np.int64))
+    np.testing.assert_array_equal(layout.rotation_counts, np.array([2, 3], dtype=np.int32))
+    np.testing.assert_array_equal(layout.rotation_ids_flat, np.array([1, 3, 2, 4, 5], dtype=np.int32))
+
+    buckets = bucket_local_hypothesis_layout(layout, image_batch_size=2, rotation_block_size=16, max_hypotheses_per_microbatch=64)
+    assert len(buckets) == 1
+    np.testing.assert_array_equal(buckets[0].actual_rotation_counts, np.array([2, 3], dtype=np.int32))
+    np.testing.assert_array_equal(buckets[0].local_rotation_ids[0, :2], np.array([1, 3], dtype=np.int32))
+    assert not np.any(buckets[0].local_rotation_mask[0, 2:])
+    np.testing.assert_array_equal(buckets[0].local_rotation_ids[1, :3], np.array([2, 4, 5], dtype=np.int32))
+
+
+def test_run_local_search_iteration_dispatches_exact_engine(monkeypatch, rng):
+    mock_dataset = MockDataset(N_IMAGES, rng)
+    called = {"engine": None}
+
+    def fake_exact(*args, **kwargs):
+        _ = args
+        called["engine"] = "exact_v1"
+        if kwargs.get("accumulate_noise", False):
+            return (
+                jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+                jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+                np.zeros(mock_dataset.n_units, dtype=np.int32),
+                RelionStats(
+                    log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
+                    best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
+                    max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
+                    rotation_posterior_sums=jnp.zeros(6, dtype=jnp.float32),
+                ),
+                NoiseStats(
+                    wsum_sigma2_noise=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
+                    wsum_img_power=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
+                    sumw=0.0,
+                ),
+            )
+        raise AssertionError("test expects accumulate_noise=True")
+
+    def fake_grouped(*args, **kwargs):
+        raise AssertionError("grouped_union path should not be used")
+
+    monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration_exact_v1", fake_exact)
+    monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration_grouped_union", fake_grouped)
+
+    prior_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], mock_dataset.n_units, axis=0)
+    rotation_grid_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 6, axis=0)
+    rotation_grid_eulers = np.zeros((6, 3), dtype=np.float32)
+    translations = np.zeros((N_TRANSLATIONS, 2), dtype=np.float32)
+    prior_translations = np.zeros((mock_dataset.n_units, 2), dtype=np.float32)
+
+    outputs = iteration_loop_module._run_local_search_iteration(
+        mock_dataset,
+        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        prior_rotations,
+        rotation_grid_rotations,
+        rotation_grid_eulers,
+        healpix_order=1,
+        sigma_rot=0.1,
+        sigma_psi=0.1,
+        translations=translations,
+        prior_translations=prior_translations,
+        sigma_offset_angstrom=1.0,
+        offset_range_pixels=1.0,
+        disc_type="linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=4,
+        accumulate_noise=True,
+        local_engine="exact_v1",
+    )
+
+    assert called["engine"] == "exact_v1"
+    assert len(outputs) == 5
+
+
+def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng):
+    dataset = MockDataset(1, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=101)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=99)
+    translations = np.zeros((1, 2), dtype=np.float32)
+    rotation_log_prior = np.zeros(2, dtype=np.float32)
+    translation_log_prior = np.zeros((1, 1), dtype=np.float32)
+
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        rotation_offsets=np.array([0, 2], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1], dtype=np.int32),
+        rotations_flat=np.asarray(local_rotations, dtype=np.float32),
+        rotation_log_priors_flat=np.asarray(rotation_log_prior, dtype=np.float32),
+        rotation_counts=np.array([2], dtype=np.int32),
+        translation_grid=np.asarray(translations, dtype=np.float32),
+        translation_log_priors=np.asarray(translation_log_prior, dtype=np.float32),
+    )
+
+    exact_outputs = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=None,
+        accumulate_noise=True,
+        return_profile=False,
+    )
+    _, ha_dense, Ft_y_dense, Ft_ctf_dense, stats_dense, noise_dense = run_em(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        np.asarray(local_rotations, dtype=np.float32),
+        np.asarray(translations, dtype=np.float32),
+        "linear_interp",
+        image_batch_size=1,
+        rotation_block_size=4,
+        rotation_log_prior=rotation_log_prior[None, :],
+        translation_log_prior=translation_log_prior,
+        image_indices=np.array([0], dtype=np.int32),
+        score_with_masked_images=True,
+        return_stats=True,
+        accumulate_noise=True,
+        sparse_pass2=False,
+    )
+
+    Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact, noise_exact = exact_outputs
+    np.testing.assert_array_equal(ha_exact, ha_dense)
+    np.testing.assert_allclose(np.asarray(Ft_y_exact), np.asarray(Ft_y_dense), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_exact), np.asarray(Ft_ctf_dense), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(stats_exact.log_evidence_per_image),
+        np.asarray(stats_dense.log_evidence_per_image),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(stats_exact.rotation_posterior_sums[:2]),
+        np.asarray(stats_dense.rotation_posterior_sums),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(noise_exact.wsum_sigma2_noise),
+        np.asarray(noise_dense.wsum_sigma2_noise),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+
+
+def test_tracked_local_engine_todo_ids_are_present():
+    repo_root = Path(__file__).resolve().parents[2]
+    iteration_loop_path = repo_root / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
+    em_engine_path = repo_root / "recovar" / "em" / "dense_single_volume" / "em_engine.py"
+    docs_path = repo_root / "docs" / "relion_local_engine_refactor.md"
+
+    iteration_text = iteration_loop_path.read_text(encoding="utf-8")
+    em_engine_text = em_engine_path.read_text(encoding="utf-8")
+    docs_text = docs_path.read_text(encoding="utf-8")
+
+    required_ids = [
+        "RELION_LOCAL_ENGINE/T001",
+        "RELION_LOCAL_ENGINE/T002",
+        "RELION_LOCAL_ENGINE/T003",
+        "RELION_LOCAL_ENGINE/T004",
+        "DENSE_ENGINE_BOUNDARY/E001",
+        "DENSE_ENGINE_BOUNDARY/E002",
+        "DENSE_ENGINE_BOUNDARY/E003",
+        "DENSE_ENGINE_BOUNDARY/E004",
+    ]
+    for todo_id in required_ids:
+        assert todo_id in docs_text
+    assert "RELION_LOCAL_ENGINE/T001" in iteration_text
+    assert "RELION_LOCAL_ENGINE/T002" in iteration_text
+    assert "RELION_LOCAL_ENGINE/T003" in iteration_text
+    assert "RELION_LOCAL_ENGINE/T004" in iteration_text
+    assert "DENSE_ENGINE_BOUNDARY/E001" in em_engine_text
+    assert "DENSE_ENGINE_BOUNDARY/E002" in em_engine_text
+    assert "DENSE_ENGINE_BOUNDARY/E003" in em_engine_text
+    assert "DENSE_ENGINE_BOUNDARY/E004" in em_engine_text
 
 
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):

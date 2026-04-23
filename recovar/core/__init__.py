@@ -51,6 +51,7 @@ from recovar.core.forward import (
 from recovar.core.slicing import (
     _AUTO,
     _default_max_r,
+    adjoint_slice_volume_indexed,
     adjoint_slice_volume,
     batch_adjoint_slice_volume,
     batch_slice_volume,
@@ -66,6 +67,7 @@ __all__ = [
     "CTFMode",
     "CTFParamIndex",
     "as_ctf_evaluator",
+    "adjoint_slice_volume_indexed",
     "adjoint_slice_volume",
     "batch_batch_find_frequencies_within_grid_dist",
     "batch_find_frequencies_within_grid_dist",

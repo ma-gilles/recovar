@@ -1,0 +1,55 @@
+"""Exact local score and normalization helpers."""
+
+from __future__ import annotations
+
+from functools import partial
+
+import jax
+import jax.numpy as jnp
+
+
+@jax.jit
+def score_local_bucket(
+    shifted,
+    ctf2_over_nv,
+    proj_weighted,
+    proj_abs2_weighted,
+    rotation_log_prior,
+    translation_log_prior,
+    rotation_mask,
+):
+    """Compute exact local scores on a padded per-image hypothesis bucket."""
+
+    # shifted: (B, T, N), proj_weighted: (B, R, N)
+    cross = -2.0 * jnp.einsum("btn,brn->btr", jnp.conj(shifted), proj_weighted).real
+    cross = cross.swapaxes(1, 2)  # (B, R, T)
+    norms = jnp.einsum("bn,brn->br", ctf2_over_nv, proj_abs2_weighted)
+    scores = -0.5 * (cross + norms[..., None])
+    scores = scores + rotation_log_prior[:, :, None]
+    scores = scores + translation_log_prior[:, None, :]
+    return jnp.where(rotation_mask[:, :, None], scores, -jnp.inf)
+
+
+@jax.jit
+def normalize_local_scores(scores):
+    """Return exact per-image log normalizer, posterior, and argmax."""
+
+    flat_scores = scores.reshape(scores.shape[0], -1)
+    best_log_score = jnp.max(flat_scores, axis=1)
+    log_shift = best_log_score[:, None, None]
+    probs = jnp.exp((scores - log_shift).astype(jnp.float64))
+    sum_exp = jnp.sum(probs.reshape(scores.shape[0], -1), axis=1)
+    log_Z = best_log_score + jnp.log(sum_exp)
+    probs = jnp.exp(scores - log_Z[:, None, None])
+    best_argmax = jnp.argmax(flat_scores, axis=1)
+    max_posterior = jnp.exp(best_log_score - log_Z)
+    return log_Z, probs, best_log_score, best_argmax, max_posterior
+
+
+@partial(jax.jit, static_argnums=(2,))
+def decode_local_argmax(best_argmax, bucket_rotation_count, n_trans):
+    """Decode flattened local argmax indices into rotation and translation ids."""
+
+    local_rot_idx = best_argmax // n_trans
+    trans_idx = best_argmax % n_trans
+    return local_rot_idx, trans_idx

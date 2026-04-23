@@ -32,6 +32,7 @@ def _rotation_z(theta):
 def test_core_reexports_slicing_api():
     assert core.decide_order is core_slicing.decide_order
     assert core.adjoint_slice_volume is core_slicing.adjoint_slice_volume
+    assert core.adjoint_slice_volume_indexed is core_slicing.adjoint_slice_volume_indexed
 
 
 def test_decide_order_values():
@@ -100,6 +101,55 @@ def test_adjoint_slice_volume_half_image_matches_full_flat_input():
         )
     )
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
+
+
+def test_adjoint_slice_volume_indexed_matches_rebuild_jax(monkeypatch):
+    monkeypatch.setattr(core_slicing, "_use_cuda_backproject", lambda order: False)
+
+    rng = np.random.default_rng(1234)
+    image_shape = (8, 8)
+    volume_shape = (8, 8, 8)
+    rots = np.stack(
+        [
+            np.eye(3, dtype=np.float32),
+            _rotation_z(np.pi / 6.0),
+        ],
+        axis=0,
+    )
+    real_images = rng.standard_normal((2,) + image_shape).astype(np.float32)
+    with jax.default_device(jax.devices("cpu")[0]):
+        half_images = np.asarray(fourier_transform_utils.get_dft2_real(real_images)).reshape(2, -1)
+    n_half = half_images.shape[1]
+    pixel_indices = np.sort(rng.choice(n_half, size=n_half // 2, replace=False).astype(np.int32))
+    windowed = half_images[:, pixel_indices]
+
+    indexed = np.asarray(
+        core_slicing.adjoint_slice_volume_indexed(
+            windowed,
+            pixel_indices,
+            rots,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            half_volume=True,
+        )
+    )
+
+    rebuilt = np.zeros_like(half_images)
+    rebuilt[:, pixel_indices] = windowed
+    rebuilt_out = np.asarray(
+        core_slicing.adjoint_slice_volume(
+            rebuilt,
+            rots,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            half_volume=True,
+        )
+    )
+    np.testing.assert_allclose(indexed, rebuilt_out, atol=1e-5, rtol=1e-5)
 
 
 def test_slice_volume_cubic_with_precomputed_spline_coefficients():
@@ -650,6 +700,56 @@ def test_half_image_backprojection_matches_full_on_gpu(gpu_device):
             )
         )
     np.testing.assert_allclose(out_half, out_full, atol=1e-5, rtol=1e-5)
+
+
+@pytest.mark.gpu
+def test_adjoint_slice_volume_indexed_matches_rebuild_on_gpu(gpu_device):
+    device = gpu_device
+    rng = np.random.default_rng(1801)
+    image_shape = (8, 8)
+    volume_shape = (8, 8, 8)
+    rots = np.stack(
+        [
+            np.eye(3, dtype=np.float32),
+            _rotation_y(np.pi / 7.0),
+        ],
+        axis=0,
+    )
+    real_images = rng.standard_normal((2,) + image_shape).astype(np.float32)
+    with jax.default_device(jax.devices("cpu")[0]):
+        half_images = np.asarray(fourier_transform_utils.get_dft2_real(real_images)).reshape(2, -1)
+    n_half = half_images.shape[1]
+    pixel_indices = np.sort(rng.choice(n_half, size=n_half // 2, replace=False).astype(np.int32))
+    windowed = half_images[:, pixel_indices]
+
+    rebuilt = np.zeros_like(half_images)
+    rebuilt[:, pixel_indices] = windowed
+
+    with jax.default_device(device):
+        indexed = np.asarray(
+            core_slicing.adjoint_slice_volume_indexed(
+                jax.device_put(windowed),
+                jax.device_put(pixel_indices),
+                jax.device_put(rots),
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                disc_type="linear_interp",
+                half_image=True,
+                half_volume=True,
+            )
+        )
+        rebuilt_out = np.asarray(
+            core_slicing.adjoint_slice_volume(
+                jax.device_put(rebuilt),
+                jax.device_put(rots),
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                disc_type="linear_interp",
+                half_image=True,
+                half_volume=True,
+            )
+        )
+    np.testing.assert_allclose(indexed, rebuilt_out, atol=1e-5, rtol=1e-5)
 
 
 # ── Tests for half-volume → half-image projection (new code paths) ────

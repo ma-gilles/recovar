@@ -10,9 +10,12 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
+import platform
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -42,6 +45,60 @@ def map_pose_arrays_to_particle_order(our_names, gt_rot_all, gt_trans_all=None):
         if gt_translations_orig is not None and 0 <= pose_idx < len(gt_trans_all):
             gt_translations_orig[j] = gt_trans_all[pose_idx]
     return gt_rotations_orig, gt_translations_orig
+
+
+def _safe_git_commit():
+    try:
+        return (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip() or None
+        )
+    except Exception:
+        return None
+
+
+def _count_compile_lines(log_path):
+    if log_path is None:
+        return None
+    path = Path(log_path)
+    if not path.exists():
+        return None
+    text = path.read_text(errors="replace")
+    return sum("Compiling" in line for line in text.splitlines())
+
+
+def _collect_local_profile_rows(save_intermediates_dir):
+    rows = []
+    for npz_path in sorted(Path(save_intermediates_dir).glob("*_local_profile.npz")):
+        with np.load(npz_path) as profile_npz:
+            row = {"path": str(npz_path)}
+            for key in [
+                "n_chunks",
+                "em_time_s",
+                "accounted_em_time_s",
+                "unattributed_em_time_s",
+                "sum_union_rows",
+                "sum_padded_rows",
+                "sum_nonzero_posterior_rows",
+                "unique_global_rotations",
+                "unique_nonzero_global_rotations",
+                "duplicate_rotation_factor",
+                "sum_union_row_pixels",
+                "adjoint_seconds_per_row_pixel",
+                "union_waste_fraction",
+                "padded_waste_fraction",
+                "padding_only_waste_fraction",
+                "em_total_wall_s",
+                "em_accounted_s",
+                "em_unattributed_s",
+                "em_adjoint_y_s",
+                "em_adjoint_ctf_s",
+                "em_batch_fetch_s",
+            ]:
+                if key in profile_npz:
+                    value = profile_npz[key]
+                    row[key] = value.item() if np.ndim(value) == 0 else np.asarray(value).tolist()
+            rows.append(row)
+    return rows
 
 
 def main():
@@ -89,15 +146,48 @@ def main():
         default="auto",
         help="Control grouped local-search profile collection. 'auto' profiles only when intermediates are enabled.",
     )
+    parser.add_argument(
+        "--local_engine",
+        choices=["grouped_union", "exact_v1", "exact_v2"],
+        default="grouped_union",
+        help="Which RELION local-search engine to use.",
+    )
+    parser.add_argument(
+        "--disable_adjoint_y",
+        action="store_true",
+        help="Experimental ablation: disable weighted-image adjoint accumulation.",
+    )
+    parser.add_argument(
+        "--disable_adjoint_ctf",
+        action="store_true",
+        help="Experimental ablation: disable CTF adjoint accumulation.",
+    )
+    parser.add_argument(
+        "--benchmark_ledger_json",
+        type=str,
+        default=None,
+        help="Optional JSON path for a machine-readable benchmark/perf ledger summary.",
+    )
+    parser.add_argument(
+        "--compile_log",
+        type=str,
+        default=None,
+        help="Optional log path to scan for JAX compile lines when building the benchmark ledger.",
+    )
     args = parser.parse_args()
 
+    import jax
     import jax.numpy as jnp
+    import jaxlib
     import starfile
 
     from recovar import utils
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.dense_single_volume.refine import refine_single_volume
+    try:
+        from recovar.em.dense_single_volume.refine import refine_single_volume
+    except ModuleNotFoundError:
+        from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
     from recovar.output.output import save_volume
     from recovar.reconstruction import noise as recon_noise
     from recovar.reconstruction import regularization
@@ -558,6 +648,11 @@ def main():
         print(f"  GT volume requested but not found: {args.gt_volume}")
 
     print(f"  Local-search profile: {args.local_search_profile}")
+    print(f"  Local engine: {args.local_engine}")
+    print(
+        f"  Adjoint ablations: disable_y={args.disable_adjoint_y}, "
+        f"disable_ctf={args.disable_adjoint_ctf}"
+    )
 
     # ---- Run ----
     print(f"\nRunning {args.max_iter} iterations...")
@@ -600,6 +695,10 @@ def main():
         replay_iteration_overrides=replay_iteration_overrides,
         save_intermediates_dir=save_intermediates_dir,
         skip_final_iteration=args.skip_final_iteration,
+        local_search_profile_mode=args.local_search_profile,
+        disable_adjoint_y=args.disable_adjoint_y,
+        disable_adjoint_ctf=args.disable_adjoint_ctf,
+        local_engine=args.local_engine,
     )
     elapsed = time.time() - t0
     print(f"\nCompleted {args.max_iter} iterations in {elapsed:.1f}s")
@@ -615,6 +714,9 @@ def main():
         "adaptive_fraction": np.float64(adaptive_fraction),
         "max_significants": np.int32(max_significants),
         "local_search_profile_mode": np.array(args.local_search_profile),
+        "local_engine": np.array(args.local_engine),
+        "disable_adjoint_y": np.bool_(args.disable_adjoint_y),
+        "disable_adjoint_ctf": np.bool_(args.disable_adjoint_ctf),
     }
     if result.get("ave_Pmax_trajectory"):
         save_dict["ave_Pmax_trajectory"] = np.array(result["ave_Pmax_trajectory"])
@@ -811,6 +913,34 @@ def main():
     npz_path = os.path.join(out_dir, "refinement_results.npz")
     np.savez(npz_path, **save_dict)
     print(f"Saved: {npz_path}")
+
+    ledger_path = args.benchmark_ledger_json or os.path.join(out_dir, "benchmark_ledger.json")
+    ledger = {
+        "git_commit": _safe_git_commit(),
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "numpy_version": np.__version__,
+        "jax_version": getattr(jax, "__version__", None),
+        "jaxlib_version": getattr(jaxlib, "__version__", None),
+        "jax_devices": [str(device) for device in jax.devices()],
+        "relion_dir": str(relion_dir),
+        "data_star": str(args.data_star),
+        "iter_start": int(args.iter),
+        "max_iter": int(args.max_iter),
+        "elapsed_s": float(elapsed),
+        "local_search_profile_mode": args.local_search_profile,
+        "local_engine": args.local_engine,
+        "disable_adjoint_y": bool(args.disable_adjoint_y),
+        "disable_adjoint_ctf": bool(args.disable_adjoint_ctf),
+        "compile_count_from_log": _count_compile_lines(args.compile_log),
+        "wall_times_trajectory": [float(x) for x in result.get("wall_times", [])],
+        "current_sizes": [int(x) for x in result.get("current_sizes", [])],
+        "pixel_resolutions": [float(x) for x in result.get("pixel_resolutions", [])],
+        "local_profile_rows": _collect_local_profile_rows(save_intermediates_dir),
+    }
+    with open(ledger_path, "w", encoding="utf-8") as f:
+        json.dump(ledger, f, indent=2, sort_keys=True)
+    print(f"Saved benchmark ledger: {ledger_path}")
 
     # ---- Per-particle Pmax comparison with RELION ----
     # pmax_per_image_history entries are in (half1, half2) concatenated order.

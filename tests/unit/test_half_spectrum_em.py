@@ -10,6 +10,8 @@ Tests:
 4. test_full_iteration_half_matches: one complete run_em iteration matches reference
 """
 
+import logging
+
 import numpy as np
 import pytest
 
@@ -20,6 +22,8 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
+import recovar.em.dense_single_volume.em_engine as em_engine_module
+import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume.em_engine import (
     _compute_projections_block,
     _e_step_block_scores,
@@ -29,6 +33,7 @@ from recovar.em.dense_single_volume.em_engine import (
     make_half_image_weights,
     run_em,
 )
+from recovar.em.dense_single_volume.helpers.types import EMProfileStats, RelionStats
 
 pytestmark = pytest.mark.unit
 
@@ -1101,6 +1106,387 @@ class TestFullIterationHalfMatches:
             ha_2,
             err_msg="Hard assignments differ between single-batch and multi-batch image processing",
         )
+
+    def test_sparse_pass2_matches_dense_pass2_and_logs_skips(self, seeded_inputs, caplog):
+        """Sparse pass 2 should preserve outputs while reporting skipped blocks."""
+        s = seeded_inputs
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+        rotation_log_prior = np.array([0.0, 0.0, -1e6, -1e6, -1e6], dtype=np.float32)
+
+        dense_mean, dense_hard, dense_ft_y, dense_ft_ctf = run_em(
+            s["dataset"],
+            s["volume"],
+            mean_variance,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=2,
+            rotation_log_prior=rotation_log_prior,
+            sparse_pass2=False,
+        )
+
+        with caplog.at_level(logging.INFO):
+            sparse_mean, sparse_hard, sparse_ft_y, sparse_ft_ctf = run_em(
+                s["dataset"],
+                s["volume"],
+                mean_variance,
+                s["noise_variance"],
+                np.array(s["rotations"]),
+                np.array(s["translations"]),
+                "linear_interp",
+                image_batch_size=N_IMAGES,
+                rotation_block_size=2,
+                rotation_log_prior=rotation_log_prior,
+                sparse_pass2=True,
+            )
+
+        np.testing.assert_allclose(np.asarray(sparse_mean), np.asarray(dense_mean), atol=1e-6, rtol=1e-6)
+        np.testing.assert_array_equal(sparse_hard, dense_hard)
+        np.testing.assert_allclose(np.asarray(sparse_ft_y), np.asarray(dense_ft_y), atol=1e-6, rtol=1e-6)
+        np.testing.assert_allclose(np.asarray(sparse_ft_ctf), np.asarray(dense_ft_ctf), atol=1e-6, rtol=1e-6)
+        assert any(
+            "Sparse pass2 skipped 2 / 3 pass2 rotation blocks" in record.getMessage()
+            and "omitted posterior mass upper bound" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_profile_stats_report_total_wall_and_unattributed_time(self, seeded_inputs):
+        """Profile stats should include total wall time and explicit unattributed time."""
+        s = seeded_inputs
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+        rotation_log_prior = np.array([0.0, 0.0, -1e6, -1e6, -1e6], dtype=np.float32)
+
+        _, _, _, _, em_profile = run_em(
+            s["dataset"],
+            s["volume"],
+            mean_variance,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=2,
+            rotation_log_prior=rotation_log_prior,
+            sparse_pass2=True,
+            return_profile=True,
+        )
+
+        stage_sum = (
+            em_profile.batch_fetch_s
+            + em_profile.preprocess_s
+            + em_profile.score_prep_s
+            + em_profile.pass1_projection_s
+            + em_profile.pass1_score_s
+            + em_profile.pass1_postprocess_s
+            + em_profile.pass1_logsumexp_s
+            + em_profile.pass2_skipmask_s
+            + em_profile.pass2_projection_s
+            + em_profile.pass2_score_s
+            + em_profile.pass2_postprocess_s
+            + em_profile.mstep_s
+            + em_profile.window_scatter_s
+            + em_profile.adjoint_y_s
+            + em_profile.adjoint_ctf_s
+            + em_profile.noise_s
+            + em_profile.assignment_s
+            + em_profile.stats_finalize_s
+            + em_profile.host_stats_s
+            + em_profile.solve_s
+        )
+        np.testing.assert_allclose(em_profile.accounted_s, stage_sum, atol=1e-6, rtol=1e-6)
+        assert em_profile.total_wall_s >= stage_sum
+        np.testing.assert_allclose(
+            em_profile.unattributed_s,
+            em_profile.total_wall_s - stage_sum,
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        assert em_profile.sparse_pass2_total_blocks == 3
+        assert em_profile.sparse_pass2_skipped_blocks == 2
+        assert em_profile.sparse_pass2_omitted_mass_upper_mean >= 0.0
+        assert em_profile.sparse_pass2_omitted_mass_upper_max >= em_profile.sparse_pass2_omitted_mass_upper_mean
+        assert em_profile.sparse_pass2_omitted_mass_upper_sum >= em_profile.sparse_pass2_omitted_mass_upper_max
+
+    def test_windowed_adjoint_ablation_flags_zero_expected_accumulators(self, seeded_inputs):
+        """Windowed adjoint ablations should zero only the targeted accumulator."""
+        s = seeded_inputs
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+        common_kwargs = dict(
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            current_size=4,
+            sparse_pass2=False,
+        )
+
+        _, _, base_ft_y, base_ft_ctf = run_em(
+            s["dataset"],
+            s["volume"],
+            mean_variance,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            **common_kwargs,
+        )
+        _, _, no_y_ft_y, no_y_ft_ctf = run_em(
+            s["dataset"],
+            s["volume"],
+            mean_variance,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            disable_adjoint_y=True,
+            **common_kwargs,
+        )
+        _, _, no_ctf_ft_y, no_ctf_ft_ctf = run_em(
+            s["dataset"],
+            s["volume"],
+            mean_variance,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            disable_adjoint_ctf=True,
+            **common_kwargs,
+        )
+
+        assert np.linalg.norm(np.asarray(base_ft_y)) > 0.0
+        assert np.linalg.norm(np.asarray(base_ft_ctf)) > 0.0
+        np.testing.assert_allclose(np.asarray(no_y_ft_y), 0.0, atol=1e-7, rtol=1e-7)
+        np.testing.assert_allclose(np.asarray(no_y_ft_ctf), np.asarray(base_ft_ctf), atol=1e-6, rtol=1e-6)
+        np.testing.assert_allclose(np.asarray(no_ctf_ft_y), np.asarray(base_ft_y), atol=1e-6, rtol=1e-6)
+        np.testing.assert_allclose(np.asarray(no_ctf_ft_ctf), 0.0, atol=1e-7, rtol=1e-7)
+
+    def test_profile_timing_sync_runs_only_when_requested(self, seeded_inputs, monkeypatch):
+        """Timing barriers should be inserted only for profiling runs."""
+        s = seeded_inputs
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+        sync_calls = []
+
+        def _spy_block_until_ready(*values):
+            sync_calls.append(len(values))
+
+        monkeypatch.setattr(em_engine_module, "_block_until_ready", _spy_block_until_ready)
+
+        run_em(
+            s["dataset"],
+            s["volume"],
+            mean_variance,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            sparse_pass2=False,
+            return_profile=False,
+        )
+        assert sync_calls == []
+
+        run_em(
+            s["dataset"],
+            s["volume"],
+            mean_variance,
+            s["noise_variance"],
+            np.array(s["rotations"]),
+            np.array(s["translations"]),
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            sparse_pass2=False,
+            return_profile=True,
+        )
+        assert len(sync_calls) >= 10
+
+    def test_local_profile_reports_rotation_row_metrics(self, mock_dataset, monkeypatch):
+        """Grouped local-search profiles should report row-level rotation accounting."""
+
+        def _fake_em_profile(**overrides):
+            defaults = dict(
+                batch_fetch_s=0.0,
+                preprocess_s=0.0,
+                score_prep_s=0.0,
+                pass1_projection_s=0.0,
+                pass1_score_s=0.0,
+                pass1_postprocess_s=0.0,
+                pass1_logsumexp_s=0.0,
+                pass2_skipmask_s=0.0,
+                pass2_projection_s=0.0,
+                pass2_score_s=0.0,
+                pass2_postprocess_s=0.0,
+                mstep_s=0.0,
+                window_scatter_s=0.0,
+                adjoint_y_s=0.0,
+                adjoint_ctf_s=0.0,
+                noise_s=0.0,
+                assignment_s=0.0,
+                stats_finalize_s=0.0,
+                host_stats_s=0.0,
+                solve_s=0.0,
+                accounted_s=0.0,
+                total_wall_s=0.0,
+                unattributed_s=0.0,
+                n_images=N_IMAGES,
+                n_trans=N_TRANSLATIONS,
+                n_rot=0,
+                n_rot_padded=0,
+                n_blocks=1,
+                n_windowed=5,
+                use_window=True,
+                reused_pass1_projections=True,
+                sparse_pass2_total_blocks=0,
+                sparse_pass2_skipped_blocks=0,
+                sparse_pass2_omitted_mass_upper_mean=0.0,
+                sparse_pass2_omitted_mass_upper_max=0.0,
+                sparse_pass2_omitted_mass_upper_sum=0.0,
+            )
+            defaults.update(overrides)
+            return EMProfileStats(**defaults)
+
+        monkeypatch.setattr(iteration_loop_module, "build_local_search_grid_metadata", lambda *args, **kwargs: object())
+        monkeypatch.setattr(iteration_loop_module, "rotation_grid_size", lambda order: 6)
+        monkeypatch.setattr(iteration_loop_module, "_local_search_engine_rotation_block_size", lambda size: size)
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "_partition_local_search_groups",
+            lambda *args, **kwargs: [
+                (
+                    np.array([0, 1], dtype=np.int32),
+                    np.array([1, 3], dtype=np.int32),
+                    np.zeros((2, 2), dtype=np.float32),
+                ),
+                (
+                    np.array([2], dtype=np.int32),
+                    np.array([3, 4, 5], dtype=np.int32),
+                    np.zeros((1, 3), dtype=np.float32),
+                ),
+            ],
+        )
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "make_relion_translation_log_prior",
+            lambda *args, **kwargs: np.zeros((len(args[3]), len(args[0])), dtype=np.float32),
+        )
+
+        def _fake_pad(local_rotations, local_log_prior, rotation_block_size):
+            _ = rotation_block_size
+            actual_count = local_rotations.shape[0]
+            padded_count = 4
+            pad = padded_count - actual_count
+            if pad > 0:
+                pad_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], pad, axis=0)
+                padded_rotations = np.concatenate([local_rotations, pad_rots], axis=0)
+                padded_log_prior = np.pad(local_log_prior, ((0, 0), (0, pad)), constant_values=-1e30)
+            else:
+                padded_rotations = local_rotations
+                padded_log_prior = local_log_prior
+            return padded_rotations, padded_log_prior, actual_count, padded_count
+
+        monkeypatch.setattr(iteration_loop_module, "_pad_local_search_rotations", _fake_pad)
+
+        def _fake_run_em(
+            experiment_dataset,
+            mean,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            disc_type,
+            **kwargs,
+        ):
+            _ = (
+                experiment_dataset,
+                mean,
+                mean_variance,
+                noise_variance,
+                translations,
+                disc_type,
+            )
+            image_indices = np.asarray(kwargs["image_indices"])
+            padded_log_prior = np.asarray(kwargs["rotation_log_prior"])
+            actual_count = int(np.count_nonzero(np.any(padded_log_prior > -1e20, axis=0)))
+            rotation_posterior_sums = np.zeros(rotations.shape[0], dtype=np.float32)
+            if actual_count == 2:
+                rotation_posterior_sums[:2] = np.array([0.5, 0.0], dtype=np.float32)
+                profile = _fake_em_profile(
+                    adjoint_y_s=10.0,
+                    adjoint_ctf_s=2.0,
+                    total_wall_s=15.0,
+                    accounted_s=14.0,
+                    unattributed_s=1.0,
+                    n_rot=actual_count,
+                    n_rot_padded=rotations.shape[0],
+                )
+            else:
+                rotation_posterior_sums[:3] = np.array([0.1, 0.3, 0.0], dtype=np.float32)
+                profile = _fake_em_profile(
+                    adjoint_y_s=20.0,
+                    adjoint_ctf_s=4.0,
+                    total_wall_s=30.0,
+                    accounted_s=29.0,
+                    unattributed_s=1.0,
+                    n_rot=actual_count,
+                    n_rot_padded=rotations.shape[0],
+                )
+            stats = RelionStats(
+                log_evidence_per_image=jnp.zeros(len(image_indices), dtype=jnp.float32),
+                best_log_score_per_image=jnp.zeros(len(image_indices), dtype=jnp.float32),
+                max_posterior_per_image=jnp.ones(len(image_indices), dtype=jnp.float32),
+                rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
+            )
+            return (
+                None,
+                np.zeros(len(image_indices), dtype=np.int32),
+                jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+                jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+                stats,
+                profile,
+            )
+
+        monkeypatch.setattr(iteration_loop_module, "run_em", _fake_run_em)
+
+        rotation_grid_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 6, axis=0)
+        rotation_grid_eulers = np.zeros((6, 3), dtype=np.float32)
+        prior_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], N_IMAGES, axis=0)
+        translations = np.zeros((N_TRANSLATIONS, 2), dtype=np.float32)
+        prior_translations = np.zeros((N_IMAGES, 2), dtype=np.float32)
+
+        _, _, _, _, profile_summary = iteration_loop_module._run_local_search_iteration(
+            mock_dataset,
+            jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            prior_rotations,
+            rotation_grid_rotations,
+            rotation_grid_eulers,
+            healpix_order=1,
+            sigma_rot=0.1,
+            sigma_psi=0.1,
+            translations=translations,
+            prior_translations=prior_translations,
+            sigma_offset_angstrom=1.0,
+            offset_range_pixels=1.0,
+            disc_type="linear_interp",
+            image_batch_size=2,
+            rotation_block_size=4,
+            current_size=4,
+            return_profile=True,
+            sparse_pass2=True,
+        )
+
+        assert int(profile_summary["n_chunks"]) == 2
+        assert int(profile_summary["sum_union_rows"]) == 5
+        assert int(profile_summary["sum_padded_rows"]) == 8
+        assert int(profile_summary["sum_nonzero_posterior_rows"]) == 3
+        assert int(profile_summary["unique_global_rotations"]) == 4
+        assert int(profile_summary["unique_nonzero_global_rotations"]) == 3
+        np.testing.assert_allclose(float(profile_summary["duplicate_rotation_factor"]), 1.25, atol=1e-6)
+        np.testing.assert_array_equal(np.asarray(profile_summary["chunk_nonzero_posterior_rows"]), np.array([1, 2]))
+        assert int(profile_summary["sum_union_row_pixels"]) == 25
+        np.testing.assert_allclose(float(profile_summary["adjoint_seconds_per_row_pixel"]), 36.0 / 25.0, atol=1e-6)
 
 
 # ===========================================================================
