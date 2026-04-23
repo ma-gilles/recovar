@@ -166,6 +166,12 @@ def main():
         help="Which RELION local-search engine to use.",
     )
     parser.add_argument(
+        "--local_search_translation_prior_mode",
+        choices=["perturbed", "coarse"],
+        default="coarse",
+        help="Evaluate local-search translation priors on the perturbed candidate grid or the unperturbed coarse RELION grid.",
+    )
+    parser.add_argument(
         "--disable_adjoint_y",
         action="store_true",
         help="Experimental ablation: disable weighted-image adjoint accumulation.",
@@ -213,6 +219,7 @@ def main():
         from recovar.em.dense_single_volume.refine import refine_single_volume
     except ModuleNotFoundError:
         from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
+    from recovar.em.sampling import read_relion_sampling_metadata
     from recovar.output.output import save_volume
     from recovar.reconstruction import noise as recon_noise
     from recovar.reconstruction import regularization
@@ -347,13 +354,10 @@ def main():
     m_ms = re.search(r"_rlnMaximumSignificantPoses\s+(-?\d+)", opt_text)
     max_significants = int(m_ms.group(1)) if m_ms else 500
 
-    samp_text = (relion_dir / f"run_it{iteration:03d}_sampling.star").read_text()
-    m_hp = re.search(r"_rlnHealpixOrder\s+(\d+)", samp_text)
-    hp_order = int(m_hp.group(1)) if m_hp else 3
-    m_range = re.search(r"_rlnOffsetRange\s+(\S+)", samp_text)
-    m_step = re.search(r"_rlnOffsetStep\s+(\S+)", samp_text)
-    offset_range = float(m_range.group(1)) if m_range else 12.75
-    offset_step = float(m_step.group(1)) if m_step else 4.25
+    sampling_meta = read_relion_sampling_metadata(relion_dir / f"run_it{iteration:03d}_sampling.star")
+    hp_order = int(sampling_meta["healpix_order"])
+    offset_range = float(sampling_meta["offset_range"])
+    offset_step = float(sampling_meta["offset_step"])
 
     # ave_Pmax from per-particle data
     relion_data = starfile.read(f"{prefix}_data.star")
@@ -543,6 +547,8 @@ def main():
         model_h2_iter = starfile.read(f"{iter_prefix}_half2_model.star")
         relion_iter_data = starfile.read(f"{iter_prefix}_data.star")
         relion_iter_df = relion_iter_data["particles"] if isinstance(relion_iter_data, dict) else relion_iter_data
+        relion_iter_names = list(relion_iter_df["rlnImageName"])
+        relion_iter_idx_to_pos = {_idx(relion_iter_names[i]): i for i in range(len(relion_iter_names))}
 
         general_iter = model_h1_iter["model_general"]
         avg_norm_iter = float(
@@ -579,14 +585,14 @@ def main():
         combined_h1_iter = (avg_norm_iter / normcorr_iter) * pp_scale_h1_iter
         combined_h2_iter = (avg_norm_iter / normcorr_iter) * pp_scale_h2_iter
 
-        corr_h1_iter = np.array([combined_h1_iter[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
-        corr_h2_iter = np.array([combined_h2_iter[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+        corr_h1_iter = np.array([combined_h1_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
+        corr_h2_iter = np.array([combined_h2_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
         scale_corr_h1_iter = np.array(
-            [pp_scale_h1_iter[relion_idx_to_pos[idx]] for idx in half1_our_idx],
+            [pp_scale_h1_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx],
             dtype=np.float32,
         )
         scale_corr_h2_iter = np.array(
-            [pp_scale_h2_iter[relion_idx_to_pos[idx]] for idx in half2_our_idx],
+            [pp_scale_h2_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx],
             dtype=np.float32,
         )
 
@@ -594,8 +600,14 @@ def main():
             offsets_x_iter = np.array(relion_iter_df["rlnOriginXAngst"], dtype=np.float64) / pixel_size
             offsets_y_iter = np.array(relion_iter_df["rlnOriginYAngst"], dtype=np.float64) / pixel_size
             offsets_iter = np.stack([offsets_x_iter, offsets_y_iter], axis=1)
-            trans_h1_iter = np.array([offsets_iter[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
-            trans_h2_iter = np.array([offsets_iter[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+            trans_h1_iter = np.array(
+                [offsets_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx],
+                dtype=np.float32,
+            )
+            trans_h2_iter = np.array(
+                [offsets_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx],
+                dtype=np.float32,
+            )
         else:
             trans_h1_iter = None
             trans_h2_iter = None
@@ -607,10 +619,22 @@ def main():
         if all(col in relion_iter_df.columns for col in angle_cols):
             eulers_iter = np.stack([np.array(relion_iter_df[col], dtype=np.float64) for col in angle_cols], axis=1)
             rotations_iter = utils.R_from_relion(eulers_iter).astype(np.float32)
-            rot_h1_iter = np.array([rotations_iter[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
-            rot_h2_iter = np.array([rotations_iter[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
-            euler_h1_iter = np.array([eulers_iter[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
-            euler_h2_iter = np.array([eulers_iter[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+            rot_h1_iter = np.array(
+                [rotations_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx],
+                dtype=np.float32,
+            )
+            rot_h2_iter = np.array(
+                [rotations_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx],
+                dtype=np.float32,
+            )
+            euler_h1_iter = np.array(
+                [eulers_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx],
+                dtype=np.float32,
+            )
+            euler_h2_iter = np.array(
+                [eulers_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx],
+                dtype=np.float32,
+            )
 
         pdf_iter = None
         if pdf_orient_key in model_h1_iter:
@@ -675,6 +699,7 @@ def main():
 
     print(f"  Local-search profile: {args.local_search_profile}")
     print(f"  Local engine: {args.local_engine}")
+    print(f"  Local translation prior mode: {args.local_search_translation_prior_mode}")
     print(
         f"  Adjoint ablations: disable_y={args.disable_adjoint_y}, "
         f"disable_ctf={args.disable_adjoint_ctf}"
@@ -722,6 +747,7 @@ def main():
         save_intermediates_dir=save_intermediates_dir,
         skip_final_iteration=args.skip_final_iteration,
         local_search_profile_mode=args.local_search_profile,
+        local_search_translation_prior_mode=args.local_search_translation_prior_mode,
         disable_adjoint_y=args.disable_adjoint_y,
         disable_adjoint_ctf=args.disable_adjoint_ctf,
         local_engine=args.local_engine,
@@ -741,6 +767,7 @@ def main():
         "max_significants": np.int32(max_significants),
         "local_search_profile_mode": np.array(args.local_search_profile),
         "local_engine": np.array(args.local_engine),
+        "local_search_translation_prior_mode": np.array(args.local_search_translation_prior_mode),
         "disable_adjoint_y": np.bool_(args.disable_adjoint_y),
         "disable_adjoint_ctf": np.bool_(args.disable_adjoint_ctf),
     }

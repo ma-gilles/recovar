@@ -50,7 +50,51 @@ def make_frequency_radius_map_half(image_shape):
     return jnp.sqrt(jnp.sum(coords**2, axis=-1))
 
 
-def make_fourier_window_indices(image_shape, current_size):
+def make_frequency_coords_half(image_shape):
+    """Return packed-half integer frequency coordinates as a JAX array."""
+    return jnp.asarray(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
+
+
+def make_frequency_coords_half_np(image_shape):
+    """Return packed-half integer frequency coordinates as a NumPy array."""
+    return np.asarray(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
+
+
+def _relion_half_layout_mask(coords, current_size, *, square=False, include_dc=False):
+    """Build the exact RELION half-layout support mask on the full packed grid."""
+    coords = np.asarray(coords, dtype=np.float64)
+    kx = np.rint(coords[:, 0]).astype(np.int32)
+    ky = np.rint(coords[:, 1]).astype(np.int32)
+    r_max = int(current_size) // 2
+
+    if square:
+        mask = (kx <= r_max) & (ky <= r_max) & (ky >= -(r_max - 1))
+    else:
+        radii = np.sqrt(np.sum(coords**2, axis=-1))
+        mask = np.round(radii).astype(np.int32) <= r_max
+        mask &= ky != -r_max
+
+    mask &= ~((kx == 0) & (ky < 0))
+
+    if not include_dc:
+        mask &= ~((kx == 0) & (ky == 0))
+
+    return mask
+
+
+def _max_window_size(image_shape, current_size, *, square=False, include_dc=False):
+    """Exact count of gathered half-spectrum pixels for a RELION-style window."""
+    coords_np = make_frequency_coords_half_np(image_shape)
+    mask = _relion_half_layout_mask(
+        coords_np,
+        current_size,
+        square=square,
+        include_dc=include_dc,
+    )
+    return int(np.count_nonzero(mask))
+
+
+def make_fourier_window_indices(image_shape, current_size, *, square=False, include_dc=False):
     """Return sorted 1D integer indices into the half-spectrum that select
     frequencies within the current resolution shell.
 
@@ -60,7 +104,13 @@ def make_fourier_window_indices(image_shape, current_size):
         Original real-space image shape.
     current_size : int
         Diameter in pixels (like RELION's rlnCurrentImageSize).
-        Frequencies with radius <= current_size // 2 are selected.
+        Frequencies with RELION shell index <= current_size // 2 are selected.
+    square : bool, optional
+        Use RELION's cropped square current-size layout instead of the default
+        radial support on that cropped layout.
+    include_dc : bool, optional
+        Include the DC pixel. RELION excludes DC from likelihood scoring but
+        includes it in reconstruction/noise accumulation.
 
     Returns
     -------
@@ -68,76 +118,61 @@ def make_fourier_window_indices(image_shape, current_size):
         Sorted indices into the (N_half,) flat half-spectrum array.
         Length varies with current_size.
     """
-    r_max = current_size // 2
-    radii = make_frequency_radius_map_half(image_shape)
-    # Use rounded radii for RELION-compatible shell assignment
-    mask = jnp.round(radii).astype(jnp.int32) <= r_max
-    return jnp.where(mask, size=_max_window_size(image_shape, current_size), fill_value=0)[0]
+    coords = make_frequency_coords_half(image_shape)
+    mask = jnp.asarray(
+        _relion_half_layout_mask(
+            coords,
+            current_size,
+            square=square,
+            include_dc=include_dc,
+        )
+    )
+    return jnp.where(
+        mask,
+        size=_max_window_size(
+            image_shape,
+            current_size,
+            square=square,
+            include_dc=include_dc,
+        ),
+        fill_value=0,
+    )[0]
 
 
-def _max_window_size(image_shape, current_size):
-    """Upper bound on the number of half-spectrum pixels within radius.
-
-    Used as the ``size`` argument for ``jnp.where`` to make the output
-    shape static (required for JIT).  We use the actual count computed
-    eagerly on the host.
-    """
-    r_max = current_size // 2
-    H, W = image_shape
-    # Compute on host with numpy for the size parameter
-    # Use the same coordinate computation as make_frequency_radius_map_half
-    coords_np = np.array(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
-    radii_np = np.sqrt(np.sum(coords_np**2, axis=-1))
-    # Use rounded radii, matching RELION's ROUND() convention
-    radii_rounded = np.round(radii_np).astype(np.int32)
-    return int(np.sum(radii_rounded <= r_max))
-
-
-def make_fourier_window_indices_np(image_shape, current_size, square=False):
+def make_fourier_window_indices_np(image_shape, current_size, square=False, include_dc=False):
     """NumPy version of make_fourier_window_indices for host-side precomputation.
 
     This avoids JIT compilation overhead and is suitable for precomputing
     the window indices once before the EM loop.
 
-    Uses ROUNDED integer radii for the window cutoff, matching RELION's
-    convention where ``Mresol_fine[n] = ROUND(sqrt(kp^2 + ip^2))`` and
-    pixels with ``ires <= current_size // 2`` are included.
+    Uses the exact RELION half-layout support on the original packed grid:
+    rounded shell cutoff on the cropped current-size layout, exclusion of the
+    redundant negative-row ``kx=0`` entries, omission of the negative boundary
+    row ``ky=-current_size//2``, and optional DC exclusion.
 
     Parameters
     ----------
     image_shape : tuple (H, W)
     current_size : int
     square : bool, optional
-        If True, use a square window of (current_size, current_size//2+1)
-        pixels in the centered half-spectrum, matching RELION's Fourier-crop
-        convention.  If False (default), use circular windowing with a
-        frequency-radius cutoff.
+        If True, use RELION's square current-size crop layout. If False
+        (default), use RELION's radial scoring support on that cropped layout.
+    include_dc : bool, optional
+        Include the DC pixel. Set this for reconstruction/noise accumulation;
+        leave it False for likelihood scoring.
 
     Returns
     -------
     indices : np.ndarray of int32, sorted
     n_windowed : int
     """
-    H, W = image_shape
-    if square:
-        # RELION square window: (current_size) rows × (current_size//2+1) cols
-        # in centered half-spectrum layout (DC at row H//2, col 0).
-        cs = current_size
-        half_cs = cs // 2
-        n_cols = W // 2 + 1  # total columns in half-spectrum
-        r_start = H // 2 - half_cs  # first row included
-        r_end = H // 2 + half_cs  # last row + 1
-        c_end = half_cs + 1  # columns 0..half_cs
-        mask_2d = np.zeros((H, n_cols), dtype=bool)
-        mask_2d[r_start:r_end, :c_end] = True
-        mask = mask_2d.ravel()
-    else:
-        r_max = current_size // 2
-        coords_np = np.array(ftu.get_k_coordinate_of_each_pixel_half(image_shape, voxel_size=1, scaled=False))
-        radii_np = np.sqrt(np.sum(coords_np**2, axis=-1))
-        # Use rounded radii for shell assignment, matching RELION's ROUND() convention
-        radii_rounded = np.round(radii_np).astype(np.int32)
-        mask = radii_rounded <= r_max
+    coords_np = make_frequency_coords_half_np(image_shape)
+    mask = _relion_half_layout_mask(
+        coords_np,
+        current_size,
+        square=square,
+        include_dc=include_dc,
+    )
     indices = np.where(mask)[0].astype(np.int32)
     return indices, len(indices)
 

@@ -13,7 +13,7 @@ import numpy as np
 import pytest
 from recovar.relion_bind._relion_bind_core import soft_mask_outside_map_2d
 
-from recovar.core.mask import relion_soft_image_mask, smooth_circular_mask
+from recovar.core.mask import apply_relion_soft_image_mask, relion_soft_image_mask, smooth_circular_mask
 
 
 @pytest.fixture(params=[32, 64, 128])
@@ -164,6 +164,25 @@ class TestRelionBinding:
             recovar_result,
             relion_result,
             atol=1e-12,
+            err_msg=f"D={D}, pixel_size={pixel_size}, particle_diameter={particle_diameter}",
+        )
+
+    @pytest.mark.parametrize("pixel_size", [1.0, 1.35, 2.0])
+    @pytest.mark.parametrize("particle_diameter", [100.0, 200.0])
+    def test_apply_relion_soft_image_mask_matches_binding(self, box_size, pixel_size, particle_diameter, rng):
+        D = box_size
+        width_mask_edge = 5
+        radius = min(particle_diameter / (2.0 * pixel_size), D / 2.0)
+        image = rng.standard_normal((D, D)).astype(np.float32)
+
+        relion_result = soft_mask_outside_map_2d(image.astype(np.float64), radius, float(width_mask_edge))
+        recovar_mask = relion_soft_image_mask(D, pixel_size, particle_diameter, width_mask_edge)
+        recovar_result = apply_relion_soft_image_mask(image, recovar_mask)
+
+        np.testing.assert_allclose(
+            recovar_result.astype(np.float64),
+            relion_result,
+            atol=5e-6,
             err_msg=f"D={D}, pixel_size={pixel_size}, particle_diameter={particle_diameter}",
         )
 

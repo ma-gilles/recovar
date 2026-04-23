@@ -808,26 +808,41 @@ def run_em(
     else:
         half_weights = make_half_image_weights(image_shape)
 
-    # Precompute window indices if current_size is set
+    # Precompute RELION-exact score/reconstruction windows if current_size is set
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
         from .helpers.fourier_window import make_fourier_window_indices_np
 
-        window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size, square=square_window)
-        window_indices = jnp.asarray(window_indices_np)
+        score_window_indices_np, n_windowed = make_fourier_window_indices_np(
+            image_shape,
+            current_size,
+            square=square_window,
+            include_dc=False,
+        )
+        recon_window_indices_np, n_recon_windowed = make_fourier_window_indices_np(
+            image_shape,
+            current_size,
+            square=square_window,
+            include_dc=True,
+        )
+        window_indices = jnp.asarray(score_window_indices_np)
+        recon_window_indices = jnp.asarray(recon_window_indices_np)
         half_weights_windowed = half_weights[window_indices]
         window_desc = "square" if square_window else "circular"
         logger.info(
-            "Fourier windowing (%s): current_size=%d, n_windowed=%d / n_half=%d (%.1f%% reduction)",
+            "Fourier windowing (%s): current_size=%d, n_score_windowed=%d, n_recon_windowed=%d / n_half=%d (%.1f%% reduction)",
             window_desc,
             current_size,
             n_windowed,
+            n_recon_windowed,
             n_half,
             100.0 * (1.0 - n_windowed / n_half),
         )
     else:
         window_indices = None
+        recon_window_indices = None
         n_windowed = n_half
+        n_recon_windowed = n_half
 
     # Upcast half_weights to float64 when scoring in double precision
     if use_float64_scoring:
@@ -982,7 +997,7 @@ def run_em(
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_shell_indices_half(image_shape)
         if use_window:
-            shell_indices_noise = shell_indices_half[window_indices]
+            shell_indices_noise = shell_indices_half[recon_window_indices]
         else:
             shell_indices_noise = shell_indices_half
         # noise_variance in half-spectrum layout
@@ -991,7 +1006,7 @@ def run_em(
             image_shape,
         ).squeeze()
         if use_window:
-            noise_variance_windowed = noise_variance_half[window_indices]
+            noise_variance_windowed = noise_variance_half[recon_window_indices]
         else:
             noise_variance_windowed = noise_variance_half
         ## TODO: is this just here for DEBUGGING? IF SO WE NEED TO CLEAN IT UP, THE NON-DEBUGGING SHOULDNT HAVE A BUNCH OF EXTRA COMPUTE/MEMORY FOR TERMS THAT ARE USELESS IF WE'RE NOT IN DEBUGGING. ESEPCIALLY IF IT INVOLVES CPU<-> GPU TRANSFERS.
@@ -1127,9 +1142,9 @@ def run_em(
         ## PERHAPS IT SHOULD BE AN OPTION IN TEH DOWNSTREAM FUNCTIONS OR SOMETHING (IF NECESSARY)
         if use_window:
             shifted_windowed = shifted_half[:, window_indices]
-            shifted_recon_windowed = shifted_recon_half[:, window_indices]
+            shifted_recon_windowed = shifted_recon_half[:, recon_window_indices]
             ctf2_over_nv_windowed = ctf2_over_nv_half[:, window_indices]
-            ctf2_over_nv_windowed_mstep = ctf2_over_nv_half_with_dc[:, window_indices]
+            ctf2_over_nv_windowed_mstep = ctf2_over_nv_half_with_dc[:, recon_window_indices]
         else:
             shifted_windowed = shifted_half
             shifted_recon_windowed = shifted_recon_half
@@ -1156,7 +1171,7 @@ def run_em(
             # Masked shifted images for the noise GEMM: use WITH-DC versions
             # (RELION includes DC in noise but excludes from scoring)
             if use_window:
-                shifted_masked_for_noise = shifted_half_with_dc[:, window_indices]
+                shifted_masked_for_noise = shifted_half_with_dc[:, recon_window_indices]
             else:
                 shifted_masked_for_noise = shifted_half_with_dc
 
@@ -1447,7 +1462,7 @@ def run_em(
                         Ft_ctf,
                         batch_size,
                         n_trans,
-                        n_windowed,
+                        n_recon_windowed,
                         image_shape,
                         volume_shape,
                     )
@@ -1468,7 +1483,7 @@ def run_em(
                     adjoint_y_t0 = time.time()
                     Ft_y = _adjoint_slice_volume_windowed(
                         summed_windowed,
-                        window_indices,
+                        recon_window_indices,
                         rots_b,
                         Ft_y,
                         image_shape,
@@ -1484,7 +1499,7 @@ def run_em(
                     adjoint_ctf_t0 = time.time()
                     Ft_ctf = _adjoint_slice_volume_windowed(
                         ctf_probs_windowed,
-                        window_indices,
+                        recon_window_indices,
                         rots_b,
                         Ft_ctf,
                         image_shape,
@@ -1565,12 +1580,14 @@ def run_em(
                 # ctf_probs for noise: recompute WITH DC (M-step used DC-zeroed version)
                 probs_sum_t_noise = jnp.sum(probs, axis=-1)  # (n_images, rot_block)
                 if use_window:
-                    ctf2_nv_noise = ctf2_over_nv_half_with_dc[:, window_indices]
+                    proj_recon_windowed_b = proj_half_b[:, recon_window_indices]
+                    proj_abs2_recon_windowed_b = proj_abs2_half_b[:, recon_window_indices]
+                    ctf2_nv_noise = ctf2_over_nv_half_with_dc[:, recon_window_indices]
                     ctf_probs_for_noise = probs_sum_t_noise.T @ ctf2_nv_noise
                     nv_for_noise = noise_variance_windowed
                     si_for_noise = shell_indices_noise
-                    proj_for_noise = proj_windowed_b
-                    proj_abs2_for_noise = proj_abs2_windowed_b
+                    proj_for_noise = proj_recon_windowed_b
+                    proj_abs2_for_noise = proj_abs2_recon_windowed_b
                 else:
                     ctf_probs_for_noise = probs_sum_t_noise.T @ ctf2_over_nv_half_with_dc
                     nv_for_noise = noise_variance_half
@@ -1885,7 +1902,11 @@ def compute_e_step_weights(
     if use_window:
         from .helpers.fourier_window import make_fourier_window_indices_np
 
-        window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size)
+        window_indices_np, n_windowed = make_fourier_window_indices_np(
+            image_shape,
+            current_size,
+            include_dc=False,
+        )
         window_indices = jnp.asarray(window_indices_np)
         half_weights_windowed = half_weights[window_indices]
     else:
