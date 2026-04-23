@@ -191,6 +191,7 @@ def build_local_hypothesis_layout(
     voxel_size: float,
     *,
     grid_metadata,
+    translation_prior_reference_translations: np.ndarray | None = None,
 ) -> LocalHypothesisLayout:
     """Build exact per-image local neighborhoods and translation priors."""
 
@@ -236,8 +237,14 @@ def build_local_hypothesis_layout(
 
     rotations_flat = rotation_grid_rotations[rotation_ids_flat] if rotation_ids_flat.size else np.zeros((0, 3, 3), dtype=np.float32)
 
+    reference_translations = (
+        np.asarray(translation_prior_reference_translations, dtype=np.float32)
+        if translation_prior_reference_translations is not None
+        else translations
+    )
+
     translation_log_priors = make_relion_translation_log_prior(
-        translations,
+        reference_translations,
         voxel_size,
         sigma_offset_angstrom,
         prior_translations,

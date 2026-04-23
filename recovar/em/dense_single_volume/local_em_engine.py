@@ -294,6 +294,12 @@ def run_local_em_exact(
     score_with_masked_images: bool = True,
     half_spectrum_scoring: bool = False,
     use_float64_scoring: bool = False,
+    use_float64_projections: bool = False,
+    do_gridding_correction: bool = False,
+    square_window: bool = False,
+    image_corrections: np.ndarray | None = None,
+    scale_corrections: np.ndarray | None = None,
+    image_pre_shifts: np.ndarray | None = None,
     return_profile: bool = False,
     disable_adjoint_y: bool = False,
     disable_adjoint_ctf: bool = False,
@@ -326,12 +332,15 @@ def run_local_em_exact(
             mean,
             volume_shape,
             projection_padding_factor,
-            do_gridding_correction=False,
+            do_gridding_correction=do_gridding_correction,
             current_size=current_size,
         )
     else:
         mean_for_proj = mean
         proj_volume_shape = volume_shape
+
+    if use_float64_projections:
+        mean_for_proj = jnp.asarray(mean_for_proj, dtype=jnp.complex128)
 
     if reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
@@ -343,16 +352,27 @@ def run_local_em_exact(
 
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
-        window_indices_np, n_windowed = make_fourier_window_indices_np(
+        score_window_indices_np, n_windowed = make_fourier_window_indices_np(
             image_shape,
             int(current_size),
-            square=False,
+            square=square_window,
+            include_dc=False,
         )
-        window_indices = jnp.asarray(window_indices_np, dtype=jnp.int32)
+        recon_window_indices_np, n_recon_windowed = make_fourier_window_indices_np(
+            image_shape,
+            int(current_size),
+            square=square_window,
+            include_dc=True,
+        )
+        window_indices = jnp.asarray(score_window_indices_np, dtype=jnp.int32)
+        recon_window_indices = jnp.asarray(recon_window_indices_np, dtype=jnp.int32)
     else:
-        window_indices_np = None
+        score_window_indices_np = None
+        recon_window_indices_np = None
         window_indices = None
+        recon_window_indices = None
         n_windowed = n_half
+        n_recon_windowed = n_half
 
     if half_spectrum_scoring:
         half_weights = jnp.ones(n_half, dtype=jnp.float32)
@@ -379,8 +399,10 @@ def run_local_em_exact(
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_shell_indices_half(image_shape)
-        shell_indices_noise = shell_indices_half if window_indices is None else shell_indices_half[window_indices]
-        noise_variance_for_noise = noise_variance_half if window_indices is None else noise_variance_half[window_indices]
+        shell_indices_noise = shell_indices_half if recon_window_indices is None else shell_indices_half[recon_window_indices]
+        noise_variance_for_noise = (
+            noise_variance_half if recon_window_indices is None else noise_variance_half[recon_window_indices]
+        )
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
 
@@ -453,6 +475,26 @@ def run_local_em_exact(
             n_trans,
             score_with_masked_images,
         )
+        if image_corrections is not None:
+            batch_corr = jnp.asarray(image_corrections[np.asarray(bucket.image_indices)])
+            corr_expanded = jnp.repeat(batch_corr, n_trans)
+            shifted_half = shifted_half * corr_expanded[:, None]
+            shifted_recon_half = shifted_recon_half * corr_expanded[:, None]
+            batch_norm = batch_norm * (batch_corr**2)[:, None]
+
+        if scale_corrections is not None:
+            batch_scale = jnp.asarray(scale_corrections[np.asarray(bucket.image_indices)])
+            ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+
+        if image_pre_shifts is not None:
+            batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(bucket.image_indices)])
+            lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+                image_shape, voxel_size=1, scaled=True
+            )
+            phase_factors = jnp.exp(-2j * jnp.pi * (lattice_half @ batch_shifts.T)).T
+            phase_expanded = jnp.repeat(phase_factors, n_trans, axis=0)
+            shifted_half = shifted_half * phase_expanded
+            shifted_recon_half = shifted_recon_half * phase_expanded
         shifted_half_with_dc = shifted_half
         ctf2_over_nv_half_with_dc = ctf2_over_nv_half
 
@@ -463,10 +505,10 @@ def run_local_em_exact(
 
         if use_window:
             shifted_score = shifted_half[:, window_indices]
-            shifted_recon = shifted_recon_half[:, window_indices]
+            shifted_recon = shifted_recon_half[:, recon_window_indices]
             ctf2_over_nv_score = ctf2_over_nv_half[:, window_indices]
-            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc[:, window_indices]
-            shifted_noise = shifted_half_with_dc[:, window_indices]
+            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc[:, recon_window_indices]
+            shifted_noise = shifted_half_with_dc[:, recon_window_indices]
         else:
             shifted_score = shifted_half
             shifted_recon = shifted_recon_half
@@ -507,8 +549,18 @@ def run_local_em_exact(
             proj_abs2 = jnp.abs(proj_half) ** 2
             proj_weighted = proj_half * half_weights_windowed[None, None, :]
             proj_abs2_weighted = proj_abs2 * half_weights_windowed[None, None, :]
-            proj_for_noise = proj_half
-            proj_abs2_for_noise = proj_abs2
+            proj_recon = proj_half_flat[:, recon_window_indices].reshape(
+                batch_size,
+                bucket.bucket_rotation_count,
+                n_recon_windowed,
+            )
+            proj_abs2_recon = proj_abs2_half_flat[:, recon_window_indices].reshape(
+                batch_size,
+                bucket.bucket_rotation_count,
+                n_recon_windowed,
+            )
+            proj_for_noise = proj_recon
+            proj_abs2_for_noise = proj_abs2_recon
         else:
             proj_half = proj_half_flat.reshape(batch_size, bucket.bucket_rotation_count, n_half)
             proj_abs2 = proj_abs2_half_flat.reshape(batch_size, bucket.bucket_rotation_count, n_half)
@@ -624,7 +676,7 @@ def run_local_em_exact(
             if use_window:
                 Ft_y = _adjoint_slice_volume_windowed(
                     flatten_bucket_rows(packed_summed),
-                    window_indices,
+                    recon_window_indices,
                     packed_flat_rotations,
                     Ft_y,
                     image_shape,
@@ -654,7 +706,7 @@ def run_local_em_exact(
             if use_window:
                 Ft_ctf = _adjoint_slice_volume_windowed(
                     flatten_bucket_rows(packed_ctf_probs),
-                    window_indices,
+                    recon_window_indices,
                     packed_flat_rotations,
                     Ft_ctf,
                     image_shape,

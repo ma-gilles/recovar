@@ -155,6 +155,14 @@ def _run_local_search_iteration(
     projection_padding_factor=1,
     reconstruction_padding_factor=1,
     use_float64_scoring=False,
+    use_float64_projections=False,
+    do_gridding_correction=False,
+    square_window=False,
+    half_spectrum_scoring=False,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
+    score_with_masked_images=True,
     return_profile=False,
     sparse_pass2=True,
     disable_adjoint_y=False,
@@ -162,6 +170,8 @@ def _run_local_search_iteration(
     adaptive_fraction=0.999,
     max_significants=-1,
     local_engine="grouped_union",
+    translation_prior_mode="perturbed",
+    translation_prior_reference_translations=None,
 ):
     """Run exact local search on the fine HEALPix grid.
 
@@ -208,10 +218,20 @@ def _run_local_search_iteration(
             projection_padding_factor=projection_padding_factor,
             reconstruction_padding_factor=reconstruction_padding_factor,
             use_float64_scoring=use_float64_scoring,
+            use_float64_projections=use_float64_projections,
+            do_gridding_correction=do_gridding_correction,
+            square_window=square_window,
+            half_spectrum_scoring=half_spectrum_scoring,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            score_with_masked_images=score_with_masked_images,
             return_profile=return_profile,
             sparse_pass2=sparse_pass2,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
+            translation_prior_mode=translation_prior_mode,
+            translation_prior_reference_translations=translation_prior_reference_translations,
         )
     if local_engine == "exact_v2":
         logger.warning("local_engine='exact_v2' is not implemented yet; using exact_v1")
@@ -238,11 +258,21 @@ def _run_local_search_iteration(
         projection_padding_factor=projection_padding_factor,
         reconstruction_padding_factor=reconstruction_padding_factor,
         use_float64_scoring=use_float64_scoring,
+        use_float64_projections=use_float64_projections,
+        do_gridding_correction=do_gridding_correction,
+        square_window=square_window,
+        half_spectrum_scoring=half_spectrum_scoring,
+        image_corrections=image_corrections,
+        scale_corrections=scale_corrections,
+        image_pre_shifts=image_pre_shifts,
+        score_with_masked_images=score_with_masked_images,
         return_profile=return_profile,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        translation_prior_mode=translation_prior_mode,
+        translation_prior_reference_translations=translation_prior_reference_translations,
     )
 
 
@@ -270,10 +300,20 @@ def _run_local_search_iteration_grouped_union(
     projection_padding_factor=1,
     reconstruction_padding_factor=1,
     use_float64_scoring=False,
+    use_float64_projections=False,
+    do_gridding_correction=False,
+    square_window=False,
+    half_spectrum_scoring=False,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
+    score_with_masked_images=True,
     return_profile=False,
     sparse_pass2=True,
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
+    translation_prior_mode="perturbed",
+    translation_prior_reference_translations=None,
 ):
     """Legacy grouped-union local engine kept for comparison and fallback."""
     rotation_block_size = _local_search_engine_rotation_block_size(rotation_block_size)
@@ -407,8 +447,13 @@ def _run_local_search_iteration_grouped_union(
         # translation grid is still bounded by `active_offset_range` in the
         # engine's score computation.
         translation_prior_t0 = time.time()
+        prior_reference_translations = (
+            np.asarray(translation_prior_reference_translations, dtype=np.float32)
+            if translation_prior_reference_translations is not None
+            else np.asarray(translations, dtype=np.float32)
+        )
         local_translation_log_prior = make_relion_translation_log_prior(
-            translations,
+            prior_reference_translations,
             experiment_dataset.voxel_size,
             sigma_offset_angstrom,
             prior_translations[group_image_indices],
@@ -465,12 +510,19 @@ def _run_local_search_iteration_grouped_union(
             rotation_log_prior=padded_log_prior,
             translation_log_prior=local_translation_log_prior,
             image_indices=group_image_indices,
-            score_with_masked_images=True,
+            score_with_masked_images=score_with_masked_images,
             return_stats=True,
             accumulate_noise=accumulate_noise,
+            half_spectrum_scoring=half_spectrum_scoring,
             projection_padding_factor=projection_padding_factor,
             reconstruction_padding_factor=reconstruction_padding_factor,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
             use_float64_scoring=use_float64_scoring,
+            use_float64_projections=use_float64_projections,
+            do_gridding_correction=do_gridding_correction,
+            square_window=square_window,
             return_profile=return_profile,
             sparse_pass2=sparse_pass2,
             disable_adjoint_y=disable_adjoint_y,
@@ -716,14 +768,25 @@ def _run_local_search_iteration_exact_v1(
     projection_padding_factor=1,
     reconstruction_padding_factor=1,
     use_float64_scoring=False,
+    use_float64_projections=False,
+    do_gridding_correction=False,
+    square_window=False,
+    half_spectrum_scoring=False,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
+    score_with_masked_images=True,
     return_profile=False,
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
     adaptive_fraction=0.999,
     max_significants=-1,
+    translation_prior_mode="perturbed",
+    translation_prior_reference_translations=None,
 ):
-    """Exact per-image local engine without grouped union neighborhoods."""
+    """Per-image exact local engine over image-specific rotation neighborhoods."""
 
+    rotation_block_size = _local_search_engine_rotation_block_size(rotation_block_size)
     prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
     if prior_rotations.ndim == 3:
         n_prior = prior_rotations.shape[0]
@@ -731,7 +794,6 @@ def _run_local_search_iteration_exact_v1(
         n_prior = prior_rotations.shape[0]
     else:
         raise ValueError(f"prior_rotations must have shape (n,3,3) or (n,3), got {prior_rotations.shape}")
-
     if prior_translations is None:
         prior_translations = np.zeros(
             (n_prior, np.asarray(translations).shape[1]),
@@ -764,6 +826,7 @@ def _run_local_search_iteration_exact_v1(
         offset_range_pixels,
         experiment_dataset.voxel_size,
         grid_metadata=local_grid_metadata,
+        translation_prior_reference_translations=translation_prior_reference_translations,
     )
     selector_time = time.time() - layout_t0
 
@@ -780,9 +843,15 @@ def _run_local_search_iteration_exact_v1(
         accumulate_noise=accumulate_noise,
         projection_padding_factor=projection_padding_factor,
         reconstruction_padding_factor=reconstruction_padding_factor,
-        score_with_masked_images=True,
-        half_spectrum_scoring=True,
+        score_with_masked_images=score_with_masked_images,
+        half_spectrum_scoring=half_spectrum_scoring,
         use_float64_scoring=use_float64_scoring,
+        use_float64_projections=use_float64_projections,
+        do_gridding_correction=do_gridding_correction,
+        square_window=square_window,
+        image_corrections=image_corrections,
+        scale_corrections=scale_corrections,
+        image_pre_shifts=image_pre_shifts,
         return_profile=return_profile,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
@@ -875,6 +944,7 @@ def refine_single_volume(
     replay_iteration_overrides=None,
     skip_final_iteration=False,
     local_search_profile_mode="auto",
+    local_search_translation_prior_mode="coarse",
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
     local_engine="grouped_union",
@@ -1031,6 +1101,7 @@ def refine_single_volume(
             replay_iteration_overrides=replay_iteration_overrides,
             skip_final_iteration=skip_final_iteration,
             local_search_profile_mode=local_search_profile_mode,
+            local_search_translation_prior_mode=local_search_translation_prior_mode,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
             local_engine=local_engine,
@@ -1106,6 +1177,7 @@ def _run_relion_iteration_loop(
     replay_iteration_overrides=None,
     skip_final_iteration=False,
     local_search_profile_mode="auto",
+    local_search_translation_prior_mode="coarse",
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
     local_engine="grouped_union",
@@ -1135,6 +1207,9 @@ def _run_relion_iteration_loop(
     # edge-taper mask (window_mask(D, 0.85, 0.99)) is too tight — it tapers
     # at 54 px vs RELION's 64 px for a 128-px box.
     RELION_WIDTH_MASK_EDGE = 5
+    for ds in experiment_datasets:
+        if hasattr(ds.image_source.backend, "image_mask_mode"):
+            ds.image_source.backend.image_mask_mode = "multiply"
     if particle_diameter_ang is not None and particle_diameter_ang > 0:
         from recovar.core import mask
         from recovar.core.mask import relion_soft_image_mask
@@ -1147,6 +1222,8 @@ def _run_relion_iteration_loop(
         )
         for ds in experiment_datasets:
             ds.image_source.backend.image_mask = relion_mask
+            if hasattr(ds.image_source.backend, "image_mask_mode"):
+                ds.image_source.backend.image_mask_mode = "relion_background_fill"
         logger.info(
             "RELION mode: image mask radius=%.1f px (particle_diameter=%.1f A, edge=%d px)",
             particle_diameter_ang / (2.0 * cryo.voxel_size),
@@ -1528,12 +1605,19 @@ def _run_relion_iteration_loop(
         # produce the same grid RELION did, so the perturbation applied later
         # is on the correct base grid.
         _replay_meta = None
+        _replay_prior_translations = None
         if perturb_replay_relion_dir is not None:
             _star = os.path.join(
                 perturb_replay_relion_dir,
                 f"run_it{init_relion_iteration + iteration + 1:03d}_sampling.star",
             )
             _replay_meta = read_relion_sampling_metadata(_star)
+            _replay_prior_translations = jnp.array(
+                get_translation_grid(
+                    float(_replay_meta["offset_range"]),
+                    float(_replay_meta["offset_step"]),
+                ).astype(np.float32)
+            )
             _relion_hp = int(_replay_meta["healpix_order"])
             # RELION stores offset_{range,step} in Angstroms; convert to px.
             _px = float(cryo.voxel_size) if cryo.voxel_size > 0 else 1.0
@@ -2017,6 +2101,12 @@ def _run_relion_iteration_loop(
                     _eff_n_rot,
                     current_translations.shape[0],
                 )
+                if local_engine != "grouped_union":
+                    # The new per-image local engine is not yet batch-equivalent
+                    # to the grouped-union scorer for all late-iteration cases.
+                    # Keep exact local buckets to one image until the
+                    # multi-image batching path is proven parity-safe.
+                    safe_ibs = 1
                 logger.info(
                     "Local search batch sizing: cone_radius=%.3f rad "
                     "(%.2f deg), est_cone_rots=%d, eff_n_rot=%d "
@@ -2028,6 +2118,16 @@ def _run_relion_iteration_loop(
                     safe_ibs,
                     safe_rbs,
                 )
+                translation_prior_reference_translations = np.asarray(current_translations, dtype=np.float32)
+                if local_search_translation_prior_mode == "coarse":
+                    if _replay_prior_translations is not None:
+                        translation_prior_reference_translations = np.asarray(_replay_prior_translations, dtype=np.float32)
+                    else:
+                        translation_prior_reference_translations = np.asarray(base_translations, dtype=np.float32)
+                    logger.info(
+                        "RELION mode: local translation prior uses coarse base grid (n=%d) while scoring perturbed translations",
+                        translation_prior_reference_translations.shape[0],
+                    )
                 grouped_local_profile_k = None
                 grouped_outputs = _run_local_search_iteration(
                     experiment_datasets[k],
@@ -2052,6 +2152,14 @@ def _run_relion_iteration_loop(
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
                     use_float64_scoring=True,
+                    use_float64_projections=False,
+                    do_gridding_correction=True,
+                    square_window=False,
+                    half_spectrum_scoring=True,
+                    image_corrections=image_corrections_per_half[k],
+                    scale_corrections=scale_corrections_per_half[k],
+                    image_pre_shifts=translation_search_base,
+                    score_with_masked_images=True,
                     return_profile=collect_local_search_profile,
                     sparse_pass2=True,
                     disable_adjoint_y=disable_adjoint_y,
@@ -2059,6 +2167,8 @@ def _run_relion_iteration_loop(
                     adaptive_fraction=adaptive_fraction,
                     max_significants=max_significants,
                     local_engine=local_engine,
+                    translation_prior_mode=local_search_translation_prior_mode,
+                    translation_prior_reference_translations=translation_prior_reference_translations,
                 )
                 if len(grouped_outputs) == 6:
                     Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k, grouped_local_profile_k = grouped_outputs

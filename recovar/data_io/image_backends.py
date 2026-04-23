@@ -126,6 +126,7 @@ class ParticleImageDataset:
         self.image_shape = (self.image_size, self.image_size)
         self.total_pixels = self.image_size * self.image_size
         self.image_mask = np.array(mask.window_mask(self.image_size, 0.85, 0.99))
+        self.image_mask_mode = "multiply"
         self.data_multiplier = -1 if invert_data else 1
 
         # Compatibility aliases
@@ -151,7 +152,10 @@ class ParticleImageDataset:
 
     def process_images(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
         if apply_image_mask:
-            images = images * self.image_mask
+            if self.image_mask_mode == "relion_background_fill":
+                images = mask.apply_relion_soft_image_mask(images, self.image_mask)
+            else:
+                images = images * self.image_mask
         import recovar.core.padding as pad
 
         images = pad.padded_dft(images * self.data_multiplier, self.D, self.padding)

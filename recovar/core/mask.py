@@ -431,6 +431,39 @@ def relion_soft_image_mask(image_size, pixel_size, particle_diameter_ang, width_
     ).astype(np.float32)
 
 
+def apply_relion_soft_image_mask(images, image_mask):
+    """Apply RELION's soft-mask background-fill image semantics."""
+
+    image_mask_arr = jnp.asarray(image_mask)
+    images_arr = jnp.asarray(images)
+
+    if image_mask_arr.ndim != 2:
+        raise ValueError(f"image_mask must be 2D, got shape {image_mask_arr.shape}")
+    if images_arr.ndim not in (2, 3):
+        raise ValueError(f"images must be 2D or 3D, got shape {images_arr.shape}")
+    if images_arr.shape[-2:] != image_mask_arr.shape:
+        raise ValueError(
+            f"image_mask shape {image_mask_arr.shape} must match trailing image shape {images_arr.shape[-2:]}"
+        )
+
+    squeeze = images_arr.ndim == 2
+    images_3d = images_arr[None, ...] if squeeze else images_arr
+
+    mask64 = image_mask_arr.astype(jnp.float64)
+    bg_weights = 1.0 - mask64
+    bg_weight_sum = jnp.sum(bg_weights, dtype=jnp.float64)
+    safe_bg_weight_sum = jnp.where(bg_weight_sum > 0.0, bg_weight_sum, 1.0)
+    images64 = images_3d.astype(jnp.float64)
+    avg_bg = jnp.tensordot(images64, bg_weights, axes=((-2, -1), (0, 1))) / safe_bg_weight_sum
+    result = images64 * mask64[None, :, :] + avg_bg[:, None, None] * bg_weights[None, :, :]
+
+    result = result.astype(images_arr.dtype)
+    if squeeze:
+        result = result[0]
+
+    return np.asarray(result) if isinstance(images, np.ndarray) else result
+
+
 # ---------------------------------------------------------------------------
 # Internal helpers (adapted from EMDA - https://emda.readthedocs.io/)
 # ---------------------------------------------------------------------------

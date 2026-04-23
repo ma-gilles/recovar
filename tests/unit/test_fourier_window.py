@@ -253,6 +253,40 @@ class TestWindowIndicesSubset:
         assert set(idx_4).issubset(set(idx_6))
         assert set(idx_6).issubset(set(idx_8))
 
+    def test_relion_exact_half_layout_count_at_late_current_size(self):
+        """128px box, current_size=84: match the RELION half-layout scoring count."""
+        indices, n = make_fourier_window_indices_np((128, 128), current_size=84)
+        assert n == 2834
+        assert indices.size == 2834
+
+    def test_relion_reconstruction_window_keeps_only_dc_extra(self):
+        """Reconstruction support should differ from scoring support only by DC."""
+        idx_score, n_score = make_fourier_window_indices_np((128, 128), current_size=84, include_dc=False)
+        idx_recon, n_recon = make_fourier_window_indices_np((128, 128), current_size=84, include_dc=True)
+        assert n_score == 2834
+        assert n_recon == 2835
+        assert n_recon - n_score == 1
+        assert set(idx_score).issubset(set(idx_recon))
+
+    def test_relion_half_layout_excludes_duplicates_and_negative_boundary_row(self):
+        """Exact RELION support removes the packed-half extras from the naive radial mask."""
+        shape = (128, 128)
+        current_size = 84
+        coords = np.asarray(ftu.get_k_coordinate_of_each_pixel_half(shape, voxel_size=1, scaled=False))
+        kx = np.rint(coords[:, 0]).astype(np.int32)
+        ky = np.rint(coords[:, 1]).astype(np.int32)
+        radii = np.sqrt(np.sum(coords**2, axis=-1))
+        naive_mask = np.round(radii).astype(np.int32) <= current_size // 2
+
+        idx_score, n_score = make_fourier_window_indices_np(shape, current_size=current_size, include_dc=False)
+        assert int(np.count_nonzero(naive_mask)) == 2883
+        assert n_score == 2834
+        assert int(np.count_nonzero(naive_mask)) - n_score == 49
+        assert int(np.count_nonzero(naive_mask & (kx == 0) & (ky == 0))) == 1
+        assert int(np.count_nonzero(naive_mask & (kx == 0) & (ky < 0))) == 42
+        assert int(np.count_nonzero(naive_mask & (ky == -(current_size // 2)))) == 7
+        assert 1 + 42 + 6 == 49
+
 
 # ===========================================================================
 # Test 3: Windowed E-step matches full at current_size=full

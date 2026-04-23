@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from recovar.data_io import image_backends
-from recovar.core import fourier_transform_utils
+from recovar.core import fourier_transform_utils, mask
 from helpers import tiny_synthetic
 
 pytestmark = pytest.mark.unit
@@ -50,6 +50,28 @@ def test_particle_image_dataset_process_images_half_matches_legacy_full_fft_path
     processed_half = ds.process_images_half(imgs, apply_image_mask=False)
 
     np.testing.assert_array_equal(processed_half, legacy_half)
+
+
+def test_particle_image_dataset_relion_background_fill_mask_mode(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+
+    imgs, _p_idx, _t_idx = ds[2]
+    ds.image_mask = mask.relion_soft_image_mask(
+        image_size=ds.image_size,
+        pixel_size=1.0,
+        particle_diameter_ang=6.0,
+        width_mask_edge_px=2.0,
+    )
+    ds.image_mask_mode = "relion_background_fill"
+
+    import recovar.core.padding as pad
+
+    monkeypatch.setattr(pad, "padded_dft", lambda images, D, padding: images)
+    processed = ds.process_images(imgs, apply_image_mask=True)
+    expected = mask.apply_relion_soft_image_mask(imgs, ds.image_mask).astype(np.complex64)
+
+    np.testing.assert_allclose(processed, expected, atol=1e-6)
 
 
 def test_particle_image_dataset_subset_generators_preserve_order_and_duplicates(monkeypatch):
