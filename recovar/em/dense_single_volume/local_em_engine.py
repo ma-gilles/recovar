@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-from functools import partial
 import logging
 import time
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -19,8 +17,6 @@ from recovar.em.dense_single_volume.em_primitives import (
     _block_until_ready,
     _compute_noise_block,
     _compute_projections_block,
-    _prepare_reconstruction_batch,
-    _preprocess_batch,
     make_half_image_weights,
     make_shell_indices_half,
 )
@@ -68,6 +64,69 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
         local_rotation_mask=np.asarray(bucket.local_rotation_mask[order], dtype=bool),
         translation_log_prior=np.asarray(bucket.translation_log_prior[order], dtype=np.float32),
     )
+
+
+def _prepare_local_exact_bucket(
+    experiment_dataset,
+    batch,
+    ctf_params,
+    noise_variance_half,
+    translations,
+    config,
+    norm_half_weights,
+    batch_size: int,
+    n_trans: int,
+    score_with_masked_images: bool,
+):
+    """Prepare score, reconstruction, and noise inputs for one local bucket.
+
+    This keeps the exact-local path separate from the dense engine and avoids
+    recomputing CTF / translation tiling scaffolding across masked, unmasked,
+    and noise-specific preprocessing.
+    """
+
+    def _process_half(apply_image_mask: bool):
+        process_half_fn = getattr(experiment_dataset, "process_images_half", None)
+        if process_half_fn is not None:
+            return process_half_fn(batch, apply_image_mask=apply_image_mask)
+        processed_full = config.process_fn(batch, apply_image_mask=apply_image_mask)
+        return fourier_transform_utils.full_image_to_half_image(processed_full, config.image_shape)
+
+    ctf_half = config.compute_ctf_half(ctf_params)
+    ctf2_over_nv_half = ctf_half**2 / noise_variance_half
+    translations_tiled = jnp.repeat(translations[None], batch_size, axis=0).reshape(batch_size * n_trans, -1)
+
+    processed_score_half = _process_half(score_with_masked_images)
+    score_weighted_half = processed_score_half * ctf_half / noise_variance_half
+    score_weighted_half_tiled = jnp.repeat(score_weighted_half[:, None, :], n_trans, axis=1).reshape(
+        batch_size * n_trans, -1
+    )
+    shifted_score_half = core.translate_images(
+        score_weighted_half_tiled,
+        translations_tiled,
+        config.image_shape,
+        half_image=True,
+    )
+    batch_norm = jnp.sum(
+        (jnp.abs(processed_score_half) ** 2 / noise_variance_half) * norm_half_weights[None, :],
+        axis=-1,
+        keepdims=True,
+    ).real
+    if score_with_masked_images:
+        processed_recon_half = _process_half(False)
+        recon_weighted_half = processed_recon_half * ctf_half / noise_variance_half
+        recon_weighted_half_tiled = jnp.repeat(recon_weighted_half[:, None, :], n_trans, axis=1).reshape(
+            batch_size * n_trans, -1
+        )
+        shifted_recon_half = core.translate_images(
+            recon_weighted_half_tiled,
+            translations_tiled,
+            config.image_shape,
+            half_image=True,
+        )
+    else:
+        shifted_recon_half = shifted_score_half
+    return shifted_score_half, shifted_recon_half, batch_norm, ctf2_over_nv_half, processed_score_half
 
 
 def run_local_em_exact(
@@ -157,7 +216,12 @@ def run_local_em_exact(
         half_weights = jnp.ones(n_half, dtype=jnp.float32)
     else:
         half_weights = make_half_image_weights(image_shape)
+    norm_half_weights = make_half_image_weights(image_shape)
     half_weights_windowed = half_weights if window_indices is None else half_weights[window_indices]
+    noise_variance_half = fourier_transform_utils.full_image_to_half_image(
+        noise_variance.reshape(1, -1),
+        image_shape,
+    ).squeeze()
 
     Ft_y = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
     Ft_ctf = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
@@ -174,10 +238,6 @@ def run_local_em_exact(
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_shell_indices_half(image_shape)
         shell_indices_noise = shell_indices_half if window_indices is None else shell_indices_half[window_indices]
-        noise_variance_half = fourier_transform_utils.full_image_to_half_image(
-            noise_variance.reshape(1, -1),
-            image_shape,
-        ).squeeze()
         noise_variance_for_noise = noise_variance_half if window_indices is None else noise_variance_half[window_indices]
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
@@ -235,28 +295,23 @@ def run_local_em_exact(
         batch_size = int(bucket.image_indices.shape[0])
 
         preprocess_t0 = time.time()
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        (
+            shifted_half,
+            shifted_recon_half,
+            batch_norm,
+            ctf2_over_nv_half,
+            processed_score_half,
+        ) = _prepare_local_exact_bucket(
+            experiment_dataset,
             batch_data,
             ctf_params,
-            noise_variance,
+            noise_variance_half,
             local_layout.translation_grid,
             config,
+            norm_half_weights,
             batch_size,
             n_trans,
             score_with_masked_images,
-        )
-        shifted_recon_half = (
-            _prepare_reconstruction_batch(
-                batch_data,
-                ctf_params,
-                noise_variance,
-                local_layout.translation_grid,
-                config,
-                batch_size,
-                n_trans,
-            )
-            if score_with_masked_images
-            else shifted_half
         )
         shifted_half_with_dc = shifted_half
         ctf2_over_nv_half_with_dc = ctf2_over_nv_half
@@ -409,9 +464,7 @@ def run_local_em_exact(
 
         if accumulate_noise:
             noise_t0 = time.time()
-            processed_masked = config.process_fn(batch_data, apply_image_mask=score_with_masked_images)
-            processed_masked_half = fourier_transform_utils.full_image_to_half_image(processed_masked, image_shape)
-            batch_img_power = jnp.sum(jnp.abs(processed_masked_half) ** 2, axis=0).astype(jnp.float32)
+            batch_img_power = jnp.sum(jnp.abs(processed_score_half) ** 2, axis=0).astype(jnp.float32)
             batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
             batch_img_power_shells = batch_img_power_shells.at[shell_indices_half].add(batch_img_power)
             noise_img_power += np.asarray(batch_img_power_shells, dtype=np.float64)
