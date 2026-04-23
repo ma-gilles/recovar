@@ -50,6 +50,20 @@ from .helpers.types import EMProfileStats, NoiseStats, RelionStats
 
 logger = logging.getLogger(__name__)
 
+# TRACKED TODOs: DENSE_ENGINE_BOUNDARY
+# TODO(DENSE_ENGINE_BOUNDARY/E001): this file is dense/global-only, local search belongs in local_em_engine.py
+# TODO(DENSE_ENGINE_BOUNDARY/E002): extract shared primitives, do not let local logic grow back here
+# TODO(DENSE_ENGINE_BOUNDARY/E003): half/full spectrum conversions need a single explicit boundary
+# TODO(DENSE_ENGINE_BOUNDARY/E004): dtype-policy cleanup needed, reduce ad hoc casts and flags
+# See docs/relion_local_engine_refactor.md
+
+
+def _block_until_ready(*values):
+    """Synchronize one or more JAX values before host-side timing reads."""
+    for value in values:
+        if value is not None:
+            jax.block_until_ready(value)
+
 
 # -- Half-spectrum utilities -------------------------------------------------
 
@@ -121,6 +135,8 @@ def _preprocess_batch(
     relative candidate scores to avoid catastrophic float32 cancellation, and
     add it back only when absolute log-evidence outputs are requested.
     """
+
+    ## TODO: ALL OF THIS SHOULD BE DONE IN HALF_IMAGE NATIVELY. NO FULL -> HALF CONVERSIONS
     CTF = config.compute_ctf(ctf_params)
     processed = config.process_fn(
         batch,
@@ -154,6 +170,8 @@ def _prepare_reconstruction_batch(
     n_images,
     n_trans,
 ):
+    ## TODO: ALL OF THIS SHOULD BE DONE IN HALF_IMAGE NATIVELY. NO FULL -> HALF CONVERSIONS. 
+
     """Preprocess one image batch for the unmasked M-step path."""
     CTF = config.compute_ctf(ctf_params)
     processed = config.process_fn(batch, apply_image_mask=False)
@@ -308,7 +326,7 @@ def _m_step_block_windowed(
     return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed
 
 
-@partial(jax.jit, static_argnums=(4, 5, 6, 7))
+@partial(jax.jit, static_argnums=(4, 5, 6, 7, 8))
 def _adjoint_slice_volume_windowed(
     windowed_half,
     window_indices,
@@ -318,6 +336,7 @@ def _adjoint_slice_volume_windowed(
     volume_shape,
     disc_type,
     half_image,
+    half_volume=False,
 ):
     """Scatter a windowed half-spectrum into a full half-grid and adjoint-slice.
 
@@ -325,18 +344,41 @@ def _adjoint_slice_volume_windowed(
     path does not bounce back through Python between the windowed GEMM output
     and the adjoint accumulation.
     """
-    H, W = image_shape
-    n_half = H * (W // 2 + 1)
-    full_half = jnp.zeros((windowed_half.shape[0], n_half), dtype=windowed_half.dtype)
-    full_half = full_half.at[:, window_indices].set(windowed_half)
-    return core.adjoint_slice_volume(
-        full_half,
+    return core.adjoint_slice_volume_indexed(
+        windowed_half,
+        window_indices,
         rotations_block,
         image_shape,
         volume_shape,
         disc_type,
         volume=volume,
         half_image=half_image,
+        half_volume=half_volume,
+    )
+
+
+@partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
+def _adjoint_slice_volume_half(
+    half_block,
+    rotations_block,
+    volume,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_image,
+    half_volume=False,
+):
+    ## UNNECESSARY? 
+    """Adjoint-slice a half-spectrum block into the volume accumulator."""
+    return core.adjoint_slice_volume(
+        half_block,
+        rotations_block,
+        image_shape,
+        volume_shape,
+        disc_type,
+        volume=volume,
+        half_image=half_image,
+        half_volume=half_volume,
     )
 
 
@@ -348,6 +390,8 @@ def _update_logsumexp(max_s, sum_exp, scores_block):
     (e.g. with RELION's narrow translation prior sigma ~ 0.3 px, most
     candidates get exp(score - max) < float32 epsilon).
     """
+
+    ## TODO: IS THIS FLOAT64 NECESSARY? WE SHOULD PROBABLY HAVE ONE WAY TO SWAP ALL COMPUTATOIN FROM FLOAT32 TO FLOAT64 (E.G. A GLOBAL FLAG LIKE _USE_FLOAT32)
     scores_flat = scores_block.reshape(scores_block.shape[0], -1)  # (n_images, block*trans)
     block_max = jnp.max(scores_flat, axis=1)  # (n_images,)
     new_max = jnp.maximum(max_s, block_max)
@@ -358,6 +402,46 @@ def _update_logsumexp(max_s, sum_exp, scores_block):
     )
     sum_exp = sum_exp * jnp.exp((max_s - new_max).astype(jnp.float64)) + exp_terms
     return new_max, sum_exp
+
+
+@partial(jax.jit, static_argnums=(7, 8, 9, 10))
+def _m_step_block_compute(
+    shifted_half,
+    scores_block,
+    log_Z,
+    rotations_block,
+    ctf2_over_nv_half,
+    Ft_y,
+    Ft_ctf,
+    n_images,
+    n_trans,
+    image_shape,
+    volume_shape,
+):
+    """Normalize scores and compute one non-windowed M-step block.
+
+    The M-step GEMM computes P @ shifted_half -> (rot_block, N_half).
+    This is a weighted sum (not an inner product), so no Hermitian weights
+    are needed.
+
+    Returns intermediates ``summed_half`` and ``ctf_probs_half`` for optional
+    downstream adjoint and noise accumulation.
+    """
+    rot_block_size = rotations_block.shape[0]
+    # Normalize
+    probs = jnp.exp(scores_block - log_Z[:, None, None])
+    # M-step GEMM: P @ shifted_half -> (rot_block, N_half)
+    # This sums shifted half-images weighted by probabilities -- already in half layout!
+    P = probs.swapaxes(0, 1).reshape(rot_block_size, n_images * n_trans)
+    summed_half = P @ shifted_half  # (rot_block, N_half) -- directly in half layout
+    # CTF backprojection: probs_sum_t @ ctf2_over_nv_half -> (rot_block, N_half)
+    probs_sum_t = jnp.sum(probs, axis=-1)  # (n_images, rot_block)
+    ctf_probs_half = probs_sum_t.T @ ctf2_over_nv_half  # (rot_block, N_half)
+    # Hard assignment contribution: argmax over this block
+    block_best = jnp.max(scores_block.reshape(n_images, -1), axis=1)
+    block_argmax = jnp.argmax(scores_block.reshape(n_images, -1), axis=1)
+    ## TODO: THIS FUNCTION HAS A LOT OF USELESS ARGUMENTS NOT BEING USED? IS THIS A BUG? OR A CLEAN UP ft_y Ft_ctf / shapes
+    return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half, ctf_probs_half
 
 
 @partial(jax.jit, static_argnums=(7, 8, 9, 10))
@@ -374,48 +458,39 @@ def _m_step_block(
     image_shape,
     volume_shape,
 ):
-    """Normalize scores to probs and accumulate M-step for one rotation block.
-
-    The M-step GEMM computes P @ shifted_half -> (rot_block, N_half).
-    This is a weighted sum (not an inner product), so no Hermitian weights needed.
-    The result goes directly to adjoint_slice_volume with half_image=True.
-
-    Returns intermediates ``summed_half`` and ``ctf_probs_half`` for optional
-    downstream noise accumulation.
-    """
-    rot_block_size = rotations_block.shape[0]
-    # Normalize
-    probs = jnp.exp(scores_block - log_Z[:, None, None])
-    # M-step GEMM: P @ shifted_half -> (rot_block, N_half)
-    # This sums shifted half-images weighted by probabilities -- already in half layout!
-    P = probs.swapaxes(0, 1).reshape(rot_block_size, n_images * n_trans)
-    summed_half = P @ shifted_half  # (rot_block, N_half) -- directly in half layout
-    # No full_image_to_half_image conversion needed!
-    Ft_y = core.adjoint_slice_volume(
+    ## TODO: IS THIS DEAD CODE?
+    """Backwards-compatible non-windowed M-step helper with adjoint included."""
+    Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half, ctf_probs_half = _m_step_block_compute(
+        shifted_half,
+        scores_block,
+        log_Z,
+        rotations_block,
+        ctf2_over_nv_half,
+        Ft_y,
+        Ft_ctf,
+        n_images,
+        n_trans,
+        image_shape,
+        volume_shape,
+    )
+    Ft_y = _adjoint_slice_volume_half(
         summed_half,
         rotations_block,
+        Ft_y,
         image_shape,
         volume_shape,
         "linear_interp",
-        volume=Ft_y,
-        half_image=True,
+        True,
     )
-    # CTF backprojection: probs_sum_t @ ctf2_over_nv_half -> (rot_block, N_half)
-    probs_sum_t = jnp.sum(probs, axis=-1)  # (n_images, rot_block)
-    ctf_probs_half = probs_sum_t.T @ ctf2_over_nv_half  # (rot_block, N_half)
-    # No full_image_to_half_image conversion needed!
-    Ft_ctf = core.adjoint_slice_volume(
+    Ft_ctf = _adjoint_slice_volume_half(
         ctf_probs_half,
         rotations_block,
+        Ft_ctf,
         image_shape,
         volume_shape,
         "linear_interp",
-        volume=Ft_ctf,
-        half_image=True,
+        True,
     )
-    # Hard assignment contribution: argmax over this block
-    block_best = jnp.max(scores_block.reshape(n_images, -1), axis=1)
-    block_argmax = jnp.argmax(scores_block.reshape(n_images, -1), axis=1)
     return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half, ctf_probs_half
 
 
@@ -423,6 +498,11 @@ def _m_step_block(
 def _compute_noise_block(
     proj_half, proj_abs2_half, summed_masked, ctf_probs, noise_variance_half, shell_indices, n_shells
 ):
+    ## TODO: QUESTION? Projections (unweighted by half_weights). IS THIS RIGHT? ARE DOCS WRONG? I THOUGHT RELION DID NOT USE WEIGHTS AT ALL? 
+
+    ## TODO: SHOULD WE REALLY BE KEEPING AROUDN BOTH PROJ AND |PROJ|^2 THROUGHOUT CODE? SEEMS WASTEFUL IN MEMORY?
+
+
     """Accumulate RELION-style posterior-weighted noise for one rotation block.
 
     Uses the decomposition::
@@ -479,8 +559,12 @@ def _compute_noise_block(
 
     # Per-pixel block contribution (without P_img)
     block_noise = A2 - 2.0 * XA
+    
+    ## TODO: IS THIS REALLY WHAT RELION DOES? WHY ARE STORING THE MIDDLE TERMS LIKE A2 AND XA?
 
+    ## TODO, SO HERE N IS N_SHELLS? WE SHOULD MAKE THAT CLEAR.
     # Bin to resolution shells (no Hermitian weights -- matching RELION)
+    ## TODO SHOULD THERE BE HERMITIAN WEIGHTS AT ALL, EVEN IF RELION USED THEM? NOT COMPLEETELY SURE, TRIPLE CHECK
     noise_shells = jnp.zeros(n_shells, dtype=jnp.float32)
     noise_shells = noise_shells.at[shell_indices].add(block_noise)
     a2_shells = jnp.zeros(n_shells, dtype=jnp.float32)
@@ -496,6 +580,7 @@ def _compute_projections_block(volume, rotations_block, image_shape, volume_shap
     Returns (proj_half, |proj_half|^2) on device, both in half-spectrum layout.
     """
     proj_half = core.slice_volume(volume, rotations_block, image_shape, volume_shape, disc_type, half_image=True)
+    ## TODO: WE SHOULD THINK ABOUT WHETHER STORING SQUARES IS WORTH IT.
     proj_abs2_half = jnp.abs(proj_half) ** 2
     return proj_half, proj_abs2_half
 
@@ -515,7 +600,7 @@ def run_em(
     translation_log_prior: np.ndarray = None,
     image_indices: np.ndarray = None,
     rotation_translation_mask: np.ndarray = None,
-    *,
+    *, ## TODO: WHAT IS THIS FROM? SEEMS AWKWARD. COULD WE MAKE OPTIONS, PARTICULARLY DEBUG OPTIONS LIKE THIS INTO A CONFIG OBJECT?
     score_with_masked_images: bool = False,
     return_stats: bool = False,
     accumulate_noise: bool = False,
@@ -530,6 +615,9 @@ def run_em(
     do_gridding_correction: bool = False,
     square_window: bool = False,
     return_profile: bool = False,
+    sparse_pass2: bool = True,
+    disable_adjoint_y: bool = False,
+    disable_adjoint_ctf: bool = False,
 ):
     """One EM iteration with JIT-fused two-pass blockwise normalization and half-spectrum GEMMs.
 
@@ -603,20 +691,30 @@ def run_em(
     return_profile : bool
         When True, append an :class:`EMProfileStats` timing summary to the
         return tuple.  This is diagnostic only.
+    sparse_pass2 : bool
+        When True, use pass-1 block maxima to skip pass-2 rotation blocks
+        whose posterior mass is negligible for every image in the batch.
+    disable_adjoint_y : bool
+        Experimental ablation flag. When True, skip the weighted-image
+        adjoint accumulation into ``Ft_y``.
+    disable_adjoint_ctf : bool
+        Experimental ablation flag. When True, skip the CTF adjoint
+        accumulation into ``Ft_ctf``.
     """
+    overall_t0 = time.time()
     n_rot = rotations.shape[0]
     n_trans = translations.shape[0]
     image_indices = np.arange(experiment_dataset.n_units) if image_indices is None else np.asarray(image_indices)
     n_images = image_indices.size
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
-
+    ## TODO: set default params same as RELION (when starting from GUI) pf=2 I think is there.
     # Pad volume in real space for smoother trilinear projection (RELION pf=2).
     if projection_padding_factor > 1:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
-
+        ## TODO: ALL VOLUMES SHOULD BE IN SOME KND OF HALF VOLUME FORMAT THROUGHOUT WHEN IN FOURIER DOMAIN. SAME FOR IMAGES (OR THINGS SIZE OF IMAGE E..G CTF)
         mean_for_proj, proj_volume_shape = pad_volume_for_projection(
-            mean,
+            mean,   ## TODO rename mean? Doesn't make a lot of sense here. also mean_var etc
             volume_shape,
             projection_padding_factor,
             do_gridding_correction=do_gridding_correction,
@@ -666,6 +764,14 @@ def run_em(
     # switching to correct Hermitian weights (make_half_image_weights) would
     # sharpen posteriors and may improve convergence speed.  This is tracked
     # as a post-parity improvement.
+    #
+    # TODO(local-engine-debt): If we keep any dense score path after the local
+    # engine split, there is still an inner-product/GEMM-shaped optimization
+    # opportunity around the translation dimension. RELION appears to fuse
+    # project+translate+score in custom kernels instead of BLAS here, so this
+    # is not a parity requirement. Still, we should remember to revisit that
+    # opportunity once the local path stops forcing per-image neighborhoods
+    # through the shared-grid dense engine.
     if half_spectrum_scoring:
         H_w, W_w = image_shape
         half_weights = jnp.ones(H_w * (W_w // 2 + 1), dtype=jnp.float32)
@@ -708,18 +814,33 @@ def run_em(
     else:
         rotations_padded = rotations
 
+    batch_fetch_time = 0.0
     preprocess_time = 0.0
+    score_prep_time = 0.0
     pass1_projection_time = 0.0
     pass1_score_time = 0.0
+    pass1_postprocess_time = 0.0
     pass1_logsumexp_time = 0.0
+    pass2_skipmask_time = 0.0
     pass2_projection_time = 0.0
     pass2_score_time = 0.0
+    pass2_postprocess_time = 0.0
     mstep_time = 0.0
     window_scatter_time = 0.0
     adjoint_y_time = 0.0
     adjoint_ctf_time = 0.0
     noise_time = 0.0
+    assignment_time = 0.0
+    stats_finalize_time = 0.0
     host_stats_time = 0.0
+    solve_time = 0.0
+    sync_timers = bool(return_profile)
+    sparse_pass2_log_threshold = float(np.log(1e-6))
+    sparse_pass2_total_blocks = 0
+    sparse_pass2_skipped_blocks = 0
+    sparse_pass2_omitted_mass_upper_total = 0.0
+    sparse_pass2_omitted_mass_upper_max = 0.0
+    sparse_pass2_omitted_mass_upper_image_count = 0
 
     # Prepare per-rotation log-prior (pad to match rotations_padded)
     per_image_log_prior = False
@@ -843,6 +964,7 @@ def run_em(
             noise_variance_windowed = noise_variance_half[window_indices]
         else:
             noise_variance_windowed = noise_variance_half
+        ## TODO: is this just here for DEBUGGING? IF SO WE NEED TO CLEAN IT UP, THE NON-DEBUGGING SHOULDNT HAVE A BUNCH OF EXTRA COMPUTE/MEMORY FOR TERMS THAT ARE USELESS IF WE'RE NOT IN DEBUGGING. ESEPCIALLY IF IT INVOLVES CPU<-> GPU TRANSFERS.
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
         noise_a2 = np.zeros(n_shells, dtype=np.float64)
@@ -850,15 +972,25 @@ def run_em(
 
     start_idx = 0
 
-    for batch_data, _, _, ctf_params, _, _, indices in experiment_dataset.iter_batches(
+    batch_iter = experiment_dataset.iter_batches(
         image_batch_size,
         indices=image_indices,
         by_image=False,
-    ):
+    )
+    while True:
+        batch_fetch_t0 = time.time()
+        try:
+            batch_data, _, _, ctf_params, _, _, indices = next(batch_iter)
+        except StopIteration:
+            batch_fetch_time += time.time() - batch_fetch_t0
+            break
+        batch_fetch_time += time.time() - batch_fetch_t0
         batch_size = len(indices)
         end_idx = start_idx + batch_size
         batch_data = jnp.asarray(batch_data)
         projection_cache = []
+        block_max_per_image = [] if sparse_pass2 else None
+        block_pose_counts = [] if sparse_pass2 else None
 
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
         preprocess_t0 = time.time()
@@ -885,9 +1017,12 @@ def run_em(
             if score_with_masked_images
             else shifted_half
         )
+        if sync_timers:
+            _block_until_ready(shifted_half, shifted_recon_half)
 
         preprocess_time += time.time() - preprocess_t0
 
+        score_prep_t0 = time.time()
         # -- Per-image corrections (RELION parity: avg_norm/normcorr * scale) --
         # RELION: img *= avg_norm_correction / normcorr  (ml_optimiser.cpp:6240)
         # then   Frefctf *= scale                        (ml_optimiser.cpp:7298)
@@ -931,6 +1066,7 @@ def run_em(
             phase_expanded = jnp.repeat(phase_factors, n_trans, axis=0)
             shifted_half = shifted_half * phase_expanded
             shifted_recon_half = shifted_recon_half * phase_expanded
+            ## TODO: THE ORDER (WHILE CORRECT IS A BIT CONFUSING)
 
         # -- Save pre-DC-exclusion arrays for M-step + noise accumulation --
         # RELION excludes DC from likelihood scores (Minvsigma2[0]=0) but
@@ -945,6 +1081,7 @@ def run_em(
         # Find the DC pixel by locating shell index 0 in the precomputed
         # shell_indices_half array.
         if half_spectrum_scoring:
+            ## TODO: THIS SEEMS LIKE A VERY INFECCICIENT WAY TO DO THIS. JUST FIND INDEX AND .SET IT 0? 
             dc_shell_idx = make_shell_indices_half(image_shape)
             dc_mask = dc_shell_idx == 0  # True at DC pixel(s)
             # Zero out DC in SCORING arrays only
@@ -955,6 +1092,9 @@ def run_em(
         # DC-zeroed arrays for scoring, with-DC arrays for M-step accumulation.
         # RELION excludes DC from likelihood (Minvsigma2[0]=0) but includes
         # it in reconstruction weights (backprojector CTF^2 weight at DC).
+        ## TODO: IS THIS WINDOWING STUFF ON BY DEFAULT IN RELION? DO WE NEED TO KEEP BOTH AROUND?
+        ## IF WE DO, IT SHOULD BE HANDLED MORE GRACEFULLY THAN HAVING IF STATEMENTS THROUGHOUT THE CODE,
+        ## PERHAPS IT SHOULD BE AN OPTION IN TEH DOWNSTREAM FUNCTIONS OR SOMETHING (IF NECESSARY)
         if use_window:
             shifted_windowed = shifted_half[:, window_indices]
             shifted_recon_windowed = shifted_recon_half[:, window_indices]
@@ -970,6 +1110,7 @@ def run_em(
         if accumulate_noise:
             # P_img = sum_i |masked_img_i(k)|^2 per half-spectrum pixel
             # Use the masked processed images (score path).
+            ## TODO ONCE AGAIN THIS SHOULD BE IN HALF IMAGE NATIVELY
             processed_masked = config.process_fn(batch_data, apply_image_mask=score_with_masked_images)
             processed_masked_half = fourier_transform_utils.full_image_to_half_image(
                 processed_masked,
@@ -979,6 +1120,7 @@ def run_em(
             batch_img_power = jnp.sum(jnp.abs(processed_masked_half) ** 2, axis=0)  # (N_half,)
             batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
             batch_img_power_shells = batch_img_power_shells.at[shell_indices_half].add(batch_img_power)
+            # TODO: IS THIS SENDING TO CPU NECESSARY? SHOULD BE HANDLED BY PUT INSTEAD OF NP.() CALLS, AND SHOULD PROBABLY BE KEPT TO A MINIMIMUM (I THINK TI CAUSES JAX TO SYNCHRONIZE?)
             noise_img_power += np.asarray(batch_img_power_shells, dtype=np.float64)
             noise_sumw += batch_size
             # Masked shifted images for the noise GEMM: use WITH-DC versions
@@ -989,6 +1131,7 @@ def run_em(
                 shifted_masked_for_noise = shifted_half_with_dc
 
         # -- Float64 scoring upcast (RELION parity: RFLOAT=double) --
+        ## IF THIS IS DEFAULT, THEN BE IT, BUT THERE SHOULD BE A NICER WAY TO DO THIS. E.G. DTYPE_SCORING = JNP.FLOAT 64 IF... etc instead of having a bunch of if statements
         # RELION uses double precision for all scoring arithmetic
         # (macros.h:77: RFLOAT=double unless RELION_SINGLE_PRECISION).
         # Upcast the scoring arrays to float64/complex128 before the GEMMs
@@ -1008,6 +1151,21 @@ def run_em(
             else:
                 shifted_recon_windowed = shifted_recon_half
 
+        if sync_timers:
+            ready_values = [
+                shifted_half,
+                shifted_recon_half,
+                batch_norm,
+                ctf2_over_nv_half,
+                shifted_windowed,
+                shifted_recon_windowed,
+                ctf2_over_nv_windowed,
+            ]
+            if accumulate_noise:
+                ready_values.append(shifted_masked_for_noise)
+            _block_until_ready(*ready_values)
+        score_prep_time += time.time() - score_prep_t0
+
         # -- PASS 1: streaming logsumexp over rotation blocks --
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
@@ -1021,6 +1179,8 @@ def run_em(
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
                 mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
             )
+            if sync_timers:
+                _block_until_ready(proj_half_b, proj_abs2_half_b)
             pass1_projection_time += time.time() - proj_t0
             if projection_cache is not None:
                 projection_cache.append((proj_half_b, proj_abs2_half_b))
@@ -1064,8 +1224,11 @@ def run_em(
                     volume_shape,
                 )
 
+            if sync_timers:
+                _block_until_ready(scores)
             pass1_score_time += time.time() - score_t0
 
+            pass1_postprocess_t0 = time.time()
             # Add rotation log-prior (Gaussian angular prior for local search)
             if log_prior_padded_jnp is not None:
                 if per_image_log_prior:
@@ -1092,17 +1255,67 @@ def run_em(
                 mask = jnp.arange(rotation_block_size) < valid
                 scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
 
+            if block_max_per_image is not None:
+                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
+                block_max_per_image.append(jnp.max(scores, axis=(1, 2)))
+                block_pose_counts.append(actual_rot * n_trans)
+
+            if sync_timers:
+                _block_until_ready(scores)
+            pass1_postprocess_time += time.time() - pass1_postprocess_t0
+
             logsumexp_t0 = time.time()
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
+            if sync_timers:
+                _block_until_ready(max_s, sum_exp)
             pass1_logsumexp_time += time.time() - logsumexp_t0
 
         log_Z = max_s + jnp.log(sum_exp)  # (batch_size,)
+        skip_pass2_block = np.zeros(n_blocks, dtype=bool)
+        pass2_skipmask_t0 = time.time()
+        if block_max_per_image:
+            block_max_matrix = jnp.stack(block_max_per_image, axis=0)
+            block_log_pose_counts = jnp.log(jnp.asarray(block_pose_counts, dtype=jnp.float64))[:, None]
+            finite_log_z = jnp.isfinite(log_Z)
+            log_omitted_mass_upper = jnp.where(
+                finite_log_z[None, :],
+                block_log_pose_counts + block_max_matrix.astype(jnp.float64) - log_Z[None, :].astype(jnp.float64),
+                jnp.inf,
+            )
+            skip_pass2_block = np.asarray(
+                jnp.all(log_omitted_mass_upper < sparse_pass2_log_threshold, axis=1),
+                dtype=bool,
+            )
+            sparse_pass2_total_blocks += int(n_blocks)
+            sparse_pass2_skipped_blocks += int(skip_pass2_block.sum())
+            if np.any(skip_pass2_block):
+                skipped_mass_upper = jnp.sum(
+                    jnp.where(
+                        jnp.asarray(skip_pass2_block)[:, None],
+                        jnp.exp(jnp.minimum(log_omitted_mass_upper, 50.0)),
+                        0.0,
+                    ),
+                    axis=0,
+                )
+                skipped_mass_upper_np = np.asarray(skipped_mass_upper, dtype=np.float64)
+                sparse_pass2_omitted_mass_upper_total += float(np.sum(skipped_mass_upper_np))
+                sparse_pass2_omitted_mass_upper_max = max(
+                    sparse_pass2_omitted_mass_upper_max,
+                    float(np.max(skipped_mass_upper_np)),
+                )
+                sparse_pass2_omitted_mass_upper_image_count += int(batch_size)
+            if sync_timers:
+                _block_until_ready(block_max_matrix, log_omitted_mass_upper)
+        pass2_skipmask_time += time.time() - pass2_skipmask_t0
 
         # -- PASS 2: recompute scores, normalize, accumulate M-step --
         best_score = jnp.full(batch_size, -jnp.inf)
         best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
 
         for b in range(n_blocks):
+            if skip_pass2_block[b]:
+                continue
+
             r0 = b * rotation_block_size
             r1 = r0 + rotation_block_size
             rots_b = rotations_padded[r0:r1]
@@ -1154,8 +1367,11 @@ def run_em(
                     volume_shape,
                 )
 
+            if sync_timers:
+                _block_until_ready(scores)
             pass2_score_time += time.time() - score_t0
 
+            pass2_postprocess_t0 = time.time()
             # Add rotation log-prior (must match pass 1 exactly)
             if log_prior_padded_jnp is not None:
                 if per_image_log_prior:
@@ -1181,6 +1397,9 @@ def run_em(
                 valid = n_rot - r0
                 mask = jnp.arange(rotation_block_size) < valid
                 scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
+            if sync_timers:
+                _block_until_ready(scores)
+            pass2_postprocess_time += time.time() - pass2_postprocess_t0
 
             if use_window:
                 # Windowed M-step: GEMM at reduced dimension, then scatter back
@@ -1203,38 +1422,54 @@ def run_em(
                         volume_shape,
                     )
                 )
+                if sync_timers:
+                    _block_until_ready(
+                        Ft_y,
+                        Ft_ctf,
+                        probs,
+                        block_best,
+                        block_argmax,
+                        summed_windowed,
+                        ctf_probs_windowed,
+                    )
                 mstep_time += time.time() - mstep_t0
 
-                adjoint_y_t0 = time.time()
-                Ft_y = _adjoint_slice_volume_windowed(
-                    summed_windowed,
-                    window_indices,
-                    rots_b,
-                    Ft_y,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    True,
-                )
-                adjoint_y_time += time.time() - adjoint_y_t0
+                if not disable_adjoint_y:
+                    adjoint_y_t0 = time.time()
+                    Ft_y = _adjoint_slice_volume_windowed(
+                        summed_windowed,
+                        window_indices,
+                        rots_b,
+                        Ft_y,
+                        image_shape,
+                        recon_volume_shape,
+                        "linear_interp",
+                        True,
+                    )
+                    if sync_timers:
+                        _block_until_ready(Ft_y)
+                    adjoint_y_time += time.time() - adjoint_y_t0
 
-                adjoint_ctf_t0 = time.time()
-                Ft_ctf = _adjoint_slice_volume_windowed(
-                    ctf_probs_windowed,
-                    window_indices,
-                    rots_b,
-                    Ft_ctf,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    True,
-                )
-                adjoint_ctf_time += time.time() - adjoint_ctf_t0
+                if not disable_adjoint_ctf:
+                    adjoint_ctf_t0 = time.time()
+                    Ft_ctf = _adjoint_slice_volume_windowed(
+                        ctf_probs_windowed,
+                        window_indices,
+                        rots_b,
+                        Ft_ctf,
+                        image_shape,
+                        recon_volume_shape,
+                        "linear_interp",
+                        True,
+                    )
+                    if sync_timers:
+                        _block_until_ready(Ft_ctf)
+                    adjoint_ctf_time += time.time() - adjoint_ctf_t0
             else:
                 # Non-windowed path: use with-DC ctf2 for M-step accumulation
                 mstep_t0 = time.time()
                 (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half_block, ctf_probs_half_block) = (
-                    _m_step_block(
+                    _m_step_block_compute(
                         shifted_recon_half,
                         scores,
                         log_Z,
@@ -1248,7 +1483,47 @@ def run_em(
                         recon_volume_shape,
                     )
                 )
+                if sync_timers:
+                    _block_until_ready(
+                        Ft_y,
+                        Ft_ctf,
+                        probs,
+                        block_best,
+                        block_argmax,
+                        summed_half_block,
+                        ctf_probs_half_block,
+                    )
                 mstep_time += time.time() - mstep_t0
+
+                if not disable_adjoint_y:
+                    adjoint_y_t0 = time.time()
+                    Ft_y = _adjoint_slice_volume_half(
+                        summed_half_block,
+                        rots_b,
+                        Ft_y,
+                        image_shape,
+                        recon_volume_shape,
+                        "linear_interp",
+                        True,
+                    )
+                    if sync_timers:
+                        _block_until_ready(Ft_y)
+                    adjoint_y_time += time.time() - adjoint_y_t0
+
+                if not disable_adjoint_ctf:
+                    adjoint_ctf_t0 = time.time()
+                    Ft_ctf = _adjoint_slice_volume_half(
+                        ctf_probs_half_block,
+                        rots_b,
+                        Ft_ctf,
+                        image_shape,
+                        recon_volume_shape,
+                        "linear_interp",
+                        True,
+                    )
+                    if sync_timers:
+                        _block_until_ready(Ft_ctf)
+                    adjoint_ctf_time += time.time() - adjoint_ctf_t0
 
             # -- Noise accumulation for this rotation block --
             if accumulate_noise:
@@ -1282,15 +1557,21 @@ def run_em(
                     si_for_noise,
                     n_shells,
                 )
+                if sync_timers:
+                    _block_until_ready(block_noise_shells, block_a2_shells, block_xa_shells)
                 noise_wsum += np.asarray(block_noise_shells, dtype=np.float64)
                 noise_a2 += np.asarray(block_a2_shells, dtype=np.float64)
                 noise_xa += np.asarray(block_xa_shells, dtype=np.float64)
                 noise_time += time.time() - noise_t0
 
             # Track global hard assignment
+            assignment_t0 = time.time()
             improved = block_best > best_score
             best_score = jnp.where(improved, block_best, best_score)
             best_argmax = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax)
+            if sync_timers:
+                _block_until_ready(best_score, best_argmax)
+            assignment_time += time.time() - assignment_t0
 
             if return_stats:
                 host_stats_t0 = time.time()
@@ -1304,6 +1585,7 @@ def run_em(
                 host_stats_time += time.time() - host_stats_t0
 
         if return_stats:
+            stats_finalize_t0 = time.time()
             log_score_offset = -0.5 * jnp.squeeze(batch_norm, axis=1)
             pmax = jnp.exp(best_score - log_Z)
             log_evidence_per_image[start_idx:end_idx] = np.asarray(
@@ -1318,6 +1600,9 @@ def run_em(
                 pmax,
                 dtype=np.float32,
             )
+            if sync_timers:
+                _block_until_ready(log_Z, best_score, pmax)
+            stats_finalize_time += time.time() - stats_finalize_t0
 
         hard_assignment[start_idx:end_idx] = np.asarray(best_argmax)
         start_idx = end_idx
@@ -1328,6 +1613,7 @@ def run_em(
     if reconstruction_padding_factor > 1:
         new_mean = None
     else:
+        solve_t0 = time.time()
         new_mean = relion_functions.post_process_from_filter(
             experiment_dataset,
             Ft_ctf,
@@ -1335,6 +1621,9 @@ def run_em(
             tau=mean_variance,
             disc_type=disc_type,
         ).reshape(-1)
+        if sync_timers:
+            _block_until_ready(new_mean)
+        solve_time += time.time() - solve_t0
 
     noise_stats = None
     if accumulate_noise:
@@ -1376,29 +1665,21 @@ def run_em(
             sumw=float(noise_sumw),
         )
 
-    em_profile = None
-    if return_profile:
-        em_profile = EMProfileStats(
-            preprocess_s=float(preprocess_time),
-            pass1_projection_s=float(pass1_projection_time),
-            pass1_score_s=float(pass1_score_time),
-            pass1_logsumexp_s=float(pass1_logsumexp_time),
-            pass2_projection_s=float(pass2_projection_time),
-            pass2_score_s=float(pass2_score_time),
-            mstep_s=float(mstep_time),
-            window_scatter_s=float(window_scatter_time),
-            adjoint_y_s=float(adjoint_y_time),
-            adjoint_ctf_s=float(adjoint_ctf_time),
-            noise_s=float(noise_time),
-            host_stats_s=float(host_stats_time),
-            n_images=int(n_images),
-            n_trans=int(n_trans),
-            n_rot=int(n_rot),
-            n_rot_padded=int(n_rot_padded),
-            n_blocks=int(n_blocks),
-            n_windowed=int(n_windowed),
-            use_window=bool(use_window),
-            reused_pass1_projections=True,
+    if sparse_pass2 and sparse_pass2_total_blocks:
+        omitted_mass_upper_mean = (
+            sparse_pass2_omitted_mass_upper_total / sparse_pass2_omitted_mass_upper_image_count
+            if sparse_pass2_omitted_mass_upper_image_count
+            else 0.0
+        )
+        logger.info(
+            "Sparse pass2 skipped %d / %d pass2 rotation blocks (%.1f%% of pass2 blocks); "
+            "omitted posterior mass upper bound mean=%.3e max=%.3e sum=%.3e",
+            sparse_pass2_skipped_blocks,
+            sparse_pass2_total_blocks,
+            100.0 * sparse_pass2_skipped_blocks / sparse_pass2_total_blocks,
+            omitted_mass_upper_mean,
+            sparse_pass2_omitted_mass_upper_max,
+            sparse_pass2_omitted_mass_upper_total,
         )
 
     if return_stats:
@@ -1410,8 +1691,90 @@ def run_em(
             rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
         )
         host_stats_time += time.time() - host_stats_t0
-        if em_profile is not None:
-            em_profile = em_profile._replace(host_stats_s=float(host_stats_time))
+    if return_profile:
+        ready_values = [new_mean, Ft_y, Ft_ctf]
+        if noise_stats is not None:
+            ready_values.extend([noise_stats.wsum_sigma2_noise, noise_stats.wsum_img_power])
+        if return_stats:
+            ready_values.extend(
+                [
+                    relion_stats.log_evidence_per_image,
+                    relion_stats.best_log_score_per_image,
+                    relion_stats.max_posterior_per_image,
+                    relion_stats.rotation_posterior_sums,
+                ]
+            )
+        _block_until_ready(*ready_values)
+        total_wall_time = time.time() - overall_t0
+        omitted_mass_upper_mean = (
+            sparse_pass2_omitted_mass_upper_total / sparse_pass2_omitted_mass_upper_image_count
+            if sparse_pass2_omitted_mass_upper_image_count
+            else 0.0
+        )
+        attributed_time = (
+            batch_fetch_time
+            + preprocess_time
+            + score_prep_time
+            + pass1_projection_time
+            + pass1_score_time
+            + pass1_postprocess_time
+            + pass1_logsumexp_time
+            + pass2_skipmask_time
+            + pass2_projection_time
+            + pass2_score_time
+            + pass2_postprocess_time
+            + mstep_time
+            + window_scatter_time
+            + adjoint_y_time
+            + adjoint_ctf_time
+            + noise_time
+            + assignment_time
+            + stats_finalize_time
+            + host_stats_time
+            + solve_time
+        )
+        em_profile = EMProfileStats(
+            batch_fetch_s=float(batch_fetch_time),
+            preprocess_s=float(preprocess_time),
+            score_prep_s=float(score_prep_time),
+            pass1_projection_s=float(pass1_projection_time),
+            pass1_score_s=float(pass1_score_time),
+            pass1_postprocess_s=float(pass1_postprocess_time),
+            pass1_logsumexp_s=float(pass1_logsumexp_time),
+            pass2_skipmask_s=float(pass2_skipmask_time),
+            pass2_projection_s=float(pass2_projection_time),
+            pass2_score_s=float(pass2_score_time),
+            pass2_postprocess_s=float(pass2_postprocess_time),
+            mstep_s=float(mstep_time),
+            window_scatter_s=float(window_scatter_time),
+            adjoint_y_s=float(adjoint_y_time),
+            adjoint_ctf_s=float(adjoint_ctf_time),
+            noise_s=float(noise_time),
+            assignment_s=float(assignment_time),
+            stats_finalize_s=float(stats_finalize_time),
+            host_stats_s=float(host_stats_time),
+            solve_s=float(solve_time),
+            accounted_s=float(attributed_time),
+            total_wall_s=float(total_wall_time),
+            unattributed_s=float(max(total_wall_time - attributed_time, 0.0)),
+            n_images=int(n_images),
+            n_trans=int(n_trans),
+            n_rot=int(n_rot),
+            n_rot_padded=int(n_rot_padded),
+            n_blocks=int(n_blocks),
+            n_windowed=int(n_windowed),
+            use_window=bool(use_window),
+            reused_pass1_projections=True,
+            sparse_pass2_total_blocks=int(sparse_pass2_total_blocks),
+            sparse_pass2_skipped_blocks=int(sparse_pass2_skipped_blocks),
+            sparse_pass2_omitted_mass_upper_mean=float(omitted_mass_upper_mean),
+            sparse_pass2_omitted_mass_upper_max=float(sparse_pass2_omitted_mass_upper_max),
+            sparse_pass2_omitted_mass_upper_sum=float(sparse_pass2_omitted_mass_upper_total),
+        )
+    else:
+        em_profile = None
+
+    if return_stats:
         if accumulate_noise:
             if return_profile:
                 return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats, noise_stats, em_profile

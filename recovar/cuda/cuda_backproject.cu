@@ -534,6 +534,161 @@ backproject_kernel(
     }
 }
 
+/* Local exact path only: duplicate the dense backproject kernel so the
+ * original dense entrypoint stays byte-for-byte unchanged. The only semantic
+ * difference is that image samples are stored compactly and mapped back to the
+ * original flattened image grid through pixel_indices[pix]. */
+template <typename T, int ORDER, bool HALF_VOL, bool HALF_IMG, bool REAL_DATA = false>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+backproject_indexed_kernel(
+    T*       __restrict__ vol,
+    const T* __restrict__ img,
+    const int32_t* __restrict__ pixel_indices,
+    const T* __restrict__ rot,   /* (n_images, 6) */
+    int n_pixels, int image_h, int image_w,
+    int N0, int N1, int N2_eff,
+    T c0, T c1, T c2,
+    int upsampling, int full_image_w,
+    T max_r2)
+{
+    __shared__ T R[6];
+
+    const int img_idx = blockIdx.x;
+    const int pix     = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+
+    if (threadIdx.x < 6) R[threadIdx.x] = rot[img_idx * 6 + threadIdx.x];
+    __syncthreads();
+    if (pix >= n_pixels) return;
+
+    const int orig_pix = (int)pixel_indices[pix];
+
+    /* On-the-fly frequency coords — row-major pixel layout. pixel_indices
+     * references the original flattened image/half-image grid, while img uses
+     * the compact local ordering. */
+    const int k0_idx = orig_pix / image_w;   /* row index */
+    const int k1_idx = orig_pix % image_w;   /* col index */
+
+    const T k0 = (T)(k0_idx - image_h / 2) * upsampling;
+    T k1;
+    if (HALF_IMG) {
+        k1 = (k1_idx * 2 == full_image_w)
+             ? (T)(-k1_idx) * upsampling
+             : (T)(k1_idx)  * upsampling;
+    } else {
+        k1 = (T)(k1_idx - image_w / 2) * upsampling;
+    }
+
+    if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
+
+    const T rk0 = k0 * R[0] + k1 * R[3];
+    const T rk1 = k0 * R[1] + k1 * R[4];
+    const T rk2 = k0 * R[2] + k1 * R[5];
+
+    T val_re, val_im;
+    if (REAL_DATA) {
+        val_re = img[img_idx * n_pixels + pix];
+        val_im = (T)0;
+    } else {
+        using V2 = vec2_t<T>;
+        V2 px = reinterpret_cast<const V2*>(img)[img_idx * n_pixels + pix];
+        val_re = px.x;
+        val_im = px.y;
+    }
+
+    const int stride1 = N2_eff;
+    const int stride0 = N1 * N2_eff;
+
+    bool conj_opt = HALF_IMG && HALF_VOL
+        && (k1_idx > 0 && k1_idx * 2 != full_image_w)
+        && !(k0_idx == 0 && (image_h & 1) == 0);
+
+    if (conj_opt) {
+        const int ic2 = (int)c2;
+        const int N2_full = 2 * ic2;
+        if (ORDER == 0) {
+            const int pi0 = round_int(rk0+c0), pi1 = round_int(rk1+c1);
+            const int pi2 = round_int(rk2+c2);
+            const int ci0 = round_int(-rk0+c0), ci1 = round_int(-rk1+c1);
+            const int ci2 = round_int(-rk2+c2);
+            if ((unsigned)pi0 >= (unsigned)N0 || (unsigned)pi1 >= (unsigned)N1 ||
+                (unsigned)pi2 >= (unsigned)N2_full ||
+                (unsigned)ci0 >= (unsigned)N0 || (unsigned)ci1 >= (unsigned)N1 ||
+                (unsigned)ci2 >= (unsigned)N2_full)
+                conj_opt = false;
+        } else {
+            const T pg0 = rk0+c0, pg1 = rk1+c1, pg2 = rk2+c2;
+            const T cg0 = -rk0+c0, cg1 = -rk1+c1, cg2 = -rk2+c2;
+            if (pg0 < (T)0 || pg0 > (T)(N0-1) ||
+                pg1 < (T)0 || pg1 > (T)(N1-1) ||
+                pg2 < (T)0 || pg2 > (T)(N2_full-1) ||
+                cg0 < (T)0 || cg0 > (T)(N0-1) ||
+                cg1 < (T)0 || cg1 > (T)(N1-1) ||
+                cg2 < (T)0 || cg2 > (T)(N2_full-1))
+                conj_opt = false;
+        }
+    }
+
+    if (ORDER == 0) {
+        if (conj_opt)
+            scatter_nearest<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                        c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+        else
+            scatter_nearest<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                         c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+    } else {
+        if (conj_opt)
+            scatter_trilinear<T, true, 1, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                          c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+        else
+            scatter_trilinear<T, HALF_VOL, 0, REAL_DATA>(vol, rk0, rk1, rk2, val_re, val_im,
+                                           c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+    }
+
+    if (HALF_IMG) {
+        if (k1_idx > 0 && k1_idx * 2 != full_image_w) {
+            T crk0, crk1, crk2;
+            if (k0_idx == 0 && (image_h & 1) == 0) {
+                const T neg_k1 = -k1;
+                crk0 = k0 * R[0] + neg_k1 * R[3];
+                crk1 = k0 * R[1] + neg_k1 * R[4];
+                crk2 = k0 * R[2] + neg_k1 * R[5];
+            } else {
+                crk0 = -rk0;
+                crk1 = -rk1;
+                crk2 = -rk2;
+            }
+            const T conj_im = REAL_DATA ? (T)0 : -val_im;
+            if (ORDER == 0) {
+                if (conj_opt)
+                    scatter_nearest<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                val_re, conj_im,
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else if (HALF_VOL)
+                    scatter_nearest<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                val_re, conj_im,
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else
+                    scatter_nearest<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                              val_re, conj_im,
+                                              c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+            } else {
+                if (conj_opt)
+                    scatter_trilinear<T, true, 2, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                  val_re, conj_im,
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else if (HALF_VOL)
+                    scatter_trilinear<T, true, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                  val_re, conj_im,
+                                                  c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+                else
+                    scatter_trilinear<T, false, 0, REAL_DATA>(vol, crk0, crk1, crk2,
+                                                val_re, conj_im,
+                                                c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
+            }
+        }
+    }
+}
+
 /* ================================================================== */
 /*                    Project kernel                                   */
 /* ================================================================== */
@@ -1003,6 +1158,51 @@ cudaError_t launch_backproject(
     case 15: BP(1, true,  true,  true); break;
     }
     #undef BP
+    return cudaGetLastError();
+}
+
+template <typename T>
+cudaError_t launch_backproject_indexed(
+    cudaStream_t s, T* vol, const T* img, const int32_t* pixel_indices, const T* rot,
+    int64_t n_images, int64_t n_pixels,
+    int64_t ih, int64_t iw,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
+    int64_t full_iw, int64_t real_data = 0, int64_t max_r2_x4 = -1)
+{
+    const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
+    const T c0 = (T)(N0 / 2);
+    const T c1 = (T)(N1 / 2);
+    const T c2 = (T)(N2 / 2);
+    const T max_r2 = max_r2_x4 < 0 ? (T)-1 : (T)max_r2_x4 / (T)4;
+    dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
+    dim3 block(BLOCK_SIZE);
+
+    #define BPI(O, HV, HI, RD) \
+        backproject_indexed_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
+            vol, img, pixel_indices, rot, (int)n_pixels, (int)ih, (int)iw, \
+            (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2)
+
+    int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
+    switch (key) {
+    case  0: BPI(0, false, false, false); break;
+    case  1: BPI(0, false, true,  false); break;
+    case  2: BPI(0, true,  false, false); break;
+    case  3: BPI(0, true,  true,  false); break;
+    case  4: BPI(1, false, false, false); break;
+    case  5: BPI(1, false, true,  false); break;
+    case  6: BPI(1, true,  false, false); break;
+    case  7: BPI(1, true,  true,  false); break;
+    case  8: BPI(0, false, false, true); break;
+    case  9: BPI(0, false, true,  true); break;
+    case 10: BPI(0, true,  false, true); break;
+    case 11: BPI(0, true,  true,  true); break;
+    case 12: BPI(1, false, false, true); break;
+    case 13: BPI(1, false, true,  true); break;
+    case 14: BPI(1, true,  false, true); break;
+    case 15: BPI(1, true,  true,  true); break;
+    }
+    #undef BPI
     return cudaGetLastError();
 }
 
@@ -1830,6 +2030,63 @@ ffi::Error BackprojectImpl(
     return ffi::Error::Success();
 }
 
+ffi::Error BackprojectIndexedImpl(
+    cudaStream_t stream,
+    int64_t image_h, int64_t image_w,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t upsampling, int64_t order,
+    int64_t half_volume, int64_t half_image, int64_t full_image_w,
+    int64_t max_r2_x4,
+    ffi::AnyBuffer img,
+    ffi::AnyBuffer pixel_indices,
+    ffi::AnyBuffer rot,
+    ffi::AnyBuffer /*vol_in*/,
+    ffi::Result<ffi::AnyBuffer> vol_out)
+{
+    if (pixel_indices.element_type() != ffi::DataType::S32)
+        return ffi::Error::InvalidArgument("backproject_indexed: pixel_indices must be int32");
+
+    const int64_t n_images = rot.dimensions()[0];
+    const int64_t n_pixels = pixel_indices.dimensions()[0];
+    void*       vol_ptr = vol_out->untyped_data();
+    const void* img_ptr = img.untyped_data();
+    const void* pix_ptr = pixel_indices.untyped_data();
+    const void* rot_ptr = rot.untyped_data();
+
+    cudaError_t err;
+    switch (img.element_type()) {
+    case ffi::DataType::C64:
+        err = launch_backproject_indexed<float>(
+            stream, (float*)vol_ptr, (const float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
+            n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4);
+        break;
+    case ffi::DataType::C128:
+        err = launch_backproject_indexed<double>(
+            stream, (double*)vol_ptr, (const double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
+            n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4);
+        break;
+    case ffi::DataType::F32:
+        err = launch_backproject_indexed<float>(
+            stream, (float*)vol_ptr, (const float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
+            n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4);
+        break;
+    case ffi::DataType::F64:
+        err = launch_backproject_indexed<double>(
+            stream, (double*)vol_ptr, (const double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
+            n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4);
+        break;
+    default:
+        return ffi::Error::InvalidArgument("backproject_indexed: images must be C64, C128, F32, or F64");
+    }
+    if (err != cudaSuccess)
+        return ffi::Error::Internal(std::string("CUDA: ") + cudaGetErrorString(err));
+    return ffi::Error::Success();
+}
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     Backproject, BackprojectImpl,
     ffi::Ffi::Bind()
@@ -1848,6 +2105,28 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>()           /* img    */
         .Arg<ffi::AnyBuffer>()           /* rot    */
         .Arg<ffi::AnyBuffer>()           /* vol_in */
+        .Ret<ffi::AnyBuffer>()           /* vol_out (aliased with vol_in) */
+);
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    BackprojectIndexed, BackprojectIndexedImpl,
+    ffi::Ffi::Bind()
+        .Ctx<ffi::PlatformStream<cudaStream_t>>()
+        .Attr<int64_t>("image_h")
+        .Attr<int64_t>("image_w")
+        .Attr<int64_t>("N0")
+        .Attr<int64_t>("N1")
+        .Attr<int64_t>("N2")
+        .Attr<int64_t>("upsampling")
+        .Attr<int64_t>("order")
+        .Attr<int64_t>("half_volume")
+        .Attr<int64_t>("half_image")
+        .Attr<int64_t>("full_image_w")
+        .Attr<int64_t>("max_r2_x4")
+        .Arg<ffi::AnyBuffer>()           /* img           */
+        .Arg<ffi::AnyBuffer>()           /* pixel_indices */
+        .Arg<ffi::AnyBuffer>()           /* rot           */
+        .Arg<ffi::AnyBuffer>()           /* vol_in        */
         .Ret<ffi::AnyBuffer>()           /* vol_out (aliased with vol_in) */
 );
 

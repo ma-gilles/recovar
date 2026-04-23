@@ -10,10 +10,10 @@ from .em_engine import (
     compute_e_step_weights as compute_e_step_weights,
 )
 from .iteration_loop import (
-    fsc_to_current_size as fsc_to_current_size,
-)
-from .iteration_loop import (
     refine_single_volume as refine_single_volume,
+)
+from .helpers.resolution import (
+    fsc_to_current_size as fsc_to_current_size,
 )
 from .helpers.oversampling import (
     find_significant_mask as find_significant_mask,

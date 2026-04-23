@@ -403,6 +403,77 @@ def adjoint_slice_volume(
     return result if volume is None else result + volume
 
 
+def adjoint_slice_volume_indexed(
+    slices,
+    pixel_indices,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    volume=None,
+    half_image=False,
+    half_volume=False,
+    max_r=_AUTO,
+):
+    """Adjoint slice extraction from a compact indexed pixel layout.
+
+    ``pixel_indices`` contains flattened pixel locations in the original image
+    grid (or packed half-image grid when ``half_image=True``). This is useful
+    for Fourier-windowed paths that gather a compact subset of frequencies.
+    """
+    slices = jnp.asarray(slices)
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if slices.ndim != 2:
+        raise ValueError(f"Expected indexed slices with shape (n_images, n_pixels), got {tuple(slices.shape)}")
+    if slices.shape[1] != pixel_indices.shape[0]:
+        raise ValueError(
+            f"Indexed slices have {slices.shape[1]} pixels per image but pixel_indices has "
+            f"{pixel_indices.shape[0]} entries"
+        )
+
+    max_r = _resolve_max_r(max_r, image_shape)
+    order = decide_order(disc_type)
+
+    if _use_cuda_backproject(order):
+        from recovar.cuda_backproject import backproject_indexed
+
+        vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+        if volume is None:
+            volume = jnp.zeros(int(np.prod(vol_shape)), dtype=slices.dtype)
+        out_dtype = jnp.result_type(slices, volume)
+        slices = slices.astype(out_dtype)
+        volume = volume.astype(out_dtype)
+        return backproject_indexed(
+            volume,
+            slices,
+            pixel_indices,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
+            max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+        )
+
+    H, W = image_shape
+    grid_shape = (H, W // 2 + 1) if half_image else (H, W)
+    n_pixels_full = int(np.prod(grid_shape))
+    full_slices = jnp.zeros((slices.shape[0], n_pixels_full), dtype=slices.dtype)
+    full_slices = full_slices.at[:, pixel_indices].set(slices)
+    return adjoint_slice_volume(
+        full_slices,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        disc_type,
+        volume=volume,
+        half_image=half_image,
+        half_volume=half_volume,
+        max_r=max_r,
+    )
+
+
 def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape, half_image=False, half_volume=False):
     """VJP-based cubic backprojection: gradient of original volume through
     coefficient computation + slice.
