@@ -470,14 +470,16 @@ def run_local_em_exact(
             noise_img_power += np.asarray(batch_img_power_shells, dtype=np.float64)
             noise_sumw += batch_size
 
-            shifted_noise_split = shifted_noise.reshape(batch_size, n_trans, -1)
+            if half_spectrum_scoring:
+                shifted_noise_split = shifted_noise.reshape(batch_size, n_trans, -1)
+            else:
+                shifted_noise_split = shifted_score_split
             summed_masked_noise = compute_local_weighted_sums(probs, shifted_noise_split)
-            ctf_probs_noise = compute_local_ctf_sums(probs, ctf2_over_nv_recon)
             block_noise_shells, _, _ = _compute_noise_block(
                 flatten_bucket_rows(proj_for_noise),
                 flatten_bucket_rows(proj_abs2_for_noise),
                 flatten_bucket_rows(summed_masked_noise),
-                flatten_bucket_rows(ctf_probs_noise),
+                flatten_bucket_rows(ctf_probs),
                 noise_variance_for_noise,
                 shell_indices_noise,
                 n_shells,
