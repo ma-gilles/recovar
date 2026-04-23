@@ -28,12 +28,7 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
-from recovar.em.dense_single_volume.local_layout import (
-    LocalBucketSpec,
-    LocalHypothesisLayout,
-    _exact_bucket_rotation_size,
-    bucket_local_hypothesis_layout,
-)
+from recovar.em.dense_single_volume.local_layout import LocalBucketSpec, LocalHypothesisLayout, bucket_local_hypothesis_layout
 from recovar.em.dense_single_volume.local_score_pass import normalize_local_scores, score_local_bucket
 
 logger = logging.getLogger(__name__)
@@ -189,15 +184,7 @@ def run_local_em_exact(
     # TODO(DENSE_ENGINE_BOUNDARY/E005): revisit half-volume accumulation for
     # local exact backprojection once we can prove the weighted local row sums
     # satisfy the Hermitian assumptions required for exact half-volume folding.
-    # The generic half-volume adjoint is correct for true packed spectra, but
-    # the local sufficient-statistics rows do not currently match the old
-    # dense/full-volume path bit-for-bit under that assumption.
-    use_half_volume_accumulation = False
-    if use_half_volume_accumulation:
-        recon_accum_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(recon_volume_shape)
-    else:
-        recon_accum_shape = recon_volume_shape
-    recon_volume_size = int(np.prod(recon_accum_shape))
+    recon_volume_size = int(np.prod(recon_volume_shape))
 
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
@@ -264,9 +251,6 @@ def run_local_em_exact(
     chunk_nonzero_posterior_rows = []
     n_chunks = 0
     local_total_hypotheses = 0
-    unique_projection_rows = 0
-    padded_unique_projection_rows = 0
-
     bucket_build_t0 = time.time()
     bucket_specs = bucket_local_hypothesis_layout(
         local_layout,
@@ -283,11 +267,6 @@ def run_local_em_exact(
         chunk_padded_rotations.append(int(bucket.image_indices.shape[0] * bucket.bucket_rotation_count))
         total_padded_rotations += int(bucket.image_indices.shape[0] * bucket.bucket_rotation_count)
         local_total_hypotheses += int(np.sum(bucket.actual_rotation_counts) * n_trans)
-        bucket_valid_rotation_ids = np.asarray(bucket.local_rotation_ids[bucket.local_rotation_mask], dtype=np.int32).reshape(-1)
-        bucket_unique_projection_rows = int(np.unique(bucket_valid_rotation_ids).shape[0])
-        unique_projection_rows += bucket_unique_projection_rows
-        padded_unique_projection_rows += int(_exact_bucket_rotation_size(bucket_unique_projection_rows, rotation_block_size))
-
         fetch_t0 = time.time()
         batch_data, ctf_params, fetched_indices = _fetch_indexed_batch(experiment_dataset, bucket.image_indices)
         batch_fetch_time += time.time() - fetch_t0
@@ -416,7 +395,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    use_half_volume_accumulation,
+                    False,
                 )
             else:
                 Ft_y = _adjoint_slice_volume_half(
@@ -427,7 +406,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    use_half_volume_accumulation,
+                    False,
                 )
             if return_profile:
                 _block_until_ready(Ft_y)
@@ -445,7 +424,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    use_half_volume_accumulation,
+                    False,
                 )
             else:
                 Ft_ctf = _adjoint_slice_volume_half(
@@ -456,7 +435,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    use_half_volume_accumulation,
+                    False,
                 )
             if return_profile:
                 _block_until_ready(Ft_ctf)
@@ -539,15 +518,6 @@ def run_local_em_exact(
             sumw=float(noise_sumw),
         )
 
-    expand_full_volume_time = 0.0
-    if use_half_volume_accumulation:
-        expand_t0 = time.time()
-        Ft_y = fourier_transform_utils.half_volume_to_full_volume(Ft_y, recon_volume_shape).reshape(-1)
-        Ft_ctf = fourier_transform_utils.half_volume_to_full_volume(Ft_ctf, recon_volume_shape).reshape(-1)
-        if return_profile:
-            _block_until_ready(Ft_y, Ft_ctf)
-        expand_full_volume_time = time.time() - expand_t0
-
     if not return_profile:
         if accumulate_noise:
             return Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats
@@ -569,7 +539,6 @@ def run_local_em_exact(
         "local_noise_s": np.float64(noise_time),
         "local_postprocess_s": np.float64(postprocess_time),
         "local_host_stats_s": np.float64(host_stats_time),
-        "local_expand_full_volume_s": np.float64(expand_full_volume_time),
         "em_time_s": np.float64(total_wall_time),
         "accounted_em_time_s": np.float64(
             bucket_build_time
@@ -584,7 +553,6 @@ def run_local_em_exact(
             + noise_time
             + postprocess_time
             + host_stats_time
-            + expand_full_volume_time
         ),
         "unattributed_em_time_s": np.float64(
             max(
@@ -602,7 +570,6 @@ def run_local_em_exact(
                     + noise_time
                     + postprocess_time
                     + host_stats_time
-                    + expand_full_volume_time
                 ),
                 0.0,
             )
@@ -625,11 +592,6 @@ def run_local_em_exact(
         "local_num_buckets": np.int32(n_chunks),
         "local_pad_fraction": np.float64(
             0.0 if total_padded_rotations == 0 else 1.0 - total_local_rotations / total_padded_rotations
-        ),
-        "local_unique_projection_rows": np.int64(unique_projection_rows),
-        "local_padded_unique_projection_rows": np.int64(padded_unique_projection_rows),
-        "local_projection_duplicate_factor": np.float64(
-            0.0 if padded_unique_projection_rows == 0 else total_padded_rotations / padded_unique_projection_rows
         ),
         "n_windowed": np.int32(n_windowed),
     }
