@@ -199,9 +199,7 @@ def vdam_m_step_single_class(
         bind.vdam_reconstruct_grad(
             state.Iref[k],
             _post_data,
-            accum_h0.weight,  # weight only used if reweightGrad re-runs;
-            # reconstructGrad ignores this buffer in
-            # use_fsc=False mode (uses its own PPref)
+            accum_h0.weight,
             state.fsc_halves_class[k],
             grad_current_stepsize,
             tau2_fudge_factor,
@@ -211,6 +209,10 @@ def vdam_m_step_single_class(
             r_max,
             grad_min_resol_shell,
             False,
+            False,  # skip_gridding; stub tests feed random weights which NaN
+            # under the skip_gridding=True path used for RELION parity.
+            # Fixture parity (F8b) uses skip_gridding=True; see
+            # test_reconstruct_grad_fixture.
         )
     )
 

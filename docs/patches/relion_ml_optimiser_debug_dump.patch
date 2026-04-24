@@ -1,5 +1,212 @@
+diff --git a/src/backprojector.cpp b/src/backprojector.cpp
+index e76ff72..35a708c 100644
+--- a/src/backprojector.cpp
++++ b/src/backprojector.cpp
+@@ -25,6 +25,9 @@
+  */
+ 
+ #include "src/backprojector.h"
++#include <cstdlib>
++#include <cstdio>
++#include <vector>
+ 
+ #ifdef TIMING
+ 	#define RCTIC(timer,label) (timer.tic(label))
+@@ -1549,6 +1552,35 @@ void BackProjector::reconstruct(MultidimArray<RFLOAT> &vol_out,
+ 			}
+ 		}
+ 
++		// [recovar-parity] Per-shell Wiener-input dump
++		{
++			static int __recovar_dump_call = 0;
++			const char* dump_dir = std::getenv("RECOVAR_WIENER_DUMP_DIR");
++			if (dump_dir != nullptr) {
++				char fn[512];
++				snprintf(fn, 512, "%s/relion_wiener_call_%04d.txt", dump_dir, __recovar_dump_call++);
++				FILE* fp = fopen(fn, "w");
++				if (fp) {
++					fprintf(fp, "# RELION reconstruct() Wiener inputs per shell\n");
++					fprintf(fp, "# pad_size=%d padding_factor=%g r_max=%d tau2_fudge=%g oversampling_correction=%g normalise=%g do_map=%d skip_gridding=%d\n",
++						(int)pad_size, (double)padding_factor, (int)r_max, (double)tau2_fudge,
++						(double)oversampling_correction, (double)normalise, (int)do_map, (int)skip_gridding);
++					fprintf(fp, "# shell  counter  Fweight_avg_raw  tau2  invtau2\n");
++					for (long i = 0; i < XSIZE(radavg_weight); ++i) {
++						RFLOAT cnt = DIRECT_A1D_ELEM(counter, i);
++						// After the /= 1000*counter above, radavg_weight[i] = mean(Fweight)/1000
++						RFLOAT fw_avg = DIRECT_A1D_ELEM(radavg_weight, i) * 1000.0;
++						RFLOAT tau2_val = (i < XSIZE(tau2)) ? DIRECT_A1D_ELEM(tau2, i) : 0.0;
++						RFLOAT iw = (tau2_val > 1e-20) ? 1.0 / (oversampling_correction * tau2_fudge * tau2_val) : 0.0;
++						fprintf(fp, "%4ld %8.0f %14.6e %14.6e %14.6e\n",
++							i, (double)cnt, (double)fw_avg, (double)tau2_val, (double)iw);
++					}
++					fclose(fp);
++					std::cerr << "[recovar-parity] wrote " << fn << std::endl;
++				}
++			}
++		}
++
+ 		bool have_warned = false;
+ 		// perform XMIPP_MAX on all weight elements, and do division of data/weight
+ 		FOR_ALL_ELEMENTS_IN_FFTW_TRANSFORM(Fweight)
+@@ -1793,6 +1825,33 @@ void BackProjector::reconstruct(MultidimArray<RFLOAT> &vol_out,
+ 	ttt.write("reconstruct_before_gridding_correction.spi");
+ #endif
+ 
++	// [recovar-parity] S5: dump vol_out (real-space, ori_size^3) right before griddingCorrect
++	{
++		static int __recovar_s5_call = 0;
++		const char* dump_dir = std::getenv("RECOVAR_WIENER_DUMP_DIR");
++		if (dump_dir != nullptr) {
++			char fn[512];
++			snprintf(fn, 512, "%s/relion_s5_vol_pregrid_%04d.raw", dump_dir, __recovar_s5_call);
++			FILE* fp = fopen(fn, "wb");
++			if (fp) {
++				long nx = XSIZE(vol_out), ny = YSIZE(vol_out), nz = ZSIZE(vol_out);
++				long nelem = nx * ny * nz;
++				// Header line: dims + dtype (float32 always since RFLOAT may be double; we cast)
++				char hdr[512];
++				int hlen = snprintf(hdr, 512, "# RELION S5 vol_pregrid nx=%ld ny=%ld nz=%ld dtype=f4 rflen=%d\n",
++					nx, ny, nz, (int)sizeof(RFLOAT));
++				fwrite(hdr, 1, hlen, fp);
++				std::vector<float> buf(nelem);
++				for (long n = 0; n < nelem; ++n) buf[n] = (float)DIRECT_MULTIDIM_ELEM(vol_out, n);
++				fwrite(buf.data(), sizeof(float), nelem, fp);
++				fclose(fp);
++				std::cerr << "[recovar-parity] S5 wrote " << fn
++					<< " dims=" << nx << "x" << ny << "x" << nz << std::endl;
++			}
++			__recovar_s5_call++;
++		}
++	}
++
+ 	// Correct for the linear/nearest-neighbour interpolation that led to the data array
+ 	RCTIC(ReconTimer,ReconS_18);
+ 
+@@ -2028,6 +2087,35 @@ void BackProjector::reconstructGrad(
+ 
+     //---------------------- FSC estimate ----------------------//
+ 
++    // ---- RECOVAR DEBUG DUMP: reconstructGrad inputs ----
++    {
++        const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++        if (dbg_dir != NULL)
++        {
++            char p[1024]; FILE* f;
++            snprintf(p, sizeof(p), "%s/rg_input_fsc_spectrum.bin", dbg_dir);
++            f = fopen(p, "wb");
++            if (f) { long nz=1, ny=1, nx=XSIZE(fsc_spectrum);
++              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
++              fwrite(fsc_spectrum.data, sizeof(RFLOAT), nx, f); fclose(f); }
++            snprintf(p, sizeof(p), "%s/rg_input_mom1_noise_power.bin", dbg_dir);
++            f = fopen(p, "wb");
++            if (f) { long nz=1, ny=1, nx=XSIZE(mom1_noise_power);
++              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
++              if (nx > 0) fwrite(mom1_noise_power.data, sizeof(RFLOAT), nx, f);
++              fclose(f); }
++            snprintf(p, sizeof(p), "%s/rg_input_args.txt", dbg_dir);
++            f = fopen(p, "w");
++            if (f) {
++                fprintf(f, "grad_stepsize_input=%f\n", (float)grad_stepsize);
++                fprintf(f, "tau2_fudge_input=%f\n", (float)tau2_fudge);
++                fprintf(f, "min_resol_shell=%f\n", (float)min_resol_shell);
++                fprintf(f, "use_fsc=%d\n", use_fsc ? 1:0);
++                fclose(f);
++            }
++        }
++    }
++
+ 	MultidimArray<RFLOAT> fsc_estimate;
+ 
+ 	if (!use_fsc) {
+@@ -2051,6 +2139,24 @@ void BackProjector::reconstructGrad(
+ 
+ 		if (mom1_noise_power.nzyxdim > 0)
+ 		{
++			// ---- RECOVAR DEBUG DUMP: prev_power + counter before averaging ----
++			{
++				const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++				if (dbg_dir != NULL)
++				{
++					char p[1024]; FILE* fp;
++					snprintf(p, sizeof(p), "%s/rg_prev_power_presum.bin", dbg_dir);
++					fp = fopen(p, "wb");
++					if (fp) { long nz=1, ny=1, nx=XSIZE(prev_power);
++					  fwrite(&nz,sizeof(long),1,fp); fwrite(&ny,sizeof(long),1,fp); fwrite(&nx,sizeof(long),1,fp);
++					  fwrite(prev_power.data, sizeof(RFLOAT), nx, fp); fclose(fp); }
++					snprintf(p, sizeof(p), "%s/rg_counter.bin", dbg_dir);
++					fp = fopen(p, "wb");
++					if (fp) { long nz=1, ny=1, nx=XSIZE(counter);
++					  fwrite(&nz,sizeof(long),1,fp); fwrite(&ny,sizeof(long),1,fp); fwrite(&nx,sizeof(long),1,fp);
++					  fwrite(counter.data, sizeof(RFLOAT), nx, fp); fclose(fp); }
++				}
++			}
+ 			//Average power spectra and calculate FSC estimate
+ 			FOR_ALL_DIRECT_ELEMENTS_IN_ARRAY1D(counter)
+ 			{
+@@ -2080,6 +2186,40 @@ void BackProjector::reconstructGrad(
+ 
+     //---------------------- Make gradient update ----------------------//
+ 
++    // ---- RECOVAR DEBUG DUMP: reconstructGrad intermediates ----
++    {
++        const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++        if (dbg_dir != NULL)
++        {
++            char p[1024]; FILE* f;
++            snprintf(p, sizeof(p), "%s/rg_PPref_data_before_update.bin", dbg_dir);
++            f = fopen(p, "wb");
++            if (f) { long nz=ZSIZE(PPref.data), ny=YSIZE(PPref.data), nx=XSIZE(PPref.data);
++              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
++              fwrite(PPref.data.data, sizeof(Complex), nz*ny*nx, f); fclose(f); }
++            snprintf(p, sizeof(p), "%s/rg_fsc_estimate.bin", dbg_dir);
++            f = fopen(p, "wb");
++            if (f) { long nz=1, ny=1, nx=XSIZE(fsc_estimate);
++              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
++              fwrite(fsc_estimate.data, sizeof(RFLOAT), nx, f); fclose(f); }
++            snprintf(p, sizeof(p), "%s/rg_intermediate_meta.txt", dbg_dir);
++            f = fopen(p, "w");
++            if (f) {
++                fprintf(f, "max_r2=%d\n", max_r2);
++                fprintf(f, "r_max=%d\n", r_max);
++                fprintf(f, "padding_factor=%f\n", (float)padding_factor);
++                fprintf(f, "pad_size=%d\n", pad_size);
++                fprintf(f, "ori_size=%d\n", ori_size);
++                fprintf(f, "data_dim=%d\n", data_dim);
++                fprintf(f, "ref_dim=%d\n", ref_dim);
++                fprintf(f, "tau2_fudge_effective=%f\n", (float)tau2_fudge);
++                fprintf(f, "grad_stepsize=%f\n", (float)grad_stepsize);
++                fprintf(f, "skip_gridding=%d\n", skip_gridding);
++                fclose(f);
++            }
++        }
++    }
++
+ 	FOR_ALL_ELEMENTS_IN_ARRAY3D(data)
+ 	{
+ 		const int r2 = k * k + i * i + j * j;
+@@ -2092,6 +2232,20 @@ void BackProjector::reconstructGrad(
+ 			A3D_ELEM(PPref.data, k, i, j) += grad_stepsize * Fgrad;
+ 		}
+ 	}
++
++    // ---- RECOVAR DEBUG DUMP: PPref.data after gradient update ----
++    {
++        const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++        if (dbg_dir != NULL)
++        {
++            char p[1024]; FILE* f;
++            snprintf(p, sizeof(p), "%s/rg_PPref_data_after_update.bin", dbg_dir);
++            f = fopen(p, "wb");
++            if (f) { long nz=ZSIZE(PPref.data), ny=YSIZE(PPref.data), nx=XSIZE(PPref.data);
++              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
++              fwrite(PPref.data.data, sizeof(Complex), nz*ny*nx, f); fclose(f); }
++        }
++    }
+ #ifdef WRITE_DIFF
+ 	{
+ 		FourierTransformer transformer;
 diff --git a/src/ml_optimiser.cpp b/src/ml_optimiser.cpp
-index fb33d84..86ed143 100644
+index fb33d84..d29d447 100644
 --- a/src/ml_optimiser.cpp
 +++ b/src/ml_optimiser.cpp
 @@ -73,6 +73,148 @@
@@ -384,7 +591,98 @@ index fb33d84..86ed143 100644
                      }
                      else
                          (wsum_model.BPref[iclass]).reconstruct(mymodel.Iref[iclass],
-@@ -6878,6 +7222,21 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
+@@ -5380,7 +5724,56 @@ int MlOptimiser::maximizationGradientParameters() {
+         {
+             if ((wsum_model.BPref[iclass].weight).sum() > XMIPP_EQUAL_ACCURACY)
+             {
++                // ---- RECOVAR DEBUG DUMP: pre-pipeline state ----
++                {
++                    const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                    if (dbg_dir != NULL && iter == 1)
++                    {
++                        char p[1024]; FILE* f;
++                        #define DUMP_C3(nm, arr) do { \
++                            snprintf(p, sizeof(p), "%s/pipe_it%d_c%d_" nm ".bin", dbg_dir, iter, iclass); \
++                            f = fopen(p, "wb"); \
++                            if (f) { long nz=ZSIZE(arr), ny=YSIZE(arr), nx=XSIZE(arr); \
++                              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f); \
++                              fwrite((arr).data, sizeof(Complex), nz*ny*nx, f); fclose(f); } \
++                        } while(0)
++                        #define DUMP_R3(nm, arr) do { \
++                            snprintf(p, sizeof(p), "%s/pipe_it%d_c%d_" nm ".bin", dbg_dir, iter, iclass); \
++                            f = fopen(p, "wb"); \
++                            if (f) { long nz=ZSIZE(arr), ny=YSIZE(arr), nx=XSIZE(arr); \
++                              fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f); \
++                              fwrite((arr).data, sizeof(RFLOAT), nz*ny*nx, f); fclose(f); } \
++                        } while(0)
++                        DUMP_C3("bp_data_pre_reweight", wsum_model.BPref[iclass].data);
++                        DUMP_R3("bp_weight", wsum_model.BPref[iclass].weight);
++                        DUMP_C3("Igrad1_pre", mymodel.Igrad1[iclass]);
++                        DUMP_C3("Igrad2_pre", mymodel.Igrad2[iclass]);
++                        if (grad_pseudo_halfsets) {
++                            int ih = iclass + mymodel.nr_classes;
++                            DUMP_C3("bp_data_h_pre_reweight", wsum_model.BPref[ih].data);
++                            DUMP_R3("bp_weight_h", wsum_model.BPref[ih].weight);
++                            DUMP_C3("Igrad1_h_pre", mymodel.Igrad1[ih]);
++                        }
++                        snprintf(p, sizeof(p), "%s/pipe_it%d_c%d_flags.txt", dbg_dir, iter, iclass);
++                        f = fopen(p, "w");
++                        if (f) {
++                            fprintf(f, "grad_pseudo_halfsets=%d\n", grad_pseudo_halfsets ? 1:0);
++                            fprintf(f, "nr_classes=%d\n", mymodel.nr_classes);
++                            fprintf(f, "mu=%f\n", (float)mu);
++                            fclose(f);
++                        }
++                    }
++                }
++
+                 wsum_model.BPref[iclass].reweightGrad();
++
++                {
++                    const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                    if (dbg_dir != NULL && iter == 1) {
++                        char p[1024]; FILE* f;
++                        DUMP_C3("bp_data_post_reweight", wsum_model.BPref[iclass].data);
++                    }
++                }
+                 wsum_model.BPref[iclass].getFristMoment(
+                         mymodel.Igrad1[iclass]);
+ 
+@@ -5410,6 +5803,33 @@ int MlOptimiser::maximizationGradientParameters() {
+                             mymodel.Igrad2[iclass]);
+                 }
+ 
++                // ---- RECOVAR DEBUG DUMP: post-pipeline state ----
++                {
++                    const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
++                    if (dbg_dir != NULL && iter == 1) {
++                        char p[1024]; FILE* f;
++                        DUMP_C3("Igrad1_post", mymodel.Igrad1[iclass]);
++                        DUMP_C3("Igrad2_post", mymodel.Igrad2[iclass]);
++                        DUMP_C3("bp_data_post_applymomenta", wsum_model.BPref[iclass].data);
++                        if (grad_pseudo_halfsets) {
++                            int ih = iclass + mymodel.nr_classes;
++                            DUMP_C3("Igrad1_h_post", mymodel.Igrad1[ih]);
++                            DUMP_C3("bp_data_h_post_reweight", wsum_model.BPref[ih].data);
++                        }
++                        // mom1_noise_power is a member of BackProjector
++                        snprintf(p, sizeof(p), "%s/pipe_it%d_c%d_mom1_noise_power.bin", dbg_dir, iter, iclass);
++                        f = fopen(p, "wb");
++                        if (f) {
++                            long nz=1, ny=1, nx=XSIZE(wsum_model.BPref[iclass].mom1_noise_power);
++                            fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
++                            if (nx > 0) fwrite(wsum_model.BPref[iclass].mom1_noise_power.data, sizeof(RFLOAT), nx, f);
++                            fclose(f);
++                        }
++                        #undef DUMP_C3
++                        #undef DUMP_R3
++                    }
++                }
++
+                 RFLOAT avg_grad(0);
+                 for (unsigned i = 0; i < wsum_model.BPref[iclass].data.nzyxdim; i++)
+                     avg_grad += norm(wsum_model.BPref[iclass].data.data[i]);
+@@ -6878,6 +7298,21 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
                      if (ires > 0 && ires_remapped < XSIZE(mymodel.sigma2_noise[optics_group]))
                          DIRECT_MULTIDIM_ELEM(exp_local_Minvsigma2, n) = 1. / (sigma2_fudge * DIRECT_A1D_ELEM(mymodel.sigma2_noise[optics_group], ires_remapped));
                  }
@@ -406,7 +704,7 @@ index fb33d84..86ed143 100644
              }
  
          }
-@@ -7060,6 +7419,18 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
+@@ -7060,6 +7495,18 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
              }
          }
      }
@@ -425,7 +723,7 @@ index fb33d84..86ed143 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -7299,6 +7670,19 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
+@@ -7299,6 +7746,19 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
                                      }
                                  }
  
@@ -445,7 +743,7 @@ index fb33d84..86ed143 100644
                                  long int ihidden = iorientclass * exp_nr_trans;
                                  for (long int itrans = exp_itrans_min; itrans <= exp_itrans_max; itrans++, ihidden++)
                                  {
-@@ -7691,6 +8075,22 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
+@@ -7691,6 +8151,22 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
          } // end if mymodel.pdf_class[iclass] > 0.
      } // end loop iclass
  
@@ -468,7 +766,7 @@ index fb33d84..86ed143 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -8228,6 +8628,40 @@ void MlOptimiser::convertAllSquaredDifferencesToWeights(long int part_id, int ib
+@@ -8228,6 +8704,40 @@ void MlOptimiser::convertAllSquaredDifferencesToWeights(long int part_id, int ib
      }
      exp_significant_weight = my_significant_weight;
  
@@ -509,7 +807,7 @@ index fb33d84..86ed143 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -9064,6 +9498,20 @@ void MlOptimiser::storeWeightedSums(long int part_id, int ibody,
+@@ -9064,6 +9574,20 @@ void MlOptimiser::storeWeightedSums(long int part_id, int ibody,
      // Also store sum of Pmax
      thr_sum_Pmax += DIRECT_A2D_ELEM(exp_metadata, metadata_offset, METADATA_PMAX);
  

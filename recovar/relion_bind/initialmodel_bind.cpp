@@ -75,6 +75,12 @@ static MultidimArray<Complex> numpy_to_complex_3d(
     long jdim = buf.shape[2];
     MultidimArray<Complex> out(kdim, idim, jdim);
     std::memcpy(out.data, buf.ptr, kdim * idim * jdim * sizeof(Complex));
+    // RELION BackProjector data uses centered origin (setXmippOrigin) with
+    // xinit=0 (half-complex axis starts at DC). Without this the
+    // FOR_ALL_ELEMENTS_IN_ARRAY3D iteration ranges are wrong and fsc
+    // counter/prev_power are computed over the wrong shells.
+    out.setXmippOrigin();
+    out.xinit = 0;
     return out;
 }
 
@@ -243,7 +249,8 @@ static py::array_t<double> vdam_reconstruct_grad(
     int r_max,
     double min_resol_shell,
     bool use_fsc,
-    bool skip_gridding
+    bool skip_gridding,
+    py::object mom1_noise_power_in
 ) {
     // MATCH RELION iter-1 M-step: wsum_model.BPref is built with
     // skip_gridding=true (MlWsumModel::initialise passes the optimiser's
@@ -255,10 +262,27 @@ static py::array_t<double> vdam_reconstruct_grad(
     bp.weight.resize(wt_buf.shape[0], wt_buf.shape[1], wt_buf.shape[2]);
     std::memcpy(bp.weight.data, wt_buf.ptr,
                 wt_buf.shape[0] * wt_buf.shape[1] * wt_buf.shape[2] * sizeof(RFLOAT));
+    // Match RELION's centered-origin layout for weight as well.
+    bp.weight.setXmippOrigin();
+    bp.weight.xinit = 0;
     if (r_max > 0) {
         bp.r_max = r_max;
         // Also reset pad_size to match: pad_size = 2*(round(pf*r_max)+1)+1
         bp.pad_size = 2 * ((int)(padding_factor * r_max + 0.5) + 1) + 1;
+    }
+
+    // Populate mom1_noise_power if caller provided it. This is the
+    // per-shell FSC-weighting signal that applyMomenta normally writes
+    // when do_half is true; if absent, reconstructGrad's `use_fsc=false`
+    // branch falls to fsc_estimate=1 and tau2_fudge=1 which is NOT what
+    // RELION produces when pseudo_halfsets is active.
+    if (!mom1_noise_power_in.is_none()) {
+        auto m1 = mom1_noise_power_in.cast<py::array_t<double, py::array::c_style | py::array::forcecast>>();
+        auto m1_buf = m1.request();
+        long n = m1_buf.shape[m1_buf.ndim - 1];
+        if (m1_buf.ndim > 1) n = m1_buf.size;  // accept (1,1,N) or (N,)
+        bp.mom1_noise_power.resize(n);
+        std::memcpy(bp.mom1_noise_power.data, m1_buf.ptr, n * sizeof(RFLOAT));
     }
 
     auto vol_buf = vol_in.request();
@@ -715,9 +739,15 @@ Returns (updated_data, mom1_noise_power).
           py::arg("interpolator") = TRILINEAR, py::arg("r_max") = -1,
           py::arg("min_resol_shell") = 0.0, py::arg("use_fsc") = false,
           py::arg("skip_gridding") = true,
+          py::arg("mom1_noise_power") = py::none(),
           R"doc(
 BackProjector::reconstructGrad — apply the gradient update to vol.
 Returns the updated real-space volume.
+
+mom1_noise_power: optional per-shell noise power. When provided (as
+produced by applyMomenta in the pseudo-halfsets pipeline) reconstructGrad
+uses the SNR-weighted fsc_estimate path; otherwise it defaults to
+fsc_estimate=1.
 )doc");
 
     // ----- Scheduler free functions -----

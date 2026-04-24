@@ -72,6 +72,14 @@ def test_reconstruct_grad_binding_vs_relion_iter1_dump():
     skip_gridding = bool(int(meta["bpref_skip_gridding"]))
     ori_size = iref_before.shape[0]
 
+    # Load the post-applyMomenta BPref data + mom1_noise_power (the real
+    # inputs to reconstructGrad after the moment pipeline runs)
+    pipe_data = RELION_DUMP_DIR / "pipe_it1_c0_bp_data_post_applymomenta.bin"
+    pipe_m1np = RELION_DUMP_DIR / "pipe_it1_c0_mom1_noise_power.bin"
+    if pipe_data.exists():
+        bp_data = _read_bin(pipe_data)
+    mom1_noise_power = _read_bin(pipe_m1np).ravel() if pipe_m1np.exists() else None
+
     fsc = np.zeros(ori_size // 2 + 1, dtype=np.float64)
     out = np.asarray(
         bind.vdam_reconstruct_grad(
@@ -88,6 +96,7 @@ def test_reconstruct_grad_binding_vs_relion_iter1_dump():
             min_resol,
             False,  # use_fsc
             skip_gridding,
+            mom1_noise_power,
         )
     )
 
@@ -110,10 +119,9 @@ def test_reconstruct_grad_binding_vs_relion_iter1_dump():
         f"  momentum pipeline is F8b's remaining work."
     )
 
-    # Soft floor: confirms the binding runs, produces a volume of the right
-    # shape, and is structurally similar to the target (CC > 0.3). The
-    # machine-precision gate for this test is > 0.999 which requires the
-    # momentum pipeline wiring.
+    # MACHINE-PRECISION gate. With correct inputs (post-applyMomenta bp.data,
+    # mom1_noise_power injected, setXmippOrigin on bp.data / bp.weight) our
+    # binding matches RELION's reconstructGrad output voxel-for-voxel.
     assert out.shape == iref_after.shape
     assert np.all(np.isfinite(out))
-    assert abs(correlation) > 0.3, f"reconstructGrad output unrelated to target: CC={correlation:.4f}"
+    assert correlation > 0.9999, f"reconstructGrad output CC = {correlation:.4f} below machine-precision threshold"
