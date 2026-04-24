@@ -603,9 +603,8 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     )
 
     Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact, noise_exact = exact_outputs
-    half_volume_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(VOLUME_SHAPE)))
-    assert np.asarray(Ft_y_exact).size == half_volume_size
-    assert np.asarray(Ft_ctf_exact).size == half_volume_size
+    assert np.asarray(Ft_y_exact).size == VOLUME_SIZE
+    assert np.asarray(Ft_ctf_exact).size == VOLUME_SIZE
     config = ForwardModelConfig.from_dataset(dataset, disc_type="linear_interp", process_fn=dataset.process_images)
     noise_variance_half = ftu.full_image_to_half_image(noise_variance.reshape(1, -1), dataset.image_shape).squeeze()
     half_weights = make_half_image_weights(dataset.image_shape)
@@ -666,7 +665,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         dataset.volume_shape,
         "linear_interp",
         half_image=True,
-        half_volume=True,
+        half_volume=False,
     )
     Ft_ctf_manual = core.adjoint_slice_volume(
         flatten_bucket_rows(manual_ctf_probs),
@@ -675,11 +674,13 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         dataset.volume_shape,
         "linear_interp",
         half_image=True,
-        half_volume=True,
+        half_volume=False,
     )
 
     np.testing.assert_allclose(np.asarray(Ft_y_exact), np.asarray(Ft_y_manual), atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(np.asarray(Ft_ctf_exact), np.asarray(Ft_ctf_manual), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_y_exact), np.asarray(Ft_y_dense), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_exact), np.asarray(Ft_ctf_dense), atol=1e-5, rtol=1e-5)
     np.testing.assert_array_equal(ha_exact, ha_dense)
     np.testing.assert_allclose(
         np.asarray(stats_exact.log_evidence_per_image),

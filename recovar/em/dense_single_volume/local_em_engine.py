@@ -346,9 +346,10 @@ def run_local_em_exact(
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
     else:
         recon_volume_shape = volume_shape
+    # TODO(DENSE_ENGINE_BOUNDARY/E005): revisit half-volume accumulation for
+    # local exact backprojection once we can prove the weighted local row sums
+    # satisfy the Hermitian assumptions required for exact half-volume folding.
     recon_volume_size = int(np.prod(recon_volume_shape))
-    recon_half_volume_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(recon_volume_shape)
-    recon_half_volume_size = int(np.prod(recon_half_volume_shape))
 
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
@@ -385,8 +386,8 @@ def run_local_em_exact(
         image_shape,
     ).squeeze()
 
-    Ft_y = jnp.zeros(recon_half_volume_size, dtype=experiment_dataset.dtype)
-    Ft_ctf = jnp.zeros(recon_half_volume_size, dtype=experiment_dataset.dtype)
+    Ft_y = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
+    Ft_ctf = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
     hard_assignment = np.empty(n_images, dtype=np.int32)
     log_evidence_per_image = np.empty(n_images, dtype=np.float32)
     best_log_score_per_image = np.empty(n_images, dtype=np.float32)
@@ -678,7 +679,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    True,
+                    False,
                 )
             else:
                 Ft_y = _adjoint_slice_volume_half(
@@ -689,7 +690,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    True,
+                    False,
                 )
             if return_profile:
                 _block_until_ready(Ft_y)
@@ -708,7 +709,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    True,
+                    False,
                 )
             else:
                 Ft_ctf = _adjoint_slice_volume_half(
@@ -719,7 +720,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    True,
+                    False,
                 )
             if return_profile:
                 _block_until_ready(Ft_ctf)
