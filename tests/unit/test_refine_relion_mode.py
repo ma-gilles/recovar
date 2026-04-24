@@ -26,6 +26,7 @@ from recovar.em.dense_single_volume.local_layout import (
     build_local_hypothesis_layout,
     bucket_local_hypothesis_layout,
 )
+from recovar.em.dense_single_volume.local_score_pass import compute_reconstruction_support
 from recovar.em.dense_single_volume.iteration_loop import (
     refine_single_volume,
 )
@@ -55,6 +56,8 @@ from recovar.em.dense_single_volume.helpers.significance import (
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.sampling import (
     apply_relion_rotation_perturbation,
+    build_local_search_grid_metadata,
+    get_local_rotation_grid_fast,
     get_relion_rotation_grid,
     rotation_grid_n_in_planes,
     rotation_grid_size,
@@ -287,7 +290,7 @@ def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_supp
         sigma_offset_angstrom=1.0,
         offset_range_pixels=1.0,
         voxel_size=1.0,
-        grid_metadata={"mode": "factorized"},
+        grid_metadata={"mode": "full", "n_pixels": np.int64(192), "n_psi": np.int64(16)},
     )
 
     np.testing.assert_array_equal(layout.rotation_offsets, np.array([0, 2, 5], dtype=np.int64))
@@ -302,9 +305,57 @@ def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_supp
     np.testing.assert_array_equal(buckets[0].local_rotation_ids[1, :3], np.array([2, 4, 5], dtype=np.int32))
 
 
+def test_build_local_hypothesis_layout_factorized_matches_per_image_selector():
+    healpix_order = 3
+    grid_metadata = build_local_search_grid_metadata(healpix_order)
+    rotation_grid = get_relion_rotation_grid(healpix_order).astype(np.float32)
+    prior_eulers = np.array(
+        [
+            [12.0, 40.0, 3.0],
+            [91.0, 65.0, 29.0],
+            [177.0, 23.0, 144.0],
+        ],
+        dtype=np.float32,
+    )
+
+    layout = build_local_hypothesis_layout(
+        prior_eulers,
+        rotation_grid,
+        sigma_rot=np.deg2rad(7.5),
+        sigma_psi=np.deg2rad(7.5),
+        healpix_order=healpix_order,
+        translations=np.zeros((9, 2), dtype=np.float32),
+        prior_translations=np.zeros((3, 2), dtype=np.float32),
+        sigma_offset_angstrom=1.0,
+        offset_range_pixels=1.0,
+        voxel_size=1.0,
+        grid_metadata=grid_metadata,
+    )
+
+    for image_idx in range(prior_eulers.shape[0]):
+        local_ids_ref, local_log_prior_ref = get_local_rotation_grid_fast(
+            prior_eulers[image_idx : image_idx + 1],
+            np.deg2rad(7.5),
+            np.deg2rad(7.5),
+            healpix_order,
+            sigma_cutoff=3.0,
+            per_image=True,
+            grid_metadata=grid_metadata,
+        )
+        start = int(layout.rotation_offsets[image_idx])
+        stop = int(layout.rotation_offsets[image_idx + 1])
+        np.testing.assert_array_equal(layout.rotation_ids_flat[start:stop], np.asarray(local_ids_ref, dtype=np.int32))
+        np.testing.assert_allclose(
+            layout.rotation_log_priors_flat[start:stop],
+            np.asarray(local_log_prior_ref[0], dtype=np.float32),
+        )
+
+
 def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods():
     layout = LocalHypothesisLayout(
         n_global_rotations=2000,
+        n_pixels=768,
+        n_psi=16,
         rotation_offsets=np.array([0, 1368, 2760, 4176], dtype=np.int64),
         rotation_ids_flat=np.arange(4176, dtype=np.int32),
         rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (4176, 3, 3)).copy(),
@@ -406,6 +457,8 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
 
     local_layout = LocalHypothesisLayout(
         n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
         rotation_offsets=np.array([0, 2], dtype=np.int64),
         rotation_ids_flat=np.array([0, 1], dtype=np.int32),
         rotations_flat=np.asarray(local_rotations, dtype=np.float32),
@@ -426,6 +479,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         rotation_block_size=4,
         current_size=None,
         accumulate_noise=True,
+        reconstruct_significant_only=False,
         return_profile=False,
     )
     _, ha_dense, Ft_y_dense, Ft_ctf_dense, stats_dense, noise_dense = run_em(
@@ -468,6 +522,34 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         np.asarray(noise_dense.wsum_sigma2_noise),
         atol=1e-5,
         rtol=1e-5,
+    )
+
+
+def test_compute_reconstruction_support_matches_relion_style_threshold():
+    probs = jnp.asarray(
+        [
+            [
+                [0.70, 0.20],
+                [0.05, 0.05],
+            ]
+        ],
+        dtype=jnp.float32,
+    )
+
+    sig_samples, sig_rots, n_sig = compute_reconstruction_support(
+        probs,
+        adaptive_fraction=0.9,
+        max_significants=-1,
+    )
+
+    np.testing.assert_array_equal(np.asarray(n_sig), np.array([2], dtype=np.int32))
+    np.testing.assert_array_equal(
+        np.asarray(sig_samples),
+        np.array([[[True, True], [False, False]]]),
+    )
+    np.testing.assert_array_equal(
+        np.asarray(sig_rots),
+        np.array([[True, False]]),
     )
 
 
