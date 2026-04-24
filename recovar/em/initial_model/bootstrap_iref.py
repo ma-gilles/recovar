@@ -192,9 +192,14 @@ def compute_bootstrap_iref_via_cpp(
     from recovar.relion_bind import _relion_bind_core as bind
 
     if current_size <= 0:
-        # RELION's wsum_model.current_size = 1/getResolution(ROUND(0.07*ori))
-        shell = int(np.floor(0.07 * ori_size + 0.5))
-        current_size = int(ori_size * pixel_size / shell)
+        # RELION's wsum_model.current_size for bootstrap goes through
+        # ml_optimiser.cpp:2941 `getPixelFromResolution(1./ini_high)` when
+        # ini_high > 0, and ini_high is set to the 0.07-digital-freq Å
+        # value at line 2518 for do_average_unaligned. Net result:
+        #   current_size = ROUND(0.07 * ori_size) (the SHELL count, not Å)
+        # which on the 64-px fixture is 4 (NOT 136). RELION dumps confirm
+        # r_max=2, pad_size=7, skip_gridding=1 for the BPref accumulator.
+        current_size = int(np.floor(0.07 * ori_size + 0.5))
 
     Iref = np.asarray(
         bind.vdam_bootstrap_iref(

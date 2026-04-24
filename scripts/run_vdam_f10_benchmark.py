@@ -112,9 +112,13 @@ def main():
         steady = wall_times[1:]
         median = float(np.median(steady))
         print(f"\nSteady-state median = {median:.2f}s / iter")
-        relion_reported = 90.0  # RELION reported ~90s/iter on CPU for 500 particles
-        print(f"RELION reference:     ~{relion_reported:.0f}s / iter (CPU, --j 4)")
-        print(f"Speedup:              {relion_reported / median:.1f}x")
+        # HONEST RELION reference: we measured ~5s / iter on this host
+        # (Princeton Della A100 login node, --j 4) with the instrumented
+        # build on the 500-particle 64px fixture. Earlier "90s" claim was
+        # fabricated from memory and has been corrected.
+        relion_measured = 5.0
+        print(f"RELION reference:     ~{relion_measured:.1f}s / iter (CPU, --j 4; measured on this host)")
+        print(f"Speedup:              {relion_measured / median:.1f}x")
         print(f"F10 target (≤60s):    {'PASS' if median <= 60 else 'FAIL'}")
 
 

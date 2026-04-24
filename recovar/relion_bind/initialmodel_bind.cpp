@@ -54,10 +54,11 @@ static BackProjector make_empty_backprojector(
     int ori_size,
     int padding_factor,
     const std::string &sym,
-    int interpolator
+    int interpolator,
+    bool skip_gridding = false
 ) {
     BackProjector bp(ori_size, 3, sym, interpolator, (float)padding_factor,
-                     10, 0, 1.9, 15, 2, false);
+                     10, 0, 1.9, 15, 2, skip_gridding);
     bp.initZeros(-1);
     return bp;
 }
@@ -481,12 +482,17 @@ static py::array_t<double> vdam_bootstrap_iref(
 
     RFLOAT radius_px = particle_diameter_ang / (2.0 * pixel_size);
 
-    // One BackProjector per class (matches wsum_model.BPref[iclass])
+    // One BackProjector per class (matches wsum_model.BPref[iclass]).
+    // RELION's bootstrap path: MlWsumModel uses skip_gridding=true and the
+    // current_size passed to initZeros is the pixel-resolution equivalent
+    // of ini_high (for 64px/8.5A/ini_high=136A this is 4). r_max ends up
+    // = 2 -> pad_size = 7.
     std::vector<BackProjector> bps;
     bps.reserve(nr_classes);
+    bool skip_gridding_bootstrap = true;  // MATCH RELION: wsum_model.BPref is skip_gridding
     for (int k = 0; k < nr_classes; k++) {
         bps.emplace_back(ori_size, 3, "C1", interpolator, (float)padding_factor,
-                         10, 0, 1.9, 15, 2, false);
+                         10, 0, 1.9, 15, 2, skip_gridding_bootstrap);
         bps.back().initZeros(current_size);
     }
 
