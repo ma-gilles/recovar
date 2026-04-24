@@ -445,6 +445,48 @@ def test_adjoint_slice_volume_half_volume_jax_vjp_consistency(monkeypatch):
     np.testing.assert_allclose(out_half_direct, out_half_ref, atol=1e-5, rtol=1e-5)
 
 
+def test_adjoint_slice_volume_half_volume_out_of_plane_half_image_matches_vjp(monkeypatch):
+    monkeypatch.setattr(core_slicing, "_use_cuda_backproject", lambda order: False)
+
+    rng = np.random.default_rng(904)
+    image_shape = (8, 8)
+    volume_shape = (8, 8, 8)
+    rots = _random_rotations(rng, 2)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    half_size = int(np.prod(half_shape))
+
+    real_imgs = rng.standard_normal((2,) + image_shape).astype(np.float32)
+    half_imgs = np.asarray(fourier_transform_utils.get_dft2_real(real_imgs)).reshape(2, -1).astype(np.complex64)
+    weighted_half_imgs = half_imgs * np.asarray([[0.7], [1.3]], dtype=np.float32)
+
+    out_half_direct = np.asarray(
+        core_slicing.adjoint_slice_volume(
+            weighted_half_imgs,
+            rots,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            half_volume=True,
+            max_r=None,
+        )
+    )
+
+    f_ref = lambda hv: core_slicing.slice_volume(
+        fourier_transform_utils.half_volume_to_full_volume(hv, volume_shape),
+        rots,
+        image_shape,
+        volume_shape,
+        "linear_interp",
+        max_r=None,
+    )
+    _, u_ref = jax.vjp(f_ref, jnp.zeros(half_size, dtype=jnp.complex64))
+    full_from_half = np.asarray(fourier_transform_utils.half_image_to_full_image(weighted_half_imgs, image_shape))
+    out_half_ref = np.asarray(u_ref(jnp.asarray(full_from_half))[0])
+
+    np.testing.assert_allclose(out_half_direct, out_half_ref, atol=1e-5, rtol=1e-5)
+
+
 def test_slice_volume_matches_full():
     """slice_volume should match projecting from the full volume."""
     import jax.numpy as jnp

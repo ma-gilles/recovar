@@ -35,3 +35,17 @@ A tracked TODO ID may be removed from code only if:
   - After reconstruction gating, the measured duplicate factor was only about `1.004-1.005`.
   - The dedupe experiment regressed the real `5k` exact-local run from about `76.7s` to about `126.9s`.
   - Keep the simpler direct projection path unless a future benchmark shows a much larger duplicate factor.
+
+- `NOTE(local-half-volume-adjoint)`: the correct exact-local reference for packed half-image rows is the direct `half_volume=True` adjoint or its VJP equivalent, not the old `half_image=True, half_volume=False` path.
+  - For out-of-plane rotations, the old `half_image=True, half_volume=False` comparison path produces a non-Hermitian full Fourier volume and is not a valid reference for packed-half accumulation.
+  - The direct `half_volume=True` adjoint matches the JAX VJP of `slice_volume(..., half_volume=True, half_image=True)` on the weighted local rows, which is the contract the local engine should follow.
+  - Do not reintroduce the “accumulate full then fold to half” workaround as a parity fix; fix tests and downstream consumers against the native packed-half contract instead.
+
+## Remaining Work After The Direct Half-Volume Fix
+
+- Push the packed half-volume layout farther out of the RELION outer loop so the local path no longer depends on dense/global orchestration state (`T001`, `T003`, `T004`).
+- Benchmark the direct `half_volume=True` path on the larger local-search fixtures (`20k @ 128`, `20k @ 256`, `50k @ 256`) and update the comparison table against RELION warm/cold timings.
+- Keep the current warm `5k @ 128` parity benchmark as the guardrail:
+  - direct `half_volume=True` exact local stays at about `20.8s` warm iteration wall
+  - map/Pmax parity remains matched to RELION on that fixture
+- Run the full repo test suite before merging or pushing beyond the working branch. The targeted half-volume tests pass, but the repo rules still require the full suite.
