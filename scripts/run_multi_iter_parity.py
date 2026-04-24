@@ -187,7 +187,19 @@ def main():
         default=None,
         help="Optional log path to scan for JAX compile lines when building the benchmark ledger.",
     )
+    parser.add_argument(
+        "--jax_cache_dir",
+        type=str,
+        default=None,
+        help="Optional persistent JAX compilation cache directory for cross-process warm starts.",
+    )
     args = parser.parse_args()
+
+    if args.jax_cache_dir:
+        os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", args.jax_cache_dir)
+        os.environ.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
+        os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
+        os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES", "0")
 
     import jax
     import jax.numpy as jnp
