@@ -40,7 +40,7 @@ def bind():
     return m
 
 
-def _make_accumulator(k: int, h: int, ori_size: int, seed: int) -> VdamAccumulator:
+def _make_accumulator(k: int, h: int, ori_size: int, seed: int, min_weight: float = 10.0) -> VdamAccumulator:
     """Build a deterministic accumulator with the RELION pad=1 shape."""
     pf = 1
     Nz_pad = ori_size * pf
@@ -50,7 +50,10 @@ def _make_accumulator(k: int, h: int, ori_size: int, seed: int) -> VdamAccumulat
     data = (
         rng.standard_normal((Nz_pad, Ny_pad, Nx_pad_half)) + 1j * rng.standard_normal((Nz_pad, Ny_pad, Nx_pad_half))
     ).astype(np.complex128)
-    weight = rng.uniform(0.1, 5.0, size=(Nz_pad, Ny_pad, Nx_pad_half)).astype(np.float64)
+    # Weights need to be well above zero so reconstruct's Wiener solve
+    # doesn't divide by tiny numbers and produce NaN. Real RELION
+    # accumulators have weights ~ N_particles * CTF^2/sigma^2 >> 1.
+    weight = rng.uniform(min_weight, min_weight * 10.0, size=(Nz_pad, Ny_pad, Nx_pad_half)).astype(np.float64)
     return VdamAccumulator(data=data, weight=weight, class_idx=k, halfset_idx=h)
 
 

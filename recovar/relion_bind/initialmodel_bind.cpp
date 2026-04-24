@@ -496,7 +496,8 @@ static py::array_t<double> vdam_bootstrap_iref(
     int random_seed,
     int padding_factor,   // 1 for InitialModel GUI, 2 for auto-refine
     int interpolator,     // TRILINEAR
-    int current_size      // 1/getResolution(ROUND(0.07*ori_size)); -1 => no windowing
+    int current_size,     // 1/getResolution(ROUND(0.07*ori_size)); -1 => no windowing
+    long minimum_nr_particles  // cap per optics group (RELION default 1000 for 2D)
 ) {
     auto img_buf = images.request();
     if (img_buf.ndim != 3)
@@ -530,7 +531,15 @@ static py::array_t<double> vdam_bootstrap_iref(
 
     FourierTransformer transformer;
 
-    for (long part_id = 0; part_id < N; part_id++) {
+    // RELION's bootstrap caps at minimum_nr_particles_sigma2_noise per
+    // optics group (ml_optimiser.cpp:2898 + :2716). For 2D non-tomo the
+    // default is 1000. Iterating ALL particles over-accumulates by
+    // N/1000 at N=5000, inflating BPref data/weight by 5x.
+    long todo = minimum_nr_particles;
+    if (todo < nr_classes * 5) todo = nr_classes * 5;  // fn_ref == None floor
+    if (todo > N) todo = N;
+
+    for (long part_id = 0; part_id < todo; part_id++) {
         // 1. Per-particle RNG reset
         init_random_generator(random_seed + (int)part_id);
 
@@ -605,6 +614,33 @@ static py::array_t<double> vdam_bootstrap_iref(
     std::memset(out_ptr, 0, nr_classes * ori_size * ori_size * ori_size * sizeof(double));
 
     for (int k = 0; k < nr_classes; k++) {
+        // ---- RECOVAR DEBUG DUMP: our BP accumulator before reconstruct ----
+        {
+            const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR");
+            if (dbg_dir != NULL) {
+                char path[1024]; FILE* f;
+                snprintf(path, sizeof(path), "%s/our_bpref_c%d_data_before.bin", dbg_dir, k);
+                f = fopen(path, "wb");
+                if (f) {
+                    long nz = ZSIZE(bps[k].data), ny = YSIZE(bps[k].data), nx = XSIZE(bps[k].data);
+                    fwrite(&nz, sizeof(long), 1, f);
+                    fwrite(&ny, sizeof(long), 1, f);
+                    fwrite(&nx, sizeof(long), 1, f);
+                    fwrite(bps[k].data.data, sizeof(Complex), nz * ny * nx, f);
+                    fclose(f);
+                }
+                snprintf(path, sizeof(path), "%s/our_bpref_c%d_weight_before.bin", dbg_dir, k);
+                f = fopen(path, "wb");
+                if (f) {
+                    long nz = ZSIZE(bps[k].weight), ny = YSIZE(bps[k].weight), nx = XSIZE(bps[k].weight);
+                    fwrite(&nz, sizeof(long), 1, f);
+                    fwrite(&ny, sizeof(long), 1, f);
+                    fwrite(&nx, sizeof(long), 1, f);
+                    fwrite(bps[k].weight.data, sizeof(RFLOAT), nz * ny * nx, f);
+                    fclose(f);
+                }
+            }
+        }
         MultidimArray<RFLOAT> vol;
         bps[k].reconstruct(vol, 10, false /* do_map */, dummy_tau2,
                            1.0 /* tau2_fudge */, 1.0 /* normalise */, -1 /* minres_map */,
@@ -802,6 +838,7 @@ Returns -1 when subset should span all particles.
           py::arg("padding_factor") = 1,
           py::arg("interpolator") = TRILINEAR,
           py::arg("current_size") = -1,
+          py::arg("minimum_nr_particles") = 1000,
           R"doc(
 Run the RELION InitialModel bootstrap (ml_optimiser.cpp:3127-3205 +
 reconstruct at :3265) end-to-end in C++. Returns the reconstructed
