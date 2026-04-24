@@ -86,7 +86,13 @@ def test_single_iter_plain_em():
     translations = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
 
     mean_ft = jnp.asarray(iref_ft, dtype=jnp.complex64)
-    mean_variance = jnp.zeros_like(mean_ft.real, dtype=jnp.float32)
+    # Seed tau2 (mean_variance) from the reference's own power spectrum.
+    # With tau2=0 the Wiener solve divides by zero producing a wildly
+    # amplified new_mean that correlates poorly with anything. This seeding
+    # is a simple but functional replacement for RELION's proper
+    # data_vs_prior_class → tau2_class update.
+    iref_power = np.abs(iref_ft) ** 2
+    mean_variance = jnp.asarray(iref_power.astype(np.float32))
     nv = jnp.asarray(noise_variance, dtype=jnp.float32)
 
     result = run_em(
@@ -144,7 +150,10 @@ def test_single_iter_plain_em():
         "(bind.vdam_reconstruct_grad) fed with Phase-4 accumulators."
     )
 
-    # Plumbing gate: new_mean is finite and non-trivial. Full VDAM parity
-    # tightens this in a follow-up commit (F8b).
+    # Plumbing gate: new_mean is finite, non-trivial, and has meaningful
+    # correlation with RELION's iter-1 volume. CC around 0.5-0.6 is
+    # expected for plain-EM without VDAM gradient blending; tightening
+    # to > 0.9 requires VDAM reconstructGrad (F8b).
     assert np.all(np.isfinite(new_mean_vol)), "new_mean has NaN/Inf"
-    assert new_mean_vol.std() > 1e-12, f"new_mean is zero: std={new_mean_vol.std()}"
+    assert new_mean_vol.std() > 1e-6, f"new_mean is zero: std={new_mean_vol.std()}"
+    assert best_cc_iter1 > 0.4, f"single-iter volume |CC| vs iter1 too low: {best_cc_iter1:.4f}"
