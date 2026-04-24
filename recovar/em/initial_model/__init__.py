@@ -9,6 +9,7 @@ pure-Python functions so they can be validated against RELION source via
 binding tests in Phase 2.
 """
 
+from .align_symmetry import AlignSymmetrySpec, build_align_symmetry_tokens
 from .e_step import (
     VdamPosterior,
     build_posterior_summary,
@@ -81,4 +82,6 @@ __all__ = [
     "fourier_crop_half",
     "hermitian_weights_relion",
     "minvsigma2_with_dc_zero",
+    "AlignSymmetrySpec",
+    "build_align_symmetry_tokens",
 ]
