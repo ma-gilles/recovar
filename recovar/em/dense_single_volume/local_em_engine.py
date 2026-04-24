@@ -492,16 +492,28 @@ def run_local_em_exact(
         # duplicate factor was only ~1.004-1.005, while the extra gather/shape
         # churn regressed the real 5k local run from ~76.7s to ~126.9s.
         flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
-        proj_half_flat, proj_abs2_half_flat = _compute_projections_block(
-            mean_for_proj,
-            flat_rotations,
-            image_shape,
-            proj_volume_shape,
-            disc_type,
-        )
+        projection_max_r = float(current_size // 2) + 0.5 if use_window else None
+        if projection_max_r is None:
+            proj_half_flat, proj_abs2_half_flat = _compute_projections_block(
+                mean_for_proj,
+                flat_rotations,
+                image_shape,
+                proj_volume_shape,
+                disc_type,
+            )
+        else:
+            proj_half_flat, proj_abs2_half_flat = _compute_projections_block(
+                mean_for_proj,
+                flat_rotations,
+                image_shape,
+                proj_volume_shape,
+                disc_type,
+                max_r=projection_max_r,
+                return_abs2=False,
+            )
         if use_window:
             proj_half = proj_half_flat[:, window_indices].reshape(batch_size, bucket.bucket_rotation_count, n_windowed)
-            proj_abs2 = proj_abs2_half_flat[:, window_indices].reshape(batch_size, bucket.bucket_rotation_count, n_windowed)
+            proj_abs2 = jnp.abs(proj_half) ** 2
             proj_weighted = proj_half * half_weights_windowed[None, None, :]
             proj_abs2_weighted = proj_abs2 * half_weights_windowed[None, None, :]
             proj_for_noise = proj_half
