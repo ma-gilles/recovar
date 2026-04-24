@@ -101,6 +101,19 @@ def _collect_local_profile_rows(save_intermediates_dir):
     return rows
 
 
+def _read_relion_pmax_column(relion_df):
+    """Return RELION per-particle Pmax values when available.
+
+    Older benchmark directories do not always carry
+    ``rlnMaxValueProbDistribution``. Keep those runs usable for timing and
+    structural parity checks by treating the field as optional.
+    """
+
+    if "rlnMaxValueProbDistribution" not in relion_df:
+        return None
+    return np.array(relion_df["rlnMaxValueProbDistribution"], dtype=np.float64)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
@@ -333,7 +346,8 @@ def main():
     # ave_Pmax from per-particle data
     relion_data = starfile.read(f"{prefix}_data.star")
     relion_df = relion_data["particles"] if isinstance(relion_data, dict) else relion_data
-    ave_Pmax = float(np.mean(np.array(relion_df["rlnMaxValueProbDistribution"])))
+    relion_pmax = _read_relion_pmax_column(relion_df)
+    ave_Pmax = float(np.mean(relion_pmax)) if relion_pmax is not None else float("nan")
 
     # has_high_fsc_at_limit (sticky flag)
     has_high_fsc_at_limit = False
@@ -977,7 +991,12 @@ def main():
                 continue
             relion_data_it = starfile.read(str(target_data_star))
             relion_df_it = relion_data_it["particles"] if isinstance(relion_data_it, dict) else relion_data_it
-            relion_pmax_raw = np.array(relion_df_it["rlnMaxValueProbDistribution"], dtype=np.float64)
+            relion_pmax_raw = _read_relion_pmax_column(relion_df_it)
+            if relion_pmax_raw is None:
+                print(
+                    f"\n  Iter {i_iter + 1}: RELION data star it{target_it:03d} lacks rlnMaxValueProbDistribution, skipping per-particle comparison"
+                )
+                continue
 
             # Map RELION particles to original ordering by stack index
             relion_names_it = list(relion_df_it["rlnImageName"])

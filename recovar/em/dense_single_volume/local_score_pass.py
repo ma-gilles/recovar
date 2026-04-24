@@ -7,6 +7,8 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
+from recovar.em.dense_single_volume.helpers.oversampling import find_significant_mask
+
 
 @jax.jit
 def score_local_bucket(
@@ -44,6 +46,26 @@ def normalize_local_scores(scores):
     best_argmax = jnp.argmax(flat_scores, axis=1)
     max_posterior = jnp.exp(best_log_score - log_Z)
     return log_Z, probs, best_log_score, best_argmax, max_posterior
+
+
+def compute_reconstruction_support(probs, adaptive_fraction=0.999, max_significants=-1):
+    """Return RELION-style significant reconstruction support.
+
+    RELION computes the full posterior over local (rotation, translation)
+    hypotheses, then reconstructs only those samples whose weight is at least
+    the per-image ``significant_weight`` threshold implied by
+    ``adaptive_fraction`` and ``maximum_significants``.
+    """
+
+    flat_probs = probs.reshape(probs.shape[0], -1)
+    significant_flat, n_significant_samples = find_significant_mask(
+        flat_probs,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
+    significant_samples = significant_flat.reshape(probs.shape)
+    significant_rotations = jnp.any(significant_samples, axis=-1)
+    return significant_samples, significant_rotations, n_significant_samples
 
 
 @partial(jax.jit, static_argnums=(2,))

@@ -30,6 +30,7 @@ import numpy as np
 from .types import RelionStats
 
 logger = logging.getLogger(__name__)
+_FAST_SIGNIFICANCE_TOPK = 64
 
 
 def map_translation_log_prior_to_fine_grid(
@@ -56,7 +57,7 @@ def map_translation_log_prior_to_fine_grid(
 
 
 @partial(jax.jit, static_argnums=(1, 2))
-def find_significant_mask(weights_flat, adaptive_fraction=0.999, max_significants=500):
+def _find_significant_mask_full_sort(weights_flat, adaptive_fraction=0.999, max_significants=500):
     """Find significant orientation x translation pairs per image.
 
     For each image, identifies the smallest set of (rotation, translation)
@@ -81,7 +82,7 @@ def find_significant_mask(weights_flat, adaptive_fraction=0.999, max_significant
     n_significant : jnp.ndarray, shape (n_images,), dtype int32
         Number of significant samples per image (after capping).
     """
-    n_images, n_samples = weights_flat.shape
+    n_images, _ = weights_flat.shape
 
     # Sort descending per image
     sorted_w = jnp.sort(weights_flat, axis=-1)[:, ::-1]
@@ -109,6 +110,69 @@ def find_significant_mask(weights_flat, adaptive_fraction=0.999, max_significant
     n_significant = jnp.sum(mask, axis=-1).astype(jnp.int32)
 
     return mask, n_significant
+
+
+@partial(jax.jit, static_argnums=(1, 2, 3))
+def _find_significant_mask_topk(weights_flat, adaptive_fraction=0.999, max_significants=500, topk=64):
+    """Fast exact significance thresholding when the cutoff lives in the top-k.
+
+    This mirrors RELION semantics exactly when the significant-weight threshold
+    is determined by one of the top-k samples. If not, the caller must fall
+    back to the full-sort implementation.
+    """
+
+    n_images, _ = weights_flat.shape
+    top_weights, _ = jax.lax.top_k(weights_flat, topk)
+    cumsum = jnp.cumsum(top_weights, axis=-1)
+    total = weights_flat.sum(axis=-1, keepdims=True)
+    frac = cumsum / jnp.maximum(total, 1e-30)
+    threshold_idx = jnp.argmax(frac >= adaptive_fraction, axis=-1)
+
+    if max_significants is not None and int(max_significants) > 0:
+        threshold_idx = jnp.minimum(threshold_idx, int(max_significants) - 1)
+        topk_covers_threshold = jnp.full(
+            (n_images,),
+            int(max_significants) <= int(topk),
+            dtype=bool,
+        )
+    else:
+        topk_covers_threshold = frac[:, -1] >= adaptive_fraction
+
+    threshold_val = top_weights[jnp.arange(n_images), threshold_idx]
+    mask = weights_flat >= threshold_val[:, None]
+    n_significant = jnp.sum(mask, axis=-1).astype(jnp.int32)
+    return mask, n_significant, topk_covers_threshold
+
+
+def find_significant_mask(weights_flat, adaptive_fraction=0.999, max_significants=500):
+    """Find significant orientation x translation pairs per image.
+
+    Uses an exact top-k threshold when possible and falls back to the original
+    full-sort path if the significance cutoff lies beyond the fast top-k band.
+    """
+
+    n_samples = int(weights_flat.shape[-1])
+    topk = min(_FAST_SIGNIFICANCE_TOPK, n_samples)
+    if topk <= 0:
+        return _find_significant_mask_full_sort(
+            weights_flat,
+            adaptive_fraction=adaptive_fraction,
+            max_significants=max_significants,
+        )
+
+    fast_mask, fast_n_significant, topk_covers_threshold = _find_significant_mask_topk(
+        weights_flat,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+        topk=topk,
+    )
+    if bool(np.all(np.asarray(topk_covers_threshold))):
+        return fast_mask, fast_n_significant
+    return _find_significant_mask_full_sort(
+        weights_flat,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
+    )
 
 
 def find_significant_rotations(weights_flat, n_rot, n_trans, adaptive_fraction=0.999, max_significants=500):

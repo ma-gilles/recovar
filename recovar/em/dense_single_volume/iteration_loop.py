@@ -124,6 +124,8 @@ def _run_local_search_iteration(
     sparse_pass2=True,
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
+    adaptive_fraction=0.999,
+    max_significants=-1,
     local_engine="grouped_union",
 ):
     """Run exact local search on the fine HEALPix grid.
@@ -204,6 +206,8 @@ def _run_local_search_iteration(
         return_profile=return_profile,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
     )
 
 
@@ -680,6 +684,8 @@ def _run_local_search_iteration_exact_v1(
     return_profile=False,
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
+    adaptive_fraction=0.999,
+    max_significants=-1,
 ):
     """Exact per-image local engine without grouped union neighborhoods."""
 
@@ -740,11 +746,14 @@ def _run_local_search_iteration_exact_v1(
         projection_padding_factor=projection_padding_factor,
         reconstruction_padding_factor=reconstruction_padding_factor,
         score_with_masked_images=True,
-        half_spectrum_scoring=False,
+        half_spectrum_scoring=True,
         use_float64_scoring=use_float64_scoring,
         return_profile=return_profile,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
+        reconstruct_significant_only=True,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=max_significants,
     )
 
     if accumulate_noise:
@@ -2065,6 +2074,8 @@ def _run_relion_iteration_loop(
                     sparse_pass2=True,
                     disable_adjoint_y=disable_adjoint_y,
                     disable_adjoint_ctf=disable_adjoint_ctf,
+                    adaptive_fraction=adaptive_fraction,
+                    max_significants=max_significants,
                     local_engine=local_engine,
                 )
                 if len(grouped_outputs) == 6:

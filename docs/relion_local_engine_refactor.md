@@ -27,3 +27,11 @@ A tracked TODO ID may be removed from code only if:
 1. this file marks it `RESOLVED`
 2. the PR explicitly explains why
 3. the regression test that pins the ID list is updated intentionally
+
+## Negative Results To Remember
+
+- `NOTE(local-projection-dedupe)`: do not retry per-bucket projection dedupe in the exact local engine unless the measured duplicate factor changes materially on the real `5k` local benchmark. This was tried multiple times and is a bad idea in the current path.
+  - Before RELION-style reconstruction gating, the exact-local projection duplicate factor was already too small to justify extra gather complexity.
+  - After reconstruction gating, the measured duplicate factor was only about `1.004-1.005`.
+  - The dedupe experiment regressed the real `5k` exact-local run from about `76.7s` to about `126.9s`.
+  - Keep the simpler direct projection path unless a future benchmark shows a much larger duplicate factor.

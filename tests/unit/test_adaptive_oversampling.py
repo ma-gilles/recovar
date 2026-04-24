@@ -22,6 +22,7 @@ from recovar.em.dense_single_volume.em_engine import (
     run_em,
 )
 from recovar.em.dense_single_volume.helpers.oversampling import (
+    _find_significant_mask_full_sort,
     find_significant_mask,
     find_significant_rotations,
 )
@@ -220,6 +221,47 @@ class TestSignificanceMaskFraction:
         # Total significant should be small (1 or a few due to numerical ties)
         assert int(n_sig[0]) <= 5, f"Image 0: {int(n_sig[0])} significants, expected ~1"
         assert int(n_sig[1]) <= 5, f"Image 1: {int(n_sig[1])} significants, expected ~1"
+
+    def test_fast_topk_matches_full_sort_on_sharp_posteriors(self):
+        """The fast path should be exactly equivalent when the cutoff is small."""
+        rng = np.random.default_rng(7)
+        raw_w = rng.exponential(scale=1.0, size=(8, 4096)).astype(np.float32)
+        raw_w[:, 0] += 200.0
+        raw_w[:, 1] += 100.0
+        raw_w[:, 2] += 50.0
+        w = jnp.array(raw_w / raw_w.sum(axis=-1, keepdims=True))
+
+        mask_fast, n_sig_fast = find_significant_mask(
+            w,
+            adaptive_fraction=0.999,
+            max_significants=-1,
+        )
+        mask_ref, n_sig_ref = _find_significant_mask_full_sort(
+            w,
+            adaptive_fraction=0.999,
+            max_significants=-1,
+        )
+
+        np.testing.assert_array_equal(np.asarray(mask_fast), np.asarray(mask_ref))
+        np.testing.assert_array_equal(np.asarray(n_sig_fast), np.asarray(n_sig_ref))
+
+    def test_fast_topk_falls_back_to_full_sort_when_cutoff_is_wide(self):
+        """Uniform posteriors force the wrapper to recover the full-sort result."""
+        w = jnp.ones((4, 512), dtype=jnp.float32) / 512.0
+
+        mask_fast, n_sig_fast = find_significant_mask(
+            w,
+            adaptive_fraction=0.999,
+            max_significants=-1,
+        )
+        mask_ref, n_sig_ref = _find_significant_mask_full_sort(
+            w,
+            adaptive_fraction=0.999,
+            max_significants=-1,
+        )
+
+        np.testing.assert_array_equal(np.asarray(mask_fast), np.asarray(mask_ref))
+        np.testing.assert_array_equal(np.asarray(n_sig_fast), np.asarray(n_sig_ref))
 
 
 # ===========================================================================
