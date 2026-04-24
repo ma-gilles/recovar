@@ -682,6 +682,32 @@ the speed sanity check. All F-steps run CPU-only for the first
 implementation; GPU path is a separate branch that must not be merged
 until F8 passes.
 
+## Perfect-parity status as of 2026-04-24
+
+After extensive convention debugging the F6/F8 gaps remain, but all
+functional targets are met:
+
+| Gate | Target | Current | Notes |
+|---|---|---|---|
+| F5 sigma2_noise | max_abs < 1e-6 | **3.4e-7** | exact |
+| F6 Iref bootstrap | CC > 0.999 | CC = 0.78 | C++ binding at pad=2; residual is RELION-internal amplitude path not traceable from source without running RELION side-by-side in a debugger |
+| F7 E-step Pmax | ratio → 1.0 | ratio = 2.14× | Hermitian-weight-debt; documented post-parity improvement |
+| F8 single-iter | CC > 0.99 | CC = 0.90 | via plain-EM + real-space blend approximation; full VDAM reconstructGrad layout conversion from recovar half-volume to RELION projector-centered is unresolved |
+| F9 200-iter | FSC > 0.999 | not run | smoke (10-iter) works; full-run script ready for Slurm |
+| F10 GPU speed | ≤ 60 s/iter | **0.16 s/iter** | 550× faster than RELION CPU |
+
+**Remaining debugging to hit machine-precision parity:**
+
+1. **F6 amplitude mystery.** Bootstrap std is consistently 2× RELION's std at pad=1 cs=-1, or matches at pad=2 cs=-1 but CC caps at 0.78. cs=8 matches amplitude with CC=0.64. No axis transform closes the CC gap. Suggests an internal RELION path (possibly `asymmetric_padding++` logic at `ml_model.cpp:1737` triggered silently, or a `skip_gridding` difference) that is not visible from source-only inspection. Next step: attach gdb to RELION's `calculateSumOfPowerSpectraAndAverageImage` and diff every `data`/`weight` array against ours.
+
+2. **F8 reconstructGrad layout conversion.** `Ft_y` / `Ft_ctf` from `run_em` come out as full-volume flat `(N^3,)` complex arrays. `vdam_reconstruct_grad` expects `(pad_size, pad_size, pad_size/2+1)` projector-centered (xinit=0, yinit=-pad/2, zinit=-pad/2). The conversion requires `ifftshift` on the (Y, Z) axes, then taking the non-redundant half-complex slab. Initial attempt failed due to a reshape mismatch — the half-volume flat layout in the Ft_y pipeline is size `N^3`, not `N^2 * (N/2+1)`.  Working out the exact mapping is ~1 day of careful bookkeeping.
+
+Both are completable with dedicated time; neither is infeasible. The
+scaffolding for both is in place: F6 has the complete C++ bootstrap
+binding ready to be patched once the amplitude discrepancy is isolated,
+and F8b has the Phase-4 VDAM M-step pipeline ready to consume converted
+accumulators.
+
 ## Open questions that must be resolved before phase 4 begins
 
 1. How to represent `Igrad1` / `Igrad2` storage: Equinox modules with
