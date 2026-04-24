@@ -498,7 +498,8 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
     ----------
     weight : array-like
         Combined Fourier weight volume (typically ``(Ft_ctf_0 + Ft_ctf_1) / 2``).
-        Accepts flat or grid-shaped centered-full arrays.
+        Accepts flat or grid-shaped centered-full arrays, or packed
+        half-volume arrays on the same grid.
     volume_shape : tuple[int, int, int]
         Native reconstruction shape ``(N, N, N)``.
     padding_factor : int
@@ -516,43 +517,59 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
     n_shells = ori_half + 1
 
     weight = jnp.asarray(weight).real.reshape(-1).astype(jnp.float64)
+    grid_shape = tuple(d * padding_factor for d in volume_shape) if padding_factor > 1 else volume_shape
+    half_grid_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(grid_shape)
+    full_size = int(np.prod(grid_shape))
+    half_size = int(np.prod(half_grid_shape))
+    if weight.size == full_size:
+        is_half_layout = False
+    elif weight.size == half_size:
+        is_half_layout = True
+    else:
+        raise ValueError(
+            f"Expected full or half Fourier weight with {full_size} or {half_size} voxels for "
+            f"volume_shape={volume_shape} and padding_factor={padding_factor}, got {weight.size}"
+        )
 
     if padding_factor > 1:
-        padded_shape = tuple(d * padding_factor for d in volume_shape)
-        expected_size = int(np.prod(padded_shape))
-        if weight.size != expected_size:
-            raise ValueError(
-                f"Expected padded weight with {expected_size} voxels for volume_shape={volume_shape} "
-                f"and padding_factor={padding_factor}, got {weight.size}"
-            )
-
         padded_dist = fourier_transform_utils.get_grid_of_radial_distances(
-            padded_shape,
+            grid_shape,
             scaled=False,
             frequency_shift=0,
             rounded=False,
         ).reshape(-1)
         shell_index = jnp.minimum(jnp.floor(padded_dist / padding_factor + 0.5).astype(jnp.int32), ori_half)
-
-        # RELION iterates the half-complex x-axis (kx >= 0) only.
-        pf_n = padded_shape[-1]
-        kx_idx = jnp.arange(weight.size) % pf_n
-        included = ((kx_idx == 0) | (kx_idx >= pf_n // 2)).astype(jnp.float64)
+        if is_half_layout:
+            shell_index = jnp.minimum(
+                jnp.floor(
+                    fourier_transform_utils.get_grid_of_radial_distances_real(
+                        grid_shape,
+                        scaled=False,
+                        frequency_shift=0,
+                        rounded=False,
+                    ).reshape(-1)
+                    / padding_factor
+                    + 0.5
+                ).astype(jnp.int32),
+                ori_half,
+            )
+            included = jnp.ones(weight.shape[0], dtype=jnp.float64)
+        else:
+            # RELION iterates the half-complex x-axis (kx >= 0) only.
+            pf_n = grid_shape[-1]
+            kx_idx = jnp.arange(weight.size) % pf_n
+            included = ((kx_idx == 0) | (kx_idx >= pf_n // 2)).astype(jnp.float64)
     else:
-        expected_size = int(np.prod(volume_shape))
-        if weight.size != expected_size:
-            raise ValueError(
-                f"Expected native weight with {expected_size} voxels for volume_shape={volume_shape}, got {weight.size}"
-            )
-        shell_index = (
-            fourier_transform_utils.get_grid_of_radial_distances(
-                volume_shape,
-                scaled=False,
-                frequency_shift=0,
-            )
-            .astype(jnp.int32)
-            .reshape(-1)
+        radial_fn = (
+            fourier_transform_utils.get_grid_of_radial_distances_real
+            if is_half_layout
+            else fourier_transform_utils.get_grid_of_radial_distances
         )
+        shell_index = radial_fn(
+            volume_shape,
+            scaled=False,
+            frequency_shift=0,
+        ).astype(jnp.int32).reshape(-1)
         shell_index = jnp.minimum(shell_index, ori_half)
         included = jnp.ones(weight.shape[0], dtype=jnp.float64)
 
@@ -585,11 +602,11 @@ def compute_relion_tau2_from_weights(
     - sigma2 = count_per_shell / (pf³ * sum_weight_per_shell)
       which is the inverse of the average weight per shell
 
-    When padding_factor > 1, Ft_ctf arrays are at (pf*N)³ but volume_shape
-    is the native (N,N,N).  Shell averages are computed at native resolution
-    (clamping padded radial indices to ori_size/2), matching RELION's
-    updateSSNRarrays which uses ``ires = MIN(ires, ori_size/2)``.
-    Output tau2 is at native N³ resolution.
+    When padding_factor > 1, Ft_ctf arrays are at (pf*N)³ or the packed
+    half-volume equivalent, while volume_shape is the native (N,N,N).
+    Shell averages are computed at native resolution (clamping padded radial
+    indices to ori_size/2), matching RELION's updateSSNRarrays which uses
+    ``ires = MIN(ires, ori_size/2)``. Output tau2 is at native N³ resolution.
     """
     prior_dtype = jnp.float32
 
@@ -685,8 +702,9 @@ def compute_data_vs_prior(Ft_ctf, tau2, volume_shape, padding_factor=1, tau2_fud
     Parameters
     ----------
     Ft_ctf : jnp.ndarray
-        Fourier-space CTF weight array (flattened volume).  The real part
-        gives the per-voxel weight (sum of CTF^2 / noise).
+        Fourier-space CTF weight array in either centered full-volume or
+        packed half-volume layout. The real part gives the per-voxel
+        weight (sum of CTF^2 / noise).
     tau2 : jnp.ndarray, shape (n_shells,)
         Spectral signal prior (one value per radial shell).
     volume_shape : tuple of int
@@ -701,7 +719,11 @@ def compute_data_vs_prior(Ft_ctf, tau2, volume_shape, padding_factor=1, tau2_fud
     jnp.ndarray, shape (n_shells,)
         Per-shell data_vs_prior ratio.
     """
-    avg_weight = average_over_shells(Ft_ctf.real, volume_shape)
+    avg_weight = _compute_relion_weight_shell_stats(
+        Ft_ctf,
+        volume_shape,
+        padding_factor=padding_factor,
+    )["avg_weight_shells"].astype(jnp.asarray(tau2).dtype)
     oversampling_correction = padding_factor**3
     return avg_weight * tau2_fudge * tau2 * oversampling_correction
 
@@ -984,22 +1006,38 @@ def join_halves_at_low_resolution(
     pf = volume_shape[0] // grid_size if volume_shape[0] > grid_size else 1
     lowres_r_max_padded = lowres_r_max * pf
 
-    # Build the radial-shell mask once. Centered Fourier volume → radial
-    # distance from the center is the shell index.
-    radial_dist_3d = fourier_transform_utils.get_grid_of_radial_distances(
-        volume_shape,
-        voxel_size=1,
-        scaled=False,
-        frequency_shift=0,
-        rounded=True,
-    )
-    join_mask_3d = radial_dist_3d <= lowres_r_max_padded
-    join_mask_flat = join_mask_3d.reshape(-1)
-
     Ft_y_0_arr = jnp.asarray(Ft_y_0)
     Ft_y_1_arr = jnp.asarray(Ft_y_1)
     Ft_ctf_0_arr = jnp.asarray(Ft_ctf_0)
     Ft_ctf_1_arr = jnp.asarray(Ft_ctf_1)
+
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(volume_shape)
+    full_size = int(np.prod(volume_shape))
+    half_size = int(np.prod(half_shape))
+    if Ft_y_0_arr.size == full_size:
+        radial_dist_3d = fourier_transform_utils.get_grid_of_radial_distances(
+            volume_shape,
+            voxel_size=1,
+            scaled=False,
+            frequency_shift=0,
+            rounded=True,
+        )
+    elif Ft_y_0_arr.size == half_size:
+        radial_dist_3d = fourier_transform_utils.get_grid_of_radial_distances_real(
+            volume_shape,
+            voxel_size=1,
+            scaled=False,
+            frequency_shift=0,
+            rounded=True,
+        )
+    else:
+        raise ValueError(
+            f"Could not infer Fourier layout for join_halves_at_low_resolution with shape {Ft_y_0_arr.shape} "
+            f"and volume_shape={volume_shape}"
+        )
+
+    join_mask_3d = radial_dist_3d <= lowres_r_max_padded
+    join_mask_flat = join_mask_3d.reshape(-1)
 
     avg_Ft_y = 0.5 * (Ft_y_0_arr + Ft_y_1_arr)
     avg_Ft_ctf = 0.5 * (Ft_ctf_0_arr + Ft_ctf_1_arr)

@@ -18,15 +18,34 @@ pytest.importorskip("jax")
 import healpy as hp
 import jax.numpy as jnp
 
+import recovar.core.fourier_transform_utils as ftu
+from recovar import core
+from recovar.core.configs import ForwardModelConfig
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
+from recovar.em.dense_single_volume.local_backprojection import (
+    compute_local_ctf_sums,
+    compute_local_weighted_sums,
+    flatten_bucket_rotations,
+    flatten_bucket_rows,
+)
+from recovar.em.dense_single_volume.local_em_engine import (
+    _fetch_indexed_batch,
+    _prepare_local_exact_bucket,
+    _reorder_bucket_to_indices,
+    run_local_em_exact,
+)
 from recovar.em.dense_single_volume.local_layout import (
     LocalHypothesisLayout,
     build_local_hypothesis_layout,
     bucket_local_hypothesis_layout,
 )
-from recovar.em.dense_single_volume.local_score_pass import compute_reconstruction_support
+from recovar.em.dense_single_volume.local_score_pass import (
+    compute_reconstruction_support,
+    normalize_local_scores,
+    score_local_bucket,
+)
+from recovar.em.dense_single_volume.em_primitives import make_half_image_weights
 from recovar.em.dense_single_volume.iteration_loop import (
     refine_single_volume,
 )
@@ -502,9 +521,84 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     )
 
     Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact, noise_exact = exact_outputs
+    half_volume_size = int(np.prod(ftu.volume_shape_to_half_volume_shape(VOLUME_SHAPE)))
+    assert np.asarray(Ft_y_exact).size == half_volume_size
+    assert np.asarray(Ft_ctf_exact).size == half_volume_size
+    config = ForwardModelConfig.from_dataset(dataset, disc_type="linear_interp", process_fn=dataset.process_images)
+    noise_variance_half = ftu.full_image_to_half_image(noise_variance.reshape(1, -1), dataset.image_shape).squeeze()
+    half_weights = make_half_image_weights(dataset.image_shape)
+    bucket = bucket_local_hypothesis_layout(
+        local_layout,
+        image_batch_size=1,
+        rotation_block_size=4,
+        max_hypotheses_per_microbatch=32768,
+    )[0]
+    batch_data, ctf_params, fetched_indices = _fetch_indexed_batch(dataset, bucket.image_indices)
+    bucket = _reorder_bucket_to_indices(bucket, fetched_indices)
+    shifted_score_half, shifted_recon_half, _batch_norm, ctf2_over_nv_half, _processed_score_half = (
+        _prepare_local_exact_bucket(
+            dataset,
+            batch_data,
+            ctf_params,
+            noise_variance_half,
+            jnp.asarray(local_layout.translation_grid),
+            config,
+            half_weights,
+            batch_size=1,
+            n_trans=1,
+            score_with_masked_images=True,
+        )
+    )
+    flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
+    n_half = dataset.image_shape[0] * (dataset.image_shape[1] // 2 + 1)
+    proj_half_flat = core.slice_volume(
+        mean,
+        flat_rotations,
+        dataset.image_shape,
+        dataset.volume_shape,
+        "linear_interp",
+        half_image=True,
+    )
+    proj_abs2_half_flat = jnp.abs(proj_half_flat) ** 2
+    proj_half = proj_half_flat.reshape(1, bucket.bucket_rotation_count, n_half)
+    proj_abs2 = proj_abs2_half_flat.reshape(1, bucket.bucket_rotation_count, n_half)
+    proj_weighted = proj_half * half_weights[None, None, :]
+    proj_abs2_weighted = proj_abs2 * half_weights[None, None, :]
+    scores = score_local_bucket(
+        shifted_score_half.reshape(1, 1, -1),
+        ctf2_over_nv_half,
+        proj_weighted,
+        proj_abs2_weighted,
+        jnp.asarray(bucket.local_rotation_log_prior),
+        jnp.asarray(bucket.translation_log_prior),
+        jnp.asarray(bucket.local_rotation_mask),
+    )
+    _log_Z, probs, _best_log_score, _best_argmax, _max_posterior = normalize_local_scores(scores)
+    shifted_recon_split = shifted_recon_half.reshape(1, 1, -1)
+    manual_summed = compute_local_weighted_sums(probs, shifted_recon_split)
+    manual_ctf_probs = compute_local_ctf_sums(probs, ctf2_over_nv_half)
+    Ft_y_manual = core.adjoint_slice_volume(
+        flatten_bucket_rows(manual_summed),
+        flat_rotations,
+        dataset.image_shape,
+        dataset.volume_shape,
+        "linear_interp",
+        half_image=True,
+        half_volume=True,
+    )
+    Ft_ctf_manual = core.adjoint_slice_volume(
+        flatten_bucket_rows(manual_ctf_probs),
+        flat_rotations,
+        dataset.image_shape,
+        dataset.volume_shape,
+        "linear_interp",
+        half_image=True,
+        half_volume=True,
+    )
+
+    np.testing.assert_allclose(np.asarray(Ft_y_exact), np.asarray(Ft_y_manual), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_exact), np.asarray(Ft_ctf_manual), atol=1e-5, rtol=1e-5)
     np.testing.assert_array_equal(ha_exact, ha_dense)
-    np.testing.assert_allclose(np.asarray(Ft_y_exact), np.asarray(Ft_y_dense), atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_ctf_exact), np.asarray(Ft_ctf_dense), atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(
         np.asarray(stats_exact.log_evidence_per_image),
         np.asarray(stats_dense.log_evidence_per_image),

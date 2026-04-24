@@ -96,6 +96,41 @@ logger = logging.getLogger(__name__)
 # oversampling.py: find_significant_rotations, compute_pass2_stats, etc.
 
 
+def _reconstruct_volume_eager(
+    Ft_ctf,
+    Ft_y,
+    vol_shape,
+    padding_factor,
+    tau,
+    tau2_fudge,
+    projection_padding_factor,
+    use_spherical_mask=True,
+    grid_correct=True,
+):
+    """Eager RELION-style reconstruction from full or half Fourier accumulators.
+
+    This keeps the reconstruction boundary out of a single monolithic JIT while
+    letting the local exact path keep its accumulators in packed half-volume
+    layout until the final iDFT boundary.
+    """
+    from recovar.reconstruction import relion_functions
+
+    return relion_functions.post_process_from_filter_v2(
+        Ft_ctf,
+        Ft_y,
+        vol_shape,
+        padding_factor,
+        tau=tau,
+        kernel="triangular",
+        use_spherical_mask=use_spherical_mask,
+        grid_correct=grid_correct,
+        gridding_correct="radial",
+        kernel_width=1,
+        tau2_fudge=tau2_fudge,
+        gridding_padding_factor=projection_padding_factor,
+    )
+
+
 def _run_local_search_iteration(
     experiment_dataset,
     mean,
@@ -1089,59 +1124,6 @@ def _run_relion_iteration_loop(
     See docs/relion5_auto_refine_algorithm.md.
     """
     from recovar.reconstruction import noise, regularization, relion_functions
-    ##TODO: why is this here? Is it because the right function is jitted? Just take off the jit or something I don't see why we need this nested function
-    def _reconstruct_volume_eager(
-        Ft_ctf,
-        Ft_y,
-        vol_shape,
-        padding_factor,
-        tau,
-        tau2_fudge,
-        projection_padding_factor,
-        use_spherical_mask=True,
-        grid_correct=True,
-    ):
-        """Eager (non-JIT) reconstruction matching post_process_from_filter_v2.
-
-        Avoids the massive XLA compilation overhead of JIT-compiling the full
-        256³ FFT + bincount + scatter pipeline as a single graph.  Each step
-        runs as its own small XLA op with negligible per-op compile time.
-        """
-        from recovar.core import fourier_transform_utils as ftu
-        from recovar.core import mask as _mask
-        from recovar.core import padding as _pad
-
-        upsampled_shape = tuple(3 * [vol_shape[0] * padding_factor])
-        valid_indices = (
-            _mask.get_radial_mask(upsampled_shape, radius=upsampled_shape[0] // 2 - 1)
-            .reshape(-1)
-            .astype(Ft_ctf.real.dtype)
-        )
-        Ft_ctf2 = relion_functions.adjust_regularization_relion_style(
-            Ft_ctf.real, ## TODO IS .REAL NECESSARY? HOPEFULLY IT SHOULD BE REAL ALREADY, CHECK
-            upsampled_shape,
-            tau=tau,
-            padding_factor=padding_factor,
-            tau2_fudge=tau2_fudge,
-        )
-        vol = (Ft_y * valid_indices) / Ft_ctf2
-        vol = ftu.get_idft3(vol.reshape(upsampled_shape))
-        vol = _pad.unpad_volume_spatial_domain(
-            vol,
-            upsampled_shape[0] - vol_shape[0],
-        )
-        if use_spherical_mask:
-            vol, _ = _mask.soft_mask_outside_map(vol, cosine_width=3)
-        if grid_correct:
-            gc_pf = projection_padding_factor  # kernel_width=1 for triangular
-            vol, _ = relion_functions.griddingCorrect(
-                vol.reshape(vol_shape),
-                vol_shape[0],
-                gc_pf,
-                order=1,
-            )
-        vol = ftu.get_dft3(vol.reshape(vol_shape))
-        return vol.astype(Ft_y.dtype)
 
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape

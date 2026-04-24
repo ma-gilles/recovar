@@ -489,6 +489,21 @@ def upscale_tau(tau, padding_factor, volume_shape, tau_is_1d=False):
     return tau[radius]
 
 
+def _upscale_tau_half(tau, padding_factor, volume_shape, tau_is_1d=False):
+    if not tau_is_1d:
+        tau = regularization.average_over_shells(tau, volume_shape)
+    radius = (
+        fourier_transform_utils.get_grid_of_radial_distances_real(
+            np.array(volume_shape) * padding_factor,
+            scaled=False,
+            frequency_shift=0,
+        )
+        / padding_factor
+    )
+    radius = jnp.round(radius).astype(jnp.int32).reshape(-1)
+    return tau[radius]
+
+
 def _as_flat_single_volume(arr, volume_shape):
     """Accept flat or grid volume array and return flat vector + was_grid flag."""
     arr = jnp.asarray(arr)
@@ -498,6 +513,21 @@ def _as_flat_single_volume(arr, volume_shape):
     if arr.ndim == 1 and int(arr.shape[0]) == flat_size:
         return arr, False
     raise ValueError(f"Expected array with shape {volume_shape} or ({flat_size},), got {arr.shape}")
+
+
+def _average_over_shells_half(input_vec, volume_shape, frequency_shift=0):
+    radial_distances = (
+        fourier_transform_utils.get_grid_of_radial_distances_real(
+            volume_shape,
+            scaled=False,
+            frequency_shift=frequency_shift,
+        )
+        .astype(int)
+        .reshape(-1)
+    )
+    labels = radial_distances.reshape(-1)
+    indices = jnp.arange(0, volume_shape[0] // 2 - 1)
+    return regularization.jax_scipy_nd_image_mean(input_vec.reshape(-1), labels=labels, index=indices)
 
 
 def adjust_regularization_relion_style(
@@ -528,20 +558,30 @@ def adjust_regularization_relion_style(
 
     # Exact half-volume behavior: reuse full-volume implementation and repack.
     if half_volume:
-        filter_full = fourier_transform_utils.half_volume_to_full_volume(filter_flat, volume_shape).reshape(-1).real
-        reg_full = adjust_regularization_relion_style(
-            filter_full,
-            volume_shape,
-            tau=tau,
-            padding_factor=padding_factor,
-            max_res_shell=max_res_shell,
-            half_volume=False,
-            tau2_fudge=tau2_fudge,
-        )
-        reg_half = fourier_transform_utils.full_volume_to_half_volume(reg_full, volume_shape).reshape(-1)
+        if tau is not None:
+            oversampling_factor = padding_factor**3
+            og_volume_shape = tuple(s // padding_factor for s in volume_shape)
+            tau = _upscale_tau_half(tau, padding_factor, og_volume_shape, tau_is_1d=False)
+            safe_tau = jnp.where(tau > 1e-20, tau, jnp.float32(1.0))
+            inv_tau = 1 / (oversampling_factor * tau2_fudge * safe_tau)
+            inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
+            inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
+            regularized_filter = filter_flat + inv_tau
+        else:
+            regularized_filter = filter_flat
+
+        if max_res_shell is None:
+            max_res_shell = volume_shape[0] // 2 - 1
+
+        avged_reg = _average_over_shells_half(regularized_filter, volume_shape, frequency_shift=0) / 1000
+        avged_reg = avged_reg.at[max_res_shell:].set(avged_reg[max_res_shell - 1])
+        avged_reg_volume = utils.make_radial_image_half(avged_reg, volume_shape).reshape(regularized_filter.shape)
+
+        regularized_filter = jnp.maximum(regularized_filter, avged_reg_volume)
+        regularized_filter = jnp.maximum(regularized_filter, jax_config.EPSILON)
         if input_is_grid:
-            return reg_half.reshape(packed_shape)
-        return reg_half
+            return regularized_filter.reshape(packed_shape)
+        return regularized_filter
 
     if tau is not None:
         # RELION: invtau2 = 1 / (padding_factor^3 * tau2_fudge * tau2[ires])
@@ -661,20 +701,20 @@ def post_process_from_filter_v2(
         packed_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(upsampled_volume_shape)
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, packed_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, packed_shape)
-        # Expand canonical half-volume to full before regularization/iDFT.
-        Ft_ctf_flat = (
-            fourier_transform_utils.half_volume_to_full_volume(Ft_ctf_flat, upsampled_volume_shape).reshape(-1).real
-        )
-        F_ty_flat = fourier_transform_utils.half_volume_to_full_volume(F_ty_flat, upsampled_volume_shape).reshape(-1)
+        valid_indices = (
+            fourier_transform_utils.full_volume_to_half_volume(
+                mask.get_radial_mask(upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1),
+                upsampled_volume_shape,
+            )
+        ).reshape(-1).astype(Ft_ctf_flat.real.dtype)
     else:
         Ft_ctf_flat, _ = _as_flat_single_volume(Ft_ctf, upsampled_volume_shape)
         F_ty_flat, _ = _as_flat_single_volume(F_ty, upsampled_volume_shape)
-
-    valid_indices = (
-        mask.get_radial_mask(upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1)
-        .reshape(-1)
-        .astype(Ft_ctf_flat.real.dtype)
-    )
+        valid_indices = (
+            mask.get_radial_mask(upsampled_volume_shape, radius=upsampled_volume_shape[0] // 2 - 1)
+            .reshape(-1)
+            .astype(Ft_ctf_flat.real.dtype)
+        )
 
     Ft_ctf2 = adjust_regularization_relion_style(
         Ft_ctf_flat.real,
@@ -682,13 +722,16 @@ def post_process_from_filter_v2(
         tau=tau,
         padding_factor=volume_upsampling_factor,
         max_res_shell=None,
-        half_volume=False,
+        half_volume=input_half_volume,
         tau2_fudge=tau2_fudge,
     )
     vol = (F_ty_flat * valid_indices) / Ft_ctf2
 
     # iDFT → crop to original size
-    vol = fourier_transform_utils.get_idft3(vol.reshape(upsampled_volume_shape))
+    if input_half_volume:
+        vol = fourier_transform_utils.get_idft3_real(vol.reshape(packed_shape), volume_shape=upsampled_volume_shape)
+    else:
+        vol = fourier_transform_utils.get_idft3(vol.reshape(upsampled_volume_shape))
     vol = padding.unpad_volume_spatial_domain(vol, upsampled_volume_shape[0] - og_volume_shape[0])
 
     if use_spherical_mask:
@@ -706,10 +749,16 @@ def post_process_from_filter_v2(
     if return_real_space:
         return vol.real.astype(Ft_ctf2.real.dtype)
 
-    vol = fourier_transform_utils.get_dft3(vol.reshape(og_volume_shape))
+    if input_half_volume:
+        vol = fourier_transform_utils.get_dft3_real(vol.reshape(og_volume_shape))
+    else:
+        vol = fourier_transform_utils.get_dft3(vol.reshape(og_volume_shape))
     if return_half_volume:
-        vol = fourier_transform_utils.full_volume_to_half_volume(vol, og_volume_shape)
+        if not input_half_volume:
+            vol = fourier_transform_utils.full_volume_to_half_volume(vol, og_volume_shape)
         return vol.reshape(-1).astype(F_ty_flat.dtype)
+    if input_half_volume:
+        vol = fourier_transform_utils.half_volume_to_full_volume(vol, og_volume_shape)
     return vol.astype(F_ty_flat.dtype)
 
 
