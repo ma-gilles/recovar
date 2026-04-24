@@ -50,7 +50,7 @@ def _stub_estep_factory(ori_size: int):
                 data = (rng.standard_normal((Nz, Ny, Nx_h)) + 1j * rng.standard_normal((Nz, Ny, Nx_h))).astype(
                     np.complex128
                 )
-                weight = rng.uniform(0.1, 5.0, size=(Nz, Ny, Nx_h))
+                weight = rng.uniform(10.0, 100.0, size=(Nz, Ny, Nx_h))
                 accumulators.append(VdamAccumulator(data=data, weight=weight, class_idx=k, halfset_idx=h))
         meta = {
             "pmax_mean": float(rng.uniform(0.1, 0.3)),
