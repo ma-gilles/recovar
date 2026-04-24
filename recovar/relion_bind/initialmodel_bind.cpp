@@ -242,16 +242,24 @@ static py::array_t<double> vdam_reconstruct_grad(
     int interpolator,
     int r_max,
     double min_resol_shell,
-    bool use_fsc
+    bool use_fsc,
+    bool skip_gridding
 ) {
-    BackProjector bp = make_empty_backprojector(ori_size, padding_factor, "C1", interpolator);
+    // MATCH RELION iter-1 M-step: wsum_model.BPref is built with
+    // skip_gridding=true (MlWsumModel::initialise passes the optimiser's
+    // skip_gridding through, and the optimiser's default is true for
+    // gradient refinement per ml_optimiser.cpp).
+    BackProjector bp = make_empty_backprojector(ori_size, padding_factor, "C1", interpolator, skip_gridding);
     bp.data = numpy_to_complex_3d(data_in);
     auto wt_buf = weight_in.request();
     bp.weight.resize(wt_buf.shape[0], wt_buf.shape[1], wt_buf.shape[2]);
     std::memcpy(bp.weight.data, wt_buf.ptr,
                 wt_buf.shape[0] * wt_buf.shape[1] * wt_buf.shape[2] * sizeof(RFLOAT));
-    if (r_max > 0)
+    if (r_max > 0) {
         bp.r_max = r_max;
+        // Also reset pad_size to match: pad_size = 2*(round(pf*r_max)+1)+1
+        bp.pad_size = 2 * ((int)(padding_factor * r_max + 0.5) + 1) + 1;
+    }
 
     auto vol_buf = vol_in.request();
     long nz = vol_buf.shape[0];
@@ -706,6 +714,7 @@ Returns (updated_data, mom1_noise_power).
           py::arg("ori_size"), py::arg("padding_factor") = 1,
           py::arg("interpolator") = TRILINEAR, py::arg("r_max") = -1,
           py::arg("min_resol_shell") = 0.0, py::arg("use_fsc") = false,
+          py::arg("skip_gridding") = true,
           R"doc(
 BackProjector::reconstructGrad — apply the gradient update to vol.
 Returns the updated real-space volume.
