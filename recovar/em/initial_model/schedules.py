@@ -18,6 +18,26 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
+import numpy as np
+
+
+def _relion_cpp_std_to_string_then_textToFloat(value: float) -> float:
+    """Mimic RELION's C++ round-trip `std::to_string(x)` then
+    `textToFloat(str)` which returns `float` (32-bit).
+
+    `std::to_string` uses `%f` formatting (6 decimal places by default).
+    `textToFloat` uses `sscanf("%f", &retval)` so the result is a 32-bit
+    float. The value stored in an RFLOAT (double) is that float32 bit
+    pattern cast to double, which has float32 precision.
+
+    Any schedule code path that formats a float via `std::to_string(...)` and
+    re-parses via `textToFloat(...)` must round-trip through this helper so
+    Python matches C++ bit-for-bit. Source: strings.cpp:220-236.
+    """
+    s = f"{value:f}"  # same default precision as std::to_string (6 decimals)
+    return float(np.float32(s))
+
+
 # ---------------------------------------------------------------------------
 # GUI InitialModel defaults (pipeline_jobs.cpp::initialiseInimodelJob)
 # ---------------------------------------------------------------------------
@@ -258,16 +278,18 @@ def compute_stepsize(
         if ref_dim == 3 and not is_3d_model:
             _scheme = "plain"
         elif ref_dim == 3 and is_3d_model:
-            _scheme = f"{0.9 / _stepsize}-step"
+            # std::to_string uses %f (6-decimal); matches C++ behaviour
+            _scheme = f"{0.9 / _stepsize:f}-step"
         else:
-            _scheme = f"{0.9 / _stepsize}-step"
+            _scheme = f"{0.9 / _stepsize:f}-step"
 
     if _scheme == "plain":
         return _stepsize
 
     if "-step" in _scheme:
         inflate_str = _scheme[: _scheme.find("-step")]
-        inflate = float(inflate_str)
+        # textToFloat returns C++ float (32-bit). Match RELION's precision.
+        inflate = float(np.float32(inflate_str))
         if inflate <= 0.0:
             raise ValueError("Invalid inflate value for --grad_stepsize_scheme <inflate>-step (inflate > 1)")
         return _step_sigmoid_value(
@@ -322,16 +344,17 @@ def compute_tau2_fudge(
         if ref_dim == 3 and not is_3d_model:
             _scheme = "plain"
         elif ref_dim == 3 and is_3d_model:
-            _scheme = f"{_fudge / 1.0}-step"
+            _scheme = f"{_fudge / 1.0:f}-step"
         else:
-            _scheme = f"{_fudge / 1.0}-step"
+            _scheme = f"{_fudge / 1.0:f}-step"
 
     if _scheme == "plain":
         return _fudge
 
     if "-step" in _scheme:
         deflate_str = _scheme[: _scheme.find("-step")]
-        deflate = float(deflate_str)
+        # textToFloat returns C++ float (32-bit). Match RELION's precision.
+        deflate = float(np.float32(deflate_str))
         if deflate <= 0.0:
             raise ValueError("Invalid deflate value for --tau2_fudge_scheme <deflate>-step (deflate > 1)")
         return _step_sigmoid_value(
