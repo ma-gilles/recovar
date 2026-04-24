@@ -58,6 +58,7 @@ set(RELION_SOURCES
     ${RELION_SRC_DIR}/filename.cpp
     ${RELION_SRC_DIR}/strings.cpp
     ${RELION_SRC_DIR}/metadata_table.cpp
+    ${RELION_SRC_DIR}/metadata_container.cpp
     ${RELION_SRC_DIR}/symmetries.cpp
     ${RELION_SRC_DIR}/mask.cpp
     ${RELION_SRC_DIR}/complex.cpp

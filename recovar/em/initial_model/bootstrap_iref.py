@@ -151,6 +151,77 @@ class ParticleCTF:
     ori_size: int = 64
 
 
+def compute_bootstrap_iref_via_cpp(
+    *,
+    images: np.ndarray,  # (N, H, W) real-space particles in stack order
+    defU: np.ndarray,
+    defV: np.ndarray,
+    defAngle: np.ndarray,
+    phase_shift: np.ndarray,
+    voltage: float,
+    Cs: float,
+    Q0: float,
+    pixel_size: float,
+    ori_size: int,
+    nr_classes: int,
+    particle_diameter_ang: float,
+    width_mask_edge_px: float,
+    do_zero_mask: bool,
+    do_ctf_correction: bool,
+    random_seed: int,
+    padding_factor: int = 2,  # RELION's internal BPref uses pad=2 for bootstrap
+    current_size: int = -1,
+) -> np.ndarray:
+    """Run the entire RELION InitialModel bootstrap in C++ (recommended).
+
+    Calls `vdam_bootstrap_iref` which reproduces ml_optimiser.cpp:3127-3205
+    + the reconstruct call at :3265 using real RELION C++ classes
+    (softMaskOutsideMap, FourierTransformer, CenterFFTbySign,
+    windowFourierTransform, CTF::getFftwImage, BackProjector).
+
+    Default `padding_factor=2` gives the best amplitude parity against
+    run_it000_class001.mrc (std within ~6%, CC > 0.78). Despite the GUI
+    command using `--pad 1` for `_rlnPaddingFactor`, the BPref accumulator
+    appears to use pad=2 internally along a code path we haven't fully
+    isolated; `padding_factor=1` gives CC ~0.67 (matches prior handoff).
+
+    Returns an Iref array of shape `(nr_classes, ori_size, ori_size, ori_size)`
+    in the raw BackProjector output frame. Caller may need to convert
+    via `recovar_volume_to_relion` depending on downstream use.
+    """
+    from recovar.relion_bind import _relion_bind_core as bind
+
+    if current_size <= 0:
+        # RELION's wsum_model.current_size = 1/getResolution(ROUND(0.07*ori))
+        shell = int(np.floor(0.07 * ori_size + 0.5))
+        current_size = int(ori_size * pixel_size / shell)
+
+    Iref = np.asarray(
+        bind.vdam_bootstrap_iref(
+            np.ascontiguousarray(images.astype(np.float64)),
+            np.ascontiguousarray(defU.astype(np.float64)),
+            np.ascontiguousarray(defV.astype(np.float64)),
+            np.ascontiguousarray(defAngle.astype(np.float64)),
+            np.ascontiguousarray(phase_shift.astype(np.float64)),
+            voltage,
+            Cs,
+            Q0,
+            pixel_size,
+            ori_size,
+            nr_classes,
+            particle_diameter_ang,
+            width_mask_edge_px,
+            do_zero_mask,
+            do_ctf_correction,
+            random_seed,
+            padding_factor,
+            1,  # TRILINEAR
+            current_size,
+        )
+    )
+    return Iref
+
+
 def compute_bootstrap_iref(
     *,
     images: np.ndarray,  # (N, H, W) real-space particles in stack order

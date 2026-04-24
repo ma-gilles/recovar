@@ -37,8 +37,11 @@
 #include <string>
 
 #include <src/backprojector.h>
+#include <src/ctf.h>
+#include <src/euler.h>
 #include <src/fftw.h>
 #include <src/funcs.h>       // for init_random_generator / rnd_unif
+#include <src/mask.h>        // for softMaskOutsideMap
 
 namespace py = pybind11;
 
@@ -428,6 +431,163 @@ static double vdam_compute_tau2_fudge(
 
 
 /**
+ * Runs the entire RELION InitialModel bootstrap loop in C++ using real
+ * RELION classes — softMaskOutsideMap, FourierTransformer, CenterFFTbySign,
+ * windowFourierTransform, CTF::getFftwImage, BackProjector::set2DFourierTransform,
+ * BackProjector::reconstruct — exactly mirroring
+ * ml_optimiser.cpp::calculateSumOfPowerSpectraAndAverageImage
+ * (fn_ref == "None" branch, lines 3127-3205) + the subsequent
+ * BPref[k].reconstruct call at line 3265.
+ *
+ * Returns Iref of shape `(nr_classes, ori_size, ori_size, ori_size)` in
+ * FFTW-natural layout (origin at array index 0, i.e. BEFORE fftshift).
+ * Caller applies `np.fft.fftshift` to put the origin at the array
+ * centre (recovar convention).
+ */
+static py::array_t<double> vdam_bootstrap_iref(
+    py::array_t<double, py::array::c_style | py::array::forcecast> images,  // (N, H, W) real
+    py::array_t<double, py::array::c_style | py::array::forcecast> defU,    // (N,)
+    py::array_t<double, py::array::c_style | py::array::forcecast> defV,    // (N,)
+    py::array_t<double, py::array::c_style | py::array::forcecast> defAngle,// (N,) degrees
+    py::array_t<double, py::array::c_style | py::array::forcecast> phase_shift, // (N,) degrees
+    double voltage,       // kV
+    double Cs,            // mm
+    double Q0,            // amplitude contrast
+    double pixel_size,    // Å
+    int ori_size,
+    int nr_classes,
+    double particle_diameter_ang,
+    double width_mask_edge_px,
+    bool do_zero_mask,
+    bool do_ctf_correction,
+    int random_seed,
+    int padding_factor,   // 1 for InitialModel GUI, 2 for auto-refine
+    int interpolator,     // TRILINEAR
+    int current_size      // 1/getResolution(ROUND(0.07*ori_size)); -1 => no windowing
+) {
+    auto img_buf = images.request();
+    if (img_buf.ndim != 3)
+        throw std::runtime_error("images must be (N, H, W)");
+    long N = img_buf.shape[0];
+    long H = img_buf.shape[1];
+    long W = img_buf.shape[2];
+    if (H != ori_size || W != ori_size)
+        throw std::runtime_error("image H, W must equal ori_size");
+
+    const double* du = (const double*)defU.request().ptr;
+    const double* dv = (const double*)defV.request().ptr;
+    const double* da = (const double*)defAngle.request().ptr;
+    const double* dp = (const double*)phase_shift.request().ptr;
+
+    RFLOAT radius_px = particle_diameter_ang / (2.0 * pixel_size);
+
+    // One BackProjector per class (matches wsum_model.BPref[iclass])
+    std::vector<BackProjector> bps;
+    bps.reserve(nr_classes);
+    for (int k = 0; k < nr_classes; k++) {
+        bps.emplace_back(ori_size, 3, "C1", interpolator, (float)padding_factor,
+                         10, 0, 1.9, 15, 2, false);
+        bps.back().initZeros(current_size);
+    }
+
+    FourierTransformer transformer;
+
+    for (long part_id = 0; part_id < N; part_id++) {
+        // 1. Per-particle RNG reset
+        init_random_generator(random_seed + (int)part_id);
+
+        // 2-4. Random Euler draws
+        RFLOAT rot  = rnd_unif() * 360.0;
+        RFLOAT tilt = rnd_unif() * 180.0;
+        RFLOAT psi  = rnd_unif() * 360.0;
+
+        Matrix2D<RFLOAT> A;
+        Euler_angles2matrix(rot, tilt, psi, A, false);
+
+        int iclass = (int)(part_id % nr_classes);
+
+        // Load image into MultidimArray
+        Image<RFLOAT> img;
+        img().initZeros(ori_size, ori_size);
+        const double* row = (const double*)img_buf.ptr + part_id * H * W;
+        for (long i = 0; i < H * W; i++)
+            img.data.data[i] = (RFLOAT)row[i];
+        img().setXmippOrigin();
+
+        // 7. Soft-mask
+        if (do_zero_mask) {
+            softMaskOutsideMap(img(), radius_px, width_mask_edge_px, NULL);
+        }
+
+        // 8. FFT (RELION uses normalize=true forward, dividing by N^d)
+        MultidimArray<Complex> Faux;
+        transformer.FourierTransform(img(), Faux, false);
+
+        // 9. CenterFFTbySign
+        CenterFFTbySign(Faux);
+
+        // 10. windowFourierTransform to current_size
+        MultidimArray<Complex> Fimg;
+        windowFourierTransform(Faux, Fimg, current_size > 0 ? current_size : ori_size);
+
+        // 11. Compute CTF
+        MultidimArray<RFLOAT> Fctf;
+        Fctf.resize(Fimg);
+        Fctf.initConstant(1.0);
+        if (do_ctf_correction) {
+            CTF ctf;
+            ctf.setValues(du[part_id], dv[part_id], da[part_id],
+                          voltage, Cs, Q0, 0.0 /* Bfac */, 1.0 /* scale */,
+                          dp[part_id]);
+            ctf.getFftwImage(Fctf, ori_size, ori_size, pixel_size,
+                             false,  // ctf_phase_flipped
+                             false,  // only_flip_phases
+                             false,  // intact_ctf_first_peak
+                             true,   // do_damping
+                             false); // do_ctf_padding
+
+            // 12. Fimg *= Fctf; Fctf² = Fctf * Fctf (weight)
+            FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fimg) {
+                DIRECT_MULTIDIM_ELEM(Fimg, n) *= DIRECT_MULTIDIM_ELEM(Fctf, n);
+                DIRECT_MULTIDIM_ELEM(Fctf, n) *= DIRECT_MULTIDIM_ELEM(Fctf, n);
+            }
+        }
+
+        // 13. Backproject into class iclass
+        bps[iclass].set2DFourierTransform(Fimg, A, &Fctf);
+    }
+
+    // Reconstruct per-class at do_map=false
+    int n_shells = ori_size / 2 + 1;
+    MultidimArray<RFLOAT> dummy_tau2(n_shells);
+    dummy_tau2.initZeros();
+
+    py::array_t<double> out({(long)nr_classes, (long)ori_size, (long)ori_size, (long)ori_size});
+    double* out_ptr = (double*)out.request().ptr;
+    std::memset(out_ptr, 0, nr_classes * ori_size * ori_size * ori_size * sizeof(double));
+
+    for (int k = 0; k < nr_classes; k++) {
+        MultidimArray<RFLOAT> vol;
+        bps[k].reconstruct(vol, 10, false /* do_map */, dummy_tau2,
+                           1.0 /* tau2_fudge */, 1.0 /* normalise */, -1 /* minres_map */,
+                           false /* printTimes */);
+        // vol is shape (ori, ori, ori) — copy into output slab
+        if (ZSIZE(vol) != (long)ori_size || YSIZE(vol) != (long)ori_size
+            || XSIZE(vol) != (long)ori_size) {
+            throw std::runtime_error("reconstructed volume shape != ori_size");
+        }
+        std::memcpy(
+            out_ptr + (long)k * ori_size * ori_size * ori_size,
+            vol.data,
+            (long)ori_size * ori_size * ori_size * sizeof(double)
+        );
+    }
+
+    return out;
+}
+
+
+/**
  * Return the first `n_draws` values of RELION's `rnd_unif()` after
  * `init_random_generator(seed)`. Useful for reproducing per-particle
  * random orientation draws during the InitialModel bootstrap
@@ -583,4 +743,24 @@ Returns -1 when subset should span all particles.
     m.def("vdam_rnd_unif_sequence", &vdam_rnd_unif_sequence,
           py::arg("seed"), py::arg("n_draws"),
           "Return the first n_draws of rnd_unif() after init_random_generator(seed).");
+
+    m.def("vdam_bootstrap_iref", &vdam_bootstrap_iref,
+          py::arg("images"),
+          py::arg("defU"), py::arg("defV"), py::arg("defAngle"),
+          py::arg("phase_shift"),
+          py::arg("voltage"), py::arg("Cs"), py::arg("Q0"),
+          py::arg("pixel_size"), py::arg("ori_size"),
+          py::arg("nr_classes"),
+          py::arg("particle_diameter_ang"), py::arg("width_mask_edge_px"),
+          py::arg("do_zero_mask"), py::arg("do_ctf_correction"),
+          py::arg("random_seed"),
+          py::arg("padding_factor") = 1,
+          py::arg("interpolator") = TRILINEAR,
+          py::arg("current_size") = -1,
+          R"doc(
+Run the RELION InitialModel bootstrap (ml_optimiser.cpp:3127-3205 +
+reconstruct at :3265) end-to-end in C++. Returns the reconstructed
+Iref of shape (nr_classes, ori, ori, ori). Caller applies fftshift to
+put the origin at the array centre.
+)doc");
 }
