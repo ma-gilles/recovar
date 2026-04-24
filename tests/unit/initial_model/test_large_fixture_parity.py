@@ -71,6 +71,7 @@ def test_bootstrap_iref_big_fixture():
     import mrcfile
 
     from recovar.data_io.starfile import read_star
+    from recovar.em.initial_model.bootstrap_iref import reorder_particles_relion_style
     from recovar.relion_bind import _relion_bind_core as bind
 
     with mrcfile.open(BIG_MRCS, permissive=True) as m:
@@ -85,6 +86,11 @@ def test_bootstrap_iref_big_fixture():
     defV = np.array([float(r["_rlnDefocusV"]) for _, r in main.iterrows()])
     defA = np.array([float(r["_rlnDefocusAngle"]) for _, r in main.iterrows()])
     phase = np.array([float(r.get("_rlnPhaseShift", 0.0)) for _, r in main.iterrows()])
+
+    # RELION iterates particles in _rlnMicrographName lex order with a cap
+    # of minimum_nr_particles_sigma2_noise=1000 per optics group. At N=5000
+    # this selects a DIFFERENT first-1000 than plain row order.
+    stack, defU, defV, defA, phase = reorder_particles_relion_style(main, stack, defU, defV, defA, phase)
 
     Iref = np.asarray(
         bind.vdam_bootstrap_iref(
@@ -121,7 +127,8 @@ def test_bootstrap_iref_big_fixture():
         f"  target std = {target.std():.3e}\n"
         f"  amplitude ratio = {Iref[0].std() / target.std():.4f}"
     )
-    assert cc > 0.85, f"F6 big fixture |CC| below floor: {cc:.4f}"
+    # Machine-precision gate with lex-sorted particle order.
+    assert cc > 0.9999, f"F6 big fixture CC below machine precision: {cc:.4f}"
 
 
 @requires_big_fixture
