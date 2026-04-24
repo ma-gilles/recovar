@@ -12,7 +12,6 @@ import numpy as np
 
 import recovar.core as core
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-import recovar.core.padding as padding
 from recovar.core.configs import ForwardModelConfig
 from recovar.em.dense_single_volume.em_primitives import (
     _adjoint_slice_volume_half,
@@ -44,36 +43,6 @@ from recovar.em.dense_single_volume.local_score_pass import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _process_images_half_direct(experiment_dataset, batch, *, apply_image_mask: bool):
-    """Return a direct half-spectrum preprocess when the dataset exposes one.
-
-    The exact local engine only needs half-spectrum images. Most of the current
-    path is already half-image native, but the generic dataset helper still
-    preserves legacy behavior by going through a full FFT and then packing to
-    half-spectrum. For the active exact-local path, prefer the direct rfft
-    route when the image source exposes the standard backend attributes.
-    """
-
-    image_source = getattr(experiment_dataset, "image_source", None)
-    if image_source is None:
-        return None
-
-    image_size = getattr(image_source, "D", None)
-    padding_size = getattr(image_source, "padding", None)
-    multiplier = getattr(image_source, "mult", None)
-    image_mask = getattr(image_source, "mask", None)
-    if image_size is None or padding_size is None or multiplier is None:
-        return None
-    if apply_image_mask and image_mask is None:
-        return None
-
-    images = batch
-    if apply_image_mask:
-        images = images * jnp.asarray(image_mask)
-    images = images * jnp.asarray(multiplier, dtype=images.dtype)
-    return padding.padded_rfft(images, int(image_size), int(padding_size))
 
 
 def _fetch_indexed_batch(experiment_dataset, image_indices):
@@ -123,13 +92,6 @@ def _prepare_local_exact_bucket(
     """
 
     def _process_half(apply_image_mask: bool):
-        processed_half = _process_images_half_direct(
-            experiment_dataset,
-            batch,
-            apply_image_mask=apply_image_mask,
-        )
-        if processed_half is not None:
-            return processed_half.astype(experiment_dataset.dtype, copy=False)
         process_half_fn = getattr(experiment_dataset, "process_images_half", None)
         if process_half_fn is not None:
             return process_half_fn(batch, apply_image_mask=apply_image_mask)
