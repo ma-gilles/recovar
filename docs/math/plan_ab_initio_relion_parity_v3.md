@@ -551,6 +551,137 @@ Out of scope for this branch:
 - `--grad_em_iters > 0` final-EM-tail case (grad-only + a single EM iter is
   what the GUI ships, and what § G pins).
 
+## Fixture-wiring roadmap (remaining work for full parity)
+
+As of 2026-04-24, Phases 1–6 of this plan are implemented + tested
+(142 unit tests, all CPU-only, all passing in ~3 s). Per-iter parity
+against the RELION fixture at
+`/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run/`
+requires the following additional work. Each step has an explicit hard
+parity gate against the fixture.
+
+### F5 — iter-0 `Mavg` + `sigma2_noise` parity
+
+**Status: DONE (2026-04-24).**
+
+`recovar/em/initial_model/avg_unaligned.py::compute_avg_unaligned_and_sigma2`
+matches `run_it000_model.star` `data_model_optics_group_1` sigma2 at:
+
+  max abs diff = 3.413e-7
+  max rel diff = 4.953e-5
+
+Test: `tests/unit/initial_model/test_avg_unaligned_fixture.py`.
+
+### F6 — Iref seeding from `Mavg`
+
+`setSigmaNoiseEstimatesAndSetAverageImage` also seeds each class's Iref
+from the average-unaligned backprojection of a C1 volume from a
+random-orientation subset of the particles (`ml_optimiser.cpp:3259-3265`
+— calls `wsum_model.BPref[iclass].reconstruct(Iref[iclass], ...)` on an
+accumulator built from one particle per class). This is what Phase 3's
+`initialise_denovo_state` currently leaves at zero.
+
+**Implementation:** extend `avg_unaligned.py` to optionally return the
+random-orientation-backprojected Iref and wire it into
+`initialise_denovo_state`. Use the existing `vdam_randomise_particles_order`
+binding so the random class assignment is byte-identical to RELION.
+
+**Parity gate:** `Iref` matches `run_it000_class001.mrc` after
+`initialLowPassFilterReferences` at 0.07·ori_size with edge-width 2.
+Tolerance: correlation > 0.999 and std within ±10%. (The handoff's
+earlier observation of CC=0.67 with 2× std came from a different
+bootstrap path — we bypass that by implementing the RELION code path
+literally rather than trying to replicate via a separate "bootstrap".)
+
+### F7 — E-step wiring at `padding_factor=1`
+
+The Phase-3 `e_step.py` helpers (`minvsigma2_with_dc_zero`,
+`hermitian_weights_relion`, `fourier_crop_half`) need to be threaded into
+a real E-step that:
+
+  - constructs a HEALPix order-1 rotation grid (48 orientations × K
+    classes × 8 sub-orientations from `--oversampling 1` = 384 rotations
+    at iter 1),
+  - constructs a translation grid at `--offset_range 6 --offset_step 2`
+    (7×7 = 49 translations),
+  - CTF-multiplies each image at `padding_factor=1`,
+  - scores `log p(image | rotation, translation, class)` using the
+    current `Iref[class]`,
+  - normalises the posterior with `exp_Mweight` clamping to the top
+    `exp_significant_weight` window (RELION prunes orientations whose
+    weight is below significance_threshold × max_weight),
+  - emits per-(class, halfset) `VdamAccumulator`s by applying the
+    posterior-weighted images into the backprojector at `pad=1`.
+
+Most of this machinery already exists in
+`recovar/em/dense_single_volume/em_engine.py` at `padding_factor=2` for
+auto-refine. The adapter is ~300 lines: switch to pad=1, zero
+`Minvsigma2[0]`, apply RELION's Hermitian weights, and route outputs
+through the existing HEALPix sampler and translation-shift kernels.
+
+**Parity gate:** posterior `Pmax` for 8 hand-picked particles (the
+handoff's [429, 459, 248, 12, 148, 409, 188, 318] list) matches
+`run_it001_data.star` `_rlnMaxValueProbDistribution` within 1% *when*
+Iref is `run_it000_class001.mrc` (not recovar's own Iref). The handoff
+already achieved this at the RELION-ref-injection level
+(mean Pmax 0.1058 vs RELION 0.1060), so this step mainly means porting
+that scoring harness into `recovar/em/initial_model/e_step.py`.
+
+### F8 — Full single-iter parity
+
+With `Mavg`/sigma2 (F5) + Iref seeding (F6) + E-step (F7) + Phase-4
+M-step primitives, run iter 1 end-to-end and compare:
+
+  - `Iref[0]` vs `run_it001_class001.mrc`:
+      correlation > 0.995 real-space + shell-by-shell amplitude ratio
+      within 5% to Nyquist.
+  - `Igrad1[slot_0]`, `Igrad1[slot_1]`, `Igrad2[0]` vs
+      `run_it001_1moment001.mrc` / `run_it001_2moment001.mrc` after
+      RELION-frame conversion (`load_relion_volume`).
+      Relative L2 diff < 1e-6 since these are accumulators, not
+      reconstructions.
+  - `sigma2_noise[0]` vs iter-1 sigma2 in `run_it001_model.star`:
+      max abs diff < 1e-6.
+  - `tau2_class`, `fsc_halves_class`, `data_vs_prior_class`:
+      max abs diff < 1e-5.
+
+If this gate passes, iter-2+ parity follows mechanically (same code
+path, no additional algorithmic surface). The RELION fixture has 2 iters
+of extract and full-run MRCs for iter 0, 1, 2 which lets us pin iter-2
+parity at the same tolerances before declaring "iter-by-iter matches".
+
+### F9 — Full 200-iter parity (quality gate)
+
+`Iref[0]` after 200 iters and after `align_symmetry` matches the
+fixture's `initial_model.mrc` with shell-by-shell FSC ≥ 0.999 to
+Nyquist. FSC against ground truth is reported but not gated.
+
+### F10 — Speed parity (performance gate)
+
+RELION's reference run wall-time was recorded in `relion_stdout.log`
+(~7.5 min for 500 particles × 200 iters on CPU in the fixture's `--j 4`
+configuration). recovar's target:
+
+  - CPU parity: within ±25% of RELION wall-time on the same CPU.
+  - GPU target: ≤ 60 s per iter on A100-80GB for 5000 particles at box
+    128 (extrapolating from the existing dense-path numbers in
+    `recovar/em/CLAUDE.md` — ~29 s/iter for pad=2 auto-refine on 36k
+    rotations; VDAM at pad=1 / 384 rotations should be ~6-10× faster).
+
+The GPU path requires JIT-compiling the E-step adapter (no host-round-
+trips per rotation), using the existing half-spectrum GEMM kernel, and
+keeping `Iref`/`Igrad*` on-device across iterations. M-step primitives
+currently route through C++ host bindings; the bindings must either (a)
+become FFI XLA kernels, or (b) be replaced by pure-JAX ports once F8
+parity is locked in.
+
+**Hard gates per step:** F5, F6, F7, F8 each have their own parity
+test against fixed bytes in the fixture. Nothing ships until all four
+are green, then F9 provides the full-run sanity check and F10 provides
+the speed sanity check. All F-steps run CPU-only for the first
+implementation; GPU path is a separate branch that must not be merged
+until F8 passes.
+
 ## Open questions that must be resolved before phase 4 begins
 
 1. How to represent `Igrad1` / `Igrad2` storage: Equinox modules with

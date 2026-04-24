@@ -10,6 +10,7 @@ binding tests in Phase 2.
 """
 
 from .align_symmetry import AlignSymmetrySpec, build_align_symmetry_tokens
+from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .e_step import (
     VdamPosterior,
     build_posterior_summary,
@@ -84,4 +85,5 @@ __all__ = [
     "minvsigma2_with_dc_zero",
     "AlignSymmetrySpec",
     "build_align_symmetry_tokens",
+    "compute_avg_unaligned_and_sigma2",
 ]
