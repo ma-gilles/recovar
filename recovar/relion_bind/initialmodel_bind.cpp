@@ -428,6 +428,25 @@ static double vdam_compute_tau2_fudge(
 
 
 /**
+ * Return the first `n_draws` values of RELION's `rnd_unif()` after
+ * `init_random_generator(seed)`. Useful for reproducing per-particle
+ * random orientation draws during the InitialModel bootstrap
+ * (ml_optimiser.cpp:3132-3145).
+ */
+static py::array_t<double> vdam_rnd_unif_sequence(
+    int seed,
+    long n_draws
+) {
+    init_random_generator(seed);
+    py::array_t<double> out((py::ssize_t)n_draws);
+    double* p = (double*)out.request().ptr;
+    for (long i = 0; i < n_draws; i++)
+        p[i] = (double)rnd_unif();
+    return out;
+}
+
+
+/**
  * Replicates Experiment::randomiseParticlesOrder's non-halves Fisher-Yates
  * path, using RELION's own Mersenne-Twister + ran1 pair (via `rnd_unif`).
  *
@@ -560,4 +579,8 @@ Returns -1 when subset should span all particles.
     m.def("vdam_randomise_particles_order", &vdam_randomise_particles_order,
           py::arg("nr_particles"), py::arg("seed"),
           "Experiment::randomiseParticlesOrder (non-halves) via RELION rnd_unif.");
+
+    m.def("vdam_rnd_unif_sequence", &vdam_rnd_unif_sequence,
+          py::arg("seed"), py::arg("n_draws"),
+          "Return the first n_draws of rnd_unif() after init_random_generator(seed).");
 }
