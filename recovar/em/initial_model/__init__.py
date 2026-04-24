@@ -9,6 +9,21 @@ pure-Python functions so they can be validated against RELION source via
 binding tests in Phase 2.
 """
 
+from .e_step import (
+    VdamPosterior,
+    build_posterior_summary,
+    fourier_crop_half,
+    hermitian_weights_relion,
+    minvsigma2_with_dc_zero,
+)
+from .init import (
+    INI_HIGH_DIGITAL_FREQ,
+    compute_current_size_for_denovo,
+    compute_ini_high_angstrom,
+    compute_ini_high_shell,
+    initialise_denovo_state,
+    seed_noise_from_mavg,
+)
 from .schedules import (
     DEFAULT_GRAD_FIN_FRAC,
     DEFAULT_GRAD_INI_FRAC,
@@ -21,6 +36,12 @@ from .schedules import (
     default_step_size_for_3d_initial_model,
     default_subset_sizes_for_3d_initial_model,
     default_tau2_fudge_for_3d_initial_model,
+)
+from .state import (
+    MOM2_INIT_CONSTANT,
+    InitialModelState,
+    half_slot_count,
+    half_slot_index,
 )
 from .subset import (
     assign_pseudo_halfsets,
@@ -45,4 +66,19 @@ __all__ = [
     "select_vdam_subset",
     "assign_pseudo_halfsets",
     "pseudo_halfsets_active",
+    "InitialModelState",
+    "MOM2_INIT_CONSTANT",
+    "half_slot_count",
+    "half_slot_index",
+    "INI_HIGH_DIGITAL_FREQ",
+    "compute_current_size_for_denovo",
+    "compute_ini_high_angstrom",
+    "compute_ini_high_shell",
+    "initialise_denovo_state",
+    "seed_noise_from_mavg",
+    "VdamPosterior",
+    "build_posterior_summary",
+    "fourier_crop_half",
+    "hermitian_weights_relion",
+    "minvsigma2_with_dc_zero",
 ]
