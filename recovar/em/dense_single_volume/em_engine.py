@@ -574,14 +574,44 @@ def _compute_noise_block(
     return noise_shells, a2_shells, xa_shells
 
 
-def _compute_projections_block(volume, rotations_block, image_shape, volume_shape, disc_type):
+_DEFAULT_PROJECTION_MAX_R = object()
+
+
+def _compute_projections_block(
+    volume,
+    rotations_block,
+    image_shape,
+    volume_shape,
+    disc_type,
+    *,
+    max_r=_DEFAULT_PROJECTION_MAX_R,
+    return_abs2: bool = True,
+):
     """Forward-slice one rotation block in half-spectrum layout.
 
     Returns (proj_half, |proj_half|^2) on device, both in half-spectrum layout.
     """
-    proj_half = core.slice_volume(volume, rotations_block, image_shape, volume_shape, disc_type, half_image=True)
+    if max_r is _DEFAULT_PROJECTION_MAX_R:
+        proj_half = core.slice_volume(
+            volume,
+            rotations_block,
+            image_shape,
+            volume_shape,
+            disc_type,
+            half_image=True,
+        )
+    else:
+        proj_half = core.slice_volume(
+            volume,
+            rotations_block,
+            image_shape,
+            volume_shape,
+            disc_type,
+            half_image=True,
+            max_r=max_r,
+        )
     ## TODO: WE SHOULD THINK ABOUT WHETHER STORING SQUARES IS WORTH IT.
-    proj_abs2_half = jnp.abs(proj_half) ** 2
+    proj_abs2_half = jnp.abs(proj_half) ** 2 if return_abs2 else None
     return proj_half, proj_abs2_half
 
 

@@ -7,6 +7,7 @@ import jax.numpy as jnp
 import recovar.core as core
 import recovar.core.slicing as core_slicing
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
 
 pytestmark = pytest.mark.unit
 
@@ -150,6 +151,55 @@ def test_adjoint_slice_volume_indexed_matches_rebuild_jax(monkeypatch):
         )
     )
     np.testing.assert_allclose(indexed, rebuilt_out, atol=1e-5, rtol=1e-5)
+
+
+def test_slice_volume_max_r_matches_windowed_projection():
+    rng = np.random.default_rng(321)
+    image_shape = (16, 16)
+    volume_shape = (16, 16, 16)
+    current_size = 8
+    rots = np.stack(
+        [
+            np.eye(3, dtype=np.float32),
+            _rotation_y(np.pi / 7.0),
+        ],
+        axis=0,
+    )
+    real_vol = rng.standard_normal(volume_shape).astype(np.float32)
+    vol_flat = np.asarray(fourier_transform_utils.get_dft3(real_vol)).reshape(-1)
+    window_indices, _ = make_fourier_window_indices_np(image_shape, current_size, square=False)
+
+    proj_full = np.asarray(
+        core_slicing.slice_volume(
+            vol_flat,
+            rots,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            max_r=None,
+        )
+    )
+    proj_clipped = np.asarray(
+        core_slicing.slice_volume(
+            vol_flat,
+            rots,
+            image_shape=image_shape,
+            volume_shape=volume_shape,
+            disc_type="linear_interp",
+            half_image=True,
+            max_r=current_size // 2 + 0.5,
+        )
+    )
+
+    np.testing.assert_allclose(
+        proj_clipped[:, window_indices],
+        proj_full[:, window_indices],
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    outside = np.setdiff1d(np.arange(proj_full.shape[1], dtype=np.int32), window_indices)
+    assert np.allclose(proj_clipped[:, outside], 0.0, atol=1e-6)
 
 
 def test_slice_volume_cubic_with_precomputed_spline_coefficients():
