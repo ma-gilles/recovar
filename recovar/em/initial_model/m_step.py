@@ -109,7 +109,11 @@ def vdam_m_step_single_class(
     bind = _get_bindings()
     ori_size = state.ori_size
     r_max = _r_max_from_state(state, padding_factor)
-    mu = 0.9  # GUI InitialModel default momentum
+    # RELION uses different EMA constants for the two moments:
+    #   getFristMoment default lambda = 0.9   (backprojector.h:335)
+    #   getSecondMoment default lambda = 0.999 (backprojector.h:343)
+    mu_first = 0.9
+    mu_second = 0.999
 
     # Step 2. reweightGrad per halfset
     data_h0 = np.asarray(bind.vdam_reweight_grad(accum_h0.data, accum_h0.weight, ori_size, padding_factor, 1, r_max))
@@ -132,7 +136,7 @@ def vdam_m_step_single_class(
             padding_factor,
             1,
             r_max,
-            **{"lambda": mu},
+            **{"lambda": mu_first},
         )
     )
     if state.pseudo_halfsets:
@@ -145,7 +149,7 @@ def vdam_m_step_single_class(
                 padding_factor,
                 1,
                 r_max,
-                **{"lambda": mu},
+                **{"lambda": mu_first},
             )
         )
 
@@ -161,7 +165,7 @@ def vdam_m_step_single_class(
                 padding_factor,
                 1,
                 r_max,
-                **{"lambda": mu},
+                **{"lambda": mu_second},
             )
         )
 

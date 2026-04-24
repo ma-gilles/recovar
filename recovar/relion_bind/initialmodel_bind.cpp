@@ -130,11 +130,15 @@ static py::array_t<std::complex<double>> vdam_reweight_grad(
 ) {
     BackProjector bp = make_empty_backprojector(ori_size, padding_factor, "C1", interpolator);
     bp.data = numpy_to_complex_3d(data_in);
-    // weight is real
+    // weight must share data's Xmipp origin; RELION's A3D_ELEM(weight, k, i, j)
+    // inside reweightGrad uses centered indexing and reads out of bounds
+    // without this.
     auto wt_buf = weight_in.request();
     bp.weight.resize(wt_buf.shape[0], wt_buf.shape[1], wt_buf.shape[2]);
     std::memcpy(bp.weight.data, wt_buf.ptr,
                 wt_buf.shape[0] * wt_buf.shape[1] * wt_buf.shape[2] * sizeof(RFLOAT));
+    bp.weight.setXmippOrigin();
+    bp.weight.xinit = 0;
     if (r_max > 0)
         bp.r_max = r_max;
 
@@ -592,6 +596,32 @@ static py::array_t<double> vdam_bootstrap_iref(
                              false,  // intact_ctf_first_peak
                              true,   // do_damping
                              false); // do_ctf_padding
+
+            // ---- RECOVAR DEBUG: dump first 3 particles' Fimg+Fctf+A ----
+            {
+                const char* dbg_dir = getenv("RECOVAR_DEBUG_DUMP_DIR_OURS");
+                if (dbg_dir != NULL && part_id < 3) {
+                    char p[1024]; FILE* f;
+                    snprintf(p, sizeof(p), "%s/p%ld_Fimg_preCTF.bin", dbg_dir, part_id);
+                    f = fopen(p, "wb");
+                    if (f) { long nz=1, ny=YSIZE(Fimg), nx=XSIZE(Fimg);
+                      fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
+                      fwrite(Fimg.data, sizeof(Complex), ny*nx, f); fclose(f); }
+                    snprintf(p, sizeof(p), "%s/p%ld_Fctf.bin", dbg_dir, part_id);
+                    f = fopen(p, "wb");
+                    if (f) { long nz=1, ny=YSIZE(Fctf), nx=XSIZE(Fctf);
+                      fwrite(&nz,sizeof(long),1,f); fwrite(&ny,sizeof(long),1,f); fwrite(&nx,sizeof(long),1,f);
+                      fwrite(Fctf.data, sizeof(RFLOAT), ny*nx, f); fclose(f); }
+                    snprintf(p, sizeof(p), "%s/p%ld_A_euler.txt", dbg_dir, part_id);
+                    f = fopen(p, "w");
+                    if (f) {
+                        for (int ri=0; ri<3; ri++)
+                            for (int ci=0; ci<3; ci++)
+                                fprintf(f, "A[%d][%d]=%.12e\n", ri, ci, (double)MAT_ELEM(A, ri, ci));
+                        fclose(f);
+                    }
+                }
+            }
 
             // 12. Fimg *= Fctf; Fctf² = Fctf * Fctf (weight)
             FOR_ALL_DIRECT_ELEMENTS_IN_MULTIDIMARRAY(Fimg) {
