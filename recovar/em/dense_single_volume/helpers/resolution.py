@@ -126,6 +126,19 @@ def _bootstrap_current_size_relion(init_current_size: int, ori_size: int, incr_s
     return quantize_current_size(raw_cs, ori_size=ori_size)
 
 
+def bootstrap_current_size_from_ini_high_relion(
+    ori_size: int,
+    voxel_size: float,
+    ini_high_angstrom: float | None,
+    incr_size: int = 10,
+) -> int | None:
+    """Bootstrap RELION's first current_size directly from ``--ini_high``."""
+    if ini_high_angstrom is None or float(ini_high_angstrom) <= 0.0:
+        return None
+    init_shell = max(1, int(np.round(float(ori_size) * float(voxel_size) / float(ini_high_angstrom))))
+    return _bootstrap_current_size_relion(2 * init_shell, ori_size=ori_size, incr_size=incr_size)
+
+
 def fsc_to_current_size(fsc, threshold=1.0 / 7.0, min_size=32):
     """Convert an FSC curve to a current_size (diameter in pixels).
 

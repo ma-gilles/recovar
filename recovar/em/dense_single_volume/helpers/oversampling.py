@@ -253,6 +253,7 @@ def compute_pass2_stats(
     image_pre_shifts=None,
     use_float64_scoring=False,
     random_perturbation=0.0,
+    translation_prior_centers=None,
 ):
     """Pass 2: evaluate oversampled children of significant coarse rotations.
 
@@ -544,6 +545,7 @@ def compute_pass2_stats_sparse(
     image_pre_shifts=None,
     use_float64_scoring=False,
     random_perturbation=0.0,
+    translation_prior_centers=None,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
@@ -584,6 +586,7 @@ def compute_pass2_stats_sparse(
     noise_wsum_total = None
     noise_img_power_total = None
     noise_sumw_total = 0.0
+    noise_sigma2_offset_total = 0.0
     if accumulate_noise:
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         noise_wsum_total = np.zeros(n_shells, dtype=np.float64)
@@ -699,6 +702,13 @@ def compute_pass2_stats_sparse(
             image_corrections=image_corrections,
             scale_corrections=scale_corrections,
             image_pre_shifts=image_pre_shifts,
+            translation_prior_centers=(
+                None
+                if translation_prior_centers is None
+                else np.asarray(translation_prior_centers[image_idx : image_idx + 1], dtype=np.float32)
+                if np.asarray(translation_prior_centers).ndim == 2
+                else np.asarray(translation_prior_centers, dtype=np.float32)
+            ),
             use_float64_scoring=use_float64_scoring,
         )
 
@@ -726,6 +736,7 @@ def compute_pass2_stats_sparse(
         if accumulate_noise and noise_stats_i is not None:
             noise_wsum_total += np.asarray(noise_stats_i.wsum_sigma2_noise, dtype=np.float64)
             noise_img_power_total += np.asarray(noise_stats_i.wsum_img_power, dtype=np.float64)
+            noise_sigma2_offset_total += float(getattr(noise_stats_i, "wsum_sigma2_offset", 0.0))
             noise_sumw_total += noise_stats_i.sumw
 
         Ft_y_total = Ft_y_total + Ft_y_i
@@ -752,6 +763,7 @@ def compute_pass2_stats_sparse(
         merged_noise_stats = NoiseStats(
             wsum_sigma2_noise=jnp.asarray(noise_wsum_total, dtype=jnp.float32),
             wsum_img_power=jnp.asarray(noise_img_power_total, dtype=jnp.float32),
+            wsum_sigma2_offset=float(noise_sigma2_offset_total),
             sumw=float(noise_sumw_total),
         )
 

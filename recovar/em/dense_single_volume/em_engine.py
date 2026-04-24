@@ -188,6 +188,37 @@ def _prepare_reconstruction_batch(
     )
 
 
+def _preprocess_batch_firstiter_cc(
+    batch,
+    ctf_params,
+    noise_variance,
+    translations,
+    config,
+    n_images,
+    n_trans,
+    score_with_masked_images=False,
+):
+    """Preprocess one image batch for RELION's iter-1 normalized CC scoring."""
+    CTF = config.compute_ctf(ctf_params)
+    processed = config.process_fn(
+        batch,
+        apply_image_mask=score_with_masked_images,
+    )
+    safe_ctf = jnp.where(jnp.abs(CTF) > 1e-8, 1.0 / CTF, 0.0)
+    processed_score = processed * safe_ctf
+    shifted = core.batch_trans_translate_images(
+        processed_score,
+        jnp.repeat(translations[None], n_images, axis=0),
+        config.image_shape,
+    )
+    shifted_flat = shifted.reshape(n_images * n_trans, -1)
+    shifted_half = fourier_transform_utils.full_image_to_half_image(shifted_flat, config.image_shape)
+    image_power = jnp.linalg.norm(processed, axis=-1, keepdims=True) ** 2
+    ctf2_half = fourier_transform_utils.full_image_to_half_image(CTF**2, config.image_shape)
+    ctf2_over_nv_half = fourier_transform_utils.full_image_to_half_image(CTF**2 / noise_variance, config.image_shape)
+    return shifted_half, image_power, ctf2_half, ctf2_over_nv_half
+
+
 @partial(jax.jit, static_argnums=(6, 7, 8, 9))
 def _e_step_block_scores(
     shifted_half,
@@ -281,6 +312,70 @@ def _e_step_block_scores_windowed(
     norms = ctf2_over_nv_windowed @ proj_abs2_windowed.T  # (n_images, rot_block_size)
     residuals = cross + norms[..., None]
     return -0.5 * residuals
+
+
+@partial(jax.jit, static_argnums=(5, 6, 7, 8))
+def _e_step_block_scores_normalized_cc(
+    shifted_half,
+    batch_norm,
+    ctf2_over_nv_half,
+    proj_half_weighted,
+    proj_abs2_half,
+    n_images,
+    n_trans,
+    image_shape,
+    volume_shape,
+):
+    """RELION iter-1 normalized cross-correlation score."""
+    del batch_norm, image_shape, volume_shape
+    rot_block_size = proj_half_weighted.shape[0]
+    cross = -2.0 * (jnp.conj(shifted_half) @ proj_half_weighted.T).real
+    cross = cross.reshape(n_images, n_trans, rot_block_size)
+    cross = cross.swapaxes(1, 2)
+    norms = ctf2_over_nv_half @ proj_abs2_half.T
+    denom = jnp.sqrt(jnp.maximum(norms, jnp.asarray(1e-30, dtype=norms.dtype)))
+    return (-0.5 * cross) / denom[..., None]
+
+
+@partial(jax.jit, static_argnums=(5, 6, 7, 8, 9))
+def _e_step_block_scores_windowed_normalized_cc(
+    shifted_windowed,
+    batch_norm,
+    ctf2_over_nv_windowed,
+    proj_windowed_weighted,
+    proj_abs2_windowed,
+    n_images,
+    n_trans,
+    n_windowed,
+    image_shape,
+    volume_shape,
+):
+    """Windowed RELION iter-1 normalized cross-correlation score."""
+    del batch_norm, n_windowed, image_shape, volume_shape
+    rot_block_size = proj_windowed_weighted.shape[0]
+    cross = -2.0 * (jnp.conj(shifted_windowed) @ proj_windowed_weighted.T).real
+    cross = cross.reshape(n_images, n_trans, rot_block_size)
+    cross = cross.swapaxes(1, 2)
+    norms = ctf2_over_nv_windowed @ proj_abs2_windowed.T
+    denom = jnp.sqrt(jnp.maximum(norms, jnp.asarray(1e-30, dtype=norms.dtype)))
+    return (-0.5 * cross) / denom[..., None]
+
+
+def _winner_take_all_probs_for_block(best_argmax, r0, actual_rot, rotation_block_size, n_trans, dtype):
+    """Return one-hot pose probabilities for one rotation block."""
+    best_argmax = jnp.asarray(best_argmax, dtype=jnp.int32)
+    winning_rot = best_argmax // n_trans
+    winning_trans = best_argmax % n_trans
+    in_block = (winning_rot >= r0) & (winning_rot < (r0 + actual_rot))
+    safe_actual_rot = max(int(actual_rot), 1)
+    local_rot = jnp.clip(winning_rot - r0, 0, safe_actual_rot - 1)
+    flat_local = local_rot * n_trans + winning_trans
+    probs = jax.nn.one_hot(
+        flat_local,
+        rotation_block_size * n_trans,
+        dtype=dtype,
+    ).reshape(best_argmax.shape[0], rotation_block_size, n_trans)
+    return probs * in_block[:, None, None]
 
 
 @partial(jax.jit, static_argnums=(7, 8, 9, 10, 11))
@@ -640,6 +735,9 @@ def run_em(
     image_corrections: np.ndarray = None,
     scale_corrections: np.ndarray = None,
     image_pre_shifts: np.ndarray = None,
+    translation_prior_centers: np.ndarray = None,
+    relion_firstiter_score_mode: str = "gaussian",
+    relion_firstiter_winner_take_all: bool = False,
     use_float64_scoring: bool = False,
     use_float64_projections: bool = False,
     do_gridding_correction: bool = False,
@@ -736,6 +834,11 @@ def run_em(
     n_trans = translations.shape[0]
     image_indices = np.arange(experiment_dataset.n_units) if image_indices is None else np.asarray(image_indices)
     n_images = image_indices.size
+    if relion_firstiter_score_mode not in {"gaussian", "normalized_cc"}:
+        raise ValueError(
+            "relion_firstiter_score_mode must be 'gaussian' or 'normalized_cc', "
+            f"got {relion_firstiter_score_mode!r}",
+        )
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
     ## TODO: set default params same as RELION (when starting from GUI) pf=2 I think is there.
@@ -957,6 +1060,28 @@ def run_em(
     else:
         translation_log_prior_jnp = None
 
+    translation_prior_centers_np = None
+    if translation_prior_centers is not None:
+        translation_prior_centers_np = np.asarray(translation_prior_centers, dtype=np.float32)
+        if translation_prior_centers_np.ndim == 1:
+            if translation_prior_centers_np.shape != (translations.shape[1],):
+                raise ValueError(
+                    "translation_prior_centers must have shape "
+                    f"({translations.shape[1]},), got {translation_prior_centers_np.shape}",
+                )
+        elif translation_prior_centers_np.ndim == 2:
+            if translation_prior_centers_np.shape != (n_images, translations.shape[1]):
+                raise ValueError(
+                    "translation_prior_centers must have shape "
+                    f"({n_images}, {translations.shape[1]}) when image-specific, got "
+                    f"{translation_prior_centers_np.shape}",
+                )
+        else:
+            raise ValueError(
+                "translation_prior_centers must be 1D or 2D, got "
+                f"{translation_prior_centers_np.ndim} dimensions",
+            )
+
     candidate_mask_padded_jnp = None
     if rotation_translation_mask is not None:
         candidate_mask = np.asarray(rotation_translation_mask, dtype=bool)
@@ -993,6 +1118,7 @@ def run_em(
     noise_sumw = 0.0
     noise_a2 = None  # diagnostic
     noise_xa = None  # diagnostic
+    noise_sigma2_offset = 0.0
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_shell_indices_half(image_shape)
@@ -1033,22 +1159,56 @@ def run_em(
         batch_size = len(indices)
         end_idx = start_idx + batch_size
         batch_data = jnp.asarray(batch_data)
+        translation_sqdist_ang = None
+        if translation_prior_centers_np is not None:
+            if translation_prior_centers_np.ndim == 1:
+                centers = np.broadcast_to(
+                    translation_prior_centers_np[None, :],
+                    (batch_size, translation_prior_centers_np.shape[0]),
+                )
+            else:
+                centers = translation_prior_centers_np[start_idx:end_idx]
+            translation_sqdist_ang = np.sum(
+                (
+                    (
+                        np.asarray(translations, dtype=np.float32)[None, :, :]
+                        - centers[:, None, :]
+                    )
+                    * float(experiment_dataset.voxel_size if experiment_dataset.voxel_size > 0 else 1.0)
+                )
+                ** 2,
+                axis=-1,
+                dtype=np.float64,
+            )
         projection_cache = []
         block_max_per_image = [] if sparse_pass2 else None
         block_pose_counts = [] if sparse_pass2 else None
 
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
         preprocess_t0 = time.time()
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data,
-            ctf_params,
-            noise_variance,
-            translations,
-            config,
-            batch_size,
-            n_trans,
-            score_with_masked_images,
-        )
+        if relion_firstiter_score_mode == "normalized_cc":
+            shifted_half, batch_norm, ctf2_half_score, ctf2_over_nv_half = _preprocess_batch_firstiter_cc(
+                batch_data,
+                ctf_params,
+                noise_variance,
+                translations,
+                config,
+                batch_size,
+                n_trans,
+                score_with_masked_images,
+            )
+        else:
+            shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+                batch_data,
+                ctf_params,
+                noise_variance,
+                translations,
+                config,
+                batch_size,
+                n_trans,
+                score_with_masked_images,
+            )
+            ctf2_half_score = None
         shifted_recon_half = (
             _prepare_reconstruction_batch(
                 batch_data,
@@ -1059,7 +1219,7 @@ def run_em(
                 batch_size,
                 n_trans,
             )
-            if score_with_masked_images
+            if (score_with_masked_images or relion_firstiter_score_mode == "normalized_cc")
             else shifted_half
         )
         if sync_timers:
@@ -1068,6 +1228,11 @@ def run_em(
         preprocess_time += time.time() - preprocess_t0
 
         score_prep_t0 = time.time()
+        if scale_corrections is not None:
+            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
+        else:
+            batch_scale = jnp.ones(batch_size, dtype=batch_norm.dtype)
+
         # -- Per-image corrections (RELION parity: avg_norm/normcorr * scale) --
         # RELION: img *= avg_norm_correction / normcorr  (ml_optimiser.cpp:6240)
         # then   Frefctf *= scale                        (ml_optimiser.cpp:7298)
@@ -1076,12 +1241,17 @@ def run_em(
         # the per-image correction across n_trans copies.
         if image_corrections is not None:
             batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
-            # Expand to (batch_size * n_trans,) by repeating each correction n_trans times
-            corr_expanded = jnp.repeat(batch_corr, n_trans)
-            shifted_half = shifted_half * corr_expanded[:, None]
-            shifted_recon_half = shifted_recon_half * corr_expanded[:, None]
-            # batch_norm also scales: ||img * corr / sqrt(sigma)||^2 = corr^2 * ||img / sqrt(sigma)||^2
-            batch_norm = batch_norm * (batch_corr**2)[:, None]
+            if relion_firstiter_score_mode == "normalized_cc":
+                score_batch_corr = batch_corr / (batch_scale**2)
+                norm_batch_corr = batch_corr / batch_scale
+            else:
+                score_batch_corr = batch_corr
+                norm_batch_corr = batch_corr
+            score_corr_expanded = jnp.repeat(score_batch_corr, n_trans)
+            recon_corr_expanded = jnp.repeat(batch_corr, n_trans)
+            shifted_half = shifted_half * score_corr_expanded[:, None]
+            shifted_recon_half = shifted_recon_half * recon_corr_expanded[:, None]
+            batch_norm = batch_norm * (norm_batch_corr**2)[:, None]
 
         # -- Per-image scale correction on CTF²/σ² (RELION parity) --
         # RELION applies scale_correction to the REFERENCE: Frefctf *= myscale
@@ -1090,8 +1260,9 @@ def run_em(
         # M-step denominator (Σ γ·ctf²/σ²) carry scale².  Apply it here so
         # all downstream uses of ctf2_over_nv_half see the correct factor.
         if scale_corrections is not None:
-            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
             ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+            if ctf2_half_score is not None:
+                ctf2_half_score = ctf2_half_score * (batch_scale**2)[:, None]
 
         # -- Per-image pre-centering (RELION parity: old_offset phase shift) --
         # RELION pre-centers each image by its stored translation (old_offset)
@@ -1113,11 +1284,18 @@ def run_em(
             shifted_recon_half = shifted_recon_half * phase_expanded
             ## TODO: THE ORDER (WHILE CORRECT IS A BIT CONFUSING)
 
+        if relion_firstiter_score_mode == "normalized_cc":
+            score_weight_half = ctf2_half_score / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))
+            shifted_score_half = shifted_half * jnp.repeat(score_weight_half, n_trans, axis=0)
+        else:
+            score_weight_half = ctf2_over_nv_half
+            shifted_score_half = shifted_half
+
         # -- Save pre-DC-exclusion arrays for M-step + noise accumulation --
         # RELION excludes DC from likelihood scores (Minvsigma2[0]=0) but
         # INCLUDES DC in reconstruction weights (backprojector CTF^2) and
         # noise estimation.  Save original arrays before DC zeroing.
-        shifted_half_with_dc = shifted_half
+        shifted_half_with_dc = shifted_score_half
         ctf2_over_nv_half_with_dc = ctf2_over_nv_half
 
         # -- DC exclusion (RELION parity: Minvsigma2[0] = 0) --
@@ -1125,13 +1303,13 @@ def run_em(
         # In recovar's half-spectrum layout, DC is NOT at flat index 0.
         # Find the DC pixel by locating shell index 0 in the precomputed
         # shell_indices_half array.
-        if half_spectrum_scoring:
+        if half_spectrum_scoring and relion_firstiter_score_mode != "normalized_cc":
             ## TODO: THIS SEEMS LIKE A VERY INFECCICIENT WAY TO DO THIS. JUST FIND INDEX AND .SET IT 0? 
             dc_shell_idx = make_shell_indices_half(image_shape)
             dc_mask = dc_shell_idx == 0  # True at DC pixel(s)
             # Zero out DC in SCORING arrays only
-            shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
-            ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
+            shifted_score_half = jnp.where(dc_mask[None, :], 0.0, shifted_score_half)
+            score_weight_half = jnp.where(dc_mask[None, :], 0.0, score_weight_half)
 
         # -- WINDOW gather (if active) --
         # DC-zeroed arrays for scoring, with-DC arrays for M-step accumulation.
@@ -1141,14 +1319,14 @@ def run_em(
         ## IF WE DO, IT SHOULD BE HANDLED MORE GRACEFULLY THAN HAVING IF STATEMENTS THROUGHOUT THE CODE,
         ## PERHAPS IT SHOULD BE AN OPTION IN TEH DOWNSTREAM FUNCTIONS OR SOMETHING (IF NECESSARY)
         if use_window:
-            shifted_windowed = shifted_half[:, window_indices]
+            shifted_windowed = shifted_score_half[:, window_indices]
             shifted_recon_windowed = shifted_recon_half[:, recon_window_indices]
-            ctf2_over_nv_windowed = ctf2_over_nv_half[:, window_indices]
+            ctf2_over_nv_windowed = score_weight_half[:, window_indices]
             ctf2_over_nv_windowed_mstep = ctf2_over_nv_half_with_dc[:, recon_window_indices]
         else:
-            shifted_windowed = shifted_half
+            shifted_windowed = shifted_score_half
             shifted_recon_windowed = shifted_recon_half
-            ctf2_over_nv_windowed = ctf2_over_nv_half
+            ctf2_over_nv_windowed = score_weight_half
             ctf2_over_nv_windowed_mstep = ctf2_over_nv_half_with_dc
 
         # -- Noise: precompute per-batch image power spectrum --
@@ -1182,14 +1360,14 @@ def run_em(
         # Upcast the scoring arrays to float64/complex128 before the GEMMs
         # so that accumulation over ~4900 windowed elements matches RELION.
         if use_float64_scoring:
-            shifted_half = shifted_half.astype(jnp.complex128)
-            ctf2_over_nv_half = ctf2_over_nv_half.astype(jnp.float64)
+            shifted_score_half = shifted_score_half.astype(jnp.complex128)
+            score_weight_half = score_weight_half.astype(jnp.float64)
             if use_window:
                 shifted_windowed = shifted_windowed.astype(jnp.complex128)
                 ctf2_over_nv_windowed = ctf2_over_nv_windowed.astype(jnp.float64)
             else:
-                shifted_windowed = shifted_half
-                ctf2_over_nv_windowed = ctf2_over_nv_half
+                shifted_windowed = shifted_score_half
+                ctf2_over_nv_windowed = score_weight_half
             shifted_recon_half = shifted_recon_half.astype(jnp.complex128)
             if use_window:
                 shifted_recon_windowed = shifted_recon_windowed.astype(jnp.complex128)
@@ -1198,10 +1376,10 @@ def run_em(
 
         if sync_timers:
             ready_values = [
-                shifted_half,
+                shifted_score_half,
                 shifted_recon_half,
                 batch_norm,
-                ctf2_over_nv_half,
+                score_weight_half,
                 shifted_windowed,
                 shifted_recon_windowed,
                 ctf2_over_nv_windowed,
@@ -1214,6 +1392,8 @@ def run_em(
         # -- PASS 1: streaming logsumexp over rotation blocks --
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
+        best_score_pass1 = jnp.full(batch_size, -jnp.inf)
+        best_argmax_pass1 = jnp.zeros(batch_size, dtype=jnp.int32)
 
         for b in range(n_blocks):
             r0 = b * rotation_block_size
@@ -1238,57 +1418,84 @@ def run_em(
                 proj_windowed_weighted_b = proj_windowed_b * half_weights_windowed
                 proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
 
-                scores = _e_step_block_scores_windowed(
-                    shifted_windowed,
-                    batch_norm,
-                    ctf2_over_nv_windowed,
-                    proj_windowed_weighted_b,
-                    proj_abs2_windowed_weighted_b,
-                    half_weights_windowed,
-                    batch_size,
-                    n_trans,
-                    n_windowed,
-                    image_shape,
-                    volume_shape,
-                )
+                if relion_firstiter_score_mode == "normalized_cc":
+                    scores = _e_step_block_scores_windowed_normalized_cc(
+                        shifted_windowed,
+                        batch_norm,
+                        ctf2_over_nv_windowed,
+                        proj_windowed_weighted_b,
+                        proj_abs2_windowed_weighted_b,
+                        batch_size,
+                        n_trans,
+                        n_windowed,
+                        image_shape,
+                        volume_shape,
+                    )
+                else:
+                    scores = _e_step_block_scores_windowed(
+                        shifted_windowed,
+                        batch_norm,
+                        ctf2_over_nv_windowed,
+                        proj_windowed_weighted_b,
+                        proj_abs2_windowed_weighted_b,
+                        half_weights_windowed,
+                        batch_size,
+                        n_trans,
+                        n_windowed,
+                        image_shape,
+                        volume_shape,
+                    )
             else:
                 # Full half-spectrum path (Phase 1 behavior)
                 proj_half_weighted_b = proj_half_b * half_weights
                 proj_abs2_weighted_b = proj_abs2_half_b * half_weights
 
-                scores = _e_step_block_scores(
-                    shifted_half,
-                    batch_norm,
-                    ctf2_over_nv_half,
-                    proj_half_weighted_b,
-                    proj_abs2_weighted_b,
-                    half_weights,
-                    batch_size,
-                    n_trans,
-                    image_shape,
-                    volume_shape,
-                )
+                if relion_firstiter_score_mode == "normalized_cc":
+                    scores = _e_step_block_scores_normalized_cc(
+                        shifted_score_half,
+                        batch_norm,
+                        score_weight_half,
+                        proj_half_weighted_b,
+                        proj_abs2_weighted_b,
+                        batch_size,
+                        n_trans,
+                        image_shape,
+                        volume_shape,
+                    )
+                else:
+                    scores = _e_step_block_scores(
+                        shifted_score_half,
+                        batch_norm,
+                        score_weight_half,
+                        proj_half_weighted_b,
+                        proj_abs2_weighted_b,
+                        half_weights,
+                        batch_size,
+                        n_trans,
+                        image_shape,
+                        volume_shape,
+                    )
 
             if sync_timers:
                 _block_until_ready(scores)
             pass1_score_time += time.time() - score_t0
 
             pass1_postprocess_t0 = time.time()
-            # Add rotation log-prior (Gaussian angular prior for local search)
-            if log_prior_padded_jnp is not None:
-                if per_image_log_prior:
-                    log_prior_block = log_prior_padded_jnp[start_idx:end_idx, r0:r1]
-                    scores = scores + log_prior_block[:, :, None]
-                else:
-                    log_prior_block = log_prior_padded_jnp[r0:r1]
-                    scores = scores + log_prior_block[None, :, None]
+            if relion_firstiter_score_mode == "gaussian":
+                if log_prior_padded_jnp is not None:
+                    if per_image_log_prior:
+                        log_prior_block = log_prior_padded_jnp[start_idx:end_idx, r0:r1]
+                        scores = scores + log_prior_block[:, :, None]
+                    else:
+                        log_prior_block = log_prior_padded_jnp[r0:r1]
+                        scores = scores + log_prior_block[None, :, None]
 
-            if translation_log_prior_jnp is not None:
-                if per_image_translation_log_prior:
-                    translation_prior_block = translation_log_prior_jnp[start_idx:end_idx]
-                    scores = scores + translation_prior_block[:, None, :]
-                else:
-                    scores = scores + translation_log_prior_jnp[None, None, :]
+                if translation_log_prior_jnp is not None:
+                    if per_image_translation_log_prior:
+                        translation_prior_block = translation_log_prior_jnp[start_idx:end_idx]
+                        scores = scores + translation_prior_block[:, None, :]
+                    else:
+                        scores = scores + translation_log_prior_jnp[None, None, :]
 
             if candidate_mask_padded_jnp is not None:
                 candidate_mask_block = candidate_mask_padded_jnp[r0:r1]
@@ -1308,6 +1515,13 @@ def run_em(
             if sync_timers:
                 _block_until_ready(scores)
             pass1_postprocess_time += time.time() - pass1_postprocess_t0
+
+            if relion_firstiter_winner_take_all:
+                block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
+                block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
+                improved = block_best > best_score_pass1
+                best_score_pass1 = jnp.where(improved, block_best, best_score_pass1)
+                best_argmax_pass1 = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax_pass1)
 
             logsumexp_t0 = time.time()
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
@@ -1354,8 +1568,12 @@ def run_em(
         pass2_skipmask_time += time.time() - pass2_skipmask_t0
 
         # -- PASS 2: recompute scores, normalize, accumulate M-step --
-        best_score = jnp.full(batch_size, -jnp.inf)
-        best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
+        if relion_firstiter_winner_take_all:
+            best_score = best_score_pass1
+            best_argmax = best_argmax_pass1
+        else:
+            best_score = jnp.full(batch_size, -jnp.inf)
+            best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
 
         for b in range(n_blocks):
             if skip_pass2_block[b]:
@@ -1382,56 +1600,83 @@ def run_em(
                 proj_windowed_weighted_b = proj_windowed_b * half_weights_windowed
                 proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
 
-                scores = _e_step_block_scores_windowed(
-                    shifted_windowed,
-                    batch_norm,
-                    ctf2_over_nv_windowed,
-                    proj_windowed_weighted_b,
-                    proj_abs2_windowed_weighted_b,
-                    half_weights_windowed,
-                    batch_size,
-                    n_trans,
-                    n_windowed,
-                    image_shape,
-                    volume_shape,
-                )
+                if relion_firstiter_score_mode == "normalized_cc":
+                    scores = _e_step_block_scores_windowed_normalized_cc(
+                        shifted_windowed,
+                        batch_norm,
+                        ctf2_over_nv_windowed,
+                        proj_windowed_weighted_b,
+                        proj_abs2_windowed_weighted_b,
+                        batch_size,
+                        n_trans,
+                        n_windowed,
+                        image_shape,
+                        volume_shape,
+                    )
+                else:
+                    scores = _e_step_block_scores_windowed(
+                        shifted_windowed,
+                        batch_norm,
+                        ctf2_over_nv_windowed,
+                        proj_windowed_weighted_b,
+                        proj_abs2_windowed_weighted_b,
+                        half_weights_windowed,
+                        batch_size,
+                        n_trans,
+                        n_windowed,
+                        image_shape,
+                        volume_shape,
+                    )
             else:
                 proj_half_weighted_b = proj_half_b * half_weights
                 proj_abs2_weighted_b = proj_abs2_half_b * half_weights
 
-                scores = _e_step_block_scores(
-                    shifted_half,
-                    batch_norm,
-                    ctf2_over_nv_half,
-                    proj_half_weighted_b,
-                    proj_abs2_weighted_b,
-                    half_weights,
-                    batch_size,
-                    n_trans,
-                    image_shape,
-                    volume_shape,
-                )
+                if relion_firstiter_score_mode == "normalized_cc":
+                    scores = _e_step_block_scores_normalized_cc(
+                        shifted_score_half,
+                        batch_norm,
+                        score_weight_half,
+                        proj_half_weighted_b,
+                        proj_abs2_weighted_b,
+                        batch_size,
+                        n_trans,
+                        image_shape,
+                        volume_shape,
+                    )
+                else:
+                    scores = _e_step_block_scores(
+                        shifted_score_half,
+                        batch_norm,
+                        score_weight_half,
+                        proj_half_weighted_b,
+                        proj_abs2_weighted_b,
+                        half_weights,
+                        batch_size,
+                        n_trans,
+                        image_shape,
+                        volume_shape,
+                    )
 
             if sync_timers:
                 _block_until_ready(scores)
             pass2_score_time += time.time() - score_t0
 
             pass2_postprocess_t0 = time.time()
-            # Add rotation log-prior (must match pass 1 exactly)
-            if log_prior_padded_jnp is not None:
-                if per_image_log_prior:
-                    log_prior_block = log_prior_padded_jnp[start_idx:end_idx, r0:r1]
-                    scores = scores + log_prior_block[:, :, None]
-                else:
-                    log_prior_block = log_prior_padded_jnp[r0:r1]
-                    scores = scores + log_prior_block[None, :, None]
+            if relion_firstiter_score_mode == "gaussian":
+                if log_prior_padded_jnp is not None:
+                    if per_image_log_prior:
+                        log_prior_block = log_prior_padded_jnp[start_idx:end_idx, r0:r1]
+                        scores = scores + log_prior_block[:, :, None]
+                    else:
+                        log_prior_block = log_prior_padded_jnp[r0:r1]
+                        scores = scores + log_prior_block[None, :, None]
 
-            if translation_log_prior_jnp is not None:
-                if per_image_translation_log_prior:
-                    translation_prior_block = translation_log_prior_jnp[start_idx:end_idx]
-                    scores = scores + translation_prior_block[:, None, :]
-                else:
-                    scores = scores + translation_log_prior_jnp[None, None, :]
+                if translation_log_prior_jnp is not None:
+                    if per_image_translation_log_prior:
+                        translation_prior_block = translation_log_prior_jnp[start_idx:end_idx]
+                        scores = scores + translation_prior_block[:, None, :]
+                    else:
+                        scores = scores + translation_log_prior_jnp[None, None, :]
 
             if candidate_mask_padded_jnp is not None:
                 candidate_mask_block = candidate_mask_padded_jnp[r0:r1]
@@ -1451,22 +1696,39 @@ def run_em(
                 # Use with-DC ctf2 for M-step accumulation (DC is excluded
                 # from scoring but must be included in reconstruction weights).
                 mstep_t0 = time.time()
-                (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed) = (
-                    _m_step_block_windowed(
-                        shifted_recon_windowed,
-                        scores,
-                        log_Z,
-                        rots_b,
-                        ctf2_over_nv_windowed_mstep,
-                        Ft_y,
-                        Ft_ctf,
-                        batch_size,
+                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
+                if relion_firstiter_winner_take_all:
+                    probs = _winner_take_all_probs_for_block(
+                        best_argmax,
+                        r0,
+                        actual_rot,
+                        rotation_block_size,
                         n_trans,
-                        n_recon_windowed,
-                        image_shape,
-                        volume_shape,
+                        scores.dtype,
                     )
-                )
+                    P = probs.swapaxes(0, 1).reshape(rotation_block_size, batch_size * n_trans)
+                    summed_windowed = P @ shifted_recon_windowed
+                    probs_sum_t = jnp.sum(probs, axis=-1)
+                    ctf_probs_windowed = probs_sum_t.T @ ctf2_over_nv_windowed_mstep
+                    block_best = best_score
+                    block_argmax = best_argmax - r0 * n_trans
+                else:
+                    (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed) = (
+                        _m_step_block_windowed(
+                            shifted_recon_windowed,
+                            scores,
+                            log_Z,
+                            rots_b,
+                            ctf2_over_nv_windowed_mstep,
+                            Ft_y,
+                            Ft_ctf,
+                            batch_size,
+                            n_trans,
+                            n_recon_windowed,
+                            image_shape,
+                            volume_shape,
+                        )
+                    )
                 if sync_timers:
                     _block_until_ready(
                         Ft_y,
@@ -1513,21 +1775,38 @@ def run_em(
             else:
                 # Non-windowed path: use with-DC ctf2 for M-step accumulation
                 mstep_t0 = time.time()
-                (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half_block, ctf_probs_half_block) = (
-                    _m_step_block_compute(
-                        shifted_recon_half,
-                        scores,
-                        log_Z,
-                        rots_b,
-                        ctf2_over_nv_half_with_dc,
-                        Ft_y,
-                        Ft_ctf,
-                        batch_size,
+                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
+                if relion_firstiter_winner_take_all:
+                    probs = _winner_take_all_probs_for_block(
+                        best_argmax,
+                        r0,
+                        actual_rot,
+                        rotation_block_size,
                         n_trans,
-                        image_shape,
-                        recon_volume_shape,
+                        scores.dtype,
                     )
-                )
+                    P = probs.swapaxes(0, 1).reshape(rotation_block_size, batch_size * n_trans)
+                    summed_half_block = P @ shifted_recon_half
+                    probs_sum_t = jnp.sum(probs, axis=-1)
+                    ctf_probs_half_block = probs_sum_t.T @ ctf2_over_nv_half_with_dc
+                    block_best = best_score
+                    block_argmax = best_argmax - r0 * n_trans
+                else:
+                    (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half_block, ctf_probs_half_block) = (
+                        _m_step_block_compute(
+                            shifted_recon_half,
+                            scores,
+                            log_Z,
+                            rots_b,
+                            ctf2_over_nv_half_with_dc,
+                            Ft_y,
+                            Ft_ctf,
+                            batch_size,
+                            n_trans,
+                            image_shape,
+                            recon_volume_shape,
+                        )
+                    )
                 if sync_timers:
                     _block_until_ready(
                         Ft_y,
@@ -1573,6 +1852,11 @@ def run_em(
             # -- Noise accumulation for this rotation block --
             if accumulate_noise:
                 noise_t0 = time.time()
+                if translation_sqdist_ang is not None:
+                    translation_posterior = np.asarray(jnp.sum(probs, axis=1), dtype=np.float64)
+                    noise_sigma2_offset += float(
+                        np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
+                    )
                 rot_block_size_actual = rots_b.shape[0]
                 # Compute masked GEMM: P @ shifted_masked (with DC intact)
                 P_noise = probs.swapaxes(0, 1).reshape(rot_block_size_actual, batch_size * n_trans)
@@ -1611,14 +1895,14 @@ def run_em(
                 noise_xa += np.asarray(block_xa_shells, dtype=np.float64)
                 noise_time += time.time() - noise_t0
 
-            # Track global hard assignment
-            assignment_t0 = time.time()
-            improved = block_best > best_score
-            best_score = jnp.where(improved, block_best, best_score)
-            best_argmax = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax)
-            if sync_timers:
-                _block_until_ready(best_score, best_argmax)
-            assignment_time += time.time() - assignment_t0
+            if not relion_firstiter_winner_take_all:
+                assignment_t0 = time.time()
+                improved = block_best > best_score
+                best_score = jnp.where(improved, block_best, best_score)
+                best_argmax = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax)
+                if sync_timers:
+                    _block_until_ready(best_score, best_argmax)
+                assignment_time += time.time() - assignment_t0
 
             if return_stats:
                 host_stats_t0 = time.time()
@@ -1709,6 +1993,7 @@ def run_em(
         noise_stats = NoiseStats(
             wsum_sigma2_noise=jnp.asarray(noise_wsum, dtype=jnp.float32),
             wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
+            wsum_sigma2_offset=float(noise_sigma2_offset),
             sumw=float(noise_sumw),
         )
 
