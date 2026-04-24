@@ -2,6 +2,9 @@ import numpy as np
 
 from scripts.run_multi_iter_parity import (
     map_pose_arrays_to_particle_order,
+    parse_relion_optimiser_cli_flags,
+    replay_control_relion_iteration,
+    replay_previous_relion_iteration,
     stack_index_from_image_name,
 )
 
@@ -37,3 +40,28 @@ def test_map_pose_arrays_to_particle_order_uses_exact_stack_row():
     np.testing.assert_array_equal(mapped_trans[1], gt_trans_all[0])
     np.testing.assert_array_equal(mapped_trans[2], gt_trans_all[1])
     assert np.isnan(mapped_trans[3]).all()
+
+
+def test_replay_iteration_helpers_split_previous_vs_control_state():
+    assert replay_previous_relion_iteration(0, 0) == 0
+    assert replay_control_relion_iteration(0, 0) == 1
+    assert replay_previous_relion_iteration(1, 0) == 1
+    assert replay_control_relion_iteration(1, 0) == 2
+    assert replay_previous_relion_iteration(13, 1) == 14
+    assert replay_control_relion_iteration(13, 1) == 15
+
+
+def test_parse_relion_optimiser_cli_flags_reads_ini_high_and_firstiter_cc():
+    parsed = parse_relion_optimiser_cli_flags(
+        "# --auto_refine --firstiter_cc --ini_high 30 --ctf --iter 8\n_rlnParticleDiameter 544\n"
+    )
+    assert parsed["do_firstiter_cc"] is True
+    assert parsed["ini_high_angstrom"] == 30.0
+
+
+def test_parse_relion_optimiser_cli_flags_defaults_when_flag_is_absent():
+    parsed = parse_relion_optimiser_cli_flags(
+        "# --auto_refine --ini_high 30 --ctf --iter 8\n_rlnParticleDiameter 544\n"
+    )
+    assert parsed["do_firstiter_cc"] is False
+    assert parsed["ini_high_angstrom"] == 30.0

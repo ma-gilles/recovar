@@ -62,12 +62,17 @@ class NoiseStats(NamedTuple):
             ``sum_i |img_masked_i|^2`` per shell (image power, orientation-
             independent).  For shells beyond ``current_size // 2`` this is
             the only contribution (high-frequency fill).
+        wsum_sigma2_offset: float -- accumulated
+            ``sum_{i,r,t} w * ||offset_{i,t} - prior_i||^2`` in Angstrom^2.
+            This is RELION's sufficient statistic for updating
+            ``sigma2_offset`` via ``wsum_sigma2_offset / (2 * sumw)``.
         sumw: float -- total posterior weight processed (equals the number
             of images when posteriors are normalised to sum to 1 per image).
     """
 
     wsum_sigma2_noise: jax.Array
     wsum_img_power: jax.Array
+    wsum_sigma2_offset: float
     sumw: float
 
 

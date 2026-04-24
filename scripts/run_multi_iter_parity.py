@@ -33,6 +33,16 @@ def stack_index_from_image_name(name: str) -> int:
     return int(m.group(1)) - 1 if m else -1
 
 
+def replay_previous_relion_iteration(init_relion_iteration: int, recovar_iteration: int) -> int:
+    """Return the RELION iteration whose particle metadata seeds this replay step."""
+    return int(init_relion_iteration) + int(recovar_iteration)
+
+
+def replay_control_relion_iteration(init_relion_iteration: int, recovar_iteration: int) -> int:
+    """Return the RELION iteration whose control variables govern this replay step."""
+    return replay_previous_relion_iteration(init_relion_iteration, recovar_iteration) + 1
+
+
 def map_pose_arrays_to_particle_order(our_names, gt_rot_all, gt_trans_all=None):
     """Map pose arrays indexed by stack row onto the current particle ordering."""
     n_total = len(our_names)
@@ -114,6 +124,20 @@ def _read_relion_pmax_column(relion_df):
     return np.array(relion_df["rlnMaxValueProbDistribution"], dtype=np.float64)
 
 
+def parse_relion_optimiser_cli_flags(opt_text: str) -> dict[str, object]:
+    """Extract selected CLI flags from RELION's optimiser STAR header."""
+    cli_line = next(
+        (line.lstrip("#").strip() for line in opt_text.splitlines() if line.lstrip().startswith("# --")),
+        "",
+    )
+    ini_high_match = re.search(r"(?:^|\s)--ini_high\s+(\S+)", cli_line)
+    return {
+        "cli_line": cli_line,
+        "do_firstiter_cc": bool(re.search(r"(?:^|\s)--firstiter_cc(?:\s|$)", cli_line)),
+        "ini_high_angstrom": float(ini_high_match.group(1)) if ini_high_match else None,
+    }
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--relion_dir", required=True)
@@ -170,6 +194,24 @@ def main():
         choices=["perturbed", "coarse"],
         default="coarse",
         help="Evaluate local-search translation priors on the perturbed candidate grid or the unperturbed coarse RELION grid.",
+    )
+    parser.add_argument(
+        "--first_iteration_score_mode",
+        choices=["gaussian", "normalized_cc"],
+        default="gaussian",
+        help="Diagnostic override for the iter-0 score metric.",
+    )
+    parser.add_argument(
+        "--first_iteration_reconstruction_mode",
+        choices=["soft", "hard"],
+        default="soft",
+        help="Diagnostic override for the iter-0 reconstruction weights.",
+    )
+    parser.add_argument(
+        "--relion_ini_high",
+        type=float,
+        default=None,
+        help="Optional override for RELION --ini_high. Defaults to the optimiser flag value, or 30 A.",
     )
     parser.add_argument(
         "--disable_adjoint_y",
@@ -333,8 +375,12 @@ def main():
 
     # ---- Load RELION state ----
     model_h1 = starfile.read(f"{prefix}_half1_model.star")
+    control_model_h1 = model_h1
+    control_model_path = relion_dir / f"run_it{replay_control_relion_iteration(iteration, 0):03d}_half1_model.star"
+    if control_model_path.exists():
+        control_model_h1 = starfile.read(control_model_path)
     N = int(model_h1["model_general"]["rlnOriginalImageSize"])
-    current_size = int(model_h1["model_general"]["rlnCurrentImageSize"])
+    current_size = int(control_model_h1["model_general"]["rlnCurrentImageSize"])
     pixel_size = float(model_h1["model_general"]["rlnPixelSize"])
 
     sigma2 = np.array(model_h1["model_optics_group_1"]["rlnSigma2Noise"])
@@ -353,17 +399,34 @@ def main():
     adaptive_fraction = float(m_af.group(1)) if m_af else 0.999
     m_ms = re.search(r"_rlnMaximumSignificantPoses\s+(-?\d+)", opt_text)
     max_significants = int(m_ms.group(1)) if m_ms else 500
+    optimiser_cli_flags = parse_relion_optimiser_cli_flags(opt_text)
+    do_firstiter_cc = bool(optimiser_cli_flags["do_firstiter_cc"])
+    relion_ini_high = (
+        float(args.relion_ini_high)
+        if args.relion_ini_high is not None
+        else float(optimiser_cli_flags["ini_high_angstrom"])
+        if optimiser_cli_flags["ini_high_angstrom"] is not None
+        else 30.0
+    )
 
     sampling_meta = read_relion_sampling_metadata(relion_dir / f"run_it{iteration:03d}_sampling.star")
     hp_order = int(sampling_meta["healpix_order"])
     offset_range = float(sampling_meta["offset_range"])
     offset_step = float(sampling_meta["offset_step"])
 
-    # ave_Pmax from per-particle data
+    # ave_Pmax from per-particle data. RELION it000 is a bootstrap state and
+    # does not yet carry rlnMaxValueProbDistribution.
     relion_data = starfile.read(f"{prefix}_data.star")
     relion_df = relion_data["particles"] if isinstance(relion_data, dict) else relion_data
     relion_pmax = _read_relion_pmax_column(relion_df)
-    ave_Pmax = float(np.mean(relion_pmax)) if relion_pmax is not None else float("nan")
+    if relion_pmax is not None:
+        ave_Pmax = float(np.mean(relion_pmax))
+    else:
+        ave_Pmax = 0.0
+        print(
+            "  Initial RELION data STAR has no rlnMaxValueProbDistribution; "
+            "bootstrapping init_ave_Pmax=0.0",
+        )
 
     # has_high_fsc_at_limit (sticky flag)
     has_high_fsc_at_limit = False
@@ -392,6 +455,7 @@ def main():
         f"  ave_Pmax={ave_Pmax:.4f}, has_high_fsc_at_limit={has_high_fsc_at_limit}, "
         f"adaptive_fraction={adaptive_fraction:.6f}, max_significants={max_significants}"
     )
+    print(f"  RELION do_firstiter_cc={do_firstiter_cc}, ini_high={relion_ini_high}")
     if args.force_oversampling is not None:
         print(f"  Oversampling override: {oversampling} -> {args.force_oversampling}")
         oversampling = int(args.force_oversampling)
@@ -524,9 +588,11 @@ def main():
         print("  Previous best eulers: None (angle columns not found)")
 
     # ---- Sigma offset from model star ----
-    general = model_h1["model_general"]
+    control_general = control_model_h1["model_general"]
     sigma_offset_angst = float(
-        general["rlnSigmaOffsetsAngst"] if isinstance(general, dict) else general["rlnSigmaOffsetsAngst"].iloc[0]
+        control_general["rlnSigmaOffsetsAngst"]
+        if isinstance(control_general, dict)
+        else control_general["rlnSigmaOffsetsAngst"].iloc[0]
     )
     print(f"  sigma_offset = {sigma_offset_angst:.4f} A")
 
@@ -541,14 +607,18 @@ def main():
         direction_prior = None
         print("  direction_prior: None (not found in model star)")
 
-    def _load_relion_iteration_override(relion_iteration):
-        iter_prefix = relion_dir / f"run_it{relion_iteration:03d}"
+    def _load_relion_iteration_override(previous_relion_iteration, control_relion_iteration):
+        iter_prefix = relion_dir / f"run_it{previous_relion_iteration:03d}"
         model_h1_iter = starfile.read(f"{iter_prefix}_half1_model.star")
         model_h2_iter = starfile.read(f"{iter_prefix}_half2_model.star")
         relion_iter_data = starfile.read(f"{iter_prefix}_data.star")
         relion_iter_df = relion_iter_data["particles"] if isinstance(relion_iter_data, dict) else relion_iter_data
         relion_iter_names = list(relion_iter_df["rlnImageName"])
         relion_iter_idx_to_pos = {_idx(relion_iter_names[i]): i for i in range(len(relion_iter_names))}
+        control_model_h1_iter = model_h1_iter
+        control_model_path_iter = relion_dir / f"run_it{control_relion_iteration:03d}_half1_model.star"
+        if control_model_path_iter.exists():
+            control_model_h1_iter = starfile.read(control_model_path_iter)
 
         general_iter = model_h1_iter["model_general"]
         avg_norm_iter = float(
@@ -556,10 +626,11 @@ def main():
             if isinstance(general_iter, dict)
             else general_iter["rlnNormCorrectionAverage"].iloc[0]
         )
+        control_general_iter = control_model_h1_iter["model_general"]
         sigma_offset_iter = float(
-            general_iter["rlnSigmaOffsetsAngst"]
-            if isinstance(general_iter, dict)
-            else general_iter["rlnSigmaOffsetsAngst"].iloc[0]
+            control_general_iter["rlnSigmaOffsetsAngst"]
+            if isinstance(control_general_iter, dict)
+            else control_general_iter["rlnSigmaOffsetsAngst"].iloc[0]
         )
 
         normcorr_iter = np.array(relion_iter_df["rlnNormCorrection"], dtype=np.float64)
@@ -652,13 +723,17 @@ def main():
 
     replay_iteration_overrides = [None] * args.max_iter
     for recovar_iter in range(1, args.max_iter):
-        relion_prev_iter = iteration + recovar_iter
+        relion_prev_iter = replay_previous_relion_iteration(iteration, recovar_iter)
+        relion_control_iter = replay_control_relion_iteration(iteration, recovar_iter)
         if not (relion_dir / f"run_it{relion_prev_iter:03d}_data.star").exists():
             print(
                 f"  Replay state for recovar iter {recovar_iter + 1}: RELION iter {relion_prev_iter:03d} not found, leaving override unset"
             )
             continue
-        replay_iteration_overrides[recovar_iter] = _load_relion_iteration_override(relion_prev_iter)
+        replay_iteration_overrides[recovar_iter] = _load_relion_iteration_override(
+            relion_prev_iter,
+            relion_control_iter,
+        )
         override = replay_iteration_overrides[recovar_iter]
         trans_msg = "none"
         if override["previous_best_translations"][0] is not None:
@@ -667,7 +742,7 @@ def main():
                 f"h2 mean_abs={np.abs(override['previous_best_translations'][1]).mean():.3f} px"
             )
         print(
-            f"  Replay state for recovar iter {recovar_iter + 1}: RELION iter {relion_prev_iter:03d}, "
+            f"  Replay state for recovar iter {recovar_iter + 1}: RELION prev={relion_prev_iter:03d}, control={relion_control_iter:03d}, "
             f"sigma_offset={float(override['translation_sigma_angstrom']):.4f} A, "
             f"corr means=({override['image_corrections'][0].mean():.4f}, {override['image_corrections'][1].mean():.4f}), "
             f"pre-shifts={trans_msg}"
@@ -700,6 +775,10 @@ def main():
     print(f"  Local-search profile: {args.local_search_profile}")
     print(f"  Local engine: {args.local_engine}")
     print(f"  Local translation prior mode: {args.local_search_translation_prior_mode}")
+    print(f"  First-iteration score mode: {args.first_iteration_score_mode}")
+    print(f"  First-iteration reconstruction mode: {args.first_iteration_reconstruction_mode}")
+    print(f"  Emulate RELION iter-1 CC: {args.iter == 0 and do_firstiter_cc}")
+    print(f"  RELION ini_high: {relion_ini_high}")
     print(
         f"  Adjoint ablations: disable_y={args.disable_adjoint_y}, "
         f"disable_ctf={args.disable_adjoint_ctf}"
@@ -751,6 +830,10 @@ def main():
         disable_adjoint_y=args.disable_adjoint_y,
         disable_adjoint_ctf=args.disable_adjoint_ctf,
         local_engine=args.local_engine,
+        emulate_relion_firstiter_cc=(args.iter == 0 and do_firstiter_cc),
+        relion_firstiter_ini_high_angstrom=relion_ini_high if args.iter == 0 else None,
+        first_iteration_score_mode=args.first_iteration_score_mode,
+        first_iteration_reconstruction_mode=args.first_iteration_reconstruction_mode,
     )
     elapsed = time.time() - t0
     print(f"\nCompleted {args.max_iter} iterations in {elapsed:.1f}s")
@@ -768,6 +851,9 @@ def main():
         "local_search_profile_mode": np.array(args.local_search_profile),
         "local_engine": np.array(args.local_engine),
         "local_search_translation_prior_mode": np.array(args.local_search_translation_prior_mode),
+        "first_iteration_score_mode": np.array(args.first_iteration_score_mode),
+        "first_iteration_reconstruction_mode": np.array(args.first_iteration_reconstruction_mode),
+        "relion_ini_high_angstrom": np.float64(relion_ini_high),
         "disable_adjoint_y": np.bool_(args.disable_adjoint_y),
         "disable_adjoint_ctf": np.bool_(args.disable_adjoint_ctf),
     }

@@ -532,21 +532,16 @@ def run_local_em_exact(
         # duplicate factor was only ~1.004-1.005, while the extra gather/shape
         # churn regressed the real 5k local run from ~76.7s to ~126.9s.
         flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
-        projection_kwargs = {}
-        if use_window:
-            projection_kwargs["max_r"] = float(current_size // 2) + 0.5
-            projection_kwargs["return_abs2"] = False
         proj_half_flat, proj_abs2_half_flat = _compute_projections_block(
             mean_for_proj,
             flat_rotations,
             image_shape,
             proj_volume_shape,
             disc_type,
-            **projection_kwargs,
         )
         if use_window:
             proj_half = proj_half_flat[:, window_indices].reshape(batch_size, bucket.bucket_rotation_count, n_windowed)
-            proj_abs2 = jnp.abs(proj_half) ** 2
+            proj_abs2 = proj_abs2_half_flat[:, window_indices].reshape(batch_size, bucket.bucket_rotation_count, n_windowed)
             proj_weighted = proj_half * half_weights_windowed[None, None, :]
             proj_abs2_weighted = proj_abs2 * half_weights_windowed[None, None, :]
             proj_recon = proj_half_flat[:, recon_window_indices].reshape(
@@ -843,6 +838,7 @@ def run_local_em_exact(
         noise_stats = NoiseStats(
             wsum_sigma2_noise=jnp.asarray(noise_wsum, dtype=jnp.float32),
             wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
             sumw=float(noise_sumw),
         )
 
