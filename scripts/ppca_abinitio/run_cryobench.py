@@ -1044,6 +1044,14 @@ def main():
         help="If set, dump final metrics + trajectories + cell config to "
         "this JSON path. Used by the Phase 1 ablation sweep driver.",
     )
+    ap.add_argument(
+        "--instrument",
+        action="store_true",
+        help="Phase 3 instrumentation: print per-iter peak GPU memory and "
+        "predicted memory model breakdown. Records to the --save-results "
+        "JSON under 'instrumentation' if both flags are set. Adds modest "
+        "overhead from jax.live_arrays() introspection.",
+    )
     args = ap.parse_args()
     if args.anneal_mu_too:
         args.anneal_factor_only = False
@@ -1186,6 +1194,97 @@ def main():
         fre_fp_traj = chosen["fre_fp_traj"]
         pe_traj = chosen["pe_traj"]
         lm_traj = chosen["lm_traj"]
+
+    # -------------------------------------------------------------------
+    # Phase 3: optional instrumentation — predicted memory model
+    # -------------------------------------------------------------------
+    instrumentation = None
+    if args.instrument:
+        from recovar.em.ppca_abinitio.memory_model import (
+            estimate_peak_memory_bytes,
+            format_memory_report,
+        )
+
+        n_rot_eff = int(ds.rotations.shape[0])
+        n_trans_eff = int(ds.translations.shape[0])
+        print()
+        print("=== PHASE 3 INSTRUMENTATION ===", flush=True)
+        print(
+            format_memory_report(
+                n_img=ds.batch_full.shape[0],
+                volume_shape=tuple(int(x) for x in cfg.volume_shape),
+                image_shape=tuple(int(x) for x in cfg.image_shape),
+                n_rot=n_rot_eff,
+                n_trans=n_trans_eff,
+                q=args.q,
+            ),
+            flush=True,
+        )
+        # Final-iter pose entropy: run one extra E-step at f=1, compute
+        # mean per-image entropy of γ over (r, t).
+        post_em_stats = score_and_posterior_moments_eqx(
+            cfg,
+            final_init.mu,
+            final_init.U,
+            final_init.s,
+            ds.batch_full,
+            ds.rotations,
+            ds.translations,
+            ds.ctf_params,
+            ds.noise_variance_full,
+        )
+        log_resp = np.asarray(post_em_stats.log_resp)  # (n_img, n_rot, n_trans)
+        gamma = np.exp(log_resp)
+        # H(γ_i) = -Σ_{r,t} γ_{i,r,t} log γ_{i,r,t}, computed in a way that
+        # tolerates numerical zeros.
+        flat = gamma.reshape(gamma.shape[0], -1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            entropy_per_img = -np.sum(np.where(flat > 0, flat * np.log(flat), 0.0), axis=-1)
+        max_entropy = np.log(flat.shape[-1])
+        # Effective pose count per image: 1 / max(gamma), clamped at n_pose.
+        eff_pose_count = 1.0 / np.maximum(np.max(flat, axis=-1), 1.0 / flat.shape[-1])
+        # GPU memory if available.
+        try:
+            mem_stats = jax.devices()[0].memory_stats()
+            peak_mem_gb = mem_stats.get("peak_bytes_in_use", 0) / (1024**3)
+        except Exception:
+            peak_mem_gb = None
+
+        memory_components = estimate_peak_memory_bytes(
+            n_img=ds.batch_full.shape[0],
+            volume_shape=tuple(int(x) for x in cfg.volume_shape),
+            image_shape=tuple(int(x) for x in cfg.image_shape),
+            n_rot=n_rot_eff,
+            n_trans=n_trans_eff,
+            q=args.q,
+        )
+        instrumentation = {
+            "memory_predicted_gb": memory_components["total"] / (1024**3),
+            "memory_components_bytes": {k: int(v) for k, v in memory_components.items()},
+            "memory_measured_peak_gb": peak_mem_gb,
+            "pose_entropy_mean_nats": float(entropy_per_img.mean()),
+            "pose_entropy_max_nats": float(max_entropy),
+            "pose_entropy_normalized": float(entropy_per_img.mean() / max(max_entropy, 1e-9)),
+            "effective_pose_count_mean": float(eff_pose_count.mean()),
+            "effective_pose_count_p10": float(np.percentile(eff_pose_count, 10)),
+            "effective_pose_count_p90": float(np.percentile(eff_pose_count, 90)),
+            "n_pose_total": int(flat.shape[-1]),
+        }
+        print(
+            f"  pose entropy:           {instrumentation['pose_entropy_mean_nats']:.3f} / "
+            f"{max_entropy:.3f} nats "
+            f"(normalized: {instrumentation['pose_entropy_normalized']:.3f})",
+            flush=True,
+        )
+        print(
+            f"  effective pose count:   p10={instrumentation['effective_pose_count_p10']:.1f}, "
+            f"mean={instrumentation['effective_pose_count_mean']:.1f}, "
+            f"p90={instrumentation['effective_pose_count_p90']:.1f} "
+            f"(of {instrumentation['n_pose_total']} grid poses)",
+            flush=True,
+        )
+        if peak_mem_gb is not None:
+            print(f"  GPU peak memory:        {peak_mem_gb:.2f} GB", flush=True)
 
     # -------------------------------------------------------------------
     # Phase 2: optional post-EM eigenvalue refit (ProjCov-style)
@@ -1339,6 +1438,8 @@ def main():
                 "s_em": refit_info.s_em.astype(np.float64).tolist(),
                 "s_refit": refit_info.s_refit.astype(np.float64).tolist(),
             }
+        if instrumentation is not None:
+            results["instrumentation"] = instrumentation
         if discrete_summary is not None:
             results["metrics"]["centroid_acc"] = float(discrete_summary["centroid_acc"])
             results["metrics"]["clust_acc_hungarian"] = float(discrete_summary["clust_acc_hungarian"])
