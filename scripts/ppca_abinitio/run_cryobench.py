@@ -84,6 +84,7 @@ from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 import recovar.core.fourier_transform_utils as ftu
 from recovar.core.slicing import adjoint_slice_volume, slice_volume
 from recovar.em.ppca_abinitio.factor_update import (
+    compute_W_prior_half,
     update_factor_closed_form,
 )
 from recovar.em.ppca_abinitio.grid import build_fixed_grid
@@ -1026,6 +1027,13 @@ def main():
         "radial-shell average of |U|^2 * s. Regularization only — does "
         "NOT estimate eigenvalues.",
     )
+    ap.add_argument(
+        "--save-results",
+        type=str,
+        default=None,
+        help="If set, dump final metrics + trajectories + cell config to "
+        "this JSON path. Used by the Phase 1 ablation sweep driver.",
+    )
     args = ap.parse_args()
     if args.anneal_mu_too:
         args.anneal_factor_only = False
@@ -1250,6 +1258,93 @@ def main():
                     f"  gap to annealed ceiling: hun={a_gap_hun:+.4f} ari={a_gap_ari:+.4f}",
                     flush=True,
                 )
+
+    # -------------------------------------------------------------------
+    # Optional JSON dump for sweep aggregation
+    # -------------------------------------------------------------------
+    if args.save_results is not None:
+        import json
+
+        def _to_pylist(x):
+            arr = np.asarray(x)
+            return arr.astype(np.float64).tolist()
+
+        results = {
+            "config": {
+                "dataset": args.dataset,
+                "vol": args.vol,
+                "n_images": args.n_images,
+                "sigma": args.sigma,
+                "q": args.q,
+                "n_burnin": n_burnin,
+                "n_joint": args.n_joint,
+                "u_init": args.u_init,
+                "svd_warmstart": args.svd_warmstart,
+                "anneal_schedule": args.anneal_schedule,
+                "anneal_iters": args.anneal_iters,
+                "anneal_factor_only": args.anneal_factor_only,
+                "s_init": args.s_init,
+                "ridge_mode": args.ridge_mode,
+                "update_eigenvalues": args.update_eigenvalues,
+                "post_anneal_s_iters": args.post_anneal_s_iters,
+                "external_mode": args.external_mode,
+                "n_restarts": args.n_restarts,
+                "data_seed": args.seed,
+                "init_seed": init_seed,
+                "healpix_order": args.healpix_order,
+            },
+            "trajectories": {
+                "fre_truth": _to_pylist(fre_truth_traj),
+                "fre_fp": _to_pylist(fre_fp_traj),
+                "pe": _to_pylist(pe_traj),
+                "lm": _to_pylist(lm_traj),
+            },
+            "metrics": {
+                "fre_floor": float(fre_floor),
+                "best_fre_truth": float(min(fre_truth_traj)),
+                "best_fre_fp": float(min(fre_fp_traj)),
+                "best_pe": float(min(pe_traj)),
+                "best_lm": float(max(lm_traj)),
+                "final_lm": float(lm_traj[-1]),
+            },
+        }
+        if discrete_summary is not None:
+            results["metrics"]["centroid_acc"] = float(discrete_summary["centroid_acc"])
+            results["metrics"]["clust_acc_hungarian"] = float(discrete_summary["clust_acc_hungarian"])
+            results["metrics"]["ari"] = float(discrete_summary["ari"])
+            results["metrics"]["nmi"] = float(discrete_summary["nmi"])
+        # Ceilings (may be None on non-discrete datasets)
+        try:
+            if oracle_ceil is not None:
+                results["ceilings"] = {
+                    "factor_only_hun": float(oracle_ceil["clust_acc_hungarian"]),
+                    "factor_only_ari": float(oracle_ceil["ari"]),
+                    "factor_only_nmi": float(oracle_ceil["nmi"]),
+                }
+        except NameError:
+            pass
+        try:
+            if joint_ceil is not None:
+                results.setdefault("ceilings", {})
+                results["ceilings"]["joint_loop_hun"] = float(joint_ceil["clust_acc_hungarian"])
+                results["ceilings"]["joint_loop_ari"] = float(joint_ceil["ari"])
+                results["ceilings"]["joint_loop_nmi"] = float(joint_ceil["nmi"])
+        except NameError:
+            pass
+        try:
+            if args.anneal_schedule != "none" and anneal_ceil is not None:
+                results.setdefault("ceilings", {})
+                results["ceilings"]["annealed_hun"] = float(anneal_ceil["clust_acc_hungarian"])
+                results["ceilings"]["annealed_ari"] = float(anneal_ceil["ari"])
+                results["ceilings"]["annealed_nmi"] = float(anneal_ceil["nmi"])
+        except NameError:
+            pass
+
+        out_path = Path(args.save_results)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w") as f:
+            json.dump(results, f, indent=2)
+        print(f"  saved results to {out_path}", flush=True)
 
 
 if __name__ == "__main__":
