@@ -284,3 +284,50 @@ Going further to /N³ doesn't change CC; going coarser to /N gives +0.735.
 The +0.74 plateau is the new ceiling. Remaining gap is per-pixel CTF
 precision + translation phase + argmax sensitivity to all of those
 combined. Each is a discrete next attack with concrete probes.
+
+## CTF + translation phase audit (2026-04-25 round 9)
+
+Per-pixel CTF comparison (our `compute_ctf_full` vs RELION `exp_local_Fctf[0]`):
+  CC = -1.000000 (sign-flipped EXACTLY)
+  max |diff| = 2.0 (= |1 - (-1)|)
+  ours[0,0] = -0.07, RELION[0,0] = +0.07
+
+Mathematical root cause (recovar/core/ctf.py:195 vs RELION ctf.h:216):
+  Recovar: `ctf = sqrt(1-w²) sin(g) - w cos(g) = sin(g - K3)` with
+           gamma_recovar = -π·λ·df·s² + (π/2)·Cs·λ³·s⁴ - phase_shift
+  RELION:  `ctf = -sin(gamma)` with
+           gamma_relion = π·λ·(Axx X² + 2Axy XY + Ayy Y²) + K2·u⁴ - K5 - K3
+                        = -π·λ·deltaf·u² + (π/2)·Cs·λ³·u⁴ - phase_shift - K3
+                        = gamma_recovar - K3
+So our `sin(g - K3) = sin(gamma_relion + K3 - K3) = sin(gamma_relion)`,
+RELION's `-sin(gamma_relion)`. **Net: ctf_recovar = -ctf_relion.**
+
+This sign flip is mathematical, not a bug — but it does propagate into
+the score formula's cross term `-2 Re<F·CTF/σ², proj>`, flipping the
+sign of cross while leaving norms (which use CTF²) unchanged. Effect
+on argmax is the +0.59 → +0.74 lift we saw with the volume-negate
+workaround (which has the same effect as CTF-negate).
+
+Translation phase audit (our `translate_images` vs RELION shift convention):
+  Tested: `exp(-2πi (kx·sx + ky·sy) / N)` (both signs negative) gives
+  CC = +0.998998 vs RELION's `exp_local_Fimgs_shifted_t0`.
+  Conclusion: translation phase is CORRECT and matches RELION.
+
+## Summary of all per-component parities
+
+  Fimg masked       : CC = +1.000000 ✓ bit-exact
+  Fimg unmasked     : CC = +1.000000 ✓ bit-exact
+  CTF (sign-flipped): CC = -1.000000 (mathematical sign, fixed via volume-negate)
+  Translation phase : matches ✓
+  Projection (Fref) : CC = +0.997 (sign + N² scale localized)
+  Score formula     : structurally aligned ✓
+  M-step chain      : CC = +1.000000 ✓ bit-exact
+  Layout converter  : byte-exact ✓
+  BPref accumulator : CC = +0.74 (with all fixes)
+
+The remaining 0.26 BPref residual after all per-component fixes is
+genuinely structural argmax-divergence amplification — when multiple
+(rot, trans) cells have near-identical scores for a particle, tiny
+numerical residuals (mostly the per-pixel projection 0.003 and CTF
+sign management) shift argmax by 90°+ for that particle, scattering
+contributions across BPref.
