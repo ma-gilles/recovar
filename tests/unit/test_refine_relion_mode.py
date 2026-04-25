@@ -1570,13 +1570,13 @@ class TestRelionModeSmokeTest:
         assert len(recorded["image_pre_shifts"]) == 2
         np.testing.assert_allclose(
             recorded["image_pre_shifts"][0],
-            np.array([[0.5, -0.25], [0.0, 0.75]], dtype=np.float32),
+            np.array([[0.0, 0.0], [0.0, 1.0]], dtype=np.float32),
             rtol=1e-6,
             atol=1e-6,
         )
         np.testing.assert_allclose(
             recorded["image_pre_shifts"][1],
-            np.array([[-0.4, 0.3], [0.6, -0.2]], dtype=np.float32),
+            np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
             rtol=1e-6,
             atol=1e-6,
         )
@@ -1609,9 +1609,10 @@ class TestRelionModeSmokeTest:
         assert np.isclose(np.mean(probs_range), 1.0, atol=1e-6)
         assert probs_range[0] > probs_sigma[0]
 
-    def test_relion_translation_search_base_preserves_subpixel_offsets(self):
+    def test_relion_translation_search_base_uses_integer_prescoring_shift(self):
         prev = np.array([[0.5, -0.25], [-0.4, 0.3]], dtype=np.float32)
-        np.testing.assert_allclose(relion_translation_search_base(prev), prev, rtol=1e-6, atol=1e-6)
+        expected = np.rint(prev).astype(np.float32)
+        np.testing.assert_allclose(relion_translation_search_base(prev), expected, rtol=1e-6, atol=1e-6)
 
     def test_direction_prior_round_trip_to_rotation_log_prior(self):
         healpix_order = 1

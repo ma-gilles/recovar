@@ -1,5 +1,47 @@
 # EM Module Developer Guide
 
+## Active Agent Instructions
+
+This `CLAUDE.md` file is the canonical EM agent guide for both Claude and
+Codex. `recovar/em/AGENTS.md` only points back here to avoid duplicated
+instructions. Do not discard or replace the existing instructions below;
+they remain active.
+
+Current RELION-parity branch: `claude/relion-parity-local-search-fix`.
+
+Goal: perfect quality parity with RELION and near RELION speed parity for
+the full end-to-end dense single-volume EM iteration.
+
+Method: aggressively compare RECOVAR and RELION source code, and add gated
+dump hooks to both codebases when source reading is not decisive. The local
+RELION checkout is `/scratch/gpfs/GILLES/mg6942/relion`; the patched build is
+`/scratch/gpfs/GILLES/mg6942/relion/build_patched`.
+
+Do not solve parity by parameter tuning. For parity fixes, identify the
+RELION source behavior, metadata value, or dump-level mismatch first, then
+encode the same behavior in RECOVAR with a targeted test.
+
+Required dump coverage for deep parity work includes raw E-step scores,
+posterior probabilities, every attempted pose in full-grid pass 1,
+adaptive/oversampled pass 2, and local search, best poses after each pass,
+angle/translation priors, support masks, noise accumulators, `Ft_y`,
+`Ft_ctf`, maps, FSC, tau2, data-vs-prior, current size, and resolution
+state.
+
+Use targeted EM tests and targeted RELION replay Slurm jobs during
+iteration. Do not run the full RECOVAR-wide test suite for normal EM parity
+work unless explicitly requested or preparing a PR that requires it.
+
+Keep algorithmic parity changes separate from performance changes. Batching,
+caps, memory layout, and scheduling changes are performance-only until output
+equivalence is proven against the old path.
+
+Current measured baselines, hardware, Slurm job IDs, artifacts, and open
+parity gaps are tracked in
+`docs/math/relion_parity_current_status_2026_04_25.md`. Update that doc
+whenever a new replay result, source-code finding, or dump comparison changes
+the state of the investigation.
+
 ## RELION Volume Convention (READ THIS FIRST)
 
 recovar and RELION use different 3D coordinate frames for real-space
