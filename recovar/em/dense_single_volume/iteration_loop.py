@@ -911,14 +911,16 @@ def _run_local_search_iteration_exact_v1(
         return_profile=return_profile,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
-        # TODO(local-engine-debt): restore RELION-style significant-sample
-        # reconstruction here only after the exact local engine matches the
-        # grouped RELION-mode path on the real replay benchmarks. The current
-        # exact significance path still drifts on iter-6 local replay, so keep
-        # exact_v1 on the full soft posterior for parity.
-        reconstruct_significant_only=False,
+        # RELION normalizes posterior weights for inference/Pmax, but
+        # storeWeightedSums only accumulates samples above the final pass's
+        # adaptive significant-weight threshold. Apply the same gate for the
+        # M-step/noise accumulators while leaving E-step probabilities intact.
+        reconstruct_significant_only=True,
         adaptive_fraction=adaptive_fraction,
-        max_significants=max_significants,
+        # RELION's maximum_significants cap is used to define the coarse pass-1
+        # adaptive support. In pass 2, the reconstruction threshold is governed
+        # by adaptive_fraction only; do not reapply the cap here.
+        max_significants=-1,
     )
 
     if accumulate_noise:
@@ -2223,14 +2225,13 @@ def _run_relion_iteration_loop(
                 # → ~7 hours per iter on the 5k benchmark.
                 #
                 # Estimate the per-image cone size from
-                #     fraction = (sigma_cutoff * biggest_sigma / pi)^2
+                #     fraction = (sigma_cutoff * sigma_rot / pi)^2
                 # which is the spherical cap area as a fraction of the
                 # full SO(3) volume (good to within ~30% for reasonable
                 # cones). Use that to compute an effective rotation count
                 # equal to ``chunk_size * cone_size``, with a safety
                 # factor of 2x for cone-overlap inefficiency.
-                _biggest_sigma = float(max(sigma_rot, sigma_psi))
-                _cone_radius = 3.0 * _biggest_sigma  # sigma_cutoff=3.0
+                _cone_radius = 3.0 * float(sigma_rot)  # sigma_cutoff=3.0
                 _cone_fraction = max(
                     (_cone_radius / float(np.pi)) ** 2,
                     1.0 / float(rotation_grid_size(local_search_order)),
@@ -2788,6 +2789,17 @@ def _run_relion_iteration_loop(
             else:
                 Ft_y_1, Ft_ctf_1 = Ft_y_k, Ft_ctf_k
 
+            # Capture original-stack image indices for the half so dumps can be
+            # matched to RELION's data.star image_name ordering.
+            try:
+                _half_orig_idx = np.asarray(
+                    experiment_datasets[k]._index_layout.original_image_indices_for_local(
+                        np.arange(experiment_datasets[k].n_images, dtype=np.int32)
+                    ),
+                    dtype=np.int64,
+                )
+            except Exception:
+                _half_orig_idx = None
             _parity_dump.collect_e_step(
                 half=k,
                 em_stats=em_stats_k,
@@ -2800,6 +2812,7 @@ def _run_relion_iteration_loop(
                 best_pose_rotation_eulers=best_pose_rotation_eulers[k],
                 best_pose_translations=best_pose_translations[k],
                 translation_search_base=translation_search_bases[k] if "translation_search_bases" in dir() else None,
+                original_image_indices=_half_orig_idx,
             )
 
         # E-step + per-half M-step accumulators are now both populated.
