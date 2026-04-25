@@ -10,6 +10,7 @@ from pathlib import Path
 import jax.numpy as jnp
 import numpy as np
 
+from recovar import utils
 import recovar.core as core
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
@@ -232,6 +233,11 @@ def _maybe_write_debug_score_dump(
         local_idx = int(bucket.image_indices[row])
         actual_count = int(bucket.actual_rotation_counts[row])
         local_rotation_ids = np.asarray(bucket.local_rotation_ids[row, :actual_count], dtype=np.int32)
+        local_rotation_matrices = np.asarray(bucket.local_rotations[row, :actual_count], dtype=np.float32)
+        local_rotation_eulers = np.asarray(
+            utils.R_to_relion(local_rotation_matrices, degrees=True),
+            dtype=np.float32,
+        )
         rotation_mask = np.asarray(bucket.local_rotation_mask[row, :actual_count], dtype=bool)
         rotation_log_prior = np.asarray(bucket.local_rotation_log_prior[row, :actual_count], dtype=np.float32)
         translation_log_prior = np.asarray(bucket.translation_log_prior[row], dtype=np.float32)
@@ -239,6 +245,18 @@ def _maybe_write_debug_score_dump(
         raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
         raw_scores = np.where(rotation_mask[:, None], raw_scores, -np.inf)
         posterior = np.asarray(probs_np[row, :actual_count, :], dtype=np.float32)
+        n_trans = int(translation_log_prior.shape[0])
+        translation_indices = np.arange(n_trans, dtype=np.int32)
+        best_score_flat = int(np.argmax(total_scores))
+        best_score_rotation_index, best_score_translation_index = np.unravel_index(
+            best_score_flat,
+            total_scores.shape,
+        )
+        best_posterior_flat = int(np.argmax(posterior))
+        best_posterior_rotation_index, best_posterior_translation_index = np.unravel_index(
+            best_posterior_flat,
+            posterior.shape,
+        )
         reconstruction_sample_mask_row = np.asarray(
             reconstruction_sample_mask_np[row, :actual_count, :],
             dtype=bool,
@@ -261,7 +279,14 @@ def _maybe_write_debug_score_dump(
             local_rotation_indices=local_rotation_ids,
             local_rotation_pixel_indices=(local_rotation_ids % int(local_layout.n_pixels)).astype(np.int64),
             local_rotation_psi_indices=(local_rotation_ids // int(local_layout.n_pixels)).astype(np.int64),
+            local_rotation_eulers=local_rotation_eulers,
+            local_rotation_matrices=local_rotation_matrices,
             translations=np.asarray(local_layout.translation_grid, dtype=np.float32),
+            candidate_pose_rotation_indices=np.repeat(local_rotation_ids[:, None], n_trans, axis=1),
+            candidate_pose_translation_indices=np.broadcast_to(
+                translation_indices[None, :],
+                (actual_count, n_trans),
+            ),
             image_pre_shift=(
                 np.asarray(image_pre_shifts[local_idx], dtype=np.float32)
                 if image_pre_shifts is not None
@@ -274,9 +299,33 @@ def _maybe_write_debug_score_dump(
             max_posterior=np.array([float(max_posterior_np[row])], dtype=np.float32),
             log_Z=np.array([float(log_Z_np[row])], dtype=np.float32),
             best_score=np.array([float(best_log_score_np[row])], dtype=np.float32),
+            best_score_rotation_local_index=np.array([int(best_score_rotation_index)], dtype=np.int32),
+            best_score_translation_index=np.array([int(best_score_translation_index)], dtype=np.int32),
+            best_score_rotation_global_id=np.array(
+                [int(local_rotation_ids[int(best_score_rotation_index)])],
+                dtype=np.int32,
+            ),
+            best_score_translation=np.asarray(
+                local_layout.translation_grid[
+                    int(best_score_translation_index) : int(best_score_translation_index) + 1
+                ],
+                dtype=np.float32,
+            ),
+            best_posterior_rotation_local_index=np.array([int(best_posterior_rotation_index)], dtype=np.int32),
+            best_posterior_translation_index=np.array([int(best_posterior_translation_index)], dtype=np.int32),
+            best_posterior_rotation_global_id=np.array(
+                [int(local_rotation_ids[int(best_posterior_rotation_index)])],
+                dtype=np.int32,
+            ),
+            best_posterior_translation=np.asarray(
+                local_layout.translation_grid[
+                    int(best_posterior_translation_index) : int(best_posterior_translation_index) + 1
+                ],
+                dtype=np.float32,
+            ),
             current_size=np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
             n_rot=np.array([actual_count], dtype=np.int32),
-            n_trans=np.array([translation_log_prior.shape[0]], dtype=np.int32),
+            n_trans=np.array([n_trans], dtype=np.int32),
             grid_n_pixels=np.array([int(local_layout.n_pixels)], dtype=np.int32),
             grid_n_psi=np.array([int(local_layout.n_psi)], dtype=np.int32),
         )

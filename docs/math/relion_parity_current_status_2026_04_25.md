@@ -170,6 +170,21 @@ It is acceptable to edit both codebases for this:
 - Dumps should identify iteration, half-set, pass name, global image ID, local
   image index, units, and grid metadata.
 
+### Dump Coverage Added On 2026-04-25
+
+- RECOVAR selected-image exact-local score dumps now include explicit attempted
+  local-search pose metadata: local/global rotation IDs, RELION Euler angles,
+  rotation matrices, translation-grid indices, and best score/posterior pose
+  indices. The dump remains gated by `RECOVAR_LOCAL_SCORE_DUMP_DIR` and
+  `RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES`.
+- The local RELION checkout now writes pass/oversampling-suffixed dump files
+  while preserving the legacy unsuffixed names for compatibility. This avoids
+  pass 2 overwriting pass 1 when comparing full-grid and adaptive pass scores
+  and posteriors. The patched `refine` and `refine_mpi` targets were rebuilt in
+  `/scratch/gpfs/GILLES/mg6942/relion/build_patched`.
+- Targeted RECOVAR unit coverage:
+  `tests/unit/test_refine_relion_mode.py::test_local_score_debug_dump_records_attempted_pose_metadata`.
+
 ## Open Questions
 
 - Why does accumulated pmax drift by iter 2 when one-step `iter 7 -> 8` from
