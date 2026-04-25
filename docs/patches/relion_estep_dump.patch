@@ -1,5 +1,5 @@
 diff --git a/src/ml_optimiser.cpp b/src/ml_optimiser.cpp
-index fb33d84..254db2c 100644
+index fb33d84..2feef27 100644
 --- a/src/ml_optimiser.cpp
 +++ b/src/ml_optimiser.cpp
 @@ -73,6 +73,148 @@
@@ -756,7 +756,7 @@ index fb33d84..254db2c 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -7299,6 +7972,19 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
+@@ -7299,6 +7972,57 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
                                      }
                                  }
  
@@ -773,10 +773,48 @@ index fb33d84..254db2c 100644
 +                                    __relion_dump_scalar("orient0_psi", oversampled_psi[iover_rot]);
 +                                }
 +
++                                // ---- RECOVAR ESTEP DUMP: Fref + Frefctf for orient 0 first 3 particles ----
++                                {
++                                    const char* est_dir = std::getenv("RECOVAR_DEBUG_ESTEP_DIR");
++                                    if (est_dir != NULL && iter == 1 && iorient == 0 && iover_rot == 0
++                                        && img_id == 0 && part_id < 3)
++                                    {
++                                        char p[1024]; FILE* f;
++                                        snprintf(p, sizeof(p), "%s/p%ld_Fref_orient0.bin", est_dir, part_id);
++                                        f = fopen(p, "wb");
++                                        if (f) {
++                                            long nz = ZSIZE(Fref), ny = YSIZE(Fref), nx = XSIZE(Fref);
++                                            fwrite(&nz, sizeof(long), 1, f);
++                                            fwrite(&ny, sizeof(long), 1, f);
++                                            fwrite(&nx, sizeof(long), 1, f);
++                                            fwrite(Fref.data, sizeof(Complex), nz * ny * nx, f);
++                                            fclose(f);
++                                        }
++                                        snprintf(p, sizeof(p), "%s/p%ld_Frefctf_orient0.bin", est_dir, part_id);
++                                        f = fopen(p, "wb");
++                                        if (f) {
++                                            long nz = ZSIZE(Frefctf), ny = YSIZE(Frefctf), nx = XSIZE(Frefctf);
++                                            fwrite(&nz, sizeof(long), 1, f);
++                                            fwrite(&ny, sizeof(long), 1, f);
++                                            fwrite(&nx, sizeof(long), 1, f);
++                                            fwrite(Frefctf.data, sizeof(Complex), nz * ny * nx, f);
++                                            fclose(f);
++                                        }
++                                        snprintf(p, sizeof(p), "%s/p%ld_orient0.txt", est_dir, part_id);
++                                        f = fopen(p, "w");
++                                        if (f) {
++                                            fprintf(f, "rot=%.12e\n", (double)oversampled_rot[iover_rot]);
++                                            fprintf(f, "tilt=%.12e\n", (double)oversampled_tilt[iover_rot]);
++                                            fprintf(f, "psi=%.12e\n", (double)oversampled_psi[iover_rot]);
++                                            fclose(f);
++                                        }
++                                    }
++                                }
++
                                  long int ihidden = iorientclass * exp_nr_trans;
                                  for (long int itrans = exp_itrans_min; itrans <= exp_itrans_max; itrans++, ihidden++)
                                  {
-@@ -7691,6 +8377,22 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
+@@ -7691,6 +8415,22 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
          } // end if mymodel.pdf_class[iclass] > 0.
      } // end loop iclass
  
@@ -799,7 +837,7 @@ index fb33d84..254db2c 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -8228,6 +8930,40 @@ void MlOptimiser::convertAllSquaredDifferencesToWeights(long int part_id, int ib
+@@ -8228,6 +8968,40 @@ void MlOptimiser::convertAllSquaredDifferencesToWeights(long int part_id, int ib
      }
      exp_significant_weight = my_significant_weight;
  
@@ -840,7 +878,7 @@ index fb33d84..254db2c 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -9064,6 +9800,20 @@ void MlOptimiser::storeWeightedSums(long int part_id, int ibody,
+@@ -9064,6 +9838,20 @@ void MlOptimiser::storeWeightedSums(long int part_id, int ibody,
      // Also store sum of Pmax
      thr_sum_Pmax += DIRECT_A2D_ELEM(exp_metadata, metadata_offset, METADATA_PMAX);
  
