@@ -99,6 +99,7 @@ def collect_e_step(
     best_pose_rotation_eulers,
     best_pose_translations,
     translation_search_base,
+    original_image_indices=None,
 ) -> None:
     """Snapshot per-half E-step outputs. Called once per half inside the iter."""
 
@@ -132,6 +133,9 @@ def collect_e_step(
         ),
         "translation_search_base": (
             np.asarray(translation_search_base, dtype=np.float32) if translation_search_base is not None else None
+        ),
+        "original_image_indices": (
+            np.asarray(original_image_indices, dtype=np.int64) if original_image_indices is not None else None
         ),
     }
 
