@@ -139,6 +139,7 @@ def main() -> None:
         reconstruction_padding_factor=1,
         half_spectrum_scoring=True,
         return_stats=True,
+        # InitialModel coherent fixture has do_firstiter_cc=0 → gaussian
         relion_firstiter_score_mode="gaussian",
         score_with_masked_images=True,
     )

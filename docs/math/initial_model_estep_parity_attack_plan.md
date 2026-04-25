@@ -207,6 +207,23 @@ Branch tip `9b88f285` includes:
 Once the E-step gap is closed, `tests/unit/initial_model/test_estep_fixture.py::test_estep_bpref_forward_parity`
 asserts `cc_h0 > 0.9999` (currently soft-baseline).
 
+## Projection-frame sign flip identified (2026-04-25 final-final-final)
+
+Direct comparison of `slice_volume(vol_recovar=load_relion_volume(...))`
+at `R_from_relion(rot,tilt,psi)` vs RELION's dumped Fref_orient0:
+
+  CC = +0.997682   sign = NEGATIVE (i.e., our_proj ≈ -RELION_Fref)
+
+Memory entry says volume sign cancels at projection step; but for
+direct projection-vs-projection comparison (not image-vs-image), the
+sign DOES propagate through. Empirically negating iref_ft before
+run_em did NOT lift BPref CC (stayed at +0.58), suggesting the sign
+isn't the only or dominant residual.
+
+The remaining BPref gap is multi-faceted: amplitude scaling residual
+(0.0003 ratio in projection probe), per-pixel CTF or translation phase
+subtleties, and per-cell argmax sensitivity to all of those combined.
+
 ## M-step Fimg parity is BIT-EXACT (2026-04-25 final-final)
 
 Direct per-pixel comparison of `process_images(apply_image_mask=False)`
