@@ -969,7 +969,13 @@ def main():
         help="Deterministic annealing of noise_variance over the first "
         "--anneal-iters joint steps. 'log1000' (logspace(3,0,anneal_iters)) "
         "rescues a random or SVD U init from the lazy basin on Ribosembly "
-        "q=8 (diag_cluster_bootstrap_v11 finding).",
+        "q=8 (diag_cluster_bootstrap_v11 finding). "
+        "PHASE 6.5 GUIDANCE (2026-04-25, see ppca_abinitio_phase6_stress_*.md): "
+        "factor-only-log1000 anneal is σ-CONDITIONAL — RESCUES Ribo q=8 σ=0.001 "
+        "(+0.19 hun) and Ribo q=8 σ=0.01 with warm μ (+0.17 hun, Phase 1), "
+        "but HURTS at σ ≥ 0.3 (-0.04 to -0.06 hun) and is NEUTRAL on cold-μ. "
+        "Recommended: enable for σ < 0.005 OR Ribosembly-like discrete q ≥ 8 "
+        "with warm μ. Do NOT enable at σ ≥ 0.3 or with cold μ.",
     )
     ap.add_argument(
         "--anneal-iters",
