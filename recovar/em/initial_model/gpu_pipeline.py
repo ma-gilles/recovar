@@ -321,16 +321,29 @@ def reconstruct_grad_from_run_em_output(
     return out
 
 
-def _split_halfset_particle_ids(n_images: int, rng_seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
-    """Return (h0_ids, h1_ids) deterministically partitioning [0, n_images).
+def _split_halfset_particle_ids(
+    n_images: int,
+    rng_seed: int = 0,
+    micrograph_names: Optional[np.ndarray] = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return (h0_ids, h1_ids) RELION-style partitioning of [0, n_images).
 
-    RELION's pseudo-halfsets alternate 0/1 in particle order; we mirror
-    that to keep the halfset assignment stable across runs.
+    RELION's pseudo-halfsets alternate 0/1 over particles in
+    `_rlnMicrographName`-lexicographic-sorted order (the same order
+    `reorder_particles_relion_style` produces). When ``micrograph_names``
+    is supplied, h0/h1 are returned as DATASET-NATURAL-ORDER indices that
+    pick the same physical particles RELION's halfsets contain.
+
+    Falls back to natural-order alternation when names are not supplied,
+    which matches RELION only when the dataset is already RELION-sorted.
     """
     ids = np.arange(n_images)
-    h0 = ids[0::2]
-    h1 = ids[1::2]
-    return h0, h1
+    if micrograph_names is None:
+        return ids[0::2], ids[1::2]
+    sort_idx = np.argsort(np.asarray(micrograph_names), kind="stable")
+    h0_sorted = sort_idx[0::2]
+    h1_sorted = sort_idx[1::2]
+    return h0_sorted, h1_sorted
 
 
 def run_iter_gpu_vdam(
