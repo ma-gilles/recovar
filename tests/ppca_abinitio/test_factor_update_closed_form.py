@@ -186,9 +186,15 @@ def test_closed_form_returns_valid_ppca_init():
     assert jnp.all(jnp.isfinite(out.U))
 
 
-def test_closed_form_output_is_real_space_orthonormal():
-    """The closed-form update must return U in the same real-space
-    orthonormal gauge used by the rest of the fixed-s PPCA code."""
+def test_closed_form_output_lives_in_real_volume_hermitian_subspace():
+    """Phase 0 gauge fix: the closed-form M-step does NOT orthonormalize
+    when s is frozen (it would change the represented covariance
+    `U diag(s) U^H` under a GL(q) transform). It applies only the
+    real-volume Hermitian projection. Verify that property — the
+    decoded volumes are real, no orthonormality assumption.
+
+    See `docs/math/ppca_abinitio_status_*.md` Section 9.1 (gauge fix).
+    """
     ds = _make_dataset(sigma=0.01, n_train=512)
     cfg = _Cfg(image_shape=IMAGE_SHAPE, volume_shape=VOLUME_SHAPE, voxel_size=1.0)
     init = init_truth_perturbed(
@@ -201,6 +207,20 @@ def test_closed_form_output_is_real_space_orthonormal():
         seed=0,
     )
     out = _call(cfg, ds, init)
+
+    # Real-volume Hermitian property: U decodes to a real-valued volume.
+    # Verify by re-applying the projection and checking it's a no-op
+    # (idempotent → already in subspace).
+    from recovar.em.ppca_abinitio.half_volume import (
+        project_to_real_volume_subspace_batch,
+    )
+
+    U_reproj = project_to_real_volume_subspace_batch(out.U, VOLUME_SHAPE)
+    np.testing.assert_allclose(np.asarray(U_reproj), np.asarray(out.U), atol=1e-10)
+
+    # Sanity: the Gram is finite and (approximately) symmetric — but
+    # NOT identity, because the M-step deliberately skips orthonormalization.
     weights = make_half_volume_weights(VOLUME_SHAPE)
     gram = np.asarray(half_real_space_gram(out.U, weights, int(np.prod(VOLUME_SHAPE))))
-    np.testing.assert_allclose(gram, np.eye(2), atol=1e-8, rtol=1e-8)
+    assert np.all(np.isfinite(gram))
+    np.testing.assert_allclose(gram, gram.conj().T, atol=1e-10)
