@@ -170,7 +170,7 @@ def _prepare_reconstruction_batch(
     n_images,
     n_trans,
 ):
-    ## TODO: ALL OF THIS SHOULD BE DONE IN HALF_IMAGE NATIVELY. NO FULL -> HALF CONVERSIONS. 
+    ## TODO: ALL OF THIS SHOULD BE DONE IN HALF_IMAGE NATIVELY. NO FULL -> HALF CONVERSIONS.
 
     """Preprocess one image batch for the unmasked M-step path."""
     CTF = config.compute_ctf(ctf_params)
@@ -304,8 +304,7 @@ def _m_step_block_windowed(
     After the GEMM, the result is scattered back to a full half-spectrum
     array before calling adjoint_slice_volume.
     """
-    H, W = image_shape
-    n_half = H * (W // 2 + 1)
+    del image_shape, volume_shape  # static args kept for jit signature stability
     rot_block_size = rotations_block.shape[0]
 
     # Normalize
@@ -368,7 +367,7 @@ def _adjoint_slice_volume_half(
     half_image,
     half_volume=False,
 ):
-    ## UNNECESSARY? 
+    ## UNNECESSARY?
     """Adjoint-slice a half-spectrum block into the volume accumulator."""
     return core.adjoint_slice_volume(
         half_block,
@@ -498,10 +497,9 @@ def _m_step_block(
 def _compute_noise_block(
     proj_half, proj_abs2_half, summed_masked, ctf_probs, noise_variance_half, shell_indices, n_shells
 ):
-    ## TODO: QUESTION? Projections (unweighted by half_weights). IS THIS RIGHT? ARE DOCS WRONG? I THOUGHT RELION DID NOT USE WEIGHTS AT ALL? 
+    ## TODO: QUESTION? Projections (unweighted by half_weights). IS THIS RIGHT? ARE DOCS WRONG? I THOUGHT RELION DID NOT USE WEIGHTS AT ALL?
 
     ## TODO: SHOULD WE REALLY BE KEEPING AROUDN BOTH PROJ AND |PROJ|^2 THROUGHOUT CODE? SEEMS WASTEFUL IN MEMORY?
-
 
     """Accumulate RELION-style posterior-weighted noise for one rotation block.
 
@@ -559,7 +557,7 @@ def _compute_noise_block(
 
     # Per-pixel block contribution (without P_img)
     block_noise = A2 - 2.0 * XA
-    
+
     ## TODO: IS THIS REALLY WHAT RELION DOES? WHY ARE STORING THE MIDDLE TERMS LIKE A2 AND XA?
 
     ## TODO, SO HERE N IS N_SHELLS? WE SHOULD MAKE THAT CLEAR.
@@ -630,7 +628,7 @@ def run_em(
     translation_log_prior: np.ndarray = None,
     image_indices: np.ndarray = None,
     rotation_translation_mask: np.ndarray = None,
-    *, ## TODO: WHAT IS THIS FROM? SEEMS AWKWARD. COULD WE MAKE OPTIONS, PARTICULARLY DEBUG OPTIONS LIKE THIS INTO A CONFIG OBJECT?
+    *,  ## TODO: WHAT IS THIS FROM? SEEMS AWKWARD. COULD WE MAKE OPTIONS, PARTICULARLY DEBUG OPTIONS LIKE THIS INTO A CONFIG OBJECT?
     score_with_masked_images: bool = False,
     return_stats: bool = False,
     accumulate_noise: bool = False,
@@ -742,9 +740,10 @@ def run_em(
     # Pad volume in real space for smoother trilinear projection (RELION pf=2).
     if projection_padding_factor > 1:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
+
         ## TODO: ALL VOLUMES SHOULD BE IN SOME KND OF HALF VOLUME FORMAT THROUGHOUT WHEN IN FOURIER DOMAIN. SAME FOR IMAGES (OR THINGS SIZE OF IMAGE E..G CTF)
         mean_for_proj, proj_volume_shape = pad_volume_for_projection(
-            mean,   ## TODO rename mean? Doesn't make a lot of sense here. also mean_var etc
+            mean,  ## TODO rename mean? Doesn't make a lot of sense here. also mean_var etc
             volume_shape,
             projection_padding_factor,
             do_gridding_correction=do_gridding_correction,
@@ -1111,7 +1110,7 @@ def run_em(
         # Find the DC pixel by locating shell index 0 in the precomputed
         # shell_indices_half array.
         if half_spectrum_scoring:
-            ## TODO: THIS SEEMS LIKE A VERY INFECCICIENT WAY TO DO THIS. JUST FIND INDEX AND .SET IT 0? 
+            ## TODO: THIS SEEMS LIKE A VERY INFECCICIENT WAY TO DO THIS. JUST FIND INDEX AND .SET IT 0?
             dc_shell_idx = make_shell_indices_half(image_shape)
             dc_mask = dc_shell_idx == 0  # True at DC pixel(s)
             # Zero out DC in SCORING arrays only

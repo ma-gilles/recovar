@@ -213,7 +213,9 @@ def _maybe_write_debug_score_dump(
         experiment_dataset.original_image_indices_from_local(bucket.image_indices),
         dtype=np.int64,
     )
-    target_rows = [row for row, original_idx in enumerate(original_image_indices.tolist()) if int(original_idx) in pending_targets]
+    target_rows = [
+        row for row, original_idx in enumerate(original_image_indices.tolist()) if int(original_idx) in pending_targets
+    ]
     if not target_rows:
         return pending_targets
 
@@ -337,7 +339,6 @@ def run_local_em_exact(
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
     else:
         recon_volume_shape = volume_shape
-    recon_volume_size = int(np.prod(recon_volume_shape))
     recon_half_volume_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(recon_volume_shape)
     recon_half_volume_size = int(np.prod(recon_half_volume_shape))
 
@@ -380,7 +381,9 @@ def run_local_em_exact(
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_shell_indices_half(image_shape)
         shell_indices_noise = shell_indices_half if window_indices is None else shell_indices_half[window_indices]
-        noise_variance_for_noise = noise_variance_half if window_indices is None else noise_variance_half[window_indices]
+        noise_variance_for_noise = (
+            noise_variance_half if window_indices is None else noise_variance_half[window_indices]
+        )
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
 
@@ -398,7 +401,11 @@ def run_local_em_exact(
     noise_time = 0.0
     host_stats_time = 0.0
     total_local_rotations = int(local_layout.total_local_rotations)
-    seen_global_rotations = np.zeros(rotation_posterior_sums.shape[0], dtype=bool) if rotation_posterior_sums.size else np.zeros(0, dtype=bool)
+    seen_global_rotations = (
+        np.zeros(rotation_posterior_sums.shape[0], dtype=bool)
+        if rotation_posterior_sums.size
+        else np.zeros(0, dtype=bool)
+    )
     seen_nonzero_global_rotations = np.zeros_like(seen_global_rotations)
     seen_reconstruction_global_rotations = np.zeros_like(seen_global_rotations)
     total_padded_rotations = 0
@@ -548,10 +555,12 @@ def run_local_em_exact(
 
         significance_t0 = time.time()
         if reconstruct_significant_only:
-            reconstruction_sample_mask, reconstruction_rotation_mask, n_significant_samples = compute_reconstruction_support(
-                probs,
-                adaptive_fraction=adaptive_fraction,
-                max_significants=max_significants,
+            reconstruction_sample_mask, reconstruction_rotation_mask, n_significant_samples = (
+                compute_reconstruction_support(
+                    probs,
+                    adaptive_fraction=adaptive_fraction,
+                    max_significants=max_significants,
+                )
             )
             reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
         else:
@@ -747,8 +756,12 @@ def run_local_em_exact(
             raise RuntimeError("exact local engine selected padded local rotation")
         hard_assignment[bucket.image_indices] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
         log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
-        log_evidence_per_image[bucket.image_indices] = np.asarray(log_Z, dtype=np.float32) + log_score_offset.astype(np.float32)
-        best_log_score_per_image[bucket.image_indices] = np.asarray(best_log_score, dtype=np.float32) + log_score_offset.astype(np.float32)
+        log_evidence_per_image[bucket.image_indices] = np.asarray(log_Z, dtype=np.float32) + log_score_offset.astype(
+            np.float32
+        )
+        best_log_score_per_image[bucket.image_indices] = np.asarray(
+            best_log_score, dtype=np.float32
+        ) + log_score_offset.astype(np.float32)
         max_posterior_per_image[bucket.image_indices] = np.asarray(max_posterior, dtype=np.float32)
 
         probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
@@ -875,7 +888,9 @@ def run_local_em_exact(
         "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
         "unique_reconstruction_global_rotations": np.int64(np.count_nonzero(seen_reconstruction_global_rotations)),
         "duplicate_rotation_factor": np.float64(
-            0.0 if not np.any(seen_global_rotations) else total_local_rotations / np.count_nonzero(seen_global_rotations)
+            0.0
+            if not np.any(seen_global_rotations)
+            else total_local_rotations / np.count_nonzero(seen_global_rotations)
         ),
         "reconstruction_duplicate_rotation_factor": np.float64(
             0.0

@@ -733,7 +733,6 @@ def compute_pass2_stats_sparse(
 
         best_idx = int(np.asarray(ha_i)[0])
         rot_idx = best_idx // n_fine_trans
-        trans_idx = best_idx % n_fine_trans
         hard_assignment[image_idx] = best_idx
         best_rotations[image_idx] = oversampled_rots[rot_idx]
         best_rotation_indices[image_idx] = oversampled_rot_indices[rot_idx]

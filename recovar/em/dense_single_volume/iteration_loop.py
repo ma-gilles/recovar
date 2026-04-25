@@ -312,11 +312,6 @@ def _run_local_search_iteration_grouped_union(
             f"rotation_grid_eulers must match rotation_grid_rotations, got "
             f"{rotation_grid_eulers.shape} vs {rotation_grid_rotations.shape}",
         )
-    active_offset_range = (
-        float(offset_range_pixels)
-        if offset_range_pixels is not None
-        else float(np.max(np.linalg.norm(np.asarray(translations, dtype=np.float32), axis=1)))
-    )
     volume_size = experiment_dataset.volume_size
     recon_vol_size = volume_size * reconstruction_padding_factor**3
 
@@ -403,8 +398,8 @@ def _run_local_search_iteration_grouped_union(
         # C1 (RELION-parity): use the explicit sigma_offset_angstrom from the
         # caller (which is the data-driven value updated each iter) without
         # the legacy `range/3` override (offset_range_pixels=None). The
-        # translation grid is still bounded by `active_offset_range` in the
-        # engine's score computation.
+        # engine's score computation still bounds the translation grid by the
+        # absolute offset implied by ``translations`` and ``offset_range_pixels``.
         translation_prior_t0 = time.time()
         local_translation_log_prior = make_relion_translation_log_prior(
             translations,
@@ -2515,9 +2510,6 @@ def _run_relion_iteration_loop(
                 current_healpix_order,
             )
             global_direction_prior_order = current_healpix_order
-
-        # --- Combined Fourier weights for data_vs_prior at next iteration ---
-        Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
 
         # --- Compute unregularized half-maps for FSC and prior ---
         _t_unreg = time.time()
