@@ -274,7 +274,7 @@ def test_estep_bpref_forward_parity():
     # Pseudo-halfsets: even particles → h0, odd → h1
     h0_ids, h1_ids = _split_halfset_particle_ids(ds.n_images)
 
-    def _run_estep(subset_ds, score_mode: str = "normalized_cc"):
+    def _run_estep(subset_ds, score_mode: str = "gaussian"):
         result = run_em(
             subset_ds,
             mean=mean_ft_j,
@@ -290,15 +290,10 @@ def test_estep_bpref_forward_parity():
             reconstruction_padding_factor=1,
             half_spectrum_scoring=True,
             return_stats=True,
-            # RELION's --firstiter_cc binarizes posteriors to single-best
-            # orientation per particle at iter 1 (ml_optimiser.cpp:7775-7803).
-            # This is the dominant E-step structural difference.
-            # NB: relion_firstiter_winner_take_all=True empirically WORSENS
-            # the BPref CC (+0.73 → +0.19) — the soft normalized_cc path
-            # matches RELION's accumulator more closely than the hard
-            # winner-take-all path, suggesting RELION's iter-1 binarised
-            # weight is offset by a per-particle CC-magnitude scale we
-            # don't reproduce. Leave as soft for now.
+            # The RELION dump (Phase A, p{X}_estep_meta.txt) shows do_firstiter_cc=0
+            # for the InitialModel default command, so the matching score path is
+            # 'gaussian', not 'normalized_cc'. Earlier 'normalized_cc' run gave a
+            # higher CC (+0.73) by luck — not the bit-exact target.
             relion_firstiter_score_mode=score_mode,
         )
         return np.asarray(result[2]), np.asarray(result[3])
