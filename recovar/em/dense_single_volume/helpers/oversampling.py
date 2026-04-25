@@ -544,12 +544,120 @@ def compute_pass2_stats_sparse(
     image_pre_shifts=None,
     use_float64_scoring=False,
     random_perturbation=0.0,
+    use_perimage_reference=False,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
 
     This matches RELION's pass-2 structure more closely than the dense-union
     approximation: each image only evaluates oversampled children of the
     coarse (rotation, translation) pairs that survived pass 1.
+
+    Implementation note
+    -------------------
+    By default the bucketed batched implementation in
+    :mod:`recovar.em.dense_single_volume.helpers.sparse_pass2_bucketed`
+    is used: images are grouped by their oversampled rotation count
+    (quantized) and evaluated as one GPU call per bucket, which keeps
+    the number of distinct XLA shapes bounded across iterations.
+
+    The original per-image Python loop is preserved as
+    :func:`_compute_pass2_stats_sparse_perimage_reference` for testing
+    parity; it can be selected by setting ``use_perimage_reference=True``.
+    The two paths must produce identical outputs (modulo float rounding).
+    """
+    if not use_perimage_reference:
+        from .sparse_pass2_bucketed import compute_pass2_stats_sparse_bucketed
+
+        return compute_pass2_stats_sparse_bucketed(
+            experiment_dataset,
+            volume,
+            mean_variance,
+            noise_variance,
+            translations,
+            significant_sample_indices,
+            nside_level,
+            disc_type,
+            oversampling_order=oversampling_order,
+            current_size=current_size,
+            translation_step=translation_step,
+            rotation_log_prior=rotation_log_prior,
+            score_with_masked_images=score_with_masked_images,
+            return_stats=return_stats,
+            translation_log_prior=translation_log_prior,
+            accumulate_noise=accumulate_noise,
+            half_spectrum_scoring=half_spectrum_scoring,
+            projection_padding_factor=projection_padding_factor,
+            reconstruction_padding_factor=reconstruction_padding_factor,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            use_float64_scoring=use_float64_scoring,
+            random_perturbation=random_perturbation,
+        )
+
+    return _compute_pass2_stats_sparse_perimage_reference(
+        experiment_dataset,
+        volume,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_sample_indices,
+        nside_level,
+        disc_type,
+        oversampling_order=oversampling_order,
+        current_size=current_size,
+        translation_step=translation_step,
+        rotation_log_prior=rotation_log_prior,
+        score_with_masked_images=score_with_masked_images,
+        return_stats=return_stats,
+        translation_log_prior=translation_log_prior,
+        accumulate_noise=accumulate_noise,
+        half_spectrum_scoring=half_spectrum_scoring,
+        projection_padding_factor=projection_padding_factor,
+        reconstruction_padding_factor=reconstruction_padding_factor,
+        image_corrections=image_corrections,
+        scale_corrections=scale_corrections,
+        image_pre_shifts=image_pre_shifts,
+        use_float64_scoring=use_float64_scoring,
+        random_perturbation=random_perturbation,
+    )
+
+
+def _compute_pass2_stats_sparse_perimage_reference(
+    experiment_dataset,
+    volume,
+    mean_variance,
+    noise_variance,
+    translations,
+    significant_sample_indices,
+    nside_level,
+    disc_type,
+    oversampling_order=1,
+    current_size=None,
+    translation_step=None,
+    *,
+    rotation_log_prior=None,
+    score_with_masked_images=False,
+    return_stats=False,
+    translation_log_prior=None,
+    accumulate_noise=False,
+    half_spectrum_scoring=False,
+    projection_padding_factor=1,
+    reconstruction_padding_factor=1,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
+    use_float64_scoring=False,
+    random_perturbation=0.0,
+):
+    """Per-image reference implementation for sparse pass-2.
+
+    Runs ``run_em`` once per image with ``image_batch_size=1`` and the
+    image's oversampled rotation/translation grid.  This is correct but
+    causes a JIT recompile per image when the rotation count varies, so
+    it is only kept as a numerical reference for testing — production
+    paths should use :func:`compute_pass2_stats_sparse` with the default
+    bucketed implementation.
     """
     from recovar.em.sampling import (
         get_oversampled_rotation_grid_from_samples,
