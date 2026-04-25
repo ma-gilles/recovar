@@ -200,6 +200,81 @@ def run_multi_iter_gpu(
     return current, {"total_e_step_s": total_e, "total_m_step_s": total_m}
 
 
+def run_em_output_to_bpref(
+    Ft_y: np.ndarray,
+    Ft_ctf: np.ndarray,
+    ori_size: int,
+    r_max: int,
+    padding_factor: int = 1,
+):
+    """Convert recovar's run_em output to RELION's BPref compressed layout.
+
+    recovar stores full 3D spectra CENTERED (DC at [N/2, N/2, N/2], see
+    `recovar.core.fourier_transform_utils.get_dft3`). RELION's
+    BackProjector stores a compressed half-complex slab sized
+    (pad_size, pad_size, pad_size//2+1) where pad_size = 2*(r_max+1)+1
+    at padding_factor=1, with `setXmippOrigin + xinit=0` so that
+    raw index (k+hp, i+hp, j) holds frequency (k, i, j) with
+    k,i ∈ [-hp, hp] and j ∈ [0, hp].
+
+    So the converter is a pure centered crop: take the (pad_size)²×(hp+1)
+    slab around DC on the non-negative x half. Same logic for data and
+    weight (weight is real-valued).
+
+    Parameters
+    ----------
+    Ft_y, Ft_ctf : flat or grid-shaped arrays of size ``ori_size**3``.
+    ori_size : box edge length.
+    r_max : current-resolution shell used by RELION's BPref.
+    padding_factor : currently only 1 is supported (matches GUI InitialModel).
+
+    Returns
+    -------
+    bp_data : complex128 array of shape (pad_size, pad_size, pad_size//2+1)
+    bp_weight : float64 array of same shape
+    """
+    if padding_factor != 1:
+        raise NotImplementedError("only padding_factor=1 supported for BPref conversion")
+    N = ori_size
+    half_ps = r_max + 1
+    c = N // 2
+
+    Fy = np.asarray(Ft_y).reshape(N, N, N)
+    Fc = np.asarray(Ft_ctf).reshape(N, N, N)
+    bp_data = Fy[c - half_ps : c + half_ps + 1, c - half_ps : c + half_ps + 1, c : c + half_ps + 1].astype(
+        np.complex128, copy=True
+    )
+    bp_weight = Fc[c - half_ps : c + half_ps + 1, c - half_ps : c + half_ps + 1, c : c + half_ps + 1].real.astype(
+        np.float64, copy=True
+    )
+    return bp_data, bp_weight
+
+
+def bpref_to_run_em_output(
+    bp_data: np.ndarray,
+    bp_weight: np.ndarray,
+    ori_size: int,
+    r_max: int,
+    padding_factor: int = 1,
+):
+    """Inverse of `run_em_output_to_bpref`: embed the BPref slab into a
+    zero-filled centered full (N, N, N) spectrum.
+
+    Used when we want to feed RELION-layout arrays back through recovar's
+    Wiener solve / visualisation paths.
+    """
+    if padding_factor != 1:
+        raise NotImplementedError("only padding_factor=1 supported for BPref conversion")
+    N = ori_size
+    half_ps = r_max + 1
+    c = N // 2
+    Fy = np.zeros((N, N, N), dtype=np.complex128)
+    Fc = np.zeros((N, N, N), dtype=np.float64)
+    Fy[c - half_ps : c + half_ps + 1, c - half_ps : c + half_ps + 1, c : c + half_ps + 1] = bp_data
+    Fc[c - half_ps : c + half_ps + 1, c - half_ps : c + half_ps + 1, c : c + half_ps + 1] = bp_weight
+    return Fy, Fc
+
+
 def reconstruct_grad_from_run_em_output(
     Ft_y: np.ndarray,
     Ft_ctf: np.ndarray,
@@ -212,55 +287,24 @@ def reconstruct_grad_from_run_em_output(
     min_resol_shell: float = 0.0,
     mom1_noise_power: Optional[np.ndarray] = None,
 ) -> np.ndarray:
-    """Full VDAM M-step via RELION's reconstructGrad binding (CPU).
+    """reconstructGrad-only M-step driven by recovar run_em accumulators.
 
-    Converts recovar's half-volume-flat accumulators to RELION's projector-
-    centered padded layout, then calls `vdam_reconstruct_grad`.
-
-    This path is bit-exact vs RELION's reconstructGrad when mom1_noise_power
-    is provided (from the Phase-4 applyMomenta primitive). Without it, the
-    binding's use_fsc=false branch defaults to fsc_estimate=1.
-
-    Layout conversion:
-      recovar Ft_y flat shape = (ori^3,) ordered in fft-natural layout.
-      Reshape to (ori, ori, ori//2+1), then ifftshift on axes 0,1 to center,
-      then crop to pad_size = 2*(r_max + 1) + 1 slab.
+    Uses `run_em_output_to_bpref` to bridge the two layouts then calls the
+    C++ `vdam_reconstruct_grad` binding. This skips the momentum pipeline
+    (reweightGrad → getFristMoment → getSecondMoment → applyMomenta) and
+    is therefore bit-exact only when mom1_noise_power is supplied from
+    that upstream chain — see `run_iter_gpu_vdam` for the full path.
     """
     from recovar.relion_bind import _relion_bind_core as bind
 
-    N = ori_size
-    pad_size = 2 * (int(padding_factor * r_max + 0.5) + 1) + 1
+    bp_data, bp_weight = run_em_output_to_bpref(Ft_y, Ft_ctf, ori_size, r_max, padding_factor)
 
-    # Convert half-volume flat → centered padded layout
-    # Ft_y is of shape ori^3 — note: it's already full-volume flat per
-    # `half_volume_to_full_volume` inside run_em. We need half-complex only.
-    Fy_full = Ft_y.reshape(N, N, N)
-    Fc_full = Ft_ctf.reshape(N, N, N)
-    # Take the half slab (non-redundant part)
-    # The internal convention: axis 2 is the half-complex axis after FFT.
-    # ifftshift on axes (0,1) brings DC to index [0,0,0] in ffw layout,
-    # then crop first pad_size rows in axis 0,1 about DC.
-    Fy_half = np.fft.ifftshift(Fy_full, axes=(0, 1))[:, :, : N // 2 + 1]
-    Fc_half = np.fft.ifftshift(Fc_full, axes=(0, 1))[:, :, : N // 2 + 1].real
-
-    # Crop to (pad_size, pad_size, pad_size/2 + 1) about DC
-    half_ps = pad_size // 2
-
-    # After ifftshift DC is at (0, 0, 0); wrap indices for negative frequencies
-    def wrap(n):
-        idx = np.concatenate([np.arange(half_ps + 1), np.arange(N - half_ps, N)])
-        return idx
-
-    idx = wrap(N)
-    data_crop = Fy_half[np.ix_(idx, idx, np.arange(pad_size // 2 + 1))]
-    weight_crop = Fc_half[np.ix_(idx, idx, np.arange(pad_size // 2 + 1))]
-
-    fsc = np.zeros(N // 2 + 1, dtype=np.float64)
+    fsc = np.zeros(ori_size // 2 + 1, dtype=np.float64)
     out = np.asarray(
         bind.vdam_reconstruct_grad(
             iref_real.astype(np.float64),
-            data_crop.astype(np.complex128),
-            weight_crop.astype(np.float64),
+            bp_data,
+            bp_weight,
             fsc,
             grad_stepsize,
             tau2_fudge,
@@ -275,3 +319,200 @@ def reconstruct_grad_from_run_em_output(
         )
     )
     return out
+
+
+def _split_halfset_particle_ids(n_images: int, rng_seed: int = 0) -> tuple[np.ndarray, np.ndarray]:
+    """Return (h0_ids, h1_ids) deterministically partitioning [0, n_images).
+
+    RELION's pseudo-halfsets alternate 0/1 in particle order; we mirror
+    that to keep the halfset assignment stable across runs.
+    """
+    ids = np.arange(n_images)
+    h0 = ids[0::2]
+    h1 = ids[1::2]
+    return h0, h1
+
+
+def run_iter_gpu_vdam(
+    ds,
+    iref_real: np.ndarray,
+    sigma2_noise: np.ndarray,
+    rotations: np.ndarray,
+    translations: np.ndarray,
+    current_size: int,
+    iter: int,
+    Igrad1: Optional[np.ndarray] = None,
+    Igrad2: Optional[np.ndarray] = None,
+    grad_stepsize: Optional[float] = None,
+    tau2_fudge_factor: float = 1.0,
+    image_batch_size: int = 500,
+    rotation_block_size: int = 50,
+    half_spectrum_scoring: bool = True,
+    padding_factor: int = 1,
+    phase_lengths=None,
+    pseudo_halfsets: bool = True,
+):
+    """Bit-exact-M-step VDAM iteration (CPU M-step via RELION primitives).
+
+    E-step runs on GPU via run_em (halfset-split when pseudo_halfsets=True).
+    Outputs are converted to RELION's BPref layout and fed through the
+    full momentum pipeline (reweightGrad → getFristMoment → getSecondMoment
+    → applyMomenta → reconstructGrad), matching RELION's InitialModel
+    exactly given matched E-step outputs.
+
+    Returns (iref_real_next, Igrad1_next, Igrad2_next, stats_dict).
+    """
+    import jax
+    import jax.numpy as jnp
+
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.em.dense_single_volume.em_engine import run_em
+    from recovar.em.initial_model.schedules import compute_phase_lengths, compute_stepsize
+    from recovar.reconstruction.noise import make_radial_noise
+    from recovar.relion_bind import _relion_bind_core as bind
+
+    ori = iref_real.shape[0]
+    r_max = current_size // 2
+    n4 = ori**4
+
+    nv = np.asarray(make_radial_noise(sigma2_noise * n4, (ori, ori))).astype(np.float32).reshape(-1)
+    iref_ft = np.asarray(ftu.get_dft3(jnp.asarray(iref_real))).reshape(-1)
+    mv = jnp.asarray((np.abs(iref_ft) ** 2).astype(np.float32))
+    mean_j = jnp.asarray(iref_ft, dtype=jnp.complex64)
+
+    nv_j = jnp.asarray(nv)
+    rot_j = jnp.asarray(rotations)
+    tr_j = jnp.asarray(translations)
+
+    def _run_estep(subset_ds):
+        jax.block_until_ready(mean_j)
+        t0 = time.time()
+        result = run_em(
+            subset_ds,
+            mean=mean_j,
+            mean_variance=mv,
+            noise_variance=nv_j,
+            rotations=rot_j,
+            translations=tr_j,
+            disc_type="linear_interp",
+            image_batch_size=image_batch_size,
+            rotation_block_size=rotation_block_size,
+            current_size=current_size,
+            projection_padding_factor=padding_factor,
+            reconstruction_padding_factor=padding_factor,
+            half_spectrum_scoring=half_spectrum_scoring,
+            return_stats=True,
+        )
+        jax.block_until_ready(result[0])
+        return (np.asarray(result[2]), np.asarray(result[3]), result[4], time.time() - t0)
+
+    # E-step(s)
+    if pseudo_halfsets:
+        h0, h1 = _split_halfset_particle_ids(ds.n_images)
+        ds_h0 = ds.subset(h0) if hasattr(ds, "subset") else ds
+        ds_h1 = ds.subset(h1) if hasattr(ds, "subset") else ds
+        Ft_y_h0, Ft_ctf_h0, stats_h0, t_h0 = _run_estep(ds_h0)
+        Ft_y_h1, Ft_ctf_h1, stats_h1, t_h1 = _run_estep(ds_h1)
+        e_step_s = t_h0 + t_h1
+        stats = stats_h0  # primary
+    else:
+        Ft_y_h0, Ft_ctf_h0, stats, e_step_s = _run_estep(ds)
+        Ft_y_h1 = Ft_ctf_h1 = None
+
+    # Convert to BPref layout
+    bp_data_h0, bp_weight_h0 = run_em_output_to_bpref(Ft_y_h0, Ft_ctf_h0, ori, r_max, padding_factor)
+    if pseudo_halfsets:
+        bp_data_h1, bp_weight_h1 = run_em_output_to_bpref(Ft_y_h1, Ft_ctf_h1, ori, r_max, padding_factor)
+
+    t_m0 = time.time()
+    mu_first = 0.9
+    mu_second = 0.999
+
+    # Step 1: reweightGrad
+    bp_h0_rw = np.asarray(bind.vdam_reweight_grad(bp_data_h0, bp_weight_h0, ori, padding_factor, 1, r_max))
+    if pseudo_halfsets:
+        bp_h1_rw = np.asarray(bind.vdam_reweight_grad(bp_data_h1, bp_weight_h1, ori, padding_factor, 1, r_max))
+
+    # Step 2: getFristMoment (initialise Igrad1 if missing)
+    K = 1
+    h_slots = 2 if pseudo_halfsets else 1
+    half_shape = ftu.volume_shape_to_half_volume_shape((ori, ori, ori))
+    if Igrad1 is None:
+        Igrad1 = np.zeros((K * h_slots,) + half_shape, dtype=np.complex128)
+    if Igrad2 is None:
+        Igrad2 = np.ones((K,) + half_shape, dtype=np.complex128)
+
+    Igrad1_h0_post = np.asarray(
+        bind.vdam_first_moment(bp_h0_rw, Igrad1[0].copy(), ori, padding_factor, 1, r_max, **{"lambda": mu_first})
+    )
+    if pseudo_halfsets:
+        Igrad1_h1_post = np.asarray(
+            bind.vdam_first_moment(bp_h1_rw, Igrad1[1].copy(), ori, padding_factor, 1, r_max, **{"lambda": mu_first})
+        )
+    else:
+        Igrad1_h1_post = Igrad1_h0_post
+
+    # Step 3: getSecondMoment
+    if pseudo_halfsets:
+        Igrad2_post = np.asarray(
+            bind.vdam_second_moment(
+                bp_h0_rw,
+                bp_h1_rw,
+                Igrad2[0].copy(),
+                ori,
+                padding_factor,
+                1,
+                r_max,
+                **{"lambda": mu_second},
+            )
+        )
+    else:
+        Igrad2_post = Igrad2[0].copy()
+
+    # Step 4: applyMomenta
+    bp_final, mom1_np = bind.vdam_apply_momenta(
+        bp_h0_rw, Igrad1_h0_post, Igrad1_h1_post, Igrad2_post, ori, padding_factor, 1, r_max
+    )
+    bp_final = np.asarray(bp_final)
+    mom1_np = np.asarray(mom1_np).ravel()
+
+    # Step 5: reconstructGrad
+    if grad_stepsize is None:
+        if phase_lengths is None:
+            phase_lengths = compute_phase_lengths(200, 0.3, 0.2)
+        grad_stepsize = compute_stepsize(iter=iter, phase_lengths=phase_lengths, is_3d_model=True, ref_dim=3)
+
+    fsc = np.zeros(ori // 2 + 1, dtype=np.float64)
+    iref_next = np.asarray(
+        bind.vdam_reconstruct_grad(
+            iref_real.astype(np.float64),
+            bp_final,
+            bp_weight_h0,
+            fsc,
+            grad_stepsize,
+            tau2_fudge_factor,
+            ori,
+            padding_factor,
+            1,
+            r_max,
+            0.0,
+            False,
+            True,
+            mom1_np,
+        )
+    )
+    m_step_s = time.time() - t_m0
+
+    Igrad1_next = np.stack([Igrad1_h0_post, Igrad1_h1_post], axis=0) if pseudo_halfsets else Igrad1_h0_post[None]
+    Igrad2_next = Igrad2_post[None]
+
+    return (
+        iref_next,
+        Igrad1_next,
+        Igrad2_next,
+        {
+            "e_step_s": e_step_s,
+            "m_step_s": m_step_s,
+            "stats": stats,
+        },
+    )

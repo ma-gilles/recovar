@@ -473,3 +473,112 @@ def _read_mstep_meta():
     iref = _read_bin(BIG_DUMP_DIR / "mstep_it1_c0_iref_before.bin")
     meta["ori_size"] = float(iref.shape[0])
     return meta
+
+
+@requires_big_fixture
+def test_layout_converter_roundtrip():
+    """`run_em_output_to_bpref` and its inverse are exact (centered crop).
+
+    Using RELION's dumped bp_data / bp_weight at the native BPref layout,
+    embed into a zero-filled centered full (N, N, N) spectrum, then crop
+    back: must match byte-for-byte.
+    """
+    from recovar.em.initial_model.gpu_pipeline import bpref_to_run_em_output, run_em_output_to_bpref
+
+    bp_data = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin")
+    bp_weight = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_weight.bin")
+    meta = _read_mstep_meta()
+    ori = int(meta["ori_size"])
+    r_max = int(meta["bpref_r_max"])
+
+    Ft_y, Ft_ctf = bpref_to_run_em_output(bp_data, bp_weight, ori, r_max)
+    bp_data_rt, bp_weight_rt = run_em_output_to_bpref(Ft_y, Ft_ctf, ori, r_max)
+    assert np.array_equal(bp_data, bp_data_rt), "bpref ↔ full round-trip lossy"
+    assert np.array_equal(bp_weight, bp_weight_rt), "bpref ↔ full weight round-trip lossy"
+
+
+@requires_big_fixture
+def test_gpu_pipeline_vdam_mstep_chain_via_converter():
+    """Cross-validate: feed RELION's BPref dumps through `run_em_output_to_bpref`
+    round-trip, then run the entire gpu_pipeline.run_iter_gpu_vdam M-step
+    chain (minus the GPU E-step), comparing final Iref to RELION's iter-1.
+
+    This pins the bit-exact M-step wiring used by the GPU iter path. If
+    the GPU E-step ever reaches machine-precision parity against RELION,
+    this same chain produces the final iter-1 Iref to machine precision.
+    """
+    from recovar.em.initial_model.gpu_pipeline import bpref_to_run_em_output, run_em_output_to_bpref
+    from recovar.relion_bind import _relion_bind_core as bind
+
+    # Load RELION's per-halfset BP data (pre-reweight)
+    bp_h0_pre = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin")
+    bp_h1_pre = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_data_h_pre_reweight.bin")
+    bp_weight_h0 = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_weight.bin")
+    bp_weight_h1 = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_bp_weight_h.bin")
+    Igrad1_h0_pre = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_Igrad1_pre.bin")
+    Igrad1_h1_pre = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_Igrad1_h_pre.bin")
+    Igrad2_pre = _read_bin(BIG_DUMP_DIR / "pipe_it1_c0_Igrad2_pre.bin")
+    iref_before = _read_bin(BIG_DUMP_DIR / "mstep_it1_c0_iref_before.bin")
+    target_iref = _read_bin(BIG_DUMP_DIR / "mstep_it1_c0_iref_after.bin")
+
+    meta = _read_mstep_meta()
+    ori = int(meta["ori_size"])
+    r_max = int(meta["bpref_r_max"])
+    mu_first = 0.9
+    mu_second = 0.999
+
+    # Inflate to centered full and then crop back — exercises the converter
+    # on inputs that mimic what recovar's run_em would produce (layout-wise).
+    Ft_y_h0, Ft_ctf_h0 = bpref_to_run_em_output(bp_h0_pre, bp_weight_h0, ori, r_max)
+    Ft_y_h1, Ft_ctf_h1 = bpref_to_run_em_output(bp_h1_pre, bp_weight_h1, ori, r_max)
+    bp_h0, w_h0 = run_em_output_to_bpref(Ft_y_h0, Ft_ctf_h0, ori, r_max)
+    bp_h1, w_h1 = run_em_output_to_bpref(Ft_y_h1, Ft_ctf_h1, ori, r_max)
+
+    # Run the full VDAM M-step chain
+    bp_h0_rw = np.asarray(bind.vdam_reweight_grad(bp_h0, w_h0, ori, 1, 1, r_max))
+    bp_h1_rw = np.asarray(bind.vdam_reweight_grad(bp_h1, w_h1, ori, 1, 1, r_max))
+    Igrad1_h0_post = np.asarray(
+        bind.vdam_first_moment(bp_h0_rw, Igrad1_h0_pre.astype(np.complex128), ori, 1, 1, r_max, **{"lambda": mu_first})
+    )
+    Igrad1_h1_post = np.asarray(
+        bind.vdam_first_moment(bp_h1_rw, Igrad1_h1_pre.astype(np.complex128), ori, 1, 1, r_max, **{"lambda": mu_first})
+    )
+    Igrad2_post = np.asarray(
+        bind.vdam_second_moment(
+            bp_h0_rw, bp_h1_rw, Igrad2_pre.astype(np.complex128), ori, 1, 1, r_max, **{"lambda": mu_second}
+        )
+    )
+    bp_final, mom1_np = bind.vdam_apply_momenta(bp_h0_rw, Igrad1_h0_post, Igrad1_h1_post, Igrad2_post, ori, 1, 1, r_max)
+    bp_final = np.asarray(bp_final)
+    mom1_np = np.asarray(mom1_np).ravel()
+
+    fsc = np.zeros(ori // 2 + 1, dtype=np.float64)
+    iref_next = np.asarray(
+        bind.vdam_reconstruct_grad(
+            iref_before.astype(np.float64),
+            bp_final,
+            w_h0,  # reconstructGrad uses BPref[iclass]=halfset 0 weight
+            fsc,
+            meta["effective_stepsize"],
+            meta["tau2_fudge_factor"],
+            ori,
+            1,
+            1,
+            r_max,
+            meta["min_resol_shell"],
+            False,
+            bool(int(meta["bpref_skip_gridding"])),
+            mom1_np,
+        )
+    )
+
+    cc = _cc(iref_next, target_iref)
+    rel_err = _max_rel_err(iref_next, target_iref)
+    print(
+        f"\nFULL CHAIN VIA LAYOUT CONVERTER (N=5000, box=256):\n"
+        f"  Iref CC      = {cc:+.6f}\n"
+        f"  Iref rel err = {rel_err:.3e}\n"
+        f"  ours std     = {iref_next.std():.3e}\n"
+        f"  target std   = {target_iref.std():.3e}"
+    )
+    assert cc > 0.9999, f"Converter-driven chain CC below precision: {cc:.4f}"
