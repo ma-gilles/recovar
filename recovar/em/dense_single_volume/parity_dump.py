@@ -223,10 +223,6 @@ def dump_iteration(
     for stage_name, stage_t in stage_seconds.items():
         payload[f"stage_seconds_{stage_name}"] = np.float64(stage_t)
 
-    shell_idx = _make_volume_shell_indices(volume_shape)
-    n_shells = int(shell_idx.max()) + 1
-    payload["shell_n_shells"] = np.int32(n_shells)
-
     for k in (0, 1):
         snap = _E_STEP.get(k)
         if snap is None:
@@ -236,13 +232,18 @@ def dump_iteration(
                 continue
             payload[f"half{k + 1}_{key}"] = val
 
+        # Per-shell reduction needs to know the layout of Ft_y/Ft_ctf (full N^3 vs
+        # half-spectrum N^2 * (N/2+1)). Skip the reduction; record summary scalars only.
         Ft_y_per_voxel = snap.get("Ft_y_norm_per_voxel")
         Ft_ctf_per_voxel = snap.get("Ft_ctf_per_voxel")
         if Ft_y_per_voxel is not None:
-            payload[f"half{k + 1}_Ft_y_per_shell"] = _shell_reduce(Ft_y_per_voxel, shell_idx, n_shells)
+            payload[f"half{k + 1}_Ft_y_total"] = float(np.sum(Ft_y_per_voxel.astype(np.float64)))
+            payload[f"half{k + 1}_Ft_y_max"] = float(np.max(Ft_y_per_voxel))
+            payload[f"half{k + 1}_Ft_y_size"] = int(Ft_y_per_voxel.size)
         if Ft_ctf_per_voxel is not None:
-            payload[f"half{k + 1}_Ft_ctf_per_shell"] = _shell_reduce(Ft_ctf_per_voxel, shell_idx, n_shells)
-        # Drop the per-voxel arrays; per-shell summaries are the only stored form.
+            payload[f"half{k + 1}_Ft_ctf_total"] = float(np.sum(Ft_ctf_per_voxel.astype(np.float64)))
+            payload[f"half{k + 1}_Ft_ctf_max"] = float(np.max(Ft_ctf_per_voxel))
+            payload[f"half{k + 1}_Ft_ctf_size"] = int(Ft_ctf_per_voxel.size)
         payload.pop(f"half{k + 1}_Ft_y_norm_per_voxel", None)
         payload.pop(f"half{k + 1}_Ft_ctf_per_voxel", None)
 

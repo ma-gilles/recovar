@@ -372,10 +372,10 @@ def _run_local_search_iteration_grouped_union(
         n_prior = prior_rotations.shape[0]
     else:
         raise ValueError(f"prior_rotations must have shape (n,3,3) or (n,3), got {prior_rotations.shape}")
-    # The local-search translation prior is evaluated on the RELION-relative
-    # delta grid after pre-centering by the rounded previous offset, so the
-    # prior center must already be in "delta coordinates" (typically
-    # -ROUND(old_offset)).
+    # The local-search translation prior is evaluated on the relative delta
+    # grid after pre-centering by the previous absolute offset, so the prior
+    # center must already be in "delta coordinates" (typically
+    # -old_offset).
     if prior_translations is None:
         prior_translations = np.zeros(
             (n_prior, np.asarray(translations).shape[1]),
@@ -877,7 +877,9 @@ def _run_local_search_iteration_exact_v1(
         translations,
         prior_translations,
         sigma_offset_angstrom,
-        offset_range_pixels,
+        # Match the grouped RELION-mode path: local translation priors use the
+        # learned/model sigma, not the legacy range/3 override.
+        None,
         experiment_dataset.voxel_size,
         grid_metadata=local_grid_metadata,
         translation_prior_reference_translations=translation_prior_reference_translations,
@@ -909,7 +911,12 @@ def _run_local_search_iteration_exact_v1(
         return_profile=return_profile,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
-        reconstruct_significant_only=True,
+        # TODO(local-engine-debt): restore RELION-style significant-sample
+        # reconstruction here only after the exact local engine matches the
+        # grouped RELION-mode path on the real replay benchmarks. The current
+        # exact significance path still drifts on iter-6 local replay, so keep
+        # exact_v1 on the full soft posterior for parity.
+        reconstruct_significant_only=False,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )
@@ -2076,7 +2083,20 @@ def _run_relion_iteration_loop(
                     current_healpix_order,
                 )
                 local_search_rotations = get_relion_rotation_grid(local_search_order).astype(np.float32)
-                local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(np.float32)
+                if abs(float(random_perturbation)) > 1e-12:
+                    local_search_rotations = apply_relion_rotation_perturbation(
+                        np.asarray(local_search_rotations, dtype=np.float32),
+                        random_perturbation,
+                        relion_angular_sampling_deg(local_search_order, adaptive_oversampling=0),
+                    ).astype(np.float32)
+                    local_search_rotation_eulers = utils.R_to_relion(
+                        np.asarray(local_search_rotations, dtype=np.float32),
+                        degrees=True,
+                    ).astype(np.float32)
+                else:
+                    local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(
+                        np.float32
+                    )
             else:
                 local_search_rotations = effective_rotations
                 local_search_rotation_eulers = None
@@ -2178,12 +2198,11 @@ def _run_relion_iteration_loop(
             # For this dataset, rlnOffsetRangeX = -1 → model sigma is used.
             # We always use current_sigma_offset_angstrom (from model star).
             #
-            # RELION evaluates the translation prior on the TOTAL offset:
-            # diff = myprior - (ROUND(old_offset) + delta). With myprior=0
-            # (no rlnOriginXPriorAngst set), this is -(ROUND(old_offset)+delta).
-            # After pre-centering the image by ROUND(old_offset), the search
-            # variable is delta (relative). To get |ROUND(old_offset) + delta|²
-            # from |delta - center|², set center = -ROUND(old_offset).
+            # Evaluate the translation prior on the total offset. After
+            # pre-centering the image by the previous absolute offset, the
+            # search variable is the relative delta. To express
+            # |old_offset + delta|^2 as |delta - center|^2, set
+            # center = -old_offset.
             trans_prior_center = -translation_search_base if translation_search_base is not None else None
             translation_log_prior = make_relion_translation_log_prior(
                 np.asarray(current_translations, dtype=np.float32),
@@ -2769,6 +2788,20 @@ def _run_relion_iteration_loop(
             else:
                 Ft_y_1, Ft_ctf_1 = Ft_y_k, Ft_ctf_k
 
+            _parity_dump.collect_e_step(
+                half=k,
+                em_stats=em_stats_k,
+                hard_assignment=ha_k,
+                coarse_hard_assignment=coarse_ha[k],
+                noise_stats=noise_stats_per_half[k],
+                Ft_y=Ft_y_k,
+                Ft_ctf=Ft_ctf_k,
+                pose_rotation_eulers=pose_rotation_eulers[k],
+                best_pose_rotation_eulers=best_pose_rotation_eulers[k],
+                best_pose_translations=best_pose_translations[k],
+                translation_search_base=translation_search_bases[k] if "translation_search_bases" in dir() else None,
+            )
+
         # E-step + per-half M-step accumulators are now both populated.
         _parity_dump.mark_stage(iteration, "e_step")
 
@@ -3143,8 +3176,8 @@ def _run_relion_iteration_loop(
                     best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
             new_iter_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
             new_iter_best_rotation_eulers[k] = np.asarray(best_eulers, dtype=np.float32)
-            # When image_pre_shifts is used, best_trans is RELATIVE to the
-            # rounded pre-shift base. Store the total (absolute) translation
+            # When image_pre_shifts is used, best_trans is relative to the
+            # previous absolute pre-shift base. Store the total (absolute) translation
             # so the next iteration pre-centers by the updated offset.
             total_trans = np.asarray(best_trans, dtype=np.float32)
             if translation_search_bases[k] is not None:
@@ -3407,6 +3440,36 @@ def _run_relion_iteration_loop(
         acc_rot_trajectory.append(float(iter_acc_rot) if iter_acc_rot is not None else np.nan)
         smallest_change_angles_trajectory.append(float(state.current_changes_optimal_orientations))
         smallest_change_offsets_trajectory.append(float(state.current_changes_optimal_offsets_angstrom))
+
+        if _parity_dump.is_active():
+            try:
+                _parity_dump.dump_iteration(
+                    iteration=iteration,
+                    init_relion_iteration=int(init_relion_iteration),
+                    current_size=int(cs),
+                    sigma_offset=float(current_sigma_offset_angstrom),
+                    translation_step=float(state.translation_step),
+                    translation_range=float(state.translation_range),
+                    random_perturbation=float(random_perturbation) if random_perturbation is not None else 0.0,
+                    random_perturbation_instance=int(state.perturbation_instance)
+                    if hasattr(state, "perturbation_instance")
+                    else 0,
+                    tau2_fudge=float(tau2_fudge),
+                    voxel_size=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
+                    grid_size=int(grid_size),
+                    volume_shape=tuple(volume_shape),
+                    ave_pmax=float(ave_pmax),
+                    fsc=np.asarray(fsc, dtype=np.float64),
+                    sigma2_noise=np.asarray(noise_variance, dtype=np.float64)
+                    if "noise_variance" in dir()
+                    else np.zeros(0),
+                    means=means,
+                    unreg_means=unreg_means,
+                    new_iter_best_rotation_eulers=new_iter_best_rotation_eulers,
+                    new_iter_best_translations=new_iter_best_translations,
+                )
+            except Exception as exc:
+                logger.warning("parity_dump.dump_iteration failed at iter %d: %s", iteration, exc)
 
         # Save assignments for next iteration's change tracking.
         # Use coarse_ha (indexed into effective_rotations/current_rotations)
