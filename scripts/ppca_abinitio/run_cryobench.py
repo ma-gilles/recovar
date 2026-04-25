@@ -1028,6 +1028,16 @@ def main():
         "NOT estimate eigenvalues.",
     )
     ap.add_argument(
+        "--post-eigenvalue-refit",
+        choices=["none", "projcov"],
+        default="none",
+        help="One-shot post-EM eigenvalue calibration. 'none' (default) "
+        "leaves the EM s as-is. 'projcov' runs the posterior-covariance "
+        "refit from recovar.em.ppca_abinitio.eigenvalue_refit (one E-step "
+        "at f=1, eigendecompose the sample-averaged posterior covariance, "
+        "rotate U accordingly). Does NOT propagate refit s back into EM.",
+    )
+    ap.add_argument(
         "--save-results",
         type=str,
         default=None,
@@ -1177,6 +1187,21 @@ def main():
         pe_traj = chosen["pe_traj"]
         lm_traj = chosen["lm_traj"]
 
+    # -------------------------------------------------------------------
+    # Phase 2: optional post-EM eigenvalue refit (ProjCov-style)
+    # -------------------------------------------------------------------
+    refit_info = None
+    if args.post_eigenvalue_refit == "projcov":
+        from recovar.em.ppca_abinitio.eigenvalue_refit import (
+            refit_eigenvalues_post_em,
+        )
+
+        print()
+        print("=== POST-EM EIGENVALUE REFIT (ProjCov, one-shot at f=1) ===", flush=True)
+        final_init, refit_info = refit_eigenvalues_post_em(final_init, cfg, ds)
+        print(f"  s_em:    {[f'{v:.4g}' for v in refit_info.s_em]}", flush=True)
+        print(f"  s_refit: {[f'{v:.4g}' for v in refit_info.s_refit]}", flush=True)
+
     print()
     print("=== FINAL ===", flush=True)
     print(f"  discretization floor (fre vs truth at oracle fixed point): {fre_floor:.4f}", flush=True)
@@ -1287,6 +1312,7 @@ def main():
                 "ridge_mode": args.ridge_mode,
                 "update_eigenvalues": args.update_eigenvalues,
                 "post_anneal_s_iters": args.post_anneal_s_iters,
+                "post_eigenvalue_refit": args.post_eigenvalue_refit,
                 "external_mode": args.external_mode,
                 "n_restarts": args.n_restarts,
                 "data_seed": args.seed,
@@ -1308,6 +1334,11 @@ def main():
                 "final_lm": float(lm_traj[-1]),
             },
         }
+        if refit_info is not None:
+            results["eigenvalue_refit"] = {
+                "s_em": refit_info.s_em.astype(np.float64).tolist(),
+                "s_refit": refit_info.s_refit.astype(np.float64).tolist(),
+            }
         if discrete_summary is not None:
             results["metrics"]["centroid_acc"] = float(discrete_summary["centroid_acc"])
             results["metrics"]["clust_acc_hungarian"] = float(discrete_summary["clust_acc_hungarian"])
