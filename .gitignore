@@ -159,3 +159,4 @@ logs/
 .tmp/
 logs/
 .test_results/
+_agent_scratch/

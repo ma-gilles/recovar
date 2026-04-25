@@ -1,0 +1,45 @@
+{
+  "fixture": "5k_128_normalized",
+  "fixture_path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized",
+  "relion_reference_dir": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0",
+  "relion_reference_dump_dir": "_agent_scratch/parity/relion",
+  "gpu": "NVIDIA A100-SXM4-80GB",
+  "_schema": {
+    "metric_constraint_keys": [
+      "<name>: scalar baseline value (informational only when paired with _tolerance)",
+      "<name>_tolerance: absolute symmetric tolerance band; outside is REGRESSED unless _regression_threshold is also set",
+      "<name>_floor: observed must be >= floor; below is REGRESSED",
+      "<name>_band: [lo, hi] interval; outside is REGRESSED",
+      "<name>_regression_threshold: absolute deviation that flips REGRESSED (combine with _tolerance for WARN tier)"
+    ]
+  },
+  "scenarios": {
+    "iter7_to_8_grouped_union": {
+      "_PLACEHOLDER": "Will be filled with measured values from the in-flight iter7-to-8 run.",
+      "config": {
+        "init_iter": 7,
+        "max_iter": 1,
+        "local_engine": "grouped_union",
+        "skip_final_iteration": true
+      },
+      "expected_metrics": {
+        "ave_pmax": 0.0,
+        "ave_pmax_tolerance": 0.05,
+        "ave_pmax_regression_threshold": 0.10,
+        "pp_hard_assign_match_lt_5deg_rate_floor": 0.0,
+        "pp_hard_assign_match_lt_1deg_rate_floor": 0.0,
+        "vol_corr_half1_floor": 0.0,
+        "vol_corr_half2_floor": 0.0,
+        "sigma2_noise_ratio_half1_med_band": [0.0, 100.0],
+        "sigma2_noise_ratio_half2_med_band": [0.0, 100.0],
+        "sigma_offset_a": 0.0,
+        "sigma_offset_a_tolerance": 1.0
+      },
+      "wall_time_s_baseline": 240.0,
+      "wall_time_s_regression_threshold_multiplier": 3.0
+    }
+  },
+  "source_runs": [
+    "PLACEHOLDER - will be set after first measured run completes."
+  ]
+}

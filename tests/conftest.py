@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -112,6 +111,11 @@ def pytest_configure(config):
         "long_test: long quality regression tests (cryo-EM SPA, cryo-ET, outliers, "
         "with/without indices); requires --long-test flag; volumes generated synthetically",
     )
+    config.addinivalue_line(
+        "markers",
+        "parity: RELION-parity quality+perf regression tests (single-iter mid-trajectory "
+        "replay against frozen baseline JSON); requires GPU; ~5 min on warm JAX cache",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
@@ -123,6 +127,7 @@ def pytest_collection_modifyitems(config, items):
     gpu_available = False
     try:
         import jax
+
         gpu_available = any(d.platform == "gpu" for d in jax.devices())
     except Exception:
         pass

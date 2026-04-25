@@ -12,6 +12,7 @@ no-op so the dump has zero behavioral effect. Optional env vars:
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +20,57 @@ import numpy as np
 
 _E_STEP: dict[int, dict[str, Any]] = {}
 
+# Per-iter wall-time tracking. Keyed by iteration index (the ``iteration``
+# variable inside ``_run_relion_iteration_loop``), holds:
+#   {"t0": float, "stages": {stage_name: cumulative_seconds_since_t0}}
+# All hooks no-op when ``RECOVAR_PARITY_DUMP_DIR`` is unset.
+_ITER_TIMERS: dict[int, dict[str, Any]] = {}
+
 
 def is_active() -> bool:
     return bool(os.environ.get("RECOVAR_PARITY_DUMP_DIR"))
+
+
+def start_iteration(iteration: int) -> None:
+    """Stamp the start of an iteration so ``mark_stage`` can record cumulative time.
+
+    No-op when the parity dump is not active.
+    """
+    if not is_active():
+        return
+    _ITER_TIMERS[int(iteration)] = {"t0": time.time(), "stages": {}}
+
+
+def mark_stage(iteration: int, stage: str) -> None:
+    """Record cumulative seconds since ``start_iteration(iteration)`` for a stage.
+
+    Stage names mirror the production perf baseline vocabulary plus EM-specific
+    stages: ``"e_step"``, ``"m_step"``, ``"recon"``, ``"fsc"``, ``"noise_update"``.
+    Calling with the same stage name twice overwrites; the cumulative-since-t0
+    semantics make this safe — later calls dominate. No-op when inactive or when
+    ``start_iteration`` was never called for that iteration.
+    """
+    if not is_active():
+        return
+    timer = _ITER_TIMERS.get(int(iteration))
+    if timer is None:
+        return
+    timer["stages"][str(stage)] = float(time.time() - timer["t0"])
+
+
+def get_iteration_timing(iteration: int) -> tuple[float | None, dict[str, float]]:
+    """Return ``(wall_time_s, stage_seconds)`` for an iteration. Wall is None if untracked."""
+    timer = _ITER_TIMERS.get(int(iteration))
+    if timer is None:
+        return None, {}
+    wall = float(time.time() - timer["t0"])
+    stages = dict(timer["stages"])
+    return wall, stages
+
+
+def reset_iteration_timer(iteration: int) -> None:
+    """Drop the timer state for a given iteration (called by ``dump_iteration``)."""
+    _ITER_TIMERS.pop(int(iteration), None)
 
 
 def dump_dir() -> Path | None:
@@ -133,8 +182,15 @@ def dump_iteration(
     unreg_means: list,
     new_iter_best_rotation_eulers: list,
     new_iter_best_translations: list,
+    iteration_start: float | None = None,
 ) -> None:
-    """Write one .npz per iteration combining both halves with E-step snapshots."""
+    """Write one .npz per iteration combining both halves with E-step snapshots.
+
+    If ``start_iteration(iteration)`` was called, the dump records ``wall_time_s``
+    plus a ``stage_seconds_<name>`` field per stage and clears the timer entry.
+    If the timer was not registered but ``iteration_start`` is provided, falls
+    back to ``time.time() - iteration_start`` for the wall time only.
+    """
 
     out = dump_dir()
     if out is None:
@@ -158,6 +214,19 @@ def dump_iteration(
         "sigma2_noise": np.asarray(sigma2_noise, dtype=np.float64),
     }
 
+    # --- Wall-time / per-stage timing ---
+    wall_time_s, stage_seconds = get_iteration_timing(iteration)
+    if wall_time_s is None and iteration_start is not None:
+        wall_time_s = float(time.time() - iteration_start)
+    if wall_time_s is not None:
+        payload["wall_time_s"] = np.float64(wall_time_s)
+    for stage_name, stage_t in stage_seconds.items():
+        payload[f"stage_seconds_{stage_name}"] = np.float64(stage_t)
+
+    shell_idx = _make_volume_shell_indices(volume_shape)
+    n_shells = int(shell_idx.max()) + 1
+    payload["shell_n_shells"] = np.int32(n_shells)
+
     for k in (0, 1):
         snap = _E_STEP.get(k)
         if snap is None:
@@ -167,19 +236,13 @@ def dump_iteration(
                 continue
             payload[f"half{k + 1}_{key}"] = val
 
-        # Per-shell reduction needs to know the layout of Ft_y/Ft_ctf (full N^3 vs
-        # half-spectrum N^2 * (N/2+1)). Skip the reduction and just record a few
-        # summary scalars; full per-voxel norm is too big to store.
         Ft_y_per_voxel = snap.get("Ft_y_norm_per_voxel")
         Ft_ctf_per_voxel = snap.get("Ft_ctf_per_voxel")
         if Ft_y_per_voxel is not None:
-            payload[f"half{k + 1}_Ft_y_total"] = float(np.sum(Ft_y_per_voxel.astype(np.float64)))
-            payload[f"half{k + 1}_Ft_y_max"] = float(np.max(Ft_y_per_voxel))
-            payload[f"half{k + 1}_Ft_y_size"] = int(Ft_y_per_voxel.size)
+            payload[f"half{k + 1}_Ft_y_per_shell"] = _shell_reduce(Ft_y_per_voxel, shell_idx, n_shells)
         if Ft_ctf_per_voxel is not None:
-            payload[f"half{k + 1}_Ft_ctf_total"] = float(np.sum(Ft_ctf_per_voxel.astype(np.float64)))
-            payload[f"half{k + 1}_Ft_ctf_max"] = float(np.max(Ft_ctf_per_voxel))
-            payload[f"half{k + 1}_Ft_ctf_size"] = int(Ft_ctf_per_voxel.size)
+            payload[f"half{k + 1}_Ft_ctf_per_shell"] = _shell_reduce(Ft_ctf_per_voxel, shell_idx, n_shells)
+        # Drop the per-voxel arrays; per-shell summaries are the only stored form.
         payload.pop(f"half{k + 1}_Ft_y_norm_per_voxel", None)
         payload.pop(f"half{k + 1}_Ft_ctf_per_voxel", None)
 
@@ -197,6 +260,7 @@ def dump_iteration(
     relion_iter = int(init_relion_iteration) + int(iteration) + 1
     np.savez_compressed(out / f"iter_{relion_iter:03d}.npz", **payload)
     reset_iteration()
+    reset_iteration_timer(iteration)
 
 
 def _downsample_volume_real(volume_ft_flat, volume_shape) -> np.ndarray:

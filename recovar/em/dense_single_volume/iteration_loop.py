@@ -1599,6 +1599,7 @@ def _run_relion_iteration_loop(
     iteration = 0
     while not state.has_converged and iteration < max_iter:
         t0 = time.time()
+        _parity_dump.start_iteration(iteration)
         iter_replay_override = None
         if replay_iteration_overrides is not None and iteration < len(replay_iteration_overrides):
             iter_replay_override = replay_iteration_overrides[iteration]
@@ -2801,6 +2802,9 @@ def _run_relion_iteration_loop(
                 translation_search_base=translation_search_bases[k] if "translation_search_bases" in dir() else None,
             )
 
+        # E-step + per-half M-step accumulators are now both populated.
+        _parity_dump.mark_stage(iteration, "e_step")
+
         # --- RELION's --low_resol_join_halves: average the low-resolution
         # shells of the per-half Fourier accumulators between the two halves
         # BEFORE the Wiener solve. This forces the two half-maps to share
@@ -2917,6 +2921,7 @@ def _run_relion_iteration_loop(
                 float(relion_firstiter_ini_high_angstrom),
             )
         logger.info("Regularized reconstruction (2 halves + flatten): %.1fs", time.time() - _t_recon)
+        _parity_dump.mark_stage(iteration, "recon")
 
         significant_counts.append(iter_sig_counts)
 
@@ -2971,6 +2976,7 @@ def _run_relion_iteration_loop(
             volume_shape,
         )
         fsc_history.append(fsc)
+        _parity_dump.mark_stage(iteration, "fsc")
 
         # --- Save intermediate volumes if requested ---
         if save_intermediates_dir is not None:
@@ -3306,6 +3312,7 @@ def _run_relion_iteration_loop(
 
             previous_noise_radial = noise_from_res
             noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
+            _parity_dump.mark_stage(iteration, "noise_update")
 
         # Save per-iter per-shell sigma2 (after this iter's noise update) and
         # the exact shell-wise tau2 ingredients used in the Wiener update.
@@ -3469,6 +3476,7 @@ def _run_relion_iteration_loop(
         # so that local search and convergence detection work correctly
         # regardless of whether adaptive oversampling was used.
         previous_assignments = [ha.copy() if ha is not None else None for ha in coarse_ha]
+        _parity_dump.mark_stage(iteration, "convergence")
 
         # --- Timing ---
         elapsed = time.time() - t0
