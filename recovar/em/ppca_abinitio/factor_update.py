@@ -42,6 +42,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+import recovar.core.fourier_transform_utils as ftu
+
 from .half_volume import (
     make_half_volume_weights,
     project_to_real_volume_subspace_batch,
@@ -56,6 +58,64 @@ from .posterior import (
     score_from_half_image_projections,
 )
 from .types import PPCAInit
+
+
+def compute_W_prior_half(U_half, s, volume_shape, eps_rel: float = 1e-3):
+    """Per-voxel, per-PC Wiener-style regularizer in half-volume layout.
+
+    The closed-form M-step solves `(M_v + R_v) U[:, v] = B_v` per voxel.
+    `R_v` is the regularization. The default uses a scalar ridge
+    `λ I_q`. This function builds an alternative regularizer:
+
+        R_v = diag(1 / W_v)  where  W_v = shell_avg(|U|² · s)
+
+    The motivation is that cryo-EM signal is shell-stratified — DC and
+    low-frequency shells carry orders of magnitude more signal than
+    high-frequency shells. A scalar ridge cannot express this; the
+    shell-averaged Wiener prior does.
+
+    This is REGULARIZATION ONLY, not eigenvalue estimation. The
+    eigenvalues `s` themselves are still treated as a fixed
+    hyperparameter (frozen at `s = 1` flat by default). See
+    `docs/math/ppca_abinitio_clean_algorithm.md` and the Phase 1
+    ablation experiment in `docs/math/ppca_abinitio_status_*.md`.
+
+    Parameters
+    ----------
+    U_half : (q, half_vol_size) complex
+        Current factor estimate.
+    s : (q,) real
+        Eigenvalues — used only as a per-PC scale; with `s = 1` flat
+        the prior reduces to a per-PC shell average of |U|².
+    volume_shape : 3-tuple
+    eps_rel : float
+        Floor for `W_v` as a fraction of the per-PC mean — prevents
+        the regularizer from blowing up at empty / outer shells where
+        the running estimate of |U|² is near zero.
+
+    Returns
+    -------
+    W_prior : (q, half_vol_size) real
+        Floored shell-averaged signal-variance prior.
+    """
+    W_sq = jnp.abs(U_half) ** 2 * s[:, None]
+
+    radial = ftu.get_grid_of_radial_distances_real(volume_shape).reshape(-1)
+    n_shells = max(1, volume_shape[0] // 2 - 1)
+    labels = jnp.minimum(radial, n_shells - 1)
+
+    def _shell_avg_one(w_sq_pc):
+        sums = jnp.bincount(labels, weights=w_sq_pc, length=n_shells)
+        counts = jnp.bincount(labels, length=n_shells)
+        safe_counts = jnp.where(counts > 0, counts, 1)
+        per_shell = jnp.where(counts > 0, sums / safe_counts, 0.0)
+        return per_shell[labels]
+
+    W_prior = jax.vmap(_shell_avg_one)(W_sq)
+    per_pc_mean = jnp.mean(W_prior, axis=1, keepdims=True)
+    floor = jnp.maximum(eps_rel * per_pc_mean, 1e-30)
+    return jnp.maximum(W_prior, floor)
+
 
 # ---------------------------------------------------------------------------
 # Loss computation
@@ -572,6 +632,7 @@ def update_factor_closed_form(
     ctf_params,
     noise_variance_full,
     *,
+    W_prior=None,
     ridge_lambda: float = 1e-4,
     update_s: bool = False,
 ) -> PPCAInit:
@@ -737,17 +798,17 @@ def update_factor_closed_form(
     # -----------------------------------------------------------------
     # 4. PER-VOXEL DIRECT SOLVE.
     # -----------------------------------------------------------------
-    # For each voxel v: solve  (M[v] + λ I_q) · U[v, :]  =  B[v, :].
-    # vmap over the voxel axis. Cost: V_half * O(q^3) flops, trivial
-    # for q ~ 2-10.
-    eye_q = jnp.eye(q, dtype=jnp.complex128)
-    M_with_ridge = M_voxel + ridge_lambda * eye_q[:, :, None]  # (q, q, V_half)
+    if W_prior is not None:
+        reg = jax.vmap(jnp.diag)(1.0 / (W_prior.T + 1e-16))
+        M_per_voxel = jnp.moveaxis(M_voxel, -1, 0) + reg
+    else:
+        eye_q = jnp.eye(q, dtype=jnp.complex128)
+        M_per_voxel = jnp.moveaxis(M_voxel + ridge_lambda * eye_q[:, :, None], -1, 0)
 
-    M_per_voxel = jnp.moveaxis(M_with_ridge, -1, 0)  # (V_half, q, q)
-    B_per_voxel = jnp.moveaxis(B_voxel, -1, 0)  # (V_half, q)
+    B_per_voxel = jnp.moveaxis(B_voxel, -1, 0)
 
-    U_per_voxel = jax.vmap(jnp.linalg.solve)(M_per_voxel, B_per_voxel)  # (V_half, q)
-    U_new = jnp.moveaxis(U_per_voxel, 0, -1).astype(jnp.complex128)  # (q, V_half)
+    U_per_voxel = jax.vmap(jnp.linalg.solve)(M_per_voxel, B_per_voxel)
+    U_new = jnp.moveaxis(U_per_voxel, 0, -1).astype(jnp.complex128)
     U_new = project_to_real_volume_subspace_batch(U_new, volume_shape)
 
     if not update_s:

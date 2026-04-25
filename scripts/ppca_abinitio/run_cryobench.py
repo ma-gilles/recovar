@@ -83,7 +83,9 @@ from sklearn.metrics import adjusted_rand_score, normalized_mutual_info_score
 
 import recovar.core.fourier_transform_utils as ftu
 from recovar.core.slicing import adjoint_slice_volume, slice_volume
-from recovar.em.ppca_abinitio.factor_update import update_factor_closed_form
+from recovar.em.ppca_abinitio.factor_update import (
+    update_factor_closed_form,
+)
 from recovar.em.ppca_abinitio.grid import build_fixed_grid
 from recovar.em.ppca_abinitio.half_volume import (
     half_volume_radial_index,
@@ -630,6 +632,7 @@ def run_two_stage(
     update_eigenvalues=False,
     post_anneal_s_iters=0,
     s_init_kind="flat",
+    ridge_mode="scalar",
 ):
     """Two-stage loop with selectable mu init.
 
@@ -795,6 +798,7 @@ def run_two_stage(
             cfg, cur, ds.batch_full, ds.rotations, ds.translations, ds.ctf_params, nv_mu, tau=0.0
         )
         cur = PPCAInit(mu=mres.mu_half, U=cur.U, s=cur.s, volume_shape=cur.volume_shape)
+        W_prior = compute_W_prior_half(cur.U, cur.s, cur.volume_shape) if ridge_mode == "w_prior" else None
         cur = update_factor_closed_form(
             cfg,
             cur,
@@ -803,6 +807,7 @@ def run_two_stage(
             ds.translations,
             ds.ctf_params,
             nv_iter,
+            W_prior=W_prior,
             update_s=update_eigenvalues,
         )
         jax.block_until_ready(cur.U)
@@ -843,6 +848,7 @@ def run_two_stage(
                 tau=0.0,
             )
             cur = PPCAInit(mu=mres.mu_half, U=cur.U, s=cur.s, volume_shape=cur.volume_shape)
+            W_prior = compute_W_prior_half(cur.U, cur.s, cur.volume_shape) if ridge_mode == "w_prior" else None
             cur = update_factor_closed_form(
                 cfg,
                 cur,
@@ -851,6 +857,7 @@ def run_two_stage(
                 ds.translations,
                 ds.ctf_params,
                 ds.noise_variance_full,
+                W_prior=W_prior,
                 update_s=True,
             )
             jax.block_until_ready(cur.U)
@@ -1009,6 +1016,16 @@ def main():
         "the annealing-induced eigenvalue inflation while still allowing s "
         "to converge to the ML estimate. 0 = disabled (default).",
     )
+    ap.add_argument(
+        "--ridge-mode",
+        choices=["scalar", "w_prior"],
+        default="scalar",
+        help="Per-voxel M-step regularization. 'scalar' (default) uses a "
+        "fixed ridge_lambda * I_q. 'w_prior' uses a Wiener-style "
+        "shell-stratified prior R_v = diag(1/W_v), where W_v is the "
+        "radial-shell average of |U|^2 * s. Regularization only — does "
+        "NOT estimate eigenvalues.",
+    )
     args = ap.parse_args()
     if args.anneal_mu_too:
         args.anneal_factor_only = False
@@ -1086,6 +1103,7 @@ def main():
             update_eigenvalues=args.update_eigenvalues,
             post_anneal_s_iters=args.post_anneal_s_iters,
             s_init_kind=args.s_init,
+            ridge_mode=args.ridge_mode,
         )
     else:
         print(
@@ -1115,6 +1133,7 @@ def main():
                 update_eigenvalues=args.update_eigenvalues,
                 post_anneal_s_iters=args.post_anneal_s_iters,
                 s_init_kind=args.s_init,
+                ridge_mode=args.ridge_mode,
             )
             if fre_floor is None:
                 fre_floor = fre_floor_k
