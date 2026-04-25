@@ -372,10 +372,10 @@ def _run_local_search_iteration_grouped_union(
         n_prior = prior_rotations.shape[0]
     else:
         raise ValueError(f"prior_rotations must have shape (n,3,3) or (n,3), got {prior_rotations.shape}")
-    # The local-search translation prior is evaluated on the relative delta
-    # grid after pre-centering by the previous absolute offset, so the prior
-    # center must already be in "delta coordinates" (typically
-    # -old_offset).
+    # The local-search translation prior is evaluated on the RELION-relative
+    # delta grid after pre-centering by the rounded previous offset, so the
+    # prior center must already be in "delta coordinates" (typically
+    # -ROUND(old_offset)).
     if prior_translations is None:
         prior_translations = np.zeros(
             (n_prior, np.asarray(translations).shape[1]),
@@ -2199,10 +2199,10 @@ def _run_relion_iteration_loop(
             # We always use current_sigma_offset_angstrom (from model star).
             #
             # Evaluate the translation prior on the total offset. After
-            # pre-centering the image by the previous absolute offset, the
+            # pre-centering the image by RELION's rounded previous offset, the
             # search variable is the relative delta. To express
-            # |old_offset + delta|^2 as |delta - center|^2, set
-            # center = -old_offset.
+            # |ROUND(old_offset) + delta|^2 as |delta - center|^2, set
+            # center = -ROUND(old_offset).
             trans_prior_center = -translation_search_base if translation_search_base is not None else None
             translation_log_prior = make_relion_translation_log_prior(
                 np.asarray(current_translations, dtype=np.float32),
@@ -2856,6 +2856,11 @@ def _run_relion_iteration_loop(
         # which gives ssnr ≈ 999 → tau2 amplifies 1e6× → ave_Pmax collapse.
         # Algorithm doc: docs/math/relion_updateSSNR_algorithm_2026_04_25.md
         #
+        # Snapshot the previous-iter means BEFORE the unreg reconstruction so
+        # sign alignment has a reference at iter 1 (where the init volumes
+        # are means[*] before any reconstruction overwrites them).
+        previous_means = [np.asarray(mean).copy() if mean is not None else None for mean in means]
+
         # Compute unregularized half-maps and CURRENT iter FSC FIRST, then
         # derive tau2 from that fresh FSC, then the regularized Wiener solve.
         _t_unreg_first = time.time()
@@ -2878,7 +2883,7 @@ def _run_relion_iteration_loop(
         for k_half in range(2):
             _unreg_means_for_fsc[k_half], _ = _align_fourier_volume_sign_to_reference(
                 _unreg_means_for_fsc[k_half],
-                previous_means[k_half] if "previous_means" in dir() else None,
+                previous_means[k_half],
                 volume_shape,
             )
         current_iter_fsc = regularization.get_fsc_gpu(
@@ -2909,7 +2914,7 @@ def _run_relion_iteration_loop(
         mean_variance = mean_signal_variance
 
         # --- Free previous-iteration means to reclaim GPU memory ---
-        previous_means = [np.asarray(mean).copy() if mean is not None else None for mean in means]
+        # (previous_means already snapshotted earlier for FSC sign alignment)
         for k in range(2):
             means[k] = None
 
@@ -3213,7 +3218,7 @@ def _run_relion_iteration_loop(
             new_iter_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
             new_iter_best_rotation_eulers[k] = np.asarray(best_eulers, dtype=np.float32)
             # When image_pre_shifts is used, best_trans is relative to the
-            # previous absolute pre-shift base. Store the total (absolute) translation
+            # rounded pre-shift base. Store the total (absolute) translation
             # so the next iteration pre-centers by the updated offset.
             total_trans = np.asarray(best_trans, dtype=np.float32)
             if translation_search_bases[k] is not None:
