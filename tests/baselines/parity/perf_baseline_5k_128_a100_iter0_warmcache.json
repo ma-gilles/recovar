@@ -1,0 +1,67 @@
+{
+  "fixture": "5k_128_normalized",
+  "fixture_path": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized",
+  "relion_ref_dir": "/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0",
+  "gpu": "NVIDIA A100-SXM4-80GB",
+  "config": {
+    "init_iter": 0,
+    "max_iter": 14,
+    "local_engine": "exact_v1",
+    "use_global_significant_support": true,
+    "image_batch_size": 1,
+    "adaptive_oversample_order": 0,
+    "adaptive_fraction": 0.999,
+    "max_significants": -1,
+    "local_search": false,
+    "image_size_box": 128,
+    "voxel_size_angstrom": 4.25,
+    "n_particles": 5000
+  },
+  "per_iter_seconds_total": {
+    "1": 3000.0,
+    "2": 360.0,
+    "3": 360.0,
+    "4": 240.0,
+    "5": 240.0,
+    "6": 240.0,
+    "7": 660.0,
+    "8": 660.0,
+    "9": 720.0,
+    "10": 720.0,
+    "11": 780.0,
+    "12": 780.0,
+    "13": 780.0,
+    "14": 780.0
+  },
+  "per_iter_seconds_stages": {
+    "1": {"e_step": 2960.0, "recon": 30.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 4.0},
+    "2": {"e_step": 320.0, "recon": 30.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 4.0},
+    "3": {"e_step": 320.0, "recon": 30.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 4.0},
+    "4": {"e_step": 200.0, "recon": 30.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 4.0},
+    "5": {"e_step": 200.0, "recon": 5.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 5.0},
+    "6": {"e_step": 200.0, "recon": 5.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 5.0},
+    "7": {"e_step": 600.0, "recon": 5.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 5.0},
+    "8": {"e_step": 600.0, "recon": 5.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 5.0},
+    "9": {"e_step": 660.0, "recon": 5.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 5.0},
+    "10": {"e_step": 660.0, "recon": 5.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 5.0},
+    "11": {"e_step": 720.0, "recon": 5.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 5.0},
+    "12": {"e_step": 720.0, "recon": 5.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 5.0},
+    "13": {"e_step": 720.0, "recon": 5.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 5.0},
+    "14": {"e_step": 720.0, "recon": 5.0, "fsc": 1.0, "noise_update": 5.0, "convergence": 5.0}
+  },
+  "tolerance_multiplier": 2.0,
+  "regression_threshold_multiplier": 3.0,
+  "source": [
+    "Notes from project_use_global_significant_support_path.md (per-image Python loop, image_batch_size=1, current_size=56)",
+    "Late-iter timings copied from perf_baseline_5k_128_a100.json (iters 4+)"
+  ],
+  "notes": [
+    "Workload: cold global pass2 with use_global_significant_support starting from --iter 0.",
+    "Iter 1 is expected to be PATHOLOGICALLY SLOW (~50min cold) due to per-image Python loop in use_global_significant_support path. Once warm and cache is hit, drops to ~5min on subsequent equivalent passes.",
+    "Iter 1 baseline of 3000s is the COLD upper bound; tolerance_multiplier=2.0 → warn at 6000s. Anything beyond 9000s (3x = 150 min) signals a real regression on the slow path.",
+    "Iters 2-3: still global search but with hot JAX cache; assumed ~6 min each.",
+    "Iter 4+ baselines mirror perf_baseline_5k_128_a100.json (local search regime).",
+    "We do NOT have a complete cold --iter 0 ground-truth trajectory; iters 2-14 are extrapolations. Reset once a real run completes successfully.",
+    "Iter index in this file is the RELION iter index (init_relion_iteration=0 + recovar_iteration + 1)."
+  ]
+}
