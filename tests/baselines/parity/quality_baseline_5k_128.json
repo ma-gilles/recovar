@@ -14,8 +14,32 @@
     ]
   },
   "scenarios": {
+    "iter4_to_5_grouped_union": {
+      "config": {
+        "init_iter": 4,
+        "max_iter": 1,
+        "local_engine": "grouped_union",
+        "skip_final_iteration": true
+      },
+      "expected_metrics": {
+        "ave_pmax": 0.962424,
+        "ave_pmax_tolerance": 0.05,
+        "ave_pmax_regression_threshold": 0.1,
+        "pp_hard_assign_match_lt_5deg_rate_floor": 0.0,
+        "pp_hard_assign_match_lt_1deg_rate_floor": 0.0,
+        "vol_corr_abs_half1_floor": 0.2824,
+        "vol_corr_abs_half2_floor": 0.2832,
+        "sigma2_noise_ratio_half1_med_band": [-1e15, 1e15],
+        "sigma2_noise_ratio_half2_med_band": [-1e15, 1e15],
+        "sigma_offset_a": 6.0104,
+        "sigma_offset_a_tolerance": 0.5
+      },
+      "wall_time_s_baseline": 360.0,
+      "wall_time_s_regression_threshold_multiplier": 3.0
+    },
     "iter7_to_8_grouped_union": {
-      "_PLACEHOLDER": "Will be filled with measured values from the in-flight iter7-to-8 run.",
+      "_NOTE": "Placeholder pending iter7-to-8 completion; will be populated by populate_baseline.py once the iter_008.npz dump is captured.",
+      "optional": true,
       "config": {
         "init_iter": 7,
         "max_iter": 1,
@@ -23,23 +47,29 @@
         "skip_final_iteration": true
       },
       "expected_metrics": {
-        "ave_pmax": 0.0,
-        "ave_pmax_tolerance": 0.05,
-        "ave_pmax_regression_threshold": 0.10,
-        "pp_hard_assign_match_lt_5deg_rate_floor": 0.0,
-        "pp_hard_assign_match_lt_1deg_rate_floor": 0.0,
-        "vol_corr_half1_floor": 0.0,
-        "vol_corr_half2_floor": 0.0,
-        "sigma2_noise_ratio_half1_med_band": [0.0, 100.0],
-        "sigma2_noise_ratio_half2_med_band": [0.0, 100.0],
-        "sigma_offset_a": 0.0,
-        "sigma_offset_a_tolerance": 1.0
+        "ave_pmax": 0.88,
+        "ave_pmax_tolerance": 0.10,
+        "ave_pmax_regression_threshold": 0.20
       },
-      "wall_time_s_baseline": 240.0,
+      "wall_time_s_baseline": 360.0,
       "wall_time_s_regression_threshold_multiplier": 3.0
     }
   },
   "source_runs": [
-    "PLACEHOLDER - will be set after first measured run completes."
+    {
+      "scenario": "iter4_to_5_grouped_union",
+      "branch": "claude/parity-quality-baseline",
+      "sha": "41f2687793e3695b942c2d2d92495c12029fc897",
+      "date": "2026-04-25",
+      "recovar_dump": "_agent_scratch/parity/recovar_iter4_grouped_union/iter_005.npz",
+      "relion_dump": "_agent_scratch/parity/relion/iter_005.npz",
+      "wall_time_s_observed": 368.1,
+      "ave_pmax_observed": 0.962424,
+      "ave_pmax_relion_ref": 0.971612,
+      "ave_pmax_gap": -0.009188,
+      "vol_corr_abs_half1_observed": 0.3324,
+      "vol_corr_abs_half2_observed": 0.3332,
+      "note": "Initial baseline. Hard-assignment match rate is 0% because recovar Eulers use a different rotation convention than RELION's particle.star (per memory project_relion_parity_volume_negation/eulers); needs convention conversion before this metric becomes meaningful. sigma2_noise_ratio uses recovar's wsum_sigma2_noise (raw A2-2XA accumulator) which is in different units from RELION's sigma2_noise; band intentionally wide. vol_corr is negative because invert_data is not applied; vol_corr_abs is the sign-invariant version used as the floor."
+    }
   ]
 }

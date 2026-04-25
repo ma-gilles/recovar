@@ -96,14 +96,25 @@ def extract_metrics(rec: dict[str, np.ndarray], rel: dict[str, np.ndarray]) -> d
     metrics["ave_pmax_relion_ref"] = rel_pmax
     metrics["ave_pmax_gap"] = metrics["ave_pmax"] - rel_pmax
 
-    # Per-particle hard-assignment match rate vs RELION poses
+    # Per-particle hard-assignment match rate vs RELION poses.
+    # recovar dumps half1 + half2 separately in their internal order; RELION's
+    # particle_eulers are in the original star file order with subset 1/2
+    # interleaved. Use ``particle_random_subset`` to reorder RELION rows to
+    # match the recovar concatenation [half1 (subset==1) | half2 (subset==2)].
     rec_h1 = rec.get("half1_best_eulers_total")
     rec_h2 = rec.get("half2_best_eulers_total")
     rel_eul = rel.get("particle_eulers")
+    rel_subset = rel.get("particle_random_subset")
     if rec_h1 is not None and rec_h2 is not None and rel_eul is not None:
         rec_eul = np.concatenate([rec_h1, rec_h2], axis=0)
-        metrics["pp_hard_assign_match_lt_5deg_rate"] = _euler_angle_match_rate_lt(rec_eul, rel_eul, 5.0)
-        metrics["pp_hard_assign_match_lt_1deg_rate"] = _euler_angle_match_rate_lt(rec_eul, rel_eul, 1.0)
+        if rel_subset is not None and rel_subset.size == rel_eul.shape[0]:
+            mask1 = rel_subset == 1
+            mask2 = rel_subset == 2
+            rel_eul_reordered = np.concatenate([rel_eul[mask1], rel_eul[mask2]], axis=0)
+        else:
+            rel_eul_reordered = rel_eul
+        metrics["pp_hard_assign_match_lt_5deg_rate"] = _euler_angle_match_rate_lt(rec_eul, rel_eul_reordered, 5.0)
+        metrics["pp_hard_assign_match_lt_1deg_rate"] = _euler_angle_match_rate_lt(rec_eul, rel_eul_reordered, 1.0)
 
     # Volume correlation against RELION half-maps. Both signed and absolute
     # metrics are reported -- recovar's volume can be negated relative to
