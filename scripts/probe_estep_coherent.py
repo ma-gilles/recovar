@@ -96,6 +96,17 @@ def main() -> None:
 
     ds = load_dataset(str(PARTICLES_STAR), lazy=False)
     ori = int(ds.grid_size)
+    # NEW: enable RELION-exact preprocessing (set_relion_image_mask) — closes
+    # the per-pixel Fimg gap from CC=+0.949 to +0.997 vs RELION's exp_Fimg.
+    backend = ds.image_source.backend if hasattr(ds.image_source, "backend") else None
+    if backend is not None and hasattr(backend, "set_relion_image_mask"):
+        pixel_size = float(ds.voxel_size)
+        backend.set_relion_image_mask(
+            pixel_size=pixel_size,
+            particle_diameter_ang=544.0,
+            width_mask_edge_px=5.0,
+        )
+        print(f"Enabled RELION-exact mask (pixel_size={pixel_size}, particle_diameter=544, edge=5)")
     iref_real = np.asarray(load_relion_volume(str(FIXTURE_DIR / "run_it000_class001.mrc")), dtype=np.float64)
     iref_ft = np.asarray(ftu.get_dft3(jnp.asarray(iref_real))).reshape(-1)
     sigma2 = _read_iter0_sigma2(ori // 2 + 1)
@@ -129,6 +140,7 @@ def main() -> None:
         half_spectrum_scoring=True,
         return_stats=True,
         relion_firstiter_score_mode="gaussian",
+        score_with_masked_images=True,
     )
     Ft_y = np.asarray(result[2])
     Ft_ctf = np.asarray(result[3])
