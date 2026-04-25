@@ -249,9 +249,22 @@ def test_estep_bpref_forward_parity():
     ori = int(ds.grid_size)
     assert ori == 64
 
+    # Round 9 fix: enable RELION-exact mask geometry + softMaskOutsideMap blend
+    # to make our masked Fimg match RELION's exp_Fimg at machine precision.
+    backend = ds.image_source.backend if hasattr(ds.image_source, "backend") else None
+    if backend is not None and hasattr(backend, "set_relion_image_mask"):
+        backend.set_relion_image_mask(
+            pixel_size=float(ds.voxel_size),
+            particle_diameter_ang=544.0,
+            width_mask_edge_px=5.0,
+        )
+
     # iter-0 Iref + sigma2 (RELION fixture)
     iref_real = np.asarray(load_relion_volume(str(FIXTURE_DIR / "run_it000_class001.mrc")), dtype=np.float64)
-    iref_ft = np.asarray(ftu.get_dft3(jnp.asarray(iref_real))).reshape(-1)
+    # Round 9 fixes: divide by N² (RELION FFT normalisation) + negate
+    # (absorbs CTF-sign convention difference: recovar's CTF = -RELION's CTF).
+    # Together these lift bp_data CC from +0.59 → +0.74 on this fixture.
+    iref_ft = -np.asarray(ftu.get_dft3(jnp.asarray(iref_real))).reshape(-1) / (ori**2)
     sigma2 = _read_iter0_sigma2(ori // 2 + 1)
     n4 = ori**4
     nv = np.asarray(make_radial_noise(sigma2 * n4, (ori, ori))).astype(np.float32).reshape(-1)
@@ -349,20 +362,18 @@ def test_estep_bpref_forward_parity():
         ratio = float(np.linalg.norm(ours)) / max(float(np.linalg.norm(target)), 1e-30)
         print(f"  {name:14s}: CC = {cc:+.6f}   rel_err = {rel:.3e}   ‖ours‖/‖target‖ = {ratio:.4f}")
 
-    # DIAGNOSTIC: this baseline is the staging gate before the next round
-    # of E-step parity work. As of 2026-04-24 the gap is dominated by:
-    #   1. recovar↔RELION volume axis convention (vol_relion = -transpose
-    #      vol_recovar (2,1,0)) which sign-flips the Fourier accumulator
-    #      → CC ≈ -0.37 (would be +0.85 with sign correction).
-    #   2. ~5000× amplitude mismatch: RELION's BPref accumulates posteriors
-    #      pre-normalised by sigma² and per-particle Pmax-binarised at iter
-    #      1 (firstiter_cc); recovar accumulates Bayesian soft posteriors.
-    #   3. Missing SamplingPerturbation port (memory:
-    #      project_relion_parity_sampling_perturbation.md).
-    # Driving CC > +0.99 unlocks bit-exact iter-1 Iref parity through the
-    # already-machine-precision M-step chain.
+    # Ratcheted gate (2026-04-25 round 9): with the fixes applied
+    # (RELION-exact mask, /N² FFT-norm, sign-negate, RELION-sorted halfsets,
+    # bit-exact M-step chain) BPref bp_data CC reaches >= +0.7 from
+    # +0.49 baseline (initial recovar grid + gaussian). The remaining
+    # 0.3 gap is structural argmax-divergence amplification, see
+    # docs/math/initial_model_estep_parity_attack_plan.md.
     cc_h0 = _cc(bp_data_h0, target_bp_data_h0)
-    print(f"\n  baseline cc_h0={cc_h0:+.4f} (target > +0.99 for full iter parity)")
-    # No assert: this test ratchets a baseline; failing it requires positive
-    # progress, not regressions (a separate guarded test will track CC once
-    # the magnitude+sign gaps are closed).
+    cc_h1 = _cc(bp_data_h1, target_bp_data_h1)
+    print(f"\n  ratcheted gate cc_h0={cc_h0:+.4f}, cc_h1={cc_h1:+.4f} (gate: > +0.6)")
+    # Guard against regressions in the round-9 BPref CC level. Going below
+    # this threshold means a fix above (mask geometry, FFT-norm, sign,
+    # halfset assignment) was unintentionally undone. Reach +0.99 to
+    # achieve bit-exact iter-1 Iref through the M-step chain.
+    assert cc_h0 > 0.6, f"BPref h0 CC regressed: {cc_h0:.4f} (round-9 baseline was +0.74)"
+    assert cc_h1 > 0.6, f"BPref h1 CC regressed: {cc_h1:.4f}"
