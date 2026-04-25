@@ -5,27 +5,12 @@ from typing import NamedTuple
 import jax
 
 
-class MeanStats(NamedTuple):
-    """Accumulated M-step sufficient statistics.
-
-    Both fields are additive over image batches and across devices,
-    making this the natural unit for distributed all-reduce.
-
-    Attributes:
-        Ft_y: (volume_size,) complex -- weighted backprojected images.
-        Ft_ctf: (volume_size,) real/complex -- weighted CTF^2 backprojection.
-    """
-
-    Ft_y: jax.Array
-    Ft_ctf: jax.Array
-
-
 class RelionStats(NamedTuple):
     """Per-image E-step statistics needed by the RELION-style refine loop.
 
-    These fields are not additive like :class:`MeanStats`; they are emitted
-    per iteration so convergence and current-size logic can reuse the exact
-    normalization already computed inside ``run_em``.
+    These fields are emitted per iteration so convergence and current-size
+    logic can reuse the exact normalization already computed inside
+    ``run_em``.
 
     Attributes:
         log_evidence_per_image: Log normalizer ``log_Z`` for each image.

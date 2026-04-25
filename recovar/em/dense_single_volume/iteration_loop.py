@@ -90,7 +90,7 @@ logger = logging.getLogger(__name__)
 # ---- Extracted helpers live in helpers/ ----
 # local_search.py: _partition_local_search_groups, _pad_local_search_rotations, etc.
 # orientation_priors.py: make_relion_translation_log_prior, make_relion_direction_log_prior, etc.
-# resolution.py: shell_index_to_resolution_angstrom, compute_coarse_image_size, fsc_to_current_size, etc.
+# resolution.py: shell_index_to_resolution_angstrom, compute_coarse_image_size, etc.
 # convergence.py: RefinementState, check_convergence, update_refinement_state, etc.
 # oversampling.py: find_significant_rotations, compute_pass2_stats, etc.
 

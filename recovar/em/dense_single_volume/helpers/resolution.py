@@ -5,7 +5,6 @@ current_size bootstrapping, coarse image size computation, FSC-to-resolution
 conversion, and adaptive pass-2 skip decisions.
 """
 
-import jax.numpy as jnp
 import numpy as np
 
 # Re-import so callers can get it from this module.
@@ -124,30 +123,3 @@ def _bootstrap_current_size_relion(init_current_size: int, ori_size: int, incr_s
         incr_size=incr_size,
     )
     return quantize_current_size(raw_cs, ori_size=ori_size)
-
-
-def fsc_to_current_size(fsc, threshold=1.0 / 7.0, min_size=32):
-    """Convert an FSC curve to a current_size (diameter in pixels).
-
-    Parameters
-    ----------
-    fsc : array-like, shape (n_shells,)
-        FSC curve between half-maps.
-    threshold : float
-        FSC threshold for resolution cutoff.  Default 1/7 ~ 0.143.
-    min_size : int
-        Minimum returned size (prevents collapse to 0 at first iteration).
-
-    Returns
-    -------
-    int
-        Raw current_size = 2 * shell_index.  Needs quantization before use.
-    """
-    from recovar.heterogeneity.locres import find_fsc_resol
-
-    fsc_arr = jnp.asarray(fsc)
-    pixel_res = float(find_fsc_resol(fsc_arr, threshold=threshold))
-
-    # current_size = 2 * shell_index (Nyquist: need 2 pixels per cycle)
-    raw_size = int(2 * pixel_res)
-    return max(raw_size, min_size)
