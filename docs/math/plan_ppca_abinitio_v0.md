@@ -67,7 +67,7 @@ These were left open in the previous draft and are now resolved:
 | # | Question | Decision |
 |---|---|---|
 | Q1 | Is Stage 1B a graduation gate or only a debugging ablation? | **Ablation only.** Stage 1C subsumes it; do not let 1B graduate the project. |
-| Q2 | "Frozen `s`" — strict `U`-only updates, or allow `s` to drift? | **Strict `U`-only.** `s` is literally constant during 1C. The W = U·diag(s)^{1/2} re-SVD pattern is dropped. |
+| Q2 | "Frozen `s`" — strict `U`-only updates, or allow `s` to drift? | **Strict `U`-only with `s = 1` flat by default** (revised 2026-04-16, commit `bae48101`). Original Q2 said `s` was frozen at empirical GT values; later validation showed the prior is negligible at cryo-EM SNR (3-4 orders smaller than the likelihood Gram), so flat `s = 1` gives identical results to GT-frozen across 7 orders of magnitude. The cheat-free unit test enforces no `s_true` leakage. Spectrum calibration is a post-EM ProjCov refit (Phase 2 of the merge plan); see `claude/ppca-refit-algorithms`. |
 | Q3 | Should `HeterogeneousEMState` be a required baseline at 1C and Phase 2? | **Yes, required.** If direct PPCA cannot beat or match the existing in-tree heterogeneous learner on the same fixed-grid harness, the project does not justify itself. *Not* a baseline at 1A — the scorer there is identical. |
 | Q4 | Is HEALPix order 3 required for v0? | **No, order 2 only.** Order 3 is deferred to Phase 4 (post-streaming-API). |
 | Q5 | Continuous heterogeneity only, or also mixtures / multimodal? | **Continuous only.** PPCA on multimodal data is an approximation and out of scope until v1; explicitly stated as a non-goal. |
@@ -629,12 +629,26 @@ PPCA vs no-PPCA, not configuration-vs-configuration.
 
 ### 8.3 Factor update (Stage 1C, real-volume parameterization)
 
+> **NOTE (2026-04-25):** This section describes the original
+> gradient-based M-step design. The shipped v0 implementation
+> in `recovar/em/ppca_abinitio/factor_update.py` uses the
+> **closed-form per-voxel Tipping-Bishop solve** instead — no
+> gradient steps, no learning rate, no line search. Subsections
+> 8.3.2 ("Objective"), 8.3.3 ("Update step"), 8.3.4 ("Ridge
+> constant") below describe the historical gradient method and
+> are kept for context only. The closed-form derivation is in
+> `docs/math/ppca_closed_form_mstep.md`. The orthonormalization
+> step in 8.3.3 is **NOT** applied in the M-step in the shipped
+> code (see `ppca_abinitio_status_20260416.md` Section 9.1 — the
+> gauge fix). It is applied at initialization (warmstart SVD,
+> random init) only.
+
 #### 8.3.1 What is being updated
 
 Only `U`. `s` is constant. `μ` may continue to update via
 Section 8.2.2 in the same outer iteration.
 
-#### 8.3.2 Objective
+#### 8.3.2 Objective (HISTORICAL — see note above)
 
 With `μ` and `s` held fixed, take K (≈3) gradient steps on the
 expected complete-data negative log-likelihood w.r.t. `U`, using

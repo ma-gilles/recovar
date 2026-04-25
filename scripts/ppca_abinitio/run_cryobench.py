@@ -629,7 +629,7 @@ def run_two_stage(
     anneal_factor_only=False,
     update_eigenvalues=False,
     post_anneal_s_iters=0,
-    s_init_kind="truth",
+    s_init_kind="flat",
 ):
     """Two-stage loop with selectable mu init.
 
@@ -1048,7 +1048,10 @@ def main():
         external_volumes_real=gt_vols,
         external_sampling_mode=args.external_mode,
     )
-    print(f"  s_true (empirical from gt vols): {np.asarray(ds.s_true)}", flush=True)
+    if args.s_init == "truth":
+        print(f"  s_true (empirical from gt vols): {np.asarray(ds.s_true)}", flush=True)
+    else:
+        print(f"  s_init={args.s_init} (s_true from GT not used in algorithmic path)", flush=True)
     print(f"  n_rot={ds.n_rot}, n_trans={ds.n_trans}, n_img={ds.n_img}", flush=True)
     if ds.state_coords_true is not None:
         n_states = int(ds.state_coords_true.shape[0])

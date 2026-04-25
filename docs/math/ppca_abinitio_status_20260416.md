@@ -1,4 +1,4 @@
-# PPCA Ab-Initio v0 — Status Report (2026-04-16)
+# PPCA Ab-Initio v0 — Status Report (last updated 2026-04-25)
 
 **Branch:** `claude/ppca-abinitio-v0`
 **Worktree:** `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_ppca_review_20260408`
@@ -9,15 +9,25 @@
 
 ## 1. What this is
 
-A probabilistic PCA (PPCA) implementation for cryo-EM heterogeneity that
-operates in the **ab-initio** regime: poses are not known and are marginalized
-over a discrete HEALPix × translation grid.  The goal is to jointly infer
-the mean volume μ, the q principal heterogeneity directions U, and per-image
-latent coordinates α, starting from a rough initial mean estimate and no
-prior knowledge of U.
+**Contribution (PR-facing framing):** an analytic pose-marginalized PPCA
+M-step for cryo-EM heterogeneity, plus a metric-correct half-volume SVD
+warmstart, inside a fixed-grid ab-initio loop. Validated as an algorithm
+at vol=32 on CryoBench-derived synthetic data; production scaling
+(vol≥128, real CTF, real datasets, pose grid refinement) is deferred to
+follow-up branches.
+
+**What the algorithm does:** infers the mean volume μ, the q principal
+heterogeneity directions U, and per-image latent coordinates α from
+images with **unknown poses**, marginalizing pose over a discrete
+HEALPix × translation grid. Starting point: rough μ initialization, no
+prior knowledge of U, no pose information.
+
+**Cheat-free contract:** the v0 algorithmic path with `--s-init flat`
+does not depend on any ground-truth field. Programmatically enforced
+by `tests/ppca_abinitio/test_no_gt_leakage.py`.
 
 The implementation lives in `recovar/em/ppca_abinitio/` with ~15 modules
-built over 10 commits.  It is evaluated against CryoBench ground-truth
+built over 10 commits. It is evaluated against CryoBench ground-truth
 volume ensembles (Ribosembly, IgG-1D, IgG-RL) through
 `scripts/ppca_abinitio/run_cryobench.py`, which synthesizes images from
 GT volumes through the v0 forward model to create a convention-matched
@@ -90,19 +100,33 @@ B_v = Σ_{i,g} γ_{i,g} · ctf²_{i,g,v}/σ²_i · m_{i,g} · (y_shifted_{i,g,v}
 This is a q×q system per voxel, solved by `jax.vmap(jnp.linalg.solve)`.
 No gradient descent, no learning rate, no line search.
 
-After the solve, U is projected back to the real-volume Hermitian subspace
-and orthonormalized under the half-volume weighted inner product
-(`real_volume_orthonormalize_half`).
+After the solve, U is projected back to the real-volume Hermitian
+subspace via `project_to_real_volume_subspace_batch`. **It is not
+orthonormalized in the M-step** — see Section 9.1 (gauge fix). The
+weighted-Gram orthonormalization (`real_volume_orthonormalize_half`)
+is applied only at initialization (warmstart SVD, random init), where
+there is no previous s to be consistent with.
 
 See `docs/math/ppca_closed_form_mstep.md` for the full derivation.
 
 ### 2.5 Eigenvalue constraint
 
-In the current v0, eigenvalues s are **frozen at the empirical values from
-the GT ensemble** (spec Section Q2).  This is a deliberate choice: it
-isolates the subspace learning problem from eigenvalue estimation.
-Eigenvalue estimation is a separate topic with known shrinkage issues
-(see Section 6.3).
+In v0, eigenvalues s are **frozen at `s = 1` flat by default**
+(`--s-init flat`, validated 2026-04-16, commit `bae48101`). The prior
+precision diag(1/s) is negligible vs the likelihood Gram at cryo-EM
+SNR (3-4 orders smaller), so the EM trajectory is identical across
+seven orders of magnitude of s. `--s-init truth` (uses GT eigenvalues)
+and `--s-init svd` exist as ablations only; the cheat-free unit test
+in `tests/ppca_abinitio/test_no_gt_leakage.py` enforces that the
+algorithmic path with `--s-init flat` never reads `ds.s_true`.
+
+Spectrum calibration (the actual eigenvalue values, separate from
+subspace learning) is deferred to a post-EM ProjCov refit; see
+Section 6.3 and `claude/ppca-refit-algorithms`.
+
+**Historical note:** Earlier text claimed s was frozen at empirical
+GT values. That was the v0 development default before commit
+`bae48101`; it has been replaced by flat-s for v0 release.
 
 ### 2.6 Deterministic annealing
 
@@ -343,7 +367,7 @@ in agent memory for the full table.
 
 | File | Change |
 |------|--------|
-| `recovar/em/ppca_abinitio/factor_update.py` | Frozen-posterior NLL uses explicit m/Hinv terms instead of re-scoring; closed-form M-step adds real-volume projection + orthonormalization |
+| `recovar/em/ppca_abinitio/factor_update.py` | Frozen-posterior NLL uses explicit m/Hinv terms; closed-form M-step adds real-volume projection (orthonormalization removed in gauge fix — see Section 9.1) |
 | `recovar/em/ppca_abinitio/loop.py` | Train/val split in fixed-grid loop (subset_synthetic_dataset); loop trains on train_idx only |
 | `recovar/em/ppca_abinitio/synthetic.py` | `subset_synthetic_dataset()`; `state_label_true`/`state_coords_true` fields; `external_volumes_real` + `external_sampling_mode` params |
 | `docs/math/plan_ppca_abinitio_v0.md` | Updated Section 0 with resolved decisions |
@@ -351,7 +375,7 @@ in agent memory for the full table.
 | `scripts/ppca_abinitio/run_stage_1c_factor_learning.py` | Same |
 | `scripts/ppca_abinitio/run_stage_1d_full_soft_mstep.py` | Same |
 | `tests/ppca_abinitio/test_factor_update.py` | New test: `test_expected_nll_uses_frozen_posterior_moments` |
-| `tests/ppca_abinitio/test_factor_update_closed_form.py` | Updated for orthonormalization post-solve |
+| `tests/ppca_abinitio/test_factor_update_closed_form.py` | Updated for the no-orthonormalization M-step (gauge fix) |
 | `tests/ppca_abinitio/test_loop_convergence_diagnostic.py` | Updated for train/val split |
 | `tests/ppca_abinitio/test_synthetic.py` | Tests for `subset_synthetic_dataset`, external volumes, discrete sampling |
 
@@ -378,63 +402,91 @@ in agent memory for the full table.
 
 ---
 
-## 8. What to try next
+## 8. Plan: from current state to merged v0 and beyond
 
-### 8.1 High priority (improving the method)
+This section supersedes the older "what to try next" notes. Plan
+phases are numbered for reference in commits and the PR.
 
-1. **Adaptive annealing or annealing-free basin escape.**  The current
-   log1000 schedule works on Ribosembly but hurts IgG-RL.  Ideas:
-   - Monitor log-marginal change Δlm and only anneal when Δlm stalls
-   - Use a milder schedule (log10 or log100) that doesn't flatten the
-     posterior as aggressively
-   - Multi-restart without annealing (K=4-8 restarts, argmax lm) as
-     the default strategy — avoids the continuous-manifold divergence
-     issue entirely
+### Phase 0 — Consistency fixes (DONE 2026-04-25)
 
-2. **Eigenvalue estimation.**  The frozen-at-truth eigenvalues are the
-   main unrealism.  Options:
-   - Tipping-Bishop eigenvalue update: s_k = (1/N) Σ_i (m²_{i,k} + H⁻¹_{i,kk})
-   - ProjCov: project sample covariance onto the PPCA subspace
-   - Minka-style automatic relevance determination to auto-select q
-   The shrinkage study (Section 6.3) provides the baseline.
+- Function default of `run_two_stage` switched from `s_init_kind="truth"`
+  to `s_init_kind="flat"`; line 651's `s_kernel = max(ds.s_true, _S_FLOOR)`
+  now gated behind explicit truth opt-in.
+- Log line at module-load time only prints `s_true` when `--s-init truth`.
+- Cheat-free contract test added: `tests/ppca_abinitio/test_no_gt_leakage.py`
+  (poisons `ds.s_true` with NaN; verifies algorithmic path with
+  `--s-init flat` produces finite outputs; positive control verifies
+  the test is sensitive).
+- Doc sweep: orthonormalization, eigenvalue, ML-fixed-point claims
+  reconciled with current code.
 
-3. **Scale to vol=64/128.**  This requires:
-   - Batched E-step (can't hold all (n_img, n_pose, n_half) in memory)
-   - Possibly switching to the CUDA backprojection kernel for the
-     M-step accumulation
-   - Higher healpix_order (order 2-3 for vol=64-128)
-   - Testing whether the closed-form per-voxel solve still works at
-     higher resolution or needs regularization
+### Phase 1 — Ablation sweep (highest-information experiment)
 
-### 8.2 Medium priority (robustness)
+Single 12-cell × 3-seed × 3-dataset sweep simultaneously validates or
+kills three claims (no-GT-spectrum, W_prior-as-regularization, annealing
+robustness). Factors:
 
-4. **Test on Tomotwin-100.**  The fourth CryoBench dataset (100 classes,
-   cryo-ET), untested.  Likely needs high q (≥25).
+- `s_init` ∈ {flat, truth}
+- `ridge` ∈ {scalar λI, W_prior radial-shell-binned}
+- `anneal` ∈ {none, factor-only log1000}
 
-5. **Pose refinement.**  Port RELION's HEALPix oversampling +
-   `SamplingPerturbation` logic so the pose grid refines over iterations.
-   This is the main gap between v0 and production-quality ab-initio.
+Rows: Ribosembly q=4, Ribosembly q=8, IgG-RL q=2. **Held-out marginal
+likelihood** is the primary model-selection metric (added in Phase 1).
+Runs as parallel Slurm jobs. Decision rules predefined before running.
 
-6. **Better multi-restart selection.**  Current argmax(lm) works for
-   rejecting collapsed basins but doesn't distinguish within good basins.
-   Could use: AIC/BIC, held-out likelihood, or post-hoc clustering quality
-   on a validation split.
+### Phase 2 — Post-EM ProjCov eigenvalue refit
 
-### 8.3 Lower priority (nice to have)
+Spectrum strategy: keep `s = 1` flat during EM, calibrate via post-EM
+ProjCov (proven on sister branch `claude/ppca-refit-algorithms`).
+Port the minimal ProjCov function into
+`recovar/em/ppca_abinitio/eigenvalue_refit.py` and validate against the
+shrinkage memo. Empirical-Bayes shell prior is recorded as a future
+direction in `docs/math/ppca_abinitio_eb_shell_prior.md` but not
+implemented in v0.
 
-7. **CTF / scale / dose weighting.**  Real images have heterogeneous CTF
-   defocus, per-image scale factors, and dose-dependent weighting.
+### Phase 3 — vol=64/order=2 scaling smoke (PR-blocking)
 
-8. **Continuous embedding quality.**  The current metrics (Hungarian, ARI,
-   NMI) are designed for discrete states.  For continuous manifolds
-   (IgG-1D, IgG-RL), better metrics would be: Spearman correlation of
-   pairwise latent distances vs GT distances, or reconstruction quality
-   of kernel-regression volumes at GT coordinates.
+- Memory model: analytic cost as a function of `(n_img, n_pose, q,
+  V_half)`, validated against measured.
+- Batched E-step in `posterior.py` (preserves vol=32 bit-identicality;
+  regression test enforces this).
+- Single Slurm run: Ribosembly q=4, vol=64, healpix_order=2, n=1024,
+  weighted SVD warmstart, no anneal, 30 iters. Acceptance: no OOM on
+  H100, hun ≥ 0.70, wall time ≤ 60 min.
+- Instrumentation hooks (gated `--instrument`): per-iter peak memory,
+  pose entropy, effective pose count, shellwise coverage, shellwise
+  mean-FRE, per-voxel condition number of `M_v` (sampled), held-out lm,
+  best-iteration checkpointing.
 
-9. **Integration with the main recovar pipeline.**  The v0 ab-initio
-   module is self-contained (its own forward model, synthetic data,
-   grid).  Plugging it into the main `CryoEMDataset → pipeline` flow
-   requires bridging the forward model conventions.
+### Phase 4 — Scaling decision (post-vol=64)
+
+Use Phase 3 instrumentation to determine whether pose-grid coarseness
+or scaling is the binding constraint at vol=64. Path forward branches
+into vol=128 work (T2a) or `SamplingPerturbation` port (T2b)
+accordingly. Decision documented before opening corresponding follow-up
+branch.
+
+### Phase 5 — PR & ship v0
+
+Rebase on `dev`, push, open PR with the Phase 1 / Phase 2 / Phase 3
+results in the description. Per `feedback_no_longtest_for_parity.md`,
+this is parity-adjacent research work; the long-test suite is **not**
+the merge gate. Phase 1 sweep + Phase 2 calibration + Phase 3 smoke
+constitute the substitute test plan.
+
+### Phase 6 — Post-merge follow-ups (deferred to separate branches)
+
+| Item | Branch | Trigger |
+|---|---|---|
+| vol≥128 scaling | `claude/ppca-abinitio-scale-vol128` | Phase 4 picks scaling-bound |
+| HEALPix oversampling + `SamplingPerturbation` port | `claude/ppca-abinitio-sampling-perturb` | Phase 4 picks grid-bound |
+| Tomotwin-100 + q≥25 | `claude/ppca-abinitio-tomotwin` | After T2 |
+| Empirical-Bayes shell prior | `claude/ppca-abinitio-eb-spectrum` | Anytime |
+| Pipeline bridge to `CryoEMDataset` | `claude/ppca-abinitio-pipeline-bridge` | After T2 |
+| External baselines (cryoDRGN, 3DVA, RELION 3DC) | `claude/ppca-abinitio-baselines` | Pre-paper |
+| Adaptive Δ-lm annealing | `claude/ppca-abinitio-adaptive-anneal` | Anytime |
+| Continuous-manifold metrics (Spearman of latent distances) | folded into baselines | — |
+| CTF / scale / dose weighting | folded into pipeline bridge | — |
 
 ---
 
@@ -462,11 +514,14 @@ Hungarian from 0.81 to 0.87 (+7.5%).  The Cholesky whitening was
 distorting the M-step solution at each iteration, accumulating gauge
 drift over the 30-iteration loop.
 
-**Future:** When eigenvalue estimation is added (s no longer frozen),
-the correct approach is: orthonormalize U_new = L^{-1} U_raw, then
-update s via Λ_new = L^T Λ L → eigendecompose → new diagonal s and
-additional rotation applied to U.  This preserves the model while
-keeping the orthonormal-row gauge.
+**Future (DEPRECATED — kept for historical context):** Earlier we
+considered joint eigenvalue + gauge-aware orthonormalization
+(orthonormalize U_new = L^{-1} U_raw, then update s via Λ_new = L^T Λ L
+→ eigendecompose). Section 9.2 shows the underlying Tipping-Bishop
+update is biased under pose marginalization regardless of gauge
+treatment, so the v0 spectrum strategy is now post-EM ProjCov refit
+(see Section 6.3 / `claude/ppca-refit-algorithms`), NOT joint
+eigenvalue + gauge update during EM.
 
 ### 9.2 Eigenvalue update experiment (2026-04-15)
 
@@ -500,9 +555,13 @@ variance under the annealed model, not the true signal variance.  Final
 estimated s = [7.35, 6.01, 4.36, 3.62] vs true std ≈ [2.85, 1.60,
 1.34, 1.08] — up to 4× inflation.
 
-**Implication:** Eigenvalue estimation should be a **post-annealing
-refinement** phase (apply at f=1 only), not during the annealing
-schedule. This is the next experiment to try.
+**Implication (UPDATED 2026-04-25):** Post-annealing Tipping-Bishop
+refinement (`--post-anneal-s-iters N`) was tested and **also harmful**:
+hun 0.84 → 0.66 on Ribosembly q=4 even with f=1. The pose-discretization
+bias is intrinsic to the formula in the pose-marginalized setting, not
+specific to annealing. v0 ships with `s = 1` flat throughout EM and
+defers eigenvalue calibration to a post-EM ProjCov refit (proven on
+sister branch `claude/ppca-refit-algorithms`). See Section 6.3.
 
 ### 9.3 Weighted SVD warmstart = matching the metric (was 9.2)
 
@@ -522,19 +581,31 @@ you pre-whiten by the metric, do standard PCA, then un-whiten.
 ### 9.4 The PPCA ML fixed point ≠ the data-generating truth
 
 Under model misspecification (q < n_states for discrete data, or any
-finite-q model for continuous manifolds), the PPCA ML optimum is NOT
-(μ_true, U_true).  The EM algorithm correctly moves AWAY from
-(μ_true, U_true) toward the ML fixed point.  This means:
+finite-q model for continuous manifolds), the **conditional ML optimum
+of the v0 discretized model** is NOT (μ_true, U_true). The EM algorithm
+correctly moves AWAY from (μ_true, U_true) toward this conditional
+fixed point.
+
+Important caveat: this is not "the cryo-EM ML fixed point" in any
+absolute sense. It is the fixed point of the v0 forward model with
+its specific pose grid, ridge regularizer, CTF simplifications, and
+nearest-disc interpolation. Each of those design choices alters the
+objective, and the fixed point moves accordingly.
+
+This means:
 - The pre-EM oracle (metrics at literal truth) over-estimates what EM
   can reach
 - The factor-only ceiling (U updates with μ frozen at truth)
   over-estimates what the joint loop reaches
-- The only honest ceiling is the joint-loop oracle: run the full
-  EM loop from truth and see where it converges
+- The only honest ceiling **for the v0 discretized model** is the
+  joint-loop oracle: run the full EM loop from truth and see where it
+  converges
 
 Concretely on Ribosembly q=4: pre-EM oracle has hun=0.90; after 30
-joint EM iters from truth, hun drops to 0.72.  This is not a bug —
-it's the ML fixed point under q=4 misspecification.
+joint EM iters from truth, hun drops to 0.72. This is not a bug —
+it is the conditional fixed point of the v0 model under q=4
+misspecification. A different forward model (finer pose grid, real
+CTF, real interpolation) would converge to a different fixed point.
 
 ### 9.5 Multi-basin landscape
 
