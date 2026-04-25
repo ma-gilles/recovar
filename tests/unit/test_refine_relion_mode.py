@@ -31,11 +31,13 @@ from recovar.em.dense_single_volume.local_backprojection import (
 )
 from recovar.em.dense_single_volume.local_em_engine import (
     _fetch_indexed_batch,
+    _maybe_write_debug_score_dump,
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.local_layout import (
+    LocalBucketSpec,
     LocalHypothesisLayout,
     build_local_hypothesis_layout,
     bucket_local_hypothesis_layout,
@@ -403,6 +405,70 @@ def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods():
     np.testing.assert_array_equal(buckets[1].actual_rotation_counts, np.array([1416], dtype=np.int32))
     assert buckets[0].local_rotation_mask[0, :1368].all()
     assert not buckets[0].local_rotation_mask[0, 1368:].any()
+
+
+def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
+    class _Dataset:
+        def original_image_indices_from_local(self, indices):
+            _ = indices
+            return np.array([123], dtype=np.int64)
+
+    layout = LocalHypothesisLayout(
+        n_global_rotations=16,
+        n_pixels=8,
+        n_psi=2,
+        rotation_offsets=np.array([0, 2], dtype=np.int64),
+        rotation_ids_flat=np.array([5, 7], dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(2, dtype=np.float32),
+        rotation_counts=np.array([2], dtype=np.int32),
+        translation_grid=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+        translation_log_priors=np.zeros((1, 3), dtype=np.float32),
+    )
+    bucket = LocalBucketSpec(
+        image_indices=np.array([0], dtype=np.int32),
+        bucket_rotation_count=2,
+        actual_rotation_counts=np.array([2], dtype=np.int32),
+        local_rotation_ids=np.array([[5, 7]], dtype=np.int32),
+        local_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (1, 2, 3, 3)).copy(),
+        local_rotation_log_prior=np.zeros((1, 2), dtype=np.float32),
+        local_rotation_mask=np.ones((1, 2), dtype=bool),
+        translation_log_prior=np.zeros((1, 3), dtype=np.float32),
+    )
+    pending = _maybe_write_debug_score_dump(
+        experiment_dataset=_Dataset(),
+        local_layout=layout,
+        bucket=bucket,
+        image_pre_shifts=np.array([[2.0, -1.0]], dtype=np.float32),
+        scores=np.array([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]], dtype=np.float32),
+        probs=np.array([[[0.05, 0.10, 0.15], [0.20, 0.25, 0.25]]], dtype=np.float32),
+        log_Z=np.array([7.0], dtype=np.float32),
+        best_log_score=np.array([6.0], dtype=np.float32),
+        max_posterior=np.array([0.25], dtype=np.float32),
+        reconstruction_sample_mask=np.ones((1, 2, 3), dtype=bool),
+        reconstruction_rotation_mask=np.ones((1, 2), dtype=bool),
+        n_significant_samples=np.array([6], dtype=np.int32),
+        current_size=8,
+        dump_dir=tmp_path,
+        pending_targets={123},
+    )
+
+    assert pending == set()
+    with np.load(tmp_path / "local_score_image_123.npz") as dump:
+        np.testing.assert_array_equal(dump["local_rotation_indices"], np.array([5, 7], dtype=np.int32))
+        assert dump["local_rotation_eulers"].shape == (2, 3)
+        assert dump["local_rotation_matrices"].shape == (2, 3, 3)
+        np.testing.assert_array_equal(
+            dump["candidate_pose_rotation_indices"],
+            np.array([[5, 5, 5], [7, 7, 7]], dtype=np.int32),
+        )
+        np.testing.assert_array_equal(
+            dump["candidate_pose_translation_indices"],
+            np.array([[0, 1, 2], [0, 1, 2]], dtype=np.int32),
+        )
+        np.testing.assert_array_equal(dump["best_score_rotation_global_id"], np.array([7], dtype=np.int32))
+        np.testing.assert_array_equal(dump["best_score_translation_index"], np.array([2], dtype=np.int32))
+        np.testing.assert_allclose(dump["best_score_translation"], np.array([[0.0, 1.0]], dtype=np.float32))
 
 
 def test_run_local_search_iteration_dispatches_exact_engine(monkeypatch, rng):
