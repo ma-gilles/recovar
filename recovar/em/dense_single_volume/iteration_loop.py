@@ -19,9 +19,8 @@ import numpy as np
 from recovar import utils
 from recovar.core import fourier_transform_utils
 from recovar.em.core import hard_assignment_idx_to_pose
+from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
-from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
 from recovar.em.dense_single_volume.helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
@@ -30,7 +29,6 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     update_refinement_state,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
-from recovar.em.dense_single_volume.legacy_iteration_loop import _run_legacy_iteration_loop
 from recovar.em.dense_single_volume.helpers.local_search import (
     _local_search_engine_rotation_block_size,
     _pad_local_search_rotations,
@@ -58,6 +56,9 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     should_skip_adaptive_pass2,
 )
 from recovar.em.dense_single_volume.helpers.types import RelionStats
+from recovar.em.dense_single_volume.legacy_iteration_loop import _run_legacy_iteration_loop
+from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
+from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
 from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,
@@ -138,7 +139,9 @@ def _reconstruct_volume_eager(
     )
 
 
-def _apply_relion_initial_lowpass_filter(volume_ft_flat, volume_shape, voxel_size, ini_high_angstrom, filter_edgewidth=5):
+def _apply_relion_initial_lowpass_filter(
+    volume_ft_flat, volume_shape, voxel_size, ini_high_angstrom, filter_edgewidth=5
+):
     """Apply RELION's ``initialLowPassFilterReferences`` to a full Fourier volume."""
     if ini_high_angstrom is None or float(ini_high_angstrom) <= 0.0:
         return volume_ft_flat
@@ -369,10 +372,10 @@ def _run_local_search_iteration_grouped_union(
         n_prior = prior_rotations.shape[0]
     else:
         raise ValueError(f"prior_rotations must have shape (n,3,3) or (n,3), got {prior_rotations.shape}")
-    # The local-search translation prior is evaluated on the RELION-relative
-    # delta grid after pre-centering by the rounded previous offset, so the
-    # prior center must already be in "delta coordinates" (typically
-    # -ROUND(old_offset)).
+    # The local-search translation prior is evaluated on the relative delta
+    # grid after pre-centering by the previous absolute offset, so the prior
+    # center must already be in "delta coordinates" (typically
+    # -old_offset).
     if prior_translations is None:
         prior_translations = np.zeros(
             (n_prior, np.asarray(translations).shape[1]),
@@ -466,7 +469,7 @@ def _run_local_search_iteration_grouped_union(
     metadata_build_time = time.time() - metadata_t0
 
     # TODO: IS THIS ALL REALLY A GOOD IDEA? I THINK IT WOULD PROBABLY BE FASTER TO DO A NAIVE THING
-    ## DONT GROUP, JUST COMPUTE. 
+    ## DONT GROUP, JUST COMPUTE.
     ## HOW MUCH TIME IS SPENT ON THIS PARTITIONING? HOW MANY EXTRA COMPARISONS ARE WE DOING?
     ## I THINK IN THIS BRANCH, WE MAY HAVE TO JUST ABANDON THE GEMM BASED, WHICH IS OK.
     ## OR IS THIS JUST GROUPING TO BATCH ON GPU ? I DON'T UNDERSTAND. ALSO SHOULDNT ALL IMAGES HAVE SOME BATCH SIZE ANYWAY?
@@ -523,7 +526,7 @@ def _run_local_search_iteration_grouped_union(
             * local_rotation_block_size
         )
 
-        ## TODO: THIS IS INCREDIBLY MESSY, WE SHOULDNT HAVE TO DEFINE 12 VARIABLES LIKE THIS. 
+        ## TODO: THIS IS INCREDIBLY MESSY, WE SHOULDNT HAVE TO DEFINE 12 VARIABLES LIKE THIS.
         ## IF THI SIS TO MAKE MATCHING WITH RELION FOR NOW FINE, BUT KEEP TRACK WE NEED TO TO CLEAN THIS UP AFTER (RELION PARITY HAS NOT BEEN ACHIEVED YET)
         valid_pair_count = int(np.count_nonzero(np.asarray(local_log_prior) > -1e20))
         union_pair_count = int(len(group_image_indices) * actual_local_rotation_count)
@@ -634,7 +637,9 @@ def _run_local_search_iteration_grouped_union(
         chunk_nonzero_posterior_rows.append(nonzero_row_count)
         sum_nonzero_posterior_rows += nonzero_row_count
         if nonzero_row_count:
-            seen_nonzero_global_rotations[np.asarray(local_indices[:actual_local_rotation_count])[nonzero_row_mask]] = True
+            seen_nonzero_global_rotations[np.asarray(local_indices[:actual_local_rotation_count])[nonzero_row_mask]] = (
+                True
+            )
         postprocess_time += time.time() - postprocess_t0
         em_time += time.time() - em_t0
 
@@ -713,7 +718,9 @@ def _run_local_search_iteration_grouped_union(
                 "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
                 "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
                 "duplicate_rotation_factor": np.float64(
-                    0.0 if not np.any(seen_global_rotations) else sum_union_rows / np.count_nonzero(seen_global_rotations)
+                    0.0
+                    if not np.any(seen_global_rotations)
+                    else sum_union_rows / np.count_nonzero(seen_global_rotations)
                 ),
                 "sum_union_row_pixels": np.int64(sum_union_row_pixels),
                 "sum_padded_row_pixels": np.int64(sum_padded_row_pixels),
@@ -870,7 +877,9 @@ def _run_local_search_iteration_exact_v1(
         translations,
         prior_translations,
         sigma_offset_angstrom,
-        offset_range_pixels,
+        # Match the grouped RELION-mode path: local translation priors use the
+        # learned/model sigma, not the legacy range/3 override.
+        None,
         experiment_dataset.voxel_size,
         grid_metadata=local_grid_metadata,
         translation_prior_reference_translations=translation_prior_reference_translations,
@@ -902,7 +911,12 @@ def _run_local_search_iteration_exact_v1(
         return_profile=return_profile,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
-        reconstruct_significant_only=True,
+        # TODO(local-engine-debt): restore RELION-style significant-sample
+        # reconstruction here only after the exact local engine matches the
+        # grouped RELION-mode path on the real replay benchmarks. The current
+        # exact significance path still drifts on iter-6 local replay, so keep
+        # exact_v1 on the full soft posterior for parity.
+        reconstruct_significant_only=False,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
     )
@@ -1254,7 +1268,7 @@ def _run_relion_iteration_loop(
     Corresponds to RELION's autoRefine iteration loop.
     See docs/relion5_auto_refine_algorithm.md.
     """
-    from recovar.reconstruction import noise, regularization, relion_functions
+    from recovar.reconstruction import noise, regularization
 
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape
@@ -1306,7 +1320,9 @@ def _run_relion_iteration_loop(
     # RELION mode owns the coarse HEALPix grid. When coarse-grid metadata is
     # provided, regenerate the matching coarse grid here instead of inheriting
     # any finer caller-supplied rotation table.
-    current_healpix_order = int(init_healpix_order) ##TODO: SURELY THIS INT IS UNNECESSARY? I WANT TO CLEAN UP THIS KIND OF USELESS CODE
+    current_healpix_order = int(
+        init_healpix_order
+    )  ##TODO: SURELY THIS INT IS UNNECESSARY? I WANT TO CLEAN UP THIS KIND OF USELESS CODE
     if nside_level is not None:
         ## TODO: ID LIKE BETTER NAMING THAT NSIDE_LEVEL. WHAT DOES THIS MEAN?
         if int(nside_level) != current_healpix_order:
@@ -1315,8 +1331,16 @@ def _run_relion_iteration_loop(
                 int(nside_level),
                 current_healpix_order,
             )
-        current_rotations = get_relion_rotation_grid(current_healpix_order).astype(np.float32) # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
-        current_rotation_eulers = get_relion_rotation_grid_eulers(current_healpix_order).astype(np.float32) # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
+        current_rotations = get_relion_rotation_grid(
+            current_healpix_order
+        ).astype(
+            np.float32
+        )  # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
+        current_rotation_eulers = get_relion_rotation_grid_eulers(
+            current_healpix_order
+        ).astype(
+            np.float32
+        )  # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
         ## TODO: I ALSO WOULD LIKE TO NOT HAVE SO MANY DTYPE COMMANDS IF THEY ARENT NECESSARY. GOOD CODING SHOULD MAKE INHERITED TYPE SEEMLESS
         current_nside_level = current_healpix_order
     elif rotations is not None:
@@ -1341,8 +1365,7 @@ def _run_relion_iteration_loop(
         os.makedirs(save_intermediates_dir, exist_ok=True)
     if local_search_profile_mode not in {"auto", "on", "off"}:
         raise ValueError(
-            "local_search_profile_mode must be one of {'auto', 'on', 'off'}, "
-            f"got {local_search_profile_mode!r}",
+            f"local_search_profile_mode must be one of {{'auto', 'on', 'off'}}, got {local_search_profile_mode!r}",
         )
     collect_local_search_profile = (
         save_intermediates_dir is not None if local_search_profile_mode == "auto" else local_search_profile_mode == "on"
@@ -1381,7 +1404,7 @@ def _run_relion_iteration_loop(
         return ibs, rbs
 
     ## TODO CHANGE NAMES OF THIGNS THIGSN. MEANS IS NOT A REASONABLE NAME HERE.
-    ## 
+    ##
 
     # State: two half-set volumes, noise, prior
     # init_volume can be a single array (used for both halves) or a list/tuple
@@ -1446,7 +1469,7 @@ def _run_relion_iteration_loop(
     tau2_ssnr_trajectory = []
 
     ## TODO: WE NEED MUCH BETTER NAMING THAN THIS, I AHVE NO IDEA WHAT THIS IS SAYING OR WHAT IT DOES
-    ## IF ITS FOR RELION PARITY OKAY, BUT MAYBE WE CNA AT LEAST HAVE COMMENTS NEXT TO DEF SO I HAVE SOME IDEA OF WHATS GOING ON 
+    ## IF ITS FOR RELION PARITY OKAY, BUT MAYBE WE CNA AT LEAST HAVE COMMENTS NEXT TO DEF SO I HAVE SOME IDEA OF WHATS GOING ON
 
     # C1 (RELION-parity): per-iter sigma2_offset update from data. Initialized
     # from `init_translation_sigma_angstrom`; updated each iter to the
@@ -2059,7 +2082,20 @@ def _run_relion_iteration_loop(
                     current_healpix_order,
                 )
                 local_search_rotations = get_relion_rotation_grid(local_search_order).astype(np.float32)
-                local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(np.float32)
+                if abs(float(random_perturbation)) > 1e-12:
+                    local_search_rotations = apply_relion_rotation_perturbation(
+                        np.asarray(local_search_rotations, dtype=np.float32),
+                        random_perturbation,
+                        relion_angular_sampling_deg(local_search_order, adaptive_oversampling=0),
+                    ).astype(np.float32)
+                    local_search_rotation_eulers = utils.R_to_relion(
+                        np.asarray(local_search_rotations, dtype=np.float32),
+                        degrees=True,
+                    ).astype(np.float32)
+                else:
+                    local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(
+                        np.float32
+                    )
             else:
                 local_search_rotations = effective_rotations
                 local_search_rotation_eulers = None
@@ -2161,12 +2197,11 @@ def _run_relion_iteration_loop(
             # For this dataset, rlnOffsetRangeX = -1 → model sigma is used.
             # We always use current_sigma_offset_angstrom (from model star).
             #
-            # RELION evaluates the translation prior on the TOTAL offset:
-            # diff = myprior - (ROUND(old_offset) + delta). With myprior=0
-            # (no rlnOriginXPriorAngst set), this is -(ROUND(old_offset)+delta).
-            # After pre-centering the image by ROUND(old_offset), the search
-            # variable is delta (relative). To get |ROUND(old_offset) + delta|²
-            # from |delta - center|², set center = -ROUND(old_offset).
+            # Evaluate the translation prior on the total offset. After
+            # pre-centering the image by the previous absolute offset, the
+            # search variable is the relative delta. To express
+            # |old_offset + delta|^2 as |delta - center|^2, set
+            # center = -old_offset.
             trans_prior_center = -translation_search_base if translation_search_base is not None else None
             translation_log_prior = make_relion_translation_log_prior(
                 np.asarray(current_translations, dtype=np.float32),
@@ -2227,7 +2262,9 @@ def _run_relion_iteration_loop(
                 translation_prior_reference_translations = np.asarray(current_translations, dtype=np.float32)
                 if local_search_translation_prior_mode == "coarse":
                     if _replay_prior_translations is not None:
-                        translation_prior_reference_translations = np.asarray(_replay_prior_translations, dtype=np.float32)
+                        translation_prior_reference_translations = np.asarray(
+                            _replay_prior_translations, dtype=np.float32
+                        )
                     else:
                         translation_prior_reference_translations = np.asarray(base_translations, dtype=np.float32)
                     logger.info(
@@ -2392,7 +2429,9 @@ def _run_relion_iteration_loop(
                         disable_adjoint_y=disable_adjoint_y,
                         disable_adjoint_ctf=disable_adjoint_ctf,
                         relion_firstiter_score_mode=(
-                            "normalized_cc" if (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter) else "gaussian"
+                            "normalized_cc"
+                            if (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter)
+                            else "gaussian"
                         ),
                         relion_firstiter_winner_take_all=(
                             relion_firstiter_cc_this_iter or first_iter_hard_reconstruction_this_iter
@@ -2670,7 +2709,9 @@ def _run_relion_iteration_loop(
                     disable_adjoint_y=disable_adjoint_y,
                     disable_adjoint_ctf=disable_adjoint_ctf,
                     relion_firstiter_score_mode=(
-                        "normalized_cc" if (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter) else "gaussian"
+                        "normalized_cc"
+                        if (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter)
+                        else "gaussian"
                     ),
                     relion_firstiter_winner_take_all=(
                         relion_firstiter_cc_this_iter or first_iter_hard_reconstruction_this_iter
@@ -2745,6 +2786,20 @@ def _run_relion_iteration_loop(
                 Ft_y_0, Ft_ctf_0 = Ft_y_k, Ft_ctf_k
             else:
                 Ft_y_1, Ft_ctf_1 = Ft_y_k, Ft_ctf_k
+
+            _parity_dump.collect_e_step(
+                half=k,
+                em_stats=em_stats_k,
+                hard_assignment=ha_k,
+                coarse_hard_assignment=coarse_ha[k],
+                noise_stats=noise_stats_per_half[k],
+                Ft_y=Ft_y_k,
+                Ft_ctf=Ft_ctf_k,
+                pose_rotation_eulers=pose_rotation_eulers[k],
+                best_pose_rotation_eulers=best_pose_rotation_eulers[k],
+                best_pose_translations=best_pose_translations[k],
+                translation_search_base=translation_search_bases[k] if "translation_search_bases" in dir() else None,
+            )
 
         # --- RELION's --low_resol_join_halves: average the low-resolution
         # shells of the per-half Fourier accumulators between the two halves
@@ -3115,8 +3170,8 @@ def _run_relion_iteration_loop(
                     best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
             new_iter_best_rotations[k] = np.asarray(best_rots, dtype=np.float32)
             new_iter_best_rotation_eulers[k] = np.asarray(best_eulers, dtype=np.float32)
-            # When image_pre_shifts is used, best_trans is RELATIVE to the
-            # rounded pre-shift base. Store the total (absolute) translation
+            # When image_pre_shifts is used, best_trans is relative to the
+            # previous absolute pre-shift base. Store the total (absolute) translation
             # so the next iteration pre-centers by the updated offset.
             total_trans = np.asarray(best_trans, dtype=np.float32)
             if translation_search_bases[k] is not None:
@@ -3378,6 +3433,36 @@ def _run_relion_iteration_loop(
         acc_rot_trajectory.append(float(iter_acc_rot) if iter_acc_rot is not None else np.nan)
         smallest_change_angles_trajectory.append(float(state.current_changes_optimal_orientations))
         smallest_change_offsets_trajectory.append(float(state.current_changes_optimal_offsets_angstrom))
+
+        if _parity_dump.is_active():
+            try:
+                _parity_dump.dump_iteration(
+                    iteration=iteration,
+                    init_relion_iteration=int(init_relion_iteration),
+                    current_size=int(cs),
+                    sigma_offset=float(current_sigma_offset_angstrom),
+                    translation_step=float(state.translation_step),
+                    translation_range=float(state.translation_range),
+                    random_perturbation=float(random_perturbation) if random_perturbation is not None else 0.0,
+                    random_perturbation_instance=int(state.perturbation_instance)
+                    if hasattr(state, "perturbation_instance")
+                    else 0,
+                    tau2_fudge=float(tau2_fudge),
+                    voxel_size=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
+                    grid_size=int(grid_size),
+                    volume_shape=tuple(volume_shape),
+                    ave_pmax=float(ave_pmax),
+                    fsc=np.asarray(fsc, dtype=np.float64),
+                    sigma2_noise=np.asarray(noise_variance, dtype=np.float64)
+                    if "noise_variance" in dir()
+                    else np.zeros(0),
+                    means=means,
+                    unreg_means=unreg_means,
+                    new_iter_best_rotation_eulers=new_iter_best_rotation_eulers,
+                    new_iter_best_translations=new_iter_best_translations,
+                )
+            except Exception as exc:
+                logger.warning("parity_dump.dump_iteration failed at iter %d: %s", iteration, exc)
 
         # Save assignments for next iteration's change tracking.
         # Use coarse_ha (indexed into effective_rotations/current_rotations)
