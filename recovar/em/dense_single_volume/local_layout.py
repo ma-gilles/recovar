@@ -177,7 +177,6 @@ def _build_factorized_local_entries(
     rotation_log_priors_flat = np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
     return offsets, counts, rotation_ids_flat, rotation_log_priors_flat
 
-
 def build_local_hypothesis_layout(
     prior_rotations: np.ndarray,
     rotation_grid_rotations: np.ndarray,
@@ -234,9 +233,7 @@ def build_local_hypothesis_layout(
 
         rotation_ids_flat = np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
         rotation_log_priors_flat = np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
-
     rotations_flat = rotation_grid_rotations[rotation_ids_flat] if rotation_ids_flat.size else np.zeros((0, 3, 3), dtype=np.float32)
-
     reference_translations = (
         np.asarray(translation_prior_reference_translations, dtype=np.float32)
         if translation_prior_reference_translations is not None

@@ -192,6 +192,7 @@ def _maybe_write_debug_score_dump(
     experiment_dataset,
     local_layout,
     bucket,
+    image_pre_shifts,
     scores,
     probs,
     log_Z,
@@ -228,6 +229,7 @@ def _maybe_write_debug_score_dump(
 
     for row in target_rows:
         original_idx = int(original_image_indices[row])
+        local_idx = int(bucket.image_indices[row])
         actual_count = int(bucket.actual_rotation_counts[row])
         local_rotation_ids = np.asarray(bucket.local_rotation_ids[row, :actual_count], dtype=np.int32)
         rotation_mask = np.asarray(bucket.local_rotation_mask[row, :actual_count], dtype=bool)
@@ -250,6 +252,7 @@ def _maybe_write_debug_score_dump(
         np.savez_compressed(
             dump_path,
             selected_global_image_indices=np.array([original_idx], dtype=np.int64),
+            selected_local_image_indices=np.array([local_idx], dtype=np.int64),
             pass2_scores_raw=raw_scores[None, :, :],
             pass2_scores_total=total_scores[None, :, :],
             rotation_log_prior=rotation_log_prior[None, :],
@@ -259,6 +262,11 @@ def _maybe_write_debug_score_dump(
             local_rotation_pixel_indices=(local_rotation_ids % int(local_layout.n_pixels)).astype(np.int64),
             local_rotation_psi_indices=(local_rotation_ids // int(local_layout.n_pixels)).astype(np.int64),
             translations=np.asarray(local_layout.translation_grid, dtype=np.float32),
+            image_pre_shift=(
+                np.asarray(image_pre_shifts[local_idx], dtype=np.float32)
+                if image_pre_shifts is not None
+                else np.array([], dtype=np.float32)
+            ),
             posterior=posterior[None, :, :],
             reconstruction_sample_mask=reconstruction_sample_mask_row[None, :, :],
             reconstruction_rotation_mask=reconstruction_rotation_mask_row[None, :],
@@ -618,6 +626,7 @@ def run_local_em_exact(
             experiment_dataset=experiment_dataset,
             local_layout=local_layout,
             bucket=bucket,
+            image_pre_shifts=image_pre_shifts,
             scores=scores,
             probs=probs,
             log_Z=log_Z,
