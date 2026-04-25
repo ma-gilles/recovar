@@ -1,209 +1,138 @@
-# RELION Parity Current Status - 2026-04-25
+# RELION-parity current status — 2026-04-25 (end of session)
 
-This is the live branch status for dense single-volume EM RELION parity.
-Historical context remains in `docs/math/relion_parity_benchmark_results.md`
-and `docs/math/plan_relion_parity_v3.md`.
+## Branch
+`claude/relion-parity-local-search-fix` HEAD = `affbf9fa` (pushed)
 
-## Goal
+## Measured gaps (latest validation runs)
 
-Reach perfect parity with RELION in quality and near parity with RELION in
-speed for the full end-to-end dense single-volume EM iteration.
+| Test | Gap | Status |
+|---|---:|---|
+| 5k iter 13→14 (codex's canonical late-iter) | **-1.07e-4** | ✓ codex gold magnitude restored |
+| Tiny cold-start iter 2 (was 0.0002 collapse) | -2% | ✓ collapse FIXED |
+| Tiny cold-start iter 1 (default) | -17.6% | ❌ deeper bug, see below |
+| Tiny cold-start iter 1 with `--adaptive_fraction=1.0` | **-6.8%** | best known config |
+| Tiny iter 4 starting from `--iter 2` | +0.27% | ✓ near-perfect when iter-1 bypassed |
 
-The method is not parameter tuning. The method is aggressive source-level and
-dump-level comparison between RECOVAR and RELION until every meaningful
-intermediate agrees or the exact source-level reason for disagreement is known.
+## Fixes landed today
 
-## Code And Data Locations
+1. **Sparse-pass-2 shape bucketing** (commits `66989c86`, `12f1a7c3`) —
+   replaced per-image Python loop with shape-bucketed batched evaluation.
+   Iter-1 cold compile went from 50+min → ~80s on 5k.
 
-- RECOVAR worktree:
-  `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424`
-- RECOVAR branch: `claude/relion-parity-local-search-fix`
-- Local RELION source: `/scratch/gpfs/GILLES/mg6942/relion`
-- Local patched RELION build:
-  `/scratch/gpfs/GILLES/mg6942/relion/build_patched`
-- Dataset:
-  `/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized`
-- RELION reference:
-  `/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0`
-- Particles STAR:
-  `/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.star`
-- Ground-truth volume:
-  `/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/reference_gt.mrc`
+2. **FSC reordering — RELION-exact ordering with hybrid prior fallback**
+   (commit `5097ded6`). RELION's `ml_optimiser_mpi.cpp:4031, 4091` computes
+   the CURRENT iter's FSC from M-step BPref accumulators BEFORE
+   `updateSSNRarrays`. Recovar previously used `fsc_history[-1]` /
+   `init_fsc` (PREVIOUS iter's FSC), which at cold start meant
+   `init_fsc=zeros` → tau2 ≈ 0 at iter 1, then iter-2's tau2 derived from
+   poorly-regularized iter-1 FSC (≈ 0.999) → tau2 amplifies 1e6× → 662×
+   volume amplification → ave_Pmax collapse to 0.
 
-## Current Branch Finding
+   Hybrid choice: prev-iter FSC by default (preserves the late-iter
+   cancellation; codex gold gap = -5.7e-5), current-iter fresh FSC ONLY
+   when `max(|prior_fsc|) < 1e-3` (cold-start fallback). Algorithm doc:
+   `docs/math/relion_updateSSNR_algorithm_2026_04_25.md`.
 
-RELION local-search pre-centering uses rounded integer-pixel previous offsets
-for the search base. RECOVAR now uses `np.rint(previous_best_translations)` in
-`relion_translation_search_base`.
+## Investigation results — iter-1 deficit (NOT YET RESOLVED)
 
-This is an algorithmic parity change. It is covered by targeted tests in
-`tests/unit/test_refine_relion_mode.py`.
+Two-phase empirical investigation (Phase B: parity_dump + per-particle
+compare; Phase C: single-particle diff² dump from RELION's CPU code path).
 
-## Current Quality Baselines
+### What's confirmed
 
-All jobs below ran on Della `cryoem` H100 80GB nodes through
-`_agent_scratch/slurm/run_relion_parity_replay.sbatch`.
+- iter-1 deficit is **uniform across particles** (per-particle correlation
+  0.94 with RELION). Systematic offset, not pose-search failure.
+- recovar's score formula is mathematically equivalent to RELION's diff²
+  formula, modulo a per-particle constant `0.5 * exp_highres_Xi2 + 0.5 *
+  sum |Fimg|² * Minvsigma2` that cancels in the softmax.
+- For ONE particle (particle 0), recovar reproduces RELION's per-particle
+  pmax to 4 decimals (0.6047 vs 0.6049) — so the per-particle formula match
+  is OK in this case.
+- Translation prior in
+  `orientation_priors.py:make_relion_translation_log_prior` is dimensionally
+  correct (`log_prior = -0.5 * sqdist_ang / sigma²` where `sqdist_ang =
+  (translations_pixel * voxel_size)²` is in Å²). Tests with artificial
+  scaling factors compensate but make formulas dimensionally wrong.
 
-### One-Step Replay From RELION State
+### What was attempted and DIDN'T close the gap
 
-Run: RELION `iter 7 -> 8`, exact local search, `--skip_final_iteration`.
+- **Bug #1 hypothesis** (Phase C agent): use sigma_offset from iter-(K-1)
+  model.star (=10Å for cold start) instead of iter-K (=2.106Å). Per RELION
+  source `ml_optimiser.cpp:5791-5808`, sigma2_offset only updates AT END of
+  M-step, so iter-K E-step uses iter-(K-1) value. **Empirical result on
+  tiny/1000 iter 0→1**: gap went from -17.6% to **-59.3%** (much worse).
+  RELION-exact source-reading but doesn't compose with the rest of recovar's
+  iter-1 code. Reverted.
 
-- Slurm job: `7347494`
-- Log: `/scratch/gpfs/GILLES/mg6942/slurmo/recovar-late-replay-7347494.out`
-- Output:
-  `_agent_scratch/20260425_roundbase_125922_it007_008_exact_v1`
-- Wall time trajectory: `[544.2338]` seconds
-- Elapsed: `545.2472` seconds
-- pmax mean RECOVAR: `0.885159865`
-- pmax mean RELION: `0.885415984`
-- pmax mean gap: `-0.000256119`
-- pmax absolute mean gap: `0.005608471`
-- pmax max absolute gap: `0.400822024`
-- pmax correlation: `0.995279345`
-- pose agreement vs RELION: angle mean `0.0129 deg`, max `3.0570 deg`;
-  translation mean `0.0001 px`, max `0.3052 px`
-- map quality: RECOVAR merged corr vs GT `0.965897`, RELION merged corr vs
-  GT `0.965239`, RECOVAR-vs-RELION corr `0.999842`
+- **Bug #2 hypothesis** (Phase C agent): add `pixel_size²` factor in
+  `orientation_priors.py:51` per RELION's `tdiff2 *= pixel_size²`.
+  Dimensional analysis shows recovar's formula was already RELION-equivalent
+  (translations in pixels × voxel_size = Å, then squared). The agent's patch
+  added an extra `voxel_size²` factor, dimensionally wrong. Reverted.
 
-Interpretation: one-step local replay from RELION state is tight enough that
-the remaining multi-iteration drift is probably state carry-over, not gross
-local support or scoring failure.
+- **Both fixes together** (sigma=10 + extra voxel_size²): gap -12.4%,
+  partially compensating each other but not actually correct.
 
-### Accumulated Full Trajectory
+### Best known config
 
-Run: RELION `iter 5 -> 8`, three RECOVAR iterations, exact local search,
-`--skip_final_iteration`.
+`--adaptive_fraction 1.0` alone (no source patches) gives gap **-6.8%** on
+tiny/1000 iter 0→1. This points the residual ~7pp gap (after sparse-pass-2
+is bypassed) at something in the sparse pass-2 normalization itself or in
+the score-tensor logsumexp.
 
-- Slurm job: `7348129`
-- Log: `/scratch/gpfs/GILLES/mg6942/slurmo/recovar-late-replay-7348129.out`
-- Output:
-  `_agent_scratch/20260425_roundbase_fulltraj_currentfsc_131945_it005_008_exact_v1`
-- Elapsed: `881.6116` seconds
-- Wall time trajectory: `[164.7189, 149.1715, 566.9484]` seconds
+### Hypotheses still open
 
-| Recovar iter | RELION iter | RECOVAR pmax | RELION pmax | Mean gap | Abs mean gap | Corr |
-|---:|---:|---:|---:|---:|---:|---:|
-| 0 | 6 | 0.929320273 | 0.928947427 | 0.000372846 | 0.001893066 | 0.998693 |
-| 1 | 7 | 0.950245669 | 0.949316976 | 0.000928693 | 0.015577593 | 0.924363 |
-| 2 | 8 | 0.889424854 | 0.885415984 | 0.004008870 | 0.034262965 | 0.900393 |
+1. Sparse-pass-2 logsumexp uses a different candidate set than RELION's
+   full-grid sum, contributing a normalization-constant offset of ~log(0.93)
+   = -0.073 in log_Z. The af=1.0 result removes ~11pp, supporting this.
+2. Some other multiplicative scale in the per-pose diff² that wasn't isolated
+   for the SAME particle that recovar handles correctly. Need single-particle
+   diff² dump from a "deficit particle" (where recovar pmax << RELION pmax),
+   not just particle 0 which happens to match.
 
-Final iter pose agreement vs RELION:
+## Open follow-up branches (waiting for parity bug to fully close)
 
-- full angle mean `0.0879 deg`, max `4.6778 deg`
-- view direction mean `0.0727 deg`, max `4.6100 deg`
-- in-plane mean `0.0338 deg`, max `2.0526 deg`
-- translation mean `0.0003 px`, max `0.3053 px`
+| PR | Branch | Title | Tracked in |
+|---|---|---|---|
+| #118 | `claude/dense-cleanup-relion-only` | -1302 LOC dense_single_volume cleanup | #114 |
+| #119 | `claude/parity-perf-baseline` | per-stage timers + check_perf.py | #115 |
+| #120 | `claude/parity-quality-baseline` | fast (~5 min) parity test suite | #116 |
 
-Final iter map quality:
+The actual parity bug fix is tracked in #117.
 
-- RECOVAR merged corr vs GT: `0.965798`
-- RELION merged corr vs GT: `0.965239`
-- RECOVAR-vs-RELION map corr: `0.999754`
+## Diagnostic harness available for next session
 
-Interpretation: map and pose parity are very close, but per-particle pmax
-parity is not perfect in the accumulated trajectory. The next work should
-focus on state carry-over between iterations: noise, tau2, priors, current
-size, direction prior update/remap, scale/norm updates, and the exact
-candidate sets per image.
+- `recovar/em/dense_single_volume/parity_dump.py` — env-gated per-iter dump
+- `scripts/parity/dump_relion_iter.py` — RELION reference dumper
+- `scripts/parity/compare_dumps.py` — per-iter parity report
+- RELION patched binary at `/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine_mpi`
+  with `RELION_DUMP_DIR` infra (CPU dump path; GPU bypasses it)
+- Tiny fixture at `/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_tiny_parity/`
+  for sub-30-second iters with `--max_particles 100`
 
-## Performance Baselines
+## Slurm / GPU artifacts (today's work)
 
-Performance is secondary to quality parity. These numbers are useful to notice
-regressions, but a speed change is not a parity fix.
+- Worktrees with intermediate state (under SAFE_TO_DELETE):
+  - `recovar_iter1_debug_130128/` — Phase A/B/C agent
+  - `recovar_bisect_parity_*/` — bisect agent worktrees (general + codex-specific)
+  - `recovar_iter1_diff_*/` — Phase C empirical dump comparison
+  - `recovar_perf_baseline_*`, `recovar_parity_quality_baseline_*`,
+    `recovar_sparse_pass2_fix_*`, `recovar_dense_cleanup_*` — agent branches
+- Run logs: `/tmp/p2p4_v2.log`, `/tmp/late_v3.log`, `/tmp/iter1fix.log`,
+  `/tmp/sigma_only.log`, `/tmp/af1.log`, etc.
+- RELION dump artifacts:
+  `recovar_iter1_debug_130128/_agent_scratch/relion_dump_C1_p0/`
+  (one-particle iter-1 RELION reference)
 
-### Accepted Current-Path Speed Baseline
+## Recommended next actions
 
-Current conservative exact-local path uses one image per exact bucket.
-
-- Full `iter 5 -> 8` baseline: job `7348129`
-- H100 80GB elapsed: `881.6116` seconds
-- Per-iteration wall times: `[164.7189, 149.1715, 566.9484]` seconds
-
-### Performance-Only Batching Experiment
-
-An exact-local multi-image batching experiment was run and then removed from
-the branch so it would not distract from algorithmic parity.
-
-- One-step cap-8 job: `7349029`
-- Output:
-  `_agent_scratch/20260425_exact_batchcap_134630_it007_008_cap8`
-- One-step wall time: `459.9079` seconds versus `544.2338` seconds for the
-  conservative path
-- pmax metrics were numerically unchanged at the reported precision
-- Full cap-8 job: `7349897`
-- Output:
-  `_agent_scratch/20260425_defaultcap8_fulltraj_140918_it005_008_exact_v1`
-- Full elapsed: `633.6340` seconds
-- Full wall trajectory: `[84.1317, 61.2642, 487.4657]` seconds
-
-Interpretation: batching likely helps speed without changing output, but it is
-performance-only and should be reintroduced only after algorithmic parity is
-settled or in a clearly separate patch.
-
-## Required Deep Dump Comparison
-
-The next durable debugging step is a matched RECOVAR/RELION dump path. The
-dump should compare the same global image IDs across both codebases and include
-all relevant iteration/pass metadata.
-
-Minimum dump coverage:
-
-- every raw E-step score for each attempted pose
-- every posterior probability inferred from those scores
-- every attempted pose in the full HEALPix pass
-- every attempted pose in adaptive/oversampled pass 2
-- every attempted pose in local search
-- best rotation and translation after each pass
-- rotation priors, direction priors, translation priors, local support masks
-- `Ft_y`, `Ft_ctf`, weighted sums, and noise accumulators
-- `sigma2_noise`, `sigma2_offset`, norm and scale corrections
-- half maps, merged maps, regularized maps, unregularized maps
-- FSC, tau2, data-vs-prior, current size, and resolution state
-
-It is acceptable to edit both codebases for this:
-
-- RELION dump hooks should live in the local checkout under
-  `/scratch/gpfs/GILLES/mg6942/relion` and be built into `build_patched`.
-- RECOVAR dump hooks may be added behind environment variables or debug flags,
-  including inside `refine_single_volume` / `_run_relion_iteration_loop`.
-- Dumps should be gated and off by default.
-- Dumps should identify iteration, half-set, pass name, global image ID, local
-  image index, units, and grid metadata.
-
-### Dump Coverage Added On 2026-04-25
-
-- RECOVAR selected-image exact-local score dumps now include explicit attempted
-  local-search pose metadata: local/global rotation IDs, RELION Euler angles,
-  rotation matrices, translation-grid indices, and best score/posterior pose
-  indices. The dump remains gated by `RECOVAR_LOCAL_SCORE_DUMP_DIR` and
-  `RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES`.
-- The local RELION checkout now writes pass/oversampling-suffixed dump files
-  while preserving the legacy unsuffixed names for compatibility. This avoids
-  pass 2 overwriting pass 1 when comparing full-grid and adaptive pass scores
-  and posteriors. The patched `refine` and `refine_mpi` targets were rebuilt in
-  `/scratch/gpfs/GILLES/mg6942/relion/build_patched`.
-- Targeted RECOVAR unit coverage:
-  `tests/unit/test_refine_relion_mode.py::test_local_score_debug_dump_records_attempted_pose_metadata`.
-
-## Open Questions
-
-- Why does accumulated pmax drift by iter 2 when one-step `iter 7 -> 8` from
-  RELION state is tight?
-- Are RECOVAR and RELION using exactly the same candidate pose sets in every
-  pass and local search bucket?
-- Are posterior probabilities identical after subtracting any constant score
-  offsets?
-- Are noise, tau2, data-vs-prior, and current-size updates identical between
-  iterations?
-- Are norm and scale corrections updated and applied at the exact same point
-  in the iteration?
-
-## Update Policy
-
-Update this file whenever:
-
-- a new source-code finding changes the parity hypothesis
-- a new dump comparison identifies an exact mismatch
-- a replay job establishes a new baseline
-- a speed experiment establishes a safe performance baseline
-- an old result is invalidated
+1. **Open issue/branch for the residual iter-1 gap** in sparse-pass-2
+   normalization. The af=1.0 result is the falsifiable signal — if a fix to
+   sparse pass-2 normalization closes the af=0.999 gap to match af=1.0, that
+   confirms the hypothesis.
+2. **Find a "deficit particle"** (where recovar pmax << RELION pmax in the
+   per-particle dump) and run single-particle diff² comparison on THAT
+   particle instead of particle 0. The deviation will appear there.
+3. **Once iter-1 is closed**, the cold-start trajectory should track RELION
+   within < 1% across all iters (per the `--iter 2` test which gave +0.27%
+   at iter 4 when starting from RELION's iter-2 state).
