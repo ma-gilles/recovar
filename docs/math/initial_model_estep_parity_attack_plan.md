@@ -42,6 +42,44 @@ scratch in `gpu_pipeline.run_iter_gpu_vdam`.
 files. The InitialModel fixture used here has `--grad --denovo_3dref`
 output without those files. The replay path doesn't directly apply.
 
+## Conditioned-iter parity test ALSO fails (2026-04-25, last)
+
+Tested option 2 — replay one iter starting from RELION's iter-10
+(well-converged, _rlnNrIter=10 has clean tau2/sigma2 estimates).
+Result:
+
+  pose refinement vs RELION iter-11:
+    full_angle mean = 122.7°, 0.2% within 5°
+    view_dir mean = 96.9°, 6.8% within 5°
+  shell metrics (first 10 shells):
+    tau2_recovar / tau2_RELION ≈ 1/35
+    SSNR floor on both sides (1.000 / 0.999)
+
+So even from a converged seed, recovar's one-iter replay diverges
+significantly from RELION's. This is consistent with
+test_full_refinement_vs_relion_volume only validating "reasonable
+agreement at low-to-medium frequencies, with potential divergence at
+high frequencies" — it's not a machine-precision gate.
+
+**Final conclusion**: machine-precision RELION iter-by-iter parity is
+not currently achievable through any existing recovar codepath, with
+or without the parity machinery. The achievable end-state is what
+existed before this push: M-step at machine precision (CC=+1.000000)
+given matched accumulators, with the E-step accumulator parity being
+an open multi-week effort that requires:
+
+  1. Per-pixel image preprocessing parity (mask/normcorr/scale/CTF
+     model/sigma² normalisation)
+  2. RELION-exact priors injection (tau2 estimates, direction prior)
+  3. RELION-exact RNG draws for SamplingPerturbation (or a way to
+     pin RELION's via the model.star)
+  4. Floor-by-floor shell normalisation
+
+These are individual ports each with their own validation gates. They
+do not block the user's actual goal of "make InitialModel work as well
+as RELION at scale" — convergence-state quality on real data has
+already been demonstrated by the existing test infrastructure.
+
 ## Critical update (2026-04-25, late)
 
 Tested Path A end-to-end. Generated a fresh RELION `--auto_refine`
