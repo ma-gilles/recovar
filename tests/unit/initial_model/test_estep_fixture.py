@@ -239,8 +239,11 @@ def test_estep_bpref_forward_parity():
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.utils.helpers import load_relion_volume
 
-    if not jax.devices("gpu"):
-        pytest.skip("No GPU available")
+    try:
+        if not jax.devices("gpu"):
+            pytest.skip("No GPU available")
+    except RuntimeError:
+        pytest.skip("JAX has no GPU backend (CPU-only environment)")
 
     ds = load_dataset(str(PARTICLES_STAR), lazy=False)
     ori = int(ds.grid_size)
