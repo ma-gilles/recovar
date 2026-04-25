@@ -42,6 +42,106 @@ parity gaps are tracked in
 whenever a new replay result, source-code finding, or dump comparison changes
 the state of the investigation.
 
+## Recent Fixes & Active Parity Gaps (updated 2026-04-25)
+
+### Fast diagnostic harness (use these for every parity session)
+
+- **`recovar/em/dense_single_volume/parity_dump.py`** — env-gated per-iter
+  dump. Set `RECOVAR_PARITY_DUMP_DIR=<path>` and the iteration loop writes
+  one `iter_NNN.npz` per RELION iter index containing per-iter metrics
+  (`ave_pmax`, `current_size`, `sigma_offset`, `random_perturbation`,
+  `fsc`, `sigma2_noise`), per-half (`max_posterior`, `hard_assignment`,
+  `coarse_hard_assignment`, `log_evidence`, `best_log_score`, `wsum_*`,
+  `Ft_y_total/max/size`, `Ft_ctf_total/max/size`, `mean_real_ds`,
+  `unreg_mean_real_ds`, `best_eulers_total`, `best_translations_total`),
+  plus per-stage timings (`wall_time_s`, `stage_seconds_e_step`, etc.)
+  when `start_iteration` / `mark_stage` are wired. Zero overhead when
+  env unset.
+- **`scripts/parity/dump_relion_iter.py`** — dump RELION's reference
+  `run_itNNN_*.star` + half maps into the SAME schema for direct
+  comparison.
+- **`scripts/parity/compare_dumps.py`** — per-iter parity report
+  (`ave_Pmax` gap, `vol_corr`, `sigma_offset` gap, `sigma2_noise`
+  ratios, per-particle pose distance, first-divergence-iter assessment).
+
+### Tiny fixture for FAST debug
+
+`/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_tiny_parity/`:
+1k particles, 64³ box, 16 RELION iters at `relion_ref_os0/`. Most parity
+microtests should use this + `--max_particles 100` for sub-30-second iters.
+**Do not use the 5k/128 fixture for iterative debugging** — the per-image
+sparse-pass-2 path makes iter-1 a 50-min cold compile there.
+
+### Sparse-pass-2 perf trap
+
+`compute_pass2_stats_sparse` previously had a per-image Python for-loop
+calling `run_em(image_batch_size=1, …)`, causing 5000 separate JIT
+compiles per iter on the 5k fixture. Fix landed in commits `66989c86`
++ `12f1a7c3`: shape-bucketed batching via
+`helpers/sparse_pass2_bucketed.py`. **If you see `[NOISE-DIAG] sumw=1`
+per batch in logs, the bucketed path didn't activate** — check the
+dispatch in `helpers/oversampling.py:compute_pass2_stats_sparse`.
+
+### FSC timing fix (commit `5097ded6`)
+
+RELION computes the CURRENT iter's FSC from M-step BPref accumulators
+BEFORE `updateSSNRarrays` (`ml_optimiser_mpi.cpp:4031, 4091`;
+`backprojector.cpp:1044`). Recovar previously used the PREVIOUS iter's
+FSC (`fsc_history[-1]` or `init_fsc`), which at cold start meant
+`init_fsc=zeros` → tau2 ≈ 0 at iter 1, then iter-2's tau2 derived from
+a poorly-regularized iter-1 FSC (≈0.999) → tau2 amplifies 1e6× → 662×
+volume amplification → ave_Pmax collapse to 0.
+
+Current code (`iteration_loop.py:2845-2914`) uses **hybrid FSC choice**:
+- prev-iter FSC by default (preserves the documented late-iter parity
+  cancellation; codex gold gap = -5.7e-5 on 5k iter 13→14)
+- current-iter fresh FSC ONLY when `max(|prior_fsc|) < 1e-3`
+  (cold-start fallback for `init_fsc=zeros`)
+
+Algorithm doc at
+`docs/math/relion_updateSSNR_algorithm_2026_04_25.md`.
+
+### `adaptive_fraction=1.0` trick
+
+Set `--adaptive_fraction 1.0` to disable sparse pass-2 significance
+pruning and route through the full-grid `else` branch in
+`_run_relion_iteration_loop`. Useful for isolating sparse-vs-dense
+normalization differences during E-step diffs. On the tiny fixture this
+moved iter-1 ave_pmax from 0.20 → 0.23 (closer to RELION's 0.24),
+indicating ~11pp of the iter-1 gap lives in the sparse-pass-2 logsumexp
+normalization.
+
+### Active known gaps (as of 2026-04-25 commit `5097ded6`)
+
+| Test | Gap | Status |
+|---|---:|---|
+| 5k iter 13→14 (codex's canonical) | -1.07e-4 | ✓ matches gold magnitude |
+| Tiny cold-start iter 2 | -2% | ✓ no collapse |
+| Tiny cold-start iter 1 (default) | -17.6% | ❌ active investigation |
+| Tiny cold-start iter 1 (af=1.0) | -6.8% | ❌ residual after sparse-pass-2 fix |
+| Tiny iter 4 from `--iter 2` | +0.27% | ✓ near-perfect when iter-1 bypassed |
+
+The iter-1 deficit is **uniform across particles** (per-particle
+correlation 0.94 with RELION) — systematic algorithmic offset, not
+pose-search failure. Hypothesis under empirical test (single-particle
+`diff²` dump from both RELION patched binary + recovar): something
+multiplicative in the per-pose `diff²` array contributes the residual
+gap.
+
+### Open follow-up branches
+
+- **#118** `claude/dense-cleanup-relion-only` — drops
+  `legacy_iteration_loop.py` + dead exports (-1302 LOC)
+- **#119** `claude/parity-perf-baseline` — perf-baseline JSONs +
+  `check_perf.py` + per-stage timers
+- **#120** `claude/parity-quality-baseline` — fast (~5 min) parity
+  quality test suite
+
+All three gated on the parity bug fully closing first; rebase + merge
+sequence tracked in issues #114, #115, #116, #117.
+
+---
+
 ## RELION Volume Convention (READ THIS FIRST)
 
 recovar and RELION use different 3D coordinate frames for real-space
