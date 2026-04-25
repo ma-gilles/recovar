@@ -42,6 +42,56 @@ scratch in `gpu_pipeline.run_iter_gpu_vdam`.
 files. The InitialModel fixture used here has `--grad --denovo_3dref`
 output without those files. The replay path doesn't directly apply.
 
+## Critical update (2026-04-25, late)
+
+Tested Path A end-to-end. Generated a fresh RELION `--auto_refine`
+reference run with the same particles + the existing E-step
+instrumentation patch, then drove `refine_single_volume(mode="relion",
+perturb_replay_relion_dir=...)` for one iteration via
+`scripts/run_multi_iter_parity.py`. Result:
+
+  recovar half-1 vol vs RELION half-1 class001 iter-1: **|CC|≈0.5**
+  pose refinement vs RELION: mean angle distance **126.8°**, **0%**
+  within 5° of RELION's poses
+
+That is, the validated `refine_single_volume(mode="relion")` codepath
+gives essentially random iter-1 poses vs RELION's iter-1, even with
+all parity machinery enabled (perturbation replay, adaptive
+oversampling, firstiter_cc emulation). Same level we got with raw
+`run_em`.
+
+**Root cause**: `--firstiter_cc` at iter 1 binarizes posteriors to a
+single argmax per particle. With random iter-0 angles AND independent
+RNG draws between recovar and RELION, the per-particle argmax is
+essentially random in both pipelines — they diverge wildly even though
+both individually converge.
+
+The implication: **iter-1 from random poses is not a meaningful parity
+gate for either path.** Iter-1 BPref CC of +0.5 (and 102° argmax shift
+on per-particle posterior) is consistent with this reading.
+
+The existing `test_refinement_vs_relion_volume` integration test
+validates parity at iter-5+ (converged state) via FSC, NOT iter-1.
+
+## Revised end goal
+
+Iter-by-iter machine-precision parity from a random-pose iter-0 is
+essentially impossible. Achievable end-states:
+
+1. **Converged-state parity**: after N≥5 iters, compare final volumes
+   via FSC. Existing infrastructure already does this.
+2. **Conditioned iter parity**: starting from a known good pose
+   distribution (RELION's iter-K data.star with K≥5), replay one
+   iter and compare. The `perturb_replay_relion_dir` machinery is
+   built for this.
+3. **M-step parity (current state)**: given matched accumulators,
+   our M-step chain produces the same iter output to machine
+   precision. Already at CC=+1.000000.
+
+(2) is the right next gate: pick iter 5+ from a healthy RELION run,
+provide the iter-K-1 data.star + model.star + sampling.star to
+recovar's replay path, run one iter, compare iter-K volume.
+
 ## Right next attack (for next session)
 
 Two parallel paths:
