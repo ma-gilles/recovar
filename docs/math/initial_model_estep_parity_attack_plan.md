@@ -207,6 +207,34 @@ Branch tip `9b88f285` includes:
 Once the E-step gap is closed, `tests/unit/initial_model/test_estep_fixture.py::test_estep_bpref_forward_parity`
 asserts `cc_h0 > 0.9999` (currently soft-baseline).
 
+## M-step Fimg parity is BIT-EXACT (2026-04-25 final-final)
+
+Direct per-pixel comparison of `process_images(apply_image_mask=False)`
+against RELION's exp_Fimg_nomask (the input RELION uses for BPref M-step
+accumulation):
+
+  CC = +1.000000   amplitude ratio = 1.0000
+
+So recovar's M-step preprocessing IS bit-exact RELION. The earlier
++0.997 result was masked-vs-masked (E-step scoring path).
+
+Score formula audit: recovar's `_e_step_block_scores` is structurally
+RELION (cross + norms with CTF²/sigma² weighting; `half_spectrum_scoring=True`
+sets half_weights=1 everywhere matching RELION's no-Hermitian-double
+convention). The remaining BPref CC=+0.58 ceiling is due to the 0.003
+residual on the MASKED Fimg path (E-step scoring input) being amplified
+by per-pixel Minvsigma2 ~10⁴ × ~10³ pixels = score residuals per cell
+of 10⁴-10⁵. With those amplified residuals, exp(score) shifts the
+per-particle argmax by 100°+, scattering the BPref accumulator.
+
+Closing this requires either:
+  1. Tightening masked Fimg from +0.997 to bit-exact (mask edge form +
+     bg-statistics formula) — multi-day work
+  2. Accepting that iter-by-iter argmax-divergence parity is structurally
+     different from "InitialModel works as well as RELION at scale"
+     (a convergence-state metric, already supported by existing
+     test_refinement_vs_relion_volume infrastructure)
+
 ## Manual RELION-style preprocessing closes 80% of the Fimg gap (2026-04-25 final)
 
 Replicating RELION's `normalize.cpp` flow manually (bg-subtract using
