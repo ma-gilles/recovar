@@ -1,5 +1,5 @@
 diff --git a/src/ml_optimiser.cpp b/src/ml_optimiser.cpp
-index fb33d84..8e4d5e4 100644
+index fb33d84..9960d02 100644
 --- a/src/ml_optimiser.cpp
 +++ b/src/ml_optimiser.cpp
 @@ -73,6 +73,148 @@
@@ -298,10 +298,75 @@ index fb33d84..8e4d5e4 100644
          }
      }
  
-@@ -4666,6 +4931,125 @@ void MlOptimiser::expectationOneParticle(long int part_id_sorted, int thread_id)
+@@ -4666,6 +4931,190 @@ void MlOptimiser::expectationOneParticle(long int part_id_sorted, int thread_id)
          #pragma omp barrier
  #endif
  
++        // ---- RECOVAR DEBUG ESTEP DUMP: preprocessed Fimg/Fctf/Minvsigma2 per particle ----
++        // Captured BEFORE storeWeightedSums runs, after getFourierTransformsAndCtfs +
++        // precalculateShiftedImagesCtfsAndInvSigma2s. Lets us bypass our preprocessing
++        // and inject RELION-exact preprocessed arrays into our scorer.
++        {
++            const char* estep_dir = std::getenv("RECOVAR_DEBUG_ESTEP_DIR");
++            if (estep_dir != NULL && iter == 1 && part_id < 3) {
++                char p[1024]; FILE* f;
++                // Dump first translation's shifted Fimg per image (one optics group)
++                if (!exp_local_Fimgs_shifted.empty() && !exp_local_Fimgs_shifted[0].empty()) {
++                    const auto& Fimg_t0 = exp_local_Fimgs_shifted[0][0];
++                    snprintf(p, sizeof(p), "%s/p%ld_local_Fimg_shifted_t0.bin", estep_dir, part_id);
++                    f = fopen(p, "wb");
++                    if (f) {
++                        long nz = ZSIZE(Fimg_t0), ny = YSIZE(Fimg_t0), nx = XSIZE(Fimg_t0);
++                        fwrite(&nz, sizeof(long), 1, f);
++                        fwrite(&ny, sizeof(long), 1, f);
++                        fwrite(&nx, sizeof(long), 1, f);
++                        fwrite(Fimg_t0.data, sizeof(Complex), nz * ny * nx, f);
++                        fclose(f);
++                    }
++                }
++                if (!exp_local_Fctf.empty()) {
++                    const auto& Fctf_l = exp_local_Fctf[0];
++                    snprintf(p, sizeof(p), "%s/p%ld_local_Fctf.bin", estep_dir, part_id);
++                    f = fopen(p, "wb");
++                    if (f) {
++                        long nz = ZSIZE(Fctf_l), ny = YSIZE(Fctf_l), nx = XSIZE(Fctf_l);
++                        fwrite(&nz, sizeof(long), 1, f);
++                        fwrite(&ny, sizeof(long), 1, f);
++                        fwrite(&nx, sizeof(long), 1, f);
++                        fwrite(Fctf_l.data, sizeof(RFLOAT), nz * ny * nx, f);
++                        fclose(f);
++                    }
++                }
++                if (MULTIDIM_SIZE(exp_local_Minvsigma2) > 0) {
++                    snprintf(p, sizeof(p), "%s/p%ld_local_Minvsigma2.bin", estep_dir, part_id);
++                    f = fopen(p, "wb");
++                    if (f) {
++                        long nz = ZSIZE(exp_local_Minvsigma2), ny = YSIZE(exp_local_Minvsigma2), nx = XSIZE(exp_local_Minvsigma2);
++                        fwrite(&nz, sizeof(long), 1, f);
++                        fwrite(&ny, sizeof(long), 1, f);
++                        fwrite(&nx, sizeof(long), 1, f);
++                        fwrite(exp_local_Minvsigma2.data, sizeof(RFLOAT), nz * ny * nx, f);
++                        fclose(f);
++                    }
++                }
++                // Also dump Fimg pre-mask + Fimg + Fctf at full storage size (these
++                // are pre-shift, post-CTF/normcorr/scale).
++                if (!exp_Fimg.empty()) {
++                    const auto& F = exp_Fimg[0];
++                    snprintf(p, sizeof(p), "%s/p%ld_Fimg.bin", estep_dir, part_id);
++                    f = fopen(p, "wb");
++                    if (f) {
++                        long nz = ZSIZE(F), ny = YSIZE(F), nx = XSIZE(F);
++                        fwrite(&nz, sizeof(long), 1, f);
++                        fwrite(&ny, sizeof(long), 1, f);
++                        fwrite(&nx, sizeof(long), 1, f);
++                        fwrite(F.data, sizeof(Complex), nz * ny * nx, f);
++                        fclose(f);
++                    }
++                }
++            }
++        }
++
 +        // ---- RECOVAR DEBUG ESTEP DUMP: per-particle posterior table + sampling ----
 +        // Captures everything needed to bit-exact reproduce iter-1 BPref accumulation
 +        // outside of RELION (Phase A of the deep-exploration parity plan).
@@ -424,7 +489,7 @@ index fb33d84..8e4d5e4 100644
          storeWeightedSums(part_id, ibody, exp_current_oversampling, metadata_offset,
                  exp_idir_min, exp_idir_max, exp_ipsi_min, exp_ipsi_max,
                  exp_itrans_min, exp_itrans_max, exp_iclass_min, exp_iclass_max,
-@@ -4995,6 +5379,89 @@ void MlOptimiser::maximization()
+@@ -4995,6 +5444,89 @@ void MlOptimiser::maximization()
                  else
                  {
                      if(do_grad) {
@@ -514,7 +579,7 @@ index fb33d84..8e4d5e4 100644
                          (wsum_model.BPref[iclass]).reconstructGrad(
                                  mymodel.Iref[iclass],
                                  mymodel.fsc_halves_class[iclass],
-@@ -5003,6 +5470,30 @@ void MlOptimiser::maximization()
+@@ -5003,6 +5535,30 @@ void MlOptimiser::maximization()
                                  mymodel.getPixelFromResolution(1./grad_min_resol),
                                  do_split_random_halves,
                                  (iclass == 0));
@@ -545,7 +610,7 @@ index fb33d84..8e4d5e4 100644
                      }
                      else
                          (wsum_model.BPref[iclass]).reconstruct(mymodel.Iref[iclass],
-@@ -5380,7 +5871,56 @@ int MlOptimiser::maximizationGradientParameters() {
+@@ -5380,7 +5936,56 @@ int MlOptimiser::maximizationGradientParameters() {
          {
              if ((wsum_model.BPref[iclass].weight).sum() > XMIPP_EQUAL_ACCURACY)
              {
@@ -602,7 +667,7 @@ index fb33d84..8e4d5e4 100644
                  wsum_model.BPref[iclass].getFristMoment(
                          mymodel.Igrad1[iclass]);
  
-@@ -5410,6 +5950,33 @@ int MlOptimiser::maximizationGradientParameters() {
+@@ -5410,6 +6015,33 @@ int MlOptimiser::maximizationGradientParameters() {
                              mymodel.Igrad2[iclass]);
                  }
  
@@ -636,7 +701,7 @@ index fb33d84..8e4d5e4 100644
                  RFLOAT avg_grad(0);
                  for (unsigned i = 0; i < wsum_model.BPref[iclass].data.nzyxdim; i++)
                      avg_grad += norm(wsum_model.BPref[iclass].data.data[i]);
-@@ -6878,6 +7445,21 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
+@@ -6878,6 +7510,21 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
                      if (ires > 0 && ires_remapped < XSIZE(mymodel.sigma2_noise[optics_group]))
                          DIRECT_MULTIDIM_ELEM(exp_local_Minvsigma2, n) = 1. / (sigma2_fudge * DIRECT_A1D_ELEM(mymodel.sigma2_noise[optics_group], ires_remapped));
                  }
@@ -658,7 +723,7 @@ index fb33d84..8e4d5e4 100644
              }
  
          }
-@@ -7060,6 +7642,18 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
+@@ -7060,6 +7707,18 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
              }
          }
      }
@@ -677,7 +742,7 @@ index fb33d84..8e4d5e4 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -7299,6 +7893,19 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
+@@ -7299,6 +7958,19 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
                                      }
                                  }
  
@@ -697,7 +762,7 @@ index fb33d84..8e4d5e4 100644
                                  long int ihidden = iorientclass * exp_nr_trans;
                                  for (long int itrans = exp_itrans_min; itrans <= exp_itrans_max; itrans++, ihidden++)
                                  {
-@@ -7691,6 +8298,22 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
+@@ -7691,6 +8363,22 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
          } // end if mymodel.pdf_class[iclass] > 0.
      } // end loop iclass
  
@@ -720,7 +785,7 @@ index fb33d84..8e4d5e4 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -8228,6 +8851,40 @@ void MlOptimiser::convertAllSquaredDifferencesToWeights(long int part_id, int ib
+@@ -8228,6 +8916,40 @@ void MlOptimiser::convertAllSquaredDifferencesToWeights(long int part_id, int ib
      }
      exp_significant_weight = my_significant_weight;
  
@@ -761,7 +826,7 @@ index fb33d84..8e4d5e4 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -9064,6 +9721,20 @@ void MlOptimiser::storeWeightedSums(long int part_id, int ibody,
+@@ -9064,6 +9786,20 @@ void MlOptimiser::storeWeightedSums(long int part_id, int ibody,
      // Also store sum of Pmax
      thr_sum_Pmax += DIRECT_A2D_ELEM(exp_metadata, metadata_offset, METADATA_PMAX);
  

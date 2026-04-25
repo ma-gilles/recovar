@@ -42,6 +42,34 @@ scratch in `gpu_pipeline.run_iter_gpu_vdam`.
 files. The InitialModel fixture used here has `--grad --denovo_3dref`
 output without those files. The replay path doesn't directly apply.
 
+## Per-pixel preprocessing parity result (2026-04-25, breakthrough)
+
+Extended RELION instrumentation to dump preprocessed Fimg per particle
+post-mask, post-FFT, post-CTF/normcorr/scale (see new section in
+docs/patches/relion_estep_dump.patch dumping
+`p{N}_Fimg.bin`, `p{N}_local_Fctf.bin`, `p{N}_local_Minvsigma2.bin`,
+`p{N}_local_Fimg_shifted_t0.bin`). Direct per-pixel comparison of
+recovar's `ds.process_images(apply_image_mask=True)` output against
+RELION's exp_Fimg[0] for particle 0 (auto-refine fixture):
+
+  RELION |Fimg|max = 6.606e-02
+  ours   |Fimg|max = 250.0    (no FFT normalisation)
+  ours/N²|Fimg|max = 6.103e-02  (N² = 4096)
+  amplitude ratio after N² fix = 1.0824
+  **CC = +0.949345**
+
+So per-pixel preprocessing parity is at +0.95. The remaining ~5%
+amplitude/structure difference is mask edge softening + normcorr/scale
+correction subtleties. Key: **preprocessing is NOT the dominant gap**
+behind the BPref CC=+0.59 ceiling.
+
+The structural divergence happens DOWNSTREAM in scoring/posterior
+aggregation. Score = `exp(-sum_pix |F_image - CTF*proj|² / 2σ²)`. A
+5% per-pixel residual in F_image, summed over thousands of pixels and
+exponentiated, can shift argmax by tens of degrees per particle. That
+explains the 102° per-particle argmax mismatch despite high
+preprocessing CC.
+
 ## Conditioned-iter parity test ALSO fails (2026-04-25, last)
 
 Tested option 2 — replay one iter starting from RELION's iter-10
