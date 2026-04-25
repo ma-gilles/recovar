@@ -1,5 +1,5 @@
 diff --git a/src/ml_optimiser.cpp b/src/ml_optimiser.cpp
-index fb33d84..9b8a84f 100644
+index fb33d84..8e4d5e4 100644
 --- a/src/ml_optimiser.cpp
 +++ b/src/ml_optimiser.cpp
 @@ -73,6 +73,148 @@
@@ -298,7 +298,7 @@ index fb33d84..9b8a84f 100644
          }
      }
  
-@@ -4666,6 +4931,99 @@ void MlOptimiser::expectationOneParticle(long int part_id_sorted, int thread_id)
+@@ -4666,6 +4931,125 @@ void MlOptimiser::expectationOneParticle(long int part_id_sorted, int thread_id)
          #pragma omp barrier
  #endif
  
@@ -346,11 +346,18 @@ index fb33d84..9b8a84f 100644
 +                // by replaying the same path storeWeightedSums uses.
 +                snprintf(p, sizeof(p), "%s/p%ld_oversampled_rotations.bin", estep_dir, part_id);
 +                f = fopen(p, "wb");
++                FILE* fa = NULL;
++                {
++                    char pa[1024];
++                    snprintf(pa, sizeof(pa), "%s/p%ld_oversampled_eulers.bin", estep_dir, part_id);
++                    fa = fopen(pa, "wb");
++                }
 +                if (f) {
 +                    long n_orient = xnr_dir * xnr_psi;
 +                    long n_per = xnr_orot;
 +                    long header[3] = { n_orient, n_per, 9 };
 +                    fwrite(header, sizeof(long), 3, f);
++                    if (fa) { long h2[3] = { n_orient, n_per, 3 }; fwrite(h2, sizeof(long), 3, fa); }
 +                    std::vector<RFLOAT> ovr_rot, ovr_tilt, ovr_psi;
 +                    for (long idir = 0; idir < xnr_dir; idir++) {
 +                        for (long ipsi = 0; ipsi < xnr_psi; ipsi++) {
@@ -366,10 +373,29 @@ index fb33d84..9b8a84f 100644
 +                                    for (int cc = 0; cc < 3; cc++)
 +                                        row[rr*3+cc] = (double)MAT_ELEM(A, rr, cc);
 +                                fwrite(row, sizeof(double), 9, f);
++                                if (fa) {
++                                    double e[3] = { (double)ovr_rot[k], (double)ovr_tilt[k], (double)ovr_psi[k] };
++                                    fwrite(e, sizeof(double), 3, fa);
++                                }
 +                            }
 +                        }
 +                    }
 +                    fclose(f);
++                    if (fa) fclose(fa);
++                }
++                // Also dump perturbation parameters used this iter
++                {
++                    char p2[1024];
++                    snprintf(p2, sizeof(p2), "%s/p%ld_perturbation.txt", estep_dir, part_id);
++                    FILE* fp = fopen(p2, "w");
++                    if (fp) {
++                        fprintf(fp, "random_perturbation=%.12e\n", (double)sampling.random_perturbation);
++                        fprintf(fp, "perturbation_factor=%.12e\n", (double)sampling.perturbation_factor);
++                        fprintf(fp, "psi_step=%.12e\n", (double)sampling.psi_step);
++                        fprintf(fp, "offset_step=%.12e\n", (double)sampling.offset_step);
++                        fprintf(fp, "angular_sampling=%.12e\n", (double)sampling.getAngularSampling());
++                        fclose(fp);
++                    }
 +                }
 +                // Dump translations (after oversampling)
 +                snprintf(p, sizeof(p), "%s/p%ld_oversampled_translations.bin", estep_dir, part_id);
@@ -398,7 +424,7 @@ index fb33d84..9b8a84f 100644
          storeWeightedSums(part_id, ibody, exp_current_oversampling, metadata_offset,
                  exp_idir_min, exp_idir_max, exp_ipsi_min, exp_ipsi_max,
                  exp_itrans_min, exp_itrans_max, exp_iclass_min, exp_iclass_max,
-@@ -4995,6 +5353,89 @@ void MlOptimiser::maximization()
+@@ -4995,6 +5379,89 @@ void MlOptimiser::maximization()
                  else
                  {
                      if(do_grad) {
@@ -488,7 +514,7 @@ index fb33d84..9b8a84f 100644
                          (wsum_model.BPref[iclass]).reconstructGrad(
                                  mymodel.Iref[iclass],
                                  mymodel.fsc_halves_class[iclass],
-@@ -5003,6 +5444,30 @@ void MlOptimiser::maximization()
+@@ -5003,6 +5470,30 @@ void MlOptimiser::maximization()
                                  mymodel.getPixelFromResolution(1./grad_min_resol),
                                  do_split_random_halves,
                                  (iclass == 0));
@@ -519,7 +545,7 @@ index fb33d84..9b8a84f 100644
                      }
                      else
                          (wsum_model.BPref[iclass]).reconstruct(mymodel.Iref[iclass],
-@@ -5380,7 +5845,56 @@ int MlOptimiser::maximizationGradientParameters() {
+@@ -5380,7 +5871,56 @@ int MlOptimiser::maximizationGradientParameters() {
          {
              if ((wsum_model.BPref[iclass].weight).sum() > XMIPP_EQUAL_ACCURACY)
              {
@@ -576,7 +602,7 @@ index fb33d84..9b8a84f 100644
                  wsum_model.BPref[iclass].getFristMoment(
                          mymodel.Igrad1[iclass]);
  
-@@ -5410,6 +5924,33 @@ int MlOptimiser::maximizationGradientParameters() {
+@@ -5410,6 +5950,33 @@ int MlOptimiser::maximizationGradientParameters() {
                              mymodel.Igrad2[iclass]);
                  }
  
@@ -610,7 +636,7 @@ index fb33d84..9b8a84f 100644
                  RFLOAT avg_grad(0);
                  for (unsigned i = 0; i < wsum_model.BPref[iclass].data.nzyxdim; i++)
                      avg_grad += norm(wsum_model.BPref[iclass].data.data[i]);
-@@ -6878,6 +7419,21 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
+@@ -6878,6 +7445,21 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
                      if (ires > 0 && ires_remapped < XSIZE(mymodel.sigma2_noise[optics_group]))
                          DIRECT_MULTIDIM_ELEM(exp_local_Minvsigma2, n) = 1. / (sigma2_fudge * DIRECT_A1D_ELEM(mymodel.sigma2_noise[optics_group], ires_remapped));
                  }
@@ -632,7 +658,7 @@ index fb33d84..9b8a84f 100644
              }
  
          }
-@@ -7060,6 +7616,18 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
+@@ -7060,6 +7642,18 @@ void MlOptimiser::precalculateShiftedImagesCtfsAndInvSigma2s(bool do_also_unmask
              }
          }
      }
@@ -651,7 +677,7 @@ index fb33d84..9b8a84f 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -7299,6 +7867,19 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
+@@ -7299,6 +7893,19 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
                                      }
                                  }
  
@@ -671,7 +697,7 @@ index fb33d84..9b8a84f 100644
                                  long int ihidden = iorientclass * exp_nr_trans;
                                  for (long int itrans = exp_itrans_min; itrans <= exp_itrans_max; itrans++, ihidden++)
                                  {
-@@ -7691,6 +8272,22 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
+@@ -7691,6 +8298,22 @@ void MlOptimiser::getAllSquaredDifferences(long int part_id, int ibody,
          } // end if mymodel.pdf_class[iclass] > 0.
      } // end loop iclass
  
@@ -694,7 +720,7 @@ index fb33d84..9b8a84f 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -8228,6 +8825,40 @@ void MlOptimiser::convertAllSquaredDifferencesToWeights(long int part_id, int ib
+@@ -8228,6 +8851,40 @@ void MlOptimiser::convertAllSquaredDifferencesToWeights(long int part_id, int ib
      }
      exp_significant_weight = my_significant_weight;
  
@@ -735,7 +761,7 @@ index fb33d84..9b8a84f 100644
  #ifdef TIMING
      if (part_id == mydata.sorted_idx[exp_my_first_part_id])
      {
-@@ -9064,6 +9695,20 @@ void MlOptimiser::storeWeightedSums(long int part_id, int ibody,
+@@ -9064,6 +9721,20 @@ void MlOptimiser::storeWeightedSums(long int part_id, int ibody,
      // Also store sum of Pmax
      thr_sum_Pmax += DIRECT_A2D_ELEM(exp_metadata, metadata_offset, METADATA_PMAX);
  
