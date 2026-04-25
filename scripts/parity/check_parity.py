@@ -105,11 +105,22 @@ def extract_metrics(rec: dict[str, np.ndarray], rel: dict[str, np.ndarray]) -> d
         metrics["pp_hard_assign_match_lt_5deg_rate"] = _euler_angle_match_rate_lt(rec_eul, rel_eul, 5.0)
         metrics["pp_hard_assign_match_lt_1deg_rate"] = _euler_angle_match_rate_lt(rec_eul, rel_eul, 1.0)
 
-    # Volume correlation against RELION half-maps
+    # Volume correlation against RELION half-maps. Both signed and absolute
+    # metrics are reported -- recovar's volume can be negated relative to
+    # RELION's depending on whether ``invert_data`` was applied (see project
+    # memory ``project_relion_parity_negation_invert_data``). Use
+    # ``vol_corr_abs_*`` for sign-invariant baselines that hold across both
+    # conventions.
     for k in (1, 2):
         a = rec.get(f"half{k}_mean_real_ds")
         b = rel.get(f"half{k}_mean_real_ds")
-        metrics[f"vol_corr_half{k}"] = _vol_real_corr(a, b) if a is not None and b is not None else float("nan")
+        if a is None or b is None:
+            metrics[f"vol_corr_half{k}"] = float("nan")
+            metrics[f"vol_corr_abs_half{k}"] = float("nan")
+        else:
+            corr = _vol_real_corr(a, b)
+            metrics[f"vol_corr_half{k}"] = corr
+            metrics[f"vol_corr_abs_half{k}"] = float("nan") if corr != corr else abs(corr)
 
     # Sigma2_noise ratio (median across shells, recovar / RELION)
     for k in (1, 2):
