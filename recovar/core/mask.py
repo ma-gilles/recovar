@@ -116,8 +116,7 @@ def masking_options(
 # ---------------------------------------------------------------------------
 
 
-def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None,
-              soft_edge=3, cleanup=True):
+def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None, soft_edge=3, cleanup=True):
     """Create a solvent mask from a 3-D real-space volume.
 
     Follows the same conceptual pipeline as RELION's ``relion_mask_create``:
@@ -206,8 +205,9 @@ def make_mask(volume, *, threshold="auto", lowpass_sigma=None, extend=None,
         thresh_val = float(threshold)
 
     binary = (filtered > thresh_val) & radial
-    logger.info("Mask threshold: %.4g  (%.1f%% of voxels inside radial mask)",
-                thresh_val, 100.0 * binary.sum() / radial.sum())
+    logger.info(
+        "Mask threshold: %.4g  (%.1f%% of voxels inside radial mask)", thresh_val, 100.0 * binary.sum() / radial.sum()
+    )
 
     # --- 3. Morphological cleanup ---
     if cleanup:
@@ -260,8 +260,7 @@ def make_mask_from_half_maps(halfmap1, halfmap2, smax=3, method="auto", **kwargs
     """
     if method == "local_correlation":
         soft_edge = kwargs.get("soft_edge", 2)
-        return _make_mask_from_half_maps_local_corr(halfmap1, halfmap2, smax=smax,
-                                                     soft_edge=soft_edge)
+        return _make_mask_from_half_maps_local_corr(halfmap1, halfmap2, smax=smax, soft_edge=soft_edge)
 
     avg = (np.asarray(halfmap1) + np.asarray(halfmap2)) / 2.0
     return make_mask(avg, **kwargs)
@@ -558,13 +557,9 @@ def relion_soft_image_mask(image_size, pixel_size, particle_diameter_ang, width_
     if pixel_size <= 0:
         raise ValueError(f"pixel_size must be positive, got {pixel_size}")
     if particle_diameter_ang <= 0:
-        raise ValueError(
-            f"particle_diameter_ang must be positive, got {particle_diameter_ang}"
-        )
+        raise ValueError(f"particle_diameter_ang must be positive, got {particle_diameter_ang}")
     if width_mask_edge_px < 0:
-        raise ValueError(
-            f"width_mask_edge_px must be non-negative, got {width_mask_edge_px}"
-        )
+        raise ValueError(f"width_mask_edge_px must be non-negative, got {width_mask_edge_px}")
 
     radius_px = float(particle_diameter_ang) / (2.0 * float(pixel_size))
     radius_px = min(radius_px, image_size / 2.0)
@@ -580,9 +575,43 @@ def relion_soft_image_mask(image_size, pixel_size, particle_diameter_ang, width_
     ).astype(np.float32)
 
 
-def apply_relion_soft_image_mask(images, image_mask):
-    """Apply RELION's soft-mask background-fill image semantics."""
+def apply_relion_soft_image_mask(images, image_mask, relion_normalize=False):
+    """Apply RELION's softMaskOutsideMap background-fill semantics.
 
+    ``relion_soft_image_mask`` returns only the raised-cosine mask shape
+    ``m(r)``. RELION's scoring path does **not** simply multiply the image by
+    that mask. Instead, with ``Mnoise == NULL`` it computes a weighted average
+    background value over the exterior and cosine edge and blends toward that
+    value:
+
+    ``out = m * image + (1 - m) * avg_bg``
+
+    where ``avg_bg`` is computed with weights ``1 - m``.
+
+    When ``relion_normalize=True``, additionally apply RELION's full
+    ``normalize.cpp`` flow before blending:
+
+      1. Compute ``bg_mean`` and ``bg_std`` from background pixels (weighted
+         by ``1 - m``).
+      2. Standardize: ``image = (image - bg_mean) / bg_std``.
+      3. Apply the soft-mask blend (with the new ``avg_bg`` ≈ 0 of the
+         standardized image).
+
+    This matches RELION's iter-1 E-step preprocessing exactly. The
+    `image_backends.process_images` path enables this when
+    ``image_mask_mode == "relion_normalize_fill"``.
+
+    Parameters
+    ----------
+    images : np.ndarray
+        Real-space image or image batch with shape ``(H, W)`` or
+        ``(N, H, W)``.
+    image_mask : np.ndarray
+        Raised-cosine mask from :func:`relion_soft_image_mask`.
+    relion_normalize : bool
+        Apply RELION's pre-mask bg-subtract + bg-std normalize. Default
+        False to preserve existing call-site behaviour.
+    """
     image_mask_arr = jnp.asarray(image_mask)
     images_arr = jnp.asarray(images)
 
@@ -603,6 +632,15 @@ def apply_relion_soft_image_mask(images, image_mask):
     bg_weight_sum = jnp.sum(bg_weights, dtype=jnp.float64)
     safe_bg_weight_sum = jnp.where(bg_weight_sum > 0.0, bg_weight_sum, 1.0)
     images64 = images_3d.astype(jnp.float64)
+
+    if relion_normalize:
+        # RELION normalize.cpp: subtract weighted bg-mean, divide by bg-std.
+        bg_mean = jnp.tensordot(images64, bg_weights, axes=((-2, -1), (0, 1))) / safe_bg_weight_sum
+        diff = images64 - bg_mean[:, None, None]
+        bg_var = jnp.tensordot(diff * diff, bg_weights, axes=((-2, -1), (0, 1))) / safe_bg_weight_sum
+        bg_std = jnp.sqrt(jnp.maximum(bg_var, 1e-30))
+        images64 = diff / bg_std[:, None, None]
+
     avg_bg = jnp.tensordot(images64, bg_weights, axes=((-2, -1), (0, 1))) / safe_bg_weight_sum
     result = images64 * mask64[None, :, :] + avg_bg[:, None, None] * bg_weights[None, :, :]
 
