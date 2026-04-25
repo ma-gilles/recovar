@@ -265,3 +265,22 @@ subtract + bg-std normalize before masking. Implementing this in
 `recovar/data_io/image_backends.py::process_images` should close
 the Fimg CC to ≥ +0.99 → propagating downstream improves posterior
 CC and BPref CC commensurately.
+
+## N² FFT-normalization lifts BPref CC +0.59 → +0.74 (round 8)
+
+Direct probe finding: our `slice_volume(vol_recovar)` projection amplitude
+is ~3486× larger than RELION's Fref (ratio = 2.87e-4 → ours ≈ 3486×).
+This is the well-known FFT normalization gap: RELION's forward FFT
+divides by N^d, ours doesn't (memory: project_relion_fft_normalization).
+
+Applying `iref_ft *= 1/N²` before passing to run_em:
+
+  bp_data CC      : +0.59 → +0.74   (+0.15 lift)
+  amplitude ratio : 1.1e-4 → 8.9e-5
+
+Sweep over /1, /N, /N², /N³ shows CC plateau at /N² (= 1/4096 for N=64).
+Going further to /N³ doesn't change CC; going coarser to /N gives +0.735.
+
+The +0.74 plateau is the new ceiling. Remaining gap is per-pixel CTF
+precision + translation phase + argmax sensitivity to all of those
+combined. Each is a discrete next attack with concrete probes.
