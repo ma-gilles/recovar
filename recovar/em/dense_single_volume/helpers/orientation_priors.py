@@ -56,10 +56,10 @@ def make_relion_translation_log_prior(
 
 
 def relion_translation_search_base(previous_best_translations):
-    """Return the stored absolute offsets used to pre-center local search."""
+    """Return RELION's integer-pixel pre-shift for stored absolute offsets."""
     if previous_best_translations is None:
         return None
-    return np.asarray(previous_best_translations, dtype=np.float32)
+    return np.rint(np.asarray(previous_best_translations, dtype=np.float32)).astype(np.float32)
 
 
 def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
