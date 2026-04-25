@@ -171,11 +171,21 @@ def _bucket_pass2_inputs(
     per_image_inputs,
     n_fine_trans,
     rotation_block_size_for_quantization=5000,
+    max_hypotheses_per_microbatch=2_000_000,
+    max_images_per_microbatch=2048,
 ):
     """Group images into buckets that share a padded rotation count.
 
     Returns a list of dicts; each contains the padded per-image arrays
     needed to evaluate the bucket as one batched call.
+
+    To avoid OOM when one bucket is very large
+    (``bucket_size * n_images_in_bucket * n_fine_trans`` is the (B, R, T)
+    score tensor footprint), we split each per-quantization-size group
+    into chunks of at most ``max_hypotheses_per_microbatch /
+    (bucket_size * n_fine_trans)`` images.  The bound ``2e6`` corresponds
+    to ~32 MiB at float32 for a (B, R, T) tensor, well within budget for
+    typical GPU memory.
     """
     n_images = len(per_image_inputs["oversampled_rots"])
     rotation_counts = np.array(
@@ -198,17 +208,20 @@ def _bucket_pass2_inputs(
     for bucket_size in unique_bucket_sizes:
         bucket_size = int(bucket_size)
         bucket_image_indices = processing_order[bucket_sizes[processing_order] == bucket_size]
-        # All images in this bucket get padded to bucket_size.
-        # We do NOT split into sub-batches here: the bucketed call handles all
-        # images of the same bucket size.  If memory pressure becomes an issue
-        # we can carve sub-batches, but the dense engine keeps all images
-        # simultaneously in run_em today.
-        buckets.append(
-            {
-                "bucket_size": bucket_size,
-                "image_indices": np.asarray(bucket_image_indices, dtype=np.int64),
-            }
+        # Chunk by max_hypotheses_per_microbatch and max_images_per_microbatch
+        cap_by_hypotheses = max(
+            1,
+            int(max_hypotheses_per_microbatch) // max(1, bucket_size * int(n_fine_trans)),
         )
+        max_per_chunk = max(1, min(int(max_images_per_microbatch), cap_by_hypotheses))
+        for start in range(0, bucket_image_indices.shape[0], max_per_chunk):
+            chunk = bucket_image_indices[start : start + max_per_chunk]
+            buckets.append(
+                {
+                    "bucket_size": bucket_size,
+                    "image_indices": np.asarray(chunk, dtype=np.int64),
+                }
+            )
     return buckets
 
 
