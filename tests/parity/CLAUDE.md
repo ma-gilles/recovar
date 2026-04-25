@@ -28,7 +28,8 @@ Metrics covered:
 - `ave_pmax`                                  — match `_rlnAveragePmax` from `model.star`
 - `pp_hard_assign_match_lt_5deg_rate`         — fraction of particles whose best Euler is within 5deg of RELION's
 - `pp_hard_assign_match_lt_1deg_rate`         — same, < 1deg
-- `vol_corr_half1` / `vol_corr_half2`         — real-space volume correlation against RELION half-maps
+- `vol_corr_half1` / `vol_corr_half2`         — real-space volume correlation against RELION half-maps (signed)
+- `vol_corr_abs_half1` / `vol_corr_abs_half2` — same, absolute value (sign-invariant; preferred for floors)
 - `sigma2_noise_ratio_half{1,2}_med`          — recovar / RELION noise-shell ratio (median over shells)
 - `sigma_offset_a`                            — translation prior std (Angstroms)
 - `wall_time_s`                               — per-iter elapsed time (recorded by `parity_dump.start_iteration` + `mark_stage`)
@@ -37,23 +38,56 @@ Per-stage wall-time fields (`stage_seconds_e_step`, `_recon`, `_fsc`,
 `_noise_update`, `_convergence`) are also written by the dump for ad-hoc
 investigation; the default checker compares total `wall_time_s`.
 
-## Workload choice — why iter7→8
+### Known metric quirks (pre-parity-completion)
+
+- **`pp_hard_assign_match_lt_5deg_rate` is currently 0.0%**. recovar's
+  best Eulers use a different rotation convention from RELION's
+  `particle.star` `(rot, tilt, psi)`. Until a convention conversion is
+  implemented, this metric is informational; the baseline floor is set
+  to 0.0 so it never trips the regression detector. Don't use this
+  metric to assert parity until the convention is reconciled.
+- **`vol_corr` is negative (~-0.3 at iter5)**. recovar's reconstruction
+  is sign-flipped relative to RELION's because `invert_data` is not
+  applied. Use `vol_corr_abs` for floors; `vol_corr` is preserved for
+  diagnostic purposes.
+- **`sigma2_noise_ratio_half{1,2}_med` may be huge negative numbers**.
+  recovar's `wsum_sigma2_noise` is the raw `A2 - 2XA` accumulator
+  (visible in NOISE-DIAG log lines) which can be negative pre-update;
+  RELION's `model.star` `sigma2_noise` is the post-update positive
+  variance. Until the comparison is anchored on the same post-update
+  quantity, the band is intentionally `[-1e15, 1e15]`.
+- **`sigma_offset_a` differs by ~4.5 A from RELION**. recovar's
+  C1-update clamps at `sqrt(36.125) = 6.01 A` while RELION computes
+  the unclamped posterior std. This is a known parity gap (separate
+  from the parity_dump infrastructure).
+
+## Workload choice — why iter4→5 (default), iter7→8 (optional)
 
 Iter 0→1 cold-compile is too slow (>30 min) for a CI-style suite.
-Iter 0→14 is too slow (>2 h). Mid-trajectory single-iter replay (init
-from RELION's `iter_007` state, run one more iter) reproduces the
-`local_search=True` code path with `current_size=82` and
-`healpix_order=5` — that path uses the static-shape
-`local_em_engine.py` buckets and is the dominant workload in the
-late-iter parity regime. With a warm JAX cache it lands in ~5 min on
-A100; ~15 min cold the first time.
+Iter 0→14 is too slow (>2 h).
+
+The DEFAULT scenario is **iter4→5 grouped_union**. From init=iter4,
+`current_size=80, healpix_order=3, local_search=False`. This exercises
+the global-search path (per-image scoring + sparse pass2 + half-map
+Wiener reconstruction). Wall time on A100:
+- Cold JAX cache: ~15 min (parity_5k_128 cache mostly hits but new
+  shapes still trigger compiles)
+- Warm cache (after first run): ~6 min, dominated by the per-image
+  global pass2 loop
+
+The OPTIONAL scenario is **iter7→8 grouped_union**. From init=iter7,
+`current_size=82, healpix_order=5, local_search=True`. This exercises
+the local-search engine — `local_em_engine.py` buckets, fine-grid
+rotation generation, M-step indexed backprojection. Cold compile takes
+20+ min for the 2.36M fine-rotation grid. Warm cache should be under
+10 min. Marked `optional: true` in the baseline JSON until a stable
+warm baseline is captured.
 
 Default scenarios are chosen to:
-- exercise the local search engine (most parity-sensitive code path)
-- exercise both the `e_step` accumulator and the per-half M-step
-  Wiener regularization
-- complete in a single iter (so total runtime stays under the 5-min
-  budget per scenario)
+- exercise the per-half M-step accumulator and Wiener regularization
+- exercise the noise update + sigma_offset update path
+- complete in under 8 min on warm cache (so the full pytest run stays
+  in the "fast feedback" regime)
 
 ## Updating the baseline after an intentional change
 
