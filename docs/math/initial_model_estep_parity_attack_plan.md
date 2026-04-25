@@ -206,3 +206,17 @@ Branch tip `9b88f285` includes:
 
 Once the E-step gap is closed, `tests/unit/initial_model/test_estep_fixture.py::test_estep_bpref_forward_parity`
 asserts `cc_h0 > 0.9999` (currently soft-baseline).
+
+## Manual RELION-style preprocessing closes 80% of the Fimg gap (2026-04-25 final)
+
+Replicating RELION's `normalize.cpp` flow manually (bg-subtract using
+out-of-circle pixels, normalize by bg-std, multiply by cosine-tapered
+soft mask with edge_width=5 px, FFT with N² normalisation) lifts
+CC vs RELION's exp_Fimg[0] from +0.949 to **+0.985** on particle 0.
+
+So the recovar↔RELION preprocessing residual is dominated by
+recovar's `image_backends.process_images` not applying bg-mean
+subtract + bg-std normalize before masking. Implementing this in
+`recovar/data_io/image_backends.py::process_images` should close
+the Fimg CC to ≥ +0.99 → propagating downstream improves posterior
+CC and BPref CC commensurately.
