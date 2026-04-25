@@ -108,11 +108,17 @@ def main() -> None:
         )
         print(f"Enabled RELION-exact mask (pixel_size={pixel_size}, particle_diameter=544, edge=5)")
     iref_real = np.asarray(load_relion_volume(str(FIXTURE_DIR / "run_it000_class001.mrc")), dtype=np.float64)
-    # Negate to absorb the volume axis-convention sign flip; divide by N² to
-    # match RELION's forward FFT normalisation (RELION FFT divides by N^d,
-    # ours doesn't — this brings projection amplitude ratio from ~3500 to 1.0).
-    N3 = int(ds.grid_size) ** 3
-    iref_ft = -np.asarray(ftu.get_dft3(jnp.asarray(iref_real))).reshape(-1) / (int(ds.grid_size) ** 2)
+    # ROUND-10 FIX: apply RELION's gridding correction (sinc² pre-divide) to
+    # the real-space volume before FFT. This compensates for trilinear interp
+    # smoothing in Fourier space, lifting projection CC from +0.997 to +1.0
+    # bit-exact vs RELION's PPref.data.
+    from recovar.core.relion_project import gridding_correct_volume_real
+
+    iref_real_corrected = np.asarray(
+        gridding_correct_volume_real(jnp.asarray(iref_real), ori_size=ori, padding_factor=1)
+    )
+    # /N² for FFT normalisation; -1 to flip CTF-sign-induced cross-term.
+    iref_ft = -np.asarray(ftu.get_dft3(jnp.asarray(iref_real_corrected))).reshape(-1) / (ori**2)
     sigma2 = _read_iter0_sigma2(ori // 2 + 1)
     n4 = ori**4
     nv = np.asarray(make_radial_noise(sigma2 * n4, (ori, ori))).astype(np.float32).reshape(-1)

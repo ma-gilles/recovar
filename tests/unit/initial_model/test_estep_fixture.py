@@ -261,10 +261,17 @@ def test_estep_bpref_forward_parity():
 
     # iter-0 Iref + sigma2 (RELION fixture)
     iref_real = np.asarray(load_relion_volume(str(FIXTURE_DIR / "run_it000_class001.mrc")), dtype=np.float64)
-    # Round 9 fixes: divide by N² (RELION FFT normalisation) + negate
-    # (absorbs CTF-sign convention difference: recovar's CTF = -RELION's CTF).
-    # Together these lift bp_data CC from +0.59 → +0.74 on this fixture.
-    iref_ft = -np.asarray(ftu.get_dft3(jnp.asarray(iref_real))).reshape(-1) / (ori**2)
+    # Round 10 fixes: gridding correction + /N² FFT-norm + sign-negate.
+    #   - gridding correction: pre-divide volume by sinc² (compensates trilinear
+    #     interp's Fourier smoothing — bit-exact projection vs RELION).
+    #   - /N²: RELION's forward FFT is N^d-normalised, ours isn't.
+    #   - sign-negate: absorbs CTF-sign convention (recovar's = -RELION's).
+    from recovar.core.relion_project import gridding_correct_volume_real
+
+    iref_real_corrected = np.asarray(
+        gridding_correct_volume_real(jnp.asarray(iref_real), ori_size=ori, padding_factor=1)
+    )
+    iref_ft = -np.asarray(ftu.get_dft3(jnp.asarray(iref_real_corrected))).reshape(-1) / (ori**2)
     sigma2 = _read_iter0_sigma2(ori // 2 + 1)
     n4 = ori**4
     nv = np.asarray(make_radial_noise(sigma2 * n4, (ori, ori))).astype(np.float32).reshape(-1)
