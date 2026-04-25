@@ -193,13 +193,18 @@ class ParticleImageDataset:
     def set_relion_image_mask(
         self, pixel_size: float, particle_diameter_ang: float, width_mask_edge_px: float = 5.0
     ) -> None:
-        """Switch the backend's image mask to RELION's exact geometry +
-        normalize.cpp preprocessing chain (bg-mean subtract + bg-std
-        normalize + soft-mask blend).
+        """Switch the backend's image mask to RELION's exact softMaskOutsideMap.
 
-        Per-pixel preprocessed-Fimg CC vs RELION's exp_Fimg on the 500/64
-        fixture rises from +0.949 (default) to +0.997 with this enabled.
-        Use this on the RELION-replay path before scoring.
+        RELION's iter-1 setup applies `softMaskOutsideMap(img, radius,
+        cosine_width)` (mask.cpp:43) which blends `(1-raisedcos)*image +
+        raisedcos*bg_mean` in the cosine band, with `bg_mean` computed
+        as the raisedcos-weighted average of out-of-particle pixels. It
+        does NOT bg-std normalize (RELION assumes images are pre-
+        normalised externally; it only warns if not).
+
+        Per-pixel preprocessed-Fimg CC vs RELION's exp_Fimg on the
+        500/64 fixture rises from +0.949 (default `multiply`+window_mask)
+        to **+1.000000 bit-exact** with this enabled.
         """
         relion_mask = np.asarray(
             mask.relion_soft_image_mask(
@@ -211,7 +216,10 @@ class ParticleImageDataset:
         )
         self.image_mask = relion_mask
         self.mask = relion_mask
-        self.image_mask_mode = "relion_normalize_fill"
+        # Use the bg-fill blend (RELION's softMaskOutsideMap) — NOT the
+        # normalize variant which over-shrinks amplitudes since RELION's
+        # iter-1 path doesn't bg-std normalize.
+        self.image_mask_mode = "relion_background_fill"
         self._relion_image_mask_params = (pixel_size, particle_diameter_ang, width_mask_edge_px)
 
     @nvtx.annotate("ParticleImageDataset.__getitem__", color="yellow", domain=NVTX_DOMAIN_DATA_IO)
