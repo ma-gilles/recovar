@@ -634,6 +634,8 @@ def run_two_stage(
     post_anneal_s_iters=0,
     s_init_kind="flat",
     ridge_mode="scalar",
+    multiclass_K: int = 5,
+    multiclass_iters: int = 50,
 ):
     """Two-stage loop with selectable mu init.
 
@@ -716,6 +718,23 @@ def run_two_stage(
         scale = mu_perturb_eps * mu_norm / max(noise_norm, 1e-12)
         mu_init = ds.mu_half_true + scale * noise_jax
         mu_init = mu_init.astype(jnp.complex128)
+    elif mu_init_kind == "multiclass":
+        # Phase 7c: cold-μ rescue. Run K-class softness-annealed EM
+        # from random blob volumes, return mean of class volumes as
+        # μ_init. No GT used. See ppca_abinitio_phase6_stress_*.md and
+        # cold_init.multiclass_mu_init.
+        from recovar.em.ppca_abinitio.cold_init import multiclass_mu_init
+
+        print(
+            f"=== STAGE A0: cold-μ multiclass bootstrap (K={multiclass_K}, n_iters={multiclass_iters}) ===", flush=True
+        )
+        mu_init = multiclass_mu_init(
+            cfg,
+            ds,
+            K=multiclass_K,
+            n_iters=multiclass_iters,
+            seed=seed,
+        )
     else:
         raise ValueError(f"unknown mu_init_kind: {mu_init_kind}")
 
@@ -930,11 +949,27 @@ def main():
     )
     ap.add_argument(
         "--mu-init",
-        choices=["zero", "oracle", "perturbed"],
+        choices=["zero", "oracle", "perturbed", "multiclass"],
         default="perturbed",
-        help="mu init: 'perturbed' simulates a homogeneous-ab-initio output (recommended).",
+        help="mu init: 'perturbed' simulates a homogeneous-ab-initio output (recommended). "
+        "'multiclass' (Phase 7c, cold-μ rescue) bootstraps μ from K-class softness-annealed EM "
+        "starting from random Gaussian blob volumes. Adds a pre-stage of "
+        "--multiclass-iters iterations before the main run_two_stage loop. "
+        "Does NOT use any GT field. Test against --mu-init zero to see the lift.",
     )
     ap.add_argument("--mu-perturb-eps", type=float, default=0.5)
+    ap.add_argument(
+        "--multiclass-K",
+        type=int,
+        default=5,
+        help="Number of classes for --mu-init multiclass. Memory says K ≈ n_states or K > q.",
+    )
+    ap.add_argument(
+        "--multiclass-iters",
+        type=int,
+        default=50,
+        help="Multi-class EM iterations for --mu-init multiclass. ~30-50 typical.",
+    )
     ap.add_argument(
         "--external-mode",
         choices=["gaussian_pc", "discrete_volumes"],
@@ -1136,6 +1171,8 @@ def main():
             post_anneal_s_iters=args.post_anneal_s_iters,
             s_init_kind=args.s_init,
             ridge_mode=args.ridge_mode,
+            multiclass_K=args.multiclass_K,
+            multiclass_iters=args.multiclass_iters,
         )
     else:
         print(
@@ -1166,6 +1203,8 @@ def main():
                 post_anneal_s_iters=args.post_anneal_s_iters,
                 s_init_kind=args.s_init,
                 ridge_mode=args.ridge_mode,
+                multiclass_K=args.multiclass_K,
+                multiclass_iters=args.multiclass_iters,
             )
             if fre_floor is None:
                 fre_floor = fre_floor_k
