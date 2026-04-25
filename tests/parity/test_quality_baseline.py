@@ -7,11 +7,20 @@ The baseline JSON is the source of truth for tolerances; if you intentionally
 change the algorithm and metrics shift, update the JSON in the same commit
 and document the change in the JSON's ``source_runs`` field.
 
-Default suite (``test-parity-fast``): ~5 minutes total on one A100, single
-GPU. Skips automatically when no GPU is available so the test is also safe
+Default suite (``test-parity-fast``): ~5-10 minutes total on one A100,
+single GPU, **with a warm JAX compile cache**. The test sets
+``JAX_COMPILATION_CACHE_DIR`` to a known location automatically. With a
+COLD cache, expect 25-30 min per scenario for the first run; subsequent
+runs hit the warm cache and run in ~5 min.
+
+The pytest timeout below (``timeout=1800`` = 30 min) is large to handle
+the cold-cache case. CI infrastructure should pre-warm the cache and run
+this with a tighter timeout (``--timeout=600``) to catch true regressions.
+
+Skips automatically when no GPU is available so the test is also safe
 to import on login nodes.
 
-Optional / slow scenarios (anything > 10 min) are marked
+Optional / slow scenarios (anything > 30 min on cold cache) are marked
 ``optional: true`` in the baseline JSON and are NOT picked up by the
 default parametrize sweep — add a separate Slurm-targeted job for those.
 """
@@ -137,7 +146,10 @@ def test_parity_quality_scenario(scenario_name: str, tmp_path: Path) -> None:
     if cfg.get("jax_cache_dir"):
         cmd += ["--jax_cache_dir", cfg["jax_cache_dir"]]
 
-    proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=900)
+    # Generous timeout (30 min) tolerates a cold JAX compile cache.
+    # Set ``RECOVAR_PARITY_TIMEOUT_S`` to override.
+    timeout_s = int(os.environ.get("RECOVAR_PARITY_TIMEOUT_S", "1800"))
+    proc = subprocess.run(cmd, env=env, capture_output=True, text=True, timeout=timeout_s)
     if proc.returncode != 0:
         pytest.fail(
             f"workload failed (rc={proc.returncode}):\n--- stdout tail ---\n{proc.stdout[-2000:]}"

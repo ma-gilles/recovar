@@ -109,9 +109,11 @@ test-gpu = "python -m pytest tests/ -q --ignore=tests/unit/test_gui_app.py --run
 test-full = "XLA_PYTHON_CLIENT_PREALLOCATE=false python -m pytest tests/ --ignore=tests/unit/test_gui_app.py --run-integration --run-gpu --run-slow --run-tiny-metrics --long-test"
 test-parallel = "bash ./scripts/run_tests_parallel.sh full"
 test-parallel-long = "bash ./scripts/run_tests_parallel.sh long-test"
-# RELION-parity quality+perf baseline. Single GPU, ~5 min on warm JAX cache.
+# RELION-parity quality+perf baseline. Single GPU. ~5 min on warm JAX cache,
+# 25-30 min on cold cache (sets JAX_COMPILATION_CACHE_DIR automatically).
 # Skips automatically with no GPU. See tests/parity/CLAUDE.md.
-test-parity-fast = "python -m pytest tests/parity/ -m parity -v --timeout=900"
+test-parity-fast = "python -m pytest tests/parity/ -m parity -v --timeout=2400"
+test-parity-smoke = "python -m pytest tests/parity/test_quality_baseline_smoke.py -v"
 bench-fast-marching = "python tests/benchmarks/bench_fast_marching.py"
 
 # Dataset creation tasks
