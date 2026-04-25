@@ -124,15 +124,77 @@ The actual parity bug fix is tracked in #117.
   `recovar_iter1_debug_130128/_agent_scratch/relion_dump_C1_p0/`
   (one-particle iter-1 RELION reference)
 
+## New finding (post-revert): deficit is roughly multiplicative
+
+**Sorted-distribution comparison** (recovar's iter1_full_af1 dump vs RELION
+iter-1 data.star, 992 particles, both halves, with `--adaptive_fraction=1.0`
+on recovar):
+
+| quantile | rec_h1 | rel_h1 | gap_h1 | rec_h2 | rel_h2 | gap_h2 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 0.05 | 0.071 | 0.076 | -0.005 | 0.061 | 0.067 | -0.007 |
+| 0.50 | 0.198 | 0.208 | -0.011 | 0.184 | 0.206 | -0.022 |
+| 0.95 | 0.516 | 0.544 | -0.028 | 0.516 | 0.564 | -0.048 |
+| 0.99 | 0.706 | 0.741 | -0.036 | 0.702 | 0.757 | -0.055 |
+
+Pattern: ratio ≈ 0.93 across the distribution → recovar's pmax is
+multiplicatively suppressed by ≈ exp(-0.073). That's a constant log_Z
+offset of ~+0.073 (recovar's log_Z is ~7% bigger than RELION's), meaning
+recovar's softmax is wider — extra weight scattered into off-MAP poses.
+
+**The bug is in the dense `run_em` path, not specifically in sparse
+pruning**: even with `--adaptive_fraction=1.0` (which bypasses
+`compute_pass2_stats_sparse` entirely and routes through dense `run_em`),
+the 7% deficit persists.
+
+A constant log_Z offset is consistent with:
+- A pose-independent normalization factor recovar applies but RELION doesn't
+  (or vice versa) — appears in log_Z but cancels in best_log_score, giving
+  smaller pmax.
+- The candidate-set size (number of poses entering the partition function)
+  differs by ~exp(0.073) ≈ 7% extra candidates in recovar's sum.
+
 ## Recommended next actions
 
-1. **Open issue/branch for the residual iter-1 gap** in sparse-pass-2
-   normalization. The af=1.0 result is the falsifiable signal — if a fix to
-   sparse pass-2 normalization closes the af=0.999 gap to match af=1.0, that
-   confirms the hypothesis.
-2. **Find a "deficit particle"** (where recovar pmax << RELION pmax in the
-   per-particle dump) and run single-particle diff² comparison on THAT
-   particle instead of particle 0. The deviation will appear there.
-3. **Once iter-1 is closed**, the cold-start trajectory should track RELION
-   within < 1% across all iters (per the `--iter 2` test which gave +0.27%
-   at iter 4 when starting from RELION's iter-2 state).
+1. **Per-pose diff² dump for a "deficit particle"** (where recovar pmax <<
+   RELION pmax). Particle 0 happens to match RELION's pmax to 4 decimals
+   (0.6047 vs 0.6049), so it can't reveal a uniform multiplicative
+   deficit. Pick a particle where recovar pmax ≈ 0.05 but RELION pmax ≈
+   0.5 (there are 153 such on tiny/1000), instrument recovar's
+   `_e_step_block_scores_*` to dump per-pose diff² for that particle, and
+   compare element-wise with RELION's `exp_Mweight_diff2.bin` from the
+   patched binary CPU dump (`RELION_DUMP_DIR` + `RELION_DUMP_STACK_INDEX=N`).
+   The (rot, trans)-dependent deviation that averages to zero for
+   particle 0 must appear for the deficit particle.
+2. **Count the candidate-set size**: if recovar's logsumexp covers ~7%
+   more candidates than RELION's, the gap is explained. Check how many
+   poses RELION's `exp_thisimage_sumweight` actually sums over (it skips
+   poses with `weight == 0` after `exp_min_diff2` subtraction —
+   `ml_optimiser.cpp:8736-8772`). Recovar may not skip the same set.
+3. **Open issue/branch for the residual iter-1 gap** as next work — bug
+   tracker reference: this status doc + algorithm doc
+   `docs/math/relion_updateSSNR_algorithm_2026_04_25.md`.
+4. **Once iter-1 is closed**, the cold-start trajectory should track
+   RELION within < 1% across all iters (per the `--iter 2` test which gave
+   +0.27% at iter 4 when starting from RELION's iter-2 state).
+
+## Mid-session candidates that turned out NOT to be the bug
+
+For future agents debugging the same gap, ruled-out candidates with evidence:
+
+- **sigma_offset source mismatch** (Phase C "Bug #1"): RELION uses
+  iter-(K-1) pre-update value; recovar reads iter-K post-update. Empirical
+  test forcing sigma=10Å made gap WORSE (-59%). Ruled out as primary cause.
+- **`pixel_size²` factor in translation prior** (Phase C "Bug #2"):
+  dimensional analysis shows recovar's formula was already RELION-equivalent.
+  Ruled out.
+- **`ini_high` low-pass filter mismatch**: filter is gated by
+  `relion_firstiter_cc_this_iter` which is False on this fixture; the
+  init reference is already smooth above shell 10. Ruled out.
+- **noise_variance N⁴ scaling**: algebraically correct (cancels FFT
+  normalization). Ruled out.
+- **Per-particle pose mismatch**: recovar identifies the same MAP pose as
+  RELION for ≥ 95% of particles (Eulers within 1°). Ruled out.
+
+The diagnostic harness (parity_dump + dump_relion_iter + compare_dumps +
+RELION patched binary) is in place for the next agent to do (1) directly.
