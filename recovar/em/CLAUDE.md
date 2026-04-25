@@ -32,6 +32,12 @@ Use targeted EM tests and targeted RELION replay Slurm jobs during
 iteration. Do not run the full RECOVAR-wide test suite for normal EM parity
 work unless explicitly requested or preparing a PR that requires it.
 
+For EM development, ignore the typical root-level/full RECOVAR test-suite
+requirement from broader repo instructions. Those tests are irrelevant to this
+RELION-parity work and should not be launched by default. Run only targeted EM
+unit tests, focused replay scripts, and selected dump-comparison jobs unless
+the user explicitly asks for the full RECOVAR suite.
+
 Keep algorithmic parity changes separate from performance changes. Batching,
 caps, memory layout, and scheduling changes are performance-only until output
 equivalence is proven against the old path.
