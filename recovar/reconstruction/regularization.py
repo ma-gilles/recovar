@@ -570,11 +570,15 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
             if is_half_layout
             else fourier_transform_utils.get_grid_of_radial_distances
         )
-        shell_index = radial_fn(
-            volume_shape,
-            scaled=False,
-            frequency_shift=0,
-        ).astype(jnp.int32).reshape(-1)
+        shell_index = (
+            radial_fn(
+                volume_shape,
+                scaled=False,
+                frequency_shift=0,
+            )
+            .astype(jnp.int32)
+            .reshape(-1)
+        )
         shell_index = jnp.minimum(shell_index, ori_half)
         included = jnp.ones(weight.shape[0], dtype=jnp.float64)
 

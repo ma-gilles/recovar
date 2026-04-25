@@ -2843,33 +2843,70 @@ def _run_relion_iteration_loop(
             current_resolution_angstrom=prev_res_angstrom,
         )
 
-        # --- Update tau2 (signal prior) BEFORE the Wiener solve ---
-        # RELION's reconstruct() calls updateSSNRarrays(fsc_from_prev_iter)
-        # first, then applies the Wiener filter with the UPDATED tau2.
-        # Use the previous iteration's FSC (or init_fsc at iteration 0).
-        prev_fsc_for_tau2 = None
-        if fsc_history:
-            prev_fsc_for_tau2 = fsc_history[-1]
-        elif init_fsc is not None:
-            prev_fsc_for_tau2 = init_fsc
-        tau2_update_details = None
-        if prev_fsc_for_tau2 is not None:
-            mean_signal_variance, _, tau2_update_details = regularization.compute_relion_tau2_from_weights(
-                Ft_ctf_0,
-                Ft_ctf_1,
-                prev_fsc_for_tau2,
+        # --- RELION-exact M-step ordering (auto-refine, split-half) ---
+        # RELION (ml_optimiser_mpi.cpp:4031, 4091; backprojector.cpp:1044):
+        #   1. compareTwoHalves() -> CURRENT iter's FSC from BPref accumulators
+        #   2. maximization() -> updateSSNRarrays(THIS_ITER_FSC) -> tau2
+        #   3. reconstruct(tau2) -> regularized half-map
+        #
+        # Recovar previously called compute_relion_tau2_from_weights with
+        # fsc_history[-1] / init_fsc (PREVIOUS iter's FSC). At cold start
+        # init_fsc is essentially zeros and at iter 2 prev-iter FSC is
+        # poisoned (~0.999) by leakage of the under-regularized iter-1 maps,
+        # which gives ssnr ≈ 999 → tau2 amplifies 1e6× → ave_Pmax collapse.
+        # Algorithm doc: docs/math/relion_updateSSNR_algorithm_2026_04_25.md
+        #
+        # Compute unregularized half-maps and CURRENT iter FSC FIRST, then
+        # derive tau2 from that fresh FSC, then the regularized Wiener solve.
+        _t_unreg_first = time.time()
+        _unreg_means_for_fsc = []
+        for k_local in range(2):
+            Ft_y_k_l = Ft_y_0 if k_local == 0 else Ft_y_1
+            Ft_ctf_k_l = Ft_ctf_0 if k_local == 0 else Ft_ctf_1
+            _unreg_means_for_fsc.append(
+                _reconstruct_volume_eager(
+                    Ft_ctf_k_l,
+                    Ft_y_k_l,
+                    volume_shape,
+                    PADDING_FACTOR,
+                    tau=None,
+                    tau2_fudge=tau2_fudge,
+                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                ).reshape(-1)
+            )
+        # Sign-align so FSC sees the same orientation downstream maps will use.
+        for k_half in range(2):
+            _unreg_means_for_fsc[k_half], _ = _align_fourier_volume_sign_to_reference(
+                _unreg_means_for_fsc[k_half],
+                previous_means[k_half] if "previous_means" in dir() else None,
                 volume_shape,
-                tau2_fudge=tau2_fudge,
-                padding_factor=PADDING_FACTOR,
-                return_details=True,
             )
-            logger.info(
-                "Pre-Wiener tau2 update from %s FSC: old_max=%.4e new_max=%.4e",
-                "init" if not fsc_history else "prev-iter",
-                float(jnp.max(jnp.abs(mean_variance))),
-                float(jnp.max(jnp.abs(mean_signal_variance))),
-            )
-            mean_variance = mean_signal_variance
+        current_iter_fsc = regularization.get_fsc_gpu(
+            _unreg_means_for_fsc[0],
+            _unreg_means_for_fsc[1],
+            volume_shape,
+        )
+        logger.info(
+            "Computed iter-%d FSC for tau2 (RELION order): %.1fs",
+            iteration + 1,
+            time.time() - _t_unreg_first,
+        )
+
+        mean_signal_variance, _, tau2_update_details = regularization.compute_relion_tau2_from_weights(
+            Ft_ctf_0,
+            Ft_ctf_1,
+            current_iter_fsc,
+            volume_shape,
+            tau2_fudge=tau2_fudge,
+            padding_factor=PADDING_FACTOR,
+            return_details=True,
+        )
+        logger.info(
+            "tau2 update from THIS-iter FSC: old_max=%.4e new_max=%.4e",
+            float(jnp.max(jnp.abs(mean_variance))),
+            float(jnp.max(jnp.abs(mean_signal_variance))),
+        )
+        mean_variance = mean_signal_variance
 
         # --- Free previous-iteration means to reclaim GPU memory ---
         previous_means = [np.asarray(mean).copy() if mean is not None else None for mean in means]
@@ -2969,12 +3006,11 @@ def _run_relion_iteration_loop(
                 logger.info("Aligned half-%d volume sign to the previous reference", k + 1)
         logger.info("Unregularized reconstruction (2 halves): %.1fs", time.time() - _t_unreg)
 
-        # --- Compute FSC between half-maps ---
-        fsc = regularization.get_fsc_gpu(
-            unreg_means[0],
-            unreg_means[1],
-            volume_shape,
-        )
+        # FSC was already computed above in the RELION-exact ordering block
+        # (current_iter_fsc) and used to derive tau2 BEFORE the Wiener solve.
+        # Reuse it here — recomputing would give the same value (same
+        # underlying unreg accumulators).
+        fsc = current_iter_fsc
         fsc_history.append(fsc)
         _parity_dump.mark_stage(iteration, "fsc")
 
