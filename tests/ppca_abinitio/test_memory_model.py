@@ -34,6 +34,7 @@ def test_components_scale_correctly_with_n_img():
 
     assert doubled["post_mean"] == 2 * base["post_mean"]
     assert doubled["post_Hinv"] == 2 * base["post_Hinv"]
+    assert doubled["mean_update_residual_stack"] == 2 * base["mean_update_residual_stack"]
     assert doubled["u_proj_half"] == base["u_proj_half"]
     assert doubled["M_voxel"] == base["M_voxel"]
 
@@ -136,16 +137,30 @@ def test_vol32_predictions_match_doc_table():
     assert cost["post_Hinv"] == 1024 * 576 * 16 * 8
 
 
-def test_vol128_q8_predicted_to_saturate_h100():
-    """Doc claims vol=128, n=10k, order=3, q=8 saturates an H100.
-    Verify the predicted total is in the 60-65 GB range."""
-    cost = estimate_peak_memory_bytes(
+def test_vol128_production_requires_image_batching():
+    """vol=128, n=10k, order=3, q=8 cannot fit a single H100 without
+    image batching — the mean_update_residual_stack alone is several TB
+    at full n_img. The recommended batch size must drop below n_img."""
+    bs = recommended_image_batch_size(
         n_img=10_000,
         volume_shape=(128, 128, 128),
         image_shape=(128, 128),
         n_rot=7776,
         n_trans=5,
         q=8,
+        budget_gb=60.0,
     )
-    total_gb = cost["total"] / (1024**3)
-    assert 50.0 < total_gb < 80.0, f"expected ~63 GB, got {total_gb:.1f} GB"
+    assert bs < 10_000, "vol=128 q=8 production scale must trigger batching"
+    # Also verify the batched cost actually fits.
+    cost_batched = estimate_peak_memory_bytes(
+        n_img=bs,
+        volume_shape=(128, 128, 128),
+        image_shape=(128, 128),
+        n_rot=7776,
+        n_trans=5,
+        q=8,
+    )
+    total_gb_batched = cost_batched["total"] / (1024**3)
+    # 60 GB budget / 1.5 runtime overhead = 40 GB hard cap on the
+    # recommendation
+    assert total_gb_batched <= 40.0, f"recommended batch={bs} still oversized: {total_gb_batched:.1f} GB"

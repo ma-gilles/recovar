@@ -21,7 +21,7 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from recovar.em.ppca_abinitio.eigenvalue_refit import refit_eigenvalues_post_em
 from recovar.em.ppca_abinitio.grid import build_fixed_grid
@@ -29,8 +29,9 @@ from recovar.em.ppca_abinitio.synthetic import (
     SyntheticFamily,
     make_synthetic_fixed_grid_dataset,
 )
-from scripts.ppca_abinitio.run_cryobench import (
+from scripts.ppca_abinitio.run_cryobench import (  # noqa: I001
     _Cfg,
+    load_cryobench_gt_volumes,
     run_two_stage,
 )
 

@@ -43,6 +43,13 @@ def estimate_peak_memory_bytes(
 
     # All tensors in float64 / complex128. complex128 = 16 bytes,
     # float64 = 8 bytes.
+    #
+    # mean_update_residual_stack: the einsum 'irt,itk->irk' inside
+    # `_per_rotation_residual_image` (recovar/em/ppca_abinitio/
+    # mean_update.py:131) materializes an (n_img, n_rot, img_half)
+    # complex128 tensor BEFORE summing over images. For typical
+    # cryo-EM regimes this dominates everything else and is what
+    # forces image batching at vol≥64.
     components = {
         "u_proj_half": n_rot * q * img_half * 16,
         "post_mean": n_img * n_rot * n_trans * q * 8,
@@ -50,6 +57,7 @@ def estimate_peak_memory_bytes(
         "M_voxel": q * q * V_half * 16,
         "B_voxel": q * V_half * 16,
         "batch_full": n_img * img_full * 16,
+        "mean_update_residual_stack": n_img * n_rot * img_half * 16,
     }
     components["total"] = sum(v for k, v in components.items() if k != "total")
     return components

@@ -4,6 +4,20 @@ Phase 3.1 of the merge plan. Analytic memory cost as a function of
 `(n_img, n_pose, q, V_half, image_size)` so we can predict when the
 existing tensor layout breaks before we run into OOM on H100.
 
+## Update 2026-04-25 — `mean_update_residual_stack` term
+
+The Phase 3 vol=64 smoke (Slurm job 7344125) OOM'd at 148 GiB despite
+the original model predicting ~770 MB. Root cause: the einsum
+`'irt,itk->irk'` inside `_per_rotation_residual_image`
+(`recovar/em/ppca_abinitio/mean_update.py:131`) materializes an
+`(n_img, n_rot, img_half)` complex128 intermediate **before** summing
+over images. This dominates everything else at any
+`(n_img · n_rot · img_half)` configuration above ~1 G complex elements.
+
+The model and tables below now include this `mean_update_residual_stack`
+term. The vol=32 numbers below are unchanged in absolute terms (the
+intermediate is small there) but vol≥64 totals jump significantly.
+
 ## What dominates
 
 The pose-marginalized E-step of `score_and_posterior_moments_eqx`

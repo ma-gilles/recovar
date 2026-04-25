@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
 # Phase 3.3 vol=64 / healpix_order=2 scaling smoke test.
 #
-# Single Ribosembly q=4 run at vol=64, n=1024, order=2, weighted SVD
+# UPDATED 2026-04-25 after first attempt OOM'd at 148 GiB (job 7344125)
+# AND second attempt host-OOM-killed at order=2 / n=128 (job 7345575).
+# Order=2 has n_rot=4608 (12*nside² · 24 in-plane), not 1944 — much
+# bigger than my initial mental model. Going to order=1 (n_rot=576)
+# which matches the existing v0 default, with n=256 to stay in budget.
+#
+# Single Ribosembly q=4 run at vol=64, n=256, order=1, weighted SVD
 # warmstart, no anneal, 30 iters. Acceptance:
 #   - completes without OOM on H100
-#   - hun >= 0.70 (gracefully degraded vs vol=32 reference)
+#   - hun >= 0.50 (loosened — n=128 is 8x fewer images than v0 default)
 #   - wall time <= 60 min
 #
 # Output: cells/result.json + slurm log + memory peak from Slurm
+#
+# Phase 4 implication: vol=64 with n=1024+ requires image batching
+# in the M-step. This is a real Phase 6 follow-up branch, not a v0
+# blocker.
 
 set -euo pipefail
 
@@ -23,8 +33,8 @@ echo "$(date)" > "${OUT_ROOT}/started_at.txt"
 "$WORKDIR/.pixi/envs/default/bin/python3.11" -c "
 from recovar.em.ppca_abinitio.memory_model import format_memory_report
 print(format_memory_report(
-    n_img=1024, volume_shape=(64, 64, 64), image_shape=(64, 64),
-    n_rot=1944, n_trans=5, q=4,
+    n_img=256, volume_shape=(64, 64, 64), image_shape=(64, 64),
+    n_rot=576, n_trans=5, q=4,
 ))
 " > "${OUT_ROOT}/predicted_memory.txt" 2>&1 || echo "(memory model preview not available)" > "${OUT_ROOT}/predicted_memory.txt"
 
@@ -37,7 +47,7 @@ cat > "$SCRIPT" <<EOF
 #SBATCH --gres=gpu:1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=128GB
+#SBATCH --mem=400GB
 #SBATCH --time=01:30:00
 #SBATCH --output=${OUT_ROOT}/smoke-%j.out
 
@@ -71,12 +81,12 @@ echo
 
 t0=\$(date +%s)
 pixi run python scripts/ppca_abinitio/run_cryobench.py \\
-    --dataset Ribosembly --vol 64 --n-images 1024 --healpix-order 2 \\
+    --dataset Ribosembly --vol 64 --n-images 256 --healpix-order 1 \\
     --u-init svd --svd-warmstart weighted --mu-init perturbed \\
     --external-mode discrete_volumes --n-burnin 0 \\
     --q 4 --n-joint 30 --sigma 0.01 \\
     --s-init flat --ridge-mode scalar --anneal-schedule none \\
-    --seed 0 --init-seed 0 \\
+    --seed 0 --init-seed 0 --instrument \\
     --save-results ${OUT_ROOT}/cells/result.json
 t1=\$(date +%s)
 echo "wall-clock seconds: \$((t1 - t0))" > ${OUT_ROOT}/wall_time_seconds.txt
