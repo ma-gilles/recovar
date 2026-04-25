@@ -271,8 +271,16 @@ def test_estep_bpref_forward_parity():
     rot_j = jnp.asarray(rotations)
     tr_j = jnp.asarray(translations)
 
-    # Pseudo-halfsets: even particles → h0, odd → h1
-    h0_ids, h1_ids = _split_halfset_particle_ids(ds.n_images)
+    # Pseudo-halfsets: RELION-sorted halfset assignment.
+    # Phase B (2026-04-25) showed natural-order [0::2] picked the wrong
+    # subset (mics ['1','3','5',...]) vs RELION's lex-sorted h0
+    # (mics ['1','100','102',...]). Pass the dataset's micrograph names
+    # so _split_halfset_particle_ids returns RELION-matching indices.
+    from recovar.data_io.starfile import read_star
+
+    main_in, _ = read_star(str(PARTICLES_STAR))
+    mic_names = np.asarray(main_in["_rlnMicrographName"].tolist())
+    h0_ids, h1_ids = _split_halfset_particle_ids(ds.n_images, micrograph_names=mic_names)
 
     def _run_estep(subset_ds, score_mode: str = "gaussian"):
         result = run_em(
