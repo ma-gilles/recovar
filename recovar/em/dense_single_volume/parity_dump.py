@@ -238,11 +238,23 @@ def dump_iteration(
 
         Ft_y_per_voxel = snap.get("Ft_y_norm_per_voxel")
         Ft_ctf_per_voxel = snap.get("Ft_ctf_per_voxel")
+        # Per-shell reduction requires shell_idx and per_voxel to have the same
+        # length. The Ft_* arrays may be N^3 (full Fourier) or N^2*(N//2+1)
+        # (half-spectrum), depending on the engine. Fall back to scalar
+        # summaries when the shapes don't match.
         if Ft_y_per_voxel is not None:
-            payload[f"half{k + 1}_Ft_y_per_shell"] = _shell_reduce(Ft_y_per_voxel, shell_idx, n_shells)
+            if Ft_y_per_voxel.size == shell_idx.size:
+                payload[f"half{k + 1}_Ft_y_per_shell"] = _shell_reduce(Ft_y_per_voxel, shell_idx, n_shells)
+            payload[f"half{k + 1}_Ft_y_total"] = float(np.sum(Ft_y_per_voxel.astype(np.float64)))
+            payload[f"half{k + 1}_Ft_y_max"] = float(np.max(Ft_y_per_voxel))
+            payload[f"half{k + 1}_Ft_y_size"] = int(Ft_y_per_voxel.size)
         if Ft_ctf_per_voxel is not None:
-            payload[f"half{k + 1}_Ft_ctf_per_shell"] = _shell_reduce(Ft_ctf_per_voxel, shell_idx, n_shells)
-        # Drop the per-voxel arrays; per-shell summaries are the only stored form.
+            if Ft_ctf_per_voxel.size == shell_idx.size:
+                payload[f"half{k + 1}_Ft_ctf_per_shell"] = _shell_reduce(Ft_ctf_per_voxel, shell_idx, n_shells)
+            payload[f"half{k + 1}_Ft_ctf_total"] = float(np.sum(Ft_ctf_per_voxel.astype(np.float64)))
+            payload[f"half{k + 1}_Ft_ctf_max"] = float(np.max(Ft_ctf_per_voxel))
+            payload[f"half{k + 1}_Ft_ctf_size"] = int(Ft_ctf_per_voxel.size)
+        # Drop the per-voxel arrays; per-shell summaries / scalar totals are the only stored form.
         payload.pop(f"half{k + 1}_Ft_y_norm_per_voxel", None)
         payload.pop(f"half{k + 1}_Ft_ctf_per_voxel", None)
 
