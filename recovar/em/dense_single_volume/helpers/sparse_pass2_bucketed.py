@@ -946,6 +946,7 @@ def compute_pass2_stats_sparse_bucketed(
         merged_noise_stats = NoiseStats(
             wsum_sigma2_noise=jnp.asarray(noise_wsum_total, dtype=jnp.float32),
             wsum_img_power=jnp.asarray(noise_img_power_total, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
             sumw=float(noise_sumw_total),
         )
 
