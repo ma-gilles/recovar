@@ -18,9 +18,8 @@ import numpy as np
 
 from recovar import utils
 from recovar.em.core import hard_assignment_idx_to_pose
+from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
-from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
 from recovar.em.dense_single_volume.helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
@@ -29,7 +28,6 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     update_refinement_state,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
-from recovar.em.dense_single_volume.legacy_iteration_loop import _run_legacy_iteration_loop
 from recovar.em.dense_single_volume.helpers.local_search import (
     _local_search_engine_rotation_block_size,
     _pad_local_search_rotations,
@@ -56,6 +54,9 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     should_skip_adaptive_pass2,
 )
 from recovar.em.dense_single_volume.helpers.types import RelionStats
+from recovar.em.dense_single_volume.legacy_iteration_loop import _run_legacy_iteration_loop
+from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
+from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
 from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,
@@ -381,7 +382,7 @@ def _run_local_search_iteration_grouped_union(
     metadata_build_time = time.time() - metadata_t0
 
     # TODO: IS THIS ALL REALLY A GOOD IDEA? I THINK IT WOULD PROBABLY BE FASTER TO DO A NAIVE THING
-    ## DONT GROUP, JUST COMPUTE. 
+    ## DONT GROUP, JUST COMPUTE.
     ## HOW MUCH TIME IS SPENT ON THIS PARTITIONING? HOW MANY EXTRA COMPARISONS ARE WE DOING?
     ## I THINK IN THIS BRANCH, WE MAY HAVE TO JUST ABANDON THE GEMM BASED, WHICH IS OK.
     ## OR IS THIS JUST GROUPING TO BATCH ON GPU ? I DON'T UNDERSTAND. ALSO SHOULDNT ALL IMAGES HAVE SOME BATCH SIZE ANYWAY?
@@ -433,7 +434,7 @@ def _run_local_search_iteration_grouped_union(
             * local_rotation_block_size
         )
 
-        ## TODO: THIS IS INCREDIBLY MESSY, WE SHOULDNT HAVE TO DEFINE 12 VARIABLES LIKE THIS. 
+        ## TODO: THIS IS INCREDIBLY MESSY, WE SHOULDNT HAVE TO DEFINE 12 VARIABLES LIKE THIS.
         ## IF THI SIS TO MAKE MATCHING WITH RELION FOR NOW FINE, BUT KEEP TRACK WE NEED TO TO CLEAN THIS UP AFTER (RELION PARITY HAS NOT BEEN ACHIEVED YET)
         valid_pair_count = int(np.count_nonzero(np.asarray(local_log_prior) > -1e20))
         union_pair_count = int(len(group_image_indices) * actual_local_rotation_count)
@@ -536,7 +537,9 @@ def _run_local_search_iteration_grouped_union(
         chunk_nonzero_posterior_rows.append(nonzero_row_count)
         sum_nonzero_posterior_rows += nonzero_row_count
         if nonzero_row_count:
-            seen_nonzero_global_rotations[np.asarray(local_indices[:actual_local_rotation_count])[nonzero_row_mask]] = True
+            seen_nonzero_global_rotations[np.asarray(local_indices[:actual_local_rotation_count])[nonzero_row_mask]] = (
+                True
+            )
         postprocess_time += time.time() - postprocess_t0
         em_time += time.time() - em_t0
 
@@ -614,7 +617,9 @@ def _run_local_search_iteration_grouped_union(
                 "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
                 "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
                 "duplicate_rotation_factor": np.float64(
-                    0.0 if not np.any(seen_global_rotations) else sum_union_rows / np.count_nonzero(seen_global_rotations)
+                    0.0
+                    if not np.any(seen_global_rotations)
+                    else sum_union_rows / np.count_nonzero(seen_global_rotations)
                 ),
                 "sum_union_row_pixels": np.int64(sum_union_row_pixels),
                 "sum_padded_row_pixels": np.int64(sum_padded_row_pixels),
@@ -1123,7 +1128,7 @@ def _run_relion_iteration_loop(
     Corresponds to RELION's autoRefine iteration loop.
     See docs/relion5_auto_refine_algorithm.md.
     """
-    from recovar.reconstruction import noise, regularization, relion_functions
+    from recovar.reconstruction import noise, regularization
 
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape
@@ -1170,7 +1175,9 @@ def _run_relion_iteration_loop(
     # RELION mode owns the coarse HEALPix grid. When coarse-grid metadata is
     # provided, regenerate the matching coarse grid here instead of inheriting
     # any finer caller-supplied rotation table.
-    current_healpix_order = int(init_healpix_order) ##TODO: SURELY THIS INT IS UNNECESSARY? I WANT TO CLEAN UP THIS KIND OF USELESS CODE
+    current_healpix_order = int(
+        init_healpix_order
+    )  ##TODO: SURELY THIS INT IS UNNECESSARY? I WANT TO CLEAN UP THIS KIND OF USELESS CODE
     if nside_level is not None:
         ## TODO: ID LIKE BETTER NAMING THAT NSIDE_LEVEL. WHAT DOES THIS MEAN?
         if int(nside_level) != current_healpix_order:
@@ -1179,8 +1186,16 @@ def _run_relion_iteration_loop(
                 int(nside_level),
                 current_healpix_order,
             )
-        current_rotations = get_relion_rotation_grid(current_healpix_order).astype(np.float32) # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
-        current_rotation_eulers = get_relion_rotation_grid_eulers(current_healpix_order).astype(np.float32) # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
+        current_rotations = get_relion_rotation_grid(
+            current_healpix_order
+        ).astype(
+            np.float32
+        )  # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
+        current_rotation_eulers = get_relion_rotation_grid_eulers(
+            current_healpix_order
+        ).astype(
+            np.float32
+        )  # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
         ## TODO: I ALSO WOULD LIKE TO NOT HAVE SO MANY DTYPE COMMANDS IF THEY ARENT NECESSARY. GOOD CODING SHOULD MAKE INHERITED TYPE SEEMLESS
         current_nside_level = current_healpix_order
     elif rotations is not None:
@@ -1205,8 +1220,7 @@ def _run_relion_iteration_loop(
         os.makedirs(save_intermediates_dir, exist_ok=True)
     if local_search_profile_mode not in {"auto", "on", "off"}:
         raise ValueError(
-            "local_search_profile_mode must be one of {'auto', 'on', 'off'}, "
-            f"got {local_search_profile_mode!r}",
+            f"local_search_profile_mode must be one of {{'auto', 'on', 'off'}}, got {local_search_profile_mode!r}",
         )
     collect_local_search_profile = (
         save_intermediates_dir is not None if local_search_profile_mode == "auto" else local_search_profile_mode == "on"
@@ -1245,7 +1259,7 @@ def _run_relion_iteration_loop(
         return ibs, rbs
 
     ## TODO CHANGE NAMES OF THIGNS THIGSN. MEANS IS NOT A REASONABLE NAME HERE.
-    ## 
+    ##
 
     # State: two half-set volumes, noise, prior
     # init_volume can be a single array (used for both halves) or a list/tuple
@@ -1310,7 +1324,7 @@ def _run_relion_iteration_loop(
     tau2_ssnr_trajectory = []
 
     ## TODO: WE NEED MUCH BETTER NAMING THAN THIS, I AHVE NO IDEA WHAT THIS IS SAYING OR WHAT IT DOES
-    ## IF ITS FOR RELION PARITY OKAY, BUT MAYBE WE CNA AT LEAST HAVE COMMENTS NEXT TO DEF SO I HAVE SOME IDEA OF WHATS GOING ON 
+    ## IF ITS FOR RELION PARITY OKAY, BUT MAYBE WE CNA AT LEAST HAVE COMMENTS NEXT TO DEF SO I HAVE SOME IDEA OF WHATS GOING ON
 
     # C1 (RELION-parity): per-iter sigma2_offset update from data. Initialized
     # from `init_translation_sigma_angstrom`; updated each iter to the
@@ -1440,6 +1454,7 @@ def _run_relion_iteration_loop(
     iteration = 0
     while not state.has_converged and iteration < max_iter:
         t0 = time.time()
+        _parity_dump.start_iteration(iteration)
         iter_replay_override = None
         if replay_iteration_overrides is not None and iteration < len(replay_iteration_overrides):
             iter_replay_override = replay_iteration_overrides[iteration]
@@ -2410,6 +2425,9 @@ def _run_relion_iteration_loop(
             else:
                 Ft_y_1, Ft_ctf_1 = Ft_y_k, Ft_ctf_k
 
+        # E-step + per-half M-step accumulators are now both populated.
+        _parity_dump.mark_stage(iteration, "e_step")
+
         # --- RELION's --low_resol_join_halves: average the low-resolution
         # shells of the per-half Fourier accumulators between the two halves
         # BEFORE the Wiener solve. This forces the two half-maps to share
@@ -2512,6 +2530,7 @@ def _run_relion_iteration_loop(
                 )
                 means[k] = fourier_transform_utils.get_dft3(vol_real).reshape(-1)
         logger.info("Regularized reconstruction (2 halves + flatten): %.1fs", time.time() - _t_recon)
+        _parity_dump.mark_stage(iteration, "recon")
 
         significant_counts.append(iter_sig_counts)
 
@@ -2561,6 +2580,7 @@ def _run_relion_iteration_loop(
             volume_shape,
         )
         fsc_history.append(fsc)
+        _parity_dump.mark_stage(iteration, "fsc")
 
         # --- Save intermediate volumes if requested ---
         if save_intermediates_dir is not None:
@@ -2890,6 +2910,7 @@ def _run_relion_iteration_loop(
 
         previous_noise_radial = noise_from_res
         noise_variance = noise.make_radial_noise(noise_from_res, cryo.image_shape)
+        _parity_dump.mark_stage(iteration, "noise_update")
 
         # Save per-iter per-shell sigma2 (after this iter's noise update) and
         # the exact shell-wise tau2 ingredients used in the Wiener update.
@@ -3005,6 +3026,7 @@ def _run_relion_iteration_loop(
         # so that local search and convergence detection work correctly
         # regardless of whether adaptive oversampling was used.
         previous_assignments = [ha.copy() if ha is not None else None for ha in coarse_ha]
+        _parity_dump.mark_stage(iteration, "convergence")
 
         # --- Timing ---
         elapsed = time.time() - t0
