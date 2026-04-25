@@ -1,12 +1,10 @@
-"""Smoke tests for refine_single_volume with mode="relion".
+"""Smoke tests for refine_single_volume (RELION-parity mode).
 
 Verifies:
-1. RELION mode runs without error on a tiny dataset (4 images, 8px, 2 iters)
-2. Returns the expected dict keys (including RELION-specific ones)
-3. Legacy mode is unchanged by the new mode parameter
-4. Invalid mode raises ValueError
-5. Convergence state is a RefinementState instance
-6. data_vs_prior_trajectory and ave_Pmax_trajectory are populated
+1. Refinement runs without error on a tiny dataset (4 images, 8px, 2 iters)
+2. Returns the expected dict keys (RELION-mode trajectories included)
+3. Convergence state is a RefinementState instance
+4. data_vs_prior_trajectory and ave_Pmax_trajectory are populated
 """
 
 from pathlib import Path
@@ -19,10 +17,38 @@ import healpy as hp
 import jax.numpy as jnp
 
 import recovar.core.fourier_transform_utils as ftu
+import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
-import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume.em_engine import run_em
+from recovar.em.dense_single_volume.em_primitives import make_half_image_weights
+from recovar.em.dense_single_volume.helpers.convergence import RefinementState
+from recovar.em.dense_single_volume.helpers.local_search import (
+    _local_search_chunk_size,
+    _local_search_engine_rotation_block_size,
+    _local_search_max_union_rotations,
+    _local_search_rotation_block_size,
+    _pad_local_search_rotations,
+    _partition_local_search_groups,
+)
+from recovar.em.dense_single_volume.helpers.orientation_priors import (
+    collapse_rotation_posterior_to_direction_prior,
+    make_relion_direction_log_prior,
+    make_relion_translation_log_prior,
+)
+from recovar.em.dense_single_volume.helpers.resolution import (
+    _bootstrap_current_size_relion,
+    clamp_relion_coarse_image_size,
+    compute_coarse_image_size,
+    should_skip_adaptive_pass2,
+)
+from recovar.em.dense_single_volume.helpers.significance import (
+    _compute_significance_batched,
+)
+from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
+from recovar.em.dense_single_volume.iteration_loop import (
+    refine_single_volume,
+)
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
@@ -37,42 +63,14 @@ from recovar.em.dense_single_volume.local_em_engine import (
 )
 from recovar.em.dense_single_volume.local_layout import (
     LocalHypothesisLayout,
-    build_local_hypothesis_layout,
     bucket_local_hypothesis_layout,
+    build_local_hypothesis_layout,
 )
 from recovar.em.dense_single_volume.local_score_pass import (
     compute_reconstruction_support,
     normalize_local_scores,
     score_local_bucket,
 )
-from recovar.em.dense_single_volume.em_primitives import make_half_image_weights
-from recovar.em.dense_single_volume.iteration_loop import (
-    refine_single_volume,
-)
-from recovar.em.dense_single_volume.helpers.convergence import RefinementState
-from recovar.em.dense_single_volume.helpers.local_search import (
-    _local_search_chunk_size,
-    _local_search_engine_rotation_block_size,
-    _local_search_max_union_rotations,
-    _local_search_rotation_block_size,
-    _pad_local_search_rotations,
-    _partition_local_search_groups,
-)
-from recovar.em.dense_single_volume.helpers.resolution import (
-    _bootstrap_current_size_relion,
-    clamp_relion_coarse_image_size,
-    compute_coarse_image_size,
-    should_skip_adaptive_pass2,
-)
-from recovar.em.dense_single_volume.helpers.orientation_priors import (
-    collapse_rotation_posterior_to_direction_prior,
-    make_relion_direction_log_prior,
-    make_relion_translation_log_prior,
-)
-from recovar.em.dense_single_volume.helpers.significance import (
-    _compute_significance_batched,
-)
-from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.sampling import (
     apply_relion_rotation_perturbation,
     build_local_search_grid_metadata,
@@ -316,7 +314,9 @@ def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_supp
     np.testing.assert_array_equal(layout.rotation_counts, np.array([2, 3], dtype=np.int32))
     np.testing.assert_array_equal(layout.rotation_ids_flat, np.array([1, 3, 2, 4, 5], dtype=np.int32))
 
-    buckets = bucket_local_hypothesis_layout(layout, image_batch_size=2, rotation_block_size=16, max_hypotheses_per_microbatch=64)
+    buckets = bucket_local_hypothesis_layout(
+        layout, image_batch_size=2, rotation_block_size=16, max_hypotheses_per_microbatch=64
+    )
     assert len(buckets) == 1
     np.testing.assert_array_equal(buckets[0].actual_rotation_counts, np.array([2, 3], dtype=np.int32))
     np.testing.assert_array_equal(buckets[0].local_rotation_ids[0, :2], np.array([1, 3], dtype=np.int32))
@@ -791,7 +791,7 @@ def translations():
 
 
 class TestRelionModeSmokeTest:
-    """Call refine_single_volume with mode='relion' and verify it runs."""
+    """Call refine_single_volume and verify it runs through the RELION-parity loop."""
 
     def test_relion_bootstrap_current_size_matches_benchmark_case(self):
         """128px, 4.25A/px, ini_high=30A should bootstrap from 36 -> 56."""
@@ -896,7 +896,7 @@ class TestRelionModeSmokeTest:
         rotations,
         translations,
     ):
-        """mode='relion' completes 2 iterations on a tiny dataset."""
+        """Refinement completes 2 iterations on a tiny dataset."""
         result = refine_single_volume(
             half_datasets,
             init_volume,
@@ -909,7 +909,6 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -950,7 +949,6 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -1006,7 +1004,6 @@ class TestRelionModeSmokeTest:
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
             adaptive_oversampling=0,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -1057,7 +1054,6 @@ class TestRelionModeSmokeTest:
             init_current_size=16,
             adaptive_oversampling=1,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
             particle_diameter_ang=200.0,
@@ -1111,7 +1107,6 @@ class TestRelionModeSmokeTest:
             init_current_size=16,
             adaptive_oversampling=1,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
             init_image_corrections=[
@@ -1341,7 +1336,6 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -1388,7 +1382,6 @@ class TestRelionModeSmokeTest:
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
             adaptive_oversampling=0,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
             init_fsc=np.ones(grid_size // 2),
@@ -1425,7 +1418,6 @@ class TestRelionModeSmokeTest:
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
             adaptive_oversampling=0,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -1452,7 +1444,6 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -1537,7 +1528,6 @@ class TestRelionModeSmokeTest:
             init_current_size=16,
             adaptive_oversampling=1,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
         )
@@ -1629,7 +1619,6 @@ class TestRelionModeSmokeTest:
             adaptive_oversampling=1,
             adaptive_pass2_skip_threshold=-1.0,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
         )
@@ -1682,7 +1671,6 @@ class TestRelionModeSmokeTest:
             adaptive_fraction=0.97,
             max_significants=123,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
         )
@@ -1738,80 +1726,11 @@ class TestRelionModeSmokeTest:
             adaptive_oversampling=1,
             adaptive_pass2_skip_threshold=-1.0,
             nside_level=3,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
         )
 
         assert captured["grid_order"] == 1
-
-
-# ===========================================================================
-# Test 2: Legacy mode unchanged
-# ===========================================================================
-
-
-class TestLegacyModeUnchanged:
-    """Verify that mode='legacy' (default) produces the same result."""
-
-    def test_legacy_mode_explicit(
-        self,
-        half_datasets,
-        init_volume,
-        rotations,
-        translations,
-    ):
-        """Explicit mode='legacy' produces standard output keys."""
-        result = refine_single_volume(
-            half_datasets,
-            init_volume,
-            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
-            translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=[32],
-            mode="legacy",
-        )
-
-        # Standard keys
-        assert "mean" in result
-        assert "means" in result
-        assert "fsc" in result
-        assert "hard_assignments" in result
-        assert "current_sizes" in result
-        assert result["current_sizes"] == [8]
-
-        # Should NOT have RELION-specific keys
-        assert "convergence_state" not in result
-        assert "data_vs_prior_trajectory" not in result
-
-    def test_default_mode_is_legacy(
-        self,
-        half_datasets,
-        init_volume,
-        rotations,
-        translations,
-    ):
-        """Calling without mode= uses legacy (no RELION keys)."""
-        result = refine_single_volume(
-            half_datasets,
-            init_volume,
-            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
-            translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=[32],
-        )
-
-        assert "convergence_state" not in result
 
 
 # ===========================================================================
@@ -1922,7 +1841,6 @@ def test_local_search_uses_fine_rotation_grid_when_oversampling_is_enabled(
         init_current_size=16,
         adaptive_oversampling=1,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
     )
@@ -2094,7 +2012,6 @@ def test_local_search_uses_negative_rounded_previous_offsets_for_translation_pri
         init_current_size=16,
         adaptive_oversampling=1,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
@@ -2242,7 +2159,6 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         init_current_size=16,
         adaptive_oversampling=0,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         replay_iteration_overrides=[
@@ -2399,7 +2315,6 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
         init_current_size=16,
         adaptive_oversampling=0,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         init_previous_best_rotation_eulers=[prev_h1, prev_h2],
@@ -2474,7 +2389,6 @@ def test_relion_mode_writes_absolute_translations_from_rounded_previous_offset(
         init_current_size=16,
         adaptive_oversampling=0,
         nside_level=1,
-        mode="relion",
         init_healpix_order=1,
         max_healpix_order=1,
         init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
@@ -2650,7 +2564,6 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         init_current_size=16,
         adaptive_oversampling=1,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         perturb_factor=0.0,
@@ -2665,30 +2578,3 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         rtol=1e-6,
         atol=1e-6,
     )
-
-
-# ===========================================================================
-# Test 3: Invalid mode
-# ===========================================================================
-
-
-class TestInvalidMode:
-    def test_invalid_mode_raises(
-        self,
-        half_datasets,
-        init_volume,
-        rotations,
-        translations,
-    ):
-        """Unknown mode raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown mode"):
-            refine_single_volume(
-                half_datasets,
-                init_volume,
-                jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-                jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-                rotations,
-                translations,
-                mode="bogus",
-                max_iter=1,
-            )

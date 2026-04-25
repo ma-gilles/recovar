@@ -19,8 +19,6 @@ import numpy as np
 from recovar import utils
 from recovar.em.core import hard_assignment_idx_to_pose
 from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
-from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
 from recovar.em.dense_single_volume.helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
@@ -29,7 +27,6 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     update_refinement_state,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
-from recovar.em.dense_single_volume.legacy_iteration_loop import _run_legacy_iteration_loop
 from recovar.em.dense_single_volume.helpers.local_search import (
     _local_search_engine_rotation_block_size,
     _pad_local_search_rotations,
@@ -56,6 +53,8 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     should_skip_adaptive_pass2,
 )
 from recovar.em.dense_single_volume.helpers.types import RelionStats
+from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
+from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
 from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,
@@ -381,7 +380,7 @@ def _run_local_search_iteration_grouped_union(
     metadata_build_time = time.time() - metadata_t0
 
     # TODO: IS THIS ALL REALLY A GOOD IDEA? I THINK IT WOULD PROBABLY BE FASTER TO DO A NAIVE THING
-    ## DONT GROUP, JUST COMPUTE. 
+    ## DONT GROUP, JUST COMPUTE.
     ## HOW MUCH TIME IS SPENT ON THIS PARTITIONING? HOW MANY EXTRA COMPARISONS ARE WE DOING?
     ## I THINK IN THIS BRANCH, WE MAY HAVE TO JUST ABANDON THE GEMM BASED, WHICH IS OK.
     ## OR IS THIS JUST GROUPING TO BATCH ON GPU ? I DON'T UNDERSTAND. ALSO SHOULDNT ALL IMAGES HAVE SOME BATCH SIZE ANYWAY?
@@ -433,7 +432,7 @@ def _run_local_search_iteration_grouped_union(
             * local_rotation_block_size
         )
 
-        ## TODO: THIS IS INCREDIBLY MESSY, WE SHOULDNT HAVE TO DEFINE 12 VARIABLES LIKE THIS. 
+        ## TODO: THIS IS INCREDIBLY MESSY, WE SHOULDNT HAVE TO DEFINE 12 VARIABLES LIKE THIS.
         ## IF THI SIS TO MAKE MATCHING WITH RELION FOR NOW FINE, BUT KEEP TRACK WE NEED TO TO CLEAN THIS UP AFTER (RELION PARITY HAS NOT BEEN ACHIEVED YET)
         valid_pair_count = int(np.count_nonzero(np.asarray(local_log_prior) > -1e20))
         union_pair_count = int(len(group_image_indices) * actual_local_rotation_count)
@@ -536,7 +535,9 @@ def _run_local_search_iteration_grouped_union(
         chunk_nonzero_posterior_rows.append(nonzero_row_count)
         sum_nonzero_posterior_rows += nonzero_row_count
         if nonzero_row_count:
-            seen_nonzero_global_rotations[np.asarray(local_indices[:actual_local_rotation_count])[nonzero_row_mask]] = True
+            seen_nonzero_global_rotations[np.asarray(local_indices[:actual_local_rotation_count])[nonzero_row_mask]] = (
+                True
+            )
         postprocess_time += time.time() - postprocess_t0
         em_time += time.time() - em_t0
 
@@ -614,7 +615,9 @@ def _run_local_search_iteration_grouped_union(
                 "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
                 "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
                 "duplicate_rotation_factor": np.float64(
-                    0.0 if not np.any(seen_global_rotations) else sum_union_rows / np.count_nonzero(seen_global_rotations)
+                    0.0
+                    if not np.any(seen_global_rotations)
+                    else sum_union_rows / np.count_nonzero(seen_global_rotations)
                 ),
                 "sum_union_row_pixels": np.int64(sum_union_row_pixels),
                 "sum_padded_row_pixels": np.int64(sum_padded_row_pixels),
@@ -848,9 +851,8 @@ def refine_single_volume(
     max_significants=500,
     nside_level=None,
     translation_pixel_offset=None,
-    mode="legacy",
+    mode="relion",
     adaptive_pass2_skip_threshold=ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
-    # --- RELION-mode parameters (only used when mode="relion") ---
     init_healpix_order=2,
     max_healpix_order=7,
     init_translation_range=10.0,
@@ -879,17 +881,12 @@ def refine_single_volume(
     disable_adjoint_ctf=False,
     local_engine="grouped_union",
 ):
-    """Multi-iteration EM refinement with FSC-driven resolution management.
+    """Multi-iteration RELION-parity EM refinement.
 
-    Supports two modes:
-
-    - ``mode="legacy"`` (default): Original FSC-driven loop with fixed
-      rotation grid.  All existing behavior is preserved exactly.
-
-    - ``mode="relion"``: RELION-parity mode with convergence detection,
-      angular step refinement, local angular search, and data_vs_prior
-      resolution criterion.  Uses :class:`RefinementState` from
-      ``convergence.py`` to drive the iteration.
+    Runs the RELION auto-refine algorithm: convergence-driven iteration,
+    angular step refinement, local angular search, and data_vs_prior
+    resolution management.  Uses :class:`RefinementState` from
+    ``convergence.py`` to drive the iteration.
 
     Parameters
     ----------
@@ -902,8 +899,8 @@ def refine_single_volume(
     init_mean_variance : jnp.ndarray, shape (volume_size,)
         Initial signal prior (tau^2).
     rotations : np.ndarray, shape (n_rot, 3, 3)
-        Rotation grid.  In legacy mode, used directly.  In RELION mode,
-        used as the initial grid (overridden when angular step refines).
+        Rotation grid used as the initial grid (overridden when angular
+        step refines).
     translations : jnp.ndarray, shape (n_trans, 2)
         Translation grid.
     disc_type : str
@@ -915,11 +912,12 @@ def refine_single_volume(
     rotation_block_size : int
         Number of rotations per block in em_engine.
     relion_current_sizes : list of int or None
-        Oracle mode: if provided, use these current_sizes instead of
-        computing from FSC.  relion_current_sizes[i] is used at iteration i.
+        Legacy oracle current_size schedule.  Only the first entry is honoured
+        as ``init_current_size``; the rest of the schedule is ignored because
+        the legacy FSC-driven loop has been removed.  Kept for backward
+        compatibility with callers that still pass it.
     init_current_size : int
-        Starting current_size for the first iteration (when no FSC is
-        available yet).  Ignored if relion_current_sizes is provided.
+        Starting current_size for the first iteration.
     fsc_threshold : float
         FSC threshold for resolution estimation.
     adaptive_oversampling : int
@@ -939,20 +937,20 @@ def refine_single_volume(
         Step size between coarse translation grid points (pixels).
         Required when adaptive_oversampling > 0.
     mode : str
-        ``"legacy"`` preserves existing behavior.  ``"relion"`` enables
-        RELION-parity convergence-driven refinement.
+        Backwards-compatibility shim. Only ``"relion"`` is accepted; the
+        legacy FSC-driven loop has been removed.
     adaptive_pass2_skip_threshold : float
         Skip adaptive pass 2 when the mean significant-sample fraction is at
         least this value. Set to a negative value to disable this shortcut and
         keep the full RELION-style two-pass adaptive search.
     init_healpix_order : int
-        Starting HEALPix order for RELION mode (default 2, ~14.7 deg).
+        Starting HEALPix order (default 2, ~14.7 deg).
     max_healpix_order : int
         Maximum HEALPix order (finest angular sampling, default 7).
     init_translation_range : float
-        Initial translation search range in pixels (RELION mode).
+        Initial translation search range in pixels.
     init_translation_step : float
-        Initial translation step size in pixels (RELION mode).
+        Initial translation step size in pixels.
     init_translation_sigma_angstrom : float
         Initial RELION-style translation prior width in Angstrom.
     particle_diameter_ang : float or None
@@ -973,70 +971,27 @@ def refine_single_volume(
         significant_counts : list of (jnp.ndarray or None) -- per-image
             significant sample counts at each iteration (None when
             adaptive_oversampling=0).
-
-    Additional keys when ``mode="relion"``:
         convergence_state : RefinementState -- final convergence state
         data_vs_prior_trajectory : list of jnp.ndarray -- per-iteration
             data_vs_prior curves
         healpix_order_trajectory : list of int -- HEALPix order per iter
         ave_Pmax_trajectory : list of float -- average Pmax per iter
     """
-    if mode not in ("legacy", "relion"):
-        raise ValueError(f"Unknown mode={mode!r}; expected 'legacy' or 'relion'")
+    if mode != "relion":
+        raise ValueError(
+            f"Unknown mode={mode!r}; only 'relion' is supported (the legacy FSC-driven loop has been removed).",
+        )
     if local_engine not in ("grouped_union", "exact_v1", "exact_v2"):
         raise ValueError(
             f"Unknown local_engine={local_engine!r}; expected 'grouped_union', 'exact_v1', or 'exact_v2'",
         )
+    if relion_current_sizes is not None and len(relion_current_sizes) > 0:
+        # Legacy callers passed an oracle schedule; honour only the first
+        # entry as the bootstrap current_size.  The rest of the schedule was
+        # consumed by the deleted legacy iteration loop.
+        init_current_size = int(relion_current_sizes[0])
 
-    if mode == "relion":
-        return _run_relion_iteration_loop(
-            experiment_datasets=experiment_datasets,
-            init_volume=init_volume,
-            init_noise_variance=init_noise_variance,
-            init_mean_variance=init_mean_variance,
-            rotations=rotations,
-            translations=translations,
-            disc_type=disc_type,
-            max_iter=max_iter,
-            image_batch_size=image_batch_size,
-            rotation_block_size=rotation_block_size,
-            init_current_size=init_current_size,
-            fsc_threshold=fsc_threshold,
-            adaptive_oversampling=adaptive_oversampling,
-            adaptive_fraction=adaptive_fraction,
-            max_significants=max_significants,
-            init_healpix_order=init_healpix_order,
-            max_healpix_order=max_healpix_order,
-            init_translation_range=init_translation_range,
-            init_translation_step=init_translation_step,
-            init_translation_sigma_angstrom=init_translation_sigma_angstrom,
-            particle_diameter_ang=particle_diameter_ang,
-            nside_level=nside_level,
-            adaptive_pass2_skip_threshold=adaptive_pass2_skip_threshold,
-            save_intermediates_dir=save_intermediates_dir,
-            low_resol_join_halves_angstrom=low_resol_join_halves_angstrom,
-            tau2_fudge=tau2_fudge,
-            perturb_factor=perturb_factor,
-            perturb_seed=perturb_seed,
-            perturb_replay_relion_dir=perturb_replay_relion_dir,
-            init_fsc=init_fsc,
-            init_ave_Pmax=init_ave_Pmax,
-            init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
-            init_relion_iteration=init_relion_iteration,
-            init_image_corrections=init_image_corrections,
-            init_scale_corrections=init_scale_corrections,
-            init_direction_prior=init_direction_prior,
-            init_previous_best_translations=init_previous_best_translations,
-            init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
-            replay_iteration_overrides=replay_iteration_overrides,
-            skip_final_iteration=skip_final_iteration,
-            local_search_profile_mode=local_search_profile_mode,
-            disable_adjoint_y=disable_adjoint_y,
-            disable_adjoint_ctf=disable_adjoint_ctf,
-            local_engine=local_engine,
-        )
-
-    return _run_legacy_iteration_loop(
+    return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
         init_volume=init_volume,
         init_noise_variance=init_noise_variance,
@@ -1047,15 +1002,40 @@ def refine_single_volume(
         max_iter=max_iter,
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
-        relion_current_sizes=relion_current_sizes,
         init_current_size=init_current_size,
         fsc_threshold=fsc_threshold,
         adaptive_oversampling=adaptive_oversampling,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        init_healpix_order=init_healpix_order,
+        max_healpix_order=max_healpix_order,
+        init_translation_range=init_translation_range,
+        init_translation_step=init_translation_step,
+        init_translation_sigma_angstrom=init_translation_sigma_angstrom,
+        particle_diameter_ang=particle_diameter_ang,
         nside_level=nside_level,
+        adaptive_pass2_skip_threshold=adaptive_pass2_skip_threshold,
+        save_intermediates_dir=save_intermediates_dir,
+        low_resol_join_halves_angstrom=low_resol_join_halves_angstrom,
+        tau2_fudge=tau2_fudge,
+        perturb_factor=perturb_factor,
+        perturb_seed=perturb_seed,
+        perturb_replay_relion_dir=perturb_replay_relion_dir,
+        init_fsc=init_fsc,
+        init_ave_Pmax=init_ave_Pmax,
+        init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
+        init_relion_iteration=init_relion_iteration,
+        init_image_corrections=init_image_corrections,
+        init_scale_corrections=init_scale_corrections,
+        init_direction_prior=init_direction_prior,
+        init_previous_best_translations=init_previous_best_translations,
+        init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
+        replay_iteration_overrides=replay_iteration_overrides,
+        skip_final_iteration=skip_final_iteration,
+        local_search_profile_mode=local_search_profile_mode,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
+        local_engine=local_engine,
     )
 
 
@@ -1123,7 +1103,7 @@ def _run_relion_iteration_loop(
     Corresponds to RELION's autoRefine iteration loop.
     See docs/relion5_auto_refine_algorithm.md.
     """
-    from recovar.reconstruction import noise, regularization, relion_functions
+    from recovar.reconstruction import noise, regularization
 
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape
@@ -1170,7 +1150,9 @@ def _run_relion_iteration_loop(
     # RELION mode owns the coarse HEALPix grid. When coarse-grid metadata is
     # provided, regenerate the matching coarse grid here instead of inheriting
     # any finer caller-supplied rotation table.
-    current_healpix_order = int(init_healpix_order) ##TODO: SURELY THIS INT IS UNNECESSARY? I WANT TO CLEAN UP THIS KIND OF USELESS CODE
+    current_healpix_order = int(
+        init_healpix_order
+    )  ##TODO: SURELY THIS INT IS UNNECESSARY? I WANT TO CLEAN UP THIS KIND OF USELESS CODE
     if nside_level is not None:
         ## TODO: ID LIKE BETTER NAMING THAT NSIDE_LEVEL. WHAT DOES THIS MEAN?
         if int(nside_level) != current_healpix_order:
@@ -1179,8 +1161,16 @@ def _run_relion_iteration_loop(
                 int(nside_level),
                 current_healpix_order,
             )
-        current_rotations = get_relion_rotation_grid(current_healpix_order).astype(np.float32) # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
-        current_rotation_eulers = get_relion_rotation_grid_eulers(current_healpix_order).astype(np.float32) # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
+        current_rotations = get_relion_rotation_grid(
+            current_healpix_order
+        ).astype(
+            np.float32
+        )  # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
+        current_rotation_eulers = get_relion_rotation_grid_eulers(
+            current_healpix_order
+        ).astype(
+            np.float32
+        )  # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
         ## TODO: I ALSO WOULD LIKE TO NOT HAVE SO MANY DTYPE COMMANDS IF THEY ARENT NECESSARY. GOOD CODING SHOULD MAKE INHERITED TYPE SEEMLESS
         current_nside_level = current_healpix_order
     elif rotations is not None:
@@ -1205,8 +1195,7 @@ def _run_relion_iteration_loop(
         os.makedirs(save_intermediates_dir, exist_ok=True)
     if local_search_profile_mode not in {"auto", "on", "off"}:
         raise ValueError(
-            "local_search_profile_mode must be one of {'auto', 'on', 'off'}, "
-            f"got {local_search_profile_mode!r}",
+            f"local_search_profile_mode must be one of {{'auto', 'on', 'off'}}, got {local_search_profile_mode!r}",
         )
     collect_local_search_profile = (
         save_intermediates_dir is not None if local_search_profile_mode == "auto" else local_search_profile_mode == "on"
@@ -1245,7 +1234,7 @@ def _run_relion_iteration_loop(
         return ibs, rbs
 
     ## TODO CHANGE NAMES OF THIGNS THIGSN. MEANS IS NOT A REASONABLE NAME HERE.
-    ## 
+    ##
 
     # State: two half-set volumes, noise, prior
     # init_volume can be a single array (used for both halves) or a list/tuple
@@ -1310,7 +1299,7 @@ def _run_relion_iteration_loop(
     tau2_ssnr_trajectory = []
 
     ## TODO: WE NEED MUCH BETTER NAMING THAN THIS, I AHVE NO IDEA WHAT THIS IS SAYING OR WHAT IT DOES
-    ## IF ITS FOR RELION PARITY OKAY, BUT MAYBE WE CNA AT LEAST HAVE COMMENTS NEXT TO DEF SO I HAVE SOME IDEA OF WHATS GOING ON 
+    ## IF ITS FOR RELION PARITY OKAY, BUT MAYBE WE CNA AT LEAST HAVE COMMENTS NEXT TO DEF SO I HAVE SOME IDEA OF WHATS GOING ON
 
     # C1 (RELION-parity): per-iter sigma2_offset update from data. Initialized
     # from `init_translation_sigma_angstrom`; updated each iter to the
