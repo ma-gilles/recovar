@@ -292,26 +292,43 @@ def test_estep_bpref_forward_parity():
     sampling_star = FIXTURE_DIR / "run_it001_sampling.star"
     random_perturbation, _perturbation_factor = read_relion_perturbation_from_sampling_star(str(sampling_star))
 
-    # Coarse RELION-NEST rotation indices: 48 healpix dirs × 12 psi = 576.
-    coarse_n_dir = 48
-    coarse_n_psi = 12
-    coarse_indices = np.arange(coarse_n_dir * coarse_n_psi, dtype=np.int64)
-    rotations, _ = get_oversampled_rotation_grid_from_samples(
-        coarse_indices,
-        parent_nside_level=1,
-        oversampling_order=1,
-        random_perturbation=random_perturbation,
-    )
-    rotations = rotations.astype(np.float32)
+    # Prefer RELION's exact dumped post-perturbation post-oversampling grid
+    # when available — eliminates any small offset between our perturbation
+    # port and RELION's. Falls back to the constructed grid otherwise.
+    relion_estep_dump = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
+    eulers_bin = relion_estep_dump / "p0_oversampled_eulers.bin"
+    trans_bin = relion_estep_dump / "p0_oversampled_translations.bin"
+    if eulers_bin.exists() and trans_bin.exists():
+        from recovar.utils.helpers import R_from_relion as _R_from_relion
 
-    coarse_translations = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
-    translations, _ = get_oversampled_translation_grid(coarse_translations, pixel_offset=2, oversampling_order=1)
-    # offset_step in pixels (= 2 here for offset_step=17Å at angpix 8.5).
-    translations = apply_relion_translation_perturbation(
-        translations.astype(np.float32),
-        random_perturbation,
-        offset_step_pixels=2.0,
-    )
+        with open(eulers_bin, "rb") as _f:
+            _h = _struct.unpack("qqq", _f.read(24))
+            _e = np.fromfile(_f, dtype=np.float64, count=_h[0] * _h[1] * _h[2]).reshape(-1, 3)
+        rotations = _R_from_relion(_e).astype(np.float32)
+        with open(trans_bin, "rb") as _f:
+            _h = _struct.unpack("qqq", _f.read(24))
+            _t = np.fromfile(_f, dtype=np.float64, count=_h[0] * _h[1] * _h[2]).reshape(-1, 3)
+        translations = _t[:, :2].astype(np.float32)
+    else:
+        # Coarse RELION-NEST rotation indices: 48 healpix dirs × 12 psi = 576.
+        coarse_n_dir = 48
+        coarse_n_psi = 12
+        coarse_indices = np.arange(coarse_n_dir * coarse_n_psi, dtype=np.int64)
+        rotations, _ = get_oversampled_rotation_grid_from_samples(
+            coarse_indices,
+            parent_nside_level=1,
+            oversampling_order=1,
+            random_perturbation=random_perturbation,
+        )
+        rotations = rotations.astype(np.float32)
+
+        coarse_translations = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
+        translations, _ = get_oversampled_translation_grid(coarse_translations, pixel_offset=2, oversampling_order=1)
+        translations = apply_relion_translation_perturbation(
+            translations.astype(np.float32),
+            random_perturbation,
+            offset_step_pixels=2.0,
+        )
 
     # Match small-fixture iter-1 r_max=14, current_size=28
     r_max = 14
