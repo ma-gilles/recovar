@@ -951,11 +951,14 @@ def main():
         "--mu-init",
         choices=["zero", "oracle", "perturbed", "multiclass"],
         default="perturbed",
-        help="mu init: 'perturbed' simulates a homogeneous-ab-initio output (recommended). "
-        "'multiclass' (Phase 7c, cold-μ rescue) bootstraps μ from K-class softness-annealed EM "
-        "starting from random Gaussian blob volumes. Adds a pre-stage of "
-        "--multiclass-iters iterations before the main run_two_stage loop. "
-        "Does NOT use any GT field. Test against --mu-init zero to see the lift.",
+        help="mu init: 'perturbed' simulates a homogeneous-ab-initio output (RECOMMENDED). "
+        "'multiclass' (Phase 7c) bootstraps μ from K-class softness-annealed EM on random "
+        "Gaussian blob volumes; uses NO GT fields. Phase 7c verdict (2026-04-25, "
+        "see ppca_abinitio_phase7c_multiclass_*.md): only +0.08 hun lift on Ribosembly "
+        "vs zero-μ baseline (~16% of the gap to perturbed-μ). Modestly better than "
+        "zero, far from a full cold-start rescue. The full prototype's hun=0.557 needs "
+        "the SO(3)-aligned + known-pose-refinement pipeline (deferred to Phase 7d). "
+        "'zero' starts from μ=0; collapses to chance for any U init (Phase 6 finding).",
     )
     ap.add_argument("--mu-perturb-eps", type=float, default=0.5)
     ap.add_argument(
