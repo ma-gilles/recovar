@@ -254,6 +254,132 @@ def _backproject_to_half_volume(per_r_half, rotations, image_shape, volume_shape
     )
 
 
+def _accumulate_mu_for_batch(
+    config,
+    init,
+    mean_proj_half,
+    u_proj_half,
+    weights_half,
+    batch_b,
+    ctf_b,
+    translations,
+    noise_variance_full,
+    *,
+    residualize: bool,
+):
+    """Per-image-batch contribution to (per_r, per_r_ctf) accumulators.
+
+    Returns shapes (n_rot, half_image_size) that sum trivially across
+    batches. Same math as the unbatched path; just sliced to a chunk.
+    """
+    shifted_half_b, ctf2_over_nv_half_b, _ = _preprocess_batch_to_half(
+        config, batch_b, translations, ctf_b, noise_variance_full
+    )
+    stats_b = score_from_half_image_projections(
+        mean_proj_half,
+        u_proj_half,
+        init.s,
+        shifted_half_b,
+        ctf2_over_nv_half_b,
+        weights_half,
+    )
+    bias_b = None
+    if residualize:
+        bias_b = _per_rotation_bias_image(
+            config,
+            ctf_b,
+            noise_variance_full,
+            stats_b.log_resp,
+            stats_b.post_mean,
+            u_proj_half,
+        )
+    per_r_b = _per_rotation_residual_image(
+        config,
+        batch_b,
+        translations,
+        ctf_b,
+        noise_variance_full,
+        stats_b.log_resp,
+        residual_subtraction_half=bias_b,
+    )
+    per_r_ctf_b = _per_rotation_ctf_image(
+        config,
+        ctf_b,
+        noise_variance_full,
+        stats_b.log_resp,
+    )
+    return per_r_b, per_r_ctf_b
+
+
+def _stream_or_full_mu_update(
+    config,
+    init,
+    batch_full,
+    rotations,
+    translations,
+    ctf_params,
+    noise_variance_full,
+    *,
+    tau,
+    residualize,
+    image_batch_size,
+):
+    """Common driver: image-batched accumulation when image_batch_size
+    is set; otherwise the original single-shot code path."""
+    weights_half = make_half_image_weights(config.image_shape)
+    mean_proj_half = _slice_mu_half(init.mu, rotations, config.image_shape, config.volume_shape).astype(jnp.complex128)
+    u_proj_half = _slice_U_half(init.U, rotations, config.image_shape, config.volume_shape).astype(jnp.complex128)
+
+    n_img_total = batch_full.shape[0]
+    n_rot = rotations.shape[0]
+    half_image_size = mean_proj_half.shape[-1]
+    use_streaming = image_batch_size is not None and image_batch_size < n_img_total
+
+    if use_streaming:
+        per_r = jnp.zeros((n_rot, half_image_size), dtype=jnp.complex128)
+        per_r_ctf = jnp.zeros((n_rot, half_image_size), dtype=jnp.float64)
+        for i_start in range(0, n_img_total, image_batch_size):
+            i_end = min(i_start + image_batch_size, n_img_total)
+            per_r_b, per_r_ctf_b = _accumulate_mu_for_batch(
+                config,
+                init,
+                mean_proj_half,
+                u_proj_half,
+                weights_half,
+                batch_full[i_start:i_end],
+                ctf_params[i_start:i_end],
+                translations,
+                noise_variance_full,
+                residualize=residualize,
+            )
+            per_r = per_r + per_r_b
+            per_r_ctf = per_r_ctf + per_r_ctf_b
+    else:
+        per_r_b, per_r_ctf_b = _accumulate_mu_for_batch(
+            config,
+            init,
+            mean_proj_half,
+            u_proj_half,
+            weights_half,
+            batch_full,
+            ctf_params,
+            translations,
+            noise_variance_full,
+            residualize=residualize,
+        )
+        per_r = per_r_b
+        per_r_ctf = per_r_ctf_b
+
+    Ft_y_half = _backproject_to_half_volume(per_r, rotations, config.image_shape, config.volume_shape)
+    Ft_ctf_half = _backproject_to_half_volume(per_r_ctf, rotations, config.image_shape, config.volume_shape)
+    mu_next = _solve_wiener(Ft_y_half, Ft_ctf_half, tau).astype(jnp.complex128)
+    return MeanUpdateResult(
+        mu_half=mu_next,
+        Ft_y_half=Ft_y_half,
+        Ft_ctf_half=Ft_ctf_half,
+    )
+
+
 def update_mu_homogeneous(
     config,
     init: PPCAInit,
@@ -264,44 +390,21 @@ def update_mu_homogeneous(
     noise_variance_full,
     *,
     tau: float = 1e-3,
+    image_batch_size: int | None = None,
 ) -> MeanUpdateResult:
-    """v0 debugging-ablation mean update: feed PPCA-shaped
-    responsibilities into a homogeneous backprojection (no
-    residualization). Per spec Section 8.2.1, this is NOT a
-    Stage 1B graduation gate.
-    """
-    weights_half = make_half_image_weights(config.image_shape)
-    mean_proj_half = _slice_mu_half(init.mu, rotations, config.image_shape, config.volume_shape).astype(jnp.complex128)
-    u_proj_half = _slice_U_half(init.U, rotations, config.image_shape, config.volume_shape).astype(jnp.complex128)
-
-    shifted_half, ctf2_over_nv_half, _ctf_half = _preprocess_batch_to_half(
-        config, batch_full, translations, ctf_params, noise_variance_full
-    )
-    stats = score_from_half_image_projections(
-        mean_proj_half, u_proj_half, init.s, shifted_half, ctf2_over_nv_half, weights_half
-    )
-
-    per_r = _per_rotation_residual_image(
+    """v0 homogeneous mean update; image-batched when image_batch_size is set."""
+    return _stream_or_full_mu_update(
         config,
+        init,
         batch_full,
+        rotations,
         translations,
         ctf_params,
         noise_variance_full,
-        stats.log_resp,
-        residual_subtraction_half=None,
+        tau=tau,
+        residualize=False,
+        image_batch_size=image_batch_size,
     )
-    per_r_ctf = _per_rotation_ctf_image(
-        config,
-        ctf_params,
-        noise_variance_full,
-        stats.log_resp,
-    )
-
-    Ft_y_half = _backproject_to_half_volume(per_r, rotations, config.image_shape, config.volume_shape)
-    Ft_ctf_half = _backproject_to_half_volume(per_r_ctf, rotations, config.image_shape, config.volume_shape)
-
-    mu_next = _solve_wiener(Ft_y_half, Ft_ctf_half, tau).astype(jnp.complex128)
-    return MeanUpdateResult(mu_half=mu_next, Ft_y_half=Ft_y_half, Ft_ctf_half=Ft_ctf_half)
 
 
 def update_mu_residualized(
@@ -314,50 +417,18 @@ def update_mu_residualized(
     noise_variance_full,
     *,
     tau: float = 1e-3,
+    image_batch_size: int | None = None,
 ) -> MeanUpdateResult:
-    """v1 graduation-gate mean update (Stage 1B). Backprojects the
-    residualized images `y_i^res(g) = y_i - CTF_i · A_g · U · m_{i,g}`
-    weighted by responsibilities. The Wiener solve at the end is
-    identical to the homogeneous version, so the comparison is
-    "PPCA vs no-PPCA" rather than "configuration vs configuration".
-    """
-    weights_half = make_half_image_weights(config.image_shape)
-    mean_proj_half = _slice_mu_half(init.mu, rotations, config.image_shape, config.volume_shape).astype(jnp.complex128)
-    u_proj_half = _slice_U_half(init.U, rotations, config.image_shape, config.volume_shape).astype(jnp.complex128)
-
-    shifted_half, ctf2_over_nv_half, _ctf_half = _preprocess_batch_to_half(
-        config, batch_full, translations, ctf_params, noise_variance_full
-    )
-    stats = score_from_half_image_projections(
-        mean_proj_half, u_proj_half, init.s, shifted_half, ctf2_over_nv_half, weights_half
-    )
-
-    bias_per_r = _per_rotation_bias_image(
+    """v1 graduation-gate residualized mean update; image-batched when set."""
+    return _stream_or_full_mu_update(
         config,
-        ctf_params,
-        noise_variance_full,
-        stats.log_resp,
-        stats.post_mean,
-        u_proj_half,
-    )
-    per_r = _per_rotation_residual_image(
-        config,
+        init,
         batch_full,
+        rotations,
         translations,
         ctf_params,
         noise_variance_full,
-        stats.log_resp,
-        residual_subtraction_half=bias_per_r,
+        tau=tau,
+        residualize=True,
+        image_batch_size=image_batch_size,
     )
-    per_r_ctf = _per_rotation_ctf_image(
-        config,
-        ctf_params,
-        noise_variance_full,
-        stats.log_resp,
-    )
-
-    Ft_y_half = _backproject_to_half_volume(per_r, rotations, config.image_shape, config.volume_shape)
-    Ft_ctf_half = _backproject_to_half_volume(per_r_ctf, rotations, config.image_shape, config.volume_shape)
-
-    mu_next = _solve_wiener(Ft_y_half, Ft_ctf_half, tau).astype(jnp.complex128)
-    return MeanUpdateResult(mu_half=mu_next, Ft_y_half=Ft_y_half, Ft_ctf_half=Ft_ctf_half)

@@ -623,6 +623,59 @@ def _orthonormalize_and_update_s(U_half, s, weights, volume_size):
     return U_new, jnp.maximum(eigvals, 1e-10)
 
 
+def _accumulate_M_B_for_batch(
+    config,
+    init,
+    mean_proj_half,
+    u_proj_half,
+    batch_b,
+    ctf_b,
+    translations,
+    noise_variance_full,
+    weights_half_image,
+):
+    """Compute the (M_im, B_im) contribution from a single image batch.
+
+    Returns (M_im_b, B_im_b) at shapes (n_rot, q, q, n_half_image) and
+    (n_rot, q, n_half_image). Caller sums these over batches to get
+    the global accumulators. Same math as the unbatched code path —
+    just with the i-axis sliced to a batch.
+    """
+    shifted_half_b, ctf2_over_nv_half_b, _ = _preprocess_batch_to_half(
+        config, batch_b, translations, ctf_b, noise_variance_full
+    )
+    stats_b = score_from_half_image_projections(
+        mean_proj_half,
+        u_proj_half,
+        init.s,
+        shifted_half_b,
+        ctf2_over_nv_half_b,
+        weights_half_image,
+    )
+    gamma_b = jnp.exp(stats_b.log_resp)
+    m_b = stats_b.post_mean
+    Hinv_b_post = stats_b.post_Hinv
+
+    # Re-run the M-step accumulators on this batch only.
+    Hinv_b_post_5 = Hinv_b_post[:, :, None, :, :]
+    mm_outer = m_b[..., :, None] * m_b[..., None, :]
+    C_b = Hinv_b_post_5 + mm_outer
+
+    ctf2_w_b = ctf2_over_nv_half_b * weights_half_image[None, :]
+    weight_M_kl_b = jnp.einsum("igt,igtkl->igkl", gamma_b, C_b)
+    M_im_b = jnp.einsum("igkl,ip->gklp", weight_M_kl_b, ctf2_w_b)
+
+    weight_B_b = gamma_b[..., None] * m_b
+    shifted_w_b = shifted_half_b * weights_half_image[None, None, :]
+    Part1_b = jnp.einsum("igtk,itp->gkp", weight_B_b, shifted_w_b)
+    weight_B_t_b = jnp.sum(weight_B_b, axis=2)
+    M_const_b = jnp.einsum("igk,ip->gkp", weight_B_t_b, ctf2_w_b)
+    Part2_b = mean_proj_half[:, None, :] * M_const_b
+    B_im_b = Part1_b - Part2_b
+
+    return M_im_b, B_im_b, gamma_b, m_b, Hinv_b_post
+
+
 def update_factor_closed_form(
     config,
     init: PPCAInit,
@@ -635,6 +688,7 @@ def update_factor_closed_form(
     W_prior=None,
     ridge_lambda: float = 1e-4,
     update_s: bool = False,
+    image_batch_size: int | None = None,
 ) -> PPCAInit:
     """Closed-form per-voxel M-step for the PPCA factor U.
 
@@ -693,48 +747,90 @@ def update_factor_closed_form(
     # fixed (rotation, translation) grid).
     mean_proj_half = _slice_mu_half(init.mu, rotations, image_shape, volume_shape).astype(jnp.complex128)
     u_proj_half = _slice_U_half(init.U, rotations, image_shape, volume_shape).astype(jnp.complex128)
-    shifted_half, ctf2_over_nv_half, _ctf_half = _preprocess_batch_to_half(
-        config, batch_full, translations, ctf_params, noise_variance_full
-    )
-    stats = score_from_half_image_projections(
-        mean_proj_half,
-        u_proj_half,
-        init.s,
-        shifted_half,
-        ctf2_over_nv_half,
-        weights_half_image,
-    )
-    gamma = jnp.exp(stats.log_resp)  # (n_img, n_rot, n_trans)  responsibilities
-    m = stats.post_mean  # (n_img, n_rot, n_trans, q)  E[alpha | y, g, t]
-    Hinv = stats.post_Hinv  # (n_img, n_rot, q, q)        Cov(alpha | y, g)
 
-    n_img, n_rot, n_trans, q = m.shape
+    n_img_total = batch_full.shape[0]
+    n_rot = rotations.shape[0]
+    q = init.U.shape[0]
     half_volume_size = init.U.shape[-1]
+    n_half_image = mean_proj_half.shape[-1]
 
-    # Restored to original two-step contractions: at vol=64 with q≤8,
-    # all intermediates here are O(few hundred MB) and fit comfortably.
-    # The per-image OOM at vol=64 was specifically the
-    # `_per_rotation_residual_image` einsum (Phase 8.1 fix); the
-    # M-step contractions below were already memory-safe and fusing
-    # them gave XLA a worse contraction path.
+    # ---- STREAMING PATH: image-batched M-step accumulation ----
+    # When image_batch_size is set and < n_img, we loop over image
+    # chunks, run a mini E-step per chunk, and accumulate the
+    # (n_rot, q, q, n_half_image) and (n_rot, q, n_half_image)
+    # M_im / B_im tensors. This avoids materializing per-image
+    # tensors at vol≥64 where they OOM (Phase 4 / Phase 8 finding).
+    use_streaming = image_batch_size is not None and image_batch_size < n_img_total
+    if use_streaming and update_s:
+        raise NotImplementedError(
+            "update_s=True is not supported in streaming mode (image_batch_size). "
+            "Tipping-Bishop eigenvalue update needs global γ, m, Hinv stats; "
+            "implement separately if needed. Default v0 path uses update_s=False."
+        )
+    if use_streaming:
+        M_im_acc = jnp.zeros((n_rot, q, q, n_half_image), dtype=jnp.complex128)
+        B_im_acc = jnp.zeros((n_rot, q, n_half_image), dtype=jnp.complex128)
+        for i_start in range(0, n_img_total, image_batch_size):
+            i_end = min(i_start + image_batch_size, n_img_total)
+            M_im_b, B_im_b, _, _, _ = _accumulate_M_B_for_batch(
+                config,
+                init,
+                mean_proj_half,
+                u_proj_half,
+                batch_full[i_start:i_end],
+                ctf_params[i_start:i_end],
+                translations,
+                noise_variance_full,
+                weights_half_image,
+            )
+            M_im_acc = M_im_acc + M_im_b
+            B_im_acc = B_im_acc + B_im_b
+        M_im = M_im_acc
+        B_im = B_im_acc
+        gamma = m = Hinv = None  # not needed in streaming + update_s=False path
+        n_img = n_img_total
+        n_trans = translations.shape[0]
+        # Skip the unbatched section below.
+        _streaming_done = True
+    else:
+        _streaming_done = False
 
-    Hinv_b = Hinv[:, :, None, :, :]  # (n_img, n_rot, 1, q, q)
-    mm_outer = m[..., :, None] * m[..., None, :]  # (n_img, n_rot, n_trans, q, q)
-    C = Hinv_b + mm_outer
+    if not _streaming_done:
+        shifted_half, ctf2_over_nv_half, _ctf_half = _preprocess_batch_to_half(
+            config, batch_full, translations, ctf_params, noise_variance_full
+        )
+        stats = score_from_half_image_projections(
+            mean_proj_half,
+            u_proj_half,
+            init.s,
+            shifted_half,
+            ctf2_over_nv_half,
+            weights_half_image,
+        )
+        gamma = jnp.exp(stats.log_resp)  # (n_img, n_rot, n_trans)
+        m = stats.post_mean  # (n_img, n_rot, n_trans, q)
+        Hinv = stats.post_Hinv  # (n_img, n_rot, q, q)
 
-    ctf2_w = ctf2_over_nv_half * weights_half_image[None, :]  # (n_img, n_half_image)
+        n_img, n_rot, n_trans, q = m.shape
 
-    weight_M_kl = jnp.einsum("igt,igtkl->igkl", gamma, C)  # (n_img, n_rot, q, q)
-    M_im = jnp.einsum("igkl,ip->gklp", weight_M_kl, ctf2_w)  # (n_rot, q, q, n_half_image)
+        # Original unbatched accumulators (vol≤32 default path).
+        Hinv_b = Hinv[:, :, None, :, :]
+        mm_outer = m[..., :, None] * m[..., None, :]
+        C = Hinv_b + mm_outer
 
-    weight_B = gamma[..., None] * m  # (n_img, n_rot, n_trans, q)
-    shifted_w = shifted_half * weights_half_image[None, None, :]  # (n_img, n_trans, n_half_image)
-    Part1 = jnp.einsum("igtk,itp->gkp", weight_B, shifted_w)  # (n_rot, q, n_half_image)
+        ctf2_w = ctf2_over_nv_half * weights_half_image[None, :]
 
-    weight_B_t = jnp.sum(weight_B, axis=2)  # (n_img, n_rot, q)
-    M_const = jnp.einsum("igk,ip->gkp", weight_B_t, ctf2_w)  # (n_rot, q, n_half_image)
-    Part2 = mean_proj_half[:, None, :] * M_const
-    B_im = Part1 - Part2  # (n_rot, q, n_half_image)
+        weight_M_kl = jnp.einsum("igt,igtkl->igkl", gamma, C)
+        M_im = jnp.einsum("igkl,ip->gklp", weight_M_kl, ctf2_w)
+
+        weight_B = gamma[..., None] * m
+        shifted_w = shifted_half * weights_half_image[None, None, :]
+        Part1 = jnp.einsum("igtk,itp->gkp", weight_B, shifted_w)
+
+        weight_B_t = jnp.sum(weight_B, axis=2)
+        M_const = jnp.einsum("igk,ip->gkp", weight_B_t, ctf2_w)
+        Part2 = mean_proj_half[:, None, :] * M_const
+        B_im = Part1 - Part2
 
     # -----------------------------------------------------------------
     # 3. BACK-PROJECT EACH ACCUMULATOR INTO THE HALF-VOLUME.

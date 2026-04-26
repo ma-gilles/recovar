@@ -63,8 +63,8 @@ EOF
 
 COMMON="--vol 64 --svd-warmstart weighted --external-mode discrete_volumes --n-burnin 0 --s-init flat --ridge-mode scalar --u-init svd --mu-init perturbed --anneal-schedule none --dataset Ribosembly --q 4 --n-joint 30 --sigma 0.01 --seed 0 --init-seed 0"
 
-submit "vol64_n1024_order1" "$COMMON --n-images 1024 --healpix-order 1" 192GB
-submit "vol64_n1024_order2" "$COMMON --n-images 1024 --healpix-order 2" 256GB
-submit "vol64_n4096_order2" "$COMMON --n-images 4096 --healpix-order 2" 384GB
+submit "vol64_n1024_order1_bs256" "$COMMON --n-images 1024 --healpix-order 1 --image-batch-size 256" 96GB
+submit "vol64_n1024_order2_bs128" "$COMMON --n-images 1024 --healpix-order 2 --image-batch-size 128" 128GB
+submit "vol64_n4096_order2_bs128" "$COMMON --n-images 4096 --healpix-order 2 --image-batch-size 128" 192GB
 
 echo "==== submitted 3 cells to ${ROOT}"

@@ -636,6 +636,7 @@ def run_two_stage(
     ridge_mode="scalar",
     multiclass_K: int = 5,
     multiclass_iters: int = 50,
+    image_batch_size: int | None = None,
 ):
     """Two-stage loop with selectable mu init.
 
@@ -682,6 +683,7 @@ def run_two_stage(
         ds.ctf_params,
         ds.noise_variance_full,
         tau=0.0,
+        image_batch_size=image_batch_size,
     )
     mu_oracle_fp = mres_ofp.mu_half
     jax.block_until_ready(mu_oracle_fp)
@@ -756,7 +758,15 @@ def run_two_stage(
     for it in range(1, n_burnin + 1):
         t0 = time.perf_counter()
         mres = update_mu_homogeneous(
-            cfg, cur, ds.batch_full, ds.rotations, ds.translations, ds.ctf_params, ds.noise_variance_full, tau=0.0
+            cfg,
+            cur,
+            ds.batch_full,
+            ds.rotations,
+            ds.translations,
+            ds.ctf_params,
+            ds.noise_variance_full,
+            tau=0.0,
+            image_batch_size=image_batch_size,
         )
         cur = PPCAInit(mu=mres.mu_half, U=cur.U, s=cur.s, volume_shape=cur.volume_shape)
         jax.block_until_ready(cur.mu)
@@ -815,7 +825,15 @@ def run_two_stage(
         nv_iter = ds.noise_variance_full * factor
         nv_mu = ds.noise_variance_full if anneal_factor_only else nv_iter
         mres = update_mu_residualized(
-            cfg, cur, ds.batch_full, ds.rotations, ds.translations, ds.ctf_params, nv_mu, tau=0.0
+            cfg,
+            cur,
+            ds.batch_full,
+            ds.rotations,
+            ds.translations,
+            ds.ctf_params,
+            nv_mu,
+            tau=0.0,
+            image_batch_size=image_batch_size,
         )
         cur = PPCAInit(mu=mres.mu_half, U=cur.U, s=cur.s, volume_shape=cur.volume_shape)
         W_prior = compute_W_prior_half(cur.U, cur.s, cur.volume_shape) if ridge_mode == "w_prior" else None
@@ -829,6 +847,7 @@ def run_two_stage(
             nv_iter,
             W_prior=W_prior,
             update_s=update_eigenvalues,
+            image_batch_size=image_batch_size,
         )
         jax.block_until_ready(cur.U)
         ft = _fre_truth(cur.mu)
@@ -972,6 +991,17 @@ def main():
         type=int,
         default=50,
         help="Multi-class EM iterations for --mu-init multiclass. ~30-50 typical.",
+    )
+    ap.add_argument(
+        "--image-batch-size",
+        type=int,
+        default=None,
+        help="Phase 8 streaming: process the M-step in image-batch chunks "
+        "of this many images. Default None = no batching (fits in memory at "
+        "vol=32). Required at vol≥64 to avoid host-OOM in the joint loop's "
+        "M-step accumulators. Recommended: 256-512 at vol=64 / order=1, "
+        "128 at vol=64 / order=2. Mathematically identical to no batching "
+        "(verified at vol=32).",
     )
     ap.add_argument(
         "--external-mode",
@@ -1176,6 +1206,7 @@ def main():
             ridge_mode=args.ridge_mode,
             multiclass_K=args.multiclass_K,
             multiclass_iters=args.multiclass_iters,
+            image_batch_size=args.image_batch_size,
         )
     else:
         print(
@@ -1208,6 +1239,7 @@ def main():
                 ridge_mode=args.ridge_mode,
                 multiclass_K=args.multiclass_K,
                 multiclass_iters=args.multiclass_iters,
+                image_batch_size=args.image_batch_size,
             )
             if fre_floor is None:
                 fre_floor = fre_floor_k
