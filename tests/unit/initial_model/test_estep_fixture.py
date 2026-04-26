@@ -235,7 +235,7 @@ def test_estep_bpref_forward_parity():
     from recovar.em.initial_model.gpu_pipeline import (
         _split_halfset_particle_ids,
     )
-    from recovar.em.sampling import get_rotation_grid, get_translation_grid
+    from recovar.em.sampling import get_translation_grid
     from recovar.reconstruction.noise import make_radial_noise
     from recovar.utils.helpers import load_relion_volume
 
@@ -278,8 +278,40 @@ def test_estep_bpref_forward_parity():
 
     # Iter-1 sampling from run_it001_sampling.star: healpix_order=1, psi=30°,
     # offset_range=51 Å (=6 px at angpix 8.5), offset_step=17 Å (=2 px).
-    rotations = get_rotation_grid(nside_level=1, n_in_planes=12, matrices=True).astype(np.float32)
-    translations = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
+    # RELION applies adaptive_oversampling=1 → 8× rotation × 4× translation
+    # children per coarse cell, plus a per-iter random perturbation read from
+    # _rlnSamplingPerturbInstance. We replicate both here so the test's
+    # rotation+translation grid matches RELION's actual iter-1 sampled grid.
+    from recovar.em.sampling import (
+        apply_relion_translation_perturbation,
+        get_oversampled_rotation_grid_from_samples,
+        get_oversampled_translation_grid,
+        read_relion_perturbation_from_sampling_star,
+    )
+
+    sampling_star = FIXTURE_DIR / "run_it001_sampling.star"
+    random_perturbation, _perturbation_factor = read_relion_perturbation_from_sampling_star(str(sampling_star))
+
+    # Coarse RELION-NEST rotation indices: 48 healpix dirs × 12 psi = 576.
+    coarse_n_dir = 48
+    coarse_n_psi = 12
+    coarse_indices = np.arange(coarse_n_dir * coarse_n_psi, dtype=np.int64)
+    rotations, _ = get_oversampled_rotation_grid_from_samples(
+        coarse_indices,
+        parent_nside_level=1,
+        oversampling_order=1,
+        random_perturbation=random_perturbation,
+    )
+    rotations = rotations.astype(np.float32)
+
+    coarse_translations = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
+    translations, _ = get_oversampled_translation_grid(coarse_translations, pixel_offset=2, oversampling_order=1)
+    # offset_step in pixels (= 2 here for offset_step=17Å at angpix 8.5).
+    translations = apply_relion_translation_perturbation(
+        translations.astype(np.float32),
+        random_perturbation,
+        offset_step_pixels=2.0,
+    )
 
     # Match small-fixture iter-1 r_max=14, current_size=28
     r_max = 14
