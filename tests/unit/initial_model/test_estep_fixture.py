@@ -367,6 +367,10 @@ def test_estep_bpref_forward_parity():
             reconstruction_padding_factor=1,
             half_spectrum_scoring=True,
             return_stats=True,
+            # RELION uses MASKED images for E-step scoring (apply_image_mask=True
+            # in process_fn) and UNMASKED for M-step accumulation. score_with_masked_images
+            # toggles this in run_em — required for matching RELION's posteriors.
+            score_with_masked_images=True,
             # The RELION dump (Phase A, p{X}_estep_meta.txt) shows do_firstiter_cc=0
             # for the InitialModel default command, so the matching score path is
             # 'gaussian', not 'normalized_cc'. Earlier 'normalized_cc' run gave a
@@ -381,20 +385,24 @@ def test_estep_bpref_forward_parity():
     Ft_y_h0, Ft_ctf_h0 = _run_estep(ds.subset(h0_ids))
     Ft_y_h1, Ft_ctf_h1 = _run_estep(ds.subset(h1_ids))
 
-    # Convert to BPref compressed layout in RELION's frame. RELION's BPref
-    # half-complex axis is the LAST axis (output axis 2). The transpose
-    # `axes=(2, 0, 1)` maps input axis 1 → output axis 2, so the non-negative
-    # crop must be applied to input axis 1. Sign flip from the volume axis
-    # convention `vol_relion = -transpose(vol_recovar, (2,1,0))`.
+    # Use the canonical run_em_output_to_bpref converter (axis-2 half crop, no
+    # transpose). The volume convention sign-flip is folded into the per-
+    # particle CTF sign (recovar CTF = -RELION CTF), so a single sign flip
+    # on bp_data brings ours into RELION frame.
+    #
+    # FFT-N^d normalization: RELION's per-particle accumulator uses normalized
+    # FFTs (Fimg/N², Pref/N²), recovar uses unnormalized FFTs. For the
+    # accumulator ratios, working through the algebra:
+    #   bp_data_relion  = -N² × bp_data_recovar    (Pref sign flip × N² norm)
+    #   bp_weight_relion = +N⁴ × bp_weight_recovar (CTF²/σ² has σ²×N⁴ scale)
+    from recovar.em.initial_model.gpu_pipeline import run_em_output_to_bpref
+
+    n2 = float(ori) ** 2
+    n4 = float(ori) ** 4
+
     def _to_bpref_relion_frame(Ft_y, Ft_ctf, N, r_max):
-        hp = r_max + 1
-        c = N // 2
-        Fy = np.asarray(Ft_y).reshape(N, N, N)
-        Fc = np.asarray(Ft_ctf).reshape(N, N, N)
-        sl = (slice(c - hp, c + hp + 1), slice(c, c + hp + 1), slice(c - hp, c + hp + 1))
-        bp_data = -np.transpose(Fy[sl], (2, 0, 1)).astype(np.complex128)
-        bp_weight = np.transpose(Fc[sl], (2, 0, 1)).real.astype(np.float64)
-        return bp_data, bp_weight
+        bp_data, bp_weight = run_em_output_to_bpref(Ft_y, Ft_ctf, N, r_max, padding_factor=1)
+        return -bp_data * n2, bp_weight * n4
 
     bp_data_h0, bp_weight_h0 = _to_bpref_relion_frame(Ft_y_h0, Ft_ctf_h0, ori, r_max)
     bp_data_h1, bp_weight_h1 = _to_bpref_relion_frame(Ft_y_h1, Ft_ctf_h1, ori, r_max)
