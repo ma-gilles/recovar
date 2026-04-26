@@ -711,34 +711,27 @@ def update_factor_closed_form(
     n_img, n_rot, n_trans, q = m.shape
     half_volume_size = init.U.shape[-1]
 
-    # Phase 8 streaming-compatible accumulators: no per-image
-    # intermediates above (n_img, n_rot, q²) get materialized.
-    # Mathematically identical to the prior `C = Hinv + mm^T` path
-    # but uses the linearity of the (i, t)-contraction to feed
-    # XLA contractions that reduce over i directly.
+    # Restored to original two-step contractions: at vol=64 with q≤8,
+    # all intermediates here are O(few hundred MB) and fit comfortably.
+    # The per-image OOM at vol=64 was specifically the
+    # `_per_rotation_residual_image` einsum (Phase 8.1 fix); the
+    # M-step contractions below were already memory-safe and fusing
+    # them gave XLA a worse contraction path.
 
-    # ---- ctf2_w stays the same (rfft Hermitian weights baked in) ----
+    Hinv_b = Hinv[:, :, None, :, :]  # (n_img, n_rot, 1, q, q)
+    mm_outer = m[..., :, None] * m[..., None, :]  # (n_img, n_rot, n_trans, q, q)
+    C = Hinv_b + mm_outer
+
     ctf2_w = ctf2_over_nv_half * weights_half_image[None, :]  # (n_img, n_half_image)
 
-    # ---- M_im[g, k, l, p] = sum_{i,t} γ_{igt} · C_{igt,kl} · ctf2_w[i,p] ----
-    # Split into Hinv part (translation-independent) and mm^T part.
-    gamma_sum_t = jnp.sum(gamma, axis=2)  # (n_img, n_rot)
-    # Hinv contribution: sum_i (sum_t γ_{igt}) · Hinv_{ig,kl} · ctf2_w[i,p]
-    M_im_Hinv = jnp.einsum("ig,igkl,ip->gklp", gamma_sum_t, Hinv, ctf2_w)
-    # m m^T contribution: sum_{i,t} γ_{igt} · m_{igt,k} · m_{igt,l} · ctf2_w[i,p]
-    M_im_mm = jnp.einsum("igt,igtk,igtl,ip->gklp", gamma, m, m, ctf2_w)
-    M_im = M_im_Hinv + M_im_mm  # (n_rot, q, q, n_half_image)
+    weight_M_kl = jnp.einsum("igt,igtkl->igkl", gamma, C)  # (n_img, n_rot, q, q)
+    M_im = jnp.einsum("igkl,ip->gklp", weight_M_kl, ctf2_w)  # (n_rot, q, q, n_half_image)
 
-    # ---- B_im[g, k, p] : per-pose residual accumulator ----
-    # Math:  residual_{igt,p} = shifted_half[i,t,p] - ctf2_over_nv[i,p] · mean_proj[g,p]
-    #        B_im[g,k,p]      = sum_{i,t} γ_{igt} · m_{igt,k} · w_p · residual_{igt,p}
-    # Split into shifted-part (Part1) and mean-part (Part2).
+    weight_B = gamma[..., None] * m  # (n_img, n_rot, n_trans, q)
     shifted_w = shifted_half * weights_half_image[None, None, :]  # (n_img, n_trans, n_half_image)
-    # Fused over i,t in one contraction → no (n_img, n_rot, n_trans, q) intermediate.
-    Part1 = jnp.einsum("igt,igtk,itp->gkp", gamma, m, shifted_w)  # (n_rot, q, n_half_image)
+    Part1 = jnp.einsum("igtk,itp->gkp", weight_B, shifted_w)  # (n_rot, q, n_half_image)
 
-    # weight_B_t[i,g,k] = sum_t γ_{igt} m_{igt,k} : single fused einsum.
-    weight_B_t = jnp.einsum("igt,igtk->igk", gamma, m)  # (n_img, n_rot, q)
+    weight_B_t = jnp.sum(weight_B, axis=2)  # (n_img, n_rot, q)
     M_const = jnp.einsum("igk,ip->gkp", weight_B_t, ctf2_w)  # (n_rot, q, n_half_image)
     Part2 = mean_proj_half[:, None, :] * M_const
     B_im = Part1 - Part2  # (n_rot, q, n_half_image)

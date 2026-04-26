@@ -193,10 +193,11 @@ def _per_rotation_bias_image(
     ctf2_half = ftu.full_image_to_half_image(ctf2_full, image_shape)  # (n_img, half)
 
     gamma = jnp.exp(log_resp)  # (n_img, n_rot, n_trans)
-    # Fused contraction: directly produce (n_rot, q, half) — no
-    # (n_img, n_rot, q) `m_weighted` intermediate. XLA streams the
-    # i and t reductions together.
-    inner_per_r = jnp.einsum("irt,irtk,ip->rkp", gamma, post_mean, ctf2_half)
+    # m_weighted is small for typical q (n_img × n_rot × q): kept
+    # as the original two-step contraction; fusing here gave XLA
+    # a worse contraction path at vol=64 (Phase 8.1 finding).
+    m_weighted = jnp.einsum("irt,irtk->irk", gamma, post_mean)  # (n_img, n_rot, q)
+    inner_per_r = jnp.einsum("ip,irk->rkp", ctf2_half, m_weighted)  # (n_rot, q, half)
     bias = jnp.sum(u_proj_half * inner_per_r, axis=1)  # (n_rot, half)
     return bias.astype(jnp.complex128)
 
