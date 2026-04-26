@@ -127,10 +127,10 @@ def _per_rotation_residual_image(
     )
 
     gamma = jnp.exp(log_resp)  # (n_img, n_rot, n_trans)
-    # Sum over t: weighted_per_image[i, r, k] = sum_t gamma[i, r, t] * shifted[i, t, k]
-    weighted = jnp.einsum("irt,itk->irk", gamma, shifted_half)
-    # Sum over i: per_r[r, k] = sum_i weighted[i, r, k]
-    per_r = jnp.sum(weighted, axis=0).astype(jnp.complex128)
+    # Single fused contraction over (i, t) → (r, k). Avoids the
+    # (n_img, n_rot, half_image) intermediate that OOM'd at vol=64
+    # (Phase 4 finding). XLA plans this as one streaming reduction.
+    per_r = jnp.einsum("irt,itk->rk", gamma, shifted_half).astype(jnp.complex128)
 
     if residual_subtraction_half is not None:
         per_r = per_r - residual_subtraction_half
@@ -193,12 +193,10 @@ def _per_rotation_bias_image(
     ctf2_half = ftu.full_image_to_half_image(ctf2_full, image_shape)  # (n_img, half)
 
     gamma = jnp.exp(log_resp)  # (n_img, n_rot, n_trans)
-    # m_weighted[i, r, k] = sum_t gamma[i, r, t] * m[i, r, t, k]
-    m_weighted = jnp.einsum("irt,irtk->irk", gamma, post_mean)  # (n_img, n_rot, q)
-
-    # For each (r, k): inner_pix[r, k, k_pix] = sum_i ctf2_half[i, k_pix] * m_weighted[i, r, k]
-    # Then bias[r, k_pix] = sum_k u_proj_half[r, k, k_pix] * inner_pix[r, k, k_pix]
-    inner_per_r = jnp.einsum("ip,irk->rkp", ctf2_half, m_weighted)  # (n_rot, q, half)
+    # Fused contraction: directly produce (n_rot, q, half) — no
+    # (n_img, n_rot, q) `m_weighted` intermediate. XLA streams the
+    # i and t reductions together.
+    inner_per_r = jnp.einsum("irt,irtk,ip->rkp", gamma, post_mean, ctf2_half)
     bias = jnp.sum(u_proj_half * inner_per_r, axis=1)  # (n_rot, half)
     return bias.astype(jnp.complex128)
 
