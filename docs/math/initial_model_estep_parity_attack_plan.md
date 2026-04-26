@@ -331,3 +331,31 @@ genuinely structural argmax-divergence amplification — when multiple
 numerical residuals (mostly the per-pixel projection 0.003 and CTF
 sign management) shift argmax by 90°+ for that particle, scattering
 contributions across BPref.
+
+## Round-12 diagnostic: 0.26 CC gap is in adjoint scatter, NOT precision
+
+Per-pixel BPref diff confirms:
+  - Magnitude ratio is constant ~1e-4 across cells (uniform scale, fine)
+  - Top-100 cell position overlap = 38/100
+  - **Signal lands at different 3D voxels** between ours and RELION:
+      RELION top-1: (15,16,0) = freq (0,1,0)  magnitude 5023
+      Ours top-1:   (14,15,0) = freq (-1,0,0) magnitude 0.32
+  - RELION concentrates at z=15 (k_z=0 plane)
+  - Ours has signal at z=14,16 (k_z=±1, **adjoint smearing**)
+
+**Root cause**: trilinear adjoint scatter pattern in
+`recovar/core/relion_interp.py::_scatter_trilinear_half` differs from
+RELION's `BackProjector::set2DFourierTransform()`. Forward projection
+is now bit-exact (gridding correction landed); adjoint scatter wasn't
+audited line-by-line.
+
+**Concrete next action**: port RELION's `set2DFourierTransform` (in
+relion/src/backprojector.cpp ≈ around the FOR_ALL_DIRECT_ELEMENTS_IN_ARRAY3D
+adjoint loop) into JAX as a replacement for `_scatter_trilinear_half`,
+matching RELION's exact rounding (FLOOR vs ROUND), Xmipp-origin
+indexing, and Hermitian conjugate scatter behavior. The fix mirrors
+what we did for `Projector::project` → `relion_project_half` this
+session (commit 024febdd).
+
+Once landed, BPref CC should jump from +0.74 to bit-exact +1.0 since
+all other components are at machine precision.
