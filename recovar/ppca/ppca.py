@@ -5,14 +5,11 @@ import logging
 
 import jax
 import jax.numpy as jnp
-import matplotlib.pyplot as plt
 import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core, utils
 from recovar.core import linalg
-from recovar.heterogeneity import covariance_estimation
-from recovar.output import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -134,9 +131,7 @@ def _tri_size(q):
 
 
 _half_slice_volume = functools.partial(core.slice_volume, half_volume=True, half_image=True)
-batch_over_vol_slice_volume_half = jax.vmap(
-    _half_slice_volume, in_axes=(1, None, None, None, None), out_axes=1
-)
+batch_over_vol_slice_volume_half = jax.vmap(_half_slice_volume, in_axes=(1, None, None, None, None), out_axes=1)
 
 _half_adjoint_slice_volume = functools.partial(core.adjoint_slice_volume, half_image=True, half_volume=True)
 batch_over_vol_adjoint_slice_volume_half = jax.vmap(
@@ -145,10 +140,20 @@ batch_over_vol_adjoint_slice_volume_half = jax.vmap(
 
 
 def _e_step_half_inner(
-    images_half, mean, W_half, CTF_params, rotation_matrices, translations,
-    voxel_size, noise_variance_half,
-    image_shape, volume_shape, ctf_evaluator, compute_ll,
-    disc_type_mean, disc_type,
+    images_half,
+    mean,
+    W_half,
+    CTF_params,
+    rotation_matrices,
+    translations,
+    voxel_size,
+    noise_variance_half,
+    image_shape,
+    volume_shape,
+    ctf_evaluator,
+    compute_ll,
+    disc_type_mean,
+    disc_type,
     z_prior_precision_diag,  # (q,) array of 1/var per dim. Use jnp.ones(q) for identity prior.
 ):
     """JIT'd E-step core: computes sufficient stats and c=1 posterior.
@@ -216,9 +221,21 @@ def _e_step_half_inner(
         ll_per_image = -0.5 * (d_n * jnp.log(2.0 * jnp.pi) + r2 - quad + logdetM)
         ll_sum = jnp.sum(ll_per_image)
 
-    return (expected_zs, second_moment_zs, ctf_squared_half,
-            images_half, projected_mean_half, CTF_half, ll_sum,
-            H, g, h, t, nu, y_norm_sq)
+    return (
+        expected_zs,
+        second_moment_zs,
+        ctf_squared_half,
+        images_half,
+        projected_mean_half,
+        CTF_half,
+        ll_sum,
+        H,
+        g,
+        h,
+        t,
+        nu,
+        y_norm_sq,
+    )
 
 
 def E_M_step_batch_half(
@@ -267,12 +284,35 @@ def E_M_step_batch_half(
         z_prior_precision_diag = 1.0 / jnp.maximum(jnp.asarray(eigenvalues, dtype=W_half.real.dtype), 1e-12)
     else:
         z_prior_precision_diag = jnp.ones(basis_size, dtype=W_half.real.dtype)
-    (expected_zs, second_moment_zs, ctf_squared_half,
-     images_half_w, projected_mean_half_w, CTF_half, ll_sum,
-     H, g, h, t, nu, y_norm_sq) = _e_step_half_inner(
-        images_half, mean, W_half, CTF_params, rotation_matrices,
-        translations, voxel_size, noise_variance_half, image_shape,
-        volume_shape, ctf_evaluator, compute_ll, disc_type_mean, disc_type,
+    (
+        expected_zs,
+        second_moment_zs,
+        ctf_squared_half,
+        images_half_w,
+        projected_mean_half_w,
+        CTF_half,
+        ll_sum,
+        H,
+        g,
+        h,
+        t,
+        nu,
+        y_norm_sq,
+    ) = _e_step_half_inner(
+        images_half,
+        mean,
+        W_half,
+        CTF_params,
+        rotation_matrices,
+        translations,
+        voxel_size,
+        noise_variance_half,
+        image_shape,
+        volume_shape,
+        ctf_evaluator,
+        compute_ll,
+        disc_type_mean,
+        disc_type,
         z_prior_precision_diag,
     )
 
@@ -286,7 +326,12 @@ def E_M_step_batch_half(
         if eigenvalues is None:
             eigenvalues = jnp.ones(basis_size)
         result = contrast_posterior.solve_latent_posterior(
-            H=H, g=g, h=h, t=t, nu=nu, y_norm_sq=y_norm_sq,
+            H=H,
+            g=g,
+            h=h,
+            t=t,
+            nu=nu,
+            y_norm_sq=y_norm_sq,
             lambdas=eigenvalues,
             contrast_mode=contrast_mode,
             contrast_nodes=contrast_grid,
@@ -498,21 +543,106 @@ def _mstep_cg(matvec, b, x0, maxiter, tol, precond):
     return x
 
 
-def _pcg_hard_mstep(lhs_tri, rhs_h, reg_diag, mask, vs, q, unpack_fn,
-                    W0_real=None, maxiter=20, tol=1e-4):
+def _mstep_cg_projected(matvec, b, x0, maxiter, tol, precond, project):
+    """Projected preconditioned CG for multi-mask M-step.
+
+    Like ``_mstep_cg`` but applies ``project`` after each update to enforce
+    per-PC support constraints. When ``project`` is identity this reduces to
+    standard PCG.
+    """
+    x = project(x0)
+    r = project(b - matvec(x))
+    z = project(precond(r)) if precond is not None else r
+    p = z
+    rz = float(jnp.sum(r * z))
+    b2 = max(float(jnp.sum(b * b)), 1e-30)
+    for _ in range(maxiter):
+        Ap = project(matvec(p))
+        pAp = float(jnp.sum(p * Ap))
+        if pAp < 1e-30:
+            break
+        alpha = rz / pAp
+        x = x + alpha * p
+        r = r - alpha * Ap
+        rr = float(jnp.sum(r * r))
+        if jnp.sqrt(rr / b2) < tol:
+            break
+        z = project(precond(r)) if precond is not None else r
+        rz_new = float(jnp.sum(r * z))
+        p = z + (rz_new / max(abs(rz), 1e-30)) * p
+        rz = rz_new
+    return x
+
+
+def _build_pc_mask_projection(masks, pc_mask_assignment, sup, q, vol):
+    """Build a per-PC mask indicator on the union support.
+
+    Returns
+    -------
+    pc_sup_mask : (n_sup, q) bool array
+        True where PC k is allowed at union-support voxel i.
+    """
+    n_sup = sup.shape[0]
+    masks_flat = jnp.asarray(masks).reshape(len(masks), vol)
+    # For each (support_voxel, pc): is that voxel in the PC's assigned mask?
+    assignment = jnp.asarray(pc_mask_assignment)  # (q,)
+    # masks_flat[assignment[k], sup[i]] > 0.5
+    pc_sup_mask = masks_flat[assignment][:, sup].T  # (n_sup, q)
+    return pc_sup_mask > 0.5
+
+
+def _pcg_hard_mstep(
+    lhs_tri,
+    rhs_h,
+    reg_diag,
+    mask,
+    vs,
+    q,
+    unpack_fn,
+    W0_real=None,
+    maxiter=20,
+    tol=1e-4,
+    masks=None,
+    pc_mask_assignment=None,
+):
     """Masked, K-internalised PCG hard M-step.
 
     Solves the masked PPCA M-step in support-restricted coordinates Z, with
     the gridding kernel K = sinc² baked into the operator. The returned W
     is real-space (q, D, D, D), already mask-zeroed and K-deconvolved —
     callers feed it straight into rfft (no post-mask, no post-gridding).
+
+    Multi-mask support
+    ------------------
+    When ``masks`` (M, D, D, D) and ``pc_mask_assignment`` (q,) are provided,
+    the solver uses the union of all masks as the support and runs projected CG:
+    after each iteration, each PC k is zeroed outside its assigned mask.
     """
     G = _compute_gridding_kernel(vs)
-    sup = jnp.where(jnp.asarray(mask).ravel() > 0.5)[0]
-    n_sup = sup.shape[0]
     vol = int(np.prod(vs))
     N = vol
-    k_eff_sq = float(jnp.sum(G ** 2)) / N
+
+    # Determine support: union of all masks if multi-mask, else single mask
+    if masks is not None and pc_mask_assignment is not None:
+        union_mask = jnp.any(jnp.asarray(masks).reshape(len(masks), vol) > 0.5, axis=0)
+        sup = jnp.where(union_mask)[0]
+    else:
+        sup = jnp.where(jnp.asarray(mask).ravel() > 0.5)[0]
+
+    n_sup = sup.shape[0]
+    k_eff_sq = float(jnp.sum(G**2)) / N
+
+    # Per-PC projection mask (None = no per-PC restriction)
+    pc_proj = None
+    if masks is not None and pc_mask_assignment is not None:
+        pc_proj = _build_pc_mask_projection(masks, pc_mask_assignment, sup, q, vol)
+
+    def project_pc(Z_flat):
+        """Zero out PCs at voxels outside their assigned mask."""
+        if pc_proj is None:
+            return Z_flat
+        Z = Z_flat.reshape(n_sup, q)
+        return (Z * pc_proj).ravel()
 
     def scatter(Z_flat):
         Z = Z_flat.reshape(n_sup, q)
@@ -529,6 +659,7 @@ def _pcg_hard_mstep(lhs_tri, rhs_h, reg_diag, mask, vs, q, unpack_fn,
     # RHS = E^T K iFFT[d]
     d_real = _mstep_batched_irfft(rhs_h, vs, q)
     rhs_flat = gather(G[None] * d_real).astype(jnp.float32)
+    rhs_flat = project_pc(rhs_flat)
 
     # Circulant preconditioner: E^T iFFT[(k_eff² A + Λ)^{-1} FFT[E Z]]
     prec_reg = k_eff_sq * reg_diag
@@ -537,7 +668,7 @@ def _pcg_hard_mstep(lhs_tri, rhs_h, reg_diag, mask, vs, q, unpack_fn,
         V = scatter(Z_flat)
         V_h = _mstep_batched_rfft(V, vs)
         S_h = _mstep_AL_solve_fourier(V_h, lhs_tri, prec_reg, q, unpack_fn, lhs_scale=k_eff_sq)
-        return gather(_mstep_batched_irfft(S_h, vs, q))
+        return project_pc(gather(_mstep_batched_irfft(S_h, vs, q)))
 
     # Initial guess: warmstart from previous iter (in support coords) or
     # per-voxel Wiener (with K^{-1}) gathered to the support.
@@ -547,8 +678,9 @@ def _pcg_hard_mstep(lhs_tri, rhs_h, reg_diag, mask, vs, q, unpack_fn,
         W0_h = _mstep_AL_solve_fourier(rhs_h, lhs_tri, reg_diag, q, unpack_fn)
         W0_r = _mstep_batched_irfft(W0_h, vs, q) / jnp.maximum(G[None], 0.01)
         x0 = gather(W0_r).astype(jnp.float32)
+    x0 = project_pc(x0)
 
-    Z_flat = _mstep_cg(matvec, rhs_flat, x0, maxiter, tol, precond)
+    Z_flat = _mstep_cg_projected(matvec, rhs_flat, x0, maxiter, tol, precond, project_pc)
     return scatter(Z_flat).astype(jnp.float32)
 
 
@@ -595,6 +727,8 @@ def EM_step_half(
     contrast_mean=1.0,
     contrast_variance=np.inf,
     return_mean_c=False,
+    masks=None,
+    pc_mask_assignment=None,
 ):
     """Half-spectrum EM step for L2-regularized PPCA.
 
@@ -685,8 +819,11 @@ def EM_step_half(
     # ------------------------------------------------------------------
     W_prior_half = ftu.full_volume_to_half_volume(W_prior.T, volume_shape).T
     reg_half = 1 / (W_prior_half + 1e-16)
-    mask = jnp.array(volume_mask).reshape(volume_shape) if volume_mask is not None \
+    mask = (
+        jnp.array(volume_mask).reshape(volume_shape)
+        if volume_mask is not None
         else jnp.ones(volume_shape, dtype=jnp.float32)
+    )
 
     W0 = None
     if W_prev_real is not None:
@@ -703,6 +840,8 @@ def EM_step_half(
         W0_real=W0,
         maxiter=pcg_maxiter,
         tol=1e-4,
+        masks=masks,
+        pc_mask_assignment=pc_mask_assignment,
     )
     # (q, D, D, D) real → (half_vol, q) half-Fourier
     W = ftu.get_dft3_real(W_real).reshape(basis_size, -1).T
@@ -743,6 +882,7 @@ def EM_step_half(
 
 # @functools.partial(jax.jit, static_argnums = [5])
 
+
 def batch_vec(x):
     return x.swapaxes(-1, -2).reshape(-1, x.shape[-1] ** 2)
 
@@ -773,7 +913,7 @@ def _orthonormalize_W_to_basis(W_half, volume_shape):
     W_real = W_real_vol.reshape(q, vol_size).T.astype(np.float32)
 
     U_flat, S_real, Vt = np.linalg.svd(W_real, full_matrices=False)
-    s = (S_real ** 2 * vol_size).astype(np.float32)
+    s = (S_real**2 * vol_size).astype(np.float32)
     U_flat = U_flat / np.sqrt(vol_size)
     U_real = U_flat.T.reshape(q, *vs).astype(np.float32)
     return U_real, s, Vt
@@ -793,8 +933,15 @@ def _refitb_Gi_hi_batch(PU, centered_images):
 
 
 def _refitb_compute_Gi_hi_from_U_real(
-    dataset, mean_fourier, U_real, volume_shape, voxel_size,
-    batch_size, disc_type, disc_type_mean, apply_image_mask=True,
+    dataset,
+    mean_fourier,
+    U_real,
+    volume_shape,
+    voxel_size,
+    batch_size,
+    disc_type,
+    disc_type_mean,
+    apply_image_mask=True,
 ):
     """Per-image G_i, h_i in the orthonormal basis ``U_real``.
 
@@ -839,13 +986,24 @@ def _refitb_compute_Gi_hi_from_U_real(
         images = core.translate_images(images, translations, image_shape) / jnp.sqrt(noise_variance)
         CTF = dataset.ctf_evaluator(ctf_params, image_shape, voxel_size) / jnp.sqrt(noise_variance)
 
-        projected_mean = core.slice_volume(
-            mean_jax, rotation_matrices, image_shape, volume_shape, disc_type_mean,
-        ) * CTF
+        projected_mean = (
+            core.slice_volume(
+                mean_jax,
+                rotation_matrices,
+                image_shape,
+                volume_shape,
+                disc_type_mean,
+            )
+            * CTF
+        )
         centered_images = images - projected_mean
 
         PU = batch_over_vol_slice_volume(
-            U_jax, rotation_matrices, image_shape, volume_shape, disc_type,
+            U_jax,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            disc_type,
         )
         PU = PU * CTF[:, None, :]
 
@@ -857,8 +1015,7 @@ def _refitb_compute_Gi_hi_from_U_real(
     return G_all, h_all
 
 
-def _refitb_em_steps(G_all, h_all, B_init, n_inner_iters=3, eps=1e-8,
-                     B_prior=None, kappa=0.0):
+def _refitb_em_steps(G_all, h_all, B_init, n_inner_iters=3, eps=1e-8, B_prior=None, kappa=0.0):
     """A few EM iterations on B in a fixed span.
 
     Optionally regularises with an inverse-Wishart-style ridge:
@@ -902,6 +1059,7 @@ def EM(
     pcg_maxiter=20,
     contrast_mode="none",
     contrast_grid=None,
+    contrast_weights=None,
     contrast_mean=1.0,
     contrast_variance=np.inf,
     projcov_every=0,
@@ -911,6 +1069,8 @@ def EM(
     refitb_inner_iters=3,
     refitb_kappa=0.0,
     gpu_memory_to_use=40,
+    masks=None,
+    pc_mask_assignment=None,
 ):
     """Run EM for L2-regularized PPCA.
 
@@ -964,6 +1124,10 @@ def EM(
 
     if contrast_grid is None:
         contrast_grid = np.ones([1])
+    # Default PC-to-mask assignment: split PCs evenly across masks
+    if masks is not None and pc_mask_assignment is None:
+        n_masks = len(masks)
+        pc_mask_assignment = np.array([k % n_masks for k in range(basis_size)], dtype=np.int32)
     # Larger batches amortize per-batch overhead (kernel launches, backprojection).
     # 200 is optimal for 256³/20 PCs on 80 GB GPU (~37 GB peak, 4.6 ms/img).
     # Smaller grids use less memory so the same batch size is safe.
@@ -1023,10 +1187,13 @@ def EM(
             W_prev_real=_W_prev_real if iter_i > 0 else None,
             contrast_mode=_contrast_mode,
             contrast_grid=jnp.array(contrast_grid) if contrast_grid is not None else None,
+            contrast_weights=jnp.array(contrast_weights) if contrast_weights is not None else None,
             eigenvalues=None,  # Λ=I (z~N(0,I), W absorbs scale)
             contrast_mean=contrast_mean,
             contrast_variance=contrast_variance,
             return_mean_c=True,
+            masks=masks,
+            pc_mask_assignment=pc_mask_assignment,
         )
         posterior_info = {"mean_c": np.asarray(mean_c, dtype=np.float32)}
 
@@ -1043,17 +1210,11 @@ def EM(
         # span(U), and rebake the calibration directly into W as
         # ``W ← U_refined · √projcov_s``. The next E-step then uses this
         # calibrated W and runs unconstrained.
-        if (
-            projcov_every > 0
-            and iter_i >= projcov_start
-            and (iter_i - projcov_start) % projcov_every == 0
-        ):
+        if projcov_every > 0 and iter_i >= projcov_start and (iter_i - projcov_start) % projcov_every == 0:
             U_real, s_em, _ = _orthonormalize_W_to_basis(W, vs)
             q_loc = U_real.shape[0]
             vol_size = int(np.prod(vs))
-            basis_fourier = (
-                np.asarray(ftu.get_dft3(U_real)).reshape(q_loc, vol_size).T.astype(np.complex64)
-            )
+            basis_fourier = np.asarray(ftu.get_dft3(U_real)).reshape(q_loc, vol_size).T.astype(np.complex64)
             refined_u, projcov_s = principal_components.pca_by_projected_covariance(
                 reference_dataset,
                 basis_fourier,
@@ -1113,11 +1274,7 @@ def EM(
         #     W ← (U @ R) · √eigvals(B)
         # where R diagonalises B. This puts the spectrum on a per-image
         # posterior-moment basis instead of a projected-data-covariance basis.
-        if (
-            refitb_every > 0
-            and iter_i >= refitb_start
-            and (iter_i - refitb_start) % refitb_every == 0
-        ):
+        if refitb_every > 0 and iter_i >= refitb_start and (iter_i - refitb_start) % refitb_every == 0:
             U_real, s_em_rb, _ = _orthonormalize_W_to_basis(W, vs)
             q_rb = U_real.shape[0]
             vol_size = int(np.prod(vs))
@@ -1136,7 +1293,9 @@ def EM(
 
             B_init = np.diag(s_em_rb.astype(np.float64))
             B_refit = _refitb_em_steps(
-                G_all, h_all, B_init,
+                G_all,
+                h_all,
+                B_init,
                 n_inner_iters=refitb_inner_iters,
                 kappa=refitb_kappa,
                 B_prior=B_init if refitb_kappa > 0 else None,
@@ -1158,12 +1317,8 @@ def EM(
             )
 
             # W ← (U @ R) · √refit_s, then back to half-Fourier.
-            U_rotated_real = np.einsum(
-                "kxyz,kj->jxyz", np.asarray(U_real), R_refit.astype(np.float32)
-            )
-            U_rotated_full_F = (
-                np.asarray(ftu.get_dft3(U_rotated_real)).reshape(q_rb, vol_size).T
-            )
+            U_rotated_real = np.einsum("kxyz,kj->jxyz", np.asarray(U_real), R_refit.astype(np.float32))
+            U_rotated_full_F = np.asarray(ftu.get_dft3(U_rotated_real)).reshape(q_rb, vol_size).T
             W_full_rb = (U_rotated_full_F * np.sqrt(np.maximum(refit_s, 0.0))[None, :]).astype(np.complex64)
             W_full_rb_grid = W_full_rb.T.reshape(q_rb, *vs)
             W_half_rb_grid = ftu.full_volume_to_half_volume(W_full_rb_grid, vs)
@@ -1261,8 +1416,8 @@ def EM(
     U_real, S_squared, _Vt = _orthonormalize_W_to_basis(W, reference_dataset.volume_shape)
     q_out = U_real.shape[0]
     half_vs_out = ftu.volume_shape_to_half_volume_shape(reference_dataset.volume_shape)
-    U_half_F = ftu.get_dft3_real(jnp.array(U_real))                # (q, *half_vs)
-    U = U_half_F.reshape(q_out, -1).T                              # (half_vol, q)
+    U_half_F = ftu.get_dft3_real(jnp.array(U_real))  # (q, *half_vs)
+    U = U_half_F.reshape(q_out, -1).T  # (half_vol, q)
     S = jnp.array(np.sqrt(np.maximum(S_squared, 0.0)).astype(np.float32))
 
     if return_iteration_data and return_posterior_info:
@@ -1272,5 +1427,3 @@ def EM(
     if return_posterior_info:
         return U, S**2, W, expected_zs, second_moment_zs, posterior_info
     return U, S**2, W, expected_zs, second_moment_zs
-
-

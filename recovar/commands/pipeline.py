@@ -3,21 +3,23 @@
 import logging
 
 logger = logging.getLogger(__name__)
-import recovar.jax_config
+import argparse
+import os
+import sys
+import time
+
 import numpy as np
-import os, argparse, time, sys
+
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import utils
-from recovar.reconstruction import homogeneous, noise
-from recovar.output import output
-from recovar.data_io import cryoem_dataset, halfsets
 from recovar.core import mask
-from recovar.heterogeneity import embedding, principal_components, covariance_estimation
+from recovar.data_io import cryoem_dataset, halfsets
+from recovar.heterogeneity import covariance_estimation, embedding, principal_components
+from recovar.output import output
 from recovar.output.output_paths import ResultPaths
 from recovar.ppca import ppca as ppca_module
 from recovar.ppca import prior_estimation as ppca_prior_estimation
-import recovar.core.fourier_transform_utils as fourier_transform_utils
-
-
+from recovar.reconstruction import homogeneous, noise
 from recovar.utils.helpers import RobustFileHandler as _RobustFileHandler
 from recovar.utils.helpers import RobustStreamHandler as _RobustStreamHandler
 
@@ -445,6 +447,18 @@ def add_args(parser: argparse.ArgumentParser):
         ),
     )
     adv.add_argument(
+        "--ppca-pcs-per-mask",
+        dest="ppca_pcs_per_mask",
+        type=str,
+        default=None,
+        help=(
+            "Comma-separated list of how many PCs to assign to each mask. "
+            "E.g. '5,5' assigns PCs 0-4 to mask 0 and PCs 5-9 to mask 1. "
+            "Requires --use-complement-mask or multiple masks. "
+            "If omitted, PCs are split evenly across masks."
+        ),
+    )
+    adv.add_argument(
         "--test-covar-options",
         dest="test_covar_options",
         action="store_true",
@@ -819,10 +833,25 @@ def _resolve_ppca_contrast_mode(args):
 
 
 def _resolve_ppca_contrast_grid(contrast_mode):
-    """Return the provisional PPCA contrast quadrature grid."""
+    """Return PPCA contrast quadrature nodes and weights.
+
+    Uses Gauss-Legendre quadrature on [0, 2] (matching the covariance path's
+    default contrast interval) with 16 nodes.
+
+    Returns
+    -------
+    (nodes, weights) : tuple of np.ndarray or (None, None)
+    """
     if contrast_mode == "none":
-        return None
-    return np.linspace(0.3, 1.7, 16, dtype=np.float32)
+        return None, None
+    from recovar.ppca.contrast_posterior import make_contrast_quadrature
+
+    nodes, weights = make_contrast_quadrature(
+        rule="gauss_legendre",
+        interval=(0.0, 2.0),
+        n_nodes=16,
+    )
+    return np.asarray(nodes, dtype=np.float32), np.asarray(weights, dtype=np.float32)
 
 
 def _resolve_ppca_zdim(args):
@@ -860,13 +889,12 @@ def _make_ppca_initial_loading(volume_size, basis_size, seed=0, init_scale=0.01,
     rng = np.random.default_rng(seed)
     if volume_shape is None:
         side = int(round(volume_size ** (1.0 / 3.0)))
-        if side ** 3 != int(volume_size):
-            raise ValueError(
-                f"volume_size={volume_size} is not a perfect cube; pass volume_shape explicitly"
-            )
+        if side**3 != int(volume_size):
+            raise ValueError(f"volume_size={volume_size} is not a perfect cube; pass volume_shape explicitly")
         volume_shape = (side, side, side)
     volume_shape = tuple(int(s) for s in volume_shape)
     from recovar.core import fourier_transform_utils as _ftu
+
     half_vol_size = int(np.prod(_ftu.volume_shape_to_half_volume_shape(volume_shape)))
     W_half = np.empty((half_vol_size, int(basis_size)), dtype=np.complex64)
     for j in range(int(basis_size)):
@@ -955,18 +983,32 @@ def _run_ppca_refinement(
 
     if getattr(args, "tilt_series", False):
         raise ValueError("PPCA pipeline mode does not support --tilt-series yet")
-    if getattr(args, "use_complement_mask", False):
-        raise ValueError("PPCA pipeline mode does not support --use-complement-mask yet")
 
-    logger.warning(
-        "PPCA pipeline mode currently uses the provisional hybrid-shell prior. This should be tightened up."
-    )
+    # Multi-mask support: build masks array and PC assignment
+    ppca_masks = None
+    ppca_pc_mask_assignment = None
+    if len(focus_masks) > 1:
+        ppca_masks = np.array([np.asarray(m, dtype=np.float32) for m in focus_masks])
+        pcs_per_mask_str = getattr(args, "ppca_pcs_per_mask", None)
+        if pcs_per_mask_str is not None:
+            pcs_per_mask = [int(x) for x in pcs_per_mask_str.split(",")]
+            if len(pcs_per_mask) != len(focus_masks):
+                raise ValueError(
+                    f"--ppca-pcs-per-mask has {len(pcs_per_mask)} entries but there are {len(focus_masks)} masks"
+                )
+            if sum(pcs_per_mask) != basis_size:
+                raise ValueError(f"--ppca-pcs-per-mask sums to {sum(pcs_per_mask)} but --ppca-zdim is {basis_size}")
+            assignment = []
+            for mask_idx, n_pcs in enumerate(pcs_per_mask):
+                assignment.extend([mask_idx] * n_pcs)
+            ppca_pc_mask_assignment = np.array(assignment, dtype=np.int32)
+        # else: EM() will default to even split
+
+    logger.warning("PPCA pipeline mode currently uses the provisional hybrid-shell prior. This should be tightened up.")
 
     contrast_mode = _resolve_ppca_contrast_mode(args)
-    contrast_grid = _resolve_ppca_contrast_grid(contrast_mode)
-    W_init = _make_ppca_initial_loading(
-        dataset.volume_size, basis_size, volume_shape=dataset.volume_shape
-    )
+    contrast_grid, contrast_weights = _resolve_ppca_contrast_grid(contrast_mode)
+    W_init = _make_ppca_initial_loading(dataset.volume_size, basis_size, volume_shape=dataset.volume_shape)
     prior_info = ppca_prior_estimation.estimate_hybrid_shell_prior_from_data(
         dataset,
         means.combined,
@@ -1024,6 +1066,7 @@ def _run_ppca_refinement(
         dilated_volume_mask=dilated_volume_mask,
         contrast_mode=contrast_mode,
         contrast_grid=contrast_grid,
+        contrast_weights=contrast_weights,
         projcov_every=projcov_every,
         projcov_start=projcov_start,
         refitb_every=refitb_every,
@@ -1031,6 +1074,8 @@ def _run_ppca_refinement(
         refitb_inner_iters=refitb_inner_iters,
         refitb_kappa=refitb_kappa,
         gpu_memory_to_use=gpu_memory,
+        masks=ppca_masks,
+        pc_mask_assignment=ppca_pc_mask_assignment,
     )
 
     # Embeddings: ALWAYS go through _compute_embeddings (= the same path the
@@ -1043,14 +1088,10 @@ def _run_ppca_refinement(
     # — but s_ppca is the *biased* PPCA spectrum (under-calibrated by the
     # standard (1 + σ²/λ) factor), so the resulting "alpha" was off by that
     # bias and not directly comparable to cov/projcov/refitb.
-    half_vol_size = int(np.prod(
-        fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)
-    ))
+    half_vol_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)))
     U_full = U_ppca
     if U_full.shape[0] == half_vol_size:
-        U_full = fourier_transform_utils.half_volume_to_full_volume(
-            np.asarray(U_full).T, dataset.volume_shape
-        ).T
+        U_full = fourier_transform_utils.half_volume_to_full_volume(np.asarray(U_full).T, dataset.volume_shape).T
     U_full = _as_pipeline_basis_dtype(U_full)
     u = {"rescaled": U_full, "real": None}
 
@@ -1070,7 +1111,8 @@ def _run_ppca_refinement(
         s_for_embed[eff_zdim:] = 1e-12
         logger.info(
             "PPCA: --ppca-effective-zdim=%d; floored trailing %d eigenvalues for embedding",
-            eff_zdim, basis_size - eff_zdim,
+            eff_zdim,
+            basis_size - eff_zdim,
         )
 
     s = {"rescaled": s_for_embed, "real": None}
@@ -1106,7 +1148,11 @@ def _run_ppca_refinement(
 
     logger.info(
         "PPCA solve complete: q=%d iters=%d projcov_every=%d refitb_every=%d contrast_mode=%s",
-        basis_size, em_iter, projcov_every, refitb_every, contrast_mode,
+        basis_size,
+        em_iter,
+        projcov_every,
+        refitb_every,
+        contrast_mode,
     )
     return {
         "u_rescaled": u_rescaled,
