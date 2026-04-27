@@ -114,3 +114,134 @@ one engineer continues the fixed-state score trace:
 
 Record each result in this roadmap or the current-status doc before starting
 implementation, so the next agent does not repeat the same source audit.
+
+## Read-only investigation results - 2026-04-27
+
+### Pass-2 routing
+
+Non-local adaptive pass 2 still routes through `compute_pass2_stats_sparse()`
+from `iteration_loop.py`, with a second sparse caller in the global-significant
+support path. The current bucketed implementation builds per-image oversampled
+children and a sparse `(rotation, translation)` mask in
+`helpers/sparse_pass2_bucketed.py`.
+
+The key design mismatch is that `_run_local_search_iteration()` / exact local
+search currently builds Gaussian neighborhoods from prior poses, while adaptive
+pass 2 must score arbitrary pass-1 significant coarse samples and their
+oversampled children. `score_local_bucket()` currently accepts only a
+per-rotation mask; pass 2 needs an optional `(B, R, T)` candidate mask.
+
+Minimal implementation:
+
+1. Add a pass-2 layout builder beside `LocalHypothesisLayout` that reuses the
+   current per-image pass-2 input preparation.
+2. Extend `LocalHypothesisLayout`, `LocalBucketSpec`, and `score_local_bucket()`
+   to accept an optional `(B, R, T)` candidate mask.
+3. Extend `run_local_em_exact()` to return the pass-2 best rotation,
+   translation, and child bookkeeping needed by the iteration loop.
+4. Replace the adaptive sparse caller with `_run_local_search_iteration(...,
+   local_engine="exact_v1", pass2_layout=...)`; do not route through
+   `grouped_union`.
+5. Convert the global-significant-support path only after adding support for
+   its externally supplied `normalization_log_z`.
+
+Relevant tests: update `tests/unit/test_refine_relion_mode.py` assertions that
+patch `compute_pass2_stats_sparse`, and compare new local-exact pass 2 against
+the current per-image reference in `tests/unit/test_sparse_pass2_bucketed_parity.py`.
+
+### Convergence and finalization
+
+RELION checks convergence at the top of each loop before the E-step. The exact
+condition is:
+
+`has_fine_enough_angular_sampling && nr_iter_wo_resol_gain >= 1 &&
+(auto_ignore_angle_changes || nr_iter_wo_large_hidden_variable_changes >= 1)`.
+
+On convergence, RELION sets `has_converged=true`,
+`do_join_random_halves=true`, and `do_use_all_data=true`. The final iteration is
+not a separate post-loop phase; it is the next normal loop iteration after those
+flags are set. `do_use_all_data` forces `current_size=ori_size`.
+
+Important RECOVAR mismatches:
+
+- RECOVAR currently checks convergence at the end of a normal iteration and has
+  a separate final block.
+- RECOVAR can run that final block after plain `max_iter` exhaustion; RELION
+  does not.
+- RECOVAR's final block scores against averaged half maps. RELION still scores
+  each random half against its own half map and only joins weighted sums after
+  expectation/FSC.
+- RECOVAR treats `healpix_order >= max_healpix_order` as fine enough; RELION's
+  condition is based on angular accuracy / maximum angular sampling.
+
+Minimal implementation:
+
+1. Move finalization into the RELION-mode loop as a pre-iteration control flag.
+2. If previous state converged or RELION-style `force_converge` is requested,
+   run exactly one Nyquist/current-size-full iteration with
+   `do_join_random_halves=True` and `do_use_all_data=True`, then stop.
+3. During final E-step, score half 1 from half 1 map and half 2 from half 2
+   map; join `Ft_y`/`Ft_ctf` only after both halves finish.
+4. Do not run finalization merely because `max_iter` was reached.
+5. Tests should stub `run_em` to prove final iteration uses half maps,
+   max-iter-without-convergence does not finalize, convergence triggers one
+   Nyquist joined iteration, and final comparison uses unsuffixed RELION
+   `run_*` files rather than a non-existent `run_itNN+1`.
+
+### PR 119 / 120 transplant
+
+PR #119 (`claude/parity-perf-baseline`) is effectively already present on this
+branch. The add-only files are byte-identical, and the stage-marker commit is
+superseded by current branch work. Do not cherry-pick #119.
+
+PR #120 (`claude/parity-quality-baseline`) should be ported manually, not
+cherry-picked wholesale. Copy only add-only quality tooling:
+
+- `scripts/parity/check_parity.py`
+- `scripts/parity/compare_dumps.py`
+- `scripts/parity/dump_relion_iter.py`
+- `scripts/parity/extract_quality_table.py`
+- `scripts/parity/negative_test.py`
+- `scripts/parity/populate_baseline.py`
+- `tests/baselines/parity/quality_baseline_5k_128.json`
+- `tests/parity/*`
+
+Small wiring hunks to port manually: add `_agent_scratch/` to `.gitignore`, add
+`test-parity-fast` and `test-parity-smoke` tasks to `pixi.toml`, and add the
+pytest marker `parity` to `tests/conftest.py`.
+
+Do not port PR #120's core EM edits wholesale. They are stale versus the
+current local-search and translation-prior fixes, especially in
+`orientation_priors.py`, `iteration_loop.py`, `local_em_engine.py`,
+`local_layout.py`, `parity_dump.py`, and `tests/unit/test_refine_relion_mode.py`.
+
+After transplant, run `git diff --check`, `pixi run test-parity-smoke`,
+`pixi run python scripts/parity/check_parity.py --help`, and targeted EM tests.
+
+### Large runs
+
+Old large runs are not final evidence because they launched from
+`/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_longrun_snapshot_20260426_191122`,
+not the current branch.
+
+The 100k run `7385332` was still running at the last audit. Its slowness is
+caused by sparse pass 2 degenerating to one image per bucket: logs show roughly
+`50002 images -> 50002 buckets`, median local rotations about `3500-3850`, and
+pass-2 half times around `64-78 min`. This is directly tied to issue #121.
+
+The box192 substitute run `7385331` failed after completing global iterations
+1-4, during iteration 5 local search at `current_size=124`, HP4, `294912`
+rotations, and 13 translations. The stack ends near
+`compute_reconstruction_support -> find_significant_mask`, but the
+`CUDA_ERROR_ILLEGAL_ADDRESS` likely surfaced asynchronously from an earlier GPU
+kernel. It was not host OOM.
+
+Current-branch rerun plan:
+
+1. Rebuild CUDA and use a fresh JAX cache.
+2. Rerun current branch after pass-2 routing is fixed.
+3. If box192 still fails, run an iter-5-only repro with
+   `CUDA_LAUNCH_BLOCKING=1`.
+4. Isolate with `RECOVAR_RELION_TEXTURE_INTERP=0` and
+   `RECOVAR_DISABLE_CUDA=1` on a smaller/subset repro to distinguish texture
+   projector issues from indexed backproject/local-support issues.
