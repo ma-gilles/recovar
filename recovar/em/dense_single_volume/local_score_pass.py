@@ -62,6 +62,18 @@ def normalize_local_scores(scores):
     return log_Z, probs, best_log_score, best_argmax, max_posterior
 
 
+@jax.jit
+def normalize_local_scores_with_log_z(scores, log_z):
+    """Normalize local scores with an externally computed full-grid log-Z."""
+
+    flat_scores = scores.reshape(scores.shape[0], -1)
+    best_log_score = jnp.max(flat_scores, axis=1)
+    probs = jnp.exp(scores - log_z[:, None, None])
+    best_argmax = jnp.argmax(flat_scores, axis=1)
+    max_posterior = jnp.exp(best_log_score - log_z)
+    return log_z, probs, best_log_score, best_argmax, max_posterior
+
+
 def compute_reconstruction_support(probs, adaptive_fraction=0.999, max_significants=-1):
     """Return RELION-style significant reconstruction support.
 

@@ -2510,11 +2510,8 @@ class TestRelionModeSmokeTest:
                 [np.array([0], dtype=np.int32) for _ in range(n_images)],
             )
 
-        def fail_pass2(*args, **kwargs):
-            raise AssertionError("compute_pass2_stats_sparse should be skipped")
-
         monkeypatch.setattr(refine_mod, "_compute_significance_batched", fake_significance)
-        monkeypatch.setattr(refine_mod, "compute_pass2_stats_sparse", fail_pass2)
+        assert not hasattr(refine_mod, "compute_pass2_stats_sparse")
 
         result = refine_single_volume(
             half_datasets,
@@ -2601,12 +2598,9 @@ class TestRelionModeSmokeTest:
                 )
             return result
 
-        def fail_sparse(*args, **kwargs):
-            raise AssertionError("compute_pass2_stats_sparse should not run for dense exact pass 2")
-
         monkeypatch.setattr(refine_mod, "_compute_significance_batched", fake_significance)
         monkeypatch.setattr(refine_mod, "compute_pass2_stats", fake_dense_pass2)
-        monkeypatch.setattr(refine_mod, "compute_pass2_stats_sparse", fail_sparse)
+        assert not hasattr(refine_mod, "compute_pass2_stats_sparse")
 
         result = refine_single_volume(
             half_datasets,
@@ -2686,12 +2680,9 @@ class TestRelionModeSmokeTest:
                 ),
             )
 
-        def fail_sparse(*args, **kwargs):
-            raise AssertionError("compute_pass2_stats_sparse should not run for adaptive RELION pass 2")
-
         monkeypatch.setattr(refine_mod, "_compute_significance_batched", fake_significance)
         monkeypatch.setattr(refine_mod, "_run_sparse_pass2_local_search_iteration", fake_local_pass2)
-        monkeypatch.setattr(refine_mod, "compute_pass2_stats_sparse", fail_sparse)
+        assert not hasattr(refine_mod, "compute_pass2_stats_sparse")
 
         refine_single_volume(
             half_datasets,
@@ -2783,7 +2774,13 @@ class TestRelionModeSmokeTest:
         rotations_many = _make_rotations(20, seed=654)
         prev_h1 = np.array([[0.6, -1.2], [0.2, 0.9]], dtype=np.float32)
         prev_h2 = np.array([[-0.7, 1.6], [1.4, -0.1]], dtype=np.float32)
-        captured = {"sig_calls": 0, "sparse_calls": 0, "run_em_calls": 0, "prior_centers": []}
+        captured = {
+            "sig_calls": 0,
+            "local_pass2_calls": 0,
+            "run_em_calls": 0,
+            "prior_centers": [],
+            "normalization_log_z": [],
+        }
 
         def fake_significance(*args, **kwargs):
             dataset = args[0]
@@ -2791,11 +2788,18 @@ class TestRelionModeSmokeTest:
             n_rot = np.asarray(args[3]).shape[0]
             n_trans = len(np.asarray(translations))
             captured["sig_calls"] += 1
+            full_stats = {
+                "normalization_log_z": np.full(n_images, 7.5, dtype=np.float64),
+                "log_evidence_per_image": np.full(n_images, 1.25, dtype=np.float32),
+                "best_log_score_per_image": np.full(n_images, 2.5, dtype=np.float32),
+                "max_posterior_per_image": np.full(n_images, 0.75, dtype=np.float32),
+            }
             return (
                 np.ones(n_rot, dtype=bool),
                 np.full(n_images, min(3, n_rot * n_trans), dtype=np.int32),
                 np.zeros(n_images, dtype=np.int32),
                 [np.array([0, 1, 2], dtype=np.int32) for _ in range(n_images)],
+                full_stats,
             )
 
         def fake_run_em(*args, **kwargs):
@@ -2824,14 +2828,16 @@ class TestRelionModeSmokeTest:
                 ),
             )
 
-        def fake_sparse_pass2(*args, **kwargs):
+        def fake_local_pass2(*args, **kwargs):
             dataset = args[0]
             n_images = dataset.n_units
             n_shells = dataset.image_shape[0] // 2 + 1
             recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
             coarse_order = int(args[6])
-            captured["sparse_calls"] += 1
+            captured["local_pass2_calls"] += 1
             captured["prior_centers"].append(np.asarray(kwargs["translation_prior_centers"], dtype=np.float32).copy())
+            captured["normalization_log_z"].append(np.asarray(kwargs["normalization_log_z"], dtype=np.float64).copy())
+            assert kwargs["oversampling_order"] == 0
             return (
                 jnp.zeros(recon_vol_size, dtype=jnp.complex64),
                 jnp.ones(recon_vol_size, dtype=jnp.complex64),
@@ -2854,7 +2860,8 @@ class TestRelionModeSmokeTest:
             )
 
         monkeypatch.setattr(refine_mod, "_compute_significance_batched", fake_significance)
-        monkeypatch.setattr(refine_mod, "compute_pass2_stats_sparse", fake_sparse_pass2)
+        monkeypatch.setattr(refine_mod, "_run_sparse_pass2_local_search_iteration", fake_local_pass2)
+        assert not hasattr(refine_mod, "compute_pass2_stats_sparse")
         monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
 
         refine_single_volume(
@@ -2879,7 +2886,7 @@ class TestRelionModeSmokeTest:
         )
 
         assert captured["sig_calls"] == 2
-        assert captured["sparse_calls"] == 2
+        assert captured["local_pass2_calls"] == 2
         assert captured["run_em_calls"] == 0
         np.testing.assert_allclose(
             captured["prior_centers"][0],
@@ -2887,6 +2894,8 @@ class TestRelionModeSmokeTest:
             rtol=1e-6,
             atol=1e-6,
         )
+        np.testing.assert_array_equal(captured["normalization_log_z"][0], np.full(prev_h1.shape[0], 7.5))
+        np.testing.assert_array_equal(captured["normalization_log_z"][1], np.full(prev_h2.shape[0], 7.5))
         np.testing.assert_allclose(
             captured["prior_centers"][1],
             relion_translation_prior_center(prev_h2, half_datasets[1].voxel_size),
