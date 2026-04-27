@@ -9,7 +9,7 @@ branch. The detailed audit trail remains in
 
 - Repo: `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424`
 - Branch: `claude/relion-parity-local-search-fix`
-- Current pushed checkpoint: `7141f632`
+- Current pushed checkpoint: `2b4a1f5e`
 - RELION source: `/scratch/gpfs/GILLES/mg6942/relion`
 - RELION patched build: `/scratch/gpfs/GILLES/mg6942/relion/build_patched`
 
