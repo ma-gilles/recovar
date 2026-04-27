@@ -4146,7 +4146,25 @@ def _run_relion_iteration_loop(
 
         iteration += 1
 
-    if skip_final_iteration:
+    # RELION's final all-data iteration is a real next iteration after
+    # convergence flags are set at the top of the loop. Do not synthesize it
+    # after plain max_iter exhaustion, and do not synthesize it when
+    # convergence is first detected on the last allowed iteration.
+    should_run_final_iteration = bool(
+        state.has_converged
+        and not force_max_iter_after_convergence
+        and (iteration + 1) < max_iter
+    )
+    if skip_final_iteration or not should_run_final_iteration:
+        if not skip_final_iteration and not should_run_final_iteration:
+            logger.info(
+                "Skipping RELION final all-data iteration: has_converged=%s, "
+                "iteration=%d, max_iter=%d, force_max_iter_after_convergence=%s",
+                state.has_converged,
+                iteration,
+                max_iter,
+                force_max_iter_after_convergence,
+            )
         merged_mean = (means[0] + means[1]) / 2
         return {
             "mean": merged_mean,
@@ -4183,18 +4201,18 @@ def _run_relion_iteration_loop(
         }
 
     # --- RELION's final iteration: do_join_random_halves + do_use_all_data ---
-    # After the EM loop finishes (either by convergence or max_iter), RELION
-    # runs ONE more iter with:
+    # After convergence, RELION runs ONE more iter with:
     #   - current_size = ori_size (Nyquist, all shells)
-    #   - both halves joined (single combined dataset)
-    #   - the merged volume as the projection source
+    #   - joined weighted sums for reconstruction
+    #   - each half still scored against its own half-map
     # See ml_optimiser.cpp:10157-10160 (sets do_join_random_halves and
     # do_use_all_data) and ml_optimiser.cpp:5707-5708 (forces current_size to
     # ori_size when do_use_all_data is true).
     #
-    # Implementation: average the two half-set volumes, then run one more E+M
-    # at full Nyquist on the COMBINED dataset (both halves' particles).
-    final_join_means = [(means[0] + means[1]) / 2, (means[0] + means[1]) / 2]
+    # Implementation: run one more E+M at full Nyquist for each half, using
+    # that half's own reference map, then join the weighted sums into one final
+    # reconstruction.
+    final_join_means = [means[0], means[1]]
     final_iter_t0 = time.time()
     logger.info("=== RELION final all-data Nyquist iteration (do_join_random_halves=True, do_use_all_data=True) ===")
     final_cs = grid_size  # = ori_size, full Nyquist
