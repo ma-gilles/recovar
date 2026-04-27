@@ -41,6 +41,9 @@ branch. The detailed audit trail remains in
    - Issue: https://github.com/ma-gilles/recovar/issues/121
    - Reason: the group-union/bucketed sparse pass-2 path is a major speed trap
      and is another source of normalization/candidate-set divergence.
+   - The grouped-union path is deprecated for RELION refinement. Do not add new
+     callers, do not use it as a fallback for parity runs, and delete it once
+     exact/local pass-2 routing has replacement tests and large-run coverage.
    - Gate: old-path vs new-path equivalence on tiny fixed-state tests before
      treating any timing improvement as real.
 
@@ -83,6 +86,9 @@ branch. The detailed audit trail remains in
    - Existing issue: https://github.com/ma-gilles/recovar/issues/114
    - Only delete code once the main RELION refinement branch and parity tests
      prove the code is unused.
+   - Include the grouped-union local-search/pass-2 code in the deletion list
+     after issue #121 lands. The RELION refinement branch should use exact/local
+     candidate layouts only.
 
 9. Address code TODOs that do not change RELION parity.
    - Defer TODOs that alter math, metadata, priors, support masks, or
@@ -144,6 +150,10 @@ Minimal implementation:
    `grouped_union`.
 5. Convert the global-significant-support path only after adding support for
    its externally supplied `normalization_log_z`.
+
+After this lands, grouped-union should have no RELION-refinement callers. Keep
+it only long enough for migration/equivalence tests, then remove it rather than
+maintaining it as an alternate backend.
 
 Relevant tests: update `tests/unit/test_refine_relion_mode.py` assertions that
 patch `compute_pass2_stats_sparse`, and compare new local-exact pass 2 against
