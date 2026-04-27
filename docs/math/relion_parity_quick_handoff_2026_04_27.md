@@ -47,7 +47,17 @@ Result:
 
 The selected-only fine-grid fix was implemented after this run to remove the
 `hp=7` full-grid materialization bottleneck seen at iteration 11 (`643.7s`).
-Rerun this trajectory after commit to measure the new full end-to-end speed.
+Focused HP7 replay after the fix:
+
+`_agent_scratch/fixed_hp7_selected_codex_hp7_selected_4fbba3e2_20260427_105105`
+
+- RELION it012 fixed-state replay, one A100.
+- Iteration wall: `391.0s`; total script wall: `412.9s`.
+- Pmax mean abs gap: `2.51e-4`, max `0.00255`, corr `0.999992`.
+- Pose/translation parity: pose mean `0.0002 deg`, translation max `0.0 px`.
+- Map corr RECOVAR-vs-RELION merged: `0.999953`.
+
+Rerun the full 13-row trajectory after this fix to measure end-to-end speed.
 
 Best post-fix fixed-state 5k replay:
 
