@@ -52,6 +52,25 @@ remaining max gap is shell 35 only. Treat shell 35 as the same outer support
 boundary issue described below unless a later replay shows it drives
 end-to-end drift.
 
+### Convergence-state initialization source fix
+
+RELION does not initialize auto-refine convergence against an infinite previous
+resolution. When replaying from a saved RELION iteration, the starting state is
+the previous `run_itNNN_optimiser.star` plus `run_itNNN_half1_model.star`:
+`rlnCurrentResolution`, `rlnNumberOfIterWithoutResolutionGain`,
+`rlnNumberOfIterWithoutChangingAssignments`,
+`rlnSmallestChangesOrientations`, `rlnSmallestChangesOffsets`, and
+`rlnSmallestChangesClasses`. The 5k/128 replay exposed this mismatch:
+starting from RELION it001, RELION it002 has
+`rlnNumberOfIterWithoutResolutionGain=1`, while RECOVAR had logged
+`stalls: resol=0` because `state.current_resolution` started at `inf`.
+
+RECOVAR now initializes replay convergence state from those RELION optimiser
+and model STAR fields. For non-replay RELION-mode runs, the initial
+`current_resolution` is seeded from `init_fsc`/`init_current_size`, or from
+`ini_high` for a cold first iteration. This fix targets stop-criterion parity;
+it does not change E-step scoring, M-step accumulators, tau2, or noise.
+
 ### Full 13-row end-to-end replay after pre-shift/pass-2 fixes
 
 Artifact:

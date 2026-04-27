@@ -95,6 +95,13 @@ weight, not the average of the two halves. On the 5k/128 replay, this closes
 the broad shell 14-34 tau2/sigma2 mismatch; only the outer support shell 35
 remains, consistent with the known boundary issue above.
 
+2026-04-27 convergence update: replay/refine convergence state must not start
+from sentinel values. For RELION replay, initialize from the previous
+`run_itNNN_optimiser.star` and `run_itNNN_half1_model.star`, including current
+resolution, no-resolution-gain count, no-large-hidden-variable-change count,
+smallest change trackers, and optimiser accuracy estimates. For non-replay
+RELION mode, seed the starting current resolution from `init_fsc` or `ini_high`.
+
 ## Recent Fixes & Active Parity Gaps (updated 2026-04-26)
 
 ### 2026-04-26 projector/scoring parity update

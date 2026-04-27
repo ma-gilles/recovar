@@ -564,10 +564,13 @@ def read_relion_optimiser_metadata(optimiser_star_path):
         overall_accuracy_translations_angst=_grab("rlnOverallAccuracyTranslationsAngst"),
         has_converged=_grab("rlnHasConverged", int),
         number_iter_without_resolution_gain=_grab("rlnNumberOfIterWithoutResolutionGain", int),
+        number_iter_without_changing_assignments=_grab("rlnNumberOfIterWithoutChangingAssignments", int),
         changes_optimal_orientations=_grab("rlnChangesOptimalOrientations"),
         changes_optimal_offsets=_grab("rlnChangesOptimalOffsets"),
+        changes_optimal_classes=_grab("rlnChangesOptimalClasses"),
         smallest_changes_orientations=_grab("rlnSmallestChangesOrientations"),
         smallest_changes_offsets=_grab("rlnSmallestChangesOffsets"),
+        smallest_changes_classes=_grab("rlnSmallestChangesClasses"),
     )
 
 
