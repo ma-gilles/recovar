@@ -97,6 +97,27 @@ The second emitted iteration entered local search and logged:
 This smoke is intentionally only a handoff/path validation; the 20-particle
 subset does not represent end-to-end map parity.
 
+### Local-search os0 M-step support source fix
+
+RELION's accelerated local-search loop still runs the symbolic second pass
+when `adaptive_oversampling == 0`. In that case
+`convertAllSquaredDifferencesToWeights` sets `significant_weight` to the
+minimum fine-pass weight, so `storeWeightedSums` keeps every valid local
+candidate. Only the `adaptive_oversampling > 0` path applies the cumulative
+`adaptive_fraction` threshold. RECOVAR had been applying the significant-support
+prune unconditionally in exact local search, so local-search M-step, noise, and
+`sigma2_offset` accumulators could differ from RELION even when the normalized
+posterior Pmax was computed over the full local candidate set.
+
+RECOVAR now disables `reconstruct_significant_only` for RELION os0 local search
+and keeps it enabled only for adaptive oversampling. Targeted validation:
+`.pixi/envs/default/bin/python -m pytest tests/unit/test_refine_relion_mode.py
+-k 'local_search_os0_keeps_full_local_support_for_mstep or
+translation_prior_reference_grid or
+grouped_local_search_passes_translation_prior_centers'` passed with 3 tests.
+The next required quantitative gate is a focused 5k local replay from RELION
+it008/it009, followed by a forced 13-row replay after this fix.
+
 ### Full 13-row end-to-end replay after pre-shift/pass-2 fixes
 
 Artifact:
