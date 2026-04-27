@@ -7,8 +7,8 @@ This file is the long audit trail and contains stale/failed experiments as
 well as current results.
 
 ## Branch
-`claude/relion-parity-local-search-fix` HEAD = `949ab6b8` plus local EM
-parity edits in this worktree.
+`claude/relion-parity-local-search-fix` HEAD = `0415e9aa` plus the
+zero-filled integer old-offset pre-shift fix in this worktree.
 
 ## 2026-04-27 5k/128 timing and parity baselines
 
@@ -74,6 +74,37 @@ about 0.0267 higher in Pmax because the top-vs-second candidate score gap is
 too sharp by about 0.136 log units. Continue by comparing RELION `fine_ref`,
 `fine_shifted`, and `corr_img` against RECOVAR's `debug_proj_weighted`,
 `debug_shifted_score`, and `debug_ctf2_over_nv` for that particle.
+
+### Integer old-offset pre-shift source fix
+
+Source/dump comparison for particle 4603 showed candidate translation phase,
+projection interpolation, CTF/noise weights, candidate support, and priors were
+already matching. The remaining score gap came from the image side: RELION
+rounds `old_offset` and applies it to the real-space image with a zero-filled
+integer translate before FFT (`TranslateAndNormCorrect` / `cuda_kernel_translate2D`),
+whereas RECOVAR had modeled that same integer pre-centering as a circular
+Fourier phase shift.
+
+RECOVAR now applies RELION-style zero-filled real-space integer pre-shifts for
+integral `image_pre_shifts` on real-space batches, and keeps the legacy
+Fourier-phase path only for non-integral or already-Fourier test inputs.
+
+Focused validation:
+`_agent_scratch/focused_it008_stack4603_zerofill_20260427_090904`, local A100,
+`--iter 7 --max_iter 1 --skip_final_iteration --keep_stack_indices 4603
+--local_engine exact_v2`.
+
+| Case | RECOVAR Pmax | RELION Pmax | abs gap | pose/trans |
+|---|---:|---:|---:|---|
+| before zero-filled pre-shift | 0.606924 | 0.580255 | 0.026669 | exact |
+| after zero-filled pre-shift | 0.580947 | 0.580255 | 0.000692 | exact |
+
+The p4603 top-vs-second score-gap excess dropped from about `0.136` log units
+to about `0.022` log units, and the RECOVAR-vs-RELION weighted shifted-image
+relative residual dropped from `6.47e-2` to `3.55e-3`. Remaining p4603 gap is
+near the RELION accelerated float32/texture arithmetic band and should be
+checked in the next full fixed-state 5k replay before pursuing another
+single-particle micro-fix.
 
 ### Post-fix forced replay timing-only run
 

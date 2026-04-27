@@ -48,6 +48,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 
+from .helpers.image_shifts import apply_relion_integer_pre_shifts, integer_pre_shifts_or_none
 from .helpers.types import EMProfileStats, NoiseStats, RelionStats
 
 logger = logging.getLogger(__name__)
@@ -844,13 +845,12 @@ def run_em(
         factor.  When provided, ``ctf2_over_nv`` is multiplied by
         ``scale**2`` per image to match RELION's convention.
     image_pre_shifts : np.ndarray or None, shape (n_images, 2)
-        Per-image translation (in pixels) applied to the processed
-        Fourier-space images before scoring.  RELION pre-centers each
-        image by its ``old_offset`` (rlnOriginXAngst/pixel_size) via
-        ``selfTranslate`` before scoring (ml_optimiser.cpp:6225).
-        The equivalent Fourier-space operation is multiplication by
-        ``exp(-2πi k·shift)``.  The candidate translations from the
-        grid are then relative to this centered position.
+        Per-image old-offset pre-shift in pixels.  For integral shifts
+        (RELION's rounded ``old_offset``), RECOVAR applies RELION's
+        zero-filled real-space integer translation before FFT.  Non-integral
+        shifts keep the legacy Fourier-phase path for non-RELION callers and
+        equivalence tests.  The candidate translations from the grid are then
+        relative to this centered position.
     return_profile : bool
         When True, append an :class:`EMProfileStats` timing summary to the
         return tuple.  This is diagnostic only.
@@ -1196,6 +1196,10 @@ def run_em(
         batch_fetch_time += time.time() - batch_fetch_t0
         batch_size = len(indices)
         end_idx = start_idx + batch_size
+        integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, indices, batch=batch_data)
+        real_space_pre_shift_applied = integer_pre_shifts is not None
+        if real_space_pre_shift_applied:
+            batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
         batch_data = jnp.asarray(batch_data)
         translation_sqdist_ang = None
         if translation_prior_centers_np is not None:
@@ -1299,13 +1303,11 @@ def run_em(
             if ctf2_half_score is not None:
                 ctf2_half_score = ctf2_half_score * (batch_scale**2)[:, None]
 
-        # -- Per-image pre-centering (RELION parity: old_offset phase shift) --
-        # RELION pre-centers each image by its stored translation (old_offset)
-        # before scoring.  In Fourier space this is multiplication by
-        # exp(-2πi k·shift).  Phase-shift the half-spectrum images so that
-        # the translation grid searches relative to the centered position.
-        # batch_norm is unaffected (|exp(iθ)| = 1).
-        if image_pre_shifts is not None:
+        # -- Per-image pre-centering --
+        # Integral RELION old-offsets were already applied to the real-space
+        # image with zero fill before FFT.  Keep the Fourier-phase path only
+        # for non-integral legacy callers.
+        if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
             # Compute per-pixel phase factors in half-spectrum layout
             lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(

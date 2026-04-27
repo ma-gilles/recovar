@@ -47,6 +47,10 @@ from recovar.em.dense_single_volume.em_primitives import (
     make_shell_indices_half,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.dense_single_volume.helpers.image_shifts import (
+    apply_relion_integer_pre_shifts,
+    integer_pre_shifts_or_none,
+)
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
@@ -601,6 +605,10 @@ def _prepare_bucket_io(
     """
     image_shape = config.image_shape
     batch_size = int(batch.shape[0])
+    integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, image_indices, batch=batch)
+    real_space_pre_shift_applied = integer_pre_shifts is not None
+    if real_space_pre_shift_applied:
+        batch = apply_relion_integer_pre_shifts(batch, integer_pre_shifts)
 
     ctf_half = config.compute_ctf_half(ctf_params)
     ctf2_over_nv_half = ctf_half**2 / noise_variance_half
@@ -664,7 +672,7 @@ def _prepare_bucket_io(
 
     # Per-image pre-centering (matches run_em lines 1087-1098): phase shift
     # in Fourier space.  Applied AFTER per-image scalar corrections.
-    if image_pre_shifts is not None:
+    if image_pre_shifts is not None and not real_space_pre_shift_applied:
         batch_shifts = jnp.asarray(np.asarray(image_pre_shifts)[np.asarray(image_indices)])
         lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
             image_shape,
