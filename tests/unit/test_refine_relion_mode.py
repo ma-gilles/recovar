@@ -50,6 +50,7 @@ from recovar.em.dense_single_volume.local_score_pass import (
 from recovar.em.dense_single_volume.em_primitives import make_half_image_weights
 from recovar.em.dense_single_volume.iteration_loop import (
     _align_fourier_volume_sign_to_reference,
+    _normalize_noise_variance_per_half,
     _replay_control_model_iteration,
     refine_single_volume,
 )
@@ -73,6 +74,8 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     collapse_rotation_posterior_to_direction_prior,
     make_relion_direction_log_prior,
     make_relion_translation_log_prior,
+    normalize_direction_prior_per_half,
+    relion_translation_prior_center,
     relion_translation_search_base,
 )
 from recovar.em.dense_single_volume.helpers.significance import (
@@ -435,27 +438,37 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
         local_rotation_mask=np.ones((1, 2), dtype=bool),
         translation_log_prior=np.zeros((1, 3), dtype=np.float32),
     )
-    pending = _maybe_write_debug_score_dump(
-        experiment_dataset=_Dataset(),
-        local_layout=layout,
-        bucket=bucket,
-        image_pre_shifts=np.array([[2.0, -1.0]], dtype=np.float32),
-        scores=np.array([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]], dtype=np.float32),
-        probs=np.array([[[0.05, 0.10, 0.15], [0.20, 0.25, 0.25]]], dtype=np.float32),
-        log_Z=np.array([7.0], dtype=np.float32),
-        best_log_score=np.array([6.0], dtype=np.float32),
-        max_posterior=np.array([0.25], dtype=np.float32),
-        reconstruction_sample_mask=np.ones((1, 2, 3), dtype=bool),
-        reconstruction_rotation_mask=np.ones((1, 2), dtype=bool),
-        n_significant_samples=np.array([6], dtype=np.int32),
-        current_size=8,
-        dump_dir=tmp_path,
-        pending_targets={123},
-    )
+    def write_dump(*, current_size):
+        return _maybe_write_debug_score_dump(
+            experiment_dataset=_Dataset(),
+            local_layout=layout,
+            bucket=bucket,
+            image_pre_shifts=np.array([[2.0, -1.0]], dtype=np.float32),
+            scores=np.array([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]], dtype=np.float32),
+            probs=np.array([[[0.05, 0.10, 0.15], [0.20, 0.25, 0.25]]], dtype=np.float32),
+            log_Z=np.array([7.0], dtype=np.float32),
+            best_log_score=np.array([6.0], dtype=np.float32),
+            max_posterior=np.array([0.25], dtype=np.float32),
+            reconstruction_sample_mask=np.ones((1, 2, 3), dtype=bool),
+            reconstruction_rotation_mask=np.ones((1, 2), dtype=bool),
+            n_significant_samples=np.array([6], dtype=np.int32),
+            current_size=current_size,
+            debug_iteration=9,
+            dump_dir=tmp_path,
+            pending_targets={123},
+            requested_current_sizes={8},
+        )
+
+    pending = write_dump(current_size=7)
+    assert pending == {123}
+    assert not (tmp_path / "local_score_it009_image_123.npz").exists()
+
+    pending = write_dump(current_size=8)
 
     assert pending == set()
-    with np.load(tmp_path / "local_score_image_123.npz") as dump:
+    with np.load(tmp_path / "local_score_it009_image_123.npz") as dump:
         np.testing.assert_array_equal(dump["local_rotation_indices"], np.array([5, 7], dtype=np.int32))
+        np.testing.assert_array_equal(dump["debug_iteration"], np.array([9], dtype=np.int32))
         assert dump["local_rotation_eulers"].shape == (2, 3)
         assert dump["local_rotation_matrices"].shape == (2, 3, 3)
         np.testing.assert_array_equal(
@@ -652,7 +665,10 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         )
 
     def fake_run_local_em_exact(*args, **kwargs):
-        _ = (args, kwargs)
+        _ = args
+        captured["reconstruct_significant_only"] = kwargs.get("reconstruct_significant_only")
+        captured["adaptive_fraction"] = kwargs.get("adaptive_fraction")
+        captured["max_significants"] = kwargs.get("max_significants")
         return (
             jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
             jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
@@ -705,11 +721,139 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
 
     assert captured["offset_range_pixels"] is None
     assert captured["sigma_offset_angstrom"] == 1.25
+    assert captured["reconstruct_significant_only"] is True
+    assert captured["adaptive_fraction"] == pytest.approx(0.999)
+    assert captured["max_significants"] == -1
     np.testing.assert_allclose(
         captured["translation_prior_reference_translations"],
         reference_translations,
         atol=1e-6,
     )
+    assert len(outputs) == 5
+
+
+def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_for_perturbed_grid(
+    monkeypatch,
+    rng,
+):
+    from recovar import utils
+
+    mock_dataset = MockDataset(1, rng)
+    captured = {}
+
+    def fake_build_local_hypothesis_layout(
+        prior_rotations,
+        rotation_grid_rotations,
+        sigma_rot,
+        sigma_psi,
+        healpix_order,
+        translations,
+        prior_translations,
+        sigma_offset_angstrom,
+        offset_range_pixels,
+        voxel_size,
+        *,
+        grid_metadata,
+        translation_prior_reference_translations=None,
+    ):
+        _ = (
+            prior_rotations,
+            sigma_rot,
+            sigma_psi,
+            healpix_order,
+            prior_translations,
+            sigma_offset_angstrom,
+            offset_range_pixels,
+            voxel_size,
+            translation_prior_reference_translations,
+        )
+        captured["grid_metadata_mode"] = grid_metadata["mode"]
+        captured["n_pixels"] = int(grid_metadata["n_pixels"])
+        captured["n_psi"] = int(grid_metadata["n_psi"])
+        captured["scored_rotations"] = np.asarray(rotation_grid_rotations, dtype=np.float32).copy()
+        return LocalHypothesisLayout(
+            n_global_rotations=rotation_grid_rotations.shape[0],
+            n_pixels=1,
+            n_psi=1,
+            rotation_offsets=np.array([0, 1], dtype=np.int64),
+            rotation_ids_flat=np.array([0], dtype=np.int32),
+            rotations_flat=np.asarray(rotation_grid_rotations[:1], dtype=np.float32),
+            rotation_log_priors_flat=np.zeros(1, dtype=np.float32),
+            rotation_counts=np.array([1], dtype=np.int32),
+            translation_grid=np.asarray(translations, dtype=np.float32),
+            translation_log_priors=np.zeros((1, np.asarray(translations).shape[0]), dtype=np.float32),
+        )
+
+    def fake_run_local_em_exact(*args, **kwargs):
+        _ = args
+        captured["max_significants"] = kwargs.get("max_significants")
+        return (
+            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
+            np.zeros(mock_dataset.n_units, dtype=np.int32),
+            RelionStats(
+                log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
+                best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
+                max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
+                rotation_posterior_sums=jnp.zeros(rotation_grid_size(1), dtype=jnp.float32),
+            ),
+            NoiseStats(
+                wsum_sigma2_noise=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
+                wsum_img_power=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
+                wsum_sigma2_offset=0.0,
+                sumw=0.0,
+            ),
+        )
+
+    monkeypatch.setattr(iteration_loop_module, "build_local_hypothesis_layout", fake_build_local_hypothesis_layout)
+    monkeypatch.setattr(iteration_loop_module, "run_local_em_exact", fake_run_local_em_exact)
+
+    healpix_order = 1
+    canonical_rotations = get_relion_rotation_grid(healpix_order).astype(np.float32)
+    perturbed_rotations = apply_relion_rotation_perturbation(
+        canonical_rotations,
+        random_perturbation=0.3,
+        angular_sampling_deg=relion_angular_sampling_deg(healpix_order),
+    ).astype(np.float32)
+    perturbed_eulers = utils.R_to_relion(perturbed_rotations, degrees=True).astype(np.float32)
+    translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+
+    # A perturbed full Euler table no longer factorizes. RELION still builds
+    # local priors from the canonical Healpix direction and psi axes, then
+    # applies SamplingPerturbation only when scoring the trial rotations.
+    assert build_local_search_grid_metadata(
+        healpix_order,
+        grid_eulers=perturbed_eulers,
+        grid_rotations=perturbed_rotations,
+    )["mode"] == "full"
+
+    outputs = iteration_loop_module._run_local_search_iteration_exact_v1(
+        mock_dataset,
+        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
+        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
+        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+        np.zeros((1, 3), dtype=np.float32),
+        perturbed_rotations,
+        perturbed_eulers,
+        healpix_order=healpix_order,
+        sigma_rot=0.1,
+        sigma_psi=0.1,
+        translations=translations,
+        prior_translations=np.zeros((1, 2), dtype=np.float32),
+        sigma_offset_angstrom=1.0,
+        offset_range_pixels=2.0,
+        disc_type="linear_interp",
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=4,
+        accumulate_noise=True,
+    )
+
+    assert captured["grid_metadata_mode"] == "factorized"
+    assert captured["n_pixels"] == hp.nside2npix(2**healpix_order)
+    assert captured["n_psi"] == rotation_grid_n_in_planes(healpix_order)
+    assert captured["max_significants"] == -1
+    np.testing.assert_allclose(captured["scored_rotations"], perturbed_rotations)
     assert len(outputs) == 5
 
 
@@ -1392,6 +1536,56 @@ class TestRelionModeSmokeTest:
         expected = np.log(np.repeat(direction_prior[None, :], rotation_grid_n_in_planes(order), axis=0).reshape(-1))
         np.testing.assert_allclose(got, expected.astype(np.float32), rtol=1e-6, atol=1e-6)
 
+    def test_make_relion_direction_log_prior_preserves_zero_prior_as_hard_mask(self):
+        order = 2
+        n_rot = rotation_grid_size(order)
+        n_pixels = n_rot // rotation_grid_n_in_planes(order)
+        direction_prior = np.ones(n_pixels, dtype=np.float32)
+        direction_prior[3] = 0.0
+        direction_prior /= direction_prior.sum()
+
+        got = make_relion_direction_log_prior(direction_prior, order)
+        zero_direction_rows = np.arange(n_rot, dtype=np.int64) % n_pixels == 3
+
+        assert np.isneginf(got[zero_direction_rows]).all()
+        assert np.isfinite(got[~zero_direction_rows]).all()
+
+    def test_normalize_direction_prior_per_half_preserves_relion_half_models(self):
+        half1 = np.array([0.7, 0.3], dtype=np.float32)
+        half2 = np.array([0.2, 0.8], dtype=np.float32)
+
+        got = normalize_direction_prior_per_half([half1, half2])
+
+        np.testing.assert_allclose(got[0], half1)
+        np.testing.assert_allclose(got[1], half2)
+
+    def test_normalize_direction_prior_per_half_keeps_legacy_shared_prior(self):
+        shared = np.array([0.7, 0.3], dtype=np.float32)
+
+        got = normalize_direction_prior_per_half(shared)
+
+        np.testing.assert_allclose(got[0], shared)
+        np.testing.assert_allclose(got[1], shared)
+        assert got[0] is not got[1]
+
+    def test_normalize_noise_variance_per_half_keeps_legacy_shared_noise(self):
+        shared = jnp.arange(IMAGE_SIZE, dtype=jnp.float32) + 1.0
+
+        got = _normalize_noise_variance_per_half(shared, n_halves=2)
+
+        assert len(got) == 2
+        np.testing.assert_allclose(np.asarray(got[0]), np.asarray(shared))
+        np.testing.assert_allclose(np.asarray(got[1]), np.asarray(shared))
+
+    def test_normalize_noise_variance_per_half_preserves_relion_half_models(self):
+        half1 = np.arange(IMAGE_SIZE, dtype=np.float32) + 1.0
+        half2 = half1 * 2.0
+
+        got = _normalize_noise_variance_per_half(np.stack([half1, half2]), n_halves=2)
+
+        np.testing.assert_allclose(np.asarray(got[0]), half1)
+        np.testing.assert_allclose(np.asarray(got[1]), half2)
+
     def test_relion_mode_runs_2_iterations(
         self,
         half_datasets,
@@ -1647,15 +1841,17 @@ class TestRelionModeSmokeTest:
             atol=1e-6,
         )
 
-    def test_relion_translation_log_prior_is_mean_normalized(self, translations):
+    def test_relion_translation_log_prior_matches_source_pdf_offset(self, translations):
         log_prior = make_relion_translation_log_prior(
             np.asarray(translations),
             voxel_size=4.25,
             sigma_offset_angstrom=10.0,
         )
-        probs = np.exp(np.asarray(log_prior))
-        assert np.isclose(np.mean(probs), 1.0, atol=1e-6)
-        assert int(np.argmax(probs)) == 0
+        translations_angstrom = np.asarray(translations) * 4.25
+        expected = -0.5 * np.sum(translations_angstrom**2, axis=1) / (10.0**2)
+        expected *= 4.25**2
+        np.testing.assert_allclose(log_prior, expected, rtol=1e-6, atol=1e-6)
+        assert int(np.argmax(log_prior)) == 0
 
     def test_relion_translation_log_prior_uses_offset_range_when_active(self, translations):
         log_prior_sigma = make_relion_translation_log_prior(
@@ -1669,16 +1865,25 @@ class TestRelionModeSmokeTest:
             sigma_offset_angstrom=10.0,
             offset_range_pixels=3.0,
         )
-        probs_sigma = np.exp(np.asarray(log_prior_sigma))
-        probs_range = np.exp(np.asarray(log_prior_range))
         # RELION uses sigma = offset_range / 3 while a finite search range is active.
-        assert np.isclose(np.mean(probs_range), 1.0, atol=1e-6)
-        assert probs_range[0] > probs_sigma[0]
+        assert log_prior_range[0] == pytest.approx(0.0)
+        assert log_prior_range[1] < log_prior_sigma[1]
 
     def test_relion_translation_search_base_uses_integer_prescoring_shift(self):
         prev = np.array([[0.5, -0.25], [-0.4, 0.3]], dtype=np.float32)
         expected = np.rint(prev).astype(np.float32)
         np.testing.assert_allclose(relion_translation_search_base(prev), expected, rtol=1e-6, atol=1e-6)
+        assert relion_translation_search_base(np.array([], dtype=np.float32)).shape == (0, 2)
+
+    def test_relion_translation_prior_center_matches_accelerated_pdf_offset_units(self):
+        prev = np.array([[0.0, -1.0], [1.0, 0.0]], dtype=np.float32)
+        expected = np.array([[0.0, 1.0 / 4.25], [-1.0 / 4.25, 0.0]], dtype=np.float32)
+        np.testing.assert_allclose(
+            relion_translation_prior_center(prev, voxel_size=4.25),
+            expected,
+            rtol=1e-6,
+            atol=1e-6,
+        )
 
     def test_direction_prior_round_trip_to_rotation_log_prior(self):
         healpix_order = 1
@@ -2323,6 +2528,8 @@ class TestRelionModeSmokeTest:
         """Posterior-weighted offset variance should drive sigma_offset in RELION mode."""
         import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
+        for ds in half_datasets:
+            ds.voxel_size = 8.5
         rotations_many = _make_rotations(20, seed=888)
         noise_offset_wsums = [12.0, 20.0]
         call_idx = {"value": 0}
@@ -2387,6 +2594,81 @@ class TestRelionModeSmokeTest:
 
         expected_sigma = np.sqrt((noise_offset_wsums[0] + noise_offset_wsums[1]) / (2.0 * N_IMAGES))
         assert result["sigma_offset_trajectory"][0] == pytest.approx(expected_sigma)
+
+    def test_relion_mode_passes_per_half_noise_to_engine(
+        self,
+        half_datasets,
+        init_volume,
+        translations,
+        monkeypatch,
+    ):
+        """RELION mode must score each half-set with its own sigma2_noise."""
+        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+
+        rotations_many = _make_rotations(20, seed=777)
+        half1_noise = np.arange(IMAGE_SIZE, dtype=np.float32) + 1.0
+        half2_noise = half1_noise * 3.0
+        captured_noise = []
+
+        def fake_run_em(
+            experiment_dataset,
+            mean,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            disc_type,
+            **kwargs,
+        ):
+            _ = (mean, mean_variance, translations, disc_type, kwargs)
+            captured_noise.append(np.asarray(noise_variance, dtype=np.float32))
+            n_images = experiment_dataset.n_units
+            n_shells = experiment_dataset.image_shape[0] // 2 + 1
+            recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+            return (
+                None,
+                np.zeros(n_images, dtype=np.int32),
+                jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+                jnp.ones(recon_vol_size, dtype=jnp.complex64),
+                RelionStats(
+                    log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
+                    best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
+                    max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
+                    rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
+                ),
+                NoiseStats(
+                    wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+                    wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+                    wsum_sigma2_offset=0.0,
+                    sumw=float(n_images),
+                ),
+            )
+
+        monkeypatch.setattr(refine_mod, "run_em", fake_run_em)
+
+        refine_single_volume(
+            half_datasets,
+            init_volume,
+            np.stack([half1_noise, half2_noise]),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations_many,
+            translations,
+            disc_type="linear_interp",
+            max_iter=1,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=len(rotations_many),
+            init_current_size=8,
+            adaptive_oversampling=0,
+            adaptive_fraction=1.0,
+            mode="relion",
+            init_healpix_order=1,
+            max_healpix_order=2,
+            skip_final_iteration=True,
+        )
+
+        assert len(captured_noise) == 2
+        np.testing.assert_allclose(captured_noise[0], half1_noise)
+        np.testing.assert_allclose(captured_noise[1], half2_noise)
 
     def test_relion_mode_regenerates_initial_coarse_grid_from_healpix_state(
         self,
@@ -2798,7 +3080,7 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
     translations,
     monkeypatch,
 ):
-    """Local-search translation priors must be centered at -old_offset."""
+    """Local-search priors use RELION's pdf_offset units, not pre-shift pixels."""
     import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
@@ -2959,8 +3241,8 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
     )
 
     assert len(local_prior_translations) == 2
-    np.testing.assert_allclose(local_prior_translations[0], -prev_h1, rtol=1e-6, atol=1e-6)
-    np.testing.assert_allclose(local_prior_translations[1], -prev_h2, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(local_prior_translations[0], -np.rint(prev_h1) / 1.0, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(local_prior_translations[1], -np.rint(prev_h2) / 1.0, rtol=1e-6, atol=1e-6)
 
 
 def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
@@ -3151,6 +3433,9 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
     prev_h2 = np.zeros((half_datasets[1].n_units, 2), dtype=np.float32)
     recorded_translation_reference_grids = []
 
+    relion_pixel_size = 4.25
+    for ds in half_datasets:
+        ds.voxel_size = relion_pixel_size
     replay_offset_range = 2.411663
     replay_offset_step = 1.220812
 
@@ -3324,7 +3609,10 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
     )
 
     assert recorded_translation_reference_grids
-    replay_grid = get_translation_grid(replay_offset_range, replay_offset_step).astype(np.float32)
+    replay_grid = get_translation_grid(
+        replay_offset_range / relion_pixel_size,
+        replay_offset_step / relion_pixel_size,
+    ).astype(np.float32)
     for grid in recorded_translation_reference_grids:
         np.testing.assert_allclose(grid, replay_grid, rtol=1e-6, atol=1e-6)
 

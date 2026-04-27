@@ -71,6 +71,29 @@ def test_adjust_regularization_relion_style_lower_bounded():
     assert (reg_np >= jax_config.EPSILON).all()
 
 
+def test_adjust_regularization_relion_style_respects_minres_map():
+    import recovar.core.fourier_transform_utils as ftu
+
+    volume_shape = (8, 8, 8)
+    filt = np.ones(int(np.prod(volume_shape)), dtype=np.float32)
+    tau = np.full(int(np.prod(volume_shape)), 0.5, dtype=np.float32)
+
+    reg = np.asarray(
+        rf.adjust_regularization_relion_style(
+            filt,
+            volume_shape=volume_shape,
+            tau=tau,
+            minres_map=2,
+        )
+    ).reshape(-1)
+    shell = np.rint(
+        np.asarray(ftu.get_grid_of_radial_distances(volume_shape, scaled=False, frequency_shift=0))
+    ).astype(int).reshape(-1)
+
+    np.testing.assert_allclose(reg[shell < 2], 1.0, rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(reg[shell >= 2], 3.0, rtol=1e-6, atol=1e-6)
+
+
 def test_adjust_regularization_relion_style_half_matches_full():
     import recovar.core.fourier_transform_utils as ftu
 
@@ -252,6 +275,41 @@ def test_join_halves_at_low_resolution_half_matches_full():
     for full_arr, half_arr in zip(full_joined, half_joined):
         restored_half = np.asarray(ftu.half_volume_to_full_volume(jnp.asarray(half_arr), volume_shape)).reshape(-1)
         np.testing.assert_allclose(restored_half, np.asarray(full_arr).reshape(-1), atol=1e-5, rtol=1e-5)
+
+
+def test_join_halves_at_low_resolution_uses_relion_squared_radius_boundary():
+    volume_shape = (8, 8, 8)
+    idx_inside = (6, 4, 4)  # frequency (2, 0, 0), included for radius^2 <= 2^2.
+    idx_boundary = (6, 5, 4)  # frequency (2, 1, 0), rounded shell 2 but radius^2 > 2^2.
+
+    ft_y_0 = np.zeros(volume_shape, dtype=np.complex64)
+    ft_y_1 = np.zeros(volume_shape, dtype=np.complex64)
+    ft_ctf_0 = np.ones(volume_shape, dtype=np.float32)
+    ft_ctf_1 = np.ones(volume_shape, dtype=np.float32)
+
+    ft_y_0[idx_inside] = 10.0
+    ft_y_1[idx_inside] = 2.0
+    ft_y_0[idx_boundary] = 20.0
+    ft_y_1[idx_boundary] = 4.0
+
+    joined0, joined1, _, _ = regularization.join_halves_at_low_resolution(
+        jnp.array(ft_y_0.reshape(-1)),
+        jnp.array(ft_y_1.reshape(-1)),
+        jnp.array(ft_ctf_0.reshape(-1)),
+        jnp.array(ft_ctf_1.reshape(-1)),
+        volume_shape,
+        voxel_size=10.0,
+        grid_size=4,
+        low_resol_join_halves_angstrom=40.0,
+    )
+
+    joined0 = np.asarray(joined0).reshape(volume_shape)
+    joined1 = np.asarray(joined1).reshape(volume_shape)
+
+    np.testing.assert_allclose(joined0[idx_inside], 6.0, atol=1e-6)
+    np.testing.assert_allclose(joined1[idx_inside], 6.0, atol=1e-6)
+    np.testing.assert_allclose(joined0[idx_boundary], 20.0, atol=1e-6)
+    np.testing.assert_allclose(joined1[idx_boundary], 4.0, atol=1e-6)
 
 
 def test_relion_weight_shell_stats_half_matches_full():

@@ -538,6 +538,7 @@ def adjust_regularization_relion_style(
     max_res_shell=None,
     half_volume=False,
     tau2_fudge=1.0,
+    minres_map=0,
 ):
     """Adjust the RELION-style regularization filter.
 
@@ -549,6 +550,9 @@ def adjust_regularization_relion_style(
     (default 1.0).  It enters the Wiener denominator as::
 
         inv_tau = 1 / (padding_factor**3 * tau2_fudge * tau)
+
+    ``minres_map`` mirrors RELION's ``--minres_map``: the Wiener prior term is
+    only added for shells ``ires >= minres_map``.
     """
     volume_shape = tuple(int(s) for s in volume_shape)
     packed_shape = (
@@ -566,6 +570,17 @@ def adjust_regularization_relion_style(
             inv_tau = 1 / (oversampling_factor * tau2_fudge * safe_tau)
             inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
             inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
+            if int(minres_map) > 0:
+                shell = (
+                    fourier_transform_utils.get_grid_of_radial_distances_real(
+                        volume_shape,
+                        scaled=False,
+                        frequency_shift=0,
+                    )
+                    / float(padding_factor)
+                )
+                shell = jnp.round(shell).astype(jnp.int32).reshape(-1)
+                inv_tau = jnp.where(shell >= int(minres_map), inv_tau, 0)
             regularized_filter = filter_flat + inv_tau
         else:
             regularized_filter = filter_flat
@@ -592,6 +607,15 @@ def adjust_regularization_relion_style(
         inv_tau = 1 / (oversampling_factor * tau2_fudge * safe_tau)
         inv_tau = jnp.where((tau < 1e-20) & (filter_flat > 1e-20), 1.0 / (0.001 * filter_flat), inv_tau)
         inv_tau = jnp.where((tau < 1e-20) & (filter_flat <= 1e-20), 0, inv_tau)
+        if int(minres_map) > 0:
+            pixels = fourier_transform_utils.get_k_coordinate_of_each_pixel(
+                np.array(volume_shape),
+                1,
+                scaled=False,
+            )
+            shell = jnp.round(jnp.linalg.norm(pixels, axis=-1) / float(padding_factor)).astype(jnp.int32)
+            shell = shell.reshape(-1)
+            inv_tau = jnp.where(shell >= int(minres_map), inv_tau, 0)
         regularized_filter = filter_flat + inv_tau
     else:
         regularized_filter = filter_flat
@@ -640,6 +664,7 @@ def post_process_from_filter(
     kernel_width=1,
     tau2_fudge=1.0,
     padding_factor=1,
+    minres_map=0,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -659,10 +684,11 @@ def post_process_from_filter(
         gridding_correct=gridding_correct,
         kernel_width=kernel_width,
         tau2_fudge=tau2_fudge,
+        minres_map=minres_map,
     )
 
 
-@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13])
+@functools.partial(jax.jit, static_argnums=[2, 3, 5, 6, 7, 8, 9, 11, 12, 13, 17])
 def post_process_from_filter_v2(
     Ft_ctf,
     F_ty,
@@ -681,6 +707,7 @@ def post_process_from_filter_v2(
     tau2_fudge=1.0,
     gridding_padding_factor=None,
     gridding_order=None,
+    minres_map=0,
 ):
     """Post-process RELION-style reconstruction from filter weights.
 
@@ -724,6 +751,7 @@ def post_process_from_filter_v2(
         max_res_shell=None,
         half_volume=input_half_volume,
         tau2_fudge=tau2_fudge,
+        minres_map=minres_map,
     )
     vol = (F_ty_flat * valid_indices) / Ft_ctf2
 

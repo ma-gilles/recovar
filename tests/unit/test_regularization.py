@@ -114,6 +114,80 @@ def test_prior_iteration_relion_style_and_downsample_from_fsc():
     assert np.any(out == 0.0)
 
 
+def test_compute_relion_fsc_from_backprojector_uses_relion_rounding_and_half_layout():
+    shape = (4, 4, 4)
+    padded_shape = (8, 8, 8)
+
+    data0 = np.zeros(padded_shape, dtype=np.complex128)
+    data1 = np.zeros(padded_shape, dtype=np.complex128)
+    weight0 = np.zeros(padded_shape, dtype=np.float64)
+    weight1 = np.zeros(padded_shape, dtype=np.float64)
+
+    # Valid RELION half-layout sample: frequency (z=0, y=2, x=0)
+    # downsamples to shell 1 for padding_factor=2.
+    valid_idx = (4, 6, 4)
+    data0[valid_idx] = 1.0
+    data1[valid_idx] = 1.0
+    weight0[valid_idx] = 1.0
+    weight1[valid_idx] = 1.0
+
+    # Frequency x=-1 would banker-round to x=0, but RELION's ROUND(-0.5)
+    # returns -1 and the half-complex layout excludes it.
+    invalid_negative_x_idx = (4, 6, 3)
+    data0[invalid_negative_x_idx] = 100.0
+    data1[invalid_negative_x_idx] = -100.0
+    weight0[invalid_negative_x_idx] = 1.0
+    weight1[invalid_negative_x_idx] = 1.0
+
+    fsc = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            data0.reshape(-1),
+            data1.reshape(-1),
+            weight0.reshape(-1),
+            weight1.reshape(-1),
+            shape,
+            padding_factor=2,
+            r_max=1,
+        )
+    )
+
+    assert fsc[0] == 1.0
+    np.testing.assert_allclose(fsc[1], 1.0, atol=1e-7, rtol=1e-7)
+
+
+def test_compute_relion_fsc_from_backprojector_applies_exact_rmax_before_shell_binning():
+    shape = (4, 4, 4)
+    data0 = np.zeros(shape, dtype=np.complex128)
+    data1 = np.zeros(shape, dtype=np.complex128)
+    weight0 = np.ones(shape, dtype=np.float64)
+    weight1 = np.ones(shape, dtype=np.float64)
+
+    # Shifted-grid coordinate (z=1, y=0, x=0): exact R=1, shell 1.
+    inside = (3, 2, 2)
+    data0[inside] = 1.0
+    data1[inside] = 1.0
+
+    # Shifted-grid coordinate (z=1, y=1, x=0): exact R=sqrt(2) > r_max,
+    # but ROUND(R) == 1. RELION excludes it before shell binning.
+    rounded_shell_but_outside_rmax = (3, 3, 2)
+    data0[rounded_shell_but_outside_rmax] = 1.0
+    data1[rounded_shell_but_outside_rmax] = -1.0
+
+    fsc = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            data0.reshape(-1),
+            data1.reshape(-1),
+            weight0.reshape(-1),
+            weight1.reshape(-1),
+            shape,
+            padding_factor=1,
+            r_max=1,
+        )
+    )
+
+    np.testing.assert_allclose(fsc[1], 1.0, atol=1e-7, rtol=1e-7)
+
+
 @pytest.mark.parametrize(
     ("padding_factor", "weight_value", "expected_sigma2"),
     [
@@ -146,11 +220,46 @@ def test_compute_relion_tau2_from_weights_constant_weight_details(padding_factor
     assert np.all(np.asarray(details["shell_count"]) > 0)
 
 
+def test_compute_relion_tau2_from_weights_respects_relion_rmax_support():
+    shape = (8, 8, 8)
+    padding_factor = 2
+    n_shells = shape[0] // 2 + 1
+    padded_shape = tuple(s * padding_factor for s in shape)
+    weight = np.ones(np.prod(padded_shape), dtype=np.float32)
+    fsc = np.full(n_shells, 0.5, dtype=np.float32)
+
+    prior, _, details = regularization.compute_relion_tau2_from_weights(
+        weight,
+        weight,
+        fsc,
+        shape,
+        padding_factor=padding_factor,
+        r_max=3,
+        return_details=True,
+    )
+
+    shell_count = np.asarray(details["shell_count"])
+    prior_shells = np.asarray(details["prior_shells"])
+    assert shell_count[4] == 0.0
+    assert prior_shells[4] <= 1e-12
+
+    radii = np.asarray(
+        regularization.fourier_transform_utils.get_grid_of_radial_distances(
+            shape,
+            scaled=False,
+            frequency_shift=0,
+        )
+        .astype(int)
+        .reshape(-1)
+    )
+    assert np.all(np.asarray(prior)[radii == 4] <= 1e-12)
+
+
 def test_compute_relion_tau2_from_weights_rejects_wrong_grid_size():
     shape = (8, 8, 8)
     fsc = np.full(shape[0] // 2 + 1, 0.5, dtype=np.float32)
     bad_weight = np.ones(np.prod(shape) - 1, dtype=np.float32)
-    with pytest.raises(ValueError, match="Expected native weight"):
+    with pytest.raises(ValueError, match="Expected full or half Fourier weight"):
         regularization.compute_relion_tau2_from_weights(
             bad_weight,
             bad_weight,

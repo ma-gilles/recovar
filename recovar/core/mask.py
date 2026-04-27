@@ -461,29 +461,32 @@ def soft_mask_outside_map(vol, radius=-1, cosine_width=3, Mnoise=None):
     )
     r = jnp.linalg.norm(volume_coords, axis=-1)
 
-    mask1 = r <= radius
-    mask2 = (r > radius) & (r <= radius_p)
+    mask1 = r < radius
+    mask2 = (r >= radius) & (r <= radius_p)
     mask3 = r > radius_p
     raised_cos = 0.5 + 0.5 * jnp.cos(jnp.pi * (radius_p - r) / cosine_width)
 
     mask = jnp.zeros_like(vol).real
     mask = jnp.where(mask1, 1, mask)
     mask = jnp.where(mask2, 1 - raised_cos, mask)
+    background_weight = jnp.zeros_like(mask)
+    background_weight = jnp.where(mask3, 1, background_weight)
+    background_weight = jnp.where(mask2, raised_cos, background_weight)
 
     if Mnoise is None:
-        sum_bg = jnp.sum((vol * mask) * (mask3 + mask2))
-        mask_sum = jnp.sum(mask * (mask3 + mask2))
+        sum_bg = jnp.sum(vol * background_weight)
+        mask_sum = jnp.sum(background_weight)
         avg_bg = sum_bg / mask_sum
     else:
+        Mnoise = jnp.asarray(Mnoise)
         avg_bg = None
 
     if Mnoise is None:
-        vol = jnp.where(mask3, avg_bg, vol)
+        add = avg_bg
     else:
-        vol = jnp.where(mask3, Mnoise, vol)
+        add = Mnoise
 
-    add = Mnoise if Mnoise is not None else avg_bg
-    vol = mask * vol + (1 - mask) * add
+    vol = mask * vol + background_weight * add
     return vol, mask
 
 

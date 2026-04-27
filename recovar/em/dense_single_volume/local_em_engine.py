@@ -163,6 +163,17 @@ def _build_reconstruction_pack_indices(
     return take_indices, padded_pack_mask, actual_counts, int(np.sum(actual_counts, dtype=np.int64))
 
 
+def _parse_debug_int_set(value: str | None) -> set[int] | None:
+    if not value:
+        return None
+    parsed = set()
+    for token in value.replace(",", " ").split():
+        token = token.strip()
+        if token:
+            parsed.add(int(token))
+    return parsed or None
+
+
 def _parse_debug_score_dump_request():
     """Return the optional debug score-dump request from the environment.
 
@@ -174,18 +185,18 @@ def _parse_debug_score_dump_request():
 
     dump_dir = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_DIR")
     dump_indices = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES")
+    dump_current_size = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_CURRENT_SIZE")
+    dump_iterations = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_ITERATION")
     if not dump_dir or not dump_indices:
-        return None, set()
-    targets = set()
-    for token in dump_indices.replace(",", " ").split():
-        token = token.strip()
-        if token:
-            targets.add(int(token))
+        return None, set(), None, None
+    targets = _parse_debug_int_set(dump_indices) or set()
     if not targets:
-        return None, set()
+        return None, set(), None, None
+    requested_current_sizes = _parse_debug_int_set(dump_current_size)
+    requested_iterations = _parse_debug_int_set(dump_iterations)
     dump_path = Path(dump_dir)
     dump_path.mkdir(parents=True, exist_ok=True)
-    return dump_path, targets
+    return dump_path, targets, requested_current_sizes, requested_iterations
 
 
 def _maybe_write_debug_score_dump(
@@ -203,12 +214,23 @@ def _maybe_write_debug_score_dump(
     reconstruction_rotation_mask,
     n_significant_samples,
     current_size,
+    debug_iteration,
+    shifted_score_split=None,
+    ctf2_over_nv_score=None,
+    proj_weighted=None,
+    proj_abs2_weighted=None,
     dump_dir: Path | None,
     pending_targets: set[int],
+    requested_current_sizes: set[int] | None = None,
+    requested_iterations: set[int] | None = None,
 ):
     """Dump one-image local score tensors for the requested original ids."""
 
     if dump_dir is None or not pending_targets:
+        return pending_targets
+    if requested_current_sizes is not None and int(current_size or -1) not in requested_current_sizes:
+        return pending_targets
+    if requested_iterations is not None and int(debug_iteration or -1) not in requested_iterations:
         return pending_targets
 
     original_image_indices = np.asarray(
@@ -227,6 +249,16 @@ def _maybe_write_debug_score_dump(
     reconstruction_sample_mask_np = np.asarray(reconstruction_sample_mask, dtype=bool)
     reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)
     n_significant_samples_np = np.asarray(n_significant_samples, dtype=np.int32)
+    dump_operands = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    shifted_score_np = np.asarray(shifted_score_split) if dump_operands and shifted_score_split is not None else None
+    ctf2_over_nv_np = np.asarray(ctf2_over_nv_score) if dump_operands and ctf2_over_nv_score is not None else None
+    proj_weighted_np = np.asarray(proj_weighted) if dump_operands and proj_weighted is not None else None
+    proj_abs2_weighted_np = np.asarray(proj_abs2_weighted) if dump_operands and proj_abs2_weighted is not None else None
 
     for row in target_rows:
         original_idx = int(original_image_indices[row])
@@ -266,70 +298,88 @@ def _maybe_write_debug_score_dump(
             dtype=bool,
         )
 
-        dump_path = dump_dir / f"local_score_image_{original_idx}.npz"
-        np.savez_compressed(
-            dump_path,
-            selected_global_image_indices=np.array([original_idx], dtype=np.int64),
-            selected_local_image_indices=np.array([local_idx], dtype=np.int64),
-            pass2_scores_raw=raw_scores[None, :, :],
-            pass2_scores_total=total_scores[None, :, :],
-            rotation_log_prior=rotation_log_prior[None, :],
-            translation_log_prior=translation_log_prior[None, :],
-            rotation_candidate_mask=rotation_mask[None, :],
-            local_rotation_indices=local_rotation_ids,
-            local_rotation_pixel_indices=(local_rotation_ids % int(local_layout.n_pixels)).astype(np.int64),
-            local_rotation_psi_indices=(local_rotation_ids // int(local_layout.n_pixels)).astype(np.int64),
-            local_rotation_eulers=local_rotation_eulers,
-            local_rotation_matrices=local_rotation_matrices,
-            translations=np.asarray(local_layout.translation_grid, dtype=np.float32),
-            candidate_pose_rotation_indices=np.repeat(local_rotation_ids[:, None], n_trans, axis=1),
-            candidate_pose_translation_indices=np.broadcast_to(
+        iteration_label = int(debug_iteration or -1)
+        dump_path = dump_dir / f"local_score_it{iteration_label:03d}_image_{original_idx}.npz"
+        payload = {
+            "selected_global_image_indices": np.array([original_idx], dtype=np.int64),
+            "selected_local_image_indices": np.array([local_idx], dtype=np.int64),
+            "pass2_scores_raw": raw_scores[None, :, :],
+            "pass2_scores_total": total_scores[None, :, :],
+            "rotation_log_prior": rotation_log_prior[None, :],
+            "translation_log_prior": translation_log_prior[None, :],
+            "rotation_candidate_mask": rotation_mask[None, :],
+            "local_rotation_indices": local_rotation_ids,
+            "local_rotation_pixel_indices": (local_rotation_ids % int(local_layout.n_pixels)).astype(np.int64),
+            "local_rotation_psi_indices": (local_rotation_ids // int(local_layout.n_pixels)).astype(np.int64),
+            "local_rotation_eulers": local_rotation_eulers,
+            "local_rotation_matrices": local_rotation_matrices,
+            "translations": np.asarray(local_layout.translation_grid, dtype=np.float32),
+            "candidate_pose_rotation_indices": np.repeat(local_rotation_ids[:, None], n_trans, axis=1),
+            "candidate_pose_translation_indices": np.broadcast_to(
                 translation_indices[None, :],
                 (actual_count, n_trans),
             ),
-            image_pre_shift=(
+            "image_pre_shift": (
                 np.asarray(image_pre_shifts[local_idx], dtype=np.float32)
                 if image_pre_shifts is not None
                 else np.array([], dtype=np.float32)
             ),
-            posterior=posterior[None, :, :],
-            reconstruction_sample_mask=reconstruction_sample_mask_row[None, :, :],
-            reconstruction_rotation_mask=reconstruction_rotation_mask_row[None, :],
-            n_significant_samples=np.array([int(n_significant_samples_np[row])], dtype=np.int32),
-            max_posterior=np.array([float(max_posterior_np[row])], dtype=np.float32),
-            log_Z=np.array([float(log_Z_np[row])], dtype=np.float32),
-            best_score=np.array([float(best_log_score_np[row])], dtype=np.float32),
-            best_score_rotation_local_index=np.array([int(best_score_rotation_index)], dtype=np.int32),
-            best_score_translation_index=np.array([int(best_score_translation_index)], dtype=np.int32),
-            best_score_rotation_global_id=np.array(
+            "posterior": posterior[None, :, :],
+            "reconstruction_sample_mask": reconstruction_sample_mask_row[None, :, :],
+            "reconstruction_rotation_mask": reconstruction_rotation_mask_row[None, :],
+            "n_significant_samples": np.array([int(n_significant_samples_np[row])], dtype=np.int32),
+            "max_posterior": np.array([float(max_posterior_np[row])], dtype=np.float32),
+            "log_Z": np.array([float(log_Z_np[row])], dtype=np.float32),
+            "best_score": np.array([float(best_log_score_np[row])], dtype=np.float32),
+            "best_score_rotation_local_index": np.array([int(best_score_rotation_index)], dtype=np.int32),
+            "best_score_translation_index": np.array([int(best_score_translation_index)], dtype=np.int32),
+            "best_score_rotation_global_id": np.array(
                 [int(local_rotation_ids[int(best_score_rotation_index)])],
                 dtype=np.int32,
             ),
-            best_score_translation=np.asarray(
+            "best_score_translation": np.asarray(
                 local_layout.translation_grid[
                     int(best_score_translation_index) : int(best_score_translation_index) + 1
                 ],
                 dtype=np.float32,
             ),
-            best_posterior_rotation_local_index=np.array([int(best_posterior_rotation_index)], dtype=np.int32),
-            best_posterior_translation_index=np.array([int(best_posterior_translation_index)], dtype=np.int32),
-            best_posterior_rotation_global_id=np.array(
+            "best_posterior_rotation_local_index": np.array([int(best_posterior_rotation_index)], dtype=np.int32),
+            "best_posterior_translation_index": np.array([int(best_posterior_translation_index)], dtype=np.int32),
+            "best_posterior_rotation_global_id": np.array(
                 [int(local_rotation_ids[int(best_posterior_rotation_index)])],
                 dtype=np.int32,
             ),
-            best_posterior_translation=np.asarray(
+            "best_posterior_translation": np.asarray(
                 local_layout.translation_grid[
                     int(best_posterior_translation_index) : int(best_posterior_translation_index) + 1
                 ],
                 dtype=np.float32,
             ),
-            current_size=np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
-            n_rot=np.array([actual_count], dtype=np.int32),
-            n_trans=np.array([n_trans], dtype=np.int32),
-            grid_n_pixels=np.array([int(local_layout.n_pixels)], dtype=np.int32),
-            grid_n_psi=np.array([int(local_layout.n_psi)], dtype=np.int32),
-        )
-        pending_targets.remove(original_idx)
+            "current_size": np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
+            "debug_iteration": np.array([iteration_label], dtype=np.int32),
+            "n_rot": np.array([actual_count], dtype=np.int32),
+            "n_trans": np.array([n_trans], dtype=np.int32),
+            "grid_n_pixels": np.array([int(local_layout.n_pixels)], dtype=np.int32),
+            "grid_n_psi": np.array([int(local_layout.n_psi)], dtype=np.int32),
+        }
+        if dump_operands:
+            if shifted_score_np is not None:
+                payload["debug_shifted_score"] = np.asarray(shifted_score_np[row], dtype=np.complex64)
+            if ctf2_over_nv_np is not None:
+                payload["debug_ctf2_over_nv"] = np.asarray(ctf2_over_nv_np[row], dtype=np.float32)
+            if proj_weighted_np is not None:
+                payload["debug_proj_weighted"] = np.asarray(
+                    proj_weighted_np[row, :actual_count, :],
+                    dtype=np.complex64,
+                )
+            if proj_abs2_weighted_np is not None:
+                payload["debug_proj_abs2_weighted"] = np.asarray(
+                    proj_abs2_weighted_np[row, :actual_count, :],
+                    dtype=np.float32,
+                )
+        np.savez_compressed(dump_path, **payload)
+        if requested_iterations is None:
+            pending_targets.remove(original_idx)
 
     return pending_targets
 
@@ -364,6 +414,7 @@ def run_local_em_exact(
     reconstruct_significant_only: bool = False,
     adaptive_fraction: float = 0.999,
     max_significants: int = -1,
+    debug_iteration: int | None = None,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
@@ -374,7 +425,23 @@ def run_local_em_exact(
     n_half = H * (W // 2 + 1)
     n_trans = int(local_layout.translation_grid.shape[0])
     n_images = int(local_layout.n_images)
-    debug_score_dump_dir, debug_score_dump_targets = _parse_debug_score_dump_request()
+    (
+        debug_score_dump_dir,
+        debug_score_dump_targets,
+        debug_score_dump_current_sizes,
+        debug_score_dump_iterations,
+    ) = _parse_debug_score_dump_request()
+    debug_score_dump_filter_matches = (
+        debug_score_dump_dir is not None
+        and (
+            debug_score_dump_current_sizes is None
+            or int(current_size or -1) in debug_score_dump_current_sizes
+        )
+        and (
+            debug_score_dump_iterations is None
+            or int(debug_iteration or -1) in debug_score_dump_iterations
+        )
+    )
 
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,
@@ -421,6 +488,7 @@ def run_local_em_exact(
             int(current_size),
             square=square_window,
             include_dc=True,
+            exact_radius=True,
         )
         window_indices = jnp.asarray(score_window_indices_np, dtype=jnp.int32)
         recon_window_indices = jnp.asarray(recon_window_indices_np, dtype=jnp.int32)
@@ -431,6 +499,9 @@ def run_local_em_exact(
         recon_window_indices = None
         n_windowed = n_half
         n_recon_windowed = n_half
+    projection_kwargs = {}
+    if use_window:
+        projection_kwargs["max_r"] = float(current_size // 2)
 
     if half_spectrum_scoring:
         half_weights = jnp.ones(n_half, dtype=jnp.float32)
@@ -580,6 +651,9 @@ def run_local_em_exact(
             shifted_noise = shifted_noise.astype(jnp.complex128)
             ctf2_over_nv_score = ctf2_over_nv_score.astype(jnp.float64)
             ctf2_over_nv_recon = ctf2_over_nv_recon.astype(jnp.float64)
+        else:
+            shifted_score = shifted_score.astype(jnp.complex64)
+            ctf2_over_nv_score = ctf2_over_nv_score.astype(jnp.float32)
         preprocess_time += time.time() - preprocess_t0
 
         projection_t0 = time.time()
@@ -596,6 +670,7 @@ def run_local_em_exact(
             image_shape,
             proj_volume_shape,
             disc_type,
+            **projection_kwargs,
         )
         if use_window:
             proj_half = proj_half_flat[:, window_indices].reshape(batch_size, bucket.bucket_rotation_count, n_windowed)
@@ -626,6 +701,9 @@ def run_local_em_exact(
             proj_abs2_weighted = proj_abs2_weighted.astype(jnp.float64)
             proj_for_noise = proj_for_noise.astype(jnp.complex128)
             proj_abs2_for_noise = proj_abs2_for_noise.astype(jnp.float64)
+        else:
+            proj_weighted = proj_weighted.astype(jnp.complex64)
+            proj_abs2_weighted = proj_abs2_weighted.astype(jnp.float32)
         if return_profile:
             _block_until_ready(proj_weighted, proj_abs2_weighted)
         projection_time += time.time() - projection_t0
@@ -685,8 +763,15 @@ def run_local_em_exact(
             reconstruction_rotation_mask=reconstruction_rotation_mask,
             n_significant_samples=n_significant_samples,
             current_size=current_size,
+            debug_iteration=debug_iteration,
+            shifted_score_split=shifted_score.reshape(batch_size, n_trans, -1),
+            ctf2_over_nv_score=ctf2_over_nv_score,
+            proj_weighted=proj_weighted,
+            proj_abs2_weighted=proj_abs2_weighted,
             dump_dir=debug_score_dump_dir,
             pending_targets=debug_score_dump_targets,
+            requested_current_sizes=debug_score_dump_current_sizes,
+            requested_iterations=debug_score_dump_iterations,
         )
 
         mstep_t0 = time.time()
@@ -738,6 +823,7 @@ def run_local_em_exact(
                     "linear_interp",
                     True,
                     False,
+                    float(current_size // 2),
                 )
             else:
                 Ft_y = _adjoint_slice_volume_half(
@@ -768,6 +854,7 @@ def run_local_em_exact(
                     "linear_interp",
                     True,
                     False,
+                    float(current_size // 2),
                 )
             else:
                 Ft_ctf = _adjoint_slice_volume_half(
@@ -901,7 +988,11 @@ def run_local_em_exact(
             sumw=float(noise_sumw),
         )
 
-    if debug_score_dump_dir is not None and debug_score_dump_targets:
+    if (
+        debug_score_dump_filter_matches
+        and debug_score_dump_targets
+        and debug_score_dump_iterations is None
+    ):
         logger.warning(
             "Requested local score dump indices were not observed in this dataset view: %s",
             sorted(debug_score_dump_targets),

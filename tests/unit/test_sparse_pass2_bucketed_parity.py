@@ -207,6 +207,12 @@ def _compare_outputs(out_ref, out_bucket, atol=1e-5, rtol=1e-5):
             atol=atol,
             rtol=rtol,
         )
+        np.testing.assert_allclose(
+            ns_ref.wsum_sigma2_offset,
+            ns_b.wsum_sigma2_offset,
+            atol=atol,
+            rtol=rtol,
+        )
         np.testing.assert_allclose(ns_ref.sumw, ns_b.sumw, atol=atol)
 
 
@@ -243,6 +249,7 @@ class TestSparsePass2Bucketed:
         image_corrections=None,
         scale_corrections=None,
         image_pre_shifts=None,
+        translation_prior_centers=None,
     ):
         ds, vol, mv, nv, trans, nside = self._common_args(sig_indices)
 
@@ -261,6 +268,7 @@ class TestSparsePass2Bucketed:
             image_corrections=image_corrections,
             scale_corrections=scale_corrections,
             image_pre_shifts=image_pre_shifts,
+            translation_prior_centers=translation_prior_centers,
         )
 
         out_ref = _compute_pass2_stats_sparse_perimage_reference(ds, vol, mv, nv, trans, sig_indices, **common_kwargs)
@@ -360,6 +368,34 @@ class TestSparsePass2Bucketed:
             half_spectrum_scoring=True,
             use_float64_scoring=True,
         )
+        _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
+
+    def test_with_translation_prior_centers_noise_match(self):
+        """Bucketed pass-2 must accumulate RELION sigma-offset posterior mass."""
+        sig_indices = [
+            np.array([0, 1], dtype=np.int32),
+            np.array([0, 1, 2, 3, 4], dtype=np.int32),
+            np.array([2], dtype=np.int32),
+            np.array([0, 3, 5], dtype=np.int32),
+        ]
+        translation_prior_centers = np.array(
+            [
+                [0.25, -0.25],
+                [0.50, 0.00],
+                [-0.25, 0.25],
+                [0.00, 0.50],
+            ],
+            dtype=np.float32,
+        )
+        out_ref, out_bucket = self._run_both(
+            sig_indices,
+            return_stats=True,
+            accumulate_noise=True,
+            half_spectrum_scoring=True,
+            use_float64_scoring=True,
+            translation_prior_centers=translation_prior_centers,
+        )
+        assert out_ref[7].wsum_sigma2_offset > 0.0
         _compare_outputs(out_ref, out_bucket, atol=1e-4, rtol=1e-4)
 
     def test_full_candidate_lists_match(self):

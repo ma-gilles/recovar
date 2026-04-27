@@ -43,10 +43,7 @@ class TestCoarseTranslations:
             f"Count mismatch: RELION={relion_grid.shape[0]} vs recovar={recovar_grid.shape[0]}"
         )
 
-        relion_sorted = relion_grid[np.lexsort((relion_grid[:, 1], relion_grid[:, 0]))]
-        recovar_sorted = recovar_grid[np.lexsort((recovar_grid[:, 1], recovar_grid[:, 0]))]
-
-        max_diff = np.max(np.abs(relion_sorted - recovar_sorted))
+        max_diff = np.max(np.abs(relion_grid - recovar_grid))
         print(f"\nrange={offset_range}, step={offset_step}: n={relion_grid.shape[0]}, max diff={max_diff:.2e}")
         assert max_diff < 1e-12, f"Grid mismatch: max diff = {max_diff:.2e}"
 

@@ -61,17 +61,14 @@ def _resolve_max_r(max_r, image_shape):
 
 
 def _cuda_max_r(max_r, image_shape, volume_shape):
-    """Scale max_r from image coordinates to volume coordinates for CUDA.
+    """Return the image-space max_r expected by the CUDA wrapper.
 
-    The CUDA kernel computes pixel frequencies in volume-space coordinates
-    (scaled by ``upsampling = volume_shape[0] // image_shape[0]``), so
-    ``max_r`` must be scaled to match.  The JAX ``relion_interp`` path
-    uses image-space coordinates and needs no scaling.
+    ``recovar.cuda_backproject`` owns the conversion from image coordinates
+    to CUDA's padded-volume coordinates because it already has the FFI
+    ``upsampling`` attribute. Scaling here as well would widen the Fourier
+    support by another factor of ``upsampling``.
     """
-    if max_r is None:
-        return None
-    upsampling = volume_shape[0] // image_shape[0]
-    return max_r * upsampling
+    return max_r
 
 
 # ── Dispatch ─────────────────────────────────────────────────────────

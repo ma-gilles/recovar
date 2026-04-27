@@ -8,7 +8,6 @@ in ``refine.py``.
 
 import healpy as hp
 import numpy as np
-import scipy.special
 
 from recovar.em.sampling import rotation_grid_n_in_planes, rotation_grid_size
 
@@ -21,7 +20,15 @@ def make_relion_translation_log_prior(
     *,
     offset_range_pixels=None,
 ):
-    """Return RELION-style normalized log-priors over a translation grid."""
+    """Return RELION's offset prior scores over a translation grid.
+
+    RELION stores ``sampling.translations_{x,y}`` in Angstrom, but uses
+    translation shifts in pixels for projection. In the E-step prior path
+    (``acc_ml_optimiser_impl.h`` around ``pdf_offset`` construction), it
+    computes the Gaussian exponent from the Angstrom-valued sampling grid and
+    then multiplies by ``my_pixel_size**2``. This intentionally mirrors that
+    source behavior rather than a dimensionally simplified Gaussian.
+    """
     translations = np.asarray(translations, dtype=np.float32)
     if translations.ndim != 2:
         raise ValueError(
@@ -29,10 +36,12 @@ def make_relion_translation_log_prior(
         )
     sigma_offset_angstrom = float(sigma_offset_angstrom)
     voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
+    sigma2_offset = sigma_offset_angstrom**2
     if offset_range_pixels is not None and float(offset_range_pixels) > 0.0:
         # RELION's score path uses sigma = offset_range / 3 while an explicit
         # translational search range is active.
         sigma_offset_angstrom = float(offset_range_pixels) * voxel_size / 3.0
+        sigma2_offset = sigma_offset_angstrom**2
     n_trans = translations.shape[0]
 
     if prior_centers is None:
@@ -42,15 +51,16 @@ def make_relion_translation_log_prior(
         centers = np.asarray(prior_centers, dtype=np.float32).reshape(-1, translations.shape[1])
         shared = False
 
-    if sigma_offset_angstrom <= 0.0:
+    if sigma2_offset <= 0.0:
         zeros = np.zeros((centers.shape[0], n_trans), dtype=np.float32)
         return zeros[0] if shared else zeros
 
     diffs_ang = (translations[None, :, :] - centers[:, None, :]) * voxel_size
     sqdist_ang = np.sum(diffs_ang**2, axis=-1)
-    log_prior = -0.5 * sqdist_ang / (sigma_offset_angstrom**2)
-    log_prior -= scipy.special.logsumexp(log_prior, axis=1, keepdims=True)
-    log_prior += np.log(float(n_trans))
+    log_prior = -0.5 * sqdist_ang / sigma2_offset
+    # RELION applies this after accumulating per-axis terms. It is not a
+    # normalization constant; it materially sharpens the translation prior.
+    log_prior *= voxel_size**2
     log_prior = log_prior.astype(np.float32)
     return log_prior[0] if shared else log_prior
 
@@ -59,7 +69,32 @@ def relion_translation_search_base(previous_best_translations):
     """Return RELION's integer-pixel pre-shift for stored absolute offsets."""
     if previous_best_translations is None:
         return None
-    return np.rint(np.asarray(previous_best_translations, dtype=np.float32)).astype(np.float32)
+    previous_best_translations = np.asarray(previous_best_translations, dtype=np.float32)
+    if previous_best_translations.size == 0:
+        return previous_best_translations.reshape(0, 2)
+    return np.rint(previous_best_translations).astype(np.float32)
+
+
+def relion_translation_prior_center(previous_best_translations, voxel_size, prior_offsets=None):
+    """Return RELION's offset-prior center in RECOVAR search-grid pixels.
+
+    RELION's accelerated path builds ``pdf_offset`` from
+    ``old_offset + sampling.translations - prior`` where the rounded
+    ``old_offset`` term is in pixel-like metadata units while
+    ``sampling.translations`` is the Angstrom-space grid.  RECOVAR scores
+    shifts after ``getTranslationsInPixel``-style conversion, so the prior
+    center must be divided by the pixel size.  The image pre-shift itself
+    still uses :func:`relion_translation_search_base` unchanged.
+    """
+    old_offset = relion_translation_search_base(previous_best_translations)
+    if old_offset is None:
+        return None
+    voxel_size = float(voxel_size if voxel_size > 0 else 1.0)
+    if prior_offsets is None:
+        prior = np.zeros_like(old_offset, dtype=np.float32)
+    else:
+        prior = np.asarray(prior_offsets, dtype=np.float32).reshape(old_offset.shape)
+    return ((prior - old_offset) / voxel_size).astype(np.float32)
 
 
 def collapse_rotation_posterior_to_direction_prior(rotation_posterior_sums, healpix_order):
@@ -91,6 +126,30 @@ def infer_direction_prior_healpix_order(direction_prior):
     if hp.nside2npix(2**order) != n_pixels:
         raise ValueError(f"Cannot infer healpix order from direction prior of length {n_pixels}")
     return order
+
+
+def normalize_direction_prior_per_half(direction_prior):
+    """Return a two-element list of RELION ``pdf_direction`` arrays.
+
+    RELION auto-refine stores separate learned orientation distributions for
+    the two half-models.  Replay callers should pass ``[half1, half2]``.  A
+    single 1D vector remains accepted for older unit tests and non-auto-refine
+    callers, and is shared across both halves.
+    """
+    if direction_prior is None:
+        return [None, None]
+
+    if isinstance(direction_prior, (list, tuple)) and len(direction_prior) == 2:
+        return [
+            None if direction_prior[0] is None else np.asarray(direction_prior[0], dtype=np.float32).reshape(-1),
+            None if direction_prior[1] is None else np.asarray(direction_prior[1], dtype=np.float32).reshape(-1),
+        ]
+
+    arr = np.asarray(direction_prior, dtype=np.float32)
+    if arr.ndim == 2 and arr.shape[0] == 2:
+        return [arr[0].reshape(-1), arr[1].reshape(-1)]
+    arr = arr.reshape(-1)
+    return [arr.copy(), arr.copy()]
 
 
 def remap_direction_prior_to_healpix_order(direction_prior, src_order, dst_order):
@@ -134,7 +193,6 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
             f"direction_prior must have shape ({n_pixels},), got {direction_prior.shape}",
         )
 
-    safe_prior = np.clip(direction_prior, np.finfo(np.float32).tiny, None)
     if rotations is None:
         pixel_idx = np.arange(n_rot, dtype=np.int64) % n_pixels
     else:
@@ -153,4 +211,9 @@ def make_relion_direction_log_prior(direction_prior, healpix_order, rotations=No
             view_dirs[:, 1],
             view_dirs[:, 2],
         )
-    return np.log(safe_prior[pixel_idx]).astype(np.float32)
+
+    prior_for_rotations = direction_prior[pixel_idx]
+    log_prior = np.full(prior_for_rotations.shape, -np.inf, dtype=np.float32)
+    positive = prior_for_rotations > 0.0
+    log_prior[positive] = np.log(prior_for_rotations[positive]).astype(np.float32)
+    return log_prior

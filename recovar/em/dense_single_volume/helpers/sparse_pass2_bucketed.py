@@ -27,7 +27,9 @@ do not perturb the M-step accumulators.
 from __future__ import annotations
 
 import logging
+import os
 import time
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -55,6 +57,38 @@ from recovar.em.dense_single_volume.local_backprojection import (
 from recovar.em.dense_single_volume.local_layout import _exact_bucket_rotation_size
 
 logger = logging.getLogger(__name__)
+
+_native_mstep_dump_counter = 0
+
+
+def _maybe_dump_native_half_mstep(
+    Ft_y_total,
+    Ft_ctf_total,
+    *,
+    current_size,
+    n_images,
+    recon_volume_shape,
+    stage,
+):
+    dump_dir = os.environ.get("RECOVAR_SPARSE_PASS2_NATIVE_DUMP_DIR")
+    if not dump_dir:
+        return
+
+    global _native_mstep_dump_counter
+    dump_idx = _native_mstep_dump_counter
+    _native_mstep_dump_counter += 1
+
+    path = Path(dump_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path / f"native_half_mstep_{dump_idx:03d}_{stage}_n{int(n_images):04d}_cs{int(current_size):03d}.npz",
+        Ft_y=np.asarray(Ft_y_total),
+        Ft_ctf=np.asarray(Ft_ctf_total),
+        current_size=np.int32(current_size),
+        n_images=np.int32(n_images),
+        recon_volume_shape=np.asarray(recon_volume_shape, dtype=np.int32),
+        stage=np.asarray(stage),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -281,14 +315,75 @@ def _score_pass2_bucket(
     candidate_mask,  # (B, R, T) bool
 ):
     """Compute (B, R, T) scores; mask invalid (rot, trans) cells to -inf."""
-    cross = -2.0 * jnp.einsum("btn,brn->btr", jnp.conj(shifted_score), proj_weighted).real
+    cross = -2.0 * jnp.einsum(
+        "btn,brn->btr",
+        jnp.conj(shifted_score),
+        proj_weighted,
+        precision=jax.lax.Precision.HIGHEST,
+    ).real
     cross = cross.swapaxes(1, 2)  # (B, R, T)
-    norms = jnp.einsum("bn,brn->br", ctf2_over_nv_score, proj_abs2_weighted)  # (B, R)
+    norms = jnp.einsum(
+        "bn,brn->br",
+        ctf2_over_nv_score,
+        proj_abs2_weighted,
+        precision=jax.lax.Precision.HIGHEST,
+    )  # (B, R)
     scores = -0.5 * (cross + norms[..., None])
     scores = scores + rotation_log_prior[:, :, None]
     scores = scores + translation_log_prior[:, None, :]
     scores = jnp.where(candidate_mask, scores, -jnp.inf)
     return scores
+
+
+@jax.jit
+def _score_pass2_bucket_relion_gpu_diff2(
+    shifted_corrected,  # (B, T, N) complex, image / (CTF * scale)
+    corr_img_score,  # (B, N) real, Minvsigma2 * CTF^2 * scale^2
+    proj_half,  # (B, R, N) complex
+    half_weights,  # (N,) real
+    rotation_log_prior,  # (B, R) real
+    translation_log_prior,  # (B, T) real
+    candidate_mask,  # (B, R, T) bool
+):
+    """RELION GPU-style direct ``diff2`` scoring for pass-2 diagnostics.
+
+    RELION's CUDA fine-search kernel first corrects the image by dividing by
+    CTF and scale, then accumulates ``|Fref - Fimg_corrected_shift|^2 *
+    corr_img`` where ``corr_img = Minvsigma2 * CTF^2 * scale^2``.  This is
+    algebraically equivalent to the CPU ``Frefctf - Fimg`` expression but has
+    different float32 rounding.  We remove the image-only constant so the
+    existing relative-score/log-evidence contract is unchanged.
+    """
+
+    weights = corr_img_score * half_weights[None, :]
+
+    def score_one_image(shifted_tn, weights_n, proj_rn, rot_prior_r, trans_prior_t, mask_rt):
+        image_constant_t = 0.5 * jnp.sum(
+            (shifted_tn.real * shifted_tn.real + shifted_tn.imag * shifted_tn.imag) * weights_n[None, :],
+            axis=-1,
+        )
+
+        def score_one_rotation(carry, proj_n):
+            del carry
+            diff_tn = proj_n[None, :] - shifted_tn
+            diff2_t = 0.5 * jnp.sum(
+                (diff_tn.real * diff_tn.real + diff_tn.imag * diff_tn.imag) * weights_n[None, :],
+                axis=-1,
+            )
+            return None, -diff2_t + image_constant_t
+
+        _, scores_rt = jax.lax.scan(score_one_rotation, None, proj_rn)
+        scores_rt = scores_rt + rot_prior_r[:, None] + trans_prior_t[None, :]
+        return jnp.where(mask_rt, scores_rt, -jnp.inf)
+
+    return jax.vmap(score_one_image)(
+        shifted_corrected,
+        weights,
+        proj_half,
+        rotation_log_prior,
+        translation_log_prior,
+        candidate_mask,
+    )
 
 
 @jax.jit
@@ -304,6 +399,17 @@ def _normalize_pass2_bucket(scores):
     best_argmax = jnp.argmax(flat, axis=1)
     max_posterior = jnp.exp(best_log_score - log_Z)
     return log_Z, probs, best_log_score, best_argmax, max_posterior
+
+
+@jax.jit
+def _normalize_pass2_bucket_with_log_z(scores, log_z):
+    """Normalize sparse candidate scores with a precomputed full-grid log-Z."""
+    flat = scores.reshape(scores.shape[0], -1)
+    best_log_score = jnp.max(flat, axis=1)
+    probs = jnp.exp(scores - log_z[:, None, None])
+    best_argmax = jnp.argmax(flat, axis=1)
+    max_posterior = jnp.exp(best_log_score - log_z)
+    return log_z, probs, best_log_score, best_argmax, max_posterior
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +436,138 @@ def _reorder_to_indices(image_indices_returned, requested_image_indices, *arrays
     return tuple(arr[order] for arr in arrays)
 
 
+def _enforce_relion_half_volume_x0_hermitian(volume_flat, full_volume_shape):
+    """Match RELION BackProjector::enforceHermitianSymmetry on x=0 plane.
+
+    RELION stores a compact half-volume. Before maximization, it sums Hermitian
+    partners on the x=0 plane and writes that sum to both partners, without
+    dividing by two. Keep this env-gated while validating native half-volume
+    M-step parity.
+    """
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(full_volume_shape)
+    vol = jnp.asarray(volume_flat).reshape(half_shape)
+    n0, n1, _ = half_shape
+    i0 = jnp.arange(n0, dtype=jnp.int32)
+    i1 = jnp.arange(n1, dtype=jnp.int32)
+    p0 = (-i0) % n0
+    p1 = (-i1) % n1
+    plane = vol[:, :, 0]
+    partner = jnp.conj(plane[p0[:, None], p1[None, :]])
+    summed = plane + partner
+    self_partner = (p0[:, None] == i0[:, None]) & (p1[None, :] == i1[None, :])
+    plane = jnp.where(self_partner, plane, summed)
+    return vol.at[:, :, 0].set(plane).reshape(-1)
+
+
+def _parse_int_set_env(name):
+    value = os.environ.get(name)
+    if not value:
+        return None
+    out = set()
+    for part in value.replace(";", ",").split(","):
+        part = part.strip()
+        if part:
+            out.add(int(part))
+    return out
+
+
+def _maybe_dump_pass2_bucket(
+    *,
+    experiment_dataset,
+    image_indices,
+    per_image_inputs,
+    current_size,
+    n_fine_trans,
+    fine_translations,
+    scores,
+    probs,
+    rotation_log_prior,
+    translation_log_prior,
+    candidate_mask,
+    shifted_score_split,
+    ctf2_over_nv_score,
+    proj_half,
+    half_weights_used,
+    window_indices,
+    shifted_corrected_score_split=None,
+):
+    """Env-gated sparse pass-2 dump for RELION operand parity debugging."""
+    dump_dir = os.environ.get("RECOVAR_PASS2_DUMP_DIR")
+    if not dump_dir:
+        return
+    target_original_indices = _parse_int_set_env("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES")
+    if not target_original_indices:
+        target_original_indices = _parse_int_set_env("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
+    if not target_original_indices:
+        return
+    target_current_size = os.environ.get("RECOVAR_PASS2_DUMP_CURRENT_SIZE")
+    if target_current_size:
+        if current_size is None or int(current_size) != int(target_current_size):
+            return
+
+    local_indices = np.asarray(image_indices, dtype=np.int64)
+    original_indices_all = getattr(experiment_dataset, "dataset_indices", None)
+    if original_indices_all is None:
+        original_indices = local_indices
+    else:
+        original_indices = np.asarray(original_indices_all, dtype=np.int64)[local_indices]
+
+    wanted_rows = [i for i, original_idx in enumerate(original_indices) if int(original_idx) in target_original_indices]
+    if not wanted_rows:
+        return
+
+    os.makedirs(dump_dir, exist_ok=True)
+    scores_np = np.asarray(scores, dtype=np.float64)
+    probs_np = np.asarray(probs, dtype=np.float64)
+    rot_prior_np = np.asarray(rotation_log_prior, dtype=np.float64)
+    trans_prior_np = np.asarray(translation_log_prior, dtype=np.float64)
+    mask_np = np.asarray(candidate_mask, dtype=bool)
+    shifted_score_np = np.asarray(shifted_score_split)
+    ctf2_np = np.asarray(ctf2_over_nv_score, dtype=np.float64)
+    proj_np = np.asarray(proj_half)
+    shifted_corrected_np = (
+        None if shifted_corrected_score_split is None else np.asarray(shifted_corrected_score_split)
+    )
+
+    for row in wanted_rows:
+        image_idx = int(local_indices[row])
+        original_idx = int(original_indices[row])
+        cnt = int(per_image_inputs["oversampled_rots"][image_idx].shape[0])
+        scores_row = scores_np[row, :cnt, :]
+        pre_prior = scores_row - rot_prior_np[row, :cnt, None] - trans_prior_np[row, None, :]
+        out_path = os.path.join(
+            dump_dir,
+            f"pass2_orig{original_idx:06d}_cs{(-1 if current_size is None else int(current_size)):03d}.npz",
+        )
+        np.savez_compressed(
+            out_path,
+            original_index=np.int64(original_idx),
+            local_index=np.int64(image_idx),
+            current_size=np.int64(-1 if current_size is None else int(current_size)),
+            n_fine_trans=np.int64(n_fine_trans),
+            fine_translations=np.asarray(fine_translations, dtype=np.float32),
+            rotations=np.asarray(per_image_inputs["oversampled_rots"][image_idx], dtype=np.float32),
+            oversampled_rot_indices=np.asarray(per_image_inputs["oversampled_rot_indices"][image_idx], dtype=np.int64),
+            parent_map=np.asarray(per_image_inputs["parent_map"][image_idx], dtype=np.int32),
+            candidate_mask=mask_np[row, :cnt, :],
+            scores_with_prior=scores_row,
+            scores_pre_prior=pre_prior,
+            probs=probs_np[row, :cnt, :],
+            rotation_log_prior=rot_prior_np[row, :cnt],
+            translation_log_prior=trans_prior_np[row],
+            shifted_score=shifted_score_np[row],
+            shifted_corrected=(
+                shifted_corrected_np[row] if shifted_corrected_np is not None else np.empty((0,), dtype=np.complex64)
+            ),
+            ctf2_over_nv_score=ctf2_np[row],
+            proj_half=proj_np[row, :cnt, :],
+            half_weights=np.asarray(half_weights_used, dtype=np.float64),
+            window_indices=(
+                np.asarray(window_indices, dtype=np.int32) if window_indices is not None else np.empty((0,), dtype=np.int32)
+            ),
+        )
+
+
 def _process_half(experiment_dataset, batch, config, apply_image_mask):
     process_half_fn = getattr(experiment_dataset, "process_images_half", None)
     if process_half_fn is not None:
@@ -353,6 +591,7 @@ def _prepare_bucket_io(
     scale_corrections,
     image_pre_shifts,
     use_float64_scoring,
+    return_direct_scoring_io=False,
 ):
     """Run preprocessing for a batch of images (translations tiled, CTF/noise ratios).
 
@@ -388,6 +627,12 @@ def _prepare_bucket_io(
 
     score_weighted_half = processed_score_half_raw * ctf_half / noise_variance_half
     recon_weighted_half = processed_recon_half_raw * ctf_half / noise_variance_half
+    direct_corrected_score_half = processed_score_half_raw
+
+    if scale_corrections is not None:
+        batch_scale = jnp.asarray(np.asarray(scale_corrections)[np.asarray(image_indices)])
+    else:
+        batch_scale = jnp.ones(batch_size, dtype=ctf_half.dtype)
 
     # Per-image image corrections (matches run_em lines 1062-1069).
     if image_corrections is not None:
@@ -397,13 +642,25 @@ def _prepare_bucket_io(
         # tiling and shifting so we apply it before tiling for efficiency.
         score_weighted_half = score_weighted_half * batch_corr[:, None]
         recon_weighted_half = recon_weighted_half * batch_corr[:, None]
+        if return_direct_scoring_io:
+            direct_raw_corr = batch_corr / batch_scale
+            direct_corrected_score_half = direct_corrected_score_half * direct_raw_corr[:, None]
         # batch_norm scales by corr^2 to match run_em line 1069
         batch_norm = batch_norm * (batch_corr**2)[:, None]
 
     # Per-image scale correction on CTF^2/noise (matches run_em lines 1077-1079).
     if scale_corrections is not None:
-        batch_scale = jnp.asarray(np.asarray(scale_corrections)[np.asarray(image_indices)])
         ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+        if return_direct_scoring_io:
+            direct_corrected_score_half = direct_corrected_score_half / batch_scale[:, None]
+
+    if return_direct_scoring_io:
+        ctf_safe = jnp.abs(ctf_half) > 1e-8
+        direct_corrected_score_half = jnp.where(
+            ctf_safe,
+            direct_corrected_score_half / ctf_half,
+            direct_corrected_score_half,
+        )
 
     # Per-image pre-centering (matches run_em lines 1087-1098): phase shift
     # in Fourier space.  Applied AFTER per-image scalar corrections.
@@ -418,6 +675,8 @@ def _prepare_bucket_io(
         phase_factors = jnp.exp(-2j * jnp.pi * (lattice_half @ batch_shifts.T)).T
         score_weighted_half = score_weighted_half * phase_factors
         recon_weighted_half = recon_weighted_half * phase_factors
+        if return_direct_scoring_io:
+            direct_corrected_score_half = direct_corrected_score_half * phase_factors
 
     # Tile translations: (batch_size * n_trans, 2)
     translations_tiled = jnp.repeat(fine_translations[None], batch_size, axis=0).reshape(batch_size * n_trans, -1)
@@ -443,6 +702,19 @@ def _prepare_bucket_io(
     else:
         shifted_recon_half = shifted_score_half
 
+    shifted_corrected_score_half = None
+    if return_direct_scoring_io:
+        direct_corrected_score_tiled = jnp.repeat(direct_corrected_score_half[:, None, :], n_trans, axis=1).reshape(
+            batch_size * n_trans,
+            -1,
+        )
+        shifted_corrected_score_half = core.translate_images(
+            direct_corrected_score_tiled,
+            translations_tiled,
+            image_shape,
+            half_image=True,
+        )
+
     # Save with-DC arrays for M-step / noise (RELION excludes DC from likelihood,
     # includes it in reconstruction weights).
     shifted_score_half_with_dc = shifted_score_half
@@ -460,6 +732,13 @@ def _prepare_bucket_io(
         shifted_score_half_with_dc = shifted_score_half_with_dc.astype(jnp.complex128)
         ctf2_over_nv_half = ctf2_over_nv_half.astype(jnp.float64)
         ctf2_over_nv_half_with_dc = ctf2_over_nv_half_with_dc.astype(jnp.float64)
+        if return_direct_scoring_io:
+            shifted_corrected_score_half = shifted_corrected_score_half.astype(jnp.complex128)
+    else:
+        shifted_score_half = shifted_score_half.astype(jnp.complex64)
+        ctf2_over_nv_half = ctf2_over_nv_half.astype(jnp.float32)
+        if return_direct_scoring_io:
+            shifted_corrected_score_half = shifted_corrected_score_half.astype(jnp.complex64)
 
     return (
         shifted_score_half,
@@ -469,6 +748,7 @@ def _prepare_bucket_io(
         ctf2_over_nv_half_with_dc,
         shifted_score_half_with_dc,
         processed_score_half_raw,  # used by noise_img_power (RAW, no corrections)
+        shifted_corrected_score_half,
     )
 
 
@@ -497,7 +777,11 @@ def compute_pass2_stats_sparse_bucketed(
     scale_corrections,
     image_pre_shifts,
     use_float64_scoring,
+    translation_prior_centers=None,
+    do_gridding_correction=False,
+    square_window=False,
     random_perturbation,
+    normalization_log_z=None,
     rotation_block_size_for_quantization=5000,
 ):
     """Bucketed batched implementation of sparse pass-2 oversampling.
@@ -516,14 +800,24 @@ def compute_pass2_stats_sparse_bucketed(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
 
-    # Recon volume layout: match the legacy per-image reference path, which
-    # uses ``run_em`` with ``half_volume=False`` and therefore returns a FULL
-    # N**3 (or (pf*N)**3 if reconstruction_padding_factor>1) accumulator.
+    # Recon volume layout: match the legacy per-image reference path by
+    # default, but allow native RELION-style half-volume accumulation as an
+    # isolated diagnostic for M-step parity against BackProjector.
+    use_native_half_volume_mstep = os.environ.get(
+        "RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME",
+        "",
+    ).lower() in {"1", "true", "yes", "on"}
     if reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
     else:
         recon_volume_shape = volume_shape
-    recon_volume_size = int(np.prod(recon_volume_shape))
+    recon_accum_shape = (
+        fourier_transform_utils.volume_shape_to_half_volume_shape(recon_volume_shape)
+        if use_native_half_volume_mstep
+        else recon_volume_shape
+    )
+    recon_volume_size = int(np.prod(recon_accum_shape))
+    recon_accum_dtype = experiment_dataset.dtype
 
     # Projection volume + padding
     if projection_padding_factor > 1:
@@ -533,7 +827,7 @@ def compute_pass2_stats_sparse_bucketed(
             volume,
             volume_shape,
             projection_padding_factor,
-            do_gridding_correction=False,
+            do_gridding_correction=do_gridding_correction,
             current_size=current_size,
         )
     else:
@@ -555,6 +849,27 @@ def compute_pass2_stats_sparse_bucketed(
     fine_translations = np.asarray(fine_translations, dtype=np.float32)
     fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
     n_fine_trans = fine_translations.shape[0]
+
+    translation_prior_centers_np = None
+    if translation_prior_centers is not None:
+        translation_prior_centers_np = np.asarray(translation_prior_centers, dtype=np.float32)
+        if translation_prior_centers_np.ndim == 1:
+            if translation_prior_centers_np.shape != (translations_np.shape[1],):
+                raise ValueError(
+                    "translation_prior_centers must have shape "
+                    f"({translations_np.shape[1]},), got {translation_prior_centers_np.shape}",
+                )
+        elif translation_prior_centers_np.ndim == 2:
+            if translation_prior_centers_np.shape != (n_images, translations_np.shape[1]):
+                raise ValueError(
+                    "translation_prior_centers must have shape "
+                    f"({n_images}, {translations_np.shape[1]}) when image-specific, got "
+                    f"{translation_prior_centers_np.shape}",
+                )
+        else:
+            raise ValueError(
+                f"translation_prior_centers must be 1D or 2D, got {translation_prior_centers_np.ndim} dimensions",
+            )
 
     # Translation prior in the fine grid
     if translation_log_prior is None:
@@ -591,11 +906,23 @@ def compute_pass2_stats_sparse_bucketed(
     local_rot_counts = [int(rots.shape[0]) for rots in per_image_inputs["oversampled_rots"]]
     valid_candidate_counts = [int(np.asarray(m).sum()) for m in per_image_inputs["candidate_mask"]]
 
+    use_relion_direct_diff2_scoring = os.environ.get("RECOVAR_RELION_DIRECT_DIFF2_SCORING", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    use_relion_adjoint_inverse = os.environ.get(
+        "RECOVAR_RELION_SPARSE_PASS2_ADJOINT_INVERSE",
+        "",
+    ).lower() in {"1", "true", "yes", "on"}
+
     # Bucket
     buckets = _bucket_pass2_inputs(
         per_image_inputs,
         n_fine_trans=n_fine_trans,
         rotation_block_size_for_quantization=rotation_block_size_for_quantization,
+        max_hypotheses_per_microbatch=100_000 if use_relion_direct_diff2_scoring else 2_000_000,
     )
 
     logger.info(
@@ -604,10 +931,14 @@ def compute_pass2_stats_sparse_bucketed(
         len(buckets),
         [b["bucket_size"] for b in buckets],
     )
+    if use_native_half_volume_mstep:
+        logger.info("Sparse pass-2 M-step: using native half-volume backprojection diagnostic")
+    if use_relion_adjoint_inverse:
+        logger.info("Sparse pass-2 M-step: using transposed rotations for RELION A.inv() diagnostic")
 
     # Output accumulators (volume_size matches what original returned: full N**3)
-    Ft_y_total = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
-    Ft_ctf_total = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
+    Ft_y_total = jnp.zeros(recon_volume_size, dtype=recon_accum_dtype)
+    Ft_ctf_total = jnp.zeros(recon_volume_size, dtype=recon_accum_dtype)
     hard_assignment = np.empty(n_images, dtype=np.int32)
     best_rotations = np.empty((n_images, 3, 3), dtype=np.float32)
     best_rotation_indices = np.empty(n_images, dtype=np.int64)
@@ -620,6 +951,7 @@ def compute_pass2_stats_sparse_bucketed(
     noise_wsum_total = None
     noise_img_power_total = None
     noise_sumw_total = 0.0
+    noise_sigma2_offset_total = 0.0
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         noise_wsum_total = np.zeros(n_shells, dtype=np.float64)
@@ -635,12 +967,28 @@ def compute_pass2_stats_sparse_bucketed(
     n_half = H * (W // 2 + 1)
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
-        window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, int(current_size), square=False)
+        window_indices_np, n_windowed = make_fourier_window_indices_np(
+            image_shape,
+            int(current_size),
+            square=square_window,
+            include_dc=False,
+        )
+        recon_window_indices_np, n_recon_windowed = make_fourier_window_indices_np(
+            image_shape,
+            int(current_size),
+            square=square_window,
+            include_dc=True,
+            exact_radius=True,
+        )
         window_indices = jnp.asarray(window_indices_np, dtype=jnp.int32)
+        recon_window_indices = jnp.asarray(recon_window_indices_np, dtype=jnp.int32)
     else:
         window_indices_np = None
+        recon_window_indices_np = None
         window_indices = None
+        recon_window_indices = None
         n_windowed = n_half
+        n_recon_windowed = n_half
 
     if half_spectrum_scoring:
         half_weights = jnp.ones(n_half, dtype=jnp.float32)
@@ -658,11 +1006,20 @@ def compute_pass2_stats_sparse_bucketed(
     if accumulate_noise:
         shell_indices_half = make_shell_indices_half(image_shape)
         if use_window:
-            shell_indices_noise = shell_indices_half[window_indices]
-            noise_variance_for_noise = noise_variance_half[window_indices]
+            shell_indices_noise = shell_indices_half[recon_window_indices]
+            noise_variance_for_noise = noise_variance_half[recon_window_indices]
         else:
             shell_indices_noise = shell_indices_half
             noise_variance_for_noise = noise_variance_half
+
+    normalization_log_z_np = None
+    if normalization_log_z is not None:
+        normalization_log_z_np = np.asarray(normalization_log_z, dtype=np.float64)
+        if normalization_log_z_np.shape != (n_images,):
+            raise ValueError(
+                "normalization_log_z must have shape "
+                f"({n_images},), got {normalization_log_z_np.shape}",
+            )
 
     overall_t0 = time.time()
 
@@ -704,6 +1061,22 @@ def compute_pass2_stats_sparse_bucketed(
             parent_map_padded = bucket_arrays["parent_map"]
             actual_counts = bucket_arrays["actual_counts"]
 
+        translation_sqdist_ang = None
+        if translation_prior_centers_np is not None:
+            if translation_prior_centers_np.ndim == 1:
+                centers = np.broadcast_to(
+                    translation_prior_centers_np[None, :],
+                    (batch, translation_prior_centers_np.shape[0]),
+                )
+            else:
+                centers = translation_prior_centers_np[image_indices]
+            voxel = float(experiment_dataset.voxel_size if experiment_dataset.voxel_size > 0 else 1.0)
+            translation_sqdist_ang = np.sum(
+                ((fine_translations[None, :, :] - centers[:, None, :]) * voxel) ** 2,
+                axis=-1,
+                dtype=np.float64,
+            )
+
         # Translation prior for this bucket (per-image)
         if fine_translation_prior_2d is None:
             bucket_translation_prior = jnp.zeros((batch, n_fine_trans), dtype=jnp.float32)
@@ -719,6 +1092,7 @@ def compute_pass2_stats_sparse_bucketed(
             ctf2_over_nv_half_with_dc,
             shifted_score_half_with_dc,
             processed_score_half_raw,
+            shifted_corrected_score_half,
         ) = _prepare_bucket_io(
             experiment_dataset,
             batch_data,
@@ -734,27 +1108,37 @@ def compute_pass2_stats_sparse_bucketed(
             scale_corrections,
             image_pre_shifts,
             use_float64_scoring,
+            return_direct_scoring_io=use_relion_direct_diff2_scoring,
         )
 
         # Window gather (if applicable)
         if use_window:
             shifted_score = shifted_score_half[:, window_indices]
-            shifted_recon = shifted_recon_half[:, window_indices]
+            shifted_recon = shifted_recon_half[:, recon_window_indices]
             ctf2_over_nv_score = ctf2_over_nv_half[:, window_indices]
-            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc[:, window_indices]
-            shifted_noise = shifted_score_half_with_dc[:, window_indices]
+            ctf2_over_nv_recon = ctf2_over_nv_half_with_dc[:, recon_window_indices]
+            shifted_noise = shifted_score_half_with_dc[:, recon_window_indices]
+            if use_relion_direct_diff2_scoring:
+                shifted_corrected_score = shifted_corrected_score_half[:, window_indices]
         else:
             shifted_score = shifted_score_half
             shifted_recon = shifted_recon_half
             ctf2_over_nv_score = ctf2_over_nv_half
             ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
             shifted_noise = shifted_score_half_with_dc
+            if use_relion_direct_diff2_scoring:
+                shifted_corrected_score = shifted_corrected_score_half
 
         # Project (B*R, 3, 3) -> (B*R, n_half) -> reshape (B, R, n_half)
         flat_rotations = flatten_bucket_rotations(jnp.asarray(rotations))
+        flat_backproject_rotations = (
+            jnp.swapaxes(flat_rotations, -1, -2)
+            if use_relion_adjoint_inverse
+            else flat_rotations
+        )
         projection_kwargs = {}
         if use_window:
-            projection_kwargs["max_r"] = float(current_size // 2) + 0.5
+            projection_kwargs["max_r"] = float(current_size // 2)
             projection_kwargs["return_abs2"] = False
         proj_half_flat, proj_abs2_half_flat = _compute_projections_block(
             mean_for_proj,
@@ -769,8 +1153,8 @@ def compute_pass2_stats_sparse_bucketed(
             proj_abs2 = jnp.abs(proj_half) ** 2
             proj_weighted = proj_half * half_weights_windowed[None, None, :]
             proj_abs2_weighted = proj_abs2 * half_weights_windowed[None, None, :]
-            proj_for_noise = proj_half
-            proj_abs2_for_noise = proj_abs2
+            proj_for_noise = proj_half_flat[:, recon_window_indices].reshape(batch, bucket_size, n_recon_windowed)
+            proj_abs2_for_noise = jnp.abs(proj_for_noise) ** 2
         else:
             proj_half = proj_half_flat.reshape(batch, bucket_size, n_half)
             proj_abs2 = proj_abs2_half_flat.reshape(batch, bucket_size, n_half)
@@ -784,20 +1168,63 @@ def compute_pass2_stats_sparse_bucketed(
             proj_abs2_weighted = proj_abs2_weighted.astype(jnp.float64)
             proj_for_noise = proj_for_noise.astype(jnp.complex128)
             proj_abs2_for_noise = proj_abs2_for_noise.astype(jnp.float64)
+        else:
+            proj_weighted = proj_weighted.astype(jnp.complex64)
+            proj_abs2_weighted = proj_abs2_weighted.astype(jnp.float32)
 
         # Score: (B, R, T)
         shifted_score_split = shifted_score.reshape(batch, n_fine_trans, -1)
-        scores = _score_pass2_bucket(
-            shifted_score_split,
-            ctf2_over_nv_score,
-            proj_weighted,
-            proj_abs2_weighted,
-            jnp.asarray(log_prior),
-            bucket_translation_prior,
-            jnp.asarray(candidate_mask),
-        )
+        shifted_corrected_score_split = None
+        if use_relion_direct_diff2_scoring:
+            shifted_corrected_score_split = shifted_corrected_score.reshape(batch, n_fine_trans, -1)
+            direct_half_weights = half_weights_windowed if use_window else half_weights
+            scores = _score_pass2_bucket_relion_gpu_diff2(
+                shifted_corrected_score_split,
+                ctf2_over_nv_score,
+                proj_half,
+                direct_half_weights,
+                jnp.asarray(log_prior),
+                bucket_translation_prior,
+                jnp.asarray(candidate_mask),
+            )
+        else:
+            scores = _score_pass2_bucket(
+                shifted_score_split,
+                ctf2_over_nv_score,
+                proj_weighted,
+                proj_abs2_weighted,
+                jnp.asarray(log_prior),
+                bucket_translation_prior,
+                jnp.asarray(candidate_mask),
+            )
 
-        log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = _normalize_pass2_bucket(scores)
+        if normalization_log_z_np is None:
+            log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = _normalize_pass2_bucket(scores)
+        else:
+            bucket_log_z = jnp.asarray(normalization_log_z_np[image_indices], dtype=scores.real.dtype)
+            log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = (
+                _normalize_pass2_bucket_with_log_z(scores, bucket_log_z)
+            )
+
+        _maybe_dump_pass2_bucket(
+            experiment_dataset=experiment_dataset,
+            image_indices=image_indices,
+            per_image_inputs=per_image_inputs,
+            current_size=current_size,
+            n_fine_trans=n_fine_trans,
+            fine_translations=fine_translations,
+            scores=scores,
+            probs=probs,
+            rotation_log_prior=jnp.asarray(log_prior),
+            translation_log_prior=bucket_translation_prior,
+            candidate_mask=jnp.asarray(candidate_mask),
+            shifted_score_split=shifted_score_split,
+            ctf2_over_nv_score=ctf2_over_nv_score,
+            proj_half=proj_half,
+            half_weights_used=half_weights_windowed if use_window else half_weights,
+            window_indices=window_indices_np,
+            shifted_corrected_score_split=shifted_corrected_score_split,
+        )
 
         # M-step accumulation: posterior-weighted sums per (image, rot)
         shifted_recon_split = shifted_recon.reshape(batch, n_fine_trans, -1)
@@ -807,57 +1234,60 @@ def compute_pass2_stats_sparse_bucketed(
         # Backproject (use flat_rotations + flat summed/ctf_probs).
         # Padded rotations contribute zero because their probs == 0
         # (candidate_mask=False -> score=-inf -> exp(-inf)=0).
-        # NOTE: half_image=True (image side is half-spectrum) and
-        # half_volume=False (volume accumulator is full N**3) to match the
-        # legacy per-image reference path that called run_em with default
-        # half_volume=False.
         if use_window:
             Ft_y_total = _adjoint_slice_volume_windowed(
                 flatten_bucket_rows(summed),
-                window_indices,
-                flat_rotations,
+                recon_window_indices,
+                flat_backproject_rotations,
                 Ft_y_total,
                 image_shape,
                 recon_volume_shape,
                 "linear_interp",
                 True,
-                False,
+                use_native_half_volume_mstep,
+                float(current_size // 2),
             )
             Ft_ctf_total = _adjoint_slice_volume_windowed(
                 flatten_bucket_rows(ctf_probs),
-                window_indices,
-                flat_rotations,
+                recon_window_indices,
+                flat_backproject_rotations,
                 Ft_ctf_total,
                 image_shape,
                 recon_volume_shape,
                 "linear_interp",
                 True,
-                False,
+                use_native_half_volume_mstep,
+                float(current_size // 2),
             )
         else:
             Ft_y_total = _adjoint_slice_volume_half(
                 flatten_bucket_rows(summed),
-                flat_rotations,
+                flat_backproject_rotations,
                 Ft_y_total,
                 image_shape,
                 recon_volume_shape,
                 "linear_interp",
                 True,
-                False,
+                use_native_half_volume_mstep,
             )
             Ft_ctf_total = _adjoint_slice_volume_half(
                 flatten_bucket_rows(ctf_probs),
-                flat_rotations,
+                flat_backproject_rotations,
                 Ft_ctf_total,
                 image_shape,
                 recon_volume_shape,
                 "linear_interp",
                 True,
-                False,
+                use_native_half_volume_mstep,
             )
 
         # Noise accumulation
         if accumulate_noise:
+            if translation_sqdist_ang is not None:
+                translation_posterior = np.asarray(jnp.sum(probs, axis=1), dtype=np.float64)
+                noise_sigma2_offset_total += float(
+                    np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
+                )
             # NOTE: noise_img_power uses RAW (un-corrected) processed images
             # to match run_em line 1144 (which recomputes processed_masked
             # from raw batch_data).
@@ -939,6 +1369,43 @@ def compute_pass2_stats_sparse_bucketed(
         int(np.median(valid_candidate_counts)) if valid_candidate_counts else 0,
     )
 
+    if use_native_half_volume_mstep:
+        _maybe_dump_native_half_mstep(
+            Ft_y_total,
+            Ft_ctf_total,
+            current_size=current_size,
+            n_images=n_images,
+            recon_volume_shape=recon_volume_shape,
+            stage="pre_x0",
+        )
+        if os.environ.get("RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME_ENFORCE_X0", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            logger.info("Sparse pass-2 M-step: enforcing RELION half-volume x=0 Hermitian plane")
+            Ft_y_total = _enforce_relion_half_volume_x0_hermitian(Ft_y_total, recon_volume_shape)
+            Ft_ctf_total = _enforce_relion_half_volume_x0_hermitian(Ft_ctf_total, recon_volume_shape)
+        _maybe_dump_native_half_mstep(
+            Ft_y_total,
+            Ft_ctf_total,
+            current_size=current_size,
+            n_images=n_images,
+            recon_volume_shape=recon_volume_shape,
+            stage="post_x0",
+        )
+        # Keep the public return contract unchanged while testing whether the
+        # RELION-style folded accumulation itself closes the Ft_ctf/Ft_y gap.
+        Ft_y_total = fourier_transform_utils.half_volume_to_full_volume(
+            Ft_y_total,
+            recon_volume_shape,
+        ).reshape(-1)
+        Ft_ctf_total = fourier_transform_utils.half_volume_to_full_volume(
+            Ft_ctf_total,
+            recon_volume_shape,
+        ).reshape(-1)
+
     best_translations = fine_translations[hard_assignment % n_fine_trans]
 
     merged_noise_stats = None
@@ -946,7 +1413,7 @@ def compute_pass2_stats_sparse_bucketed(
         merged_noise_stats = NoiseStats(
             wsum_sigma2_noise=jnp.asarray(noise_wsum_total, dtype=jnp.float32),
             wsum_img_power=jnp.asarray(noise_img_power_total, dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
+            wsum_sigma2_offset=float(noise_sigma2_offset_total),
             sumw=float(noise_sumw_total),
         )
 

@@ -23,9 +23,19 @@ def score_local_bucket(
     """Compute exact local scores on a padded per-image hypothesis bucket."""
 
     # shifted: (B, T, N), proj_weighted: (B, R, N)
-    cross = -2.0 * jnp.einsum("btn,brn->btr", jnp.conj(shifted), proj_weighted).real
+    cross = -2.0 * jnp.einsum(
+        "btn,brn->btr",
+        jnp.conj(shifted),
+        proj_weighted,
+        precision=jax.lax.Precision.HIGHEST,
+    ).real
     cross = cross.swapaxes(1, 2)  # (B, R, T)
-    norms = jnp.einsum("bn,brn->br", ctf2_over_nv, proj_abs2_weighted)
+    norms = jnp.einsum(
+        "bn,brn->br",
+        ctf2_over_nv,
+        proj_abs2_weighted,
+        precision=jax.lax.Precision.HIGHEST,
+    )
     scores = -0.5 * (cross + norms[..., None])
     scores = scores + rotation_log_prior[:, :, None]
     scores = scores + translation_log_prior[:, None, :]
