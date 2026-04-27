@@ -64,6 +64,11 @@ parity gaps are tracked in
 whenever a new replay result, source-code finding, or dump comparison changes
 the state of the investigation.
 
+The compact roadmap and GitHub issue map for the next EM parity milestones is
+`docs/math/relion_parity_roadmap_2026_04_27.md`. Read it before starting new
+implementation work so pass-2 routing, convergence, initialization, large-run
+reruns, cleanup, K-class refinement, and ab-initio work stay ordered.
+
 Known low-priority boundary issue: the best one-iteration native half-volume
 M-step replay matches RELION assignments and maps (`Pmax` mean abs `3.5e-5`,
 exact poses/translations, final map corr `0.999996`) and matches BPref through
