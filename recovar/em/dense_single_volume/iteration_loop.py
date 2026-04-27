@@ -44,10 +44,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     relion_translation_search_base,
     remap_direction_prior_to_healpix_order,
 )
-from recovar.em.dense_single_volume.helpers.oversampling import (
-    compute_pass2_stats,
-    compute_pass2_stats_sparse,
-)
+from recovar.em.dense_single_volume.helpers.oversampling import compute_pass2_stats
 from recovar.em.dense_single_volume.helpers.resolution import (
     ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
     _bootstrap_current_size_relion,
@@ -345,6 +342,8 @@ def _run_local_search_iteration(
     debug_iteration=None,
     pass2_layout=None,
     return_best_pose_details=False,
+    normalization_log_z=None,
+    translation_prior_centers=None,
 ):
     """Run exact local search on the fine HEALPix grid.
 
@@ -451,6 +450,8 @@ def _run_local_search_iteration(
         debug_iteration=debug_iteration,
         local_layout_override=pass2_layout,
         return_best_pose_details=return_best_pose_details,
+        normalization_log_z=normalization_log_z,
+        translation_prior_centers=translation_prior_centers,
     )
 
 
@@ -486,6 +487,8 @@ def _run_sparse_pass2_local_search_iteration(
     rotation_block_size=5000,
     adaptive_fraction=0.999,
     debug_iteration=None,
+    normalization_log_z=None,
+    translation_prior_centers=None,
 ):
     """Run RELION adaptive pass 2 through the exact local-search engine."""
 
@@ -546,6 +549,8 @@ def _run_sparse_pass2_local_search_iteration(
         debug_iteration=debug_iteration,
         pass2_layout=pass2_layout,
         return_best_pose_details=True,
+        normalization_log_z=normalization_log_z,
+        translation_prior_centers=translation_prior_centers,
     )
 
     outputs = list(outputs)
@@ -1156,6 +1161,8 @@ def _run_local_search_iteration_exact_v1(
     debug_iteration=None,
     local_layout_override=None,
     return_best_pose_details=False,
+    normalization_log_z=None,
+    translation_prior_centers=None,
 ):
     """Per-image exact local engine over image-specific rotation neighborhoods."""
 
@@ -1245,6 +1252,8 @@ def _run_local_search_iteration_exact_v1(
         max_significants=-1,
         debug_iteration=debug_iteration,
         return_best_pose_details=return_best_pose_details,
+        normalization_log_z=normalization_log_z,
+        translation_prior_centers=translation_prior_centers,
     )
 
     if accumulate_noise:
@@ -3160,7 +3169,7 @@ def _run_relion_iteration_loop(
                     _best_rot_indices_k,
                     em_stats_k,
                     noise_stats_k,
-                ) = compute_pass2_stats_sparse(
+                ) = _run_sparse_pass2_local_search_iteration(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
@@ -3187,6 +3196,10 @@ def _run_relion_iteration_loop(
                     do_gridding_correction=True,
                     square_window=RELION_FOURIER_WINDOW_SQUARE,
                     random_perturbation=random_perturbation,
+                    image_batch_size=image_batch_size,
+                    rotation_block_size=rotation_block_size,
+                    adaptive_fraction=adaptive_fraction,
+                    debug_iteration=iteration,
                     translation_prior_centers=trans_prior_center,
                     normalization_log_z=(
                         None if full_coarse_stats is None else full_coarse_stats["normalization_log_z"]
@@ -3194,7 +3207,7 @@ def _run_relion_iteration_loop(
                 )
                 noise_stats_per_half[k] = noise_stats_k
                 dt_pass2 = time.time() - t_pass2
-                logger.info("Global significant support pass 2 (half %d): %.1fs", k, dt_pass2)
+                logger.info("Global significant support exact-local pass 2 (half %d): %.1fs", k, dt_pass2)
 
                 if full_coarse_stats is not None:
                     # In this RELION os0 parity path the sparse pass-2

@@ -44,6 +44,7 @@ from recovar.em.dense_single_volume.local_layout import (
 from recovar.em.dense_single_volume.local_score_pass import (
     compute_reconstruction_support,
     normalize_local_scores,
+    normalize_local_scores_with_log_z,
     score_local_bucket,
 )
 
@@ -441,6 +442,8 @@ def run_local_em_exact(
     max_significants: int = -1,
     debug_iteration: int | None = None,
     return_best_pose_details: bool = False,
+    normalization_log_z: np.ndarray | None = None,
+    translation_prior_centers: np.ndarray | None = None,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
@@ -451,6 +454,33 @@ def run_local_em_exact(
     n_half = H * (W // 2 + 1)
     n_trans = int(local_layout.translation_grid.shape[0])
     n_images = int(local_layout.n_images)
+    normalization_log_z_np = None
+    if normalization_log_z is not None:
+        normalization_log_z_np = np.asarray(normalization_log_z, dtype=np.float64)
+        if normalization_log_z_np.shape != (n_images,):
+            raise ValueError(
+                "normalization_log_z must have shape "
+                f"({n_images},), got {normalization_log_z_np.shape}",
+            )
+    translation_prior_centers_np = None
+    if translation_prior_centers is not None:
+        translation_prior_centers_np = np.asarray(translation_prior_centers, dtype=np.float32)
+        if translation_prior_centers_np.ndim == 1:
+            if translation_prior_centers_np.shape != (local_layout.translation_grid.shape[1],):
+                raise ValueError(
+                    "translation_prior_centers must have shape "
+                    f"({local_layout.translation_grid.shape[1]},), got {translation_prior_centers_np.shape}",
+                )
+        elif translation_prior_centers_np.ndim == 2:
+            if translation_prior_centers_np.shape != (n_images, local_layout.translation_grid.shape[1]):
+                raise ValueError(
+                    "translation_prior_centers must have shape "
+                    f"({n_images}, {local_layout.translation_grid.shape[1]}), got {translation_prior_centers_np.shape}",
+                )
+        else:
+            raise ValueError(
+                f"translation_prior_centers must be 1D or 2D, got {translation_prior_centers_np.ndim} dimensions",
+            )
     (
         debug_score_dump_dir,
         debug_score_dump_targets,
@@ -553,6 +583,7 @@ def run_local_em_exact(
 
     noise_wsum = None
     noise_img_power = None
+    noise_sigma2_offset = 0.0
     noise_sumw = 0.0
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
@@ -613,6 +644,22 @@ def run_local_em_exact(
         batch_fetch_time += time.time() - fetch_t0
         bucket = _reorder_bucket_to_indices(bucket, fetched_indices)
         batch_size = int(bucket.image_indices.shape[0])
+        translation_sqdist_ang = None
+        if translation_prior_centers_np is not None:
+            if translation_prior_centers_np.ndim == 1:
+                centers = np.broadcast_to(
+                    translation_prior_centers_np[None, :],
+                    (batch_size, translation_prior_centers_np.shape[0]),
+                )
+            else:
+                centers = translation_prior_centers_np[np.asarray(bucket.image_indices)]
+            voxel = float(experiment_dataset.voxel_size if experiment_dataset.voxel_size > 0 else 1.0)
+            translation_sqdist_ang = np.sum(
+                ((np.asarray(local_layout.translation_grid, dtype=np.float32)[None, :, :] - centers[:, None, :]) * voxel)
+                ** 2,
+                axis=-1,
+                dtype=np.float64,
+            )
 
         preprocess_t0 = time.time()
         (
@@ -757,7 +804,17 @@ def run_local_em_exact(
         score_time += time.time() - score_t0
 
         normalize_t0 = time.time()
-        log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores(scores)
+        if normalization_log_z_np is None:
+            log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores(scores)
+        else:
+            bucket_log_z = jnp.asarray(
+                normalization_log_z_np[np.asarray(bucket.image_indices)],
+                dtype=scores.real.dtype,
+            )
+            log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores_with_log_z(
+                scores,
+                bucket_log_z,
+            )
         if return_profile:
             _block_until_ready(log_Z, probs, best_log_score, best_argmax, max_posterior)
         normalize_time += time.time() - normalize_t0
@@ -906,6 +963,11 @@ def run_local_em_exact(
 
         if accumulate_noise:
             noise_t0 = time.time()
+            if translation_sqdist_ang is not None:
+                translation_posterior = np.asarray(jnp.sum(probs, axis=1), dtype=np.float64)
+                noise_sumw_offset = np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
+            else:
+                noise_sumw_offset = 0.0
             batch_img_power = jnp.sum(jnp.abs(processed_score_half) ** 2, axis=0).astype(jnp.float32)
             batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
             batch_img_power_shells = batch_img_power_shells.at[shell_indices_half].add(batch_img_power)
@@ -959,6 +1021,7 @@ def run_local_em_exact(
             if return_profile:
                 _block_until_ready(block_noise_shells)
             noise_wsum += np.asarray(block_noise_shells, dtype=np.float64)
+            noise_sigma2_offset += float(noise_sumw_offset)
             noise_time += time.time() - noise_t0
 
         postprocess_t0 = time.time()
@@ -1033,7 +1096,7 @@ def run_local_em_exact(
         noise_stats = NoiseStats(
             wsum_sigma2_noise=jnp.asarray(noise_wsum, dtype=jnp.float32),
             wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
+            wsum_sigma2_offset=float(noise_sigma2_offset),
             sumw=float(noise_sumw),
         )
 

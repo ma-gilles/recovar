@@ -106,6 +106,22 @@ near the RELION accelerated float32/texture arithmetic band and should be
 checked in the next full fixed-state 5k replay before pursuing another
 single-particle micro-fix.
 
+### Pass-2 routing source fix
+
+The RELION refinement path no longer calls the grouped/bucketed sparse pass-2
+helper from `iteration_loop.py`. Normal adaptive sparse pass 2 and the os0
+global-significant-support replay branch now both route through
+`_run_sparse_pass2_local_search_iteration()` and the exact local engine. The os0
+branch keeps the RELION denominator contract by passing the full coarse-grid
+`normalization_log_z` from pass 1, and keeps offset-noise accounting by passing
+translation prior centers into exact local pass 2.
+
+Targeted coverage:
+`tests/unit/test_refine_relion_mode.py -k 'global_significant_support or
+sparse_pass2_local_search_matches_per_image_reference or
+routes_sparse_adaptive_pass2 or skips_pass2_when_significance_fraction_is_high
+or uses_dense_exact_pass2'`.
+
 ### Post-fix forced replay timing-only run
 
 Artifact:

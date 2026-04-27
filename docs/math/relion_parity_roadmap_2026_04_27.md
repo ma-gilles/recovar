@@ -180,10 +180,14 @@ Implementation update (2026-04-27):
   pass-2 layout/mask construction, score masking, route assertion that
   adaptive pass 2 does not call `compute_pass2_stats_sparse()`, and a numerical
   comparison against `_compute_pass2_stats_sparse_perimage_reference()`.
-- The os0 global-significant-support replay path still calls
-  `compute_pass2_stats_sparse()` because it needs externally supplied
-  `normalization_log_z`; convert that separately after adding denominator
-  support to the local-exact path.
+- The os0 global-significant-support replay path now also routes through
+  `_run_sparse_pass2_local_search_iteration(... oversampling_order=0)`.
+  Exact local pass 2 accepts external full-grid `normalization_log_z` and
+  translation prior centers so this path preserves the old sparse-support
+  denominator/noise contract without calling the grouped/bucketed helper.
+- `iteration_loop.py` no longer imports or calls `compute_pass2_stats_sparse()`.
+  The deprecated bucketed/grouped sparse pass-2 helper remains only as legacy
+  code/test scaffolding, not as a RELION refinement route.
 - `tests/unit/test_sparse_pass2_bucketed_parity.py` still covers the deprecated
   grouped/bucketed implementation and currently shows a legacy M-step scale
   mismatch. Do not use that path as a RELION adaptive-pass-2 fallback; delete or
