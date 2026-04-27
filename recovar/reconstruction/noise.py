@@ -929,13 +929,13 @@ def normalize_wsum_to_sigma2_noise(wsum_sigma2_noise, wsum_img_power, sumw, imag
         Per-shell noise variance in **recovar's native FFT units**, ready to
         be fed back into the engine. Same scale as ``|process_images|^2``.
     """
-    from recovar.em.dense_single_volume.em_engine import make_shell_indices_half
+    from recovar.em.dense_single_volume.em_engine import make_relion_noise_shell_indices_half
 
     wsum_sigma2_noise = jnp.asarray(wsum_sigma2_noise, dtype=jnp.float32)
     wsum_img_power = jnp.asarray(wsum_img_power, dtype=jnp.float32)
     n_shells = image_shape[0] // 2 + 1
 
-    shell_indices = make_shell_indices_half(image_shape)
+    shell_indices = make_relion_noise_shell_indices_half(image_shape)
     Npix_per_shell = jnp.zeros(n_shells, dtype=jnp.float32)
     Npix_per_shell = Npix_per_shell.at[shell_indices].add(jnp.ones_like(shell_indices, dtype=jnp.float32))
 

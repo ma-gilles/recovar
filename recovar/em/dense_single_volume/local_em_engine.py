@@ -21,6 +21,7 @@ from recovar.em.dense_single_volume.em_primitives import (
     _compute_noise_block,
     _compute_projections_block,
     make_half_image_weights,
+    make_relion_noise_shell_indices_half,
     make_shell_indices_half,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
@@ -32,6 +33,7 @@ from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
+    enforce_relion_half_volume_x0_hermitian,
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
@@ -223,6 +225,122 @@ def _parse_debug_score_dump_request():
     dump_path = Path(dump_dir)
     dump_path.mkdir(parents=True, exist_ok=True)
     return dump_path, targets, requested_current_sizes, requested_iterations
+
+
+def _parse_debug_noise_component_dump_request():
+    """Return optional per-particle local noise component dump settings."""
+
+    dump_dir = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_DIR")
+    dump_indices = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_GLOBAL_INDICES")
+    dump_current_size = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_CURRENT_SIZE")
+    dump_iterations = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_ITERATION")
+    if not dump_dir or not dump_indices:
+        return None, set(), None, None
+    targets = _parse_debug_int_set(dump_indices) or set()
+    if not targets:
+        return None, set(), None, None
+    requested_current_sizes = _parse_debug_int_set(dump_current_size)
+    requested_iterations = _parse_debug_int_set(dump_iterations)
+    dump_path = Path(dump_dir)
+    dump_path.mkdir(parents=True, exist_ok=True)
+    return dump_path, targets, requested_current_sizes, requested_iterations
+
+
+def _bin_shell_values(values, shell_indices, n_shells):
+    return np.bincount(
+        np.asarray(shell_indices, dtype=np.int64),
+        weights=np.asarray(values, dtype=np.float64),
+        minlength=int(n_shells),
+    )[: int(n_shells)]
+
+
+def _maybe_write_debug_noise_component_dump(
+    *,
+    experiment_dataset,
+    bucket,
+    support_mass,
+    processed_noise_power_half,
+    proj_for_noise,
+    proj_abs2_for_noise,
+    summed_masked_noise,
+    ctf_probs,
+    noise_variance_for_noise,
+    shell_indices_half,
+    shell_indices_noise,
+    n_shells,
+    current_size,
+    debug_iteration,
+    reconstruction_sample_mask,
+    n_significant_samples,
+    dump_dir: Path | None,
+    pending_targets: set[int],
+    requested_current_sizes: set[int] | None = None,
+    requested_iterations: set[int] | None = None,
+):
+    """Dump per-particle RELION-style noise components for selected images."""
+
+    if dump_dir is None or not pending_targets:
+        return pending_targets
+    if requested_current_sizes is not None and int(current_size or -1) not in requested_current_sizes:
+        return pending_targets
+    if requested_iterations is not None and int(debug_iteration or -1) not in requested_iterations:
+        return pending_targets
+
+    original_image_indices = np.asarray(
+        experiment_dataset.original_image_indices_from_local(bucket.image_indices),
+        dtype=np.int64,
+    )
+    target_rows = [row for row, original_idx in enumerate(original_image_indices.tolist()) if int(original_idx) in pending_targets]
+    if not target_rows:
+        return pending_targets
+
+    support_mass_np = np.asarray(support_mass, dtype=np.float64)
+    processed_noise_power_np = np.asarray(processed_noise_power_half)
+    proj_np = np.asarray(proj_for_noise)
+    proj_abs2_np = np.asarray(proj_abs2_for_noise, dtype=np.float64)
+    summed_np = np.asarray(summed_masked_noise)
+    ctf_probs_np = np.asarray(ctf_probs, dtype=np.float64)
+    noise_variance_np = np.asarray(noise_variance_for_noise, dtype=np.float64)
+    shell_indices_half_np = np.asarray(shell_indices_half, dtype=np.int64)
+    shell_indices_noise_np = np.asarray(shell_indices_noise, dtype=np.int64)
+    reconstruction_sample_mask_np = np.asarray(reconstruction_sample_mask, dtype=bool)
+    n_significant_samples_np = np.asarray(n_significant_samples, dtype=np.int32)
+
+    for row in target_rows:
+        original_idx = int(original_image_indices[row])
+        local_idx = int(bucket.image_indices[row])
+        p_img_pixel = (np.abs(processed_noise_power_np[row]) ** 2) * support_mass_np[row]
+        p_img_shells = _bin_shell_values(p_img_pixel, shell_indices_half_np, n_shells)
+
+        ctf_probs_raw = ctf_probs_np[row] * noise_variance_np[None, :]
+        a2_pixel = np.sum(proj_abs2_np[row] * ctf_probs_raw, axis=0)
+        xa_pixel = noise_variance_np * np.real(np.sum(proj_np[row] * np.conj(summed_np[row]), axis=0))
+        a2_shells = _bin_shell_values(a2_pixel, shell_indices_noise_np, n_shells)
+        xa_shells = _bin_shell_values(xa_pixel, shell_indices_noise_np, n_shells)
+        total_shells = p_img_shells + a2_shells - 2.0 * xa_shells
+
+        significant = reconstruction_sample_mask_np[row, : int(bucket.actual_rotation_counts[row]), :]
+        dump_path = dump_dir / f"local_noise_components_it{int(debug_iteration or -1):03d}_image_{original_idx}.npz"
+        np.savez_compressed(
+            dump_path,
+            selected_global_image_indices=np.array([original_idx], dtype=np.int64),
+            selected_local_image_indices=np.array([local_idx], dtype=np.int64),
+            current_size=np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
+            debug_iteration=np.array([int(debug_iteration or -1)], dtype=np.int32),
+            support_mass=np.array([support_mass_np[row]], dtype=np.float64),
+            n_significant_samples=np.array([int(n_significant_samples_np[row])], dtype=np.int32),
+            significant_count=np.array([int(np.sum(significant))], dtype=np.int32),
+            p_img_shells=p_img_shells.astype(np.float64),
+            a2_shells=a2_shells.astype(np.float64),
+            xa_shells=xa_shells.astype(np.float64),
+            total_shells=total_shells.astype(np.float64),
+            shell_indices_half=shell_indices_half_np.astype(np.int32),
+            shell_indices_noise=shell_indices_noise_np.astype(np.int32),
+        )
+        if requested_iterations is None:
+            pending_targets.remove(original_idx)
+
+    return pending_targets
 
 
 def _maybe_write_debug_score_dump(
@@ -487,6 +605,12 @@ def run_local_em_exact(
         debug_score_dump_current_sizes,
         debug_score_dump_iterations,
     ) = _parse_debug_score_dump_request()
+    (
+        debug_noise_dump_dir,
+        debug_noise_dump_targets,
+        debug_noise_dump_current_sizes,
+        debug_noise_dump_iterations,
+    ) = _parse_debug_noise_component_dump_request()
     debug_score_dump_filter_matches = (
         debug_score_dump_dir is not None
         and (
@@ -526,10 +650,16 @@ def run_local_em_exact(
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
     else:
         recon_volume_shape = volume_shape
-    # TODO(DENSE_ENGINE_BOUNDARY/E005): revisit half-volume accumulation for
-    # local exact backprojection once we can prove the weighted local row sums
-    # satisfy the Hermitian assumptions required for exact half-volume folding.
-    recon_volume_size = int(np.prod(recon_volume_shape))
+    use_native_half_volume_mstep = os.environ.get(
+        "RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME",
+        "",
+    ).lower() in {"1", "true", "yes", "on"}
+    if use_native_half_volume_mstep:
+        logger.info("Exact local M-step: using native half-volume RELION backprojection")
+        recon_accum_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(recon_volume_shape)
+    else:
+        recon_accum_shape = recon_volume_shape
+    recon_volume_size = int(np.prod(recon_accum_shape))
 
     use_window = current_size is not None and current_size < image_shape[0]
     if use_window:
@@ -583,17 +713,21 @@ def run_local_em_exact(
 
     noise_wsum = None
     noise_img_power = None
+    noise_a2 = None
+    noise_xa = None
     noise_sigma2_offset = 0.0
     noise_sumw = 0.0
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
-        shell_indices_half = make_shell_indices_half(image_shape)
+        shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
         shell_indices_noise = shell_indices_half if recon_window_indices is None else shell_indices_half[recon_window_indices]
         noise_variance_for_noise = (
             noise_variance_half if recon_window_indices is None else noise_variance_half[recon_window_indices]
         )
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
+        noise_a2 = np.zeros(n_shells, dtype=np.float64)
+        noise_xa = np.zeros(n_shells, dtype=np.float64)
 
     bucket_build_time = 0.0
     batch_fetch_time = 0.0
@@ -683,15 +817,23 @@ def run_local_em_exact(
             score_with_masked_images,
             image_pre_shifts=image_pre_shifts,
         )
+        if scale_corrections is not None:
+            batch_scale = jnp.asarray(scale_corrections[np.asarray(bucket.image_indices)])
+        else:
+            batch_scale = jnp.ones(batch_size, dtype=batch_norm.dtype)
+
         if image_corrections is not None:
             batch_corr = jnp.asarray(image_corrections[np.asarray(bucket.image_indices)])
+            image_only_corr = batch_corr / batch_scale
             corr_expanded = jnp.repeat(batch_corr, n_trans)
             shifted_half = shifted_half * corr_expanded[:, None]
             shifted_recon_half = shifted_recon_half * corr_expanded[:, None]
-            batch_norm = batch_norm * (batch_corr**2)[:, None]
+            batch_norm = batch_norm * (image_only_corr**2)[:, None]
+        else:
+            batch_corr = None
+            image_only_corr = None
 
         if scale_corrections is not None:
-            batch_scale = jnp.asarray(scale_corrections[np.asarray(bucket.image_indices)])
             ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
 
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
@@ -912,7 +1054,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    False,
+                    use_native_half_volume_mstep,
                     float(current_size // 2),
                 )
             else:
@@ -924,7 +1066,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    False,
+                    use_native_half_volume_mstep,
                 )
             if return_profile:
                 _block_until_ready(Ft_y)
@@ -943,7 +1085,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    False,
+                    use_native_half_volume_mstep,
                     float(current_size // 2),
                 )
             else:
@@ -955,7 +1097,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    False,
+                    use_native_half_volume_mstep,
                 )
             if return_profile:
                 _block_until_ready(Ft_ctf)
@@ -963,22 +1105,51 @@ def run_local_em_exact(
 
         if accumulate_noise:
             noise_t0 = time.time()
+            support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
             if translation_sqdist_ang is not None:
-                translation_posterior = np.asarray(jnp.sum(probs, axis=1), dtype=np.float64)
+                translation_posterior = np.asarray(jnp.sum(reconstruction_probs, axis=1), dtype=np.float64)
                 noise_sumw_offset = np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
             else:
                 noise_sumw_offset = 0.0
-            batch_img_power = jnp.sum(jnp.abs(processed_score_half) ** 2, axis=0).astype(jnp.float32)
+            processed_noise_power_half = processed_score_half
+            if image_only_corr is not None:
+                processed_noise_power_half = processed_noise_power_half * image_only_corr[:, None]
+            batch_img_power = jnp.sum(
+                (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
+                axis=0,
+            ).astype(jnp.float32)
             batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
             batch_img_power_shells = batch_img_power_shells.at[shell_indices_half].add(batch_img_power)
             noise_img_power += np.asarray(batch_img_power_shells, dtype=np.float64)
-            noise_sumw += batch_size
+            noise_sumw += float(np.sum(np.asarray(support_mass, dtype=np.float64)))
 
             if half_spectrum_scoring:
                 shifted_noise_split = shifted_noise.reshape(batch_size, n_trans, -1)
             else:
                 shifted_noise_split = shifted_score_split
             summed_masked_noise = compute_local_weighted_sums(reconstruction_probs, shifted_noise_split)
+            debug_noise_dump_targets = _maybe_write_debug_noise_component_dump(
+                experiment_dataset=experiment_dataset,
+                bucket=bucket,
+                support_mass=support_mass,
+                processed_noise_power_half=processed_noise_power_half,
+                proj_for_noise=proj_for_noise,
+                proj_abs2_for_noise=proj_abs2_for_noise,
+                summed_masked_noise=summed_masked_noise,
+                ctf_probs=ctf_probs,
+                noise_variance_for_noise=noise_variance_for_noise,
+                shell_indices_half=shell_indices_half,
+                shell_indices_noise=shell_indices_noise,
+                n_shells=n_shells,
+                current_size=current_size,
+                debug_iteration=debug_iteration,
+                reconstruction_sample_mask=reconstruction_sample_mask,
+                n_significant_samples=n_significant_samples,
+                dump_dir=debug_noise_dump_dir,
+                pending_targets=debug_noise_dump_targets,
+                requested_current_sizes=debug_noise_dump_current_sizes,
+                requested_iterations=debug_noise_dump_iterations,
+            )
             packed_summed_masked_noise = jnp.take_along_axis(
                 summed_masked_noise,
                 reconstruction_take_indices_jnp[:, :, None],
@@ -1009,7 +1180,7 @@ def run_local_em_exact(
                 packed_proj_abs2_for_noise,
                 0.0,
             )
-            block_noise_shells, _, _ = _compute_noise_block(
+            block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
                 flatten_bucket_rows(packed_proj_for_noise),
                 flatten_bucket_rows(packed_proj_abs2_for_noise),
                 flatten_bucket_rows(packed_summed_masked_noise),
@@ -1021,6 +1192,8 @@ def run_local_em_exact(
             if return_profile:
                 _block_until_ready(block_noise_shells)
             noise_wsum += np.asarray(block_noise_shells, dtype=np.float64)
+            noise_a2 += np.asarray(block_a2_shells, dtype=np.float64)
+            noise_xa += np.asarray(block_xa_shells, dtype=np.float64)
             noise_sigma2_offset += float(noise_sumw_offset)
             noise_time += time.time() - noise_t0
 
@@ -1082,6 +1255,19 @@ def run_local_em_exact(
         )
         host_stats_time += time.time() - host_stats_t0
 
+    if use_native_half_volume_mstep:
+        if os.environ.get("RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME_ENFORCE_X0", "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            logger.info("Exact local M-step: enforcing RELION half-volume x=0 Hermitian plane")
+            Ft_y = enforce_relion_half_volume_x0_hermitian(Ft_y, recon_volume_shape)
+            Ft_ctf = enforce_relion_half_volume_x0_hermitian(Ft_ctf, recon_volume_shape)
+        Ft_y = fourier_transform_utils.half_volume_to_full_volume(Ft_y, recon_volume_shape).reshape(-1)
+        Ft_ctf = fourier_transform_utils.half_volume_to_full_volume(Ft_ctf, recon_volume_shape).reshape(-1)
+
     if return_profile:
         _block_until_ready(Ft_y, Ft_ctf)
 
@@ -1098,6 +1284,8 @@ def run_local_em_exact(
             wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
             wsum_sigma2_offset=float(noise_sigma2_offset),
             sumw=float(noise_sumw),
+            wsum_noise_a2=jnp.asarray(noise_a2, dtype=jnp.float32),
+            wsum_noise_xa=jnp.asarray(noise_xa, dtype=jnp.float32),
         )
 
     if (

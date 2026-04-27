@@ -2,6 +2,8 @@
 
 import functools
 import logging
+import os
+import pathlib
 
 import jax
 import jax.numpy as jnp
@@ -526,24 +528,31 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
     ori_half = volume_shape[0] // 2
     n_shells = ori_half + 1
 
-    weight = jnp.asarray(weight).real.reshape(-1).astype(jnp.float64)
     grid_shape = tuple(d * padding_factor for d in volume_shape) if padding_factor > 1 else volume_shape
     half_grid_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(grid_shape)
     full_size = int(np.prod(grid_shape))
     half_size = int(np.prod(half_grid_shape))
-    if weight.size == full_size:
+    weight_arr = jnp.asarray(weight).real.astype(jnp.float64)
+    if weight_arr.size == full_size:
         is_half_layout = False
-    elif weight.size == half_size:
+        # Match the RELION logical-axis convention used by
+        # compute_relion_fsc_from_backprojector: RECOVAR full accumulators are
+        # (z, y, x), while RELION's compact half-axis maps to RECOVAR axis 0.
+        weight = jnp.transpose(weight_arr.reshape(grid_shape), (1, 2, 0)).reshape(-1)
+        relion_grid_shape = (grid_shape[1], grid_shape[2], grid_shape[0])
+    elif weight_arr.size == half_size:
         is_half_layout = True
+        weight = weight_arr.reshape(-1)
+        relion_grid_shape = grid_shape
     else:
         raise ValueError(
             f"Expected full or half Fourier weight with {full_size} or {half_size} voxels for "
-            f"volume_shape={volume_shape} and padding_factor={padding_factor}, got {weight.size}"
+            f"volume_shape={volume_shape} and padding_factor={padding_factor}, got {weight_arr.size}"
         )
 
     if padding_factor > 1:
         padded_dist = fourier_transform_utils.get_grid_of_radial_distances(
-            grid_shape,
+            relion_grid_shape,
             scaled=False,
             frequency_shift=0,
             rounded=False,
@@ -577,7 +586,7 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
             included = radius_included
         else:
             # RELION iterates the half-complex x-axis (kx >= 0) only.
-            pf_n = grid_shape[-1]
+            pf_n = relion_grid_shape[-1]
             kx_idx = jnp.arange(weight.size) % pf_n
             half_complex_included = ((kx_idx == 0) | (kx_idx >= pf_n // 2)).astype(jnp.float64)
             included = half_complex_included * radius_included
@@ -753,12 +762,26 @@ def compute_relion_fsc_from_backprojector(
     weight0 = _as_padded_full(Ft_ctf_0, "Ft_ctf_0").real
     weight1 = _as_padded_full(Ft_ctf_1, "Ft_ctf_1").real
 
-    axes = [np.asarray(fourier_transform_utils.get_1d_frequency_grid(s, scaled=False), dtype=np.float64)
-            for s in padded_shape]
-    kz, ky, kx = np.meshgrid(axes[0], axes[1], axes[2], indexing="ij")
-    dz = _relion_round_away_from_zero(kz / pf)
-    dy = _relion_round_away_from_zero(ky / pf)
-    dx = _relion_round_away_from_zero(kx / pf)
+    axes = [
+        np.asarray(fourier_transform_utils.get_1d_frequency_grid(s, scaled=False), dtype=np.float64)
+        for s in padded_shape
+    ]
+    # RECOVAR stores centered Fourier volumes as (z, y, x), but the RELION
+    # BackProjector's compact half-axis is its logical x coordinate.  In the
+    # dense EM rotation convention that logical RELION x corresponds to
+    # RECOVAR axis 0 after the CUDA rotation-row swap.  Interpret the saved
+    # full accumulator as (relion_y, relion_x, relion_z) before mirroring
+    # BackProjector::getDownsampledAverage.  This is source-level layout
+    # emulation; the shell bins are rotationally invariant, but the compact
+    # half-axis selection is not.
+    relion_z, relion_y, relion_x = np.meshgrid(axes[1], axes[2], axes[0], indexing="ij")
+    dz = _relion_round_away_from_zero(relion_z / pf)
+    dy = _relion_round_away_from_zero(relion_y / pf)
+    dx = _relion_round_away_from_zero(relion_x / pf)
+    data0 = np.transpose(data0, (1, 2, 0))
+    data1 = np.transpose(data1, (1, 2, 0))
+    weight0 = np.transpose(weight0, (1, 2, 0))
+    weight1 = np.transpose(weight1, (1, 2, 0))
 
     half = n // 2
     max_shell = half if r_max is None else int(r_max)
@@ -787,10 +810,10 @@ def compute_relion_fsc_from_backprojector(
         nonzero = sum_weight > 0.0
         avg[nonzero] /= sum_weight[nonzero]
         avg[~nonzero] = 0.0
-        return avg.reshape((down_size, down_size, down_xsize))
+        return avg.reshape((down_size, down_size, down_xsize)), sum_weight.reshape((down_size, down_size, down_xsize))
 
-    avg0 = _downsample_average(data0, weight0)
-    avg1 = _downsample_average(data1, weight1)
+    avg0, down_weight0 = _downsample_average(data0, weight0)
+    avg1, down_weight1 = _downsample_average(data1, weight1)
 
     z_axis = np.arange(-down_radius, down_radius + 1, dtype=np.float64)
     y_axis = np.arange(-down_radius, down_radius + 1, dtype=np.float64)
@@ -813,6 +836,45 @@ def compute_relion_fsc_from_backprojector(
     nonzero = (denom0 * denom1) > 0.0
     fsc[nonzero] = numerator[nonzero] / np.sqrt(denom0[nonzero] * denom1[nonzero])
     fsc[0] = 1.0
+
+    dump_dir = os.environ.get("RECOVAR_MSTEP_FSC_DUMP_DIR")
+    if dump_dir:
+        pathlib.Path(dump_dir).mkdir(parents=True, exist_ok=True)
+        tag = os.environ.get("RECOVAR_MSTEP_FSC_DUMP_TAG", "recovar")
+        np.savetxt(
+            pathlib.Path(dump_dir) / f"{tag}_downsampled_fsc.txt",
+            np.column_stack([np.arange(shell_count), numerator, denom0, denom1, fsc]),
+            header="shell num den1 den2 fsc",
+        )
+        if os.environ.get("RECOVAR_MSTEP_FSC_DUMP_AVG", "").lower() in {"1", "true", "yes", "on"}:
+            coords = np.column_stack(
+                [
+                    rz[shell_valid].reshape(-1).astype(np.int64),
+                    ry[shell_valid].reshape(-1).astype(np.int64),
+                    rx[shell_valid].reshape(-1).astype(np.int64),
+                ]
+            )
+            for suffix, avg, down_weight in (
+                ("half1", avg0, down_weight0),
+                ("half2", avg1, down_weight1),
+            ):
+                avg_flat = avg[shell_valid].reshape(-1)
+                np.savetxt(
+                    pathlib.Path(dump_dir) / f"{tag}_downsampled_avg_{suffix}.txt",
+                    np.column_stack(
+                        [
+                            coords,
+                            avg_flat.real,
+                            avg_flat.imag,
+                            down_weight[shell_valid].reshape(-1),
+                        ]
+                    ),
+                    header=(
+                        f"xsize {down_xsize} ysize {down_size} zsize {down_size} "
+                        f"xinit 0 yinit {-down_radius} zinit {-down_radius}\n"
+                        "k i j real imag weight"
+                    ),
+                )
     return jnp.asarray(fsc, dtype=jnp.float32)
 
 

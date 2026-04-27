@@ -14,6 +14,7 @@ from .em_engine import (
     _prepare_reconstruction_batch,
     _preprocess_batch,
     make_half_image_weights,
+    make_relion_noise_shell_indices_half,
     make_shell_indices_half,
 )
 
@@ -26,5 +27,6 @@ __all__ = [
     "_prepare_reconstruction_batch",
     "_preprocess_batch",
     "make_half_image_weights",
+    "make_relion_noise_shell_indices_half",
     "make_shell_indices_half",
 ]

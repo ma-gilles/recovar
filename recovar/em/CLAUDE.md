@@ -88,6 +88,13 @@ does not reproduce RELION and should not be used as a fix. Keep p933 as a
 boundary stress test, but choose less boundary-dominated particles for the next
 M-step/tau2/noise parity trace.
 
+2026-04-27 tau2/noise update: RECOVAR now mirrors RELION's per-half
+`BackProjector::updateSSNRarrays` ordering. The FSC is shared across halves,
+but each half's sigma2/tau2/data-vs-prior comes from that half's own BPref
+weight, not the average of the two halves. On the 5k/128 replay, this closes
+the broad shell 14-34 tau2/sigma2 mismatch; only the outer support shell 35
+remains, consistent with the known boundary issue above.
+
 ## Recent Fixes & Active Parity Gaps (updated 2026-04-26)
 
 ### 2026-04-26 projector/scoring parity update

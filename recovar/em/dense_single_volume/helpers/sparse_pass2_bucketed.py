@@ -44,6 +44,7 @@ from recovar.em.dense_single_volume.em_primitives import (
     _compute_noise_block,
     _compute_projections_block,
     make_half_image_weights,
+    make_relion_noise_shell_indices_half,
     make_shell_indices_half,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
@@ -55,6 +56,7 @@ from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
+    enforce_relion_half_volume_x0_hermitian,
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
@@ -438,29 +440,6 @@ def _reorder_to_indices(image_indices_returned, requested_image_indices, *arrays
     position = {int(idx): pos for pos, idx in enumerate(np.asarray(requested_image_indices).tolist())}
     order = np.array([position[int(idx)] for idx in np.asarray(image_indices_returned).tolist()], dtype=np.int64)
     return tuple(arr[order] for arr in arrays)
-
-
-def _enforce_relion_half_volume_x0_hermitian(volume_flat, full_volume_shape):
-    """Match RELION BackProjector::enforceHermitianSymmetry on x=0 plane.
-
-    RELION stores a compact half-volume. Before maximization, it sums Hermitian
-    partners on the x=0 plane and writes that sum to both partners, without
-    dividing by two. Keep this env-gated while validating native half-volume
-    M-step parity.
-    """
-    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(full_volume_shape)
-    vol = jnp.asarray(volume_flat).reshape(half_shape)
-    n0, n1, _ = half_shape
-    i0 = jnp.arange(n0, dtype=jnp.int32)
-    i1 = jnp.arange(n1, dtype=jnp.int32)
-    p0 = (-i0) % n0
-    p1 = (-i1) % n1
-    plane = vol[:, :, 0]
-    partner = jnp.conj(plane[p0[:, None], p1[None, :]])
-    summed = plane + partner
-    self_partner = (p0[:, None] == i0[:, None]) & (p1[None, :] == i1[None, :])
-    plane = jnp.where(self_partner, plane, summed)
-    return vol.at[:, :, 0].set(plane).reshape(-1)
 
 
 def _parse_int_set_env(name):
@@ -1012,7 +991,7 @@ def compute_pass2_stats_sparse_bucketed(
     ).squeeze()
 
     if accumulate_noise:
-        shell_indices_half = make_shell_indices_half(image_shape)
+        shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
         if use_window:
             shell_indices_noise = shell_indices_half[recon_window_indices]
             noise_variance_for_noise = noise_variance_half[recon_window_indices]
@@ -1393,8 +1372,8 @@ def compute_pass2_stats_sparse_bucketed(
             "on",
         }:
             logger.info("Sparse pass-2 M-step: enforcing RELION half-volume x=0 Hermitian plane")
-            Ft_y_total = _enforce_relion_half_volume_x0_hermitian(Ft_y_total, recon_volume_shape)
-            Ft_ctf_total = _enforce_relion_half_volume_x0_hermitian(Ft_ctf_total, recon_volume_shape)
+            Ft_y_total = enforce_relion_half_volume_x0_hermitian(Ft_y_total, recon_volume_shape)
+            Ft_ctf_total = enforce_relion_half_volume_x0_hermitian(Ft_ctf_total, recon_volume_shape)
         _maybe_dump_native_half_mstep(
             Ft_y_total,
             Ft_ctf_total,

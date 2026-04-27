@@ -28,6 +28,7 @@ from recovar.em.dense_single_volume.em_engine import (
     _m_step_block_windowed,
     _preprocess_batch,
     make_half_image_weights,
+    make_relion_noise_shell_indices_half,
     run_em,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import (
@@ -306,6 +307,21 @@ class TestWindowIndicesSubset:
         assert int(np.count_nonzero(naive_mask & (kx == 0) & (ky < 0))) == 42
         assert int(np.count_nonzero(naive_mask & (ky == -(current_size // 2)))) == 7
         assert 1 + 42 + 6 == 49
+
+    def test_relion_noise_shell_indices_exclude_negative_kx0_axis(self):
+        """Noise shell support matches RELION's Mresol_fine duplicate-axis rule."""
+        shape = (128, 128)
+        coords = make_frequency_coords_half_np(shape)
+        shell_indices = np.asarray(make_relion_noise_shell_indices_half(shape))
+
+        shell1 = np.flatnonzero(shell_indices == 1)
+        shell1_coords = {tuple(coords[i].astype(int)) for i in shell1}
+
+        assert (0, -1) not in shell1_coords
+        assert (0, 1) in shell1_coords
+        assert len(shell1_coords) == 4
+        counts = np.bincount(shell_indices[shell_indices <= shape[0] // 2], minlength=shape[0] // 2 + 1)
+        assert counts[:5].tolist() == [1, 4, 6, 8, 16]
 
     def test_square_window_matches_relion_downsized_half_shape(self):
         """Square mode matches RELION windowFourierTransform's FFTW crop size."""

@@ -20,6 +20,38 @@ RELION reference:
 This fixture has 5,000 particles, box size 128, pixel size 4.25 A, and
 half-sets of 2,515 and 2,485 particles.
 
+### Per-half tau2/noise source fix
+
+RELION calls `BackProjector::updateSSNRarrays` independently for each half-map
+backprojector. The gold-standard FSC is shared, but the shell-wise `sigma2`,
+`tau2`, and `data_vs_prior` ingredients use each half's own BPref Fourier
+weights outside joined low-resolution shells. RECOVAR previously passed the
+average of half1/half2 weights into the tau2 update, which created an apparent
+noise/tau2 gap after the low-resolution join boundary.
+
+RECOVAR now computes tau2 once per half from that half's own `Ft_ctf`, keeps the
+legacy saved `tau2_*_iter` arrays aligned to RELION half1 model.star for diff
+scripts, and reconstructs each half with its own tau2 radial prior. The shared
+`mean_variance` remains the average of the two half priors for the next E-step.
+
+Focused 5k replay artifact:
+`_agent_scratch/full5k_tau2_halfspecific_replay_20260427_1706`. The replay
+emitted one RECOVAR iteration in 235.2 s.
+
+| Metric vs RELION half1 it002 model.star | Before per-half tau2 | After per-half tau2 |
+|---|---:|---:|
+| sigma2 max / mean relative gap, shells 1..35 | 2.7015e-2 / 5.067e-3 | 2.1887e-2 / 6.335e-4 |
+| tau2 max / mean relative gap, shells 1..35 | 1.7935e-2 / 4.433e-3 | 4.540e-4 / 6.120e-5 |
+| FSC max / mean absolute gap, shells 1..35 | 2.541e-3 / 4.483e-4 | 2.541e-3 / 4.483e-4 |
+| Pmax mean abs / max abs | 7.5e-5 / 1.03e-3 | 7.5e-5 / 1.03e-3 |
+| pose / translation agreement | exact | exact |
+| map corr RECOVAR vs RELION | 0.999995 | 0.999995 |
+
+Shells 14-34 now match RELION essentially exactly for tau2/sigma2; the
+remaining max gap is shell 35 only. Treat shell 35 as the same outer support
+boundary issue described below unless a later replay shows it drives
+end-to-end drift.
+
 ### Full 13-row end-to-end replay after pre-shift/pass-2 fixes
 
 Artifact:
