@@ -61,6 +61,40 @@ logger = logging.getLogger(__name__)
 # See docs/relion_local_engine_refactor.md
 
 
+def _parse_debug_int_set(value: str | None) -> set[int] | None:
+    if not value:
+        return None
+    parsed = set()
+    for token in value.replace(",", " ").split():
+        token = token.strip()
+        if token:
+            parsed.add(int(token))
+    return parsed or None
+
+
+def _parse_dense_noise_component_dump_request():
+    dump_dir = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
+    dump_indices = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_GLOBAL_INDICES")
+    dump_current_size = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_CURRENT_SIZE")
+    if not dump_dir or not dump_indices:
+        return None, set(), None
+    targets = _parse_debug_int_set(dump_indices) or set()
+    if not targets:
+        return None, set(), None
+    current_sizes = _parse_debug_int_set(dump_current_size)
+    dump_path = pathlib.Path(dump_dir)
+    dump_path.mkdir(parents=True, exist_ok=True)
+    return dump_path, targets, current_sizes
+
+
+def _bin_shell_values_np(values, shell_indices, n_shells):
+    return np.bincount(
+        np.asarray(shell_indices, dtype=np.int64),
+        weights=np.asarray(values, dtype=np.float64),
+        minlength=int(n_shells),
+    )[: int(n_shells)]
+
+
 def _block_until_ready(*values):
     """Synchronize one or more JAX values before host-side timing reads."""
     for value in values:
@@ -113,6 +147,37 @@ def make_shell_indices_half(image_shape):
         rounded=True,
     )
     return radii.reshape(-1).astype(jnp.int32)
+
+
+def make_relion_noise_shell_indices_half(image_shape):
+    """Return RELION's non-redundant half-plane shell indices for noise sums.
+
+    RELION's ``Mresol_fine`` and ``Npix_per_shell`` skip redundant FFTW
+    half-plane entries where ``jp == 0 && ip < 0``. RECOVAR stores half-images
+    in a centered-row layout, so derive this from physical coordinates instead
+    of assuming a raw row range. Skipped and out-of-range pixels are marked
+    one-past-the-last shell so JAX scatter drops them.
+    """
+
+    height, width = int(image_shape[0]), int(image_shape[1])
+    n_shells = height // 2 + 1
+    shell_indices = np.asarray(make_shell_indices_half(image_shape), dtype=np.int32).reshape(
+        height,
+        width // 2 + 1,
+    )
+    coords = np.asarray(
+        fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+            image_shape,
+            voxel_size=1,
+            scaled=False,
+        ),
+    ).reshape(height, width // 2 + 1, 2)
+    kx = np.rint(coords[..., 0]).astype(np.int32)
+    ky = np.rint(coords[..., 1]).astype(np.int32)
+    keep = shell_indices < n_shells
+    keep &= ~((kx == 0) & (ky < 0))
+    shell_indices = np.where(keep, shell_indices, n_shells)
+    return jnp.asarray(shell_indices.reshape(-1), dtype=jnp.int32)
 
 
 # -- JIT-compiled kernels ---------------------------------------------------
@@ -830,12 +895,12 @@ def run_em(
         during the E-step.
     image_corrections : np.ndarray or None, shape (n_images,)
         Per-image multiplicative correction applied to Fourier images
-        before scoring and M-step accumulation.  For RELION parity this
-        is ``(avg_norm / normcorr[i]) * scale[group_id[i]]`` — RELION
-        applies ``img *= avg_norm_correction / normcorr`` before FFT
-        (ml_optimiser.cpp:6240) and scale to the reference
-        (ml_optimiser.cpp:7298).  See ``scale_corrections`` for the
-        companion norm-term / denominator fix.
+        in cross terms. For RELION parity this is
+        ``(avg_norm / normcorr[i]) * scale[group_id[i]]`` so the cross term
+        matches RELION's norm-corrected image and scale-corrected reference.
+        Image-only terms divide out ``scale_corrections`` and use only
+        ``avg_norm / normcorr[i]`` because RELION applies group scale to the
+        reference/CTF, not to image power.
     scale_corrections : np.ndarray or None, shape (n_images,)
         Per-image scale correction (``rlnGroupScaleCorrection``).
         RELION applies scale to the *reference* (``Frefctf *= myscale``
@@ -875,6 +940,18 @@ def run_em(
         )
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
+    (
+        dense_noise_component_dump_dir,
+        dense_noise_component_dump_targets,
+        dense_noise_component_dump_current_sizes,
+    ) = _parse_dense_noise_component_dump_request()
+    dense_noise_component_dump_enabled = (
+        dense_noise_component_dump_dir is not None
+        and (
+            dense_noise_component_dump_current_sizes is None
+            or int(current_size or -1) in dense_noise_component_dump_current_sizes
+        )
+    )
     ## TODO: set default params same as RELION (when starting from GUI) pf=2 I think is there.
     # Pad volume in real space for smoother trilinear projection (RELION pf=2).
     if projection_padding_factor > 1:
@@ -1159,7 +1236,7 @@ def run_em(
     noise_sigma2_offset = 0.0
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
-        shell_indices_half = make_shell_indices_half(image_shape)
+        shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
         if use_window:
             shell_indices_noise = shell_indices_half[recon_window_indices]
         else:
@@ -1275,22 +1352,27 @@ def run_em(
         # -- Per-image corrections (RELION parity: avg_norm/normcorr * scale) --
         # RELION: img *= avg_norm_correction / normcorr  (ml_optimiser.cpp:6240)
         # then   Frefctf *= scale                        (ml_optimiser.cpp:7298)
-        # The image-side multiplier is (avg_norm/normcorr)*scale.
+        # The cross-term multiplier is (avg_norm/normcorr)*scale. Image-only
+        # terms use avg_norm/normcorr, so divide the scale back out below.
         # shifted_half has shape (batch_size * n_trans, N_half) — broadcast
         # the per-image correction across n_trans copies.
         if image_corrections is not None:
             batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
+            image_only_corr = batch_corr / batch_scale
             if relion_firstiter_score_mode == "normalized_cc":
                 score_batch_corr = batch_corr / (batch_scale**2)
-                norm_batch_corr = batch_corr / batch_scale
+                norm_batch_corr = image_only_corr
             else:
                 score_batch_corr = batch_corr
-                norm_batch_corr = batch_corr
+                norm_batch_corr = image_only_corr
             score_corr_expanded = jnp.repeat(score_batch_corr, n_trans)
             recon_corr_expanded = jnp.repeat(batch_corr, n_trans)
             shifted_half = shifted_half * score_corr_expanded[:, None]
             shifted_recon_half = shifted_recon_half * recon_corr_expanded[:, None]
             batch_norm = batch_norm * (norm_batch_corr**2)[:, None]
+        else:
+            batch_corr = None
+            image_only_corr = None
 
         # -- Per-image scale correction on CTF²/σ² (RELION parity) --
         # RELION applies scale_correction to the REFERENCE: Frefctf *= myscale
@@ -1376,6 +1458,8 @@ def run_em(
                 processed_masked,
                 image_shape,
             )
+            if image_only_corr is not None:
+                processed_masked_half = processed_masked_half * image_only_corr[:, None]
             # Sum |img|^2 over images in this batch, bin to shells (FULL spectrum, not windowed)
             batch_img_power = jnp.sum(jnp.abs(processed_masked_half) ** 2, axis=0)  # (N_half,)
             batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
@@ -1389,6 +1473,29 @@ def run_em(
                 shifted_masked_for_noise = shifted_half_with_dc[:, recon_window_indices]
             else:
                 shifted_masked_for_noise = shifted_half_with_dc
+            dense_noise_component_acc = {}
+            if dense_noise_component_dump_enabled:
+                indices_np = np.asarray(indices, dtype=np.int64)
+                original_indices_np = np.asarray(
+                    experiment_dataset.original_image_indices_from_local(indices_np),
+                    dtype=np.int64,
+                )
+                target_rows = [
+                    (row, int(local_idx), int(global_idx))
+                    for row, (local_idx, global_idx) in enumerate(zip(indices_np.tolist(), original_indices_np.tolist()))
+                    if int(global_idx) in dense_noise_component_dump_targets
+                ]
+                for row, local_idx, global_idx in target_rows:
+                    p_img_pixel = np.asarray(jnp.abs(processed_masked_half[row]) ** 2, dtype=np.float64)
+                    dense_noise_component_acc[global_idx] = {
+                        "row": int(row),
+                        "local_idx": int(local_idx),
+                        "p_img_shells": _bin_shell_values_np(p_img_pixel, shell_indices_half, n_shells),
+                        "a2_shells": np.zeros(n_shells, dtype=np.float64),
+                        "xa_shells": np.zeros(n_shells, dtype=np.float64),
+                    }
+        else:
+            dense_noise_component_acc = {}
 
         # -- Float64 scoring upcast (RELION parity: RFLOAT=double) --
         ## IF THIS IS DEFAULT, THEN BE IT, BUT THERE SHOULD BE A NICER WAY TO DO THIS. E.G. DTYPE_SCORING = JNP.FLOAT 64 IF... etc instead of having a bunch of if statements
@@ -2005,6 +2112,22 @@ def run_em(
                     proj_for_noise = proj_half_b
                     proj_abs2_for_noise = proj_abs2_half_b
 
+                if dense_noise_component_acc:
+                    for state in dense_noise_component_acc.values():
+                        row = int(state["row"])
+                        row_probs = probs[row]
+                        row_shifted = shifted_masked_for_noise[row * n_trans : (row + 1) * n_trans]
+                        row_summed_masked = row_probs @ row_shifted
+                        row_ctf2_nv = ctf2_nv_noise[row] if use_window else ctf2_over_nv_half_with_dc[row]
+                        row_ctf_probs = jnp.sum(row_probs, axis=-1)[:, None] * row_ctf2_nv[None, :]
+                        row_ctf_probs_raw = row_ctf_probs * nv_for_noise[None, :]
+                        row_a2_pixel = jnp.sum(proj_abs2_for_noise * row_ctf_probs_raw, axis=0)
+                        row_xa_pixel = nv_for_noise * jnp.real(
+                            jnp.sum(proj_for_noise * jnp.conj(row_summed_masked), axis=0)
+                        )
+                        state["a2_shells"] += _bin_shell_values_np(row_a2_pixel, si_for_noise, n_shells)
+                        state["xa_shells"] += _bin_shell_values_np(row_xa_pixel, si_for_noise, n_shells)
+
                 block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
                     proj_for_noise,
                     proj_abs2_for_noise,
@@ -2040,6 +2163,31 @@ def run_em(
                     )
                     rotation_posterior_sums[r0 : r0 + actual_rot] += block_rotation_sums
                 host_stats_time += time.time() - host_stats_t0
+
+        if dense_noise_component_acc:
+            for global_idx, state in dense_noise_component_acc.items():
+                p_img_shells = np.asarray(state["p_img_shells"], dtype=np.float64)
+                a2_shells = np.asarray(state["a2_shells"], dtype=np.float64)
+                xa_shells = np.asarray(state["xa_shells"], dtype=np.float64)
+                total_shells = p_img_shells + a2_shells - 2.0 * xa_shells
+                dump_path = (
+                    dense_noise_component_dump_dir
+                    / f"dense_noise_components_cs{int(current_size or -1):03d}_image_{int(global_idx)}.npz"
+                )
+                np.savez_compressed(
+                    dump_path,
+                    selected_global_image_indices=np.array([int(global_idx)], dtype=np.int64),
+                    selected_local_image_indices=np.array([int(state["local_idx"])], dtype=np.int64),
+                    current_size=np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
+                    n_rot=np.array([int(n_rot)], dtype=np.int32),
+                    n_trans=np.array([int(n_trans)], dtype=np.int32),
+                    p_img_shells=p_img_shells,
+                    a2_shells=a2_shells,
+                    xa_shells=xa_shells,
+                    total_shells=total_shells,
+                    shell_indices_half=np.asarray(shell_indices_half, dtype=np.int32),
+                    shell_indices_noise=np.asarray(shell_indices_noise, dtype=np.int32),
+                )
 
         if return_stats:
             stats_finalize_t0 = time.time()
@@ -2121,6 +2269,8 @@ def run_em(
             wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
             wsum_sigma2_offset=float(noise_sigma2_offset),
             sumw=float(noise_sumw),
+            wsum_noise_a2=jnp.asarray(noise_a2, dtype=jnp.float32),
+            wsum_noise_xa=jnp.asarray(noise_xa, dtype=jnp.float32),
         )
 
     if sparse_pass2 and sparse_pass2_total_blocks:

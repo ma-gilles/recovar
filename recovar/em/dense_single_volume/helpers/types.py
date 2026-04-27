@@ -59,21 +59,26 @@ class NoiseStats(NamedTuple):
             ``sum_{i,r,t} w * (A2 - 2*XA)`` per shell (reference-dependent
             part of the residual).
         wsum_img_power: (n_shells,) float -- accumulated
-            ``sum_i |img_masked_i|^2`` per shell (image power, orientation-
-            independent).  For shells beyond ``current_size // 2`` this is
-            the only contribution (high-frequency fill).
+            ``sum_i mass_i * |img_masked_i|^2`` per shell, where ``mass_i`` is
+            the same significant-support posterior mass used for A2/XA.
+            For ungated full-grid updates ``mass_i == 1``.
         wsum_sigma2_offset: float -- accumulated
             ``sum_{i,r,t} w * ||offset_{i,t} - prior_i||^2`` in Angstrom^2.
             This is RELION's sufficient statistic for updating
             ``sigma2_offset`` via ``wsum_sigma2_offset / (2 * sumw)``.
-        sumw: float -- total posterior weight processed (equals the number
-            of images when posteriors are normalised to sum to 1 per image).
+        sumw: float -- total posterior/support weight processed (equals the
+            number of images when posteriors are normalised to sum to 1 per
+            image and no significant-support pruning is active).
+        wsum_noise_a2: optional diagnostic split of ``wsum_sigma2_noise``.
+        wsum_noise_xa: optional diagnostic split of ``wsum_sigma2_noise``.
     """
 
     wsum_sigma2_noise: jax.Array
     wsum_img_power: jax.Array
     wsum_sigma2_offset: float
     sumw: float
+    wsum_noise_a2: jax.Array | None = None
+    wsum_noise_xa: jax.Array | None = None
 
 
 class EMProfileStats(NamedTuple):

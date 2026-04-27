@@ -62,6 +62,7 @@ from recovar.em.dense_single_volume.local_layout import (
     build_local_hypothesis_layout,
     build_pass2_hypothesis_layout,
 )
+from recovar.em.dense_single_volume.em_primitives import make_half_image_weights, make_shell_indices_half
 from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,
@@ -87,6 +88,97 @@ from recovar.reconstruction.regularization import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_env_int_set(value: str | None) -> set[int] | None:
+    if not value:
+        return None
+    parsed = set()
+    for token in value.replace(",", " ").split():
+        token = token.strip()
+        if token:
+            parsed.add(int(token))
+    return parsed or None
+
+
+def _relion_half_plane_shell_counts(image_shape):
+    """Count RELION's non-redundant FFTW half-plane shell pixels."""
+
+    height, width = int(image_shape[0]), int(image_shape[1])
+    n_shells = height // 2 + 1
+    counts = np.zeros(n_shells, dtype=np.float64)
+    for iy in range(height):
+        ky = iy if iy <= height // 2 else iy - height
+        for ix in range(width // 2 + 1):
+            # RELION excludes redundant jp==0, ip<0 FFTW half-plane entries.
+            if ix == 0 and ky < 0:
+                continue
+            shell = int(np.rint(np.sqrt(float(ky * ky + ix * ix))))
+            if shell < n_shells:
+                counts[shell] += 1.0
+    return counts
+
+
+def _maybe_dump_noise_update_debug(
+    *,
+    iteration: int,
+    current_size: int | None,
+    image_shape,
+    noise_stats_per_half,
+    previous_noise_radial_per_half,
+    noise_from_res_per_half,
+    noise_from_res,
+):
+    """Write raw noise M-step terms for RELION parity debugging when requested."""
+
+    dump_dir = os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
+    if not dump_dir:
+        return
+    requested_iterations = _parse_env_int_set(os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_ITERATION"))
+    if requested_iterations is not None and int(iteration) not in requested_iterations:
+        return
+
+    os.makedirs(dump_dir, exist_ok=True)
+    n_shells = int(image_shape[0]) // 2 + 1
+    shell_indices_half = np.asarray(make_shell_indices_half(image_shape), dtype=np.int64)
+    half_counts = np.bincount(shell_indices_half, minlength=n_shells).astype(np.float64)[:n_shells]
+    half_weights = np.asarray(make_half_image_weights(image_shape), dtype=np.float64)
+    half_weighted_counts = np.bincount(shell_indices_half, weights=half_weights, minlength=n_shells).astype(
+        np.float64,
+    )[:n_shells]
+
+    payload = {
+        "zero_based_iteration": np.array([int(iteration)], dtype=np.int32),
+        "one_based_iteration": np.array([int(iteration) + 1], dtype=np.int32),
+        "current_size": np.array([-1 if current_size is None else int(current_size)], dtype=np.int32),
+        "image_shape": np.asarray(image_shape, dtype=np.int32),
+        "shell_index_half": shell_indices_half.astype(np.int32),
+        "half_shell_counts": half_counts,
+        "half_weighted_shell_counts": half_weighted_counts,
+        "relion_half_plane_shell_counts": _relion_half_plane_shell_counts(image_shape),
+        "mean_sigma2_noise": np.asarray(noise_from_res, dtype=np.float64),
+    }
+    for half_id, stats_k in enumerate(noise_stats_per_half, start=1):
+        prefix = f"half{half_id}"
+        wsum_sigma2 = np.asarray(stats_k.wsum_sigma2_noise, dtype=np.float64)
+        img_power = np.asarray(stats_k.wsum_img_power, dtype=np.float64)
+        payload[f"{prefix}_wsum_sigma2_noise"] = wsum_sigma2
+        payload[f"{prefix}_wsum_img_power"] = img_power
+        payload[f"{prefix}_wsum_total"] = wsum_sigma2 + img_power
+        payload[f"{prefix}_sumw"] = np.array([float(stats_k.sumw)], dtype=np.float64)
+        payload[f"{prefix}_sigma2_noise"] = np.asarray(noise_from_res_per_half[half_id - 1], dtype=np.float64)
+        payload[f"{prefix}_previous_sigma2_noise"] = np.asarray(
+            previous_noise_radial_per_half[half_id - 1],
+            dtype=np.float64,
+        )
+        if getattr(stats_k, "wsum_noise_a2", None) is not None:
+            payload[f"{prefix}_wsum_noise_a2"] = np.asarray(stats_k.wsum_noise_a2, dtype=np.float64)
+        if getattr(stats_k, "wsum_noise_xa", None) is not None:
+            payload[f"{prefix}_wsum_noise_xa"] = np.asarray(stats_k.wsum_noise_xa, dtype=np.float64)
+
+    path = os.path.join(dump_dir, f"recovar_noise_update_it{int(iteration) + 1:03d}.npz")
+    np.savez_compressed(path, **payload)
+    logger.info("Wrote RECOVAR noise update debug dump: %s", path)
 
 # TRACKED TODOs: RELION_LOCAL_ENGINE
 # TODO(RELION_LOCAL_ENGINE/T001): grouped-union local search is the wrong active abstraction
@@ -340,6 +432,7 @@ def _run_local_search_iteration(
     disable_adjoint_ctf=False,
     adaptive_fraction=0.999,
     max_significants=-1,
+    reconstruct_significant_only=True,
     local_engine="exact_v1",
     translation_prior_mode="perturbed",
     translation_prior_reference_translations=None,
@@ -451,6 +544,7 @@ def _run_local_search_iteration(
         disable_adjoint_ctf=disable_adjoint_ctf,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        reconstruct_significant_only=reconstruct_significant_only,
         translation_prior_mode=translation_prior_mode,
         translation_prior_reference_translations=translation_prior_reference_translations,
         debug_iteration=debug_iteration,
@@ -559,6 +653,11 @@ def _run_sparse_pass2_local_search_iteration(
         return_best_pose_details=True,
         normalization_log_z=normalization_log_z,
         translation_prior_centers=translation_prior_centers,
+        # RELION re-thresholds fine pass weights only when adaptive
+        # oversampling is active. With oversampling_order == 0, FPCMasks already
+        # contain the coarse pass-1 significant samples and the final threshold
+        # is the minimum selected weight, so all selected samples contribute.
+        reconstruct_significant_only=int(oversampling_order) > 0,
     )
 
     outputs = list(outputs)
@@ -1164,6 +1263,7 @@ def _run_local_search_iteration_exact_v1(
     disable_adjoint_ctf=False,
     adaptive_fraction=0.999,
     max_significants=-1,
+    reconstruct_significant_only=True,
     translation_prior_mode="perturbed",
     translation_prior_reference_translations=None,
     debug_iteration=None,
@@ -1252,11 +1352,7 @@ def _run_local_search_iteration_exact_v1(
         return_profile=return_profile,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
-        # RELION normalizes posterior weights for inference/Pmax, but
-        # storeWeightedSums only accumulates samples above the final pass's
-        # adaptive significant-weight threshold. Apply the same gate for the
-        # M-step/noise accumulators while leaving E-step probabilities intact.
-        reconstruct_significant_only=True,
+        reconstruct_significant_only=reconstruct_significant_only,
         adaptive_fraction=adaptive_fraction,
         # RELION's maximum_significants cap is used to define the coarse pass-1
         # adaptive support. In pass 2, the reconstruction threshold is governed
@@ -1907,6 +2003,8 @@ def _run_relion_iteration_loop(
     tau2_shell_count_trajectory = []
     tau2_fsc_used_trajectory = []
     tau2_ssnr_trajectory = []
+    tau2_update_details = None
+    tau2_update_details_per_half = None
 
     ## TODO: WE NEED MUCH BETTER NAMING THAN THIS, I AHVE NO IDEA WHAT THIS IS SAYING OR WHAT IT DOES
     ## IF ITS FOR RELION PARITY OKAY, BUT MAYBE WE CNA AT LEAST HAVE COMMENTS NEXT TO DEF SO I HAVE SOME IDEA OF WHATS GOING ON
@@ -3523,20 +3621,34 @@ def _run_relion_iteration_loop(
             time.time() - _t_unreg_first,
         )
 
-        mean_signal_variance, _, tau2_update_details = regularization.compute_relion_tau2_from_weights(
-            Ft_ctf_0,
-            Ft_ctf_1,
-            current_iter_fsc,
-            volume_shape,
-            tau2_fudge=tau2_fudge,
-            padding_factor=PADDING_FACTOR,
-            r_max=cs // 2,
-            return_details=True,
-        )
+        # RELION calls BackProjector::updateSSNRarrays independently for each
+        # half-map BPref.  The gold-standard FSC is shared, but sigma2/tau2
+        # come from each half's own Fourier weight outside the joined shells.
+        tau2_update_details_per_half = []
+        mean_signal_variance_per_half = []
+        for Ft_ctf_half in (Ft_ctf_0, Ft_ctf_1):
+            mean_signal_variance_k, _, tau2_update_details_k = regularization.compute_relion_tau2_from_weights(
+                Ft_ctf_half,
+                Ft_ctf_half,
+                current_iter_fsc,
+                volume_shape,
+                tau2_fudge=tau2_fudge,
+                padding_factor=PADDING_FACTOR,
+                r_max=cs // 2,
+                return_details=True,
+            )
+            mean_signal_variance_per_half.append(mean_signal_variance_k)
+            tau2_update_details_per_half.append(tau2_update_details_k)
+        mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
+        # Keep the legacy single tau2 diagnostic fields aligned with RELION's
+        # half1 model.star, which is what the parity diff script reports.
+        tau2_update_details = tau2_update_details_per_half[0]
         logger.info(
-            "tau2 update from THIS-iter FSC: old_max=%.4e new_max=%.4e",
+            "tau2 update from THIS-iter FSC: old_max=%.4e new_max=%.4e half_max=(%.4e, %.4e)",
             float(jnp.max(jnp.abs(mean_variance))),
             float(jnp.max(jnp.abs(mean_signal_variance))),
+            float(jnp.max(jnp.abs(mean_signal_variance_per_half[0]))),
+            float(jnp.max(jnp.abs(mean_signal_variance_per_half[1]))),
         )
         mean_variance = mean_signal_variance
 
@@ -3559,7 +3671,7 @@ def _run_relion_iteration_loop(
                 Ft_y_k_local,
                 volume_shape,
                 PADDING_FACTOR,
-                tau=mean_variance,
+                tau=mean_signal_variance_per_half[k],
                 tau2_fudge=tau2_fudge,
                 projection_padding_factor=PROJECTION_PADDING_FACTOR,
                 minres_map=RELION_MINRES_MAP,
@@ -3998,6 +4110,15 @@ def _run_relion_iteration_loop(
                 n_log,
                 ", ".join(f"{float(x):.3e}" for x in old_noise_radial[:n_log]),
                 ", ".join(f"{float(x):.3e}" for x in noise_from_res[:n_log]),
+            )
+            _maybe_dump_noise_update_debug(
+                iteration=iteration,
+                current_size=cs,
+                image_shape=cryo.image_shape,
+                noise_stats_per_half=noise_stats_per_half,
+                previous_noise_radial_per_half=previous_noise_radial_per_half,
+                noise_from_res_per_half=noise_from_res_per_half,
+                noise_from_res=noise_from_res,
             )
 
             previous_noise_radial_per_half = noise_from_res_per_half

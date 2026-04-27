@@ -123,17 +123,18 @@ def test_compute_relion_fsc_from_backprojector_uses_relion_rounding_and_half_lay
     weight0 = np.zeros(padded_shape, dtype=np.float64)
     weight1 = np.zeros(padded_shape, dtype=np.float64)
 
-    # Valid RELION half-layout sample: frequency (z=0, y=2, x=0)
-    # downsamples to shell 1 for padding_factor=2.
-    valid_idx = (4, 6, 4)
+    # Valid RELION half-layout sample: logical RELION (z=0, y=2, x=0)
+    # downsamples to shell 1 for padding_factor=2. In RECOVAR's centered
+    # full-array layout, RELION x is axis 0 for this helper.
+    valid_idx = (4, 4, 6)
     data0[valid_idx] = 1.0
     data1[valid_idx] = 1.0
     weight0[valid_idx] = 1.0
     weight1[valid_idx] = 1.0
 
-    # Frequency x=-1 would banker-round to x=0, but RELION's ROUND(-0.5)
-    # returns -1 and the half-complex layout excludes it.
-    invalid_negative_x_idx = (4, 6, 3)
+    # Logical RELION x=-1 would banker-round to x=0, but RELION's ROUND(-0.5)
+    # returns -1 and the compact half layout excludes it.
+    invalid_negative_x_idx = (3, 4, 6)
     data0[invalid_negative_x_idx] = 100.0
     data1[invalid_negative_x_idx] = -100.0
     weight0[invalid_negative_x_idx] = 1.0
