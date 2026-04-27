@@ -24,7 +24,30 @@ Achieve near-perfect RECOVAR/RELION EM parity:
 For EM parity work, do not run the full RECOVAR-wide test suite. It is not
 relevant to this branch. Use targeted EM/parity tests and targeted Slurm runs.
 
-## Current best result
+## Current best results
+
+Full 5k/128 replay after pre-shift/pass-2 fixes:
+
+`_agent_scratch/long_5k_exactlocal_2e2d8301_local_20260427_093922`
+
+Dataset:
+
+`/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/particles.star`
+
+Result:
+
+- Command emitted 13 RECOVAR rows matching RELION it002 through it014.
+- Total wall time: `2956.8s` on one visible A100.
+- Final map parity: half1/half2 corr vs RELION `0.999884/0.999883`.
+- Final merged GT corr: RECOVAR `0.966522`, RELION `0.966607`.
+- Final merged FSC0.143 shell: RECOVAR `43`, RELION `43`.
+- Final Pmax: RECOVAR `0.323451`, RELION `0.324587`; mean abs Pmax gap
+  `2.98e-2`, p99 `1.32e-1`, max `4.16e-1`, corr `0.909574`.
+- Final pose parity: mean angular error `0.0865 deg`, max `1.18 deg`.
+
+The selected-only fine-grid fix was implemented after this run to remove the
+`hp=7` full-grid materialization bottleneck seen at iteration 11 (`643.7s`).
+Rerun this trajectory after commit to measure the new full end-to-end speed.
 
 Best post-fix fixed-state 5k replay:
 
@@ -47,61 +70,37 @@ Result:
 - GT merged corr: RECOVAR `0.965163`, RELION `0.965239`.
 - FSC0.143 shell: RECOVAR `42`, RELION `42`.
 
-## Fix achieved
+## Fixes achieved
 
-The latest important fix is matching RELION accelerated `pdf_offset` units for
-the local translation prior.
+Important fixes now in this branch:
 
-Main files:
-
-- `recovar/em/dense_single_volume/helpers/orientation_priors.py`
-- `recovar/em/dense_single_volume/iteration_loop.py`
-- `tests/unit/test_refine_relion_mode.py`
-
-This fixed the former particle-256 Pmax outlier. After the fix, particle 256
-went from roughly `0.943` vs `0.349` to `0.3514` vs `0.3493`, with matching
-pose/translation.
+- RELION accelerated `pdf_offset` units for the local translation prior.
+- RELION-style zero-filled real-space integer old-offset pre-shift before FFT.
+  This fixed particle 4603 from Pmax gap `0.026669` to `0.000692` with exact
+  pose/translation agreement in focused replay.
+- Adaptive sparse pass 2 and os0 global-significant-support pass 2 route
+  through exact local search, not grouped/bucketed sparse pass 2.
+- Exact local search no longer materializes the full perturbed fine rotation
+  grid. It selects canonical fine-grid ids first and applies RELION
+  `SamplingPerturbation` only to selected rotations.
 
 ## Current open problem
 
-Next target is particle original index `4603` in the same 5k normalized
-dataset.
-
-Artifacts:
-
-- RECOVAR focused run:
-  `_agent_scratch/focused_it008_stack4603_priorfix_20260427_031644`
-- RECOVAR operand dump:
-  `_agent_scratch/focused_it008_stack4603_operands_20260427_032510`
-- RELION dump:
-  `_agent_scratch/relion_dump_stack4604_it008_20260427_031754/dump`
-
-Known facts:
-
-- Pose and translation match RELION to numerical noise.
-- The remaining gap is score/posterior-level.
-- Full 5k Pmax for particle 4603: RECOVAR `0.606924`, RELION `0.580255`.
-- RELION dump Pmax is `0.576184`, close to the RELION STAR comparison row.
-- RECOVAR makes the top-vs-second candidate logit gap too sharp by about
-  `0.136` log units.
-- Forcing RECOVAR float32 scoring did not fix it.
-- Switching RECOVAR scoring to square Fourier window worsened it.
-
-Next debugging step:
-
-Compare RELION `fine_ref`, `fine_shifted`, and `corr_img` against RECOVAR
-`debug_proj_weighted`, `debug_shifted_score`, and `debug_ctf2_over_nv` for the
-six active candidates of particle 4603. This should identify whether the
-remaining score gap is interpolation, boundary/support, or weighting.
+Current parity standing: map and pose parity are strong through the 13-row 5k
+trajectory, but late-iteration per-particle Pmax parity is still not at the
+`~1e-4` arithmetic target. Next debugging step is a post-selected-only rerun of
+the 5k/128 trajectory, then trace the first late-iteration particle with a large
+Pmax gap using RELION-vs-RECOVAR dumps of raw scores, normalized probabilities,
+candidate poses/translations, noise, CTF, tau2, and Ft_y/Ft_CTF.
 
 ## Full-trajectory and large-run caveats
 
-Complete 5k trajectory artifact:
+Old complete 8-row 5k trajectory artifact:
 
 `_agent_scratch/long_end2end_parity_20260426_182134`
 
-This is useful as timing/performance baseline, but it predates the latest
-translation-prior fix. Do not use it as final parity evidence.
+This is now historical only. Use the 13-row replay above as the current
+pre-selected-only speed baseline.
 
 Post-fix forced long run:
 

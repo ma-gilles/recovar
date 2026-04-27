@@ -7,8 +7,9 @@ This file is the long audit trail and contains stale/failed experiments as
 well as current results.
 
 ## Branch
-`claude/relion-parity-local-search-fix` HEAD = `0415e9aa` plus the
-zero-filled integer old-offset pre-shift fix in this worktree.
+`claude/relion-parity-local-search-fix`. The current pushed baseline before
+the selected-only fine-grid speed fix is `2e2d8301`; this document entry is
+updated with the selected-only fix in the same branch.
 
 ## 2026-04-27 5k/128 timing and parity baselines
 
@@ -18,6 +19,46 @@ RELION reference:
 `/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_noise1_5k_normalized/relion_ref_os0`.
 This fixture has 5,000 particles, box size 128, pixel size 4.25 A, and
 half-sets of 2,515 and 2,485 particles.
+
+### Full 13-row end-to-end replay after pre-shift/pass-2 fixes
+
+Artifact:
+`_agent_scratch/long_5k_exactlocal_2e2d8301_local_20260427_093922`.
+Command used `--iter 1 --max_iter 13 --skip_final_iteration
+--local_engine exact_v1 --local_search_profile off` on one visible A100
+(`jax_devices=["cuda:0"]`, `CUDA_VISIBLE_DEVICES=1`). RECOVAR emitted 13 rows
+matching RELION it002 through it014 and did not stop at 8 rows. Total wall time
+was 2,956.8 s.
+
+| Rec iter | RELION it | wall s | cs | pixres A | hp | REC Pmax | REL Pmax | mean abs | p99 abs | max abs | Pmax corr | pose mean/max deg | trans mean/max px | map corr R-vs-L | GT corr R/L | FSC0.143 R/L |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 2 | 302.8 | 70 | 25.0 | 3 | 0.646336 | 0.646337 | 7.53e-05 | 3.45e-04 | 1.03e-03 | 1.000000 | 5.76e-06/1.90e-05 | 3.20e-07/5.58e-07 | 0.999965 | 0.939964/0.939879 | 36/36 |
+| 2 | 3 | 77.4 | 82 | 24.0 | 3 | 0.964185 | 0.964374 | 6.60e-03 | 1.04e-01 | 3.03e-01 | 0.973796 | 7.89e-02/15.12 | 8.30e-07/8.63e-07 | 0.999940 | 0.948235/0.948359 | 41/41 |
+| 3 | 4 | 71.5 | 80 | 24.0 | 3 | 0.974087 | 0.973470 | 7.31e-03 | 1.51e-01 | 4.45e-01 | 0.940930 | 7.93e-02/15.18 | 4.11e-07/4.83e-07 | 0.999939 | 0.946547/0.946794 | 40/40 |
+| 4 | 5 | 69.8 | 80 | 24.0 | 3 | 0.973225 | 0.972628 | 7.77e-03 | 1.60e-01 | 3.67e-01 | 0.940812 | 1.03e-01/14.78 | 5.81e-06/5.85e-06 | 0.999942 | 0.946122/0.946271 | 40/40 |
+| 5 | 6 | 176.8 | 80 | 25.0 | 4 | 0.928715 | 0.928947 | 1.69e-02 | 1.81e-01 | 4.40e-01 | 0.950317 | 7.67e-02/6.75 | 5.44e-08/1.64e-06 | 0.999933 | 0.962108/0.962210 | 41/41 |
+| 6 | 7 | 179.2 | 82 | 25.0 | 4 | 0.948387 | 0.949317 | 1.53e-02 | 2.01e-01 | 4.60e-01 | 0.927246 | 1.08e-01/7.12 | 1.52e-04/3.78e-01 | 0.999902 | 0.961636/0.961718 | 42/41 |
+| 7 | 8 | 197.9 | 82 | 26.0 | 5 | 0.884212 | 0.885416 | 3.21e-02 | 2.99e-01 | 6.17e-01 | 0.909393 | 1.01e-01/4.79 | 1.23e-04/3.05e-01 | 0.999866 | 0.965130/0.965239 | 42/42 |
+| 8 | 9 | 182.4 | 84 | 26.0 | 5 | 0.894761 | 0.896648 | 3.67e-02 | 3.34e-01 | 6.71e-01 | 0.868923 | 1.16e-01/4.10 | 2.44e-04/3.05e-01 | 0.999838 | 0.965878/0.965953 | 43/43 |
+| 9 | 10 | 211.7 | 84 | 26.0 | 6 | 0.693342 | 0.692447 | 5.82e-02 | 3.38e-01 | 5.68e-01 | 0.893892 | 1.24e-01/2.95 | 1.51e-03/2.91e-01 | 0.999858 | 0.965971/0.966049 | 43/43 |
+| 10 | 11 | 187.4 | 84 | 26.0 | 6 | 0.693309 | 0.694100 | 6.57e-02 | 3.71e-01 | 5.48e-01 | 0.866578 | 1.36e-01/3.54 | 3.50e-04/2.91e-01 | 0.999874 | 0.966651/0.966737 | 43/43 |
+| 11 | 12 | 643.7 | 84 | 26.0 | 7 | 0.315508 | 0.316854 | 3.31e-02 | 1.59e-01 | 4.79e-01 | 0.874782 | 1.13e-01/2.08 | 2.30e-04/2.87e-01 | 0.999905 | 0.966608/0.966694 | 43/43 |
+| 12 | 13 | 301.5 | 84 | 26.0 | 7 | 0.306719 | 0.307071 | 3.09e-02 | 1.37e-01 | 2.98e-01 | 0.900640 | 9.74e-02/2.00 | 9.79e-04/2.87e-01 | 0.999922 | 0.966065/0.966154 | 43/43 |
+| 13 | 14 | 353.6 | 84 | 26.0 | 7 | 0.323451 | 0.324587 | 2.98e-02 | 1.32e-01 | 4.16e-01 | 0.909574 | 8.65e-02/1.18 | 1.17e-04/2.87e-01 | 0.999928 | 0.966522/0.966607 | 43/43 |
+
+Final map parity: half1 corr vs RELION `0.999884`, half2 corr vs RELION
+`0.999883`; merged GT corr RECOVAR/RELION `0.966522/0.966607`; merged
+FSC<0.143 shell RECOVAR/RELION `43/43`.
+
+Timing interpretation before the selected-only fine-grid fix: iteration 11
+(`hp=7`) took 643.7 s because exact local materialized the full perturbed fine
+grid (about 151M rotations) before selecting per-image neighborhoods. GPU was
+mostly idle during this CPU/RAM-heavy materialization step. The selected-only
+fix in this branch now selects canonical fine-grid IDs first and constructs
+only the selected perturbed rotation matrices, matching RELION's
+`selectOrientationsWithNonZeroPriorProbability` before `SamplingPerturbation`
+ordering. Targeted unit gate after the fix: `141 passed` for
+`tests/unit/test_convergence.py tests/unit/test_refine_relion_mode.py`.
 
 ### Full 8-row end-to-end trajectory
 

@@ -12,6 +12,7 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import make_relio
 from recovar.em.sampling import (
     _normalized_log_weights,
     _wrapped_abs_diff_deg,
+    apply_relion_rotation_perturbation_to_eulers,
     get_oversampled_rotation_grid_from_samples,
     get_oversampled_translation_grid,
     get_local_rotation_grid_fast,
@@ -187,9 +188,61 @@ def _build_factorized_local_entries(
     rotation_log_priors_flat = np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
     return offsets, counts, rotation_ids_flat, rotation_log_priors_flat
 
+
+def _rotation_eulers_from_grid_metadata(rotation_ids: np.ndarray, grid_metadata) -> np.ndarray:
+    """Return canonical RELION Euler angles for selected rotation ids only."""
+
+    rotation_ids = np.asarray(rotation_ids, dtype=np.int64).reshape(-1)
+    if rotation_ids.size == 0:
+        return np.zeros((0, 3), dtype=np.float32)
+    if "eulers_full" in grid_metadata:
+        return np.asarray(grid_metadata["eulers_full"], dtype=np.float32)[rotation_ids]
+    if str(grid_metadata["mode"]) != "factorized":
+        raise ValueError("Selected rotation eulers require factorized metadata or eulers_full")
+    n_pixels = int(grid_metadata["n_pixels"])
+    pixel_idx = rotation_ids % n_pixels
+    psi_idx = rotation_ids // n_pixels
+    return np.stack(
+        [
+            np.asarray(grid_metadata["rot_deg"], dtype=np.float32)[pixel_idx],
+            np.asarray(grid_metadata["tilt_deg"], dtype=np.float32)[pixel_idx],
+            np.asarray(grid_metadata["psi_deg"], dtype=np.float32)[psi_idx],
+        ],
+        axis=1,
+    ).astype(np.float32, copy=False)
+
+
+def _selected_rotation_matrices(
+    rotation_ids: np.ndarray,
+    rotation_grid_rotations: np.ndarray | None,
+    grid_metadata,
+    *,
+    random_perturbation: float = 0.0,
+    angular_sampling_deg: float | None = None,
+) -> np.ndarray:
+    """Build matrices for selected local ids without materializing the full grid."""
+
+    rotation_ids = np.asarray(rotation_ids, dtype=np.int64).reshape(-1)
+    if rotation_ids.size == 0:
+        return np.zeros((0, 3, 3), dtype=np.float32)
+    if rotation_grid_rotations is not None:
+        return np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)[rotation_ids]
+    selected_eulers = _rotation_eulers_from_grid_metadata(rotation_ids, grid_metadata)
+    if abs(float(random_perturbation)) > 1e-12:
+        if angular_sampling_deg is None:
+            raise ValueError("angular_sampling_deg is required when random_perturbation is nonzero")
+        rotations, _ = apply_relion_rotation_perturbation_to_eulers(
+            selected_eulers,
+            float(random_perturbation),
+            float(angular_sampling_deg),
+        )
+        return rotations.astype(np.float32, copy=False)
+    return utils.R_from_relion(selected_eulers, degrees=True).astype(np.float32, copy=False)
+
+
 def build_local_hypothesis_layout(
     prior_rotations: np.ndarray,
-    rotation_grid_rotations: np.ndarray,
+    rotation_grid_rotations: np.ndarray | None,
     sigma_rot: float,
     sigma_psi: float,
     healpix_order: int,
@@ -201,11 +254,14 @@ def build_local_hypothesis_layout(
     *,
     grid_metadata,
     translation_prior_reference_translations: np.ndarray | None = None,
+    rotation_grid_random_perturbation: float = 0.0,
+    rotation_grid_angular_sampling_deg: float | None = None,
 ) -> LocalHypothesisLayout:
     """Build exact per-image local neighborhoods and translation priors."""
 
     prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
-    rotation_grid_rotations = np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)
+    if rotation_grid_rotations is not None:
+        rotation_grid_rotations = np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)
     translations = np.asarray(translations, dtype=np.float32)
     prior_translations = np.asarray(prior_translations, dtype=np.float32).reshape(-1, translations.shape[1])
 
@@ -243,7 +299,13 @@ def build_local_hypothesis_layout(
 
         rotation_ids_flat = np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
         rotation_log_priors_flat = np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
-    rotations_flat = rotation_grid_rotations[rotation_ids_flat] if rotation_ids_flat.size else np.zeros((0, 3, 3), dtype=np.float32)
+    rotations_flat = _selected_rotation_matrices(
+        rotation_ids_flat,
+        rotation_grid_rotations,
+        grid_metadata,
+        random_perturbation=rotation_grid_random_perturbation,
+        angular_sampling_deg=rotation_grid_angular_sampling_deg,
+    )
     reference_translations = (
         np.asarray(translation_prior_reference_translations, dtype=np.float32)
         if translation_prior_reference_translations is not None
@@ -258,8 +320,13 @@ def build_local_hypothesis_layout(
         offset_range_pixels=offset_range_pixels,
     ).astype(np.float32, copy=False)
 
+    if rotation_grid_rotations is not None:
+        n_global_rotations = int(rotation_grid_rotations.shape[0])
+    else:
+        n_global_rotations = int(grid_metadata["n_pixels"]) * int(grid_metadata["n_psi"])
+
     return LocalHypothesisLayout(
-        n_global_rotations=int(rotation_grid_rotations.shape[0]),
+        n_global_rotations=n_global_rotations,
         n_pixels=int(grid_metadata["n_pixels"]),
         n_psi=int(grid_metadata["n_psi"]),
         rotation_offsets=offsets,
