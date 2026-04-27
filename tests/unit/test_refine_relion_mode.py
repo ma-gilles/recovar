@@ -672,6 +672,11 @@ def test_run_local_search_iteration_exact_engine_uses_translation_prior_referenc
             if kwargs.get("translation_prior_reference_translations") is None
             else np.asarray(kwargs["translation_prior_reference_translations"], dtype=np.float32).copy()
         )
+        captured["translation_prior_centers"] = (
+            None
+            if kwargs.get("translation_prior_centers") is None
+            else np.asarray(kwargs["translation_prior_centers"], dtype=np.float32).copy()
+        )
         return (
             jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
             jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
@@ -701,6 +706,7 @@ def test_run_local_search_iteration_exact_engine_uses_translation_prior_referenc
     rotation_grid_eulers = get_relion_rotation_grid_eulers(0).astype(np.float32)
     translations = np.array([[0.5, 0.5], [1.5, 0.5]], dtype=np.float32)
     reference_translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    prior_centers = np.array([[0.25, -0.5]], dtype=np.float32)
 
     outputs = iteration_loop_module._run_local_search_iteration(
         mock_dataset,
@@ -725,11 +731,17 @@ def test_run_local_search_iteration_exact_engine_uses_translation_prior_referenc
         local_engine="exact_v1",
         translation_prior_mode="coarse",
         translation_prior_reference_translations=reference_translations,
+        translation_prior_centers=prior_centers,
     )
 
     np.testing.assert_allclose(
         captured["translation_prior_reference_translations"],
         reference_translations,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        captured["translation_prior_centers"],
+        prior_centers,
         atol=1e-6,
     )
     assert len(outputs) == 5
