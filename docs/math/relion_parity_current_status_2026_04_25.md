@@ -60,6 +60,19 @@ only the selected perturbed rotation matrices, matching RELION's
 ordering. Targeted unit gate after the fix: `141 passed` for
 `tests/unit/test_convergence.py tests/unit/test_refine_relion_mode.py`.
 
+Focused post-fix HP7 replay:
+`_agent_scratch/fixed_hp7_selected_codex_hp7_selected_4fbba3e2_20260427_105105`.
+Command used `--iter 11 --max_iter 1 --skip_final_iteration --local_engine
+exact_v1 --local_search_profile off` on one A100. The selected-only path
+logged `Using selected-only fine local-search grid: order=7 (150994944
+rotations)` and completed the iteration in 391.0 s, with total script wall time
+412.9 s. This is a 39% iteration-wall improvement vs the previous 643.7 s HP7
+row while preserving fixed-state parity:
+
+| RELION it | REC Pmax | REL Pmax | mean abs | p99 abs | max abs | Pmax corr | pose mean/max deg | trans max px | map corr R-vs-L | GT corr R/L | FSC0.143 R/L |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 12 | 0.316846 | 0.316854 | 2.51e-4 | 1.11e-3 | 2.55e-3 | 0.999992 | 2e-4/0.5534 | 0.0 | 0.999953 | 0.966635/0.966694 | 43/43 |
+
 ### Full 8-row end-to-end trajectory
 
 Artifact:

@@ -67,6 +67,10 @@ branch. The detailed audit trail remains in
      tests/unit/test_refine_relion_mode.py` passed (`141 passed`) with tests
      asserting selected-only perturbation equivalence against full-grid
      perturbation for a small grid.
+   - Focused HP7 replay after the fix:
+     `_agent_scratch/fixed_hp7_selected_codex_hp7_selected_4fbba3e2_20260427_105105`.
+     Iteration wall improved to 391.0 s and fixed-state parity stayed tight
+     (Pmax mean abs `2.51e-4`, max `0.00255`, map corr vs RELION `0.999953`).
 
 3. Match RELION auto_refine convergence and finalization exactly.
    - Issue: https://github.com/ma-gilles/recovar/issues/122
