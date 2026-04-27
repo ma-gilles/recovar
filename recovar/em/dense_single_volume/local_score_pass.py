@@ -19,6 +19,7 @@ def score_local_bucket(
     rotation_log_prior,
     translation_log_prior,
     rotation_mask,
+    sample_mask=None,
 ):
     """Compute exact local scores on a padded per-image hypothesis bucket."""
 
@@ -39,7 +40,10 @@ def score_local_bucket(
     scores = -0.5 * (cross + norms[..., None])
     scores = scores + rotation_log_prior[:, :, None]
     scores = scores + translation_log_prior[:, None, :]
-    return jnp.where(rotation_mask[:, :, None], scores, -jnp.inf)
+    valid_mask = rotation_mask[:, :, None]
+    if sample_mask is not None:
+        valid_mask = valid_mask & sample_mask
+    return jnp.where(valid_mask, scores, -jnp.inf)
 
 
 @jax.jit

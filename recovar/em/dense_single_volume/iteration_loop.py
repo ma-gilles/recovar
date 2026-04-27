@@ -60,7 +60,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.legacy_iteration_loop import _run_legacy_iteration_loop
 from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
-from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout
+from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout, build_pass2_hypothesis_layout
 from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,
@@ -339,10 +339,12 @@ def _run_local_search_iteration(
     disable_adjoint_ctf=False,
     adaptive_fraction=0.999,
     max_significants=-1,
-    local_engine="grouped_union",
+    local_engine="exact_v1",
     translation_prior_mode="perturbed",
     translation_prior_reference_translations=None,
     debug_iteration=None,
+    pass2_layout=None,
+    return_best_pose_details=False,
 ):
     """Run exact local search on the fine HEALPix grid.
 
@@ -365,6 +367,8 @@ def _run_local_search_iteration(
         raise ValueError(
             f"Unknown local_engine={local_engine!r}; expected 'grouped_union', 'exact_v1', or 'exact_v2'",
         )
+    if pass2_layout is not None and local_engine == "grouped_union":
+        raise ValueError("Pass-2 layouts must use exact local search, not grouped_union")
     if local_engine == "grouped_union":
         return _run_local_search_iteration_grouped_union(
             experiment_dataset,
@@ -445,7 +449,199 @@ def _run_local_search_iteration(
         translation_prior_mode=translation_prior_mode,
         translation_prior_reference_translations=translation_prior_reference_translations,
         debug_iteration=debug_iteration,
+        local_layout_override=pass2_layout,
+        return_best_pose_details=return_best_pose_details,
     )
+
+
+def _run_sparse_pass2_local_search_iteration(
+    experiment_dataset,
+    mean,
+    mean_variance,
+    noise_variance,
+    translations,
+    significant_sample_indices,
+    nside_level,
+    disc_type,
+    *,
+    oversampling_order=1,
+    current_size=None,
+    translation_step=None,
+    rotation_log_prior=None,
+    translation_log_prior=None,
+    score_with_masked_images=True,
+    return_stats=True,
+    accumulate_noise=True,
+    half_spectrum_scoring=True,
+    projection_padding_factor=1,
+    reconstruction_padding_factor=1,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
+    use_float64_scoring=False,
+    do_gridding_correction=False,
+    square_window=False,
+    random_perturbation=0.0,
+    image_batch_size=1,
+    rotation_block_size=5000,
+    adaptive_fraction=0.999,
+    debug_iteration=None,
+):
+    """Run RELION adaptive pass 2 through the exact local-search engine."""
+
+    n_images = int(experiment_dataset.n_units)
+    translations_np = np.asarray(translations, dtype=np.float32)
+    n_coarse_rot = int(rotation_grid_size(nside_level))
+    n_coarse_trans = int(translations_np.shape[0])
+    pass2_layout = build_pass2_hypothesis_layout(
+        significant_sample_indices,
+        n_coarse_rot,
+        n_coarse_trans,
+        int(nside_level),
+        translations_np,
+        oversampling_order=int(oversampling_order),
+        translation_step=translation_step,
+        rotation_log_prior=rotation_log_prior,
+        translation_log_prior=translation_log_prior,
+        random_perturbation=random_perturbation,
+    )
+    dummy_prior_rotations = np.zeros((n_images, 3), dtype=np.float32)
+    dummy_prior_translations = np.zeros((n_images, translations_np.shape[1]), dtype=np.float32)
+    dummy_rotation_grid = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], max(n_coarse_rot, 1), axis=0)
+
+    outputs = _run_local_search_iteration(
+        experiment_dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        dummy_prior_rotations,
+        dummy_rotation_grid,
+        None,
+        int(nside_level),
+        0.0,
+        0.0,
+        pass2_layout.translation_grid,
+        dummy_prior_translations,
+        1.0,
+        None,
+        disc_type,
+        image_batch_size,
+        rotation_block_size,
+        current_size,
+        accumulate_noise=accumulate_noise,
+        projection_padding_factor=projection_padding_factor,
+        reconstruction_padding_factor=reconstruction_padding_factor,
+        use_float64_scoring=use_float64_scoring,
+        do_gridding_correction=do_gridding_correction,
+        square_window=square_window,
+        half_spectrum_scoring=half_spectrum_scoring,
+        image_corrections=image_corrections,
+        scale_corrections=scale_corrections,
+        image_pre_shifts=image_pre_shifts,
+        score_with_masked_images=score_with_masked_images,
+        return_profile=False,
+        adaptive_fraction=adaptive_fraction,
+        max_significants=-1,
+        local_engine="exact_v1",
+        debug_iteration=debug_iteration,
+        pass2_layout=pass2_layout,
+        return_best_pose_details=True,
+    )
+
+    outputs = list(outputs)
+    outputs[2] = _decode_pass2_local_hard_assignment(
+        pass2_layout,
+        outputs[2],
+        outputs[3],
+        outputs[4],
+        outputs[5],
+    )
+
+    if return_stats and accumulate_noise:
+        return tuple(outputs)
+    if return_stats:
+        return tuple(outputs[:-1])
+    if accumulate_noise:
+        return tuple(outputs[:6] + [outputs[-1]])
+    return tuple(outputs[:6])
+
+
+def _decode_pass2_local_hard_assignment(
+    pass2_layout,
+    global_hard_assignment,
+    best_pose_rotations,
+    best_pose_translations,
+    best_pose_rotation_ids,
+):
+    """Decode exact-local best poses into sparse pass-2 local assignment ids.
+
+    ``run_local_em_exact`` reports hard assignments as global/fine rotation
+    ids, which is correct for ordinary local search. Sparse adaptive pass 2
+    historically exposes per-image local-row assignments; keep that return
+    contract so downstream diagnostics can decode against each image's
+    oversampled candidate list.
+    """
+
+    n_images = int(pass2_layout.n_images)
+    n_trans = int(np.asarray(pass2_layout.translation_grid).shape[0])
+    translation_grid = np.asarray(pass2_layout.translation_grid, dtype=np.float32)
+    rotation_offsets = np.asarray(pass2_layout.rotation_offsets, dtype=np.int64)
+    rotation_ids = np.asarray(pass2_layout.rotation_ids_flat, dtype=np.int64)
+    rotations = np.asarray(pass2_layout.rotations_flat, dtype=np.float32)
+    sample_mask = (
+        None
+        if pass2_layout.sample_mask_flat is None
+        else np.asarray(pass2_layout.sample_mask_flat, dtype=bool)
+    )
+    best_rots = np.asarray(best_pose_rotations, dtype=np.float32)
+    best_trans = np.asarray(best_pose_translations, dtype=np.float32)
+    best_ids = np.asarray(best_pose_rotation_ids, dtype=np.int64).reshape(-1)
+    global_assignment = np.asarray(global_hard_assignment, dtype=np.int64).reshape(-1)
+    hard_assignment = np.empty(n_images, dtype=np.int32)
+
+    for image_idx in range(n_images):
+        start = int(rotation_offsets[image_idx])
+        end = int(rotation_offsets[image_idx + 1])
+        rows = np.arange(start, end, dtype=np.int64)
+        if rows.size == 0:
+            raise ValueError(f"Image {image_idx} has no pass-2 local rotations")
+
+        trans_idx = int(global_assignment[image_idx] % n_trans)
+        trans_delta = float(np.max(np.abs(translation_grid[trans_idx] - best_trans[image_idx])))
+        if trans_delta > 1e-5:
+            raise RuntimeError(
+                f"Could not decode sparse pass-2 translation for image {image_idx}: "
+                f"engine hard-assignment delta={trans_delta:.3e}",
+            )
+
+        valid = rotation_ids[rows] == int(best_ids[image_idx])
+        if sample_mask is not None:
+            valid &= sample_mask[rows, trans_idx]
+        candidate_rows = rows[valid]
+        if candidate_rows.size == 0 and sample_mask is not None:
+            candidate_rows = rows[sample_mask[rows, trans_idx]]
+        if candidate_rows.size == 0:
+            candidate_rows = rows
+
+        rot_delta = np.max(
+            np.abs(rotations[candidate_rows] - best_rots[image_idx][None, :, :]),
+            axis=(1, 2),
+        )
+        best_delta = float(np.min(rot_delta))
+        best_row = int(candidate_rows[int(np.argmin(rot_delta))])
+        if best_delta > 1e-5:
+            raise RuntimeError(
+                f"Could not decode sparse pass-2 rotation for image {image_idx}: "
+                f"nearest delta={best_delta:.3e}",
+            )
+        if sample_mask is not None and not bool(sample_mask[best_row, trans_idx]):
+            raise RuntimeError(
+                f"Decoded sparse pass-2 assignment is outside the candidate mask for image {image_idx}",
+            )
+
+        hard_assignment[image_idx] = np.int32((best_row - start) * n_trans + trans_idx)
+
+    return hard_assignment
 
 
 def _run_local_search_iteration_grouped_union(
@@ -958,6 +1154,8 @@ def _run_local_search_iteration_exact_v1(
     translation_prior_mode="perturbed",
     translation_prior_reference_translations=None,
     debug_iteration=None,
+    local_layout_override=None,
+    return_best_pose_details=False,
 ):
     """Per-image exact local engine over image-specific rotation neighborhoods."""
 
@@ -980,30 +1178,35 @@ def _run_local_search_iteration_exact_v1(
             np.asarray(translations).shape[1],
         )
 
-    metadata_t0 = time.time()
-    # RELION local priors remain factorized in canonical direction/psi index
-    # space even when the scored trial rotations have been perturbed.
-    local_grid_metadata = build_local_search_grid_metadata(healpix_order)
-    metadata_build_time = time.time() - metadata_t0
+    if local_layout_override is None:
+        metadata_t0 = time.time()
+        # RELION local priors remain factorized in canonical direction/psi index
+        # space even when the scored trial rotations have been perturbed.
+        local_grid_metadata = build_local_search_grid_metadata(healpix_order)
+        metadata_build_time = time.time() - metadata_t0
 
-    layout_t0 = time.time()
-    local_layout = build_local_hypothesis_layout(
-        prior_rotations,
-        rotation_grid_rotations,
-        sigma_rot,
-        sigma_psi,
-        healpix_order,
-        translations,
-        prior_translations,
-        sigma_offset_angstrom,
-        # Match the grouped RELION-mode path: local translation priors use the
-        # learned/model sigma, not the legacy range/3 override.
-        None,
-        experiment_dataset.voxel_size,
-        grid_metadata=local_grid_metadata,
-        translation_prior_reference_translations=translation_prior_reference_translations,
-    )
-    selector_time = time.time() - layout_t0
+        layout_t0 = time.time()
+        local_layout = build_local_hypothesis_layout(
+            prior_rotations,
+            rotation_grid_rotations,
+            sigma_rot,
+            sigma_psi,
+            healpix_order,
+            translations,
+            prior_translations,
+            sigma_offset_angstrom,
+            # Match the grouped RELION-mode path: local translation priors use the
+            # learned/model sigma, not the legacy range/3 override.
+            None,
+            experiment_dataset.voxel_size,
+            grid_metadata=local_grid_metadata,
+            translation_prior_reference_translations=translation_prior_reference_translations,
+        )
+        selector_time = time.time() - layout_t0
+    else:
+        local_layout = local_layout_override
+        metadata_build_time = 0.0
+        selector_time = 0.0
 
     engine_outputs = run_local_em_exact(
         experiment_dataset,
@@ -1041,19 +1244,68 @@ def _run_local_search_iteration_exact_v1(
         # by adaptive_fraction only; do not reapply the cap here.
         max_significants=-1,
         debug_iteration=debug_iteration,
+        return_best_pose_details=return_best_pose_details,
     )
 
     if accumulate_noise:
         if return_profile:
-            Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats, profile_summary = engine_outputs
+            if return_best_pose_details:
+                (
+                    Ft_y,
+                    Ft_ctf,
+                    hard_assignment,
+                    best_pose_rotations,
+                    best_pose_translations,
+                    best_pose_rotation_ids,
+                    relion_stats,
+                    noise_stats,
+                    profile_summary,
+                ) = engine_outputs
+            else:
+                Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats, profile_summary = engine_outputs
         else:
-            Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats = engine_outputs
+            if return_best_pose_details:
+                (
+                    Ft_y,
+                    Ft_ctf,
+                    hard_assignment,
+                    best_pose_rotations,
+                    best_pose_translations,
+                    best_pose_rotation_ids,
+                    relion_stats,
+                    noise_stats,
+                ) = engine_outputs
+            else:
+                Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats = engine_outputs
             profile_summary = None
     else:
         if return_profile:
-            Ft_y, Ft_ctf, hard_assignment, relion_stats, profile_summary = engine_outputs
+            if return_best_pose_details:
+                (
+                    Ft_y,
+                    Ft_ctf,
+                    hard_assignment,
+                    best_pose_rotations,
+                    best_pose_translations,
+                    best_pose_rotation_ids,
+                    relion_stats,
+                    profile_summary,
+                ) = engine_outputs
+            else:
+                Ft_y, Ft_ctf, hard_assignment, relion_stats, profile_summary = engine_outputs
         else:
-            Ft_y, Ft_ctf, hard_assignment, relion_stats = engine_outputs
+            if return_best_pose_details:
+                (
+                    Ft_y,
+                    Ft_ctf,
+                    hard_assignment,
+                    best_pose_rotations,
+                    best_pose_translations,
+                    best_pose_rotation_ids,
+                    relion_stats,
+                ) = engine_outputs
+            else:
+                Ft_y, Ft_ctf, hard_assignment, relion_stats = engine_outputs
             profile_summary = None
             noise_stats = None
 
@@ -1064,9 +1316,45 @@ def _run_local_search_iteration_exact_v1(
         profile_summary["translation_prior_time_s"] = np.float64(0.0)
 
     if accumulate_noise:
+        if return_best_pose_details:
+            if return_profile:
+                return (
+                    Ft_y,
+                    Ft_ctf,
+                    hard_assignment,
+                    best_pose_rotations,
+                    best_pose_translations,
+                    best_pose_rotation_ids,
+                    relion_stats,
+                    noise_stats,
+                    profile_summary,
+                )
+            return (
+                Ft_y,
+                Ft_ctf,
+                hard_assignment,
+                best_pose_rotations,
+                best_pose_translations,
+                best_pose_rotation_ids,
+                relion_stats,
+                noise_stats,
+            )
         if return_profile:
             return Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats, profile_summary
         return Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats
+    if return_best_pose_details:
+        if return_profile:
+            return (
+                Ft_y,
+                Ft_ctf,
+                hard_assignment,
+                best_pose_rotations,
+                best_pose_translations,
+                best_pose_rotation_ids,
+                relion_stats,
+                profile_summary,
+            )
+        return Ft_y, Ft_ctf, hard_assignment, best_pose_rotations, best_pose_translations, best_pose_rotation_ids, relion_stats
     if return_profile:
         return Ft_y, Ft_ctf, hard_assignment, relion_stats, profile_summary
     return Ft_y, Ft_ctf, hard_assignment, relion_stats
@@ -1130,7 +1418,7 @@ def refine_single_volume(
     local_search_translation_prior_mode="coarse",
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
-    local_engine="grouped_union",
+    local_engine="exact_v1",
     emulate_relion_firstiter_cc=False,
     relion_firstiter_ini_high_angstrom=None,
     first_iteration_score_mode="gaussian",
@@ -1374,7 +1662,7 @@ def _run_relion_iteration_loop(
     local_search_translation_prior_mode="coarse",
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
-    local_engine="grouped_union",
+    local_engine="exact_v1",
     emulate_relion_firstiter_cc=False,
     relion_firstiter_ini_high_angstrom=None,
     first_iteration_score_mode="gaussian",
@@ -2742,7 +3030,7 @@ def _run_relion_iteration_loop(
                         _best_rot_indices_k,
                         em_stats_k,
                         noise_stats_k,
-                    ) = compute_pass2_stats_sparse(
+                    ) = _run_sparse_pass2_local_search_iteration(
                         experiment_datasets[k],
                         means[k],
                         mean_variance,
@@ -2769,11 +3057,15 @@ def _run_relion_iteration_loop(
                         do_gridding_correction=True,
                         square_window=RELION_FOURIER_WINDOW_SQUARE,
                         random_perturbation=random_perturbation,
+                        image_batch_size=image_batch_size,
+                        rotation_block_size=rotation_block_size,
+                        adaptive_fraction=adaptive_fraction,
+                        debug_iteration=iteration,
                     )
                     noise_stats_per_half[k] = noise_stats_k
                     dt_pass2 = time.time() - t_pass2
                     logger.info(
-                        "Pass 2 sparse (half %d): %.1fs",
+                        "Pass 2 exact-local (half %d): %.1fs",
                         k,
                         dt_pass2,
                     )
