@@ -12,7 +12,10 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import make_relio
 from recovar.em.sampling import (
     _normalized_log_weights,
     _wrapped_abs_diff_deg,
+    get_oversampled_rotation_grid_from_samples,
+    get_oversampled_translation_grid,
     get_local_rotation_grid_fast,
+    rotation_grid_n_in_planes,
     rotation_indices_to_relion_eulers,
 )
 
@@ -52,6 +55,8 @@ class LocalHypothesisLayout:
     rotation_counts: np.ndarray
     translation_grid: np.ndarray
     translation_log_priors: np.ndarray
+    rotation_posterior_ids_flat: np.ndarray | None = None
+    sample_mask_flat: np.ndarray | None = None
 
     @property
     def n_images(self) -> int:
@@ -74,6 +79,8 @@ class LocalBucketSpec:
     local_rotation_log_prior: np.ndarray
     local_rotation_mask: np.ndarray
     translation_log_prior: np.ndarray
+    local_rotation_posterior_ids: np.ndarray | None = None
+    local_sample_mask: np.ndarray | None = None
 
 
 def _resolve_prior_rotations(prior_rotations: np.ndarray, healpix_order: int, grid_metadata):
@@ -265,6 +272,166 @@ def build_local_hypothesis_layout(
     )
 
 
+def _infer_translation_step(translations: np.ndarray) -> float:
+    unique_vals = np.unique(np.asarray(translations, dtype=np.float32))
+    diffs = np.diff(np.sort(unique_vals))
+    diffs = diffs[diffs > 1e-6]
+    return float(diffs.min()) if diffs.size else 1.0
+
+
+def _fine_translation_log_prior(
+    translation_log_prior: np.ndarray | None,
+    fine_translation_parent: np.ndarray,
+    n_images: int,
+    n_fine_translations: int,
+) -> np.ndarray:
+    if translation_log_prior is None:
+        return np.zeros((n_images, n_fine_translations), dtype=np.float32)
+    translation_log_prior_np = np.asarray(translation_log_prior, dtype=np.float32)
+    if translation_log_prior_np.ndim == 1:
+        fine = translation_log_prior_np[fine_translation_parent]
+        return np.broadcast_to(fine[None, :], (n_images, n_fine_translations)).astype(np.float32, copy=False)
+    if translation_log_prior_np.ndim == 2:
+        if translation_log_prior_np.shape[0] != n_images:
+            raise ValueError(
+                "translation_log_prior must have one row per image when 2D; "
+                f"got {translation_log_prior_np.shape[0]} rows for {n_images} images",
+            )
+        return translation_log_prior_np[:, fine_translation_parent].astype(np.float32, copy=False)
+    raise ValueError(f"translation_log_prior must be 1D or 2D, got {translation_log_prior_np.ndim} dimensions")
+
+
+def build_pass2_hypothesis_layout(
+    significant_sample_indices,
+    n_coarse_rotations: int,
+    n_coarse_translations: int,
+    nside_level: int,
+    translations: np.ndarray,
+    *,
+    oversampling_order: int,
+    translation_step: float | None = None,
+    rotation_log_prior: np.ndarray | None = None,
+    translation_log_prior: np.ndarray | None = None,
+    random_perturbation: float = 0.0,
+) -> LocalHypothesisLayout:
+    """Build exact-local layout for RELION adaptive pass-2 hypotheses.
+
+    Pass 2 is not a Gaussian local search around one previous best pose. RELION
+    oversamples the coarse ``(rotation, translation)`` samples that survived
+    pass 1. The exact local engine can score the same structure if each image
+    carries its own oversampled rotations plus a sparse ``(R, T)`` mask.
+    """
+
+    translations_np = np.asarray(translations, dtype=np.float32)
+    if translation_step is None:
+        translation_step = _infer_translation_step(translations_np)
+    fine_translations, fine_translation_parent = get_oversampled_translation_grid(
+        translations_np,
+        float(translation_step),
+        oversampling_order=oversampling_order,
+    )
+    fine_translations = np.asarray(fine_translations, dtype=np.float32)
+    fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
+    n_fine_translations = int(fine_translations.shape[0])
+    n_images = len(significant_sample_indices)
+    rotation_log_prior_np = None if rotation_log_prior is None else np.asarray(rotation_log_prior, dtype=np.float32)
+
+    offsets = np.zeros(n_images + 1, dtype=np.int64)
+    counts = np.zeros(n_images, dtype=np.int32)
+    rotations_parts: list[np.ndarray] = []
+    rotation_ids_parts: list[np.ndarray] = []
+    posterior_ids_parts: list[np.ndarray] = []
+    log_prior_parts: list[np.ndarray] = []
+    sample_mask_parts: list[np.ndarray] = []
+
+    for image_idx, sig_samples in enumerate(significant_sample_indices):
+        if sig_samples is None:
+            unique_rot = np.arange(n_coarse_rotations, dtype=np.int32)
+            coarse_rot = unique_rot
+            coarse_trans = None
+            use_full_candidate_mask = True
+        else:
+            sig_samples = np.asarray(sig_samples, dtype=np.int32).reshape(-1)
+            if sig_samples.size == 0:
+                raise ValueError(f"Image {image_idx} has no significant coarse samples for sparse pass 2")
+            coarse_rot = sig_samples // int(n_coarse_translations)
+            coarse_trans = sig_samples % int(n_coarse_translations)
+            unique_rot = np.unique(coarse_rot).astype(np.int32, copy=False)
+            use_full_candidate_mask = False
+
+        oversampled_rots, parent_map, oversampled_rot_indices = get_oversampled_rotation_grid_from_samples(
+            unique_rot,
+            int(nside_level),
+            oversampling_order=oversampling_order,
+            random_perturbation=random_perturbation,
+            return_rotation_indices=True,
+        )
+        oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
+        parent_map = np.asarray(parent_map, dtype=np.int32)
+        oversampled_rot_indices = np.asarray(oversampled_rot_indices, dtype=np.int32)
+        coarse_parent_ids = unique_rot[parent_map].astype(np.int32, copy=False)
+
+        if rotation_log_prior_np is None:
+            local_rotation_log_prior = np.zeros(oversampled_rots.shape[0], dtype=np.float32)
+        else:
+            local_rotation_log_prior = rotation_log_prior_np[unique_rot][parent_map].astype(np.float32, copy=False)
+
+        if use_full_candidate_mask:
+            sample_mask = np.ones((oversampled_rots.shape[0], n_fine_translations), dtype=bool)
+        else:
+            sample_mask = np.zeros((oversampled_rots.shape[0], n_fine_translations), dtype=bool)
+            for parent_local_idx, coarse_rot_idx in enumerate(unique_rot.tolist()):
+                valid_coarse_trans = coarse_trans[coarse_rot == coarse_rot_idx]
+                col_mask = np.isin(fine_translation_parent, valid_coarse_trans)
+                sample_mask[parent_map == parent_local_idx, :] = col_mask[None, :]
+
+        if not np.any(sample_mask):
+            raise ValueError(f"Image {image_idx} has no valid sparse pass-2 candidates after oversampling")
+
+        counts[image_idx] = int(oversampled_rots.shape[0])
+        offsets[image_idx + 1] = offsets[image_idx] + oversampled_rots.shape[0]
+        rotations_parts.append(oversampled_rots)
+        rotation_ids_parts.append(oversampled_rot_indices)
+        posterior_ids_parts.append(coarse_parent_ids)
+        log_prior_parts.append(local_rotation_log_prior)
+        sample_mask_parts.append(sample_mask)
+
+    rotations_flat = np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=np.float32)
+    rotation_ids_flat = np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
+    posterior_ids_flat = (
+        np.concatenate(posterior_ids_parts, axis=0) if posterior_ids_parts else np.zeros(0, dtype=np.int32)
+    )
+    rotation_log_priors_flat = (
+        np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
+    )
+    sample_mask_flat = (
+        np.concatenate(sample_mask_parts, axis=0)
+        if sample_mask_parts
+        else np.zeros((0, n_fine_translations), dtype=bool)
+    )
+    n_pixels = 12 * (2 ** int(nside_level)) ** 2
+
+    return LocalHypothesisLayout(
+        n_global_rotations=int(n_coarse_rotations),
+        n_pixels=int(n_pixels),
+        n_psi=int(rotation_grid_n_in_planes(int(nside_level))),
+        rotation_offsets=offsets,
+        rotation_ids_flat=rotation_ids_flat,
+        rotations_flat=rotations_flat,
+        rotation_log_priors_flat=rotation_log_priors_flat,
+        rotation_counts=counts,
+        translation_grid=fine_translations,
+        translation_log_priors=_fine_translation_log_prior(
+            translation_log_prior,
+            fine_translation_parent,
+            n_images,
+            n_fine_translations,
+        ),
+        rotation_posterior_ids_flat=posterior_ids_flat,
+        sample_mask_flat=sample_mask_flat,
+    )
+
+
 def bucket_local_hypothesis_layout(
     layout: LocalHypothesisLayout,
     image_batch_size: int,
@@ -301,6 +468,19 @@ def bucket_local_hypothesis_layout(
             padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
             padded_log_prior = np.full((batch_size, int(bucket_size)), -1e30, dtype=np.float32)
             padded_mask = np.zeros((batch_size, int(bucket_size)), dtype=bool)
+            padded_posterior_ids = (
+                None
+                if layout.rotation_posterior_ids_flat is None
+                else np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
+            )
+            padded_sample_mask = (
+                None
+                if layout.sample_mask_flat is None
+                else np.zeros(
+                    (batch_size, int(bucket_size), int(layout.translation_grid.shape[0])),
+                    dtype=bool,
+                )
+            )
 
             for row, image_idx in enumerate(image_indices.tolist()):
                 start_off = int(layout.rotation_offsets[image_idx])
@@ -310,6 +490,10 @@ def bucket_local_hypothesis_layout(
                 padded_rotation_ids[row, :count] = layout.rotation_ids_flat[start_off:end_off]
                 padded_log_prior[row, :count] = layout.rotation_log_priors_flat[start_off:end_off]
                 padded_mask[row, :count] = True
+                if padded_posterior_ids is not None:
+                    padded_posterior_ids[row, :count] = layout.rotation_posterior_ids_flat[start_off:end_off]
+                if padded_sample_mask is not None:
+                    padded_sample_mask[row, :count, :] = layout.sample_mask_flat[start_off:end_off]
 
             bucket_specs.append(
                 LocalBucketSpec(
@@ -321,6 +505,8 @@ def bucket_local_hypothesis_layout(
                     local_rotation_log_prior=padded_log_prior,
                     local_rotation_mask=padded_mask,
                     translation_log_prior=np.asarray(layout.translation_log_priors[image_indices], dtype=np.float32),
+                    local_rotation_posterior_ids=padded_posterior_ids,
+                    local_sample_mask=padded_sample_mask,
                 )
             )
 

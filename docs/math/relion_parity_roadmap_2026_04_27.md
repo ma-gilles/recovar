@@ -157,7 +157,32 @@ maintaining it as an alternate backend.
 
 Relevant tests: update `tests/unit/test_refine_relion_mode.py` assertions that
 patch `compute_pass2_stats_sparse`, and compare new local-exact pass 2 against
-the current per-image reference in `tests/unit/test_sparse_pass2_bucketed_parity.py`.
+the current per-image reference from `helpers/oversampling.py`.
+
+Implementation update (2026-04-27):
+
+- Non-local adaptive sparse pass 2 now routes through
+  `_run_sparse_pass2_local_search_iteration()`, which builds a pass-2
+  `LocalHypothesisLayout` and calls `_run_local_search_iteration()` with
+  `local_engine="exact_v1"` instead of the grouped/bucketed sparse pass-2
+  machinery.
+- The pass-2 local layout carries a sparse `(rotation, translation)` candidate
+  mask, coarse parent ids for posterior sums, and the exact oversampled child
+  rotations/translations.
+- `run_local_em_exact()` can return best pose details; the pass-2 wrapper
+  decodes those back to the legacy per-image sparse hard-assignment contract.
+- New targeted test coverage lives in `tests/unit/test_refine_relion_mode.py`:
+  pass-2 layout/mask construction, score masking, route assertion that
+  adaptive pass 2 does not call `compute_pass2_stats_sparse()`, and a numerical
+  comparison against `_compute_pass2_stats_sparse_perimage_reference()`.
+- The os0 global-significant-support replay path still calls
+  `compute_pass2_stats_sparse()` because it needs externally supplied
+  `normalization_log_z`; convert that separately after adding denominator
+  support to the local-exact path.
+- `tests/unit/test_sparse_pass2_bucketed_parity.py` still covers the deprecated
+  grouped/bucketed implementation and currently shows a legacy M-step scale
+  mismatch. Do not use that path as a RELION adaptive-pass-2 fallback; delete or
+  quarantine it when grouped/bucketed pass 2 is removed.
 
 ### Convergence and finalization
 

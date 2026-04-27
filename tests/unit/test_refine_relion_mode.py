@@ -40,6 +40,7 @@ from recovar.em.dense_single_volume.local_layout import (
     LocalBucketSpec,
     LocalHypothesisLayout,
     build_local_hypothesis_layout,
+    build_pass2_hypothesis_layout,
     bucket_local_hypothesis_layout,
 )
 from recovar.em.dense_single_volume.local_score_pass import (
@@ -80,6 +81,9 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
 )
 from recovar.em.dense_single_volume.helpers.significance import (
     _compute_significance_batched,
+)
+from recovar.em.dense_single_volume.helpers.oversampling import (
+    _compute_pass2_stats_sparse_perimage_reference,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.sampling import (
@@ -334,6 +338,76 @@ def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_supp
     np.testing.assert_array_equal(buckets[0].local_rotation_ids[0, :2], np.array([1, 3], dtype=np.int32))
     assert not np.any(buckets[0].local_rotation_mask[0, 2:])
     np.testing.assert_array_equal(buckets[0].local_rotation_ids[1, :3], np.array([2, 4, 5], dtype=np.int32))
+
+
+def test_build_pass2_hypothesis_layout_preserves_sparse_rotation_translation_mask():
+    translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    significant_samples = [
+        np.array([0, 3], dtype=np.int32),  # rot 0/trans 0 and rot 1/trans 1
+        np.array([2], dtype=np.int32),  # rot 1/trans 0
+    ]
+
+    layout = build_pass2_hypothesis_layout(
+        significant_samples,
+        n_coarse_rotations=rotation_grid_size(0),
+        n_coarse_translations=2,
+        nside_level=0,
+        translations=translations,
+        oversampling_order=0,
+        rotation_log_prior=np.arange(rotation_grid_size(0), dtype=np.float32),
+        translation_log_prior=np.array([0.0, -2.0], dtype=np.float32),
+    )
+
+    assert layout.n_images == 2
+    np.testing.assert_array_equal(layout.rotation_counts, np.array([2, 1], dtype=np.int32))
+    np.testing.assert_array_equal(layout.rotation_offsets, np.array([0, 2, 3], dtype=np.int64))
+    np.testing.assert_array_equal(layout.rotation_posterior_ids_flat, np.array([0, 1, 1], dtype=np.int32))
+    assert layout.sample_mask_flat.shape == (3, 2)
+    np.testing.assert_array_equal(
+        layout.sample_mask_flat,
+        np.array(
+            [
+                [True, False],
+                [False, True],
+                [True, False],
+            ],
+            dtype=bool,
+        ),
+    )
+
+    buckets = bucket_local_hypothesis_layout(
+        layout,
+        image_batch_size=2,
+        rotation_block_size=4,
+        max_hypotheses_per_microbatch=64,
+    )
+    assert len(buckets) == 1
+    row_for_image0 = int(np.flatnonzero(buckets[0].image_indices == 0)[0])
+    np.testing.assert_array_equal(
+        buckets[0].local_rotation_posterior_ids[row_for_image0, :2],
+        np.array([0, 1], dtype=np.int32),
+    )
+    np.testing.assert_array_equal(buckets[0].local_sample_mask[row_for_image0, :2], layout.sample_mask_flat[:2])
+    assert not np.any(buckets[0].local_sample_mask[row_for_image0, 2:])
+
+
+def test_score_local_bucket_honors_rotation_translation_sample_mask():
+    scores = score_local_bucket(
+        shifted=jnp.zeros((1, 2, 1), dtype=jnp.complex64),
+        ctf2_over_nv=jnp.zeros((1, 1), dtype=jnp.float32),
+        proj_weighted=jnp.zeros((1, 2, 1), dtype=jnp.complex64),
+        proj_abs2_weighted=jnp.zeros((1, 2, 1), dtype=jnp.float32),
+        rotation_log_prior=jnp.array([[0.0, 10.0]], dtype=jnp.float32),
+        translation_log_prior=jnp.array([[0.0, 1.0]], dtype=jnp.float32),
+        rotation_mask=jnp.array([[True, True]]),
+        sample_mask=jnp.array([[[False, True], [True, False]]]),
+    )
+
+    scores_np = np.asarray(scores)
+    assert np.isneginf(scores_np[0, 0, 0])
+    assert scores_np[0, 0, 1] == pytest.approx(1.0)
+    assert scores_np[0, 1, 0] == pytest.approx(10.0)
+    assert np.isneginf(scores_np[0, 1, 1])
 
 
 def test_build_local_hypothesis_layout_factorized_matches_per_image_selector():
@@ -1422,6 +1496,94 @@ def translations():
     return jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=jnp.float32)
 
 
+def test_sparse_pass2_local_search_matches_per_image_reference(rng, init_volume, translations):
+    """Exact-local sparse pass 2 preserves the legacy per-image pass-2 contract."""
+
+    dataset = MockDataset(2, rng)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    significant_samples = [
+        np.array([0, 4], dtype=np.int32),
+        np.array([2, 3, 5], dtype=np.int32),
+    ]
+    common_kwargs = dict(
+        nside_level=1,
+        disc_type="linear_interp",
+        oversampling_order=1,
+        current_size=None,
+        translation_step=1.0,
+        return_stats=True,
+        accumulate_noise=True,
+        half_spectrum_scoring=True,
+        use_float64_scoring=True,
+    )
+
+    reference = _compute_pass2_stats_sparse_perimage_reference(
+        dataset,
+        init_volume,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_samples,
+        **common_kwargs,
+    )
+    exact_local = iteration_loop_module._run_sparse_pass2_local_search_iteration(
+        dataset,
+        init_volume,
+        mean_variance,
+        noise_variance,
+        translations,
+        significant_samples,
+        common_kwargs["nside_level"],
+        common_kwargs["disc_type"],
+        oversampling_order=common_kwargs["oversampling_order"],
+        current_size=common_kwargs["current_size"],
+        translation_step=common_kwargs["translation_step"],
+        return_stats=common_kwargs["return_stats"],
+        accumulate_noise=common_kwargs["accumulate_noise"],
+        half_spectrum_scoring=common_kwargs["half_spectrum_scoring"],
+        use_float64_scoring=common_kwargs["use_float64_scoring"],
+    )
+
+    np.testing.assert_allclose(np.asarray(exact_local[0]), np.asarray(reference[0]), atol=1e-4, rtol=1e-4)
+    np.testing.assert_allclose(np.asarray(exact_local[1]), np.asarray(reference[1]), atol=1e-4, rtol=1e-4)
+    np.testing.assert_array_equal(np.asarray(exact_local[2]), np.asarray(reference[2]))
+    np.testing.assert_allclose(np.asarray(exact_local[3]), np.asarray(reference[3]), atol=1e-6)
+    np.testing.assert_allclose(np.asarray(exact_local[4]), np.asarray(reference[4]), atol=1e-6)
+    np.testing.assert_array_equal(np.asarray(exact_local[5]), np.asarray(reference[5]))
+    np.testing.assert_allclose(
+        np.asarray(exact_local[6].log_evidence_per_image),
+        np.asarray(reference[6].log_evidence_per_image),
+        atol=5e-4,
+        rtol=5e-4,
+    )
+    np.testing.assert_allclose(
+        np.asarray(exact_local[6].max_posterior_per_image),
+        np.asarray(reference[6].max_posterior_per_image),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(exact_local[6].rotation_posterior_sums),
+        np.asarray(reference[6].rotation_posterior_sums),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(exact_local[7].wsum_sigma2_noise),
+        np.asarray(reference[7].wsum_sigma2_noise),
+        atol=1e-4,
+        rtol=1e-4,
+    )
+    np.testing.assert_allclose(
+        np.asarray(exact_local[7].wsum_img_power),
+        np.asarray(reference[7].wsum_img_power),
+        atol=1e-5,
+        rtol=1e-5,
+    )
+    assert exact_local[7].sumw == pytest.approx(reference[7].sumw)
+
+
 # ===========================================================================
 # Test 1: RELION mode smoke test -- runs without error
 # ===========================================================================
@@ -2351,6 +2513,92 @@ class TestRelionModeSmokeTest:
         assert dense_calls["count"] == 2
         assert result["significant_counts"][0] is not None
 
+    def test_relion_mode_routes_sparse_adaptive_pass2_through_local_search_iteration(
+        self,
+        half_datasets,
+        init_volume,
+        translations,
+        monkeypatch,
+    ):
+        """Sparse adaptive pass 2 should use exact local-search machinery, not sparse bucketed fallback."""
+        import recovar.em.dense_single_volume.iteration_loop as refine_mod
+
+        rotations_many = _make_rotations(20, seed=789)
+        captured = {"local_pass2_calls": 0}
+
+        def fake_significance(*args, **kwargs):
+            dataset = args[0]
+            n_images = dataset.n_units
+            n_rot = np.asarray(args[3]).shape[0]
+            _ = kwargs
+            return (
+                np.ones(n_rot, dtype=bool),
+                np.ones(n_images, dtype=np.int32),
+                np.zeros(n_images, dtype=np.int32),
+                [np.array([0], dtype=np.int32) for _ in range(n_images)],
+            )
+
+        def fake_local_pass2(*args, **kwargs):
+            dataset = args[0]
+            n_images = dataset.n_units
+            n_shells = dataset.image_shape[0] // 2 + 1
+            recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
+            coarse_order = int(args[6])
+            captured["local_pass2_calls"] += 1
+            captured["adaptive_fraction"] = kwargs["adaptive_fraction"]
+            captured["oversampling_order"] = kwargs["oversampling_order"]
+            return (
+                jnp.zeros(recon_vol_size, dtype=jnp.complex64),
+                jnp.ones(recon_vol_size, dtype=jnp.complex64),
+                np.zeros(n_images, dtype=np.int32),
+                np.tile(np.eye(3, dtype=np.float32)[None, :, :], (n_images, 1, 1)),
+                np.zeros((n_images, 2), dtype=np.float32),
+                np.zeros(n_images, dtype=np.int32),
+                RelionStats(
+                    log_evidence_per_image=jnp.zeros(n_images, dtype=jnp.float32),
+                    best_log_score_per_image=jnp.zeros(n_images, dtype=jnp.float32),
+                    max_posterior_per_image=jnp.ones(n_images, dtype=jnp.float32),
+                    rotation_posterior_sums=jnp.ones(rotation_grid_size(coarse_order), dtype=jnp.float32),
+                ),
+                NoiseStats(
+                    wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+                    wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+                    wsum_sigma2_offset=0.0,
+                    sumw=float(n_images),
+                ),
+            )
+
+        def fail_sparse(*args, **kwargs):
+            raise AssertionError("compute_pass2_stats_sparse should not run for adaptive RELION pass 2")
+
+        monkeypatch.setattr(refine_mod, "_compute_significance_batched", fake_significance)
+        monkeypatch.setattr(refine_mod, "_run_sparse_pass2_local_search_iteration", fake_local_pass2)
+        monkeypatch.setattr(refine_mod, "compute_pass2_stats_sparse", fail_sparse)
+
+        refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations_many,
+            translations,
+            disc_type="linear_interp",
+            max_iter=1,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=len(rotations_many),
+            init_current_size=16,
+            adaptive_oversampling=1,
+            adaptive_fraction=0.97,
+            nside_level=1,
+            mode="relion",
+            init_healpix_order=1,
+            max_healpix_order=2,
+        )
+
+        assert captured["local_pass2_calls"] == 2
+        assert captured["adaptive_fraction"] == pytest.approx(0.97)
+        assert captured["oversampling_order"] == 1
+
     def test_relion_mode_passes_adaptive_pruning_parameters(
         self,
         half_datasets,
@@ -2515,8 +2763,18 @@ class TestRelionModeSmokeTest:
         assert captured["sig_calls"] == 2
         assert captured["sparse_calls"] == 2
         assert captured["run_em_calls"] == 2
-        np.testing.assert_allclose(captured["prior_centers"][0], -prev_h1, rtol=1e-6, atol=1e-6)
-        np.testing.assert_allclose(captured["prior_centers"][1], -prev_h2, rtol=1e-6, atol=1e-6)
+        np.testing.assert_allclose(
+            captured["prior_centers"][0],
+            relion_translation_prior_center(prev_h1, half_datasets[0].voxel_size),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+        np.testing.assert_allclose(
+            captured["prior_centers"][1],
+            relion_translation_prior_center(prev_h2, half_datasets[1].voxel_size),
+            rtol=1e-6,
+            atol=1e-6,
+        )
 
     def test_relion_mode_updates_sigma_offset_from_posterior_noise_stats(
         self,
@@ -2957,6 +3215,19 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         sentinel[:, 0, 0] = 7.0
         return sentinel
 
+    def fake_apply_relion_rotation_perturbation_to_eulers(eulers, random_perturbation, angular_sampling_deg):
+        perturb_calls.append(
+            {
+                "n_rot": int(np.asarray(eulers).shape[0]),
+                "random_perturbation": float(random_perturbation),
+                "angular_sampling_deg": float(angular_sampling_deg),
+            }
+        )
+        sentinel_rotations = np.zeros((np.asarray(eulers).shape[0], 3, 3), dtype=np.float32)
+        sentinel_rotations[:, 0, 0] = 7.0
+        sentinel_eulers = np.full((np.asarray(eulers).shape[0], 3), 5.0, dtype=np.float32)
+        return sentinel_rotations, sentinel_eulers
+
     def fake_r_to_relion(rotations, degrees=True):
         _ = degrees
         return np.full((np.asarray(rotations).shape[0], 3), 5.0, dtype=np.float32)
@@ -3032,6 +3303,11 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
     monkeypatch.setattr(refine_mod, "advance_relion_perturbation", fake_advance_relion_perturbation)
     monkeypatch.setattr(refine_mod, "apply_relion_rotation_perturbation", fake_apply_relion_rotation_perturbation)
+    monkeypatch.setattr(
+        refine_mod,
+        "apply_relion_rotation_perturbation_to_eulers",
+        fake_apply_relion_rotation_perturbation_to_eulers,
+    )
     monkeypatch.setattr(refine_mod.utils, "R_to_relion", fake_r_to_relion)
     monkeypatch.setattr(refine_mod, "_run_local_search_iteration", fake_grouped_local_search)
     monkeypatch.setattr(
@@ -4002,11 +4278,12 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
         init_healpix_order=1,
         max_healpix_order=1,
         init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
+        adaptive_fraction=1.0,
         skip_final_iteration=True,
     )
 
-    expected_h1 = prev_h1 + chosen_trans[None, :]
-    expected_h2 = prev_h2 + chosen_trans[None, :]
+    expected_h1 = relion_translation_search_base(prev_h1) + chosen_trans[None, :]
+    expected_h2 = relion_translation_search_base(prev_h2) + chosen_trans[None, :]
     np.testing.assert_allclose(half_datasets[0].translations, expected_h1, rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(half_datasets[1].translations, expected_h2, rtol=1e-6, atol=1e-6)
 

@@ -70,6 +70,14 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
         local_rotation_log_prior=np.asarray(bucket.local_rotation_log_prior[order], dtype=np.float32),
         local_rotation_mask=np.asarray(bucket.local_rotation_mask[order], dtype=bool),
         translation_log_prior=np.asarray(bucket.translation_log_prior[order], dtype=np.float32),
+        local_rotation_posterior_ids=(
+            None
+            if bucket.local_rotation_posterior_ids is None
+            else np.asarray(bucket.local_rotation_posterior_ids[order], dtype=np.int32)
+        ),
+        local_sample_mask=(
+            None if bucket.local_sample_mask is None else np.asarray(bucket.local_sample_mask[order], dtype=bool)
+        ),
     )
 
 
@@ -415,6 +423,7 @@ def run_local_em_exact(
     adaptive_fraction: float = 0.999,
     max_significants: int = -1,
     debug_iteration: int | None = None,
+    return_best_pose_details: bool = False,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
 
@@ -521,6 +530,9 @@ def run_local_em_exact(
     best_log_score_per_image = np.empty(n_images, dtype=np.float32)
     max_posterior_per_image = np.empty(n_images, dtype=np.float32)
     rotation_posterior_sums = np.zeros(int(local_layout.n_global_rotations), dtype=np.float64)
+    best_pose_rotations = np.empty((n_images, 3, 3), dtype=np.float32) if return_best_pose_details else None
+    best_pose_translations = np.empty((n_images, local_layout.translation_grid.shape[1]), dtype=np.float32) if return_best_pose_details else None
+    best_pose_rotation_ids = np.empty(n_images, dtype=np.int32) if return_best_pose_details else None
 
     noise_wsum = None
     noise_img_power = None
@@ -718,6 +730,7 @@ def run_local_em_exact(
             jnp.asarray(bucket.local_rotation_log_prior),
             jnp.asarray(bucket.translation_log_prior),
             jnp.asarray(bucket.local_rotation_mask),
+            None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
         )
         if return_profile:
             _block_until_ready(scores)
@@ -947,8 +960,13 @@ def run_local_em_exact(
         probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
         n_significant_samples_np = np.asarray(n_significant_samples, dtype=np.int32)
         local_ids_np = np.asarray(bucket.local_rotation_ids, dtype=np.int32)
+        posterior_ids_np = (
+            local_ids_np
+            if bucket.local_rotation_posterior_ids is None
+            else np.asarray(bucket.local_rotation_posterior_ids, dtype=np.int32)
+        )
         local_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)
-        np.add.at(rotation_posterior_sums, local_ids_np[local_mask_np], probs_sum_t_np[local_mask_np])
+        np.add.at(rotation_posterior_sums, posterior_ids_np[local_mask_np], probs_sum_t_np[local_mask_np])
         nonzero_mask = (probs_sum_t_np > 0.0) & local_mask_np
         chunk_nonzero_posterior_rows.append(int(np.count_nonzero(nonzero_mask)))
         chunk_significant_samples.append(int(np.sum(n_significant_samples_np, dtype=np.int64)))
@@ -956,9 +974,20 @@ def run_local_em_exact(
         total_significant_samples += int(np.sum(n_significant_samples_np, dtype=np.int64))
         total_reconstruction_rows += int(reconstruction_row_count)
         if seen_global_rotations.size:
-            seen_global_rotations[local_ids_np[local_mask_np]] = True
-            seen_nonzero_global_rotations[local_ids_np[nonzero_mask]] = True
-            seen_reconstruction_global_rotations[packed_rotation_ids_np[reconstruction_pack_mask_np]] = True
+            seen_global_rotations[posterior_ids_np[local_mask_np]] = True
+            seen_nonzero_global_rotations[posterior_ids_np[nonzero_mask]] = True
+            packed_posterior_ids_np = np.take_along_axis(posterior_ids_np, reconstruction_take_indices, axis=1)
+            seen_reconstruction_global_rotations[packed_posterior_ids_np[reconstruction_pack_mask_np]] = True
+        if return_best_pose_details:
+            best_pose_rotations[bucket.image_indices] = np.take_along_axis(
+                np.asarray(bucket.local_rotations, dtype=np.float32),
+                best_rot_idx[:, None, None, None],
+                axis=1,
+            ).reshape(-1, 3, 3)
+            best_pose_translations[bucket.image_indices] = np.asarray(local_layout.translation_grid, dtype=np.float32)[
+                best_trans_idx
+            ]
+            best_pose_rotation_ids[bucket.image_indices] = best_rotation_ids.astype(np.int32, copy=False)
         postprocess_time += time.time() - postprocess_t0
 
         host_stats_t0 = time.time()
@@ -999,6 +1028,19 @@ def run_local_em_exact(
         )
 
     if not return_profile:
+        if return_best_pose_details:
+            if accumulate_noise:
+                return (
+                    Ft_y,
+                    Ft_ctf,
+                    hard_assignment,
+                    best_pose_rotations,
+                    best_pose_translations,
+                    best_pose_rotation_ids,
+                    relion_stats,
+                    noise_stats,
+                )
+            return Ft_y, Ft_ctf, hard_assignment, best_pose_rotations, best_pose_translations, best_pose_rotation_ids, relion_stats
         if accumulate_noise:
             return Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats
         return Ft_y, Ft_ctf, hard_assignment, relion_stats
@@ -1094,6 +1136,29 @@ def run_local_em_exact(
         ),
         "n_windowed": np.int32(n_windowed),
     }
+    if return_best_pose_details:
+        if accumulate_noise:
+            return (
+                Ft_y,
+                Ft_ctf,
+                hard_assignment,
+                best_pose_rotations,
+                best_pose_translations,
+                best_pose_rotation_ids,
+                relion_stats,
+                noise_stats,
+                profile_summary,
+            )
+        return (
+            Ft_y,
+            Ft_ctf,
+            hard_assignment,
+            best_pose_rotations,
+            best_pose_translations,
+            best_pose_rotation_ids,
+            relion_stats,
+            profile_summary,
+        )
     if accumulate_noise:
         return Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats, profile_summary
     return Ft_y, Ft_ctf, hard_assignment, relion_stats, profile_summary
