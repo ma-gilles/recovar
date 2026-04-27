@@ -206,8 +206,11 @@ Important RECOVAR mismatches:
 - RECOVAR's final block scores against averaged half maps. RELION still scores
   each random half against its own half map and only joins weighted sums after
   expectation/FSC.
-- RECOVAR treats `healpix_order >= max_healpix_order` as fine enough; RELION's
-  condition is based on angular accuracy / maximum angular sampling.
+- Fixed in `convergence.py`: RECOVAR must not treat
+  `healpix_order >= max_healpix_order` as fine enough. That setting is only a
+  runtime cap on grid growth; RELION's fine-enough condition is based on angular
+  accuracy / maximum angular sampling. Targeted coverage:
+  `tests/unit/test_convergence.py`.
 
 Minimal implementation:
 

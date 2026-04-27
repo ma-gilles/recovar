@@ -74,13 +74,17 @@ class TestRefinementStateConstruction:
         expected = healpix_angular_step(3) / 2.0
         assert abs(state.effective_step - expected) < 1e-10
 
-    def test_has_fine_enough_at_max(self):
+    def test_max_healpix_order_is_not_fine_enough_by_itself(self):
         state = RefinementState(healpix_order=7, max_healpix_order=7)
-        assert state.has_fine_enough_angular_sampling is True
+        assert state.has_fine_enough_angular_sampling is False
 
     def test_has_fine_enough_below_max(self):
         state = RefinementState(healpix_order=3, max_healpix_order=7)
         assert state.has_fine_enough_angular_sampling is False
+
+    def test_has_fine_enough_from_acc_rot(self):
+        state = RefinementState(healpix_order=7, max_healpix_order=7, acc_rot=1.0)
+        assert state.has_fine_enough_angular_sampling is True
 
     def test_should_do_local_search_at_order_4(self):
         state = RefinementState(healpix_order=4)
@@ -262,6 +266,7 @@ class TestCheckConvergence:
             max_healpix_order=7,
             nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
             nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+            acc_rot=1.0,
         )
         assert check_convergence(state) is True
 
@@ -272,8 +277,18 @@ class TestCheckConvergence:
             max_healpix_order=7,
             nr_iter_wo_resol_gain=10,
             nr_iter_wo_assignment_changes=10,
+            acc_rot=1.0,
         )
         assert check_convergence(state) is True
+
+    def test_not_converged_when_only_runtime_cap_reached(self):
+        state = RefinementState(
+            healpix_order=7,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=MAX_NR_ITER_WO_RESOL_GAIN,
+            nr_iter_wo_assignment_changes=MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES,
+        )
+        assert check_convergence(state) is False
 
 
 # =========================================================================
@@ -354,6 +369,17 @@ class TestShouldRefineAngularSampling:
         # effective_step at order 6 = 0.9375 deg; 0.75 * 0.5 = 0.375
         # 0.9375 > 0.375, so should still refine
         assert should_refine_angular_sampling(state3) is True
+
+        state4 = RefinementState(
+            healpix_order=6,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=5,
+            nr_iter_wo_assignment_changes=5,
+            acc_rot=2.0,
+        )
+        # effective_step at order 6 = 0.9375 deg; 0.75 * 2.0 = 1.5
+        # 0.9375 < 1.5, so RELION considers angular sampling fine enough.
+        assert should_refine_angular_sampling(state4) is False
 
 
 class TestRefineAngularSampling:
@@ -576,13 +602,37 @@ class TestUpdateRefinementState:
         assert updated.nr_iter_wo_resol_gain == 0
         assert updated.nr_iter_wo_assignment_changes == 0
 
-    def test_convergence_at_max_order(self):
-        """When at max order with both stalls, should converge."""
+    def test_runtime_cap_alone_does_not_converge(self):
+        """The RECOVAR max order cap is not RELION's convergence criterion."""
         state = self._make_base_state(
             healpix_order=7,
             max_healpix_order=7,
             nr_iter_wo_resol_gain=0,
             nr_iter_wo_assignment_changes=0,
+        )
+        n_rot, n_trans = 100, 5
+        assignments = np.arange(50) * n_trans
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state,
+            assignments,
+            assignments,
+            n_rot,
+            n_trans,
+            translations,
+            new_resolution=5.5,
+        )
+        assert updated.has_converged is False
+
+    def test_convergence_when_fine_enough_at_max_order(self):
+        """At max order with RELION fine-enough sampling, stalls converge."""
+        state = self._make_base_state(
+            healpix_order=7,
+            max_healpix_order=7,
+            nr_iter_wo_resol_gain=0,
+            nr_iter_wo_assignment_changes=0,
+            acc_rot=1.0,
         )
         n_rot, n_trans = 100, 5
         assignments = np.arange(50) * n_trans
@@ -660,7 +710,8 @@ class TestMultiIterationWorkflow:
         """
         Iter 0: improving resolution, assignments unstable
         Iter 1: resolution stalls, assignments stabilize -> refine order 2->3
-        Iter 2: at max order, stalls -> converge
+        Iter 2: at max order but without RELION fine-enough acc_rot -> no convergence
+        Iter 3: at max order with fine-enough acc_rot, stalls -> converge
         """
         n_rot, n_trans = 100, 5
         n_images = 50
@@ -705,7 +756,9 @@ class TestMultiIterationWorkflow:
         assert state.nr_iter_wo_resol_gain == 0  # reset
         assert state.has_converged is False
 
-        # Iter 2: at max order, resolution stalls, assignments stable -> converge
+        # Iter 2: at max order, resolution stalls, assignments stable. The
+        # RECOVAR runtime cap prevents further refinement but does not imply
+        # RELION convergence by itself.
         state2 = RefinementState(
             iteration=state.iteration,
             healpix_order=3,
@@ -723,4 +776,26 @@ class TestMultiIterationWorkflow:
             translations,
             new_resolution=9.5,
         )
-        assert state2.has_converged is True
+        assert state2.has_converged is False
+
+        # Iter 3: once angular accuracy says the current sampling is fine
+        # enough, the same stall counters can trigger convergence.
+        state3 = RefinementState(
+            iteration=state2.iteration,
+            healpix_order=3,
+            max_healpix_order=3,
+            current_resolution=9.5,
+            nr_iter_wo_resol_gain=0,
+            nr_iter_wo_assignment_changes=0,
+            acc_rot=100.0,
+        )
+        state3 = update_refinement_state(
+            state3,
+            ha0,
+            ha0,
+            n_rot,
+            n_trans,
+            translations,
+            new_resolution=10.0,
+        )
+        assert state3.has_converged is True
