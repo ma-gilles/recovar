@@ -213,18 +213,19 @@ class RefinementState:
     def has_fine_enough_angular_sampling(self) -> bool:
         """True when angular sampling should not be refined further.
 
-        Fires when one of:
-        - ``healpix_order`` has reached ``max_healpix_order`` (hard cap), or
-        - the per-particle ``acc_rot`` estimate is populated and
-          ``effective_step < 0.75 * acc_rot``.
+        Fires when the per-particle ``acc_rot`` estimate is populated and
+        ``effective_step < 0.75 * acc_rot``.
 
         Mirrors RELION ``ml_optimiser.cpp:9817`` which sets
         ``has_fine_enough_angular_sampling = true`` when the old step is
         already finer than ``0.75 * acc_rot``, so the convergence check
         downstream (``ml_optimiser.cpp:10137``) can proceed.
+
+        ``max_healpix_order`` is a RECOVAR runtime cap, not RELION's
+        fine-enough criterion. Hitting that cap must stop further grid
+        refinement but must not by itself trigger the final all-data
+        iteration, otherwise RECOVAR can terminate earlier than RELION.
         """
-        if self.healpix_order >= self.max_healpix_order:
-            return True
         if self.acc_rot < float("inf"):
             if self.effective_step < 0.75 * self.acc_rot:
                 return True
@@ -572,7 +573,7 @@ def check_convergence(state: RefinementState) -> bool:
 
     Implements ml_optimiser.cpp:10135-10204 ``MlOptimiser::checkConvergence``.
     Convergence requires ALL of:
-    1. Angular sampling at finest level (healpix_order >= max_healpix_order)
+    1. RELION fine-enough angular sampling
     2. Resolution stalled for >= MAX_NR_ITER_WO_RESOL_GAIN iterations
     3. Hidden-variable changes stable for >=
        MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES iterations.
@@ -638,6 +639,8 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
        that don't pass rotation matrices to ``update_refinement_state``),
        fall back to the legacy ``nr_iter_wo_assignment_changes``.
     3. Current angular step is NOT already finer than 75% of acc_rot
+    4. ``healpix_order`` is below the RECOVAR hard cap. The cap only prevents
+       runaway grid growth; it is not a RELION convergence criterion.
 
     Parameters
     ----------
@@ -649,8 +652,19 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
     bool
         True if angular sampling should be refined.
     """
-    # Already at finest level
+    # RELION fine-enough sampling: do not refine further. This may allow
+    # convergence downstream once the stall counters are also satisfied.
     if state.has_fine_enough_angular_sampling:
+        return False
+
+    # RECOVAR runtime cap: do not refine beyond it, but do not report
+    # fine-enough/converged just because the cap was reached.
+    if state.healpix_order >= state.max_healpix_order:
+        logger.info(
+            "Angular sampling reached max_healpix_order=%d; not refining further "
+            "(RELION fine-enough criterion not yet met)",
+            state.max_healpix_order,
+        )
         return False
 
     # Resolution stalls are required.  RELION uses the strict
@@ -1038,7 +1052,7 @@ def update_refinement_state(
         logger.info(
             "Convergence detected at iteration %d: "
             "resolution stalled for %d iter, hvc stable for %d iter, "
-            "angular sampling at finest level (order %d)",
+            "RELION fine-enough angular sampling reached (order %d)",
             updated.iteration,
             nr_iter_wo_resol_gain,
             nr_iter_wo_large_hidden_variable_changes,
