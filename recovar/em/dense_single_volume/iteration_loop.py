@@ -3036,6 +3036,7 @@ def _run_relion_iteration_loop(
                     translation_prior_reference_translations=translation_prior_reference_translations,
                     debug_iteration=iteration + 1,
                     return_best_pose_details=(local_engine != "grouped_union"),
+                    translation_prior_centers=trans_prior_center,
                     rotation_grid_random_perturbation=local_search_random_perturbation,
                     rotation_grid_angular_sampling_deg=local_search_angular_sampling_deg,
                 )

@@ -71,6 +71,32 @@ and model STAR fields. For non-replay RELION-mode runs, the initial
 `ini_high` for a cold first iteration. This fix targets stop-criterion parity;
 it does not change E-step scoring, M-step accumulators, tau2, or noise.
 
+### Local-search `sigma2_offset` posterior handoff fix
+
+RELION updates `mymodel.sigma2_offset` from the posterior-weighted sufficient
+statistic accumulated in `storeWeightedSums`:
+`sum weight * pixel_size^2 * (prior - old_offset - sampled_translation)^2`,
+then normalizes by `2 * sum_weight` for 2D SPA and clamps to
+`min_sigma2_offset=2 A^2`. RECOVAR already accumulated the same statistic in
+the dense and exact-local EM engines when `translation_prior_centers` was
+provided.
+
+The local-search branch had a handoff bug: it passed `trans_prior_center` as
+the local translation prior used for score normalization, but did not pass that
+same center through as `translation_prior_centers` to the exact local engine.
+As a result, late local-search iterations produced `wsum_sigma2_offset=0` and
+fell back to hard-assignment offset changes, visible in logs as
+`C1 fallback: sigma_offset updated ... from hard assignments`.
+
+RECOVAR now forwards `translation_prior_centers=trans_prior_center` through
+the exact local-search path. Targeted validation:
+`_agent_scratch/local_sigma_offset_posterior_smoke2_20260427_174016_14328`
+ran `--iter 4 --max_iter 2 --max_particles 20 --local_engine exact_v1`.
+The second emitted iteration entered local search and logged:
+`C1: sigma_offset updated 1.414 A from posterior variance`, not the fallback.
+This smoke is intentionally only a handoff/path validation; the 20-particle
+subset does not represent end-to-end map parity.
+
 ### Full 13-row end-to-end replay after pre-shift/pass-2 fixes
 
 Artifact:
