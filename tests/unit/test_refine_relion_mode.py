@@ -1789,6 +1789,89 @@ class TestRelionModeSmokeTest:
         assert "healpix_order_trajectory" in result
         assert "ave_Pmax_trajectory" in result
 
+    def test_relion_mode_does_not_finalize_after_max_iter_exhaustion(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+    ):
+        """RELION does not run final all-data iteration just because max_iter ended."""
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations,
+            translations,
+            disc_type="linear_interp",
+            max_iter=1,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            init_current_size=4,
+            mode="relion",
+            init_healpix_order=2,
+            max_healpix_order=2,
+            low_resol_join_halves_angstrom=0.0,
+        )
+
+        assert result["convergence_state"].has_converged is False
+        assert len(result["wall_times"]) == 1
+        assert len(result["current_sizes"]) == 1
+
+    def test_relion_final_iteration_scores_half_maps_after_convergence(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+        monkeypatch,
+    ):
+        """The final joined reconstruction still scores each half against its own map."""
+        original_update = iteration_loop_module.update_refinement_state
+        original_run_em = iteration_loop_module.run_em
+        run_em_mean_ids = []
+
+        def force_convergence_after_first_iter(*args, **kwargs):
+            updated = original_update(*args, **kwargs)
+            updated.has_converged = True
+            return updated
+
+        def spy_run_em(dataset, mean, *args, **kwargs):
+            _ = dataset
+            run_em_mean_ids.append(id(mean))
+            return original_run_em(dataset, mean, *args, **kwargs)
+
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "update_refinement_state",
+            force_convergence_after_first_iter,
+        )
+        monkeypatch.setattr(iteration_loop_module, "run_em", spy_run_em)
+
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations,
+            translations,
+            disc_type="linear_interp",
+            max_iter=2,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            init_current_size=4,
+            mode="relion",
+            init_healpix_order=2,
+            max_healpix_order=2,
+            low_resol_join_halves_angstrom=0.0,
+        )
+
+        assert result["convergence_state"].has_converged is True
+        assert len(result["wall_times"]) == 2
+        assert len(run_em_mean_ids) == 4
+        assert run_em_mean_ids[-2:] == [id(result["means"][0]), id(result["means"][1])]
+
     def test_relion_mode_finite_outputs(
         self,
         half_datasets,
@@ -2762,7 +2845,7 @@ class TestRelionModeSmokeTest:
 
         assert captured["sig_calls"] == 2
         assert captured["sparse_calls"] == 2
-        assert captured["run_em_calls"] == 2
+        assert captured["run_em_calls"] == 0
         np.testing.assert_allclose(
             captured["prior_centers"][0],
             relion_translation_prior_center(prev_h1, half_datasets[0].voxel_size),

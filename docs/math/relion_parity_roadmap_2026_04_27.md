@@ -200,27 +200,32 @@ flags are set. `do_use_all_data` forces `current_size=ori_size`.
 Important RECOVAR mismatches:
 
 - RECOVAR currently checks convergence at the end of a normal iteration and has
-  a separate final block.
-- RECOVAR can run that final block after plain `max_iter` exhaustion; RELION
-  does not.
-- RECOVAR's final block scores against averaged half maps. RELION still scores
-  each random half against its own half map and only joins weighted sums after
-  expectation/FSC.
+  a separate final block. This is still not the ideal RELION structure.
+- Fixed in `iteration_loop.py`: RECOVAR must not run the final all-data block
+  after plain `max_iter` exhaustion or when convergence is first detected on
+  the last allowed iteration. RELION only gets a final iteration if the normal
+  loop reaches another iteration with convergence already detected.
+- Fixed in `iteration_loop.py`: RECOVAR's final block must score half 1 against
+  half 1's map and half 2 against half 2's map, then join weighted sums for the
+  final reconstruction. It must not score both halves against the averaged map.
 - Fixed in `convergence.py`: RECOVAR must not treat
   `healpix_order >= max_healpix_order` as fine enough. That setting is only a
   runtime cap on grid growth; RELION's fine-enough condition is based on angular
   accuracy / maximum angular sampling. Targeted coverage:
-  `tests/unit/test_convergence.py`.
+  `tests/unit/test_convergence.py` and `tests/unit/test_refine_relion_mode.py`.
 
 Minimal implementation:
 
-1. Move finalization into the RELION-mode loop as a pre-iteration control flag.
+1. Still to do: move finalization fully into the RELION-mode loop as a
+   pre-iteration control flag.
 2. If previous state converged or RELION-style `force_converge` is requested,
    run exactly one Nyquist/current-size-full iteration with
    `do_join_random_halves=True` and `do_use_all_data=True`, then stop.
-3. During final E-step, score half 1 from half 1 map and half 2 from half 2
-   map; join `Ft_y`/`Ft_ctf` only after both halves finish.
-4. Do not run finalization merely because `max_iter` was reached.
+3. Done in the post-loop final block: during final E-step, score half 1 from
+   half 1 map and half 2 from half 2 map; join `Ft_y`/`Ft_ctf` only after both
+   halves finish.
+4. Done in the post-loop final block: do not run finalization merely because
+   `max_iter` was reached.
 5. Tests should stub `run_em` to prove final iteration uses half maps,
    max-iter-without-convergence does not finalize, convergence triggers one
    Nyquist joined iteration, and final comparison uses unsuffixed RELION
