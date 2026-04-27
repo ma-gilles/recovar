@@ -2993,6 +2993,13 @@ def _run_relion_iteration_loop(
                         "RELION mode: local translation prior uses coarse base grid (n=%d) while scoring perturbed translations",
                         translation_prior_reference_translations.shape[0],
                     )
+                # RELION's accelerated local-search loop still executes the
+                # symbolic second pass when adaptive_oversampling == 0. In
+                # that case convertAllSquaredDifferencesToWeights sets
+                # significant_weight to the minimum fine-pass weight, so
+                # storeWeightedSums keeps all local candidates. Do not apply
+                # the 0.999 significant-support prune on this os0 path.
+                local_reconstruct_significant_only = state.adaptive_oversampling > 0
                 grouped_local_profile_k = None
                 grouped_outputs = _run_local_search_iteration(
                     experiment_datasets[k],
@@ -3031,6 +3038,7 @@ def _run_relion_iteration_loop(
                     disable_adjoint_ctf=disable_adjoint_ctf,
                     adaptive_fraction=adaptive_fraction,
                     max_significants=max_significants,
+                    reconstruct_significant_only=local_reconstruct_significant_only,
                     local_engine=local_engine,
                     translation_prior_mode=local_search_translation_prior_mode,
                     translation_prior_reference_translations=translation_prior_reference_translations,
