@@ -79,6 +79,10 @@ from recovar.em.dense_single_volume.helpers.orientation_priors import (
     relion_translation_prior_center,
     relion_translation_search_base,
 )
+from recovar.em.dense_single_volume.helpers.image_shifts import (
+    apply_relion_integer_pre_shifts,
+    integer_pre_shifts_or_none,
+)
 from recovar.em.dense_single_volume.helpers.significance import (
     _compute_significance_batched,
 )
@@ -1001,11 +1005,19 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     )[0]
     batch_data, ctf_params, fetched_indices = _fetch_indexed_batch(dataset, bucket.image_indices)
     bucket = _reorder_bucket_to_indices(bucket, fetched_indices)
-    shifted_score_half, shifted_recon_half, _batch_norm, ctf2_over_nv_half, _processed_score_half = (
+    (
+        shifted_score_half,
+        shifted_recon_half,
+        _batch_norm,
+        ctf2_over_nv_half,
+        _processed_score_half,
+        _real_space_pre_shift_applied,
+    ) = (
         _prepare_local_exact_bucket(
             dataset,
             batch_data,
             ctf_params,
+            bucket.image_indices,
             noise_variance_half,
             jnp.asarray(local_layout.translation_grid),
             config,
@@ -2119,6 +2131,29 @@ class TestRelionModeSmokeTest:
         expected = np.rint(prev).astype(np.float32)
         np.testing.assert_allclose(relion_translation_search_base(prev), expected, rtol=1e-6, atol=1e-6)
         assert relion_translation_search_base(np.array([], dtype=np.float32)).shape == (0, 2)
+
+    def test_relion_integer_pre_shift_uses_zero_fill_real_space_convention(self):
+        image = np.arange(9, dtype=np.float32).reshape(1, 3, 3)
+        shifted = apply_relion_integer_pre_shifts(image, np.array([[1, -1]], dtype=np.int32))
+        expected = np.array(
+            [
+                [
+                    [0.0, 3.0, 4.0],
+                    [0.0, 6.0, 7.0],
+                    [0.0, 0.0, 0.0],
+                ]
+            ],
+            dtype=np.float32,
+        )
+        np.testing.assert_array_equal(shifted, expected)
+
+    def test_integer_pre_shifts_only_selects_integral_offsets(self):
+        shifts = np.array([[1.0, -1.0], [0.5, 0.0]], dtype=np.float32)
+        np.testing.assert_array_equal(
+            integer_pre_shifts_or_none(shifts, np.array([0], dtype=np.int32)),
+            np.array([[1, -1]], dtype=np.int32),
+        )
+        assert integer_pre_shifts_or_none(shifts, np.array([1], dtype=np.int32)) is None
 
     def test_relion_translation_prior_center_matches_accelerated_pdf_offset_units(self):
         prev = np.array([[0.0, -1.0], [1.0, 0.0]], dtype=np.float32)

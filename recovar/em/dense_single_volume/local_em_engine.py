@@ -24,6 +24,10 @@ from recovar.em.dense_single_volume.em_primitives import (
     make_shell_indices_half,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.dense_single_volume.helpers.image_shifts import (
+    apply_relion_integer_pre_shifts,
+    integer_pre_shifts_or_none,
+)
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
@@ -85,6 +89,7 @@ def _prepare_local_exact_bucket(
     experiment_dataset,
     batch,
     ctf_params,
+    image_indices,
     noise_variance_half,
     translations,
     config,
@@ -92,6 +97,7 @@ def _prepare_local_exact_bucket(
     batch_size: int,
     n_trans: int,
     score_with_masked_images: bool,
+    image_pre_shifts=None,
 ):
     """Prepare score, reconstruction, and noise inputs for one local bucket.
 
@@ -99,6 +105,10 @@ def _prepare_local_exact_bucket(
     recomputing CTF / translation tiling scaffolding across masked, unmasked,
     and noise-specific preprocessing.
     """
+
+    integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, image_indices, batch=batch)
+    if integer_pre_shifts is not None:
+        batch = apply_relion_integer_pre_shifts(batch, integer_pre_shifts)
 
     def _process_half(apply_image_mask: bool):
         process_half_fn = getattr(experiment_dataset, "process_images_half", None)
@@ -141,7 +151,14 @@ def _prepare_local_exact_bucket(
         )
     else:
         shifted_recon_half = shifted_score_half
-    return shifted_score_half, shifted_recon_half, batch_norm, ctf2_over_nv_half, processed_score_half
+    return (
+        shifted_score_half,
+        shifted_recon_half,
+        batch_norm,
+        ctf2_over_nv_half,
+        processed_score_half,
+        integer_pre_shifts is not None,
+    )
 
 
 def _build_reconstruction_pack_indices(
@@ -604,10 +621,12 @@ def run_local_em_exact(
             batch_norm,
             ctf2_over_nv_half,
             processed_score_half,
+            real_space_pre_shift_applied,
         ) = _prepare_local_exact_bucket(
             experiment_dataset,
             batch_data,
             ctf_params,
+            bucket.image_indices,
             noise_variance_half,
             local_layout.translation_grid,
             config,
@@ -615,6 +634,7 @@ def run_local_em_exact(
             batch_size,
             n_trans,
             score_with_masked_images,
+            image_pre_shifts=image_pre_shifts,
         )
         if image_corrections is not None:
             batch_corr = jnp.asarray(image_corrections[np.asarray(bucket.image_indices)])
@@ -627,7 +647,7 @@ def run_local_em_exact(
             batch_scale = jnp.asarray(scale_corrections[np.asarray(bucket.image_indices)])
             ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
 
-        if image_pre_shifts is not None:
+        if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(bucket.image_indices)])
             lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
                 image_shape, voxel_size=1, scaled=True

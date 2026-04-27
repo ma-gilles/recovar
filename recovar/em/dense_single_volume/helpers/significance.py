@@ -246,6 +246,10 @@ def _compute_significance_batched(
     from recovar.em.dense_single_volume.helpers.oversampling import (
         find_significant_rotations as _find_sig,
     )
+    from recovar.em.dense_single_volume.helpers.image_shifts import (
+        apply_relion_integer_pre_shifts,
+        integer_pre_shifts_or_none,
+    )
 
     if projection_padding_factor > 1:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
@@ -413,6 +417,10 @@ def _compute_significance_batched(
     ):
         batch_size = len(indices)
         end_idx = start_idx + batch_size
+        integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, indices, batch=batch_data)
+        real_space_pre_shift_applied = integer_pre_shifts is not None
+        if real_space_pre_shift_applied:
+            batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
         batch_data = jnp.asarray(batch_data)
         if translation_log_prior is None:
             batch_translation_log_prior = None
@@ -451,7 +459,7 @@ def _compute_significance_batched(
             batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
             ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
 
-        if image_pre_shifts is not None:
+        if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
             lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
                 image_shape,

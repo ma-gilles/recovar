@@ -9,7 +9,7 @@ branch. The detailed audit trail remains in
 
 - Repo: `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar_codex_em_phase01_sparse_pass2_rebase_20260424`
 - Branch: `claude/relion-parity-local-search-fix`
-- Current pushed checkpoint: `2b4a1f5e`
+- Current pushed checkpoint: branch tip on `origin/claude/relion-parity-local-search-fix`
 - RELION source: `/scratch/gpfs/GILLES/mg6942/relion`
 - RELION patched build: `/scratch/gpfs/GILLES/mg6942/relion/build_patched`
 
@@ -31,11 +31,16 @@ branch. The detailed audit trail remains in
 
 1. Close fixed-state E-step score/posterior outliers.
    - Issue: https://github.com/ma-gilles/recovar/issues/127
-   - Current target: original particle `4603` in the 5k normalized fixture at
-     RELION it008.
-   - Next comparison: RELION `fine_ref`, `fine_shifted`, `corr_img` vs
-     RECOVAR `debug_proj_weighted`, `debug_shifted_score`,
-     `debug_ctf2_over_nv` for the six active candidates.
+   - Latest result: source/dump comparison showed RELION applies rounded
+     `old_offset` as a zero-filled real-space integer translate before FFT.
+     RECOVAR now does the same for integral real-space `image_pre_shifts`.
+   - Focused particle `4603` at RELION it008 improved from Pmax gap
+     `0.026669` to `0.000692` with exact pose/translation agreement.
+   - Next comparison: rerun the full fixed-state 5k replay on this branch,
+     identify the new worst particle, then compare RELION `fine_ref`,
+     `fine_shifted`, and `corr_img` against RECOVAR `debug_proj_weighted`,
+     `debug_shifted_score`, and `debug_ctf2_over_nv` only if the new gap is
+     still larger than the accelerated float32/texture arithmetic band.
 
 2. Route sparse pass 2 through the local-search iteration machinery.
    - Issue: https://github.com/ma-gilles/recovar/issues/121
