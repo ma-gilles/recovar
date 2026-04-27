@@ -44,6 +44,8 @@ branch. The detailed audit trail remains in
 
 2. Route sparse pass 2 through the local-search iteration machinery.
    - Issue: https://github.com/ma-gilles/recovar/issues/121
+   - Status: landed for the RELION refinement route on
+     `claude/relion-parity-local-search-fix`.
    - Reason: the group-union/bucketed sparse pass-2 path is a major speed trap
      and is another source of normalization/candidate-set divergence.
    - The grouped-union path is deprecated for RELION refinement. Do not add new
@@ -51,6 +53,20 @@ branch. The detailed audit trail remains in
      exact/local pass-2 routing has replacement tests and large-run coverage.
    - Gate: old-path vs new-path equivalence on tiny fixed-state tests before
      treating any timing improvement as real.
+
+2a. Avoid full fine-grid materialization in exact local search.
+   - Status: implemented after source comparison against RELION
+     `selectOrientationsWithNonZeroPriorProbability` and `getOrientations`.
+   - RELION selects local-search orientation ids on the canonical fine grid,
+     then applies `SamplingPerturbation` only to orientations that are scored.
+     RECOVAR now follows that ordering for exact local search.
+   - This targets the 5k/128 replay bottleneck where `hp=7` iteration 11 spent
+     643.7 s and large RAM building the full perturbed fine grid before
+     selecting neighborhoods.
+   - Targeted gate: `tests/unit/test_convergence.py
+     tests/unit/test_refine_relion_mode.py` passed (`141 passed`) with tests
+     asserting selected-only perturbation equivalence against full-grid
+     perturbation for a small grid.
 
 3. Match RELION auto_refine convergence and finalization exactly.
    - Issue: https://github.com/ma-gilles/recovar/issues/122

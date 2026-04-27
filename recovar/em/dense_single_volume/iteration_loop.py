@@ -57,7 +57,11 @@ from recovar.em.dense_single_volume.helpers.resolution import (
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.legacy_iteration_loop import _run_legacy_iteration_loop
 from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
-from recovar.em.dense_single_volume.local_layout import build_local_hypothesis_layout, build_pass2_hypothesis_layout
+from recovar.em.dense_single_volume.local_layout import (
+    _selected_rotation_matrices,
+    build_local_hypothesis_layout,
+    build_pass2_hypothesis_layout,
+)
 from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,
@@ -344,6 +348,8 @@ def _run_local_search_iteration(
     return_best_pose_details=False,
     normalization_log_z=None,
     translation_prior_centers=None,
+    rotation_grid_random_perturbation=0.0,
+    rotation_grid_angular_sampling_deg=None,
 ):
     """Run exact local search on the fine HEALPix grid.
 
@@ -452,6 +458,8 @@ def _run_local_search_iteration(
         return_best_pose_details=return_best_pose_details,
         normalization_log_z=normalization_log_z,
         translation_prior_centers=translation_prior_centers,
+        rotation_grid_random_perturbation=rotation_grid_random_perturbation,
+        rotation_grid_angular_sampling_deg=rotation_grid_angular_sampling_deg,
     )
 
 
@@ -1163,6 +1171,8 @@ def _run_local_search_iteration_exact_v1(
     return_best_pose_details=False,
     normalization_log_z=None,
     translation_prior_centers=None,
+    rotation_grid_random_perturbation=0.0,
+    rotation_grid_angular_sampling_deg=None,
 ):
     """Per-image exact local engine over image-specific rotation neighborhoods."""
 
@@ -1208,6 +1218,8 @@ def _run_local_search_iteration_exact_v1(
             experiment_dataset.voxel_size,
             grid_metadata=local_grid_metadata,
             translation_prior_reference_translations=translation_prior_reference_translations,
+            rotation_grid_random_perturbation=rotation_grid_random_perturbation,
+            rotation_grid_angular_sampling_deg=rotation_grid_angular_sampling_deg,
         )
         selector_time = time.time() - layout_t0
     else:
@@ -2540,22 +2552,39 @@ def _run_relion_iteration_loop(
 
         if use_local:
             local_search_order = state.healpix_order + state.adaptive_oversampling
+            local_search_random_perturbation = 0.0
+            local_search_angular_sampling_deg = None
             if effective_rotations.shape[0] != rotation_grid_size(local_search_order):
-                logger.info(
-                    "Generating fine local-search grid: order=%d (%d rotations) from capped base order=%d",
-                    local_search_order,
-                    rotation_grid_size(local_search_order),
-                    current_healpix_order,
-                )
-                local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(np.float32)
-                if abs(float(random_perturbation)) > 1e-12:
-                    local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
-                        local_search_rotation_eulers,
-                        random_perturbation,
-                        relion_angular_sampling_deg(local_search_order, adaptive_oversampling=0),
+                if local_engine == "grouped_union":
+                    logger.info(
+                        "Generating fine local-search grid: order=%d (%d rotations) from capped base order=%d",
+                        local_search_order,
+                        rotation_grid_size(local_search_order),
+                        current_healpix_order,
                     )
+                    local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(np.float32)
+                    if abs(float(random_perturbation)) > 1e-12:
+                        local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
+                            local_search_rotation_eulers,
+                            random_perturbation,
+                            relion_angular_sampling_deg(local_search_order, adaptive_oversampling=0),
+                        )
+                    else:
+                        local_search_rotations = get_relion_rotation_grid(local_search_order).astype(np.float32)
                 else:
-                    local_search_rotations = get_relion_rotation_grid(local_search_order).astype(np.float32)
+                    logger.info(
+                        "Using selected-only fine local-search grid: order=%d (%d rotations) from capped base order=%d",
+                        local_search_order,
+                        rotation_grid_size(local_search_order),
+                        current_healpix_order,
+                    )
+                    local_search_rotations = None
+                    local_search_rotation_eulers = None
+                    local_search_random_perturbation = float(random_perturbation)
+                    local_search_angular_sampling_deg = relion_angular_sampling_deg(
+                        local_search_order,
+                        adaptive_oversampling=0,
+                    )
             else:
                 local_search_rotations = effective_rotations
                 local_search_rotation_eulers = None
@@ -2838,11 +2867,51 @@ def _run_relion_iteration_loop(
                     translation_prior_mode=local_search_translation_prior_mode,
                     translation_prior_reference_translations=translation_prior_reference_translations,
                     debug_iteration=iteration + 1,
+                    return_best_pose_details=(local_engine != "grouped_union"),
+                    rotation_grid_random_perturbation=local_search_random_perturbation,
+                    rotation_grid_angular_sampling_deg=local_search_angular_sampling_deg,
                 )
-                if len(grouped_outputs) == 6:
+                if len(grouped_outputs) == 9:
+                    (
+                        Ft_y_k,
+                        Ft_ctf_k,
+                        ha_k,
+                        best_rots_k,
+                        best_trans_k,
+                        _best_rot_ids_k,
+                        em_stats_k,
+                        noise_stats_k,
+                        grouped_local_profile_k,
+                    ) = grouped_outputs
+                    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
+                    best_pose_rotation_eulers[k] = utils.R_to_relion(
+                        np.asarray(best_rots_k),
+                        degrees=True,
+                    ).astype(np.float32)
+                    best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
+                elif len(grouped_outputs) == 8:
+                    (
+                        Ft_y_k,
+                        Ft_ctf_k,
+                        ha_k,
+                        best_rots_k,
+                        best_trans_k,
+                        _best_rot_ids_k,
+                        em_stats_k,
+                        noise_stats_k,
+                    ) = grouped_outputs
+                    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
+                    best_pose_rotation_eulers[k] = utils.R_to_relion(
+                        np.asarray(best_rots_k),
+                        degrees=True,
+                    ).astype(np.float32)
+                    best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
+                elif len(grouped_outputs) == 6:
                     Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k, grouped_local_profile_k = grouped_outputs
-                else:
+                elif len(grouped_outputs) == 5:
                     Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k = grouped_outputs
+                else:
+                    raise RuntimeError(f"Unexpected local-search output arity: {len(grouped_outputs)}")
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
                 coarse_ha[k] = ha_k
@@ -3764,12 +3833,21 @@ def _run_relion_iteration_loop(
                 rot_idx = hard_assignments[k] // current_translations.shape[0]
                 trans_idx = hard_assignments[k] % current_translations.shape[0]
                 if local_search_rotations is None:
-                    raise ValueError("Local-search hard assignments require the fine local-search grid")
-                best_rots = np.asarray(local_search_rotations, dtype=np.float32)[rot_idx]
-                if local_search_rotation_eulers is not None:
-                    best_eulers = np.asarray(local_search_rotation_eulers, dtype=np.float32)[rot_idx]
-                else:
+                    local_grid_metadata = build_local_search_grid_metadata(local_search_order)
+                    best_rots = _selected_rotation_matrices(
+                        rot_idx,
+                        None,
+                        local_grid_metadata,
+                        random_perturbation=local_search_random_perturbation,
+                        angular_sampling_deg=local_search_angular_sampling_deg,
+                    )
                     best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
+                else:
+                    best_rots = np.asarray(local_search_rotations, dtype=np.float32)[rot_idx]
+                    if local_search_rotation_eulers is not None:
+                        best_eulers = np.asarray(local_search_rotation_eulers, dtype=np.float32)[rot_idx]
+                    else:
+                        best_eulers = utils.R_to_relion(np.asarray(best_rots), degrees=True).astype(np.float32)
                 best_trans = np.asarray(current_translations)[trans_idx]
             else:
                 # Global search uses the dense grid in pose_rotations[k].

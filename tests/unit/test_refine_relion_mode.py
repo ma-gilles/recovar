@@ -39,6 +39,7 @@ from recovar.em.dense_single_volume.local_em_engine import (
 from recovar.em.dense_single_volume.local_layout import (
     LocalBucketSpec,
     LocalHypothesisLayout,
+    _selected_rotation_matrices,
     build_local_hypothesis_layout,
     build_pass2_hypothesis_layout,
     bucket_local_hypothesis_layout,
@@ -92,6 +93,7 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.sampling import (
     apply_relion_rotation_perturbation,
+    apply_relion_rotation_perturbation_to_eulers,
     build_local_search_grid_metadata,
     get_local_rotation_grid_fast,
     get_translation_grid,
@@ -459,6 +461,36 @@ def test_build_local_hypothesis_layout_factorized_matches_per_image_selector():
             np.asarray(local_log_prior_ref[0], dtype=np.float32),
         )
 
+
+def test_selected_rotation_matrices_match_full_perturbed_grid():
+    healpix_order = 2
+    random_perturbation = 0.25
+    angular_sampling_deg = relion_angular_sampling_deg(healpix_order)
+    grid_metadata = build_local_search_grid_metadata(healpix_order)
+    full_eulers = get_relion_rotation_grid_eulers(healpix_order).astype(np.float32)
+    full_perturbed_rotations, _ = apply_relion_rotation_perturbation_to_eulers(
+        full_eulers,
+        random_perturbation,
+        angular_sampling_deg,
+    )
+    rotation_ids = np.array([0, 3, 17, rotation_grid_size(healpix_order) - 1], dtype=np.int32)
+
+    selected_rotations = _selected_rotation_matrices(
+        rotation_ids,
+        None,
+        grid_metadata,
+        random_perturbation=random_perturbation,
+        angular_sampling_deg=angular_sampling_deg,
+    )
+
+    np.testing.assert_allclose(
+        selected_rotations,
+        np.asarray(full_perturbed_rotations, dtype=np.float32)[rotation_ids],
+        atol=1e-6,
+        rtol=1e-6,
+    )
+
+
 def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods():
     layout = LocalHypothesisLayout(
         n_global_rotations=2000,
@@ -721,9 +753,13 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
         *,
         grid_metadata,
         translation_prior_reference_translations=None,
+        rotation_grid_random_perturbation=0.0,
+        rotation_grid_angular_sampling_deg=None,
     ):
         captured["offset_range_pixels"] = offset_range_pixels
         captured["sigma_offset_angstrom"] = sigma_offset_angstrom
+        captured["rotation_grid_random_perturbation"] = rotation_grid_random_perturbation
+        captured["rotation_grid_angular_sampling_deg"] = rotation_grid_angular_sampling_deg
         captured["translation_prior_reference_translations"] = (
             None
             if translation_prior_reference_translations is None
@@ -799,6 +835,8 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
 
     assert captured["offset_range_pixels"] is None
     assert captured["sigma_offset_angstrom"] == 1.25
+    assert captured["rotation_grid_random_perturbation"] == 0.0
+    assert captured["rotation_grid_angular_sampling_deg"] is None
     assert captured["reconstruct_significant_only"] is True
     assert captured["adaptive_fraction"] == pytest.approx(0.999)
     assert captured["max_significants"] == -1
@@ -833,6 +871,8 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
         *,
         grid_metadata,
         translation_prior_reference_translations=None,
+        rotation_grid_random_perturbation=0.0,
+        rotation_grid_angular_sampling_deg=None,
     ):
         _ = (
             prior_rotations,
@@ -848,6 +888,8 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
         captured["grid_metadata_mode"] = grid_metadata["mode"]
         captured["n_pixels"] = int(grid_metadata["n_pixels"])
         captured["n_psi"] = int(grid_metadata["n_psi"])
+        captured["rotation_grid_random_perturbation"] = rotation_grid_random_perturbation
+        captured["rotation_grid_angular_sampling_deg"] = rotation_grid_angular_sampling_deg
         captured["scored_rotations"] = np.asarray(rotation_grid_rotations, dtype=np.float32).copy()
         return LocalHypothesisLayout(
             n_global_rotations=rotation_grid_rotations.shape[0],
@@ -931,6 +973,8 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
     assert captured["n_pixels"] == hp.nside2npix(2**healpix_order)
     assert captured["n_psi"] == rotation_grid_n_in_planes(healpix_order)
     assert captured["max_significants"] == -1
+    assert captured["rotation_grid_random_perturbation"] == 0.0
+    assert captured["rotation_grid_angular_sampling_deg"] is None
     np.testing.assert_allclose(captured["scored_rotations"], perturbed_rotations)
     assert len(outputs) == 5
 
@@ -3184,13 +3228,13 @@ class TestLegacyModeUnchanged:
 # ===========================================================================
 
 
-def test_local_search_uses_fine_rotation_grid_when_oversampling_is_enabled(
+def test_local_search_uses_selected_only_fine_rotation_grid_when_oversampling_is_enabled(
     half_datasets,
     init_volume,
     translations,
     monkeypatch,
 ):
-    """Local search must use the fine-order grid when oversampling is enabled."""
+    """Exact local search selects from the fine-order grid without materializing it."""
     import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
@@ -3234,29 +3278,37 @@ def test_local_search_uses_fine_rotation_grid_when_oversampling_is_enabled(
         local_calls.append(
             {
                 "healpix_order": int(healpix_order),
-                "n_rot": int(np.asarray(rotation_grid_rotations).shape[0]),
-                "n_euler": int(np.asarray(rotation_grid_eulers).shape[0]),
+                "rotations_is_none": rotation_grid_rotations is None,
+                "eulers_is_none": rotation_grid_eulers is None,
+                "rotation_grid_random_perturbation": kwargs.get("rotation_grid_random_perturbation"),
+                "rotation_grid_angular_sampling_deg": kwargs.get("rotation_grid_angular_sampling_deg"),
             }
         )
         n_shells = experiment_dataset.image_shape[0] // 2 + 1
         recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
-        return (
+        base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(experiment_dataset.n_units),
-            ),
         )
+        relion_stats = RelionStats(
+            log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
+        )
+        noise_stats = NoiseStats(
+            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=float(experiment_dataset.n_units),
+        )
+        if kwargs.get("return_best_pose_details"):
+            best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], experiment_dataset.n_units, axis=0)
+            best_trans = np.zeros((experiment_dataset.n_units, 2), dtype=np.float32)
+            best_ids = np.zeros(experiment_dataset.n_units, dtype=np.int32)
+            return base_outputs + (best_rots, best_trans, best_ids, relion_stats, noise_stats)
+        return base_outputs + (relion_stats, noise_stats)
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
@@ -3293,13 +3345,17 @@ def test_local_search_uses_fine_rotation_grid_when_oversampling_is_enabled(
         max_healpix_order=4,
     )
 
-    assert any(kind == "rot" and order == 5 for kind, order in grid_calls)
-    assert any(kind == "euler" and order == 5 for kind, order in grid_calls)
+    assert not any(kind == "rot" and order == 5 for kind, order in grid_calls)
+    assert not any(kind == "euler" and order == 5 for kind, order in grid_calls)
     assert local_calls
     for call in local_calls:
         assert call["healpix_order"] == 5
-        assert call["n_rot"] == order_sizes[5]
-        assert call["n_euler"] == order_sizes[5]
+        assert call["rotations_is_none"]
+        assert call["eulers_is_none"]
+        assert call["rotation_grid_random_perturbation"] == 0.0
+        assert call["rotation_grid_angular_sampling_deg"] == pytest.approx(
+            relion_angular_sampling_deg(5, adaptive_oversampling=0),
+        )
 
 
 def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
@@ -3308,7 +3364,7 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
     translations,
     monkeypatch,
 ):
-    """Generated fine local grids must carry the same RELION perturbation as the coarse grid."""
+    """Selected-only fine local grids must carry the RELION perturbation metadata."""
     import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
     order_sizes = {4: 4, 5: 9}
@@ -3401,29 +3457,37 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         local_calls.append(
             {
                 "healpix_order": int(healpix_order),
-                "rotation_grid_rotations": np.asarray(rotation_grid_rotations, dtype=np.float32).copy(),
-                "rotation_grid_eulers": np.asarray(rotation_grid_eulers, dtype=np.float32).copy(),
+                "rotations_is_none": rotation_grid_rotations is None,
+                "eulers_is_none": rotation_grid_eulers is None,
+                "rotation_grid_random_perturbation": kwargs.get("rotation_grid_random_perturbation"),
+                "rotation_grid_angular_sampling_deg": kwargs.get("rotation_grid_angular_sampling_deg"),
             }
         )
         n_shells = half_datasets[0].image_shape[0] // 2 + 1
         recon_vol_size = VOLUME_SIZE * kwargs.get("reconstruction_padding_factor", 1) ** 3
-        return (
+        base_outputs = (
             jnp.zeros(recon_vol_size, dtype=jnp.complex64),
             jnp.ones(recon_vol_size, dtype=jnp.complex64),
             np.zeros(half_datasets[0].n_units, dtype=np.int32),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(half_datasets[0].n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(half_datasets[0].n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(half_datasets[0].n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=float(half_datasets[0].n_units),
-            ),
         )
+        relion_stats = RelionStats(
+            log_evidence_per_image=jnp.zeros(half_datasets[0].n_units, dtype=jnp.float32),
+            best_log_score_per_image=jnp.zeros(half_datasets[0].n_units, dtype=jnp.float32),
+            max_posterior_per_image=jnp.ones(half_datasets[0].n_units, dtype=jnp.float32),
+            rotation_posterior_sums=jnp.ones(order_sizes[int(healpix_order)], dtype=jnp.float32),
+        )
+        noise_stats = NoiseStats(
+            wsum_sigma2_noise=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_img_power=jnp.ones(n_shells, dtype=jnp.float32),
+            wsum_sigma2_offset=0.0,
+            sumw=float(half_datasets[0].n_units),
+        )
+        if kwargs.get("return_best_pose_details"):
+            best_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], half_datasets[0].n_units, axis=0)
+            best_trans = np.zeros((half_datasets[0].n_units, 2), dtype=np.float32)
+            best_ids = np.zeros(half_datasets[0].n_units, dtype=np.int32)
+            return base_outputs + (best_rots, best_trans, best_ids, relion_stats, noise_stats)
+        return base_outputs + (relion_stats, noise_stats)
 
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
@@ -3466,15 +3530,19 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         perturb_factor=0.5,
     )
 
-    assert any(call["n_rot"] == order_sizes[5] for call in perturb_calls)
     assert any(
-        call["n_rot"] == order_sizes[5]
-        and np.isclose(call["angular_sampling_deg"], relion_angular_sampling_deg(5, adaptive_oversampling=0))
+        call["n_rot"] == order_sizes[4]
+        and np.isclose(call["angular_sampling_deg"], relion_angular_sampling_deg(4, adaptive_oversampling=0))
         for call in perturb_calls
     )
+    assert not any(call["n_rot"] == order_sizes[5] for call in perturb_calls)
     assert local_calls
-    assert np.all(local_calls[0]["rotation_grid_rotations"][:, 0, 0] == 7.0)
-    assert np.all(local_calls[0]["rotation_grid_eulers"] == 5.0)
+    assert local_calls[0]["rotations_is_none"]
+    assert local_calls[0]["eulers_is_none"]
+    assert local_calls[0]["rotation_grid_random_perturbation"] == pytest.approx(0.25)
+    assert local_calls[0]["rotation_grid_angular_sampling_deg"] == pytest.approx(
+        relion_angular_sampling_deg(5, adaptive_oversampling=0),
+    )
 
 
 def test_local_search_uses_negative_previous_offsets_for_translation_prior(
@@ -4586,7 +4654,12 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         perturb_factor=0.0,
     )
 
-    expected_euler = fake_get_grid_eulers(5)[fine_idx]
+    expected_rotation = _selected_rotation_matrices(
+        np.array([fine_idx], dtype=np.int32),
+        None,
+        build_local_search_grid_metadata(5),
+    )
+    expected_euler = iteration_loop_module.utils.R_to_relion(expected_rotation, degrees=True)[0].astype(np.float32)
     observed = np.asarray(result["best_rotation_eulers_history"][1], dtype=np.float32)
     assert observed.shape[0] == N_IMAGES
     np.testing.assert_allclose(
