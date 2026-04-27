@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 # NVTX domain for regularization operations
 NVTX_DOMAIN_REG = "regularization"
 
+
+def _relion_round_away_from_zero(x):
+    """Mirror RELION's ``ROUND`` macro for NumPy arrays."""
+    x = np.asarray(x)
+    return np.trunc(np.where(x > 0, x + 0.5, x - 0.5)).astype(np.int64)
+
 ## Mean prior computation
 
 
@@ -496,7 +502,7 @@ def prior_iteration_relion_style(
     return cov_col0.reshape(-1), prior, fsc
 
 
-def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1):
+def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1, r_max=None):
     """Match RELION's shell-wise weight averaging for tau2 diagnostics.
 
     Parameters
@@ -510,6 +516,10 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
     padding_factor : int
         Fourier padding factor. When ``> 1``, ``weight`` must live on the
         padded grid ``(pf*N)^3``.
+    r_max : float or None
+        RELION reconstruction support radius in native Fourier pixels.  When
+        provided, match ``BackProjector::updateSSNRarrays`` by averaging only
+        padded voxels with ``r2 < ROUND(r_max * padding_factor)^2``.
 
     Returns
     -------
@@ -543,27 +553,39 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
             frequency_shift=0,
             rounded=False,
         ).reshape(-1)
+        if r_max is None:
+            radius_included = jnp.ones_like(padded_dist, dtype=jnp.float64)
+        else:
+            max_r_pad = int(_relion_round_away_from_zero(np.asarray(float(r_max) * padding_factor)))
+            radius_included = (padded_dist * padded_dist < float(max_r_pad * max_r_pad)).astype(jnp.float64)
         shell_index = jnp.minimum(jnp.floor(padded_dist / padding_factor + 0.5).astype(jnp.int32), ori_half)
         if is_half_layout:
+            padded_dist_half = fourier_transform_utils.get_grid_of_radial_distances_real(
+                grid_shape,
+                scaled=False,
+                frequency_shift=0,
+                rounded=False,
+            ).reshape(-1)
+            if r_max is None:
+                radius_included = jnp.ones_like(padded_dist_half, dtype=jnp.float64)
+            else:
+                max_r_pad = int(_relion_round_away_from_zero(np.asarray(float(r_max) * padding_factor)))
+                radius_included = (padded_dist_half * padded_dist_half < float(max_r_pad * max_r_pad)).astype(
+                    jnp.float64
+                )
             shell_index = jnp.minimum(
                 jnp.floor(
-                    fourier_transform_utils.get_grid_of_radial_distances_real(
-                        grid_shape,
-                        scaled=False,
-                        frequency_shift=0,
-                        rounded=False,
-                    ).reshape(-1)
-                    / padding_factor
-                    + 0.5
+                    padded_dist_half / padding_factor + 0.5
                 ).astype(jnp.int32),
                 ori_half,
             )
-            included = jnp.ones(weight.shape[0], dtype=jnp.float64)
+            included = radius_included
         else:
             # RELION iterates the half-complex x-axis (kx >= 0) only.
             pf_n = grid_shape[-1]
             kx_idx = jnp.arange(weight.size) % pf_n
-            included = ((kx_idx == 0) | (kx_idx >= pf_n // 2)).astype(jnp.float64)
+            half_complex_included = ((kx_idx == 0) | (kx_idx >= pf_n // 2)).astype(jnp.float64)
+            included = half_complex_included * radius_included
     else:
         radial_fn = (
             fourier_transform_utils.get_grid_of_radial_distances_real
@@ -580,7 +602,17 @@ def _compute_relion_weight_shell_stats(weight, volume_shape, *, padding_factor=1
             .reshape(-1)
         )
         shell_index = jnp.minimum(shell_index, ori_half)
-        included = jnp.ones(weight.shape[0], dtype=jnp.float64)
+        if r_max is None:
+            included = jnp.ones(weight.shape[0], dtype=jnp.float64)
+        else:
+            radial_raw = radial_fn(
+                volume_shape,
+                scaled=False,
+                frequency_shift=0,
+                rounded=False,
+            ).reshape(-1)
+            max_r_native = int(_relion_round_away_from_zero(np.asarray(float(r_max))))
+            included = (radial_raw * radial_raw < float(max_r_native * max_r_native)).astype(jnp.float64)
 
     shell_sum = jnp.zeros(n_shells, dtype=jnp.float64)
     shell_count = jnp.zeros(n_shells, dtype=jnp.float64)
@@ -602,6 +634,7 @@ def compute_relion_tau2_from_weights(
     *,
     tau2_fudge=1.0,
     padding_factor=1,
+    r_max=None,
     return_details=False,
 ):
     """Compute tau2 from CTF weights and external FSC (RELION's updateSSNRarrays).
@@ -616,6 +649,11 @@ def compute_relion_tau2_from_weights(
     Shell averages are computed at native resolution (clamping padded radial
     indices to ori_size/2), matching RELION's updateSSNRarrays which uses
     ``ires = MIN(ires, ori_size/2)``. Output tau2 is at native N³ resolution.
+    r_max : float or None
+        Reconstruction support radius. RELION ignores padded weights with
+        ``r2 >= ROUND(r_max * padding_factor)^2`` in
+        ``BackProjector::updateSSNRarrays``; pass the current iteration
+        ``current_size // 2`` for auto-refine parity.
     """
     prior_dtype = jnp.float32
 
@@ -626,6 +664,7 @@ def compute_relion_tau2_from_weights(
         H_comb,
         volume_shape,
         padding_factor=padding_factor,
+        r_max=r_max,
     )
     shell_sum = shell_stats["shell_sum"]
     shell_count = shell_stats["shell_count"]
@@ -670,6 +709,116 @@ def compute_relion_tau2_from_weights(
         "oversampling_correction": jnp.asarray(oversampling_correction, dtype=prior_dtype),
     }
     return prior, fsc_clamped, details
+
+
+def compute_relion_fsc_from_backprojector(
+    Ft_y_0,
+    Ft_y_1,
+    Ft_ctf_0,
+    Ft_ctf_1,
+    volume_shape,
+    *,
+    padding_factor=1,
+    r_max=None,
+):
+    """Compute RELION's gold-standard FSC from backprojector accumulators.
+
+    RELION does not compute the auto-refine FSC used by ``updateSSNRarrays``
+    from reconstructed unregularized maps. In
+    ``BackProjector::getDownsampledAverage`` it rounds each padded
+    backprojector Fourier voxel onto the native grid, divides accumulated
+    complex data by accumulated weight, and then
+    ``calculateDownSampledFourierShellCorrelation`` bins the two half averages
+    with ``ROUND(R)``. RELION's ``ROUND`` is round-half-away-from-zero, not
+    NumPy's banker rounding. This helper mirrors that path for centered full
+    Fourier arrays used by RECOVAR's dense single-volume M-step.
+    """
+
+    volume_shape = tuple(int(s) for s in volume_shape)
+    if len(volume_shape) != 3 or len(set(volume_shape)) != 1:
+        raise ValueError(f"Expected cubic 3-D volume_shape, got {volume_shape}")
+    n = volume_shape[0]
+    pf = int(padding_factor)
+    if pf <= 0:
+        raise ValueError(f"padding_factor must be positive, got {padding_factor}")
+    padded_shape = tuple(d * pf for d in volume_shape)
+    full_size = int(np.prod(padded_shape))
+
+    def _as_padded_full(arr, name):
+        arr_np = np.asarray(arr)
+        if arr_np.size != full_size:
+            raise ValueError(
+                f"{name} must be centered full Fourier data with {full_size} entries "
+                f"for volume_shape={volume_shape}, padding_factor={padding_factor}; got {arr_np.size}"
+            )
+        return arr_np.reshape(padded_shape)
+
+    data0 = _as_padded_full(Ft_y_0, "Ft_y_0")
+    data1 = _as_padded_full(Ft_y_1, "Ft_y_1")
+    weight0 = _as_padded_full(Ft_ctf_0, "Ft_ctf_0").real
+    weight1 = _as_padded_full(Ft_ctf_1, "Ft_ctf_1").real
+
+    axes = [np.asarray(fourier_transform_utils.get_1d_frequency_grid(s, scaled=False), dtype=np.float64)
+            for s in padded_shape]
+    kz, ky, kx = np.meshgrid(axes[0], axes[1], axes[2], indexing="ij")
+    dz = _relion_round_away_from_zero(kz / pf)
+    dy = _relion_round_away_from_zero(ky / pf)
+    dx = _relion_round_away_from_zero(kx / pf)
+
+    half = n // 2
+    max_shell = half if r_max is None else int(r_max)
+    down_radius = max_shell + 1
+    down_size = 2 * down_radius + 1
+    down_xsize = down_size // 2 + 1
+    valid = (
+        (dz >= -down_radius)
+        & (dz <= down_radius)
+        & (dy >= -down_radius)
+        & (dy <= down_radius)
+        & (dx >= 0)
+        & (dx < down_xsize)
+    )
+    labels = ((dz[valid] + down_radius) * down_size + (dy[valid] + down_radius)) * down_xsize + dx[valid]
+    labels = labels.reshape(-1)
+    minlength = down_size * down_size * down_xsize
+
+    def _downsample_average(data, weight):
+        weight_flat = weight[valid].reshape(-1)
+        data_flat = data[valid].reshape(-1)
+        sum_weight = np.bincount(labels, weights=weight_flat, minlength=minlength)
+        sum_real = np.bincount(labels, weights=data_flat.real, minlength=minlength)
+        sum_imag = np.bincount(labels, weights=data_flat.imag, minlength=minlength)
+        avg = sum_real + 1j * sum_imag
+        nonzero = sum_weight > 0.0
+        avg[nonzero] /= sum_weight[nonzero]
+        avg[~nonzero] = 0.0
+        return avg.reshape((down_size, down_size, down_xsize))
+
+    avg0 = _downsample_average(data0, weight0)
+    avg1 = _downsample_average(data1, weight1)
+
+    z_axis = np.arange(-down_radius, down_radius + 1, dtype=np.float64)
+    y_axis = np.arange(-down_radius, down_radius + 1, dtype=np.float64)
+    x_axis = np.arange(0, down_xsize, dtype=np.float64)
+    rz, ry, rx = np.meshgrid(z_axis, y_axis, x_axis, indexing="ij")
+    radius = np.sqrt(rz * rz + ry * ry + rx * rx)
+    shell = _relion_round_away_from_zero(radius)
+    shell_count = half + 1
+    # RELION's calculateDownSampledFourierShellCorrelation bins by ROUND(R),
+    # but first skips samples with exact native radius R > r_max.
+    shell_valid = radius <= float(max_shell)
+    shell_labels = shell[shell_valid].reshape(-1)
+    avg0_flat = avg0[shell_valid].reshape(-1)
+    avg1_flat = avg1[shell_valid].reshape(-1)
+
+    numerator = np.bincount(shell_labels, weights=(np.conj(avg0_flat) * avg1_flat).real, minlength=shell_count)
+    denom0 = np.bincount(shell_labels, weights=np.abs(avg0_flat) ** 2, minlength=shell_count)
+    denom1 = np.bincount(shell_labels, weights=np.abs(avg1_flat) ** 2, minlength=shell_count)
+    fsc = np.zeros(shell_count, dtype=np.float64)
+    nonzero = (denom0 * denom1) > 0.0
+    fsc[nonzero] = numerator[nonzero] / np.sqrt(denom0[nonzero] * denom1[nonzero])
+    fsc[0] = 1.0
+    return jnp.asarray(fsc, dtype=jnp.float32)
 
 
 def downsample_from_fsc(array, fsc, volume_shape):
@@ -1008,12 +1157,15 @@ def join_halves_at_low_resolution(
     if lowres_r_max <= 0:
         return Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1
 
-    # RELION ml_optimiser_mpi.cpp:3161 scales the comparison radius by
-    # padding_factor when operating on the padded backprojector grid:
-    #   if (kp*kp + ip*ip + jp*jp <= lowres_r_max*lowres_r_max * pf*pf)
-    # Since volume_shape here is the padded grid, scale lowres_r_max.
+    # RELION BackProjector::getLowResDataAndWeight / setLowResDataAndWeight
+    # uses squared coordinates, not rounded shell labels:
+    #   lowres_r2_max = ROUND(padding_factor * lowres_r_max)^2
+    #   if (k*k + i*i + j*j <= lowres_r2_max) ...
+    # Using rounded radial shells joins extra boundary voxels and changes the
+    # downsampled half-map FSC near the 40 A join cutoff.
     pf = volume_shape[0] // grid_size if volume_shape[0] > grid_size else 1
-    lowres_r_max_padded = lowres_r_max * pf
+    lowres_r_max_padded = int(_relion_round_away_from_zero(float(pf) * lowres_r_max))
+    lowres_r2_max = lowres_r_max_padded * lowres_r_max_padded
 
     Ft_y_0_arr = jnp.asarray(Ft_y_0)
     Ft_y_1_arr = jnp.asarray(Ft_y_1)
@@ -1024,28 +1176,27 @@ def join_halves_at_low_resolution(
     full_size = int(np.prod(volume_shape))
     half_size = int(np.prod(half_shape))
     if Ft_y_0_arr.size == full_size:
-        radial_dist_3d = fourier_transform_utils.get_grid_of_radial_distances(
-            volume_shape,
-            voxel_size=1,
-            scaled=False,
-            frequency_shift=0,
-            rounded=True,
-        )
+        axes = [
+            jnp.asarray(fourier_transform_utils.get_1d_frequency_grid(s, scaled=False), dtype=jnp.float32)
+            for s in volume_shape
+        ]
+        kz, ky, kx = jnp.meshgrid(axes[0], axes[1], axes[2], indexing="ij")
+        radius2_3d = kz * kz + ky * ky + kx * kx
     elif Ft_y_0_arr.size == half_size:
-        radial_dist_3d = fourier_transform_utils.get_grid_of_radial_distances_real(
-            volume_shape,
-            voxel_size=1,
-            scaled=False,
-            frequency_shift=0,
-            rounded=True,
-        )
+        axes = [
+            jnp.asarray(fourier_transform_utils.get_1d_frequency_grid(volume_shape[0], scaled=False), dtype=jnp.float32),
+            jnp.asarray(fourier_transform_utils.get_1d_frequency_grid(volume_shape[1], scaled=False), dtype=jnp.float32),
+            jnp.asarray(fourier_transform_utils.get_1d_frequency_grid_rfft(volume_shape[2], scaled=False), dtype=jnp.float32),
+        ]
+        kz, ky, kx = jnp.meshgrid(axes[0], axes[1], axes[2], indexing="ij")
+        radius2_3d = kz * kz + ky * ky + kx * kx
     else:
         raise ValueError(
             f"Could not infer Fourier layout for join_halves_at_low_resolution with shape {Ft_y_0_arr.shape} "
             f"and volume_shape={volume_shape}"
         )
 
-    join_mask_3d = radial_dist_3d <= lowres_r_max_padded
+    join_mask_3d = radius2_3d <= lowres_r2_max
     join_mask_flat = join_mask_3d.reshape(-1)
 
     avg_Ft_y = 0.5 * (Ft_y_0_arr + Ft_y_1_arr)

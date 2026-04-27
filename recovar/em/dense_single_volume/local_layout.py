@@ -121,7 +121,10 @@ def _build_factorized_local_entries(
 
     sigma_rot_deg = float(np.rad2deg(sigma_rot))
     sigma_psi_deg = float(np.rad2deg(sigma_psi))
-    biggest_sigma_deg = float(max(sigma_rot_deg, sigma_psi_deg))
+    # RELION widens the direction cone with max(sigma_rot, sigma_tilt).
+    # In this SPA path sigma_tilt == sigma_rot; sigma_psi only controls
+    # in-plane support and must not widen directions.
+    biggest_sigma_deg = sigma_rot_deg
     cutoff_dir_deg = 3.0 * biggest_sigma_deg
     cutoff_psi_deg = 3.0 * sigma_psi_deg
 

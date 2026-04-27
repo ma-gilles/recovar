@@ -264,7 +264,10 @@ def get_rotation_grid(nside_level, n_in_planes=None, matrices=False):
 def get_translation_grid(max_pixel, pixel_offset):
     gridded_max_pixel = (max_pixel // pixel_offset) * pixel_offset
     xrange = np.arange(-gridded_max_pixel, gridded_max_pixel + 1, pixel_offset)
-    x, y = np.meshgrid(xrange, xrange)
+    # Match RELION's HealpixSampling::setTranslations loop order exactly:
+    # x is the outer loop, y is the inner loop.  The ordering is scientifically
+    # irrelevant but important for source-level parity of itrans diagnostics.
+    x, y = np.meshgrid(xrange, xrange, indexing="ij")
     grid = np.stack([x.flatten(), y.flatten()], axis=1)
     norm_res = np.linalg.norm(grid, axis=1) <= max_pixel + 0.001
     grid = grid[norm_res]
@@ -321,6 +324,113 @@ def advance_relion_perturbation(prev_random_perturbation, perturbation_factor, r
     while new < -pf:
         new += 2 * pf
     return float(new)
+
+
+def _relion_euler_angles_to_matrix(eulers_deg: np.ndarray) -> np.ndarray:
+    """Vectorized port of RELION ``Euler_angles2matrix``.
+
+    This returns RELION's projector matrix ``A``. RECOVAR's rotation matrices
+    are the transpose of this representation; use ``utils.R_from_relion`` when
+    a RECOVAR-frame matrix is needed.
+    """
+    eulers = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
+    alpha = np.deg2rad(eulers[:, 0])
+    beta = np.deg2rad(eulers[:, 1])
+    gamma = np.deg2rad(eulers[:, 2])
+
+    ca = np.cos(alpha)
+    cb = np.cos(beta)
+    cg = np.cos(gamma)
+    sa = np.sin(alpha)
+    sb = np.sin(beta)
+    sg = np.sin(gamma)
+    cc = cb * ca
+    cs = cb * sa
+    sc = sb * ca
+    ss = sb * sa
+
+    A = np.empty((eulers.shape[0], 3, 3), dtype=np.float64)
+    A[:, 0, 0] = cg * cc - sg * sa
+    A[:, 0, 1] = cg * cs + sg * ca
+    A[:, 0, 2] = -cg * sb
+    A[:, 1, 0] = -sg * cc - cg * sa
+    A[:, 1, 1] = -sg * cs + cg * ca
+    A[:, 1, 2] = sg * sb
+    A[:, 2, 0] = sc
+    A[:, 2, 1] = ss
+    A[:, 2, 2] = cb
+    return A
+
+
+def _relion_matrix_to_euler_angles(A: np.ndarray) -> np.ndarray:
+    """Vectorized port of RELION ``Euler_matrix2angles``."""
+    A = np.asarray(A, dtype=np.float64).reshape(-1, 3, 3)
+    out = np.empty((A.shape[0], 3), dtype=np.float64)
+    abs_sb = np.sqrt(A[:, 0, 2] * A[:, 0, 2] + A[:, 1, 2] * A[:, 1, 2])
+    nonsingular = abs_sb > (16.0 * np.finfo(np.float32).eps)
+
+    def relion_sgn(x):
+        # RELION's SGN macro returns +1 for zero.
+        return np.where(x >= 0.0, 1.0, -1.0)
+
+    if np.any(nonsingular):
+        An = A[nonsingular]
+        gamma = np.arctan2(An[:, 1, 2], -An[:, 0, 2])
+        alpha = np.arctan2(An[:, 2, 1], An[:, 2, 0])
+        sign_sb = np.empty_like(gamma)
+        small_sin_gamma = np.abs(np.sin(gamma)) < np.finfo(np.float32).eps
+        if np.any(small_sin_gamma):
+            sign_sb[small_sin_gamma] = relion_sgn(
+                -An[small_sin_gamma, 0, 2] / np.cos(gamma[small_sin_gamma])
+            )
+        if np.any(~small_sin_gamma):
+            sign_sb[~small_sin_gamma] = np.where(
+                np.sin(gamma[~small_sin_gamma]) > 0.0,
+                relion_sgn(An[~small_sin_gamma, 1, 2]),
+                -relion_sgn(An[~small_sin_gamma, 1, 2]),
+            )
+        beta = np.arctan2(sign_sb * abs_sb[nonsingular], An[:, 2, 2])
+        out[nonsingular, 0] = np.rad2deg(alpha)
+        out[nonsingular, 1] = np.rad2deg(beta)
+        out[nonsingular, 2] = np.rad2deg(gamma)
+
+    if np.any(~nonsingular):
+        As = A[~nonsingular]
+        positive = As[:, 2, 2] >= 0.0
+        alpha = np.zeros(As.shape[0], dtype=np.float64)
+        beta = np.where(positive, 0.0, np.pi)
+        gamma = np.empty(As.shape[0], dtype=np.float64)
+        gamma[positive] = np.arctan2(-As[positive, 1, 0], As[positive, 0, 0])
+        gamma[~positive] = np.arctan2(As[~positive, 1, 0], -As[~positive, 0, 0])
+        out[~nonsingular, 0] = np.rad2deg(alpha)
+        out[~nonsingular, 1] = np.rad2deg(beta)
+        out[~nonsingular, 2] = np.rad2deg(gamma)
+
+    return out
+
+
+def apply_relion_rotation_perturbation_to_eulers(eulers_deg, random_perturbation, angular_sampling_deg):
+    """Apply RELION's SamplingPerturbation and return eulers plus matrices.
+
+    RELION does not score ``A @ R_perturb`` directly. It converts that product
+    back to Euler angles with ``Euler_matrix2angles`` and later regenerates
+    projector matrices with ``generateEulerMatrices``. The round trip changes
+    some float32 matrix entries by one ulp; CUDA texture interpolation can
+    amplify that into measurable Pmax differences for borderline particles.
+    """
+    eulers = np.asarray(eulers_deg, dtype=np.float64).reshape(-1, 3)
+    if abs(float(random_perturbation)) < 1e-12:
+        return _relion_euler_angles_to_matrix(eulers).astype(np.float32), eulers.astype(np.float32)
+
+    myperturb = float(random_perturbation) * float(angular_sampling_deg)
+    A = _relion_euler_angles_to_matrix(eulers)
+    R_perturb = _relion_euler_angles_to_matrix(
+        np.array([[myperturb, myperturb, myperturb]], dtype=np.float64)
+    )[0]
+    perturbed_A = np.einsum("nij,jk->nik", A, R_perturb)
+    perturbed_eulers = _relion_matrix_to_euler_angles(perturbed_A)
+    perturbed_rotations = _relion_euler_angles_to_matrix(perturbed_eulers).astype(np.float32)
+    return perturbed_rotations, perturbed_eulers.astype(np.float32)
 
 
 def apply_relion_rotation_perturbation(rotations, random_perturbation, angular_sampling_deg):
@@ -407,6 +517,7 @@ def read_relion_sampling_metadata(sampling_star_path):
         random_perturbation=_grab("rlnSamplingPerturbInstance"),
         perturbation_factor=_grab("rlnSamplingPerturbFactor"),
         healpix_order=_grab("rlnHealpixOrder", int),
+        psi_step=_grab("rlnPsiStep"),
         offset_range=_grab("rlnOffsetRange"),
         offset_step=_grab("rlnOffsetStep"),
     )
@@ -433,6 +544,30 @@ def read_relion_model_metadata(model_star_path):
     return dict(
         current_image_size=_grab("rlnCurrentImageSize", int),
         current_resolution=_grab("rlnCurrentResolution"),
+    )
+
+
+def read_relion_optimiser_metadata(optimiser_star_path):
+    """Read RELION optimiser fields needed for exact replay control flow."""
+    import re
+
+    text = open(optimiser_star_path).read()
+
+    def _grab(name, cast=float, default=None):
+        m = re.search(rf"_{name}\s+(\S+)", text)
+        if not m:
+            return default
+        return cast(m.group(1))
+
+    return dict(
+        overall_accuracy_rotations=_grab("rlnOverallAccuracyRotations"),
+        overall_accuracy_translations_angst=_grab("rlnOverallAccuracyTranslationsAngst"),
+        has_converged=_grab("rlnHasConverged", int),
+        number_iter_without_resolution_gain=_grab("rlnNumberOfIterWithoutResolutionGain", int),
+        changes_optimal_orientations=_grab("rlnChangesOptimalOrientations"),
+        changes_optimal_offsets=_grab("rlnChangesOptimalOffsets"),
+        smallest_changes_orientations=_grab("rlnSmallestChangesOrientations"),
+        smallest_changes_offsets=_grab("rlnSmallestChangesOffsets"),
     )
 
 
@@ -617,13 +752,14 @@ def get_oversampled_rotation_grid_from_samples(
         axis=-1,
     )
     euler_angles = euler_angles / (2 * np.pi) * 360
-    matrices = utils.R_from_relion(euler_angles).astype(np.float32)
     if abs(float(random_perturbation)) > 1e-12:
-        matrices = apply_relion_rotation_perturbation(
-            matrices,
+        matrices, _ = apply_relion_rotation_perturbation_to_eulers(
+            euler_angles,
             random_perturbation,
             relion_angular_sampling_deg(parent_nside_level, adaptive_oversampling=0),
-        ).astype(np.float32)
+        )
+    else:
+        matrices = _relion_euler_angles_to_matrix(euler_angles).astype(np.float32)
     parent_map = np.repeat(parent_map, psi_factor)
 
     if return_rotation_indices:
@@ -811,12 +947,13 @@ def get_local_rotation_grid_fast(
         cone radius scale and the log-prior denominator.
     sigma_psi : float
         Gaussian prior sigma for in-plane angle, **radians**. Combined
-        with ``sigma_rot`` via ``max(sigma_rot, sigma_psi)`` to match
-        RELION's `biggest_sigma`.
+        Independent in-plane prior sigma; it must not widen the direction
+        cone. RELION's direction `biggest_sigma` is `max(sigma_rot,
+        sigma_tilt)`, and this SPA path uses `sigma_tilt == sigma_rot`.
     healpix_order : int
         HEALPix order (nside = 2^order) of the rotation grid.
     sigma_cutoff : float
-        Include grid points within ``sigma_cutoff * max(sigma_rot, sigma_psi)``
+        Include grid points within ``sigma_cutoff * sigma_rot``
         SO(3) distance of at least one prior (default 3.0).
     per_image : bool
         When True, return a per-image log-prior of shape
@@ -874,7 +1011,7 @@ def get_local_rotation_grid_fast(
     n_priors = int(np.asarray(prior_rot_deg).reshape(-1).shape[0])
     sigma_rot_deg = float(np.rad2deg(sigma_rot))
     sigma_psi_deg = float(np.rad2deg(sigma_psi))
-    biggest_sigma_deg = float(max(sigma_rot_deg, sigma_psi_deg))
+    biggest_sigma_deg = sigma_rot_deg
 
     selected_union = set()
     prior_entries: list[tuple[np.ndarray, np.ndarray]] = []

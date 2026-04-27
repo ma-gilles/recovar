@@ -9,6 +9,176 @@ import jax.numpy as jnp
 import numpy as np
 
 
+def _parse_int_set_env(name):
+    value = __import__("os").environ.get(name)
+    if not value:
+        return None
+    out = set()
+    for part in value.replace(";", ",").split(","):
+        part = part.strip()
+        if part:
+            out.add(int(part))
+    return out
+
+
+def _maybe_dump_significance_batch(
+    *,
+    experiment_dataset,
+    indices,
+    batch_weights,
+    batch_sig_mask,
+    batch_n_sig,
+    hard_assignment_batch,
+    log_z,
+    best_score,
+    max_posterior,
+    rotations,
+    translations,
+    rotation_log_prior,
+    batch_translation_log_prior,
+    current_size,
+    adaptive_fraction,
+    max_significants,
+    scores_pre_prior_full=None,
+    scores_with_prior_full=None,
+    dump_target_positions=None,
+    shifted_data=None,
+    ctf2_data=None,
+    batch_norm=None,
+    window_indices=None,
+    half_weights_used=None,
+):
+    """Env-gated debug dump for RELION pass-1 significance parity."""
+    import os
+
+    dump_dir = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR")
+    if not dump_dir:
+        return
+    target_original_indices = _parse_int_set_env("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
+    if not target_original_indices:
+        return
+    target_current_size = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE")
+    if target_current_size:
+        if current_size is None or int(current_size) != int(target_current_size):
+            return
+
+    local_indices = np.asarray(indices, dtype=np.int64)
+    original_indices_all = getattr(experiment_dataset, "dataset_indices", None)
+    if original_indices_all is None:
+        original_indices = local_indices
+    else:
+        original_indices = np.asarray(original_indices_all, dtype=np.int64)[local_indices]
+
+    os.makedirs(dump_dir, exist_ok=True)
+    n_trans = int(translations.shape[0])
+    n_candidates = int(batch_weights.shape[1])
+    flat_indices = np.arange(n_candidates, dtype=np.int32)
+    rot_indices = (flat_indices // n_trans).astype(np.int32)
+    trans_indices = (flat_indices % n_trans).astype(np.int32)
+
+    for local_pos, original_idx in enumerate(original_indices):
+        if int(original_idx) not in target_original_indices:
+            continue
+        weights = np.asarray(batch_weights[local_pos], dtype=np.float64)
+        sig_mask = np.asarray(batch_sig_mask[local_pos], dtype=bool)
+        trans_prior = None
+        if batch_translation_log_prior is not None:
+            prior_arr = np.asarray(batch_translation_log_prior)
+            trans_prior = prior_arr if prior_arr.ndim == 1 else prior_arr[local_pos]
+        dump_row = None
+        if dump_target_positions is not None:
+            matches = np.flatnonzero(np.asarray(dump_target_positions, dtype=np.int64) == int(local_pos))
+            if matches.size:
+                dump_row = int(matches[0])
+        image_rows = slice(local_pos * n_trans, (local_pos + 1) * n_trans)
+        ctf2_arr = None if ctf2_data is None else np.asarray(ctf2_data)
+        if ctf2_arr is not None and ctf2_arr.shape[0] == local_indices.shape[0]:
+            ctf2_target = ctf2_arr[local_pos : local_pos + 1]
+        elif ctf2_arr is not None:
+            ctf2_target = ctf2_arr[image_rows]
+        else:
+            ctf2_target = None
+        out_path = os.path.join(
+            dump_dir,
+            f"significance_orig{int(original_idx):06d}_cs{(-1 if current_size is None else int(current_size)):03d}.npz",
+        )
+        np.savez_compressed(
+            out_path,
+            original_index=np.int64(original_idx),
+            local_index=np.int64(local_indices[local_pos]),
+            current_size=np.int64(-1 if current_size is None else int(current_size)),
+            adaptive_fraction=np.float64(adaptive_fraction),
+            max_significants=np.int64(max_significants),
+            n_rot=np.int64(rotations.shape[0]),
+            n_trans=np.int64(n_trans),
+            weights_full=weights,
+            significant_mask=sig_mask,
+            significant_indices=np.flatnonzero(sig_mask).astype(np.int32),
+            n_significant=np.int64(batch_n_sig[local_pos]),
+            hard_assignment=np.int64(hard_assignment_batch[local_pos]),
+            normalization_log_z=np.float64(log_z[local_pos]),
+            best_score=np.float64(best_score[local_pos]),
+            max_posterior=np.float64(max_posterior[local_pos]),
+            rotations=np.asarray(rotations, dtype=np.float32),
+            translations=np.asarray(translations, dtype=np.float32),
+            rot_indices=rot_indices,
+            trans_indices=trans_indices,
+            rotation_log_prior=(
+                np.asarray(rotation_log_prior, dtype=np.float64)
+                if rotation_log_prior is not None
+                else np.empty((0,), dtype=np.float64)
+            ),
+            translation_log_prior=(
+                np.asarray(trans_prior, dtype=np.float64)
+                if trans_prior is not None
+                else np.empty((0,), dtype=np.float64)
+            ),
+            scores_pre_prior_full=(
+                np.asarray(scores_pre_prior_full[dump_row], dtype=np.float64)
+                if scores_pre_prior_full is not None and dump_row is not None
+                else np.empty((0,), dtype=np.float64)
+            ),
+            scores_with_prior_full=(
+                np.asarray(scores_with_prior_full[dump_row], dtype=np.float64)
+                if scores_with_prior_full is not None and dump_row is not None
+                else np.empty((0,), dtype=np.float64)
+            ),
+            shifted_data=(
+                np.asarray(shifted_data[image_rows], dtype=np.complex128)
+                if shifted_data is not None
+                else np.empty((0,), dtype=np.complex128)
+            ),
+            ctf2_data=(
+                np.asarray(ctf2_target, dtype=np.float64)
+                if ctf2_target is not None
+                else np.empty((0,), dtype=np.float64)
+            ),
+            batch_norm=(
+                np.asarray(batch_norm[local_pos], dtype=np.float64)
+                if batch_norm is not None
+                else np.empty((0,), dtype=np.float64)
+            ),
+            window_indices=(
+                np.asarray(window_indices, dtype=np.int32)
+                if window_indices is not None
+                else np.empty((0,), dtype=np.int32)
+            ),
+            half_weights=(
+                np.asarray(half_weights_used, dtype=np.float64)
+                if half_weights_used is not None
+                else np.empty((0,), dtype=np.float64)
+            ),
+        )
+
+
+def _uses_relion_background_fill(experiment_dataset) -> bool:
+    image_source = getattr(experiment_dataset, "image_source", None)
+    while hasattr(image_source, "parent"):
+        image_source = image_source.parent
+    backend = getattr(image_source, "backend", image_source)
+    return getattr(backend, "image_mask_mode", None) == "relion_background_fill"
+
+
 def _compute_significance_batched(
     experiment_dataset,
     mean,
@@ -31,7 +201,10 @@ def _compute_significance_batched(
     image_pre_shifts=None,
     half_spectrum_scoring=False,
     projection_padding_factor=1,
+    do_gridding_correction=False,
+    square_window=False,
     use_float64_scoring=False,
+    return_full_stats=False,
 ):
     """Run coarse E-step and find significant rotations in a memory-efficient way.
 
@@ -52,9 +225,16 @@ def _compute_significance_batched(
         Returned only when ``return_significant_sample_indices=True``.
         ``significant_sample_indices[i]`` stores flattened
         ``rot_idx * n_trans + trans_idx`` entries kept for image ``i``.
+    full_stats : dict[str, np.ndarray], optional
+        Returned only when ``return_full_stats=True``.  Contains the full
+        coarse-grid log normalizer and best-pose statistics before any
+        significant-pose pruning.  RELION os0 uses these full-grid weights for
+        Pmax / weight_norm, while ``significant_weight`` only gates
+        reconstruction.
     """
     from recovar.core import fourier_transform_utils
     from recovar.core.configs import ForwardModelConfig
+    from recovar import core
     from recovar.em.dense_single_volume.em_engine import (
         _compute_projections_block,
         _e_step_block_scores,
@@ -74,7 +254,7 @@ def _compute_significance_batched(
             mean,
             experiment_dataset.volume_shape,
             projection_padding_factor,
-            do_gridding_correction=False,
+            do_gridding_correction=do_gridding_correction,
             current_size=current_size,
         )
     else:
@@ -108,17 +288,64 @@ def _compute_significance_batched(
             make_fourier_window_indices_np,
         )
 
-        window_indices_np, n_windowed = make_fourier_window_indices_np(image_shape, current_size)
+        window_indices_np, n_windowed = make_fourier_window_indices_np(
+            image_shape,
+            current_size,
+            square=square_window,
+        )
         window_indices = jnp.asarray(window_indices_np)
         half_weights_windowed = half_weights[window_indices]
     else:
         window_indices = None
         n_windowed = n_half
+    projection_kwargs = {}
+    if use_window:
+        projection_kwargs["max_r"] = float(current_size // 2)
 
     if use_float64_scoring:
         half_weights = half_weights.astype(jnp.float64)
         if use_window:
             half_weights_windowed = half_weights[window_indices]
+
+    use_relion_numpy_preprocess = (
+        _uses_relion_background_fill(experiment_dataset)
+        and __import__("os").environ.get("RECOVAR_RELION_NUMPY_IMAGE_FFT") == "1"
+    )
+    noise_variance_half = fourier_transform_utils.full_image_to_half_image(
+        noise_variance.reshape(1, -1),
+        image_shape,
+    ).squeeze()
+    norm_half_weights = make_half_image_weights(image_shape)
+
+    def _preprocess_batch_relion_numpy(batch_data, ctf_params, batch_size):
+        processed_half = experiment_dataset.process_images_half(
+            np.asarray(batch_data),
+            apply_image_mask=score_with_masked_images,
+        )
+        processed_half = jnp.asarray(processed_half)
+        ctf_half = config.compute_ctf_half(ctf_params)
+        ctf2_over_nv_half = ctf_half**2 / noise_variance_half
+        ctf_weighted = processed_half * ctf_half / noise_variance_half
+        translations_tiled = jnp.repeat(jnp.asarray(translations)[None], batch_size, axis=0).reshape(
+            batch_size * n_trans,
+            -1,
+        )
+        weighted_tiled = jnp.repeat(ctf_weighted[:, None, :], n_trans, axis=1).reshape(
+            batch_size * n_trans,
+            -1,
+        )
+        shifted_half = core.translate_images(
+            weighted_tiled,
+            translations_tiled,
+            image_shape,
+            half_image=True,
+        )
+        batch_norm = jnp.sum(
+            (jnp.abs(processed_half) ** 2 / noise_variance_half) * norm_half_weights[None, :],
+            axis=-1,
+            keepdims=True,
+        ).real
+        return shifted_half, batch_norm, ctf2_over_nv_half
 
     # Pad rotations
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
@@ -134,6 +361,10 @@ def _compute_significance_batched(
     n_sig_all = np.empty(n_images, dtype=np.int32)
     hard_assignment = np.empty(n_images, dtype=np.int32)
     significant_sample_indices = [None] * n_images if return_significant_sample_indices else None
+    normalization_log_z = np.empty(n_images, dtype=np.float64) if return_full_stats else None
+    log_evidence = np.empty(n_images, dtype=np.float32) if return_full_stats else None
+    best_log_score = np.empty(n_images, dtype=np.float32) if return_full_stats else None
+    max_posterior = np.empty(n_images, dtype=np.float32) if return_full_stats else None
 
     if translation_log_prior is not None:
         translation_log_prior = np.asarray(translation_log_prior, dtype=np.float32)
@@ -192,16 +423,23 @@ def _compute_significance_batched(
                 translation_log_prior[start_idx:end_idx],
             )
 
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
-            batch_data,
-            ctf_params,
-            noise_variance,
-            translations,
-            config,
-            batch_size,
-            n_trans,
-            score_with_masked_images,
-        )
+        if use_relion_numpy_preprocess:
+            shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch_relion_numpy(
+                batch_data,
+                ctf_params,
+                batch_size,
+            )
+        else:
+            shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+                batch_data,
+                ctf_params,
+                noise_variance,
+                translations,
+                config,
+                batch_size,
+                n_trans,
+                score_with_masked_images,
+            )
 
         if image_corrections is not None:
             batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
@@ -249,10 +487,42 @@ def _compute_significance_batched(
             else:
                 shifted_data = shifted_half
                 ctf2_data = ctf2_over_nv_half
+        else:
+            # Diagnostic path for RELION's accelerated kernels: XFLOAT is
+            # float unless RELION is compiled with ACC_DOUBLE_PRECISION.
+            shifted_half = shifted_half.astype(jnp.complex64)
+            ctf2_over_nv_half = ctf2_over_nv_half.astype(jnp.float32)
+            if use_window:
+                shifted_data = shifted_data.astype(jnp.complex64)
+                ctf2_data = ctf2_data.astype(jnp.float32)
+            else:
+                shifted_data = shifted_half
+                ctf2_data = ctf2_over_nv_half
+
+        dump_target_positions = None
+        dump_score_pre_prior_blocks = None
+        dump_score_with_prior_blocks = None
+        if __import__("os").environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR"):
+            target_original_indices = _parse_int_set_env("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
+            if target_original_indices:
+                local_indices_for_dump = np.asarray(indices, dtype=np.int64)
+                original_indices_all = getattr(experiment_dataset, "dataset_indices", None)
+                if original_indices_all is None:
+                    original_indices_for_dump = local_indices_for_dump
+                else:
+                    original_indices_for_dump = np.asarray(original_indices_all, dtype=np.int64)[
+                        local_indices_for_dump
+                    ]
+                dump_target_positions = np.flatnonzero(
+                    np.isin(original_indices_for_dump, np.fromiter(target_original_indices, dtype=np.int64))
+                ).astype(np.int64)
+                if dump_target_positions.size:
+                    dump_score_pre_prior_blocks = []
+                    dump_score_with_prior_blocks = []
 
         # Pass 1: streaming logsumexp
         max_s = jnp.full(batch_size, -jnp.inf)
-        sum_exp = jnp.zeros(batch_size)
+        sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
 
         for b in range(n_blocks):
             r0 = b * rotation_block_size
@@ -260,12 +530,20 @@ def _compute_significance_batched(
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
+                mean_for_proj,
+                rots_b,
+                image_shape,
+                proj_volume_shape,
+                disc_type,
+                **projection_kwargs,
             )
 
             if use_window:
                 proj_w = proj_half_b[:, window_indices]
                 proj_abs2_w = proj_abs2_half_b[:, window_indices]
+                if not use_float64_scoring:
+                    proj_w = proj_w.astype(jnp.complex64)
+                    proj_abs2_w = proj_abs2_w.astype(jnp.float32)
                 scores = _e_step_block_scores_windowed(
                     shifted_data,
                     batch_norm,
@@ -280,6 +558,9 @@ def _compute_significance_batched(
                     volume_shape,
                 )
             else:
+                if not use_float64_scoring:
+                    proj_half_b = proj_half_b.astype(jnp.complex64)
+                    proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
                 scores = _e_step_block_scores(
                     shifted_data,
                     batch_norm,
@@ -322,12 +603,20 @@ def _compute_significance_batched(
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
+                mean_for_proj,
+                rots_b,
+                image_shape,
+                proj_volume_shape,
+                disc_type,
+                **projection_kwargs,
             )
 
             if use_window:
                 proj_w = proj_half_b[:, window_indices]
                 proj_abs2_w = proj_abs2_half_b[:, window_indices]
+                if not use_float64_scoring:
+                    proj_w = proj_w.astype(jnp.complex64)
+                    proj_abs2_w = proj_abs2_w.astype(jnp.float32)
                 scores = _e_step_block_scores_windowed(
                     shifted_data,
                     batch_norm,
@@ -342,6 +631,9 @@ def _compute_significance_batched(
                     volume_shape,
                 )
             else:
+                if not use_float64_scoring:
+                    proj_half_b = proj_half_b.astype(jnp.complex64)
+                    proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
                 scores = _e_step_block_scores(
                     shifted_data,
                     batch_norm,
@@ -360,6 +652,7 @@ def _compute_significance_batched(
                 pmask = jnp.arange(rotation_block_size) < valid
                 scores = jnp.where(pmask[None, :, None], scores, -jnp.inf)
 
+            scores_pre_prior = scores
             if rotation_log_prior_padded is not None:
                 scores = scores + jnp.asarray(rotation_log_prior_padded[r0:r1])[None, :, None]
 
@@ -368,6 +661,21 @@ def _compute_significance_batched(
                     scores = scores + batch_translation_log_prior[None, None, :]
                 else:
                     scores = scores + batch_translation_log_prior[:, None, :]
+
+            if dump_score_pre_prior_blocks is not None and dump_target_positions is not None:
+                actual_rot = min(rotation_block_size, n_rot - r0)
+                dump_score_pre_prior_blocks.append(
+                    np.asarray(scores_pre_prior[dump_target_positions, :actual_rot, :], dtype=np.float64).reshape(
+                        dump_target_positions.size,
+                        -1,
+                    )
+                )
+                dump_score_with_prior_blocks.append(
+                    np.asarray(scores[dump_target_positions, :actual_rot, :], dtype=np.float64).reshape(
+                        dump_target_positions.size,
+                        -1,
+                    )
+                )
 
             probs = jnp.exp(scores - log_Z[:, None, None])
 
@@ -382,9 +690,27 @@ def _compute_significance_batched(
             batch_weights_blocks.append(np.asarray(block_probs.reshape(batch_size, -1)))
 
         hard_assignment[start_idx:end_idx] = np.asarray(best_argmax)
+        if return_full_stats:
+            log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+            log_z_np = np.asarray(log_Z, dtype=np.float64)
+            best_score_np = np.asarray(best_score, dtype=np.float64)
+            normalization_log_z[start_idx:end_idx] = log_z_np
+            log_evidence[start_idx:end_idx] = (log_z_np + log_score_offset).astype(np.float32)
+            best_log_score[start_idx:end_idx] = (best_score_np + log_score_offset).astype(np.float32)
+            max_posterior[start_idx:end_idx] = np.exp(best_score_np - log_z_np).astype(np.float32)
 
         # Concatenate this batch's weights -> (batch_size, n_rot * n_trans)
         batch_weights = np.concatenate(batch_weights_blocks, axis=1)
+        dump_scores_pre_prior = (
+            np.concatenate(dump_score_pre_prior_blocks, axis=1)
+            if dump_score_pre_prior_blocks is not None
+            else None
+        )
+        dump_scores_with_prior = (
+            np.concatenate(dump_score_with_prior_blocks, axis=1)
+            if dump_score_with_prior_blocks is not None
+            else None
+        )
 
         # Find significance for this batch
         batch_sig_mask, batch_sig_rot_mask, batch_n_sig = _find_sig(
@@ -400,6 +726,35 @@ def _compute_significance_batched(
         sig_rot_any |= batch_sig_rot_any
 
         n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig)
+        if __import__("os").environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR"):
+            best_score_np_for_dump = np.asarray(best_score, dtype=np.float64)
+            log_z_np_for_dump = np.asarray(log_Z, dtype=np.float64)
+            _maybe_dump_significance_batch(
+                experiment_dataset=experiment_dataset,
+                indices=indices,
+                batch_weights=batch_weights,
+                batch_sig_mask=np.asarray(batch_sig_mask, dtype=bool),
+                batch_n_sig=np.asarray(batch_n_sig, dtype=np.int64),
+                hard_assignment_batch=np.asarray(best_argmax, dtype=np.int64),
+                log_z=log_z_np_for_dump,
+                best_score=best_score_np_for_dump,
+                max_posterior=np.exp(best_score_np_for_dump - log_z_np_for_dump),
+                rotations=rotations,
+                translations=translations,
+                rotation_log_prior=rotation_log_prior,
+                batch_translation_log_prior=batch_translation_log_prior,
+                current_size=current_size,
+                adaptive_fraction=adaptive_fraction,
+                max_significants=max_significants,
+                scores_pre_prior_full=dump_scores_pre_prior,
+                scores_with_prior_full=dump_scores_with_prior,
+                dump_target_positions=dump_target_positions,
+                shifted_data=shifted_data,
+                ctf2_data=ctf2_data,
+                batch_norm=batch_norm,
+                window_indices=window_indices,
+                half_weights_used=half_weights_windowed if use_window else half_weights,
+            )
         if return_significant_sample_indices:
             batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
             for local_idx, global_idx in enumerate(indices):
@@ -411,6 +766,19 @@ def _compute_significance_batched(
                     )
         start_idx = end_idx
 
+    full_stats = None
+    if return_full_stats:
+        full_stats = {
+            "normalization_log_z": normalization_log_z,
+            "log_evidence_per_image": log_evidence,
+            "best_log_score_per_image": best_log_score,
+            "max_posterior_per_image": max_posterior,
+        }
+
     if return_significant_sample_indices:
+        if return_full_stats:
+            return sig_rot_any, n_sig_all, hard_assignment, significant_sample_indices, full_stats
         return sig_rot_any, n_sig_all, hard_assignment, significant_sample_indices
+    if return_full_stats:
+        return sig_rot_any, n_sig_all, hard_assignment, full_stats
     return sig_rot_any, n_sig_all, hard_assignment

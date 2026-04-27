@@ -34,6 +34,49 @@ logger = logging.getLogger(__name__)
 NVTX_DOMAIN_DATA_IO = "data_io"
 
 
+def _apply_relion_soft_image_mask_numpy(images: np.ndarray, image_mask: np.ndarray) -> np.ndarray:
+    """Apply RELION's background-fill image mask using NumPy arithmetic."""
+
+    image_mask_arr = np.asarray(image_mask)
+    images_arr = np.asarray(images)
+    if image_mask_arr.ndim != 2:
+        raise ValueError(f"image_mask must be 2D, got shape {image_mask_arr.shape}")
+    if images_arr.ndim not in (2, 3):
+        raise ValueError(f"images must be 2D or 3D, got shape {images_arr.shape}")
+    if images_arr.shape[-2:] != image_mask_arr.shape:
+        raise ValueError(
+            f"image_mask shape {image_mask_arr.shape} must match trailing image shape {images_arr.shape[-2:]}"
+        )
+
+    squeeze = images_arr.ndim == 2
+    images_3d = images_arr[None, ...] if squeeze else images_arr
+    mask64 = image_mask_arr.astype(np.float64, copy=False)
+    bg_weights = 1.0 - mask64
+    bg_weight_sum = float(np.sum(bg_weights, dtype=np.float64))
+    safe_bg_weight_sum = bg_weight_sum if bg_weight_sum > 0.0 else 1.0
+    images64 = images_3d.astype(np.float64, copy=False)
+    avg_bg = np.sum(images64 * bg_weights[None, :, :], axis=(-2, -1), dtype=np.float64) / safe_bg_weight_sum
+    result = images64 * mask64[None, :, :] + avg_bg[:, None, None] * bg_weights[None, :, :]
+    # RELION promotes stored particle pixels to RFLOAT before masking/FFT.  Some
+    # RECOVAR loaders expose float16 images, so do not quantize the masked image
+    # back to float16 before the Fourier transform.
+    result = result.astype(np.result_type(images_arr.dtype, np.float32), copy=False)
+    return result[0] if squeeze else result
+
+
+def _centered_fft2_numpy(images: np.ndarray) -> np.ndarray:
+    """Centered 2-D FFT matching RELION/FFTW preprocessing conventions."""
+
+    images_np = np.asarray(images)
+    if images_np.ndim == 2:
+        images_np = images_np[None, ...]
+    if images_np.dtype == np.float16:
+        images_np = images_np.astype(np.float32)
+    shifted = np.fft.fftshift(images_np, axes=(-2, -1))
+    transformed = np.fft.fft2(shifted, axes=(-2, -1))
+    return np.fft.fftshift(transformed, axes=(-2, -1))
+
+
 class _SimpleSubset:
     """Lightweight subset wrapper (replaces torch.utils.data.Subset).
 
@@ -151,6 +194,28 @@ class ParticleImageDataset:
         return images, index, index
 
     def process_images(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
+        use_relion_numpy_fft = (
+            self.image_mask_mode == "relion_background_fill"
+            and __import__("os").environ.get("RECOVAR_RELION_NUMPY_IMAGE_FFT") == "1"
+        )
+        if use_relion_numpy_fft:
+            try:
+                images_np = np.asarray(images)
+            except Exception as exc:
+                if exc.__class__.__name__ != "TracerArrayConversionError":
+                    raise
+                # Jitted callers cannot leave JAX. They keep the previous JAX
+                # path; non-jitted RELION pass-2 uses the NumPy/FFTW-compatible
+                # path above.
+                use_relion_numpy_fft = False
+            else:
+                if images_np.ndim == 2:
+                    images_np = images_np[np.newaxis, ...]
+                if apply_image_mask:
+                    images_np = _apply_relion_soft_image_mask_numpy(images_np, self.image_mask)
+                transformed = _centered_fft2_numpy(images_np * self.mult)
+                return transformed.reshape((transformed.shape[0], -1)).astype(self.dtype, copy=False)
+
         if apply_image_mask:
             if self.image_mask_mode == "relion_background_fill":
                 images = mask.apply_relion_soft_image_mask(images, self.image_mask)

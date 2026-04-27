@@ -33,6 +33,7 @@ from recovar.em.dense_single_volume.em_engine import (
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     ALLOWED_CURRENT_SIZES,
     make_fourier_window_indices_np,
+    make_frequency_coords_half_np,
     make_frequency_radius_map_half,
     quantize_current_size,
 )
@@ -268,6 +269,25 @@ class TestWindowIndicesSubset:
         assert n_recon - n_score == 1
         assert set(idx_score).issubset(set(idx_recon))
 
+    def test_exact_radius_removes_rounded_outer_rim(self):
+        """M-step support follows RELION BackProjector's squared-radius cutoff."""
+        shape = (64, 64)
+        current_size = 54
+        idx_round, _ = make_fourier_window_indices_np(shape, current_size=current_size, include_dc=True)
+        idx_exact, _ = make_fourier_window_indices_np(
+            shape,
+            current_size=current_size,
+            include_dc=True,
+            exact_radius=True,
+        )
+
+        coords = make_frequency_coords_half_np(shape)
+        r_max = current_size // 2
+        exact_coords = np.rint(coords[idx_exact]).astype(np.int32)
+        assert np.all(np.sum(exact_coords * exact_coords, axis=1) <= r_max * r_max)
+        assert set(idx_exact).issubset(set(idx_round))
+        assert len(set(idx_round) - set(idx_exact)) > 0
+
     def test_relion_half_layout_excludes_duplicates_and_negative_boundary_row(self):
         """Exact RELION support removes the packed-half extras from the naive radial mask."""
         shape = (128, 128)
@@ -286,6 +306,43 @@ class TestWindowIndicesSubset:
         assert int(np.count_nonzero(naive_mask & (kx == 0) & (ky < 0))) == 42
         assert int(np.count_nonzero(naive_mask & (ky == -(current_size // 2)))) == 7
         assert 1 + 42 + 6 == 49
+
+    def test_square_window_matches_relion_downsized_half_shape(self):
+        """Square mode matches RELION windowFourierTransform's FFTW crop size."""
+        shape = (64, 64)
+        current_size = 54
+        idx_score, n_score = make_fourier_window_indices_np(
+            shape,
+            current_size=current_size,
+            square=True,
+            include_dc=False,
+        )
+        idx_recon, n_recon = make_fourier_window_indices_np(
+            shape,
+            current_size=current_size,
+            square=True,
+            include_dc=True,
+        )
+
+        assert n_recon == current_size * (current_size // 2 + 1)
+        assert n_score == n_recon - 1
+        assert set(idx_score).issubset(set(idx_recon))
+
+    def test_square_window_keeps_relion_negative_rows_not_full_nyquist_column(self):
+        """RELION keeps negative ky rows in its crop but not the full-grid Nyquist column."""
+        shape = (64, 64)
+        current_size = 54
+        coords = make_frequency_coords_half_np(shape)
+        idx_recon, _ = make_fourier_window_indices_np(
+            shape,
+            current_size=current_size,
+            square=True,
+            include_dc=True,
+        )
+        selected = coords[idx_recon]
+
+        assert np.any((selected[:, 0] == 0) & (selected[:, 1] < 0))
+        assert not np.any(selected[:, 0] == -(shape[1] // 2))
 
 
 # ===========================================================================

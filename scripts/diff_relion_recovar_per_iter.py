@@ -216,9 +216,10 @@ def extract_recovar_scalars(recovar, it):
     pr_arr = recovar.get("pixel_resolutions")
     pmax_arr = recovar.get("ave_Pmax_trajectory")
     hpx_arr = recovar.get("healpix_order_trajectory")
-    sigma_offset_arr = recovar.get("sigma_offset_used_trajectory")
+    sigma_offset_arr = recovar.get("sigma_offset_trajectory")
+    sigma_offset_used_arr = recovar.get("sigma_offset_used_trajectory")
     if sigma_offset_arr is None:
-        sigma_offset_arr = recovar.get("sigma_offset_trajectory")
+        sigma_offset_arr = sigma_offset_used_arr
     frac_changed_arr = recovar.get("frac_changed_trajectory")
     acc_rot_arr = recovar.get("acc_rot_trajectory")
     smallest_change_angles_arr = recovar.get("smallest_change_angles_trajectory")
@@ -234,6 +235,8 @@ def extract_recovar_scalars(recovar, it):
         out["healpix_order"] = int(hpx_arr[it])
     if sigma_offset_arr is not None and it < len(sigma_offset_arr):
         out["sigma_offsets_angst"] = float(sigma_offset_arr[it])
+    if sigma_offset_used_arr is not None and it < len(sigma_offset_used_arr):
+        out["sigma_offsets_used_angst"] = float(sigma_offset_used_arr[it])
     if frac_changed_arr is not None and it < len(frac_changed_arr):
         out["fraction_changed"] = float(frac_changed_arr[it])
     if acc_rot_arr is not None and it < len(acc_rot_arr):
@@ -375,6 +378,7 @@ def main():
 
     voxel_size = float(recovar["voxel_size"])
     grid_size = int(recovar["volume_shape"][0])
+    recovar_iter_count = int(len(recovar["current_sizes"])) if "current_sizes" in recovar.files else 0
     logger.info("Loaded recovar npz: %d files, voxel_size=%.3f, grid=%d", len(recovar.files), voxel_size, grid_size)
     recovar_half1_particles = int(recovar["n_half1_particles"]) if "n_half1_particles" in recovar.files else None
 
@@ -393,7 +397,12 @@ def main():
     logger.info("RELION wrote iters: %s", relion_iters)
 
     relion_offset = args.relion_start_iter
-    n_iters_to_check = min(args.max_iter, max(relion_iters) + 1)
+    n_iters_to_check = min(args.max_iter, max(relion_iters) + 1, recovar_iter_count + 1)
+    if args.max_iter > recovar_iter_count + 1:
+        print(
+            f"  note       : recovar emitted {recovar_iter_count} iteration rows; "
+            f"showing RELION init + matched rows only (requested {args.max_iter})."
+        )
 
     for it in range(n_iters_to_check):
         relion_it = it + relion_offset
@@ -433,6 +442,7 @@ def main():
             ("current_size", rsc.get("current_size"), rec_sc.get("current_size")),
             ("ave_Pmax", rsc.get("ave_Pmax"), rec_sc.get("ave_Pmax")),
             ("sigma_offsets_Å", rsc.get("sigma_offsets_angst"), rec_sc.get("sigma_offsets_angst")),
+            ("sigma_offsets_used_Å", None, rec_sc.get("sigma_offsets_used_angst")),
             ("smallest_chg_angles_°", rsc.get("smallest_change_angles"), rec_sc.get("smallest_change_angles")),
             ("smallest_chg_offsets", rsc.get("smallest_change_offsets"), rec_sc.get("smallest_change_offsets")),
             ("current_resolution Å", rsc.get("current_resolution"), None),

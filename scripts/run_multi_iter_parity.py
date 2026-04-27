@@ -151,7 +151,24 @@ def main():
     parser.add_argument("--max_healpix_order", type=int, default=8)
     parser.add_argument("--skip_final_iteration", action="store_true", help="Skip the final combined-data Nyquist iter")
     parser.add_argument(
+        "--force_max_iter_after_convergence",
+        action="store_true",
+        help=(
+            "Continue RECOVAR parity replay until --max_iter even if the RELION-mode "
+            "convergence state has already converged. Use only for fixed-length diagnostics."
+        ),
+    )
+    parser.add_argument(
         "--max_particles", type=int, default=None, help="Subsample to at most N particles (N/2 per half)"
+    )
+    parser.add_argument(
+        "--keep_stack_indices",
+        type=str,
+        default=None,
+        help=(
+            "Comma/space-separated zero-based particle stack indices to keep. "
+            "Use for focused RELION-vs-RECOVAR E-step score dumps."
+        ),
     )
     parser.add_argument(
         "--gt_volume",
@@ -257,6 +274,7 @@ def main():
     from recovar import utils
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
+
     try:
         from recovar.em.dense_single_volume.refine import refine_single_volume
     except ModuleNotFoundError:
@@ -375,6 +393,7 @@ def main():
 
     # ---- Load RELION state ----
     model_h1 = starfile.read(f"{prefix}_half1_model.star")
+    model_h2 = starfile.read(f"{prefix}_half2_model.star")
     control_model_h1 = model_h1
     control_model_path = relion_dir / f"run_it{replay_control_relion_iteration(iteration, 0):03d}_half1_model.star"
     if control_model_path.exists():
@@ -383,7 +402,8 @@ def main():
     current_size = int(control_model_h1["model_general"]["rlnCurrentImageSize"])
     pixel_size = float(model_h1["model_general"]["rlnPixelSize"])
 
-    sigma2 = np.array(model_h1["model_optics_group_1"]["rlnSigma2Noise"])
+    sigma2_h1 = np.array(model_h1["model_optics_group_1"]["rlnSigma2Noise"])
+    sigma2_h2 = np.array(model_h2["model_optics_group_1"]["rlnSigma2Noise"])
     class1 = model_h1["model_class_1"]
     tau2_col = "rlnReferenceSigma2" if "rlnReferenceSigma2" in class1 else "rlnReferenceTau2"
     tau2 = np.array(class1[tau2_col])
@@ -424,8 +444,7 @@ def main():
     else:
         ave_Pmax = 0.0
         print(
-            "  Initial RELION data STAR has no rlnMaxValueProbDistribution; "
-            "bootstrapping init_ave_Pmax=0.0",
+            "  Initial RELION data STAR has no rlnMaxValueProbDistribution; bootstrapping init_ave_Pmax=0.0",
         )
 
     # has_high_fsc_at_limit (sticky flag)
@@ -471,7 +490,9 @@ def main():
     # model.star are in RELION's convention.  recovar uses unnormalized FFT,
     # so power spectra scale by N^4.
     n4 = N**4
-    noise_variance = jnp.asarray(recon_noise.make_radial_noise(sigma2 * n4, (N, N)))
+    noise_variance_h1 = jnp.asarray(recon_noise.make_radial_noise(sigma2_h1 * n4, (N, N)))
+    noise_variance_h2 = jnp.asarray(recon_noise.make_radial_noise(sigma2_h2 * n4, (N, N)))
+    noise_variance = jnp.stack([noise_variance_h1.reshape(-1), noise_variance_h2.reshape(-1)], axis=0)
     mean_variance = jnp.asarray(utils.make_radial_image(tau2 * n4, (N, N, N), extend_last_frequency=True))
 
     # Volume: get_dft3(vol_real) produces the unnormalized centered DFT.
@@ -495,6 +516,28 @@ def main():
     relion_idx_map = {_idx(relion_names[i]): relion_subsets[i] for i in range(len(relion_names))}
     our_subsets = np.array([relion_idx_map.get(_idx(n), 0) for n in our_names])
 
+    # Keep exact known-bad particles when debugging per-image score parity.
+    if args.keep_stack_indices:
+        keep_indices = set()
+        for token in args.keep_stack_indices.replace(",", " ").split():
+            token = token.strip()
+            if token:
+                keep_indices.add(int(token))
+        keep_mask = np.zeros_like(our_subsets, dtype=bool)
+        observed = set()
+        for i, name in enumerate(our_names):
+            stack_idx = stack_index_from_image_name(name)
+            if stack_idx in keep_indices:
+                keep_mask[i] = True
+                observed.add(stack_idx)
+        our_subsets[~keep_mask] = 0
+        print(
+            "  Focused particle selection: "
+            f"requested={sorted(keep_indices)}, kept={int(np.sum(keep_mask))}, "
+            f"half1={int(np.sum(our_subsets == 1))}, half2={int(np.sum(our_subsets == 2))}, "
+            f"missing={sorted(keep_indices - observed)}"
+        )
+
     # Subsample if requested (for fast debugging)
     if args.max_particles is not None:
         rng = np.random.RandomState(42)
@@ -517,12 +560,17 @@ def main():
     # RELION: img *= avg_norm_correction / normcorr  (ml_optimiser.cpp:6240)
     # then   Frefctf *= scale                        (ml_optimiser.cpp:7298)
     normcorr = np.array(relion_df["rlnNormCorrection"], dtype=np.float64)
-    model_h2 = starfile.read(f"{prefix}_half2_model.star")
-    general = model_h1["model_general"]
-    avg_norm = float(
-        general["rlnNormCorrectionAverage"]
-        if isinstance(general, dict)
-        else general["rlnNormCorrectionAverage"].iloc[0]
+    general_h1 = model_h1["model_general"]
+    general_h2 = model_h2["model_general"]
+    avg_norm_h1 = float(
+        general_h1["rlnNormCorrectionAverage"]
+        if isinstance(general_h1, dict)
+        else general_h1["rlnNormCorrectionAverage"].iloc[0]
+    )
+    avg_norm_h2 = float(
+        general_h2["rlnNormCorrectionAverage"]
+        if isinstance(general_h2, dict)
+        else general_h2["rlnNormCorrectionAverage"].iloc[0]
     )
     groups_h1 = model_h1.get("model_groups", None)
     groups_h2 = model_h2.get("model_groups", None)
@@ -544,8 +592,8 @@ def main():
     pp_scale_h1 = scale_h1[np.clip(group_numbers - 1, 0, len(scale_h1) - 1)]
     pp_scale_h2 = scale_h2[np.clip(group_numbers - 1, 0, len(scale_h2) - 1)]
 
-    combined_h1 = (avg_norm / normcorr) * pp_scale_h1
-    combined_h2 = (avg_norm / normcorr) * pp_scale_h2
+    combined_h1 = (avg_norm_h1 / normcorr) * pp_scale_h1
+    combined_h2 = (avg_norm_h2 / normcorr) * pp_scale_h2
 
     # Map to dataset ordering per half-set
     relion_idx_to_pos = {_idx(relion_names[i]): i for i in range(len(relion_names))}
@@ -558,7 +606,9 @@ def main():
     scale_corr_h1 = np.array([pp_scale_h1[relion_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
     scale_corr_h2 = np.array([pp_scale_h2[relion_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
     print(
-        f"  Image corrections: avg_norm={avg_norm:.6f}, corr_h1 mean={corr_h1.mean():.4f}, corr_h2 mean={corr_h2.mean():.4f}"
+        "  Image corrections: "
+        f"avg_norm_h1={avg_norm_h1:.6f}, avg_norm_h2={avg_norm_h2:.6f}, "
+        f"corr_h1 mean={corr_h1.mean():.4f}, corr_h2 mean={corr_h2.mean():.4f}"
     )
 
     # ---- Previous best translations (RELION parity: pre-centering) ----
@@ -588,7 +638,11 @@ def main():
         print("  Previous best eulers: None (angle columns not found)")
 
     # ---- Sigma offset from model star ----
-    control_general = control_model_h1["model_general"]
+    # RELION scores iteration N+1 with the model state written at iteration N.
+    # The next model file is useful for replaying control outputs such as the
+    # bootstrapped current image size, but its sigma offset is the result of
+    # the E/M-step we are trying to reproduce, not an input to it.
+    control_general = model_h1["model_general"]
     sigma_offset_angst = float(
         control_general["rlnSigmaOffsetsAngst"]
         if isinstance(control_general, dict)
@@ -598,10 +652,15 @@ def main():
 
     # ---- Direction prior from model star (RELION's pdf_orientation) ----
     pdf_orient_key = "model_pdf_orient_class_1"
-    if pdf_orient_key in model_h1:
-        direction_prior = np.array(model_h1[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32)
+    if pdf_orient_key in model_h1 and pdf_orient_key in model_h2:
+        direction_prior = [
+            np.array(model_h1[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32),
+            np.array(model_h2[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32),
+        ]
         print(
-            f"  direction_prior: {direction_prior.shape[0]} directions, range=[{direction_prior.min():.6f}, {direction_prior.max():.6f}], zeros={int(np.sum(direction_prior == 0))}"
+            "  direction_prior: "
+            f"h1 {direction_prior[0].shape[0]} directions range=[{direction_prior[0].min():.6f}, {direction_prior[0].max():.6f}] zeros={int(np.sum(direction_prior[0] == 0))}; "
+            f"h2 {direction_prior[1].shape[0]} directions range=[{direction_prior[1].min():.6f}, {direction_prior[1].max():.6f}] zeros={int(np.sum(direction_prior[1] == 0))}"
         )
     else:
         direction_prior = None
@@ -615,22 +674,31 @@ def main():
         relion_iter_df = relion_iter_data["particles"] if isinstance(relion_iter_data, dict) else relion_iter_data
         relion_iter_names = list(relion_iter_df["rlnImageName"])
         relion_iter_idx_to_pos = {_idx(relion_iter_names[i]): i for i in range(len(relion_iter_names))}
-        control_model_h1_iter = model_h1_iter
-        control_model_path_iter = relion_dir / f"run_it{control_relion_iteration:03d}_half1_model.star"
-        if control_model_path_iter.exists():
-            control_model_h1_iter = starfile.read(control_model_path_iter)
-
-        general_iter = model_h1_iter["model_general"]
-        avg_norm_iter = float(
-            general_iter["rlnNormCorrectionAverage"]
-            if isinstance(general_iter, dict)
-            else general_iter["rlnNormCorrectionAverage"].iloc[0]
+        general_h1_iter = model_h1_iter["model_general"]
+        general_h2_iter = model_h2_iter["model_general"]
+        avg_norm_h1_iter = float(
+            general_h1_iter["rlnNormCorrectionAverage"]
+            if isinstance(general_h1_iter, dict)
+            else general_h1_iter["rlnNormCorrectionAverage"].iloc[0]
         )
-        control_general_iter = control_model_h1_iter["model_general"]
+        avg_norm_h2_iter = float(
+            general_h2_iter["rlnNormCorrectionAverage"]
+            if isinstance(general_h2_iter, dict)
+            else general_h2_iter["rlnNormCorrectionAverage"].iloc[0]
+        )
         sigma_offset_iter = float(
-            control_general_iter["rlnSigmaOffsetsAngst"]
-            if isinstance(control_general_iter, dict)
-            else control_general_iter["rlnSigmaOffsetsAngst"].iloc[0]
+            general_h1_iter["rlnSigmaOffsetsAngst"]
+            if isinstance(general_h1_iter, dict)
+            else general_h1_iter["rlnSigmaOffsetsAngst"].iloc[0]
+        )
+        sigma2_h1_iter = np.array(model_h1_iter["model_optics_group_1"]["rlnSigma2Noise"])
+        sigma2_h2_iter = np.array(model_h2_iter["model_optics_group_1"]["rlnSigma2Noise"])
+        noise_variance_iter = jnp.stack(
+            [
+                jnp.asarray(recon_noise.make_radial_noise(sigma2_h1_iter * n4, (N, N))).reshape(-1),
+                jnp.asarray(recon_noise.make_radial_noise(sigma2_h2_iter * n4, (N, N))).reshape(-1),
+            ],
+            axis=0,
         )
 
         normcorr_iter = np.array(relion_iter_df["rlnNormCorrection"], dtype=np.float64)
@@ -653,11 +721,15 @@ def main():
         )
         pp_scale_h1_iter = scale_h1_iter[np.clip(iter_group_numbers - 1, 0, len(scale_h1_iter) - 1)]
         pp_scale_h2_iter = scale_h2_iter[np.clip(iter_group_numbers - 1, 0, len(scale_h2_iter) - 1)]
-        combined_h1_iter = (avg_norm_iter / normcorr_iter) * pp_scale_h1_iter
-        combined_h2_iter = (avg_norm_iter / normcorr_iter) * pp_scale_h2_iter
+        combined_h1_iter = (avg_norm_h1_iter / normcorr_iter) * pp_scale_h1_iter
+        combined_h2_iter = (avg_norm_h2_iter / normcorr_iter) * pp_scale_h2_iter
 
-        corr_h1_iter = np.array([combined_h1_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32)
-        corr_h2_iter = np.array([combined_h2_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32)
+        corr_h1_iter = np.array(
+            [combined_h1_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx], dtype=np.float32
+        )
+        corr_h2_iter = np.array(
+            [combined_h2_iter[relion_iter_idx_to_pos[idx]] for idx in half2_our_idx], dtype=np.float32
+        )
         scale_corr_h1_iter = np.array(
             [pp_scale_h1_iter[relion_iter_idx_to_pos[idx]] for idx in half1_our_idx],
             dtype=np.float32,
@@ -708,8 +780,11 @@ def main():
             )
 
         pdf_iter = None
-        if pdf_orient_key in model_h1_iter:
-            pdf_iter = np.array(model_h1_iter[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32)
+        if pdf_orient_key in model_h1_iter and pdf_orient_key in model_h2_iter:
+            pdf_iter = [
+                np.array(model_h1_iter[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32),
+                np.array(model_h2_iter[pdf_orient_key]["rlnOrientationDistribution"], dtype=np.float32),
+            ]
 
         return {
             "translation_sigma_angstrom": np.float32(sigma_offset_iter),
@@ -719,6 +794,7 @@ def main():
             "previous_best_rotations": [rot_h1_iter, rot_h2_iter],
             "previous_best_rotation_eulers": [euler_h1_iter, euler_h2_iter],
             "direction_prior": pdf_iter,
+            "noise_variance": noise_variance_iter,
         }
 
     replay_iteration_overrides = [None] * args.max_iter
@@ -779,10 +855,7 @@ def main():
     print(f"  First-iteration reconstruction mode: {args.first_iteration_reconstruction_mode}")
     print(f"  Emulate RELION iter-1 CC: {args.iter == 0 and do_firstiter_cc}")
     print(f"  RELION ini_high: {relion_ini_high}")
-    print(
-        f"  Adjoint ablations: disable_y={args.disable_adjoint_y}, "
-        f"disable_ctf={args.disable_adjoint_ctf}"
-    )
+    print(f"  Adjoint ablations: disable_y={args.disable_adjoint_y}, disable_ctf={args.disable_adjoint_ctf}")
 
     # ---- Run ----
     print(f"\nRunning {args.max_iter} iterations...")
@@ -790,7 +863,7 @@ def main():
     result = refine_single_volume(
         experiment_datasets=[ds_half1, ds_half2],
         init_volume=[jnp.asarray(vol_ft_h1), jnp.asarray(vol_ft_h2)],
-        init_noise_variance=noise_variance.reshape(-1),
+        init_noise_variance=noise_variance,
         init_mean_variance=mean_variance.reshape(-1),
         rotations=None,
         translations=None,
@@ -834,9 +907,17 @@ def main():
         relion_firstiter_ini_high_angstrom=relion_ini_high if args.iter == 0 else None,
         first_iteration_score_mode=args.first_iteration_score_mode,
         first_iteration_reconstruction_mode=args.first_iteration_reconstruction_mode,
+        force_max_iter_after_convergence=args.force_max_iter_after_convergence,
     )
     elapsed = time.time() - t0
-    print(f"\nCompleted {args.max_iter} iterations in {elapsed:.1f}s")
+    completed_iters = len(result.get("current_sizes", []))
+    if completed_iters != args.max_iter:
+        print(
+            f"\nCompleted {completed_iters} emitted iterations in {elapsed:.1f}s "
+            f"(requested --max_iter {args.max_iter}; stopped by convergence)"
+        )
+    else:
+        print(f"\nCompleted {completed_iters} emitted iterations in {elapsed:.1f}s")
 
     # ---- Save results ----
     save_dict = {
@@ -882,6 +963,7 @@ def main():
         ("fsc_history", "fsc_iter"),
         ("data_vs_prior_trajectory", "data_vs_prior_iter"),
         ("noise_radial_trajectory", "noise_radial_iter"),
+        ("noise_radial_per_half_trajectory", "noise_radial_per_half_iter"),
         ("tau2_radial_trajectory", "tau2_radial_iter"),
         ("tau2_sigma2_trajectory", "tau2_sigma2_iter"),
         ("tau2_avg_weight_trajectory", "tau2_avg_weight_iter"),
@@ -1066,6 +1148,8 @@ def main():
         "data_star": str(args.data_star),
         "iter_start": int(args.iter),
         "max_iter": int(args.max_iter),
+        "completed_iterations": int(completed_iters),
+        "force_max_iter_after_convergence": bool(args.force_max_iter_after_convergence),
         "elapsed_s": float(elapsed),
         "local_search_profile_mode": args.local_search_profile,
         "local_engine": args.local_engine,
@@ -1450,7 +1534,7 @@ def main():
             "--relion_start_iter",
             str(iteration),
             "--max_iter",
-            str(args.max_iter + 1),
+            str(completed_iters + 1),
             "--tol",
             "0.05",
             "--shells",

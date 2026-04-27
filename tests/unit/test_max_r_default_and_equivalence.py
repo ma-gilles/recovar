@@ -88,22 +88,36 @@ class TestDefaultMaxR:
         assert slicing._resolve_max_r(5.0, (128, 128)) == 5.0
 
     def test_cuda_max_r_no_upsampling(self):
-        """With upsampling=1, _cuda_max_r returns the same value."""
+        """_cuda_max_r preserves the image-space radius for the CUDA wrapper."""
         assert slicing._cuda_max_r(63, (128, 128), (128, 128, 128)) == 63
         assert slicing._cuda_max_r(31, (64, 64), (64, 64, 64)) == 31
 
     def test_cuda_max_r_upsampling_2x(self):
-        """With upsampling=2, _cuda_max_r doubles the radius."""
-        assert slicing._cuda_max_r(63, (128, 128), (256, 256, 256)) == 126
-        assert slicing._cuda_max_r(31, (64, 64), (128, 128, 128)) == 62
+        """With upsampling=2, the low-level wrapper owns the scaling."""
+        assert slicing._cuda_max_r(63, (128, 128), (256, 256, 256)) == 63
+        assert slicing._cuda_max_r(31, (64, 64), (128, 128, 128)) == 31
 
     def test_cuda_max_r_upsampling_4x(self):
-        """With upsampling=4, _cuda_max_r quadruples the radius."""
-        assert slicing._cuda_max_r(15, (32, 32), (128, 128, 128)) == 60
+        """With upsampling=4, _cuda_max_r still returns image coordinates."""
+        assert slicing._cuda_max_r(15, (32, 32), (128, 128, 128)) == 15
 
     def test_cuda_max_r_none(self):
         """_cuda_max_r(None, ...) returns None."""
         assert slicing._cuda_max_r(None, (128, 128), (256, 256, 256)) is None
+
+    def test_cuda_ffi_encodes_upsampled_radius_once(self):
+        """The FFI layer converts image-space max_r to padded-volume coords once."""
+        from recovar import cuda_backproject
+
+        kw, _, _ = cuda_backproject._ffi_kwargs(
+            image_shape=(64, 64),
+            volume_shape=(128, 128, 128),
+            order=1,
+            half_volume=False,
+            half_image=True,
+            max_r=27,
+        )
+        assert kw["max_r2_x4"] == np.int64((27 * 2) ** 2 * 4)
 
     def test_default_clips_more_than_none(self):
         """Default max_r should produce more zeros than max_r=None."""

@@ -21,6 +21,22 @@ Do not solve parity by parameter tuning. For parity fixes, identify the
 RELION source behavior, metadata value, or dump-level mismatch first, then
 encode the same behavior in RECOVAR with a targeted test.
 
+Numerical triage target: generally aim for `~1e-4` score/Pmax accuracy in
+RELION accelerated GPU parity, because stable float32/texture arithmetic can
+leave residual per-pose score and Pmax differences at that level. Treat exact
+pose agreement plus Pmax/score gaps near `1e-4` as arithmetic-level parity
+unless a source/dump comparison shows otherwise. Escalate gaps at `1e-3` or
+larger, pose flips, or systematic multi-iteration drift. If unsure, rerun the
+RECOVAR side with float64 scoring (`JAX_ENABLE_X64=1` and do not set
+`RECOVAR_RELION_FLOAT32_SCORING=1`) and, when needed, obtain a RELION
+CPU/double or `ACC_DOUBLE_PRECISION` dump for the same particle/candidate set
+before changing algorithmic behavior.
+
+Future EM parity agents should use this as the default numeric contract: do
+not chase bitwise equality against RELION GPU/texture arithmetic, but do chase
+all reproducible gaps beyond the `~1e-4` arithmetic band with source-level and
+dump-level evidence.
+
 Required dump coverage for deep parity work includes raw E-step scores,
 posterior probabilities, every attempted pose in full-grid pass 1,
 adaptive/oversampled pass 2, and local search, best poses after each pass,
@@ -48,7 +64,103 @@ parity gaps are tracked in
 whenever a new replay result, source-code finding, or dump comparison changes
 the state of the investigation.
 
-## Recent Fixes & Active Parity Gaps (updated 2026-04-25)
+Known low-priority boundary issue: the best one-iteration native half-volume
+M-step replay matches RELION assignments and maps (`Pmax` mean abs `3.5e-5`,
+exact poses/translations, final map corr `0.999996`) and matches BPref through
+`rpad<=52` at `~1e-4`, but shell 26/27 BPref boundary voxels still differ.
+Do not spend more time on this outermost-shell scatter mismatch unless later
+end-to-end parity points back to it. Details and falsified hypotheses are in
+`docs/math/relion_parity_current_status_2026_04_25.md`.
+
+Related 2026-04-26 boundary-stress case: particle 933 at iter 2 remains a
+large Pmax outlier even when RECOVAR and RELION use the same two
+rotation/translation candidates and the same priors. Directly projecting the
+RELION half-map through RECOVAR's projector reproduces RELION's fine-reference
+projections to `~1e-7`, so projection/scoring is not the root cause. The score
+gap is driven by high-shell map residuals, mainly shells 26-28 at
+`current_size=58`. Explicitly zeroing projection/image pixels in those shells
+does not reproduce RELION and should not be used as a fix. Keep p933 as a
+boundary stress test, but choose less boundary-dominated particles for the next
+M-step/tau2/noise parity trace.
+
+## Recent Fixes & Active Parity Gaps (updated 2026-04-26)
+
+### 2026-04-26 projector/scoring parity update
+
+Source-level RELION comparison showed the accelerated path uses
+`Projector::initialiseData(current_size)` with `r_max=current_size/2`, CUDA
+texture linear interpolation, direct diff2 scoring, and FFTW-style centered
+complex image FFTs. RECOVAR `mode="relion"` now enables these defaults unless
+explicitly overridden:
+
+- `RECOVAR_RELION_DIRECT_DIFF2_SCORING=1`
+- `RECOVAR_RELION_TEXTURE_INTERP=1`
+- `RECOVAR_RELION_NUMPY_IMAGE_FFT=1`
+
+Latest tiny 1k / 64³ replay with automatic defaults:
+`_agent_scratch/20260426_tiny1k_auto_parity_15715` on local A100, 69.5s,
+mean abs Pmax `3.68e-5`, max abs Pmax `8.70e-4`, exact pose parity, and
+recovar-vs-RELION map corr `0.999964`.
+
+RECOVAR-side float64 replay did not remove the residual p668 score gap:
+`_agent_scratch/20260426_tiny1k_float64_replay_25714` had p668 pre-prior
+score deltas `[-4.60e-4, 0, -2.02e-4, +6.47e-5, -2.65e-4, -1.52e-4,
++8.40e-5]`. This is now treated as likely RELION accelerated float32/texture
+arithmetic until a RELION CPU/double or `ACC_DOUBLE_PRECISION` dump proves
+otherwise. Current worst Pmax outlier on that replay is original particle
+374 (`-8.70e-4`) with exact pose parity.
+
+### 2026-04-26 M-step/FSC source fixes
+
+RELION M-step parity now depends on two exact source details:
+
+- `BackProjector::getDownsampledAverage` uses RELION `ROUND`, i.e.
+  round-half-away-from-zero, while NumPy `rint` uses banker rounding. RECOVAR
+  must use RELION rounding when mapping padded backprojector voxels to the
+  native downsampled half-complex grid.
+- `BackProjector::getLowResDataAndWeight` / `setLowResDataAndWeight` join
+  low-resolution half accumulators by squared radius
+  `k*k+i*i+j*j <= ROUND(padding_factor * lowres_r_max)^2`, not by rounded
+  shell labels. Rounded shell labels over-join boundary voxels near the
+  `--low_resol_join_halves 40` cutoff and inflate FSC at shells 14-15 on the
+  64³ tiny fixture.
+- `BackProjector::updateSSNRarrays` averages only Fourier weight voxels with
+  `r2 < ROUND(r_max * padding_factor)^2`, where
+  `r_max=current_size/2`. Do not shell-average padded weights outside this
+  support. On the tiny 64³ iter-1 accumulator this removes the false shell-28
+  tau2 leak (`494.05 -> 1e-16`) and matches RELION's zero shell-28 support.
+- `BackProjector::calculateDownSampledFourierShellCorrelation` bins by
+  `ROUND(R)`, but first skips exact native radii with `R > r_max`. Do not
+  include the outer half of a rounded shell merely because `ROUND(R) <=
+  r_max`; this affects boundary shells such as shell 27 at `current_size=54`.
+
+Latest tiny 1k / 64³ 5-iteration replay after those fixes:
+`_agent_scratch/codex_tiny5_joinboundary_20260426_105052_10436` on local
+A100 GPU 2. Final recovar-vs-RELION half-map corr: half1 `0.999970`, half2
+`0.999969`; per-iteration recovar-vs-RELION map corr: `0.999972`,
+`0.999975`, `0.999973`, `0.999976`, `0.999973`. Pmax mean abs gaps by iter:
+`3.53e-5`, `9.32e-3`, `6.22e-3`, `4.77e-3`, `6.09e-3`. The remaining
+multi-iter gap is above pure float32 noise and should be traced from the
+remaining M-step/tau2/noise differences, not by tuning parameters.
+
+Latest 2-iteration tiny replay with the `updateSSNRarrays`/FSC boundary fixes:
+`_agent_scratch/codex_pmax_sentinels_fsc_rmax_20260426_185332_27278`, local
+A100 GPU 3, `JAX_ENABLE_X64=1`. Map parity improved to final
+recovar-vs-RELION corr `0.999998`, and iter-1 tau2 shell 28 now matches
+RELION zero support. Iter-2 Pmax is still not closed: mean abs `0.005059`,
+max abs `0.276175`, corr `0.957262`; top outliers mostly have identical
+RELION/RECOVAR best pose and translation to numerical noise, so the residual
+is posterior-confidence/score-gap, not pose enumeration.
+
+Latest 5k / 128³ long end-to-end baseline:
+`_agent_scratch/long_end2end_parity_20260426_182134`, Slurm job `7383509`,
+A100 node `della-l07g4`, elapsed `2075.6s`, branch
+`claude/relion-parity-local-search-fix`, commit
+`949ab6b84a40bab5011024689c15492414c4e6ce`. Final half-map corr vs RELION:
+half1 `0.996346`, half2 `0.996437`. Pmax mean abs gaps by RELION iter 2-9:
+`0.00109`, `0.00634`, `0.00654`, `0.00620`, `0.01383`, `0.01920`,
+`0.03473`, `0.04248`; pose mean angular gaps remain small (`0.026-0.122`
+deg), with outlier pose flips but most particles matching.
 
 ### Fast diagnostic harness (use these for every parity session)
 
@@ -117,22 +229,62 @@ moved iter-1 ave_pmax from 0.20 → 0.23 (closer to RELION's 0.24),
 indicating ~11pp of the iter-1 gap lives in the sparse-pass-2 logsumexp
 normalization.
 
-### Active known gaps (as of 2026-04-25 commit `5097ded6`)
+### Parity status (updated 2026-04-25 22:12, commit `949ab6b8`)
+
+**Multi-iter trajectory on 5k/128 (cold start, default flags):**
+
+| Iter | recovar pmax | RELION pmax | gap_abs | gap_rel |
+|------|--------------|-------------|---------|---------|
+| 0→1  | 0.042146 | 0.042136 | **+1.1e-5** | +0.025% |
+| 1→2  | 0.645229 | 0.646337 | -1.1e-3 | -0.17% |
+| 2→3  | 0.965861 | 0.964374 | +1.5e-3 | +0.15% |
+| 3→4  | 0.974609 | 0.973470 | +1.1e-3 | +0.12% |
+| 4→5  | 0.973150 | 0.972628 | +5.2e-4 | +0.05% |
+| 5→6  | 0.928100 | 0.928428 | -3.3e-4 | -0.04% |
+| 6→7  | 0.956000 | 0.950240 | +5.8e-3 | +0.61% |
+| 7→8  | 0.889200 | 0.883678 | +5.5e-3 | +0.62% |
+
+(iters 6-8 from second 15-iter run that was killed for time; iters 1-5
+from first 5-iter run; both reproducibly match at 1e-3 magnitude)
+
+**Per-iter regularized volume corr vs RELION half1 (5k/128):**
+
+| Iter | corr_reg |
+|------|----------|
+| 1    | 0.999805 |
+| 2    | 0.999706 |
+| 3    | 0.999630 |
+| 4    | 0.999543 |
+| 5    | 0.999155 |
+
+**Final iter-5 metrics:**
+- `recovar_reg corr_vs_gt = 0.946049`, `RELION = 0.946271` (gap 2.2e-4)
+- recovar-vs-RELION volume corr = **0.9993**
+- pose error vs RELION: mean **0.45°**, p99 9.4°
+- 99.5% of poses agree within 1px translation
+
+### Pre-prior dump option (added 2026-04-25)
+
+The old per-pose comparison was misleading: recovar's `RECOVAR_DEBUG_PER_POSE_DUMP_DIR`
+captured `scores` AFTER prior addition (`em_engine.py:1527`) while RELION's
+`exp_Mweight_diff2.bin` is captured BEFORE prior (`ml_optimiser.cpp:8450`).
+This made the apparent gap ~200× worse than reality.
+
+For apples-to-apples diff² comparison, set:
+```
+RECOVAR_DEBUG_PER_POSE_DUMP_DIR=<dir>
+RECOVAR_DEBUG_PER_POSE_DUMP_TARGET=<image_idx>
+RECOVAR_DEBUG_PER_POSE_DUMP_PREPRIOR=1
+```
+to also dump scores BEFORE prior addition (`em_engine.py:1481-1506`).
+Files are named `target<idx>_block<b>_preprior.npy`.
+
+### Stale measurements (kept for history)
 
 | Test | Gap | Status |
 |---|---:|---|
-| 5k iter 13→14 (codex's canonical) | -1.07e-4 | ✓ matches gold magnitude |
-| Tiny cold-start iter 2 | -2% | ✓ no collapse |
-| Tiny cold-start iter 1 (default) | -17.6% | ❌ active investigation |
-| Tiny cold-start iter 1 (af=1.0) | -6.8% | ❌ residual after sparse-pass-2 fix |
-| Tiny iter 4 from `--iter 2` | +0.27% | ✓ near-perfect when iter-1 bypassed |
-
-The iter-1 deficit is **uniform across particles** (per-particle
-correlation 0.94 with RELION) — systematic algorithmic offset, not
-pose-search failure. Hypothesis under empirical test (single-particle
-`diff²` dump from both RELION patched binary + recovar): something
-multiplicative in the per-pose `diff²` array contributes the residual
-gap.
+| 5k iter 13→14 (codex's canonical late-iter) | -1.07e-4 | ✓ matches gold magnitude |
+| Tiny cold-start iter 1 (default) | (was -17.6%, ACTUAL +0.025% on 5k / -0.08% on tiny) | ✓ resolved; doc was misleading |
 
 ### Open follow-up branches
 

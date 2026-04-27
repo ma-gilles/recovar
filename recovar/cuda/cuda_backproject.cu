@@ -95,6 +95,26 @@ static __device__ __forceinline__ int wrap_mod(int x, int N) {
 /*   Device helpers: scatter one value into volume at rotated coords   */
 /* ================================================================== */
 
+template <typename T>
+static __device__ __forceinline__ bool relion_compact_trilinear_oob(
+    T relion_x, T relion_y, T relion_z, int maxR)
+{
+    /* RELION BackProjector::backproject2Dto3D accumulates into a compact
+     * Fourier box sized x=maxR+2, y/z=2*maxR+3 with STARTINGY/Z=-(maxR+1).
+     * For linear interpolation it drops the entire source pixel if any of the
+     * eight neighbors would leave that compact box. RECOVAR's normal scatter
+     * clips neighbors independently in the full padded box; RELION parity must
+     * reproduce the all-or-nothing compact-boundary skip. */
+    const int x0 = floor_int(relion_x);
+    const int y0 = floor_int(relion_y) + maxR + 1;
+    const int z0 = floor_int(relion_z) + maxR + 1;
+    const int xdim = maxR + 2;
+    const int ydim = 2 * maxR + 3;
+    return x0 < 0 || x0 + 1 >= xdim ||
+           y0 < 0 || y0 + 1 >= ydim ||
+           z0 < 0 || z0 + 1 >= ydim;
+}
+
 /* scatter_nearest: atomicAdd one value at the nearest voxel.
  *
  * HALF_VOL: Hermitian fold approach.  Voxels with kz >= 0 scatter
@@ -549,7 +569,8 @@ backproject_indexed_kernel(
     int N0, int N1, int N2_eff,
     T c0, T c1, T c2,
     int upsampling, int full_image_w,
-    T max_r2)
+    T max_r2,
+    int relion_fold_x)
 {
     __shared__ T R[6];
 
@@ -580,9 +601,21 @@ backproject_indexed_kernel(
 
     if (max_r2 >= (T)0 && k0 * k0 + k1 * k1 > max_r2) return;
 
-    const T rk0 = k0 * R[0] + k1 * R[3];
-    const T rk1 = k0 * R[1] + k1 * R[4];
-    const T rk2 = k0 * R[2] + k1 * R[5];
+    T rk0 = k0 * R[0] + k1 * R[3];
+    T rk1 = k0 * R[1] + k1 * R[4];
+    T rk2 = k0 * R[2] + k1 * R[5];
+
+    if (relion_fold_x && HALF_IMG && HALF_VOL && max_r2 >= (T)0) {
+        /* RELION's backproject2Dto3D repeats the radius cutoff after the
+         * source pixel has been rotated into 3-D. Mathematically this is
+         * redundant for an exactly orthonormal matrix, but at the outer shell
+         * it changes inclusion for roundoff-level boundary pixels. */
+        const double r2_3d =
+            (double)rk0 * (double)rk0 +
+            (double)rk1 * (double)rk1 +
+            (double)rk2 * (double)rk2;
+        if (r2_3d > (double)max_r2) return;
+    }
 
     T val_re, val_im;
     if (REAL_DATA) {
@@ -595,10 +628,37 @@ backproject_indexed_kernel(
         val_im = px.y;
     }
 
+    const bool relion_half_backproject = relion_fold_x && HALF_IMG && HALF_VOL;
+
+    /* RELION's BackProjector iterates an FFTW half-image and stores only one
+     * Hermitian half of the 3-D Fourier volume.  It omits duplicated x=0 rows
+     * for negative y in the 2-D FFTW layout, folds the stored 3-D half-axis
+     * coordinate before trilinear interpolation, and does not emit a separate
+     * conjugate rFFT scatter.  RECOVAR's default path remains the adjoint of
+     * its half_image_to_full_image expansion; this source-level RELION mode is
+     * env-gated while validating M-step parity. */
+    if (relion_half_backproject && rk2 < (T)0) {
+        rk0 = -rk0;
+        rk1 = -rk1;
+        rk2 = -rk2;
+        if (!REAL_DATA) val_im = -val_im;
+    }
+    if (relion_fold_x && HALF_IMG && !HALF_VOL && rk2 < (T)0) {
+        rk0 = -rk0;
+        rk1 = -rk1;
+        rk2 = -rk2;
+        if (!REAL_DATA) val_im = -val_im;
+    }
+
+    if (relion_half_backproject && ORDER == 1 && max_r2 >= (T)0) {
+        const int maxR = (int)floor(sqrt((double)max_r2) + 0.5);
+        if (relion_compact_trilinear_oob<T>(rk2, rk1, rk0, maxR)) return;
+    }
+
     const int stride1 = N2_eff;
     const int stride0 = N1 * N2_eff;
 
-    bool conj_opt = HALF_IMG && HALF_VOL
+    bool conj_opt = HALF_IMG && HALF_VOL && !relion_half_backproject
         && (k1_idx > 0 && k1_idx * 2 != full_image_w)
         && !(k0_idx == 0 && (image_h & 1) == 0);
 
@@ -644,10 +704,14 @@ backproject_indexed_kernel(
                                            c0, c1, c2, N0, N1, N2_eff, stride0, stride1);
     }
 
-    if (HALF_IMG) {
+    if (HALF_IMG && !relion_half_backproject) {
         if (k1_idx > 0 && k1_idx * 2 != full_image_w) {
             T crk0, crk1, crk2;
-            if (k0_idx == 0 && (image_h & 1) == 0) {
+            if (relion_fold_x && !HALF_VOL) {
+                crk0 = -rk0;
+                crk1 = -rk1;
+                crk2 = -rk2;
+            } else if (k0_idx == 0 && (image_h & 1) == 0) {
                 const T neg_k1 = -k1;
                 crk0 = k0 * R[0] + neg_k1 * R[3];
                 crk1 = k0 * R[1] + neg_k1 * R[4];
@@ -1108,6 +1172,206 @@ project_kernel(
     img2[img_off] = make_v2(sum_re, sum_im);
 }
 
+/* RELION's CUDA accelerated projector stores the Fourier reference in CUDA
+ * texture objects with cudaFilterModeLinear. Hardware texture interpolation is
+ * not bit-identical to the manual no_tex3D trilinear path above. This gated
+ * diagnostic path mirrors RELION's texture setup for full complex64 volumes.
+ *
+ * Axes are transposed for the texture array: recovar stores vol[i0,i1,i2] with
+ * i2 fastest, while tex3D's x coordinate addresses the fastest dimension.
+ */
+__global__ void __launch_bounds__(BLOCK_SIZE)
+split_complex_float_kernel(
+    const float* __restrict__ vol,
+    float* __restrict__ real,
+    float* __restrict__ imag,
+    int n_voxels)
+{
+    const int i = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    if (i >= n_voxels) return;
+    real[i] = vol[2 * i];
+    imag[i] = vol[2 * i + 1];
+}
+
+__global__ void __launch_bounds__(BLOCK_SIZE)
+split_complex_double_to_float_kernel(
+    const double* __restrict__ vol,
+    float* __restrict__ real,
+    float* __restrict__ imag,
+    int n_voxels)
+{
+    const int i = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    if (i >= n_voxels) return;
+    real[i] = (float)vol[2 * i];
+    imag[i] = (float)vol[2 * i + 1];
+}
+
+template <typename T>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+fill_relion_texture_compact_kernel(
+    const T* __restrict__ vol,
+    float* __restrict__ real,
+    float* __restrict__ imag,
+    int texX, int texY, int texZ,
+    int yinit, int zinit,
+    int N0, int N1, int N2)
+{
+    const int idx = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    const int n = texX * texY * texZ;
+    if (idx >= n) return;
+
+    const int x = idx % texX;
+    const int yidx = (idx / texX) % texY;
+    const int zidx = idx / (texX * texY);
+    const int y = yidx + yinit;
+    const int z = zidx + zinit;
+
+    const int i0 = N0 / 2 + x;
+    const int i1 = N1 / 2 + y;
+    const int i2 = N2 / 2 + z;
+
+    float re = 0.0f;
+    float im = 0.0f;
+    if ((unsigned)i0 < (unsigned)N0 && (unsigned)i1 < (unsigned)N1 && (unsigned)i2 < (unsigned)N2) {
+        using V2 = vec2_t<T>;
+        const V2 v = reinterpret_cast<const V2*>(vol)[i0 * N1 * N2 + i1 * N2 + i2];
+        re = (float)v.x;
+        im = (float)v.y;
+    }
+    real[idx] = re;
+    imag[idx] = im;
+}
+
+template <bool HALF_IMG>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+project_texture_kernel(
+    cudaTextureObject_t texReal,
+    cudaTextureObject_t texImag,
+    float* __restrict__ img,
+    const float* __restrict__ rot,
+    int n_pixels, int image_h, int image_w,
+    int tex_yinit, int tex_zinit,
+    int upsampling, int full_image_w,
+    int maxR2_padded)
+{
+    __shared__ float R[6];
+
+    const int img_idx = blockIdx.x;
+    const int pix = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+
+    if (threadIdx.x < 6) R[threadIdx.x] = rot[img_idx * 6 + threadIdx.x];
+    __syncthreads();
+    if (pix >= n_pixels) return;
+
+    const int k0_idx = pix / image_w;
+    const int k1_idx = pix % image_w;
+    const float k0_unscaled = (float)(k0_idx - image_h / 2);
+    float k1_unscaled;
+    if (HALF_IMG) {
+        k1_unscaled = (k1_idx * 2 == full_image_w)
+             ? (float)(-k1_idx)
+             : (float)(k1_idx);
+    } else {
+        k1_unscaled = (float)(k1_idx - image_w / 2);
+    }
+
+    float2* img2 = reinterpret_cast<float2*>(img);
+    const int img_off = img_idx * n_pixels + pix;
+
+    /* Match RELION AccProjectorKernel arithmetic: rotate integer image
+     * coordinates first, then multiply by padding_factor. Scaling the image
+     * coordinates before the dot product changes CUDA texture fractions by a
+     * few ulps and is visible in borderline per-particle Pmax comparisons. */
+    const float rk0 = (k0_unscaled * R[0] + k1_unscaled * R[3]) * (float)upsampling;
+    const float rk1 = (k0_unscaled * R[1] + k1_unscaled * R[4]) * (float)upsampling;
+    const float rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (float)upsampling;
+
+    if ((int)(rk0 * rk0 + rk1 * rk1 + rk2 * rk2) > maxR2_padded) {
+        img2[img_off] = make_float2(0.0f, 0.0f);
+        return;
+    }
+
+    float xp = rk0;
+    float yp = rk1;
+    float zp = rk2;
+    float imag_sign = 1.0f;
+    if (xp < 0.0f) {
+        xp = -xp;
+        yp = -yp;
+        zp = -zp;
+        imag_sign = -1.0f;
+    }
+
+    /* Stage and sample the same compact half-Fourier texture layout as
+     * RELION: texture x is nonnegative model-x, y/z start at mdlInitY/Z. */
+    const float re = tex3D<float>(texReal, xp + 0.5f, yp - (float)tex_yinit + 0.5f, zp - (float)tex_zinit + 0.5f);
+    const float im = imag_sign * tex3D<float>(texImag, xp + 0.5f, yp - (float)tex_yinit + 0.5f, zp - (float)tex_zinit + 0.5f);
+    img2[img_off] = make_float2(re, im);
+}
+
+template <bool HALF_IMG>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+project_texture_double_kernel(
+    cudaTextureObject_t texReal,
+    cudaTextureObject_t texImag,
+    double* __restrict__ img,
+    const double* __restrict__ rot,
+    int n_pixels, int image_h, int image_w,
+    int tex_yinit, int tex_zinit,
+    int upsampling, int full_image_w,
+    int maxR2_padded)
+{
+    __shared__ float R[6];
+
+    const int img_idx = blockIdx.x;
+    const int pix = blockIdx.y * BLOCK_SIZE + threadIdx.x;
+
+    if (threadIdx.x < 6) R[threadIdx.x] = (float)rot[img_idx * 6 + threadIdx.x];
+    __syncthreads();
+    if (pix >= n_pixels) return;
+
+    const int k0_idx = pix / image_w;
+    const int k1_idx = pix % image_w;
+    const float k0_unscaled = (float)(k0_idx - image_h / 2);
+    float k1_unscaled;
+    if (HALF_IMG) {
+        k1_unscaled = (k1_idx * 2 == full_image_w)
+             ? (float)(-k1_idx)
+             : (float)(k1_idx);
+    } else {
+        k1_unscaled = (float)(k1_idx - image_w / 2);
+    }
+
+    double2* img2 = reinterpret_cast<double2*>(img);
+    const int img_off = img_idx * n_pixels + pix;
+
+    /* Match RELION AccProjectorKernel arithmetic: rotate integer image
+     * coordinates first, then multiply by padding_factor. */
+    const float rk0 = (k0_unscaled * R[0] + k1_unscaled * R[3]) * (float)upsampling;
+    const float rk1 = (k0_unscaled * R[1] + k1_unscaled * R[4]) * (float)upsampling;
+    const float rk2 = (k0_unscaled * R[2] + k1_unscaled * R[5]) * (float)upsampling;
+
+    if ((int)(rk0 * rk0 + rk1 * rk1 + rk2 * rk2) > maxR2_padded) {
+        img2[img_off] = make_double2(0.0, 0.0);
+        return;
+    }
+
+    float xp = rk0;
+    float yp = rk1;
+    float zp = rk2;
+    float imag_sign = 1.0f;
+    if (xp < 0.0f) {
+        xp = -xp;
+        yp = -yp;
+        zp = -zp;
+        imag_sign = -1.0f;
+    }
+
+    const float re = tex3D<float>(texReal, xp + 0.5f, yp - (float)tex_yinit + 0.5f, zp - (float)tex_zinit + 0.5f);
+    const float im = imag_sign * tex3D<float>(texImag, xp + 0.5f, yp - (float)tex_yinit + 0.5f, zp - (float)tex_zinit + 0.5f);
+    img2[img_off] = make_double2((double)re, (double)im);
+}
+
 /* ================================================================== */
 /*                  Launch dispatchers                                 */
 /* ================================================================== */
@@ -1168,7 +1432,8 @@ cudaError_t launch_backproject_indexed(
     int64_t ih, int64_t iw,
     int64_t N0, int64_t N1, int64_t N2,
     int64_t ups, int64_t order, int64_t half_vol, int64_t half_img,
-    int64_t full_iw, int64_t real_data = 0, int64_t max_r2_x4 = -1)
+    int64_t full_iw, int64_t real_data = 0, int64_t max_r2_x4 = -1,
+    int64_t relion_fold_x = 0)
 {
     const int N2_eff = half_vol ? (int)(N2 / 2 + 1) : (int)N2;
     const T c0 = (T)(N0 / 2);
@@ -1181,7 +1446,7 @@ cudaError_t launch_backproject_indexed(
     #define BPI(O, HV, HI, RD) \
         backproject_indexed_kernel<T, O, HV, HI, RD><<<grid, block, 0, s>>>( \
             vol, img, pixel_indices, rot, (int)n_pixels, (int)ih, (int)iw, \
-            (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2)
+            (int)N0, (int)N1, N2_eff, c0, c1, c2, (int)ups, (int)full_iw, max_r2, (int)relion_fold_x)
 
     int key = (real_data ? 8 : 0) | (order ? 4 : 0) | (half_vol ? 2 : 0) | (half_img ? 1 : 0);
     switch (key) {
@@ -1248,6 +1513,210 @@ cudaError_t launch_project(
     }
     #undef PJ
     return cudaGetLastError();
+}
+
+cudaError_t launch_project_texture_float(
+    cudaStream_t s, const float* vol, float* img, const float* rot,
+    int64_t n_images, int64_t n_pixels,
+    int64_t ih, int64_t iw,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t ups, int64_t half_img,
+    int64_t full_iw, int64_t max_r2_x4 = -1)
+{
+    const float max_r2 = max_r2_x4 < 0 ? (float)((N0 / 2 - 1) * (N0 / 2 - 1)) : (float)max_r2_x4 / 4.0f;
+    const int maxR = (int)floorf(sqrtf(max_r2) + 0.5f);
+    const int texX = maxR + 2;
+    const int texY = 2 * maxR + 3;
+    const int texZ = 2 * maxR + 3;
+    const int texYInit = -(maxR + 1);
+    const int texZInit = -(maxR + 1);
+    const int n_voxels = texX * texY * texZ;
+    float *real = nullptr, *imag = nullptr;
+    cudaArray_t arrReal = nullptr, arrImag = nullptr;
+    cudaTextureObject_t texReal = 0, texImag = 0;
+
+    cudaError_t err = cudaMalloc((void**)&real, n_voxels * sizeof(float));
+    if (err != cudaSuccess) goto cleanup;
+    err = cudaMalloc((void**)&imag, n_voxels * sizeof(float));
+    if (err != cudaSuccess) goto cleanup;
+
+    {
+        dim3 block(BLOCK_SIZE);
+        dim3 grid((n_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        fill_relion_texture_compact_kernel<float><<<grid, block, 0, s>>>(
+            vol, real, imag, texX, texY, texZ, texYInit, texZInit, (int)N0, (int)N1, (int)N2);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) goto cleanup;
+    }
+
+    {
+        cudaChannelFormatDesc desc = cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
+        cudaExtent extent = make_cudaExtent((size_t)texX, (size_t)texY, (size_t)texZ);
+        err = cudaMalloc3DArray(&arrReal, &desc, extent);
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaMalloc3DArray(&arrImag, &desc, extent);
+        if (err != cudaSuccess) goto cleanup;
+
+        cudaMemcpy3DParms copyParams = {0};
+        copyParams.extent = extent;
+        copyParams.kind = cudaMemcpyDeviceToDevice;
+        copyParams.dstArray = arrReal;
+        copyParams.srcPtr = make_cudaPitchedPtr(real, (size_t)texX * sizeof(float), (size_t)texX, (size_t)texY);
+        err = cudaMemcpy3DAsync(&copyParams, s);
+        if (err != cudaSuccess) goto cleanup;
+        copyParams.dstArray = arrImag;
+        copyParams.srcPtr = make_cudaPitchedPtr(imag, (size_t)texX * sizeof(float), (size_t)texX, (size_t)texY);
+        err = cudaMemcpy3DAsync(&copyParams, s);
+        if (err != cudaSuccess) goto cleanup;
+
+        cudaResourceDesc resReal, resImag;
+        cudaTextureDesc texDesc;
+        memset(&resReal, 0, sizeof(resReal));
+        memset(&resImag, 0, sizeof(resImag));
+        memset(&texDesc, 0, sizeof(texDesc));
+        resReal.resType = cudaResourceTypeArray;
+        resReal.res.array.array = arrReal;
+        resImag.resType = cudaResourceTypeArray;
+        resImag.res.array.array = arrImag;
+        texDesc.filterMode = cudaFilterModeLinear;
+        texDesc.readMode = cudaReadModeElementType;
+        texDesc.normalizedCoords = false;
+        texDesc.addressMode[0] = cudaAddressModeClamp;
+        texDesc.addressMode[1] = cudaAddressModeClamp;
+        texDesc.addressMode[2] = cudaAddressModeClamp;
+        err = cudaCreateTextureObject(&texReal, &resReal, &texDesc, nullptr);
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaCreateTextureObject(&texImag, &resImag, &texDesc, nullptr);
+        if (err != cudaSuccess) goto cleanup;
+    }
+
+    {
+        dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        dim3 block(BLOCK_SIZE);
+        if (half_img) {
+            project_texture_kernel<true><<<grid, block, 0, s>>>(
+                texReal, texImag, img, rot, (int)n_pixels, (int)ih, (int)iw,
+                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR);
+        } else {
+            project_texture_kernel<false><<<grid, block, 0, s>>>(
+                texReal, texImag, img, rot, (int)n_pixels, (int)ih, (int)iw,
+                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR);
+        }
+        err = cudaGetLastError();
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaStreamSynchronize(s);
+    }
+
+cleanup:
+    if (texReal) cudaDestroyTextureObject(texReal);
+    if (texImag) cudaDestroyTextureObject(texImag);
+    if (arrReal) cudaFreeArray(arrReal);
+    if (arrImag) cudaFreeArray(arrImag);
+    if (real) cudaFree(real);
+    if (imag) cudaFree(imag);
+    return err;
+}
+
+cudaError_t launch_project_texture_double(
+    cudaStream_t s, const double* vol, double* img, const double* rot,
+    int64_t n_images, int64_t n_pixels,
+    int64_t ih, int64_t iw,
+    int64_t N0, int64_t N1, int64_t N2,
+    int64_t ups, int64_t half_img,
+    int64_t full_iw, int64_t max_r2_x4 = -1)
+{
+    const float max_r2 = max_r2_x4 < 0 ? (float)((N0 / 2 - 1) * (N0 / 2 - 1)) : (float)max_r2_x4 / 4.0f;
+    const int maxR = (int)floorf(sqrtf(max_r2) + 0.5f);
+    const int texX = maxR + 2;
+    const int texY = 2 * maxR + 3;
+    const int texZ = 2 * maxR + 3;
+    const int texYInit = -(maxR + 1);
+    const int texZInit = -(maxR + 1);
+    const int n_voxels = texX * texY * texZ;
+    float *real = nullptr, *imag = nullptr;
+    cudaArray_t arrReal = nullptr, arrImag = nullptr;
+    cudaTextureObject_t texReal = 0, texImag = 0;
+
+    cudaError_t err = cudaMalloc((void**)&real, n_voxels * sizeof(float));
+    if (err != cudaSuccess) goto cleanup;
+    err = cudaMalloc((void**)&imag, n_voxels * sizeof(float));
+    if (err != cudaSuccess) goto cleanup;
+
+    {
+        dim3 block(BLOCK_SIZE);
+        dim3 grid((n_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        fill_relion_texture_compact_kernel<double><<<grid, block, 0, s>>>(
+            vol, real, imag, texX, texY, texZ, texYInit, texZInit, (int)N0, (int)N1, (int)N2);
+        err = cudaGetLastError();
+        if (err != cudaSuccess) goto cleanup;
+    }
+
+    {
+        cudaChannelFormatDesc desc = cudaCreateChannelDesc(32, 0, 0, 0, cudaChannelFormatKindFloat);
+        cudaExtent extent = make_cudaExtent((size_t)texX, (size_t)texY, (size_t)texZ);
+        err = cudaMalloc3DArray(&arrReal, &desc, extent);
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaMalloc3DArray(&arrImag, &desc, extent);
+        if (err != cudaSuccess) goto cleanup;
+
+        cudaMemcpy3DParms copyParams = {0};
+        copyParams.extent = extent;
+        copyParams.kind = cudaMemcpyDeviceToDevice;
+        copyParams.dstArray = arrReal;
+        copyParams.srcPtr = make_cudaPitchedPtr(real, (size_t)texX * sizeof(float), (size_t)texX, (size_t)texY);
+        err = cudaMemcpy3DAsync(&copyParams, s);
+        if (err != cudaSuccess) goto cleanup;
+        copyParams.dstArray = arrImag;
+        copyParams.srcPtr = make_cudaPitchedPtr(imag, (size_t)texX * sizeof(float), (size_t)texX, (size_t)texY);
+        err = cudaMemcpy3DAsync(&copyParams, s);
+        if (err != cudaSuccess) goto cleanup;
+
+        cudaResourceDesc resReal, resImag;
+        cudaTextureDesc texDesc;
+        memset(&resReal, 0, sizeof(resReal));
+        memset(&resImag, 0, sizeof(resImag));
+        memset(&texDesc, 0, sizeof(texDesc));
+        resReal.resType = cudaResourceTypeArray;
+        resReal.res.array.array = arrReal;
+        resImag.resType = cudaResourceTypeArray;
+        resImag.res.array.array = arrImag;
+        texDesc.filterMode = cudaFilterModeLinear;
+        texDesc.readMode = cudaReadModeElementType;
+        texDesc.normalizedCoords = false;
+        texDesc.addressMode[0] = cudaAddressModeClamp;
+        texDesc.addressMode[1] = cudaAddressModeClamp;
+        texDesc.addressMode[2] = cudaAddressModeClamp;
+        err = cudaCreateTextureObject(&texReal, &resReal, &texDesc, nullptr);
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaCreateTextureObject(&texImag, &resImag, &texDesc, nullptr);
+        if (err != cudaSuccess) goto cleanup;
+    }
+
+    {
+        dim3 grid((int)n_images, ((int)n_pixels + BLOCK_SIZE - 1) / BLOCK_SIZE);
+        dim3 block(BLOCK_SIZE);
+        if (half_img) {
+            project_texture_double_kernel<true><<<grid, block, 0, s>>>(
+                texReal, texImag, img, rot, (int)n_pixels, (int)ih, (int)iw,
+                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR);
+        } else {
+            project_texture_double_kernel<false><<<grid, block, 0, s>>>(
+                texReal, texImag, img, rot, (int)n_pixels, (int)ih, (int)iw,
+                texYInit, texZInit, (int)ups, (int)full_iw, maxR * maxR);
+        }
+        err = cudaGetLastError();
+        if (err != cudaSuccess) goto cleanup;
+        err = cudaStreamSynchronize(s);
+    }
+
+cleanup:
+    if (texReal) cudaDestroyTextureObject(texReal);
+    if (texImag) cudaDestroyTextureObject(texImag);
+    if (arrReal) cudaFreeArray(arrReal);
+    if (arrImag) cudaFreeArray(arrImag);
+    if (real) cudaFree(real);
+    if (imag) cudaFree(imag);
+    return err;
 }
 
 /* ================================================================== */
@@ -2037,6 +2506,7 @@ ffi::Error BackprojectIndexedImpl(
     int64_t upsampling, int64_t order,
     int64_t half_volume, int64_t half_image, int64_t full_image_w,
     int64_t max_r2_x4,
+    int64_t relion_fold_x,
     ffi::AnyBuffer img,
     ffi::AnyBuffer pixel_indices,
     ffi::AnyBuffer rot,
@@ -2059,25 +2529,25 @@ ffi::Error BackprojectIndexedImpl(
         err = launch_backproject_indexed<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4);
+            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4, relion_fold_x);
         break;
     case ffi::DataType::C128:
         err = launch_backproject_indexed<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4);
+            order, half_volume, half_image, full_image_w, /*real_data=*/0, max_r2_x4, relion_fold_x);
         break;
     case ffi::DataType::F32:
         err = launch_backproject_indexed<float>(
             stream, (float*)vol_ptr, (const float*)img_ptr, (const int32_t*)pix_ptr, (const float*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4);
+            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4, relion_fold_x);
         break;
     case ffi::DataType::F64:
         err = launch_backproject_indexed<double>(
             stream, (double*)vol_ptr, (const double*)img_ptr, (const int32_t*)pix_ptr, (const double*)rot_ptr,
             n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4);
+            order, half_volume, half_image, full_image_w, /*real_data=*/1, max_r2_x4, relion_fold_x);
         break;
     default:
         return ffi::Error::InvalidArgument("backproject_indexed: images must be C64, C128, F32, or F64");
@@ -2123,6 +2593,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("half_image")
         .Attr<int64_t>("full_image_w")
         .Attr<int64_t>("max_r2_x4")
+        .Attr<int64_t>("relion_fold_x")
         .Arg<ffi::AnyBuffer>()           /* img           */
         .Arg<ffi::AnyBuffer>()           /* pixel_indices */
         .Arg<ffi::AnyBuffer>()           /* rot           */
@@ -2137,6 +2608,7 @@ ffi::Error ProjectImpl(
     int64_t upsampling, int64_t order,
     int64_t half_volume, int64_t half_image, int64_t full_image_w,
     int64_t max_r2_x4,
+    int64_t relion_texture_interp,
     ffi::AnyBuffer vol,
     ffi::AnyBuffer rot,
     ffi::Result<ffi::AnyBuffer> img_out)
@@ -2150,16 +2622,30 @@ ffi::Error ProjectImpl(
     cudaError_t err;
     switch (vol.element_type()) {
     case ffi::DataType::C64:
-        err = launch_project<float>(
-            stream, (const float*)vol_ptr, (float*)img_ptr, (const float*)rot_ptr,
-            n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, max_r2_x4);
+        if (relion_texture_interp && order == 1 && !half_volume) {
+            err = launch_project_texture_float(
+                stream, (const float*)vol_ptr, (float*)img_ptr, (const float*)rot_ptr,
+                n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+                half_image, full_image_w, max_r2_x4);
+        } else {
+            err = launch_project<float>(
+                stream, (const float*)vol_ptr, (float*)img_ptr, (const float*)rot_ptr,
+                n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+                order, half_volume, half_image, full_image_w, max_r2_x4);
+        }
         break;
     case ffi::DataType::C128:
-        err = launch_project<double>(
-            stream, (const double*)vol_ptr, (double*)img_ptr, (const double*)rot_ptr,
-            n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-            order, half_volume, half_image, full_image_w, max_r2_x4);
+        if (relion_texture_interp && order == 1 && !half_volume) {
+            err = launch_project_texture_double(
+                stream, (const double*)vol_ptr, (double*)img_ptr, (const double*)rot_ptr,
+                n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+                half_image, full_image_w, max_r2_x4);
+        } else {
+            err = launch_project<double>(
+                stream, (const double*)vol_ptr, (double*)img_ptr, (const double*)rot_ptr,
+                n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
+                order, half_volume, half_image, full_image_w, max_r2_x4);
+        }
         break;
     default:
         return ffi::Error::InvalidArgument("project: volume must be C64 or C128");
@@ -2184,6 +2670,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Attr<int64_t>("half_image")
         .Attr<int64_t>("full_image_w")
         .Attr<int64_t>("max_r2_x4")
+        .Attr<int64_t>("relion_texture_interp")
         .Arg<ffi::AnyBuffer>()           /* vol     */
         .Arg<ffi::AnyBuffer>()           /* rot     */
         .Ret<ffi::AnyBuffer>()           /* img_out */

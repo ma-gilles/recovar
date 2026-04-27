@@ -21,6 +21,7 @@ from __future__ import annotations
 import ctypes
 import functools
 import logging
+import os
 import pathlib
 import subprocess
 import threading
@@ -106,6 +107,7 @@ def _ensure_ffi():
 
 
 _cuda_ok = None  # cached result: None = not checked, True/False = result
+_texture_debug_keys = set()
 
 
 def cuda_available() -> bool:
@@ -197,7 +199,13 @@ def _encode_max_r(max_r):
 
 
 def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r=None):
-    """Compute the shared FFI scalar keyword arguments (used by all 4 targets)."""
+    """Compute shared FFI scalar keyword arguments.
+
+    ``max_r`` is in image Fourier-pixel coordinates, matching
+    ``recovar.core.slicing`` and ``relion_interp``. The CUDA kernels compare
+    against coordinates already multiplied by ``upsampling``, so encode the
+    radius in padded-volume coordinates here and nowhere else.
+    """
     ih, iw_full = image_shape
     N0, N1, N2 = volume_shape
     ups = N0 // ih
@@ -214,11 +222,36 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
             half_volume=np.int64(int(half_volume)),
             half_image=np.int64(int(half_image)),
             full_image_w=np.int64(iw_full),
-            max_r2_x4=_encode_max_r(max_r),
+            max_r2_x4=_encode_max_r(None if max_r is None else float(max_r) * float(ups)),
         ),
         ih,
         iw_eff,
     )
+
+
+def _relion_texture_interp_enabled() -> bool:
+    return os.environ.get("RECOVAR_RELION_TEXTURE_INTERP", "0") == "1"
+
+
+def _project_ffi_kwargs(
+    image_shape,
+    volume_shape,
+    order,
+    half_volume,
+    half_image,
+    max_r=None,
+    relion_texture_interp: bool = False,
+):
+    """FFI kwargs for forward projection.
+
+    ``RECOVAR_RELION_TEXTURE_INTERP=1`` enables a diagnostic CUDA texture
+    interpolation path for full complex64 order-1 projections, matching
+    RELION's accelerated projector. It is intentionally env-gated because the
+    first implementation stages the volume into texture arrays per launch.
+    """
+    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["relion_texture_interp"] = np.int64(int(relion_texture_interp))
+    return kw, ih, iw_eff
 
 
 @functools.partial(jax.jit, static_argnums=(3, 4, 5, 6, 7, 8))
@@ -293,6 +326,9 @@ def backproject_indexed(
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["relion_fold_x"] = np.int64(
+        int(os.environ.get("RECOVAR_RELION_BACKPROJECT_FOLD_X", "0").lower() in {"1", "true", "yes", "on"})
+    )
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
@@ -305,8 +341,8 @@ def backproject_indexed(
     )(images, pixel_indices, rot6, volume, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
-def project(
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
+def _project_impl(
     volume: jax.Array,
     rotation_matrices: jax.Array,
     image_shape: Tuple[int, int] = (0, 0),
@@ -315,6 +351,7 @@ def project(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_texture_interp: bool = False,
 ) -> jax.Array:
     """Project *volume* to 2D images.
 
@@ -330,7 +367,15 @@ def project(
     """
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
-    kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw, ih, iw_eff = _project_ffi_kwargs(
+        image_shape,
+        volume_shape,
+        order,
+        half_volume,
+        half_image,
+        max_r,
+        relion_texture_interp=relion_texture_interp,
+    )
     n_images = rotation_matrices.shape[0]
     n_pixels = ih * iw_eff
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
@@ -341,6 +386,61 @@ def project(
         out_type,
         vmap_method="sequential",
     )(volume, rot6, **kw)
+
+
+def project(
+    volume: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+) -> jax.Array:
+    """Project *volume* to 2D images.
+
+    Set ``RECOVAR_RELION_TEXTURE_INTERP=1`` before the first call to use the
+    gated RELION CUDA texture interpolation path. The flag is forwarded as a
+    static argument so manual and texture traces cannot alias in JAX caches.
+    """
+    global _texture_debug_keys
+    texture_interp = _relion_texture_interp_enabled()
+    debug_key = (
+        texture_interp,
+        getattr(volume, "dtype", None),
+        order,
+        half_volume,
+        half_image,
+        image_shape,
+        volume_shape,
+        max_r,
+    )
+    if os.environ.get("RECOVAR_DEBUG_TEXTURE_PROJECT", "0") == "1" and debug_key not in _texture_debug_keys:
+        print(
+            "[RECOVAR_TEXTURE_PROJECT]",
+            f"enabled={texture_interp}",
+            f"dtype={getattr(volume, 'dtype', None)}",
+            f"order={order}",
+            f"half_volume={half_volume}",
+            f"half_image={half_image}",
+            f"image_shape={image_shape}",
+            f"volume_shape={volume_shape}",
+            f"max_r={max_r}",
+            flush=True,
+        )
+        _texture_debug_keys.add(debug_key)
+    return _project_impl(
+        volume,
+        rotation_matrices,
+        image_shape,
+        volume_shape,
+        order,
+        half_volume,
+        half_image,
+        max_r,
+        texture_interp,
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────

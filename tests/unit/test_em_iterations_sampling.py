@@ -13,6 +13,62 @@ import recovar.em.sampling as em_sampling
 pytestmark = pytest.mark.unit
 
 
+def test_read_relion_sampling_metadata_includes_psi_step(tmp_path):
+    sampling_star = tmp_path / "run_it010_sampling.star"
+    sampling_star.write_text(
+        "\n".join(
+            [
+                "_rlnSamplingPerturbInstance 0.47674",
+                "_rlnSamplingPerturbFactor 0.5",
+                "_rlnHealpixOrder 6",
+                "_rlnPsiStep 0.9375",
+                "_rlnOffsetRange 1.853",
+                "_rlnOffsetStep 1.237",
+                "",
+            ]
+        )
+    )
+
+    meta = em_sampling.read_relion_sampling_metadata(sampling_star)
+
+    assert meta["random_perturbation"] == pytest.approx(0.47674)
+    assert meta["perturbation_factor"] == pytest.approx(0.5)
+    assert meta["healpix_order"] == 6
+    assert meta["psi_step"] == pytest.approx(0.9375)
+    assert meta["offset_range"] == pytest.approx(1.853)
+    assert meta["offset_step"] == pytest.approx(1.237)
+
+
+def test_read_relion_optimiser_metadata_reads_replay_accuracies(tmp_path):
+    optimiser_star = tmp_path / "run_it010_optimiser.star"
+    optimiser_star.write_text(
+        "\n".join(
+            [
+                "_rlnOverallAccuracyRotations 1.030",
+                "_rlnOverallAccuracyTranslationsAngst 1.649",
+                "_rlnHasConverged 0",
+                "_rlnNumberOfIterWithoutResolutionGain 1",
+                "_rlnChangesOptimalOrientations 0.25",
+                "_rlnChangesOptimalOffsets 0.33",
+                "_rlnSmallestChangesOrientations 0.5405",
+                "_rlnSmallestChangesOffsets 0.4216",
+                "",
+            ]
+        )
+    )
+
+    meta = em_sampling.read_relion_optimiser_metadata(optimiser_star)
+
+    assert meta["overall_accuracy_rotations"] == pytest.approx(1.030)
+    assert meta["overall_accuracy_translations_angst"] == pytest.approx(1.649)
+    assert meta["has_converged"] == 0
+    assert meta["number_iter_without_resolution_gain"] == 1
+    assert meta["changes_optimal_orientations"] == pytest.approx(0.25)
+    assert meta["changes_optimal_offsets"] == pytest.approx(0.33)
+    assert meta["smallest_changes_orientations"] == pytest.approx(0.5405)
+    assert meta["smallest_changes_offsets"] == pytest.approx(0.4216)
+
+
 def test_translations_to_indices_maps_centered_integer_offsets():
     image_shape = (8, 8)
     translations = np.array(
@@ -241,7 +297,7 @@ def test_local_rotation_grid_fast_full_mode_matches_reference_loop():
         psi_deg_full = np.asarray(metadata["psi_deg_full"], dtype=np.float64)
         sigma_rot_deg = float(np.rad2deg(sigma_rot))
         sigma_psi_deg = float(np.rad2deg(sigma_psi))
-        biggest_sigma_deg = float(max(sigma_rot_deg, sigma_psi_deg))
+        biggest_sigma_deg = sigma_rot_deg
         sigma_rot_scale = max(biggest_sigma_deg, np.finfo(np.float64).tiny)
         sigma_psi_scale = max(sigma_psi_deg, np.finfo(np.float64).tiny)
 
@@ -282,7 +338,10 @@ def test_local_rotation_grid_fast_full_mode_matches_reference_loop():
                     joint_logw += -0.5 * (diffang[flat_indices] / sigma_rot_scale) ** 2
                 if sigma_psi_deg > 0.0:
                     joint_logw += -0.5 * (diffpsi[flat_indices] / sigma_psi_scale) ** 2
-                flat_log_prior = em_sampling._normalize_log_weights(joint_logw)
+                max_logw = float(np.max(joint_logw))
+                flat_log_prior = (
+                    joint_logw - (max_logw + np.log(np.sum(np.exp(joint_logw - max_logw))))
+                ).astype(np.float32)
             prior_entries.append((flat_indices, flat_log_prior))
             selected_union.update(flat_indices.tolist())
 
@@ -386,7 +445,7 @@ def test_local_rotation_grid_fast_factorized_support_stays_in_cone():
     assert float(np.max(ang_deg)) < sigma_cutoff * sigma_deg + 7.5
 
 
-def test_local_rotation_grid_fast_uses_max_of_sigma_rot_and_sigma_psi_for_direction_cone():
+def test_local_rotation_grid_fast_uses_sigma_rot_not_sigma_psi_for_direction_cone():
     from recovar import utils
 
     order = 4
@@ -411,14 +470,14 @@ def test_local_rotation_grid_fast_uses_max_of_sigma_rot_and_sigma_psi_for_direct
 
     n_pixels = hp.nside2npix(2**order)
     unique_pixels = np.unique(selected_indices % n_pixels)
-    assert unique_pixels.size > 1
+    assert unique_pixels.size == 1
 
     relion_grid = np.asarray(em_sampling.get_relion_rotation_grid(order), dtype=np.float64).reshape(-1, 3, 3)
     selected_views = relion_grid[unique_pixels, 2, :]
     selected_views /= np.linalg.norm(selected_views, axis=1, keepdims=True)
     diff_deg = np.rad2deg(np.arccos(np.clip(np.sum(selected_views * prior_view[None, :], axis=1), -1.0, 1.0)))
 
-    assert float(np.max(diff_deg)) < sigma_cutoff * max(sigma_rot_deg, sigma_psi_deg) + 1e-4
+    assert float(np.max(diff_deg)) < sigma_cutoff * sigma_rot_deg + 1e-4
 
 
 def test_local_rotation_grid_fast_per_image_priors_prefer_each_image_peak():

@@ -543,7 +543,7 @@ class TestSignificantCountsReasonable:
             max_significants=500,
         )
 
-        sig_rot_any, n_sig_b, hard_b, sparse_sig = _compute_significance_batched(
+        sig_rot_any, n_sig_b, hard_b, sparse_sig, full_stats = _compute_significance_batched(
             ds,
             volume,
             noise_variance,
@@ -556,10 +556,18 @@ class TestSignificantCountsReasonable:
             rotation_block_size=5,
             current_size=None,
             return_significant_sample_indices=True,
+            return_full_stats=True,
         )
 
         np.testing.assert_array_equal(np.asarray(hard_b), np.asarray(hard_assignments))
         np.testing.assert_array_equal(np.asarray(n_sig_b), np.asarray(n_sig))
+        np.testing.assert_allclose(
+            np.asarray(full_stats["max_posterior_per_image"]),
+            np.asarray(weights).max(axis=1),
+            rtol=1e-5,
+            atol=1e-6,
+        )
+        assert np.all(np.isfinite(full_stats["normalization_log_z"]))
         assert np.any(sig_rot_any)
         for i in range(n_images):
             np.testing.assert_array_equal(

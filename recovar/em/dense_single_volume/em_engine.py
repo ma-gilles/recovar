@@ -260,14 +260,22 @@ def _e_step_block_scores(
     rot_block_size = proj_half_weighted.shape[0]
     # Cross-term: -2 Re(conj(Y_half) @ (P_half * w).T)
     # This recovers -2 Re<Y, P>_full via the half-spectrum identity
-    cross = -2.0 * (jnp.conj(shifted_half) @ proj_half_weighted.T).real
+    cross = -2.0 * jnp.matmul(
+        jnp.conj(shifted_half),
+        proj_half_weighted.T,
+        precision=jax.lax.Precision.HIGHEST,
+    ).real
     # ``batch_norm`` is a per-image additive constant over the entire
     # rotation x translation grid. Omitting it preserves the posterior exactly
     # while keeping the relative scores representable in float32.
     cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)  # (n_images, rot_block_size, n_trans)
     # Norm-term: sum_k w(k) * CTF^2/noise(k) * |proj(k)|^2
-    norms = ctf2_over_nv_half @ proj_abs2_half.T  # (n_images, rot_block_size)
+    norms = jnp.matmul(
+        ctf2_over_nv_half,
+        proj_abs2_half.T,
+        precision=jax.lax.Precision.HIGHEST,
+    )  # (n_images, rot_block_size)
     residuals = cross + norms[..., None]
     # Convert to log-prob scores (higher = more probable)
     return -0.5 * residuals
@@ -307,11 +315,19 @@ def _e_step_block_scores_windowed(
     """
     rot_block_size = proj_windowed_weighted.shape[0]
     # Cross-term on windowed subset
-    cross = -2.0 * (jnp.conj(shifted_windowed) @ proj_windowed_weighted.T).real
+    cross = -2.0 * jnp.matmul(
+        jnp.conj(shifted_windowed),
+        proj_windowed_weighted.T,
+        precision=jax.lax.Precision.HIGHEST,
+    ).real
     cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)  # (n_images, rot_block_size, n_trans)
     # Norm-term on windowed subset
-    norms = ctf2_over_nv_windowed @ proj_abs2_windowed.T  # (n_images, rot_block_size)
+    norms = jnp.matmul(
+        ctf2_over_nv_windowed,
+        proj_abs2_windowed.T,
+        precision=jax.lax.Precision.HIGHEST,
+    )  # (n_images, rot_block_size)
     residuals = cross + norms[..., None]
     return -0.5 * residuals
 
@@ -331,10 +347,18 @@ def _e_step_block_scores_normalized_cc(
     """RELION iter-1 normalized cross-correlation score."""
     del batch_norm, image_shape, volume_shape
     rot_block_size = proj_half_weighted.shape[0]
-    cross = -2.0 * (jnp.conj(shifted_half) @ proj_half_weighted.T).real
+    cross = -2.0 * jnp.matmul(
+        jnp.conj(shifted_half),
+        proj_half_weighted.T,
+        precision=jax.lax.Precision.HIGHEST,
+    ).real
     cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)
-    norms = ctf2_over_nv_half @ proj_abs2_half.T
+    norms = jnp.matmul(
+        ctf2_over_nv_half,
+        proj_abs2_half.T,
+        precision=jax.lax.Precision.HIGHEST,
+    )
     denom = jnp.sqrt(jnp.maximum(norms, jnp.asarray(1e-30, dtype=norms.dtype)))
     return (-0.5 * cross) / denom[..., None]
 
@@ -355,10 +379,18 @@ def _e_step_block_scores_windowed_normalized_cc(
     """Windowed RELION iter-1 normalized cross-correlation score."""
     del batch_norm, n_windowed, image_shape, volume_shape
     rot_block_size = proj_windowed_weighted.shape[0]
-    cross = -2.0 * (jnp.conj(shifted_windowed) @ proj_windowed_weighted.T).real
+    cross = -2.0 * jnp.matmul(
+        jnp.conj(shifted_windowed),
+        proj_windowed_weighted.T,
+        precision=jax.lax.Precision.HIGHEST,
+    ).real
     cross = cross.reshape(n_images, n_trans, rot_block_size)
     cross = cross.swapaxes(1, 2)
-    norms = ctf2_over_nv_windowed @ proj_abs2_windowed.T
+    norms = jnp.matmul(
+        ctf2_over_nv_windowed,
+        proj_abs2_windowed.T,
+        precision=jax.lax.Precision.HIGHEST,
+    )
     denom = jnp.sqrt(jnp.maximum(norms, jnp.asarray(1e-30, dtype=norms.dtype)))
     return (-0.5 * cross) / denom[..., None]
 
@@ -423,7 +455,7 @@ def _m_step_block_windowed(
     return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed
 
 
-@partial(jax.jit, static_argnums=(4, 5, 6, 7, 8))
+@partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9))
 def _adjoint_slice_volume_windowed(
     windowed_half,
     window_indices,
@@ -434,6 +466,7 @@ def _adjoint_slice_volume_windowed(
     disc_type,
     half_image,
     half_volume=False,
+    max_r=None,
 ):
     """Scatter a windowed half-spectrum into a full half-grid and adjoint-slice.
 
@@ -451,6 +484,7 @@ def _adjoint_slice_volume_windowed(
         volume=volume,
         half_image=half_image,
         half_volume=half_volume,
+        max_r=max_r,
     )
 
 
@@ -928,6 +962,7 @@ def run_em(
             current_size,
             square=square_window,
             include_dc=True,
+            exact_radius=True,
         )
         window_indices = jnp.asarray(score_window_indices_np)
         recon_window_indices = jnp.asarray(recon_window_indices_np)
@@ -947,6 +982,9 @@ def run_em(
         recon_window_indices = None
         n_windowed = n_half
         n_recon_windowed = n_half
+    projection_kwargs = {}
+    if use_window:
+        projection_kwargs["max_r"] = float(current_size // 2)
 
     # Upcast half_weights to float64 when scoring in double precision
     if use_float64_scoring:
@@ -1370,6 +1408,18 @@ def run_em(
                 shifted_recon_windowed = shifted_recon_windowed.astype(jnp.complex128)
             else:
                 shifted_recon_windowed = shifted_recon_half
+        else:
+            # RELION's accelerated CUDA path uses XFLOAT=float unless compiled
+            # with ACC_DOUBLE_PRECISION. Keep scoring in complex64/float32 so a
+            # complex128 volume does not silently promote the likelihood GEMMs.
+            shifted_score_half = shifted_score_half.astype(jnp.complex64)
+            score_weight_half = score_weight_half.astype(jnp.float32)
+            if use_window:
+                shifted_windowed = shifted_windowed.astype(jnp.complex64)
+                ctf2_over_nv_windowed = ctf2_over_nv_windowed.astype(jnp.float32)
+            else:
+                shifted_windowed = shifted_score_half
+                ctf2_over_nv_windowed = score_weight_half
 
         if sync_timers:
             ready_values = [
@@ -1399,7 +1449,12 @@ def run_em(
 
             proj_t0 = time.time()
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
+                mean_for_proj,
+                rots_b,
+                image_shape,
+                proj_volume_shape,
+                disc_type,
+                **projection_kwargs,
             )
             if sync_timers:
                 _block_until_ready(proj_half_b, proj_abs2_half_b)
@@ -1412,6 +1467,9 @@ def run_em(
                 # Gather windowed subset from projections
                 proj_windowed_b = proj_half_b[:, window_indices]
                 proj_abs2_windowed_b = proj_abs2_half_b[:, window_indices]
+                if not use_float64_scoring:
+                    proj_windowed_b = proj_windowed_b.astype(jnp.complex64)
+                    proj_abs2_windowed_b = proj_abs2_windowed_b.astype(jnp.float32)
                 proj_windowed_weighted_b = proj_windowed_b * half_weights_windowed
                 proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
 
@@ -1444,6 +1502,9 @@ def run_em(
                     )
             else:
                 # Full half-spectrum path (Phase 1 behavior)
+                if not use_float64_scoring:
+                    proj_half_b = proj_half_b.astype(jnp.complex64)
+                    proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
                 proj_half_weighted_b = proj_half_b * half_weights
                 proj_abs2_weighted_b = proj_abs2_half_b * half_weights
 
@@ -1476,6 +1537,34 @@ def run_em(
             if sync_timers:
                 _block_until_ready(scores)
             pass1_score_time += time.time() - score_t0
+
+            # Pre-prior per-pose dump for one targeted particle (env-gated debug).
+            # When RECOVAR_DEBUG_PER_POSE_DUMP_PREPRIOR=1, dump scores BEFORE
+            # adding any prior — matches RELION's exp_Mweight_diff2 dump point.
+            _per_pose_dir_pre = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR")
+            _per_pose_target_pre = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_TARGET")
+            _per_pose_preprior = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_PREPRIOR")
+            if (
+                _per_pose_dir_pre
+                and _per_pose_target_pre is not None
+                and _per_pose_preprior
+                and _per_pose_preprior != "0"
+            ):
+                try:
+                    _target_idx_pre = int(_per_pose_target_pre)
+                    _idx_arr_pre = np.asarray(indices, dtype=np.int64)
+                    _hits_pre = np.where(_idx_arr_pre == _target_idx_pre)[0]
+                    if len(_hits_pre) > 0:
+                        _row_pre = int(_hits_pre[0])
+                        _per_pose_path_pre = pathlib.Path(_per_pose_dir_pre)
+                        _per_pose_path_pre.mkdir(parents=True, exist_ok=True)
+                        _scores_target_pre = np.asarray(scores[_row_pre], dtype=np.float64)
+                        np.save(
+                            _per_pose_path_pre / f"target{_target_idx_pre:06d}_block{b:04d}_preprior.npy",
+                            _scores_target_pre,
+                        )
+                except Exception:
+                    pass
 
             pass1_postprocess_t0 = time.time()
             if relion_firstiter_score_mode == "gaussian":
@@ -1608,7 +1697,12 @@ def run_em(
             else:
                 proj_t0 = time.time()
                 proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                    mean_for_proj, rots_b, image_shape, proj_volume_shape, disc_type
+                    mean_for_proj,
+                    rots_b,
+                    image_shape,
+                    proj_volume_shape,
+                    disc_type,
+                    **projection_kwargs,
                 )
                 pass2_projection_time += time.time() - proj_t0
 
@@ -1617,6 +1711,9 @@ def run_em(
                 # Gather windowed subset
                 proj_windowed_b = proj_half_b[:, window_indices]
                 proj_abs2_windowed_b = proj_abs2_half_b[:, window_indices]
+                if not use_float64_scoring:
+                    proj_windowed_b = proj_windowed_b.astype(jnp.complex64)
+                    proj_abs2_windowed_b = proj_abs2_windowed_b.astype(jnp.float32)
                 proj_windowed_weighted_b = proj_windowed_b * half_weights_windowed
                 proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
 
@@ -1648,6 +1745,9 @@ def run_em(
                         volume_shape,
                     )
             else:
+                if not use_float64_scoring:
+                    proj_half_b = proj_half_b.astype(jnp.complex64)
+                    proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
                 proj_half_weighted_b = proj_half_b * half_weights
                 proj_abs2_weighted_b = proj_abs2_half_b * half_weights
 
@@ -1772,6 +1872,8 @@ def run_em(
                         recon_volume_shape,
                         "linear_interp",
                         True,
+                        False,
+                        float(current_size // 2),
                     )
                     if sync_timers:
                         _block_until_ready(Ft_y)
@@ -1788,6 +1890,8 @@ def run_em(
                         recon_volume_shape,
                         "linear_interp",
                         True,
+                        False,
+                        float(current_size // 2),
                     )
                     if sync_timers:
                         _block_until_ready(Ft_ctf)
@@ -2217,6 +2321,9 @@ def compute_e_step_weights(
     else:
         window_indices = None
         n_windowed = n_half
+    projection_kwargs = {}
+    if use_window:
+        projection_kwargs["max_r"] = float(current_size // 2)
 
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
     n_rot_padded = n_blocks * rotation_block_size
@@ -2270,7 +2377,12 @@ def compute_e_step_weights(
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean, rots_b, image_shape, volume_shape, disc_type
+                mean,
+                rots_b,
+                image_shape,
+                volume_shape,
+                disc_type,
+                **projection_kwargs,
             )
 
             if use_window:
@@ -2327,7 +2439,12 @@ def compute_e_step_weights(
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean, rots_b, image_shape, volume_shape, disc_type
+                mean,
+                rots_b,
+                image_shape,
+                volume_shape,
+                disc_type,
+                **projection_kwargs,
             )
 
             if use_window:

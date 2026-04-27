@@ -252,6 +252,8 @@ def compute_pass2_stats(
     scale_corrections=None,
     image_pre_shifts=None,
     use_float64_scoring=False,
+    do_gridding_correction=False,
+    square_window=False,
     random_perturbation=0.0,
     translation_prior_centers=None,
 ):
@@ -476,6 +478,8 @@ def compute_pass2_stats(
         scale_corrections=scale_corrections,
         image_pre_shifts=image_pre_shifts,
         use_float64_scoring=use_float64_scoring,
+        do_gridding_correction=do_gridding_correction,
+        square_window=square_window,
     )
 
     # Unpack: run_em returns (mean, ha, Ft_y, Ft_ctf, [relion_stats], [noise_stats])
@@ -544,8 +548,11 @@ def compute_pass2_stats_sparse(
     scale_corrections=None,
     image_pre_shifts=None,
     use_float64_scoring=False,
+    do_gridding_correction=False,
+    square_window=False,
     random_perturbation=0.0,
     translation_prior_centers=None,
+    normalization_log_z=None,
     use_perimage_reference=False,
 ):
     """Exact sparse pass 2 over per-image significant coarse samples.
@@ -594,7 +601,11 @@ def compute_pass2_stats_sparse(
             scale_corrections=scale_corrections,
             image_pre_shifts=image_pre_shifts,
             use_float64_scoring=use_float64_scoring,
+            translation_prior_centers=translation_prior_centers,
+            do_gridding_correction=do_gridding_correction,
+            square_window=square_window,
             random_perturbation=random_perturbation,
+            normalization_log_z=normalization_log_z,
         )
 
     return _compute_pass2_stats_sparse_perimage_reference(
@@ -620,8 +631,12 @@ def compute_pass2_stats_sparse(
         image_corrections=image_corrections,
         scale_corrections=scale_corrections,
         image_pre_shifts=image_pre_shifts,
+        translation_prior_centers=translation_prior_centers,
         use_float64_scoring=use_float64_scoring,
+        do_gridding_correction=do_gridding_correction,
+        square_window=square_window,
         random_perturbation=random_perturbation,
+        normalization_log_z=normalization_log_z,
     )
 
 
@@ -649,8 +664,12 @@ def _compute_pass2_stats_sparse_perimage_reference(
     image_corrections=None,
     scale_corrections=None,
     image_pre_shifts=None,
+    translation_prior_centers=None,
     use_float64_scoring=False,
+    do_gridding_correction=False,
+    square_window=False,
     random_perturbation=0.0,
+    normalization_log_z=None,
 ):
     """Per-image reference implementation for sparse pass-2.
 
@@ -669,6 +688,11 @@ def _compute_pass2_stats_sparse_perimage_reference(
 
     from ..em_engine import run_em
     from .types import NoiseStats
+
+    if normalization_log_z is not None:
+        raise NotImplementedError(
+            "normalization_log_z is only implemented for the bucketed sparse pass-2 path",
+        )
 
     n_images = experiment_dataset.n_units
     n_coarse_trans = int(np.asarray(translations).shape[0])
@@ -718,7 +742,6 @@ def _compute_pass2_stats_sparse_perimage_reference(
         translation_log_prior,
         fine_translation_parent,
     )
-
     local_rot_counts = []
     valid_candidate_counts = []
 
@@ -818,6 +841,8 @@ def _compute_pass2_stats_sparse_perimage_reference(
                 else np.asarray(translation_prior_centers, dtype=np.float32)
             ),
             use_float64_scoring=use_float64_scoring,
+            do_gridding_correction=do_gridding_correction,
+            square_window=square_window,
         )
 
         # Unpack return based on flags
