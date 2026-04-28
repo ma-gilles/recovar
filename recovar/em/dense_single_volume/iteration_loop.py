@@ -357,6 +357,15 @@ def _normalize_logged_float32_half_pair(values, *, label: str):
     return per_half
 
 
+def _relion_rotation_grid_float32(healpix_order: int):
+    """Return RELION rotation matrices/eulers using the loop's float32 policy."""
+    order = int(healpix_order)
+    return (
+        get_relion_rotation_grid(order).astype(np.float32),
+        get_relion_rotation_grid_eulers(order).astype(np.float32),
+    )
+
+
 def _radial_profile_from_noise_variance(noise_variance, image_shape):
     """Average an image-shaped noise vector into integer radial shells."""
     n_shells = image_shape[0] // 2 + 1
@@ -1990,36 +1999,22 @@ def _run_relion_iteration_loop(
     # RELION mode owns the coarse HEALPix grid. When coarse-grid metadata is
     # provided, regenerate the matching coarse grid here instead of inheriting
     # any finer caller-supplied rotation table.
-    current_healpix_order = int(
-        init_healpix_order
-    )  ##TODO: SURELY THIS INT IS UNNECESSARY? I WANT TO CLEAN UP THIS KIND OF USELESS CODE
+    current_healpix_order = int(init_healpix_order)
     if nside_level is not None:
-        ## TODO: ID LIKE BETTER NAMING THAT NSIDE_LEVEL. WHAT DOES THIS MEAN?
         if int(nside_level) != current_healpix_order:
             logger.info(
                 "RELION mode: ignoring caller nside_level=%d and regenerating initial coarse grid at healpix_order=%d",
                 int(nside_level),
                 current_healpix_order,
             )
-        current_rotations = get_relion_rotation_grid(
-            current_healpix_order
-        ).astype(
-            np.float32
-        )  # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
-        current_rotation_eulers = get_relion_rotation_grid_eulers(
-            current_healpix_order
-        ).astype(
-            np.float32
-        )  # I WANT DTYPE TO BE DECLARED AHEAD. E.G. RIGHT NOW ANYTHING THAT USES NP.FLOAT32 SHOULD HAVE SOMETHING LIKE DEFAULT_DTYPE
-        ## TODO: I ALSO WOULD LIKE TO NOT HAVE SO MANY DTYPE COMMANDS IF THEY ARENT NECESSARY. GOOD CODING SHOULD MAKE INHERITED TYPE SEEMLESS
+        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
         current_nside_level = current_healpix_order
     elif rotations is not None:
         current_rotations = np.asarray(rotations, dtype=np.float32)
         current_rotation_eulers = utils.R_to_relion(np.asarray(current_rotations), degrees=True).astype(np.float32)
         current_nside_level = current_healpix_order
     else:
-        current_rotations = get_relion_rotation_grid(current_healpix_order).astype(np.float32)
-        current_rotation_eulers = get_relion_rotation_grid_eulers(current_healpix_order).astype(np.float32)
+        current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(current_healpix_order)
         current_nside_level = current_healpix_order
     if translations is None:
         current_translations = jnp.asarray(
@@ -2600,8 +2595,7 @@ def _run_relion_iteration_loop(
                     current_healpix_order,
                     new_order,
                 )
-                current_rotations = get_relion_rotation_grid(new_order).astype(np.float32)
-                current_rotation_eulers = get_relion_rotation_grid_eulers(new_order).astype(np.float32)
+                current_rotations, current_rotation_eulers = _relion_rotation_grid_float32(new_order)
                 current_healpix_order = new_order
                 global_direction_prior_per_half = [None, None]
                 global_direction_prior_order_per_half = [None, None]
@@ -2728,7 +2722,7 @@ def _run_relion_iteration_loop(
                         rotation_grid_size(local_search_order),
                         current_healpix_order,
                     )
-                    local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(np.float32)
+                    _, local_search_rotation_eulers = _relion_rotation_grid_float32(local_search_order)
                     if abs(float(random_perturbation)) > 1e-12:
                         local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
                             local_search_rotation_eulers,
@@ -2736,7 +2730,7 @@ def _run_relion_iteration_loop(
                             relion_angular_sampling_deg(local_search_order, adaptive_oversampling=0),
                         )
                     else:
-                        local_search_rotations = get_relion_rotation_grid(local_search_order).astype(np.float32)
+                        local_search_rotations, _ = _relion_rotation_grid_float32(local_search_order)
                 else:
                     logger.info(
                         "Using selected-only fine local-search grid: order=%d (%d rotations) from capped base order=%d",
@@ -2749,9 +2743,7 @@ def _run_relion_iteration_loop(
                         adaptive_oversampling=0,
                     )
                     if _precompute_exact_local_fine_grid_enabled(local_search_order):
-                        local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(
-                            np.float32
-                        )
+                        _, local_search_rotation_eulers = _relion_rotation_grid_float32(local_search_order)
                         local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
                             local_search_rotation_eulers,
                             float(random_perturbation),
