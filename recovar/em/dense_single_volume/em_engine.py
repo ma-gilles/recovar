@@ -617,21 +617,19 @@ def _m_step_block_windowed(
 def _update_logsumexp(max_s, sum_exp, scores_block):
     """Streaming logsumexp update: accumulate normalization stats from one block.
 
-    Accumulates in float64 to avoid underflow when the posterior is sharp
-    (e.g. with RELION's narrow translation prior sigma ~ 0.3 px, most
-    candidates get exp(score - max) < float32 epsilon).
+    The accumulator dtype is selected by the caller through ``sum_exp``. Dense
+    RELION paths default to float64 to avoid underflow with sharp posteriors.
     """
 
-    ## TODO: IS THIS FLOAT64 NECESSARY? WE SHOULD PROBABLY HAVE ONE WAY TO SWAP ALL COMPUTATOIN FROM FLOAT32 TO FLOAT64 (E.G. A GLOBAL FLAG LIKE _USE_FLOAT32)
+    accumulator_dtype = sum_exp.dtype
     scores_flat = scores_block.reshape(scores_block.shape[0], -1)  # (n_images, block*trans)
     block_max = jnp.max(scores_flat, axis=1)  # (n_images,)
     new_max = jnp.maximum(max_s, block_max)
-    # Use float64 for the exponential sums to avoid underflow
     exp_terms = jnp.sum(
-        jnp.exp((scores_flat - new_max[:, None]).astype(jnp.float64)),
+        jnp.exp((scores_flat - new_max[:, None]).astype(accumulator_dtype)),
         axis=1,
     )
-    sum_exp = sum_exp * jnp.exp((max_s - new_max).astype(jnp.float64)) + exp_terms
+    sum_exp = sum_exp * jnp.exp((max_s - new_max).astype(accumulator_dtype)) + exp_terms
     return new_max, sum_exp
 
 
@@ -639,10 +637,11 @@ def _update_logsumexp(max_s, sum_exp, scores_block):
 def _merge_block_logsumexp(max_s, sum_exp, block_max, block_sum_exp):
     """Merge one pre-reduced block logsumexp into streaming batch stats."""
 
+    accumulator_dtype = sum_exp.dtype
     new_max = jnp.maximum(max_s, block_max)
-    old_term = sum_exp * jnp.exp((max_s - new_max).astype(jnp.float64))
-    block_term = block_sum_exp.astype(jnp.float64) * jnp.exp(
-        (block_max - new_max).astype(jnp.float64),
+    old_term = sum_exp * jnp.exp((max_s - new_max).astype(accumulator_dtype))
+    block_term = block_sum_exp.astype(accumulator_dtype) * jnp.exp(
+        (block_max - new_max).astype(accumulator_dtype),
     )
     return new_max, old_term + block_term
 
@@ -1454,7 +1453,7 @@ def run_em(
 
         # -- PASS 1: streaming logsumexp over rotation blocks --
         max_s = jnp.full(batch_size, -jnp.inf)
-        sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
+        sum_exp = jnp.zeros(batch_size, dtype=precision_policy.normalization_real_dtype)
         best_score_pass1 = jnp.full(batch_size, -jnp.inf)
         best_argmax_pass1 = jnp.zeros(batch_size, dtype=jnp.int32)
 
@@ -1591,11 +1590,15 @@ def run_em(
         pass2_skipmask_t0 = time.time()
         if block_max_per_image:
             block_max_matrix = jnp.stack(block_max_per_image, axis=0)
-            block_log_pose_counts = jnp.log(jnp.asarray(block_pose_counts, dtype=jnp.float64))[:, None]
+            block_log_pose_counts = jnp.log(
+                jnp.asarray(block_pose_counts, dtype=precision_policy.normalization_real_dtype),
+            )[:, None]
             finite_log_z = jnp.isfinite(log_Z) & valid_image_mask
             log_omitted_mass_upper = jnp.where(
                 finite_log_z[None, :],
-                block_log_pose_counts + block_max_matrix.astype(jnp.float64) - log_Z[None, :].astype(jnp.float64),
+                block_log_pose_counts
+                + block_max_matrix.astype(precision_policy.normalization_real_dtype)
+                - log_Z[None, :].astype(precision_policy.normalization_real_dtype),
                 jnp.inf,
             )
             skip_candidate = (log_omitted_mass_upper < sparse_profile.log_threshold) | (~valid_image_mask[None, :])
@@ -2261,6 +2264,7 @@ def compute_e_step_weights(
     )
 
     half_weights = make_half_image_weights(image_shape)
+    precision_policy = DensePrecisionPolicy()
 
     window_spec = make_fourier_window_spec(
         image_shape,
@@ -2319,7 +2323,7 @@ def compute_e_step_weights(
 
         # Pass 1: streaming logsumexp
         max_s = jnp.full(batch_size, -jnp.inf)
-        sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
+        sum_exp = jnp.zeros(batch_size, dtype=precision_policy.normalization_real_dtype)
 
         for b in range(n_blocks):
             r0 = b * rotation_block_size

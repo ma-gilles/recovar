@@ -31,6 +31,7 @@ def test_dense_precision_policy_casts_score_and_projection_dtypes():
     )
 
     assert default_policy.cast_projection_volume(volume) is volume
+    assert default_policy.normalization_real_dtype == jnp.float64
     assert cast_score.dtype == jnp.complex64
     assert cast_weight.dtype == jnp.float32
     assert cast_recon.dtype == jnp.complex64
@@ -46,9 +47,13 @@ def test_dense_precision_policy_casts_score_and_projection_dtypes():
     )
 
     assert precise_policy.cast_projection_volume(volume).dtype == jnp.complex128
+    assert precise_policy.normalization_real_dtype == jnp.float64
     assert cast_score.dtype == jnp.complex128
     assert cast_weight.dtype == jnp.float64
     assert cast_recon.dtype == jnp.complex128
+
+    float32_normalization_policy = DensePrecisionPolicy(use_float64_normalization=False)
+    assert float32_normalization_policy.normalization_real_dtype == jnp.float32
 
 
 def test_dense_precision_policy_casts_projection_scores_only_for_float32_scoring():

@@ -13,6 +13,7 @@ class DensePrecisionPolicy:
 
     use_float64_scoring: bool = False
     use_float64_projections: bool = False
+    use_float64_normalization: bool = True
 
     @property
     def score_complex_dtype(self):
@@ -25,6 +26,10 @@ class DensePrecisionPolicy:
     @property
     def projection_complex_dtype(self):
         return jnp.complex128 if self.use_float64_projections else None
+
+    @property
+    def normalization_real_dtype(self):
+        return jnp.float64 if self.use_float64_normalization else self.score_real_dtype
 
     def cast_projection_volume(self, volume):
         dtype = self.projection_complex_dtype
