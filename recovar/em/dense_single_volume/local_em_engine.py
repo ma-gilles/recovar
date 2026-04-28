@@ -38,6 +38,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     integer_pre_shifts_or_none,
+    tiled_half_image_phase_factors,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases as _apply_half_translation_phases,
@@ -1333,11 +1334,7 @@ def run_local_em_exact(
 
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(bucket.image_indices)])
-            lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-                image_shape, voxel_size=1, scaled=True
-            )
-            phase_factors = jnp.exp(-2j * jnp.pi * (lattice_half @ batch_shifts.T)).T
-            phase_expanded = jnp.repeat(phase_factors, n_trans, axis=0)
+            phase_expanded = tiled_half_image_phase_factors(image_shape, batch_shifts, n_trans)
             shifted_half = shifted_half * phase_expanded
             shifted_recon_half = shifted_recon_half * phase_expanded
         shifted_half_with_dc = shifted_half
