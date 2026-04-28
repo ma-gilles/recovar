@@ -75,6 +75,11 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket_abs2_weighted_on_demand,
     score_local_bucket,
 )
+from recovar.em.dense_single_volume.helpers.translation_prior import (
+    translation_prior_centers_for_images,
+    translation_sqdist_angstrom,
+    validate_translation_prior_centers,
+)
 from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
 logger = logging.getLogger(__name__)
@@ -1073,25 +1078,11 @@ def run_local_em_exact(
                 "normalization_log_z must have shape "
                 f"({n_images},), got {normalization_log_z_np.shape}",
             )
-    translation_prior_centers_np = None
-    if translation_prior_centers is not None:
-        translation_prior_centers_np = np.asarray(translation_prior_centers, dtype=np.float32)
-        if translation_prior_centers_np.ndim == 1:
-            if translation_prior_centers_np.shape != (local_layout.translation_grid.shape[1],):
-                raise ValueError(
-                    "translation_prior_centers must have shape "
-                    f"({local_layout.translation_grid.shape[1]},), got {translation_prior_centers_np.shape}",
-                )
-        elif translation_prior_centers_np.ndim == 2:
-            if translation_prior_centers_np.shape != (n_images, local_layout.translation_grid.shape[1]):
-                raise ValueError(
-                    "translation_prior_centers must have shape "
-                    f"({n_images}, {local_layout.translation_grid.shape[1]}), got {translation_prior_centers_np.shape}",
-                )
-        else:
-            raise ValueError(
-                f"translation_prior_centers must be 1D or 2D, got {translation_prior_centers_np.ndim} dimensions",
-            )
+    translation_prior_centers_np = validate_translation_prior_centers(
+        translation_prior_centers,
+        n_images=n_images,
+        n_dims=local_layout.translation_grid.shape[1],
+    )
     (
         debug_score_dump_dir,
         debug_score_dump_targets,
@@ -1360,19 +1351,15 @@ def run_local_em_exact(
         batch_size = int(bucket.image_indices.shape[0])
         translation_sqdist_ang = None
         if translation_prior_centers_np is not None:
-            if translation_prior_centers_np.ndim == 1:
-                centers = np.broadcast_to(
-                    translation_prior_centers_np[None, :],
-                    (batch_size, translation_prior_centers_np.shape[0]),
-                )
-            else:
-                centers = translation_prior_centers_np[np.asarray(bucket.image_indices)]
-            voxel = float(experiment_dataset.voxel_size if experiment_dataset.voxel_size > 0 else 1.0)
-            translation_sqdist_ang = np.sum(
-                ((np.asarray(local_layout.translation_grid, dtype=np.float32)[None, :, :] - centers[:, None, :]) * voxel)
-                ** 2,
-                axis=-1,
-                dtype=np.float64,
+            centers = translation_prior_centers_for_images(
+                translation_prior_centers_np,
+                bucket.image_indices,
+                batch_size=batch_size,
+            )
+            translation_sqdist_ang = translation_sqdist_angstrom(
+                local_layout.translation_grid,
+                centers,
+                experiment_dataset.voxel_size,
             )
         ## TODO: THIS IS INSANE BRANCHING LOGIC. HOW MANY OF THESE ARE USEFU?  CAN WE DELETE SOME/MANY OF THESE FLAGS?
         can_use_big_jit_bucket = _can_use_local_big_jit_bucket(
