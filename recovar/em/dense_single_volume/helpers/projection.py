@@ -126,3 +126,37 @@ def compute_projections_block(
     ## TODO: WE SHOULD THINK ABOUT WHETHER STORING SQUARES IS WORTH IT.
     proj_abs2_half = jnp.abs(proj_half) ** 2 if return_abs2 else None
     return proj_half, proj_abs2_half
+
+
+def project_half_spectrum(
+    volume,
+    rotations_block,
+    image_shape,
+    volume_shape,
+    disc_type,
+    *,
+    half_volume: bool = False,
+    max_r=DEFAULT_PROJECTION_MAX_R,
+):
+    """Forward-slice one rotation block and return only the half-spectrum projection."""
+
+    if max_r is DEFAULT_PROJECTION_MAX_R or max_r == "auto":
+        return core.slice_volume(
+            volume,
+            rotations_block,
+            image_shape,
+            volume_shape,
+            disc_type,
+            half_volume=half_volume,
+            half_image=True,
+        )
+    return core.slice_volume(
+        volume,
+        rotations_block,
+        image_shape,
+        volume_shape,
+        disc_type,
+        half_volume=half_volume,
+        half_image=True,
+        max_r=max_r,
+    )

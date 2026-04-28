@@ -13,8 +13,11 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 
-from recovar import core
 from recovar.em.dense_single_volume.helpers.backprojection import accumulate_adjoint_pair
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_noise_block,
+    project_half_spectrum,
+)
 
 
 class DenseBucketResult(NamedTuple):
@@ -44,24 +47,13 @@ def _project_half(
 ):
     """Project to a half-image while preserving the public ``"auto"`` sentinel."""
 
-    if projection_max_r == "auto":
-        return core.slice_volume(
-            mean_for_proj,
-            rotations_block,
-            image_shape,
-            proj_volume_shape,
-            disc_type,
-            half_volume=projection_half_volume,
-            half_image=True,
-        )
-    return core.slice_volume(
+    return project_half_spectrum(
         mean_for_proj,
         rotations_block,
         image_shape,
         proj_volume_shape,
         disc_type,
         half_volume=projection_half_volume,
-        half_image=True,
         max_r=projection_max_r,
     )
 
@@ -183,35 +175,6 @@ def _adjoint_dense_bucket(
         half_volume=mstep_half_volume,
         max_r=backprojection_max_r,
     )
-
-
-def _compute_noise_block(
-    proj_half,
-    proj_abs2_half,
-    summed_masked,
-    ctf_probs,
-    noise_variance_half,
-    shell_indices,
-    n_shells: int,
-    *,
-    return_noise_split: bool,
-):
-    ctf_probs_raw = ctf_probs * noise_variance_half
-    a2 = jnp.sum(proj_abs2_half * ctf_probs_raw, axis=0)
-    cross = jnp.sum(proj_half * jnp.conj(summed_masked), axis=0)
-    xa = noise_variance_half * cross.real
-    block_noise = a2 - 2.0 * xa
-
-    noise_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-    noise_shells = noise_shells.at[shell_indices].add(block_noise.astype(jnp.float32))
-    if not return_noise_split:
-        zeros = jnp.zeros(n_shells, dtype=jnp.float32)
-        return noise_shells, zeros, zeros
-    a2_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-    a2_shells = a2_shells.at[shell_indices].add(a2.astype(jnp.float32))
-    xa_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-    xa_shells = xa_shells.at[shell_indices].add(xa.astype(jnp.float32))
-    return noise_shells, a2_shells, xa_shells
 
 
 @partial(
@@ -434,7 +397,7 @@ def run_dense_bucket_big_jit(
             P_noise = probs.swapaxes(0, 1).reshape(rot_block_size, batch_size * n_trans)
             summed_masked_noise = P_noise @ shifted_noise
             proj_abs2_noise = jnp.abs(proj_noise) ** 2
-            block_noise, block_a2, block_xa = _compute_noise_block(
+            block_noise, block_a2, block_xa = compute_noise_block(
                 proj_noise,
                 proj_abs2_noise,
                 summed_masked_noise,
@@ -442,7 +405,7 @@ def run_dense_bucket_big_jit(
                 noise_variance,
                 shell_indices_noise,
                 n_shells,
-                return_noise_split=return_noise_split,
+                return_split=return_noise_split,
             )
             noise_wsum = noise_wsum + block_noise
             if return_noise_split:
