@@ -4026,6 +4026,8 @@ def test_local_search_uses_selected_only_fine_rotation_grid_when_oversampling_is
     """Exact local search selects from the fine-order grid without materializing it."""
     import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
+    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID", "0")
+
     order_sizes = {4: 4, 5: 9}
     grid_calls = []
     local_calls = []
@@ -4155,6 +4157,8 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
 ):
     """Selected-only fine local grids must carry the RELION perturbation metadata."""
     import recovar.em.dense_single_volume.iteration_loop as refine_mod
+
+    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID", "0")
 
     order_sizes = {4: 4, 5: 9}
     perturb_calls = []
@@ -5538,6 +5542,8 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
 ):
     """Oversampled local-search assignments must be decoded on the fine grid."""
     import recovar.em.dense_single_volume.iteration_loop as refine_mod
+
+    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID", "0")
 
     order_sizes = {4: 4, 5: 9}
     fine_idx = order_sizes[5] - 1

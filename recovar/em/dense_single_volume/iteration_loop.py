@@ -2815,7 +2815,15 @@ def _run_relion_iteration_loop(
         # coarse/fine (adaptive_oversampling>=1).
         iter_sig_counts = None
         use_adaptive = state.adaptive_oversampling > 0 and not use_local and effective_rotations.shape[0] > 16
-        is_initial_global_iteration = init_relion_iteration == 0 and iteration == 0 and not use_local
+        has_replay_pose_state = any(
+            trans is not None for trans in relion_half_inputs.previous_best_translations
+        ) or any(eulers is not None for eulers in relion_half_inputs.previous_best_rotation_eulers)
+        is_initial_global_iteration = (
+            init_relion_iteration == 0
+            and iteration == 0
+            and not use_local
+            and not has_replay_pose_state
+        )
         use_global_significant_support = (
             state.adaptive_oversampling == 0
             and not use_local
@@ -4472,6 +4480,13 @@ def _run_relion_iteration_loop(
         smallest_change_angles_trajectory.append(float(state.current_changes_optimal_orientations))
         smallest_change_offsets_trajectory.append(float(state.current_changes_optimal_offsets_angstrom))
 
+        # Save assignments for next iteration's change tracking.
+        # Use coarse_ha (indexed into effective_rotations/current_rotations)
+        # so that local search and convergence detection work correctly
+        # regardless of whether adaptive oversampling was used.
+        previous_assignments = [ha.copy() if ha is not None else None for ha in coarse_ha]
+        _parity_dump.mark_stage(iteration, "convergence")
+
         if _parity_dump.is_active():
             try:
                 _parity_dump.dump_iteration(
@@ -4501,13 +4516,6 @@ def _run_relion_iteration_loop(
                 )
             except Exception as exc:
                 logger.warning("parity_dump.dump_iteration failed at iter %d: %s", iteration, exc)
-
-        # Save assignments for next iteration's change tracking.
-        # Use coarse_ha (indexed into effective_rotations/current_rotations)
-        # so that local search and convergence detection work correctly
-        # regardless of whether adaptive oversampling was used.
-        previous_assignments = [ha.copy() if ha is not None else None for ha in coarse_ha]
-        _parity_dump.mark_stage(iteration, "convergence")
 
         # --- Timing ---
         elapsed = time.time() - t0
