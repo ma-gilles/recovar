@@ -12,10 +12,7 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-import recovar.core.padding as padding
 from recovar.core.configs import ForwardModelConfig
-from recovar.core import mask as core_mask
-from recovar.data_io.image_backends import _apply_relion_soft_image_mask_numpy
 from recovar.em.dense_single_volume.em_primitives import (
     _adjoint_slice_volume_half,
     _adjoint_slice_volume_windowed,
@@ -32,6 +29,14 @@ from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_w
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     integer_pre_shifts_or_none,
+)
+from recovar.em.dense_single_volume.helpers.preprocessing import (
+    apply_half_translation_phases as _apply_half_translation_phases,
+    can_native_half_preprocess as _can_native_half_preprocess,
+    half_translation_phase_table as _half_translation_phase_table,
+    image_preprocess_backend as _image_preprocess_backend,
+    process_half_image,
+    try_process_masked_and_unmasked_half_together as _try_process_masked_and_unmasked_half_together,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.local_debug import (
@@ -393,26 +398,23 @@ def _build_processed_half_cache(
     if not can_cache:
         return None, None, False
 
-    process_half_fn = getattr(experiment_dataset, "process_images_half", None)
-    if process_half_fn is not None:
-        score_half = process_half_fn(raw_for_processing, apply_image_mask=score_with_masked_images)
-        if score_with_masked_images:
-            recon_half = process_half_fn(raw_for_processing, apply_image_mask=False)
-        else:
-            recon_half = score_half
-    else:
+    config = None
+    if getattr(experiment_dataset, "process_images_half", None) is None:
         config = ForwardModelConfig.from_dataset(
             experiment_dataset,
             disc_type="linear_interp",
             process_fn=experiment_dataset.process_images,
         )
-        processed_full = config.process_fn(raw_for_processing, apply_image_mask=score_with_masked_images)
-        score_half = fourier_transform_utils.full_image_to_half_image(processed_full, config.image_shape)
-        if score_with_masked_images:
-            processed_full = config.process_fn(raw_for_processing, apply_image_mask=False)
-            recon_half = fourier_transform_utils.full_image_to_half_image(processed_full, config.image_shape)
-        else:
-            recon_half = score_half
+    score_half = process_half_image(
+        experiment_dataset,
+        raw_for_processing,
+        config,
+        score_with_masked_images,
+    )
+    if score_with_masked_images:
+        recon_half = process_half_image(experiment_dataset, raw_for_processing, config, False)
+    else:
+        recon_half = score_half
 
     return jnp.asarray(score_half), jnp.asarray(recon_half), real_space_pre_shift_applied
 
@@ -472,104 +474,10 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
     )
 
 
-@jax.jit
-def _apply_half_translation_phases(weighted_half, translation_phases_half):
-    return (weighted_half[:, None, :] * translation_phases_half[None, :, :]).reshape(
-        weighted_half.shape[0] * translation_phases_half.shape[0],
-        weighted_half.shape[1],
-    )
-
-
-def _can_native_half_preprocess(experiment_dataset, batch) -> bool:
-    if batch is None:
-        return False
-    shape = getattr(batch, "shape", None)
-    if shape is None or len(shape) != 3:
-        return False
-    image_shape = tuple(int(v) for v in getattr(experiment_dataset, "image_shape", ()))
-    if tuple(int(v) for v in shape[-2:]) != image_shape:
-        return False
-    dtype = getattr(batch, "dtype", None)
-    return dtype is None or not np.issubdtype(np.dtype(dtype), np.complexfloating)
-
-
 def _use_native_half_preprocess(native_half_preprocess_mode: str, experiment_dataset, batch) -> bool:
     if native_half_preprocess_mode == "off":
         return False
     return _can_native_half_preprocess(experiment_dataset, batch)
-
-
-def _process_images_half_native(experiment_dataset, batch, apply_image_mask: bool):
-    """GPU-native half-spectrum preprocessing for exact-local experiments.
-
-    This avoids the legacy full-complex FFT then half-gather path for raw
-    real-space image batches. Callers must gate this to real ``(N, H, W)``
-    inputs; flat Fourier-space fixtures use the legacy processor.
-    """
-
-    images = jnp.asarray(batch)
-    if apply_image_mask:
-        image_mask = getattr(experiment_dataset, "image_mask", None)
-        if image_mask is not None:
-            image_source = getattr(experiment_dataset, "image_source", None)
-            backend = getattr(image_source, "backend", image_source)
-            if getattr(backend, "image_mask_mode", None) == "relion_background_fill":
-                images = core_mask.apply_relion_soft_image_mask(images, image_mask)
-            else:
-                images = images * jnp.asarray(image_mask)
-    images = images * jnp.asarray(getattr(experiment_dataset, "data_multiplier", 1), dtype=images.dtype)
-    return padding.padded_rfft(images, int(experiment_dataset.grid_size), int(experiment_dataset.padding))
-
-
-def _half_translation_phase_table(translations, image_shape):
-    lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-        image_shape,
-        voxel_size=1,
-        scaled=True,
-    )
-    phase_arg = jnp.einsum(
-        "td,pd->tp",
-        jnp.asarray(translations, dtype=jnp.float32),
-        lattice_half,
-    )
-    return jnp.exp(-2j * jnp.pi * phase_arg)
-
-
-def _image_preprocess_backend(experiment_dataset):
-    image_source = getattr(experiment_dataset, "image_source", None)
-    return getattr(image_source, "backend", image_source)
-
-
-def _try_process_masked_and_unmasked_half_together(experiment_dataset, batch):
-    """Process RELION masked score images and unmasked M-step images in one FFT call."""
-
-    process_half_fn = getattr(experiment_dataset, "process_images_half", None)
-    if process_half_fn is None:
-        return None
-    backend = _image_preprocess_backend(experiment_dataset)
-    if getattr(backend, "image_mask_mode", None) != "relion_background_fill":
-        return None
-    if os.environ.get("RECOVAR_RELION_NUMPY_IMAGE_FFT") != "1":
-        return None
-
-    image_mask = getattr(backend, "image_mask", None)
-    if image_mask is None:
-        image_mask = getattr(backend, "mask", None)
-    if image_mask is None:
-        image_mask = getattr(experiment_dataset, "image_mask", None)
-    if image_mask is None:
-        return None
-
-    batch_np = np.asarray(batch)
-    image_mask_np = np.asarray(image_mask)
-    if batch_np.ndim != 3 or tuple(batch_np.shape[-2:]) != tuple(image_mask_np.shape):
-        return None
-
-    masked_batch = _apply_relion_soft_image_mask_numpy(batch_np, image_mask_np)
-    combined_batch = np.concatenate((masked_batch, batch_np), axis=0)
-    combined_half = process_half_fn(combined_batch, apply_image_mask=False)
-    n_images = int(batch_np.shape[0])
-    return combined_half[:n_images], combined_half[n_images:]
 
 
 def _prepare_local_exact_bucket(
@@ -629,13 +537,13 @@ def _prepare_local_exact_bucket(
         timer["translation_phase_s"] += time.time() - phase_t0
 
     def _process_half(apply_image_mask: bool):
-        if native_half_preprocess:
-            return _process_images_half_native(experiment_dataset, batch, apply_image_mask)
-        process_half_fn = getattr(experiment_dataset, "process_images_half", None)
-        if process_half_fn is not None:
-            return process_half_fn(batch, apply_image_mask=apply_image_mask)
-        processed_full = config.process_fn(batch, apply_image_mask=apply_image_mask)
-        return fourier_transform_utils.full_image_to_half_image(processed_full, config.image_shape)
+        return process_half_image(
+            experiment_dataset,
+            batch,
+            config,
+            apply_image_mask,
+            native_half_preprocess=native_half_preprocess,
+        )
 
     ctf_t0 = time.time()
     ctf_half = config.compute_ctf_half(ctf_params)

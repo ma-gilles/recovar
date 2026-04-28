@@ -52,6 +52,7 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     integer_pre_shifts_or_none,
 )
+from recovar.em.dense_single_volume.helpers.preprocessing import process_half_image
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
@@ -551,14 +552,6 @@ def _maybe_dump_pass2_bucket(
         )
 
 
-def _process_half(experiment_dataset, batch, config, apply_image_mask):
-    process_half_fn = getattr(experiment_dataset, "process_images_half", None)
-    if process_half_fn is not None:
-        return process_half_fn(batch, apply_image_mask=apply_image_mask)
-    processed_full = config.process_fn(batch, apply_image_mask=apply_image_mask)
-    return fourier_transform_utils.full_image_to_half_image(processed_full, config.image_shape)
-
-
 def _prepare_bucket_io(
     experiment_dataset,
     batch,
@@ -595,9 +588,9 @@ def _prepare_bucket_io(
     # Raw processed half-spectrum images (BEFORE any per-image correction).
     # The score path uses masked images iff ``score_with_masked_images`` is True,
     # while the reconstruction path always uses the unmasked (raw) images.
-    processed_score_half_raw = _process_half(experiment_dataset, batch, config, score_with_masked_images)
+    processed_score_half_raw = process_half_image(experiment_dataset, batch, config, score_with_masked_images)
     if score_with_masked_images:
-        processed_recon_half_raw = _process_half(experiment_dataset, batch, config, False)
+        processed_recon_half_raw = process_half_image(experiment_dataset, batch, config, False)
     else:
         processed_recon_half_raw = processed_score_half_raw
 
