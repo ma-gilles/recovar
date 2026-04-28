@@ -40,6 +40,7 @@ import pathlib
 import time
 from dataclasses import dataclass
 from functools import partial
+from typing import Any
 
 import jax
 import jax.numpy as jnp
@@ -61,6 +62,8 @@ logger = logging.getLogger(__name__)
 # TODO(DENSE_ENGINE_BOUNDARY/E002): extract shared primitives, do not let local logic grow back here
 # TODO(DENSE_ENGINE_BOUNDARY/E003): half/full spectrum conversions need a single explicit boundary
 # TODO(DENSE_ENGINE_BOUNDARY/E004): dtype-policy cleanup needed, reduce ad hoc casts and flags
+# TODO(DENSE_ENGINE_BOUNDARY/E005): audit em_engine.py vs local_em_engine.py for copied implementations
+# TODO(DENSE_ENGINE_BOUNDARY/E006): move shared JAX primitives to helpers and delete redundant engine-local copies
 # See docs/relion_local_engine_refactor.md
 
 
@@ -215,6 +218,90 @@ class _SparsePass2Profile:
         if self.omitted_mass_upper_image_count == 0:
             return 0.0
         return self.omitted_mass_upper_sum / self.omitted_mass_upper_image_count
+
+
+@dataclass(frozen=True)
+class _DenseWindowSpec:
+    """Host-side Fourier window metadata shared by dense EM entry points."""
+
+    use_window: bool
+    score_indices: Any
+    recon_indices: Any
+    n_score: int
+    n_recon: int
+    max_r: float | None
+
+    def projection_kwargs(self) -> dict:
+        if not self.use_window:
+            return {}
+        return {"max_r": self.max_r}
+
+    def dense_big_jit_max_r(self):
+        return self.max_r if self.use_window else "auto"
+
+
+def _make_dense_window_spec(
+    image_shape,
+    current_size,
+    n_half: int,
+    *,
+    square_window: bool = False,
+    include_recon_window: bool = True,
+) -> _DenseWindowSpec:
+    """Precompute RELION-style score/reconstruction half-spectrum windows."""
+
+    use_window = current_size is not None and current_size < image_shape[0]
+    if not use_window:
+        return _DenseWindowSpec(
+            use_window=False,
+            score_indices=None,
+            recon_indices=None,
+            n_score=int(n_half),
+            n_recon=int(n_half),
+            max_r=None,
+        )
+
+    from .helpers.fourier_window import make_fourier_window_indices_np
+
+    score_window_indices_np, n_score = make_fourier_window_indices_np(
+        image_shape,
+        current_size,
+        square=square_window,
+        include_dc=False,
+    )
+    score_indices = jnp.asarray(score_window_indices_np)
+    recon_indices = None
+    n_recon = int(n_score)
+    if include_recon_window:
+        recon_window_indices_np, n_recon = make_fourier_window_indices_np(
+            image_shape,
+            current_size,
+            square=square_window,
+            include_dc=True,
+            exact_radius=True,
+        )
+        recon_indices = jnp.asarray(recon_window_indices_np)
+
+    window_desc = "square" if square_window else "circular"
+    if include_recon_window:
+        logger.info(
+            "Fourier windowing (%s): current_size=%d, n_score_windowed=%d, n_recon_windowed=%d / n_half=%d (%.1f%% reduction)",
+            window_desc,
+            current_size,
+            n_score,
+            n_recon,
+            n_half,
+            100.0 * (1.0 - n_score / n_half),
+        )
+
+    return _DenseWindowSpec(
+        use_window=True,
+        score_indices=score_indices,
+        recon_indices=recon_indices,
+        n_score=int(n_score),
+        n_recon=int(n_recon),
+        max_r=float(current_size // 2),
+    )
 
 
 def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int):
@@ -1182,45 +1269,21 @@ def run_em(
     else:
         half_weights = make_half_image_weights(image_shape)
 
-    # Precompute RELION-exact score/reconstruction windows if current_size is set
-    use_window = current_size is not None and current_size < image_shape[0]
+    window_spec = _make_dense_window_spec(
+        image_shape,
+        current_size,
+        n_half,
+        square_window=square_window,
+        include_recon_window=True,
+    )
+    use_window = window_spec.use_window
+    window_indices = window_spec.score_indices
+    recon_window_indices = window_spec.recon_indices
+    n_windowed = window_spec.n_score
+    n_recon_windowed = window_spec.n_recon
+    projection_kwargs = window_spec.projection_kwargs()
     if use_window:
-        from .helpers.fourier_window import make_fourier_window_indices_np
-
-        score_window_indices_np, n_windowed = make_fourier_window_indices_np(
-            image_shape,
-            current_size,
-            square=square_window,
-            include_dc=False,
-        )
-        recon_window_indices_np, n_recon_windowed = make_fourier_window_indices_np(
-            image_shape,
-            current_size,
-            square=square_window,
-            include_dc=True,
-            exact_radius=True,
-        )
-        window_indices = jnp.asarray(score_window_indices_np)
-        recon_window_indices = jnp.asarray(recon_window_indices_np)
         half_weights_windowed = half_weights[window_indices]
-        window_desc = "square" if square_window else "circular"
-        logger.info(
-            "Fourier windowing (%s): current_size=%d, n_score_windowed=%d, n_recon_windowed=%d / n_half=%d (%.1f%% reduction)",
-            window_desc,
-            current_size,
-            n_windowed,
-            n_recon_windowed,
-            n_half,
-            100.0 * (1.0 - n_windowed / n_half),
-        )
-    else:
-        window_indices = None
-        recon_window_indices = None
-        n_windowed = n_half
-        n_recon_windowed = n_half
-    projection_kwargs = {}
-    if use_window:
-        projection_kwargs["max_r"] = float(current_size // 2)
 
     # Upcast half_weights to float64 when scoring in double precision
     if use_float64_scoring:
@@ -1772,7 +1835,7 @@ def run_em(
         dense_big_jit_recon_window_indices = (
             recon_window_indices if recon_window_indices is not None else jnp.arange(n_half, dtype=jnp.int32)
         )
-        dense_big_jit_max_r = float(current_size // 2) if use_window else "auto"
+        dense_big_jit_max_r = window_spec.dense_big_jit_max_r()
         dense_big_jit_noise_wsum0 = jnp.zeros(1, dtype=jnp.float32)
         dense_big_jit_noise_a20 = jnp.zeros(1, dtype=jnp.float32)
         dense_big_jit_noise_xa0 = jnp.zeros(1, dtype=jnp.float32)
@@ -2790,23 +2853,18 @@ def compute_e_step_weights(
 
     half_weights = make_half_image_weights(image_shape)
 
-    use_window = current_size is not None and current_size < image_shape[0]
+    window_spec = _make_dense_window_spec(
+        image_shape,
+        current_size,
+        n_half,
+        include_recon_window=False,
+    )
+    use_window = window_spec.use_window
+    window_indices = window_spec.score_indices
+    n_windowed = window_spec.n_score
+    projection_kwargs = window_spec.projection_kwargs()
     if use_window:
-        from .helpers.fourier_window import make_fourier_window_indices_np
-
-        window_indices_np, n_windowed = make_fourier_window_indices_np(
-            image_shape,
-            current_size,
-            include_dc=False,
-        )
-        window_indices = jnp.asarray(window_indices_np)
         half_weights_windowed = half_weights[window_indices]
-    else:
-        window_indices = None
-        n_windowed = n_half
-    projection_kwargs = {}
-    if use_window:
-        projection_kwargs["max_r"] = float(current_size // 2)
 
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
     n_rot_padded = n_blocks * rotation_block_size
