@@ -24,15 +24,21 @@ from recovar import core
 from recovar.core.configs import ForwardModelConfig
 import recovar.em.dense_single_volume.em_engine as em_engine_module
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
-from recovar.em.dense_single_volume.em_engine import (
-    _adjoint_slice_volume_half,
-    _compute_projections_block,
+from recovar.em.dense_single_volume.em_engine import run_em
+from recovar.em.dense_single_volume.helpers.adjoint import (
+    adjoint_slice_volume_half as _adjoint_slice_volume_half,
+)
+from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
+from recovar.em.dense_single_volume.helpers.preprocessing import (
+    preprocess_batch as _preprocess_batch,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_projections_block as _compute_projections_block,
+)
+from recovar.em.dense_single_volume.helpers.scoring import (
     _e_step_block_scores,
     _m_step_block_compute,
-    _preprocess_batch,
     _update_logsumexp,
-    make_half_image_weights,
-    run_em,
 )
 from recovar.em.dense_single_volume.helpers.types import EMProfileStats, RelionStats
 

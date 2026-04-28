@@ -8,11 +8,17 @@ import jax.numpy as jnp
 
 from recovar.em.dense_single_volume.dense_big_jit import run_dense_bucket_big_jit
 from recovar.em.dense_single_volume.em_engine import (
-    _adjoint_slice_volume_half,
-    _compute_projections_block,
     _dense_big_jit_disabled_reason,
     _dense_big_jit_enabled,
     _pad_dense_big_jit_image_axis,
+)
+from recovar.em.dense_single_volume.helpers.adjoint import (
+    adjoint_slice_volume_half as _adjoint_slice_volume_half,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_projections_block as _compute_projections_block,
+)
+from recovar.em.dense_single_volume.helpers.scoring import (
     _e_step_block_scores,
     _e_step_block_scores_normalized_cc,
     _e_step_block_scores_windowed,
