@@ -18,6 +18,9 @@ underlying CUDA image grid.
 See ``docs/math/plan_relion_parity.md``, Phase 3.
 """
 
+from dataclasses import dataclass
+from typing import Any
+
 import jax.numpy as jnp
 import numpy as np
 
@@ -25,6 +28,31 @@ import recovar.core.fourier_transform_utils as ftu
 
 # Representative sizes kept for explicit callers that still want a bounded set.
 ALLOWED_CURRENT_SIZES = [16, 24, 32, 48, 64, 80, 96, 104, 112, 120, 128, 160, 192, 224, 256]
+
+
+@dataclass(frozen=True)
+class FourierWindowSpec:
+    """Score/reconstruction half-spectrum window metadata."""
+
+    use_window: bool
+    score_indices_np: np.ndarray | None
+    recon_indices_np: np.ndarray | None
+    score_indices: Any
+    recon_indices: Any
+    n_score: int
+    n_recon: int
+    max_r: float | None
+
+    def projection_kwargs(self, *, return_abs2=None) -> dict:
+        kwargs = {}
+        if self.use_window:
+            kwargs["max_r"] = self.max_r
+        if return_abs2 is not None:
+            kwargs["return_abs2"] = bool(return_abs2)
+        return kwargs
+
+    def dense_big_jit_max_r(self):
+        return self.max_r if self.use_window else "auto"
 
 
 def make_frequency_radius_map_half(image_shape):
@@ -211,6 +239,61 @@ def make_fourier_window_indices_np(image_shape, current_size, square=False, incl
     )
     indices = np.where(mask)[0].astype(np.int32)
     return indices, len(indices)
+
+
+def make_fourier_window_spec(
+    image_shape,
+    current_size,
+    n_half: int,
+    *,
+    square=False,
+    include_recon_window=True,
+    dtype=jnp.int32,
+) -> FourierWindowSpec:
+    """Return shared score/reconstruction window metadata for EM engines."""
+
+    use_window = current_size is not None and current_size < image_shape[0]
+    if not use_window:
+        return FourierWindowSpec(
+            use_window=False,
+            score_indices_np=None,
+            recon_indices_np=None,
+            score_indices=None,
+            recon_indices=None,
+            n_score=int(n_half),
+            n_recon=int(n_half),
+            max_r=None,
+        )
+
+    score_indices_np, n_score = make_fourier_window_indices_np(
+        image_shape,
+        int(current_size),
+        square=square,
+        include_dc=False,
+    )
+    recon_indices_np = None
+    recon_indices = None
+    n_recon = int(n_score)
+    if include_recon_window:
+        recon_indices_np, n_recon = make_fourier_window_indices_np(
+            image_shape,
+            int(current_size),
+            square=square,
+            include_dc=True,
+            exact_radius=True,
+        )
+        recon_indices = jnp.asarray(recon_indices_np, dtype=dtype)
+
+    return FourierWindowSpec(
+        use_window=True,
+        score_indices_np=score_indices_np,
+        recon_indices_np=recon_indices_np,
+        score_indices=jnp.asarray(score_indices_np, dtype=dtype),
+        recon_indices=recon_indices,
+        n_score=int(n_score),
+        n_recon=int(n_recon),
+        max_r=float(int(current_size) // 2),
+    )
 
 
 def quantize_current_size(cs, allowed=None, ori_size=None, min_size=16):

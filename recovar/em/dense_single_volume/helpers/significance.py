@@ -246,6 +246,7 @@ def _compute_significance_batched(
     from recovar.em.dense_single_volume.helpers.oversampling import (
         find_significant_rotations as _find_sig,
     )
+    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
     from recovar.em.dense_single_volume.helpers.image_shifts import (
         apply_relion_integer_pre_shifts,
         integer_pre_shifts_or_none,
@@ -286,25 +287,19 @@ def _compute_significance_batched(
         jnp.ones(n_half, dtype=jnp.float32) if half_spectrum_scoring else make_half_image_weights(image_shape)
     )
 
-    use_window = current_size is not None and current_size < image_shape[0]
+    window_spec = make_fourier_window_spec(
+        image_shape,
+        current_size,
+        n_half,
+        square=square_window,
+        include_recon_window=False,
+    )
+    use_window = window_spec.use_window
+    window_indices = window_spec.score_indices
+    n_windowed = window_spec.n_score
+    projection_kwargs = window_spec.projection_kwargs()
     if use_window:
-        from recovar.em.dense_single_volume.helpers.fourier_window import (
-            make_fourier_window_indices_np,
-        )
-
-        window_indices_np, n_windowed = make_fourier_window_indices_np(
-            image_shape,
-            current_size,
-            square=square_window,
-        )
-        window_indices = jnp.asarray(window_indices_np)
         half_weights_windowed = half_weights[window_indices]
-    else:
-        window_indices = None
-        n_windowed = n_half
-    projection_kwargs = {}
-    if use_window:
-        projection_kwargs["max_r"] = float(current_size // 2)
 
     if use_float64_scoring:
         half_weights = half_weights.astype(jnp.float64)

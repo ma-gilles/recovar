@@ -47,7 +47,7 @@ from recovar.em.dense_single_volume.em_primitives import (
     make_relion_noise_shell_indices_half,
     make_shell_indices_half,
 )
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     integer_pre_shifts_or_none,
@@ -952,30 +952,19 @@ def compute_pass2_stats_sparse_bucketed(
     )
     H, W = image_shape
     n_half = H * (W // 2 + 1)
-    use_window = current_size is not None and current_size < image_shape[0]
-    if use_window:
-        window_indices_np, n_windowed = make_fourier_window_indices_np(
-            image_shape,
-            int(current_size),
-            square=square_window,
-            include_dc=False,
-        )
-        recon_window_indices_np, n_recon_windowed = make_fourier_window_indices_np(
-            image_shape,
-            int(current_size),
-            square=square_window,
-            include_dc=True,
-            exact_radius=True,
-        )
-        window_indices = jnp.asarray(window_indices_np, dtype=jnp.int32)
-        recon_window_indices = jnp.asarray(recon_window_indices_np, dtype=jnp.int32)
-    else:
-        window_indices_np = None
-        recon_window_indices_np = None
-        window_indices = None
-        recon_window_indices = None
-        n_windowed = n_half
-        n_recon_windowed = n_half
+    window_spec = make_fourier_window_spec(
+        image_shape,
+        current_size,
+        n_half,
+        square=square_window,
+        include_recon_window=True,
+    )
+    use_window = window_spec.use_window
+    window_indices_np = window_spec.score_indices_np
+    window_indices = window_spec.score_indices
+    recon_window_indices = window_spec.recon_indices
+    n_windowed = window_spec.n_score
+    n_recon_windowed = window_spec.n_recon
 
     if half_spectrum_scoring:
         half_weights = jnp.ones(n_half, dtype=jnp.float32)
@@ -1123,10 +1112,7 @@ def compute_pass2_stats_sparse_bucketed(
             if use_relion_adjoint_inverse
             else flat_rotations
         )
-        projection_kwargs = {}
-        if use_window:
-            projection_kwargs["max_r"] = float(current_size // 2)
-            projection_kwargs["return_abs2"] = False
+        projection_kwargs = window_spec.projection_kwargs(return_abs2=False if use_window else None)
         proj_half_flat, proj_abs2_half_flat = _compute_projections_block(
             mean_for_proj,
             flat_rotations,

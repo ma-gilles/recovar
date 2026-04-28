@@ -28,7 +28,7 @@ from recovar.em.dense_single_volume.em_primitives import (
     make_relion_noise_shell_indices_half,
     make_shell_indices_half,
 )
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_indices_np
+from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     integer_pre_shifts_or_none,
@@ -910,33 +910,19 @@ def run_local_em_exact(
         recon_accum_shape = recon_volume_shape
     recon_volume_size = int(np.prod(recon_accum_shape))
 
-    use_window = current_size is not None and current_size < image_shape[0]
-    if use_window:
-        score_window_indices_np, n_windowed = make_fourier_window_indices_np(
-            image_shape,
-            int(current_size),
-            square=square_window,
-            include_dc=False,
-        )
-        recon_window_indices_np, n_recon_windowed = make_fourier_window_indices_np(
-            image_shape,
-            int(current_size),
-            square=square_window,
-            include_dc=True,
-            exact_radius=True,
-        )
-        window_indices = jnp.asarray(score_window_indices_np, dtype=jnp.int32)
-        recon_window_indices = jnp.asarray(recon_window_indices_np, dtype=jnp.int32)
-    else:
-        score_window_indices_np = None
-        recon_window_indices_np = None
-        window_indices = None
-        recon_window_indices = None
-        n_windowed = n_half
-        n_recon_windowed = n_half
-    projection_kwargs = {}
-    if use_window:
-        projection_kwargs["max_r"] = float(current_size // 2)
+    window_spec = make_fourier_window_spec(
+        image_shape,
+        current_size,
+        n_half,
+        square=square_window,
+        include_recon_window=True,
+    )
+    use_window = window_spec.use_window
+    window_indices = window_spec.score_indices
+    recon_window_indices = window_spec.recon_indices
+    n_windowed = window_spec.n_score
+    n_recon_windowed = window_spec.n_recon
+    projection_kwargs = window_spec.projection_kwargs()
 
     if half_spectrum_scoring:
         half_weights = jnp.ones(n_half, dtype=jnp.float32)
@@ -1280,7 +1266,7 @@ def run_local_em_exact(
                 noise_variance_for_noise_arg = noise_variance_half
                 n_shells_arg = 1
 
-            projection_max_r_big_jit = float(current_size // 2) if use_window else "auto"
+            projection_max_r_big_jit = window_spec.dense_big_jit_max_r()
             (
                 Ft_y,
                 Ft_ctf,
