@@ -300,7 +300,7 @@ class TestPosteriorParity:
         jax.config.update("jax_enable_x64", True)
         import jax.numpy as jnp
 
-        from recovar.em.dense_single_volume.em_engine import _e_step_block_scores
+        from recovar.em.dense_single_volume.helpers.scoring import _e_step_block_scores
 
         s = _setup_scenario()
         N = s["N"]
