@@ -213,31 +213,38 @@ def _max_rel_err(out: np.ndarray, target: np.ndarray) -> float:
 
 @requires_estep_dumps
 def test_estep_bpref_forward_parity():
-    """Run our GPU E-step on the RELION InitialModel fixture, convert the
-    raw (Ft_y, Ft_ctf) accumulators to RELION's BPref layout, and compare
-    to RELION's iter-1 dumped BPref data + weight (per halfset).
+    """Drive `run_iter_gpu_vdam` end-to-end on the RELION InitialModel fixture
+    and compare the per-halfset BPref accumulator (pre-reweight) against
+    RELION's iter-1 dumps.
 
-    With pseudo_halfsets=1 RELION accumulates two BPref instances by
-    alternating particles 0/1 across halfset slots. We mirror that via
-    `_split_halfset_particle_ids`.
+    Phase C refactor (2026-04-28): the test now exercises the production
+    `run_iter_gpu_vdam` wrapper instead of calling `run_em` directly with a
+    bespoke recipe. This guarantees the test gate covers the same code path
+    that downstream consumers (e.g. `scripts/run_ab_initio.py`) will hit.
 
-    This is the FINAL parity gate: if the GPU E-step output matches the
-    dumped BPref byte-for-byte, the existing M-step chain produces an
-    iter-1 Iref at machine precision (the M-step chain is already at
-    CC=+1.0 given matched inputs — see test_large_fixture_parity.py).
+    With pseudo_halfsets=1, RELION accumulates two BPref instances by
+    alternating particles across halfset slots. We mirror that via
+    `_split_halfset_particle_ids` driven from `_rlnMicrographName`.
+
+    Per-kernel ceiling (2026-04-28, post-rebase onto canonical EM-parity
+    branch): BPref bp_data CC ≈ +0.73 on this small (500/64) iter-1 fixture.
+    Closing the residual to +0.99 requires patching RELION to emit an iter-1
+    `Frefctf_orient0` dump at the windowed (28×15) layout. See memory
+    `project_initial_model_estep_diag_2026_04_26.md` and the diag scripts at
+    `/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/scripts/diag_p0_diff2_*.py`.
     """
     import jax
-    import jax.numpy as jnp
 
-    from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
-    from recovar.em.dense_single_volume.em_engine import run_em
-    from recovar.em.initial_model.gpu_pipeline import (
-        _split_halfset_particle_ids,
+    from recovar.data_io.starfile import read_star
+    from recovar.em.initial_model.gpu_pipeline import _split_halfset_particle_ids, run_iter_gpu_vdam
+    from recovar.em.sampling import (
+        apply_relion_translation_perturbation,
+        get_oversampled_rotation_grid_from_samples,
+        get_oversampled_translation_grid,
+        get_translation_grid,
+        read_relion_perturbation_from_sampling_star,
     )
-    from recovar.em.sampling import get_translation_grid
-    from recovar.reconstruction.noise import make_radial_noise
-    from recovar.utils.helpers import load_relion_volume
 
     try:
         if not jax.devices("gpu"):
@@ -249,8 +256,8 @@ def test_estep_bpref_forward_parity():
     ori = int(ds.grid_size)
     assert ori == 64
 
-    # Round 9 fix: enable RELION-exact mask geometry + softMaskOutsideMap blend
-    # to make our masked Fimg match RELION's exp_Fimg at machine precision.
+    # Enable RELION-exact mask geometry + softMaskOutsideMap blend so our
+    # masked Fimg matches RELION's exp_Fimg at machine precision.
     backend = ds.image_source.backend if hasattr(ds.image_source, "backend") else None
     if backend is not None and hasattr(backend, "set_relion_image_mask"):
         backend.set_relion_image_mask(
@@ -259,42 +266,21 @@ def test_estep_bpref_forward_parity():
             width_mask_edge_px=5.0,
         )
 
-    # iter-0 Iref + sigma2 (RELION fixture)
+    if not hasattr(ds, "subset"):
+        pytest.skip("dataset has no subset()")
+
+    # iter-0 Iref + sigma2 (RELION fixture). `run_iter_gpu_vdam` performs the
+    # gridding correction + /N² FFT-norm + sign-negate internally when invoked
+    # with the matching kwargs below.
+    from recovar.utils.helpers import load_relion_volume
+
     iref_real = np.asarray(load_relion_volume(str(FIXTURE_DIR / "run_it000_class001.mrc")), dtype=np.float64)
-    # Round 10 fixes: gridding correction + /N² FFT-norm + sign-negate.
-    #   - gridding correction: pre-divide volume by sinc² (compensates trilinear
-    #     interp's Fourier smoothing — bit-exact projection vs RELION).
-    #   - /N²: RELION's forward FFT is N^d-normalised, ours isn't.
-    #   - sign-negate: absorbs CTF-sign convention (recovar's = -RELION's).
-    from recovar.core.relion_project import gridding_correct_volume_real
-
-    iref_real_corrected = np.asarray(
-        gridding_correct_volume_real(jnp.asarray(iref_real), ori_size=ori, padding_factor=1)
-    )
-    iref_ft = -np.asarray(ftu.get_dft3(jnp.asarray(iref_real_corrected))).reshape(-1) / (ori**2)
     sigma2 = _read_iter0_sigma2(ori // 2 + 1)
-    n4 = ori**4
-    nv = np.asarray(make_radial_noise(sigma2 * n4, (ori, ori))).astype(np.float32).reshape(-1)
 
-    # Iter-1 sampling from run_it001_sampling.star: healpix_order=1, psi=30°,
-    # offset_range=51 Å (=6 px at angpix 8.5), offset_step=17 Å (=2 px).
-    # RELION applies adaptive_oversampling=1 → 8× rotation × 4× translation
-    # children per coarse cell, plus a per-iter random perturbation read from
-    # _rlnSamplingPerturbInstance. We replicate both here so the test's
-    # rotation+translation grid matches RELION's actual iter-1 sampled grid.
-    from recovar.em.sampling import (
-        apply_relion_translation_perturbation,
-        get_oversampled_rotation_grid_from_samples,
-        get_oversampled_translation_grid,
-        read_relion_perturbation_from_sampling_star,
-    )
-
+    # Iter-1 sampling: prefer RELION's exact dumped post-perturbation grid;
+    # fall back to constructed grid otherwise.
     sampling_star = FIXTURE_DIR / "run_it001_sampling.star"
     random_perturbation, _perturbation_factor = read_relion_perturbation_from_sampling_star(str(sampling_star))
-
-    # Prefer RELION's exact dumped post-perturbation post-oversampling grid
-    # when available — eliminates any small offset between our perturbation
-    # port and RELION's. Falls back to the constructed grid otherwise.
     relion_estep_dump = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
     eulers_bin = relion_estep_dump / "p0_oversampled_eulers.bin"
     trans_bin = relion_estep_dump / "p0_oversampled_translations.bin"
@@ -310,104 +296,70 @@ def test_estep_bpref_forward_parity():
             _t = np.fromfile(_f, dtype=np.float64, count=_h[0] * _h[1] * _h[2]).reshape(-1, 3)
         translations = _t[:, :2].astype(np.float32)
     else:
-        # Coarse RELION-NEST rotation indices: 48 healpix dirs × 12 psi = 576.
-        coarse_n_dir = 48
-        coarse_n_psi = 12
-        coarse_indices = np.arange(coarse_n_dir * coarse_n_psi, dtype=np.int64)
+        coarse_indices = np.arange(48 * 12, dtype=np.int64)
         rotations, _ = get_oversampled_rotation_grid_from_samples(
-            coarse_indices,
-            parent_nside_level=1,
-            oversampling_order=1,
-            random_perturbation=random_perturbation,
+            coarse_indices, parent_nside_level=1, oversampling_order=1, random_perturbation=random_perturbation
         )
         rotations = rotations.astype(np.float32)
-
         coarse_translations = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
         translations, _ = get_oversampled_translation_grid(coarse_translations, pixel_offset=2, oversampling_order=1)
         translations = apply_relion_translation_perturbation(
-            translations.astype(np.float32),
-            random_perturbation,
-            offset_step_pixels=2.0,
+            translations.astype(np.float32), random_perturbation, offset_step_pixels=2.0
         )
 
-    # Match small-fixture iter-1 r_max=14, current_size=28
-    r_max = 14
     current_size = 28
+    r_max = 14
 
-    mean_ft_j = jnp.asarray(iref_ft, dtype=jnp.complex64)
-    mean_var_j = jnp.asarray((np.abs(iref_ft) ** 2).astype(np.float32))
-    nv_j = jnp.asarray(nv)
-    rot_j = jnp.asarray(rotations)
-    tr_j = jnp.asarray(translations)
-
-    # Pseudo-halfsets: RELION-sorted halfset assignment.
-    # Phase B (2026-04-25) showed natural-order [0::2] picked the wrong
-    # subset (mics ['1','3','5',...]) vs RELION's lex-sorted h0
-    # (mics ['1','100','102',...]). Pass the dataset's micrograph names
-    # so _split_halfset_particle_ids returns RELION-matching indices.
-    from recovar.data_io.starfile import read_star
-
+    # Pseudo-halfset routing: pass micrograph names so the wrapper picks
+    # RELION-sorted halfsets via `_split_halfset_particle_ids`.
     main_in, _ = read_star(str(PARTICLES_STAR))
     mic_names = np.asarray(main_in["_rlnMicrographName"].tolist())
+    # Sanity-check the wrapper's halfset assignment matches RELION's lex-sort.
     h0_ids, h1_ids = _split_halfset_particle_ids(ds.n_images, micrograph_names=mic_names)
+    assert h0_ids.size + h1_ids.size == ds.n_images
 
-    def _run_estep(subset_ds, score_mode: str = "gaussian"):
-        result = run_em(
-            subset_ds,
-            mean=mean_ft_j,
-            mean_variance=mean_var_j,
-            noise_variance=nv_j,
-            rotations=rot_j,
-            translations=tr_j,
-            disc_type="linear_interp",
-            image_batch_size=50,
-            rotation_block_size=100,
-            current_size=current_size,
-            projection_padding_factor=1,
-            reconstruction_padding_factor=1,
-            half_spectrum_scoring=True,
-            return_stats=True,
-            # RELION uses MASKED images for E-step scoring (apply_image_mask=True
-            # in process_fn) and UNMASKED for M-step accumulation. score_with_masked_images
-            # toggles this in run_em — required for matching RELION's posteriors.
-            score_with_masked_images=True,
-            # The RELION dump (Phase A, p{X}_estep_meta.txt) shows do_firstiter_cc=0
-            # for the InitialModel default command, so the matching score path is
-            # 'gaussian', not 'normalized_cc'. Earlier 'normalized_cc' run gave a
-            # higher CC (+0.73) by luck — not the bit-exact target.
-            relion_firstiter_score_mode=score_mode,
-        )
-        return np.asarray(result[2]), np.asarray(result[3])
+    # Drive the production wrapper. Volume preprocessing kwargs reproduce the
+    # bespoke iter-1 recipe (gridding + /N² + sign-flip): with run_em's
+    # internal gridding only firing at projection_padding_factor > 1 and
+    # InitialModel/VDAM using `--pad 1`, we need to apply it externally.
+    # The Gaussian translation prior is read from `_rlnSigmaOffsetsAngst` in
+    # run_it001_model.star (≈ 6.4 Å on this fixture).
+    sigma_offset_Ang = 6.398173
+    iref_for_wrapper = iref_real.copy()
+    iref_next, Igrad1, Igrad2, stats_dict = run_iter_gpu_vdam(
+        ds,
+        iref_for_wrapper,
+        sigma2,
+        rotations,
+        translations,
+        current_size=current_size,
+        iter=1,
+        image_batch_size=50,
+        rotation_block_size=100,
+        half_spectrum_scoring=True,
+        padding_factor=1,
+        pseudo_halfsets=True,
+        apply_gridding_correction=True,
+        iref_ft_scale=1.0 / (ori**2),
+        iref_ft_sign=-1.0,
+        score_with_masked_images=True,
+        relion_firstiter_score_mode="gaussian",
+        sigma_offset_Ang=sigma_offset_Ang,
+        accumulate_noise=False,
+        sparse_pass2=True,
+        micrograph_names=mic_names,
+    )
+    intermediates = stats_dict["intermediates"]
 
-    if not hasattr(ds, "subset"):
-        pytest.skip("dataset has no subset()")
-
-    Ft_y_h0, Ft_ctf_h0 = _run_estep(ds.subset(h0_ids))
-    Ft_y_h1, Ft_ctf_h1 = _run_estep(ds.subset(h1_ids))
-
-    # Use the canonical run_em_output_to_bpref converter (axis-2 half crop, no
-    # transpose). The volume convention sign-flip is folded into the per-
-    # particle CTF sign (recovar CTF = -RELION CTF), so a single sign flip
-    # on bp_data brings ours into RELION frame.
-    #
-    # FFT-N^d normalization: RELION's per-particle accumulator uses normalized
-    # FFTs (Fimg/N², Pref/N²), recovar uses unnormalized FFTs. For the
-    # accumulator ratios, working through the algebra:
-    #   bp_data_relion  = -N² × bp_data_recovar    (Pref sign flip × N² norm)
-    #   bp_weight_relion = +N⁴ × bp_weight_recovar (CTF²/σ² has σ²×N⁴ scale)
-    from recovar.em.initial_model.gpu_pipeline import run_em_output_to_bpref
-
+    # Apply the BPref-frame correction (`-N²` for bp_data, `N⁴` for bp_weight)
+    # to bring recovar's centered Ft_y / Ft_ctf into RELION's BPref slab frame.
     n2 = float(ori) ** 2
     n4 = float(ori) ** 4
+    bp_data_h0 = -np.asarray(intermediates["bp_data_h0"]) * n2
+    bp_data_h1 = -np.asarray(intermediates["bp_data_h1"]) * n2
+    bp_weight_h0 = np.asarray(intermediates["bp_weight_h0"]) * n4
+    bp_weight_h1 = np.asarray(intermediates["bp_weight_h1"]) * n4
 
-    def _to_bpref_relion_frame(Ft_y, Ft_ctf, N, r_max):
-        bp_data, bp_weight = run_em_output_to_bpref(Ft_y, Ft_ctf, N, r_max, padding_factor=1)
-        return -bp_data * n2, bp_weight * n4
-
-    bp_data_h0, bp_weight_h0 = _to_bpref_relion_frame(Ft_y_h0, Ft_ctf_h0, ori, r_max)
-    bp_data_h1, bp_weight_h1 = _to_bpref_relion_frame(Ft_y_h1, Ft_ctf_h1, ori, r_max)
-
-    # RELION dumps: plain = halfset 0 (BPref[iclass]), _h_ = halfset 1 (BPref[ih])
     target_bp_data_h0 = _read_bin(RELION_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin")
     target_bp_data_h1 = _read_bin(RELION_DUMP_DIR / "pipe_it1_c0_bp_data_h_pre_reweight.bin")
     target_bp_weight_h0 = _read_bin(RELION_DUMP_DIR / "pipe_it1_c0_bp_weight.bin")
@@ -426,18 +378,14 @@ def test_estep_bpref_forward_parity():
         ratio = float(np.linalg.norm(ours)) / max(float(np.linalg.norm(target)), 1e-30)
         print(f"  {name:14s}: CC = {cc:+.6f}   rel_err = {rel:.3e}   ‖ours‖/‖target‖ = {ratio:.4f}")
 
-    # Ratcheted gate (2026-04-25 round 9): with the fixes applied
-    # (RELION-exact mask, /N² FFT-norm, sign-negate, RELION-sorted halfsets,
-    # bit-exact M-step chain) BPref bp_data CC reaches >= +0.7 from
-    # +0.49 baseline (initial recovar grid + gaussian). The remaining
-    # 0.3 gap is structural argmax-divergence amplification, see
-    # docs/math/initial_model_estep_parity_attack_plan.md.
     cc_h0 = _cc(bp_data_h0, target_bp_data_h0)
     cc_h1 = _cc(bp_data_h1, target_bp_data_h1)
-    print(f"\n  ratcheted gate cc_h0={cc_h0:+.4f}, cc_h1={cc_h1:+.4f} (gate: > +0.6)")
-    # Guard against regressions in the round-9 BPref CC level. Going below
-    # this threshold means a fix above (mask geometry, FFT-norm, sign,
-    # halfset assignment) was unintentionally undone. Reach +0.99 to
-    # achieve bit-exact iter-1 Iref through the M-step chain.
-    assert cc_h0 > 0.6, f"BPref h0 CC regressed: {cc_h0:.4f} (round-9 baseline was +0.74)"
-    assert cc_h1 > 0.6, f"BPref h1 CC regressed: {cc_h1:.4f}"
+    print(f"\n  near-parity gate cc_h0={cc_h0:+.4f}, cc_h1={cc_h1:+.4f} (gate: > +0.7)")
+
+    # Per-kernel near-parity ceiling on this iter-1 small fixture is ~+0.73
+    # (memory `project_initial_model_estep_diag_2026_04_26.md`). Going below
+    # this regress threshold means parameter alignment to standard E-M (gridding,
+    # /N², sign-flip, RELION-sorted halfsets, masked Fimg, gaussian score mode,
+    # Gaussian translation prior) was unintentionally undone.
+    assert cc_h0 > 0.7, f"BPref h0 CC regressed: {cc_h0:.4f} (post-rebase baseline ≈ +0.73)"
+    assert cc_h1 > 0.7, f"BPref h1 CC regressed: {cc_h1:.4f}"

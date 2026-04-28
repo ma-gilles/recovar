@@ -364,6 +364,23 @@ def run_iter_gpu_vdam(
     padding_factor: int = 1,
     phase_lengths=None,
     pseudo_halfsets: bool = True,
+    # Volume preprocessing knobs — match RELION's projector setup at pad=1:
+    # gridding correction must be applied externally because run_em's internal
+    # gridding only fires when projection_padding_factor > 1 (em_engine.py:1046).
+    apply_gridding_correction: bool = True,
+    iref_ft_scale: float = 1.0,  # /N²/N³/etc. compensation for RELION's normalized FFT — paired with bp_data_frame_scale
+    iref_ft_sign: float = -1.0,  # RELION-frame projection sign convention
+    # E-step parameters mirroring standard-EM's `run_em` invocation
+    # (recovar/em/dense_single_volume/iteration_loop.py:547-579).
+    score_with_masked_images: bool = True,
+    relion_firstiter_score_mode: str = "gaussian",
+    sigma_offset_Ang: Optional[float] = None,  # None → uniform translation prior
+    accumulate_noise: bool = False,  # set True from a multi-iter driver to track per-iter noise updates
+    sparse_pass2: bool = True,
+    # When provided, drives RELION-sorted (lex-by-micrograph) pseudo-halfset
+    # split. Falls back to natural-order alternation otherwise (matches RELION
+    # only when the dataset is already RELION-sorted).
+    micrograph_names: Optional[np.ndarray] = None,
 ):
     """Bit-exact-M-step VDAM iteration (CPU M-step via RELION primitives).
 
@@ -373,12 +390,19 @@ def run_iter_gpu_vdam(
     → applyMomenta → reconstructGrad), matching RELION's InitialModel
     exactly given matched E-step outputs.
 
+    The `run_em` call mirrors the parameter set used in
+    `recovar/em/dense_single_volume/iteration_loop.py:547-579` (the canonical
+    RELION-parity standard-EM path). The known structural per-kernel ceiling
+    on the small (500/64) iter-1 fixture is BPref CC ≈ +0.73; closing the
+    residual to +0.99 requires an iter-1 RELION `Frefctf_orient0` dump.
+
     Returns (iref_real_next, Igrad1_next, Igrad2_next, stats_dict).
     """
     import jax
     import jax.numpy as jnp
 
     from recovar.core import fourier_transform_utils as ftu
+    from recovar.core.relion_project import gridding_correct_volume_real
     from recovar.em.dense_single_volume.em_engine import run_em
     from recovar.em.initial_model.schedules import compute_phase_lengths, compute_stepsize
     from recovar.reconstruction.noise import make_radial_noise
@@ -389,7 +413,12 @@ def run_iter_gpu_vdam(
     n4 = ori**4
 
     nv = np.asarray(make_radial_noise(sigma2_noise * n4, (ori, ori))).astype(np.float32).reshape(-1)
-    iref_ft = np.asarray(ftu.get_dft3(jnp.asarray(iref_real))).reshape(-1)
+    if apply_gridding_correction:
+        iref_real_for_ft = np.asarray(gridding_correct_volume_real(jnp.asarray(iref_real), ori, padding_factor))
+    else:
+        iref_real_for_ft = iref_real
+    iref_ft = np.asarray(ftu.get_dft3(jnp.asarray(iref_real_for_ft))).reshape(-1)
+    iref_ft = iref_ft * iref_ft_sign * iref_ft_scale
     mv = jnp.asarray((np.abs(iref_ft) ** 2).astype(np.float32))
     mean_j = jnp.asarray(iref_ft, dtype=jnp.complex64)
 
@@ -397,9 +426,32 @@ def run_iter_gpu_vdam(
     rot_j = jnp.asarray(rotations)
     tr_j = jnp.asarray(translations)
 
+    # Build Gaussian translation log-prior from sigma_offset (RELION's
+    # convertAllSquaredDifferencesToWeights at ml_optimiser.cpp:8644-8671).
+    # tdiff² = -||t_pix × pixel_size_Ang||² / (2 × sigma_offset_Ang²)
+    pixel_size_Ang = float(getattr(ds, "voxel_size", 1.0))
+    if sigma_offset_Ang is not None and sigma_offset_Ang > 0:
+        translations_np = np.asarray(translations, dtype=np.float32)
+        t_dist2_Ang2 = (translations_np[:, 0] ** 2 + translations_np[:, 1] ** 2) * (pixel_size_Ang**2)
+        translation_log_prior = (-0.5 * t_dist2_Ang2 / (sigma_offset_Ang**2)).astype(np.float32)
+        translation_log_prior_j = jnp.asarray(translation_log_prior)
+    else:
+        translation_log_prior_j = None
+
     def _run_estep(subset_ds):
         jax.block_until_ready(mean_j)
         t0 = time.time()
+        n = subset_ds.n_images
+        extra_kwargs: dict = {
+            "score_with_masked_images": score_with_masked_images,
+            "relion_firstiter_score_mode": relion_firstiter_score_mode,
+            "sparse_pass2": sparse_pass2,
+            "accumulate_noise": accumulate_noise,
+        }
+        if translation_log_prior_j is not None:
+            extra_kwargs["translation_log_prior"] = translation_log_prior_j
+            extra_kwargs["translation_prior_centers"] = jnp.zeros((n, 2), dtype=jnp.float32)
+            extra_kwargs["image_pre_shifts"] = jnp.zeros((n, 2), dtype=jnp.float32)
         result = run_em(
             subset_ds,
             mean=mean_j,
@@ -415,13 +467,23 @@ def run_iter_gpu_vdam(
             reconstruction_padding_factor=padding_factor,
             half_spectrum_scoring=half_spectrum_scoring,
             return_stats=True,
+            **extra_kwargs,
         )
         jax.block_until_ready(result[0])
-        return (np.asarray(result[2]), np.asarray(result[3]), result[4], time.time() - t0)
+        # Layout: (mean, ha, Ft_y, Ft_ctf, [relion_stats], [noise_stats])
+        Ft_y = np.asarray(result[2])
+        Ft_ctf = np.asarray(result[3])
+        relion_stats = result[4] if len(result) > 4 else None
+        return (Ft_y, Ft_ctf, relion_stats, time.time() - t0)
 
-    # E-step(s)
+    # E-step(s).
+    # Pseudo-halfsets: split particles RELION-style (lex-sort micrograph names,
+    # alternate). When `_rlnMicrographName` is unavailable on the dataset,
+    # fall back to natural-order alternation (matches RELION only when the
+    # dataset is already RELION-sorted).
     if pseudo_halfsets:
-        h0, h1 = _split_halfset_particle_ids(ds.n_images)
+        mic_names = np.asarray(micrograph_names) if micrograph_names is not None else None
+        h0, h1 = _split_halfset_particle_ids(ds.n_images, micrograph_names=mic_names)
         ds_h0 = ds.subset(h0) if hasattr(ds, "subset") else ds
         ds_h1 = ds.subset(h1) if hasattr(ds, "subset") else ds
         Ft_y_h0, Ft_ctf_h0, stats_h0, t_h0 = _run_estep(ds_h0)
@@ -519,6 +581,17 @@ def run_iter_gpu_vdam(
     Igrad1_next = np.stack([Igrad1_h0_post, Igrad1_h1_post], axis=0) if pseudo_halfsets else Igrad1_h0_post[None]
     Igrad2_next = Igrad2_post[None]
 
+    intermediates = {
+        "bp_data_h0": bp_data_h0,
+        "bp_weight_h0": bp_weight_h0,
+        "Ft_y_h0": Ft_y_h0,
+        "Ft_ctf_h0": Ft_ctf_h0,
+    }
+    if pseudo_halfsets:
+        intermediates["bp_data_h1"] = bp_data_h1
+        intermediates["bp_weight_h1"] = bp_weight_h1
+        intermediates["Ft_y_h1"] = Ft_y_h1
+        intermediates["Ft_ctf_h1"] = Ft_ctf_h1
     return (
         iref_next,
         Igrad1_next,
@@ -527,5 +600,6 @@ def run_iter_gpu_vdam(
             "e_step_s": e_step_s,
             "m_step_s": m_step_s,
             "stats": stats,
+            "intermediates": intermediates,
         },
     )
