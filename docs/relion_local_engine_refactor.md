@@ -18,7 +18,7 @@ Tracked TODO IDs in the active RELION local-search refactor.
 | `DENSE_ENGINE_BOUNDARY/E001` | OPEN | `recovar/em/dense_single_volume/em_engine.py` | `em_engine.py` should remain dense/global-only. |
 | `DENSE_ENGINE_BOUNDARY/E002` | OPEN | `recovar/em/dense_single_volume/em_primitives.py` | Shared primitives should be extracted so local logic does not grow back into the dense engine. |
 | `DENSE_ENGINE_BOUNDARY/E003` | OPEN | `recovar/em/dense_single_volume/em_engine.py` | Half/full spectrum conversions need one explicit boundary. |
-| `DENSE_ENGINE_BOUNDARY/E004` | OPEN | `recovar/em/dense_single_volume/em_engine.py` | Dtype policy cleanup is still needed. |
+| `DENSE_ENGINE_BOUNDARY/E004` | PARTIAL | `recovar/em/dense_single_volume/helpers/dtype_policy.py` | Dense EM now has a centralized precision policy; follow-up is to push the same policy through local/big-JIT call boundaries. |
 
 ## Review rule
 

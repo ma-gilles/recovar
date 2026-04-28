@@ -1,0 +1,43 @@
+"""Precision policy helpers for dense single-volume EM."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import jax.numpy as jnp
+
+
+@dataclass(frozen=True)
+class DensePrecisionPolicy:
+    """Centralized dtype choices for dense EM scoring/projection paths."""
+
+    use_float64_scoring: bool = False
+    use_float64_projections: bool = False
+
+    @property
+    def score_complex_dtype(self):
+        return jnp.complex128 if self.use_float64_scoring else jnp.complex64
+
+    @property
+    def score_real_dtype(self):
+        return jnp.float64 if self.use_float64_scoring else jnp.float32
+
+    @property
+    def projection_complex_dtype(self):
+        return jnp.complex128 if self.use_float64_projections else None
+
+    def cast_projection_volume(self, volume):
+        dtype = self.projection_complex_dtype
+        return volume if dtype is None else jnp.asarray(volume, dtype=dtype)
+
+    def cast_scoring_inputs(self, shifted_score_half, score_weight_half, shifted_recon_half):
+        shifted_score_half = shifted_score_half.astype(self.score_complex_dtype)
+        score_weight_half = score_weight_half.astype(self.score_real_dtype)
+        if self.use_float64_scoring:
+            shifted_recon_half = shifted_recon_half.astype(self.score_complex_dtype)
+        return shifted_score_half, score_weight_half, shifted_recon_half
+
+    def cast_projection_scores(self, proj_half, proj_abs2_half):
+        if self.use_float64_scoring:
+            return proj_half, proj_abs2_half
+        return proj_half.astype(jnp.complex64), proj_abs2_half.astype(jnp.float32)

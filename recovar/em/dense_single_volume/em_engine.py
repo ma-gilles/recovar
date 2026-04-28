@@ -50,6 +50,7 @@ from recovar import core
 from recovar.core.configs import ForwardModelConfig
 
 from .dense_big_jit import run_dense_bucket_big_jit
+from .helpers.dtype_policy import DensePrecisionPolicy
 from .helpers.env_flags import parse_env_bool
 from .helpers.fourier_window import make_fourier_window_spec
 from .helpers.half_spectrum import (
@@ -352,15 +353,16 @@ def _score_rotation_block(
     image_shape,
     volume_shape,
     score_mode: str,
-    use_float64_scoring: bool,
+    precision_policy: DensePrecisionPolicy,
 ):
     """Score one rotation block against the active Fourier-window spec."""
 
     proj_score = window_spec.score_values(proj_half)
     proj_abs2_score = window_spec.score_values(proj_abs2_half)
-    if not use_float64_scoring:
-        proj_score = proj_score.astype(jnp.complex64)
-        proj_abs2_score = proj_abs2_score.astype(jnp.float32)
+    proj_score, proj_abs2_score = precision_policy.cast_projection_scores(
+        proj_score,
+        proj_abs2_score,
+    )
     weights = window_spec.score_values(half_weights)
     proj_weighted = proj_score * weights
     proj_abs2_weighted = proj_abs2_score * weights
@@ -964,10 +966,13 @@ def run_em(
         mean_for_proj = mean
         proj_volume_shape = volume_shape
 
+    precision_policy = DensePrecisionPolicy(
+        use_float64_scoring=use_float64_scoring,
+        use_float64_projections=use_float64_projections,
+    )
     # NOTE: float64 projections tested (Slurm 7174969) — identical results to float32.
     # The 0.0074 Pmax gap is NOT float precision; it's boundary handling in trilinear interp.
-    if use_float64_projections:
-        mean_for_proj = jnp.asarray(mean_for_proj, dtype=jnp.complex128)
+    mean_for_proj = precision_policy.cast_projection_volume(mean_for_proj)
 
     # Backprojection padding: accumulate into a (pf*N)³ grid for finer
     # trilinear interpolation, matching RELION's --pad flag.
@@ -1043,9 +1048,7 @@ def run_em(
             100.0 * (1.0 - n_windowed / n_half),
         )
 
-    # Upcast half_weights to float64 when scoring in double precision
-    if use_float64_scoring:
-        half_weights = half_weights.astype(jnp.float64)
+    half_weights = half_weights.astype(precision_policy.score_real_dtype)
 
     # Pad rotations to multiple of block size for fixed shapes
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
@@ -1490,27 +1493,14 @@ def run_em(
         else:
             dense_noise_component_acc = {}
 
-        # -- Float64 scoring upcast (RELION parity: RFLOAT=double) --
-        ## IF THIS IS DEFAULT, THEN BE IT, BUT THERE SHOULD BE A NICER WAY TO DO THIS. E.G. DTYPE_SCORING = JNP.FLOAT 64 IF... etc instead of having a bunch of if statements
-        # RELION uses double precision for all scoring arithmetic
-        # (macros.h:77: RFLOAT=double unless RELION_SINGLE_PRECISION).
-        # Upcast the scoring arrays to float64/complex128 before the GEMMs
-        # so that accumulation over ~4900 windowed elements matches RELION.
-        if use_float64_scoring:
-            shifted_score_half = shifted_score_half.astype(jnp.complex128)
-            score_weight_half = score_weight_half.astype(jnp.float64)
-            shifted_recon_half = shifted_recon_half.astype(jnp.complex128)
-            shifted_windowed = window_spec.score_values(shifted_score_half)
-            ctf2_over_nv_windowed = window_spec.score_values(score_weight_half)
-            shifted_recon_windowed = window_spec.recon_values(shifted_recon_half)
-        else:
-            # RELION's accelerated CUDA path uses XFLOAT=float unless compiled
-            # with ACC_DOUBLE_PRECISION. Keep scoring in complex64/float32 so a
-            # complex128 volume does not silently promote the likelihood GEMMs.
-            shifted_score_half = shifted_score_half.astype(jnp.complex64)
-            score_weight_half = score_weight_half.astype(jnp.float32)
-            shifted_windowed = window_spec.score_values(shifted_score_half)
-            ctf2_over_nv_windowed = window_spec.score_values(score_weight_half)
+        shifted_score_half, score_weight_half, shifted_recon_half = precision_policy.cast_scoring_inputs(
+            shifted_score_half,
+            score_weight_half,
+            shifted_recon_half,
+        )
+        shifted_windowed = window_spec.score_values(shifted_score_half)
+        ctf2_over_nv_windowed = window_spec.score_values(score_weight_half)
+        shifted_recon_windowed = window_spec.recon_values(shifted_recon_half)
 
         if sync_timers:
             ready_values = [
@@ -1655,7 +1645,7 @@ def run_em(
                 image_shape=image_shape,
                 volume_shape=volume_shape,
                 score_mode=relion_firstiter_score_mode,
-                use_float64_scoring=use_float64_scoring,
+                precision_policy=precision_policy,
             )
 
             if sync_timers:
@@ -1889,7 +1879,7 @@ def run_em(
                 image_shape=image_shape,
                 volume_shape=volume_shape,
                 score_mode=relion_firstiter_score_mode,
-                use_float64_scoring=use_float64_scoring,
+                precision_policy=precision_policy,
             )
 
             if sync_timers:
