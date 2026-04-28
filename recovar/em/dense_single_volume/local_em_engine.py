@@ -17,8 +17,6 @@ from recovar.reconstruction import noise as noise_utils
 from recovar.em.dense_single_volume.em_primitives import (
     _adjoint_slice_volume_half,
     _adjoint_slice_volume_windowed,
-    _batch_adjoint_slice_volume_half,
-    _batch_adjoint_slice_volume_windowed,
     _block_until_ready,
     _compute_noise_block,
     _compute_projections_block,
@@ -273,10 +271,6 @@ def _local_processed_cache_enabled(n_images: int, image_shape, score_with_masked
     n_copies = 2 if score_with_masked_images else 1
     estimated_gb = int(n_images) * n_half * np.dtype(np.complex64).itemsize * n_copies / 1e9
     return estimated_gb <= max_gb
-
-
-def _local_batch_backproject_enabled() -> bool:
-    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_BATCH_BACKPROJECT", default=False)
 
 
 def _local_big_jit_enabled() -> bool:
@@ -815,7 +809,6 @@ def run_local_em_exact(
         noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_xa = jnp.zeros(n_shells, dtype=jnp.float32)
 
-    batch_backproject_enabled = _local_batch_backproject_enabled()
     big_jit_enabled = _local_big_jit_enabled()
     compact_zero_posterior_rows = _local_compact_zero_posterior_rows_enabled()
     combined_masked_preprocess = _local_combined_masked_preprocess_enabled()
@@ -1693,20 +1686,14 @@ def run_local_em_exact(
             packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_rotations_np))
         timing.pack_s += time.time() - pack_t0
 
-        if batch_backproject_enabled and not disable_adjoint_y and not disable_adjoint_ctf:
+        if not disable_adjoint_y:
             adjoint_y_t0 = time.time()
             if use_window:
-                updated_volumes = _batch_adjoint_slice_volume_windowed(
-                    jnp.stack(
-                        [
-                            flatten_bucket_rows(packed_summed),
-                            flatten_bucket_rows(packed_ctf_probs),
-                        ],
-                        axis=0,
-                    ),
+                Ft_y = _adjoint_slice_volume_windowed(
+                    flatten_bucket_rows(packed_summed),
                     recon_window_indices,
                     packed_flat_rotations,
-                    jnp.stack([Ft_y, Ft_ctf], axis=0),
+                    Ft_y,
                     image_shape,
                     recon_volume_shape,
                     "linear_interp",
@@ -1715,87 +1702,49 @@ def run_local_em_exact(
                     float(current_size // 2),
                 )
             else:
-                updated_volumes = _batch_adjoint_slice_volume_half(
-                    jnp.stack(
-                        [
-                            flatten_bucket_rows(packed_summed),
-                            flatten_bucket_rows(packed_ctf_probs),
-                        ],
-                        axis=0,
-                    ),
+                Ft_y = _adjoint_slice_volume_half(
+                    flatten_bucket_rows(packed_summed),
                     packed_flat_rotations,
-                    jnp.stack([Ft_y, Ft_ctf], axis=0),
+                    Ft_y,
                     image_shape,
                     recon_volume_shape,
                     "linear_interp",
                     True,
                     use_native_half_volume_mstep,
                 )
-            Ft_y = updated_volumes[0]
-            Ft_ctf = updated_volumes[1]
             if return_profile:
-                _block_until_ready(Ft_y, Ft_ctf)
+                _block_until_ready(Ft_y)
             timing.adjoint_y_s += time.time() - adjoint_y_t0
-        else:
-            if not disable_adjoint_y:
-                adjoint_y_t0 = time.time()
-                if use_window:
-                    Ft_y = _adjoint_slice_volume_windowed(
-                        flatten_bucket_rows(packed_summed),
-                        recon_window_indices,
-                        packed_flat_rotations,
-                        Ft_y,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        True,
-                        use_native_half_volume_mstep,
-                        float(current_size // 2),
-                    )
-                else:
-                    Ft_y = _adjoint_slice_volume_half(
-                        flatten_bucket_rows(packed_summed),
-                        packed_flat_rotations,
-                        Ft_y,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        True,
-                        use_native_half_volume_mstep,
-                    )
-                if return_profile:
-                    _block_until_ready(Ft_y)
-                timing.adjoint_y_s += time.time() - adjoint_y_t0
 
-            if not disable_adjoint_ctf:
-                adjoint_ctf_t0 = time.time()
-                if use_window:
-                    Ft_ctf = _adjoint_slice_volume_windowed(
-                        flatten_bucket_rows(packed_ctf_probs),
-                        recon_window_indices,
-                        packed_flat_rotations,
-                        Ft_ctf,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        True,
-                        use_native_half_volume_mstep,
-                        float(current_size // 2),
-                    )
-                else:
-                    Ft_ctf = _adjoint_slice_volume_half(
-                        flatten_bucket_rows(packed_ctf_probs),
-                        packed_flat_rotations,
-                        Ft_ctf,
-                        image_shape,
-                        recon_volume_shape,
-                        "linear_interp",
-                        True,
-                        use_native_half_volume_mstep,
-                    )
-                if return_profile:
-                    _block_until_ready(Ft_ctf)
-                timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
+        if not disable_adjoint_ctf:
+            adjoint_ctf_t0 = time.time()
+            if use_window:
+                Ft_ctf = _adjoint_slice_volume_windowed(
+                    flatten_bucket_rows(packed_ctf_probs),
+                    recon_window_indices,
+                    packed_flat_rotations,
+                    Ft_ctf,
+                    image_shape,
+                    recon_volume_shape,
+                    "linear_interp",
+                    True,
+                    use_native_half_volume_mstep,
+                    float(current_size // 2),
+                )
+            else:
+                Ft_ctf = _adjoint_slice_volume_half(
+                    flatten_bucket_rows(packed_ctf_probs),
+                    packed_flat_rotations,
+                    Ft_ctf,
+                    image_shape,
+                    recon_volume_shape,
+                    "linear_interp",
+                    True,
+                    use_native_half_volume_mstep,
+                )
+            if return_profile:
+                _block_until_ready(Ft_ctf)
+            timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
         if accumulate_noise:
             noise_t0 = time.time()
@@ -2049,7 +1998,6 @@ def run_local_em_exact(
     profile_summary = {
         "big_jit_enabled": np.asarray(big_jit_enabled),
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
-        "batch_backproject_enabled": np.asarray(batch_backproject_enabled),
         "compact_zero_posterior_rows": np.asarray(compact_zero_posterior_rows),
         "combined_masked_preprocess": np.asarray(combined_masked_preprocess),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
