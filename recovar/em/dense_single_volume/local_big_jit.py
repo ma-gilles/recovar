@@ -12,7 +12,6 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from recovar import core
 from recovar.core import mask as core_mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.padding as padding
@@ -21,6 +20,7 @@ from recovar.em.dense_single_volume.em_primitives import (
 )
 from recovar.em.dense_single_volume.helpers.backprojection import accumulate_adjoint_pair
 from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
+from recovar.em.dense_single_volume.helpers.projection import project_half_spectrum
 
 
 def _apply_integer_pre_shifts(images, shifts):
@@ -362,27 +362,15 @@ def run_local_bucket_big_jit(
     ctf2_over_nv_recon = ctf2_over_nv_recon.astype(score_real_dtype)
 
     flat_rotations = local_rotations.reshape(local_rotations.shape[0] * local_rotations.shape[1], 3, 3)
-    if projection_max_r == "auto":
-        proj_half_flat = core.slice_volume(
-            mean_for_proj,
-            flat_rotations,
-            image_shape,
-            proj_volume_shape,
-            disc_type,
-            half_volume=projection_half_volume,
-            half_image=True,
-        )
-    else:
-        proj_half_flat = core.slice_volume(
-            mean_for_proj,
-            flat_rotations,
-            image_shape,
-            proj_volume_shape,
-            disc_type,
-            half_volume=projection_half_volume,
-            half_image=True,
-            max_r=projection_max_r,
-        )
+    proj_half_flat = project_half_spectrum(
+        mean_for_proj,
+        flat_rotations,
+        image_shape,
+        proj_volume_shape,
+        disc_type,
+        half_volume=projection_half_volume,
+        max_r=projection_max_r,
+    )
     if use_window:
         proj_half = proj_half_flat[:, window_indices].reshape(
             batch_size,
