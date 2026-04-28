@@ -185,6 +185,18 @@ class _BigJitMaskArgs:
 
 
 @dataclass(frozen=True)
+class _BigJitNoiseArgs:
+    noise_wsum: jax.Array
+    noise_img_power: jax.Array
+    noise_a2: jax.Array
+    noise_xa: jax.Array
+    shell_indices_half: jax.Array
+    shell_indices_noise: jax.Array
+    noise_variance_for_noise: jax.Array
+    n_shells: int
+
+
+@dataclass(frozen=True)
 class _LocalReconstructionPack:
     local_mask: np.ndarray
     take_indices: np.ndarray
@@ -301,6 +313,47 @@ def _local_big_jit_mask_args(experiment_dataset, image_shape) -> _BigJitMaskArgs
         mask_mode = "none"
 
     return _BigJitMaskArgs(mask_mode=mask_mode, image_mask=jnp.asarray(image_mask))
+
+
+def _local_big_jit_noise_args(
+    *,
+    accumulate_noise: bool,
+    noise_wsum,
+    noise_img_power,
+    noise_a2,
+    noise_xa,
+    shell_indices_half,
+    shell_indices_noise,
+    noise_variance_for_noise,
+    n_shells: int,
+    noise_variance_half,
+) -> _BigJitNoiseArgs:
+    """Return concrete noise arrays for the big-JIT call boundary."""
+
+    if accumulate_noise:
+        return _BigJitNoiseArgs(
+            noise_wsum=noise_wsum,
+            noise_img_power=noise_img_power,
+            noise_a2=noise_a2,
+            noise_xa=noise_xa,
+            shell_indices_half=shell_indices_half,
+            shell_indices_noise=shell_indices_noise,
+            noise_variance_for_noise=noise_variance_for_noise,
+            n_shells=int(n_shells),
+        )
+
+    disabled = jnp.zeros(1, dtype=jnp.float32)
+    disabled_shell_indices = jnp.zeros(noise_variance_half.shape[0], dtype=jnp.int32)
+    return _BigJitNoiseArgs(
+        noise_wsum=disabled,
+        noise_img_power=disabled,
+        noise_a2=disabled,
+        noise_xa=disabled,
+        shell_indices_half=disabled_shell_indices,
+        shell_indices_noise=disabled_shell_indices,
+        noise_variance_for_noise=noise_variance_half,
+        n_shells=1,
+    )
 
 
 def _can_use_local_big_jit_bucket(
@@ -1216,11 +1269,6 @@ def run_local_em_exact(
 
     big_jit_window_indices_arg = window_spec.score_or_full_indices(n_half)
     big_jit_recon_window_indices_arg = window_spec.recon_or_full_indices(n_half)
-    disabled_noise_wsum = jnp.zeros(1, dtype=jnp.float32)
-    disabled_noise_img_power = jnp.zeros(1, dtype=jnp.float32)
-    disabled_noise_a2 = jnp.zeros(1, dtype=jnp.float32)
-    disabled_noise_xa = jnp.zeros(1, dtype=jnp.float32)
-    disabled_noise_shell_indices = jnp.zeros(n_half, dtype=jnp.int32)
 
     for bucket in bucket_specs:
         n_chunks += 1
@@ -1364,24 +1412,18 @@ def run_local_em_exact(
                 if normalization_log_z_np is not None
                 else jnp.zeros(batch_size, dtype=jnp.float32)
             )
-            if accumulate_noise:
-                noise_wsum_arg = noise_wsum
-                noise_img_power_arg = noise_img_power
-                noise_a2_arg = noise_a2
-                noise_xa_arg = noise_xa
-                shell_indices_half_arg = shell_indices_half
-                shell_indices_noise_arg = shell_indices_noise
-                noise_variance_for_noise_arg = noise_variance_for_noise
-                n_shells_arg = n_shells
-            else:
-                noise_wsum_arg = disabled_noise_wsum
-                noise_img_power_arg = disabled_noise_img_power
-                noise_a2_arg = disabled_noise_a2
-                noise_xa_arg = disabled_noise_xa
-                shell_indices_half_arg = disabled_noise_shell_indices
-                shell_indices_noise_arg = disabled_noise_shell_indices
-                noise_variance_for_noise_arg = noise_variance_half
-                n_shells_arg = 1
+            noise_args = _local_big_jit_noise_args(
+                accumulate_noise=accumulate_noise,
+                noise_wsum=noise_wsum,
+                noise_img_power=noise_img_power,
+                noise_a2=noise_a2,
+                noise_xa=noise_xa,
+                shell_indices_half=shell_indices_half,
+                shell_indices_noise=shell_indices_noise,
+                noise_variance_for_noise=noise_variance_for_noise,
+                n_shells=n_shells,
+                noise_variance_half=noise_variance_half,
+            )
 
             projection_max_r_big_jit = window_spec.dense_big_jit_max_r()
             (
@@ -1408,10 +1450,10 @@ def run_local_em_exact(
                 mean_for_proj_big_jit,
                 Ft_y,
                 Ft_ctf,
-                noise_wsum_arg,
-                noise_img_power_arg,
-                noise_a2_arg,
-                noise_xa_arg,
+                noise_args.noise_wsum,
+                noise_args.noise_img_power,
+                noise_args.noise_a2,
+                noise_args.noise_xa,
                 noise_sigma2_offset,
                 noise_sumw,
                 big_jit_image_mask_arg,
@@ -1427,9 +1469,9 @@ def run_local_em_exact(
                 norm_half_weights,
                 big_jit_window_indices_arg,
                 big_jit_recon_window_indices_arg,
-                shell_indices_half_arg,
-                shell_indices_noise_arg,
-                noise_variance_for_noise_arg,
+                noise_args.shell_indices_half,
+                noise_args.shell_indices_noise,
+                noise_args.noise_variance_for_noise,
                 jnp.asarray(bucket.local_rotations),
                 jnp.asarray(bucket.local_rotation_log_prior),
                 jnp.asarray(bucket.translation_log_prior),
@@ -1460,7 +1502,7 @@ def run_local_em_exact(
                 use_native_half_volume_mstep=use_native_half_volume_mstep,
                 accumulate_noise=accumulate_noise,
                 return_noise_split=return_noise_split,
-                n_shells=n_shells_arg,
+                n_shells=noise_args.n_shells,
                 has_normalization_log_z=normalization_log_z_np is not None,
             )
             if return_profile:
