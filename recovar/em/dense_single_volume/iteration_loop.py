@@ -421,7 +421,7 @@ def _normalize_noise_variance_per_half(init_noise_variance, n_halves=2):
 
 
 def _mean_noise_variance(noise_variance_per_half):
-    """Average per-half image noise for diagnostics and legacy outputs."""
+    """Average per-half image noise for diagnostics and compatibility outputs."""
     return jnp.mean(
         jnp.stack([jnp.asarray(noise_k).reshape(-1) for noise_k in noise_variance_per_half], axis=0),
         axis=0,
@@ -662,11 +662,11 @@ def _run_local_search_iteration(
     iteration. ``prior_rotations`` may be either RELION Euler angles
     ``(rot, tilt, psi)`` or rotation matrices. Images are processed in
     chunks; by default they are evaluated by the active per-image exact local
-    engine (``exact_v1``). The legacy grouped-union path remains available
-    only for parity comparisons and fallback experiments.
+    engine (``exact_v1``). The grouped-union path remains available only for
+    parity comparisons and fallback experiments.
 
     TODO(local-engine-debt): Keep the translation-side inner-product/GEMM
-    opportunity in mind as an optimization target when replacing the legacy
+    opportunity in mind as an optimization target when replacing the
     grouped-union code, but do not let it keep us trapped in the union-based
     local abstraction.
     """

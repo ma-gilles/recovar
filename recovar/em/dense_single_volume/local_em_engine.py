@@ -295,8 +295,8 @@ def _local_native_half_preprocess_mode() -> str:
     """Return native half-preprocess mode.
 
     ``auto`` is the default so raw real-space buckets use the same half-rFFT
-    preprocessing that big-JIT requires. Explicit off still forces the legacy
-    preprocessing path, which also disables big-JIT for affected buckets.
+    preprocessing that big-JIT requires. Explicit off still forces the older
+    full-image preprocessing path, which also disables big-JIT for affected buckets.
     """
 
     return parse_env_auto_mode("RECOVAR_RELION_EXACT_LOCAL_NATIVE_HALF_PREPROCESS", default="auto")
