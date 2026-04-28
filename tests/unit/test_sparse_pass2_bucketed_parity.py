@@ -19,6 +19,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
+import recovar.core.fourier_transform_utils as ftu
 from recovar.em.dense_single_volume.helpers.oversampling import (
     _compute_pass2_stats_sparse_perimage_reference,
     compute_pass2_stats_sparse,
@@ -37,11 +38,9 @@ VOLUME_SHAPE = (8, 8, 8)
 VOLUME_SIZE = 512
 
 
-def _hermitian_image_2d(image_shape, seed=42):
+def _raw_real_image_2d(image_shape, seed=42):
     rng = np.random.default_rng(seed)
-    real_img = rng.standard_normal(image_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fft2(real_img))
-    return jnp.array(ft, dtype=jnp.complex64)
+    return rng.standard_normal(image_shape).astype(np.float32)
 
 
 def _hermitian_volume(volume_shape, seed=42):
@@ -60,9 +59,22 @@ def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False
     return jnp.ones((params.shape[0], sz), dtype=jnp.float32)
 
 
-def _identity_process(batch, apply_image_mask=False):
-    _ = apply_image_mask
-    return batch
+def _unit_image_mask(dtype=jnp.float32):
+    return jnp.linspace(0.2, 1.0, IMAGE_SIZE, dtype=dtype).reshape(IMAGE_SHAPE)
+
+
+def _raw_real_process(batch, apply_image_mask=False):
+    images = jnp.asarray(batch)
+    if apply_image_mask:
+        images = images * _unit_image_mask(images.dtype)
+    return ftu.get_dft2(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
+
+
+def _raw_real_process_half(batch, apply_image_mask=False):
+    images = jnp.asarray(batch)
+    if apply_image_mask:
+        images = images * _unit_image_mask(images.dtype)
+    return ftu.get_dft2_real(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
 
 
 class MockDataset:
@@ -78,19 +90,21 @@ class MockDataset:
         self.dtype = jnp.complex64
         self.CTF_params = np.zeros((n_images, 9), dtype=np.float32)
         self.ctf_evaluator = staticmethod(_identity_ctf)
-        self.process_images = staticmethod(_identity_process)
+        self.process_images = staticmethod(_raw_real_process)
+        self.process_images_half = staticmethod(_raw_real_process_half)
 
         self.rotation_matrices = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
         self.translations = np.zeros((n_images, 2), dtype=np.float32)
         self.premultiplied_ctf = False
 
         rng = np.random.default_rng(seed)
-        self._images = np.zeros((n_images, IMAGE_SIZE), dtype=np.complex64)
+        self._images = np.zeros((n_images, *IMAGE_SHAPE), dtype=np.float32)
         for i in range(n_images):
-            self._images[i] = _hermitian_image_2d(IMAGE_SHAPE, seed=rng.integers(10000)).reshape(-1)
+            self._images[i] = _raw_real_image_2d(IMAGE_SHAPE, seed=rng.integers(10000))
 
         class _ImageSource:
-            process_images = staticmethod(_identity_process)
+            process_images = staticmethod(_raw_real_process)
+            process_images_half = staticmethod(_raw_real_process_half)
 
         self.image_source = _ImageSource()
 
@@ -403,7 +417,10 @@ class TestSparsePass2Bucketed:
         n_images = 3
         sig_indices = [None] * n_images
         out_ref, out_bucket = self._run_both(sig_indices, return_stats=True)
-        _compare_outputs(out_ref, out_bucket)
+        # The bucketed path accumulates all images in one GPU reduction, while
+        # the reference adds per-image reductions.  The remaining difference is
+        # float32 accumulation order in Ft_y, not candidate selection logic.
+        _compare_outputs(out_ref, out_bucket, atol=5e-5, rtol=5e-5)
 
     def test_relion_mode_kwargs_match(self):
         """Match the exact production call: half_spectrum + float64 + masked + noise."""
@@ -429,8 +446,7 @@ class TestSparsePass2Bucketed:
         These exercise the parity-critical RELION corrections path (avg_norm/normcorr,
         rlnGroupScaleCorrection, old_offset pre-centering).  The bucketed
         path needs to reproduce the per-image scaling exactly, including the
-        ``batch_norm * corr**2`` and the use of *raw* (un-corrected) processed
-        images for noise_img_power.
+        ``batch_norm`` and noise image-power image-only correction conventions.
         """
         sig_indices = [
             np.array([0, 1, 2], dtype=np.int32),
