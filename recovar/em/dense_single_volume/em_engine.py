@@ -36,7 +36,6 @@ Fourier windowing:
 
 import logging
 import os
-import pathlib
 import time
 from dataclasses import dataclass
 from functools import partial
@@ -73,7 +72,11 @@ from .helpers.translation_prior import (
     validate_translation_prior_centers,
 )
 from .helpers.types import EMProfileStats, NoiseStats, RelionStats
-from .local_debug import parse_dense_noise_component_dump_request
+from .local_debug import (
+    maybe_write_dense_per_pose_score_dump,
+    parse_dense_noise_component_dump_request,
+    parse_dense_per_pose_score_dump_request,
+)
 from .shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
 logger = logging.getLogger(__name__)
@@ -924,6 +927,7 @@ def run_em(
             or int(current_size or -1) in dense_noise_component_dump_current_sizes
         )
     )
+    dense_per_pose_score_dump = parse_dense_per_pose_score_dump_request()
     # Pad volume in real space for smoother trilinear projection.
     if projection_padding_factor > 1:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
@@ -1133,7 +1137,7 @@ def run_em(
         relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
         accumulate_noise=accumulate_noise,
         dense_noise_component_dump_enabled=dense_noise_component_dump_enabled,
-        per_pose_debug_dump_enabled=bool(os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR")),
+        per_pose_debug_dump_enabled=dense_per_pose_score_dump.enabled,
     )
     use_dense_big_jit = dense_big_jit_requested and dense_big_jit_unsupported_reason is None
     if dense_big_jit_requested and not use_dense_big_jit:
@@ -1622,33 +1626,13 @@ def run_em(
                 _block_until_ready(scores)
             timing.pass1_score_s += time.time() - score_t0
 
-            # Pre-prior per-pose dump for one targeted particle (env-gated debug).
-            # When RECOVAR_DEBUG_PER_POSE_DUMP_PREPRIOR=1, dump scores BEFORE
-            # adding any prior — matches RELION's exp_Mweight_diff2 dump point.
-            _per_pose_dir_pre = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR")
-            _per_pose_target_pre = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_TARGET")
-            _per_pose_preprior = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_PREPRIOR")
-            if (
-                _per_pose_dir_pre
-                and _per_pose_target_pre is not None
-                and _per_pose_preprior
-                and _per_pose_preprior != "0"
-            ):
-                try:
-                    _target_idx_pre = int(_per_pose_target_pre)
-                    _idx_arr_pre = np.asarray(indices, dtype=np.int64)
-                    _hits_pre = np.where(_idx_arr_pre == _target_idx_pre)[0]
-                    if len(_hits_pre) > 0:
-                        _row_pre = int(_hits_pre[0])
-                        _per_pose_path_pre = pathlib.Path(_per_pose_dir_pre)
-                        _per_pose_path_pre.mkdir(parents=True, exist_ok=True)
-                        _scores_target_pre = np.asarray(scores[_row_pre], dtype=np.float64)
-                        np.save(
-                            _per_pose_path_pre / f"target{_target_idx_pre:06d}_block{b:04d}_preprior.npy",
-                            _scores_target_pre,
-                        )
-                except Exception:
-                    pass
+            maybe_write_dense_per_pose_score_dump(
+                request=dense_per_pose_score_dump,
+                indices=indices,
+                scores=scores,
+                block_index=b,
+                preprior=True,
+            )
 
             pass1_postprocess_t0 = time.time()
             if relion_firstiter_score_mode == "gaussian":
@@ -1682,28 +1666,12 @@ def run_em(
                 block_max_per_image.append(jnp.max(scores, axis=(1, 2)))
                 block_pose_counts.append(actual_rot * n_trans)
 
-            # Per-pose score dump for one targeted particle (env-gated debug).
-            # Set RECOVAR_DEBUG_PER_POSE_DUMP_DIR and RECOVAR_DEBUG_PER_POSE_DUMP_TARGET
-            # (the global stack-index in the input dataset) to capture the
-            # rotation×translation score matrix for that image across all blocks.
-            _per_pose_dir = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR")
-            _per_pose_target = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_TARGET")
-            if _per_pose_dir and _per_pose_target is not None:
-                try:
-                    _target_idx = int(_per_pose_target)
-                    _idx_arr = np.asarray(indices, dtype=np.int64)
-                    _hits = np.where(_idx_arr == _target_idx)[0]
-                    if len(_hits) > 0:
-                        _row = int(_hits[0])
-                        _per_pose_path = pathlib.Path(_per_pose_dir)
-                        _per_pose_path.mkdir(parents=True, exist_ok=True)
-                        _scores_target = np.asarray(scores[_row], dtype=np.float64)
-                        np.save(
-                            _per_pose_path / f"target{_target_idx:06d}_block{b:04d}.npy",
-                            _scores_target,
-                        )
-                except Exception:
-                    pass
+            maybe_write_dense_per_pose_score_dump(
+                request=dense_per_pose_score_dump,
+                indices=indices,
+                scores=scores,
+                block_index=b,
+            )
 
             if sync_timers:
                 _block_until_ready(scores)

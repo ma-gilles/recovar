@@ -3,11 +3,25 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from recovar import utils
+
+
+@dataclass(frozen=True)
+class DensePerPoseScoreDumpRequest:
+    """Dense/global per-pose score dump request parsed from environment."""
+
+    dump_dir: Path | None = None
+    target: int | None = None
+    dump_preprior: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return self.dump_dir is not None and self.target is not None
 
 
 def parse_debug_int_set(value: str | None) -> set[int] | None:
@@ -74,6 +88,56 @@ def parse_dense_noise_component_dump_request():
     dump_path = Path(dump_dir)
     dump_path.mkdir(parents=True, exist_ok=True)
     return dump_path, targets, requested_current_sizes
+
+
+def parse_dense_per_pose_score_dump_request() -> DensePerPoseScoreDumpRequest:
+    """Return optional dense/global per-pose score dump settings."""
+
+    dump_dir = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR")
+    dump_target = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_TARGET")
+    if not dump_dir or dump_target is None:
+        return DensePerPoseScoreDumpRequest()
+    try:
+        target = int(dump_target)
+    except ValueError:
+        return DensePerPoseScoreDumpRequest()
+    dump_path = Path(dump_dir)
+    dump_path.mkdir(parents=True, exist_ok=True)
+    dump_preprior = os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_PREPRIOR")
+    return DensePerPoseScoreDumpRequest(
+        dump_dir=dump_path,
+        target=target,
+        dump_preprior=bool(dump_preprior and dump_preprior != "0"),
+    )
+
+
+def maybe_write_dense_per_pose_score_dump(
+    *,
+    request: DensePerPoseScoreDumpRequest,
+    indices,
+    scores,
+    block_index: int,
+    preprior: bool = False,
+) -> None:
+    """Dump one dense/global score block for a targeted input image."""
+
+    if not request.enabled:
+        return
+    if preprior and not request.dump_preprior:
+        return
+    try:
+        hits = np.where(np.asarray(indices, dtype=np.int64) == int(request.target))[0]
+        if len(hits) == 0:
+            return
+        row = int(hits[0])
+        suffix = "_preprior" if preprior else ""
+        scores_target = np.asarray(scores[row], dtype=np.float64)
+        np.save(
+            request.dump_dir / f"target{int(request.target):06d}_block{int(block_index):04d}{suffix}.npy",
+            scores_target,
+        )
+    except Exception:
+        return
 
 
 def noise_split_diagnostics_requested() -> bool:
