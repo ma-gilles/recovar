@@ -461,6 +461,37 @@ def _normalize_logged_float32_half_pair(values, *, label: str):
     return per_half
 
 
+@dataclass
+class _RelionHalfInputState:
+    """Mutable per-half inputs carried across replay and local-search iterations."""
+
+    previous_best_translations: list
+    previous_best_rotation_eulers: list
+    image_corrections: list
+    scale_corrections: list
+
+    @classmethod
+    def from_initial_values(
+        cls,
+        *,
+        previous_best_translations,
+        previous_best_rotation_eulers,
+        image_corrections,
+        scale_corrections,
+    ):
+        return cls(
+            previous_best_translations=_optional_float32_half_pair(previous_best_translations),
+            previous_best_rotation_eulers=_optional_float32_half_pair(previous_best_rotation_eulers),
+            image_corrections=_normalize_logged_float32_half_pair(
+                image_corrections,
+                label="image_corrections",
+            ),
+            scale_corrections=_normalize_logged_float32_half_pair(
+                scale_corrections,
+                label="scale_corrections",
+            ),
+        )
+
 def _relion_rotation_grid_float32(healpix_order: int):
     """Return RELION rotation matrices/eulers using the loop's float32 policy."""
     order = int(healpix_order)
@@ -2089,10 +2120,7 @@ def _run_relion_iteration_loop(
         )
         return ibs, rbs
 
-    ## TODO CHANGE NAMES OF THIGNS THIGSN. MEANS IS NOT A REASONABLE NAME HERE.
-    ##
-
-    # State: two half-set volumes, noise, prior
+    # State: two half-set volumes, noise, prior.
     # init_volume can be a single array (used for both halves) or a list/tuple
     # of 2 arrays (one per half-set, matching RELION auto-refine).
     if isinstance(init_volume, (list, tuple)) and len(init_volume) == 2:
@@ -2106,10 +2134,8 @@ def _run_relion_iteration_loop(
     noise_variance = _mean_noise_variance(noise_variance_per_half)
     mean_variance = jnp.array(init_mean_variance)
 
-    ## TODO: WE NEED TO FIND A BETTER WAY TO MANAGE ALL OF THESE VARIABLES.
-    ## PERHAPS SOME CONFIGS, SOME MORE OBJECTS/ENUM THING, WE SHOULDNT DEFINE 1000 VARIABLES LIKE THIS IN PYTHON.
-
-    # History tracking
+    # History tracking. Keep these plain lists for now because they are
+    # serialized directly into legacy intermediate files.
     current_sizes = []
     fsc_history = []
     pixel_resolutions = []
@@ -2117,8 +2143,12 @@ def _run_relion_iteration_loop(
     hard_assignments = [None, None]
     previous_assignments = [None, None]
     previous_best_rotations = [None, None]
-    previous_best_translations = _optional_float32_half_pair(init_previous_best_translations)
-    previous_best_rotation_eulers = _optional_float32_half_pair(init_previous_best_rotation_eulers)
+    relion_half_inputs = _RelionHalfInputState.from_initial_values(
+        previous_best_translations=init_previous_best_translations,
+        previous_best_rotation_eulers=init_previous_best_rotation_eulers,
+        image_corrections=init_image_corrections,
+        scale_corrections=init_scale_corrections,
+    )
     max_posterior_per_half = [None, None]
     rotation_posterior_per_half = [None, None]
     significant_counts = []
@@ -2142,9 +2172,6 @@ def _run_relion_iteration_loop(
     tau2_update_details = None
     tau2_update_details_per_half = None
 
-    ## TODO: WE NEED MUCH BETTER NAMING THAN THIS, I AHVE NO IDEA WHAT THIS IS SAYING OR WHAT IT DOES
-    ## IF ITS FOR RELION PARITY OKAY, BUT MAYBE WE CNA AT LEAST HAVE COMMENTS NEXT TO DEF SO I HAVE SOME IDEA OF WHATS GOING ON
-
     # C1 (RELION-parity): per-iter sigma2_offset update from data. Initialized
     # from `init_translation_sigma_angstrom`; updated from RELION's
     # posterior-weighted offset moment when the E-step path propagates it.
@@ -2164,31 +2191,6 @@ def _run_relion_iteration_loop(
     relion_has_high_fsc_at_limit = bool(init_has_high_fsc_at_limit) if init_has_high_fsc_at_limit is not None else False
     global_direction_prior_per_half = [None, None]
     global_direction_prior_order_per_half = [None, None]
-
-    ## TODO: DO THE NEXT 2 FOR LOOPS DO THE SAME THING? I'M CONFUSED.
-    ## AT LEAST ITS TERRIBLE CODE
-
-    # --- Per-image corrections (RELION parity: avg_norm/normcorr * scale) ---
-    # RELION applies img *= avg_norm_correction/normcorr (ml_optimiser.cpp:6240)
-    # and scale_correction to the reference (line 7298).  The caller must
-    # compute (avg_norm/normcorr)*scale and pass it here.  Passed through to
-    # run_em's image_corrections parameter.
-    # The arrays are indexed by the HALF-SET dataset order (not global particle
-    # order), matching experiment_datasets[k].
-    image_corrections_per_half = _normalize_logged_float32_half_pair(
-        init_image_corrections,
-        label="image_corrections",
-    )
-
-    # --- Per-image scale corrections (RELION parity: reference side) ---
-    # RELION applies rlnGroupScaleCorrection to the REFERENCE, not the image
-    # (ml_optimiser.cpp:7295-7298).  This means the E-step norm-term and
-    # M-step denominator carry scale².  Passed to run_em's
-    # scale_corrections parameter to multiply ctf²/σ² by scale².
-    scale_corrections_per_half = _normalize_logged_float32_half_pair(
-        init_scale_corrections,
-        label="scale_corrections",
-    )
 
     # --- Direction prior from snapshot ---
     # When starting from a RELION snapshot, the previous iteration's
@@ -2507,11 +2509,11 @@ def _run_relion_iteration_loop(
                 )
             _replay_prev_trans = iter_replay_override.get("previous_best_translations")
             if _replay_prev_trans is not None:
-                previous_best_translations = _optional_float32_half_pair(_replay_prev_trans)
+                relion_half_inputs.previous_best_translations = _optional_float32_half_pair(_replay_prev_trans)
                 logger.info(
                     "Replay override: previous_best_translations <- half1=%s half2=%s",
-                    "set" if previous_best_translations[0] is not None else "none",
-                    "set" if previous_best_translations[1] is not None else "none",
+                    "set" if relion_half_inputs.previous_best_translations[0] is not None else "none",
+                    "set" if relion_half_inputs.previous_best_translations[1] is not None else "none",
                 )
             _replay_prev_rots = iter_replay_override.get("previous_best_rotations")
             if _replay_prev_rots is not None:
@@ -2523,27 +2525,27 @@ def _run_relion_iteration_loop(
                 )
             _replay_prev_eulers = iter_replay_override.get("previous_best_rotation_eulers")
             if _replay_prev_eulers is not None:
-                previous_best_rotation_eulers = _optional_float32_half_pair(_replay_prev_eulers)
+                relion_half_inputs.previous_best_rotation_eulers = _optional_float32_half_pair(_replay_prev_eulers)
                 logger.info(
                     "Replay override: previous_best_rotation_eulers <- half1=%s half2=%s",
-                    "set" if previous_best_rotation_eulers[0] is not None else "none",
-                    "set" if previous_best_rotation_eulers[1] is not None else "none",
+                    "set" if relion_half_inputs.previous_best_rotation_eulers[0] is not None else "none",
+                    "set" if relion_half_inputs.previous_best_rotation_eulers[1] is not None else "none",
                 )
             _replay_img_corr = iter_replay_override.get("image_corrections")
             if _replay_img_corr is not None:
-                image_corrections_per_half = _optional_float32_half_pair(_replay_img_corr)
+                relion_half_inputs.image_corrections = _optional_float32_half_pair(_replay_img_corr)
                 logger.info(
                     "Replay override: image_corrections <- half1=%s half2=%s",
-                    "set" if image_corrections_per_half[0] is not None else "none",
-                    "set" if image_corrections_per_half[1] is not None else "none",
+                    "set" if relion_half_inputs.image_corrections[0] is not None else "none",
+                    "set" if relion_half_inputs.image_corrections[1] is not None else "none",
                 )
             _replay_scale_corr = iter_replay_override.get("scale_corrections")
             if _replay_scale_corr is not None:
-                scale_corrections_per_half = _optional_float32_half_pair(_replay_scale_corr)
+                relion_half_inputs.scale_corrections = _optional_float32_half_pair(_replay_scale_corr)
                 logger.info(
                     "Replay override: scale_corrections <- half1=%s half2=%s",
-                    "set" if scale_corrections_per_half[0] is not None else "none",
-                    "set" if scale_corrections_per_half[1] is not None else "none",
+                    "set" if relion_half_inputs.scale_corrections[0] is not None else "none",
+                    "set" if relion_half_inputs.scale_corrections[1] is not None else "none",
                 )
             _replay_noise = iter_replay_override.get("noise_variance")
             if _replay_noise is not None:
@@ -2672,7 +2674,9 @@ def _run_relion_iteration_loop(
         effective_rotations = current_rotations
         effective_rotation_eulers = np.asarray(current_rotation_eulers, dtype=np.float32)
         rotation_log_prior_per_half = [None, None]
-        use_local = state.do_local_search and all(eulers is not None for eulers in previous_best_rotation_eulers)
+        use_local = state.do_local_search and all(
+            eulers is not None for eulers in relion_half_inputs.previous_best_rotation_eulers
+        )
         # --- Apply RELION SamplingPerturbation to the trial grid for this iter ---
         # healpix_sampling.cpp:1909-1934 (rotations) + 1810-1820 (translations)
         # Perturbation is a rigid rotation of SO(3): A := A @ R_perturb applied
@@ -2877,7 +2881,8 @@ def _run_relion_iteration_loop(
         for k in range(2):
             noise_variance_k = noise_variance_per_half[k]
             rotation_log_prior_k = rotation_log_prior_per_half[k]
-            translation_search_base = relion_translation_search_base(previous_best_translations[k])
+            previous_translations_k = relion_half_inputs.previous_best_translations[k]
+            translation_search_base = relion_translation_search_base(previous_translations_k)
             translation_search_bases[k] = translation_search_base
             current_translation_range = float(state.translation_range)
             # RELION translation prior sigma (ml_optimiser.cpp:7737-7746):
@@ -2896,7 +2901,7 @@ def _run_relion_iteration_loop(
             # getTranslationsInPixel; convert the rounded old-offset center
             # into the pixel-space search grid used below.
             trans_prior_center = relion_translation_prior_center(
-                previous_best_translations[k],
+                previous_translations_k,
                 cryo.voxel_size,
             )
             translation_prior_translations = np.asarray(base_translations, dtype=np.float32)
@@ -3033,7 +3038,7 @@ def _run_relion_iteration_loop(
                     means[k],
                     mean_variance,
                     noise_variance_k,
-                    previous_best_rotation_eulers[k],
+                    relion_half_inputs.previous_best_rotation_eulers[k],
                     local_search_rotations,
                     local_search_rotation_eulers,
                     local_search_order,
@@ -3055,8 +3060,8 @@ def _run_relion_iteration_loop(
                     do_gridding_correction=True,
                     square_window=RELION_FOURIER_WINDOW_SQUARE,
                     half_spectrum_scoring=True,
-                    image_corrections=image_corrections_per_half[k],
-                    scale_corrections=scale_corrections_per_half[k],
+                    image_corrections=relion_half_inputs.image_corrections[k],
+                    scale_corrections=relion_half_inputs.scale_corrections[k],
                     image_pre_shifts=translation_search_base,
                     score_with_masked_images=True,
                     return_profile=collect_local_search_profile,
@@ -3156,8 +3161,8 @@ def _run_relion_iteration_loop(
                     return_significant_sample_indices=True,
                     rotation_log_prior=rotation_log_prior_k,
                     translation_log_prior=translation_log_prior,
-                    image_corrections=image_corrections_per_half[k],
-                    scale_corrections=scale_corrections_per_half[k],
+                    image_corrections=relion_half_inputs.image_corrections[k],
+                    scale_corrections=relion_half_inputs.scale_corrections[k],
                     image_pre_shifts=translation_search_base,
                     half_spectrum_scoring=True,
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
@@ -3222,8 +3227,8 @@ def _run_relion_iteration_loop(
                         half_spectrum_scoring=True,
                         projection_padding_factor=PROJECTION_PADDING_FACTOR,
                         reconstruction_padding_factor=PADDING_FACTOR,
-                        image_corrections=image_corrections_per_half[k],
-                        scale_corrections=scale_corrections_per_half[k],
+                        image_corrections=relion_half_inputs.image_corrections[k],
+                        scale_corrections=relion_half_inputs.scale_corrections[k],
                         image_pre_shifts=translation_search_base,
                         translation_prior_centers=trans_prior_center,
                         use_float64_scoring=_relion_use_float64_scoring(),
@@ -3273,8 +3278,8 @@ def _run_relion_iteration_loop(
                         half_spectrum_scoring=True,
                         projection_padding_factor=PROJECTION_PADDING_FACTOR,
                         reconstruction_padding_factor=PADDING_FACTOR,
-                        image_corrections=image_corrections_per_half[k],
-                        scale_corrections=scale_corrections_per_half[k],
+                        image_corrections=relion_half_inputs.image_corrections[k],
+                        scale_corrections=relion_half_inputs.scale_corrections[k],
                         image_pre_shifts=translation_search_base,
                         use_float64_scoring=_relion_use_float64_scoring(),
                         do_gridding_correction=True,
@@ -3328,8 +3333,8 @@ def _run_relion_iteration_loop(
                         half_spectrum_scoring=True,
                         projection_padding_factor=PROJECTION_PADDING_FACTOR,
                         reconstruction_padding_factor=PADDING_FACTOR,
-                        image_corrections=image_corrections_per_half[k],
-                        scale_corrections=scale_corrections_per_half[k],
+                        image_corrections=relion_half_inputs.image_corrections[k],
+                        scale_corrections=relion_half_inputs.scale_corrections[k],
                         image_pre_shifts=translation_search_base,
                         use_float64_scoring=_relion_use_float64_scoring(),
                         do_gridding_correction=True,
@@ -3432,8 +3437,8 @@ def _run_relion_iteration_loop(
                     return_significant_sample_indices=True,
                     rotation_log_prior=rotation_log_prior_k,
                     translation_log_prior=translation_log_prior,
-                    image_corrections=image_corrections_per_half[k],
-                    scale_corrections=scale_corrections_per_half[k],
+                    image_corrections=relion_half_inputs.image_corrections[k],
+                    scale_corrections=relion_half_inputs.scale_corrections[k],
                     image_pre_shifts=translation_search_base,
                     half_spectrum_scoring=True,
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
@@ -3488,8 +3493,8 @@ def _run_relion_iteration_loop(
                     half_spectrum_scoring=True,
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
-                    image_corrections=image_corrections_per_half[k],
-                    scale_corrections=scale_corrections_per_half[k],
+                    image_corrections=relion_half_inputs.image_corrections[k],
+                    scale_corrections=relion_half_inputs.scale_corrections[k],
                     image_pre_shifts=translation_search_base,
                     use_float64_scoring=_relion_use_float64_scoring(),
                     do_gridding_correction=True,
@@ -3595,8 +3600,8 @@ def _run_relion_iteration_loop(
                     half_spectrum_scoring=True,
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
-                    image_corrections=image_corrections_per_half[k],
-                    scale_corrections=scale_corrections_per_half[k],
+                    image_corrections=relion_half_inputs.image_corrections[k],
+                    scale_corrections=relion_half_inputs.scale_corrections[k],
                     image_pre_shifts=translation_search_base,
                     translation_prior_centers=trans_prior_center,
                     use_float64_scoring=_relion_use_float64_scoring(),
@@ -3636,17 +3641,17 @@ def _run_relion_iteration_loop(
                         "translation_log_prior": np.asarray(translation_log_prior, dtype=np.float64)
                         if translation_log_prior is not None
                         else np.array([]),
-                        "image_corrections": np.asarray(image_corrections_per_half[k], dtype=np.float64)
-                        if image_corrections_per_half[k] is not None
+                        "image_corrections": np.asarray(relion_half_inputs.image_corrections[k], dtype=np.float64)
+                        if relion_half_inputs.image_corrections[k] is not None
                         else np.array([]),
-                        "scale_corrections": np.asarray(scale_corrections_per_half[k], dtype=np.float64)
-                        if scale_corrections_per_half[k] is not None
+                        "scale_corrections": np.asarray(relion_half_inputs.scale_corrections[k], dtype=np.float64)
+                        if relion_half_inputs.scale_corrections[k] is not None
                         else np.array([]),
                         "image_pre_shifts": np.asarray(translation_search_base, dtype=np.float32)
                         if translation_search_base is not None
                         else np.array([]),
-                        "absolute_previous_translations": np.asarray(previous_best_translations[k], dtype=np.float32)
-                        if previous_best_translations[k] is not None
+                        "absolute_previous_translations": np.asarray(previous_translations_k, dtype=np.float32)
+                        if previous_translations_k is not None
                         else np.array([]),
                         "mean_vol_ft": np.asarray(means[k]),
                         "mean_variance": np.asarray(mean_variance),
@@ -4112,7 +4117,8 @@ def _run_relion_iteration_loop(
             np.asarray(rot).copy() if rot is not None else None for rot in previous_best_rotations
         ]
         prior_iter_best_translations = [
-            np.asarray(trans).copy() if trans is not None else None for trans in previous_best_translations
+            np.asarray(trans).copy() if trans is not None else None
+            for trans in relion_half_inputs.previous_best_translations
         ]
         new_iter_best_rotations = [None, None]
         new_iter_best_rotation_eulers = [None, None]
@@ -4168,8 +4174,8 @@ def _run_relion_iteration_loop(
                 total_trans = total_trans + translation_search_bases[k]
             new_iter_best_translations[k] = total_trans
             previous_best_rotations[k] = new_iter_best_rotations[k]
-            previous_best_rotation_eulers[k] = new_iter_best_rotation_eulers[k]
-            previous_best_translations[k] = new_iter_best_translations[k]
+            relion_half_inputs.previous_best_rotation_eulers[k] = new_iter_best_rotation_eulers[k]
+            relion_half_inputs.previous_best_translations[k] = new_iter_best_translations[k]
             experiment_datasets[k].update_poses(best_rots, total_trans)
 
         try:
@@ -4645,9 +4651,9 @@ def _run_relion_iteration_loop(
             half_spectrum_scoring=True,
             projection_padding_factor=PROJECTION_PADDING_FACTOR,
             reconstruction_padding_factor=PADDING_FACTOR,
-            image_corrections=image_corrections_per_half[k],
-            scale_corrections=scale_corrections_per_half[k],
-            image_pre_shifts=relion_translation_search_base(previous_best_translations[k]),
+            image_corrections=relion_half_inputs.image_corrections[k],
+            scale_corrections=relion_half_inputs.scale_corrections[k],
+            image_pre_shifts=relion_translation_search_base(relion_half_inputs.previous_best_translations[k]),
             use_float64_scoring=_relion_use_float64_scoring(),
             use_float64_projections=False,
             do_gridding_correction=True,
@@ -4667,19 +4673,22 @@ def _run_relion_iteration_loop(
                 "current_translations": np.asarray(current_translations, dtype=np.float32),
                 "rotation_log_prior": np.array([]),
                 "translation_log_prior": np.array([]),
-                "image_corrections": np.asarray(image_corrections_per_half[k], dtype=np.float64)
-                if image_corrections_per_half[k] is not None
+                "image_corrections": np.asarray(relion_half_inputs.image_corrections[k], dtype=np.float64)
+                if relion_half_inputs.image_corrections[k] is not None
                 else np.array([]),
-                "scale_corrections": np.asarray(scale_corrections_per_half[k], dtype=np.float64)
-                if scale_corrections_per_half[k] is not None
+                "scale_corrections": np.asarray(relion_half_inputs.scale_corrections[k], dtype=np.float64)
+                if relion_half_inputs.scale_corrections[k] is not None
                 else np.array([]),
                 "image_pre_shifts": np.asarray(
-                    relion_translation_search_base(previous_best_translations[k]), dtype=np.float32
+                    relion_translation_search_base(relion_half_inputs.previous_best_translations[k]), dtype=np.float32
                 )
-                if previous_best_translations[k] is not None
+                if relion_half_inputs.previous_best_translations[k] is not None
                 else np.array([]),
-                "absolute_previous_translations": np.asarray(previous_best_translations[k], dtype=np.float32)
-                if previous_best_translations[k] is not None
+                "absolute_previous_translations": np.asarray(
+                    relion_half_inputs.previous_best_translations[k],
+                    dtype=np.float32,
+                )
+                if relion_half_inputs.previous_best_translations[k] is not None
                 else np.array([]),
                 "mean_vol_ft": np.asarray(final_join_means[k]),
                 "mean_variance": np.asarray(mean_variance),
