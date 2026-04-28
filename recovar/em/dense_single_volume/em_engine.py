@@ -50,6 +50,7 @@ from recovar import core
 from recovar.core.configs import ForwardModelConfig
 
 from .dense_big_jit import run_dense_bucket_big_jit
+from .helpers.env_flags import parse_env_bool
 from .helpers.fourier_window import make_fourier_window_spec
 from .helpers.half_spectrum import (
     make_half_image_weights,
@@ -120,12 +121,7 @@ def _dense_big_jit_enabled() -> bool:
     eligible without mixing it into sparse/local/debug code paths.
     """
 
-    raw = os.environ.get("RECOVAR_RELION_DENSE_BIG_JIT", "1").strip().lower()
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError("RECOVAR_RELION_DENSE_BIG_JIT must be one of 1/0/true/false")
+    return parse_env_bool("RECOVAR_RELION_DENSE_BIG_JIT", default=True)
 
 
 def _dense_big_jit_disabled_reason(

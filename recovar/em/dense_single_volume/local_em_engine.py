@@ -22,6 +22,11 @@ from recovar.em.dense_single_volume.em_primitives import (
     _compute_noise_block,
     _compute_projections_block,
 )
+from recovar.em.dense_single_volume.helpers.env_flags import (
+    parse_env_auto_bool,
+    parse_env_auto_mode,
+    parse_env_bool,
+)
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
@@ -250,15 +255,9 @@ def _fetch_indexed_batch(experiment_dataset, image_indices):
 
 
 def _local_raw_cache_enabled(n_images: int, image_shape, dtype) -> bool:
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_RAW_CACHE", "auto").strip().lower()
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw not in {"", "auto"}:
-        raise ValueError(
-            "RECOVAR_RELION_EXACT_LOCAL_RAW_CACHE must be one of auto/1/0/true/false",
-        )
+    parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_RAW_CACHE", default="auto")
+    if parsed is not None:
+        return parsed
     max_gb = float(os.environ.get("RECOVAR_RELION_EXACT_LOCAL_RAW_CACHE_MAX_GB", "2.0"))
     bytes_per_pixel = np.dtype(dtype).itemsize if dtype is not None else np.dtype(np.float32).itemsize
     estimated_gb = int(n_images) * int(np.prod(image_shape)) * bytes_per_pixel / 1e9
@@ -266,15 +265,9 @@ def _local_raw_cache_enabled(n_images: int, image_shape, dtype) -> bool:
 
 
 def _local_processed_cache_enabled(n_images: int, image_shape, score_with_masked_images: bool) -> bool:
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_PROCESSED_CACHE", "0").strip().lower()
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw not in {"", "auto"}:
-        raise ValueError(
-            "RECOVAR_RELION_EXACT_LOCAL_PROCESSED_CACHE must be one of auto/1/0/true/false",
-        )
+    parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_PROCESSED_CACHE", default="0")
+    if parsed is not None:
+        return parsed
     max_gb = float(os.environ.get("RECOVAR_RELION_EXACT_LOCAL_PROCESSED_CACHE_MAX_GB", "2.0"))
     n_half = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
     n_copies = 2 if score_with_masked_images else 1
@@ -283,14 +276,7 @@ def _local_processed_cache_enabled(n_images: int, image_shape, score_with_masked
 
 
 def _local_batch_backproject_enabled() -> bool:
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_BATCH_BACKPROJECT", "0").strip().lower()
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        "RECOVAR_RELION_EXACT_LOCAL_BATCH_BACKPROJECT must be one of 1/0/true/false",
-    )
+    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_BATCH_BACKPROJECT", default=False)
 
 
 def _local_big_jit_enabled() -> bool:
@@ -300,25 +286,11 @@ def _local_big_jit_enabled() -> bool:
     available for parity bisects and fallback debugging.
     """
 
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_BIG_JIT", "1").strip().lower()
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        "RECOVAR_RELION_EXACT_LOCAL_BIG_JIT must be one of 1/0/true/false",
-    )
+    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_BIG_JIT", default=True)
 
 
 def _local_compact_zero_posterior_rows_enabled() -> bool:
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_COMPACT_ZERO_POSTERIOR_ROWS", "1").strip().lower()
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        "RECOVAR_RELION_EXACT_LOCAL_COMPACT_ZERO_POSTERIOR_ROWS must be one of 1/0/true/false",
-    )
+    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_COMPACT_ZERO_POSTERIOR_ROWS", default=True)
 
 
 def _local_native_half_preprocess_mode() -> str:
@@ -329,64 +301,25 @@ def _local_native_half_preprocess_mode() -> str:
     preprocessing path, which also disables big-JIT for affected buckets.
     """
 
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_NATIVE_HALF_PREPROCESS", "auto").strip().lower()
-    if raw in {"", "auto"}:
-        return "auto"
-    if raw in {"0", "false", "no", "off"}:
-        return "off"
-    if raw in {"1", "true", "yes", "on"}:
-        return "on"
-    raise ValueError(
-        "RECOVAR_RELION_EXACT_LOCAL_NATIVE_HALF_PREPROCESS must be one of auto/1/0/true/false",
-    )
+    return parse_env_auto_mode("RECOVAR_RELION_EXACT_LOCAL_NATIVE_HALF_PREPROCESS", default="auto")
 
 
 def _local_combined_masked_preprocess_enabled() -> bool:
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_COMBINED_MASKED_PREPROCESS", "0").strip().lower()
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        "RECOVAR_RELION_EXACT_LOCAL_COMBINED_MASKED_PREPROCESS must be one of 1/0/true/false",
-    )
+    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_COMBINED_MASKED_PREPROCESS", default=False)
 
 
 def _local_materialize_projection_abs2_enabled(default: bool) -> bool:
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_MATERIALIZE_PROJECTION_ABS2", "auto").strip().lower()
-    if raw in {"", "auto"}:
-        return bool(default)
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        "RECOVAR_RELION_EXACT_LOCAL_MATERIALIZE_PROJECTION_ABS2 must be one of auto/1/0/true/false",
-    )
+    parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_MATERIALIZE_PROJECTION_ABS2", default="auto")
+    return bool(default) if parsed is None else parsed
 
 
 def _local_keep_half_volume_accumulators_enabled() -> bool:
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_KEEP_HALF_VOLUME_ACCUMULATORS", "0").strip().lower()
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        "RECOVAR_RELION_EXACT_LOCAL_KEEP_HALF_VOLUME_ACCUMULATORS must be one of 1/0/true/false",
-    )
+    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_KEEP_HALF_VOLUME_ACCUMULATORS", default=False)
 
 
 def _local_fused_score_mstep_enabled(default: bool = False) -> bool:
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_FUSED_SCORE_MSTEP", "auto").strip().lower()
-    if raw in {"", "auto"}:
-        return bool(default)
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    raise ValueError(
-        "RECOVAR_RELION_EXACT_LOCAL_FUSED_SCORE_MSTEP must be one of auto/1/0/true/false",
-    )
+    parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_FUSED_SCORE_MSTEP", default="auto")
+    return bool(default) if parsed is None else parsed
 
 
 def _build_local_raw_cache(experiment_dataset, n_images: int):
