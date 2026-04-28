@@ -2485,7 +2485,7 @@ def _run_relion_iteration_loop(
                     "Replay override: sigma_offset <- %.4f A (iter=%d)",
                     current_sigma_offset_angstrom,
                     iteration + 1,
-            )
+                )
             _replay_prev_trans = iter_replay_override.get("previous_best_translations")
             if _replay_prev_trans is not None:
                 previous_best_translations = _optional_float32_half_pair(_replay_prev_trans)
