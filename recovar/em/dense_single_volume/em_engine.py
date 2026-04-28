@@ -95,7 +95,6 @@ logger = logging.getLogger(__name__)
 # TRACKED TODOs: DENSE_ENGINE_BOUNDARY
 # TODO(DENSE_ENGINE_BOUNDARY/E001): this file is dense/global-only, local search belongs in local_em_engine.py
 # TODO(DENSE_ENGINE_BOUNDARY/E002): extract shared primitives, do not let local logic grow back here
-# TODO(DENSE_ENGINE_BOUNDARY/E003): half/full spectrum conversions need a single explicit boundary
 # TODO(DENSE_ENGINE_BOUNDARY/E004): dtype-policy cleanup needed, reduce ad hoc casts and flags
 # TODO(DENSE_ENGINE_BOUNDARY/E005): audit em_engine.py vs local_em_engine.py for copied implementations
 # TODO(DENSE_ENGINE_BOUNDARY/E006): move shared JAX primitives to helpers and delete redundant engine-local copies
@@ -149,6 +148,30 @@ def _bin_shell_values_np(values, shell_indices, n_shells):
     )[: int(n_shells)]
 
 
+_DENSE_TIMING_FIELDS = (
+    "batch_fetch_s",
+    "preprocess_s",
+    "score_prep_s",
+    "pass1_projection_s",
+    "pass1_score_s",
+    "pass1_postprocess_s",
+    "pass1_logsumexp_s",
+    "pass2_skipmask_s",
+    "pass2_projection_s",
+    "pass2_score_s",
+    "pass2_postprocess_s",
+    "mstep_s",
+    "window_scatter_s",
+    "adjoint_y_s",
+    "adjoint_ctf_s",
+    "noise_s",
+    "assignment_s",
+    "stats_finalize_s",
+    "host_stats_s",
+    "solve_s",
+)
+
+
 @dataclass
 class _DenseTiming:
     """Mutable host-side timers for one dense EM call."""
@@ -175,28 +198,10 @@ class _DenseTiming:
     solve_s: float = 0.0
 
     def accounted_s(self) -> float:
-        return (
-            self.batch_fetch_s
-            + self.preprocess_s
-            + self.score_prep_s
-            + self.pass1_projection_s
-            + self.pass1_score_s
-            + self.pass1_postprocess_s
-            + self.pass1_logsumexp_s
-            + self.pass2_skipmask_s
-            + self.pass2_projection_s
-            + self.pass2_score_s
-            + self.pass2_postprocess_s
-            + self.mstep_s
-            + self.window_scatter_s
-            + self.adjoint_y_s
-            + self.adjoint_ctf_s
-            + self.noise_s
-            + self.assignment_s
-            + self.stats_finalize_s
-            + self.host_stats_s
-            + self.solve_s
-        )
+        return sum(float(getattr(self, field)) for field in _DENSE_TIMING_FIELDS)
+
+    def profile_kwargs(self) -> dict[str, float]:
+        return {field: float(getattr(self, field)) for field in _DENSE_TIMING_FIELDS}
 
 
 @dataclass
@@ -215,6 +220,15 @@ class _SparsePass2Profile:
         if self.omitted_mass_upper_image_count == 0:
             return 0.0
         return self.omitted_mass_upper_sum / self.omitted_mass_upper_image_count
+
+    def profile_kwargs(self) -> dict[str, float | int]:
+        return {
+            "sparse_pass2_total_blocks": int(self.total_blocks),
+            "sparse_pass2_skipped_blocks": int(self.skipped_blocks),
+            "sparse_pass2_omitted_mass_upper_mean": float(self.omitted_mass_upper_mean),
+            "sparse_pass2_omitted_mass_upper_max": float(self.omitted_mass_upper_max),
+            "sparse_pass2_omitted_mass_upper_sum": float(self.omitted_mass_upper_sum),
+        }
 
 
 @dataclass(frozen=True)
@@ -719,9 +733,8 @@ def run_em(
         Per-image old-offset pre-shift in pixels.  For integral shifts
         (RELION's rounded ``old_offset``), RECOVAR applies RELION's
         zero-filled real-space integer translation before FFT.  Non-integral
-        shifts keep the legacy Fourier-phase path for non-RELION callers and
-        equivalence tests.  The candidate translations from the grid are then
-        relative to this centered position.
+        shifts use half-spectrum Fourier phases.  The candidate translations
+        from the grid are then relative to this centered position.
     return_profile : bool
         When True, append an :class:`EMProfileStats` timing summary to the
         return tuple.  This is diagnostic only.
@@ -2065,26 +2078,7 @@ def run_em(
         total_wall_time = time.time() - overall_t0
         attributed_time = timing.accounted_s()
         em_profile = EMProfileStats(
-            batch_fetch_s=float(timing.batch_fetch_s),
-            preprocess_s=float(timing.preprocess_s),
-            score_prep_s=float(timing.score_prep_s),
-            pass1_projection_s=float(timing.pass1_projection_s),
-            pass1_score_s=float(timing.pass1_score_s),
-            pass1_postprocess_s=float(timing.pass1_postprocess_s),
-            pass1_logsumexp_s=float(timing.pass1_logsumexp_s),
-            pass2_skipmask_s=float(timing.pass2_skipmask_s),
-            pass2_projection_s=float(timing.pass2_projection_s),
-            pass2_score_s=float(timing.pass2_score_s),
-            pass2_postprocess_s=float(timing.pass2_postprocess_s),
-            mstep_s=float(timing.mstep_s),
-            window_scatter_s=float(timing.window_scatter_s),
-            adjoint_y_s=float(timing.adjoint_y_s),
-            adjoint_ctf_s=float(timing.adjoint_ctf_s),
-            noise_s=float(timing.noise_s),
-            assignment_s=float(timing.assignment_s),
-            stats_finalize_s=float(timing.stats_finalize_s),
-            host_stats_s=float(timing.host_stats_s),
-            solve_s=float(timing.solve_s),
+            **timing.profile_kwargs(),
             accounted_s=float(attributed_time),
             total_wall_s=float(total_wall_time),
             unattributed_s=float(max(total_wall_time - attributed_time, 0.0)),
@@ -2096,11 +2090,7 @@ def run_em(
             n_windowed=int(n_windowed),
             use_window=bool(use_window),
             reused_pass1_projections=True,
-            sparse_pass2_total_blocks=int(sparse_profile.total_blocks),
-            sparse_pass2_skipped_blocks=int(sparse_profile.skipped_blocks),
-            sparse_pass2_omitted_mass_upper_mean=float(sparse_profile.omitted_mass_upper_mean),
-            sparse_pass2_omitted_mass_upper_max=float(sparse_profile.omitted_mass_upper_max),
-            sparse_pass2_omitted_mass_upper_sum=float(sparse_profile.omitted_mass_upper_sum),
+            **sparse_profile.profile_kwargs(),
         )
     else:
         em_profile = None
