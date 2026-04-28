@@ -56,7 +56,6 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     should_skip_adaptive_pass2,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
-from recovar.em.dense_single_volume.legacy_iteration_loop import _run_legacy_iteration_loop
 from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
 from recovar.em.dense_single_volume.local_layout import (
     _selected_rotation_matrices,
@@ -1638,9 +1637,9 @@ def refine_single_volume(
     max_significants=500,
     nside_level=None,
     translation_pixel_offset=None,
-    mode="legacy",
+    mode="relion",
     adaptive_pass2_skip_threshold=ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
-    # --- RELION-mode parameters (only used when mode="relion") ---
+    # --- RELION refinement parameters ---
     init_healpix_order=2,
     max_healpix_order=7,
     init_translation_range=10.0,
@@ -1675,17 +1674,7 @@ def refine_single_volume(
     first_iteration_reconstruction_mode="soft",
     force_max_iter_after_convergence=False,
 ):
-    """Multi-iteration EM refinement with FSC-driven resolution management.
-
-    Supports two modes:
-
-    - ``mode="legacy"`` (default): Original FSC-driven loop with fixed
-      rotation grid.  All existing behavior is preserved exactly.
-
-    - ``mode="relion"``: RELION-parity mode with convergence detection,
-      angular step refinement, local angular search, and data_vs_prior
-      resolution criterion.  Uses :class:`RefinementState` from
-      ``convergence.py`` to drive the iteration.
+    """RELION-style multi-iteration EM refinement with FSC-driven resolution management.
 
     Parameters
     ----------
@@ -1698,8 +1687,7 @@ def refine_single_volume(
     init_mean_variance : jnp.ndarray, shape (volume_size,)
         Initial signal prior (tau^2).
     rotations : np.ndarray, shape (n_rot, 3, 3)
-        Rotation grid.  In legacy mode, used directly.  In RELION mode,
-        used as the initial grid (overridden when angular step refines).
+        Initial rotation grid, overridden when angular step refines.
     translations : jnp.ndarray, shape (n_trans, 2)
         Translation grid.
     disc_type : str
@@ -1735,8 +1723,8 @@ def refine_single_volume(
         Step size between coarse translation grid points (pixels).
         Required when adaptive_oversampling > 0.
     mode : str
-        ``"legacy"`` preserves existing behavior.  ``"relion"`` enables
-        RELION-parity convergence-driven refinement.
+        Only ``"relion"`` is supported. This argument remains for callers that
+        already pass it explicitly.
     adaptive_pass2_skip_threshold : float
         Skip adaptive pass 2 when the mean significant-sample fraction is at
         least this value. Set to a negative value to disable this shortcut and
@@ -1770,73 +1758,19 @@ def refine_single_volume(
             significant sample counts at each iteration (None when
             adaptive_oversampling=0).
 
-    Additional keys when ``mode="relion"``:
+    Additional keys:
         convergence_state : RefinementState -- final convergence state
         data_vs_prior_trajectory : list of jnp.ndarray -- per-iteration
             data_vs_prior curves
         healpix_order_trajectory : list of int -- HEALPix order per iter
         ave_Pmax_trajectory : list of float -- average Pmax per iter
     """
-    if mode not in ("legacy", "relion"):
-        raise ValueError(f"Unknown mode={mode!r}; expected 'legacy' or 'relion'")
+    if mode != "relion":
+        raise ValueError(f"Unsupported mode={mode!r}; only 'relion' is supported")
     local_engine = _normalize_local_engine(local_engine)
 
-    if mode == "relion":
-        _enable_relion_parity_defaults()
-        return _run_relion_iteration_loop(
-            experiment_datasets=experiment_datasets,
-            init_volume=init_volume,
-            init_noise_variance=init_noise_variance,
-            init_mean_variance=init_mean_variance,
-            rotations=rotations,
-            translations=translations,
-            disc_type=disc_type,
-            max_iter=max_iter,
-            image_batch_size=image_batch_size,
-            rotation_block_size=rotation_block_size,
-            init_current_size=init_current_size,
-            fsc_threshold=fsc_threshold,
-            adaptive_oversampling=adaptive_oversampling,
-            adaptive_fraction=adaptive_fraction,
-            max_significants=max_significants,
-            init_healpix_order=init_healpix_order,
-            max_healpix_order=max_healpix_order,
-            init_translation_range=init_translation_range,
-            init_translation_step=init_translation_step,
-            init_translation_sigma_angstrom=init_translation_sigma_angstrom,
-            particle_diameter_ang=particle_diameter_ang,
-            nside_level=nside_level,
-            adaptive_pass2_skip_threshold=adaptive_pass2_skip_threshold,
-            save_intermediates_dir=save_intermediates_dir,
-            low_resol_join_halves_angstrom=low_resol_join_halves_angstrom,
-            tau2_fudge=tau2_fudge,
-            perturb_factor=perturb_factor,
-            perturb_seed=perturb_seed,
-            perturb_replay_relion_dir=perturb_replay_relion_dir,
-            init_fsc=init_fsc,
-            init_ave_Pmax=init_ave_Pmax,
-            init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
-            init_relion_iteration=init_relion_iteration,
-            init_image_corrections=init_image_corrections,
-            init_scale_corrections=init_scale_corrections,
-            init_direction_prior=init_direction_prior,
-            init_previous_best_translations=init_previous_best_translations,
-            init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
-            replay_iteration_overrides=replay_iteration_overrides,
-            skip_final_iteration=skip_final_iteration,
-            local_search_profile_mode=local_search_profile_mode,
-            local_search_translation_prior_mode=local_search_translation_prior_mode,
-            disable_adjoint_y=disable_adjoint_y,
-            disable_adjoint_ctf=disable_adjoint_ctf,
-            local_engine=local_engine,
-            emulate_relion_firstiter_cc=emulate_relion_firstiter_cc,
-            relion_firstiter_ini_high_angstrom=relion_firstiter_ini_high_angstrom,
-            first_iteration_score_mode=first_iteration_score_mode,
-            first_iteration_reconstruction_mode=first_iteration_reconstruction_mode,
-            force_max_iter_after_convergence=force_max_iter_after_convergence,
-        )
-
-    return _run_legacy_iteration_loop(
+    _enable_relion_parity_defaults()
+    return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
         init_volume=init_volume,
         init_noise_variance=init_noise_variance,
@@ -1847,15 +1781,46 @@ def refine_single_volume(
         max_iter=max_iter,
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
-        relion_current_sizes=relion_current_sizes,
         init_current_size=init_current_size,
         fsc_threshold=fsc_threshold,
         adaptive_oversampling=adaptive_oversampling,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        init_healpix_order=init_healpix_order,
+        max_healpix_order=max_healpix_order,
+        init_translation_range=init_translation_range,
+        init_translation_step=init_translation_step,
+        init_translation_sigma_angstrom=init_translation_sigma_angstrom,
+        particle_diameter_ang=particle_diameter_ang,
         nside_level=nside_level,
+        adaptive_pass2_skip_threshold=adaptive_pass2_skip_threshold,
+        save_intermediates_dir=save_intermediates_dir,
+        low_resol_join_halves_angstrom=low_resol_join_halves_angstrom,
+        tau2_fudge=tau2_fudge,
+        perturb_factor=perturb_factor,
+        perturb_seed=perturb_seed,
+        perturb_replay_relion_dir=perturb_replay_relion_dir,
+        init_fsc=init_fsc,
+        init_ave_Pmax=init_ave_Pmax,
+        init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
+        init_relion_iteration=init_relion_iteration,
+        init_image_corrections=init_image_corrections,
+        init_scale_corrections=init_scale_corrections,
+        init_direction_prior=init_direction_prior,
+        init_previous_best_translations=init_previous_best_translations,
+        init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
+        replay_iteration_overrides=replay_iteration_overrides,
+        skip_final_iteration=skip_final_iteration,
+        local_search_profile_mode=local_search_profile_mode,
+        local_search_translation_prior_mode=local_search_translation_prior_mode,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
+        local_engine=local_engine,
+        emulate_relion_firstiter_cc=emulate_relion_firstiter_cc,
+        relion_firstiter_ini_high_angstrom=relion_firstiter_ini_high_angstrom,
+        first_iteration_score_mode=first_iteration_score_mode,
+        first_iteration_reconstruction_mode=first_iteration_reconstruction_mode,
+        force_max_iter_after_convergence=force_max_iter_after_convergence,
     )
 
 

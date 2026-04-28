@@ -3842,79 +3842,6 @@ class TestRelionModeSmokeTest:
         assert captured["grid_order"] == 1
 
 
-# ===========================================================================
-# Test 2: Legacy mode unchanged
-# ===========================================================================
-
-
-class TestLegacyModeUnchanged:
-    """Verify that mode='legacy' (default) produces the same result."""
-
-    def test_legacy_mode_explicit(
-        self,
-        half_datasets,
-        init_volume,
-        rotations,
-        translations,
-    ):
-        """Explicit mode='legacy' produces standard output keys."""
-        result = refine_single_volume(
-            half_datasets,
-            init_volume,
-            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
-            translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=[32],
-            mode="legacy",
-        )
-
-        # Standard keys
-        assert "mean" in result
-        assert "means" in result
-        assert "fsc" in result
-        assert "hard_assignments" in result
-        assert "current_sizes" in result
-        assert result["current_sizes"] == [8]
-
-        # Should NOT have RELION-specific keys
-        assert "convergence_state" not in result
-        assert "data_vs_prior_trajectory" not in result
-
-    def test_default_mode_is_legacy(
-        self,
-        half_datasets,
-        init_volume,
-        rotations,
-        translations,
-    ):
-        """Calling without mode= uses legacy (no RELION keys)."""
-        result = refine_single_volume(
-            half_datasets,
-            init_volume,
-            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-            rotations,
-            translations,
-            disc_type="linear_interp",
-            max_iter=1,
-            image_batch_size=N_IMAGES,
-            rotation_block_size=N_ROTATIONS,
-            relion_current_sizes=[32],
-        )
-
-        assert "convergence_state" not in result
-
-
-# ===========================================================================
-# Test 3: Local search oversampling regression
-# ===========================================================================
-
-
 def test_fused_score_normalize_mstep_matches_split_path():
     import jax
 
@@ -5721,8 +5648,8 @@ class TestInvalidMode:
         rotations,
         translations,
     ):
-        """Unknown mode raises ValueError."""
-        with pytest.raises(ValueError, match="Unknown mode"):
+        """Only RELION mode is supported."""
+        with pytest.raises(ValueError, match="only 'relion' is supported"):
             refine_single_volume(
                 half_datasets,
                 init_volume,

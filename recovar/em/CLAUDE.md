@@ -307,8 +307,8 @@ Files are named `target<idx>_block<b>_preprior.npy`.
 
 ### Open follow-up branches
 
-- **#118** `claude/dense-cleanup-relion-only` — drops
-  `legacy_iteration_loop.py` + dead exports (-1302 LOC)
+- **#118** `claude/dense-cleanup-relion-only` — legacy iteration loop
+  deletion has landed; continue removing remaining dead exports.
 - **#119** `claude/parity-perf-baseline` — perf-baseline JSONs +
   `check_perf.py` + per-stage timers
 - **#120** `claude/parity-quality-baseline` — fast (~5 min) parity
