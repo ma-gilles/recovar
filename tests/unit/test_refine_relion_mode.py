@@ -1541,7 +1541,7 @@ def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, r
     assert noise_default.sumw == pytest.approx(noise_split.sumw, abs=1e-5)
 
 
-def test_run_local_em_exact_big_jit_bucket_matches_legacy(monkeypatch, rng):
+def test_run_local_em_exact_big_jit_bucket_matches_debug_split(monkeypatch, rng, tmp_path):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=551)
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
@@ -1584,7 +1584,8 @@ def test_run_local_em_exact_big_jit_bucket_matches_legacy(monkeypatch, rng):
         max_significants=-1,
     )
 
-    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_BIG_JIT", "1")
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", raising=False)
     big = run_local_em_exact(
         dataset,
         mean,
@@ -1594,8 +1595,9 @@ def test_run_local_em_exact_big_jit_bucket_matches_legacy(monkeypatch, rng):
         "linear_interp",
         **common_kwargs,
     )
-    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_BIG_JIT", "0")
-    legacy = run_local_em_exact(
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", str(tmp_path / "score_dump"))
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "0")
+    split = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -1606,38 +1608,37 @@ def test_run_local_em_exact_big_jit_bucket_matches_legacy(monkeypatch, rng):
     )
 
     Ft_y_big, Ft_ctf_big, hard_big, stats_big, noise_big, profile_big = big
-    Ft_y_legacy, Ft_ctf_legacy, hard_legacy, stats_legacy, noise_legacy, profile_legacy = legacy
-    assert bool(profile_big["big_jit_enabled"]) is True
+    Ft_y_split, Ft_ctf_split, hard_split, stats_split, noise_split, profile_split = split
     assert int(profile_big["big_jit_bucket_count"]) == 1
-    assert bool(profile_legacy["big_jit_enabled"]) is False
-    np.testing.assert_array_equal(hard_big, hard_legacy)
-    np.testing.assert_allclose(np.asarray(Ft_y_big), np.asarray(Ft_y_legacy), atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_ctf_big), np.asarray(Ft_ctf_legacy), atol=1e-5, rtol=1e-5)
+    assert int(profile_split["big_jit_bucket_count"]) == 0
+    np.testing.assert_array_equal(hard_big, hard_split)
+    np.testing.assert_allclose(np.asarray(Ft_y_big), np.asarray(Ft_y_split), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_big), np.asarray(Ft_ctf_split), atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(
         np.asarray(stats_big.log_evidence_per_image),
-        np.asarray(stats_legacy.log_evidence_per_image),
+        np.asarray(stats_split.log_evidence_per_image),
         atol=1e-5,
         rtol=1e-5,
     )
     np.testing.assert_allclose(
         np.asarray(stats_big.max_posterior_per_image),
-        np.asarray(stats_legacy.max_posterior_per_image),
+        np.asarray(stats_split.max_posterior_per_image),
         atol=1e-5,
         rtol=1e-5,
     )
     np.testing.assert_allclose(
         np.asarray(stats_big.rotation_posterior_sums),
-        np.asarray(stats_legacy.rotation_posterior_sums),
+        np.asarray(stats_split.rotation_posterior_sums),
         atol=1e-5,
         rtol=1e-5,
     )
     np.testing.assert_allclose(
         np.asarray(noise_big.wsum_sigma2_noise),
-        np.asarray(noise_legacy.wsum_sigma2_noise),
+        np.asarray(noise_split.wsum_sigma2_noise),
         atol=1e-5,
         rtol=1e-5,
     )
-    assert noise_big.sumw == pytest.approx(noise_legacy.sumw, abs=1e-5)
+    assert noise_big.sumw == pytest.approx(noise_split.sumw, abs=1e-5)
 
 
 def test_compute_reconstruction_support_matches_relion_style_threshold():

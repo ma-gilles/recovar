@@ -1431,9 +1431,9 @@ Forced higher-iteration replay now running after the prior-center fix:
 
 ### Big-JIT implementation status on this branch
 
-- Exact-local big-JIT is now the default candidate path:
-  `RECOVAR_RELION_EXACT_LOCAL_BIG_JIT` defaults to `1`. Explicit false-like
-  values still force the older split local branches for bisects.
+- Exact-local big-JIT is now the normal candidate path. The old exact-local
+  big-JIT kill switch has been removed; diagnostics that need score/noise
+  tensors use the split debug path directly.
 - Exact-local native half preprocessing now defaults to `auto`, so eligible
   raw real-space buckets can stay in the JAX half-rFFT path needed by big-JIT.
 - Dense/global `em_engine.py` now defaults to the bucket big-JIT where eligible:
