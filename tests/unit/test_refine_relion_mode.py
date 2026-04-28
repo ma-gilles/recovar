@@ -1425,7 +1425,7 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
     assert noise_b.sumw == pytest.approx(noise_s.sumw, abs=1e-5)
 
 
-def test_run_local_em_exact_default_fused_path_matches_materialized_split(monkeypatch, rng):
+def test_run_local_em_exact_default_path_matches_debug_split_path(monkeypatch, rng, tmp_path):
     dataset = MockDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=531)
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
@@ -1482,8 +1482,8 @@ def test_run_local_em_exact_default_fused_path_matches_materialized_split(monkey
         max_significants=-1,
     )
 
-    monkeypatch.delenv("RECOVAR_RELION_EXACT_LOCAL_MATERIALIZE_PROJECTION_ABS2", raising=False)
-    monkeypatch.delenv("RECOVAR_RELION_EXACT_LOCAL_FUSED_SCORE_MSTEP", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", raising=False)
+    monkeypatch.delenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", raising=False)
     default = run_local_em_exact(
         dataset,
         mean,
@@ -1493,9 +1493,9 @@ def test_run_local_em_exact_default_fused_path_matches_materialized_split(monkey
         "linear_interp",
         **common_kwargs,
     )
-    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_MATERIALIZE_PROJECTION_ABS2", "1")
-    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_FUSED_SCORE_MSTEP", "0")
-    materialized = run_local_em_exact(
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_DIR", str(tmp_path / "score_dump"))
+    monkeypatch.setenv("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES", "0")
+    split = run_local_em_exact(
         dataset,
         mean,
         mean_variance,
@@ -1506,39 +1506,39 @@ def test_run_local_em_exact_default_fused_path_matches_materialized_split(monkey
     )
 
     Ft_y_default, Ft_ctf_default, hard_default, stats_default, noise_default, profile_default = default
-    Ft_y_mat, Ft_ctf_mat, hard_mat, stats_mat, noise_mat, profile_mat = materialized
-    assert bool(profile_default["materialize_projection_abs2"]) is False
+    Ft_y_split, Ft_ctf_split, hard_split, stats_split, noise_split, profile_split = split
+    assert int(profile_default["big_jit_bucket_count"]) > 0
+    assert int(profile_split["big_jit_bucket_count"]) == 0
     assert bool(profile_default["fused_score_mstep_enabled"]) is True
-    assert bool(profile_mat["materialize_projection_abs2"]) is True
-    assert bool(profile_mat["fused_score_mstep_enabled"]) is False
-    np.testing.assert_array_equal(hard_default, hard_mat)
-    np.testing.assert_allclose(np.asarray(Ft_y_default), np.asarray(Ft_y_mat), atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_ctf_default), np.asarray(Ft_ctf_mat), atol=1e-5, rtol=1e-5)
+    assert bool(profile_split["fused_score_mstep_enabled"]) is True
+    np.testing.assert_array_equal(hard_default, hard_split)
+    np.testing.assert_allclose(np.asarray(Ft_y_default), np.asarray(Ft_y_split), atol=1e-5, rtol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_default), np.asarray(Ft_ctf_split), atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(
         np.asarray(stats_default.log_evidence_per_image),
-        np.asarray(stats_mat.log_evidence_per_image),
+        np.asarray(stats_split.log_evidence_per_image),
         atol=1e-5,
         rtol=1e-5,
     )
     np.testing.assert_allclose(
         np.asarray(stats_default.max_posterior_per_image),
-        np.asarray(stats_mat.max_posterior_per_image),
+        np.asarray(stats_split.max_posterior_per_image),
         atol=1e-5,
         rtol=1e-5,
     )
     np.testing.assert_allclose(
         np.asarray(stats_default.rotation_posterior_sums),
-        np.asarray(stats_mat.rotation_posterior_sums),
+        np.asarray(stats_split.rotation_posterior_sums),
         atol=1e-5,
         rtol=1e-5,
     )
     np.testing.assert_allclose(
         np.asarray(noise_default.wsum_sigma2_noise),
-        np.asarray(noise_mat.wsum_sigma2_noise),
+        np.asarray(noise_split.wsum_sigma2_noise),
         atol=1e-5,
         rtol=1e-5,
     )
-    assert noise_default.sumw == pytest.approx(noise_mat.sumw, abs=1e-5)
+    assert noise_default.sumw == pytest.approx(noise_split.sumw, abs=1e-5)
 
 
 def test_run_local_em_exact_big_jit_bucket_matches_legacy(monkeypatch, rng):

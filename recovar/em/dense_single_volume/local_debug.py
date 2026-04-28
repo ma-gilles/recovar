@@ -204,7 +204,11 @@ def maybe_write_debug_noise_component_dump(
     support_mass_np = np.asarray(support_mass, dtype=np.float64)
     processed_noise_power_np = np.asarray(processed_noise_power_half)
     proj_np = np.asarray(proj_for_noise)
-    proj_abs2_np = np.asarray(proj_abs2_for_noise, dtype=np.float64)
+    proj_abs2_np = (
+        np.abs(proj_np) ** 2
+        if proj_abs2_for_noise is None
+        else np.asarray(proj_abs2_for_noise, dtype=np.float64)
+    )
     summed_np = np.asarray(summed_masked_noise)
     ctf_probs_np = np.asarray(ctf_probs, dtype=np.float64)
     noise_variance_np = np.asarray(noise_variance_for_noise, dtype=np.float64)

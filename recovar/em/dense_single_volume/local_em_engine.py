@@ -75,7 +75,6 @@ from recovar.em.dense_single_volume.local_score_pass import (
     normalize_local_scores_with_log_z_float32,
     score_local_bucket_abs2_on_demand,
     score_local_bucket_abs2_weighted_on_demand,
-    score_local_bucket,
 )
 from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_prior_centers_for_images,
@@ -281,18 +280,8 @@ def _local_big_jit_enabled() -> bool:
     return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_BIG_JIT", default=True)
 
 
-def _local_materialize_projection_abs2_enabled(default: bool) -> bool:
-    parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_MATERIALIZE_PROJECTION_ABS2", default="auto")
-    return bool(default) if parsed is None else parsed
-
-
 def _local_keep_half_volume_accumulators_enabled() -> bool:
     return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_KEEP_HALF_VOLUME_ACCUMULATORS", default=False)
-
-
-def _local_fused_score_mstep_enabled(default: bool = False) -> bool:
-    parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_FUSED_SCORE_MSTEP", default="auto")
-    return bool(default) if parsed is None else parsed
 
 
 def _validate_native_half_batch(batch, image_shape):
@@ -748,8 +737,6 @@ def run_local_em_exact(
         image_shape,
         relion_half_sum=half_spectrum_scoring,
     )
-    default_materialize_projection_abs2 = False
-    materialize_projection_abs2 = _local_materialize_projection_abs2_enabled(default_materialize_projection_abs2)
     norm_half_weights = make_half_image_weights(image_shape)
     half_weights_windowed = window_spec.score_values(half_weights)
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
@@ -787,7 +774,7 @@ def run_local_em_exact(
         (max_significants is None or int(max_significants) <= 0)
         and normalization_log_z is None
     )
-    fused_score_mstep_enabled = _local_fused_score_mstep_enabled(default_fused_score_mstep)
+    fused_score_mstep_enabled = default_fused_score_mstep
     timing = _LocalTiming()
     raw_cache_enabled = False
     processed_cache_enabled = False
@@ -946,7 +933,6 @@ def run_local_em_exact(
             big_jit_enabled
             and not processed_cache_enabled
             and batch_data is not None
-            and not materialize_projection_abs2
             and not debug_score_dump_filter_matches
             and debug_noise_dump_dir is None
         )
@@ -1344,13 +1330,13 @@ def run_local_em_exact(
         # duplicate factor was only ~1.004-1.005, while the extra gather/shape
         # churn regressed the real 5k local run from ~76.7s to ~126.9s.
         flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
-        proj_half_flat, proj_abs2_half_flat = _compute_projections_block(
+        proj_half_flat, _ = _compute_projections_block(
             mean_for_proj,
             flat_rotations,
             image_shape,
             proj_volume_shape,
             disc_type,
-            return_abs2=materialize_projection_abs2,
+            return_abs2=False,
             **projection_kwargs,
         )
         if use_window:
@@ -1362,52 +1348,29 @@ def run_local_em_exact(
                 n_recon_windowed,
             )
             proj_for_noise = proj_recon
-            if materialize_projection_abs2:
-                proj_abs2 = proj_abs2_half_flat[:, window_indices].reshape(
-                    batch_size,
-                    bucket.bucket_rotation_count,
-                    n_windowed,
-                )
-                proj_abs2_weighted = proj_abs2 * half_weights_windowed[None, None, :]
-                proj_abs2_for_noise = proj_abs2_half_flat[:, recon_window_indices].reshape(
-                    batch_size,
-                    bucket.bucket_rotation_count,
-                    n_recon_windowed,
-                )
-            else:
-                proj_abs2_weighted = None
-                proj_abs2_for_noise = None
         else:
             proj_half = proj_half_flat.reshape(batch_size, bucket.bucket_rotation_count, n_half)
             proj_weighted = proj_half * half_weights[None, None, :]
             proj_for_noise = proj_half
-            if materialize_projection_abs2:
-                proj_abs2 = proj_abs2_half_flat.reshape(batch_size, bucket.bucket_rotation_count, n_half)
-                proj_abs2_weighted = proj_abs2 * half_weights[None, None, :]
-                proj_abs2_for_noise = proj_abs2
-            else:
-                proj_abs2_weighted = None
-                proj_abs2_for_noise = None
         (
             proj_weighted,
             proj_for_noise,
-            proj_abs2_weighted,
-            proj_abs2_for_noise,
+            _,
+            _,
         ) = precision_policy.cast_local_projection_scores(
             proj_weighted,
             proj_for_noise,
-            proj_abs2_weighted,
-            proj_abs2_for_noise,
+            None,
+            None,
         )
         if return_profile:
-            _block_until_ready(proj_weighted if proj_abs2_weighted is None else (proj_weighted, proj_abs2_weighted))
+            _block_until_ready(proj_weighted)
         timing.projection_s += time.time() - projection_t0
 
         shifted_score_split = shifted_score.reshape(batch_size, n_trans, -1)
         shifted_recon_split = shifted_recon.reshape(batch_size, n_trans, -1)
         can_use_fused_score_mstep = (
             fused_score_mstep_enabled
-            and proj_abs2_weighted is None
             and normalization_log_z_np is None
             and not debug_score_dump_filter_matches
         )
@@ -1462,35 +1425,23 @@ def run_local_em_exact(
             timing.fused_score_mstep_s += fused_elapsed
         else:
             score_t0 = time.time()
-            if proj_abs2_weighted is None:
-                if half_spectrum_scoring:
-                    scores = score_local_bucket_abs2_on_demand(
-                        shifted_score_split,
-                        ctf2_over_nv_score,
-                        proj_weighted,
-                        jnp.asarray(bucket.local_rotation_log_prior),
-                        jnp.asarray(bucket.translation_log_prior),
-                        jnp.asarray(bucket.local_rotation_mask),
-                        None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
-                    )
-                else:
-                    score_half_weights = half_weights_windowed if use_window else half_weights
-                    scores = score_local_bucket_abs2_weighted_on_demand(
-                        shifted_score_split,
-                        ctf2_over_nv_score,
-                        proj_weighted,
-                        score_half_weights,
-                        jnp.asarray(bucket.local_rotation_log_prior),
-                        jnp.asarray(bucket.translation_log_prior),
-                        jnp.asarray(bucket.local_rotation_mask),
-                        None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
-                    )
-            else:
-                scores = score_local_bucket(
+            if half_spectrum_scoring:
+                scores = score_local_bucket_abs2_on_demand(
                     shifted_score_split,
                     ctf2_over_nv_score,
                     proj_weighted,
-                    proj_abs2_weighted,
+                    jnp.asarray(bucket.local_rotation_log_prior),
+                    jnp.asarray(bucket.translation_log_prior),
+                    jnp.asarray(bucket.local_rotation_mask),
+                    None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
+                )
+            else:
+                score_half_weights = half_weights_windowed if use_window else half_weights
+                scores = score_local_bucket_abs2_weighted_on_demand(
+                    shifted_score_split,
+                    ctf2_over_nv_score,
+                    proj_weighted,
+                    score_half_weights,
                     jnp.asarray(bucket.local_rotation_log_prior),
                     jnp.asarray(bucket.translation_log_prior),
                     jnp.asarray(bucket.local_rotation_mask),
@@ -1565,7 +1516,7 @@ def run_local_em_exact(
                 shifted_score_split=shifted_score.reshape(batch_size, n_trans, -1),
                 ctf2_over_nv_score=ctf2_over_nv_score,
                 proj_weighted=proj_weighted,
-                proj_abs2_weighted=proj_abs2_weighted,
+                proj_abs2_weighted=None,
                 dump_dir=debug_score_dump_dir,
                 pending_targets=debug_score_dump_targets,
                 requested_current_sizes=debug_score_dump_current_sizes,
@@ -1709,7 +1660,7 @@ def run_local_em_exact(
                 support_mass=support_mass,
                 processed_noise_power_half=processed_noise_power_half,
                 proj_for_noise=proj_for_noise,
-                proj_abs2_for_noise=proj_abs2_for_noise,
+                proj_abs2_for_noise=None,
                 summed_masked_noise=summed_masked_noise,
                 ctf_probs=ctf_probs,
                 noise_variance_for_noise=noise_variance_for_noise,
@@ -1746,20 +1697,7 @@ def run_local_em_exact(
                 0.0,
             )
             flat_proj_for_noise = flatten_bucket_rows(packed_proj_for_noise)
-            if proj_abs2_for_noise is None:
-                flat_proj_abs2_for_noise = jnp.abs(flat_proj_for_noise) ** 2
-            else:
-                packed_proj_abs2_for_noise = jnp.take_along_axis(
-                    proj_abs2_for_noise,
-                    reconstruction_take_indices_jnp[:, :, None],
-                    axis=1,
-                )
-                packed_proj_abs2_for_noise = jnp.where(
-                    reconstruction_pack_mask_jnp[:, :, None],
-                    packed_proj_abs2_for_noise,
-                    0.0,
-                )
-                flat_proj_abs2_for_noise = flatten_bucket_rows(packed_proj_abs2_for_noise)
+            flat_proj_abs2_for_noise = jnp.abs(flat_proj_for_noise) ** 2
             block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
                 flat_proj_for_noise,
                 flat_proj_abs2_for_noise,
@@ -1932,7 +1870,6 @@ def run_local_em_exact(
         "big_jit_enabled": np.asarray(big_jit_enabled),
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
-        "materialize_projection_abs2": np.asarray(materialize_projection_abs2),
         "keep_half_volume_accumulators": np.asarray(keep_half_volume_accumulators),
         "bucket_build_time_s": np.float64(timing.bucket_build_s),
         "raw_cache_build_time_s": np.float64(timing.raw_cache_build_s),

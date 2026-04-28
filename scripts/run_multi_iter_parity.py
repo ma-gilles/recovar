@@ -98,7 +98,6 @@ def _collect_local_profile_rows(save_intermediates_dir):
         "union_waste_fraction",
         "padded_waste_fraction",
         "padding_only_waste_fraction",
-        "materialize_projection_abs2",
         "preprocess_time_s",
         "preprocess_integer_shift_s",
         "preprocess_translation_phase_s",
@@ -223,7 +222,6 @@ def _summarize_local_profile_rows(rows, wall_times):
     for key in (
         "native_half_preprocess",
         "native_half_preprocess_mode",
-        "materialize_projection_abs2",
         "fused_score_mstep_enabled",
     ):
         values = [row[key] for row in rows if key in row]
