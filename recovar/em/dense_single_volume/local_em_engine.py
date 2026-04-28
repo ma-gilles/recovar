@@ -172,6 +172,29 @@ class _LocalTiming:
         )
 
 
+@dataclass(frozen=True)
+class _LocalSpectrumSetup:
+    half_weights: jax.Array
+    norm_half_weights: jax.Array
+    half_weights_windowed: jax.Array
+    noise_variance_half: jax.Array
+    materialize_projection_abs2: bool
+
+
+@dataclass(frozen=True)
+class _BigJitMaskArgs:
+    mask_mode: str
+    image_mask: jax.Array
+
+
+@dataclass(frozen=True)
+class _LocalReconstructionPack:
+    local_mask: np.ndarray
+    take_indices: np.ndarray
+    pack_mask: np.ndarray
+    row_count: int
+
+
 def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_params):
     """Pad a local big-JIT bucket to its planned image shape class."""
 
@@ -238,6 +261,93 @@ def _exact_local_max_hypotheses_per_microbatch(default: int | None, n_windowed: 
             "RECOVAR_RELION_EXACT_LOCAL_MAX_HYPOTHESES_PER_MICROBATCH must be positive",
         )
     return value
+
+
+def _make_local_spectrum_setup(
+    image_shape,
+    n_half: int,
+    noise_variance,
+    window_spec,
+    *,
+    half_spectrum_scoring: bool,
+) -> _LocalSpectrumSetup:
+    if half_spectrum_scoring:
+        half_weights = jnp.ones(n_half, dtype=jnp.float32)
+    else:
+        half_weights = make_half_image_weights(image_shape)
+    noise_variance_half = fourier_transform_utils.full_image_to_half_image(
+        noise_variance.reshape(1, -1),
+        image_shape,
+    ).squeeze()
+    return _LocalSpectrumSetup(
+        half_weights=half_weights,
+        norm_half_weights=make_half_image_weights(image_shape),
+        half_weights_windowed=window_spec.score_values(half_weights),
+        noise_variance_half=noise_variance_half,
+        materialize_projection_abs2=_local_materialize_projection_abs2_enabled(False),
+    )
+
+
+def _local_big_jit_mask_args(experiment_dataset, image_shape) -> _BigJitMaskArgs:
+    backend = _image_preprocess_backend(experiment_dataset)
+    mask_mode = getattr(backend, "image_mask_mode", "multiply")
+    if mask_mode not in {"relion_background_fill", "multiply"}:
+        mask_mode = "none"
+
+    image_mask = getattr(backend, "image_mask", None)
+    if image_mask is None:
+        image_mask = getattr(backend, "mask", None)
+    if image_mask is None:
+        image_mask = getattr(experiment_dataset, "image_mask", None)
+    if image_mask is None:
+        image_mask = np.ones(image_shape, dtype=np.float32)
+        mask_mode = "none"
+
+    return _BigJitMaskArgs(mask_mode=mask_mode, image_mask=jnp.asarray(image_mask))
+
+
+def _can_use_local_big_jit_bucket(
+    *,
+    big_jit_enabled: bool,
+    native_half_preprocess_mode: str,
+    processed_cache_enabled: bool,
+    batch_data,
+    experiment_dataset,
+    materialize_projection_abs2: bool,
+    debug_score_dump_filter_matches: bool,
+    debug_noise_dump_dir,
+) -> bool:
+    return (
+        big_jit_enabled
+        and native_half_preprocess_mode != "off"
+        and not processed_cache_enabled
+        and batch_data is not None
+        and _can_native_half_preprocess(experiment_dataset, batch_data)
+        and not materialize_projection_abs2
+        and not debug_score_dump_filter_matches
+        and debug_noise_dump_dir is None
+    )
+
+
+def _local_big_jit_reconstruction_pack(
+    bucket: LocalBucketSpec,
+    reconstruction_rotation_mask,
+    reconstruction_row_count,
+    unpadded_batch_size: int,
+) -> _LocalReconstructionPack:
+    local_mask = np.asarray(bucket.local_rotation_mask, dtype=bool)[:unpadded_batch_size]
+    reconstruction_mask = np.asarray(reconstruction_rotation_mask, dtype=bool)[:unpadded_batch_size]
+    take_indices = np.broadcast_to(
+        np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
+        (unpadded_batch_size, int(bucket.bucket_rotation_count)),
+    )
+    return _LocalReconstructionPack(
+        local_mask=local_mask,
+        take_indices=take_indices,
+        pack_mask=reconstruction_mask & local_mask,
+        row_count=int(np.asarray(reconstruction_row_count, dtype=np.int32)),
+    )
+
 
 def _fetch_indexed_batch(experiment_dataset, image_indices):
     batch_iter = experiment_dataset.iter_batches(
@@ -867,19 +977,19 @@ def run_local_em_exact(
     n_windowed = window_spec.n_score
     n_recon_windowed = window_spec.n_recon
     projection_kwargs = window_spec.projection_kwargs()
-
-    if half_spectrum_scoring:
-        half_weights = jnp.ones(n_half, dtype=jnp.float32)
-    else:
-        half_weights = make_half_image_weights(image_shape)
-    default_materialize_projection_abs2 = False
-    materialize_projection_abs2 = _local_materialize_projection_abs2_enabled(default_materialize_projection_abs2)
-    norm_half_weights = make_half_image_weights(image_shape)
-    half_weights_windowed = window_spec.score_values(half_weights)
-    noise_variance_half = fourier_transform_utils.full_image_to_half_image(
-        noise_variance.reshape(1, -1),
+    ## TODO: THE NEXT 100 LINES ARE JSUT DEFINING VARIABLES AND CONSTANTS. CLEAN THIS UP.
+    spectrum_setup = _make_local_spectrum_setup(
         image_shape,
-    ).squeeze()
+        n_half,
+        noise_variance,
+        window_spec,
+        half_spectrum_scoring=half_spectrum_scoring,
+    )
+    half_weights = spectrum_setup.half_weights
+    norm_half_weights = spectrum_setup.norm_half_weights
+    half_weights_windowed = spectrum_setup.half_weights_windowed
+    noise_variance_half = spectrum_setup.noise_variance_half
+    materialize_projection_abs2 = spectrum_setup.materialize_projection_abs2
 
     Ft_y = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
     Ft_ctf = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
@@ -1022,19 +1132,10 @@ def run_local_em_exact(
     timing.preprocess_s += translation_phase_time
     preprocess_profile["translation_phase_s"] += translation_phase_time
 
-    backend = _image_preprocess_backend(experiment_dataset)
-    big_jit_mask_mode = getattr(backend, "image_mask_mode", "multiply")
-    if big_jit_mask_mode not in {"relion_background_fill", "multiply"}:
-        big_jit_mask_mode = "none"
-    big_jit_image_mask_arg = getattr(backend, "image_mask", None)
-    if big_jit_image_mask_arg is None:
-        big_jit_image_mask_arg = getattr(backend, "mask", None)
-    if big_jit_image_mask_arg is None:
-        big_jit_image_mask_arg = getattr(experiment_dataset, "image_mask", None)
-    if big_jit_image_mask_arg is None:
-        big_jit_image_mask_arg = np.ones(image_shape, dtype=np.float32)
-        big_jit_mask_mode = "none"
-    big_jit_image_mask_arg = jnp.asarray(big_jit_image_mask_arg)
+    ## TODO: THIS IS VERY MESSY. CLEAN UP
+    big_jit_mask_args = _local_big_jit_mask_args(experiment_dataset, image_shape)
+    big_jit_mask_mode = big_jit_mask_args.mask_mode
+    big_jit_image_mask_arg = big_jit_mask_args.image_mask
 
     big_jit_window_indices_arg = window_spec.score_or_full_indices(n_half)
     big_jit_recon_window_indices_arg = window_spec.recon_or_full_indices(n_half)
@@ -1084,16 +1185,16 @@ def run_local_em_exact(
                 axis=-1,
                 dtype=np.float64,
             )
-
-        can_use_big_jit_bucket = (
-            big_jit_enabled
-            and native_half_preprocess_mode != "off"
-            and not processed_cache_enabled
-            and batch_data is not None
-            and _can_native_half_preprocess(experiment_dataset, batch_data)
-            and not materialize_projection_abs2
-            and not debug_score_dump_filter_matches
-            and debug_noise_dump_dir is None
+        ## TODO: THIS IS INSANE BRANCHING LOGIC. HOW MANY OF THESE ARE USEFU?  CAN WE DELETE SOME/MANY OF THESE FLAGS?
+        can_use_big_jit_bucket = _can_use_local_big_jit_bucket(
+            big_jit_enabled=big_jit_enabled,
+            native_half_preprocess_mode=native_half_preprocess_mode,
+            processed_cache_enabled=processed_cache_enabled,
+            batch_data=batch_data,
+            experiment_dataset=experiment_dataset,
+            materialize_projection_abs2=materialize_projection_abs2,
+            debug_score_dump_filter_matches=debug_score_dump_filter_matches,
+            debug_noise_dump_dir=debug_noise_dump_dir,
         )
         if can_use_big_jit_bucket:
             native_half_preprocess_used = True
@@ -1303,16 +1404,18 @@ def run_local_em_exact(
                 )
             timing.big_jit_bucket_s += time.time() - big_jit_t0
             big_jit_bucket_count += 1
-
+            ## TODO: NEXT BLOCK OF CODE SEEMS VERY NON-PYTHONIC. CLEAN UP
             pack_t0 = time.time()
-            reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)[:unpadded_batch_size]
-            local_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)[:unpadded_batch_size]
-            reconstruction_take_indices = np.broadcast_to(
-                np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
-                (unpadded_batch_size, int(bucket.bucket_rotation_count)),
+            reconstruction_pack = _local_big_jit_reconstruction_pack(
+                bucket,
+                reconstruction_rotation_mask,
+                reconstruction_row_count_jax,
+                unpadded_batch_size,
             )
-            reconstruction_pack_mask_np = reconstruction_rotation_mask_np & local_mask_np
-            reconstruction_row_count = int(np.asarray(reconstruction_row_count_jax, dtype=np.int32))
+            local_mask_np = reconstruction_pack.local_mask
+            reconstruction_take_indices = reconstruction_pack.take_indices
+            reconstruction_pack_mask_np = reconstruction_pack.pack_mask
+            reconstruction_row_count = reconstruction_pack.row_count
             timing.pack_s += time.time() - pack_t0
 
             postprocess_t0 = time.time()
@@ -1558,6 +1661,8 @@ def run_local_em_exact(
 
         shifted_score_split = shifted_score.reshape(batch_size, n_trans, -1)
         shifted_recon_split = shifted_recon.reshape(batch_size, n_trans, -1)
+        ## TODO: ONCE AGIN: INSANE  BRANCIGN LOGIC. I WANT TO DELETE AS MANY OF THESE AS POSSIBLE.  HOW MANY OF THESE FLAGS ARE REALLY USEFUL?
+        ## AND REMOVE AS MANY IF STATEMENTS. ANY FLAGS USELESS FOR OUR 5K PARITY RUN SHOULD BE REMOVED (UNLESS GREAT REASON TO STAY)
         can_use_fused_score_mstep = (
             fused_score_mstep_enabled
             and proj_abs2_weighted is None
@@ -1654,7 +1759,9 @@ def run_local_em_exact(
             timing.score_s += time.time() - score_t0
 
             normalize_t0 = time.time()
+            ## TODO: NEEDS A LOT OF CLEAN UP FOR THIS STUFF
             if normalization_log_z_np is None:
+                ## TODO: THIS IS AN INSANE BRANCH FOR EXAMPLE, AND INSANE THAT THERE ARE TWO FUNCTIONS FOR THIS. THIS SHOULD BE FIGURED OUT BY DTYPE. DUCK TYPING.
                 if use_float64_normalization:
                     log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores(scores)
                 else:
@@ -1808,7 +1915,7 @@ def run_local_em_exact(
         if not disable_adjoint_y or not disable_adjoint_ctf:
             packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_rotations_np))
         timing.pack_s += time.time() - pack_t0
-
+        ## TODO THIS CLEAN THIS INSSANE BRANCHING HERE
         if batch_backproject_enabled and not disable_adjoint_y and not disable_adjoint_ctf:
             adjoint_y_t0 = time.time()
             if use_window:
