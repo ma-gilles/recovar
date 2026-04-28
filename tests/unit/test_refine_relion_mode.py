@@ -1111,7 +1111,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     assert np.asarray(Ft_y_exact).size == VOLUME_SIZE
     assert np.asarray(Ft_ctf_exact).size == VOLUME_SIZE
     config = ForwardModelConfig.from_dataset(dataset, disc_type="linear_interp", process_fn=dataset.process_images)
-    noise_variance_half = ftu.full_image_to_half_image(noise_variance.reshape(1, -1), dataset.image_shape).squeeze()
+    noise_variance_half = jnp.ones(dataset.image_shape[0] * (dataset.image_shape[1] // 2 + 1), dtype=jnp.float32)
     half_weights = make_half_image_weights(dataset.image_shape)
     bucket = bucket_local_hypothesis_layout(
         local_layout,
@@ -1699,99 +1699,6 @@ def test_run_local_em_exact_default_fused_path_matches_materialized_split(monkey
     assert noise_default.sumw == pytest.approx(noise_mat.sumw, abs=1e-5)
 
 
-def test_run_local_em_exact_forced_native_half_preprocess_matches_legacy(monkeypatch, rng):
-    dataset = RawRealImageDataset(3, rng)
-    mean = _hermitian_volume(VOLUME_SHAPE, seed=541)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
-    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
-    all_rotations = _make_rotations(5, seed=543)
-    translations = np.array([[0.0, 0.0], [0.5, -0.5]], dtype=np.float32)
-    rotation_ids = [
-        np.array([0, 1, 2], dtype=np.int32),
-        np.array([1, 3], dtype=np.int32),
-        np.array([0, 2, 4], dtype=np.int32),
-    ]
-    rotation_counts = np.asarray([ids.size for ids in rotation_ids], dtype=np.int32)
-    rotation_offsets = np.concatenate(([0], np.cumsum(rotation_counts))).astype(np.int64)
-    rotation_ids_flat = np.concatenate(rotation_ids).astype(np.int32)
-    local_layout = LocalHypothesisLayout(
-        n_global_rotations=all_rotations.shape[0],
-        n_pixels=6,
-        n_psi=1,
-        rotation_offsets=rotation_offsets,
-        rotation_ids_flat=rotation_ids_flat,
-        rotations_flat=np.asarray(all_rotations[rotation_ids_flat], dtype=np.float32),
-        rotation_log_priors_flat=np.linspace(0.0, -0.7, rotation_ids_flat.size, dtype=np.float32),
-        rotation_counts=rotation_counts,
-        translation_grid=translations,
-        translation_log_priors=np.array(
-            [[0.0, -0.5], [-0.2, 0.1], [0.3, -0.4]],
-            dtype=np.float32,
-        ),
-    )
-    common_kwargs = dict(
-        image_batch_size=3,
-        rotation_block_size=8,
-        current_size=6,
-        accumulate_noise=True,
-        reconstruct_significant_only=True,
-        return_profile=True,
-        score_with_masked_images=False,
-        half_spectrum_scoring=False,
-        image_pre_shifts=np.array([[0.25, -0.5], [-0.75, 0.5], [0.0, 0.0]], dtype=np.float32),
-        max_significants=-1,
-    )
-
-    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_NATIVE_HALF_PREPROCESS", "1")
-    native = run_local_em_exact(
-        dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        local_layout,
-        "linear_interp",
-        **common_kwargs,
-    )
-    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_NATIVE_HALF_PREPROCESS", "0")
-    legacy = run_local_em_exact(
-        dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        local_layout,
-        "linear_interp",
-        **common_kwargs,
-    )
-
-    Ft_y_native, Ft_ctf_native, hard_native, stats_native, noise_native, profile_native = native
-    Ft_y_legacy, Ft_ctf_legacy, hard_legacy, stats_legacy, noise_legacy, profile_legacy = legacy
-    assert bool(profile_native["native_half_preprocess"]) is True
-    assert str(profile_native["native_half_preprocess_mode"]) == "on"
-    assert bool(profile_legacy["native_half_preprocess"]) is False
-    np.testing.assert_array_equal(hard_native, hard_legacy)
-    np.testing.assert_allclose(np.asarray(Ft_y_native), np.asarray(Ft_y_legacy), atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_ctf_native), np.asarray(Ft_ctf_legacy), atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(
-        np.asarray(stats_native.log_evidence_per_image),
-        np.asarray(stats_legacy.log_evidence_per_image),
-        atol=1e-5,
-        rtol=1e-5,
-    )
-    np.testing.assert_allclose(
-        np.asarray(stats_native.max_posterior_per_image),
-        np.asarray(stats_legacy.max_posterior_per_image),
-        atol=1e-5,
-        rtol=1e-5,
-    )
-    np.testing.assert_allclose(
-        np.asarray(noise_native.wsum_sigma2_noise),
-        np.asarray(noise_legacy.wsum_sigma2_noise),
-        atol=1e-5,
-        rtol=1e-5,
-    )
-    assert noise_native.sumw == pytest.approx(noise_legacy.sumw, abs=1e-5)
-
-
 def test_run_local_em_exact_big_jit_bucket_matches_legacy(monkeypatch, rng):
     dataset = RawRealImageDataset(3, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=551)
@@ -1860,7 +1767,6 @@ def test_run_local_em_exact_big_jit_bucket_matches_legacy(monkeypatch, rng):
     Ft_y_legacy, Ft_ctf_legacy, hard_legacy, stats_legacy, noise_legacy, profile_legacy = legacy
     assert bool(profile_big["big_jit_enabled"]) is True
     assert int(profile_big["big_jit_bucket_count"]) == 1
-    assert bool(profile_big["native_half_preprocess"]) is True
     assert bool(profile_legacy["big_jit_enabled"]) is False
     np.testing.assert_array_equal(hard_big, hard_legacy)
     np.testing.assert_allclose(np.asarray(Ft_y_big), np.asarray(Ft_y_legacy), atol=1e-5, rtol=1e-5)
@@ -2049,17 +1955,22 @@ def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False
     return jnp.ones((params.shape[0], sz), dtype=jnp.float32)
 
 
-def _identity_process(batch, apply_image_mask=False):
-    _ = apply_image_mask
-    return batch
+def _unit_image_mask(dtype=jnp.float32):
+    return jnp.linspace(0.2, 1.0, IMAGE_SIZE, dtype=dtype).reshape(IMAGE_SHAPE)
 
 
 def _raw_real_process(batch, apply_image_mask=False):
     images = jnp.asarray(batch)
     if apply_image_mask:
-        mask = jnp.linspace(0.2, 1.0, IMAGE_SIZE, dtype=images.dtype).reshape(IMAGE_SHAPE)
-        images = images * mask
+        images = images * _unit_image_mask(images.dtype)
     return ftu.get_dft2(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
+
+
+def _raw_real_process_half(batch, apply_image_mask=False):
+    images = jnp.asarray(batch)
+    if apply_image_mask:
+        images = images * _unit_image_mask(images.dtype)
+    return ftu.get_dft2_real(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
 
 
 class MockDataset:
@@ -2078,21 +1989,23 @@ class MockDataset:
         self.dtype = jnp.complex64
         self.CTF_params = np.zeros((n_images, 9), dtype=np.float32)
         self.ctf_evaluator = staticmethod(_identity_ctf)
-        self.process_images = staticmethod(_identity_process)
+        self.process_images = staticmethod(_raw_real_process)
+        self.process_images_half = staticmethod(_raw_real_process_half)
+        self.image_mask = np.asarray(_unit_image_mask(np.float32), dtype=np.float32)
         self.premultiplied_ctf = False
 
-        self._images = np.zeros((n_images, IMAGE_SIZE), dtype=np.complex64)
-        for i in range(n_images):
-            self._images[i] = _hermitian_image_2d(IMAGE_SHAPE, seed=rng.integers(10000)).reshape(-1)
+        self._images = rng.standard_normal((n_images, *IMAGE_SHAPE)).astype(np.float32)
 
         self.rotation_matrices = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
         self.translations = np.zeros((n_images, 2), dtype=np.float32)
 
         class _Backend:
-            image_mask = None
+            image_mask = np.asarray(_unit_image_mask(np.float32), dtype=np.float32)
+            image_mask_mode = "multiply"
 
         class _ImageSource:
-            process_images = staticmethod(_identity_process)
+            process_images = staticmethod(_raw_real_process)
+            process_images_half = staticmethod(_raw_real_process_half)
             backend = _Backend()
 
         self.image_source = _ImageSource()
@@ -2143,12 +2056,7 @@ class RawRealImageDataset:
         self.CTF_params = np.zeros((n_images, 9), dtype=np.float32)
         self.ctf_evaluator = staticmethod(_identity_ctf)
         self.process_images = staticmethod(_raw_real_process)
-        self.process_images_half = staticmethod(
-            lambda batch, apply_image_mask=False: ftu.full_image_to_half_image(
-                _raw_real_process(batch, apply_image_mask=apply_image_mask),
-                IMAGE_SHAPE,
-            )
-        )
+        self.process_images_half = staticmethod(_raw_real_process_half)
         self.premultiplied_ctf = False
         self._images = rng.standard_normal((n_images, *IMAGE_SHAPE)).astype(np.float32)
         self.rotation_matrices = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
@@ -2160,12 +2068,7 @@ class RawRealImageDataset:
 
         class _ImageSource:
             process_images = staticmethod(_raw_real_process)
-            process_images_half = staticmethod(
-                lambda batch, apply_image_mask=False: ftu.full_image_to_half_image(
-                    _raw_real_process(batch, apply_image_mask=apply_image_mask),
-                    IMAGE_SHAPE,
-                )
-            )
+            process_images_half = staticmethod(_raw_real_process_half)
             backend = _Backend()
 
         self.image_source = _ImageSource()

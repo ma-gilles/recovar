@@ -40,16 +40,15 @@ def test_particle_image_dataset_basic_getitem_and_preprocess(monkeypatch):
     assert processed.dtype == np.complex64
 
 
-def test_particle_image_dataset_process_images_half_matches_legacy_full_fft_path(monkeypatch):
+def test_particle_image_dataset_process_images_half_uses_native_rfft(monkeypatch):
     monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
     ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
 
     imgs, _p_idx, _t_idx = ds[2]
-    processed_full = ds.process_images(imgs, apply_image_mask=False)
-    legacy_half = fourier_transform_utils.full_image_to_half_image(processed_full, ds.image_shape)
+    expected_half = np.asarray(fourier_transform_utils.get_dft2_real(imgs).reshape((1, -1))).astype(np.complex64)
     processed_half = ds.process_images_half(imgs, apply_image_mask=False)
 
-    np.testing.assert_array_equal(processed_half, legacy_half)
+    np.testing.assert_array_equal(processed_half, expected_half)
 
 
 def test_particle_image_dataset_relion_background_fill_mask_mode(monkeypatch):

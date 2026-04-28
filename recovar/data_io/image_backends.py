@@ -21,7 +21,7 @@ import grain.python as grain
 import jax.numpy as jnp
 import numpy as np
 
-from recovar.core import mask
+from recovar.core import mask, padding
 from recovar.data_io import starfile
 from recovar.data_io._index_utils import normalize_indices
 from recovar.data_io.image_loader import ImageLoader
@@ -73,6 +73,19 @@ def _centered_fft2_numpy(images: np.ndarray) -> np.ndarray:
     shifted = np.fft.fftshift(images_np, axes=(-2, -1))
     transformed = np.fft.fft2(shifted, axes=(-2, -1))
     return np.fft.fftshift(transformed, axes=(-2, -1))
+
+
+def _centered_rfft2_numpy(images: np.ndarray) -> np.ndarray:
+    """Centered 2-D real FFT returning packed half-spectrum columns."""
+
+    images_np = np.asarray(images)
+    if images_np.ndim == 2:
+        images_np = images_np[None, ...]
+    if images_np.dtype == np.float16:
+        images_np = images_np.astype(np.float32)
+    shifted = np.fft.fftshift(images_np, axes=(-2, -1))
+    transformed = np.fft.rfft2(shifted, axes=(-2, -1))
+    return np.fft.fftshift(transformed, axes=(-2,))
 
 
 class _SimpleSubset:
@@ -268,20 +281,35 @@ class ParticleImageDataset:
         return images.astype(self.dtype, copy=False)
 
     def process_images_half(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
-        """Return half-spectrum images using the legacy full-FFT path.
+        """Return preprocessed images directly in packed half-spectrum layout."""
 
-        The old pipeline applied ``process_images`` first and then converted
-        the full FFT layout to half-spectrum storage.  Direct ``rfft`` is
-        mathematically close, but it is not numerically identical and that
-        drift is enough to change downstream PCA / outlier regressions.
-        """
-        processed = self.process_images(images, apply_image_mask=apply_image_mask)
-        import recovar.core.fourier_transform_utils as fourier_transform_utils
-
-        half_images = fourier_transform_utils.full_image_to_half_image(
-            processed,
-            self.image_shape,
+        use_relion_numpy_fft = (
+            self.image_mask_mode == "relion_background_fill"
+            and __import__("os").environ.get("RECOVAR_RELION_NUMPY_IMAGE_FFT") == "1"
         )
+        if use_relion_numpy_fft:
+            try:
+                images_np = np.asarray(images)
+            except Exception as exc:
+                if exc.__class__.__name__ != "TracerArrayConversionError":
+                    raise
+                use_relion_numpy_fft = False
+            else:
+                if images_np.ndim == 2:
+                    images_np = images_np[np.newaxis, ...]
+                if apply_image_mask:
+                    images_np = _apply_relion_soft_image_mask_numpy(images_np, self.image_mask)
+                transformed = _centered_rfft2_numpy(images_np * self.mult)
+                return transformed.reshape((transformed.shape[0], -1)).astype(self.dtype, copy=False)
+
+        if apply_image_mask:
+            if self.image_mask_mode == "relion_normalize_fill":
+                images = mask.apply_relion_soft_image_mask(images, self.image_mask, relion_normalize=True)
+            elif self.image_mask_mode == "relion_background_fill":
+                images = mask.apply_relion_soft_image_mask(images, self.image_mask)
+            else:
+                images = images * self.image_mask
+        half_images = padding.padded_rfft(images * self.mult, self.D, self.padding)
         return half_images.astype(self.dtype, copy=False)
 
     def get_dataset_generator(

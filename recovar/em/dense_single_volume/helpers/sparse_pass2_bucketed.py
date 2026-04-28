@@ -38,6 +38,7 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
+from recovar.reconstruction import noise as noise_utils
 from recovar.em.dense_single_volume.em_primitives import (
     _adjoint_slice_volume_half,
     _adjoint_slice_volume_windowed,
@@ -595,9 +596,9 @@ def _prepare_bucket_io(
     # Raw processed half-spectrum images (BEFORE any per-image correction).
     # The score path uses masked images iff ``score_with_masked_images`` is True,
     # while the reconstruction path always uses the unmasked (raw) images.
-    processed_score_half_raw = process_half_image(experiment_dataset, batch, config, score_with_masked_images)
+    processed_score_half_raw = process_half_image(experiment_dataset, batch, score_with_masked_images)
     if score_with_masked_images:
-        processed_recon_half_raw = process_half_image(experiment_dataset, batch, config, False)
+        processed_recon_half_raw = process_half_image(experiment_dataset, batch, False)
     else:
         processed_recon_half_raw = processed_score_half_raw
 
@@ -960,9 +961,7 @@ def compute_pass2_stats_sparse_bucketed(
         half_weights = half_weights.astype(jnp.float64)
         half_weights_windowed = window_spec.score_values(half_weights)
 
-    noise_variance_half = fourier_transform_utils.full_image_to_half_image(
-        noise_variance.reshape(1, -1), image_shape
-    ).squeeze()
+    noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
 
     if accumulate_noise:
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)

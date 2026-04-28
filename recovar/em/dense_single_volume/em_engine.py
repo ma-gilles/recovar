@@ -45,18 +45,18 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar import core
 from recovar.core.configs import ForwardModelConfig
+from recovar.reconstruction import noise as noise_utils
 
 from .dense_big_jit import run_dense_bucket_big_jit
-from .helpers.dtype_policy import DensePrecisionPolicy
-from .helpers.env_flags import parse_env_bool
 from .helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
     batch_adjoint_slice_volume_half as _batch_adjoint_slice_volume_half,
     batch_adjoint_slice_volume_windowed as _batch_adjoint_slice_volume_windowed,
 )
+from .helpers.dtype_policy import DensePrecisionPolicy
+from .helpers.env_flags import parse_env_bool
 from .helpers.fourier_window import make_fourier_window_spec
 from .helpers.half_spectrum import (
     half_spectrum_dc_index,
@@ -66,7 +66,12 @@ from .helpers.half_spectrum import (
 )
 from .helpers.image_shifts import apply_relion_integer_pre_shifts, integer_pre_shifts_or_none
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
-from .helpers.preprocessing import translate_full_images_to_half
+from .helpers.preprocessing import (
+    prepare_reconstruction_batch as _prepare_reconstruction_batch,
+    process_half_image,
+    preprocess_batch as _preprocess_batch,
+    preprocess_batch_firstiter_cc as _preprocess_batch_firstiter_cc,
+)
 from .helpers.projection import (
     DEFAULT_PROJECTION_MAX_R as _DEFAULT_PROJECTION_MAX_R,
     compute_noise_block as _compute_noise_block,
@@ -252,100 +257,6 @@ def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int
 
 
 # -- JIT-compiled kernels ---------------------------------------------------
-
-
-@partial(jax.jit, static_argnums=(5, 6, 7))
-def _preprocess_batch(
-    batch,
-    ctf_params,
-    noise_variance,
-    translations,
-    config,
-    n_images,
-    n_trans,
-    score_with_masked_images=False,
-):
-    """Preprocess one image batch for E-step scoring.
-
-    When ``score_with_masked_images`` is True, the likelihood path uses the
-    dataset's masked-image preprocessing. The returned ``batch_norm`` is the
-    per-image constant ``||y||^2 / sigma^2`` term from the Gaussian
-    likelihood. The score kernels intentionally omit that constant from the
-    relative candidate scores to avoid catastrophic float32 cancellation, and
-    add it back only when absolute log-evidence outputs are requested.
-    """
-
-    CTF = config.compute_ctf(ctf_params)
-    processed = config.process_fn(
-        batch,
-        apply_image_mask=score_with_masked_images,
-    )
-    ctf_weighted = processed * CTF / noise_variance
-    shifted_half = translate_full_images_to_half(
-        ctf_weighted,
-        translations,
-        config.image_shape,
-        n_images,
-        n_trans,
-    )
-    batch_norm = jnp.linalg.norm(processed / jnp.sqrt(noise_variance), axis=-1, keepdims=True) ** 2
-    ctf2_over_nv = CTF**2 / noise_variance
-    ctf2_over_nv_half = fourier_transform_utils.full_image_to_half_image(ctf2_over_nv, config.image_shape)
-    return shifted_half, batch_norm, ctf2_over_nv_half
-
-
-@partial(jax.jit, static_argnums=(5, 6))
-def _prepare_reconstruction_batch(
-    batch,
-    ctf_params,
-    noise_variance,
-    translations,
-    config,
-    n_images,
-    n_trans,
-):
-    """Preprocess one image batch for the unmasked M-step path."""
-    CTF = config.compute_ctf(ctf_params)
-    processed = config.process_fn(batch, apply_image_mask=False)
-    ctf_weighted = processed * CTF / noise_variance
-    return translate_full_images_to_half(
-        ctf_weighted,
-        translations,
-        config.image_shape,
-        n_images,
-        n_trans,
-    )
-
-
-def _preprocess_batch_firstiter_cc(
-    batch,
-    ctf_params,
-    noise_variance,
-    translations,
-    config,
-    n_images,
-    n_trans,
-    score_with_masked_images=False,
-):
-    """Preprocess one image batch for RELION's iter-1 normalized CC scoring."""
-    CTF = config.compute_ctf(ctf_params)
-    processed = config.process_fn(
-        batch,
-        apply_image_mask=score_with_masked_images,
-    )
-    safe_ctf = jnp.where(jnp.abs(CTF) > 1e-8, 1.0 / CTF, 0.0)
-    processed_score = processed * safe_ctf
-    shifted_half = translate_full_images_to_half(
-        processed_score,
-        translations,
-        config.image_shape,
-        n_images,
-        n_trans,
-    )
-    image_power = jnp.linalg.norm(processed, axis=-1, keepdims=True) ** 2
-    ctf2_half = fourier_transform_utils.full_image_to_half_image(CTF**2, config.image_shape)
-    ctf2_over_nv_half = fourier_transform_utils.full_image_to_half_image(CTF**2 / noise_variance, config.image_shape)
-    return shifted_half, image_power, ctf2_half, ctf2_over_nv_half
 
 
 def _score_rotation_block(
@@ -870,6 +781,7 @@ def run_em(
 
     H, W = image_shape
     n_half = H * (W // 2 + 1)
+    noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
 
     config = ForwardModelConfig.from_dataset(
         experiment_dataset,
@@ -1122,10 +1034,6 @@ def run_em(
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
         shell_indices_noise = window_spec.recon_values(shell_indices_half)
-        noise_variance_half = fourier_transform_utils.full_image_to_half_image(
-            noise_variance.reshape(1, -1),
-            image_shape,
-        ).squeeze()
         noise_variance_windowed = window_spec.recon_values(noise_variance_half)
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
@@ -1196,36 +1104,33 @@ def run_em(
         preprocess_t0 = time.time()
         if relion_firstiter_score_mode == "normalized_cc":
             shifted_half, batch_norm, ctf2_half_score, ctf2_over_nv_half = _preprocess_batch_firstiter_cc(
+                experiment_dataset,
                 batch_data,
                 ctf_params,
-                noise_variance,
+                noise_variance_half,
                 translations,
                 config,
-                batch_size,
-                n_trans,
                 score_with_masked_images,
             )
         else:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+                experiment_dataset,
                 batch_data,
                 ctf_params,
-                noise_variance,
+                noise_variance_half,
                 translations,
                 config,
-                batch_size,
-                n_trans,
                 score_with_masked_images,
             )
             ctf2_half_score = None
         shifted_recon_half = (
             _prepare_reconstruction_batch(
+                experiment_dataset,
                 batch_data,
                 ctf_params,
-                noise_variance,
+                noise_variance_half,
                 translations,
                 config,
-                batch_size,
-                n_trans,
             )
             if (score_with_masked_images or relion_firstiter_score_mode == "normalized_cc")
             else shifted_half
@@ -1334,10 +1239,10 @@ def run_em(
         if accumulate_noise:
             # P_img = sum_i |masked_img_i(k)|^2 per half-spectrum pixel
             # Use the masked processed images (score path).
-            processed_masked = config.process_fn(batch_data, apply_image_mask=score_with_masked_images)
-            processed_masked_half = fourier_transform_utils.full_image_to_half_image(
-                processed_masked,
-                image_shape,
+            processed_masked_half = process_half_image(
+                experiment_dataset,
+                batch_data,
+                score_with_masked_images,
             )
             if image_only_corr is not None:
                 processed_masked_half = processed_masked_half * image_only_corr[:, None]
@@ -2274,6 +2179,7 @@ def compute_e_step_weights(
         disc_type=disc_type,
         process_fn=experiment_dataset.process_images,
     )
+    noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
 
     half_weights = make_half_image_weights(image_shape)
     precision_policy = DensePrecisionPolicy()
@@ -2316,13 +2222,12 @@ def compute_e_step_weights(
         batch_data = jnp.asarray(batch_data)
 
         shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+            experiment_dataset,
             batch_data,
             ctf_params,
-            noise_variance,
+            noise_variance_half,
             translations,
             config,
-            batch_size,
-            n_trans,
             score_with_masked_images,
         )
 
