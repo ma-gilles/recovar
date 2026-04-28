@@ -45,6 +45,7 @@ from recovar.em.dense_single_volume.em_primitives import (
     _compute_noise_block,
     _compute_projections_block,
 )
+from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
@@ -603,10 +604,8 @@ def _prepare_bucket_io(
     else:
         processed_recon_half_raw = processed_score_half_raw
 
-    # batch_norm: (batch_size, 1) computed from RAW processed-score images
-    # (matches ``_preprocess_batch`` line 156: ``processed`` is the raw masked).
-    # We then scale by ``batch_corr**2`` if image_corrections is present, to
-    # mirror ``run_em`` line 1069.
+    # batch_norm starts from raw processed-score images, then follows dense
+    # run_em's image-only correction convention below.
     norm_half_weights = make_half_image_weights(image_shape)
     batch_norm = jnp.sum(
         (jnp.abs(processed_score_half_raw) ** 2 / noise_variance_half) * norm_half_weights[None, :],
@@ -617,6 +616,7 @@ def _prepare_bucket_io(
     score_weighted_half = processed_score_half_raw * ctf_half / noise_variance_half
     recon_weighted_half = processed_recon_half_raw * ctf_half / noise_variance_half
     direct_corrected_score_half = processed_score_half_raw
+    processed_score_half_for_noise = processed_score_half_raw
 
     if scale_corrections is not None:
         batch_scale = jnp.asarray(np.asarray(scale_corrections)[np.asarray(image_indices)])
@@ -626,6 +626,7 @@ def _prepare_bucket_io(
     # Per-image image corrections (matches run_em lines 1062-1069).
     if image_corrections is not None:
         batch_corr = jnp.asarray(np.asarray(image_corrections)[np.asarray(image_indices)])
+        image_only_corr = batch_corr / batch_scale
         # Note: corrections are applied to the per-translation-tiled arrays in
         # run_em, but multiplication by a per-image scalar commutes with the
         # tiling and shifting so we apply it before tiling for efficiency.
@@ -634,8 +635,8 @@ def _prepare_bucket_io(
         if return_direct_scoring_io:
             direct_raw_corr = batch_corr / batch_scale
             direct_corrected_score_half = direct_corrected_score_half * direct_raw_corr[:, None]
-        # batch_norm scales by corr^2 to match run_em line 1069
-        batch_norm = batch_norm * (batch_corr**2)[:, None]
+        batch_norm = batch_norm * (image_only_corr**2)[:, None]
+        processed_score_half_for_noise = processed_score_half_for_noise * image_only_corr[:, None]
 
     # Per-image scale correction on CTF^2/noise (matches run_em lines 1077-1079).
     if scale_corrections is not None:
@@ -715,19 +716,24 @@ def _prepare_bucket_io(
         shifted_score_half = jnp.where(dc_mask[None, :], 0.0, shifted_score_half)
         ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
 
-    if use_float64_scoring:
-        shifted_score_half = shifted_score_half.astype(jnp.complex128)
-        shifted_recon_half = shifted_recon_half.astype(jnp.complex128)
-        shifted_score_half_with_dc = shifted_score_half_with_dc.astype(jnp.complex128)
-        ctf2_over_nv_half = ctf2_over_nv_half.astype(jnp.float64)
-        ctf2_over_nv_half_with_dc = ctf2_over_nv_half_with_dc.astype(jnp.float64)
-        if return_direct_scoring_io:
-            shifted_corrected_score_half = shifted_corrected_score_half.astype(jnp.complex128)
-    else:
-        shifted_score_half = shifted_score_half.astype(jnp.complex64)
-        ctf2_over_nv_half = ctf2_over_nv_half.astype(jnp.float32)
-        if return_direct_scoring_io:
-            shifted_corrected_score_half = shifted_corrected_score_half.astype(jnp.complex64)
+    precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
+    (
+        shifted_score_half,
+        shifted_recon_half,
+        shifted_score_half_with_dc,
+        ctf2_over_nv_half,
+        ctf2_over_nv_half_with_dc,
+    ) = precision_policy.cast_local_preprocessed_inputs(
+        shifted_score_half,
+        shifted_recon_half,
+        shifted_score_half_with_dc,
+        ctf2_over_nv_half,
+        ctf2_over_nv_half_with_dc,
+    )
+    if return_direct_scoring_io:
+        shifted_corrected_score_half = shifted_corrected_score_half.astype(
+            precision_policy.score_complex_dtype,
+        )
 
     return (
         shifted_score_half,
@@ -736,7 +742,7 @@ def _prepare_bucket_io(
         ctf2_over_nv_half,
         ctf2_over_nv_half_with_dc,
         shifted_score_half_with_dc,
-        processed_score_half_raw,  # used by noise_img_power (RAW, no corrections)
+        processed_score_half_for_noise,
         shifted_corrected_score_half,
     )
 
@@ -939,6 +945,7 @@ def compute_pass2_stats_sparse_bucketed(
     )
     H, W = image_shape
     n_half = H * (W // 2 + 1)
+    precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
     window_spec = make_fourier_window_spec(
         image_shape,
         current_size,
@@ -1045,7 +1052,7 @@ def compute_pass2_stats_sparse_bucketed(
             ctf2_over_nv_half,
             ctf2_over_nv_half_with_dc,
             shifted_score_half_with_dc,
-            processed_score_half_raw,
+            processed_score_half_for_noise,
             shifted_corrected_score_half,
         ) = _prepare_bucket_io(
             experiment_dataset,
@@ -1114,14 +1121,17 @@ def compute_pass2_stats_sparse_bucketed(
             proj_for_noise = proj_half
             proj_abs2_for_noise = proj_abs2
 
-        if use_float64_scoring:
-            proj_weighted = proj_weighted.astype(jnp.complex128)
-            proj_abs2_weighted = proj_abs2_weighted.astype(jnp.float64)
-            proj_for_noise = proj_for_noise.astype(jnp.complex128)
-            proj_abs2_for_noise = proj_abs2_for_noise.astype(jnp.float64)
-        else:
-            proj_weighted = proj_weighted.astype(jnp.complex64)
-            proj_abs2_weighted = proj_abs2_weighted.astype(jnp.float32)
+        (
+            proj_weighted,
+            proj_for_noise,
+            proj_abs2_weighted,
+            proj_abs2_for_noise,
+        ) = precision_policy.cast_local_projection_scores(
+            proj_weighted,
+            proj_for_noise,
+            proj_abs2_weighted,
+            proj_abs2_for_noise,
+        )
 
         # Score: (B, R, T)
         shifted_score_split = shifted_score.reshape(batch, n_fine_trans, -1)
@@ -1239,10 +1249,9 @@ def compute_pass2_stats_sparse_bucketed(
                 noise_sigma2_offset_total += float(
                     np.sum(translation_posterior * translation_sqdist_ang, dtype=np.float64)
                 )
-            # NOTE: noise_img_power uses RAW (un-corrected) processed images
-            # to match run_em line 1144 (which recomputes processed_masked
-            # from raw batch_data).
-            batch_img_power = jnp.sum(jnp.abs(processed_score_half_raw) ** 2, axis=0).astype(jnp.float32)
+            # ``processed_score_half_for_noise`` is already adjusted for dense
+            # run_em's image-only correction convention when applicable.
+            batch_img_power = jnp.sum(jnp.abs(processed_score_half_for_noise) ** 2, axis=0).astype(jnp.float32)
             batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
             batch_img_power_shells = batch_img_power_shells.at[shell_indices_half].add(batch_img_power)
             noise_img_power_total += np.asarray(batch_img_power_shells, dtype=np.float64)
