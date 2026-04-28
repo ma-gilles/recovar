@@ -327,8 +327,8 @@ def main():
     )
     parser.add_argument(
         "--local_engine",
-        choices=["grouped_union", "exact_v1", "exact_v2"],
-        default="grouped_union",
+        choices=["grouped_union", "exact_v1"],
+        default="exact_v1",
         help="Which RELION local-search engine to use.",
     )
     parser.add_argument(
