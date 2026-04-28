@@ -204,6 +204,15 @@ class _LocalReconstructionPack:
     row_count: int
 
 
+@dataclass(frozen=True)
+class _LocalPackSelection:
+    rotation_mask: np.ndarray
+    take_indices: np.ndarray
+    pack_mask: np.ndarray
+    row_count: int
+    probs_sum_t: np.ndarray
+
+
 def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_params):
     """Pad a local big-JIT bucket to its planned image shape class."""
 
@@ -920,6 +929,60 @@ def _build_nonzero_reconstruction_pack_indices(
         np.asarray(significant_rotation_mask, dtype=bool) & nonzero_rotation_mask,
         local_rotation_mask,
         rotation_block_size,
+    )
+
+
+def _select_local_reconstruction_pack(
+    *,
+    bucket: LocalBucketSpec,
+    reconstruction_rotation_mask,
+    probs_sum_t,
+    reconstruct_significant_only: bool,
+    compact_zero_posterior_rows: bool,
+    rotation_block_size: int,
+    transfer_profile: dict[str, float],
+    pack_start_time: float,
+) -> _LocalPackSelection:
+    local_rotation_mask = np.asarray(bucket.local_rotation_mask, dtype=bool)
+    probs_sum_t_np = None
+    if reconstruct_significant_only:
+        reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)
+        transfer_profile["reconstruction_mask_to_host_s"] += time.time() - pack_start_time
+    else:
+        reconstruction_rotation_mask_np = local_rotation_mask
+
+    if compact_zero_posterior_rows:
+        transfer_t0 = time.time()
+        probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+        transfer_profile["mstep_posterior_sum_to_host_s"] += time.time() - transfer_t0
+        take_indices, pack_mask, _, row_count = _build_nonzero_reconstruction_pack_indices(
+            reconstruction_rotation_mask_np,
+            local_rotation_mask,
+            probs_sum_t_np,
+            rotation_block_size,
+        )
+    elif reconstruct_significant_only:
+        take_indices, pack_mask, _, row_count = _build_reconstruction_pack_indices(
+            reconstruction_rotation_mask_np,
+            local_rotation_mask,
+            rotation_block_size,
+        )
+    else:
+        take_indices = np.broadcast_to(
+            np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
+            (int(bucket.image_indices.shape[0]), int(bucket.bucket_rotation_count)),
+        )
+        pack_mask = reconstruction_rotation_mask_np
+        row_count = int(np.sum(np.asarray(bucket.actual_rotation_counts, dtype=np.int32), dtype=np.int64))
+
+    if probs_sum_t_np is None:
+        probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+    return _LocalPackSelection(
+        rotation_mask=reconstruction_rotation_mask_np,
+        take_indices=take_indices,
+        pack_mask=pack_mask,
+        row_count=row_count,
+        probs_sum_t=probs_sum_t_np,
     )
 
 
@@ -1920,63 +1983,21 @@ def run_local_em_exact(
             scores = None
 
         pack_t0 = time.time()
-        probs_sum_t_np = None
-        if reconstruct_significant_only:
-            reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)
-            transfer_profile["reconstruction_mask_to_host_s"] += time.time() - pack_t0
-            if compact_zero_posterior_rows:
-                transfer_t0 = time.time()
-                probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
-                transfer_profile["mstep_posterior_sum_to_host_s"] += time.time() - transfer_t0
-                (
-                    reconstruction_take_indices,
-                    reconstruction_pack_mask_np,
-                    reconstruction_counts_np,
-                    reconstruction_row_count,
-                ) = _build_nonzero_reconstruction_pack_indices(
-                    reconstruction_rotation_mask_np,
-                    np.asarray(bucket.local_rotation_mask, dtype=bool),
-                    probs_sum_t_np,
-                    rotation_block_size,
-                )
-            else:
-                (
-                    reconstruction_take_indices,
-                    reconstruction_pack_mask_np,
-                    reconstruction_counts_np,
-                    reconstruction_row_count,
-                ) = _build_reconstruction_pack_indices(
-                    reconstruction_rotation_mask_np,
-                    np.asarray(bucket.local_rotation_mask, dtype=bool),
-                    rotation_block_size,
-                )
-        elif compact_zero_posterior_rows:
-            reconstruction_rotation_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)
-            transfer_t0 = time.time()
-            probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
-            transfer_profile["mstep_posterior_sum_to_host_s"] += time.time() - transfer_t0
-            (
-                reconstruction_take_indices,
-                reconstruction_pack_mask_np,
-                reconstruction_counts_np,
-                reconstruction_row_count,
-            ) = _build_nonzero_reconstruction_pack_indices(
-                reconstruction_rotation_mask_np,
-                np.asarray(bucket.local_rotation_mask, dtype=bool),
-                probs_sum_t_np,
-                rotation_block_size,
-            )
-        else:
-            reconstruction_rotation_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)
-            reconstruction_take_indices = np.broadcast_to(
-                np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
-                (batch_size, int(bucket.bucket_rotation_count)),
-            )
-            reconstruction_pack_mask_np = reconstruction_rotation_mask_np
-            reconstruction_counts_np = np.asarray(bucket.actual_rotation_counts, dtype=np.int32)
-            reconstruction_row_count = int(np.sum(reconstruction_counts_np, dtype=np.int64))
-        if probs_sum_t_np is None:
-            probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+        pack_selection = _select_local_reconstruction_pack(
+            bucket=bucket,
+            reconstruction_rotation_mask=reconstruction_rotation_mask,
+            probs_sum_t=probs_sum_t,
+            reconstruct_significant_only=reconstruct_significant_only,
+            compact_zero_posterior_rows=compact_zero_posterior_rows,
+            rotation_block_size=rotation_block_size,
+            transfer_profile=transfer_profile,
+            pack_start_time=pack_t0,
+        )
+        reconstruction_rotation_mask_np = pack_selection.rotation_mask
+        reconstruction_take_indices = pack_selection.take_indices
+        reconstruction_pack_mask_np = pack_selection.pack_mask
+        reconstruction_row_count = pack_selection.row_count
+        probs_sum_t_np = pack_selection.probs_sum_t
         reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
         reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
         packed_rotations_np = np.take_along_axis(
