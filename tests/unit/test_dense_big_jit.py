@@ -12,6 +12,7 @@ from recovar.em.dense_single_volume.em_engine import (
     _compute_projections_block,
     _dense_big_jit_disabled_reason,
     _dense_big_jit_enabled,
+    _pad_dense_big_jit_image_axis,
     _e_step_block_scores,
     _e_step_block_scores_normalized_cc,
     _e_step_block_scores_windowed,
@@ -205,7 +206,16 @@ def _reference_scores(s, *, score_mode="gaussian", use_window=False, current_siz
     return scores
 
 
-def _run_big_jit(s, *, run_mstep, log_z=None, score_mode="gaussian", use_window=False, current_size=None):
+def _run_big_jit(
+    s,
+    *,
+    run_mstep,
+    log_z=None,
+    score_mode="gaussian",
+    use_window=False,
+    current_size=None,
+    valid_image_mask=None,
+):
     if use_window:
         if current_size is None:
             raise ValueError("current_size is required for windowed big-JIT scores")
@@ -230,6 +240,7 @@ def _run_big_jit(s, *, run_mstep, log_z=None, score_mode="gaussian", use_window=
         s["translation_log_prior"],
         s["candidate_mask"],
         s["valid_rotation_mask"],
+        jnp.ones(N_IMAGES, dtype=bool) if valid_image_mask is None else valid_image_mask,
         jnp.zeros(N_IMAGES, dtype=jnp.float32) if log_z is None else log_z,
         jnp.zeros(1, dtype=jnp.float32),
         jnp.zeros(1, dtype=jnp.float32),
@@ -299,6 +310,24 @@ def test_dense_big_jit_allows_sparse_pass2_skip_path():
         )
         is None
     )
+
+
+def test_pad_dense_big_jit_image_axis_preserves_ctf_rows():
+    batch = np.ones((1, 4, 4), dtype=np.float32)
+    ctf_params = np.arange(9, dtype=np.float32).reshape(1, 9)
+
+    padded_batch, padded_ctf, valid_mask, actual_batch_size = _pad_dense_big_jit_image_axis(
+        batch,
+        ctf_params,
+        3,
+    )
+
+    assert actual_batch_size == 1
+    assert padded_batch.shape == (3, 4, 4)
+    assert padded_ctf.shape == (3, 9)
+    np.testing.assert_array_equal(valid_mask, np.array([True, False, False]))
+    np.testing.assert_allclose(padded_batch[1:], 0.0)
+    np.testing.assert_allclose(padded_ctf[1:], np.broadcast_to(ctf_params[0], (2, 9)))
 
 
 @pytest.mark.parametrize(
@@ -411,3 +440,37 @@ def test_dense_big_jit_mstep_matches_dense_primitives_and_adjoint():
     )
     np.testing.assert_allclose(np.asarray(result.Ft_y), np.asarray(ref_Ft_y), rtol=1e-6, atol=1e-6)
     np.testing.assert_allclose(np.asarray(result.Ft_ctf), np.asarray(ref_Ft_ctf), rtol=1e-6, atol=1e-6)
+
+
+def test_dense_big_jit_masks_padded_image_rows():
+    s = _inputs()
+    scores = _reference_scores(s)
+    ref_max, ref_sum_exp = _update_logsumexp(
+        jnp.full((N_IMAGES,), -jnp.inf),
+        jnp.zeros((N_IMAGES,), dtype=jnp.float64),
+        scores,
+    )
+    valid_image_mask = jnp.asarray([True, False], dtype=bool)
+
+    pass1 = _run_big_jit(
+        s,
+        run_mstep=False,
+        valid_image_mask=valid_image_mask,
+    )
+    np.testing.assert_allclose(np.asarray(pass1.block_max[0]), np.asarray(ref_max[0]), rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(np.asarray(pass1.block_sum_exp[0]), np.asarray(ref_sum_exp[0]), rtol=1e-6, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(pass1.block_max[1]), 0.0, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(np.asarray(pass1.block_sum_exp[1]), N_ROT * N_TRANS, rtol=0.0, atol=0.0)
+
+    log_z = ref_max + jnp.log(ref_sum_exp)
+    log_z = log_z.at[1].set(0.0)
+    mstep = _run_big_jit(
+        s,
+        run_mstep=True,
+        log_z=log_z,
+        valid_image_mask=valid_image_mask,
+    )
+    assert np.isneginf(np.asarray(mstep.block_best[1]))
+    assert int(np.asarray(mstep.block_argmax[1])) == 0
+    np.testing.assert_allclose(np.asarray(mstep.max_posterior[1]), 0.0, rtol=0.0, atol=0.0)
+    np.testing.assert_allclose(np.asarray(mstep.probs_sum_t[1]), 0.0, rtol=0.0, atol=0.0)

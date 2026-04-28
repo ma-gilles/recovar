@@ -51,6 +51,7 @@ from recovar.core.configs import ForwardModelConfig
 from .dense_big_jit import run_dense_bucket_big_jit
 from .helpers.image_shifts import apply_relion_integer_pre_shifts, integer_pre_shifts_or_none
 from .helpers.types import EMProfileStats, NoiseStats, RelionStats
+from .shape_buckets import pad_axis
 
 logger = logging.getLogger(__name__)
 
@@ -145,6 +146,33 @@ def _block_until_ready(*values):
     for value in values:
         if value is not None:
             jax.block_until_ready(value)
+
+
+def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int):
+    """Pad dense big-JIT raw batch inputs to a stable image shape class."""
+
+    actual_batch_size = int(np.asarray(batch_data).shape[0])
+    padded_batch_size = int(max(actual_batch_size, target_batch_size))
+    if actual_batch_size == padded_batch_size:
+        return (
+            batch_data,
+            ctf_params,
+            np.ones(actual_batch_size, dtype=bool),
+            actual_batch_size,
+        )
+
+    ctf_params_np = np.asarray(ctf_params)
+    padded_ctf_params = pad_axis(ctf_params_np, 0, padded_batch_size, value=0)
+    if actual_batch_size > 0:
+        padded_ctf_params[actual_batch_size:] = ctf_params_np[0]
+    valid_image_mask = np.zeros(padded_batch_size, dtype=bool)
+    valid_image_mask[:actual_batch_size] = True
+    return (
+        pad_axis(batch_data, 0, padded_batch_size, value=0),
+        padded_ctf_params,
+        valid_image_mask,
+        actual_batch_size,
+    )
 
 
 # -- Half-spectrum utilities -------------------------------------------------
@@ -1344,25 +1372,39 @@ def run_em(
     elif use_dense_big_jit:
         logger.info("Dense big-JIT enabled for dense/global rotation buckets")
 
-    def _dense_big_jit_priors_and_masks(r0: int, r1: int, start: int, end: int):
+    def _dense_big_jit_priors_and_masks(r0: int, r1: int, start: int, end: int, batch_count: int):
+        actual_count = int(end - start)
+        batch_count = int(batch_count)
         if log_prior_padded_jnp is None:
-            rotation_prior_block = jnp.zeros((end - start, rotation_block_size), dtype=jnp.float32)
+            rotation_prior_block = jnp.zeros((batch_count, rotation_block_size), dtype=jnp.float32)
         elif per_image_log_prior:
             rotation_prior_block = log_prior_padded_jnp[start:end, r0:r1]
+            if batch_count != actual_count:
+                rotation_prior_block = jnp.pad(
+                    rotation_prior_block,
+                    ((0, batch_count - actual_count), (0, 0)),
+                    constant_values=0,
+                )
         else:
             rotation_prior_block = jnp.broadcast_to(
                 log_prior_padded_jnp[r0:r1][None, :],
-                (end - start, rotation_block_size),
+                (batch_count, rotation_block_size),
             )
 
         if translation_log_prior_jnp is None:
-            translation_prior_block = jnp.zeros((end - start, n_trans), dtype=jnp.float32)
+            translation_prior_block = jnp.zeros((batch_count, n_trans), dtype=jnp.float32)
         elif per_image_translation_log_prior:
             translation_prior_block = translation_log_prior_jnp[start:end]
+            if batch_count != actual_count:
+                translation_prior_block = jnp.pad(
+                    translation_prior_block,
+                    ((0, batch_count - actual_count), (0, 0)),
+                    constant_values=0,
+                )
         else:
             translation_prior_block = jnp.broadcast_to(
                 translation_log_prior_jnp[None, :],
-                (end - start, n_trans),
+                (batch_count, n_trans),
             )
 
         if candidate_mask_padded_jnp is None:
@@ -1441,19 +1483,31 @@ def run_em(
             batch_fetch_time += time.time() - batch_fetch_t0
             break
         batch_fetch_time += time.time() - batch_fetch_t0
-        batch_size = len(indices)
-        end_idx = start_idx + batch_size
+        actual_batch_size = len(indices)
+        batch_indices_np = np.asarray(indices)
+        end_idx = start_idx + actual_batch_size
         integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, indices, batch=batch_data)
         real_space_pre_shift_applied = integer_pre_shifts is not None
         if real_space_pre_shift_applied:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
+        if use_dense_big_jit:
+            (
+                batch_data,
+                ctf_params,
+                valid_image_mask_np,
+                actual_batch_size,
+            ) = _pad_dense_big_jit_image_axis(batch_data, ctf_params, image_batch_size)
+        else:
+            valid_image_mask_np = np.ones(actual_batch_size, dtype=bool)
+        batch_size = int(np.asarray(batch_data).shape[0])
+        valid_image_mask = jnp.asarray(valid_image_mask_np, dtype=bool)
         batch_data = jnp.asarray(batch_data)
         translation_sqdist_ang = None
         if translation_prior_centers_np is not None:
             if translation_prior_centers_np.ndim == 1:
                 centers = np.broadcast_to(
                     translation_prior_centers_np[None, :],
-                    (batch_size, translation_prior_centers_np.shape[0]),
+                    (actual_batch_size, translation_prior_centers_np.shape[0]),
                 )
             else:
                 centers = translation_prior_centers_np[start_idx:end_idx]
@@ -1466,6 +1520,8 @@ def run_em(
                 axis=-1,
                 dtype=np.float64,
             )
+            if use_dense_big_jit and batch_size != actual_batch_size:
+                translation_sqdist_ang = pad_axis(translation_sqdist_ang, 0, batch_size, value=0)
         projection_cache = None if use_dense_big_jit else []
         block_max_per_image = [] if sparse_pass2 else None
         block_pose_counts = [] if sparse_pass2 else None
@@ -1515,7 +1571,10 @@ def run_em(
 
         score_prep_t0 = time.time()
         if scale_corrections is not None:
-            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
+            batch_scale_np = np.asarray(scale_corrections, dtype=np.float32)[batch_indices_np]
+            if use_dense_big_jit and batch_size != actual_batch_size:
+                batch_scale_np = pad_axis(batch_scale_np, 0, batch_size, value=1)
+            batch_scale = jnp.asarray(batch_scale_np)
         else:
             batch_scale = jnp.ones(batch_size, dtype=batch_norm.dtype)
 
@@ -1527,7 +1586,10 @@ def run_em(
         # shifted_half has shape (batch_size * n_trans, N_half) — broadcast
         # the per-image correction across n_trans copies.
         if image_corrections is not None:
-            batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
+            batch_corr_np = np.asarray(image_corrections, dtype=np.float32)[batch_indices_np]
+            if use_dense_big_jit and batch_size != actual_batch_size:
+                batch_corr_np = pad_axis(batch_corr_np, 0, batch_size, value=1)
+            batch_corr = jnp.asarray(batch_corr_np)
             image_only_corr = batch_corr / batch_scale
             if relion_firstiter_score_mode == "normalized_cc":
                 score_batch_corr = batch_corr / (batch_scale**2)
@@ -1560,7 +1622,10 @@ def run_em(
         # image with zero fill before FFT.  Keep the Fourier-phase path only
         # for non-integral legacy callers.
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
-            batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
+            batch_shifts_np = np.asarray(image_pre_shifts, dtype=np.float32)[batch_indices_np]
+            if use_dense_big_jit and batch_size != actual_batch_size:
+                batch_shifts_np = pad_axis(batch_shifts_np, 0, batch_size, value=0)
+            batch_shifts = jnp.asarray(batch_shifts_np)
             # Compute per-pixel phase factors in half-spectrum layout
             lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
                 image_shape, voxel_size=1, scaled=True
@@ -1734,7 +1799,7 @@ def run_em(
                 translation_prior_block,
                 candidate_mask_block,
                 valid_rotation_mask,
-            ) = _dense_big_jit_priors_and_masks(r0, r1, start_idx, end_idx)
+            ) = _dense_big_jit_priors_and_masks(r0, r1, start_idx, end_idx, batch_size)
             return run_dense_bucket_big_jit(
                 shifted_score_half,
                 batch_norm,
@@ -1750,6 +1815,7 @@ def run_em(
                 translation_prior_block,
                 candidate_mask_block,
                 valid_rotation_mask,
+                valid_image_mask,
                 log_z,
                 dense_big_jit_noise_wsum0,
                 dense_big_jit_noise_a20,
@@ -2014,14 +2080,15 @@ def run_em(
         if block_max_per_image:
             block_max_matrix = jnp.stack(block_max_per_image, axis=0)
             block_log_pose_counts = jnp.log(jnp.asarray(block_pose_counts, dtype=jnp.float64))[:, None]
-            finite_log_z = jnp.isfinite(log_Z)
+            finite_log_z = jnp.isfinite(log_Z) & valid_image_mask
             log_omitted_mass_upper = jnp.where(
                 finite_log_z[None, :],
                 block_log_pose_counts + block_max_matrix.astype(jnp.float64) - log_Z[None, :].astype(jnp.float64),
                 jnp.inf,
             )
+            skip_candidate = (log_omitted_mass_upper < sparse_pass2_log_threshold) | (~valid_image_mask[None, :])
             skip_pass2_block = np.asarray(
-                jnp.all(log_omitted_mass_upper < sparse_pass2_log_threshold, axis=1),
+                jnp.all(skip_candidate, axis=1),
                 dtype=bool,
             )
             sparse_pass2_total_blocks += int(n_blocks)
@@ -2041,7 +2108,7 @@ def run_em(
                     sparse_pass2_omitted_mass_upper_max,
                     float(np.max(skipped_mass_upper_np)),
                 )
-                sparse_pass2_omitted_mass_upper_image_count += int(batch_size)
+                sparse_pass2_omitted_mass_upper_image_count += int(actual_batch_size)
             if sync_timers:
                 _block_until_ready(block_max_matrix, log_omitted_mass_upper)
         pass2_skipmask_time += time.time() - pass2_skipmask_t0
@@ -2501,25 +2568,27 @@ def run_em(
 
         if return_stats:
             stats_finalize_t0 = time.time()
-            log_score_offset = -0.5 * jnp.squeeze(batch_norm, axis=1)
+            log_score_offset = -0.5 * jnp.squeeze(batch_norm[:actual_batch_size], axis=1)
+            log_Z_actual = log_Z[:actual_batch_size]
+            best_score_actual = best_score[:actual_batch_size]
             pmax = jnp.exp(best_score - log_Z)
             log_evidence_per_image[start_idx:end_idx] = np.asarray(
-                log_Z + log_score_offset,
+                log_Z_actual + log_score_offset,
                 dtype=np.float32,
             )
             best_log_score_per_image[start_idx:end_idx] = np.asarray(
-                best_score + log_score_offset,
+                best_score_actual + log_score_offset,
                 dtype=np.float32,
             )
             max_posterior_per_image[start_idx:end_idx] = np.asarray(
-                pmax,
+                pmax[:actual_batch_size],
                 dtype=np.float32,
             )
             if sync_timers:
                 _block_until_ready(log_Z, best_score, pmax)
             stats_finalize_time += time.time() - stats_finalize_t0
 
-        hard_assignment[start_idx:end_idx] = np.asarray(best_argmax)
+        hard_assignment[start_idx:end_idx] = np.asarray(best_argmax[:actual_batch_size])
         start_idx = end_idx
 
     # -- SOLVE --
