@@ -89,6 +89,9 @@ from recovar.reconstruction.regularization import (
 
 logger = logging.getLogger(__name__)
 
+RELION_SCORE_TENSOR_FLOAT_BUDGET = 200_000_000
+RELION_MAX_FULL_GRID_ORDER = 4
+
 
 def _precompute_exact_local_fine_grid_enabled(healpix_order: int) -> bool:
     """Return whether exact local search should materialize the fine grid once."""
@@ -2047,7 +2050,6 @@ def _run_relion_iteration_loop(
     padded_volume_shape = tuple(d * PADDING_FACTOR for d in volume_shape)
 
     def _safe_batch_sizes(n_rot, n_trans):
-        ## TODO: BUT (NO RUSH ON THIS ONE): THIS SHOULD BE SET BY THE THE GPU CAPACITY SOMEHOW.
         """Reduce batch sizes for large pose grids to avoid GPU OOM.
 
         2026-04-08: bumped budget from 50M to 200M floats. This is the
@@ -2058,15 +2060,14 @@ def _run_relion_iteration_loop(
         per-iter times on tiny but OOM on 128-px boxes.
         """
         # Target the actual score-tensor size: n_img * n_rot_block * n_trans.
-        budget = 200_000_000
         n_trans = max(int(n_trans), 1)
         ibs = min(
             image_batch_size,
-            max(1, budget // max(n_rot * n_trans, 1)),
+            max(1, RELION_SCORE_TENSOR_FLOAT_BUDGET // max(n_rot * n_trans, 1)),
         )
         rbs = min(
             rotation_block_size,
-            max(64, budget // max(ibs * n_trans, 1)),
+            max(64, RELION_SCORE_TENSOR_FLOAT_BUDGET // max(ibs * n_trans, 1)),
         )
         return ibs, rbs
 
@@ -2591,10 +2592,8 @@ def _run_relion_iteration_loop(
         # OOMs the GPU.  Instead, keep the order-4 grid as the "base" and
         # rely on local search + oversampling to achieve finer angular steps.
         # The order is still tracked for sigma calculation.
-        ## TODO: I DON'T LIKE HOW GLOBAL CONSTANTS ARE SET THROUGHOUT THE CODE. WE NEED A BETTER WAY TO DO THIS. PERHAPS SOME CONFIG, SOMETHING
-        MAX_FULL_GRID_ORDER = 4
         if state.healpix_order != current_healpix_order:
-            new_order = min(state.healpix_order, MAX_FULL_GRID_ORDER)
+            new_order = min(state.healpix_order, RELION_MAX_FULL_GRID_ORDER)
             if new_order != current_healpix_order:
                 logger.info(
                     "Regenerating rotation grid: order %d -> %d",
