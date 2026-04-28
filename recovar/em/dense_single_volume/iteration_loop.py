@@ -322,6 +322,16 @@ def _mean_noise_variance(noise_variance_per_half):
     )
 
 
+def _optional_float32_half_pair(values):
+    """Return optional per-half arrays normalized to float32."""
+    if values is None:
+        return [None, None]
+    return [
+        np.asarray(values[0], dtype=np.float32) if values[0] is not None else None,
+        np.asarray(values[1], dtype=np.float32) if values[1] is not None else None,
+    ]
+
+
 def _radial_profile_from_noise_variance(noise_variance, image_shape):
     """Average an image-shaped noise vector into integer radial shells."""
     n_shells = image_shape[0] // 2 + 1
@@ -2065,28 +2075,9 @@ def _run_relion_iteration_loop(
     wall_times = []
     hard_assignments = [None, None]
     previous_assignments = [None, None]
-    previous_best_translations = [None, None]
     previous_best_rotations = [None, None]
-    previous_best_rotation_eulers = [None, None]
-    # TODO: THESE IFS SURELY COULD BE MORE CLEAN UP
-    if init_previous_best_translations is not None:
-        previous_best_translations = [
-            np.asarray(init_previous_best_translations[0], dtype=np.float32)
-            if init_previous_best_translations[0] is not None
-            else None,
-            np.asarray(init_previous_best_translations[1], dtype=np.float32)
-            if init_previous_best_translations[1] is not None
-            else None,
-        ]
-    if init_previous_best_rotation_eulers is not None:
-        previous_best_rotation_eulers = [
-            np.asarray(init_previous_best_rotation_eulers[0], dtype=np.float32)
-            if init_previous_best_rotation_eulers[0] is not None
-            else None,
-            np.asarray(init_previous_best_rotation_eulers[1], dtype=np.float32)
-            if init_previous_best_rotation_eulers[1] is not None
-            else None,
-        ]
+    previous_best_translations = _optional_float32_half_pair(init_previous_best_translations)
+    previous_best_rotation_eulers = _optional_float32_half_pair(init_previous_best_rotation_eulers)
     max_posterior_per_half = [None, None]
     rotation_posterior_per_half = [None, None]
     significant_counts = []
