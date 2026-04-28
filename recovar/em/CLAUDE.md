@@ -197,6 +197,12 @@ deg), with outlier pose flips but most particles matching.
 
 ### Fast diagnostic harness (use these for every parity session)
 
+- **Dense/local EM fast guardrail** — run `pixi run test-em-fast-guard`
+  before and after dense EM, local exact EM, Fourier-window, dtype-policy, or
+  helper refactors. It uses tiny synthetic/unit fixtures only, defaults to CPU
+  (`JAX_PLATFORMS=cpu`), and should finish in under about 60 seconds. For
+  local GPU execution, check `nvidia-smi` first and run
+  `EM_FAST_GUARD_BACKEND=gpu pixi run test-em-fast-guard`.
 - **`recovar/em/dense_single_volume/parity_dump.py`** — env-gated per-iter
   dump. Set `RECOVAR_PARITY_DUMP_DIR=<path>` and the iteration loop writes
   one `iter_NNN.npz` per RELION iter index containing per-iter metrics
