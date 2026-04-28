@@ -845,14 +845,12 @@ def run_em(
             or int(current_size or -1) in dense_noise_component_dump_current_sizes
         )
     )
-    ## TODO: set default params same as RELION (when starting from GUI) pf=2 I think is there.
-    # Pad volume in real space for smoother trilinear projection (RELION pf=2).
+    # Pad volume in real space for smoother trilinear projection.
     if projection_padding_factor > 1:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
 
-        ## TODO: ALL VOLUMES SHOULD BE IN SOME KND OF HALF VOLUME FORMAT THROUGHOUT WHEN IN FOURIER DOMAIN. SAME FOR IMAGES (OR THINGS SIZE OF IMAGE E..G CTF)
         mean_for_proj, proj_volume_shape = pad_volume_for_projection(
-            mean,  ## TODO rename mean? Doesn't make a lot of sense here. also mean_var etc
+            mean,
             volume_shape,
             projection_padding_factor,
             do_gridding_correction=do_gridding_correction,
@@ -1314,7 +1312,6 @@ def run_em(
             phase_expanded = jnp.repeat(phase_factors, n_trans, axis=0)
             shifted_half = shifted_half * phase_expanded
             shifted_recon_half = shifted_recon_half * phase_expanded
-            ## TODO: THE ORDER (WHILE CORRECT IS A BIT CONFUSING)
 
         if relion_firstiter_score_mode == "normalized_cc":
             score_weight_half = ctf2_half_score / jnp.maximum(batch_norm, jnp.asarray(1e-30, dtype=batch_norm.dtype))
@@ -1347,7 +1344,6 @@ def run_em(
         if accumulate_noise:
             # P_img = sum_i |masked_img_i(k)|^2 per half-spectrum pixel
             # Use the masked processed images (score path).
-            ## TODO ONCE AGAIN THIS SHOULD BE IN HALF IMAGE NATIVELY
             processed_masked = config.process_fn(batch_data, apply_image_mask=score_with_masked_images)
             processed_masked_half = fourier_transform_utils.full_image_to_half_image(
                 processed_masked,
@@ -1359,7 +1355,6 @@ def run_em(
             batch_img_power = jnp.sum(jnp.abs(processed_masked_half) ** 2, axis=0)  # (N_half,)
             batch_img_power_shells = jnp.zeros(n_shells, dtype=jnp.float32)
             batch_img_power_shells = batch_img_power_shells.at[shell_indices_half].add(batch_img_power)
-            # TODO: IS THIS SENDING TO CPU NECESSARY? SHOULD BE HANDLED BY PUT INSTEAD OF NP.() CALLS, AND SHOULD PROBABLY BE KEPT TO A MINIMIMUM (I THINK TI CAUSES JAX TO SYNCHRONIZE?)
             noise_img_power += np.asarray(batch_img_power_shells, dtype=np.float64)
             noise_sumw += batch_size
             # Masked shifted images for the noise GEMM: use WITH-DC versions
