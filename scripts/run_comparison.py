@@ -159,7 +159,7 @@ def run_refinement(
 ):
     """Run our refinement and return results dict + wall time."""
     from recovar.em.sampling import get_rotation_grid, get_translation_grid
-    from recovar.em.dense_single_volume.refine import refine_single_volume
+    from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
     from recovar.reconstruction.regularization import average_over_shells
     from recovar.reconstruction import noise as recon_noise
     from recovar import utils
@@ -278,9 +278,9 @@ def main():
     )
     parser.add_argument(
         "--mode",
-        choices=["legacy", "relion"],
+        choices=["relion"],
         default="relion",
-        help="Refinement mode to benchmark. Use 'relion' for parity comparisons.",
+        help="Refinement mode to benchmark. Only 'relion' is supported.",
     )
     parser.add_argument("--adaptive_oversampling", type=int, default=0)
     parser.add_argument("--adaptive_fraction", type=float, default=0.999)

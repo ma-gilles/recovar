@@ -56,7 +56,6 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     should_skip_adaptive_pass2,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
-from recovar.em.dense_single_volume.legacy_iteration_loop import _run_legacy_iteration_loop
 from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
 from recovar.em.dense_single_volume.local_layout import (
     _selected_rotation_matrices,
@@ -1638,9 +1637,9 @@ def refine_single_volume(
     max_significants=500,
     nside_level=None,
     translation_pixel_offset=None,
-    mode="legacy",
+    mode="relion",
     adaptive_pass2_skip_threshold=ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
-    # --- RELION-mode parameters (only used when mode="relion") ---
+    # --- RELION-mode parameters ---
     init_healpix_order=2,
     max_healpix_order=7,
     init_translation_range=10.0,
@@ -1675,17 +1674,11 @@ def refine_single_volume(
     first_iteration_reconstruction_mode="soft",
     force_max_iter_after_convergence=False,
 ):
-    """Multi-iteration EM refinement with FSC-driven resolution management.
+    """Multi-iteration RELION-parity EM refinement.
 
-    Supports two modes:
-
-    - ``mode="legacy"`` (default): Original FSC-driven loop with fixed
-      rotation grid.  All existing behavior is preserved exactly.
-
-    - ``mode="relion"``: RELION-parity mode with convergence detection,
-      angular step refinement, local angular search, and data_vs_prior
-      resolution criterion.  Uses :class:`RefinementState` from
-      ``convergence.py`` to drive the iteration.
+    The legacy FSC-driven refinement loop has been removed. ``mode`` remains
+    as a compatibility keyword for callers that already pass ``"relion"``,
+    but ``"relion"`` is the only supported value.
 
     Parameters
     ----------
@@ -1698,8 +1691,8 @@ def refine_single_volume(
     init_mean_variance : jnp.ndarray, shape (volume_size,)
         Initial signal prior (tau^2).
     rotations : np.ndarray, shape (n_rot, 3, 3)
-        Rotation grid.  In legacy mode, used directly.  In RELION mode,
-        used as the initial grid (overridden when angular step refines).
+        Optional initial rotation grid for compatibility. RELION mode
+        regenerates grids from the HEALPix refinement state.
     translations : jnp.ndarray, shape (n_trans, 2)
         Translation grid.
     disc_type : str
@@ -1712,7 +1705,8 @@ def refine_single_volume(
         Number of rotations per block in em_engine.
     relion_current_sizes : list of int or None
         Oracle mode: if provided, use these current_sizes instead of
-        computing from FSC.  relion_current_sizes[i] is used at iteration i.
+        computing RELION-style current sizes from the FSC/data-vs-prior
+        trajectory. relion_current_sizes[i] is used at iteration i.
     init_current_size : int
         Starting current_size for the first iteration (when no FSC is
         available yet).  Ignored if relion_current_sizes is provided.
@@ -1729,14 +1723,13 @@ def refine_single_volume(
         Matches RELION's --maxsig semantics (counts SAMPLES, not just
         orientations; see C5 in plan_relion_parity.md).
     nside_level : int or None
-        HEALPix level of the coarse rotation grid.  Required when
-        adaptive_oversampling > 0.
+        Compatibility keyword for older callers. RELION mode derives the
+        coarse rotation grid from ``init_healpix_order``.
     translation_pixel_offset : float or None
         Step size between coarse translation grid points (pixels).
         Required when adaptive_oversampling > 0.
     mode : str
-        ``"legacy"`` preserves existing behavior.  ``"relion"`` enables
-        RELION-parity convergence-driven refinement.
+        Only ``"relion"`` is supported.
     adaptive_pass2_skip_threshold : float
         Skip adaptive pass 2 when the mean significant-sample fraction is at
         least this value. Set to a negative value to disable this shortcut and
@@ -1770,73 +1763,21 @@ def refine_single_volume(
             significant sample counts at each iteration (None when
             adaptive_oversampling=0).
 
-    Additional keys when ``mode="relion"``:
+    RELION-specific keys:
         convergence_state : RefinementState -- final convergence state
         data_vs_prior_trajectory : list of jnp.ndarray -- per-iteration
             data_vs_prior curves
         healpix_order_trajectory : list of int -- HEALPix order per iter
         ave_Pmax_trajectory : list of float -- average Pmax per iter
     """
-    if mode not in ("legacy", "relion"):
-        raise ValueError(f"Unknown mode={mode!r}; expected 'legacy' or 'relion'")
+    if mode != "relion":
+        raise ValueError(f"Unknown mode={mode!r}; expected 'relion'")
+    if relion_current_sizes is not None and len(relion_current_sizes) == 0:
+        raise ValueError("relion_current_sizes must be non-empty when provided")
     local_engine = _normalize_local_engine(local_engine)
 
-    if mode == "relion":
-        _enable_relion_parity_defaults()
-        return _run_relion_iteration_loop(
-            experiment_datasets=experiment_datasets,
-            init_volume=init_volume,
-            init_noise_variance=init_noise_variance,
-            init_mean_variance=init_mean_variance,
-            rotations=rotations,
-            translations=translations,
-            disc_type=disc_type,
-            max_iter=max_iter,
-            image_batch_size=image_batch_size,
-            rotation_block_size=rotation_block_size,
-            init_current_size=init_current_size,
-            fsc_threshold=fsc_threshold,
-            adaptive_oversampling=adaptive_oversampling,
-            adaptive_fraction=adaptive_fraction,
-            max_significants=max_significants,
-            init_healpix_order=init_healpix_order,
-            max_healpix_order=max_healpix_order,
-            init_translation_range=init_translation_range,
-            init_translation_step=init_translation_step,
-            init_translation_sigma_angstrom=init_translation_sigma_angstrom,
-            particle_diameter_ang=particle_diameter_ang,
-            nside_level=nside_level,
-            adaptive_pass2_skip_threshold=adaptive_pass2_skip_threshold,
-            save_intermediates_dir=save_intermediates_dir,
-            low_resol_join_halves_angstrom=low_resol_join_halves_angstrom,
-            tau2_fudge=tau2_fudge,
-            perturb_factor=perturb_factor,
-            perturb_seed=perturb_seed,
-            perturb_replay_relion_dir=perturb_replay_relion_dir,
-            init_fsc=init_fsc,
-            init_ave_Pmax=init_ave_Pmax,
-            init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
-            init_relion_iteration=init_relion_iteration,
-            init_image_corrections=init_image_corrections,
-            init_scale_corrections=init_scale_corrections,
-            init_direction_prior=init_direction_prior,
-            init_previous_best_translations=init_previous_best_translations,
-            init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
-            replay_iteration_overrides=replay_iteration_overrides,
-            skip_final_iteration=skip_final_iteration,
-            local_search_profile_mode=local_search_profile_mode,
-            local_search_translation_prior_mode=local_search_translation_prior_mode,
-            disable_adjoint_y=disable_adjoint_y,
-            disable_adjoint_ctf=disable_adjoint_ctf,
-            local_engine=local_engine,
-            emulate_relion_firstiter_cc=emulate_relion_firstiter_cc,
-            relion_firstiter_ini_high_angstrom=relion_firstiter_ini_high_angstrom,
-            first_iteration_score_mode=first_iteration_score_mode,
-            first_iteration_reconstruction_mode=first_iteration_reconstruction_mode,
-            force_max_iter_after_convergence=force_max_iter_after_convergence,
-        )
-
-    return _run_legacy_iteration_loop(
+    _enable_relion_parity_defaults()
+    return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
         init_volume=init_volume,
         init_noise_variance=init_noise_variance,
@@ -1847,15 +1788,47 @@ def refine_single_volume(
         max_iter=max_iter,
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
-        relion_current_sizes=relion_current_sizes,
         init_current_size=init_current_size,
         fsc_threshold=fsc_threshold,
         adaptive_oversampling=adaptive_oversampling,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        relion_current_sizes=relion_current_sizes,
+        init_healpix_order=init_healpix_order,
+        max_healpix_order=max_healpix_order,
+        init_translation_range=init_translation_range,
+        init_translation_step=init_translation_step,
+        init_translation_sigma_angstrom=init_translation_sigma_angstrom,
+        particle_diameter_ang=particle_diameter_ang,
         nside_level=nside_level,
+        adaptive_pass2_skip_threshold=adaptive_pass2_skip_threshold,
+        save_intermediates_dir=save_intermediates_dir,
+        low_resol_join_halves_angstrom=low_resol_join_halves_angstrom,
+        tau2_fudge=tau2_fudge,
+        perturb_factor=perturb_factor,
+        perturb_seed=perturb_seed,
+        perturb_replay_relion_dir=perturb_replay_relion_dir,
+        init_fsc=init_fsc,
+        init_ave_Pmax=init_ave_Pmax,
+        init_has_high_fsc_at_limit=init_has_high_fsc_at_limit,
+        init_relion_iteration=init_relion_iteration,
+        init_image_corrections=init_image_corrections,
+        init_scale_corrections=init_scale_corrections,
+        init_direction_prior=init_direction_prior,
+        init_previous_best_translations=init_previous_best_translations,
+        init_previous_best_rotation_eulers=init_previous_best_rotation_eulers,
+        replay_iteration_overrides=replay_iteration_overrides,
+        skip_final_iteration=skip_final_iteration,
+        local_search_profile_mode=local_search_profile_mode,
+        local_search_translation_prior_mode=local_search_translation_prior_mode,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
+        local_engine=local_engine,
+        emulate_relion_firstiter_cc=emulate_relion_firstiter_cc,
+        relion_firstiter_ini_high_angstrom=relion_firstiter_ini_high_angstrom,
+        first_iteration_score_mode=first_iteration_score_mode,
+        first_iteration_reconstruction_mode=first_iteration_reconstruction_mode,
+        force_max_iter_after_convergence=force_max_iter_after_convergence,
     )
 
 
@@ -1880,6 +1853,7 @@ def _run_relion_iteration_loop(
     adaptive_oversampling,
     adaptive_fraction,
     max_significants,
+    relion_current_sizes,
     init_healpix_order,
     max_healpix_order,
     init_translation_range,
@@ -1943,9 +1917,13 @@ def _run_relion_iteration_loop(
     # edge-taper mask (window_mask(D, 0.85, 0.99)) is too tight — it tapers
     # at 54 px vs RELION's 64 px for a 128-px box.
     RELION_WIDTH_MASK_EDGE = 5
+    def _image_backend(ds):
+        return getattr(getattr(ds, "image_source", None), "backend", None)
+
     for ds in experiment_datasets:
-        if hasattr(ds.image_source.backend, "image_mask_mode"):
-            ds.image_source.backend.image_mask_mode = "multiply"
+        backend = _image_backend(ds)
+        if backend is not None and hasattr(backend, "image_mask_mode"):
+            backend.image_mask_mode = "multiply"
     if particle_diameter_ang is not None and particle_diameter_ang > 0:
         from recovar.core import mask
         from recovar.core.mask import relion_soft_image_mask
@@ -1957,9 +1935,12 @@ def _run_relion_iteration_loop(
             width_mask_edge_px=RELION_WIDTH_MASK_EDGE,
         )
         for ds in experiment_datasets:
-            ds.image_source.backend.image_mask = relion_mask
-            if hasattr(ds.image_source.backend, "image_mask_mode"):
-                ds.image_source.backend.image_mask_mode = "relion_background_fill"
+            backend = _image_backend(ds)
+            if backend is None:
+                continue
+            backend.image_mask = relion_mask
+            if hasattr(backend, "image_mask_mode"):
+                backend.image_mask_mode = "relion_background_fill"
         logger.info(
             "RELION mode: image mask radius=%.1f px (particle_diameter=%.1f A, edge=%d px)",
             particle_diameter_ang / (2.0 * cryo.voxel_size),
@@ -2343,6 +2324,19 @@ def _run_relion_iteration_loop(
             cs = quantize_current_size(raw_cs, ori_size=grid_size)
 
         cs = quantize_current_size(cs, ori_size=grid_size)
+        if relion_current_sizes is not None:
+            if iteration < len(relion_current_sizes):
+                oracle_cs = int(relion_current_sizes[iteration])
+            else:
+                oracle_cs = int(relion_current_sizes[-1])
+            if oracle_cs <= 0:
+                oracle_cs = int(init_current_size)
+            cs = quantize_current_size(oracle_cs, ori_size=grid_size)
+            logger.info(
+                "Current-size oracle: iteration %d using current_size=%d",
+                iteration + 1,
+                cs,
+            )
 
         # --- Replay override: force recovar's sampling state to mirror RELION ---
         # When replaying, RELION's per-iter sampling.star dictates the actual

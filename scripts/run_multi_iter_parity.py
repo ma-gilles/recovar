@@ -409,10 +409,7 @@ def main():
     from recovar.core import fourier_transform_utils as ftu
     from recovar.data_io.cryoem_dataset import load_dataset
 
-    try:
-        from recovar.em.dense_single_volume.refine import refine_single_volume
-    except ModuleNotFoundError:
-        from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
+    from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
     from recovar.em.sampling import read_relion_sampling_metadata
     from recovar.output.output import save_volume
     from recovar.reconstruction import noise as recon_noise
