@@ -87,6 +87,7 @@ class LocalBucketSpec:
     """Static-shape padded execution batch for the exact local engine."""
 
     image_indices: np.ndarray
+    bucket_image_count: int
     bucket_rotation_count: int
     actual_rotation_counts: np.ndarray
     local_rotation_ids: np.ndarray
@@ -581,6 +582,7 @@ def bucket_local_hypothesis_layout(
             bucket_specs.append(
                 LocalBucketSpec(
                     image_indices=image_indices,
+                    bucket_image_count=int(max_images),
                     bucket_rotation_count=int(bucket_size),
                     actual_rotation_counts=actual_counts,
                     local_rotation_ids=padded_rotation_ids,

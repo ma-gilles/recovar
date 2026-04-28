@@ -60,8 +60,54 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket_abs2_weighted_on_demand,
     score_local_bucket,
 )
+from recovar.em.dense_single_volume.shape_buckets import pad_axis
 
 logger = logging.getLogger(__name__)
+
+
+def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_params):
+    """Pad a local big-JIT bucket to its planned image shape class."""
+
+    actual_batch_size = int(bucket.image_indices.shape[0])
+    padded_batch_size = int(max(actual_batch_size, getattr(bucket, "bucket_image_count", actual_batch_size)))
+    if actual_batch_size == padded_batch_size:
+        return bucket, batch_data, ctf_params, np.ones(actual_batch_size, dtype=bool), actual_batch_size
+
+    padded_rotations = pad_axis(bucket.local_rotations, 0, padded_batch_size, value=0).astype(np.float32)
+    padded_rotations[actual_batch_size:] = np.eye(3, dtype=np.float32)
+    padded_bucket = LocalBucketSpec(
+        image_indices=np.asarray(bucket.image_indices, dtype=np.int32),
+        bucket_image_count=padded_batch_size,
+        bucket_rotation_count=int(bucket.bucket_rotation_count),
+        actual_rotation_counts=pad_axis(bucket.actual_rotation_counts, 0, padded_batch_size, value=0).astype(np.int32),
+        local_rotation_ids=pad_axis(bucket.local_rotation_ids, 0, padded_batch_size, value=-1).astype(np.int32),
+        local_rotations=padded_rotations,
+        local_rotation_log_prior=pad_axis(
+            bucket.local_rotation_log_prior,
+            0,
+            padded_batch_size,
+            value=-1e30,
+        ).astype(np.float32),
+        local_rotation_mask=pad_axis(bucket.local_rotation_mask, 0, padded_batch_size, value=False).astype(bool),
+        translation_log_prior=pad_axis(bucket.translation_log_prior, 0, padded_batch_size, value=0).astype(np.float32),
+        local_rotation_posterior_ids=(
+            None
+            if bucket.local_rotation_posterior_ids is None
+            else pad_axis(bucket.local_rotation_posterior_ids, 0, padded_batch_size, value=-1).astype(np.int32)
+        ),
+        local_sample_mask=(
+            None
+            if bucket.local_sample_mask is None
+            else pad_axis(bucket.local_sample_mask, 0, padded_batch_size, value=False).astype(bool)
+        ),
+    )
+    valid_image_mask = np.zeros(padded_batch_size, dtype=bool)
+    valid_image_mask[:actual_batch_size] = True
+    padded_batch_data = pad_axis(batch_data, 0, padded_batch_size, value=0)
+    padded_ctf_params = pad_axis(ctf_params, 0, padded_batch_size, value=0)
+    if actual_batch_size > 0:
+        padded_ctf_params[actual_batch_size:] = np.asarray(ctf_params)[0]
+    return padded_bucket, padded_batch_data, padded_ctf_params, valid_image_mask, actual_batch_size
 
 
 def _exact_local_max_hypotheses_per_microbatch(default: int | None, n_windowed: int) -> int:
@@ -351,6 +397,7 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
     order = np.asarray([position[int(idx)] for idx in np.asarray(returned_indices).tolist()], dtype=np.int32)
     return LocalBucketSpec(
         image_indices=np.asarray(returned_indices, dtype=np.int32),
+        bucket_image_count=int(bucket.bucket_image_count),
         bucket_rotation_count=int(bucket.bucket_rotation_count),
         actual_rotation_counts=np.asarray(bucket.actual_rotation_counts[order], dtype=np.int32),
         local_rotation_ids=np.asarray(bucket.local_rotation_ids[order], dtype=np.int32),
@@ -1434,7 +1481,14 @@ def run_local_em_exact(
         if can_use_big_jit_bucket:
             native_half_preprocess_used = True
             big_jit_t0 = time.time()
-            bucket_image_indices = np.asarray(bucket.image_indices, dtype=np.int32)
+            unpadded_bucket = bucket
+            unpadded_batch_size = batch_size
+            bucket, batch_data, ctf_params, valid_image_mask, batch_size = _pad_local_big_jit_image_axis(
+                bucket,
+                batch_data,
+                ctf_params,
+            )
+            bucket_image_indices = np.asarray(unpadded_bucket.image_indices, dtype=np.int32)
             integer_pre_shifts = integer_pre_shifts_or_none(
                 image_pre_shifts,
                 bucket_image_indices,
@@ -1442,13 +1496,21 @@ def run_local_em_exact(
             )
             apply_integer_pre_shift = integer_pre_shifts is not None
             if apply_integer_pre_shift:
-                integer_pre_shifts_arg = jnp.asarray(integer_pre_shifts, dtype=jnp.int32)
+                integer_pre_shifts_arg = jnp.asarray(
+                    pad_axis(integer_pre_shifts, 0, batch_size, value=0),
+                    dtype=jnp.int32,
+                )
                 fourier_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.float32)
                 apply_fourier_pre_shift = False
             elif image_pre_shifts is not None:
                 integer_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.int32)
                 fourier_pre_shifts_arg = jnp.asarray(
-                    np.asarray(image_pre_shifts, dtype=np.float32)[bucket_image_indices],
+                    pad_axis(
+                        np.asarray(image_pre_shifts, dtype=np.float32)[bucket_image_indices],
+                        0,
+                        batch_size,
+                        value=0,
+                    ),
                     dtype=jnp.float32,
                 )
                 apply_fourier_pre_shift = True
@@ -1458,12 +1520,26 @@ def run_local_em_exact(
                 apply_fourier_pre_shift = False
 
             image_corrections_arg = (
-                jnp.asarray(np.asarray(image_corrections, dtype=np.float32)[bucket_image_indices])
+                jnp.asarray(
+                    pad_axis(
+                        np.asarray(image_corrections, dtype=np.float32)[bucket_image_indices],
+                        0,
+                        batch_size,
+                        value=1,
+                    ),
+                )
                 if image_corrections is not None
                 else jnp.ones(batch_size, dtype=jnp.float32)
             )
             scale_corrections_arg = (
-                jnp.asarray(np.asarray(scale_corrections, dtype=np.float32)[bucket_image_indices])
+                jnp.asarray(
+                    pad_axis(
+                        np.asarray(scale_corrections, dtype=np.float32)[bucket_image_indices],
+                        0,
+                        batch_size,
+                        value=1,
+                    ),
+                )
                 if scale_corrections is not None
                 else jnp.ones(batch_size, dtype=jnp.float32)
             )
@@ -1473,7 +1549,10 @@ def run_local_em_exact(
                 else jnp.ones(batch_size, dtype=jnp.float32)
             )
             translation_sqdist_arg = (
-                jnp.asarray(translation_sqdist_ang, dtype=jnp.float32)
+                jnp.asarray(
+                    pad_axis(translation_sqdist_ang, 0, batch_size, value=0),
+                    dtype=jnp.float32,
+                )
                 if translation_sqdist_ang is not None
                 else jnp.zeros((batch_size, n_trans), dtype=jnp.float32)
             )
@@ -1483,7 +1562,10 @@ def run_local_em_exact(
                 else jnp.ones((batch_size, int(bucket.bucket_rotation_count), n_trans), dtype=bool)
             )
             normalization_log_z_arg = (
-                jnp.asarray(normalization_log_z_np[bucket_image_indices], dtype=jnp.float32)
+                jnp.asarray(
+                    pad_axis(normalization_log_z_np[bucket_image_indices], 0, batch_size, value=0),
+                    dtype=jnp.float32,
+                )
                 if normalization_log_z_np is not None
                 else jnp.zeros(batch_size, dtype=jnp.float32)
             )
@@ -1558,6 +1640,7 @@ def run_local_em_exact(
                 jnp.asarray(bucket.translation_log_prior),
                 jnp.asarray(bucket.local_rotation_mask),
                 sample_mask_arg,
+                jnp.asarray(valid_image_mask),
                 normalization_log_z_arg,
                 config,
                 mask_mode=big_jit_mask_mode,
@@ -1605,11 +1688,11 @@ def run_local_em_exact(
             big_jit_bucket_count += 1
 
             pack_t0 = time.time()
-            reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)
-            local_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)
+            reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)[:unpadded_batch_size]
+            local_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)[:unpadded_batch_size]
             reconstruction_take_indices = np.broadcast_to(
                 np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
-                (batch_size, int(bucket.bucket_rotation_count)),
+                (unpadded_batch_size, int(bucket.bucket_rotation_count)),
             )
             reconstruction_pack_mask_np = reconstruction_rotation_mask_np & local_mask_np
             reconstruction_row_count = int(np.asarray(reconstruction_row_count_jax, dtype=np.int32))
@@ -1617,38 +1700,38 @@ def run_local_em_exact(
 
             postprocess_t0 = time.time()
             transfer_t0 = time.time()
-            best_rot_idx = np.asarray(best_argmax // n_trans, dtype=np.int32)
-            best_trans_idx = np.asarray(best_argmax % n_trans, dtype=np.int32)
+            best_rot_idx = np.asarray(best_argmax[:unpadded_batch_size] // n_trans, dtype=np.int32)
+            best_trans_idx = np.asarray(best_argmax[:unpadded_batch_size] % n_trans, dtype=np.int32)
             transfer_profile["postprocess_argmax_to_host_s"] += time.time() - transfer_t0
             best_rotation_ids = np.take_along_axis(
-                np.asarray(bucket.local_rotation_ids, dtype=np.int32),
+                np.asarray(bucket.local_rotation_ids[:unpadded_batch_size], dtype=np.int32),
                 best_rot_idx[:, None],
                 axis=1,
             ).reshape(-1)
             if np.any(best_rotation_ids < 0):
                 raise RuntimeError("exact local engine selected padded local rotation")
-            hard_assignment[bucket.image_indices] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
+            hard_assignment[unpadded_bucket.image_indices] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
             transfer_t0 = time.time()
-            log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
-            log_z_np = np.asarray(log_Z, dtype=np.float32)
-            best_log_score_np = np.asarray(best_log_score, dtype=np.float32)
-            max_posterior_np = np.asarray(max_posterior, dtype=np.float32)
+            log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm[:unpadded_batch_size], axis=1), dtype=np.float64)
+            log_z_np = np.asarray(log_Z[:unpadded_batch_size], dtype=np.float32)
+            best_log_score_np = np.asarray(best_log_score[:unpadded_batch_size], dtype=np.float32)
+            max_posterior_np = np.asarray(max_posterior[:unpadded_batch_size], dtype=np.float32)
             transfer_profile["postprocess_scores_to_host_s"] += time.time() - transfer_t0
-            log_evidence_per_image[bucket.image_indices] = log_z_np + log_score_offset.astype(np.float32)
-            best_log_score_per_image[bucket.image_indices] = best_log_score_np + log_score_offset.astype(np.float32)
-            max_posterior_per_image[bucket.image_indices] = max_posterior_np
+            log_evidence_per_image[unpadded_bucket.image_indices] = log_z_np + log_score_offset.astype(np.float32)
+            best_log_score_per_image[unpadded_bucket.image_indices] = best_log_score_np + log_score_offset.astype(np.float32)
+            max_posterior_per_image[unpadded_bucket.image_indices] = max_posterior_np
 
             transfer_t0 = time.time()
-            probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+            probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
             n_significant_samples_np = (
-                np.asarray(n_significant_samples, dtype=np.int32) if collect_profile_stats else None
+                np.asarray(n_significant_samples[:unpadded_batch_size], dtype=np.int32) if collect_profile_stats else None
             )
             transfer_profile["postprocess_posterior_to_host_s"] += time.time() - transfer_t0
-            local_ids_np = np.asarray(bucket.local_rotation_ids, dtype=np.int32)
+            local_ids_np = np.asarray(bucket.local_rotation_ids[:unpadded_batch_size], dtype=np.int32)
             posterior_ids_np = (
                 local_ids_np
                 if bucket.local_rotation_posterior_ids is None
-                else np.asarray(bucket.local_rotation_posterior_ids, dtype=np.int32)
+                else np.asarray(bucket.local_rotation_posterior_ids[:unpadded_batch_size], dtype=np.int32)
             )
             np.add.at(rotation_posterior_sums, posterior_ids_np[local_mask_np], probs_sum_t_np[local_mask_np])
             if collect_profile_stats:
@@ -1665,24 +1748,24 @@ def run_local_em_exact(
                 packed_posterior_ids_np = np.take_along_axis(posterior_ids_np, reconstruction_take_indices, axis=1)
                 seen_reconstruction_global_rotations[packed_posterior_ids_np[reconstruction_pack_mask_np]] = True
             if return_best_pose_details:
-                best_pose_rotations[bucket.image_indices] = np.take_along_axis(
-                    np.asarray(bucket.local_rotations, dtype=np.float32),
+                best_pose_rotations[unpadded_bucket.image_indices] = np.take_along_axis(
+                    np.asarray(bucket.local_rotations[:unpadded_batch_size], dtype=np.float32),
                     best_rot_idx[:, None, None, None],
                     axis=1,
                 ).reshape(-1, 3, 3)
-                best_pose_translations[bucket.image_indices] = np.asarray(
+                best_pose_translations[unpadded_bucket.image_indices] = np.asarray(
                     local_layout.translation_grid,
                     dtype=np.float32,
                 )[best_trans_idx]
-                best_pose_rotation_ids[bucket.image_indices] = best_rotation_ids.astype(np.int32, copy=False)
+                best_pose_rotation_ids[unpadded_bucket.image_indices] = best_rotation_ids.astype(np.int32, copy=False)
             postprocess_time += time.time() - postprocess_t0
 
             host_stats_t0 = time.time()
             logger.debug(
                 "Exact local big-JIT bucket: %d images, bucket_rot=%d, total_local_rot=%d",
-                batch_size,
+                unpadded_batch_size,
                 int(bucket.bucket_rotation_count),
-                int(np.sum(bucket.actual_rotation_counts)),
+                int(np.sum(unpadded_bucket.actual_rotation_counts)),
             )
             host_stats_time += time.time() - host_stats_t0
             continue
