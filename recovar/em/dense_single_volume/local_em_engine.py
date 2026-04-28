@@ -77,6 +77,50 @@ from recovar.em.dense_single_volume.shape_buckets import pad_axis
 
 logger = logging.getLogger(__name__)
 
+_LOCAL_PREPROCESS_TIMER_KEYS = (
+    "integer_shift_s",
+    "translation_phase_s",
+    "processed_cache_gather_s",
+    "combined_process_s",
+    "score_process_s",
+    "recon_process_s",
+    "ctf_s",
+    "tile_shift_score_s",
+    "tile_shift_recon_s",
+    "norm_s",
+)
+
+_LOCAL_TRANSFER_TIMER_KEYS = (
+    "reconstruction_mask_to_host_s",
+    "mstep_posterior_sum_to_host_s",
+    "postprocess_argmax_to_host_s",
+    "postprocess_scores_to_host_s",
+    "postprocess_posterior_to_host_s",
+    "final_noise_to_host_s",
+)
+
+_LOCAL_TIMING_PROFILE_FIELDS = (
+    ("projection_time_s", "projection_s"),
+    ("big_jit_bucket_s", "big_jit_bucket_s"),
+    ("fused_score_mstep_s", "fused_score_mstep_s"),
+    ("local_score_s", "score_s"),
+    ("local_normalize_s", "normalize_s"),
+    ("local_significance_s", "significance_s"),
+    ("local_mstep_s", "mstep_s"),
+    ("local_pack_s", "pack_s"),
+    ("local_backproject_y_s", "adjoint_y_s"),
+    ("local_backproject_ctf_s", "adjoint_ctf_s"),
+    ("local_noise_s", "noise_s"),
+    ("local_postprocess_s", "postprocess_s"),
+    ("local_host_stats_s", "host_stats_s"),
+    ("local_final_accumulator_s", "final_accumulator_s"),
+    ("local_stats_finalize_s", "stats_finalize_s"),
+)
+
+
+def _new_zero_timer(keys):
+    return {key: 0.0 for key in keys}
+
 
 @dataclass
 class _LocalTiming:
@@ -422,31 +466,21 @@ def _build_processed_half_cache(
 
 
 def _new_local_preprocess_timer():
-    return {
-        "integer_shift_s": 0.0,
-        "translation_phase_s": 0.0,
-        "processed_cache_gather_s": 0.0,
-        "combined_process_s": 0.0,
-        "score_process_s": 0.0,
-        "recon_process_s": 0.0,
-        "ctf_s": 0.0,
-        "tile_shift_score_s": 0.0,
-        "tile_shift_recon_s": 0.0,
-        "norm_s": 0.0,
-    }
+    return _new_zero_timer(_LOCAL_PREPROCESS_TIMER_KEYS)
 
 
 def _new_local_transfer_timer():
+    return _new_zero_timer(_LOCAL_TRANSFER_TIMER_KEYS)
+
+
+def _prefixed_timer_profile(prefix: str, timer: dict[str, float]) -> dict[str, np.float64]:
+    return {f"{prefix}{key}": np.float64(value) for key, value in timer.items()}
+
+
+def _local_timing_profile(timing: _LocalTiming) -> dict[str, np.float64]:
     return {
-        "reconstruction_mask_to_host_s": 0.0,
-        "mstep_posterior_sum_to_host_s": 0.0,
-        "noise_img_power_to_host_s": 0.0,
-        "noise_sumw_to_host_s": 0.0,
-        "noise_shells_to_host_s": 0.0,
-        "postprocess_argmax_to_host_s": 0.0,
-        "postprocess_scores_to_host_s": 0.0,
-        "postprocess_posterior_to_host_s": 0.0,
-        "final_noise_to_host_s": 0.0,
+        output_key: np.float64(getattr(timing, timing_attr))
+        for output_key, timing_attr in _LOCAL_TIMING_PROFILE_FIELDS
     }
 
 
@@ -2147,48 +2181,10 @@ def run_local_em_exact(
         "processed_cache_enabled": np.asarray(processed_cache_enabled),
         "batch_fetch_time_s": np.float64(timing.batch_fetch_s),
         "preprocess_time_s": np.float64(timing.preprocess_s),
-        "preprocess_integer_shift_s": np.float64(preprocess_profile["integer_shift_s"]),
-        "preprocess_translation_phase_s": np.float64(preprocess_profile["translation_phase_s"]),
-        "preprocess_processed_cache_gather_s": np.float64(preprocess_profile["processed_cache_gather_s"]),
-        "preprocess_combined_process_s": np.float64(preprocess_profile["combined_process_s"]),
-        "preprocess_score_process_s": np.float64(preprocess_profile["score_process_s"]),
-        "preprocess_recon_process_s": np.float64(preprocess_profile["recon_process_s"]),
-        "preprocess_ctf_s": np.float64(preprocess_profile["ctf_s"]),
-        "preprocess_tile_shift_score_s": np.float64(preprocess_profile["tile_shift_score_s"]),
-        "preprocess_tile_shift_recon_s": np.float64(preprocess_profile["tile_shift_recon_s"]),
-        "preprocess_norm_s": np.float64(preprocess_profile["norm_s"]),
-        "transfer_reconstruction_mask_to_host_s": np.float64(
-            transfer_profile["reconstruction_mask_to_host_s"],
-        ),
-        "transfer_mstep_posterior_sum_to_host_s": np.float64(
-            transfer_profile["mstep_posterior_sum_to_host_s"],
-        ),
-        "transfer_postprocess_argmax_to_host_s": np.float64(
-            transfer_profile["postprocess_argmax_to_host_s"],
-        ),
-        "transfer_postprocess_scores_to_host_s": np.float64(
-            transfer_profile["postprocess_scores_to_host_s"],
-        ),
-        "transfer_postprocess_posterior_to_host_s": np.float64(
-            transfer_profile["postprocess_posterior_to_host_s"],
-        ),
-        "transfer_final_noise_to_host_s": np.float64(transfer_profile["final_noise_to_host_s"]),
+        **_prefixed_timer_profile("preprocess_", preprocess_profile),
+        **_prefixed_timer_profile("transfer_", transfer_profile),
         "transfer_total_to_host_s": np.float64(sum(transfer_profile.values())),
-        "projection_time_s": np.float64(timing.projection_s),
-        "big_jit_bucket_s": np.float64(timing.big_jit_bucket_s),
-        "fused_score_mstep_s": np.float64(timing.fused_score_mstep_s),
-        "local_score_s": np.float64(timing.score_s),
-        "local_normalize_s": np.float64(timing.normalize_s),
-        "local_significance_s": np.float64(timing.significance_s),
-        "local_mstep_s": np.float64(timing.mstep_s),
-        "local_pack_s": np.float64(timing.pack_s),
-        "local_backproject_y_s": np.float64(timing.adjoint_y_s),
-        "local_backproject_ctf_s": np.float64(timing.adjoint_ctf_s),
-        "local_noise_s": np.float64(timing.noise_s),
-        "local_postprocess_s": np.float64(timing.postprocess_s),
-        "local_host_stats_s": np.float64(timing.host_stats_s),
-        "local_final_accumulator_s": np.float64(timing.final_accumulator_s),
-        "local_stats_finalize_s": np.float64(timing.stats_finalize_s),
+        **_local_timing_profile(timing),
         "em_time_s": np.float64(total_wall_time),
         "accounted_em_time_s": np.float64(timing.accounted_s()),
         "unattributed_em_time_s": np.float64(
