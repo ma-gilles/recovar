@@ -13,6 +13,44 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
 )
 
 
+def _local_scores_from_weighted_abs2(
+    shifted,
+    ctf2_over_nv,
+    proj_weighted,
+    weighted_abs2,
+    rotation_log_prior,
+    translation_log_prior,
+    rotation_mask,
+    sample_mask,
+):
+    cross = -2.0 * jnp.einsum(
+        "btn,brn->btr",
+        jnp.conj(shifted),
+        proj_weighted,
+        precision=jax.lax.Precision.HIGHEST,
+    ).real
+    cross = cross.swapaxes(1, 2)
+    norms = jnp.einsum(
+        "bn,brn->br",
+        ctf2_over_nv,
+        weighted_abs2,
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    scores = -0.5 * (cross + norms[..., None])
+    scores = scores + rotation_log_prior[:, :, None]
+    scores = scores + translation_log_prior[:, None, :]
+    valid_mask = rotation_mask[:, :, None]
+    if sample_mask is not None:
+        valid_mask = valid_mask & sample_mask
+    return jnp.where(valid_mask, scores, -jnp.inf)
+
+
+def _weighted_abs2_from_weighted_projection(proj_weighted, half_weights, *, weights_absorbed_once: bool):
+    if weights_absorbed_once:
+        return (jnp.abs(proj_weighted) ** 2) / half_weights[None, None, :]
+    return jnp.abs(proj_weighted) ** 2
+
+
 @jax.jit
 def score_local_bucket(
     shifted,
@@ -26,27 +64,16 @@ def score_local_bucket(
 ):
     """Compute exact local scores on a padded per-image hypothesis bucket."""
 
-    # shifted: (B, T, N), proj_weighted: (B, R, N)
-    cross = -2.0 * jnp.einsum(
-        "btn,brn->btr",
-        jnp.conj(shifted),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
-    cross = cross.swapaxes(1, 2)  # (B, R, T)
-    norms = jnp.einsum(
-        "bn,brn->br",
+    return _local_scores_from_weighted_abs2(
+        shifted,
         ctf2_over_nv,
+        proj_weighted,
         proj_abs2_weighted,
-        precision=jax.lax.Precision.HIGHEST,
+        rotation_log_prior,
+        translation_log_prior,
+        rotation_mask,
+        sample_mask,
     )
-    scores = -0.5 * (cross + norms[..., None])
-    scores = scores + rotation_log_prior[:, :, None]
-    scores = scores + translation_log_prior[:, None, :]
-    valid_mask = rotation_mask[:, :, None]
-    if sample_mask is not None:
-        valid_mask = valid_mask & sample_mask
-    return jnp.where(valid_mask, scores, -jnp.inf)
 
 
 @jax.jit
@@ -61,26 +88,20 @@ def score_local_bucket_abs2_on_demand(
 ):
     """Compute local scores without storing a separate |projection|^2 tensor."""
 
-    cross = -2.0 * jnp.einsum(
-        "btn,brn->btr",
-        jnp.conj(shifted),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
-    cross = cross.swapaxes(1, 2)
-    norms = jnp.einsum(
-        "bn,brn->br",
+    return _local_scores_from_weighted_abs2(
+        shifted,
         ctf2_over_nv,
-        jnp.abs(proj_weighted) ** 2,
-        precision=jax.lax.Precision.HIGHEST,
+        proj_weighted,
+        _weighted_abs2_from_weighted_projection(
+            proj_weighted,
+            None,
+            weights_absorbed_once=False,
+        ),
+        rotation_log_prior,
+        translation_log_prior,
+        rotation_mask,
+        sample_mask,
     )
-    scores = -0.5 * (cross + norms[..., None])
-    scores = scores + rotation_log_prior[:, :, None]
-    scores = scores + translation_log_prior[:, None, :]
-    valid_mask = rotation_mask[:, :, None]
-    if sample_mask is not None:
-        valid_mask = valid_mask & sample_mask
-    return jnp.where(valid_mask, scores, -jnp.inf)
 
 
 @jax.jit
@@ -102,27 +123,20 @@ def score_local_bucket_abs2_weighted_on_demand(
     ``|proj * weight|^2 / weight``.
     """
 
-    cross = -2.0 * jnp.einsum(
-        "btn,brn->btr",
-        jnp.conj(shifted),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
-    cross = cross.swapaxes(1, 2)
-    weighted_abs2 = (jnp.abs(proj_weighted) ** 2) / half_weights[None, None, :]
-    norms = jnp.einsum(
-        "bn,brn->br",
+    return _local_scores_from_weighted_abs2(
+        shifted,
         ctf2_over_nv,
-        weighted_abs2,
-        precision=jax.lax.Precision.HIGHEST,
+        proj_weighted,
+        _weighted_abs2_from_weighted_projection(
+            proj_weighted,
+            half_weights,
+            weights_absorbed_once=True,
+        ),
+        rotation_log_prior,
+        translation_log_prior,
+        rotation_mask,
+        sample_mask,
     )
-    scores = -0.5 * (cross + norms[..., None])
-    scores = scores + rotation_log_prior[:, :, None]
-    scores = scores + translation_log_prior[:, None, :]
-    valid_mask = rotation_mask[:, :, None]
-    if sample_mask is not None:
-        valid_mask = valid_mask & sample_mask
-    return jnp.where(valid_mask, scores, -jnp.inf)
 
 
 @jax.jit
@@ -249,30 +263,20 @@ def fused_score_normalize_mstep_abs2_on_demand(
     launch and materialization overhead.
     """
 
-    cross = -2.0 * jnp.einsum(
-        "btn,brn->btr",
-        jnp.conj(shifted_score_split),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
-    cross = cross.swapaxes(1, 2)
-    if half_spectrum_scoring:
-        weighted_abs2 = jnp.abs(proj_weighted) ** 2
-    else:
-        weighted_abs2 = (jnp.abs(proj_weighted) ** 2) / half_weights[None, None, :]
-    norms = jnp.einsum(
-        "bn,brn->br",
+    scores = _local_scores_from_weighted_abs2(
+        shifted_score_split,
         ctf2_over_nv_score,
-        weighted_abs2,
-        precision=jax.lax.Precision.HIGHEST,
+        proj_weighted,
+        _weighted_abs2_from_weighted_projection(
+            proj_weighted,
+            half_weights,
+            weights_absorbed_once=not half_spectrum_scoring,
+        ),
+        rotation_log_prior,
+        translation_log_prior,
+        rotation_mask,
+        sample_mask,
     )
-    scores = -0.5 * (cross + norms[..., None])
-    scores = scores + rotation_log_prior[:, :, None]
-    scores = scores + translation_log_prior[:, None, :]
-    valid_mask = rotation_mask[:, :, None]
-    if sample_mask is not None:
-        valid_mask = valid_mask & sample_mask
-    scores = jnp.where(valid_mask, scores, -jnp.inf)
 
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
