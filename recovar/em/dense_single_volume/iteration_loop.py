@@ -1109,11 +1109,8 @@ def _run_local_search_iteration_grouped_union(
     local_grid_metadata = build_local_search_grid_metadata(healpix_order)
     metadata_build_time = time.time() - metadata_t0
 
-    # TODO: IS THIS ALL REALLY A GOOD IDEA? I THINK IT WOULD PROBABLY BE FASTER TO DO A NAIVE THING
-    ## DONT GROUP, JUST COMPUTE.
-    ## HOW MUCH TIME IS SPENT ON THIS PARTITIONING? HOW MANY EXTRA COMPARISONS ARE WE DOING?
-    ## I THINK IN THIS BRANCH, WE MAY HAVE TO JUST ABANDON THE GEMM BASED, WHICH IS OK.
-    ## OR IS THIS JUST GROUPING TO BATCH ON GPU ? I DON'T UNDERSTAND. ALSO SHOULDNT ALL IMAGES HAVE SOME BATCH SIZE ANYWAY?
+    # Grouped-union is retained only for explicit fallback/parity runs. The
+    # active local engine computes exact per-image hypotheses directly.
     selector_t0 = time.time()
     grouped_local_search = _partition_local_search_groups(
         prior_rotations,
@@ -2231,8 +2228,6 @@ def _run_relion_iteration_loop(
             first_iteration_reconstruction_mode == "hard" and init_relion_iteration == 0 and iteration == 0
         )
 
-        ## TODO: THIS IS REASONABLE, BUT DOES IT BREAK IF WE TEST A SINGLE ITER AS WE HAVE BEEN DOING FOR PARITY?
-
         # --- Determine current_size using RELION's FSC-derived SSNR (C4/C5) ---
         # At iteration 0, no previous half-map FSC exists yet; use the initial
         # resolution plus RELION's bootstrap image-size growth. After that,
@@ -2961,8 +2956,6 @@ def _run_relion_iteration_loop(
                 )
                 continue
             if use_local:
-                ## TODO: Is this STRATEGY REALLY WHAT DOES IN TERMS OF COMPUTE? THIS ALL SEEMS TO HACKY. IF IT IS FINE, BUT WE SHOULD TRIPLE CHECK
-
                 # For local search the per-chunk M-step only sees the
                 # cone-restricted rotation set (typically a few thousand
                 # rotations per image with high overlap across the chunk)

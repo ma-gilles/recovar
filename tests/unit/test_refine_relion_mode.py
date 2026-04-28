@@ -1915,7 +1915,7 @@ def test_tracked_local_engine_todo_ids_are_present():
     em_engine_text = em_engine_path.read_text(encoding="utf-8")
     docs_text = docs_path.read_text(encoding="utf-8")
 
-    required_ids = [
+    documented_ids = [
         "RELION_LOCAL_ENGINE/T001",
         "RELION_LOCAL_ENGINE/T002",
         "RELION_LOCAL_ENGINE/T003",
@@ -1924,17 +1924,22 @@ def test_tracked_local_engine_todo_ids_are_present():
         "DENSE_ENGINE_BOUNDARY/E002",
         "DENSE_ENGINE_BOUNDARY/E003",
         "DENSE_ENGINE_BOUNDARY/E004",
+        "DENSE_ENGINE_BOUNDARY/E005",
+        "DENSE_ENGINE_BOUNDARY/E006",
     ]
-    for todo_id in required_ids:
+    for todo_id in documented_ids:
         assert todo_id in docs_text
+
     assert "RELION_LOCAL_ENGINE/T001" in iteration_text
     assert "RELION_LOCAL_ENGINE/T002" in iteration_text
     assert "RELION_LOCAL_ENGINE/T003" in iteration_text
     assert "RELION_LOCAL_ENGINE/T004" in iteration_text
     assert "DENSE_ENGINE_BOUNDARY/E001" in em_engine_text
     assert "DENSE_ENGINE_BOUNDARY/E002" in em_engine_text
-    assert "DENSE_ENGINE_BOUNDARY/E003" in em_engine_text
     assert "DENSE_ENGINE_BOUNDARY/E004" in em_engine_text
+    assert "DENSE_ENGINE_BOUNDARY/E005" in em_engine_text
+    assert "DENSE_ENGINE_BOUNDARY/E003" not in em_engine_text
+    assert "DENSE_ENGINE_BOUNDARY/E006" not in em_engine_text
 
 
 def test_local_engine_normalization_rejects_removed_aliases():
