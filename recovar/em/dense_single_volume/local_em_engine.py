@@ -23,6 +23,7 @@ from recovar.em.dense_single_volume.em_primitives import (
     _compute_noise_block,
     _compute_projections_block,
 )
+from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_auto_bool,
     parse_env_bool,
@@ -1094,8 +1095,12 @@ def run_local_em_exact(
         mean_for_proj = mean
         proj_volume_shape = volume_shape
 
-    if use_float64_projections:
-        mean_for_proj = jnp.asarray(mean_for_proj, dtype=jnp.complex128)
+    precision_policy = DensePrecisionPolicy(
+        use_float64_scoring=use_float64_scoring,
+        use_float64_projections=use_float64_projections,
+        use_float64_normalization=use_float64_normalization,
+    )
+    mean_for_proj = precision_policy.cast_projection_volume(mean_for_proj)
 
     if reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
@@ -1707,15 +1712,19 @@ def run_local_em_exact(
             ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
             shifted_noise = shifted_half_with_dc
 
-        if use_float64_scoring:
-            shifted_score = shifted_score.astype(jnp.complex128)
-            shifted_recon = shifted_recon.astype(jnp.complex128)
-            shifted_noise = shifted_noise.astype(jnp.complex128)
-            ctf2_over_nv_score = ctf2_over_nv_score.astype(jnp.float64)
-            ctf2_over_nv_recon = ctf2_over_nv_recon.astype(jnp.float64)
-        else:
-            shifted_score = shifted_score.astype(jnp.complex64)
-            ctf2_over_nv_score = ctf2_over_nv_score.astype(jnp.float32)
+        (
+            shifted_score,
+            shifted_recon,
+            shifted_noise,
+            ctf2_over_nv_score,
+            ctf2_over_nv_recon,
+        ) = precision_policy.cast_local_preprocessed_inputs(
+            shifted_score,
+            shifted_recon,
+            shifted_noise,
+            ctf2_over_nv_score,
+            ctf2_over_nv_recon,
+        )
         timing.preprocess_s += time.time() - preprocess_t0
 
         projection_t0 = time.time()
@@ -1770,17 +1779,17 @@ def run_local_em_exact(
             else:
                 proj_abs2_weighted = None
                 proj_abs2_for_noise = None
-        if use_float64_scoring:
-            proj_weighted = proj_weighted.astype(jnp.complex128)
-            proj_for_noise = proj_for_noise.astype(jnp.complex128)
-            if proj_abs2_weighted is not None:
-                proj_abs2_weighted = proj_abs2_weighted.astype(jnp.float64)
-            if proj_abs2_for_noise is not None:
-                proj_abs2_for_noise = proj_abs2_for_noise.astype(jnp.float64)
-        else:
-            proj_weighted = proj_weighted.astype(jnp.complex64)
-            if proj_abs2_weighted is not None:
-                proj_abs2_weighted = proj_abs2_weighted.astype(jnp.float32)
+        (
+            proj_weighted,
+            proj_for_noise,
+            proj_abs2_weighted,
+            proj_abs2_for_noise,
+        ) = precision_policy.cast_local_projection_scores(
+            proj_weighted,
+            proj_for_noise,
+            proj_abs2_weighted,
+            proj_abs2_for_noise,
+        )
         if return_profile:
             _block_until_ready(proj_weighted if proj_abs2_weighted is None else (proj_weighted, proj_abs2_weighted))
         timing.projection_s += time.time() - projection_t0
