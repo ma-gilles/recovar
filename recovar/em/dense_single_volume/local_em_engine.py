@@ -839,7 +839,7 @@ def run_local_em_exact(
     default_materialize_projection_abs2 = False
     materialize_projection_abs2 = _local_materialize_projection_abs2_enabled(default_materialize_projection_abs2)
     norm_half_weights = make_half_image_weights(image_shape)
-    half_weights_windowed = half_weights if window_indices is None else half_weights[window_indices]
+    half_weights_windowed = window_spec.score_values(half_weights)
     noise_variance_half = fourier_transform_utils.full_image_to_half_image(
         noise_variance.reshape(1, -1),
         image_shape,
@@ -866,10 +866,8 @@ def run_local_em_exact(
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
-        shell_indices_noise = shell_indices_half if recon_window_indices is None else shell_indices_half[recon_window_indices]
-        noise_variance_for_noise = (
-            noise_variance_half if recon_window_indices is None else noise_variance_half[recon_window_indices]
-        )
+        shell_indices_noise = window_spec.recon_values(shell_indices_half)
+        noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
         noise_wsum = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_img_power = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)
@@ -1002,11 +1000,8 @@ def run_local_em_exact(
         big_jit_mask_mode = "none"
     big_jit_image_mask_arg = jnp.asarray(big_jit_image_mask_arg)
 
-    full_half_indices = jnp.arange(n_half, dtype=jnp.int32)
-    big_jit_window_indices_arg = window_indices if window_indices is not None else full_half_indices
-    big_jit_recon_window_indices_arg = (
-        recon_window_indices if recon_window_indices is not None else full_half_indices
-    )
+    big_jit_window_indices_arg = window_spec.score_or_full_indices(n_half)
+    big_jit_recon_window_indices_arg = window_spec.recon_or_full_indices(n_half)
     disabled_noise_wsum = jnp.zeros(1, dtype=jnp.float32)
     disabled_noise_img_power = jnp.zeros(1, dtype=jnp.float32)
     disabled_noise_a2 = jnp.zeros(1, dtype=jnp.float32)

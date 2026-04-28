@@ -299,12 +299,12 @@ def _compute_significance_batched(
     n_windowed = window_spec.n_score
     projection_kwargs = window_spec.projection_kwargs()
     if use_window:
-        half_weights_windowed = half_weights[window_indices]
+        half_weights_windowed = window_spec.score_values(half_weights)
 
     if use_float64_scoring:
         half_weights = half_weights.astype(jnp.float64)
         if use_window:
-            half_weights_windowed = half_weights[window_indices]
+            half_weights_windowed = window_spec.score_values(half_weights)
 
     use_relion_numpy_preprocess = (
         _uses_relion_background_fill(experiment_dataset)
