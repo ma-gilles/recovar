@@ -1199,7 +1199,7 @@ def run_em(
     n_recon_windowed = window_spec.n_recon
     projection_kwargs = window_spec.projection_kwargs()
     if use_window:
-        half_weights_windowed = half_weights[window_indices]
+        half_weights_windowed = window_spec.score_values(half_weights)
         window_desc = "square" if square_window else "circular"
         logger.info(
             "Fourier windowing (%s): current_size=%d, n_score_windowed=%d, n_recon_windowed=%d / n_half=%d (%.1f%% reduction)",
@@ -1215,7 +1215,7 @@ def run_em(
     if use_float64_scoring:
         half_weights = half_weights.astype(jnp.float64)
         if use_window:
-            half_weights_windowed = half_weights[window_indices]
+            half_weights_windowed = window_spec.score_values(half_weights)
 
     # Pad rotations to multiple of block size for fixed shapes
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
@@ -1755,12 +1755,8 @@ def run_em(
             _block_until_ready(*ready_values)
         timing.score_prep_s += time.time() - score_prep_t0
 
-        dense_big_jit_window_indices = (
-            window_indices if window_indices is not None else jnp.arange(n_half, dtype=jnp.int32)
-        )
-        dense_big_jit_recon_window_indices = (
-            recon_window_indices if recon_window_indices is not None else jnp.arange(n_half, dtype=jnp.int32)
-        )
+        dense_big_jit_window_indices = window_spec.score_or_full_indices(n_half)
+        dense_big_jit_recon_window_indices = window_spec.recon_or_full_indices(n_half)
         dense_big_jit_max_r = window_spec.dense_big_jit_max_r()
         dense_big_jit_noise_wsum0 = jnp.zeros(1, dtype=jnp.float32)
         dense_big_jit_noise_a20 = jnp.zeros(1, dtype=jnp.float32)
@@ -2790,7 +2786,7 @@ def compute_e_step_weights(
     n_windowed = window_spec.n_score
     projection_kwargs = window_spec.projection_kwargs()
     if use_window:
-        half_weights_windowed = half_weights[window_indices]
+        half_weights_windowed = window_spec.score_values(half_weights)
 
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
     n_rot_padded = n_blocks * rotation_block_size

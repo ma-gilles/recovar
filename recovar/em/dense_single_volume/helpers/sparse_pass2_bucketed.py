@@ -963,10 +963,10 @@ def compute_pass2_stats_sparse_bucketed(
         half_weights = jnp.ones(n_half, dtype=jnp.float32)
     else:
         half_weights = make_half_image_weights(image_shape)
-    half_weights_windowed = half_weights if window_indices is None else half_weights[window_indices]
+    half_weights_windowed = window_spec.score_values(half_weights)
     if use_float64_scoring:
         half_weights = half_weights.astype(jnp.float64)
-        half_weights_windowed = half_weights if window_indices is None else half_weights[window_indices]
+        half_weights_windowed = window_spec.score_values(half_weights)
 
     noise_variance_half = fourier_transform_utils.full_image_to_half_image(
         noise_variance.reshape(1, -1), image_shape
@@ -974,12 +974,8 @@ def compute_pass2_stats_sparse_bucketed(
 
     if accumulate_noise:
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
-        if use_window:
-            shell_indices_noise = shell_indices_half[recon_window_indices]
-            noise_variance_for_noise = noise_variance_half[recon_window_indices]
-        else:
-            shell_indices_noise = shell_indices_half
-            noise_variance_for_noise = noise_variance_half
+        shell_indices_noise = window_spec.recon_values(shell_indices_half)
+        noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
 
     normalization_log_z_np = None
     if normalization_log_z is not None:

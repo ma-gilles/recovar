@@ -54,6 +54,18 @@ class FourierWindowSpec:
     def dense_big_jit_max_r(self):
         return self.max_r if self.use_window else "auto"
 
+    def score_values(self, values):
+        return values if self.score_indices is None else values[self.score_indices]
+
+    def recon_values(self, values):
+        return values if self.recon_indices is None else values[self.recon_indices]
+
+    def score_or_full_indices(self, n_half: int, *, dtype=jnp.int32):
+        return self.score_indices if self.score_indices is not None else jnp.arange(int(n_half), dtype=dtype)
+
+    def recon_or_full_indices(self, n_half: int, *, dtype=jnp.int32):
+        return self.recon_indices if self.recon_indices is not None else jnp.arange(int(n_half), dtype=dtype)
+
 
 def make_frequency_radius_map_half(image_shape):
     """Return (N_half,) array of frequency radius at each pixel of the half-spectrum.
