@@ -1438,11 +1438,18 @@ Forced higher-iteration replay now running after the prior-center fix:
 - Exact-local native half preprocessing now defaults to `auto`, so eligible
   raw real-space buckets can stay in the JAX half-rFFT path needed by big-JIT.
 - Dense/global `em_engine.py` now has an experimental opt-in bucket big-JIT:
-  `RECOVAR_RELION_DENSE_BIG_JIT=1`. It is intentionally default-off until dense
-  bucket parity and f5k refinement parity are measured.
+  `RECOVAR_RELION_DENSE_BIG_JIT=1`. It is intentionally default-off until f5k
+  refinement parity/performance are measured.
 - Dense big-JIT currently covers the no-sparse-pass2, no-winner-take-all,
   no-noise-accumulation bucket path. Unsupported cases log and fall back to the
   existing dense implementation.
+- The dense big-JIT call construction in `em_engine.py` is factored through one
+  per-batch helper so pass 1 and pass 2 share the same bucket argument setup.
+- `exact_v2` is now a deprecated alias for `exact_v1`, not a presented active
+  engine; grouped-union is documented as legacy/fallback only.
+- Local big-JIT now passes identity/zero correction operands instead of using
+  static branches for optional image corrections, scale corrections, and
+  translation-distance noise offsets.
 - Shared shape-bucket helpers were added for padded compile-shape classes.
   Local exact rotation bucketing preserves the previous minimum bucket size of
   16 while centralizing the policy.
@@ -1450,12 +1457,18 @@ Forced higher-iteration replay now running after the prior-center fix:
 Validation performed for this implementation slice:
 
 - `python -m compileall -q recovar/em/dense_single_volume`
-- `python -m pytest tests/unit/test_dense_shape_buckets.py`
+- `python -m pytest tests/unit/test_dense_big_jit.py
+  tests/unit/test_dense_shape_buckets.py
+  tests/unit/test_refine_relion_mode.py::test_tracked_local_engine_todo_ids_are_present
+  tests/unit/test_refine_relion_mode.py::test_exact_v2_is_deprecated_alias_for_exact_v1`
 - Tiny synthetic JIT call of `run_dense_bucket_big_jit`
+- Dense big-JIT non-windowed Gaussian bucket equivalence against existing dense
+  primitives for pass-1 logsumexp reductions and pass-2 M-step adjoint sums.
 
 Still required before claiming final performance/parity:
 
 - f5k RELION parity with local big-JIT default on.
-- Dense opt-in equivalence against current `run_em` on a deterministic fixture.
+- Dense opt-in equivalence for windowed, normalized-CC, noise-accumulation, and
+  winner-take-all cases before enabling it by default.
 - Warm-path timing repeated with explicit `block_until_ready()` measurements and
   compile-count/shape-bucket logging.

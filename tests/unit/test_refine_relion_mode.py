@@ -55,6 +55,7 @@ from recovar.em.dense_single_volume.em_primitives import make_half_image_weights
 from recovar.em.dense_single_volume.iteration_loop import (
     _align_fourier_volume_sign_to_reference,
     _normalize_noise_variance_per_half,
+    _normalize_local_engine,
     _replay_control_model_iteration,
     refine_single_volume,
 )
@@ -1989,6 +1990,17 @@ def test_tracked_local_engine_todo_ids_are_present():
     assert "DENSE_ENGINE_BOUNDARY/E002" in em_engine_text
     assert "DENSE_ENGINE_BOUNDARY/E003" in em_engine_text
     assert "DENSE_ENGINE_BOUNDARY/E004" in em_engine_text
+
+
+def test_exact_v2_is_deprecated_alias_for_exact_v1(caplog):
+    caplog.set_level("WARNING")
+
+    assert _normalize_local_engine("exact_v2") == "exact_v1"
+    assert "deprecated CLI alias" in caplog.text
+    assert _normalize_local_engine("exact_v1") == "exact_v1"
+    assert _normalize_local_engine("grouped_union") == "grouped_union"
+    with pytest.raises(ValueError, match="expected 'exact_v1' or 'grouped_union'"):
+        _normalize_local_engine("unknown")
 
 
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):

@@ -1700,6 +1700,74 @@ def run_em(
             _block_until_ready(*ready_values)
         score_prep_time += time.time() - score_prep_t0
 
+        dense_big_jit_window_indices = (
+            window_indices if window_indices is not None else jnp.arange(n_half, dtype=jnp.int32)
+        )
+        dense_big_jit_recon_window_indices = (
+            recon_window_indices if recon_window_indices is not None else jnp.arange(n_half, dtype=jnp.int32)
+        )
+        dense_big_jit_max_r = float(current_size // 2) if use_window else "auto"
+        dense_big_jit_noise_wsum0 = jnp.zeros(1, dtype=jnp.float32)
+        dense_big_jit_noise_a20 = jnp.zeros(1, dtype=jnp.float32)
+        dense_big_jit_noise_xa0 = jnp.zeros(1, dtype=jnp.float32)
+        dense_big_jit_offset0 = jnp.asarray(0.0, dtype=jnp.float32)
+        dense_big_jit_translation_sqdist0 = jnp.zeros((batch_size, n_trans), dtype=jnp.float32)
+
+        def _run_dense_big_jit_bucket(r0: int, r1: int, *, run_mstep: bool, log_z):
+            (
+                rotation_prior_block,
+                translation_prior_block,
+                candidate_mask_block,
+                valid_rotation_mask,
+            ) = _dense_big_jit_priors_and_masks(r0, r1, start_idx, end_idx)
+            return run_dense_bucket_big_jit(
+                shifted_score_half,
+                batch_norm,
+                score_weight_half,
+                shifted_recon_half,
+                ctf2_over_nv_half_with_dc,
+                mean_for_proj,
+                Ft_y,
+                Ft_ctf,
+                jnp.asarray(rotations_padded[r0:r1]),
+                half_weights,
+                rotation_prior_block,
+                translation_prior_block,
+                candidate_mask_block,
+                valid_rotation_mask,
+                log_z,
+                dense_big_jit_noise_wsum0,
+                dense_big_jit_noise_a20,
+                dense_big_jit_noise_xa0,
+                dense_big_jit_offset0,
+                shifted_half_with_dc,
+                dense_big_jit_noise_variance_half,
+                dense_big_jit_shell_indices_half,
+                dense_big_jit_translation_sqdist0,
+                dense_big_jit_window_indices,
+                dense_big_jit_recon_window_indices,
+                score_mode=relion_firstiter_score_mode,
+                zero_dc_for_scoring=half_spectrum_scoring,
+                use_window=use_window,
+                use_float64_scoring=use_float64_scoring,
+                use_float64_normalization=True,
+                run_mstep=run_mstep,
+                accumulate_noise=False,
+                return_noise_split=False,
+                has_translation_sqdist=False,
+                image_shape=image_shape,
+                proj_volume_shape=proj_volume_shape,
+                recon_volume_shape=recon_volume_shape,
+                disc_type=disc_type,
+                projection_half_volume=False,
+                projection_max_r=dense_big_jit_max_r,
+                mstep_half_volume=False,
+                backprojection_max_r=dense_big_jit_max_r,
+                disable_adjoint_y=disable_adjoint_y,
+                disable_adjoint_ctf=disable_adjoint_ctf,
+                n_shells=1,
+            )
+
         # -- PASS 1: streaming logsumexp over rotation blocks --
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=jnp.float64)
@@ -1713,58 +1781,11 @@ def run_em(
 
             if use_dense_big_jit:
                 score_t0 = time.time()
-                (
-                    rotation_prior_block,
-                    translation_prior_block,
-                    candidate_mask_block,
-                    valid_rotation_mask,
-                ) = _dense_big_jit_priors_and_masks(r0, r1, start_idx, end_idx)
-                dense_result = run_dense_bucket_big_jit(
-                    shifted_score_half,
-                    batch_norm,
-                    score_weight_half,
-                    shifted_recon_half,
-                    ctf2_over_nv_half_with_dc,
-                    mean_for_proj,
-                    Ft_y,
-                    Ft_ctf,
-                    jnp.asarray(rots_b),
-                    half_weights,
-                    rotation_prior_block,
-                    translation_prior_block,
-                    candidate_mask_block,
-                    valid_rotation_mask,
-                    jnp.zeros(batch_size, dtype=jnp.float32),
-                    jnp.zeros(1, dtype=jnp.float32),
-                    jnp.zeros(1, dtype=jnp.float32),
-                    jnp.zeros(1, dtype=jnp.float32),
-                    jnp.asarray(0.0, dtype=jnp.float32),
-                    shifted_half_with_dc,
-                    dense_big_jit_noise_variance_half,
-                    dense_big_jit_shell_indices_half,
-                    jnp.zeros((batch_size, n_trans), dtype=jnp.float32),
-                    window_indices if window_indices is not None else jnp.arange(n_half, dtype=jnp.int32),
-                    recon_window_indices if recon_window_indices is not None else jnp.arange(n_half, dtype=jnp.int32),
-                    score_mode=relion_firstiter_score_mode,
-                    zero_dc_for_scoring=half_spectrum_scoring,
-                    use_window=use_window,
-                    use_float64_scoring=use_float64_scoring,
-                    use_float64_normalization=True,
+                dense_result = _run_dense_big_jit_bucket(
+                    r0,
+                    r1,
                     run_mstep=False,
-                    accumulate_noise=False,
-                    return_noise_split=False,
-                    has_translation_sqdist=False,
-                    image_shape=image_shape,
-                    proj_volume_shape=proj_volume_shape,
-                    recon_volume_shape=recon_volume_shape,
-                    disc_type=disc_type,
-                    projection_half_volume=False,
-                    projection_max_r=float(current_size // 2) if use_window else "auto",
-                    mstep_half_volume=False,
-                    backprojection_max_r=float(current_size // 2) if use_window else "auto",
-                    disable_adjoint_y=disable_adjoint_y,
-                    disable_adjoint_ctf=disable_adjoint_ctf,
-                    n_shells=1,
+                    log_z=jnp.zeros(batch_size, dtype=jnp.float32),
                 )
                 max_s, sum_exp = _merge_block_logsumexp(
                     max_s,
@@ -2024,58 +2045,11 @@ def run_em(
 
             if use_dense_big_jit:
                 score_t0 = time.time()
-                (
-                    rotation_prior_block,
-                    translation_prior_block,
-                    candidate_mask_block,
-                    valid_rotation_mask,
-                ) = _dense_big_jit_priors_and_masks(r0, r1, start_idx, end_idx)
-                dense_result = run_dense_bucket_big_jit(
-                    shifted_score_half,
-                    batch_norm,
-                    score_weight_half,
-                    shifted_recon_half,
-                    ctf2_over_nv_half_with_dc,
-                    mean_for_proj,
-                    Ft_y,
-                    Ft_ctf,
-                    jnp.asarray(rots_b),
-                    half_weights,
-                    rotation_prior_block,
-                    translation_prior_block,
-                    candidate_mask_block,
-                    valid_rotation_mask,
-                    log_Z,
-                    jnp.zeros(1, dtype=jnp.float32),
-                    jnp.zeros(1, dtype=jnp.float32),
-                    jnp.zeros(1, dtype=jnp.float32),
-                    jnp.asarray(0.0, dtype=jnp.float32),
-                    shifted_half_with_dc,
-                    dense_big_jit_noise_variance_half,
-                    dense_big_jit_shell_indices_half,
-                    jnp.zeros((batch_size, n_trans), dtype=jnp.float32),
-                    window_indices if window_indices is not None else jnp.arange(n_half, dtype=jnp.int32),
-                    recon_window_indices if recon_window_indices is not None else jnp.arange(n_half, dtype=jnp.int32),
-                    score_mode=relion_firstiter_score_mode,
-                    zero_dc_for_scoring=half_spectrum_scoring,
-                    use_window=use_window,
-                    use_float64_scoring=use_float64_scoring,
-                    use_float64_normalization=True,
+                dense_result = _run_dense_big_jit_bucket(
+                    r0,
+                    r1,
                     run_mstep=True,
-                    accumulate_noise=False,
-                    return_noise_split=False,
-                    has_translation_sqdist=False,
-                    image_shape=image_shape,
-                    proj_volume_shape=proj_volume_shape,
-                    recon_volume_shape=recon_volume_shape,
-                    disc_type=disc_type,
-                    projection_half_volume=False,
-                    projection_max_r=float(current_size // 2) if use_window else "auto",
-                    mstep_half_volume=False,
-                    backprojection_max_r=float(current_size // 2) if use_window else "auto",
-                    disable_adjoint_y=disable_adjoint_y,
-                    disable_adjoint_ctf=disable_adjoint_ctf,
-                    n_shells=1,
+                    log_z=log_Z,
                 )
                 Ft_y = dense_result.Ft_y
                 Ft_ctf = dense_result.Ft_ctf

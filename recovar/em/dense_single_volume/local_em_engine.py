@@ -1355,6 +1355,31 @@ def run_local_em_exact(
     preprocess_time += translation_phase_time
     preprocess_profile["translation_phase_s"] += translation_phase_time
 
+    backend = _image_preprocess_backend(experiment_dataset)
+    big_jit_mask_mode = getattr(backend, "image_mask_mode", "multiply")
+    if big_jit_mask_mode not in {"relion_background_fill", "multiply"}:
+        big_jit_mask_mode = "none"
+    big_jit_image_mask_arg = getattr(backend, "image_mask", None)
+    if big_jit_image_mask_arg is None:
+        big_jit_image_mask_arg = getattr(backend, "mask", None)
+    if big_jit_image_mask_arg is None:
+        big_jit_image_mask_arg = getattr(experiment_dataset, "image_mask", None)
+    if big_jit_image_mask_arg is None:
+        big_jit_image_mask_arg = np.ones(image_shape, dtype=np.float32)
+        big_jit_mask_mode = "none"
+    big_jit_image_mask_arg = jnp.asarray(big_jit_image_mask_arg)
+
+    full_half_indices = jnp.arange(n_half, dtype=jnp.int32)
+    big_jit_window_indices_arg = window_indices if window_indices is not None else full_half_indices
+    big_jit_recon_window_indices_arg = (
+        recon_window_indices if recon_window_indices is not None else full_half_indices
+    )
+    disabled_noise_wsum = jnp.zeros(1, dtype=jnp.float32)
+    disabled_noise_img_power = jnp.zeros(1, dtype=jnp.float32)
+    disabled_noise_a2 = jnp.zeros(1, dtype=jnp.float32)
+    disabled_noise_xa = jnp.zeros(1, dtype=jnp.float32)
+    disabled_noise_shell_indices = jnp.zeros(n_half, dtype=jnp.int32)
+
     for bucket in bucket_specs:
         n_chunks += 1
         if collect_profile_stats:
@@ -1432,19 +1457,6 @@ def run_local_em_exact(
                 fourier_pre_shifts_arg = jnp.zeros((batch_size, 2), dtype=jnp.float32)
                 apply_fourier_pre_shift = False
 
-            backend = _image_preprocess_backend(experiment_dataset)
-            mask_mode = getattr(backend, "image_mask_mode", "multiply")
-            if mask_mode not in {"relion_background_fill", "multiply"}:
-                mask_mode = "none"
-            image_mask_arg = getattr(backend, "image_mask", None)
-            if image_mask_arg is None:
-                image_mask_arg = getattr(backend, "mask", None)
-            if image_mask_arg is None:
-                image_mask_arg = getattr(experiment_dataset, "image_mask", None)
-            if image_mask_arg is None:
-                image_mask_arg = np.ones(image_shape, dtype=np.float32)
-                mask_mode = "none"
-
             image_corrections_arg = (
                 jnp.asarray(np.asarray(image_corrections, dtype=np.float32)[bucket_image_indices])
                 if image_corrections is not None
@@ -1453,6 +1465,11 @@ def run_local_em_exact(
             scale_corrections_arg = (
                 jnp.asarray(np.asarray(scale_corrections, dtype=np.float32)[bucket_image_indices])
                 if scale_corrections is not None
+                else jnp.ones(batch_size, dtype=jnp.float32)
+            )
+            image_only_corrections_arg = (
+                image_corrections_arg / scale_corrections_arg
+                if image_corrections is not None
                 else jnp.ones(batch_size, dtype=jnp.float32)
             )
             translation_sqdist_arg = (
@@ -1470,12 +1487,6 @@ def run_local_em_exact(
                 if normalization_log_z_np is not None
                 else jnp.zeros(batch_size, dtype=jnp.float32)
             )
-            window_indices_arg = (
-                window_indices if window_indices is not None else jnp.arange(n_half, dtype=jnp.int32)
-            )
-            recon_window_indices_arg = (
-                recon_window_indices if recon_window_indices is not None else jnp.arange(n_half, dtype=jnp.int32)
-            )
             if accumulate_noise:
                 noise_wsum_arg = noise_wsum
                 noise_img_power_arg = noise_img_power
@@ -1486,12 +1497,12 @@ def run_local_em_exact(
                 noise_variance_for_noise_arg = noise_variance_for_noise
                 n_shells_arg = n_shells
             else:
-                noise_wsum_arg = jnp.zeros(1, dtype=jnp.float32)
-                noise_img_power_arg = jnp.zeros(1, dtype=jnp.float32)
-                noise_a2_arg = jnp.zeros(1, dtype=jnp.float32)
-                noise_xa_arg = jnp.zeros(1, dtype=jnp.float32)
-                shell_indices_half_arg = jnp.zeros(n_half, dtype=jnp.int32)
-                shell_indices_noise_arg = jnp.zeros(n_half, dtype=jnp.int32)
+                noise_wsum_arg = disabled_noise_wsum
+                noise_img_power_arg = disabled_noise_img_power
+                noise_a2_arg = disabled_noise_a2
+                noise_xa_arg = disabled_noise_xa
+                shell_indices_half_arg = disabled_noise_shell_indices
+                shell_indices_noise_arg = disabled_noise_shell_indices
                 noise_variance_for_noise_arg = noise_variance_half
                 n_shells_arg = 1
 
@@ -1526,18 +1537,19 @@ def run_local_em_exact(
                 noise_xa_arg,
                 noise_sigma2_offset,
                 noise_sumw,
-                jnp.asarray(image_mask_arg),
+                big_jit_image_mask_arg,
                 integer_pre_shifts_arg,
                 fourier_pre_shifts_arg,
                 image_corrections_arg,
+                image_only_corrections_arg,
                 scale_corrections_arg,
                 translation_sqdist_arg,
                 noise_variance_half,
                 translation_phases_half,
                 half_weights,
                 norm_half_weights,
-                window_indices_arg,
-                recon_window_indices_arg,
+                big_jit_window_indices_arg,
+                big_jit_recon_window_indices_arg,
                 shell_indices_half_arg,
                 shell_indices_noise_arg,
                 noise_variance_for_noise_arg,
@@ -1548,12 +1560,10 @@ def run_local_em_exact(
                 sample_mask_arg,
                 normalization_log_z_arg,
                 config,
-                mask_mode=mask_mode,
+                mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
                 apply_integer_pre_shift=apply_integer_pre_shift,
                 apply_fourier_pre_shift=apply_fourier_pre_shift,
-                has_image_corrections=image_corrections is not None,
-                has_scale_corrections=scale_corrections is not None,
                 half_spectrum_scoring=half_spectrum_scoring,
                 use_float64_scoring=use_float64_scoring,
                 use_float64_normalization=use_float64_normalization,
@@ -1573,7 +1583,6 @@ def run_local_em_exact(
                 accumulate_noise=accumulate_noise,
                 return_noise_split=return_noise_split,
                 n_shells=n_shells_arg,
-                has_translation_sqdist=translation_sqdist_ang is not None,
                 has_normalization_log_z=normalization_log_z_np is not None,
             )
             if return_profile:
