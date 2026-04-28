@@ -55,6 +55,11 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     integer_pre_shifts_or_none,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import process_half_image
+from recovar.em.dense_single_volume.helpers.translation_prior import (
+    translation_prior_centers_for_images,
+    translation_sqdist_angstrom,
+    validate_translation_prior_centers,
+)
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
@@ -832,26 +837,11 @@ def compute_pass2_stats_sparse_bucketed(
     fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
     n_fine_trans = fine_translations.shape[0]
 
-    translation_prior_centers_np = None
-    if translation_prior_centers is not None:
-        translation_prior_centers_np = np.asarray(translation_prior_centers, dtype=np.float32)
-        if translation_prior_centers_np.ndim == 1:
-            if translation_prior_centers_np.shape != (translations_np.shape[1],):
-                raise ValueError(
-                    "translation_prior_centers must have shape "
-                    f"({translations_np.shape[1]},), got {translation_prior_centers_np.shape}",
-                )
-        elif translation_prior_centers_np.ndim == 2:
-            if translation_prior_centers_np.shape != (n_images, translations_np.shape[1]):
-                raise ValueError(
-                    "translation_prior_centers must have shape "
-                    f"({n_images}, {translations_np.shape[1]}) when image-specific, got "
-                    f"{translation_prior_centers_np.shape}",
-                )
-        else:
-            raise ValueError(
-                f"translation_prior_centers must be 1D or 2D, got {translation_prior_centers_np.ndim} dimensions",
-            )
+    translation_prior_centers_np = validate_translation_prior_centers(
+        translation_prior_centers,
+        n_images=n_images,
+        n_dims=translations_np.shape[1],
+    )
 
     # Translation prior in the fine grid
     if translation_log_prior is None:
@@ -1030,18 +1020,15 @@ def compute_pass2_stats_sparse_bucketed(
 
         translation_sqdist_ang = None
         if translation_prior_centers_np is not None:
-            if translation_prior_centers_np.ndim == 1:
-                centers = np.broadcast_to(
-                    translation_prior_centers_np[None, :],
-                    (batch, translation_prior_centers_np.shape[0]),
-                )
-            else:
-                centers = translation_prior_centers_np[image_indices]
-            voxel = float(experiment_dataset.voxel_size if experiment_dataset.voxel_size > 0 else 1.0)
-            translation_sqdist_ang = np.sum(
-                ((fine_translations[None, :, :] - centers[:, None, :]) * voxel) ** 2,
-                axis=-1,
-                dtype=np.float64,
+            centers = translation_prior_centers_for_images(
+                translation_prior_centers_np,
+                image_indices,
+                batch_size=batch,
+            )
+            translation_sqdist_ang = translation_sqdist_angstrom(
+                fine_translations,
+                centers,
+                experiment_dataset.voxel_size,
             )
 
         # Translation prior for this bucket (per-image)

@@ -66,6 +66,11 @@ from .helpers.projection import (
     compute_noise_block as _compute_noise_block,
     compute_projections_block as _compute_projections_block,
 )
+from .helpers.translation_prior import (
+    translation_prior_centers_for_images,
+    translation_sqdist_angstrom,
+    validate_translation_prior_centers,
+)
 from .helpers.types import EMProfileStats, NoiseStats, RelionStats
 from .shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
@@ -1073,26 +1078,11 @@ def run_em(
     else:
         translation_log_prior_jnp = None
 
-    translation_prior_centers_np = None
-    if translation_prior_centers is not None:
-        translation_prior_centers_np = np.asarray(translation_prior_centers, dtype=np.float32)
-        if translation_prior_centers_np.ndim == 1:
-            if translation_prior_centers_np.shape != (translations.shape[1],):
-                raise ValueError(
-                    "translation_prior_centers must have shape "
-                    f"({translations.shape[1]},), got {translation_prior_centers_np.shape}",
-                )
-        elif translation_prior_centers_np.ndim == 2:
-            if translation_prior_centers_np.shape != (n_images, translations.shape[1]):
-                raise ValueError(
-                    "translation_prior_centers must have shape "
-                    f"({n_images}, {translations.shape[1]}) when image-specific, got "
-                    f"{translation_prior_centers_np.shape}",
-                )
-        else:
-            raise ValueError(
-                f"translation_prior_centers must be 1D or 2D, got {translation_prior_centers_np.ndim} dimensions",
-            )
+    translation_prior_centers_np = validate_translation_prior_centers(
+        translation_prior_centers,
+        n_images=n_images,
+        n_dims=translations.shape[1],
+    )
 
     candidate_mask_padded_jnp = None
     if rotation_translation_mask is not None:
@@ -1253,21 +1243,15 @@ def run_em(
         batch_data = jnp.asarray(batch_data)
         translation_sqdist_ang = None
         if translation_prior_centers_np is not None:
-            if translation_prior_centers_np.ndim == 1:
-                centers = np.broadcast_to(
-                    translation_prior_centers_np[None, :],
-                    (actual_batch_size, translation_prior_centers_np.shape[0]),
-                )
-            else:
-                centers = translation_prior_centers_np[start_idx:end_idx]
-            translation_sqdist_ang = np.sum(
-                (
-                    (np.asarray(translations, dtype=np.float32)[None, :, :] - centers[:, None, :])
-                    * float(experiment_dataset.voxel_size if experiment_dataset.voxel_size > 0 else 1.0)
-                )
-                ** 2,
-                axis=-1,
-                dtype=np.float64,
+            centers = translation_prior_centers_for_images(
+                translation_prior_centers_np,
+                np.arange(start_idx, end_idx, dtype=np.int64),
+                batch_size=actual_batch_size,
+            )
+            translation_sqdist_ang = translation_sqdist_angstrom(
+                translations,
+                centers,
+                experiment_dataset.voxel_size,
             )
             if use_dense_big_jit and batch_size != actual_batch_size:
                 translation_sqdist_ang = pad_axis(translation_sqdist_ang, 0, batch_size, value=0)
