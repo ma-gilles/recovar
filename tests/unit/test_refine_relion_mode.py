@@ -1,4 +1,13 @@
-"""Smoke and parity tests for RELION-mode single-volume refinement."""
+"""Smoke tests for refine_single_volume's RELION-only path.
+
+Verifies:
+1. RELION mode runs without error on a tiny dataset (4 images, 8px, 2 iters)
+2. Returns the expected dict keys (including RELION-specific ones)
+3. Legacy mode is rejected
+4. Invalid mode raises ValueError
+5. Convergence state is a RefinementState instance
+6. data_vs_prior_trajectory and ave_Pmax_trajectory are populated
+"""
 
 from pathlib import Path
 
@@ -3607,6 +3616,94 @@ class TestRelionModeSmokeTest:
         )
 
         assert captured["grid_order"] == 1
+
+# ===========================================================================
+# Test 2: Legacy mode removed
+# ===========================================================================
+
+
+class TestLegacyModeRemoved:
+    """Verify that mode='legacy' is no longer part of the API."""
+
+    def test_legacy_mode_explicit_raises(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+    ):
+        """Explicit mode='legacy' is rejected."""
+        with pytest.raises(ValueError, match="expected 'relion'"):
+            refine_single_volume(
+                half_datasets,
+                init_volume,
+                jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+                jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+                rotations,
+                translations,
+                disc_type="linear_interp",
+                max_iter=1,
+                image_batch_size=N_IMAGES,
+                rotation_block_size=N_ROTATIONS,
+                mode="legacy",
+            )
+
+    def test_default_mode_is_relion(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+        monkeypatch,
+    ):
+        """Calling without mode= uses the RELION path."""
+        sentinel = {"convergence_state": object()}
+        called = {"enabled_defaults": False, "ran_relion": False}
+
+        def fake_enable_defaults():
+            called["enabled_defaults"] = True
+
+        def fake_relion_loop(**kwargs):
+            called["ran_relion"] = True
+            assert kwargs["experiment_datasets"] is half_datasets
+            assert kwargs["relion_current_sizes"] is None
+            assert kwargs["init_healpix_order"] == 2
+            return sentinel
+
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "_enable_relion_parity_defaults",
+            fake_enable_defaults,
+        )
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "_run_relion_iteration_loop",
+            fake_relion_loop,
+        )
+
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations,
+            translations,
+            disc_type="linear_interp",
+            max_iter=1,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            init_current_size=16,
+            init_healpix_order=2,
+            max_healpix_order=3,
+        )
+
+        assert result is sentinel
+        assert called == {"enabled_defaults": True, "ran_relion": True}
+
+
+# ===========================================================================
+# Test 3: Local search oversampling regression
+# ===========================================================================
 
 
 def test_fused_score_normalize_mstep_matches_split_path():

@@ -1080,7 +1080,7 @@ def refine_single_volume(
     translation_pixel_offset=None,
     mode="relion",
     adaptive_pass2_skip_threshold=ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
-    # --- RELION refinement parameters ---
+    # --- RELION-mode parameters ---
     init_healpix_order=2,
     max_healpix_order=7,
     init_translation_range=10.0,
@@ -1115,7 +1115,11 @@ def refine_single_volume(
     first_iteration_reconstruction_mode="soft",
     force_max_iter_after_convergence=False,
 ):
-    """RELION-style multi-iteration EM refinement with FSC-driven resolution management.
+    """Multi-iteration RELION-parity EM refinement.
+
+    The legacy FSC-driven refinement loop has been removed. ``mode`` remains
+    as a compatibility keyword for callers that already pass ``"relion"``,
+    but ``"relion"`` is the only supported value.
 
     Parameters
     ----------
@@ -1128,7 +1132,8 @@ def refine_single_volume(
     init_mean_variance : jnp.ndarray, shape (volume_size,)
         Initial signal prior (tau^2).
     rotations : np.ndarray, shape (n_rot, 3, 3)
-        Initial rotation grid, overridden when angular step refines.
+        Optional initial rotation grid for compatibility. RELION mode
+        regenerates grids from the HEALPix refinement state.
     translations : jnp.ndarray, shape (n_trans, 2)
         Translation grid.
     disc_type : str
@@ -1141,7 +1146,8 @@ def refine_single_volume(
         Number of rotations per block in em_engine.
     relion_current_sizes : list of int or None
         Oracle mode: if provided, use these current_sizes instead of
-        computing from FSC.  relion_current_sizes[i] is used at iteration i.
+        computing RELION-style current sizes from the FSC/data-vs-prior
+        trajectory. relion_current_sizes[i] is used at iteration i.
     init_current_size : int
         Starting current_size for the first iteration (when no FSC is
         available yet).  Ignored if relion_current_sizes is provided.
@@ -1158,14 +1164,13 @@ def refine_single_volume(
         Matches RELION's --maxsig semantics (counts SAMPLES, not just
         orientations; see C5 in plan_relion_parity.md).
     nside_level : int or None
-        HEALPix level of the coarse rotation grid.  Required when
-        adaptive_oversampling > 0.
+        Compatibility keyword for older callers. RELION mode derives the
+        coarse rotation grid from ``init_healpix_order``.
     translation_pixel_offset : float or None
         Step size between coarse translation grid points (pixels).
         Required when adaptive_oversampling > 0.
     mode : str
-        Only ``"relion"`` is supported. This argument remains for callers that
-        already pass it explicitly.
+        Only ``"relion"`` is supported.
     adaptive_pass2_skip_threshold : float
         Skip adaptive pass 2 when the mean significant-sample fraction is at
         least this value. Set to a negative value to disable this shortcut and
@@ -1199,7 +1204,7 @@ def refine_single_volume(
             significant sample counts at each iteration (None when
             adaptive_oversampling=0).
 
-    Additional keys:
+    RELION-specific keys:
         convergence_state : RefinementState -- final convergence state
         data_vs_prior_trajectory : list of jnp.ndarray -- per-iteration
             data_vs_prior curves
@@ -1207,7 +1212,9 @@ def refine_single_volume(
         ave_Pmax_trajectory : list of float -- average Pmax per iter
     """
     if mode != "relion":
-        raise ValueError(f"Unsupported mode={mode!r}; only 'relion' is supported")
+        raise ValueError(f"Unknown mode={mode!r}; expected 'relion'")
+    if relion_current_sizes is not None and len(relion_current_sizes) == 0:
+        raise ValueError("relion_current_sizes must be non-empty when provided")
     local_engine = _normalize_local_engine(local_engine)
 
     _enable_relion_parity_defaults()
@@ -1227,6 +1234,7 @@ def refine_single_volume(
         adaptive_oversampling=adaptive_oversampling,
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
+        relion_current_sizes=relion_current_sizes,
         init_healpix_order=init_healpix_order,
         max_healpix_order=max_healpix_order,
         init_translation_range=init_translation_range,
@@ -1286,6 +1294,7 @@ def _run_relion_iteration_loop(
     adaptive_oversampling,
     adaptive_fraction,
     max_significants,
+    relion_current_sizes,
     init_healpix_order,
     max_healpix_order,
     init_translation_range,
@@ -1349,9 +1358,13 @@ def _run_relion_iteration_loop(
     # edge-taper mask (window_mask(D, 0.85, 0.99)) is too tight — it tapers
     # at 54 px vs RELION's 64 px for a 128-px box.
     RELION_WIDTH_MASK_EDGE = 5
+    def _image_backend(ds):
+        return getattr(getattr(ds, "image_source", None), "backend", None)
+
     for ds in experiment_datasets:
-        if hasattr(ds.image_source.backend, "image_mask_mode"):
-            ds.image_source.backend.image_mask_mode = "multiply"
+        backend = _image_backend(ds)
+        if backend is not None and hasattr(backend, "image_mask_mode"):
+            backend.image_mask_mode = "multiply"
     if particle_diameter_ang is not None and particle_diameter_ang > 0:
         from recovar.core import mask
         from recovar.core.mask import relion_soft_image_mask
@@ -1363,9 +1376,12 @@ def _run_relion_iteration_loop(
             width_mask_edge_px=RELION_WIDTH_MASK_EDGE,
         )
         for ds in experiment_datasets:
-            ds.image_source.backend.image_mask = relion_mask
-            if hasattr(ds.image_source.backend, "image_mask_mode"):
-                ds.image_source.backend.image_mask_mode = "relion_background_fill"
+            backend = _image_backend(ds)
+            if backend is None:
+                continue
+            backend.image_mask = relion_mask
+            if hasattr(backend, "image_mask_mode"):
+                backend.image_mask_mode = "relion_background_fill"
         logger.info(
             "RELION mode: image mask radius=%.1f px (particle_diameter=%.1f A, edge=%d px)",
             particle_diameter_ang / (2.0 * cryo.voxel_size),
@@ -1749,6 +1765,19 @@ def _run_relion_iteration_loop(
             cs = quantize_current_size(raw_cs, ori_size=grid_size)
 
         cs = quantize_current_size(cs, ori_size=grid_size)
+        if relion_current_sizes is not None:
+            if iteration < len(relion_current_sizes):
+                oracle_cs = int(relion_current_sizes[iteration])
+            else:
+                oracle_cs = int(relion_current_sizes[-1])
+            if oracle_cs <= 0:
+                oracle_cs = int(init_current_size)
+            cs = quantize_current_size(oracle_cs, ori_size=grid_size)
+            logger.info(
+                "Current-size oracle: iteration %d using current_size=%d",
+                iteration + 1,
+                cs,
+            )
 
         # --- Replay override: force recovar's sampling state to mirror RELION ---
         # When replaying, RELION's per-iter sampling.star dictates the actual

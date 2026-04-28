@@ -145,9 +145,9 @@ def main():
     parser.add_argument("--max_iter", type=int, default=10, help="Maximum EM iterations")
     parser.add_argument(
         "--mode",
-        choices=["legacy", "relion"],
+        choices=["relion"],
         default="relion",
-        help="Refinement mode to run. Use 'relion' for the parity path.",
+        help="Refinement mode to run. Only 'relion' is supported.",
     )
     parser.add_argument(
         "--healpix_order",
@@ -398,7 +398,7 @@ def main():
     logger.info("Initial current_size from resolution %.1f A: %d pixels", args.init_resolution, init_current_size)
 
     # ---- Run refinement ----
-    from recovar.em.dense_single_volume.refine import refine_single_volume
+    from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
 
     experiment_datasets = [ds_half1, ds_half2]
     translations_jnp = jnp.asarray(translations)

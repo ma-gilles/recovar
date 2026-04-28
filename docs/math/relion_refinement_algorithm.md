@@ -68,8 +68,8 @@ the iteration loop.
 
 **recovar code**:
 - [`iteration_loop.py:448`](../../recovar/em/dense_single_volume/iteration_loop.py#L448) -- `refine_single_volume()`: public entry point.
-  Accepts init volume, noise, dataset; dispatches to `_run_relion_iteration_loop` when
-  `relion_mode=True`, otherwise runs legacy dense-grid EM.
+  Accepts init volume, noise, and dataset; runs `_run_relion_iteration_loop`.
+  The legacy dense-grid EM mode has been removed.
 - [`iteration_loop.py:931`](../../recovar/em/dense_single_volume/iteration_loop.py#L931) -- `_run_relion_iteration_loop()`: the main iteration loop.
   Each iteration: build grids with perturbation, call `run_em` for E+M step,
   reconstruct via `relion_reconstruct`, update noise/convergence, check stopping.

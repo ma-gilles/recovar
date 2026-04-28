@@ -325,17 +325,17 @@ Files are named `target<idx>_block<b>_preprior.npy`.
 | 5k iter 13→14 (codex's canonical late-iter) | -1.07e-4 | ✓ matches gold magnitude |
 | Tiny cold-start iter 1 (default) | (was -17.6%, ACTUAL +0.025% on 5k / -0.08% on tiny) | ✓ resolved; doc was misleading |
 
-### Open follow-up branches
+### Follow-up branches
 
-- **#118** `claude/dense-cleanup-relion-only` — legacy iteration loop
-  deletion has landed; continue removing remaining dead exports.
+- **#118** `claude/dense-cleanup-relion-only` — historical cleanup branch
+  that was used as a reference for the RELION-only API cleanup
 - **#119** `claude/parity-perf-baseline` — perf-baseline JSONs +
   `check_perf.py` + per-stage timers
 - **#120** `claude/parity-quality-baseline` — fast (~5 min) parity
   quality test suite
 
-All three gated on the parity bug fully closing first; rebase + merge
-sequence tracked in issues #114, #115, #116, #117.
+The remaining follow-ups are gated on the parity bug fully closing first;
+rebase + merge sequence tracked in issues #114, #115, #116, #117.
 
 ---
 

@@ -1,4 +1,4 @@
-"""FSC-driven resolution loop tests (Phase 4 of RELION-parity plan).
+"""Current-size and resolution loop tests for dense single-volume refinement.
 
 Tests:
 1. test_fsc_to_current_size: FSC -> shell -> current_size mapping.
@@ -14,9 +14,9 @@ pytest.importorskip("jax")
 import jax.numpy as jnp
 
 from recovar.em.dense_single_volume.iteration_loop import (
-    fsc_to_current_size,
     refine_single_volume,
 )
+from recovar.em.dense_single_volume.helpers.resolution import fsc_to_current_size
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     quantize_current_size,
 )

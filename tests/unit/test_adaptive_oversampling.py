@@ -958,8 +958,8 @@ class TestRefineWithAdaptive:
                 sc_np = np.asarray(sc)
                 assert np.all(sc_np >= 1), "Some images have 0 significant samples"
 
-    def test_requires_nside_level(self):
-        """adaptive_oversampling > 0 should require nside_level."""
+    def test_relion_default_does_not_require_nside_level(self):
+        """RELION mode derives the coarse grid from init_healpix_order."""
         from recovar.em.dense_single_volume.iteration_loop import refine_single_volume
 
         ds1 = MockDataset(n_images=2, seed=42)
@@ -970,18 +970,23 @@ class TestRefineWithAdaptive:
         noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
         mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0
 
-        with pytest.raises(ValueError, match="nside_level"):
-            refine_single_volume(
-                [ds1, ds2],
-                volume,
-                noise_variance,
-                mean_variance,
-                rotations,
-                translations,
-                max_iter=1,
-                adaptive_oversampling=1,
-                nside_level=None,
-            )
+        result = refine_single_volume(
+            [ds1, ds2],
+            volume,
+            noise_variance,
+            mean_variance,
+            rotations,
+            translations,
+            max_iter=1,
+            image_batch_size=2,
+            rotation_block_size=5,
+            adaptive_oversampling=1,
+            nside_level=None,
+            init_healpix_order=2,
+            max_healpix_order=2,
+        )
+
+        assert "convergence_state" in result
 
     def test_adaptive_0_matches_standard(self):
         """adaptive_oversampling=0 should give identical results to standard path."""
