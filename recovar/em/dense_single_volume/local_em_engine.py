@@ -17,8 +17,6 @@ from recovar.reconstruction import noise as noise_utils
 from recovar.em.dense_single_volume.em_primitives import (
     _adjoint_slice_volume_half,
     _adjoint_slice_volume_windowed,
-    _batch_adjoint_slice_volume_half,
-    _batch_adjoint_slice_volume_windowed,
     _block_until_ready,
     _compute_noise_block,
     _compute_projections_block,
@@ -382,49 +380,6 @@ def _local_big_jit_reconstruction_pack(
     )
 
 
-def _local_batch_adjoint_pair(
-    summed_rows,
-    ctf_rows,
-    rotations,
-    Ft_y,
-    Ft_ctf,
-    recon_window_indices,
-    image_shape,
-    recon_volume_shape,
-    *,
-    use_window: bool,
-    use_native_half_volume_mstep: bool,
-    current_size,
-):
-    rows = jnp.stack([summed_rows, ctf_rows], axis=0)
-    volumes = jnp.stack([Ft_y, Ft_ctf], axis=0)
-    if use_window:
-        updated = _batch_adjoint_slice_volume_windowed(
-            rows,
-            recon_window_indices,
-            rotations,
-            volumes,
-            image_shape,
-            recon_volume_shape,
-            "linear_interp",
-            True,
-            use_native_half_volume_mstep,
-            float(current_size // 2),
-        )
-    else:
-        updated = _batch_adjoint_slice_volume_half(
-            rows,
-            rotations,
-            volumes,
-            image_shape,
-            recon_volume_shape,
-            "linear_interp",
-            True,
-            use_native_half_volume_mstep,
-        )
-    return updated[0], updated[1]
-
-
 def _local_adjoint_one(
     rows,
     rotations,
@@ -475,32 +430,11 @@ def _accumulate_local_adjoint_rows(
     use_window: bool,
     use_native_half_volume_mstep: bool,
     current_size,
-    batch_backproject_enabled: bool,
     disable_adjoint_y: bool,
     disable_adjoint_ctf: bool,
     return_profile: bool,
     timing: _LocalTiming,
 ):
-    if batch_backproject_enabled and not disable_adjoint_y and not disable_adjoint_ctf:
-        adjoint_y_t0 = time.time()
-        Ft_y, Ft_ctf = _local_batch_adjoint_pair(
-            packed_summed_rows,
-            packed_ctf_rows,
-            packed_flat_rotations,
-            Ft_y,
-            Ft_ctf,
-            recon_window_indices,
-            image_shape,
-            recon_volume_shape,
-            use_window=use_window,
-            use_native_half_volume_mstep=use_native_half_volume_mstep,
-            current_size=current_size,
-        )
-        if return_profile:
-            _block_until_ready(Ft_y, Ft_ctf)
-        timing.adjoint_y_s += time.time() - adjoint_y_t0
-        return Ft_y, Ft_ctf
-
     if not disable_adjoint_y:
         adjoint_y_t0 = time.time()
         Ft_y = _local_adjoint_one(
@@ -566,10 +500,6 @@ def _local_processed_cache_enabled(n_images: int, image_shape, score_with_masked
     n_copies = 2 if score_with_masked_images else 1
     estimated_gb = int(n_images) * n_half * np.dtype(np.complex64).itemsize * n_copies / 1e9
     return estimated_gb <= max_gb
-
-
-def _local_batch_backproject_enabled() -> bool:
-    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_BATCH_BACKPROJECT", default=False)
 
 
 def _local_big_jit_enabled() -> bool:
@@ -1165,7 +1095,6 @@ def run_local_em_exact(
         noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_xa = jnp.zeros(n_shells, dtype=jnp.float32)
 
-    batch_backproject_enabled = _local_batch_backproject_enabled()
     big_jit_enabled = _local_big_jit_enabled()
     compact_zero_posterior_rows = _local_compact_zero_posterior_rows_enabled()
     combined_masked_preprocess = _local_combined_masked_preprocess_enabled()
@@ -1988,7 +1917,7 @@ def run_local_em_exact(
         packed_summed_rows = flatten_bucket_rows(packed_summed)
         packed_ctf_rows = flatten_bucket_rows(packed_ctf_probs)
         timing.pack_s += time.time() - pack_t0
-        ## TODO THIS CLEAN THIS INSSANE BRANCHING HERE
+
         Ft_y, Ft_ctf = _accumulate_local_adjoint_rows(
             packed_summed_rows=packed_summed_rows,
             packed_ctf_rows=packed_ctf_rows,
@@ -2001,7 +1930,6 @@ def run_local_em_exact(
             use_window=use_window,
             use_native_half_volume_mstep=use_native_half_volume_mstep,
             current_size=current_size,
-            batch_backproject_enabled=batch_backproject_enabled,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
             return_profile=return_profile,
@@ -2260,7 +2188,6 @@ def run_local_em_exact(
     profile_summary = {
         "big_jit_enabled": np.asarray(big_jit_enabled),
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
-        "batch_backproject_enabled": np.asarray(batch_backproject_enabled),
         "compact_zero_posterior_rows": np.asarray(compact_zero_posterior_rows),
         "combined_masked_preprocess": np.asarray(combined_masked_preprocess),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
