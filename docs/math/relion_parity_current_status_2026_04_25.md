@@ -1437,12 +1437,13 @@ Forced higher-iteration replay now running after the prior-center fix:
   values still force the older split local branches for bisects.
 - Exact-local native half preprocessing now defaults to `auto`, so eligible
   raw real-space buckets can stay in the JAX half-rFFT path needed by big-JIT.
-- Dense/global `em_engine.py` now has an experimental opt-in bucket big-JIT:
-  `RECOVAR_RELION_DENSE_BIG_JIT=1`. It is intentionally default-off until f5k
-  refinement parity/performance are measured.
-- Dense big-JIT currently covers the no-sparse-pass2, no-winner-take-all,
-  no-noise-accumulation bucket path. Unsupported cases log and fall back to the
-  existing dense implementation.
+- Dense/global `em_engine.py` now defaults to the bucket big-JIT where eligible:
+  `RECOVAR_RELION_DENSE_BIG_JIT` defaults to `1`. Explicit false-like values
+  force the older split dense branches for bisects.
+- Dense big-JIT currently covers the dense/global bucket path including
+  sparse-pass2 skip decisions fed by the big-JIT block maxima. Unsupported
+  noise/winner/debug cases log and fall back to the existing dense
+  implementation.
 - The dense big-JIT call construction in `em_engine.py` is factored through one
   per-batch helper so pass 1 and pass 2 share the same bucket argument setup.
 - `exact_v2` is now a deprecated alias for `exact_v1`, not a presented active

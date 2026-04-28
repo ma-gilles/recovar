@@ -1,8 +1,8 @@
-"""Dense/global single-volume EM bucket big-JIT scaffold.
+"""Dense/global single-volume EM bucket big-JIT path.
 
-This module is deliberately not wired into ``em_engine.run_em`` by default.
-It provides a compiled per-rotation-bucket boundary that mirrors the dense
-half-spectrum hot path while keeping full Fourier arrays out of the API.
+This module provides the compiled per-rotation-bucket boundary used by
+``em_engine.run_em`` for eligible dense/global RELION buckets. Inputs stay in
+half-spectrum layout so the hot path avoids full Fourier image tensors.
 """
 
 from __future__ import annotations
