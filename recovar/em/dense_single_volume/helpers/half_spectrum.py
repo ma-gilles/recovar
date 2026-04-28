@@ -31,6 +31,15 @@ def make_shell_indices_half(image_shape):
     return radii.reshape(-1).astype(jnp.int32)
 
 
+def half_spectrum_dc_index(image_shape) -> int:
+    """Return the flat packed-rfft index of the DC pixel."""
+    shell_indices = np.asarray(make_shell_indices_half(image_shape), dtype=np.int32)
+    dc_indices = np.flatnonzero(shell_indices == 0)
+    if dc_indices.size != 1:
+        raise ValueError(f"Expected exactly one half-spectrum DC pixel, found {dc_indices.size}")
+    return int(dc_indices[0])
+
+
 def make_relion_noise_shell_indices_half(image_shape):
     """Return RELION's non-redundant half-plane shell indices for noise sums."""
 

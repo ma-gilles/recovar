@@ -59,6 +59,7 @@ from .helpers.backprojection import (
 from .helpers.env_flags import parse_env_bool
 from .helpers.fourier_window import make_fourier_window_spec
 from .helpers.half_spectrum import (
+    half_spectrum_dc_index,
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_shell_indices_half,
@@ -1132,6 +1133,7 @@ def run_em(
     dense_big_jit_noise_variance_half = (
         noise_variance_half if accumulate_noise else jnp.ones(n_half, dtype=jnp.float32)
     )
+    score_dc_index = half_spectrum_dc_index(image_shape)
 
     start_idx = 0
 
@@ -1319,16 +1321,10 @@ def run_em(
 
         # -- DC exclusion (RELION parity: Minvsigma2[0] = 0) --
         # RELION excludes the DC pixel from likelihood scores.
-        # In recovar's half-spectrum layout, DC is NOT at flat index 0.
-        # Find the DC pixel by locating shell index 0 in the precomputed
-        # shell_indices_half array.
+        # In recovar's half-spectrum layout, DC is NOT generally at flat index 0.
         if half_spectrum_scoring and relion_firstiter_score_mode != "normalized_cc":
-            ## TODO: THIS SEEMS LIKE A VERY INFECCICIENT WAY TO DO THIS. JUST FIND INDEX AND .SET IT 0?
-            dc_shell_idx = make_shell_indices_half(image_shape)
-            dc_mask = dc_shell_idx == 0  # True at DC pixel(s)
-            # Zero out DC in SCORING arrays only
-            shifted_score_half = jnp.where(dc_mask[None, :], 0.0, shifted_score_half)
-            score_weight_half = jnp.where(dc_mask[None, :], 0.0, score_weight_half)
+            shifted_score_half = shifted_score_half.at[:, score_dc_index].set(0.0)
+            score_weight_half = score_weight_half.at[:, score_dc_index].set(0.0)
 
         # -- WINDOW gather (if active) --
         # DC-zeroed arrays for scoring, with-DC arrays for M-step accumulation.
