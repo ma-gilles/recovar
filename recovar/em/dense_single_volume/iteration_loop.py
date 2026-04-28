@@ -2485,13 +2485,10 @@ def _run_relion_iteration_loop(
                     "Replay override: sigma_offset <- %.4f A (iter=%d)",
                     current_sigma_offset_angstrom,
                     iteration + 1,
-                )
+            )
             _replay_prev_trans = iter_replay_override.get("previous_best_translations")
             if _replay_prev_trans is not None:
-                previous_best_translations = [
-                    np.asarray(_replay_prev_trans[0], dtype=np.float32) if _replay_prev_trans[0] is not None else None,
-                    np.asarray(_replay_prev_trans[1], dtype=np.float32) if _replay_prev_trans[1] is not None else None,
-                ]
+                previous_best_translations = _optional_float32_half_pair(_replay_prev_trans)
                 logger.info(
                     "Replay override: previous_best_translations <- half1=%s half2=%s",
                     "set" if previous_best_translations[0] is not None else "none",
@@ -2499,10 +2496,7 @@ def _run_relion_iteration_loop(
                 )
             _replay_prev_rots = iter_replay_override.get("previous_best_rotations")
             if _replay_prev_rots is not None:
-                previous_best_rotations = [
-                    np.asarray(_replay_prev_rots[0], dtype=np.float32) if _replay_prev_rots[0] is not None else None,
-                    np.asarray(_replay_prev_rots[1], dtype=np.float32) if _replay_prev_rots[1] is not None else None,
-                ]
+                previous_best_rotations = _optional_float32_half_pair(_replay_prev_rots)
                 logger.info(
                     "Replay override: previous_best_rotations <- half1=%s half2=%s",
                     "set" if previous_best_rotations[0] is not None else "none",
