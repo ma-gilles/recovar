@@ -281,10 +281,6 @@ def _local_big_jit_enabled() -> bool:
     return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_BIG_JIT", default=True)
 
 
-def _local_compact_zero_posterior_rows_enabled() -> bool:
-    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_COMPACT_ZERO_POSTERIOR_ROWS", default=True)
-
-
 def _local_materialize_projection_abs2_enabled(default: bool) -> bool:
     parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_MATERIALIZE_PROJECTION_ABS2", default="auto")
     return bool(default) if parsed is None else parsed
@@ -787,7 +783,6 @@ def run_local_em_exact(
         noise_xa = jnp.zeros(n_shells, dtype=jnp.float32)
 
     big_jit_enabled = _local_big_jit_enabled()
-    compact_zero_posterior_rows = _local_compact_zero_posterior_rows_enabled()
     default_fused_score_mstep = (
         (max_significants is None or int(max_significants) <= 0)
         and normalization_log_z is None
@@ -1592,59 +1587,22 @@ def run_local_em_exact(
         if reconstruct_significant_only:
             reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)
             transfer_profile["reconstruction_mask_to_host_s"] += time.time() - pack_t0
-            if compact_zero_posterior_rows:
-                transfer_t0 = time.time()
-                probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
-                transfer_profile["mstep_posterior_sum_to_host_s"] += time.time() - transfer_t0
-                (
-                    reconstruction_take_indices,
-                    reconstruction_pack_mask_np,
-                    reconstruction_counts_np,
-                    reconstruction_row_count,
-                ) = _build_nonzero_reconstruction_pack_indices(
-                    reconstruction_rotation_mask_np,
-                    np.asarray(bucket.local_rotation_mask, dtype=bool),
-                    probs_sum_t_np,
-                    rotation_block_size,
-                )
-            else:
-                (
-                    reconstruction_take_indices,
-                    reconstruction_pack_mask_np,
-                    reconstruction_counts_np,
-                    reconstruction_row_count,
-                ) = _build_reconstruction_pack_indices(
-                    reconstruction_rotation_mask_np,
-                    np.asarray(bucket.local_rotation_mask, dtype=bool),
-                    rotation_block_size,
-                )
-        elif compact_zero_posterior_rows:
-            reconstruction_rotation_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)
-            transfer_t0 = time.time()
-            probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
-            transfer_profile["mstep_posterior_sum_to_host_s"] += time.time() - transfer_t0
-            (
-                reconstruction_take_indices,
-                reconstruction_pack_mask_np,
-                reconstruction_counts_np,
-                reconstruction_row_count,
-            ) = _build_nonzero_reconstruction_pack_indices(
-                reconstruction_rotation_mask_np,
-                np.asarray(bucket.local_rotation_mask, dtype=bool),
-                probs_sum_t_np,
-                rotation_block_size,
-            )
         else:
             reconstruction_rotation_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)
-            reconstruction_take_indices = np.broadcast_to(
-                np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
-                (batch_size, int(bucket.bucket_rotation_count)),
-            )
-            reconstruction_pack_mask_np = reconstruction_rotation_mask_np
-            reconstruction_counts_np = np.asarray(bucket.actual_rotation_counts, dtype=np.int32)
-            reconstruction_row_count = int(np.sum(reconstruction_counts_np, dtype=np.int64))
-        if probs_sum_t_np is None:
-            probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+        transfer_t0 = time.time()
+        probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+        transfer_profile["mstep_posterior_sum_to_host_s"] += time.time() - transfer_t0
+        (
+            reconstruction_take_indices,
+            reconstruction_pack_mask_np,
+            reconstruction_counts_np,
+            reconstruction_row_count,
+        ) = _build_nonzero_reconstruction_pack_indices(
+            reconstruction_rotation_mask_np,
+            np.asarray(bucket.local_rotation_mask, dtype=bool),
+            probs_sum_t_np,
+            rotation_block_size,
+        )
         reconstruction_take_indices_jnp = jnp.asarray(reconstruction_take_indices, dtype=jnp.int32)
         reconstruction_pack_mask_jnp = jnp.asarray(reconstruction_pack_mask_np)
         packed_rotations_np = np.take_along_axis(
@@ -1973,7 +1931,6 @@ def run_local_em_exact(
     profile_summary = {
         "big_jit_enabled": np.asarray(big_jit_enabled),
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
-        "compact_zero_posterior_rows": np.asarray(compact_zero_posterior_rows),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
         "materialize_projection_abs2": np.asarray(materialize_projection_abs2),
         "keep_half_volume_accumulators": np.asarray(keep_half_volume_accumulators),
