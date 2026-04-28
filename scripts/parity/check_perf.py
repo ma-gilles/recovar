@@ -4,7 +4,9 @@
 Reads ``iter_NNN.npz`` files from ``--dump-dir`` (written by
 ``recovar.em.dense_single_volume.parity_dump``) and compares the
 ``wall_time_s`` field against ``--baseline``'s ``per_iter_seconds_total``
-table. Emits one line per checked iter with a status:
+table. ``stage_seconds_*`` fields are cumulative stage-completion stamps
+since iteration start, not per-stage duration deltas. Emits one line per
+checked iter with a status:
 
     iter 4: 251.3s vs baseline 240.0s (+5%) OK
     iter 5: 248.7s vs baseline 240.0s (+4%) OK
