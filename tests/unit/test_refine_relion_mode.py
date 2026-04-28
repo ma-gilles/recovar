@@ -1,13 +1,4 @@
-"""Smoke tests for refine_single_volume with mode="relion".
-
-Verifies:
-1. RELION mode runs without error on a tiny dataset (4 images, 8px, 2 iters)
-2. Returns the expected dict keys (including RELION-specific ones)
-3. Legacy mode is unchanged by the new mode parameter
-4. Invalid mode raises ValueError
-5. Convergence state is a RefinementState instance
-6. data_vs_prior_trajectory and ave_Pmax_trajectory are populated
-"""
+"""Smoke and parity tests for RELION-mode single-volume refinement."""
 
 from pathlib import Path
 
@@ -61,14 +52,7 @@ from recovar.em.dense_single_volume.iteration_loop import (
     refine_single_volume,
 )
 from recovar.em.dense_single_volume.helpers.convergence import RefinementState
-from recovar.em.dense_single_volume.helpers.local_search import (
-    _local_search_chunk_size,
-    _local_search_engine_rotation_block_size,
-    _local_search_max_union_rotations,
-    _local_search_rotation_block_size,
-    _pad_local_search_rotations,
-    _partition_local_search_groups,
-)
+from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
 from recovar.em.dense_single_volume.helpers.resolution import (
     _bootstrap_current_size_relion,
     bootstrap_current_size_from_ini_high_relion,
@@ -156,138 +140,10 @@ def _make_rotations(n, seed=42):
     return q.astype(np.float32)
 
 
-def test_local_search_chunk_size_caps_seed_groups_at_64_images():
-    assert _local_search_chunk_size(1) == 1
-    assert _local_search_chunk_size(64) == 64
-    assert _local_search_chunk_size(512) == 64
-
-
-def test_local_search_rotation_block_size_uses_power_of_two_buckets():
-    assert _local_search_rotation_block_size(0, 5000) == 1
-    assert _local_search_rotation_block_size(12, 5000) == 16
-    assert _local_search_rotation_block_size(17, 5000) == 32
-    assert _local_search_rotation_block_size(3000, 5000) == 4096
-    assert _local_search_rotation_block_size(5001, 5000) == 5000
-
-
 def test_local_search_engine_rotation_block_size_caps_dense_tiles():
     assert _local_search_engine_rotation_block_size(64) == 64
     assert _local_search_engine_rotation_block_size(1024) == 1024
     assert _local_search_engine_rotation_block_size(5000) == 1024
-
-
-def test_local_search_max_union_rotations_tracks_engine_cap():
-    assert _local_search_max_union_rotations(64) == 256
-    assert _local_search_max_union_rotations(1024) == 4096
-    assert _local_search_max_union_rotations(5000) == 4096
-
-
-def test_pad_local_search_rotations_masks_padding_with_large_negative_prior():
-    rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 12, axis=0)
-    log_prior = np.zeros((1, 12), dtype=np.float32)
-    padded_rotations, padded_log_prior, actual_count, block_size = _pad_local_search_rotations(
-        rotations,
-        log_prior,
-        5000,
-    )
-
-    assert actual_count == 12
-    assert block_size == 16
-    assert padded_rotations.shape == (16, 3, 3)
-    assert padded_log_prior.shape == (1, 16)
-    np.testing.assert_allclose(padded_log_prior[0, :12], 0.0)
-    np.testing.assert_allclose(padded_log_prior[0, 12:], -1e30)
-
-
-def test_pad_local_search_rotations_caps_large_neighborhoods_without_recompiling_exact_shape():
-    rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 6000, axis=0)
-    log_prior = np.zeros((1, 6000), dtype=np.float32)
-    padded_rotations, padded_log_prior, actual_count, block_size = _pad_local_search_rotations(
-        rotations,
-        log_prior,
-        5000,
-    )
-
-    assert actual_count == 6000
-    assert block_size == 5000
-    assert padded_rotations.shape == (6000, 3, 3)
-    assert padded_log_prior.shape == (1, 6000)
-    np.testing.assert_allclose(padded_log_prior, 0.0)
-
-
-def test_partition_local_search_groups_keeps_small_exact_unions_together(monkeypatch):
-    import recovar.em.dense_single_volume.helpers.local_search as local_search_mod
-
-    def fake_selector(
-        prior_rotation_indices,
-        sigma_rot,
-        sigma_psi,
-        healpix_order,
-        sigma_cutoff=3.0,
-        *,
-        per_image=False,
-        grid_metadata=None,
-    ):
-        _ = (sigma_rot, sigma_psi, healpix_order, sigma_cutoff, grid_metadata)
-        n = np.asarray(prior_rotation_indices).shape[0]
-        assert per_image
-        return np.arange(12, dtype=np.int64), np.zeros((n, 12), dtype=np.float32)
-
-    monkeypatch.setattr(local_search_mod, "get_local_rotation_grid_fast", fake_selector)
-
-    groups = _partition_local_search_groups(
-        np.zeros((4, 3), dtype=np.float32),
-        sigma_rot=np.deg2rad(7.5),
-        sigma_psi=np.deg2rad(7.5),
-        healpix_order=4,
-        image_batch_size=4,
-        rotation_block_size=5000,
-        grid_metadata={"mode": "factorized", "n_pixels": np.int64(192), "n_psi": np.int64(1536)},
-    )
-
-    assert len(groups) == 1
-    group_indices, local_indices, local_log_prior = groups[0]
-    np.testing.assert_array_equal(np.sort(group_indices), np.array([0, 1, 2, 3], dtype=np.int64))
-    assert local_indices.shape == (12,)
-    assert local_log_prior.shape == (4, 12)
-
-
-def test_partition_local_search_groups_splits_large_exact_unions(monkeypatch):
-    import recovar.em.dense_single_volume.helpers.local_search as local_search_mod
-
-    def fake_selector(
-        prior_rotation_indices,
-        sigma_rot,
-        sigma_psi,
-        healpix_order,
-        sigma_cutoff=3.0,
-        *,
-        per_image=False,
-        grid_metadata=None,
-    ):
-        _ = (sigma_rot, sigma_psi, healpix_order, sigma_cutoff, grid_metadata)
-        n = np.asarray(prior_rotation_indices).shape[0]
-        assert per_image
-        n_union = 5000 if n > 1 else 1200
-        return np.arange(n_union, dtype=np.int64), np.zeros((n, n_union), dtype=np.float32)
-
-    monkeypatch.setattr(local_search_mod, "get_local_rotation_grid_fast", fake_selector)
-
-    groups = _partition_local_search_groups(
-        np.zeros((4, 3), dtype=np.float32),
-        sigma_rot=np.deg2rad(7.5),
-        sigma_psi=np.deg2rad(7.5),
-        healpix_order=4,
-        image_batch_size=4,
-        rotation_block_size=5000,
-        grid_metadata={"mode": "factorized", "n_pixels": np.int64(192), "n_psi": np.int64(1536)},
-    )
-
-    assert len(groups) == 4
-    for group_indices, local_indices, local_log_prior in groups:
-        assert group_indices.shape == (1,)
-        assert local_indices.shape == (1200,)
-        assert local_log_prior.shape == (1, 1200)
 
 
 def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_support(monkeypatch):
@@ -682,11 +538,7 @@ def test_run_local_search_iteration_dispatches_exact_engine(monkeypatch, rng):
             )
         raise AssertionError("test expects accumulate_noise=True")
 
-    def fake_grouped(*args, **kwargs):
-        raise AssertionError("grouped_union path should not be used")
-
     monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration_exact_v1", fake_exact)
-    monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration_grouped_union", fake_grouped)
 
     prior_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], mock_dataset.n_units, axis=0)
     rotation_grid_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 6, axis=0)
@@ -756,11 +608,7 @@ def test_run_local_search_iteration_exact_engine_uses_translation_prior_referenc
             ),
         )
 
-    def fake_grouped(*args, **kwargs):
-        raise AssertionError("grouped_union path should not be used")
-
     monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration_exact_v1", fake_exact)
-    monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration_grouped_union", fake_grouped)
 
     prior_rotations = np.zeros((1, 3), dtype=np.float32)
     rotation_grid_rotations = get_relion_rotation_grid(0).astype(np.float32)
@@ -1892,85 +1740,6 @@ def test_run_local_em_exact_big_jit_bucket_matches_legacy(monkeypatch, rng):
     assert noise_big.sumw == pytest.approx(noise_legacy.sumw, abs=1e-5)
 
 
-def test_grouped_local_search_passes_translation_prior_centers_to_run_em(monkeypatch, rng):
-    dataset = MockDataset(1, rng)
-    mean = _hermitian_volume(VOLUME_SHAPE, seed=301)
-    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
-    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
-    prior_rotations = np.zeros((1, 3), dtype=np.float32)
-    rotation_grid_rotations = get_relion_rotation_grid(0).astype(np.float32)
-    rotation_grid_eulers = get_relion_rotation_grid_eulers(0).astype(np.float32)
-    translations = np.array([[0.0, 0.0], [1.0, -1.0]], dtype=np.float32)
-    prior_translations = np.array([[0.25, -0.75]], dtype=np.float32)
-    captured = {}
-
-    def fake_partition(*args, **kwargs):
-        _ = (args, kwargs)
-        return [
-            (
-                np.array([0], dtype=np.int32),
-                np.array([0], dtype=np.int32),
-                np.zeros((1, 1), dtype=np.float32),
-            )
-        ]
-
-    def fake_run_em(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        rotations,
-        translations,
-        disc_type,
-        **kwargs,
-    ):
-        _ = (mean, mean_variance, noise_variance, translations, disc_type)
-        captured["translation_prior_centers"] = np.asarray(kwargs["translation_prior_centers"], dtype=np.float32).copy()
-        return (
-            None,
-            np.zeros(experiment_dataset.n_units, dtype=np.int32),
-            jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.complex64),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(experiment_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(experiment_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.ones(np.asarray(rotations).shape[0], dtype=jnp.float32),
-            ),
-        )
-
-    monkeypatch.setattr(iteration_loop_module, "_partition_local_search_groups", fake_partition)
-    monkeypatch.setattr(iteration_loop_module, "run_em", fake_run_em)
-
-    Ft_y, Ft_ctf, hard_assignment, stats, profile = iteration_loop_module._run_local_search_iteration_grouped_union(
-        dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        prior_rotations,
-        rotation_grid_rotations,
-        rotation_grid_eulers,
-        0,
-        np.deg2rad(7.5),
-        np.deg2rad(7.5),
-        translations,
-        prior_translations,
-        3.0,
-        1.5,
-        "linear_interp",
-        1,
-        4,
-        4,
-    )
-
-    np.testing.assert_allclose(captured["translation_prior_centers"], prior_translations, rtol=1e-6, atol=1e-6)
-    assert Ft_y.shape == (VOLUME_SIZE,)
-    assert Ft_ctf.shape == (VOLUME_SIZE,)
-    assert hard_assignment.shape == (1,)
-    assert stats.max_posterior_per_image.shape == (1,)
-    assert profile is None
-
-
 def test_compute_reconstruction_support_matches_relion_style_threshold():
     probs = jnp.asarray(
         [
@@ -2021,10 +1790,7 @@ def test_tracked_local_engine_todo_ids_are_present():
     ]
     for todo_id in required_ids:
         assert todo_id in docs_text
-    assert "RELION_LOCAL_ENGINE/T001" in iteration_text
-    assert "RELION_LOCAL_ENGINE/T002" in iteration_text
-    assert "RELION_LOCAL_ENGINE/T003" in iteration_text
-    assert "RELION_LOCAL_ENGINE/T004" in iteration_text
+    assert "RELION_LOCAL_ENGINE/T001" not in iteration_text
     assert "DENSE_ENGINE_BOUNDARY/E001" in em_engine_text
     assert "DENSE_ENGINE_BOUNDARY/E002" in em_engine_text
     assert "DENSE_ENGINE_BOUNDARY/E003" in em_engine_text
@@ -2033,10 +1799,11 @@ def test_tracked_local_engine_todo_ids_are_present():
 
 def test_local_engine_normalization_rejects_removed_aliases():
     assert _normalize_local_engine("exact_v1") == "exact_v1"
-    assert _normalize_local_engine("grouped_union") == "grouped_union"
-    with pytest.raises(ValueError, match="expected 'exact_v1' or 'grouped_union'"):
+    with pytest.raises(ValueError, match="expected 'exact_v1'"):
+        _normalize_local_engine("grouped_union")
+    with pytest.raises(ValueError, match="expected 'exact_v1'"):
         _normalize_local_engine("exact_v2")
-    with pytest.raises(ValueError, match="expected 'exact_v1' or 'grouped_union'"):
+    with pytest.raises(ValueError, match="expected 'exact_v1'"):
         _normalize_local_engine("unknown")
 
 

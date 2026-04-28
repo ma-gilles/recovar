@@ -6,7 +6,7 @@ Tracked TODO IDs in the active RELION local-search refactor.
 
 | ID | Status | Owning module | Rationale |
 |---|---|---|---|
-| `RELION_LOCAL_ENGINE/T001` | OPEN | `recovar/em/dense_single_volume/iteration_loop.py` | Grouped-union local search is the wrong active abstraction. |
+| `RELION_LOCAL_ENGINE/T001` | RESOLVED | `recovar/em/dense_single_volume/iteration_loop.py` | Grouped-union local search was removed; `exact_v1` is now the only local-search engine. |
 | `RELION_LOCAL_ENGINE/T002` | OPEN | `recovar/em/dense_single_volume/local_layout.py` | Active RELION local path must use per-image local hypotheses. |
 | `RELION_LOCAL_ENGINE/T003` | OPEN | `recovar/em/dense_single_volume/local_em_engine.py` | Local path should not depend on dense shared-grid engine orchestration. |
 | `RELION_LOCAL_ENGINE/T004` | OPEN | `recovar/em/dense_single_volume/iteration_loop.py` | RELION-parity hacks should move inward, out of outer-loop control flow. |

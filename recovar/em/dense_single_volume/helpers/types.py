@@ -84,8 +84,7 @@ class NoiseStats(NamedTuple):
 class EMProfileStats(NamedTuple):
     """Host-side timing and work counters for one ``run_em`` call.
 
-    These values are diagnostic only and are intended for profiling the
-    grouped local-search path without changing numerical behavior.
+    These values are diagnostic only and do not affect numerical behavior.
     """
 
     batch_fetch_s: float

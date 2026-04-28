@@ -323,11 +323,11 @@ def main():
         "--local_search_profile",
         choices=["auto", "on", "off"],
         default="auto",
-        help="Control grouped local-search profile collection. 'auto' profiles only when intermediates are enabled.",
+        help="Control local-search profile collection. 'auto' profiles only when intermediates are enabled.",
     )
     parser.add_argument(
         "--local_engine",
-        choices=["grouped_union", "exact_v1"],
+        choices=["exact_v1"],
         default="exact_v1",
         help="Which RELION local-search engine to use.",
     )

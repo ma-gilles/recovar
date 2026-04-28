@@ -478,37 +478,28 @@ For each image with prior orientation `(rot_i, tilt_i, psi_i)`:
    `log_prior[d,p] = log_gauss(diffang_d, sigma_rot) + log_gauss(diffpsi_p, sigma_psi)`,
    normalized so the prior sums to 1. Unselected rotations get `-1e30` (zero weight).
 
-**Grouping for GPU efficiency** --
-[`local_search.py:92`](../../recovar/em/dense_single_volume/helpers/local_search.py#L92) -- `_partition_local_search_groups()`:
+**Bucketization for GPU efficiency** --
+[`local_layout.py`](../../recovar/em/dense_single_volume/local_layout.py) --
+`build_local_hypothesis_layout()` and `bucket_local_hypothesis_layout()`:
 
 Different images have different prior orientations, so their neighborhoods differ.
-But the engine (`run_em`) processes all images in a batch against the same set
-of rotations. To reconcile:
-1. Sort images by their prior HEALPix pixel (so nearby orientations are adjacent).
-2. Form chunks of ~`image_batch_size` images.
-3. For each chunk, compute the **union** of all per-image neighborhoods. This union
-   becomes the rotation grid for the whole chunk. Each image's log-prior is
-   `(n_images_in_chunk, n_union_rotations)` -- entries outside image `i`'s own
-   neighborhood are `-1e30`.
-4. If the union is too large (> `rotation_block_size`), recursively split the chunk
-   in half until each sub-chunk's union fits.
-5. Pad the union to a JIT-friendly size (multiple of `rotation_block_size`), with
-   padding rotations masked to `-1e30` prior.
+The active local path keeps that per-image support explicit:
+1. Build a flat `LocalHypothesisLayout` containing each image's selected rotations,
+   rotation log-priors, translation priors, and row offsets.
+2. Group images by padded local-rotation count so nearby shapes reuse the same
+   compiled XLA programs.
+3. Build `LocalBucketSpec` batches with per-image rotation masks and `-inf` prior
+   on padded rows, preserving the exact per-image posterior support.
 
-**Per-chunk EM iteration** --
-[`iteration_loop.py:90`](../../recovar/em/dense_single_volume/iteration_loop.py#L90) -- `_run_local_search_iteration()`:
+**Per-bucket EM iteration** --
+[`local_em_engine.py`](../../recovar/em/dense_single_volume/local_em_engine.py) --
+`run_local_em_exact()`:
 
-For each chunk `(group_image_indices, local_rotation_indices, local_log_prior)`:
-1. Build a per-image Gaussian translation log-prior centered on each image's
-   previous best translation, with `sigma = sigma_offset_angstrom` (data-driven,
-   updated each iteration from the MAP translation changes).
-2. Call `run_em` with:
-   - `rotations = rotation_grid[local_rotation_indices]` (the union subset)
-   - `rotation_log_prior = local_log_prior` (per-image, `-1e30` outside each image's cone)
-   - `translation_log_prior = per-image Gaussian` centered on previous best
-   - Only the images in `group_image_indices`
-3. Accumulate `Ft_y`, `Ft_ctf`, noise stats, hard assignments, and per-direction
-   posterior sums across all chunks.
+For each local bucket:
+1. Preprocess the selected images and CTF rows.
+2. Score each image only on its own local rotation neighborhood and translation grid.
+3. Normalize posteriors, accumulate `Ft_y`/`Ft_ctf`, noise stats, hard assignments,
+   and per-direction posterior sums across buckets.
 
 The per-direction posterior sums feed back into `make_relion_direction_log_prior`
 for the next iteration's direction prior (RELION's `pdf_direction`).
@@ -522,8 +513,9 @@ for the next iteration's direction prior (RELION's `pdf_direction`).
 - [`convergence.py:691`](../../recovar/em/dense_single_volume/helpers/convergence.py#L691) -- `refine_angular_sampling()`: order bump + parameter update
 - [`sampling.py:772`](../../recovar/em/sampling.py#L772) -- `get_local_rotation_grid_fast()`: per-image neighborhood with Gaussian prior
 - [`sampling.py:102`](../../recovar/em/sampling.py#L102) -- `build_local_search_grid_metadata()`: precomputes direction vectors + psi grid for fast neighbor lookup
-- [`local_search.py:92`](../../recovar/em/dense_single_volume/helpers/local_search.py#L92) -- `_partition_local_search_groups()`: sort-and-split grouping
-- [`iteration_loop.py:90`](../../recovar/em/dense_single_volume/iteration_loop.py#L90) -- `_run_local_search_iteration()`: per-chunk EM with per-image priors
+- [`local_layout.py`](../../recovar/em/dense_single_volume/local_layout.py) -- `build_local_hypothesis_layout()`: per-image local hypothesis layout
+- [`local_layout.py`](../../recovar/em/dense_single_volume/local_layout.py) -- `bucket_local_hypothesis_layout()`: padded shape buckets for exact local EM
+- [`local_em_engine.py`](../../recovar/em/dense_single_volume/local_em_engine.py) -- `run_local_em_exact()`: per-bucket EM with per-image priors
 - [`orientation_priors.py:16`](../../recovar/em/dense_single_volume/helpers/orientation_priors.py#L16) -- `make_relion_translation_log_prior()`: Gaussian translation prior from `sigma_offset_angstrom` and previous best offset
 - [`orientation_priors.py:118`](../../recovar/em/dense_single_volume/helpers/orientation_priors.py#L118) -- `make_relion_direction_log_prior()`: accumulates per-direction posterior across iterations for the direction prior
 

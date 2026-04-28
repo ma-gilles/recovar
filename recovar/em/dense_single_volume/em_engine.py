@@ -608,9 +608,9 @@ def _adjoint_slice_volume_windowed(
 ):
     """Scatter a windowed half-spectrum into a full half-grid and adjoint-slice.
 
-    This keeps the scatter inside a single jitted helper so the grouped local
-    path does not bounce back through Python between the windowed GEMM output
-    and the adjoint accumulation.
+    This keeps the scatter inside a single jitted helper so local EM paths do
+    not bounce back through Python between the windowed GEMM output and the
+    adjoint accumulation.
     """
     return core.adjoint_slice_volume_indexed(
         windowed_half,
