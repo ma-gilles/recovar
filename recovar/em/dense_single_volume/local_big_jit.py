@@ -17,10 +17,9 @@ from recovar.core import mask as core_mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.padding as padding
 from recovar.em.dense_single_volume.em_primitives import (
-    _batch_adjoint_slice_volume_half,
-    _batch_adjoint_slice_volume_windowed,
     _compute_noise_block,
 )
+from recovar.em.dense_single_volume.helpers.backprojection import accumulate_adjoint_pair
 from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
 
 
@@ -440,83 +439,22 @@ def run_local_bucket_big_jit(
 
     flat_summed = summed.reshape(batch_size * local_rotations.shape[1], summed.shape[-1])
     flat_ctf_probs = ctf_probs.reshape(batch_size * local_rotations.shape[1], ctf_probs.shape[-1])
-    if not disable_adjoint_y and not disable_adjoint_ctf:
-        if use_window:
-            updated_volumes = _batch_adjoint_slice_volume_windowed(
-                jnp.stack([flat_summed, flat_ctf_probs], axis=0),
-                recon_window_indices,
-                flat_rotations,
-                jnp.stack([Ft_y, Ft_ctf], axis=0),
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                use_native_half_volume_mstep,
-                projection_max_r,
-            )
-        else:
-            updated_volumes = _batch_adjoint_slice_volume_half(
-                jnp.stack([flat_summed, flat_ctf_probs], axis=0),
-                flat_rotations,
-                jnp.stack([Ft_y, Ft_ctf], axis=0),
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                use_native_half_volume_mstep,
-            )
-        Ft_y = updated_volumes[0]
-        Ft_ctf = updated_volumes[1]
-    elif not disable_adjoint_y:
-        if use_window:
-            Ft_y = _batch_adjoint_slice_volume_windowed(
-                flat_summed[None, :, :],
-                recon_window_indices,
-                flat_rotations,
-                Ft_y[None, :],
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                use_native_half_volume_mstep,
-                projection_max_r,
-            )[0]
-        else:
-            Ft_y = _batch_adjoint_slice_volume_half(
-                flat_summed[None, :, :],
-                flat_rotations,
-                Ft_y[None, :],
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                use_native_half_volume_mstep,
-            )[0]
-    elif not disable_adjoint_ctf:
-        if use_window:
-            Ft_ctf = _batch_adjoint_slice_volume_windowed(
-                flat_ctf_probs[None, :, :],
-                recon_window_indices,
-                flat_rotations,
-                Ft_ctf[None, :],
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                use_native_half_volume_mstep,
-                projection_max_r,
-            )[0]
-        else:
-            Ft_ctf = _batch_adjoint_slice_volume_half(
-                flat_ctf_probs[None, :, :],
-                flat_rotations,
-                Ft_ctf[None, :],
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                True,
-                use_native_half_volume_mstep,
-            )[0]
+    Ft_y, Ft_ctf = accumulate_adjoint_pair(
+        flat_summed,
+        flat_ctf_probs,
+        flat_rotations,
+        Ft_y,
+        Ft_ctf,
+        recon_window_indices,
+        image_shape,
+        recon_volume_shape,
+        disc_type,
+        use_window=use_window,
+        disable_left=disable_adjoint_y,
+        disable_right=disable_adjoint_ctf,
+        half_volume=use_native_half_volume_mstep,
+        max_r=projection_max_r,
+    )
 
     if accumulate_noise:
         support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)

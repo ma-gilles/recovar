@@ -14,6 +14,7 @@ import jax
 import jax.numpy as jnp
 
 from recovar import core
+from recovar.em.dense_single_volume.helpers.backprojection import accumulate_adjoint_pair
 
 
 class DenseBucketResult(NamedTuple):
@@ -31,8 +32,6 @@ class DenseBucketResult(NamedTuple):
     block_argmax: jax.Array
     max_posterior: jax.Array
     probs_sum_t: jax.Array
-
-
 def _project_half(
     mean_for_proj,
     rotations_block,
@@ -43,6 +42,8 @@ def _project_half(
     projection_half_volume: bool,
     projection_max_r,
 ):
+    """Project to a half-image while preserving the public ``"auto"`` sentinel."""
+
     if projection_max_r == "auto":
         return core.slice_volume(
             mean_for_proj,
@@ -166,128 +167,22 @@ def _adjoint_dense_bucket(
     mstep_half_volume: bool,
     backprojection_max_r,
 ):
-    if disable_adjoint_y and disable_adjoint_ctf:
-        return Ft_y, Ft_ctf
-
-    if not disable_adjoint_y and not disable_adjoint_ctf:
-        volumes = jnp.stack([Ft_y, Ft_ctf], axis=0)
-        slices = jnp.stack([summed_half, ctf_probs_half], axis=0)
-        if use_window:
-            if backprojection_max_r == "auto":
-                updated = core.batch_adjoint_slice_volume_indexed(
-                    slices,
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=volumes,
-                    half_image=True,
-                    half_volume=mstep_half_volume,
-                )
-            else:
-                updated = core.batch_adjoint_slice_volume_indexed(
-                    slices,
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=volumes,
-                    half_image=True,
-                    half_volume=mstep_half_volume,
-                    max_r=backprojection_max_r,
-                )
-        else:
-            updated = core.batch_adjoint_slice_volume(
-                slices,
-                rotations_block,
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                volumes=volumes,
-                half_image=True,
-                half_volume=mstep_half_volume,
-            )
-        return updated[0], updated[1]
-
-    if not disable_adjoint_y:
-        if use_window:
-            if backprojection_max_r == "auto":
-                Ft_y = core.batch_adjoint_slice_volume_indexed(
-                    summed_half[None, :, :],
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=Ft_y[None, :],
-                    half_image=True,
-                    half_volume=mstep_half_volume,
-                )[0]
-            else:
-                Ft_y = core.batch_adjoint_slice_volume_indexed(
-                    summed_half[None, :, :],
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=Ft_y[None, :],
-                    half_image=True,
-                    half_volume=mstep_half_volume,
-                    max_r=backprojection_max_r,
-                )[0]
-        else:
-            Ft_y = core.batch_adjoint_slice_volume(
-                summed_half[None, :, :],
-                rotations_block,
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                volumes=Ft_y[None, :],
-                half_image=True,
-                half_volume=mstep_half_volume,
-            )[0]
-    else:
-        if use_window:
-            if backprojection_max_r == "auto":
-                Ft_ctf = core.batch_adjoint_slice_volume_indexed(
-                    ctf_probs_half[None, :, :],
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=Ft_ctf[None, :],
-                    half_image=True,
-                    half_volume=mstep_half_volume,
-                )[0]
-            else:
-                Ft_ctf = core.batch_adjoint_slice_volume_indexed(
-                    ctf_probs_half[None, :, :],
-                    window_indices,
-                    rotations_block,
-                    image_shape,
-                    recon_volume_shape,
-                    disc_type,
-                    volumes=Ft_ctf[None, :],
-                    half_image=True,
-                    half_volume=mstep_half_volume,
-                    max_r=backprojection_max_r,
-                )[0]
-        else:
-            Ft_ctf = core.batch_adjoint_slice_volume(
-                ctf_probs_half[None, :, :],
-                rotations_block,
-                image_shape,
-                recon_volume_shape,
-                disc_type,
-                volumes=Ft_ctf[None, :],
-                half_image=True,
-                half_volume=mstep_half_volume,
-            )[0]
-    return Ft_y, Ft_ctf
+    return accumulate_adjoint_pair(
+        summed_half,
+        ctf_probs_half,
+        rotations_block,
+        Ft_y,
+        Ft_ctf,
+        window_indices,
+        image_shape,
+        recon_volume_shape,
+        disc_type,
+        use_window=use_window,
+        disable_left=disable_adjoint_y,
+        disable_right=disable_adjoint_ctf,
+        half_volume=mstep_half_volume,
+        max_r=backprojection_max_r,
+    )
 
 
 def _compute_noise_block(
