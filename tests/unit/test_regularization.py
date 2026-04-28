@@ -4,6 +4,7 @@ import pytest
 pytest.importorskip("jax")
 
 from recovar.reconstruction import regularization
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 pytestmark = pytest.mark.unit
 
@@ -154,6 +155,53 @@ def test_compute_relion_fsc_from_backprojector_uses_relion_rounding_and_half_lay
 
     assert fsc[0] == 1.0
     np.testing.assert_allclose(fsc[1], 1.0, atol=1e-7, rtol=1e-7)
+
+
+def test_compute_relion_fsc_from_backprojector_accepts_packed_half_accumulators():
+    shape = (4, 4, 4)
+    padding_factor = 2
+    padded_shape = tuple(s * padding_factor for s in shape)
+    half_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(padded_shape)
+    rng = np.random.default_rng(0)
+
+    data0_half = (
+        rng.normal(size=half_shape).astype(np.float32)
+        + 1j * rng.normal(size=half_shape).astype(np.float32)
+    )
+    data1_half = (
+        rng.normal(size=half_shape).astype(np.float32)
+        + 1j * rng.normal(size=half_shape).astype(np.float32)
+    )
+    weight0_half = (0.25 + rng.random(size=half_shape)).astype(np.float32)
+    weight1_half = (0.25 + rng.random(size=half_shape)).astype(np.float32)
+
+    data0_full = np.asarray(fourier_transform_utils.half_volume_to_full_volume(data0_half, padded_shape))
+    data1_full = np.asarray(fourier_transform_utils.half_volume_to_full_volume(data1_half, padded_shape))
+    weight0_full = np.asarray(fourier_transform_utils.half_volume_to_full_volume(weight0_half, padded_shape))
+    weight1_full = np.asarray(fourier_transform_utils.half_volume_to_full_volume(weight1_half, padded_shape))
+
+    fsc_from_full = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            data0_full.reshape(-1),
+            data1_full.reshape(-1),
+            weight0_full.reshape(-1),
+            weight1_full.reshape(-1),
+            shape,
+            padding_factor=padding_factor,
+        )
+    )
+    fsc_from_half = np.asarray(
+        regularization.compute_relion_fsc_from_backprojector(
+            data0_half.reshape(-1),
+            data1_half.reshape(-1),
+            weight0_half.reshape(-1),
+            weight1_half.reshape(-1),
+            shape,
+            padding_factor=padding_factor,
+        )
+    )
+
+    np.testing.assert_allclose(fsc_from_half, fsc_from_full, atol=1e-6, rtol=1e-6)
 
 
 def test_compute_relion_fsc_from_backprojector_applies_exact_rmax_before_shell_binning():

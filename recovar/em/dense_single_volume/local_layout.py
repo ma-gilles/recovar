@@ -9,6 +9,7 @@ import numpy as np
 from recovar import utils
 from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
 from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
+from recovar.em.dense_single_volume.shape_buckets import coarse_bucket
 from recovar.em.sampling import (
     _normalized_log_weights,
     _wrapped_abs_diff_deg,
@@ -36,10 +37,23 @@ def _exact_bucket_rotation_size(local_rotation_count: int, rotation_block_size: 
         return 1
     engine_cap = int(_local_search_engine_rotation_block_size(rotation_block_size))
     if local_rotation_count <= engine_cap:
-        bucket = 1 << max(int(local_rotation_count - 1).bit_length(), 4)
-        return int(max(local_rotation_count, min(bucket, engine_cap)))
+        return int(
+            coarse_bucket(
+                local_rotation_count,
+                small_power2_max=engine_cap,
+                large_multiple=engine_cap,
+                minimum=16,
+            ),
+        )
     large_bucket_quantum = max(64, engine_cap // 8)
-    return int(((local_rotation_count + large_bucket_quantum - 1) // large_bucket_quantum) * large_bucket_quantum)
+    return int(
+        coarse_bucket(
+            local_rotation_count,
+            small_power2_max=engine_cap,
+            large_multiple=large_bucket_quantum,
+            minimum=16,
+        ),
+    )
 
 
 @dataclass(frozen=True)
@@ -227,7 +241,8 @@ def _selected_rotation_matrices(
         return np.zeros((0, 3, 3), dtype=np.float32)
     if rotation_grid_rotations is not None:
         return np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)[rotation_ids]
-    selected_eulers = _rotation_eulers_from_grid_metadata(rotation_ids, grid_metadata)
+    unique_ids, inverse = np.unique(rotation_ids, return_inverse=True)
+    selected_eulers = _rotation_eulers_from_grid_metadata(unique_ids, grid_metadata)
     if abs(float(random_perturbation)) > 1e-12:
         if angular_sampling_deg is None:
             raise ValueError("angular_sampling_deg is required when random_perturbation is nonzero")
@@ -236,8 +251,9 @@ def _selected_rotation_matrices(
             float(random_perturbation),
             float(angular_sampling_deg),
         )
-        return rotations.astype(np.float32, copy=False)
-    return utils.R_from_relion(selected_eulers, degrees=True).astype(np.float32, copy=False)
+    else:
+        rotations = utils.R_from_relion(selected_eulers, degrees=True)
+    return rotations.astype(np.float32, copy=False)[inverse]
 
 
 def build_local_hypothesis_layout(

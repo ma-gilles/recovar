@@ -48,6 +48,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 
+from .dense_big_jit import run_dense_bucket_big_jit
 from .helpers.image_shifts import apply_relion_integer_pre_shifts, integer_pre_shifts_or_none
 from .helpers.types import EMProfileStats, NoiseStats, RelionStats
 
@@ -85,6 +86,30 @@ def _parse_dense_noise_component_dump_request():
     dump_path = pathlib.Path(dump_dir)
     dump_path.mkdir(parents=True, exist_ok=True)
     return dump_path, targets, current_sizes
+
+
+def _noise_split_diagnostics_requested() -> bool:
+    """Return whether per-shell A2/XA noise split diagnostics are needed."""
+    return bool(
+        os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
+        or os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
+    )
+
+
+def _dense_big_jit_enabled() -> bool:
+    """Return whether the experimental dense/global bucket big-JIT is enabled.
+
+    This is deliberately default-off until dense bucket parity has been gated
+    against the current `run_em` path.  It gives `em_engine.py` a real big-JIT
+    call path without changing RELION-default behavior.
+    """
+
+    raw = os.environ.get("RECOVAR_RELION_DENSE_BIG_JIT", "0").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    raise ValueError("RECOVAR_RELION_DENSE_BIG_JIT must be one of 1/0/true/false")
 
 
 def _bin_shell_values_np(values, shell_indices, n_shells):
@@ -554,6 +579,34 @@ def _adjoint_slice_volume_windowed(
     )
 
 
+@partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9))
+def _batch_adjoint_slice_volume_windowed(
+    windowed_halves,
+    window_indices,
+    rotations_block,
+    volumes,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_image,
+    half_volume=False,
+    max_r=None,
+):
+    """Batched indexed adjoint-slice for windowed half-spectrum blocks."""
+    return core.batch_adjoint_slice_volume_indexed(
+        windowed_halves,
+        window_indices,
+        rotations_block,
+        image_shape,
+        volume_shape,
+        disc_type,
+        volumes=volumes,
+        half_image=half_image,
+        half_volume=half_volume,
+        max_r=max_r,
+    )
+
+
 @partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
 def _adjoint_slice_volume_half(
     half_block,
@@ -579,6 +632,30 @@ def _adjoint_slice_volume_half(
     )
 
 
+@partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
+def _batch_adjoint_slice_volume_half(
+    half_blocks,
+    rotations_block,
+    volumes,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_image,
+    half_volume=False,
+):
+    """Batched adjoint-slice half-spectrum blocks into volume accumulators."""
+    return core.batch_adjoint_slice_volume(
+        half_blocks,
+        rotations_block,
+        image_shape,
+        volume_shape,
+        disc_type,
+        volumes=volumes,
+        half_image=half_image,
+        half_volume=half_volume,
+    )
+
+
 @partial(jax.jit, static_argnums=())
 def _update_logsumexp(max_s, sum_exp, scores_block):
     """Streaming logsumexp update: accumulate normalization stats from one block.
@@ -599,6 +676,18 @@ def _update_logsumexp(max_s, sum_exp, scores_block):
     )
     sum_exp = sum_exp * jnp.exp((max_s - new_max).astype(jnp.float64)) + exp_terms
     return new_max, sum_exp
+
+
+@jax.jit
+def _merge_block_logsumexp(max_s, sum_exp, block_max, block_sum_exp):
+    """Merge one pre-reduced block logsumexp into streaming batch stats."""
+
+    new_max = jnp.maximum(max_s, block_max)
+    old_term = sum_exp * jnp.exp((max_s - new_max).astype(jnp.float64))
+    block_term = block_sum_exp.astype(jnp.float64) * jnp.exp(
+        (block_max - new_max).astype(jnp.float64),
+    )
+    return new_max, old_term + block_term
 
 
 @partial(jax.jit, static_argnums=(7, 8, 9, 10))
@@ -691,9 +780,16 @@ def _m_step_block(
     return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half, ctf_probs_half
 
 
-@partial(jax.jit, static_argnums=(6,))
+@partial(jax.jit, static_argnums=(6, 7))
 def _compute_noise_block(
-    proj_half, proj_abs2_half, summed_masked, ctf_probs, noise_variance_half, shell_indices, n_shells
+    proj_half,
+    proj_abs2_half,
+    summed_masked,
+    ctf_probs,
+    noise_variance_half,
+    shell_indices,
+    n_shells,
+    return_split: bool = True,
 ):
     ## TODO: QUESTION? Projections (unweighted by half_weights). IS THIS RIGHT? ARE DOCS WRONG? I THOUGHT RELION DID NOT USE WEIGHTS AT ALL?
 
@@ -736,10 +832,9 @@ def _compute_noise_block(
     -------
     noise_shells : (n_shells,) float
         ``sum_{k in shell} (A2(k) - 2*XA(k))`` contribution from this block.
-    a2_shells : (n_shells,) float
-        ``sum_{k in shell} A2(k)`` (diagnostic split).
-    xa_shells : (n_shells,) float
-        ``sum_{k in shell} XA(k)`` (diagnostic split).
+    a2_shells, xa_shells : (n_shells,) float
+        Diagnostic split terms. Returned as zeros when ``return_split`` is
+        false, avoiding two extra scatter reductions in normal runs.
     """
     # A2 term: sum_r |proj_r|^2 * (ctf_probs * noise_variance)[r, k]
     # ctf_probs has CTF^2/sigma2; multiply by sigma2 to get CTF^2
@@ -762,11 +857,14 @@ def _compute_noise_block(
     # Bin to resolution shells (no Hermitian weights -- matching RELION)
     ## TODO SHOULD THERE BE HERMITIAN WEIGHTS AT ALL, EVEN IF RELION USED THEM? NOT COMPLEETELY SURE, TRIPLE CHECK
     noise_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-    noise_shells = noise_shells.at[shell_indices].add(block_noise)
+    noise_shells = noise_shells.at[shell_indices].add(block_noise.astype(noise_shells.dtype))
+    if not return_split:
+        zeros = jnp.zeros(n_shells, dtype=jnp.float32)
+        return noise_shells, zeros, zeros
     a2_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-    a2_shells = a2_shells.at[shell_indices].add(A2)
+    a2_shells = a2_shells.at[shell_indices].add(A2.astype(a2_shells.dtype))
     xa_shells = jnp.zeros(n_shells, dtype=jnp.float32)
-    xa_shells = xa_shells.at[shell_indices].add(XA)
+    xa_shells = xa_shells.at[shell_indices].add(XA.astype(xa_shells.dtype))
     return noise_shells, a2_shells, xa_shells
 
 
@@ -1213,6 +1311,54 @@ def run_em(
             int(candidate_mask.size),
         )
 
+    dense_big_jit_requested = _dense_big_jit_enabled()
+    dense_big_jit_unsupported_reason = None
+    if sparse_pass2:
+        dense_big_jit_unsupported_reason = "sparse_pass2"
+    elif relion_firstiter_winner_take_all:
+        dense_big_jit_unsupported_reason = "winner_take_all"
+    elif accumulate_noise:
+        dense_big_jit_unsupported_reason = "noise_accumulation"
+    elif dense_noise_component_dump_enabled:
+        dense_big_jit_unsupported_reason = "dense_noise_component_dump"
+    elif os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR"):
+        dense_big_jit_unsupported_reason = "per_pose_debug_dump"
+    use_dense_big_jit = dense_big_jit_requested and dense_big_jit_unsupported_reason is None
+    if dense_big_jit_requested and not use_dense_big_jit:
+        logger.info("Dense big-JIT disabled for this run: unsupported %s", dense_big_jit_unsupported_reason)
+    elif use_dense_big_jit:
+        logger.info("Dense big-JIT enabled for dense/global rotation buckets")
+
+    def _dense_big_jit_priors_and_masks(r0: int, r1: int, start: int, end: int):
+        if log_prior_padded_jnp is None:
+            rotation_prior_block = jnp.zeros((end - start, rotation_block_size), dtype=jnp.float32)
+        elif per_image_log_prior:
+            rotation_prior_block = log_prior_padded_jnp[start:end, r0:r1]
+        else:
+            rotation_prior_block = jnp.broadcast_to(
+                log_prior_padded_jnp[r0:r1][None, :],
+                (end - start, rotation_block_size),
+            )
+
+        if translation_log_prior_jnp is None:
+            translation_prior_block = jnp.zeros((end - start, n_trans), dtype=jnp.float32)
+        elif per_image_translation_log_prior:
+            translation_prior_block = translation_log_prior_jnp[start:end]
+        else:
+            translation_prior_block = jnp.broadcast_to(
+                translation_log_prior_jnp[None, :],
+                (end - start, n_trans),
+            )
+
+        if candidate_mask_padded_jnp is None:
+            candidate_mask_block = jnp.ones((rotation_block_size, n_trans), dtype=bool)
+        else:
+            candidate_mask_block = candidate_mask_padded_jnp[r0:r1]
+
+        valid = max(0, min(rotation_block_size, n_rot - r0))
+        valid_rotation_mask = jnp.arange(rotation_block_size) < valid
+        return rotation_prior_block, translation_prior_block, candidate_mask_block, valid_rotation_mask
+
     # Initialize accumulators (at padded resolution for pf>1 backprojection)
     Ft_y = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
     Ft_ctf = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
@@ -1234,6 +1380,7 @@ def run_em(
     noise_a2 = None  # diagnostic
     noise_xa = None  # diagnostic
     noise_sigma2_offset = 0.0
+    return_noise_split = _noise_split_diagnostics_requested()
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
@@ -1255,6 +1402,12 @@ def run_em(
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
         noise_a2 = np.zeros(n_shells, dtype=np.float64)
         noise_xa = np.zeros(n_shells, dtype=np.float64)
+    dense_big_jit_shell_indices_half = (
+        shell_indices_half if accumulate_noise else make_shell_indices_half(image_shape)
+    )
+    dense_big_jit_noise_variance_half = (
+        noise_variance_half if accumulate_noise else jnp.ones(n_half, dtype=jnp.float32)
+    )
 
     start_idx = 0
 
@@ -1263,6 +1416,8 @@ def run_em(
         indices=image_indices,
         by_image=False,
     )
+    ##TODO: WE NEED TO GIVE THIS PATH THE SAME TREAMENT AS THE LOCAL_EM_ENGINE... USE A BIG_JIT FUNCTION AND PUT AS MUCH IN IT AS POSSIBLE.
+    ## ALSO THERE IS SO MUCH BRANCHING WE NEED TO GET RID OFF.
     while True:
         batch_fetch_t0 = time.time()
         try:
@@ -1296,7 +1451,7 @@ def run_em(
                 axis=-1,
                 dtype=np.float64,
             )
-        projection_cache = []
+        projection_cache = None if use_dense_big_jit else []
         block_max_per_image = [] if sparse_pass2 else None
         block_pose_counts = [] if sparse_pass2 else None
 
@@ -1556,6 +1711,72 @@ def run_em(
             r1 = r0 + rotation_block_size
             rots_b = rotations_padded[r0:r1]
 
+            if use_dense_big_jit:
+                score_t0 = time.time()
+                (
+                    rotation_prior_block,
+                    translation_prior_block,
+                    candidate_mask_block,
+                    valid_rotation_mask,
+                ) = _dense_big_jit_priors_and_masks(r0, r1, start_idx, end_idx)
+                dense_result = run_dense_bucket_big_jit(
+                    shifted_score_half,
+                    batch_norm,
+                    score_weight_half,
+                    shifted_recon_half,
+                    ctf2_over_nv_half_with_dc,
+                    mean_for_proj,
+                    Ft_y,
+                    Ft_ctf,
+                    jnp.asarray(rots_b),
+                    half_weights,
+                    rotation_prior_block,
+                    translation_prior_block,
+                    candidate_mask_block,
+                    valid_rotation_mask,
+                    jnp.zeros(batch_size, dtype=jnp.float32),
+                    jnp.zeros(1, dtype=jnp.float32),
+                    jnp.zeros(1, dtype=jnp.float32),
+                    jnp.zeros(1, dtype=jnp.float32),
+                    jnp.asarray(0.0, dtype=jnp.float32),
+                    shifted_half_with_dc,
+                    dense_big_jit_noise_variance_half,
+                    dense_big_jit_shell_indices_half,
+                    jnp.zeros((batch_size, n_trans), dtype=jnp.float32),
+                    window_indices if window_indices is not None else jnp.arange(n_half, dtype=jnp.int32),
+                    recon_window_indices if recon_window_indices is not None else jnp.arange(n_half, dtype=jnp.int32),
+                    score_mode=relion_firstiter_score_mode,
+                    zero_dc_for_scoring=half_spectrum_scoring,
+                    use_window=use_window,
+                    use_float64_scoring=use_float64_scoring,
+                    use_float64_normalization=True,
+                    run_mstep=False,
+                    accumulate_noise=False,
+                    return_noise_split=False,
+                    has_translation_sqdist=False,
+                    image_shape=image_shape,
+                    proj_volume_shape=proj_volume_shape,
+                    recon_volume_shape=recon_volume_shape,
+                    disc_type=disc_type,
+                    projection_half_volume=False,
+                    projection_max_r=float(current_size // 2) if use_window else "auto",
+                    mstep_half_volume=False,
+                    backprojection_max_r=float(current_size // 2) if use_window else "auto",
+                    disable_adjoint_y=disable_adjoint_y,
+                    disable_adjoint_ctf=disable_adjoint_ctf,
+                    n_shells=1,
+                )
+                max_s, sum_exp = _merge_block_logsumexp(
+                    max_s,
+                    sum_exp,
+                    dense_result.block_max,
+                    dense_result.block_sum_exp,
+                )
+                if sync_timers:
+                    _block_until_ready(max_s, sum_exp)
+                pass1_score_time += time.time() - score_t0
+                continue
+
             proj_t0 = time.time()
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
                 mean_for_proj,
@@ -1800,6 +2021,97 @@ def run_em(
             r0 = b * rotation_block_size
             r1 = r0 + rotation_block_size
             rots_b = rotations_padded[r0:r1]
+
+            if use_dense_big_jit:
+                score_t0 = time.time()
+                (
+                    rotation_prior_block,
+                    translation_prior_block,
+                    candidate_mask_block,
+                    valid_rotation_mask,
+                ) = _dense_big_jit_priors_and_masks(r0, r1, start_idx, end_idx)
+                dense_result = run_dense_bucket_big_jit(
+                    shifted_score_half,
+                    batch_norm,
+                    score_weight_half,
+                    shifted_recon_half,
+                    ctf2_over_nv_half_with_dc,
+                    mean_for_proj,
+                    Ft_y,
+                    Ft_ctf,
+                    jnp.asarray(rots_b),
+                    half_weights,
+                    rotation_prior_block,
+                    translation_prior_block,
+                    candidate_mask_block,
+                    valid_rotation_mask,
+                    log_Z,
+                    jnp.zeros(1, dtype=jnp.float32),
+                    jnp.zeros(1, dtype=jnp.float32),
+                    jnp.zeros(1, dtype=jnp.float32),
+                    jnp.asarray(0.0, dtype=jnp.float32),
+                    shifted_half_with_dc,
+                    dense_big_jit_noise_variance_half,
+                    dense_big_jit_shell_indices_half,
+                    jnp.zeros((batch_size, n_trans), dtype=jnp.float32),
+                    window_indices if window_indices is not None else jnp.arange(n_half, dtype=jnp.int32),
+                    recon_window_indices if recon_window_indices is not None else jnp.arange(n_half, dtype=jnp.int32),
+                    score_mode=relion_firstiter_score_mode,
+                    zero_dc_for_scoring=half_spectrum_scoring,
+                    use_window=use_window,
+                    use_float64_scoring=use_float64_scoring,
+                    use_float64_normalization=True,
+                    run_mstep=True,
+                    accumulate_noise=False,
+                    return_noise_split=False,
+                    has_translation_sqdist=False,
+                    image_shape=image_shape,
+                    proj_volume_shape=proj_volume_shape,
+                    recon_volume_shape=recon_volume_shape,
+                    disc_type=disc_type,
+                    projection_half_volume=False,
+                    projection_max_r=float(current_size // 2) if use_window else "auto",
+                    mstep_half_volume=False,
+                    backprojection_max_r=float(current_size // 2) if use_window else "auto",
+                    disable_adjoint_y=disable_adjoint_y,
+                    disable_adjoint_ctf=disable_adjoint_ctf,
+                    n_shells=1,
+                )
+                Ft_y = dense_result.Ft_y
+                Ft_ctf = dense_result.Ft_ctf
+                if sync_timers:
+                    _block_until_ready(
+                        Ft_y,
+                        Ft_ctf,
+                        dense_result.block_best,
+                        dense_result.block_argmax,
+                        dense_result.probs_sum_t,
+                    )
+                pass2_score_time += time.time() - score_t0
+
+                assignment_t0 = time.time()
+                improved = dense_result.block_best > best_score
+                best_score = jnp.where(improved, dense_result.block_best, best_score)
+                best_argmax = jnp.where(
+                    improved,
+                    dense_result.block_argmax + r0 * n_trans,
+                    best_argmax,
+                )
+                if sync_timers:
+                    _block_until_ready(best_score, best_argmax)
+                assignment_time += time.time() - assignment_t0
+
+                if return_stats:
+                    host_stats_t0 = time.time()
+                    actual_rot = max(0, min(rotation_block_size, n_rot - r0))
+                    if actual_rot > 0:
+                        block_rotation_sums = np.asarray(
+                            jnp.sum(dense_result.probs_sum_t[:, :actual_rot], axis=0),
+                            dtype=np.float64,
+                        )
+                        rotation_posterior_sums[r0 : r0 + actual_rot] += block_rotation_sums
+                    host_stats_time += time.time() - host_stats_t0
+                continue
 
             if projection_cache is not None:
                 proj_half_b, proj_abs2_half_b = projection_cache[b]
@@ -2136,12 +2448,17 @@ def run_em(
                     nv_for_noise,
                     si_for_noise,
                     n_shells,
+                    return_noise_split,
                 )
                 if sync_timers:
-                    _block_until_ready(block_noise_shells, block_a2_shells, block_xa_shells)
+                    if return_noise_split:
+                        _block_until_ready(block_noise_shells, block_a2_shells, block_xa_shells)
+                    else:
+                        _block_until_ready(block_noise_shells)
                 noise_wsum += np.asarray(block_noise_shells, dtype=np.float64)
-                noise_a2 += np.asarray(block_a2_shells, dtype=np.float64)
-                noise_xa += np.asarray(block_xa_shells, dtype=np.float64)
+                if return_noise_split:
+                    noise_a2 += np.asarray(block_a2_shells, dtype=np.float64)
+                    noise_xa += np.asarray(block_xa_shells, dtype=np.float64)
                 noise_time += time.time() - noise_t0
 
             if not relion_firstiter_winner_take_all:
@@ -2242,16 +2559,17 @@ def run_em(
                 int(n_rot),
                 bool(use_window),
             )
-            logger.info(
-                "[NOISE-DIAG] A2 (first %d shells): %s",
-                n_log_shells,
-                ", ".join(f"{noise_a2[i]:.3e}" for i in range(n_log_shells)),
-            )
-            logger.info(
-                "[NOISE-DIAG] XA (first %d shells): %s",
-                n_log_shells,
-                ", ".join(f"{noise_xa[i]:.3e}" for i in range(n_log_shells)),
-            )
+            if return_noise_split:
+                logger.info(
+                    "[NOISE-DIAG] A2 (first %d shells): %s",
+                    n_log_shells,
+                    ", ".join(f"{noise_a2[i]:.3e}" for i in range(n_log_shells)),
+                )
+                logger.info(
+                    "[NOISE-DIAG] XA (first %d shells): %s",
+                    n_log_shells,
+                    ", ".join(f"{noise_xa[i]:.3e}" for i in range(n_log_shells)),
+                )
             logger.info(
                 "[NOISE-DIAG] img_power (first %d shells): %s",
                 n_log_shells,
@@ -2269,8 +2587,8 @@ def run_em(
             wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
             wsum_sigma2_offset=float(noise_sigma2_offset),
             sumw=float(noise_sumw),
-            wsum_noise_a2=jnp.asarray(noise_a2, dtype=jnp.float32),
-            wsum_noise_xa=jnp.asarray(noise_xa, dtype=jnp.float32),
+            wsum_noise_a2=(jnp.asarray(noise_a2, dtype=jnp.float32) if return_noise_split else None),
+            wsum_noise_xa=(jnp.asarray(noise_xa, dtype=jnp.float32) if return_noise_split else None),
         )
 
     if sparse_pass2 and sparse_pass2_total_blocks:

@@ -20,25 +20,23 @@ def _get_relion_grid_metadata(healpix_order: int) -> dict[str, np.ndarray]:
     if cached is not None:
         return cached
 
-    nside = 2**healpix_order
-    n_pixels = hp.nside2npix(nside)
-    n_psi = rotation_grid_n_in_planes(healpix_order)
-    grid_eulers = np.asarray(get_relion_rotation_grid_eulers(healpix_order), dtype=np.float32).reshape(
-        n_psi, n_pixels, 3
-    )
-    grid_rotations = np.asarray(get_relion_rotation_grid(healpix_order), dtype=np.float32).reshape(
-        n_psi, n_pixels, 3, 3
-    )
+    from recovar.relion_bind._relion_bind_core import get_healpix_directions
 
+    directions = np.asarray(get_healpix_directions(healpix_order), dtype=np.float32)
+    n_pixels = int(directions.shape[0])
+    n_psi = rotation_grid_n_in_planes(healpix_order)
     # Use the actual matrix view directions of the RELION grid rather than a
     # closed-form HEALPix angle formula. This keeps the local-search selector
     # aligned with the trial rotations that are actually scored.
-    rot_deg = np.asarray(grid_eulers[0, :, 0], dtype=np.float32)
-    tilt_deg = np.asarray(grid_eulers[0, :, 1], dtype=np.float32)
-    psi_deg = np.asarray(grid_eulers[:, 0, 2], dtype=np.float32)
+    rot_deg = np.asarray(directions[:, 0], dtype=np.float32)
+    tilt_deg = np.asarray(directions[:, 1], dtype=np.float32)
+    psi_step = 360.0 / float(max(1, n_psi))
+    psi_deg = (np.arange(n_psi, dtype=np.float32) * np.float32(psi_step)).astype(np.float32, copy=False)
     # RELION's viewing direction is the third ROW of the rotation matrix,
     # not the third column.
-    dir_vecs = np.asarray(grid_rotations[0, :, 2, :], dtype=np.float32)
+    dir_eulers = np.column_stack([rot_deg, tilt_deg, np.zeros(n_pixels, dtype=np.float32)])
+    dir_rotations = utils.R_from_relion(dir_eulers, degrees=True)
+    dir_vecs = np.asarray(dir_rotations[:, 2, :], dtype=np.float32)
     dir_norm = np.linalg.norm(dir_vecs, axis=1, keepdims=True)
     dir_norm = np.where(dir_norm > 0.0, dir_norm, 1.0)
     dir_vecs = dir_vecs / dir_norm
