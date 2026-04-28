@@ -42,7 +42,39 @@ class DensePrecisionPolicy:
             shifted_recon_half = shifted_recon_half.astype(self.score_complex_dtype)
         return shifted_score_half, score_weight_half, shifted_recon_half
 
+    def cast_local_preprocessed_inputs(
+        self,
+        shifted_score,
+        shifted_recon,
+        shifted_noise,
+        score_weight,
+        recon_weight,
+    ):
+        shifted_score = shifted_score.astype(self.score_complex_dtype)
+        score_weight = score_weight.astype(self.score_real_dtype)
+        if self.use_float64_scoring:
+            shifted_recon = shifted_recon.astype(self.score_complex_dtype)
+            shifted_noise = shifted_noise.astype(self.score_complex_dtype)
+            recon_weight = recon_weight.astype(self.score_real_dtype)
+        return shifted_score, shifted_recon, shifted_noise, score_weight, recon_weight
+
     def cast_projection_scores(self, proj_half, proj_abs2_half):
         if self.use_float64_scoring:
             return proj_half, proj_abs2_half
         return proj_half.astype(jnp.complex64), proj_abs2_half.astype(jnp.float32)
+
+    def cast_local_projection_scores(
+        self,
+        proj_weighted,
+        proj_for_noise,
+        proj_abs2_weighted=None,
+        proj_abs2_for_noise=None,
+    ):
+        proj_weighted = proj_weighted.astype(self.score_complex_dtype)
+        if self.use_float64_scoring:
+            proj_for_noise = proj_for_noise.astype(self.score_complex_dtype)
+        if proj_abs2_weighted is not None:
+            proj_abs2_weighted = proj_abs2_weighted.astype(self.score_real_dtype)
+        if proj_abs2_for_noise is not None and self.use_float64_scoring:
+            proj_abs2_for_noise = proj_abs2_for_noise.astype(self.score_real_dtype)
+        return proj_weighted, proj_for_noise, proj_abs2_weighted, proj_abs2_for_noise

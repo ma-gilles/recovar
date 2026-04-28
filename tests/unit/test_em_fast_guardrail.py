@@ -72,6 +72,69 @@ def test_dense_precision_policy_casts_projection_scores_only_for_float32_scoring
     assert abs64.dtype == jnp.float64
 
 
+def test_dense_precision_policy_casts_local_score_inputs():
+    score = jnp.asarray([1.0 + 2.0j], dtype=jnp.complex128)
+    recon = jnp.asarray([3.0 + 4.0j], dtype=jnp.complex64)
+    noise = jnp.asarray([5.0 + 6.0j], dtype=jnp.complex64)
+    score_weight = jnp.asarray([1.0], dtype=jnp.float64)
+    recon_weight = jnp.asarray([2.0], dtype=jnp.float32)
+    proj_abs2 = jnp.asarray([3.0], dtype=jnp.float64)
+
+    default_policy = DensePrecisionPolicy()
+    cast_score, cast_recon, cast_noise, cast_score_weight, cast_recon_weight = (
+        default_policy.cast_local_preprocessed_inputs(
+            score,
+            recon,
+            noise,
+            score_weight,
+            recon_weight,
+        )
+    )
+    proj, proj_noise, abs2, abs2_noise = default_policy.cast_local_projection_scores(
+        score,
+        recon,
+        proj_abs2,
+        proj_abs2,
+    )
+
+    assert cast_score.dtype == jnp.complex64
+    assert cast_score_weight.dtype == jnp.float32
+    assert cast_recon.dtype == jnp.complex64
+    assert cast_noise.dtype == jnp.complex64
+    assert cast_recon_weight.dtype == jnp.float32
+    assert proj.dtype == jnp.complex64
+    assert proj_noise.dtype == jnp.complex64
+    assert abs2.dtype == jnp.float32
+    assert abs2_noise.dtype == jnp.float64
+
+    precise_policy = DensePrecisionPolicy(use_float64_scoring=True)
+    cast_score, cast_recon, cast_noise, cast_score_weight, cast_recon_weight = (
+        precise_policy.cast_local_preprocessed_inputs(
+            score.astype(jnp.complex64),
+            recon,
+            noise,
+            score_weight.astype(jnp.float32),
+            recon_weight,
+        )
+    )
+    proj, proj_noise, abs2, abs2_noise = precise_policy.cast_local_projection_scores(
+        score.astype(jnp.complex64),
+        recon,
+        proj_abs2.astype(jnp.float32),
+        proj_abs2.astype(jnp.float32),
+    )
+
+    assert cast_score.dtype == jnp.complex128
+    assert cast_score_weight.dtype == jnp.float64
+    assert cast_recon.dtype == jnp.complex128
+    assert cast_noise.dtype == jnp.complex128
+    assert cast_recon_weight.dtype == jnp.float64
+    assert proj.dtype == jnp.complex128
+    assert proj_noise.dtype == jnp.complex128
+    assert abs2.dtype == jnp.float64
+    assert abs2_noise.dtype == jnp.float64
+
+
 def test_fourier_window_spec_gathers_last_axis_for_batched_values():
     image_shape = (8, 8)
     n_half = image_shape[0] * (image_shape[1] // 2 + 1)
