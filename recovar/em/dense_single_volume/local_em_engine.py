@@ -65,10 +65,7 @@ from recovar.em.dense_single_volume.local_layout import (
 from recovar.em.dense_single_volume.local_score_pass import (
     compute_reconstruction_support,
     fused_score_normalize_mstep_abs2_on_demand,
-    normalize_local_scores,
-    normalize_local_scores_float32,
-    normalize_local_scores_with_log_z,
-    normalize_local_scores_with_log_z_float32,
+    normalize_local_scores_auto,
     score_local_bucket_abs2_on_demand,
     score_local_bucket_abs2_weighted_on_demand,
     score_local_bucket,
@@ -1760,29 +1757,20 @@ def run_local_em_exact(
 
             normalize_t0 = time.time()
             ## TODO: NEEDS A LOT OF CLEAN UP FOR THIS STUFF
-            if normalization_log_z_np is None:
-                ## TODO: THIS IS AN INSANE BRANCH FOR EXAMPLE, AND INSANE THAT THERE ARE TWO FUNCTIONS FOR THIS. THIS SHOULD BE FIGURED OUT BY DTYPE. DUCK TYPING.
-                if use_float64_normalization:
-                    log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores(scores)
-                else:
-                    log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores_float32(scores)
-            else:
-                bucket_log_z = jnp.asarray(
+            ## TODO: THIS IS AN INSANE BRANCH FOR EXAMPLE, AND INSANE THAT THERE ARE TWO FUNCTIONS FOR THIS. THIS SHOULD BE FIGURED OUT BY DTYPE. DUCK TYPING.
+            bucket_log_z = (
+                None
+                if normalization_log_z_np is None
+                else jnp.asarray(
                     normalization_log_z_np[np.asarray(bucket.image_indices)],
                     dtype=scores.real.dtype,
                 )
-                if use_float64_normalization:
-                    log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores_with_log_z(
-                        scores,
-                        bucket_log_z,
-                    )
-                else:
-                    log_Z, probs, best_log_score, best_argmax, max_posterior = (
-                        normalize_local_scores_with_log_z_float32(
-                            scores,
-                            bucket_log_z,
-                        )
-                    )
+            )
+            log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores_auto(
+                scores,
+                bucket_log_z,
+                use_float64_normalization=use_float64_normalization,
+            )
             if return_profile:
                 _block_until_ready(log_Z, probs, best_log_score, best_argmax, max_posterior)
             timing.normalize_s += time.time() - normalize_t0

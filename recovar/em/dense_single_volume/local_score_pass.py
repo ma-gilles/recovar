@@ -181,6 +181,18 @@ def normalize_local_scores_with_log_z_float32(scores, log_z):
     return log_z, probs, best_log_score, best_argmax, max_posterior
 
 
+def normalize_local_scores_auto(scores, log_z=None, *, use_float64_normalization: bool):
+    """Select the local posterior normalizer from explicit precision inputs."""
+
+    if log_z is None:
+        if use_float64_normalization:
+            return normalize_local_scores(scores)
+        return normalize_local_scores_float32(scores)
+    if use_float64_normalization:
+        return normalize_local_scores_with_log_z(scores, log_z)
+    return normalize_local_scores_with_log_z_float32(scores, log_z)
+
+
 def compute_reconstruction_support(probs, adaptive_fraction=0.999, max_significants=-1):
     """Return RELION-style significant reconstruction support.
 
