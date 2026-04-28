@@ -59,6 +59,23 @@ def parse_debug_noise_component_dump_request():
     return dump_path, targets, requested_current_sizes, requested_iterations
 
 
+def parse_dense_noise_component_dump_request():
+    """Return optional per-particle dense noise component dump settings."""
+
+    dump_dir = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
+    dump_indices = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_GLOBAL_INDICES")
+    dump_current_size = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_CURRENT_SIZE")
+    if not dump_dir or not dump_indices:
+        return None, set(), None
+    targets = parse_debug_int_set(dump_indices) or set()
+    if not targets:
+        return None, set(), None
+    requested_current_sizes = parse_debug_int_set(dump_current_size)
+    dump_path = Path(dump_dir)
+    dump_path.mkdir(parents=True, exist_ok=True)
+    return dump_path, targets, requested_current_sizes
+
+
 def noise_split_diagnostics_requested() -> bool:
     """Return whether per-shell A2/XA noise split diagnostics are needed."""
 

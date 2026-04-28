@@ -73,6 +73,7 @@ from .helpers.translation_prior import (
     validate_translation_prior_centers,
 )
 from .helpers.types import EMProfileStats, NoiseStats, RelionStats
+from .local_debug import parse_dense_noise_component_dump_request
 from .shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
 logger = logging.getLogger(__name__)
@@ -85,32 +86,6 @@ logger = logging.getLogger(__name__)
 # TODO(DENSE_ENGINE_BOUNDARY/E005): audit em_engine.py vs local_em_engine.py for copied implementations
 # TODO(DENSE_ENGINE_BOUNDARY/E006): move shared JAX primitives to helpers and delete redundant engine-local copies
 # See docs/relion_local_engine_refactor.md
-
-
-def _parse_debug_int_set(value: str | None) -> set[int] | None:
-    if not value:
-        return None
-    parsed = set()
-    for token in value.replace(",", " ").split():
-        token = token.strip()
-        if token:
-            parsed.add(int(token))
-    return parsed or None
-
-
-def _parse_dense_noise_component_dump_request():
-    dump_dir = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
-    dump_indices = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_GLOBAL_INDICES")
-    dump_current_size = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_CURRENT_SIZE")
-    if not dump_dir or not dump_indices:
-        return None, set(), None
-    targets = _parse_debug_int_set(dump_indices) or set()
-    if not targets:
-        return None, set(), None
-    current_sizes = _parse_debug_int_set(dump_current_size)
-    dump_path = pathlib.Path(dump_dir)
-    dump_path.mkdir(parents=True, exist_ok=True)
-    return dump_path, targets, current_sizes
 
 
 def _noise_split_diagnostics_requested() -> bool:
@@ -941,7 +916,7 @@ def run_em(
         dense_noise_component_dump_dir,
         dense_noise_component_dump_targets,
         dense_noise_component_dump_current_sizes,
-    ) = _parse_dense_noise_component_dump_request()
+    ) = parse_dense_noise_component_dump_request()
     dense_noise_component_dump_enabled = (
         dense_noise_component_dump_dir is not None
         and (
