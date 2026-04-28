@@ -25,10 +25,10 @@ from recovar.em.sampling import (
 def _exact_bucket_rotation_size(local_rotation_count: int, rotation_block_size: int) -> int:
     """Return a compile-friendly padded size for one exact local neighborhood.
 
-    Unlike the grouped-union path, the exact local engine cannot safely cap the
-    bucket size below the true per-image neighborhood cardinality. Use the same
-    power-of-two style padding for smaller neighborhoods. For larger exact
-    neighborhoods, round up to a coarse fixed quantum so nearby local-support
+    The exact local engine cannot safely cap the bucket size below the true
+    per-image neighborhood cardinality. Use power-of-two style padding for
+    smaller neighborhoods. For larger exact neighborhoods, round up to a
+    coarse fixed quantum so nearby local-support
     sizes reuse the same compiled shapes instead of each exact count generating
     its own XLA program.
     """

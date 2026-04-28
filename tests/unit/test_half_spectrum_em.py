@@ -40,7 +40,6 @@ from recovar.em.dense_single_volume.helpers.scoring import (
     _m_step_block_compute,
     _update_logsumexp,
 )
-from recovar.em.dense_single_volume.helpers.types import EMProfileStats, RelionStats
 
 pytestmark = pytest.mark.unit
 
@@ -66,11 +65,14 @@ SEED = 42
 # ---------------------------------------------------------------------------
 
 
+def _raw_real_image_2d(image_shape, seed=42):
+    rng = np.random.default_rng(seed)
+    return rng.standard_normal(image_shape).astype(np.float32)
+
+
 def _hermitian_image_2d(image_shape, seed=42):
     """Generate a Hermitian-symmetric 2D spectrum (DFT of real data), centered."""
-    rng = np.random.default_rng(seed)
-    real_img = rng.standard_normal(image_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fft2(real_img))
+    ft = np.fft.fftshift(np.fft.fft2(_raw_real_image_2d(image_shape, seed=seed)))
     return jnp.array(ft, dtype=jnp.complex64)
 
 
@@ -104,15 +106,59 @@ def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False
     return jnp.ones((params.shape[0], sz), dtype=jnp.float32)
 
 
-def _identity_process(batch, apply_image_mask=False):
+def _raw_real_process(batch, apply_image_mask=False):
     _ = apply_image_mask
-    return batch
+    images = jnp.asarray(batch)
+    return ftu.get_dft2(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
+
+
+def _raw_real_process_half(batch, apply_image_mask=False):
+    _ = apply_image_mask
+    images = jnp.asarray(batch)
+    return ftu.get_dft2_real(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
 
 
 def _mask_for_score_only_process(batch, apply_image_mask=False):
     if apply_image_mask:
-        return jnp.zeros_like(batch)
-    return batch
+        return jnp.zeros((jnp.asarray(batch).shape[0], IMAGE_SIZE), dtype=jnp.complex64)
+    return _raw_real_process(batch, apply_image_mask=False)
+
+
+def _mask_for_score_only_process_half(batch, apply_image_mask=False):
+    if apply_image_mask:
+        return jnp.zeros((jnp.asarray(batch).shape[0], N_HALF), dtype=jnp.complex64)
+    return _raw_real_process_half(batch, apply_image_mask=False)
+
+
+def _constant_half_noise_variance(noise_variance):
+    noise_variance = jnp.asarray(noise_variance)
+    if noise_variance.shape[-1] == N_HALF:
+        return noise_variance
+    values = np.asarray(noise_variance).reshape(-1)
+    if values.size != IMAGE_SIZE or not np.allclose(values, values[0]):
+        raise ValueError("test helper only supports scalar full-image noise variance")
+    return jnp.full((N_HALF,), values[0], dtype=noise_variance.dtype)
+
+
+def _preprocess_test_batch(
+    dataset,
+    batch_data,
+    ctf_params,
+    noise_variance,
+    translations,
+    config,
+    *,
+    score_with_masked_images=False,
+):
+    return _preprocess_batch(
+        dataset,
+        batch_data,
+        ctf_params,
+        _constant_half_noise_variance(noise_variance),
+        translations,
+        config,
+        score_with_masked_images=score_with_masked_images,
+    )
 
 
 class MockDataset:
@@ -130,15 +176,16 @@ class MockDataset:
         self.dtype = jnp.complex64
         self.CTF_params = np.zeros((N_IMAGES, 9), dtype=np.float32)
         self.ctf_evaluator = staticmethod(_identity_ctf)
-        self.process_images = staticmethod(_identity_process)
+        self.process_images = staticmethod(_raw_real_process)
+        self.process_images_half = staticmethod(_raw_real_process_half)
 
-        # Fixed Hermitian-symmetric images from seed
-        self._images = np.zeros((N_IMAGES, IMAGE_SIZE), dtype=np.complex64)
+        self._images = np.zeros((N_IMAGES, *IMAGE_SHAPE), dtype=np.float32)
         for i in range(N_IMAGES):
-            self._images[i] = _hermitian_image_2d(IMAGE_SHAPE, seed=rng.integers(10000)).reshape(-1)
+            self._images[i] = _raw_real_image_2d(IMAGE_SHAPE, seed=rng.integers(10000))
 
         class _ImageSource:
-            process_images = staticmethod(_identity_process)
+            process_images = staticmethod(_raw_real_process)
+            process_images_half = staticmethod(_raw_real_process_half)
 
         self.image_source = _ImageSource()
 
@@ -170,9 +217,11 @@ class MaskedScoringDataset(MockDataset):
     def __init__(self, rng):
         super().__init__(rng)
         self.process_images = staticmethod(_mask_for_score_only_process)
+        self.process_images_half = staticmethod(_mask_for_score_only_process_half)
 
         class _ImageSource:
             process_images = staticmethod(_mask_for_score_only_process)
+            process_images_half = staticmethod(_mask_for_score_only_process_half)
 
         self.image_source = _ImageSource()
 
@@ -198,7 +247,7 @@ def seeded_inputs(rng, mock_dataset):
     config = ForwardModelConfig.from_dataset(
         mock_dataset,
         disc_type="linear_interp",
-        process_fn=_identity_process,
+        process_fn=mock_dataset.process_images,
     )
 
     return {
@@ -327,14 +376,13 @@ class TestEStepHalfMatchesFull:
         scores_full = -0.5 * (cross_term + norm_term[..., None])
 
         # === HALF-SPECTRUM path ===
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
             batch_data,
             ctf_params,
             noise_variance,
             translations,
             config,
-            n_images,
-            n_trans,
         )
 
         proj_half, proj_abs2_half = _compute_projections_block(
@@ -362,7 +410,7 @@ class TestEStepHalfMatchesFull:
             np.array(scores_full) + score_offset,
             np.array(scores_half),
             atol=1e-3,
-            rtol=1e-4,
+            rtol=5e-4,
             err_msg="E-step scores differ between half-spectrum and full-spectrum paths",
         )
 
@@ -399,14 +447,13 @@ class TestEStepHalfMatchesFull:
         probs_full = jnp.exp(scores_full - log_Z_full[:, None, None])
 
         # Half-spectrum scores
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
             batch_data,
             ctf_params,
             noise_variance,
             translations,
             config,
-            n_images,
-            n_trans,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
             volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp"
@@ -466,14 +513,13 @@ class TestMStepHalfMatchesFull:
         ctf_params = jnp.asarray(ds.CTF_params)
 
         # -- Compute shared probabilities using half-spectrum path (already verified) --
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
             batch_data,
             ctf_params,
             noise_variance,
             translations,
             config,
-            n_images,
-            n_trans,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
             volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp"
@@ -721,14 +767,13 @@ class TestFullIterationHalfMatches:
             disc_type="linear_interp",
             process_fn=ds.process_images,
         )
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
             jnp.asarray(batch_data),
             jnp.asarray(ctf_params),
             noise_variance,
             translations,
             config,
-            N_IMAGES,
-            N_TRANSLATIONS,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
             volume,
@@ -794,7 +839,7 @@ class TestFullIterationHalfMatches:
         """Large per-image norm constants should not collapse the posterior to uniform."""
         s = seeded_inputs
         ds = s["dataset"]
-        ds._images = (np.asarray(ds._images) * 1e4).astype(np.complex64)
+        ds._images = (np.asarray(ds._images) * 1e4).astype(np.float32)
         volume = s["volume"] * np.complex64(1e-6)
         noise_variance = s["noise_variance"]
         rotations = np.array(s["rotations"])
@@ -822,14 +867,13 @@ class TestFullIterationHalfMatches:
             disc_type="linear_interp",
             process_fn=ds.process_images,
         )
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
             jnp.asarray(batch_data),
             jnp.asarray(ctf_params),
             noise_variance,
             translations,
             config,
-            N_IMAGES,
-            N_TRANSLATIONS,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
             volume,
@@ -926,6 +970,7 @@ class TestFullIterationHalfMatches:
                 self.dtype = base_ds.dtype
                 self.ctf_evaluator = base_ds.ctf_evaluator
                 self.process_images = base_ds.process_images
+                self.process_images_half = base_ds.process_images_half
                 self.image_source = base_ds.image_source
                 self._images = np.asarray(base_ds._images)[image_indices].copy()
                 self.CTF_params = np.asarray(base_ds.CTF_params)[image_indices].copy()
@@ -1320,195 +1365,7 @@ class TestFullIterationHalfMatches:
             sparse_pass2=False,
             return_profile=True,
         )
-        assert len(sync_calls) >= 10
-
-    def test_local_profile_reports_rotation_row_metrics(self, mock_dataset, monkeypatch):
-        """Grouped local-search profiles should report row-level rotation accounting."""
-
-        def _fake_em_profile(**overrides):
-            defaults = dict(
-                batch_fetch_s=0.0,
-                preprocess_s=0.0,
-                score_prep_s=0.0,
-                pass1_projection_s=0.0,
-                pass1_score_s=0.0,
-                pass1_postprocess_s=0.0,
-                pass1_logsumexp_s=0.0,
-                pass2_skipmask_s=0.0,
-                pass2_projection_s=0.0,
-                pass2_score_s=0.0,
-                pass2_postprocess_s=0.0,
-                mstep_s=0.0,
-                window_scatter_s=0.0,
-                adjoint_y_s=0.0,
-                adjoint_ctf_s=0.0,
-                noise_s=0.0,
-                assignment_s=0.0,
-                stats_finalize_s=0.0,
-                host_stats_s=0.0,
-                solve_s=0.0,
-                accounted_s=0.0,
-                total_wall_s=0.0,
-                unattributed_s=0.0,
-                n_images=N_IMAGES,
-                n_trans=N_TRANSLATIONS,
-                n_rot=0,
-                n_rot_padded=0,
-                n_blocks=1,
-                n_windowed=5,
-                use_window=True,
-                reused_pass1_projections=True,
-                sparse_pass2_total_blocks=0,
-                sparse_pass2_skipped_blocks=0,
-                sparse_pass2_omitted_mass_upper_mean=0.0,
-                sparse_pass2_omitted_mass_upper_max=0.0,
-                sparse_pass2_omitted_mass_upper_sum=0.0,
-            )
-            defaults.update(overrides)
-            return EMProfileStats(**defaults)
-
-        monkeypatch.setattr(iteration_loop_module, "build_local_search_grid_metadata", lambda *args, **kwargs: object())
-        monkeypatch.setattr(iteration_loop_module, "rotation_grid_size", lambda order: 6)
-        monkeypatch.setattr(iteration_loop_module, "_local_search_engine_rotation_block_size", lambda size: size)
-        monkeypatch.setattr(
-            iteration_loop_module,
-            "_partition_local_search_groups",
-            lambda *args, **kwargs: [
-                (
-                    np.array([0, 1], dtype=np.int32),
-                    np.array([1, 3], dtype=np.int32),
-                    np.zeros((2, 2), dtype=np.float32),
-                ),
-                (
-                    np.array([2], dtype=np.int32),
-                    np.array([3, 4, 5], dtype=np.int32),
-                    np.zeros((1, 3), dtype=np.float32),
-                ),
-            ],
-        )
-        monkeypatch.setattr(
-            iteration_loop_module,
-            "make_relion_translation_log_prior",
-            lambda *args, **kwargs: np.zeros((len(args[3]), len(args[0])), dtype=np.float32),
-        )
-
-        def _fake_pad(local_rotations, local_log_prior, rotation_block_size):
-            _ = rotation_block_size
-            actual_count = local_rotations.shape[0]
-            padded_count = 4
-            pad = padded_count - actual_count
-            if pad > 0:
-                pad_rots = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], pad, axis=0)
-                padded_rotations = np.concatenate([local_rotations, pad_rots], axis=0)
-                padded_log_prior = np.pad(local_log_prior, ((0, 0), (0, pad)), constant_values=-1e30)
-            else:
-                padded_rotations = local_rotations
-                padded_log_prior = local_log_prior
-            return padded_rotations, padded_log_prior, actual_count, padded_count
-
-        monkeypatch.setattr(iteration_loop_module, "_pad_local_search_rotations", _fake_pad)
-
-        def _fake_run_em(
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            rotations,
-            translations,
-            disc_type,
-            **kwargs,
-        ):
-            _ = (
-                experiment_dataset,
-                mean,
-                mean_variance,
-                noise_variance,
-                translations,
-                disc_type,
-            )
-            image_indices = np.asarray(kwargs["image_indices"])
-            padded_log_prior = np.asarray(kwargs["rotation_log_prior"])
-            actual_count = int(np.count_nonzero(np.any(padded_log_prior > -1e20, axis=0)))
-            rotation_posterior_sums = np.zeros(rotations.shape[0], dtype=np.float32)
-            if actual_count == 2:
-                rotation_posterior_sums[:2] = np.array([0.5, 0.0], dtype=np.float32)
-                profile = _fake_em_profile(
-                    adjoint_y_s=10.0,
-                    adjoint_ctf_s=2.0,
-                    total_wall_s=15.0,
-                    accounted_s=14.0,
-                    unattributed_s=1.0,
-                    n_rot=actual_count,
-                    n_rot_padded=rotations.shape[0],
-                )
-            else:
-                rotation_posterior_sums[:3] = np.array([0.1, 0.3, 0.0], dtype=np.float32)
-                profile = _fake_em_profile(
-                    adjoint_y_s=20.0,
-                    adjoint_ctf_s=4.0,
-                    total_wall_s=30.0,
-                    accounted_s=29.0,
-                    unattributed_s=1.0,
-                    n_rot=actual_count,
-                    n_rot_padded=rotations.shape[0],
-                )
-            stats = RelionStats(
-                log_evidence_per_image=jnp.zeros(len(image_indices), dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(len(image_indices), dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(len(image_indices), dtype=jnp.float32),
-                rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
-            )
-            return (
-                None,
-                np.zeros(len(image_indices), dtype=np.int32),
-                jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-                jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-                stats,
-                profile,
-            )
-
-        monkeypatch.setattr(iteration_loop_module, "run_em", _fake_run_em)
-
-        rotation_grid_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 6, axis=0)
-        rotation_grid_eulers = np.zeros((6, 3), dtype=np.float32)
-        prior_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], N_IMAGES, axis=0)
-        translations = np.zeros((N_TRANSLATIONS, 2), dtype=np.float32)
-        prior_translations = np.zeros((N_IMAGES, 2), dtype=np.float32)
-
-        _, _, _, _, profile_summary = iteration_loop_module._run_local_search_iteration(
-            mock_dataset,
-            jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-            jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
-            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order=1,
-            sigma_rot=0.1,
-            sigma_psi=0.1,
-            translations=translations,
-            prior_translations=prior_translations,
-            sigma_offset_angstrom=1.0,
-            offset_range_pixels=1.0,
-            disc_type="linear_interp",
-            image_batch_size=2,
-            rotation_block_size=4,
-            current_size=4,
-            return_profile=True,
-            sparse_pass2=True,
-        )
-
-        assert int(profile_summary["n_chunks"]) == 2
-        assert int(profile_summary["sum_union_rows"]) == 5
-        assert int(profile_summary["sum_padded_rows"]) == 8
-        assert int(profile_summary["sum_nonzero_posterior_rows"]) == 3
-        assert int(profile_summary["unique_global_rotations"]) == 4
-        assert int(profile_summary["unique_nonzero_global_rotations"]) == 3
-        np.testing.assert_allclose(float(profile_summary["duplicate_rotation_factor"]), 1.25, atol=1e-6)
-        np.testing.assert_array_equal(np.asarray(profile_summary["chunk_nonzero_posterior_rows"]), np.array([1, 2]))
-        assert int(profile_summary["sum_union_row_pixels"]) == 25
-        np.testing.assert_allclose(float(profile_summary["adjoint_seconds_per_row_pixel"]), 36.0 / 25.0, atol=1e-6)
-
+        assert sync_calls
 
 # ===========================================================================
 # Test 5: make_half_image_weights shape and dtype

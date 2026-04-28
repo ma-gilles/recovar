@@ -6,7 +6,7 @@ Tracked TODO IDs in the active RELION local-search refactor.
 
 | ID | Status | Owning module | Rationale |
 |---|---|---|---|
-| `RELION_LOCAL_ENGINE/T001` | OPEN | `recovar/em/dense_single_volume/iteration_loop.py` | Grouped-union local search is the wrong active abstraction. |
+| `RELION_LOCAL_ENGINE/T001` | RESOLVED | `recovar/em/dense_single_volume/iteration_loop.py` | Grouped-union local search has been removed; local RELION refinement uses the exact per-image engine. |
 | `RELION_LOCAL_ENGINE/T002` | OPEN | `recovar/em/dense_single_volume/local_layout.py` | Active RELION local path must use per-image local hypotheses. |
 | `RELION_LOCAL_ENGINE/T003` | OPEN | `recovar/em/dense_single_volume/local_em_engine.py` | Local path should not depend on dense shared-grid engine orchestration. |
 | `RELION_LOCAL_ENGINE/T004` | OPEN | `recovar/em/dense_single_volume/iteration_loop.py` | RELION-parity hacks should move inward, out of outer-loop control flow. |
@@ -45,7 +45,7 @@ A tracked TODO ID may be removed from code only if:
 
 ## Remaining Work After The Direct Half-Volume Fix
 
-- Push the packed half-volume layout farther out of the RELION outer loop so the local path no longer depends on dense/global orchestration state (`T001`, `T003`, `T004`).
+- Push the packed half-volume layout farther out of the RELION outer loop so the local path no longer depends on dense/global orchestration state (`T003`, `T004`).
 - Benchmark the direct `half_volume=True` path on the larger local-search fixtures (`20k @ 128`, `20k @ 256`, `50k @ 256`) and update the comparison table against RELION warm/cold timings.
 - Keep the current warm `5k @ 128` parity benchmark as the guardrail:
   - direct `half_volume=True` exact local stays at about `20.8s` warm iteration wall

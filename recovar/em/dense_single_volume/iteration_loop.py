@@ -30,11 +30,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     update_refinement_state,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
-from recovar.em.dense_single_volume.helpers.local_search import (
-    _local_search_engine_rotation_block_size,
-    _pad_local_search_rotations,
-    _partition_local_search_groups,
-)
+from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
     collapse_rotation_posterior_to_direction_prior,
     infer_direction_prior_healpix_order,
@@ -91,109 +87,6 @@ logger = logging.getLogger(__name__)
 
 RELION_SCORE_TENSOR_FLOAT_BUDGET = 200_000_000
 RELION_MAX_FULL_GRID_ORDER = 4
-
-
-@dataclass(frozen=True)
-class _GroupedUnionChunkCounts:
-    valid_pairs: int
-    union_pairs: int
-    padded_pairs: int
-
-
-def _grouped_union_chunk_counts(
-    *,
-    group_image_count: int,
-    actual_local_rotation_count: int,
-    padded_total_rotations: int,
-    local_log_prior,
-) -> _GroupedUnionChunkCounts:
-    """Return grouped-union profile counts for one legacy local-search chunk."""
-
-    return _GroupedUnionChunkCounts(
-        valid_pairs=int(np.count_nonzero(np.asarray(local_log_prior) > -1e20)),
-        union_pairs=int(group_image_count * actual_local_rotation_count),
-        padded_pairs=int(group_image_count * padded_total_rotations),
-    )
-
-
-def _build_grouped_union_profile_summary(
-    *,
-    metadata_build_time,
-    selector_time,
-    translation_prior_time,
-    em_time,
-    local_setup_time,
-    run_em_wall_time,
-    profile_merge_time,
-    postprocess_time,
-    n_chunks,
-    chunk_sizes,
-    chunk_local_rotations,
-    chunk_padded_rotations,
-    chunk_valid_pairs,
-    chunk_union_pairs,
-    chunk_padded_pairs,
-    chunk_nonzero_posterior_rows,
-    sum_union_rows,
-    sum_padded_rows,
-    sum_nonzero_posterior_rows,
-    seen_global_rotations,
-    seen_nonzero_global_rotations,
-    sum_union_row_pixels,
-    sum_padded_row_pixels,
-    total_adjoint_time,
-    em_phase_totals,
-):
-    total_valid_pairs = float(np.sum(chunk_valid_pairs))
-    total_union_pairs = float(np.sum(chunk_union_pairs))
-    total_padded_pairs = float(np.sum(chunk_padded_pairs))
-    accounted_time = local_setup_time + run_em_wall_time + profile_merge_time + postprocess_time
-    profile_summary = {
-        "metadata_build_time_s": np.float64(metadata_build_time),
-        "selector_time_s": np.float64(selector_time),
-        "translation_prior_time_s": np.float64(translation_prior_time),
-        "em_time_s": np.float64(em_time),
-        "local_setup_time_s": np.float64(local_setup_time),
-        "run_em_wall_time_s": np.float64(run_em_wall_time),
-        "profile_merge_time_s": np.float64(profile_merge_time),
-        "postprocess_time_s": np.float64(postprocess_time),
-        "accounted_em_time_s": np.float64(accounted_time),
-        "unattributed_em_time_s": np.float64(max(em_time - accounted_time, 0.0)),
-        "n_chunks": np.int32(n_chunks),
-        "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
-        "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
-        "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
-        "chunk_valid_pairs": np.asarray(chunk_valid_pairs, dtype=np.int64),
-        "chunk_union_pairs": np.asarray(chunk_union_pairs, dtype=np.int64),
-        "chunk_padded_pairs": np.asarray(chunk_padded_pairs, dtype=np.int64),
-        "chunk_nonzero_posterior_rows": np.asarray(chunk_nonzero_posterior_rows, dtype=np.int32),
-        "sum_union_rows": np.int64(sum_union_rows),
-        "sum_padded_rows": np.int64(sum_padded_rows),
-        "sum_nonzero_posterior_rows": np.int64(sum_nonzero_posterior_rows),
-        "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
-        "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
-        "duplicate_rotation_factor": np.float64(
-            0.0 if not np.any(seen_global_rotations) else sum_union_rows / np.count_nonzero(seen_global_rotations)
-        ),
-        "sum_union_row_pixels": np.int64(sum_union_row_pixels),
-        "sum_padded_row_pixels": np.int64(sum_padded_row_pixels),
-        "adjoint_seconds_per_row_pixel": np.float64(
-            0.0 if sum_union_row_pixels == 0 else total_adjoint_time / sum_union_row_pixels
-        ),
-        "union_waste_fraction": np.float64(
-            0.0 if total_union_pairs == 0 else 1.0 - total_valid_pairs / total_union_pairs
-        ),
-        "padded_waste_fraction": np.float64(
-            0.0 if total_padded_pairs == 0 else 1.0 - total_valid_pairs / total_padded_pairs
-        ),
-        "padding_only_waste_fraction": np.float64(
-            0.0 if total_padded_pairs == 0 else (total_padded_pairs - total_union_pairs) / total_padded_pairs
-        ),
-    }
-    if em_phase_totals is not None:
-        for key, value in em_phase_totals.items():
-            profile_summary[f"em_{key}"] = np.asarray(value)
-    return profile_summary
 
 
 def _precompute_exact_local_fine_grid_enabled(healpix_order: int) -> bool:
@@ -302,8 +195,8 @@ def _maybe_dump_noise_update_debug(
     np.savez_compressed(path, **payload)
     logger.info("Wrote RECOVAR noise update debug dump: %s", path)
 
+
 # TRACKED TODOs: RELION_LOCAL_ENGINE
-# TODO(RELION_LOCAL_ENGINE/T001): grouped-union local search is a legacy abstraction
 # TODO(RELION_LOCAL_ENGINE/T002): active RELION local path uses exact per-image local hypotheses
 # TODO(RELION_LOCAL_ENGINE/T003): local path should not depend on dense shared-grid engine contracts
 # TODO(RELION_LOCAL_ENGINE/T004): parity hacks should move inward, out of outer-loop control flow
@@ -372,11 +265,9 @@ def _relion_exact_local_image_batch_override() -> int | None:
 
 
 def _normalize_local_engine(local_engine: str) -> str:
-    """Normalize local-search engine names without hiding the active path."""
-    if local_engine not in ("exact_v1", "grouped_union"):
-        raise ValueError(
-            f"Unknown local_engine={local_engine!r}; expected 'exact_v1' or 'grouped_union'",
-        )
+    """Normalize local-search engine names."""
+    if local_engine != "exact_v1":
+        raise ValueError(f"Unknown local_engine={local_engine!r}; expected 'exact_v1'")
     return local_engine
 
 
@@ -522,14 +413,6 @@ def _radial_profile_from_noise_variance(noise_variance, image_shape):
     return radial / np.maximum(counts, 1.0)
 
 
-# ---- Extracted helpers live in helpers/ ----
-# local_search.py: _partition_local_search_groups, _pad_local_search_rotations, etc.
-# orientation_priors.py: make_relion_translation_log_prior, make_relion_direction_log_prior, etc.
-# resolution.py: shell_index_to_resolution_angstrom, compute_coarse_image_size, fsc_to_current_size, etc.
-# convergence.py: RefinementState, check_convergence, update_refinement_state, etc.
-# oversampling.py: find_significant_rotations, compute_pass2_stats, etc.
-
-
 def _reconstruct_volume_eager(
     Ft_ctf,
     Ft_y,
@@ -640,7 +523,6 @@ def _run_local_search_iteration(
     image_pre_shifts=None,
     score_with_masked_images=True,
     return_profile=False,
-    sparse_pass2=True,
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
     adaptive_fraction=0.999,
@@ -660,57 +542,10 @@ def _run_local_search_iteration(
 
     Each image carries its own exact prior orientation from the previous
     iteration. ``prior_rotations`` may be either RELION Euler angles
-    ``(rot, tilt, psi)`` or rotation matrices. Images are processed in
-    chunks; by default they are evaluated by the active per-image exact local
-    engine (``exact_v1``). The grouped-union path remains available only for
-    parity comparisons and fallback experiments.
-
-    TODO(local-engine-debt): Keep the translation-side inner-product/GEMM
-    opportunity in mind as an optimization target when replacing the
-    grouped-union code, but do not let it keep us trapped in the union-based
-    local abstraction.
+    ``(rot, tilt, psi)`` or rotation matrices. Images are evaluated by the
+    active per-image exact local engine (``exact_v1``).
     """
     local_engine = _normalize_local_engine(local_engine)
-    if pass2_layout is not None and local_engine == "grouped_union":
-        raise ValueError("Pass-2 layouts must use exact local search, not grouped_union")
-    if local_engine == "grouped_union":
-        return _run_local_search_iteration_grouped_union(
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            prior_rotations,
-            rotation_grid_rotations,
-            rotation_grid_eulers,
-            healpix_order,
-            sigma_rot,
-            sigma_psi,
-            translations,
-            prior_translations,
-            sigma_offset_angstrom,
-            offset_range_pixels,
-            disc_type,
-            image_batch_size,
-            rotation_block_size,
-            current_size,
-            accumulate_noise=accumulate_noise,
-            projection_padding_factor=projection_padding_factor,
-            reconstruction_padding_factor=reconstruction_padding_factor,
-            use_float64_scoring=use_float64_scoring,
-            use_float64_projections=use_float64_projections,
-            do_gridding_correction=do_gridding_correction,
-            square_window=square_window,
-            half_spectrum_scoring=half_spectrum_scoring,
-            image_corrections=image_corrections,
-            scale_corrections=scale_corrections,
-            image_pre_shifts=image_pre_shifts,
-            score_with_masked_images=score_with_masked_images,
-            return_profile=return_profile,
-            sparse_pass2=sparse_pass2,
-            disable_adjoint_y=disable_adjoint_y,
-            disable_adjoint_ctf=disable_adjoint_ctf,
-            translation_prior_reference_translations=translation_prior_reference_translations,
-        )
     return _run_local_search_iteration_exact_v1(
         experiment_dataset,
         mean,
@@ -968,391 +803,6 @@ def _decode_pass2_local_hard_assignment(
         hard_assignment[image_idx] = np.int32((best_row - start) * n_trans + trans_idx)
 
     return hard_assignment
-
-
-def _run_local_search_iteration_grouped_union(
-    experiment_dataset,
-    mean,
-    mean_variance,
-    noise_variance,
-    prior_rotations,
-    rotation_grid_rotations,
-    rotation_grid_eulers,
-    healpix_order,
-    sigma_rot,
-    sigma_psi,
-    translations,
-    prior_translations,
-    sigma_offset_angstrom,
-    offset_range_pixels,
-    disc_type,
-    image_batch_size,
-    rotation_block_size,
-    current_size,
-    *,
-    accumulate_noise=False,
-    projection_padding_factor=1,
-    reconstruction_padding_factor=1,
-    use_float64_scoring=False,
-    use_float64_projections=False,
-    do_gridding_correction=False,
-    square_window=False,
-    half_spectrum_scoring=False,
-    image_corrections=None,
-    scale_corrections=None,
-    image_pre_shifts=None,
-    score_with_masked_images=True,
-    return_profile=False,
-    sparse_pass2=True,
-    disable_adjoint_y=False,
-    disable_adjoint_ctf=False,
-    translation_prior_reference_translations=None,
-    debug_iteration=None,
-):
-    """Legacy grouped-union local engine kept for comparison and fallback."""
-    rotation_block_size = _local_search_engine_rotation_block_size(rotation_block_size)
-    prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
-    if prior_rotations.ndim == 3:
-        n_prior = prior_rotations.shape[0]
-    elif prior_rotations.ndim == 2 and prior_rotations.shape[1] == 3:
-        n_prior = prior_rotations.shape[0]
-    else:
-        raise ValueError(f"prior_rotations must have shape (n,3,3) or (n,3), got {prior_rotations.shape}")
-    # The local-search translation prior is evaluated on the RELION-relative
-    # delta grid after pre-centering by the rounded previous offset, so the
-    # prior center must already be in "delta coordinates" (typically
-    # -ROUND(old_offset)).
-    if prior_translations is None:
-        prior_translations = np.zeros(
-            (n_prior, np.asarray(translations).shape[1]),
-            dtype=np.float32,
-        )
-    else:
-        prior_translations = np.asarray(prior_translations, dtype=np.float32).reshape(
-            -1,
-            np.asarray(translations).shape[1],
-        )
-    n_images = experiment_dataset.n_units
-    n_trans = int(np.asarray(translations).shape[0])
-    rotation_grid_rotations = np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)
-    if rotation_grid_rotations.shape[0] != rotation_grid_size(healpix_order):
-        raise ValueError(
-            f"rotation_grid_rotations must have shape ({rotation_grid_size(healpix_order)}, 3, 3), "
-            f"got {rotation_grid_rotations.shape}",
-        )
-    if rotation_grid_eulers is not None:
-        rotation_grid_eulers = np.asarray(rotation_grid_eulers, dtype=np.float32).reshape(-1, 3)
-    if rotation_grid_eulers is not None and rotation_grid_eulers.shape[0] != rotation_grid_rotations.shape[0]:
-        raise ValueError(
-            f"rotation_grid_eulers must match rotation_grid_rotations, got "
-            f"{rotation_grid_eulers.shape} vs {rotation_grid_rotations.shape}",
-        )
-    active_offset_range = (
-        float(offset_range_pixels)
-        if offset_range_pixels is not None
-        else float(np.max(np.linalg.norm(np.asarray(translations, dtype=np.float32), axis=1)))
-    )
-    volume_size = experiment_dataset.volume_size
-    recon_vol_size = volume_size * reconstruction_padding_factor**3
-
-    Ft_y_total = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
-    Ft_ctf_total = jnp.zeros(recon_vol_size, dtype=experiment_dataset.dtype)
-    hard_assignment = np.empty(n_images, dtype=np.int32)
-    log_evidence = np.empty(n_images, dtype=np.float32)
-    best_log_score = np.empty(n_images, dtype=np.float32)
-    max_posterior = np.empty(n_images, dtype=np.float32)
-    rotation_posterior_sums = np.zeros(
-        rotation_grid_size(healpix_order),
-        dtype=np.float64,
-    )
-
-    # Noise accumulation across chunks (RELION-parity for the noise update).
-    n_shells_local = experiment_dataset.image_shape[0] // 2 + 1
-    accum_noise_wsum = np.zeros(n_shells_local, dtype=np.float64) if accumulate_noise else None
-    accum_img_power = np.zeros(n_shells_local, dtype=np.float64) if accumulate_noise else None
-    accum_sumw = 0.0
-
-    total_local_rotations = 0
-    max_local_rotations = 0
-    chunk_sizes = []
-    n_chunks = 0
-    metadata_build_time = 0.0
-    selector_time = 0.0
-    translation_prior_time = 0.0
-    em_time = 0.0
-    local_setup_time = 0.0
-    run_em_wall_time = 0.0
-    profile_merge_time = 0.0
-    postprocess_time = 0.0
-    total_bucket_rotations = 0
-    max_bucket_rotations = 0
-    chunk_local_rotations = []
-    chunk_padded_rotations = []
-    chunk_valid_pairs = []
-    chunk_union_pairs = []
-    chunk_padded_pairs = []
-    chunk_nonzero_posterior_rows = []
-    sum_union_rows = 0
-    sum_padded_rows = 0
-    sum_nonzero_posterior_rows = 0
-    sum_union_row_pixels = 0
-    sum_padded_row_pixels = 0
-    total_adjoint_time = 0.0
-    seen_global_rotations = np.zeros(rotation_grid_size(healpix_order), dtype=bool)
-    seen_nonzero_global_rotations = np.zeros(rotation_grid_size(healpix_order), dtype=bool)
-    em_phase_totals = None
-    # RELION builds local angular priors from the canonical factorized
-    # Healpix/psi sampling arrays, then applies SamplingPerturbation when it
-    # materializes the trial orientations. Keep the selector/prior metadata
-    # canonical while indexing the already-perturbed rotations for scoring.
-    metadata_t0 = time.time()
-    local_grid_metadata = build_local_search_grid_metadata(healpix_order)
-    metadata_build_time = time.time() - metadata_t0
-
-    # Grouped-union is retained only for explicit fallback/parity runs. The
-    # active local engine computes exact per-image hypotheses directly.
-    selector_t0 = time.time()
-    grouped_local_search = _partition_local_search_groups(
-        prior_rotations,
-        sigma_rot,
-        sigma_psi,
-        healpix_order,
-        image_batch_size,
-        rotation_block_size,
-        local_grid_metadata,
-    )
-    selector_time += time.time() - selector_t0
-
-    for group_image_indices, local_indices, local_log_prior in grouped_local_search:
-        n_chunks += 1
-        chunk_sizes.append(len(group_image_indices))
-        local_rotations = rotation_grid_rotations[local_indices]
-        # C1 (RELION-parity): use the explicit sigma_offset_angstrom from the
-        # caller (which is the data-driven value updated each iter) without
-        # the legacy `range/3` override (offset_range_pixels=None). The
-        # translation grid is still bounded by `active_offset_range` in the
-        # engine's score computation.
-        translation_prior_t0 = time.time()
-        prior_reference_translations = (
-            np.asarray(translation_prior_reference_translations, dtype=np.float32)
-            if translation_prior_reference_translations is not None
-            else np.asarray(translations, dtype=np.float32)
-        )
-        local_translation_log_prior = make_relion_translation_log_prior(
-            prior_reference_translations,
-            experiment_dataset.voxel_size,
-            sigma_offset_angstrom,
-            prior_translations[group_image_indices],
-            offset_range_pixels=None,
-        )
-        translation_prior_time += time.time() - translation_prior_t0
-
-        total_local_rotations += int(local_rotations.shape[0])
-        max_local_rotations = max(max_local_rotations, int(local_rotations.shape[0]))
-
-        em_t0 = time.time()
-        local_setup_t0 = time.time()
-        padded_rotations, padded_log_prior, actual_local_rotation_count, local_rotation_block_size = (
-            _pad_local_search_rotations(
-                local_rotations,
-                local_log_prior,
-                int(rotation_block_size),
-            )
-        )
-        padded_total_rotations = int(
-            ((padded_rotations.shape[0] + local_rotation_block_size - 1) // local_rotation_block_size)
-            * local_rotation_block_size
-        )
-
-        chunk_counts = _grouped_union_chunk_counts(
-            group_image_count=len(group_image_indices),
-            actual_local_rotation_count=actual_local_rotation_count,
-            padded_total_rotations=padded_total_rotations,
-            local_log_prior=local_log_prior,
-        )
-        chunk_local_rotations.append(int(actual_local_rotation_count))
-        chunk_padded_rotations.append(int(padded_total_rotations))
-        chunk_valid_pairs.append(chunk_counts.valid_pairs)
-        chunk_union_pairs.append(chunk_counts.union_pairs)
-        chunk_padded_pairs.append(chunk_counts.padded_pairs)
-        sum_union_rows += int(actual_local_rotation_count)
-        sum_padded_rows += int(padded_total_rotations)
-        seen_global_rotations[np.asarray(local_indices[:actual_local_rotation_count], dtype=np.int32)] = True
-        total_bucket_rotations += padded_total_rotations
-        max_bucket_rotations = max(max_bucket_rotations, int(local_rotation_block_size))
-        local_setup_time += time.time() - local_setup_t0
-
-        run_em_t0 = time.time()
-        run_em_outputs = run_em(
-            experiment_dataset,
-            mean,
-            mean_variance,
-            noise_variance,
-            padded_rotations,
-            translations,
-            disc_type,
-            image_batch_size=image_batch_size,
-            rotation_block_size=local_rotation_block_size,
-            current_size=current_size,
-            rotation_log_prior=padded_log_prior,
-            translation_log_prior=local_translation_log_prior,
-            translation_prior_centers=prior_translations[group_image_indices],
-            image_indices=group_image_indices,
-            score_with_masked_images=score_with_masked_images,
-            return_stats=True,
-            accumulate_noise=accumulate_noise,
-            half_spectrum_scoring=half_spectrum_scoring,
-            projection_padding_factor=projection_padding_factor,
-            reconstruction_padding_factor=reconstruction_padding_factor,
-            image_corrections=image_corrections,
-            scale_corrections=scale_corrections,
-            image_pre_shifts=image_pre_shifts,
-            use_float64_scoring=use_float64_scoring,
-            use_float64_projections=use_float64_projections,
-            do_gridding_correction=do_gridding_correction,
-            square_window=square_window,
-            return_profile=return_profile,
-            sparse_pass2=sparse_pass2,
-            disable_adjoint_y=disable_adjoint_y,
-            disable_adjoint_ctf=disable_adjoint_ctf,
-        )
-        run_em_wall_time += time.time() - run_em_t0
-        if accumulate_noise:
-            if return_profile:
-                _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g, em_profile_g = run_em_outputs
-            else:
-                _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, noise_stats_g = run_em_outputs
-            accum_noise_wsum += np.asarray(noise_stats_g.wsum_sigma2_noise, dtype=np.float64)
-            accum_img_power += np.asarray(noise_stats_g.wsum_img_power, dtype=np.float64)
-            accum_sumw += float(noise_stats_g.sumw)
-        else:
-            if return_profile:
-                _, ha_local, Ft_y_g, Ft_ctf_g, stats_g, em_profile_g = run_em_outputs
-            else:
-                _, ha_local, Ft_y_g, Ft_ctf_g, stats_g = run_em_outputs
-
-        if return_profile:
-            profile_merge_t0 = time.time()
-            profile_dict = em_profile_g._asdict()
-            if em_phase_totals is None:
-                em_phase_totals = {key: 0.0 for key in profile_dict}
-            for key, value in profile_dict.items():
-                em_phase_totals[key] += float(value)
-            total_adjoint_time += float(em_profile_g.adjoint_y_s + em_profile_g.adjoint_ctf_s)
-            sum_union_row_pixels += int(actual_local_rotation_count * em_profile_g.n_windowed)
-            sum_padded_row_pixels += int(padded_total_rotations * em_profile_g.n_windowed)
-            profile_merge_time += time.time() - profile_merge_t0
-
-        postprocess_t0 = time.time()
-        Ft_y_total = Ft_y_total + Ft_y_g
-        Ft_ctf_total = Ft_ctf_total + Ft_ctf_g
-
-        local_rot_idx = ha_local // n_trans
-        trans_idx = ha_local % n_trans
-        if np.any(local_rot_idx >= actual_local_rotation_count):
-            raise RuntimeError(
-                "Padded local-search rotation selected despite masked prior; "
-                f"got index {int(np.max(local_rot_idx))} with actual_count={actual_local_rotation_count}"
-            )
-        hard_assignment[group_image_indices] = (local_indices[local_rot_idx] * n_trans + trans_idx).astype(np.int32)
-        log_evidence[group_image_indices] = np.asarray(
-            stats_g.log_evidence_per_image,
-            dtype=np.float32,
-        )
-        best_log_score[group_image_indices] = np.asarray(
-            stats_g.best_log_score_per_image,
-            dtype=np.float32,
-        )
-        max_posterior[group_image_indices] = np.asarray(
-            stats_g.max_posterior_per_image,
-            dtype=np.float32,
-        )
-        rotation_posterior_sums[local_indices] += np.asarray(
-            stats_g.rotation_posterior_sums[:actual_local_rotation_count],
-            dtype=np.float64,
-        )
-        nonzero_row_mask = np.asarray(stats_g.rotation_posterior_sums[:actual_local_rotation_count]) > 0
-        nonzero_row_count = int(np.count_nonzero(nonzero_row_mask))
-        chunk_nonzero_posterior_rows.append(nonzero_row_count)
-        sum_nonzero_posterior_rows += nonzero_row_count
-        if nonzero_row_count:
-            seen_nonzero_global_rotations[np.asarray(local_indices[:actual_local_rotation_count])[nonzero_row_mask]] = (
-                True
-            )
-        postprocess_time += time.time() - postprocess_t0
-        em_time += time.time() - em_t0
-
-    logger.info(
-        "Batched local search: %d chunks, median chunk size=%d, mean local rotations=%.1f, max local rotations=%d, "
-        "mean bucket rotations=%.1f, max bucket rotations=%d",
-        n_chunks,
-        int(np.median(chunk_sizes)) if chunk_sizes else 0,
-        float(total_local_rotations / max(n_chunks, 1)),
-        max_local_rotations,
-        float(total_bucket_rotations / max(n_chunks, 1)),
-        max_bucket_rotations,
-    )
-    logger.info(
-        "Batched local search timings: metadata=%.2fs, selector=%.2fs, translation_prior=%.2fs, "
-        "em=%.2fs (setup=%.2fs, run_em=%.2fs, profile_merge=%.2fs, postprocess=%.2fs)",
-        metadata_build_time,
-        selector_time,
-        translation_prior_time,
-        em_time,
-        local_setup_time,
-        run_em_wall_time,
-        profile_merge_time,
-        postprocess_time,
-    )
-
-    relion_stats = RelionStats(
-        log_evidence_per_image=jnp.asarray(log_evidence),
-        best_log_score_per_image=jnp.asarray(best_log_score),
-        max_posterior_per_image=jnp.asarray(max_posterior),
-        rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
-    )
-    profile_summary = (
-        _build_grouped_union_profile_summary(
-            metadata_build_time=metadata_build_time,
-            selector_time=selector_time,
-            translation_prior_time=translation_prior_time,
-            em_time=em_time,
-            local_setup_time=local_setup_time,
-            run_em_wall_time=run_em_wall_time,
-            profile_merge_time=profile_merge_time,
-            postprocess_time=postprocess_time,
-            n_chunks=n_chunks,
-            chunk_sizes=chunk_sizes,
-            chunk_local_rotations=chunk_local_rotations,
-            chunk_padded_rotations=chunk_padded_rotations,
-            chunk_valid_pairs=chunk_valid_pairs,
-            chunk_union_pairs=chunk_union_pairs,
-            chunk_padded_pairs=chunk_padded_pairs,
-            chunk_nonzero_posterior_rows=chunk_nonzero_posterior_rows,
-            sum_union_rows=sum_union_rows,
-            sum_padded_rows=sum_padded_rows,
-            sum_nonzero_posterior_rows=sum_nonzero_posterior_rows,
-            seen_global_rotations=seen_global_rotations,
-            seen_nonzero_global_rotations=seen_nonzero_global_rotations,
-            sum_union_row_pixels=sum_union_row_pixels,
-            sum_padded_row_pixels=sum_padded_row_pixels,
-            total_adjoint_time=total_adjoint_time,
-            em_phase_totals=em_phase_totals,
-        )
-        if return_profile
-        else None
-    )
-    if accumulate_noise:
-        from recovar.em.dense_single_volume.helpers.types import NoiseStats
-
-        noise_stats = NoiseStats(
-            wsum_sigma2_noise=jnp.asarray(accum_noise_wsum, dtype=jnp.float32),
-            wsum_img_power=jnp.asarray(accum_img_power, dtype=jnp.float32),
-            wsum_sigma2_offset=0.0,
-            sumw=float(accum_sumw),
-        )
-        return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats, noise_stats, profile_summary
-    return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats, profile_summary
 
 
 def _run_local_search_iteration_exact_v1(
@@ -2731,45 +2181,28 @@ def _run_relion_iteration_loop(
             local_search_random_perturbation = 0.0
             local_search_angular_sampling_deg = None
             if effective_rotations.shape[0] != rotation_grid_size(local_search_order):
-                if local_engine == "grouped_union":
-                    logger.info(
-                        "Generating fine local-search grid: order=%d (%d rotations) from capped base order=%d",
-                        local_search_order,
-                        rotation_grid_size(local_search_order),
-                        current_healpix_order,
-                    )
+                logger.info(
+                    "Using selected-only fine local-search grid: order=%d (%d rotations) from capped base order=%d",
+                    local_search_order,
+                    rotation_grid_size(local_search_order),
+                    current_healpix_order,
+                )
+                local_search_angular_sampling_deg = relion_angular_sampling_deg(
+                    local_search_order,
+                    adaptive_oversampling=0,
+                )
+                if _precompute_exact_local_fine_grid_enabled(local_search_order):
                     _, local_search_rotation_eulers = _relion_rotation_grid_float32(local_search_order)
-                    if abs(float(random_perturbation)) > 1e-12:
-                        local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
-                            local_search_rotation_eulers,
-                            random_perturbation,
-                            relion_angular_sampling_deg(local_search_order, adaptive_oversampling=0),
-                        )
-                    else:
-                        local_search_rotations, _ = _relion_rotation_grid_float32(local_search_order)
+                    local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
+                        local_search_rotation_eulers,
+                        float(random_perturbation),
+                        local_search_angular_sampling_deg,
+                    )
+                    local_search_random_perturbation = 0.0
                 else:
-                    logger.info(
-                        "Using selected-only fine local-search grid: order=%d (%d rotations) from capped base order=%d",
-                        local_search_order,
-                        rotation_grid_size(local_search_order),
-                        current_healpix_order,
-                    )
-                    local_search_angular_sampling_deg = relion_angular_sampling_deg(
-                        local_search_order,
-                        adaptive_oversampling=0,
-                    )
-                    if _precompute_exact_local_fine_grid_enabled(local_search_order):
-                        _, local_search_rotation_eulers = _relion_rotation_grid_float32(local_search_order)
-                        local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
-                            local_search_rotation_eulers,
-                            float(random_perturbation),
-                            local_search_angular_sampling_deg,
-                        )
-                        local_search_random_perturbation = 0.0
-                    else:
-                        local_search_rotations = None
-                        local_search_rotation_eulers = None
-                        local_search_random_perturbation = float(random_perturbation)
+                    local_search_rotations = None
+                    local_search_rotation_eulers = None
+                    local_search_random_perturbation = float(random_perturbation)
             else:
                 local_search_rotations = effective_rotations
                 local_search_rotation_eulers = None
@@ -2984,9 +2417,7 @@ def _run_relion_iteration_loop(
                     _eff_n_rot,
                     current_translations.shape[0],
                 )
-                exact_local_batch_override = (
-                    None if local_engine == "grouped_union" else _relion_exact_local_image_batch_override()
-                )
+                exact_local_batch_override = _relion_exact_local_image_batch_override()
                 if exact_local_batch_override is not None:
                     safe_ibs = min(int(exact_local_batch_override), image_batch_size)
                 logger.info(
@@ -3019,8 +2450,7 @@ def _run_relion_iteration_loop(
                 # storeWeightedSums keeps all local candidates. Do not apply
                 # the 0.999 significant-support prune on this os0 path.
                 local_reconstruct_significant_only = state.adaptive_oversampling > 0
-                grouped_local_profile_k = None
-                grouped_outputs = _run_local_search_iteration(
+                local_outputs = _run_local_search_iteration(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
@@ -3052,7 +2482,6 @@ def _run_relion_iteration_loop(
                     image_pre_shifts=translation_search_base,
                     score_with_masked_images=True,
                     return_profile=collect_local_search_profile,
-                    sparse_pass2=True,
                     disable_adjoint_y=disable_adjoint_y,
                     disable_adjoint_ctf=disable_adjoint_ctf,
                     adaptive_fraction=adaptive_fraction,
@@ -3061,12 +2490,12 @@ def _run_relion_iteration_loop(
                     local_engine=local_engine,
                     translation_prior_reference_translations=translation_prior_reference_translations,
                     debug_iteration=iteration + 1,
-                    return_best_pose_details=(local_engine != "grouped_union"),
+                    return_best_pose_details=True,
                     translation_prior_centers=trans_prior_center,
                     rotation_grid_random_perturbation=local_search_random_perturbation,
                     rotation_grid_angular_sampling_deg=local_search_angular_sampling_deg,
                 )
-                if len(grouped_outputs) == 9:
+                if collect_local_search_profile:
                     (
                         Ft_y_k,
                         Ft_ctf_k,
@@ -3076,53 +2505,41 @@ def _run_relion_iteration_loop(
                         _best_rot_ids_k,
                         em_stats_k,
                         noise_stats_k,
-                        grouped_local_profile_k,
-                    ) = grouped_outputs
-                    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
-                    best_pose_rotation_eulers[k] = utils.R_to_relion(
-                        np.asarray(best_rots_k),
-                        degrees=True,
-                    ).astype(np.float32)
-                    best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
-                elif len(grouped_outputs) == 8:
-                    (
-                        Ft_y_k,
-                        Ft_ctf_k,
-                        ha_k,
-                        best_rots_k,
-                        best_trans_k,
-                        _best_rot_ids_k,
-                        em_stats_k,
-                        noise_stats_k,
-                    ) = grouped_outputs
-                    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
-                    best_pose_rotation_eulers[k] = utils.R_to_relion(
-                        np.asarray(best_rots_k),
-                        degrees=True,
-                    ).astype(np.float32)
-                    best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
-                elif len(grouped_outputs) == 6:
-                    Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k, grouped_local_profile_k = grouped_outputs
-                elif len(grouped_outputs) == 5:
-                    Ft_y_k, Ft_ctf_k, ha_k, em_stats_k, noise_stats_k = grouped_outputs
-                else:
-                    raise RuntimeError(f"Unexpected local-search output arity: {len(grouped_outputs)}")
-                noise_stats_per_half[k] = noise_stats_k
-                pose_rotations[k] = None
-                coarse_ha[k] = ha_k
-                if grouped_local_profile_k is not None:
-                    profile_row = dict(grouped_local_profile_k)
+                        local_profile_k,
+                    ) = local_outputs
+                    profile_row = dict(local_profile_k)
                     profile_row["iteration"] = np.int32(iteration)
                     profile_row["half_index"] = np.int32(k)
                     local_profile_history.append(profile_row)
-                if save_intermediates_dir is not None and grouped_local_profile_k is not None:
-                    np.savez_compressed(
-                        os.path.join(
-                            save_intermediates_dir,
-                            f"it{iteration:03d}_half{k + 1}_local_profile.npz",
-                        ),
-                        **grouped_local_profile_k,
-                    )
+                    if save_intermediates_dir is not None:
+                        np.savez_compressed(
+                            os.path.join(
+                                save_intermediates_dir,
+                                f"it{iteration:03d}_half{k + 1}_local_profile.npz",
+                            ),
+                            **local_profile_k,
+                        )
+                else:
+                    (
+                        Ft_y_k,
+                        Ft_ctf_k,
+                        ha_k,
+                        best_rots_k,
+                        best_trans_k,
+                        _best_rot_ids_k,
+                        em_stats_k,
+                        noise_stats_k,
+                    ) = local_outputs
+                    best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
+                best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
+                best_pose_rotation_eulers[k] = utils.R_to_relion(
+                    np.asarray(best_rots_k),
+                    degrees=True,
+                ).astype(np.float32)
+                best_pose_translations[k] = np.asarray(best_trans_k, dtype=np.float32)
+                noise_stats_per_half[k] = noise_stats_k
+                pose_rotations[k] = None
+                coarse_ha[k] = ha_k
 
             elif use_adaptive:
                 # --- PASS 1: Coarse significance pruning ---
