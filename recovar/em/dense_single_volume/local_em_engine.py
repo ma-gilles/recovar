@@ -2045,7 +2045,6 @@ def run_local_em_exact(
     _block_until_ready(Ft_y, Ft_ctf)
     total_wall_time = time.time() - overall_t0
     profile_summary = {
-        "local_engine_kind": np.array("exact_v1"),
         "big_jit_enabled": np.asarray(big_jit_enabled),
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
         "batch_backproject_enabled": np.asarray(batch_backproject_enabled),

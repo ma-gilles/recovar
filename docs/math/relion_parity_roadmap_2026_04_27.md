@@ -191,8 +191,7 @@ Minimal implementation:
 3. Extend `run_local_em_exact()` to return the pass-2 best rotation,
    translation, and child bookkeeping needed by the iteration loop.
 4. Replace the adaptive sparse caller with `_run_local_search_iteration(...,
-   local_engine="exact_v1", pass2_layout=...)`; do not route through
-   `grouped_union`.
+   pass2_layout=...)`; do not route through `grouped_union`.
 5. Convert the global-significant-support path only after adding support for
    its externally supplied `normalization_log_z`.
 
@@ -208,9 +207,8 @@ Implementation update (2026-04-27):
 
 - Non-local adaptive sparse pass 2 now routes through
   `_run_sparse_pass2_local_search_iteration()`, which builds a pass-2
-  `LocalHypothesisLayout` and calls `_run_local_search_iteration()` with
-  `local_engine="exact_v1"` instead of the grouped/bucketed sparse pass-2
-  machinery.
+  `LocalHypothesisLayout` and calls `_run_local_search_iteration()` instead
+  of the grouped/bucketed sparse pass-2 machinery.
 - The pass-2 local layout carries a sparse `(rotation, translation)` candidate
   mask, coarse parent ids for posterior sums, and the exact oversampled child
   rotations/translations.

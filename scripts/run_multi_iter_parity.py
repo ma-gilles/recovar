@@ -323,13 +323,7 @@ def main():
         "--local_search_profile",
         choices=["auto", "on", "off"],
         default="auto",
-        help="Control grouped local-search profile collection. 'auto' profiles only when intermediates are enabled.",
-    )
-    parser.add_argument(
-        "--local_engine",
-        choices=["exact_v1"],
-        default="exact_v1",
-        help="RELION local-search engine to use.",
+        help="Control exact-local profile collection. 'auto' profiles only when intermediates are enabled.",
     )
     parser.add_argument(
         "--local_search_translation_prior_mode",
@@ -983,7 +977,6 @@ def main():
         print(f"  GT volume requested but not found: {args.gt_volume}")
 
     print(f"  Local-search profile: {args.local_search_profile}")
-    print(f"  Local engine: {args.local_engine}")
     print(f"  Local translation prior mode: {args.local_search_translation_prior_mode}")
     print(f"  First-iteration score mode: {args.first_iteration_score_mode}")
     print(f"  First-iteration reconstruction mode: {args.first_iteration_reconstruction_mode}")
@@ -1036,7 +1029,6 @@ def main():
         local_search_translation_prior_mode=args.local_search_translation_prior_mode,
         disable_adjoint_y=args.disable_adjoint_y,
         disable_adjoint_ctf=args.disable_adjoint_ctf,
-        local_engine=args.local_engine,
         emulate_relion_firstiter_cc=(args.iter == 0 and do_firstiter_cc),
         relion_firstiter_ini_high_angstrom=relion_ini_high if args.iter == 0 else None,
         first_iteration_score_mode=args.first_iteration_score_mode,
@@ -1076,7 +1068,6 @@ def main():
             "elapsed_s": float(elapsed),
             "timing_only": True,
             "local_search_profile_mode": args.local_search_profile,
-            "local_engine": args.local_engine,
             "disable_adjoint_y": bool(args.disable_adjoint_y),
             "disable_adjoint_ctf": bool(args.disable_adjoint_ctf),
             "compile_count_from_log": _count_compile_lines(args.compile_log),
@@ -1103,7 +1094,6 @@ def main():
         "adaptive_fraction": np.float64(adaptive_fraction),
         "max_significants": np.int32(max_significants),
         "local_search_profile_mode": np.array(args.local_search_profile),
-        "local_engine": np.array(args.local_engine),
         "local_search_translation_prior_mode": np.array(args.local_search_translation_prior_mode),
         "first_iteration_score_mode": np.array(args.first_iteration_score_mode),
         "first_iteration_reconstruction_mode": np.array(args.first_iteration_reconstruction_mode),
@@ -1327,7 +1317,6 @@ def main():
         "force_max_iter_after_convergence": bool(args.force_max_iter_after_convergence),
         "elapsed_s": float(elapsed),
         "local_search_profile_mode": args.local_search_profile,
-        "local_engine": args.local_engine,
         "disable_adjoint_y": bool(args.disable_adjoint_y),
         "disable_adjoint_ctf": bool(args.disable_adjoint_ctf),
         "compile_count_from_log": _count_compile_lines(args.compile_log),
