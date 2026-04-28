@@ -15,10 +15,8 @@ from .em_engine import (
     _compute_projections_block,
     _prepare_reconstruction_batch,
     _preprocess_batch,
-    make_half_image_weights,
-    make_relion_noise_shell_indices_half,
-    make_shell_indices_half,
 )
+from .helpers.half_spectrum import make_half_image_weights, make_relion_noise_shell_indices_half, make_shell_indices_half
 
 __all__ = [
     "_adjoint_slice_volume_half",

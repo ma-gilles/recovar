@@ -63,7 +63,7 @@ from recovar.em.dense_single_volume.local_layout import (
     build_local_hypothesis_layout,
     build_pass2_hypothesis_layout,
 )
-from recovar.em.dense_single_volume.em_primitives import make_half_image_weights, make_shell_indices_half
+from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights, make_shell_indices_half
 from recovar.em.sampling import (
     advance_relion_perturbation,
     apply_relion_rotation_perturbation,

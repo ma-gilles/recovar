@@ -21,11 +21,13 @@ from recovar.em.dense_single_volume.em_primitives import (
     _block_until_ready,
     _compute_noise_block,
     _compute_projections_block,
+)
+from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
     make_shell_indices_half,
 )
-from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     integer_pre_shifts_or_none,
