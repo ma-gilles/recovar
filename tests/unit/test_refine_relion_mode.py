@@ -10,6 +10,7 @@ Verifies:
 """
 
 from pathlib import Path
+import inspect
 
 import numpy as np
 import pytest
@@ -56,7 +57,6 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image
 from recovar.em.dense_single_volume.iteration_loop import (
     _align_fourier_volume_sign_to_reference,
     _normalize_noise_variance_per_half,
-    _normalize_local_engine,
     _replay_control_model_iteration,
     refine_single_volume,
 )
@@ -575,7 +575,6 @@ def test_run_local_search_iteration_dispatches_exact_engine(monkeypatch, rng):
         rotation_block_size=4,
         current_size=4,
         accumulate_noise=True,
-        local_engine="exact_v1",
     )
 
     assert called["engine"] == "exact_v1"
@@ -646,7 +645,6 @@ def test_run_local_search_iteration_exact_engine_uses_translation_prior_referenc
         rotation_block_size=4,
         current_size=4,
         accumulate_noise=True,
-        local_engine="exact_v1",
         translation_prior_reference_translations=reference_translations,
         translation_prior_centers=prior_centers,
     )
@@ -1716,14 +1714,9 @@ def test_tracked_local_engine_todo_ids_are_present():
     assert "DENSE_ENGINE_BOUNDARY/E006" not in em_engine_text
 
 
-def test_local_engine_normalization_rejects_removed_aliases():
-    assert _normalize_local_engine("exact_v1") == "exact_v1"
-    with pytest.raises(ValueError, match="expected 'exact_v1'"):
-        _normalize_local_engine("grouped_union")
-    with pytest.raises(ValueError, match="expected 'exact_v1'"):
-        _normalize_local_engine("exact_v2")
-    with pytest.raises(ValueError, match="expected 'exact_v1'"):
-        _normalize_local_engine("unknown")
+def test_local_engine_selector_is_removed():
+    assert "local_engine" not in inspect.signature(refine_single_volume).parameters
+    assert "local_engine" not in inspect.signature(iteration_loop_module._run_local_search_iteration).parameters
 
 
 def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False):

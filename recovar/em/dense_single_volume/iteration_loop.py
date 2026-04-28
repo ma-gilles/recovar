@@ -257,13 +257,6 @@ def _relion_exact_local_image_batch_override() -> int | None:
     return value
 
 
-def _normalize_local_engine(local_engine: str) -> str:
-    """Normalize local-search engine names."""
-    if local_engine != "exact_v1":
-        raise ValueError(f"Unknown local_engine={local_engine!r}; expected 'exact_v1'")
-    return local_engine
-
-
 def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: int) -> int:
     """Return the RELION model.star index whose control state governs this replay step."""
     return int(init_relion_iteration) + int(loop_iteration) + 1
@@ -522,7 +515,6 @@ def _run_local_search_iteration(
     adaptive_fraction=0.999,
     max_significants=-1,
     reconstruct_significant_only=True,
-    local_engine="exact_v1",
     translation_prior_reference_translations=None,
     debug_iteration=None,
     pass2_layout=None,
@@ -542,7 +534,6 @@ def _run_local_search_iteration(
     TODO(local-engine-debt): Keep the translation-side inner-product/GEMM
     opportunity in mind as an optimization target for exact-local search.
     """
-    local_engine = _normalize_local_engine(local_engine)
     return _run_local_search_iteration_exact_v1(
         experiment_dataset,
         mean,
@@ -682,7 +673,6 @@ def _run_sparse_pass2_local_search_iteration(
         return_profile=return_profile,
         adaptive_fraction=adaptive_fraction,
         max_significants=-1,
-        local_engine="exact_v1",
         debug_iteration=debug_iteration,
         pass2_layout=pass2_layout,
         return_best_pose_details=True,
@@ -1111,7 +1101,6 @@ def refine_single_volume(
     local_search_translation_prior_mode="coarse",
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
-    local_engine="exact_v1",
     emulate_relion_firstiter_cc=False,
     relion_firstiter_ini_high_angstrom=None,
     first_iteration_score_mode="gaussian",
@@ -1218,7 +1207,6 @@ def refine_single_volume(
         raise ValueError(f"Unknown mode={mode!r}; expected 'relion'")
     if relion_current_sizes is not None and len(relion_current_sizes) == 0:
         raise ValueError("relion_current_sizes must be non-empty when provided")
-    local_engine = _normalize_local_engine(local_engine)
 
     _enable_relion_parity_defaults()
     return _run_relion_iteration_loop(
@@ -1267,7 +1255,6 @@ def refine_single_volume(
         local_search_translation_prior_mode=local_search_translation_prior_mode,
         disable_adjoint_y=disable_adjoint_y,
         disable_adjoint_ctf=disable_adjoint_ctf,
-        local_engine=local_engine,
         emulate_relion_firstiter_cc=emulate_relion_firstiter_cc,
         relion_firstiter_ini_high_angstrom=relion_firstiter_ini_high_angstrom,
         first_iteration_score_mode=first_iteration_score_mode,
@@ -1327,7 +1314,6 @@ def _run_relion_iteration_loop(
     local_search_translation_prior_mode="coarse",
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
-    local_engine="exact_v1",
     emulate_relion_firstiter_cc=False,
     relion_firstiter_ini_high_angstrom=None,
     first_iteration_score_mode="gaussian",
@@ -1348,8 +1334,6 @@ def _run_relion_iteration_loop(
     See docs/relion5_auto_refine_algorithm.md.
     """
     from recovar.reconstruction import noise, regularization
-
-    local_engine = _normalize_local_engine(local_engine)
 
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape
@@ -2485,7 +2469,6 @@ def _run_relion_iteration_loop(
                     adaptive_fraction=adaptive_fraction,
                     max_significants=max_significants,
                     reconstruct_significant_only=local_reconstruct_significant_only,
-                    local_engine=local_engine,
                     translation_prior_reference_translations=translation_prior_reference_translations,
                     debug_iteration=iteration + 1,
                     return_best_pose_details=True,

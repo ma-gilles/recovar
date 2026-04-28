@@ -1460,7 +1460,7 @@ Validation performed for this implementation slice:
 - `python -m pytest tests/unit/test_dense_big_jit.py
   tests/unit/test_dense_shape_buckets.py
   tests/unit/test_refine_relion_mode.py::test_tracked_local_engine_todo_ids_are_present
-  tests/unit/test_refine_relion_mode.py::test_local_engine_normalization_rejects_removed_aliases`
+  tests/unit/test_refine_relion_mode.py::test_local_engine_selector_is_removed`
 - Tiny synthetic JIT call of `run_dense_bucket_big_jit`
 - Dense big-JIT non-windowed Gaussian bucket equivalence against existing dense
   primitives for pass-1 logsumexp reductions and pass-2 M-step adjoint sums.

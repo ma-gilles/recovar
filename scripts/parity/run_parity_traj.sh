@@ -61,8 +61,7 @@ INNER_CMD="pixi run python scripts/run_multi_iter_parity.py \
     --relion_dir $RELION_REF \
     --data_star $DATA_STAR \
     --iter $INIT_ITER --max_iter $MAX_ITER \
-    --output_dir $OUT \
-    --local_engine exact_v1"
+    --output_dir $OUT"
 
 pixi run python scripts/parity/launch_with_perf_check.py \
     --dump-dir "$DUMP_DIR" \
