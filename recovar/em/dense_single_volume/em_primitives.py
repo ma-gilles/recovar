@@ -10,10 +10,10 @@ from .helpers.backprojection import (
     batch_adjoint_slice_volume_half as _batch_adjoint_slice_volume_half,
     batch_adjoint_slice_volume_windowed as _batch_adjoint_slice_volume_windowed,
 )
-from .em_engine import (
-    _block_until_ready,
-    _compute_noise_block,
-    _compute_projections_block,
+from .helpers.jax_runtime import block_until_ready as _block_until_ready
+from .helpers.projection import (
+    compute_noise_block as _compute_noise_block,
+    compute_projections_block as _compute_projections_block,
 )
 
 __all__ = [
