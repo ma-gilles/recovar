@@ -398,18 +398,14 @@ def test_dense_big_jit_mstep_matches_dense_primitives_and_adjoint():
 
     ref_Ft_y0 = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
     ref_Ft_ctf0 = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
-    _, _, probs, ref_best, ref_argmax, summed_half, ctf_probs_half = _m_step_block_compute(
+    probs, ref_best, ref_argmax, summed_half, ctf_probs_half = _m_step_block_compute(
         s["shifted_recon_half"],
         scores,
         log_z,
         s["rotations"],
         s["ctf2_over_nv_recon_half"],
-        ref_Ft_y0,
-        ref_Ft_ctf0,
         N_IMAGES,
         N_TRANS,
-        IMAGE_SHAPE,
-        VOLUME_SHAPE,
     )
     ref_Ft_y = _adjoint_slice_volume_half(
         summed_half,

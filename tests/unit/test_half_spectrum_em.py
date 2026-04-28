@@ -25,9 +25,10 @@ from recovar.core.configs import ForwardModelConfig
 import recovar.em.dense_single_volume.em_engine as em_engine_module
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume.em_engine import (
+    _adjoint_slice_volume_half,
     _compute_projections_block,
     _e_step_block_scores,
-    _m_step_block,
+    _m_step_block_compute,
     _preprocess_batch,
     _update_logsumexp,
     make_half_image_weights,
@@ -494,18 +495,32 @@ class TestMStepHalfMatchesFull:
         Ft_y_half = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
         Ft_ctf_half = jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64)
 
-        Ft_y_half, Ft_ctf_half, probs, _, _, _, _ = _m_step_block(
+        probs, _, _, summed_half, ctf_probs_half = _m_step_block_compute(
             shifted_half,
             scores,
             log_Z,
             rotations,
             ctf2_over_nv_half,
-            Ft_y_half,
-            Ft_ctf_half,
             n_images,
             n_trans,
+        )
+        Ft_y_half = _adjoint_slice_volume_half(
+            summed_half,
+            rotations,
+            Ft_y_half,
             IMAGE_SHAPE,
             VOLUME_SHAPE,
+            "linear_interp",
+            True,
+        )
+        Ft_ctf_half = _adjoint_slice_volume_half(
+            ctf_probs_half,
+            rotations,
+            Ft_ctf_half,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            "linear_interp",
+            True,
         )
 
         # -- Full-spectrum reference M-step --
