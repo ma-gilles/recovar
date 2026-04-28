@@ -100,6 +100,7 @@ def _apply_dense_score_postprocess(
     translation_log_prior_block,
     candidate_mask_block,
     valid_rotation_mask,
+    valid_image_mask,
     *,
     score_mode: str,
 ):
@@ -108,6 +109,7 @@ def _apply_dense_score_postprocess(
         scores = scores + translation_log_prior_block[:, None, :]
     scores = jnp.where(candidate_mask_block[None, :, :], scores, -jnp.inf)
     scores = jnp.where(valid_rotation_mask[None, :, None], scores, -jnp.inf)
+    scores = jnp.where(valid_image_mask[:, None, None], scores, 0.0)
     return scores
 
 
@@ -126,11 +128,13 @@ def _mstep_half_sums(
     ctf2_over_nv_recon_half,
     scores,
     log_Z,
+    valid_image_mask,
 ):
     batch_size = scores.shape[0]
     rot_block_size = scores.shape[1]
     n_trans = scores.shape[2]
     probs = jnp.exp(scores - log_Z[:, None, None])
+    probs = jnp.where(valid_image_mask[:, None, None], probs, 0.0)
     P = probs.swapaxes(0, 1).reshape(rot_block_size, batch_size * n_trans)
     summed_half = P @ shifted_recon_half
     probs_sum_t = jnp.sum(probs, axis=-1)
@@ -139,6 +143,9 @@ def _mstep_half_sums(
     block_best = jnp.max(flat_scores, axis=1)
     block_argmax = jnp.argmax(flat_scores, axis=1)
     max_posterior = jnp.exp(block_best - log_Z)
+    block_best = jnp.where(valid_image_mask, block_best, -jnp.inf)
+    block_argmax = jnp.where(valid_image_mask, block_argmax, 0)
+    max_posterior = jnp.where(valid_image_mask, max_posterior, 0.0)
     return probs, probs_sum_t, summed_half, ctf_probs_half, block_best, block_argmax, max_posterior
 
 
@@ -352,6 +359,7 @@ def run_dense_bucket_big_jit(
     translation_log_prior_block,
     candidate_mask_block,
     valid_rotation_mask,
+    valid_image_mask,
     log_Z,
     noise_wsum,
     noise_a2,
@@ -396,6 +404,8 @@ def run_dense_bucket_big_jit(
     ``translation_log_prior_block`` must be shaped ``(batch, n_trans)``.  Use
     zeros for flat priors.  ``candidate_mask_block`` and
     ``valid_rotation_mask`` should already include any padding/candidate masks.
+    ``valid_image_mask`` marks real image rows when the caller pads a tail
+    image batch to a stable shape class.
     """
     if score_mode not in ("gaussian", "normalized_cc"):
         raise ValueError(f"score_mode must be 'gaussian' or 'normalized_cc', got {score_mode!r}")
@@ -476,6 +486,7 @@ def run_dense_bucket_big_jit(
         translation_log_prior_block,
         candidate_mask_block,
         valid_rotation_mask,
+        valid_image_mask.astype(bool),
         score_mode=score_mode,
     )
 
@@ -505,6 +516,7 @@ def run_dense_bucket_big_jit(
             ctf2_over_nv_recon,
             scores,
             log_Z,
+            valid_image_mask.astype(bool),
         )
         Ft_y, Ft_ctf = _adjoint_dense_bucket(
             summed_half,
