@@ -21,6 +21,10 @@ from recovar.em.sampling import (
     rotation_indices_to_relion_eulers,
 )
 
+## TODO: WE NEED OT CLENA UP THE NP.FLOAT STUFF. IT SHOULD BE A SINGLE DEFAULT DTYPE THROUGHOUT UNLESS THER EIS A GREAT REASON( I DONT THINK THERE ARE )
+##
+_LOCAL_LAYOUT_FLOAT_DTYPE = np.float32
+
 
 def _exact_bucket_rotation_size(local_rotation_count: int, rotation_block_size: int) -> int:
     """Return a compile-friendly padded size for one exact local neighborhood.
@@ -108,17 +112,22 @@ def _resolve_prior_rotations(prior_rotations: np.ndarray, healpix_order: int, gr
 
     if prior_rotations.ndim == 1:
         if "eulers_full" in grid_metadata:
-            prior_eulers = np.asarray(grid_metadata["eulers_full"], dtype=np.float32)[prior_rotations.astype(np.int64)]
+            prior_eulers = np.asarray(grid_metadata["eulers_full"], dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)[
+                prior_rotations.astype(np.int64)
+            ]
         else:
             prior_eulers = rotation_indices_to_relion_eulers(prior_rotations.astype(np.int64), healpix_order)
         prior_rotation_mats = utils.R_from_relion(prior_eulers, degrees=True)
-        return np.asarray(prior_eulers, dtype=np.float32), np.asarray(prior_rotation_mats, dtype=np.float64)
+        return np.asarray(prior_eulers, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE), np.asarray(
+            prior_rotation_mats,
+            dtype=np.float64,
+        )
     if prior_rotations.ndim == 2 and prior_rotations.shape[-1] == 3:
-        prior_eulers = np.asarray(prior_rotations, dtype=np.float32).reshape(-1, 3)
+        prior_eulers = np.asarray(prior_rotations, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE).reshape(-1, 3)
         prior_rotation_mats = utils.R_from_relion(prior_eulers, degrees=True)
         return prior_eulers, np.asarray(prior_rotation_mats, dtype=np.float64)
     prior_rotation_mats = np.asarray(prior_rotations, dtype=np.float64).reshape(-1, 3, 3)
-    prior_eulers = utils.R_to_relion(prior_rotation_mats, degrees=True).astype(np.float32)
+    prior_eulers = utils.R_to_relion(prior_rotation_mats, degrees=True).astype(_LOCAL_LAYOUT_FLOAT_DTYPE)
     return prior_eulers, prior_rotation_mats
 
 
@@ -173,34 +182,44 @@ def _build_factorized_local_entries(
             dir_indices = np.flatnonzero(dir_mask).astype(np.int64)
             if dir_indices.size == 0:
                 dir_indices = np.array([int(np.argmin(diffang[image_idx]))], dtype=np.int64)
-                dir_log_prior = np.zeros(1, dtype=np.float32)
+                dir_log_prior = np.zeros(1, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
             else:
                 dir_log_prior = _normalized_log_weights(diffang[image_idx, dir_indices], biggest_sigma_deg)
         else:
             dir_indices = np.arange(n_pixels, dtype=np.int64)
-            dir_log_prior = np.full(n_pixels, -np.log(max(n_pixels, 1)), dtype=np.float32)
+            dir_log_prior = np.full(n_pixels, -np.log(max(n_pixels, 1)), dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
 
         if sigma_psi_deg > 0.0:
             psi_mask = diffpsi[image_idx] < cutoff_psi_deg
             psi_indices = np.flatnonzero(psi_mask).astype(np.int64)
             if psi_indices.size == 0:
                 psi_indices = np.array([int(np.argmin(diffpsi[image_idx]))], dtype=np.int64)
-                psi_log_prior = np.zeros(1, dtype=np.float32)
+                psi_log_prior = np.zeros(1, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
             else:
                 psi_log_prior = _normalized_log_weights(diffpsi[image_idx, psi_indices], sigma_psi_deg)
         else:
             psi_indices = np.arange(int(grid_metadata["n_psi"]), dtype=np.int64)
-            psi_log_prior = np.full(psi_indices.shape[0], -np.log(max(psi_indices.shape[0], 1)), dtype=np.float32)
+            psi_log_prior = np.full(
+                psi_indices.shape[0],
+                -np.log(max(psi_indices.shape[0], 1)),
+                dtype=_LOCAL_LAYOUT_FLOAT_DTYPE,
+            )
 
         local_ids = (psi_indices[:, None] * n_pixels + dir_indices[None, :]).reshape(-1).astype(np.int32)
-        local_log_prior = (psi_log_prior[:, None] + dir_log_prior[None, :]).reshape(-1).astype(np.float32)
+        local_log_prior = (psi_log_prior[:, None] + dir_log_prior[None, :]).reshape(-1).astype(
+            _LOCAL_LAYOUT_FLOAT_DTYPE
+        )
         counts[image_idx] = int(local_ids.shape[0])
         offsets[image_idx + 1] = offsets[image_idx] + local_ids.shape[0]
         rotation_ids_parts.append(local_ids)
         log_prior_parts.append(local_log_prior)
 
     rotation_ids_flat = np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
-    rotation_log_priors_flat = np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
+    rotation_log_priors_flat = (
+        np.concatenate(log_prior_parts, axis=0)
+        if log_prior_parts
+        else np.zeros(0, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
+    )
     return offsets, counts, rotation_ids_flat, rotation_log_priors_flat
 
 
@@ -209,9 +228,9 @@ def _rotation_eulers_from_grid_metadata(rotation_ids: np.ndarray, grid_metadata)
 
     rotation_ids = np.asarray(rotation_ids, dtype=np.int64).reshape(-1)
     if rotation_ids.size == 0:
-        return np.zeros((0, 3), dtype=np.float32)
+        return np.zeros((0, 3), dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
     if "eulers_full" in grid_metadata:
-        return np.asarray(grid_metadata["eulers_full"], dtype=np.float32)[rotation_ids]
+        return np.asarray(grid_metadata["eulers_full"], dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)[rotation_ids]
     if str(grid_metadata["mode"]) != "factorized":
         raise ValueError("Selected rotation eulers require factorized metadata or eulers_full")
     n_pixels = int(grid_metadata["n_pixels"])
@@ -219,12 +238,12 @@ def _rotation_eulers_from_grid_metadata(rotation_ids: np.ndarray, grid_metadata)
     psi_idx = rotation_ids // n_pixels
     return np.stack(
         [
-            np.asarray(grid_metadata["rot_deg"], dtype=np.float32)[pixel_idx],
-            np.asarray(grid_metadata["tilt_deg"], dtype=np.float32)[pixel_idx],
-            np.asarray(grid_metadata["psi_deg"], dtype=np.float32)[psi_idx],
+            np.asarray(grid_metadata["rot_deg"], dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)[pixel_idx],
+            np.asarray(grid_metadata["tilt_deg"], dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)[pixel_idx],
+            np.asarray(grid_metadata["psi_deg"], dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)[psi_idx],
         ],
         axis=1,
-    ).astype(np.float32, copy=False)
+    ).astype(_LOCAL_LAYOUT_FLOAT_DTYPE, copy=False)
 
 
 def _selected_rotation_matrices(
@@ -239,9 +258,9 @@ def _selected_rotation_matrices(
 
     rotation_ids = np.asarray(rotation_ids, dtype=np.int64).reshape(-1)
     if rotation_ids.size == 0:
-        return np.zeros((0, 3, 3), dtype=np.float32)
+        return np.zeros((0, 3, 3), dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
     if rotation_grid_rotations is not None:
-        return np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)[rotation_ids]
+        return np.asarray(rotation_grid_rotations, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE).reshape(-1, 3, 3)[rotation_ids]
     unique_ids, inverse = np.unique(rotation_ids, return_inverse=True)
     selected_eulers = _rotation_eulers_from_grid_metadata(unique_ids, grid_metadata)
     if abs(float(random_perturbation)) > 1e-12:
@@ -254,7 +273,7 @@ def _selected_rotation_matrices(
         )
     else:
         rotations = utils.R_from_relion(selected_eulers, degrees=True)
-    return rotations.astype(np.float32, copy=False)[inverse]
+    return rotations.astype(_LOCAL_LAYOUT_FLOAT_DTYPE, copy=False)[inverse]
 
 
 def build_local_hypothesis_layout(
@@ -276,11 +295,14 @@ def build_local_hypothesis_layout(
 ) -> LocalHypothesisLayout:
     """Build exact per-image local neighborhoods and translation priors."""
 
-    prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
+    prior_rotations = np.asarray(prior_rotations, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
     if rotation_grid_rotations is not None:
-        rotation_grid_rotations = np.asarray(rotation_grid_rotations, dtype=np.float32).reshape(-1, 3, 3)
-    translations = np.asarray(translations, dtype=np.float32)
-    prior_translations = np.asarray(prior_translations, dtype=np.float32).reshape(-1, translations.shape[1])
+        rotation_grid_rotations = np.asarray(rotation_grid_rotations, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE).reshape(-1, 3, 3)
+    translations = np.asarray(translations, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
+    prior_translations = np.asarray(prior_translations, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE).reshape(
+        -1,
+        translations.shape[1],
+    )
 
     if str(grid_metadata["mode"]) == "factorized":
         offsets, counts, rotation_ids_flat, rotation_log_priors_flat = _build_factorized_local_entries(
@@ -308,14 +330,18 @@ def build_local_hypothesis_layout(
                 grid_metadata=grid_metadata,
             )
             local_ids = np.asarray(local_ids, dtype=np.int32).reshape(-1)
-            local_log_prior = np.asarray(local_log_prior[0], dtype=np.float32).reshape(-1)
+            local_log_prior = np.asarray(local_log_prior[0], dtype=_LOCAL_LAYOUT_FLOAT_DTYPE).reshape(-1)
             counts[image_idx] = int(local_ids.shape[0])
             offsets[image_idx + 1] = offsets[image_idx] + local_ids.shape[0]
             rotation_ids_parts.append(local_ids)
             log_prior_parts.append(local_log_prior)
 
         rotation_ids_flat = np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
-        rotation_log_priors_flat = np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
+        rotation_log_priors_flat = (
+            np.concatenate(log_prior_parts, axis=0)
+            if log_prior_parts
+            else np.zeros(0, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
+        )
     rotations_flat = _selected_rotation_matrices(
         rotation_ids_flat,
         rotation_grid_rotations,
@@ -324,7 +350,7 @@ def build_local_hypothesis_layout(
         angular_sampling_deg=rotation_grid_angular_sampling_deg,
     )
     reference_translations = (
-        np.asarray(translation_prior_reference_translations, dtype=np.float32)
+        np.asarray(translation_prior_reference_translations, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
         if translation_prior_reference_translations is not None
         else translations
     )
@@ -335,7 +361,7 @@ def build_local_hypothesis_layout(
         sigma_offset_angstrom,
         prior_translations,
         offset_range_pixels=offset_range_pixels,
-    ).astype(np.float32, copy=False)
+    ).astype(_LOCAL_LAYOUT_FLOAT_DTYPE, copy=False)
 
     if rotation_grid_rotations is not None:
         n_global_rotations = int(rotation_grid_rotations.shape[0])
@@ -352,12 +378,12 @@ def build_local_hypothesis_layout(
         rotation_log_priors_flat=rotation_log_priors_flat,
         rotation_counts=counts,
         translation_grid=translations,
-        translation_log_priors=np.asarray(translation_log_priors, dtype=np.float32),
+        translation_log_priors=np.asarray(translation_log_priors, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE),
     )
 
 
 def _infer_translation_step(translations: np.ndarray) -> float:
-    unique_vals = np.unique(np.asarray(translations, dtype=np.float32))
+    unique_vals = np.unique(np.asarray(translations, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE))
     diffs = np.diff(np.sort(unique_vals))
     diffs = diffs[diffs > 1e-6]
     return float(diffs.min()) if diffs.size else 1.0
@@ -370,18 +396,21 @@ def _fine_translation_log_prior(
     n_fine_translations: int,
 ) -> np.ndarray:
     if translation_log_prior is None:
-        return np.zeros((n_images, n_fine_translations), dtype=np.float32)
-    translation_log_prior_np = np.asarray(translation_log_prior, dtype=np.float32)
+        return np.zeros((n_images, n_fine_translations), dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
+    translation_log_prior_np = np.asarray(translation_log_prior, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
     if translation_log_prior_np.ndim == 1:
         fine = translation_log_prior_np[fine_translation_parent]
-        return np.broadcast_to(fine[None, :], (n_images, n_fine_translations)).astype(np.float32, copy=False)
+        return np.broadcast_to(fine[None, :], (n_images, n_fine_translations)).astype(
+            _LOCAL_LAYOUT_FLOAT_DTYPE,
+            copy=False,
+        )
     if translation_log_prior_np.ndim == 2:
         if translation_log_prior_np.shape[0] != n_images:
             raise ValueError(
                 "translation_log_prior must have one row per image when 2D; "
                 f"got {translation_log_prior_np.shape[0]} rows for {n_images} images",
             )
-        return translation_log_prior_np[:, fine_translation_parent].astype(np.float32, copy=False)
+        return translation_log_prior_np[:, fine_translation_parent].astype(_LOCAL_LAYOUT_FLOAT_DTYPE, copy=False)
     raise ValueError(f"translation_log_prior must be 1D or 2D, got {translation_log_prior_np.ndim} dimensions")
 
 
@@ -406,7 +435,7 @@ def build_pass2_hypothesis_layout(
     carries its own oversampled rotations plus a sparse ``(R, T)`` mask.
     """
 
-    translations_np = np.asarray(translations, dtype=np.float32)
+    translations_np = np.asarray(translations, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
     if translation_step is None:
         translation_step = _infer_translation_step(translations_np)
     fine_translations, fine_translation_parent = get_oversampled_translation_grid(
@@ -414,11 +443,13 @@ def build_pass2_hypothesis_layout(
         float(translation_step),
         oversampling_order=oversampling_order,
     )
-    fine_translations = np.asarray(fine_translations, dtype=np.float32)
+    fine_translations = np.asarray(fine_translations, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
     fine_translation_parent = np.asarray(fine_translation_parent, dtype=np.int32)
     n_fine_translations = int(fine_translations.shape[0])
     n_images = len(significant_sample_indices)
-    rotation_log_prior_np = None if rotation_log_prior is None else np.asarray(rotation_log_prior, dtype=np.float32)
+    rotation_log_prior_np = (
+        None if rotation_log_prior is None else np.asarray(rotation_log_prior, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
+    )
 
     offsets = np.zeros(n_images + 1, dtype=np.int64)
     counts = np.zeros(n_images, dtype=np.int32)
@@ -450,15 +481,18 @@ def build_pass2_hypothesis_layout(
             random_perturbation=random_perturbation,
             return_rotation_indices=True,
         )
-        oversampled_rots = np.asarray(oversampled_rots, dtype=np.float32)
+        oversampled_rots = np.asarray(oversampled_rots, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
         parent_map = np.asarray(parent_map, dtype=np.int32)
         oversampled_rot_indices = np.asarray(oversampled_rot_indices, dtype=np.int32)
         coarse_parent_ids = unique_rot[parent_map].astype(np.int32, copy=False)
 
         if rotation_log_prior_np is None:
-            local_rotation_log_prior = np.zeros(oversampled_rots.shape[0], dtype=np.float32)
+            local_rotation_log_prior = np.zeros(oversampled_rots.shape[0], dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
         else:
-            local_rotation_log_prior = rotation_log_prior_np[unique_rot][parent_map].astype(np.float32, copy=False)
+            local_rotation_log_prior = rotation_log_prior_np[unique_rot][parent_map].astype(
+                _LOCAL_LAYOUT_FLOAT_DTYPE,
+                copy=False,
+            )
 
         if use_full_candidate_mask:
             sample_mask = np.ones((oversampled_rots.shape[0], n_fine_translations), dtype=bool)
@@ -480,13 +514,17 @@ def build_pass2_hypothesis_layout(
         log_prior_parts.append(local_rotation_log_prior)
         sample_mask_parts.append(sample_mask)
 
-    rotations_flat = np.concatenate(rotations_parts, axis=0) if rotations_parts else np.zeros((0, 3, 3), dtype=np.float32)
+    rotations_flat = (
+        np.concatenate(rotations_parts, axis=0)
+        if rotations_parts
+        else np.zeros((0, 3, 3), dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
+    )
     rotation_ids_flat = np.concatenate(rotation_ids_parts, axis=0) if rotation_ids_parts else np.zeros(0, dtype=np.int32)
     posterior_ids_flat = (
         np.concatenate(posterior_ids_parts, axis=0) if posterior_ids_parts else np.zeros(0, dtype=np.int32)
     )
     rotation_log_priors_flat = (
-        np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=np.float32)
+        np.concatenate(log_prior_parts, axis=0) if log_prior_parts else np.zeros(0, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
     )
     sample_mask_flat = (
         np.concatenate(sample_mask_parts, axis=0)
@@ -546,11 +584,11 @@ def bucket_local_hypothesis_layout(
             actual_counts = layout.rotation_counts[image_indices].astype(np.int32, copy=False)
             batch_size = int(image_indices.shape[0])
             padded_rotations = np.broadcast_to(
-                np.eye(3, dtype=np.float32),
+                np.eye(3, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE),
                 (batch_size, int(bucket_size), 3, 3),
             ).copy()
             padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
-            padded_log_prior = np.full((batch_size, int(bucket_size)), -1e30, dtype=np.float32)
+            padded_log_prior = np.full((batch_size, int(bucket_size)), -1e30, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
             padded_mask = np.zeros((batch_size, int(bucket_size)), dtype=bool)
             padded_posterior_ids = (
                 None
@@ -589,7 +627,10 @@ def bucket_local_hypothesis_layout(
                     local_rotations=padded_rotations,
                     local_rotation_log_prior=padded_log_prior,
                     local_rotation_mask=padded_mask,
-                    translation_log_prior=np.asarray(layout.translation_log_priors[image_indices], dtype=np.float32),
+                    translation_log_prior=np.asarray(
+                        layout.translation_log_priors[image_indices],
+                        dtype=_LOCAL_LAYOUT_FLOAT_DTYPE,
+                    ),
                     local_rotation_posterior_ids=padded_posterior_ids,
                     local_sample_mask=padded_sample_mask,
                 )
