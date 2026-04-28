@@ -107,7 +107,7 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
     padded_ctf_params = pad_axis(ctf_params, 0, padded_batch_size, value=0)
     if actual_batch_size > 0:
         padded_ctf_params[actual_batch_size:] = np.asarray(ctf_params)[0]
-    return padded_bucket, padded_batch_data, padded_ctf_params, valid_image_mask, actual_batch_size
+    return padded_bucket, padded_batch_data, padded_ctf_params, valid_image_mask, padded_batch_size
 
 
 def _exact_local_max_hypotheses_per_microbatch(default: int | None, n_windowed: int) -> int:

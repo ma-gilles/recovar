@@ -559,13 +559,13 @@ def test_pad_local_big_jit_image_axis_masks_dummy_rows():
     batch_data = np.ones((1, 8, 8), dtype=np.float32)
     ctf_params = np.ones((1, 9), dtype=np.float32)
 
-    padded, padded_batch, padded_ctf, valid_mask, actual_batch_size = _pad_local_big_jit_image_axis(
+    padded, padded_batch, padded_ctf, valid_mask, padded_batch_size = _pad_local_big_jit_image_axis(
         bucket,
         batch_data,
         ctf_params,
     )
 
-    assert actual_batch_size == 1
+    assert padded_batch_size == 3
     assert padded.bucket_image_count == 3
     np.testing.assert_array_equal(valid_mask, np.array([True, False, False]))
     assert padded_batch.shape == (3, 8, 8)
@@ -790,7 +790,6 @@ def test_run_local_search_iteration_exact_engine_uses_translation_prior_referenc
         current_size=4,
         accumulate_noise=True,
         local_engine="exact_v1",
-        translation_prior_mode="coarse",
         translation_prior_reference_translations=reference_translations,
         translation_prior_centers=prior_centers,
     )

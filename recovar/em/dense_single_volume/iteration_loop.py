@@ -469,7 +469,6 @@ def _run_local_search_iteration(
     max_significants=-1,
     reconstruct_significant_only=True,
     local_engine="exact_v1",
-    translation_prior_mode="perturbed",
     translation_prior_reference_translations=None,
     debug_iteration=None,
     pass2_layout=None,
@@ -532,7 +531,6 @@ def _run_local_search_iteration(
             sparse_pass2=sparse_pass2,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
-            translation_prior_mode=translation_prior_mode,
             translation_prior_reference_translations=translation_prior_reference_translations,
         )
     return _run_local_search_iteration_exact_v1(
@@ -572,7 +570,6 @@ def _run_local_search_iteration(
         adaptive_fraction=adaptive_fraction,
         max_significants=max_significants,
         reconstruct_significant_only=reconstruct_significant_only,
-        translation_prior_mode=translation_prior_mode,
         translation_prior_reference_translations=translation_prior_reference_translations,
         debug_iteration=debug_iteration,
         local_layout_override=pass2_layout,
@@ -831,7 +828,6 @@ def _run_local_search_iteration_grouped_union(
     sparse_pass2=True,
     disable_adjoint_y=False,
     disable_adjoint_ctf=False,
-    translation_prior_mode="perturbed",
     translation_prior_reference_translations=None,
     debug_iteration=None,
 ):
@@ -1303,7 +1299,6 @@ def _run_local_search_iteration_exact_v1(
     adaptive_fraction=0.999,
     max_significants=-1,
     reconstruct_significant_only=True,
-    translation_prior_mode="perturbed",
     translation_prior_reference_translations=None,
     debug_iteration=None,
     local_layout_override=None,
@@ -3094,7 +3089,6 @@ def _run_relion_iteration_loop(
                     max_significants=max_significants,
                     reconstruct_significant_only=local_reconstruct_significant_only,
                     local_engine=local_engine,
-                    translation_prior_mode=local_search_translation_prior_mode,
                     translation_prior_reference_translations=translation_prior_reference_translations,
                     debug_iteration=iteration + 1,
                     return_best_pose_details=(local_engine != "grouped_union"),
