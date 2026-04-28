@@ -43,7 +43,6 @@ from recovar.em.dense_single_volume.helpers.preprocessing import (
     half_translation_phase_table as _half_translation_phase_table,
     process_half_image,
     resolve_image_mask_for_half_preprocess,
-    try_process_masked_and_unmasked_half_together as _try_process_masked_and_unmasked_half_together,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.local_debug import (
@@ -91,7 +90,6 @@ _LOCAL_PREPROCESS_TIMER_KEYS = (
     "integer_shift_s",
     "translation_phase_s",
     "processed_cache_gather_s",
-    "combined_process_s",
     "score_process_s",
     "recon_process_s",
     "ctf_s",
@@ -287,10 +285,6 @@ def _local_compact_zero_posterior_rows_enabled() -> bool:
     return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_COMPACT_ZERO_POSTERIOR_ROWS", default=True)
 
 
-def _local_combined_masked_preprocess_enabled() -> bool:
-    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_COMBINED_MASKED_PREPROCESS", default=False)
-
-
 def _local_materialize_projection_abs2_enabled(default: bool) -> bool:
     parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_MATERIALIZE_PROJECTION_ABS2", default="auto")
     return bool(default) if parsed is None else parsed
@@ -451,7 +445,6 @@ def _prepare_local_exact_bucket(
     real_space_pre_shift_applied_cache: bool = False,
     timer: dict[str, float] | None = None,
     synchronize_profile: bool = False,
-    combined_masked_preprocess: bool = False,
 ):
     """Prepare score, reconstruction, and noise inputs for one local bucket.
 
@@ -503,31 +496,15 @@ def _prepare_local_exact_bucket(
     if timer is not None:
         timer["ctf_s"] += time.time() - ctf_t0
 
-    combined_processed = False
-    if (
-        combined_masked_preprocess
-        and score_with_masked_images
-        and not using_processed_cache
-    ):
-        combined_t0 = time.time()
-        combined_halves = _try_process_masked_and_unmasked_half_together(experiment_dataset, batch)
-        if combined_halves is not None:
-            processed_score_half, processed_recon_half = combined_halves
-            combined_processed = True
-            if synchronize_profile:
-                _block_until_ready(processed_score_half, processed_recon_half)
-            if timer is not None:
-                timer["combined_process_s"] += time.time() - combined_t0
-
     score_process_t0 = time.time()
-    if not using_processed_cache and not combined_processed:
+    if not using_processed_cache:
         processed_score_half = _process_half(score_with_masked_images)
     if synchronize_profile:
         _block_until_ready(processed_score_half)
     if timer is not None:
         if using_processed_cache:
             timer["processed_cache_gather_s"] += time.time() - score_process_t0
-        elif not combined_processed:
+        else:
             timer["score_process_s"] += time.time() - score_process_t0
 
     shift_score_t0 = time.time()
@@ -551,14 +528,14 @@ def _prepare_local_exact_bucket(
 
     if score_with_masked_images:
         recon_process_t0 = time.time()
-        if not using_processed_cache and not combined_processed:
+        if not using_processed_cache:
             processed_recon_half = _process_half(False)
         if synchronize_profile:
             _block_until_ready(processed_recon_half)
         if timer is not None:
             if using_processed_cache:
                 timer["processed_cache_gather_s"] += time.time() - recon_process_t0
-            elif not combined_processed:
+            else:
                 timer["recon_process_s"] += time.time() - recon_process_t0
 
         shift_recon_t0 = time.time()
@@ -811,7 +788,6 @@ def run_local_em_exact(
 
     big_jit_enabled = _local_big_jit_enabled()
     compact_zero_posterior_rows = _local_compact_zero_posterior_rows_enabled()
-    combined_masked_preprocess = _local_combined_masked_preprocess_enabled()
     default_fused_score_mstep = (
         (max_significants is None or int(max_significants) <= 0)
         and normalization_log_z is None
@@ -1304,7 +1280,6 @@ def run_local_em_exact(
             real_space_pre_shift_applied_cache=processed_cache_real_space_pre_shift_applied,
             timer=preprocess_profile if return_profile else None,
             synchronize_profile=return_profile,
-            combined_masked_preprocess=combined_masked_preprocess,
         )
         if scale_corrections is not None:
             batch_scale = jnp.asarray(scale_corrections[np.asarray(bucket.image_indices)])
@@ -1999,7 +1974,6 @@ def run_local_em_exact(
         "big_jit_enabled": np.asarray(big_jit_enabled),
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
         "compact_zero_posterior_rows": np.asarray(compact_zero_posterior_rows),
-        "combined_masked_preprocess": np.asarray(combined_masked_preprocess),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
         "materialize_projection_abs2": np.asarray(materialize_projection_abs2),
         "keep_half_volume_accumulators": np.asarray(keep_half_volume_accumulators),

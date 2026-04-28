@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-import os
-
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar.data_io.image_backends import _apply_relion_soft_image_mask_numpy
 
 from .half_spectrum import make_half_image_weights
 
@@ -188,35 +185,3 @@ def resolve_image_mask_for_half_preprocess(
             )
         return np.ones(tuple(image_shape), dtype=np.float32), "none"
     return image_mask, mask_mode
-
-
-def try_process_masked_and_unmasked_half_together(experiment_dataset, batch):
-    """Process RELION masked score images and unmasked M-step images in one FFT call."""
-
-    process_half_fn = getattr(experiment_dataset, "process_images_half", None)
-    if process_half_fn is None:
-        return None
-    backend = image_preprocess_backend(experiment_dataset)
-    if getattr(backend, "image_mask_mode", None) != "relion_background_fill":
-        return None
-    if os.environ.get("RECOVAR_RELION_NUMPY_IMAGE_FFT") != "1":
-        return None
-
-    image_mask = getattr(backend, "image_mask", None)
-    if image_mask is None:
-        image_mask = getattr(backend, "mask", None)
-    if image_mask is None:
-        image_mask = getattr(experiment_dataset, "image_mask", None)
-    if image_mask is None:
-        return None
-
-    batch_np = np.asarray(batch)
-    image_mask_np = np.asarray(image_mask)
-    if batch_np.ndim != 3 or tuple(batch_np.shape[-2:]) != tuple(image_mask_np.shape):
-        return None
-
-    masked_batch = _apply_relion_soft_image_mask_numpy(batch_np, image_mask_np)
-    combined_batch = np.concatenate((masked_batch, batch_np), axis=0)
-    combined_half = process_half_fn(combined_batch, apply_image_mask=False)
-    n_images = int(batch_np.shape[0])
-    return combined_half[:n_images], combined_half[n_images:]

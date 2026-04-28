@@ -35,7 +35,6 @@ from recovar.em.dense_single_volume.local_em_engine import (
     _pad_local_big_jit_image_axis,
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
-    _try_process_masked_and_unmasked_half_together,
     run_local_em_exact,
 )
 from recovar.em.dense_single_volume.local_debug import maybe_write_debug_score_dump
@@ -103,8 +102,6 @@ from recovar.em.sampling import (
     rotation_grid_n_in_planes,
     rotation_grid_size,
 )
-from recovar.data_io.image_backends import ParticleImageDataset
-
 pytestmark = pytest.mark.unit
 
 # ---------------------------------------------------------------------------
@@ -1071,42 +1068,6 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         atol=1e-5,
         rtol=1e-5,
     )
-
-
-def test_combined_masked_preprocess_matches_separate_relion_fft(monkeypatch, rng):
-    monkeypatch.setenv("RECOVAR_RELION_NUMPY_IMAGE_FFT", "1")
-
-    backend = object.__new__(ParticleImageDataset)
-    backend.image_size = 8
-    backend.image_shape = (8, 8)
-    backend.D = 8
-    backend.padding = 0
-    backend.dtype = np.complex64
-    backend.image_mask_mode = "relion_background_fill"
-    backend.image_mask = np.linspace(0.0, 1.0, 64, dtype=np.float32).reshape(8, 8)
-    backend.mask = backend.image_mask
-    backend.mult = -1
-    backend.data_multiplier = -1
-
-    class _ImageSource:
-        pass
-
-    class _Dataset:
-        process_images_half = backend.process_images_half
-        image_source = _ImageSource()
-        image_mask = backend.image_mask
-
-    _Dataset.image_source.backend = backend
-    batch = rng.standard_normal((3, 8, 8)).astype(np.float32)
-
-    combined = _try_process_masked_and_unmasked_half_together(_Dataset(), batch)
-    assert combined is not None
-    score_half, recon_half = combined
-
-    expected_score = backend.process_images_half(batch, apply_image_mask=True)
-    expected_recon = backend.process_images_half(batch, apply_image_mask=False)
-    np.testing.assert_array_equal(np.asarray(score_half), np.asarray(expected_score))
-    np.testing.assert_array_equal(np.asarray(recon_half), np.asarray(expected_recon))
 
 
 def test_native_half_preprocess_requires_mask_for_masked_score(rng):
