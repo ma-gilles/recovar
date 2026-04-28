@@ -738,19 +738,15 @@ def _merge_block_logsumexp(max_s, sum_exp, block_max, block_sum_exp):
     return new_max, old_term + block_term
 
 
-@partial(jax.jit, static_argnums=(7, 8, 9, 10))
+@partial(jax.jit, static_argnums=(5, 6))
 def _m_step_block_compute(
     shifted_half,
     scores_block,
     log_Z,
     rotations_block,
     ctf2_over_nv_half,
-    Ft_y,
-    Ft_ctf,
     n_images,
     n_trans,
-    image_shape,
-    volume_shape,
 ):
     """Normalize scores and compute one non-windowed M-step block.
 
@@ -774,58 +770,7 @@ def _m_step_block_compute(
     # Hard assignment contribution: argmax over this block
     block_best = jnp.max(scores_block.reshape(n_images, -1), axis=1)
     block_argmax = jnp.argmax(scores_block.reshape(n_images, -1), axis=1)
-    ## TODO: THIS FUNCTION HAS A LOT OF USELESS ARGUMENTS NOT BEING USED? IS THIS A BUG? OR A CLEAN UP ft_y Ft_ctf / shapes
-    return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half, ctf_probs_half
-
-
-@partial(jax.jit, static_argnums=(7, 8, 9, 10))
-def _m_step_block(
-    shifted_half,
-    scores_block,
-    log_Z,
-    rotations_block,
-    ctf2_over_nv_half,
-    Ft_y,
-    Ft_ctf,
-    n_images,
-    n_trans,
-    image_shape,
-    volume_shape,
-):
-    ## TODO: IS THIS DEAD CODE?
-    """Backwards-compatible non-windowed M-step helper with adjoint included."""
-    Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half, ctf_probs_half = _m_step_block_compute(
-        shifted_half,
-        scores_block,
-        log_Z,
-        rotations_block,
-        ctf2_over_nv_half,
-        Ft_y,
-        Ft_ctf,
-        n_images,
-        n_trans,
-        image_shape,
-        volume_shape,
-    )
-    Ft_y = _adjoint_slice_volume_half(
-        summed_half,
-        rotations_block,
-        Ft_y,
-        image_shape,
-        volume_shape,
-        "linear_interp",
-        True,
-    )
-    Ft_ctf = _adjoint_slice_volume_half(
-        ctf_probs_half,
-        rotations_block,
-        Ft_ctf,
-        image_shape,
-        volume_shape,
-        "linear_interp",
-        True,
-    )
-    return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half, ctf_probs_half
+    return probs, block_best, block_argmax, summed_half, ctf_probs_half
 
 
 @partial(jax.jit, static_argnums=(6, 7))
@@ -2397,19 +2342,15 @@ def run_em(
                     block_best = best_score
                     block_argmax = best_argmax - r0 * n_trans
                 else:
-                    (Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_half_block, ctf_probs_half_block) = (
+                    (probs, block_best, block_argmax, summed_half_block, ctf_probs_half_block) = (
                         _m_step_block_compute(
                             shifted_recon_half,
                             scores,
                             log_Z,
                             rots_b,
                             ctf2_over_nv_half_with_dc,
-                            Ft_y,
-                            Ft_ctf,
                             batch_size,
                             n_trans,
-                            image_shape,
-                            recon_volume_shape,
                         )
                     )
                 if sync_timers:
