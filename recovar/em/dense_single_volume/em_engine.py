@@ -66,7 +66,7 @@ from .helpers.projection import (
     compute_projections_block as _compute_projections_block,
 )
 from .helpers.types import EMProfileStats, NoiseStats, RelionStats
-from .shape_buckets import pad_axis
+from .shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
 logger = logging.getLogger(__name__)
 
@@ -224,24 +224,11 @@ class _SparsePass2Profile:
 def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int):
     """Pad dense big-JIT raw batch inputs to a stable image shape class."""
 
-    actual_batch_size = int(np.asarray(batch_data).shape[0])
-    padded_batch_size = int(max(actual_batch_size, target_batch_size))
-    if actual_batch_size == padded_batch_size:
-        return (
-            batch_data,
-            ctf_params,
-            np.ones(actual_batch_size, dtype=bool),
-            actual_batch_size,
-        )
-
-    ctf_params_np = np.asarray(ctf_params)
-    padded_ctf_params = pad_axis(ctf_params_np, 0, padded_batch_size, value=0)
-    if actual_batch_size > 0:
-        padded_ctf_params[actual_batch_size:] = ctf_params_np[0]
-    valid_image_mask = np.zeros(padded_batch_size, dtype=bool)
-    valid_image_mask[:actual_batch_size] = True
+    padded_batch_data, padded_ctf_params, valid_image_mask, actual_batch_size, _ = (
+        pad_batch_data_ctf_and_valid_mask(batch_data, ctf_params, target_batch_size)
+    )
     return (
-        pad_axis(batch_data, 0, padded_batch_size, value=0),
+        padded_batch_data,
         padded_ctf_params,
         valid_image_mask,
         actual_batch_size,
