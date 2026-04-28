@@ -54,6 +54,20 @@ RELION-parity work and should not be launched by default. Run only targeted EM
 unit tests, focused replay scripts, and selected dump-comparison jobs unless
 the user explicitly asks for the full RECOVAR suite.
 
+Reliable local GPU test setup: before running EM tests on a visible GPU,
+always bind imports to the current checkout and rebuild the CUDA FFI through
+the pixi Python:
+`pixi run install-recovar`, then
+`PIXI_PY="$(pixi run which python)"`, then
+`PYTHON="$PIXI_PY" make -C recovar/cuda clean all`, then run a provenance
+gate that checks `recovar.__file__` is inside the checkout, JAX is imported
+from `.pixi/envs/default`, `jax.devices()` sees the selected GPU, and
+`recovar.cuda_backproject.cuda_available()` is true. If this build step is
+skipped, tests fail late with
+`CUDA backproject/project kernels required on GPU but not available`.
+Set `RECOVAR_DISABLE_CUDA=1` only when intentionally testing the CPU/JAX
+fallback, not for normal GPU parity tests.
+
 Keep algorithmic parity changes separate from performance changes. Batching,
 caps, memory layout, and scheduling changes are performance-only until output
 equivalence is proven against the old path.
