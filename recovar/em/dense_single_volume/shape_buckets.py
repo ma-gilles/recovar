@@ -123,3 +123,36 @@ def pad_axis(array, axis: int, size: int, *, value=0):
     pad_width = [(0, 0)] * arr.ndim
     pad_width[axis] = (0, size - arr.shape[axis])
     return np.pad(arr, pad_width, mode="constant", constant_values=value)
+
+
+def pad_batch_data_ctf_and_valid_mask(batch_data, ctf_params, target_batch_size: int):
+    """Pad raw image and CTF rows together and return a valid-image mask.
+
+    Dummy CTF rows repeat the first real CTF row, matching the dense/local
+    big-JIT callers that mask padded images before using those rows.
+    """
+
+    actual_batch_size = int(np.asarray(batch_data).shape[0])
+    padded_batch_size = int(max(actual_batch_size, target_batch_size))
+    if actual_batch_size == padded_batch_size:
+        return (
+            batch_data,
+            ctf_params,
+            np.ones(actual_batch_size, dtype=bool),
+            actual_batch_size,
+            padded_batch_size,
+        )
+
+    ctf_params_np = np.asarray(ctf_params)
+    padded_ctf_params = pad_axis(ctf_params_np, 0, padded_batch_size, value=0)
+    if actual_batch_size > 0:
+        padded_ctf_params[actual_batch_size:] = ctf_params_np[0]
+    valid_image_mask = np.zeros(padded_batch_size, dtype=bool)
+    valid_image_mask[:actual_batch_size] = True
+    return (
+        pad_axis(batch_data, 0, padded_batch_size, value=0),
+        padded_ctf_params,
+        valid_image_mask,
+        actual_batch_size,
+        padded_batch_size,
+    )

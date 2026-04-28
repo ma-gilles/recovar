@@ -75,7 +75,7 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket_abs2_weighted_on_demand,
     score_local_bucket,
 )
-from recovar.em.dense_single_volume.shape_buckets import pad_axis
+from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
 logger = logging.getLogger(__name__)
 
@@ -254,12 +254,11 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
             else pad_axis(bucket.local_sample_mask, 0, padded_batch_size, value=False).astype(bool)
         ),
     )
-    valid_image_mask = np.zeros(padded_batch_size, dtype=bool)
-    valid_image_mask[:actual_batch_size] = True
-    padded_batch_data = pad_axis(batch_data, 0, padded_batch_size, value=0)
-    padded_ctf_params = pad_axis(ctf_params, 0, padded_batch_size, value=0)
-    if actual_batch_size > 0:
-        padded_ctf_params[actual_batch_size:] = np.asarray(ctf_params)[0]
+    padded_batch_data, padded_ctf_params, valid_image_mask, _, _ = pad_batch_data_ctf_and_valid_mask(
+        batch_data,
+        ctf_params,
+        padded_batch_size,
+    )
     return padded_bucket, padded_batch_data, padded_ctf_params, valid_image_mask, padded_batch_size
 
 
