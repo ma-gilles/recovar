@@ -81,6 +81,7 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     integer_pre_shifts_or_none,
 )
+from recovar.em.dense_single_volume.helpers.preprocessing import resolve_image_mask_for_half_preprocess
 from recovar.em.dense_single_volume.helpers.significance import (
     _compute_significance_batched,
 )
@@ -1104,6 +1105,29 @@ def test_combined_masked_preprocess_matches_separate_relion_fft(monkeypatch, rng
     expected_recon = backend.process_images_half(batch, apply_image_mask=False)
     np.testing.assert_array_equal(np.asarray(score_half), np.asarray(expected_score))
     np.testing.assert_array_equal(np.asarray(recon_half), np.asarray(expected_recon))
+
+
+def test_native_half_preprocess_requires_mask_for_masked_score(rng):
+    dataset = RawRealImageDataset(1, rng)
+
+    with pytest.raises(ValueError, match="score_with_masked_images=True requires an image mask"):
+        resolve_image_mask_for_half_preprocess(
+            dataset,
+            dataset.image_shape,
+            require_mask=True,
+        )
+
+
+def test_native_half_preprocess_rejects_unsupported_mask_mode(rng):
+    dataset = MockDataset(1, rng)
+    dataset.image_source.backend.image_mask_mode = "unsupported"
+
+    with pytest.raises(ValueError, match="Unsupported image_mask_mode"):
+        resolve_image_mask_for_half_preprocess(
+            dataset,
+            dataset.image_shape,
+            require_mask=True,
+        )
 
 
 def test_weighted_abs2_on_demand_scores_match_materialized(rng):

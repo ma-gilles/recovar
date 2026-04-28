@@ -19,6 +19,7 @@ from recovar.em.dense_single_volume.em_primitives import (
     _compute_noise_block,
 )
 from recovar.em.dense_single_volume.helpers.backprojection import accumulate_adjoint_pair
+from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
 from recovar.em.dense_single_volume.helpers.projection import project_half_spectrum
 
@@ -353,14 +354,6 @@ def run_local_bucket_big_jit(
         ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
         score_half_weights = half_weights
 
-    score_complex_dtype = jnp.complex128 if use_float64_scoring else jnp.complex64
-    score_real_dtype = jnp.float64 if use_float64_scoring else jnp.float32
-    shifted_score = shifted_score.astype(score_complex_dtype)
-    shifted_recon = shifted_recon.astype(score_complex_dtype)
-    shifted_noise = shifted_noise.astype(score_complex_dtype)
-    ctf2_over_nv_score = ctf2_over_nv_score.astype(score_real_dtype)
-    ctf2_over_nv_recon = ctf2_over_nv_recon.astype(score_real_dtype)
-
     flat_rotations = local_rotations.reshape(local_rotations.shape[0] * local_rotations.shape[1], 3, 3)
     proj_half_flat = project_half_spectrum(
         mean_for_proj,
@@ -387,8 +380,24 @@ def run_local_bucket_big_jit(
         proj_for_noise = proj_half
 
     proj_weighted = proj_half * score_half_weights[None, None, :]
-    proj_weighted = proj_weighted.astype(score_complex_dtype)
-    proj_for_noise = proj_for_noise.astype(score_complex_dtype)
+    precision_policy = DensePrecisionPolicy(use_float64_scoring=use_float64_scoring)
+    (
+        shifted_score,
+        shifted_recon,
+        shifted_noise,
+        ctf2_over_nv_score,
+        ctf2_over_nv_recon,
+        proj_weighted,
+        proj_for_noise,
+    ) = precision_policy.cast_local_big_jit_inputs(
+        shifted_score,
+        shifted_recon,
+        shifted_noise,
+        ctf2_over_nv_score,
+        ctf2_over_nv_recon,
+        proj_weighted,
+        proj_for_noise,
+    )
 
     shifted_score_split = shifted_score.reshape(batch_size, n_trans, -1)
     shifted_recon_split = shifted_recon.reshape(batch_size, n_trans, -1)

@@ -78,3 +78,30 @@ class DensePrecisionPolicy:
         if proj_abs2_for_noise is not None and self.use_float64_scoring:
             proj_abs2_for_noise = proj_abs2_for_noise.astype(self.score_real_dtype)
         return proj_weighted, proj_for_noise, proj_abs2_weighted, proj_abs2_for_noise
+
+    def cast_local_big_jit_inputs(
+        self,
+        shifted_score,
+        shifted_recon,
+        shifted_noise,
+        score_weight,
+        recon_weight,
+        proj_weighted,
+        proj_for_noise,
+    ):
+        shifted_score = shifted_score.astype(self.score_complex_dtype)
+        shifted_recon = shifted_recon.astype(self.score_complex_dtype)
+        shifted_noise = shifted_noise.astype(self.score_complex_dtype)
+        score_weight = score_weight.astype(self.score_real_dtype)
+        recon_weight = recon_weight.astype(self.score_real_dtype)
+        proj_weighted = proj_weighted.astype(self.score_complex_dtype)
+        proj_for_noise = proj_for_noise.astype(self.score_complex_dtype)
+        return (
+            shifted_score,
+            shifted_recon,
+            shifted_noise,
+            score_weight,
+            recon_weight,
+            proj_weighted,
+            proj_for_noise,
+        )

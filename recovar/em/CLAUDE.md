@@ -7,7 +7,9 @@ Codex. `recovar/em/AGENTS.md` only points back here to avoid duplicated
 instructions. Do not discard or replace the existing instructions below;
 they remain active.
 
-Current RELION-parity branch: `claude/relion-parity-local-search-fix`.
+Use the current checked-out task branch for active work. Do not switch to
+older branch names mentioned in historical notes unless the user explicitly
+asks for a baseline comparison.
 
 Goal: perfect quality parity with RELION and near RELION speed parity for
 the full end-to-end dense single-volume EM iteration.
@@ -67,6 +69,12 @@ skipped, tests fail late with
 `CUDA backproject/project kernels required on GPU but not available`.
 Set `RECOVAR_DISABLE_CUDA=1` only when intentionally testing the CPU/JAX
 fallback, not for normal GPU parity tests.
+
+Exact-local refactor quick-test rule: after a sizable EM engine chunk, run
+`pixi run test-em-fast-guard` plus focused tests for the touched behavior.
+Do not spend cycles launching full 5k/long-test jobs after every small edit.
+Use local GPUs for short GPU checks only after `nvidia-smi` confirms an idle
+device, and keep the provenance/CUDA-availability gate visible in the log.
 
 Keep algorithmic parity changes separate from performance changes. Batching,
 caps, memory layout, and scheduling changes are performance-only until output

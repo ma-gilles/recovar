@@ -13,6 +13,8 @@ from recovar.data_io.image_backends import _apply_relion_soft_image_mask_numpy
 
 from .half_spectrum import make_half_image_weights
 
+SUPPORTED_IMAGE_MASK_MODES = frozenset({"relion_background_fill", "multiply"})
+
 
 @jax.jit
 def apply_half_translation_phases(weighted_half, translation_phases_half):
@@ -156,6 +158,36 @@ def half_translation_phase_table(translations, image_shape):
 def image_preprocess_backend(experiment_dataset):
     image_source = getattr(experiment_dataset, "image_source", None)
     return getattr(image_source, "backend", image_source)
+
+
+def resolve_image_mask_for_half_preprocess(
+    experiment_dataset,
+    image_shape,
+    *,
+    require_mask: bool,
+):
+    """Return the image mask and mode used by native packed-half preprocessing."""
+
+    backend = image_preprocess_backend(experiment_dataset)
+    mask_mode = getattr(backend, "image_mask_mode", "multiply")
+    if mask_mode not in SUPPORTED_IMAGE_MASK_MODES:
+        raise ValueError(
+            "Unsupported image_mask_mode for native half preprocessing: "
+            f"{mask_mode!r}. Expected one of {sorted(SUPPORTED_IMAGE_MASK_MODES)}.",
+        )
+
+    image_mask = getattr(backend, "image_mask", None)
+    if image_mask is None:
+        image_mask = getattr(backend, "mask", None)
+    if image_mask is None:
+        image_mask = getattr(experiment_dataset, "image_mask", None)
+    if image_mask is None:
+        if require_mask:
+            raise ValueError(
+                "score_with_masked_images=True requires an image mask for native half preprocessing",
+            )
+        return np.ones(tuple(image_shape), dtype=np.float32), "none"
+    return image_mask, mask_mode
 
 
 def try_process_masked_and_unmasked_half_together(experiment_dataset, batch):

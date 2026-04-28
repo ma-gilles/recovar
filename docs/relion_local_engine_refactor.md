@@ -18,7 +18,7 @@ Tracked TODO IDs in the active RELION local-search refactor.
 | `DENSE_ENGINE_BOUNDARY/E001` | OPEN | `recovar/em/dense_single_volume/em_engine.py` | `em_engine.py` should remain dense/global-only. |
 | `DENSE_ENGINE_BOUNDARY/E002` | OPEN | `recovar/em/dense_single_volume/em_primitives.py` | Shared primitives should be extracted so local logic does not grow back into the dense engine. |
 | `DENSE_ENGINE_BOUNDARY/E003` | RESOLVED | `recovar/em/dense_single_volume/helpers/preprocessing.py` | Dense/local image preprocessing now requires native packed-half Fourier preprocessing instead of dense-side full-to-half conversion fallbacks. |
-| `DENSE_ENGINE_BOUNDARY/E004` | PARTIAL | `recovar/em/dense_single_volume/helpers/dtype_policy.py` | Dense EM now has a centralized precision policy; follow-up is to push the same policy through local/big-JIT call boundaries. |
+| `DENSE_ENGINE_BOUNDARY/E004` | PARTIAL | `recovar/em/dense_single_volume/helpers/dtype_policy.py` | Dense, local, sparse pass-2, and local big-JIT paths now route score dtype choices through the shared precision policy; remaining work is to reduce user-facing float64 toggles once parity no longer needs them. |
 | `DENSE_ENGINE_BOUNDARY/E005` | OPEN | `recovar/em/dense_single_volume/em_engine.py` | Audit dense and local engines for duplicated implementation and move reusable pieces into helpers without hurting hot-path performance. |
 | `DENSE_ENGINE_BOUNDARY/E006` | RESOLVED | `recovar/em/dense_single_volume/helpers/scoring.py` | Shared dense scoring/logsumexp/M-step kernels moved out of `em_engine.py`; significance code imports helpers directly instead of reaching back through the engine. |
 

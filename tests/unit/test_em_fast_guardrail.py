@@ -135,6 +135,51 @@ def test_dense_precision_policy_casts_local_score_inputs():
     assert abs2_noise.dtype == jnp.float64
 
 
+def test_dense_precision_policy_casts_local_big_jit_inputs():
+    complex64 = jnp.asarray([1.0 + 2.0j], dtype=jnp.complex64)
+    complex128 = jnp.asarray([3.0 + 4.0j], dtype=jnp.complex128)
+    real32 = jnp.asarray([1.0], dtype=jnp.float32)
+    real64 = jnp.asarray([2.0], dtype=jnp.float64)
+
+    default_casts = DensePrecisionPolicy().cast_local_big_jit_inputs(
+        complex128,
+        complex64,
+        complex128,
+        real64,
+        real32,
+        complex128,
+        complex64,
+    )
+    assert [value.dtype for value in default_casts] == [
+        jnp.complex64,
+        jnp.complex64,
+        jnp.complex64,
+        jnp.float32,
+        jnp.float32,
+        jnp.complex64,
+        jnp.complex64,
+    ]
+
+    precise_casts = DensePrecisionPolicy(use_float64_scoring=True).cast_local_big_jit_inputs(
+        complex64,
+        complex64,
+        complex64,
+        real32,
+        real32,
+        complex64,
+        complex64,
+    )
+    assert [value.dtype for value in precise_casts] == [
+        jnp.complex128,
+        jnp.complex128,
+        jnp.complex128,
+        jnp.float64,
+        jnp.float64,
+        jnp.complex128,
+        jnp.complex128,
+    ]
+
+
 def test_fourier_window_spec_gathers_last_axis_for_batched_values():
     image_shape = (8, 8)
     n_half = image_shape[0] * (image_shape[1] // 2 + 1)

@@ -42,8 +42,8 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases as _apply_half_translation_phases,
     half_translation_phase_table as _half_translation_phase_table,
-    image_preprocess_backend as _image_preprocess_backend,
     process_half_image,
+    resolve_image_mask_for_half_preprocess,
     try_process_masked_and_unmasked_half_together as _try_process_masked_and_unmasked_half_together,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
@@ -184,12 +184,6 @@ class _LocalSpectrumSetup:
 
 
 @dataclass(frozen=True)
-class _BigJitMaskArgs:
-    mask_mode: str
-    image_mask: jax.Array
-
-
-@dataclass(frozen=True)
 class _BigJitNoiseArgs:
     noise_wsum: jax.Array
     noise_img_power: jax.Array
@@ -305,24 +299,6 @@ def _make_local_spectrum_setup(
         noise_variance_half=noise_variance_half,
         materialize_projection_abs2=_local_materialize_projection_abs2_enabled(False),
     )
-
-
-def _local_big_jit_mask_args(experiment_dataset, image_shape) -> _BigJitMaskArgs:
-    backend = _image_preprocess_backend(experiment_dataset)
-    mask_mode = getattr(backend, "image_mask_mode", "multiply")
-    if mask_mode not in {"relion_background_fill", "multiply"}:
-        mask_mode = "none"
-
-    image_mask = getattr(backend, "image_mask", None)
-    if image_mask is None:
-        image_mask = getattr(backend, "mask", None)
-    if image_mask is None:
-        image_mask = getattr(experiment_dataset, "image_mask", None)
-    if image_mask is None:
-        image_mask = np.ones(image_shape, dtype=np.float32)
-        mask_mode = "none"
-
-    return _BigJitMaskArgs(mask_mode=mask_mode, image_mask=jnp.asarray(image_mask))
 
 
 def _local_big_jit_noise_args(
@@ -625,6 +601,17 @@ def _local_keep_half_volume_accumulators_enabled() -> bool:
 def _local_fused_score_mstep_enabled(default: bool = False) -> bool:
     parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_FUSED_SCORE_MSTEP", default="auto")
     return bool(default) if parsed is None else parsed
+
+
+def _validate_native_half_batch(batch, image_shape):
+    batch_np = np.asarray(batch)
+    if batch_np.ndim != 3 or tuple(batch_np.shape[-2:]) != tuple(image_shape):
+        raise ValueError(
+            "Exact local big-JIT requires raw real-space image batches with shape "
+            f"(B, {int(image_shape[0])}, {int(image_shape[1])}); got {batch_np.shape}",
+        )
+    if np.iscomplexobj(batch_np):
+        raise ValueError("Exact local big-JIT does not support pre-Fourier complex image batches")
 
 
 def _build_local_raw_cache(experiment_dataset, n_images: int):
@@ -1288,10 +1275,12 @@ def run_local_em_exact(
     timing.preprocess_s += translation_phase_time
     preprocess_profile["translation_phase_s"] += translation_phase_time
 
-    ## TODO: THIS IS VERY MESSY. CLEAN UP
-    big_jit_mask_args = _local_big_jit_mask_args(experiment_dataset, image_shape)
-    big_jit_mask_mode = big_jit_mask_args.mask_mode
-    big_jit_image_mask_arg = big_jit_mask_args.image_mask
+    big_jit_image_mask_arg, big_jit_mask_mode = resolve_image_mask_for_half_preprocess(
+        experiment_dataset,
+        image_shape,
+        require_mask=score_with_masked_images,
+    )
+    big_jit_image_mask_arg = jnp.asarray(big_jit_image_mask_arg)
 
     big_jit_window_indices_arg = window_spec.score_or_full_indices(n_half)
     big_jit_recon_window_indices_arg = window_spec.recon_or_full_indices(n_half)
@@ -1345,6 +1334,7 @@ def run_local_em_exact(
             big_jit_t0 = time.time()
             unpadded_bucket = bucket
             unpadded_batch_size = batch_size
+            _validate_native_half_batch(batch_data, image_shape)
             integer_pre_shifts = integer_pre_shifts_or_none(
                 image_pre_shifts,
                 np.asarray(unpadded_bucket.image_indices, dtype=np.int32),
