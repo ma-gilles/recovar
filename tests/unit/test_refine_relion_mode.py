@@ -32,6 +32,7 @@ from recovar.em.dense_single_volume.local_backprojection import (
 from recovar.em.dense_single_volume.local_em_engine import (
     _fetch_indexed_batch,
     _maybe_write_debug_score_dump,
+    _pad_local_big_jit_image_axis,
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
     _try_process_masked_and_unmasked_half_together,
@@ -344,6 +345,7 @@ def test_build_local_hypothesis_layout_and_bucketization_preserve_per_image_supp
 
     buckets = bucket_local_hypothesis_layout(layout, image_batch_size=2, rotation_block_size=16, max_hypotheses_per_microbatch=64)
     assert len(buckets) == 1
+    assert buckets[0].bucket_image_count == 2
     np.testing.assert_array_equal(buckets[0].actual_rotation_counts, np.array([2, 3], dtype=np.int32))
     np.testing.assert_array_equal(buckets[0].local_rotation_ids[0, :2], np.array([1, 3], dtype=np.int32))
     assert not np.any(buckets[0].local_rotation_mask[0, 2:])
@@ -535,10 +537,47 @@ def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods():
 
     bucket_sizes = sorted(int(bucket.bucket_rotation_count) for bucket in buckets)
     assert bucket_sizes == [1408, 1536]
+    assert [int(bucket.bucket_image_count) for bucket in buckets] == [10, 10]
     np.testing.assert_array_equal(buckets[0].actual_rotation_counts, np.array([1368, 1392], dtype=np.int32))
     np.testing.assert_array_equal(buckets[1].actual_rotation_counts, np.array([1416], dtype=np.int32))
     assert buckets[0].local_rotation_mask[0, :1368].all()
     assert not buckets[0].local_rotation_mask[0, 1368:].any()
+
+
+def test_pad_local_big_jit_image_axis_masks_dummy_rows():
+    bucket = LocalBucketSpec(
+        image_indices=np.array([2], dtype=np.int32),
+        bucket_image_count=3,
+        bucket_rotation_count=2,
+        actual_rotation_counts=np.array([2], dtype=np.int32),
+        local_rotation_ids=np.array([[5, 7]], dtype=np.int32),
+        local_rotations=np.broadcast_to(np.eye(3, dtype=np.float32), (1, 2, 3, 3)).copy(),
+        local_rotation_log_prior=np.zeros((1, 2), dtype=np.float32),
+        local_rotation_mask=np.ones((1, 2), dtype=bool),
+        translation_log_prior=np.ones((1, 4), dtype=np.float32),
+    )
+    batch_data = np.ones((1, 8, 8), dtype=np.float32)
+    ctf_params = np.ones((1, 9), dtype=np.float32)
+
+    padded, padded_batch, padded_ctf, valid_mask, actual_batch_size = _pad_local_big_jit_image_axis(
+        bucket,
+        batch_data,
+        ctf_params,
+    )
+
+    assert actual_batch_size == 1
+    assert padded.bucket_image_count == 3
+    np.testing.assert_array_equal(valid_mask, np.array([True, False, False]))
+    assert padded_batch.shape == (3, 8, 8)
+    assert padded_ctf.shape == (3, 9)
+    np.testing.assert_array_equal(padded.local_rotation_mask[0], np.array([True, True]))
+    assert not np.any(padded.local_rotation_mask[1:])
+    np.testing.assert_array_equal(padded.local_rotation_ids[1:], -np.ones((2, 2), dtype=np.int32))
+    np.testing.assert_allclose(
+        padded.local_rotations[1:, 0],
+        np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)),
+    )
+    np.testing.assert_allclose(padded_ctf[1:], np.broadcast_to(ctf_params[0], (2, 9)))
 
 
 def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
@@ -561,6 +600,7 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
     )
     bucket = LocalBucketSpec(
         image_indices=np.array([0], dtype=np.int32),
+        bucket_image_count=1,
         bucket_rotation_count=2,
         actual_rotation_counts=np.array([2], dtype=np.int32),
         local_rotation_ids=np.array([[5, 7]], dtype=np.int32),
@@ -1466,7 +1506,7 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
         noise_variance,
         local_layout,
         "linear_interp",
-        image_batch_size=3,
+        image_batch_size=2,
         rotation_block_size=8,
         current_size=6,
         accumulate_noise=True,

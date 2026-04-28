@@ -77,6 +77,7 @@ def _score_normalize_mstep(
     translation_log_prior,
     rotation_mask,
     sample_mask,
+    valid_image_mask,
     normalization_log_z,
     shifted_recon_split,
     ctf2_over_nv_recon,
@@ -111,6 +112,7 @@ def _score_normalize_mstep(
     scores = scores + rotation_log_prior[:, :, None]
     scores = scores + translation_log_prior[:, None, :]
     scores = jnp.where(rotation_mask[:, :, None] & sample_mask, scores, -jnp.inf)
+    scores = jnp.where(valid_image_mask[:, None, None], scores, 0.0)
 
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
@@ -125,8 +127,12 @@ def _score_normalize_mstep(
         sum_exp = jnp.sum(shifted_exp.reshape(scores.shape[0], -1), axis=1)
         log_Z = best_log_score + jnp.log(sum_exp)
     probs = jnp.exp(scores - log_Z[:, None, None])
+    probs = jnp.where(valid_image_mask[:, None, None], probs, 0.0)
     best_argmax = jnp.argmax(flat_scores, axis=1)
     max_posterior = jnp.exp(best_log_score - log_Z)
+    best_log_score = jnp.where(valid_image_mask, best_log_score, -jnp.inf)
+    best_argmax = jnp.where(valid_image_mask, best_argmax, 0)
+    max_posterior = jnp.where(valid_image_mask, max_posterior, 0.0)
 
     if reconstruct_significant_only:
         flat_probs = probs.reshape(probs.shape[0], -1)
@@ -136,12 +142,14 @@ def _score_normalize_mstep(
             max_significants=max_significants,
         )
         reconstruction_sample_mask = significant_flat.reshape(probs.shape)
+        reconstruction_sample_mask = reconstruction_sample_mask & valid_image_mask[:, None, None]
         reconstruction_rotation_mask = jnp.any(reconstruction_sample_mask, axis=-1)
+        n_significant_samples = jnp.where(valid_image_mask, n_significant_samples, 0)
         reconstruction_probs = jnp.where(reconstruction_sample_mask, probs, 0.0)
     else:
-        reconstruction_rotation_mask = rotation_mask
-        reconstruction_sample_mask = jnp.broadcast_to(rotation_mask[:, :, None], probs.shape)
-        n_significant_samples = jnp.sum(rotation_mask, axis=1).astype(jnp.int32) * probs.shape[-1]
+        reconstruction_rotation_mask = rotation_mask & valid_image_mask[:, None]
+        reconstruction_sample_mask = jnp.broadcast_to(reconstruction_rotation_mask[:, :, None], probs.shape)
+        n_significant_samples = jnp.sum(reconstruction_rotation_mask, axis=1).astype(jnp.int32) * probs.shape[-1]
         reconstruction_probs = probs
 
     probs_sum_t = jnp.sum(probs, axis=-1)
@@ -225,6 +233,7 @@ def run_local_bucket_big_jit(
     translation_log_prior,
     rotation_mask,
     sample_mask,
+    valid_image_mask,
     normalization_log_z,
     config,
     *,
@@ -305,6 +314,7 @@ def run_local_bucket_big_jit(
     batch_scale = scale_corrections.astype(batch_norm.dtype)
     batch_corr = image_corrections.astype(batch_norm.dtype)
     image_only_corr = image_only_corrections.astype(batch_norm.dtype)
+    valid_image_mask = valid_image_mask.astype(bool)
     corr_expanded = jnp.repeat(batch_corr, n_trans)
     shifted_half = shifted_half * corr_expanded[:, None]
     shifted_recon_half = shifted_recon_half * corr_expanded[:, None]
@@ -416,6 +426,7 @@ def run_local_bucket_big_jit(
         translation_log_prior,
         rotation_mask,
         sample_mask,
+        valid_image_mask,
         normalization_log_z,
         shifted_recon_split,
         ctf2_over_nv_recon,
@@ -509,6 +520,7 @@ def run_local_bucket_big_jit(
 
     if accumulate_noise:
         support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
+        support_mass = jnp.where(valid_image_mask, support_mass, 0.0)
         translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
         noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(jnp.float32))
         processed_noise_power_half = processed_score_half * image_only_corr[:, None]
