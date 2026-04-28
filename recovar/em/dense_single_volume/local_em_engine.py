@@ -122,6 +122,18 @@ _LOCAL_TIMING_PROFILE_FIELDS = (
     ("local_stats_finalize_s", "stats_finalize_s"),
 )
 
+_LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS = (
+    "bucket_build_s",
+    "raw_cache_build_s",
+    "processed_cache_build_s",
+    "batch_fetch_s",
+    "preprocess_s",
+)
+
+_LOCAL_ACCOUNTED_TIMING_FIELDS = _LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS + tuple(
+    timing_attr for _, timing_attr in _LOCAL_TIMING_PROFILE_FIELDS
+)
+
 
 def _new_zero_timer(keys):
     return {key: 0.0 for key in keys}
@@ -153,27 +165,9 @@ class _LocalTiming:
     stats_finalize_s: float = 0.0
 
     def accounted_s(self) -> float:
-        return (
-            self.bucket_build_s
-            + self.raw_cache_build_s
-            + self.processed_cache_build_s
-            + self.batch_fetch_s
-            + self.preprocess_s
-            + self.projection_s
-            + self.big_jit_bucket_s
-            + self.fused_score_mstep_s
-            + self.score_s
-            + self.normalize_s
-            + self.significance_s
-            + self.mstep_s
-            + self.pack_s
-            + self.adjoint_y_s
-            + self.adjoint_ctf_s
-            + self.noise_s
-            + self.postprocess_s
-            + self.host_stats_s
-            + self.final_accumulator_s
-            + self.stats_finalize_s
+        return sum(
+            getattr(self, timing_attr)
+            for timing_attr in _LOCAL_ACCOUNTED_TIMING_FIELDS
         )
 
 
