@@ -19,6 +19,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
     project_half_spectrum,
 )
+from recovar.em.dense_single_volume.helpers.score_constraints import apply_dense_score_constraints
 
 
 class DenseBucketResult(NamedTuple):
@@ -87,25 +88,6 @@ def _score_block(
         denom = jnp.sqrt(jnp.maximum(norms, jnp.asarray(1e-30, dtype=norms.dtype)))
         return (-0.5 * cross) / denom[..., None]
     return -0.5 * (cross + norms[..., None])
-
-
-def _apply_dense_score_postprocess(
-    scores,
-    rotation_log_prior_block,
-    translation_log_prior_block,
-    candidate_mask_block,
-    valid_rotation_mask,
-    valid_image_mask,
-    *,
-    score_mode: str,
-):
-    if score_mode == "gaussian":
-        scores = scores + rotation_log_prior_block[:, :, None]
-        scores = scores + translation_log_prior_block[:, None, :]
-    scores = jnp.where(candidate_mask_block[None, :, :], scores, -jnp.inf)
-    scores = jnp.where(valid_rotation_mask[None, :, None], scores, -jnp.inf)
-    scores = jnp.where(valid_image_mask[:, None, None], scores, 0.0)
-    return scores
 
 
 def _block_logsumexp_stats(scores, *, use_float64_normalization: bool):
@@ -446,7 +428,7 @@ def run_dense_bucket_big_jit(
         batch_norm,
         score_mode=score_mode,
     )
-    scores = _apply_dense_score_postprocess(
+    scores = apply_dense_score_constraints(
         scores,
         rotation_log_prior_block,
         translation_log_prior_block,

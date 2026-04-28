@@ -86,6 +86,7 @@ from .helpers.scoring import (
     _update_logsumexp,
     _winner_take_all_probs_for_block,
 )
+from .helpers.score_constraints import DenseScoreConstraints, apply_dense_score_constraints
 from .helpers.translation_prior import (
     translation_prior_centers_for_images,
     translation_sqdist_angstrom,
@@ -500,75 +501,31 @@ def run_em(
     sync_timers = bool(return_profile)
     sparse_profile = _SparsePass2Profile()
 
-    # Prepare per-rotation log-prior (pad to match rotations_padded)
-    per_image_log_prior = False
-    if rotation_log_prior is not None:
-        rotation_log_prior = np.asarray(rotation_log_prior, dtype=np.float32)
-        if rotation_log_prior.ndim == 1:
-            log_prior_padded = np.full(n_rot_padded, -1e30, dtype=np.float32)
-            log_prior_padded[:n_rot] = rotation_log_prior
-        elif rotation_log_prior.ndim == 2:
-            if rotation_log_prior.shape != (n_images, n_rot):
-                raise ValueError(
-                    "rotation_log_prior must have shape "
-                    f"({n_images}, {n_rot}) when image-specific, got "
-                    f"{rotation_log_prior.shape}",
-                )
-            log_prior_padded = np.full((n_images, n_rot_padded), -1e30, dtype=np.float32)
-            log_prior_padded[:, :n_rot] = rotation_log_prior
-            per_image_log_prior = True
-        else:
-            raise ValueError(
-                f"rotation_log_prior must be 1D or 2D, got {rotation_log_prior.ndim} dimensions",
-            )
-        log_prior_padded_jnp = jnp.asarray(log_prior_padded)
-        finite_prior = rotation_log_prior[np.isfinite(rotation_log_prior)]
-        if finite_prior.size == 0:
-            finite_prior = np.array([-1e30], dtype=np.float32)
+    score_constraints = DenseScoreConstraints.from_inputs(
+        rotation_log_prior=rotation_log_prior,
+        translation_log_prior=translation_log_prior,
+        rotation_translation_mask=rotation_translation_mask,
+        n_images=n_images,
+        n_rot=n_rot,
+        n_trans=n_trans,
+        n_rot_padded=n_rot_padded,
+    )
+    if score_constraints.rotation_prior_minmax is not None:
         logger.info(
             "Using rotation log-prior: %d rotations%s, range [%.2f, %.2f]",
             n_rot,
-            " (per-image)" if per_image_log_prior else "",
-            float(finite_prior.min()),
-            float(finite_prior.max()),
+            " (per-image)" if score_constraints.per_image_rotation_prior else "",
+            score_constraints.rotation_prior_minmax[0],
+            score_constraints.rotation_prior_minmax[1],
         )
-    else:
-        log_prior_padded_jnp = None
-
-    per_image_translation_log_prior = False
-    if translation_log_prior is not None:
-        translation_log_prior = np.asarray(translation_log_prior, dtype=np.float32)
-        if translation_log_prior.ndim == 1:
-            if translation_log_prior.shape != (n_trans,):
-                raise ValueError(
-                    f"translation_log_prior must have shape ({n_trans},), got {translation_log_prior.shape}",
-                )
-            translation_log_prior_jnp = jnp.asarray(translation_log_prior)
-        elif translation_log_prior.ndim == 2:
-            if translation_log_prior.shape != (n_images, n_trans):
-                raise ValueError(
-                    "translation_log_prior must have shape "
-                    f"({n_images}, {n_trans}) when image-specific, got "
-                    f"{translation_log_prior.shape}",
-                )
-            translation_log_prior_jnp = jnp.asarray(translation_log_prior)
-            per_image_translation_log_prior = True
-        else:
-            raise ValueError(
-                f"translation_log_prior must be 1D or 2D, got {translation_log_prior.ndim} dimensions",
-            )
-        finite_translation_prior = translation_log_prior[np.isfinite(translation_log_prior)]
-        if finite_translation_prior.size == 0:
-            finite_translation_prior = np.array([-1e30], dtype=np.float32)
+    if score_constraints.translation_prior_minmax is not None:
         logger.info(
             "Using translation log-prior: %d translations%s, range [%.2f, %.2f]",
             n_trans,
-            " (per-image)" if per_image_translation_log_prior else "",
-            float(finite_translation_prior.min()),
-            float(finite_translation_prior.max()),
+            " (per-image)" if score_constraints.per_image_translation_prior else "",
+            score_constraints.translation_prior_minmax[0],
+            score_constraints.translation_prior_minmax[1],
         )
-    else:
-        translation_log_prior_jnp = None
 
     translation_prior_centers_np = validate_translation_prior_centers(
         translation_prior_centers,
@@ -576,20 +533,11 @@ def run_em(
         n_dims=translations.shape[1],
     )
 
-    candidate_mask_padded_jnp = None
-    if rotation_translation_mask is not None:
-        candidate_mask = np.asarray(rotation_translation_mask, dtype=bool)
-        if candidate_mask.shape != (n_rot, n_trans):
-            raise ValueError(
-                f"rotation_translation_mask must have shape ({n_rot}, {n_trans}), got {candidate_mask.shape}",
-            )
-        candidate_mask_padded = np.zeros((n_rot_padded, n_trans), dtype=bool)
-        candidate_mask_padded[:n_rot] = candidate_mask
-        candidate_mask_padded_jnp = jnp.asarray(candidate_mask_padded)
+    if score_constraints.candidate_mask_count is not None:
         logger.info(
             "Using rotation-translation mask: %d / %d candidates valid",
-            int(candidate_mask.sum()),
-            int(candidate_mask.size),
+            score_constraints.candidate_mask_count,
+            score_constraints.candidate_mask_size,
         )
 
     dense_big_jit_requested = _dense_big_jit_enabled()
@@ -605,49 +553,15 @@ def run_em(
     elif use_dense_big_jit:
         logger.info("Dense big-JIT enabled for dense/global rotation buckets")
 
-    def _dense_big_jit_priors_and_masks(r0: int, r1: int, start: int, end: int, batch_count: int):
-        actual_count = int(end - start)
-        batch_count = int(batch_count)
-        if log_prior_padded_jnp is None:
-            rotation_prior_block = jnp.zeros((batch_count, rotation_block_size), dtype=jnp.float32)
-        elif per_image_log_prior:
-            rotation_prior_block = log_prior_padded_jnp[start:end, r0:r1]
-            if batch_count != actual_count:
-                rotation_prior_block = jnp.pad(
-                    rotation_prior_block,
-                    ((0, batch_count - actual_count), (0, 0)),
-                    constant_values=0,
-                )
-        else:
-            rotation_prior_block = jnp.broadcast_to(
-                log_prior_padded_jnp[r0:r1][None, :],
-                (batch_count, rotation_block_size),
-            )
-
-        if translation_log_prior_jnp is None:
-            translation_prior_block = jnp.zeros((batch_count, n_trans), dtype=jnp.float32)
-        elif per_image_translation_log_prior:
-            translation_prior_block = translation_log_prior_jnp[start:end]
-            if batch_count != actual_count:
-                translation_prior_block = jnp.pad(
-                    translation_prior_block,
-                    ((0, batch_count - actual_count), (0, 0)),
-                    constant_values=0,
-                )
-        else:
-            translation_prior_block = jnp.broadcast_to(
-                translation_log_prior_jnp[None, :],
-                (batch_count, n_trans),
-            )
-
-        if candidate_mask_padded_jnp is None:
-            candidate_mask_block = jnp.ones((rotation_block_size, n_trans), dtype=bool)
-        else:
-            candidate_mask_block = candidate_mask_padded_jnp[r0:r1]
-
-        valid = max(0, min(rotation_block_size, n_rot - r0))
-        valid_rotation_mask = jnp.arange(rotation_block_size) < valid
-        return rotation_prior_block, translation_prior_block, candidate_mask_block, valid_rotation_mask
+    def _dense_score_constraint_blocks(r0: int, r1: int, start: int, end: int, batch_count: int):
+        return score_constraints.block_inputs(
+            r0=r0,
+            r1=r1,
+            start=start,
+            end=end,
+            batch_count=batch_count,
+            rotation_block_size=rotation_block_size,
+        )
 
     # Initialize accumulators (at padded resolution for pf>1 backprojection)
     Ft_y = jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype)
@@ -958,7 +872,7 @@ def run_em(
                 translation_prior_block,
                 candidate_mask_block,
                 valid_rotation_mask,
-            ) = _dense_big_jit_priors_and_masks(r0, r1, start_idx, end_idx, batch_size)
+            ) = _dense_score_constraint_blocks(r0, r1, start_idx, end_idx, batch_size)
             return run_dense_bucket_big_jit(
                 shifted_score_half,
                 batch_norm,
@@ -1087,31 +1001,21 @@ def run_em(
             )
 
             pass1_postprocess_t0 = time.time()
-            if relion_firstiter_score_mode == "gaussian":
-                if log_prior_padded_jnp is not None:
-                    if per_image_log_prior:
-                        log_prior_block = log_prior_padded_jnp[start_idx:end_idx, r0:r1]
-                        scores = scores + log_prior_block[:, :, None]
-                    else:
-                        log_prior_block = log_prior_padded_jnp[r0:r1]
-                        scores = scores + log_prior_block[None, :, None]
-
-                if translation_log_prior_jnp is not None:
-                    if per_image_translation_log_prior:
-                        translation_prior_block = translation_log_prior_jnp[start_idx:end_idx]
-                        scores = scores + translation_prior_block[:, None, :]
-                    else:
-                        scores = scores + translation_log_prior_jnp[None, None, :]
-
-            if candidate_mask_padded_jnp is not None:
-                candidate_mask_block = candidate_mask_padded_jnp[r0:r1]
-                scores = jnp.where(candidate_mask_block[None, :, :], scores, -jnp.inf)
-
-            # Mask padding rotations (set their scores to -inf)
-            if r1 > n_rot:
-                valid = n_rot - r0
-                mask = jnp.arange(rotation_block_size) < valid
-                scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
+            (
+                rotation_prior_block,
+                translation_prior_block,
+                candidate_mask_block,
+                valid_rotation_mask,
+            ) = _dense_score_constraint_blocks(r0, r1, start_idx, end_idx, batch_size)
+            scores = apply_dense_score_constraints(
+                scores,
+                rotation_prior_block,
+                translation_prior_block,
+                candidate_mask_block,
+                valid_rotation_mask,
+                valid_image_mask,
+                score_mode=relion_firstiter_score_mode,
+            )
 
             if block_max_per_image is not None:
                 actual_rot = max(0, min(rotation_block_size, n_rot - r0))
@@ -1281,31 +1185,21 @@ def run_em(
             timing.pass2_score_s += time.time() - score_t0
 
             pass2_postprocess_t0 = time.time()
-            if relion_firstiter_score_mode == "gaussian":
-                if log_prior_padded_jnp is not None:
-                    if per_image_log_prior:
-                        log_prior_block = log_prior_padded_jnp[start_idx:end_idx, r0:r1]
-                        scores = scores + log_prior_block[:, :, None]
-                    else:
-                        log_prior_block = log_prior_padded_jnp[r0:r1]
-                        scores = scores + log_prior_block[None, :, None]
-
-                if translation_log_prior_jnp is not None:
-                    if per_image_translation_log_prior:
-                        translation_prior_block = translation_log_prior_jnp[start_idx:end_idx]
-                        scores = scores + translation_prior_block[:, None, :]
-                    else:
-                        scores = scores + translation_log_prior_jnp[None, None, :]
-
-            if candidate_mask_padded_jnp is not None:
-                candidate_mask_block = candidate_mask_padded_jnp[r0:r1]
-                scores = jnp.where(candidate_mask_block[None, :, :], scores, -jnp.inf)
-
-            # Mask padding
-            if r1 > n_rot:
-                valid = n_rot - r0
-                mask = jnp.arange(rotation_block_size) < valid
-                scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
+            (
+                rotation_prior_block,
+                translation_prior_block,
+                candidate_mask_block,
+                valid_rotation_mask,
+            ) = _dense_score_constraint_blocks(r0, r1, start_idx, end_idx, batch_size)
+            scores = apply_dense_score_constraints(
+                scores,
+                rotation_prior_block,
+                translation_prior_block,
+                candidate_mask_block,
+                valid_rotation_mask,
+                valid_image_mask,
+                score_mode=relion_firstiter_score_mode,
+            )
             if sync_timers:
                 _block_until_ready(scores)
             timing.pass2_postprocess_s += time.time() - pass2_postprocess_t0
