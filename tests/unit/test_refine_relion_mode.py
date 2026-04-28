@@ -1516,7 +1516,7 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
         half_spectrum_scoring=True,
         image_corrections=np.array([1.3, 0.8, 1.1], dtype=np.float32),
         scale_corrections=np.array([0.7, 1.2, 0.9], dtype=np.float32),
-        image_pre_shifts=np.array([[0.5, -1.0], [-1.0, 1.25], [0.0, 0.0]], dtype=np.float32),
+        image_pre_shifts=np.array([[1.0, -1.0], [-1.0, 1.0], [0.0, 0.0]], dtype=np.float32),
     )
     single = run_local_em_exact(
         dataset,
@@ -1535,7 +1535,7 @@ def test_run_local_em_exact_batched_matches_single_image_chunks(rng):
         half_spectrum_scoring=True,
         image_corrections=np.array([1.3, 0.8, 1.1], dtype=np.float32),
         scale_corrections=np.array([0.7, 1.2, 0.9], dtype=np.float32),
-        image_pre_shifts=np.array([[0.5, -1.0], [-1.0, 1.25], [0.0, 0.0]], dtype=np.float32),
+        image_pre_shifts=np.array([[1.0, -1.0], [-1.0, 1.0], [0.0, 0.0]], dtype=np.float32),
     )
 
     Ft_y_b, Ft_ctf_b, ha_b, stats_b, noise_b, profile_b = batched

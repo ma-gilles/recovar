@@ -1483,17 +1483,17 @@ def run_local_em_exact(
             big_jit_t0 = time.time()
             unpadded_bucket = bucket
             unpadded_batch_size = batch_size
+            integer_pre_shifts = integer_pre_shifts_or_none(
+                image_pre_shifts,
+                np.asarray(unpadded_bucket.image_indices, dtype=np.int32),
+                batch=batch_data,
+            )
             bucket, batch_data, ctf_params, valid_image_mask, batch_size = _pad_local_big_jit_image_axis(
                 bucket,
                 batch_data,
                 ctf_params,
             )
             bucket_image_indices = np.asarray(unpadded_bucket.image_indices, dtype=np.int32)
-            integer_pre_shifts = integer_pre_shifts_or_none(
-                image_pre_shifts,
-                bucket_image_indices,
-                batch=batch_data,
-            )
             apply_integer_pre_shift = integer_pre_shifts is not None
             if apply_integer_pre_shift:
                 integer_pre_shifts_arg = jnp.asarray(
