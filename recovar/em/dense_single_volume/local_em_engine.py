@@ -31,6 +31,7 @@ from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_w
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
+    make_scoring_half_image_weights,
     make_shell_indices_half,
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
@@ -291,10 +292,10 @@ def _make_local_spectrum_setup(
     *,
     half_spectrum_scoring: bool,
 ) -> _LocalSpectrumSetup:
-    if half_spectrum_scoring:
-        half_weights = jnp.ones(n_half, dtype=jnp.float32)
-    else:
-        half_weights = make_half_image_weights(image_shape)
+    half_weights = make_scoring_half_image_weights(
+        image_shape,
+        relion_half_sum=half_spectrum_scoring,
+    )
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
     return _LocalSpectrumSetup(
         half_weights=half_weights,
