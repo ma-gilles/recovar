@@ -212,6 +212,31 @@ class _SparsePass2Profile:
         return self.omitted_mass_upper_sum / self.omitted_mass_upper_image_count
 
 
+@dataclass(frozen=True)
+class _DenseDebugOptions:
+    """Environment-gated dense debug outputs for one EM call."""
+
+    noise_component_dump_dir: object | None
+    noise_component_dump_targets: frozenset[int]
+    noise_component_dump_enabled: bool
+    per_pose_score_dump: object
+    return_noise_split: bool
+
+    @classmethod
+    def from_env(cls, current_size: int | None) -> "_DenseDebugOptions":
+        dump_dir, dump_targets, dump_current_sizes = parse_dense_noise_component_dump_request()
+        dump_enabled = dump_dir is not None and (
+            dump_current_sizes is None or int(current_size or -1) in dump_current_sizes
+        )
+        return cls(
+            noise_component_dump_dir=dump_dir,
+            noise_component_dump_targets=frozenset(dump_targets),
+            noise_component_dump_enabled=bool(dump_enabled),
+            per_pose_score_dump=parse_dense_per_pose_score_dump_request(),
+            return_noise_split=_noise_split_diagnostics_requested(),
+        )
+
+
 def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int):
     """Pad dense big-JIT raw batch inputs to a stable image shape class."""
 
@@ -696,7 +721,7 @@ def run_em(
     translation_log_prior: np.ndarray = None,
     image_indices: np.ndarray = None,
     rotation_translation_mask: np.ndarray = None,
-    *,  ## TODO: WHAT IS THIS FROM? SEEMS AWKWARD. COULD WE MAKE OPTIONS, PARTICULARLY DEBUG OPTIONS LIKE THIS INTO A CONFIG OBJECT?
+    *,
     score_with_masked_images: bool = False,
     return_stats: bool = False,
     accumulate_noise: bool = False,
@@ -810,19 +835,7 @@ def run_em(
         )
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
-    (
-        dense_noise_component_dump_dir,
-        dense_noise_component_dump_targets,
-        dense_noise_component_dump_current_sizes,
-    ) = parse_dense_noise_component_dump_request()
-    dense_noise_component_dump_enabled = (
-        dense_noise_component_dump_dir is not None
-        and (
-            dense_noise_component_dump_current_sizes is None
-            or int(current_size or -1) in dense_noise_component_dump_current_sizes
-        )
-    )
-    dense_per_pose_score_dump = parse_dense_per_pose_score_dump_request()
+    debug_options = _DenseDebugOptions.from_env(current_size)
     # Pad volume in real space for smoother trilinear projection.
     if projection_padding_factor > 1:
         from recovar.reconstruction.relion_functions import pad_volume_for_projection
@@ -1031,8 +1044,8 @@ def run_em(
     dense_big_jit_unsupported_reason = _dense_big_jit_disabled_reason(
         relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
         accumulate_noise=accumulate_noise,
-        dense_noise_component_dump_enabled=dense_noise_component_dump_enabled,
-        per_pose_debug_dump_enabled=dense_per_pose_score_dump.enabled,
+        dense_noise_component_dump_enabled=debug_options.noise_component_dump_enabled,
+        per_pose_debug_dump_enabled=debug_options.per_pose_score_dump.enabled,
     )
     use_dense_big_jit = dense_big_jit_requested and dense_big_jit_unsupported_reason is None
     if dense_big_jit_requested and not use_dense_big_jit:
@@ -1105,7 +1118,6 @@ def run_em(
     noise_a2 = None  # diagnostic
     noise_xa = None  # diagnostic
     noise_sigma2_offset = 0.0
-    return_noise_split = _noise_split_diagnostics_requested()
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
@@ -1117,7 +1129,7 @@ def run_em(
         noise_variance_windowed = window_spec.recon_values(noise_variance_half)
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
-        if return_noise_split:
+        if debug_options.return_noise_split:
             noise_a2 = np.zeros(n_shells, dtype=np.float64)
             noise_xa = np.zeros(n_shells, dtype=np.float64)
     dense_big_jit_shell_indices_half = (
@@ -1339,7 +1351,7 @@ def run_em(
             # (RELION includes DC in noise but excludes from scoring)
             shifted_masked_for_noise = window_spec.recon_values(shifted_half_with_dc)
             dense_noise_component_acc = {}
-            if dense_noise_component_dump_enabled:
+            if debug_options.noise_component_dump_enabled:
                 indices_np = np.asarray(indices, dtype=np.int64)
                 original_indices_np = np.asarray(
                     experiment_dataset.original_image_indices_from_local(indices_np),
@@ -1348,7 +1360,7 @@ def run_em(
                 target_rows = [
                     (row, int(local_idx), int(global_idx))
                     for row, (local_idx, global_idx) in enumerate(zip(indices_np.tolist(), original_indices_np.tolist()))
-                    if int(global_idx) in dense_noise_component_dump_targets
+                    if int(global_idx) in debug_options.noise_component_dump_targets
                 ]
                 for row, local_idx, global_idx in target_rows:
                     p_img_pixel = np.asarray(jnp.abs(processed_masked_half[row]) ** 2, dtype=np.float64)
@@ -1522,7 +1534,7 @@ def run_em(
             timing.pass1_score_s += time.time() - score_t0
 
             maybe_write_dense_per_pose_score_dump(
-                request=dense_per_pose_score_dump,
+                request=debug_options.per_pose_score_dump,
                 indices=indices,
                 scores=scores,
                 block_index=b,
@@ -1562,7 +1574,7 @@ def run_em(
                 block_pose_counts.append(actual_rot * n_trans)
 
             maybe_write_dense_per_pose_score_dump(
-                request=dense_per_pose_score_dump,
+                request=debug_options.per_pose_score_dump,
                 indices=indices,
                 scores=scores,
                 block_index=b,
@@ -1965,15 +1977,15 @@ def run_em(
                     nv_for_noise,
                     si_for_noise,
                     n_shells,
-                    return_noise_split,
+                    debug_options.return_noise_split,
                 )
                 if sync_timers:
-                    if return_noise_split:
+                    if debug_options.return_noise_split:
                         _block_until_ready(block_noise_shells, block_a2_shells, block_xa_shells)
                     else:
                         _block_until_ready(block_noise_shells)
                 noise_wsum += np.asarray(block_noise_shells, dtype=np.float64)
-                if return_noise_split:
+                if debug_options.return_noise_split:
                     noise_a2 += np.asarray(block_a2_shells, dtype=np.float64)
                     noise_xa += np.asarray(block_xa_shells, dtype=np.float64)
                 timing.noise_s += time.time() - noise_t0
@@ -2005,7 +2017,7 @@ def run_em(
                 xa_shells = np.asarray(state["xa_shells"], dtype=np.float64)
                 total_shells = p_img_shells + a2_shells - 2.0 * xa_shells
                 dump_path = (
-                    dense_noise_component_dump_dir
+                    debug_options.noise_component_dump_dir
                     / f"dense_noise_components_cs{int(current_size or -1):03d}_image_{int(global_idx)}.npz"
                 )
                 np.savez_compressed(
@@ -2078,7 +2090,7 @@ def run_em(
                 int(n_rot),
                 bool(use_window),
             )
-            if return_noise_split:
+            if debug_options.return_noise_split:
                 logger.info(
                     "[NOISE-DIAG] A2 (first %d shells): %s",
                     n_log_shells,
@@ -2106,8 +2118,8 @@ def run_em(
             wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
             wsum_sigma2_offset=float(noise_sigma2_offset),
             sumw=float(noise_sumw),
-            wsum_noise_a2=(jnp.asarray(noise_a2, dtype=jnp.float32) if return_noise_split else None),
-            wsum_noise_xa=(jnp.asarray(noise_xa, dtype=jnp.float32) if return_noise_split else None),
+            wsum_noise_a2=(jnp.asarray(noise_a2, dtype=jnp.float32) if debug_options.return_noise_split else None),
+            wsum_noise_xa=(jnp.asarray(noise_xa, dtype=jnp.float32) if debug_options.return_noise_split else None),
         )
 
     if sparse_pass2 and sparse_profile.total_blocks:
