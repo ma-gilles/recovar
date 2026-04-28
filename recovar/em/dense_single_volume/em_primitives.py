@@ -1,15 +1,16 @@
-"""Bridge for dense-owned kernels reused by local EM engines.
+"""Bridge for shared dense/local EM kernels.
 
-The remaining exports are JIT kernels still implemented in ``em_engine``.
 Higher-level helpers should live in purpose-specific helper modules instead of
 being re-exported here.
 """
 
+from .helpers.backprojection import (
+    adjoint_slice_volume_half as _adjoint_slice_volume_half,
+    adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
+    batch_adjoint_slice_volume_half as _batch_adjoint_slice_volume_half,
+    batch_adjoint_slice_volume_windowed as _batch_adjoint_slice_volume_windowed,
+)
 from .em_engine import (
-    _adjoint_slice_volume_half,
-    _adjoint_slice_volume_windowed,
-    _batch_adjoint_slice_volume_half,
-    _batch_adjoint_slice_volume_windowed,
     _block_until_ready,
     _compute_noise_block,
     _compute_projections_block,

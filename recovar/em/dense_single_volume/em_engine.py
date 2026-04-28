@@ -50,6 +50,12 @@ from recovar import core
 from recovar.core.configs import ForwardModelConfig
 
 from .dense_big_jit import run_dense_bucket_big_jit
+from .helpers.backprojection import (
+    adjoint_slice_volume_half as _adjoint_slice_volume_half,
+    adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
+    batch_adjoint_slice_volume_half as _batch_adjoint_slice_volume_half,
+    batch_adjoint_slice_volume_windowed as _batch_adjoint_slice_volume_windowed,
+)
 from .helpers.fourier_window import make_fourier_window_spec
 from .helpers.half_spectrum import (
     make_half_image_weights,
@@ -591,116 +597,6 @@ def _m_step_block_windowed(
     block_argmax = jnp.argmax(scores_block.reshape(n_images, -1), axis=1)
 
     return Ft_y, Ft_ctf, probs, block_best, block_argmax, summed_windowed, ctf_probs_windowed
-
-
-@partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9))
-def _adjoint_slice_volume_windowed(
-    windowed_half,
-    window_indices,
-    rotations_block,
-    volume,
-    image_shape,
-    volume_shape,
-    disc_type,
-    half_image,
-    half_volume=False,
-    max_r=None,
-):
-    """Scatter a windowed half-spectrum into a full half-grid and adjoint-slice.
-
-    This keeps the scatter inside a single jitted helper so local EM paths do
-    not bounce back through Python between the windowed GEMM output and the
-    adjoint accumulation.
-    """
-    return core.adjoint_slice_volume_indexed(
-        windowed_half,
-        window_indices,
-        rotations_block,
-        image_shape,
-        volume_shape,
-        disc_type,
-        volume=volume,
-        half_image=half_image,
-        half_volume=half_volume,
-        max_r=max_r,
-    )
-
-
-@partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9))
-def _batch_adjoint_slice_volume_windowed(
-    windowed_halves,
-    window_indices,
-    rotations_block,
-    volumes,
-    image_shape,
-    volume_shape,
-    disc_type,
-    half_image,
-    half_volume=False,
-    max_r=None,
-):
-    """Batched indexed adjoint-slice for windowed half-spectrum blocks."""
-    return core.batch_adjoint_slice_volume_indexed(
-        windowed_halves,
-        window_indices,
-        rotations_block,
-        image_shape,
-        volume_shape,
-        disc_type,
-        volumes=volumes,
-        half_image=half_image,
-        half_volume=half_volume,
-        max_r=max_r,
-    )
-
-
-@partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
-def _adjoint_slice_volume_half(
-    half_block,
-    rotations_block,
-    volume,
-    image_shape,
-    volume_shape,
-    disc_type,
-    half_image,
-    half_volume=False,
-):
-    ## UNNECESSARY?
-    """Adjoint-slice a half-spectrum block into the volume accumulator."""
-    return core.adjoint_slice_volume(
-        half_block,
-        rotations_block,
-        image_shape,
-        volume_shape,
-        disc_type,
-        volume=volume,
-        half_image=half_image,
-        half_volume=half_volume,
-    )
-
-
-@partial(jax.jit, static_argnums=(3, 4, 5, 6, 7))
-def _batch_adjoint_slice_volume_half(
-    half_blocks,
-    rotations_block,
-    volumes,
-    image_shape,
-    volume_shape,
-    disc_type,
-    half_image,
-    half_volume=False,
-):
-    """Batched adjoint-slice half-spectrum blocks into volume accumulators."""
-    return core.batch_adjoint_slice_volume(
-        half_blocks,
-        rotations_block,
-        image_shape,
-        volume_shape,
-        disc_type,
-        volumes=volumes,
-        half_image=half_image,
-        half_volume=half_volume,
-    )
 
 
 @partial(jax.jit, static_argnums=())
