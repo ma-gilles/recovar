@@ -781,7 +781,7 @@ def _compute_noise_block(
     ctf_probs,
     noise_variance_half,
     shell_indices,
-    n_shells,
+    shell_count,
     return_split: bool = True,
 ):
     ## TODO: QUESTION? Projections (unweighted by half_weights). IS THIS RIGHT? ARE DOCS WRONG? I THOUGHT RELION DID NOT USE WEIGHTS AT ALL?
@@ -818,14 +818,14 @@ def _compute_noise_block(
         Per-pixel noise variance in half-spectrum layout.
     shell_indices : (N,) int32
         Radial shell index per half-spectrum pixel.
-    n_shells : int (static)
+    shell_count : int (static)
         Number of resolution shells.
 
     Returns
     -------
-    noise_shells : (n_shells,) float
+    noise_shells : (shell_count,) float
         ``sum_{k in shell} (A2(k) - 2*XA(k))`` contribution from this block.
-    a2_shells, xa_shells : (n_shells,) float
+    a2_shells, xa_shells : (shell_count,) float
         Diagnostic split terms. Returned as zeros when ``return_split`` is
         false, avoiding two extra scatter reductions in normal runs.
     """
@@ -846,17 +846,16 @@ def _compute_noise_block(
 
     ## TODO: IS THIS REALLY WHAT RELION DOES? WHY ARE STORING THE MIDDLE TERMS LIKE A2 AND XA?
 
-    ## TODO, SO HERE N IS N_SHELLS? WE SHOULD MAKE THAT CLEAR.
     # Bin to resolution shells (no Hermitian weights -- matching RELION)
     ## TODO SHOULD THERE BE HERMITIAN WEIGHTS AT ALL, EVEN IF RELION USED THEM? NOT COMPLEETELY SURE, TRIPLE CHECK
-    noise_shells = jnp.zeros(n_shells, dtype=jnp.float32)
+    noise_shells = jnp.zeros(shell_count, dtype=jnp.float32)
     noise_shells = noise_shells.at[shell_indices].add(block_noise.astype(noise_shells.dtype))
     if not return_split:
-        zeros = jnp.zeros(n_shells, dtype=jnp.float32)
+        zeros = jnp.zeros(shell_count, dtype=jnp.float32)
         return noise_shells, zeros, zeros
-    a2_shells = jnp.zeros(n_shells, dtype=jnp.float32)
+    a2_shells = jnp.zeros(shell_count, dtype=jnp.float32)
     a2_shells = a2_shells.at[shell_indices].add(A2.astype(a2_shells.dtype))
-    xa_shells = jnp.zeros(n_shells, dtype=jnp.float32)
+    xa_shells = jnp.zeros(shell_count, dtype=jnp.float32)
     xa_shells = xa_shells.at[shell_indices].add(XA.astype(xa_shells.dtype))
     return noise_shells, a2_shells, xa_shells
 
