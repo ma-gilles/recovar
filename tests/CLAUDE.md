@@ -29,6 +29,17 @@ Use `logging.info()` or `sys.stderr` for regression comparison tables — NOT `p
 
 All data is generated synthetically — no external downloads needed.
 
+### Fast EM Guardrail
+
+For dense/local EM refactor work, run:
+`pixi run test-em-fast-guard`
+
+This CPU-default guardrail runs tiny deterministic dense big-JIT, local exact
+EM, Fourier-window, dtype-policy, and helper-path tests. It is intended to
+finish in under about 60 seconds without the 5k parity dataset. To run it on a
+local GPU, check `nvidia-smi` first and then use
+`EM_FAST_GUARD_BACKEND=gpu pixi run test-em-fast-guard`.
+
 ## Baseline Management
 
 ```
