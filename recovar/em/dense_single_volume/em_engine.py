@@ -344,6 +344,61 @@ def _preprocess_batch_firstiter_cc(
     return shifted_half, image_power, ctf2_half, ctf2_over_nv_half
 
 
+def _score_rotation_block(
+    window_spec,
+    *,
+    shifted_score,
+    batch_norm,
+    score_weight,
+    proj_half,
+    proj_abs2_half,
+    half_weights,
+    n_images,
+    n_trans,
+    image_shape,
+    volume_shape,
+    score_mode: str,
+    use_float64_scoring: bool,
+):
+    """Score one rotation block against the active Fourier-window spec."""
+
+    proj_score = window_spec.score_values(proj_half)
+    proj_abs2_score = window_spec.score_values(proj_abs2_half)
+    if not use_float64_scoring:
+        proj_score = proj_score.astype(jnp.complex64)
+        proj_abs2_score = proj_abs2_score.astype(jnp.float32)
+    weights = window_spec.score_values(half_weights)
+    proj_weighted = proj_score * weights
+    proj_abs2_weighted = proj_abs2_score * weights
+    n_score = window_spec.n_score
+    if score_mode == "normalized_cc":
+        return _e_step_block_scores_windowed_normalized_cc(
+            shifted_score,
+            batch_norm,
+            score_weight,
+            proj_weighted,
+            proj_abs2_weighted,
+            n_images,
+            n_trans,
+            n_score,
+            image_shape,
+            volume_shape,
+        )
+    return _e_step_block_scores_windowed(
+        shifted_score,
+        batch_norm,
+        score_weight,
+        proj_weighted,
+        proj_abs2_weighted,
+        weights,
+        n_images,
+        n_trans,
+        n_score,
+        image_shape,
+        volume_shape,
+    )
+
+
 @partial(jax.jit, static_argnums=(6, 7, 8, 9))
 def _e_step_block_scores(
     shifted_half,
@@ -873,7 +928,6 @@ def run_em(
     n_recon_windowed = window_spec.n_recon
     projection_kwargs = window_spec.projection_kwargs()
     if use_window:
-        half_weights_windowed = window_spec.score_values(half_weights)
         window_desc = "square" if square_window else "circular"
         logger.info(
             "Fourier windowing (%s): current_size=%d, n_score_windowed=%d, n_recon_windowed=%d / n_half=%d (%.1f%% reduction)",
@@ -888,8 +942,6 @@ def run_em(
     # Upcast half_weights to float64 when scoring in double precision
     if use_float64_scoring:
         half_weights = half_weights.astype(jnp.float64)
-        if use_window:
-            half_weights_windowed = window_spec.score_values(half_weights)
 
     # Pad rotations to multiple of block size for fixed shapes
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
@@ -1078,18 +1130,12 @@ def run_em(
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
-        if use_window:
-            shell_indices_noise = shell_indices_half[recon_window_indices]
-        else:
-            shell_indices_noise = shell_indices_half
+        shell_indices_noise = window_spec.recon_values(shell_indices_half)
         noise_variance_half = fourier_transform_utils.full_image_to_half_image(
             noise_variance.reshape(1, -1),
             image_shape,
         ).squeeze()
-        if use_window:
-            noise_variance_windowed = noise_variance_half[recon_window_indices]
-        else:
-            noise_variance_windowed = noise_variance_half
+        noise_variance_windowed = window_spec.recon_values(noise_variance_half)
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
         if return_noise_split:
@@ -1288,23 +1334,11 @@ def run_em(
             shifted_score_half = shifted_score_half.at[:, score_dc_index].set(0.0)
             score_weight_half = score_weight_half.at[:, score_dc_index].set(0.0)
 
-        # -- WINDOW gather (if active) --
-        # DC-zeroed arrays for scoring, with-DC arrays for M-step accumulation.
-        # RELION excludes DC from likelihood (Minvsigma2[0]=0) but includes
-        # it in reconstruction weights (backprojector CTF^2 weight at DC).
-        ## TODO: IS THIS WINDOWING STUFF ON BY DEFAULT IN RELION? DO WE NEED TO KEEP BOTH AROUND?
-        ## IF WE DO, IT SHOULD BE HANDLED MORE GRACEFULLY THAN HAVING IF STATEMENTS THROUGHOUT THE CODE,
-        ## PERHAPS IT SHOULD BE AN OPTION IN TEH DOWNSTREAM FUNCTIONS OR SOMETHING (IF NECESSARY)
-        if use_window:
-            shifted_windowed = shifted_score_half[:, window_indices]
-            shifted_recon_windowed = shifted_recon_half[:, recon_window_indices]
-            ctf2_over_nv_windowed = score_weight_half[:, window_indices]
-            ctf2_over_nv_windowed_mstep = ctf2_over_nv_half_with_dc[:, recon_window_indices]
-        else:
-            shifted_windowed = shifted_score_half
-            shifted_recon_windowed = shifted_recon_half
-            ctf2_over_nv_windowed = score_weight_half
-            ctf2_over_nv_windowed_mstep = ctf2_over_nv_half_with_dc
+        # DC-zeroed arrays for scoring; with-DC arrays for M-step/noise.
+        shifted_windowed = window_spec.score_values(shifted_score_half)
+        shifted_recon_windowed = window_spec.recon_values(shifted_recon_half)
+        ctf2_over_nv_windowed = window_spec.score_values(score_weight_half)
+        ctf2_over_nv_windowed_mstep = window_spec.recon_values(ctf2_over_nv_half_with_dc)
 
         # -- Noise: precompute per-batch image power spectrum --
         if accumulate_noise:
@@ -1327,10 +1361,7 @@ def run_em(
             noise_sumw += batch_size
             # Masked shifted images for the noise GEMM: use WITH-DC versions
             # (RELION includes DC in noise but excludes from scoring)
-            if use_window:
-                shifted_masked_for_noise = shifted_half_with_dc[:, recon_window_indices]
-            else:
-                shifted_masked_for_noise = shifted_half_with_dc
+            shifted_masked_for_noise = window_spec.recon_values(shifted_half_with_dc)
             dense_noise_component_acc = {}
             if dense_noise_component_dump_enabled:
                 indices_np = np.asarray(indices, dtype=np.int64)
@@ -1364,29 +1395,18 @@ def run_em(
         if use_float64_scoring:
             shifted_score_half = shifted_score_half.astype(jnp.complex128)
             score_weight_half = score_weight_half.astype(jnp.float64)
-            if use_window:
-                shifted_windowed = shifted_windowed.astype(jnp.complex128)
-                ctf2_over_nv_windowed = ctf2_over_nv_windowed.astype(jnp.float64)
-            else:
-                shifted_windowed = shifted_score_half
-                ctf2_over_nv_windowed = score_weight_half
             shifted_recon_half = shifted_recon_half.astype(jnp.complex128)
-            if use_window:
-                shifted_recon_windowed = shifted_recon_windowed.astype(jnp.complex128)
-            else:
-                shifted_recon_windowed = shifted_recon_half
+            shifted_windowed = window_spec.score_values(shifted_score_half)
+            ctf2_over_nv_windowed = window_spec.score_values(score_weight_half)
+            shifted_recon_windowed = window_spec.recon_values(shifted_recon_half)
         else:
             # RELION's accelerated CUDA path uses XFLOAT=float unless compiled
             # with ACC_DOUBLE_PRECISION. Keep scoring in complex64/float32 so a
             # complex128 volume does not silently promote the likelihood GEMMs.
             shifted_score_half = shifted_score_half.astype(jnp.complex64)
             score_weight_half = score_weight_half.astype(jnp.float32)
-            if use_window:
-                shifted_windowed = shifted_windowed.astype(jnp.complex64)
-                ctf2_over_nv_windowed = ctf2_over_nv_windowed.astype(jnp.float32)
-            else:
-                shifted_windowed = shifted_score_half
-                ctf2_over_nv_windowed = score_weight_half
+            shifted_windowed = window_spec.score_values(shifted_score_half)
+            ctf2_over_nv_windowed = window_spec.score_values(score_weight_half)
 
         if sync_timers:
             ready_values = [
@@ -1518,76 +1538,21 @@ def run_em(
                 projection_cache.append((proj_half_b, proj_abs2_half_b))
 
             score_t0 = time.time()
-            if use_window:
-                # Gather windowed subset from projections
-                proj_windowed_b = proj_half_b[:, window_indices]
-                proj_abs2_windowed_b = proj_abs2_half_b[:, window_indices]
-                if not use_float64_scoring:
-                    proj_windowed_b = proj_windowed_b.astype(jnp.complex64)
-                    proj_abs2_windowed_b = proj_abs2_windowed_b.astype(jnp.float32)
-                proj_windowed_weighted_b = proj_windowed_b * half_weights_windowed
-                proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
-
-                if relion_firstiter_score_mode == "normalized_cc":
-                    scores = _e_step_block_scores_windowed_normalized_cc(
-                        shifted_windowed,
-                        batch_norm,
-                        ctf2_over_nv_windowed,
-                        proj_windowed_weighted_b,
-                        proj_abs2_windowed_weighted_b,
-                        batch_size,
-                        n_trans,
-                        n_windowed,
-                        image_shape,
-                        volume_shape,
-                    )
-                else:
-                    scores = _e_step_block_scores_windowed(
-                        shifted_windowed,
-                        batch_norm,
-                        ctf2_over_nv_windowed,
-                        proj_windowed_weighted_b,
-                        proj_abs2_windowed_weighted_b,
-                        half_weights_windowed,
-                        batch_size,
-                        n_trans,
-                        n_windowed,
-                        image_shape,
-                        volume_shape,
-                    )
-            else:
-                # Full half-spectrum path (Phase 1 behavior)
-                if not use_float64_scoring:
-                    proj_half_b = proj_half_b.astype(jnp.complex64)
-                    proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
-                proj_half_weighted_b = proj_half_b * half_weights
-                proj_abs2_weighted_b = proj_abs2_half_b * half_weights
-
-                if relion_firstiter_score_mode == "normalized_cc":
-                    scores = _e_step_block_scores_normalized_cc(
-                        shifted_score_half,
-                        batch_norm,
-                        score_weight_half,
-                        proj_half_weighted_b,
-                        proj_abs2_weighted_b,
-                        batch_size,
-                        n_trans,
-                        image_shape,
-                        volume_shape,
-                    )
-                else:
-                    scores = _e_step_block_scores(
-                        shifted_score_half,
-                        batch_norm,
-                        score_weight_half,
-                        proj_half_weighted_b,
-                        proj_abs2_weighted_b,
-                        half_weights,
-                        batch_size,
-                        n_trans,
-                        image_shape,
-                        volume_shape,
-                    )
+            scores = _score_rotation_block(
+                window_spec,
+                shifted_score=shifted_windowed,
+                batch_norm=batch_norm,
+                score_weight=ctf2_over_nv_windowed,
+                proj_half=proj_half_b,
+                proj_abs2_half=proj_abs2_half_b,
+                half_weights=half_weights,
+                n_images=batch_size,
+                n_trans=n_trans,
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                score_mode=relion_firstiter_score_mode,
+                use_float64_scoring=use_float64_scoring,
+            )
 
             if sync_timers:
                 _block_until_ready(scores)
@@ -1807,75 +1772,21 @@ def run_em(
                 timing.pass2_projection_s += time.time() - proj_t0
 
             score_t0 = time.time()
-            if use_window:
-                # Gather windowed subset
-                proj_windowed_b = proj_half_b[:, window_indices]
-                proj_abs2_windowed_b = proj_abs2_half_b[:, window_indices]
-                if not use_float64_scoring:
-                    proj_windowed_b = proj_windowed_b.astype(jnp.complex64)
-                    proj_abs2_windowed_b = proj_abs2_windowed_b.astype(jnp.float32)
-                proj_windowed_weighted_b = proj_windowed_b * half_weights_windowed
-                proj_abs2_windowed_weighted_b = proj_abs2_windowed_b * half_weights_windowed
-
-                if relion_firstiter_score_mode == "normalized_cc":
-                    scores = _e_step_block_scores_windowed_normalized_cc(
-                        shifted_windowed,
-                        batch_norm,
-                        ctf2_over_nv_windowed,
-                        proj_windowed_weighted_b,
-                        proj_abs2_windowed_weighted_b,
-                        batch_size,
-                        n_trans,
-                        n_windowed,
-                        image_shape,
-                        volume_shape,
-                    )
-                else:
-                    scores = _e_step_block_scores_windowed(
-                        shifted_windowed,
-                        batch_norm,
-                        ctf2_over_nv_windowed,
-                        proj_windowed_weighted_b,
-                        proj_abs2_windowed_weighted_b,
-                        half_weights_windowed,
-                        batch_size,
-                        n_trans,
-                        n_windowed,
-                        image_shape,
-                        volume_shape,
-                    )
-            else:
-                if not use_float64_scoring:
-                    proj_half_b = proj_half_b.astype(jnp.complex64)
-                    proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
-                proj_half_weighted_b = proj_half_b * half_weights
-                proj_abs2_weighted_b = proj_abs2_half_b * half_weights
-
-                if relion_firstiter_score_mode == "normalized_cc":
-                    scores = _e_step_block_scores_normalized_cc(
-                        shifted_score_half,
-                        batch_norm,
-                        score_weight_half,
-                        proj_half_weighted_b,
-                        proj_abs2_weighted_b,
-                        batch_size,
-                        n_trans,
-                        image_shape,
-                        volume_shape,
-                    )
-                else:
-                    scores = _e_step_block_scores(
-                        shifted_score_half,
-                        batch_norm,
-                        score_weight_half,
-                        proj_half_weighted_b,
-                        proj_abs2_weighted_b,
-                        half_weights,
-                        batch_size,
-                        n_trans,
-                        image_shape,
-                        volume_shape,
-                    )
+            scores = _score_rotation_block(
+                window_spec,
+                shifted_score=shifted_windowed,
+                batch_norm=batch_norm,
+                score_weight=ctf2_over_nv_windowed,
+                proj_half=proj_half_b,
+                proj_abs2_half=proj_abs2_half_b,
+                half_weights=half_weights,
+                n_images=batch_size,
+                n_trans=n_trans,
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                score_mode=relion_firstiter_score_mode,
+                use_float64_scoring=use_float64_scoring,
+            )
 
             if sync_timers:
                 _block_until_ready(scores)
