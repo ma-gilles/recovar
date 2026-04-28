@@ -1273,8 +1273,8 @@ def run_em(
 
         # -- Per-image pre-centering --
         # Integral RELION old-offsets were already applied to the real-space
-        # image with zero fill before FFT.  Keep the Fourier-phase path only
-        # for non-integral legacy callers.
+        # image with zero fill before FFT. Keep the Fourier-phase path for
+        # non-integral pre-shifts.
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts_np = np.asarray(image_pre_shifts, dtype=np.float32)[batch_indices_np]
             if use_dense_big_jit and batch_size != actual_batch_size:

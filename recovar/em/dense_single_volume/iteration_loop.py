@@ -305,7 +305,7 @@ def _normalize_noise_variance_per_half(init_noise_variance, n_halves=2):
 
 
 def _mean_noise_variance(noise_variance_per_half):
-    """Average per-half image noise for diagnostics and legacy outputs."""
+    """Average per-half image noise for diagnostics and compatibility outputs."""
     return jnp.mean(
         jnp.stack([jnp.asarray(noise_k).reshape(-1) for noise_k in noise_variance_per_half], axis=0),
         axis=0,
@@ -538,6 +538,9 @@ def _run_local_search_iteration(
     iteration. ``prior_rotations`` may be either RELION Euler angles
     ``(rot, tilt, psi)`` or rotation matrices. Images are processed in
     buckets by the per-image exact local engine.
+
+    TODO(local-engine-debt): Keep the translation-side inner-product/GEMM
+    opportunity in mind as an optimization target for exact-local search.
     """
     local_engine = _normalize_local_engine(local_engine)
     return _run_local_search_iteration_exact_v1(
