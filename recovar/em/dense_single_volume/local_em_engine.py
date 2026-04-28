@@ -510,10 +510,6 @@ def _local_big_jit_enabled() -> bool:
     return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_BIG_JIT", default=True)
 
 
-def _local_compact_zero_posterior_rows_enabled() -> bool:
-    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_COMPACT_ZERO_POSTERIOR_ROWS", default=True)
-
-
 def _local_materialize_projection_abs2_enabled(default: bool) -> bool:
     parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_MATERIALIZE_PROJECTION_ABS2", default="auto")
     return bool(default) if parsed is None else parsed
@@ -841,7 +837,6 @@ def _select_local_reconstruction_pack(
     reconstruction_rotation_mask,
     probs_sum_t,
     reconstruct_significant_only: bool,
-    compact_zero_posterior_rows: bool,
     rotation_block_size: int,
     transfer_profile: dict[str, float],
     pack_start_time: float,
@@ -854,32 +849,15 @@ def _select_local_reconstruction_pack(
     else:
         reconstruction_rotation_mask_np = local_rotation_mask
 
-    if compact_zero_posterior_rows:
-        transfer_t0 = time.time()
-        probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
-        transfer_profile["mstep_posterior_sum_to_host_s"] += time.time() - transfer_t0
-        take_indices, pack_mask, _, row_count = _build_nonzero_reconstruction_pack_indices(
-            reconstruction_rotation_mask_np,
-            local_rotation_mask,
-            probs_sum_t_np,
-            rotation_block_size,
-        )
-    elif reconstruct_significant_only:
-        take_indices, pack_mask, _, row_count = _build_reconstruction_pack_indices(
-            reconstruction_rotation_mask_np,
-            local_rotation_mask,
-            rotation_block_size,
-        )
-    else:
-        take_indices = np.broadcast_to(
-            np.arange(int(bucket.bucket_rotation_count), dtype=np.int32)[None, :],
-            (int(bucket.image_indices.shape[0]), int(bucket.bucket_rotation_count)),
-        )
-        pack_mask = reconstruction_rotation_mask_np
-        row_count = int(np.sum(np.asarray(bucket.actual_rotation_counts, dtype=np.int32), dtype=np.int64))
-
-    if probs_sum_t_np is None:
-        probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+    transfer_t0 = time.time()
+    probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+    transfer_profile["mstep_posterior_sum_to_host_s"] += time.time() - transfer_t0
+    take_indices, pack_mask, _, row_count = _build_nonzero_reconstruction_pack_indices(
+        reconstruction_rotation_mask_np,
+        local_rotation_mask,
+        probs_sum_t_np,
+        rotation_block_size,
+    )
     return _LocalPackSelection(
         rotation_mask=reconstruction_rotation_mask_np,
         take_indices=take_indices,
@@ -1073,7 +1051,6 @@ def run_local_em_exact(
         noise_xa = jnp.zeros(n_shells, dtype=jnp.float32)
 
     big_jit_enabled = _local_big_jit_enabled()
-    compact_zero_posterior_rows = _local_compact_zero_posterior_rows_enabled()
     default_fused_score_mstep = (
         (max_significants is None or int(max_significants) <= 0)
         and normalization_log_z is None
@@ -1865,7 +1842,6 @@ def run_local_em_exact(
             reconstruction_rotation_mask=reconstruction_rotation_mask,
             probs_sum_t=probs_sum_t,
             reconstruct_significant_only=reconstruct_significant_only,
-            compact_zero_posterior_rows=compact_zero_posterior_rows,
             rotation_block_size=rotation_block_size,
             transfer_profile=transfer_profile,
             pack_start_time=pack_t0,
@@ -2163,7 +2139,6 @@ def run_local_em_exact(
     profile_summary = {
         "big_jit_enabled": np.asarray(big_jit_enabled),
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
-        "compact_zero_posterior_rows": np.asarray(compact_zero_posterior_rows),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
         "materialize_projection_abs2": np.asarray(materialize_projection_abs2),
         "keep_half_volume_accumulators": np.asarray(keep_half_volume_accumulators),

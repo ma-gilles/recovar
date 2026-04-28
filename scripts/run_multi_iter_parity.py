@@ -145,7 +145,6 @@ def _collect_local_profile_rows(save_intermediates_dir):
         "local_pad_fraction",
         "max_hypotheses_per_microbatch",
         "n_windowed",
-        "compact_zero_posterior_rows",
         "native_half_preprocess",
         "native_half_preprocess_mode",
         "fused_score_mstep_enabled",
