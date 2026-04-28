@@ -332,6 +332,28 @@ def _optional_float32_half_pair(values):
     ]
 
 
+def _normalize_logged_float32_half_pair(values, *, label: str):
+    """Normalize per-half correction arrays and log summary statistics."""
+    per_half = _optional_float32_half_pair(values)
+    for k, arr in enumerate(per_half):
+        if arr is None:
+            continue
+        if arr.size:
+            logger.info(
+                "RELION mode: %s half-%d: mean=%.4f, std=%.4f, min=%.4f, max=%.4f (%d images)",
+                label,
+                k + 1,
+                arr.mean(),
+                arr.std(),
+                arr.min(),
+                arr.max(),
+                len(arr),
+            )
+        else:
+            logger.info("RELION mode: %s half-%d: empty", label, k + 1)
+    return per_half
+
+
 def _radial_profile_from_noise_variance(noise_variance, image_shape):
     """Average an image-shaped noise vector into integer radial shells."""
     n_shells = image_shape[0] // 2 + 1
@@ -2134,50 +2156,20 @@ def _run_relion_iteration_loop(
     # run_em's image_corrections parameter.
     # The arrays are indexed by the HALF-SET dataset order (not global particle
     # order), matching experiment_datasets[k].
-    image_corrections_per_half = [None, None]
-    if init_image_corrections is not None:
-        image_corrections_per_half = init_image_corrections
-        for k in range(2):
-            if image_corrections_per_half[k] is not None:
-                ic = np.asarray(image_corrections_per_half[k], dtype=np.float32)
-                if ic.size:
-                    logger.info(
-                        "RELION mode: image_corrections half-%d: mean=%.4f, std=%.4f, min=%.4f, max=%.4f (%d images)",
-                        k + 1,
-                        ic.mean(),
-                        ic.std(),
-                        ic.min(),
-                        ic.max(),
-                        len(ic),
-                    )
-                else:
-                    logger.info("RELION mode: image_corrections half-%d: empty", k + 1)
-                image_corrections_per_half[k] = ic
+    image_corrections_per_half = _normalize_logged_float32_half_pair(
+        init_image_corrections,
+        label="image_corrections",
+    )
 
     # --- Per-image scale corrections (RELION parity: reference side) ---
     # RELION applies rlnGroupScaleCorrection to the REFERENCE, not the image
     # (ml_optimiser.cpp:7295-7298).  This means the E-step norm-term and
     # M-step denominator carry scale².  Passed to run_em's
     # scale_corrections parameter to multiply ctf²/σ² by scale².
-    scale_corrections_per_half = [None, None]
-    if init_scale_corrections is not None:
-        scale_corrections_per_half = init_scale_corrections
-        for k in range(2):
-            if scale_corrections_per_half[k] is not None:
-                sc = np.asarray(scale_corrections_per_half[k], dtype=np.float32)
-                if sc.size:
-                    logger.info(
-                        "RELION mode: scale_corrections half-%d: mean=%.4f, std=%.4f, min=%.4f, max=%.4f (%d images)",
-                        k + 1,
-                        sc.mean(),
-                        sc.std(),
-                        sc.min(),
-                        sc.max(),
-                        len(sc),
-                    )
-                else:
-                    logger.info("RELION mode: scale_corrections half-%d: empty", k + 1)
-                scale_corrections_per_half[k] = sc
+    scale_corrections_per_half = _normalize_logged_float32_half_pair(
+        init_scale_corrections,
+        label="scale_corrections",
+    )
 
     # --- Direction prior from snapshot ---
     # When starting from a RELION snapshot, the previous iteration's
@@ -2518,14 +2510,7 @@ def _run_relion_iteration_loop(
                 )
             _replay_prev_eulers = iter_replay_override.get("previous_best_rotation_eulers")
             if _replay_prev_eulers is not None:
-                previous_best_rotation_eulers = [
-                    np.asarray(_replay_prev_eulers[0], dtype=np.float32)
-                    if _replay_prev_eulers[0] is not None
-                    else None,
-                    np.asarray(_replay_prev_eulers[1], dtype=np.float32)
-                    if _replay_prev_eulers[1] is not None
-                    else None,
-                ]
+                previous_best_rotation_eulers = _optional_float32_half_pair(_replay_prev_eulers)
                 logger.info(
                     "Replay override: previous_best_rotation_eulers <- half1=%s half2=%s",
                     "set" if previous_best_rotation_eulers[0] is not None else "none",
@@ -2533,10 +2518,7 @@ def _run_relion_iteration_loop(
                 )
             _replay_img_corr = iter_replay_override.get("image_corrections")
             if _replay_img_corr is not None:
-                image_corrections_per_half = [
-                    np.asarray(_replay_img_corr[0], dtype=np.float32) if _replay_img_corr[0] is not None else None,
-                    np.asarray(_replay_img_corr[1], dtype=np.float32) if _replay_img_corr[1] is not None else None,
-                ]
+                image_corrections_per_half = _optional_float32_half_pair(_replay_img_corr)
                 logger.info(
                     "Replay override: image_corrections <- half1=%s half2=%s",
                     "set" if image_corrections_per_half[0] is not None else "none",
@@ -2544,10 +2526,7 @@ def _run_relion_iteration_loop(
                 )
             _replay_scale_corr = iter_replay_override.get("scale_corrections")
             if _replay_scale_corr is not None:
-                scale_corrections_per_half = [
-                    np.asarray(_replay_scale_corr[0], dtype=np.float32) if _replay_scale_corr[0] is not None else None,
-                    np.asarray(_replay_scale_corr[1], dtype=np.float32) if _replay_scale_corr[1] is not None else None,
-                ]
+                scale_corrections_per_half = _optional_float32_half_pair(_replay_scale_corr)
                 logger.info(
                     "Replay override: scale_corrections <- half1=%s half2=%s",
                     "set" if scale_corrections_per_half[0] is not None else "none",
