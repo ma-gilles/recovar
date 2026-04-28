@@ -12,6 +12,7 @@ See ``docs/math/relion_refinement_algorithm.md`` for the full algorithm map.
 import logging
 import os
 import time
+from dataclasses import dataclass
 
 import jax.numpy as jnp
 import numpy as np
@@ -91,6 +92,109 @@ logger = logging.getLogger(__name__)
 
 RELION_SCORE_TENSOR_FLOAT_BUDGET = 200_000_000
 RELION_MAX_FULL_GRID_ORDER = 4
+
+
+@dataclass(frozen=True)
+class _GroupedUnionChunkCounts:
+    valid_pairs: int
+    union_pairs: int
+    padded_pairs: int
+
+
+def _grouped_union_chunk_counts(
+    *,
+    group_image_count: int,
+    actual_local_rotation_count: int,
+    padded_total_rotations: int,
+    local_log_prior,
+) -> _GroupedUnionChunkCounts:
+    """Return grouped-union profile counts for one legacy local-search chunk."""
+
+    return _GroupedUnionChunkCounts(
+        valid_pairs=int(np.count_nonzero(np.asarray(local_log_prior) > -1e20)),
+        union_pairs=int(group_image_count * actual_local_rotation_count),
+        padded_pairs=int(group_image_count * padded_total_rotations),
+    )
+
+
+def _build_grouped_union_profile_summary(
+    *,
+    metadata_build_time,
+    selector_time,
+    translation_prior_time,
+    em_time,
+    local_setup_time,
+    run_em_wall_time,
+    profile_merge_time,
+    postprocess_time,
+    n_chunks,
+    chunk_sizes,
+    chunk_local_rotations,
+    chunk_padded_rotations,
+    chunk_valid_pairs,
+    chunk_union_pairs,
+    chunk_padded_pairs,
+    chunk_nonzero_posterior_rows,
+    sum_union_rows,
+    sum_padded_rows,
+    sum_nonzero_posterior_rows,
+    seen_global_rotations,
+    seen_nonzero_global_rotations,
+    sum_union_row_pixels,
+    sum_padded_row_pixels,
+    total_adjoint_time,
+    em_phase_totals,
+):
+    total_valid_pairs = float(np.sum(chunk_valid_pairs))
+    total_union_pairs = float(np.sum(chunk_union_pairs))
+    total_padded_pairs = float(np.sum(chunk_padded_pairs))
+    accounted_time = local_setup_time + run_em_wall_time + profile_merge_time + postprocess_time
+    profile_summary = {
+        "metadata_build_time_s": np.float64(metadata_build_time),
+        "selector_time_s": np.float64(selector_time),
+        "translation_prior_time_s": np.float64(translation_prior_time),
+        "em_time_s": np.float64(em_time),
+        "local_setup_time_s": np.float64(local_setup_time),
+        "run_em_wall_time_s": np.float64(run_em_wall_time),
+        "profile_merge_time_s": np.float64(profile_merge_time),
+        "postprocess_time_s": np.float64(postprocess_time),
+        "accounted_em_time_s": np.float64(accounted_time),
+        "unattributed_em_time_s": np.float64(max(em_time - accounted_time, 0.0)),
+        "n_chunks": np.int32(n_chunks),
+        "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
+        "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
+        "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
+        "chunk_valid_pairs": np.asarray(chunk_valid_pairs, dtype=np.int64),
+        "chunk_union_pairs": np.asarray(chunk_union_pairs, dtype=np.int64),
+        "chunk_padded_pairs": np.asarray(chunk_padded_pairs, dtype=np.int64),
+        "chunk_nonzero_posterior_rows": np.asarray(chunk_nonzero_posterior_rows, dtype=np.int32),
+        "sum_union_rows": np.int64(sum_union_rows),
+        "sum_padded_rows": np.int64(sum_padded_rows),
+        "sum_nonzero_posterior_rows": np.int64(sum_nonzero_posterior_rows),
+        "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
+        "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
+        "duplicate_rotation_factor": np.float64(
+            0.0 if not np.any(seen_global_rotations) else sum_union_rows / np.count_nonzero(seen_global_rotations)
+        ),
+        "sum_union_row_pixels": np.int64(sum_union_row_pixels),
+        "sum_padded_row_pixels": np.int64(sum_padded_row_pixels),
+        "adjoint_seconds_per_row_pixel": np.float64(
+            0.0 if sum_union_row_pixels == 0 else total_adjoint_time / sum_union_row_pixels
+        ),
+        "union_waste_fraction": np.float64(
+            0.0 if total_union_pairs == 0 else 1.0 - total_valid_pairs / total_union_pairs
+        ),
+        "padded_waste_fraction": np.float64(
+            0.0 if total_padded_pairs == 0 else 1.0 - total_valid_pairs / total_padded_pairs
+        ),
+        "padding_only_waste_fraction": np.float64(
+            0.0 if total_padded_pairs == 0 else (total_padded_pairs - total_union_pairs) / total_padded_pairs
+        ),
+    }
+    if em_phase_totals is not None:
+        for key, value in em_phase_totals.items():
+            profile_summary[f"em_{key}"] = np.asarray(value)
+    return profile_summary
 
 
 def _precompute_exact_local_fine_grid_enabled(healpix_order: int) -> bool:
@@ -1033,16 +1137,17 @@ def _run_local_search_iteration_grouped_union(
             * local_rotation_block_size
         )
 
-        ## TODO: THIS IS INCREDIBLY MESSY, WE SHOULDNT HAVE TO DEFINE 12 VARIABLES LIKE THIS.
-        ## IF THI SIS TO MAKE MATCHING WITH RELION FOR NOW FINE, BUT KEEP TRACK WE NEED TO TO CLEAN THIS UP AFTER (RELION PARITY HAS NOT BEEN ACHIEVED YET)
-        valid_pair_count = int(np.count_nonzero(np.asarray(local_log_prior) > -1e20))
-        union_pair_count = int(len(group_image_indices) * actual_local_rotation_count)
-        padded_pair_count = int(len(group_image_indices) * padded_total_rotations)
+        chunk_counts = _grouped_union_chunk_counts(
+            group_image_count=len(group_image_indices),
+            actual_local_rotation_count=actual_local_rotation_count,
+            padded_total_rotations=padded_total_rotations,
+            local_log_prior=local_log_prior,
+        )
         chunk_local_rotations.append(int(actual_local_rotation_count))
         chunk_padded_rotations.append(int(padded_total_rotations))
-        chunk_valid_pairs.append(valid_pair_count)
-        chunk_union_pairs.append(union_pair_count)
-        chunk_padded_pairs.append(padded_pair_count)
+        chunk_valid_pairs.append(chunk_counts.valid_pairs)
+        chunk_union_pairs.append(chunk_counts.union_pairs)
+        chunk_padded_pairs.append(chunk_counts.padded_pairs)
         sum_union_rows += int(actual_local_rotation_count)
         sum_padded_rows += int(padded_total_rotations)
         seen_global_rotations[np.asarray(local_indices[:actual_local_rotation_count], dtype=np.int32)] = True
@@ -1179,6 +1284,37 @@ def _run_local_search_iteration_grouped_union(
         max_posterior_per_image=jnp.asarray(max_posterior),
         rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
     )
+    profile_summary = (
+        _build_grouped_union_profile_summary(
+            metadata_build_time=metadata_build_time,
+            selector_time=selector_time,
+            translation_prior_time=translation_prior_time,
+            em_time=em_time,
+            local_setup_time=local_setup_time,
+            run_em_wall_time=run_em_wall_time,
+            profile_merge_time=profile_merge_time,
+            postprocess_time=postprocess_time,
+            n_chunks=n_chunks,
+            chunk_sizes=chunk_sizes,
+            chunk_local_rotations=chunk_local_rotations,
+            chunk_padded_rotations=chunk_padded_rotations,
+            chunk_valid_pairs=chunk_valid_pairs,
+            chunk_union_pairs=chunk_union_pairs,
+            chunk_padded_pairs=chunk_padded_pairs,
+            chunk_nonzero_posterior_rows=chunk_nonzero_posterior_rows,
+            sum_union_rows=sum_union_rows,
+            sum_padded_rows=sum_padded_rows,
+            sum_nonzero_posterior_rows=sum_nonzero_posterior_rows,
+            seen_global_rotations=seen_global_rotations,
+            seen_nonzero_global_rotations=seen_nonzero_global_rotations,
+            sum_union_row_pixels=sum_union_row_pixels,
+            sum_padded_row_pixels=sum_padded_row_pixels,
+            total_adjoint_time=total_adjoint_time,
+            em_phase_totals=em_phase_totals,
+        )
+        if return_profile
+        else None
+    )
     if accumulate_noise:
         from recovar.em.dense_single_volume.helpers.types import NoiseStats
 
@@ -1188,120 +1324,7 @@ def _run_local_search_iteration_grouped_union(
             wsum_sigma2_offset=0.0,
             sumw=float(accum_sumw),
         )
-        profile_summary = None
-        if return_profile:
-            total_valid_pairs = float(np.sum(chunk_valid_pairs))
-            total_union_pairs = float(np.sum(chunk_union_pairs))
-            total_padded_pairs = float(np.sum(chunk_padded_pairs))
-            profile_summary = {
-                "metadata_build_time_s": np.float64(metadata_build_time),
-                "selector_time_s": np.float64(selector_time),
-                "translation_prior_time_s": np.float64(translation_prior_time),
-                "em_time_s": np.float64(em_time),
-                "local_setup_time_s": np.float64(local_setup_time),
-                "run_em_wall_time_s": np.float64(run_em_wall_time),
-                "profile_merge_time_s": np.float64(profile_merge_time),
-                "postprocess_time_s": np.float64(postprocess_time),
-                "accounted_em_time_s": np.float64(
-                    local_setup_time + run_em_wall_time + profile_merge_time + postprocess_time
-                ),
-                "unattributed_em_time_s": np.float64(
-                    max(
-                        em_time - (local_setup_time + run_em_wall_time + profile_merge_time + postprocess_time),
-                        0.0,
-                    )
-                ),
-                "n_chunks": np.int32(n_chunks),
-                "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
-                "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
-                "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
-                "chunk_valid_pairs": np.asarray(chunk_valid_pairs, dtype=np.int64),
-                "chunk_union_pairs": np.asarray(chunk_union_pairs, dtype=np.int64),
-                "chunk_padded_pairs": np.asarray(chunk_padded_pairs, dtype=np.int64),
-                "chunk_nonzero_posterior_rows": np.asarray(chunk_nonzero_posterior_rows, dtype=np.int32),
-                "sum_union_rows": np.int64(sum_union_rows),
-                "sum_padded_rows": np.int64(sum_padded_rows),
-                "sum_nonzero_posterior_rows": np.int64(sum_nonzero_posterior_rows),
-                "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
-                "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
-                "duplicate_rotation_factor": np.float64(
-                    0.0
-                    if not np.any(seen_global_rotations)
-                    else sum_union_rows / np.count_nonzero(seen_global_rotations)
-                ),
-                "sum_union_row_pixels": np.int64(sum_union_row_pixels),
-                "sum_padded_row_pixels": np.int64(sum_padded_row_pixels),
-                "adjoint_seconds_per_row_pixel": np.float64(
-                    0.0 if sum_union_row_pixels == 0 else total_adjoint_time / sum_union_row_pixels
-                ),
-                "union_waste_fraction": np.float64(
-                    0.0 if total_union_pairs == 0 else 1.0 - total_valid_pairs / total_union_pairs
-                ),
-                "padded_waste_fraction": np.float64(
-                    0.0 if total_padded_pairs == 0 else 1.0 - total_valid_pairs / total_padded_pairs
-                ),
-                "padding_only_waste_fraction": np.float64(
-                    0.0 if total_padded_pairs == 0 else (total_padded_pairs - total_union_pairs) / total_padded_pairs
-                ),
-            }
-            if em_phase_totals is not None:
-                for key, value in em_phase_totals.items():
-                    profile_summary[f"em_{key}"] = np.asarray(value)
         return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats, noise_stats, profile_summary
-    profile_summary = None
-    if return_profile:
-        total_valid_pairs = float(np.sum(chunk_valid_pairs))
-        total_union_pairs = float(np.sum(chunk_union_pairs))
-        total_padded_pairs = float(np.sum(chunk_padded_pairs))
-        profile_summary = {
-            "metadata_build_time_s": np.float64(metadata_build_time),
-            "selector_time_s": np.float64(selector_time),
-            "translation_prior_time_s": np.float64(translation_prior_time),
-            "em_time_s": np.float64(em_time),
-            "local_setup_time_s": np.float64(local_setup_time),
-            "run_em_wall_time_s": np.float64(run_em_wall_time),
-            "profile_merge_time_s": np.float64(profile_merge_time),
-            "postprocess_time_s": np.float64(postprocess_time),
-            "accounted_em_time_s": np.float64(
-                local_setup_time + run_em_wall_time + profile_merge_time + postprocess_time
-            ),
-            "unattributed_em_time_s": np.float64(
-                max(em_time - (local_setup_time + run_em_wall_time + profile_merge_time + postprocess_time), 0.0)
-            ),
-            "n_chunks": np.int32(n_chunks),
-            "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
-            "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
-            "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
-            "chunk_valid_pairs": np.asarray(chunk_valid_pairs, dtype=np.int64),
-            "chunk_union_pairs": np.asarray(chunk_union_pairs, dtype=np.int64),
-            "chunk_padded_pairs": np.asarray(chunk_padded_pairs, dtype=np.int64),
-            "chunk_nonzero_posterior_rows": np.asarray(chunk_nonzero_posterior_rows, dtype=np.int32),
-            "sum_union_rows": np.int64(sum_union_rows),
-            "sum_padded_rows": np.int64(sum_padded_rows),
-            "sum_nonzero_posterior_rows": np.int64(sum_nonzero_posterior_rows),
-            "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
-            "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
-            "duplicate_rotation_factor": np.float64(
-                0.0 if not np.any(seen_global_rotations) else sum_union_rows / np.count_nonzero(seen_global_rotations)
-            ),
-            "sum_union_row_pixels": np.int64(sum_union_row_pixels),
-            "sum_padded_row_pixels": np.int64(sum_padded_row_pixels),
-            "adjoint_seconds_per_row_pixel": np.float64(
-                0.0 if sum_union_row_pixels == 0 else total_adjoint_time / sum_union_row_pixels
-            ),
-            "union_waste_fraction": np.float64(
-                0.0 if total_union_pairs == 0 else 1.0 - total_valid_pairs / total_union_pairs
-            ),
-            "padded_waste_fraction": np.float64(
-                0.0 if total_padded_pairs == 0 else 1.0 - total_valid_pairs / total_padded_pairs
-            ),
-            "padding_only_waste_fraction": np.float64(
-                0.0 if total_padded_pairs == 0 else (total_padded_pairs - total_union_pairs) / total_padded_pairs
-            ),
-        }
-        if em_phase_totals is not None:
-            for key, value in em_phase_totals.items():
-                profile_summary[f"em_{key}"] = np.asarray(value)
     return Ft_y_total, Ft_ctf_total, hard_assignment, relion_stats, profile_summary
 
 
