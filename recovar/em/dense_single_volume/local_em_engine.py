@@ -31,6 +31,7 @@ from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_w
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
+    make_scoring_half_image_weights,
     make_shell_indices_half,
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
@@ -759,10 +760,10 @@ def run_local_em_exact(
     n_recon_windowed = window_spec.n_recon
     projection_kwargs = window_spec.projection_kwargs()
 
-    if half_spectrum_scoring:
-        half_weights = jnp.ones(n_half, dtype=jnp.float32)
-    else:
-        half_weights = make_half_image_weights(image_shape)
+    half_weights = make_scoring_half_image_weights(
+        image_shape,
+        relion_half_sum=half_spectrum_scoring,
+    )
     default_materialize_projection_abs2 = False
     materialize_projection_abs2 = _local_materialize_projection_abs2_enabled(default_materialize_projection_abs2)
     norm_half_weights = make_half_image_weights(image_shape)

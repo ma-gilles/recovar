@@ -247,7 +247,10 @@ def _compute_significance_batched(
         _e_step_block_scores_windowed,
         _update_logsumexp,
     )
-    from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
+    from recovar.em.dense_single_volume.helpers.half_spectrum import (
+        make_half_image_weights,
+        make_scoring_half_image_weights,
+    )
     from recovar.em.dense_single_volume.helpers.oversampling import (
         find_significant_rotations as _find_sig,
     )
@@ -286,10 +289,9 @@ def _compute_significance_batched(
         process_fn=experiment_dataset.process_images,
     )
 
-    # TODO(RELION-parity-debt): w=1 matches RELION's incorrect half-sum.
-    # See em_engine.py for full explanation. Post-parity: use make_half_image_weights.
-    half_weights = (
-        jnp.ones(n_half, dtype=jnp.float32) if half_spectrum_scoring else make_half_image_weights(image_shape)
+    half_weights = make_scoring_half_image_weights(
+        image_shape,
+        relion_half_sum=half_spectrum_scoring,
     )
 
     window_spec = make_fourier_window_spec(

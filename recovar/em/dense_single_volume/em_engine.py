@@ -60,6 +60,7 @@ from .helpers.half_spectrum import (
     half_spectrum_dc_index,
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
+    make_scoring_half_image_weights,
     make_shell_indices_half,
 )
 from .helpers.image_shifts import apply_relion_integer_pre_shifts, integer_pre_shifts_or_none
@@ -447,24 +448,6 @@ def run_em(
         process_fn=experiment_dataset.process_images,
     )
 
-    # Precompute half-spectrum weights for E-step scoring.
-    #
-    # TODO(RELION-parity-debt): RELION sums over the rfft half-image with
-    # weight=1 for ALL pixels — no Hermitian doubling.  This is mathematically
-    # INCORRECT: for a real-valued signal, the half-spectrum inner product
-    # should use weight=2 for interior frequencies (which represent both +k
-    # and the conjugate -k) and weight=1 for DC and Nyquist (self-conjugate).
-    # By using w=1 everywhere, RELION effectively computes HALF the true
-    # Gaussian log-likelihood.  Consequences:
-    #   - Posterior is softer (Pmax lower) than the true Bayesian posterior
-    #   - MAP orientation is UNCHANGED (same ranking, just scaled score)
-    #   - Resolution-dependent signal weighting is slightly wrong at
-    #     DC/Nyquist boundaries (negligible in practice)
-    # We match RELION exactly here for parity.  Once parity is confirmed,
-    # switching to correct Hermitian weights (make_half_image_weights) would
-    # sharpen posteriors and may improve convergence speed.  This is tracked
-    # as a post-parity improvement.
-    #
     # TODO(local-engine-debt): If we keep any dense score path after the local
     # engine split, there is still an inner-product/GEMM-shaped optimization
     # opportunity around the translation dimension. RELION appears to fuse
@@ -472,11 +455,10 @@ def run_em(
     # is not a parity requirement. Still, we should remember to revisit that
     # opportunity once the local path stops forcing per-image neighborhoods
     # through the shared-grid dense engine.
-    if half_spectrum_scoring:
-        H_w, W_w = image_shape
-        half_weights = jnp.ones(H_w * (W_w // 2 + 1), dtype=jnp.float32)
-    else:
-        half_weights = make_half_image_weights(image_shape)
+    half_weights = make_scoring_half_image_weights(
+        image_shape,
+        relion_half_sum=half_spectrum_scoring,
+    )
 
     window_spec = make_fourier_window_spec(
         image_shape,

@@ -18,6 +18,20 @@ def make_half_image_weights(image_shape):
     return weights.reshape(-1)
 
 
+def make_scoring_half_image_weights(image_shape, *, relion_half_sum: bool):
+    """Return half-spectrum weights for likelihood scoring.
+
+    TODO(RELION-parity-debt): RELION scores the packed rfft half-plane with
+    unit weights rather than Hermitian weights. Keep this parity switch
+    centralized so dense/local/sparse scoring use the same convention.
+    """
+
+    height, width = image_shape
+    if relion_half_sum:
+        return jnp.ones(height * (width // 2 + 1), dtype=jnp.float32)
+    return make_half_image_weights(image_shape)
+
+
 def make_shell_indices_half(image_shape):
     """Return half-spectrum radial shell indices in packed-rfft layout."""
 
