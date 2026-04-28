@@ -147,24 +147,6 @@ def _voxel_magnitude(arr) -> np.ndarray:
     return np.abs(np.asarray(a, dtype=np.float64)).astype(np.float32)
 
 
-def _shell_reduce(per_voxel: np.ndarray, shell_idx: np.ndarray, n_shells: int) -> np.ndarray:
-    out = np.zeros(n_shells, dtype=np.float64)
-    np.add.at(out, shell_idx, per_voxel.astype(np.float64))
-    return out
-
-
-def _make_volume_shell_indices(volume_shape) -> np.ndarray:
-    nz, ny, nx = volume_shape
-    n = nz
-    idx = np.arange(nz)
-    iz = np.where(idx <= n // 2, idx, idx - n)
-    iy = np.where(np.arange(ny) <= n // 2, np.arange(ny), np.arange(ny) - n)
-    ix = np.where(np.arange(nx) <= n // 2, np.arange(nx), np.arange(nx) - n)
-    Z, Y, X = np.meshgrid(iz, iy, ix, indexing="ij")
-    r = np.sqrt(Z * Z + Y * Y + X * X)
-    return np.clip(r.astype(np.int32), 0, n // 2).reshape(-1)
-
-
 def dump_iteration(
     *,
     iteration: int,
