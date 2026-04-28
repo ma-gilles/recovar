@@ -10,6 +10,7 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.padding as padding
+from recovar import core
 from recovar.core import mask as core_mask
 from recovar.data_io.image_backends import _apply_relion_soft_image_mask_numpy
 
@@ -66,6 +67,25 @@ def process_half_image(
         return process_half_fn(batch, apply_image_mask=apply_image_mask)
     processed_full = config.process_fn(batch, apply_image_mask=apply_image_mask)
     return fourier_transform_utils.full_image_to_half_image(processed_full, config.image_shape)
+
+
+def translate_full_images_to_half(weighted_full, translations, image_shape, n_images: int, n_trans: int):
+    """Apply full-spectrum translation phases and return flattened half images.
+
+    TODO(DENSE_ENGINE_BOUNDARY/E003): replace this boundary with native
+    half-image preprocessing once the dense path no longer depends on
+    full-spectrum translation.
+    """
+
+    shifted = core.batch_trans_translate_images(
+        weighted_full,
+        jnp.repeat(translations[None], n_images, axis=0),
+        image_shape,
+    )
+    return fourier_transform_utils.full_image_to_half_image(
+        shifted.reshape(n_images * n_trans, -1),
+        image_shape,
+    )
 
 
 def half_translation_phase_table(translations, image_shape):

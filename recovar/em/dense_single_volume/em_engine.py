@@ -66,6 +66,7 @@ from .helpers.half_spectrum import (
 )
 from .helpers.image_shifts import apply_relion_integer_pre_shifts, integer_pre_shifts_or_none
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
+from .helpers.preprocessing import translate_full_images_to_half
 from .helpers.projection import (
     DEFAULT_PROJECTION_MAX_R as _DEFAULT_PROJECTION_MAX_R,
     compute_noise_block as _compute_noise_block,
@@ -265,26 +266,21 @@ def _preprocess_batch(
     add it back only when absolute log-evidence outputs are requested.
     """
 
-    ## TODO: ALL OF THIS SHOULD BE DONE IN HALF_IMAGE NATIVELY. NO FULL -> HALF CONVERSIONS
     CTF = config.compute_ctf(ctf_params)
     processed = config.process_fn(
         batch,
         apply_image_mask=score_with_masked_images,
     )
     ctf_weighted = processed * CTF / noise_variance
-    # Phase shifts operate on full spectrum (need all frequencies for correct shift)
-    shifted = core.batch_trans_translate_images(
+    shifted_half = translate_full_images_to_half(
         ctf_weighted,
-        jnp.repeat(translations[None], n_images, axis=0),
+        translations,
         config.image_shape,
+        n_images,
+        n_trans,
     )
-    shifted_flat = shifted.reshape(n_images * n_trans, -1)
-    # Convert to half-spectrum for all subsequent GEMMs
-    shifted_half = fourier_transform_utils.full_image_to_half_image(shifted_flat, config.image_shape)
-
     batch_norm = jnp.linalg.norm(processed / jnp.sqrt(noise_variance), axis=-1, keepdims=True) ** 2
     ctf2_over_nv = CTF**2 / noise_variance
-    # Also convert ctf2_over_nv to half for norm-term GEMM
     ctf2_over_nv_half = fourier_transform_utils.full_image_to_half_image(ctf2_over_nv, config.image_shape)
     return shifted_half, batch_norm, ctf2_over_nv_half
 
@@ -299,21 +295,16 @@ def _prepare_reconstruction_batch(
     n_images,
     n_trans,
 ):
-    ## TODO: ALL OF THIS SHOULD BE DONE IN HALF_IMAGE NATIVELY. NO FULL -> HALF CONVERSIONS.
-
     """Preprocess one image batch for the unmasked M-step path."""
     CTF = config.compute_ctf(ctf_params)
     processed = config.process_fn(batch, apply_image_mask=False)
     ctf_weighted = processed * CTF / noise_variance
-    shifted = core.batch_trans_translate_images(
+    return translate_full_images_to_half(
         ctf_weighted,
-        jnp.repeat(translations[None], n_images, axis=0),
+        translations,
         config.image_shape,
-    )
-    shifted_flat = shifted.reshape(n_images * n_trans, -1)
-    return fourier_transform_utils.full_image_to_half_image(
-        shifted_flat,
-        config.image_shape,
+        n_images,
+        n_trans,
     )
 
 
@@ -335,13 +326,13 @@ def _preprocess_batch_firstiter_cc(
     )
     safe_ctf = jnp.where(jnp.abs(CTF) > 1e-8, 1.0 / CTF, 0.0)
     processed_score = processed * safe_ctf
-    shifted = core.batch_trans_translate_images(
+    shifted_half = translate_full_images_to_half(
         processed_score,
-        jnp.repeat(translations[None], n_images, axis=0),
+        translations,
         config.image_shape,
+        n_images,
+        n_trans,
     )
-    shifted_flat = shifted.reshape(n_images * n_trans, -1)
-    shifted_half = fourier_transform_utils.full_image_to_half_image(shifted_flat, config.image_shape)
     image_power = jnp.linalg.norm(processed, axis=-1, keepdims=True) ** 2
     ctf2_half = fourier_transform_utils.full_image_to_half_image(CTF**2, config.image_shape)
     ctf2_over_nv_half = fourier_transform_utils.full_image_to_half_image(CTF**2 / noise_variance, config.image_shape)
