@@ -99,17 +99,37 @@ def _noise_split_diagnostics_requested() -> bool:
 def _dense_big_jit_enabled() -> bool:
     """Return whether the experimental dense/global bucket big-JIT is enabled.
 
-    This is deliberately default-off until dense bucket parity has been gated
-    against the current `run_em` path.  It gives `em_engine.py` a real big-JIT
-    call path without changing RELION-default behavior.
+    The default is on. Unsupported dense variants still fall back before the
+    batch loop, so the main RELION path gets the compiled bucket boundary where
+    eligible without mixing it into sparse/local/debug code paths.
     """
 
-    raw = os.environ.get("RECOVAR_RELION_DENSE_BIG_JIT", "0").strip().lower()
+    raw = os.environ.get("RECOVAR_RELION_DENSE_BIG_JIT", "1").strip().lower()
     if raw in {"0", "false", "no", "off"}:
         return False
     if raw in {"1", "true", "yes", "on"}:
         return True
     raise ValueError("RECOVAR_RELION_DENSE_BIG_JIT must be one of 1/0/true/false")
+
+
+def _dense_big_jit_disabled_reason(
+    *,
+    relion_firstiter_winner_take_all: bool,
+    accumulate_noise: bool,
+    dense_noise_component_dump_enabled: bool,
+    per_pose_debug_dump_enabled: bool,
+) -> str | None:
+    """Return the dense big-JIT fallback reason, or ``None`` if eligible."""
+
+    if relion_firstiter_winner_take_all:
+        return "winner_take_all"
+    if accumulate_noise:
+        return "noise_accumulation"
+    if dense_noise_component_dump_enabled:
+        return "dense_noise_component_dump"
+    if per_pose_debug_dump_enabled:
+        return "per_pose_debug_dump"
+    return None
 
 
 def _bin_shell_values_np(values, shell_indices, n_shells):
@@ -1312,17 +1332,12 @@ def run_em(
         )
 
     dense_big_jit_requested = _dense_big_jit_enabled()
-    dense_big_jit_unsupported_reason = None
-    if sparse_pass2:
-        dense_big_jit_unsupported_reason = "sparse_pass2"
-    elif relion_firstiter_winner_take_all:
-        dense_big_jit_unsupported_reason = "winner_take_all"
-    elif accumulate_noise:
-        dense_big_jit_unsupported_reason = "noise_accumulation"
-    elif dense_noise_component_dump_enabled:
-        dense_big_jit_unsupported_reason = "dense_noise_component_dump"
-    elif os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR"):
-        dense_big_jit_unsupported_reason = "per_pose_debug_dump"
+    dense_big_jit_unsupported_reason = _dense_big_jit_disabled_reason(
+        relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+        accumulate_noise=accumulate_noise,
+        dense_noise_component_dump_enabled=dense_noise_component_dump_enabled,
+        per_pose_debug_dump_enabled=bool(os.environ.get("RECOVAR_DEBUG_PER_POSE_DUMP_DIR")),
+    )
     use_dense_big_jit = dense_big_jit_requested and dense_big_jit_unsupported_reason is None
     if dense_big_jit_requested and not use_dense_big_jit:
         logger.info("Dense big-JIT disabled for this run: unsupported %s", dense_big_jit_unsupported_reason)
@@ -1793,6 +1808,10 @@ def run_em(
                     dense_result.block_max,
                     dense_result.block_sum_exp,
                 )
+                if block_max_per_image is not None:
+                    actual_rot = max(0, min(rotation_block_size, n_rot - r0))
+                    block_max_per_image.append(dense_result.block_best)
+                    block_pose_counts.append(actual_rot * n_trans)
                 if sync_timers:
                     _block_until_ready(max_s, sum_exp)
                 pass1_score_time += time.time() - score_t0
