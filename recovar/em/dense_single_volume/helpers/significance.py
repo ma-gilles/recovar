@@ -241,8 +241,8 @@ def _compute_significance_batched(
         _e_step_block_scores_windowed,
         _preprocess_batch,
         _update_logsumexp,
-        make_half_image_weights,
     )
+    from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
     from recovar.em.dense_single_volume.helpers.oversampling import (
         find_significant_rotations as _find_sig,
     )
@@ -467,7 +467,7 @@ def _compute_significance_batched(
 
         # DC exclusion (RELION parity: Minvsigma2[0] = 0)
         if half_spectrum_scoring:
-            from recovar.em.dense_single_volume.em_engine import make_shell_indices_half as _mshi
+            from recovar.em.dense_single_volume.helpers.half_spectrum import make_shell_indices_half as _mshi
 
             dc_shell = _mshi(image_shape)
             dc_mask = dc_shell == 0

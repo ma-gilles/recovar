@@ -51,6 +51,11 @@ from recovar.core.configs import ForwardModelConfig
 
 from .dense_big_jit import run_dense_bucket_big_jit
 from .helpers.fourier_window import make_fourier_window_spec
+from .helpers.half_spectrum import (
+    make_half_image_weights,
+    make_relion_noise_shell_indices_half,
+    make_shell_indices_half,
+)
 from .helpers.image_shifts import apply_relion_integer_pre_shifts, integer_pre_shifts_or_none
 from .helpers.types import EMProfileStats, NoiseStats, RelionStats
 from .shape_buckets import pad_axis
@@ -245,84 +250,6 @@ def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int
         valid_image_mask,
         actual_batch_size,
     )
-
-
-# -- Half-spectrum utilities -------------------------------------------------
-
-
-def make_half_image_weights(image_shape):
-    """Return (N_half,) Hermitian weights for half-spectrum inner products.
-
-    For a real-valued image of shape (H, W), the rfft-packed half-spectrum
-    has shape (H, W//2+1).  The full inner product is recovered from the half:
-
-        Re<a, b>_full = Re[sum_k w(k) * conj(a_half(k)) * b_half(k)]
-
-    where:
-        w = 2 for all interior pixels (each represents itself and its conjugate)
-        w = 1 for packed column 0 (DC) -- has no conjugate partner
-        w = 1 for packed column -1 (Nyquist, even W only) -- self-conjugate
-
-    NOTE: These are the CORRECT Hermitian weights for Parseval-preserving inner
-    products.  RELION does NOT use these — it sums with w=1 everywhere, computing
-    roughly half the true likelihood.  The ``half_spectrum_scoring=True`` path in
-    run_em uses ones() to match RELION.  This function is used by the
-    non-RELION-parity path (``half_spectrum_scoring=False``).
-    See TODO(RELION-parity-debt) in run_em for details.
-    """
-    H, W = image_shape
-    w = 2.0 * jnp.ones((H, W // 2 + 1), dtype=jnp.float32)
-    w = w.at[:, 0].set(1.0)  # packed column 0 = DC
-    w = w.at[:, -1].set(1.0)  # packed column -1 = Nyquist
-    return w.reshape(-1)  # (N_half,)
-
-
-def make_shell_indices_half(image_shape):
-    """Return (N_half,) int32 mapping each half-spectrum pixel to its radial shell.
-
-    Uses the rfft-packed layout matching ``full_image_to_half_image``.
-    Shell indices range from 0 (DC) to ``image_shape[0] // 2`` (Nyquist).
-    """
-    # get_grid_of_radial_distances_real returns shape (H, W//2+1) with rounded int distances
-    radii = fourier_transform_utils.get_grid_of_radial_distances_real(
-        image_shape,
-        voxel_size=1,
-        scaled=False,
-        frequency_shift=0,
-        rounded=True,
-    )
-    return radii.reshape(-1).astype(jnp.int32)
-
-
-def make_relion_noise_shell_indices_half(image_shape):
-    """Return RELION's non-redundant half-plane shell indices for noise sums.
-
-    RELION's ``Mresol_fine`` and ``Npix_per_shell`` skip redundant FFTW
-    half-plane entries where ``jp == 0 && ip < 0``. RECOVAR stores half-images
-    in a centered-row layout, so derive this from physical coordinates instead
-    of assuming a raw row range. Skipped and out-of-range pixels are marked
-    one-past-the-last shell so JAX scatter drops them.
-    """
-
-    height, width = int(image_shape[0]), int(image_shape[1])
-    n_shells = height // 2 + 1
-    shell_indices = np.asarray(make_shell_indices_half(image_shape), dtype=np.int32).reshape(
-        height,
-        width // 2 + 1,
-    )
-    coords = np.asarray(
-        fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-            image_shape,
-            voxel_size=1,
-            scaled=False,
-        ),
-    ).reshape(height, width // 2 + 1, 2)
-    kx = np.rint(coords[..., 0]).astype(np.int32)
-    ky = np.rint(coords[..., 1]).astype(np.int32)
-    keep = shell_indices < n_shells
-    keep &= ~((kx == 0) & (ky < 0))
-    shell_indices = np.where(keep, shell_indices, n_shells)
-    return jnp.asarray(shell_indices.reshape(-1), dtype=jnp.int32)
 
 
 # -- JIT-compiled kernels ---------------------------------------------------
