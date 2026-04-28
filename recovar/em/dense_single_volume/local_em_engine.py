@@ -338,15 +338,13 @@ def _local_big_jit_noise_args(
 
 def _can_use_local_big_jit_bucket(
     *,
-    big_jit_enabled: bool,
-    processed_cache_enabled: bool,
+    use_big_jit_buckets: bool,
     batch_data,
     debug_score_dump_filter_matches: bool,
     debug_noise_dump_dir,
 ) -> bool:
     return (
-        big_jit_enabled
-        and not processed_cache_enabled
+        use_big_jit_buckets
         and batch_data is not None
         and not debug_score_dump_filter_matches
         and debug_noise_dump_dir is None
@@ -493,16 +491,6 @@ def _local_processed_cache_enabled(n_images: int, image_shape, score_with_masked
     n_copies = 2 if score_with_masked_images else 1
     estimated_gb = int(n_images) * n_half * np.dtype(np.complex64).itemsize * n_copies / 1e9
     return estimated_gb <= max_gb
-
-
-def _local_big_jit_enabled() -> bool:
-    """Return whether exact-local should try the large fused JIT path.
-
-    Default is on; explicit false-like values keep the older local branches
-    available for parity bisects and fallback debugging.
-    """
-
-    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_BIG_JIT", default=True)
 
 
 def _local_keep_half_volume_accumulators_enabled() -> bool:
@@ -1034,7 +1022,6 @@ def run_local_em_exact(
         noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_xa = jnp.zeros(n_shells, dtype=jnp.float32)
 
-    big_jit_enabled = _local_big_jit_enabled()
     default_fused_score_mstep = (
         (max_significants is None or int(max_significants) <= 0)
         and normalization_log_z is None
@@ -1073,15 +1060,6 @@ def run_local_em_exact(
         max_hypotheses_per_microbatch,
         n_windowed,
     )
-    mean_for_proj_big_jit = mean_for_proj
-    projection_half_volume_big_jit = False
-    if big_jit_enabled:
-        # The big-JIT path keeps projection input in packed half-volume layout.
-        mean_for_proj_big_jit = fourier_transform_utils.full_volume_to_half_volume(
-            mean_for_proj,
-            proj_volume_shape,
-        ).reshape(-1)
-        projection_half_volume_big_jit = True
     bucket_build_t0 = time.time()
     bucket_specs = bucket_local_hypothesis_layout(
         local_layout,
@@ -1152,6 +1130,20 @@ def run_local_em_exact(
     big_jit_window_indices_arg = window_spec.score_or_full_indices(n_half)
     big_jit_recon_window_indices_arg = window_spec.recon_or_full_indices(n_half)
 
+    use_big_jit_buckets = (
+        not processed_cache_enabled
+        and not debug_score_dump_filter_matches
+        and debug_noise_dump_dir is None
+    )
+    mean_for_proj_big_jit = mean_for_proj
+    projection_half_volume_big_jit = False
+    if use_big_jit_buckets:
+        mean_for_proj_big_jit = fourier_transform_utils.full_volume_to_half_volume(
+            mean_for_proj,
+            proj_volume_shape,
+        ).reshape(-1)
+        projection_half_volume_big_jit = True
+
     for bucket in bucket_specs:
         n_chunks += 1
         if collect_profile_stats:
@@ -1190,8 +1182,7 @@ def run_local_em_exact(
             )
         ## TODO: THIS IS INSANE BRANCHING LOGIC. HOW MANY OF THESE ARE USEFU?  CAN WE DELETE SOME/MANY OF THESE FLAGS?
         can_use_big_jit_bucket = _can_use_local_big_jit_bucket(
-            big_jit_enabled=big_jit_enabled,
-            processed_cache_enabled=processed_cache_enabled,
+            use_big_jit_buckets=use_big_jit_buckets,
             batch_data=batch_data,
             debug_score_dump_filter_matches=debug_score_dump_filter_matches,
             debug_noise_dump_dir=debug_noise_dump_dir,
@@ -2072,7 +2063,6 @@ def run_local_em_exact(
     _block_until_ready(Ft_y, Ft_ctf)
     total_wall_time = time.time() - overall_t0
     profile_summary = {
-        "big_jit_enabled": np.asarray(big_jit_enabled),
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
         "keep_half_volume_accumulators": np.asarray(keep_half_volume_accumulators),

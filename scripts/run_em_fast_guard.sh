@@ -52,7 +52,7 @@ tests=(
   tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid
   tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine
   tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_default_path_matches_debug_split_path
-  tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_big_jit_bucket_matches_legacy
+  tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_big_jit_bucket_matches_debug_split
 )
 
 exec "$PYTHON_BIN" -m pytest "${tests[@]}" -q "$@"
