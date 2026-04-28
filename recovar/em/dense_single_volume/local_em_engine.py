@@ -24,7 +24,6 @@ from recovar.em.dense_single_volume.em_primitives import (
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_auto_bool,
-    parse_env_bool,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
@@ -268,10 +267,6 @@ def _local_processed_cache_enabled(n_images: int, image_shape, score_with_masked
     n_copies = 2 if score_with_masked_images else 1
     estimated_gb = int(n_images) * n_half * np.dtype(np.complex64).itemsize * n_copies / 1e9
     return estimated_gb <= max_gb
-
-
-def _local_keep_half_volume_accumulators_enabled() -> bool:
-    return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_KEEP_HALF_VOLUME_ACCUMULATORS", default=False)
 
 
 def _validate_native_half_batch(batch, image_shape):
@@ -697,13 +692,8 @@ def run_local_em_exact(
         "RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME",
         "",
     ).lower() in {"1", "true", "yes", "on"}
-    keep_half_volume_accumulators = (
-        use_native_half_volume_mstep and _local_keep_half_volume_accumulators_enabled()
-    )
     if use_native_half_volume_mstep:
         logger.info("Exact local M-step: using native half-volume RELION backprojection")
-        if keep_half_volume_accumulators:
-            logger.info("Exact local M-step: keeping packed half-volume accumulators")
         recon_accum_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(recon_volume_shape)
     else:
         recon_accum_shape = recon_volume_shape
@@ -1796,9 +1786,8 @@ def run_local_em_exact(
             logger.info("Exact local M-step: enforcing RELION half-volume x=0 Hermitian plane")
             Ft_y = enforce_relion_half_volume_x0_hermitian(Ft_y, recon_volume_shape)
             Ft_ctf = enforce_relion_half_volume_x0_hermitian(Ft_ctf, recon_volume_shape)
-        if not keep_half_volume_accumulators:
-            Ft_y = fourier_transform_utils.half_volume_to_full_volume(Ft_y, recon_volume_shape).reshape(-1)
-            Ft_ctf = fourier_transform_utils.half_volume_to_full_volume(Ft_ctf, recon_volume_shape).reshape(-1)
+        Ft_y = fourier_transform_utils.half_volume_to_full_volume(Ft_y, recon_volume_shape).reshape(-1)
+        Ft_ctf = fourier_transform_utils.half_volume_to_full_volume(Ft_ctf, recon_volume_shape).reshape(-1)
 
     if return_profile:
         _block_until_ready(Ft_y, Ft_ctf)
@@ -1860,7 +1849,6 @@ def run_local_em_exact(
     profile_summary = {
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
-        "keep_half_volume_accumulators": np.asarray(keep_half_volume_accumulators),
         "bucket_build_time_s": np.float64(timing.bucket_build_s),
         "raw_cache_build_time_s": np.float64(timing.raw_cache_build_s),
         "raw_cache_enabled": np.asarray(raw_cache_enabled),
