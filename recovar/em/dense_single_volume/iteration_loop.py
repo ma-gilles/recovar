@@ -1675,8 +1675,6 @@ def _run_relion_iteration_loop(
             first_iteration_reconstruction_mode == "hard" and init_relion_iteration == 0 and iteration == 0
         )
 
-        ## TODO: THIS IS REASONABLE, BUT DOES IT BREAK IF WE TEST A SINGLE ITER AS WE HAVE BEEN DOING FOR PARITY?
-
         # --- Determine current_size using RELION's FSC-derived SSNR (C4/C5) ---
         # At iteration 0, no previous half-map FSC exists yet; use the initial
         # resolution plus RELION's bootstrap image-size growth. After that,
@@ -2388,8 +2386,6 @@ def _run_relion_iteration_loop(
                 )
                 continue
             if use_local:
-                ## TODO: Is this STRATEGY REALLY WHAT DOES IN TERMS OF COMPUTE? THIS ALL SEEMS TO HACKY. IF IT IS FINE, BUT WE SHOULD TRIPLE CHECK
-
                 # For local search the per-chunk M-step only sees the
                 # cone-restricted rotation set (typically a few thousand
                 # rotations per image with high overlap across the chunk)

@@ -48,7 +48,12 @@ def compute_projections_block(
     max_r=DEFAULT_PROJECTION_MAX_R,
     return_abs2: bool = True,
 ):
-    """Forward-slice one rotation block and optionally compute ``|proj|^2``."""
+    """Forward-slice one rotation block and optionally compute ``|proj|^2``.
+
+    Dense scoring and noise accumulation need ``|proj|^2`` repeatedly enough to
+    materialize it. Exact-local paths can pass ``return_abs2=False`` and compute
+    norms on demand when that saves memory.
+    """
     proj_half = project_half_spectrum(
         volume,
         rotations_block,
@@ -57,7 +62,6 @@ def compute_projections_block(
         disc_type,
         max_r=max_r,
     )
-    # TODO: WE SHOULD THINK ABOUT WHETHER STORING SQUARES IS WORTH IT.
     proj_abs2_half = jnp.abs(proj_half) ** 2 if return_abs2 else None
     return proj_half, proj_abs2_half
 
@@ -79,7 +83,19 @@ def compute_noise_block(
     # worth the memory cost.
     # TODO: Confirm whether Hermitian weights should participate in shell noise
     # binning even if RELION omits them.
-    """Accumulate RELION-style posterior-weighted noise for one rotation block."""
+    """Accumulate RELION-style posterior-weighted noise for one rotation block.
+
+    Uses the decomposition::
+
+        E_w[|CTF*proj - img|^2] = E_w[|CTF*proj|^2] - 2*Re(E_w[conj(img)*CTF*proj]) + |img|^2
+                                 =     A2            -           2*XA                  + P_img
+
+    ``P_img`` is handled by the caller (image-only, no rotation dependence).
+    This function computes the ``A2 - 2*XA`` contribution from one rotation
+    block, binned to resolution shells. Inputs are un-Hermitian-weighted packed
+    half spectra because RELION's noise update bins over its FFTW half-plane
+    convention directly.
+    """
     ctf_probs_raw = ctf_probs * noise_variance_half
     a2 = jnp.sum(proj_abs2_half * ctf_probs_raw, axis=0)
 
