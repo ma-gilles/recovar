@@ -52,7 +52,7 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket,
     score_local_bucket_abs2_weighted_on_demand,
 )
-from recovar.em.dense_single_volume.em_primitives import make_half_image_weights
+from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
 from recovar.em.dense_single_volume.iteration_loop import (
     _align_fourier_volume_sign_to_reference,
     _normalize_noise_variance_per_half,
