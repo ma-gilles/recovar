@@ -55,6 +55,7 @@ from recovar.em.dense_single_volume.helpers.half_spectrum import (
 )
 from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
+    half_image_phase_factors,
     integer_pre_shifts_or_none,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import process_half_image
@@ -656,13 +657,7 @@ def _prepare_bucket_io(
     # in Fourier space.  Applied AFTER per-image scalar corrections.
     if image_pre_shifts is not None and not real_space_pre_shift_applied:
         batch_shifts = jnp.asarray(np.asarray(image_pre_shifts)[np.asarray(image_indices)])
-        lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-            image_shape,
-            voxel_size=1,
-            scaled=True,
-        )
-        # phase_factors: (batch, N_half) complex
-        phase_factors = jnp.exp(-2j * jnp.pi * (lattice_half @ batch_shifts.T)).T
+        phase_factors = half_image_phase_factors(image_shape, batch_shifts)
         score_weighted_half = score_weighted_half * phase_factors
         recon_weighted_half = recon_weighted_half * phase_factors
         if return_direct_scoring_io:

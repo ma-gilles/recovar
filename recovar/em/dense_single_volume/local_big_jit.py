@@ -20,6 +20,7 @@ from recovar.em.dense_single_volume.em_primitives import (
 )
 from recovar.em.dense_single_volume.helpers.backprojection import accumulate_adjoint_pair
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.dense_single_volume.helpers.image_shifts import tiled_half_image_phase_factors
 from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
 from recovar.em.dense_single_volume.helpers.projection import project_half_spectrum
 
@@ -322,13 +323,7 @@ def run_local_bucket_big_jit(
     ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
 
     if apply_fourier_pre_shift:
-        lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-            image_shape,
-            voxel_size=1,
-            scaled=True,
-        )
-        phase_factors = jnp.exp(-2j * jnp.pi * (lattice_half @ fourier_pre_shifts.T)).T
-        phase_expanded = jnp.repeat(phase_factors, n_trans, axis=0)
+        phase_expanded = tiled_half_image_phase_factors(image_shape, fourier_pre_shifts, n_trans)
         shifted_half = shifted_half * phase_expanded
         shifted_recon_half = shifted_recon_half * phase_expanded
 

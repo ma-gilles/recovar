@@ -63,7 +63,11 @@ from .helpers.half_spectrum import (
     make_scoring_half_image_weights,
     make_shell_indices_half,
 )
-from .helpers.image_shifts import apply_relion_integer_pre_shifts, integer_pre_shifts_or_none
+from .helpers.image_shifts import (
+    apply_relion_integer_pre_shifts,
+    integer_pre_shifts_or_none,
+    tiled_half_image_phase_factors,
+)
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
 from .helpers.preprocessing import (
     prepare_reconstruction_batch as _prepare_reconstruction_batch,
@@ -750,15 +754,7 @@ def run_em(
             batch_shifts_np = np.asarray(image_pre_shifts, dtype=np.float32)[batch_indices_np]
             if use_dense_big_jit and batch_size != actual_batch_size:
                 batch_shifts_np = pad_axis(batch_shifts_np, 0, batch_size, value=0)
-            batch_shifts = jnp.asarray(batch_shifts_np)
-            # Compute per-pixel phase factors in half-spectrum layout
-            lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-                image_shape, voxel_size=1, scaled=True
-            )
-            # phase_factors: (batch_size, N_half) complex
-            phase_factors = jnp.exp(-2j * jnp.pi * (lattice_half @ batch_shifts.T)).T
-            # Expand to (batch_size * n_trans, N_half)
-            phase_expanded = jnp.repeat(phase_factors, n_trans, axis=0)
+            phase_expanded = tiled_half_image_phase_factors(image_shape, batch_shifts_np, n_trans)
             shifted_half = shifted_half * phase_expanded
             shifted_recon_half = shifted_recon_half * phase_expanded
 

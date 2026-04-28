@@ -13,6 +13,10 @@ import jax.numpy as jnp
 
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.dense_single_volume.helpers.image_shifts import (
+    half_image_phase_factors,
+    tiled_half_image_phase_factors,
+)
 
 pytestmark = pytest.mark.unit
 
@@ -198,4 +202,19 @@ def test_fourier_window_spec_gathers_last_axis_for_batched_values():
     np.testing.assert_array_equal(
         np.asarray(spec.recon_values(values)),
         np.asarray(values)[..., np.asarray(spec.recon_indices_np)],
+    )
+
+
+def test_half_image_pre_shift_phase_helpers_match_explicit_tiling():
+    image_shape = (8, 8)
+    shifts = jnp.asarray([[0.5, -1.25], [2.0, 0.0]], dtype=jnp.float32)
+    phase = half_image_phase_factors(image_shape, shifts)
+    tiled = tiled_half_image_phase_factors(image_shape, shifts, n_trans=3)
+
+    assert phase.shape == (2, image_shape[0] * (image_shape[1] // 2 + 1))
+    np.testing.assert_allclose(
+        np.asarray(tiled),
+        np.asarray(jnp.repeat(phase, 3, axis=0)),
+        atol=0,
+        rtol=0,
     )

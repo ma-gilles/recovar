@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import jax.numpy as jnp
 import numpy as np
+
+import recovar.core.fourier_transform_utils as fourier_transform_utils
 
 
 def integer_pre_shifts_or_none(image_pre_shifts, image_indices, *, batch=None, atol: float = 1e-6):
@@ -70,3 +73,25 @@ def apply_relion_integer_pre_shifts(batch, integer_shifts):
         out[row, dst_y0:dst_y1, dst_x0:dst_x1] = images[row, src_y0:src_y1, src_x0:src_x1]
 
     return out
+
+
+def half_image_phase_factors(image_shape, shifts):
+    """Return packed-half Fourier phase factors for per-image pre-shifts."""
+
+    lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
+        image_shape,
+        voxel_size=1,
+        scaled=True,
+    )
+    shifts = jnp.asarray(shifts, dtype=jnp.float32)
+    return jnp.exp(-2j * jnp.pi * (lattice_half @ shifts.T)).T
+
+
+def tiled_half_image_phase_factors(image_shape, shifts, n_trans: int):
+    """Return phase factors expanded across translation-tiled image rows."""
+
+    return jnp.repeat(
+        half_image_phase_factors(image_shape, shifts),
+        int(n_trans),
+        axis=0,
+    )

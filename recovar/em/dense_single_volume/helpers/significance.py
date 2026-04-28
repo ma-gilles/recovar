@@ -232,7 +232,6 @@ def _compute_significance_batched(
         Pmax / weight_norm, while ``significant_weight`` only gates
         reconstruction.
     """
-    from recovar.core import fourier_transform_utils
     from recovar.core.configs import ForwardModelConfig
     from recovar import core
     from recovar.reconstruction import noise as noise_utils
@@ -258,6 +257,7 @@ def _compute_significance_batched(
     from recovar.em.dense_single_volume.helpers.image_shifts import (
         apply_relion_integer_pre_shifts,
         integer_pre_shifts_or_none,
+        tiled_half_image_phase_factors,
     )
 
     if projection_padding_factor > 1:
@@ -459,13 +459,7 @@ def _compute_significance_batched(
 
         if image_pre_shifts is not None and not real_space_pre_shift_applied:
             batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
-            lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
-                image_shape,
-                voxel_size=1,
-                scaled=True,
-            )
-            phase_factors = jnp.exp(-2j * jnp.pi * (lattice_half @ batch_shifts.T)).T
-            phase_expanded = jnp.repeat(phase_factors, n_trans, axis=0)
+            phase_expanded = tiled_half_image_phase_factors(image_shape, batch_shifts, n_trans)
             shifted_half = shifted_half * phase_expanded
 
         # DC exclusion (RELION parity: Minvsigma2[0] = 0)
