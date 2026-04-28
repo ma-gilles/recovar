@@ -197,8 +197,8 @@ def _maybe_dump_noise_update_debug(
     logger.info("Wrote RECOVAR noise update debug dump: %s", path)
 
 # TRACKED TODOs: RELION_LOCAL_ENGINE
-# TODO(RELION_LOCAL_ENGINE/T001): grouped-union local search is the wrong active abstraction
-# TODO(RELION_LOCAL_ENGINE/T002): active RELION local path must use per-image local hypotheses
+# TODO(RELION_LOCAL_ENGINE/T001): grouped-union local search is a legacy abstraction
+# TODO(RELION_LOCAL_ENGINE/T002): active RELION local path uses exact per-image local hypotheses
 # TODO(RELION_LOCAL_ENGINE/T003): local path should not depend on dense shared-grid engine contracts
 # TODO(RELION_LOCAL_ENGINE/T004): parity hacks should move inward, out of outer-loop control flow
 # See docs/relion_local_engine_refactor.md
@@ -263,6 +263,22 @@ def _relion_exact_local_image_batch_override() -> int | None:
     if value <= 0:
         raise ValueError("RECOVAR_RELION_EXACT_LOCAL_IMAGE_BATCH_SIZE must be positive")
     return value
+
+
+def _normalize_local_engine(local_engine: str) -> str:
+    """Normalize local-search engine names without hiding the active path."""
+    if local_engine == "exact_v2":
+        logger.warning(
+            "local_engine='exact_v2' is a deprecated CLI alias for 'exact_v1'; "
+            "running exact_v1. Use local_engine='exact_v1' for the active exact local path.",
+        )
+        return "exact_v1"
+    if local_engine not in ("exact_v1", "grouped_union"):
+        raise ValueError(
+            f"Unknown local_engine={local_engine!r}; expected 'exact_v1' or 'grouped_union' "
+            "('exact_v2' is a deprecated alias for 'exact_v1')",
+        )
+    return local_engine
 
 
 def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: int) -> int:
@@ -475,22 +491,16 @@ def _run_local_search_iteration(
     Each image carries its own exact prior orientation from the previous
     iteration. ``prior_rotations`` may be either RELION Euler angles
     ``(rot, tilt, psi)`` or rotation matrices. Images are processed in
-    chunks; each chunk is evaluated either by the legacy grouped-union path
-    or by the new per-image exact local engine.
+    chunks; by default they are evaluated by the active per-image exact local
+    engine (``exact_v1``). The legacy grouped-union path remains available
+    only for parity comparisons and fallback experiments.
 
-    TODO(local-engine-debt): This shared-union batching scheme is only a
-    stopgap for the active RELION-mode local path. It forces multiple images
-    onto one padded union rotation set and then masks invalid image-rotation
-    pairs with per-image priors. We should replace it with a dedicated local
-    engine that evaluates each image on its own neighborhood. When that
-    refactor happens, keep the translation-side inner-product/GEMM opportunity
-    in mind as an optimization target, but do not let it keep us trapped in
-    the current union-based local abstraction.
+    TODO(local-engine-debt): Keep the translation-side inner-product/GEMM
+    opportunity in mind as an optimization target when replacing the legacy
+    grouped-union code, but do not let it keep us trapped in the union-based
+    local abstraction.
     """
-    if local_engine not in ("grouped_union", "exact_v1", "exact_v2"):
-        raise ValueError(
-            f"Unknown local_engine={local_engine!r}; expected 'grouped_union', 'exact_v1', or 'exact_v2'",
-        )
+    local_engine = _normalize_local_engine(local_engine)
     if pass2_layout is not None and local_engine == "grouped_union":
         raise ValueError("Pass-2 layouts must use exact local search, not grouped_union")
     if local_engine == "grouped_union":
@@ -532,8 +542,6 @@ def _run_local_search_iteration(
             translation_prior_mode=translation_prior_mode,
             translation_prior_reference_translations=translation_prior_reference_translations,
         )
-    if local_engine == "exact_v2":
-        logger.warning("local_engine='exact_v2' is not implemented yet; using exact_v1")
     return _run_local_search_iteration_exact_v1(
         experiment_dataset,
         mean,
@@ -1685,10 +1693,7 @@ def refine_single_volume(
     """
     if mode not in ("legacy", "relion"):
         raise ValueError(f"Unknown mode={mode!r}; expected 'legacy' or 'relion'")
-    if local_engine not in ("grouped_union", "exact_v1", "exact_v2"):
-        raise ValueError(
-            f"Unknown local_engine={local_engine!r}; expected 'grouped_union', 'exact_v1', or 'exact_v2'",
-        )
+    local_engine = _normalize_local_engine(local_engine)
 
     if mode == "relion":
         _enable_relion_parity_defaults()
@@ -1839,6 +1844,8 @@ def _run_relion_iteration_loop(
     See docs/relion5_auto_refine_algorithm.md.
     """
     from recovar.reconstruction import noise, regularization
+
+    local_engine = _normalize_local_engine(local_engine)
 
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape

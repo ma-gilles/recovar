@@ -170,8 +170,6 @@ def _score_normalize_mstep(
         "score_with_masked_images",
         "apply_integer_pre_shift",
         "apply_fourier_pre_shift",
-        "has_image_corrections",
-        "has_scale_corrections",
         "half_spectrum_scoring",
         "use_float64_scoring",
         "use_float64_normalization",
@@ -191,7 +189,6 @@ def _score_normalize_mstep(
         "accumulate_noise",
         "return_noise_split",
         "n_shells",
-        "has_translation_sqdist",
         "has_normalization_log_z",
     ),
 )
@@ -211,6 +208,7 @@ def run_local_bucket_big_jit(
     integer_pre_shifts,
     fourier_pre_shifts,
     image_corrections,
+    image_only_corrections,
     scale_corrections,
     translation_sqdist_ang,
     noise_variance_half,
@@ -234,8 +232,6 @@ def run_local_bucket_big_jit(
     score_with_masked_images: bool,
     apply_integer_pre_shift: bool,
     apply_fourier_pre_shift: bool,
-    has_image_corrections: bool,
-    has_scale_corrections: bool,
     half_spectrum_scoring: bool,
     use_float64_scoring: bool,
     use_float64_normalization: bool,
@@ -255,7 +251,6 @@ def run_local_bucket_big_jit(
     accumulate_noise: bool,
     return_noise_split: bool,
     n_shells: int,
-    has_translation_sqdist: bool,
     has_normalization_log_z: bool,
 ):
     """Run one exact-local bucket in a single compiled numeric boundary.
@@ -307,20 +302,14 @@ def run_local_bucket_big_jit(
 
     batch_size = processed_score_half.shape[0]
     n_trans = translation_phases_half.shape[0]
-    batch_scale = scale_corrections if has_scale_corrections else jnp.ones(batch_size, dtype=batch_norm.dtype)
-
-    if has_image_corrections:
-        batch_corr = image_corrections
-        image_only_corr = batch_corr / batch_scale
-        corr_expanded = jnp.repeat(batch_corr, n_trans)
-        shifted_half = shifted_half * corr_expanded[:, None]
-        shifted_recon_half = shifted_recon_half * corr_expanded[:, None]
-        batch_norm = batch_norm * (image_only_corr**2)[:, None]
-    else:
-        image_only_corr = jnp.ones(batch_size, dtype=batch_norm.dtype)
-
-    if has_scale_corrections:
-        ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+    batch_scale = scale_corrections.astype(batch_norm.dtype)
+    batch_corr = image_corrections.astype(batch_norm.dtype)
+    image_only_corr = image_only_corrections.astype(batch_norm.dtype)
+    corr_expanded = jnp.repeat(batch_corr, n_trans)
+    shifted_half = shifted_half * corr_expanded[:, None]
+    shifted_recon_half = shifted_recon_half * corr_expanded[:, None]
+    batch_norm = batch_norm * (image_only_corr**2)[:, None]
+    ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
 
     if apply_fourier_pre_shift:
         lattice_half = fourier_transform_utils.get_k_coordinate_of_each_pixel_half(
@@ -520,11 +509,8 @@ def run_local_bucket_big_jit(
 
     if accumulate_noise:
         support_mass = jnp.sum(reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
-        if has_translation_sqdist:
-            translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
-            noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(jnp.float32))
-        else:
-            noise_sumw_offset = jnp.asarray(0.0, dtype=jnp.float32)
+        translation_posterior = jnp.sum(reconstruction_probs, axis=1).astype(jnp.float32)
+        noise_sumw_offset = jnp.sum(translation_posterior * translation_sqdist_ang.astype(jnp.float32))
         processed_noise_power_half = processed_score_half * image_only_corr[:, None]
         batch_img_power = jnp.sum(
             (jnp.abs(processed_noise_power_half) ** 2) * support_mass[:, None],
