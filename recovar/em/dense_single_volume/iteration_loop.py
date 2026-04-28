@@ -267,16 +267,9 @@ def _relion_exact_local_image_batch_override() -> int | None:
 
 def _normalize_local_engine(local_engine: str) -> str:
     """Normalize local-search engine names without hiding the active path."""
-    if local_engine == "exact_v2":
-        logger.warning(
-            "local_engine='exact_v2' is a deprecated CLI alias for 'exact_v1'; "
-            "running exact_v1. Use local_engine='exact_v1' for the active exact local path.",
-        )
-        return "exact_v1"
     if local_engine not in ("exact_v1", "grouped_union"):
         raise ValueError(
-            f"Unknown local_engine={local_engine!r}; expected 'exact_v1' or 'grouped_union' "
-            "('exact_v2' is a deprecated alias for 'exact_v1')",
+            f"Unknown local_engine={local_engine!r}; expected 'exact_v1' or 'grouped_union'",
         )
     return local_engine
 

@@ -2032,13 +2032,11 @@ def test_tracked_local_engine_todo_ids_are_present():
     assert "DENSE_ENGINE_BOUNDARY/E004" in em_engine_text
 
 
-def test_exact_v2_is_deprecated_alias_for_exact_v1(caplog):
-    caplog.set_level("WARNING")
-
-    assert _normalize_local_engine("exact_v2") == "exact_v1"
-    assert "deprecated CLI alias" in caplog.text
+def test_local_engine_normalization_rejects_removed_aliases():
     assert _normalize_local_engine("exact_v1") == "exact_v1"
     assert _normalize_local_engine("grouped_union") == "grouped_union"
+    with pytest.raises(ValueError, match="expected 'exact_v1' or 'grouped_union'"):
+        _normalize_local_engine("exact_v2")
     with pytest.raises(ValueError, match="expected 'exact_v1' or 'grouped_union'"):
         _normalize_local_engine("unknown")
 

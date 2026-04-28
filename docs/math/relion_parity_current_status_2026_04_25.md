@@ -270,9 +270,8 @@ prior center; see the post-fix fixed-state baseline below.
 Artifact:
 `_agent_scratch/recovar_it008_5k_priorfix_20260427_031136`.
 This is the current best post-fix fixed-state baseline. It replays one
-iteration from RELION it008 on one A100 80GB using `--iter 7 --max_iter 1
---skip_final_iteration --local_engine exact_v2` (`exact_v2` currently falls
-back to exact_v1).
+iteration from RELION it008 on one A100 80GB using the exact local engine
+(`--iter 7 --max_iter 1 --skip_final_iteration --local_engine exact_v1`).
 
 | Run | RELION it | wall s | cs | pixres A | GPU | REC Pmax | REL Pmax | mean abs | median abs | p99 abs | max abs | pose mean/max deg | trans mean px | map corr R-vs-L | GT corr R/L | FSC0.143 R/L |
 |---|---:|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
@@ -310,7 +309,7 @@ Fourier-phase path only for non-integral or already-Fourier test inputs.
 Focused validation:
 `_agent_scratch/focused_it008_stack4603_zerofill_20260427_090904`, local A100,
 `--iter 7 --max_iter 1 --skip_final_iteration --keep_stack_indices 4603
---local_engine exact_v2`.
+--local_engine exact_v1`.
 
 | Case | RECOVAR Pmax | RELION Pmax | abs gap | pose/trans |
 |---|---:|---:|---:|---|
@@ -1446,8 +1445,8 @@ Forced higher-iteration replay now running after the prior-center fix:
   implementation.
 - The dense big-JIT call construction in `em_engine.py` is factored through one
   per-batch helper so pass 1 and pass 2 share the same bucket argument setup.
-- `exact_v2` is now a deprecated alias for `exact_v1`, not a presented active
-  engine; grouped-union is documented as legacy/fallback only.
+- `exact_v2` has been removed; use `exact_v1` for the active exact local
+  engine. Grouped-union is documented as legacy/fallback only.
 - Local big-JIT now passes identity/zero correction operands instead of using
   static branches for optional image corrections, scale corrections, and
   translation-distance noise offsets.
@@ -1461,7 +1460,7 @@ Validation performed for this implementation slice:
 - `python -m pytest tests/unit/test_dense_big_jit.py
   tests/unit/test_dense_shape_buckets.py
   tests/unit/test_refine_relion_mode.py::test_tracked_local_engine_todo_ids_are_present
-  tests/unit/test_refine_relion_mode.py::test_exact_v2_is_deprecated_alias_for_exact_v1`
+  tests/unit/test_refine_relion_mode.py::test_local_engine_normalization_rejects_removed_aliases`
 - Tiny synthetic JIT call of `run_dense_bucket_big_jit`
 - Dense big-JIT non-windowed Gaussian bucket equivalence against existing dense
   primitives for pass-1 logsumexp reductions and pass-2 M-step adjoint sums.
