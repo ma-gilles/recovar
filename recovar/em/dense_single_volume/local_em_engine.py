@@ -13,6 +13,7 @@ import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
+from recovar.reconstruction import noise as noise_utils
 from recovar.em.dense_single_volume.em_primitives import (
     _adjoint_slice_volume_half,
     _adjoint_slice_volume_windowed,
@@ -24,7 +25,6 @@ from recovar.em.dense_single_volume.em_primitives import (
 )
 from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_auto_bool,
-    parse_env_auto_mode,
     parse_env_bool,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
@@ -39,7 +39,6 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases as _apply_half_translation_phases,
-    can_native_half_preprocess as _can_native_half_preprocess,
     half_translation_phase_table as _half_translation_phase_table,
     image_preprocess_backend as _image_preprocess_backend,
     process_half_image,
@@ -296,10 +295,7 @@ def _make_local_spectrum_setup(
         half_weights = jnp.ones(n_half, dtype=jnp.float32)
     else:
         half_weights = make_half_image_weights(image_shape)
-    noise_variance_half = fourier_transform_utils.full_image_to_half_image(
-        noise_variance.reshape(1, -1),
-        image_shape,
-    ).squeeze()
+    noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
     return _LocalSpectrumSetup(
         half_weights=half_weights,
         norm_half_weights=make_half_image_weights(image_shape),
@@ -371,20 +367,16 @@ def _local_big_jit_noise_args(
 def _can_use_local_big_jit_bucket(
     *,
     big_jit_enabled: bool,
-    native_half_preprocess_mode: str,
     processed_cache_enabled: bool,
     batch_data,
-    experiment_dataset,
     materialize_projection_abs2: bool,
     debug_score_dump_filter_matches: bool,
     debug_noise_dump_dir,
 ) -> bool:
     return (
         big_jit_enabled
-        and native_half_preprocess_mode != "off"
         and not processed_cache_enabled
         and batch_data is not None
-        and _can_native_half_preprocess(experiment_dataset, batch_data)
         and not materialize_projection_abs2
         and not debug_score_dump_filter_matches
         and debug_noise_dump_dir is None
@@ -615,17 +607,6 @@ def _local_compact_zero_posterior_rows_enabled() -> bool:
     return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_COMPACT_ZERO_POSTERIOR_ROWS", default=True)
 
 
-def _local_native_half_preprocess_mode() -> str:
-    """Return native half-preprocess mode.
-
-    ``auto`` is the default so raw real-space buckets use the same half-rFFT
-    preprocessing that big-JIT requires. Explicit off still forces the older
-    full-image preprocessing path, which also disables big-JIT for affected buckets.
-    """
-
-    return parse_env_auto_mode("RECOVAR_RELION_EXACT_LOCAL_NATIVE_HALF_PREPROCESS", default="auto")
-
-
 def _local_combined_masked_preprocess_enabled() -> bool:
     return parse_env_bool("RECOVAR_RELION_EXACT_LOCAL_COMBINED_MASKED_PREPROCESS", default=False)
 
@@ -699,21 +680,17 @@ def _build_processed_half_cache(
     if not can_cache:
         return None, None, False
 
-    config = None
-    if getattr(experiment_dataset, "process_images_half", None) is None:
-        config = ForwardModelConfig.from_dataset(
-            experiment_dataset,
-            disc_type="linear_interp",
-            process_fn=experiment_dataset.process_images,
-        )
     score_half = process_half_image(
         experiment_dataset,
         raw_for_processing,
-        config,
         score_with_masked_images,
     )
     if score_with_masked_images:
-        recon_half = process_half_image(experiment_dataset, raw_for_processing, config, False)
+        recon_half = process_half_image(
+            experiment_dataset,
+            raw_for_processing,
+            False,
+        )
     else:
         recon_half = score_half
 
@@ -765,12 +742,6 @@ def _reorder_bucket_to_indices(bucket: LocalBucketSpec, returned_indices: np.nda
     )
 
 
-def _use_native_half_preprocess(native_half_preprocess_mode: str, experiment_dataset, batch) -> bool:
-    if native_half_preprocess_mode == "off":
-        return False
-    return _can_native_half_preprocess(experiment_dataset, batch)
-
-
 def _prepare_local_exact_bucket(
     experiment_dataset,
     batch,
@@ -789,7 +760,6 @@ def _prepare_local_exact_bucket(
     real_space_pre_shift_applied_cache: bool = False,
     timer: dict[str, float] | None = None,
     synchronize_profile: bool = False,
-    native_half_preprocess: bool = False,
     combined_masked_preprocess: bool = False,
 ):
     """Prepare score, reconstruction, and noise inputs for one local bucket.
@@ -831,9 +801,7 @@ def _prepare_local_exact_bucket(
         return process_half_image(
             experiment_dataset,
             batch,
-            config,
             apply_image_mask,
-            native_half_preprocess=native_half_preprocess,
         )
 
     ctf_t0 = time.time()
@@ -849,7 +817,6 @@ def _prepare_local_exact_bucket(
         combined_masked_preprocess
         and score_with_masked_images
         and not using_processed_cache
-        and not native_half_preprocess
     ):
         combined_t0 = time.time()
         combined_halves = _try_process_masked_and_unmasked_half_together(experiment_dataset, batch)
@@ -1207,8 +1174,6 @@ def run_local_em_exact(
     batch_backproject_enabled = _local_batch_backproject_enabled()
     big_jit_enabled = _local_big_jit_enabled()
     compact_zero_posterior_rows = _local_compact_zero_posterior_rows_enabled()
-    native_half_preprocess_mode = _local_native_half_preprocess_mode()
-    native_half_preprocess_used = False
     combined_masked_preprocess = _local_combined_masked_preprocess_enabled()
     default_fused_score_mstep = (
         (max_significants is None or int(max_significants) <= 0)
@@ -1364,16 +1329,13 @@ def run_local_em_exact(
         ## TODO: THIS IS INSANE BRANCHING LOGIC. HOW MANY OF THESE ARE USEFU?  CAN WE DELETE SOME/MANY OF THESE FLAGS?
         can_use_big_jit_bucket = _can_use_local_big_jit_bucket(
             big_jit_enabled=big_jit_enabled,
-            native_half_preprocess_mode=native_half_preprocess_mode,
             processed_cache_enabled=processed_cache_enabled,
             batch_data=batch_data,
-            experiment_dataset=experiment_dataset,
             materialize_projection_abs2=materialize_projection_abs2,
             debug_score_dump_filter_matches=debug_score_dump_filter_matches,
             debug_noise_dump_dir=debug_noise_dump_dir,
         )
         if can_use_big_jit_bucket:
-            native_half_preprocess_used = True
             big_jit_t0 = time.time()
             unpadded_bucket = bucket
             unpadded_batch_size = batch_size
@@ -1667,12 +1629,6 @@ def run_local_em_exact(
             bucket_score_half_cache = processed_score_half_cache[bucket_image_indices]
             bucket_recon_half_cache = processed_recon_half_cache[bucket_image_indices]
 
-        native_half_preprocess = _use_native_half_preprocess(
-            native_half_preprocess_mode,
-            experiment_dataset,
-            batch_data,
-        )
-        native_half_preprocess_used = native_half_preprocess_used or native_half_preprocess
         preprocess_t0 = time.time()
         (
             shifted_half,
@@ -1699,7 +1655,6 @@ def run_local_em_exact(
             real_space_pre_shift_applied_cache=processed_cache_real_space_pre_shift_applied,
             timer=preprocess_profile if return_profile else None,
             synchronize_profile=return_profile,
-            native_half_preprocess=native_half_preprocess,
             combined_masked_preprocess=combined_masked_preprocess,
         )
         if scale_corrections is not None:
@@ -2311,8 +2266,6 @@ def run_local_em_exact(
         "big_jit_bucket_count": np.int32(big_jit_bucket_count),
         "batch_backproject_enabled": np.asarray(batch_backproject_enabled),
         "compact_zero_posterior_rows": np.asarray(compact_zero_posterior_rows),
-        "native_half_preprocess": np.asarray(native_half_preprocess_used),
-        "native_half_preprocess_mode": np.array(native_half_preprocess_mode),
         "combined_masked_preprocess": np.asarray(combined_masked_preprocess),
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
         "materialize_projection_abs2": np.asarray(materialize_projection_abs2),

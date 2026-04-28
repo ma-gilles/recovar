@@ -9,10 +9,9 @@ import jax.numpy as jnp
 import numpy as np
 
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-import recovar.core.padding as padding
-from recovar import core
-from recovar.core import mask as core_mask
 from recovar.data_io.image_backends import _apply_relion_soft_image_mask_numpy
+
+from .half_spectrum import make_half_image_weights
 
 
 @jax.jit
@@ -23,69 +22,121 @@ def apply_half_translation_phases(weighted_half, translation_phases_half):
     )
 
 
-def can_native_half_preprocess(experiment_dataset, batch) -> bool:
-    if batch is None:
-        return False
-    shape = getattr(batch, "shape", None)
-    if shape is None or len(shape) != 3:
-        return False
-    image_shape = tuple(int(v) for v in getattr(experiment_dataset, "image_shape", ()))
-    if tuple(int(v) for v in shape[-2:]) != image_shape:
-        return False
-    dtype = getattr(batch, "dtype", None)
-    return dtype is None or not np.issubdtype(np.dtype(dtype), np.complexfloating)
-
-
-def process_images_half_native(experiment_dataset, batch, apply_image_mask: bool):
-    """GPU-native half-spectrum preprocessing for real-space image batches."""
-
-    images = jnp.asarray(batch)
-    if apply_image_mask:
-        image_mask = getattr(experiment_dataset, "image_mask", None)
-        if image_mask is not None:
-            backend = image_preprocess_backend(experiment_dataset)
-            if getattr(backend, "image_mask_mode", None) == "relion_background_fill":
-                images = core_mask.apply_relion_soft_image_mask(images, image_mask)
-            else:
-                images = images * jnp.asarray(image_mask)
-    images = images * jnp.asarray(getattr(experiment_dataset, "data_multiplier", 1), dtype=images.dtype)
-    return padding.padded_rfft(images, int(experiment_dataset.grid_size), int(experiment_dataset.padding))
-
-
 def process_half_image(
     experiment_dataset,
     batch,
+    apply_image_mask: bool,
+):
+    process_half_fn = getattr(experiment_dataset, "process_images_half", None)
+    if process_half_fn is None:
+        raise ValueError("Dense EM requires experiment_dataset.process_images_half")
+    return process_half_fn(batch, apply_image_mask=apply_image_mask)
+
+
+def _dense_batch_half_inputs(
+    experiment_dataset,
+    batch,
+    ctf_params,
+    noise_variance,
+    translations,
     config,
     apply_image_mask: bool,
-    *,
-    native_half_preprocess: bool = False,
 ):
-    if native_half_preprocess:
-        return process_images_half_native(experiment_dataset, batch, apply_image_mask)
-    process_half_fn = getattr(experiment_dataset, "process_images_half", None)
-    if process_half_fn is not None:
-        return process_half_fn(batch, apply_image_mask=apply_image_mask)
-    processed_full = config.process_fn(batch, apply_image_mask=apply_image_mask)
-    return fourier_transform_utils.full_image_to_half_image(processed_full, config.image_shape)
-
-
-def translate_full_images_to_half(weighted_full, translations, image_shape, n_images: int, n_trans: int):
-    """Apply full-spectrum translation phases and return flattened half images.
-
-    TODO(DENSE_ENGINE_BOUNDARY/E003): replace this boundary with native
-    half-image preprocessing once the dense path no longer depends on
-    full-spectrum translation.
-    """
-
-    shifted = core.batch_trans_translate_images(
-        weighted_full,
-        jnp.repeat(translations[None], n_images, axis=0),
-        image_shape,
+    processed_half = process_half_image(
+        experiment_dataset,
+        batch,
+        apply_image_mask,
     )
-    return fourier_transform_utils.full_image_to_half_image(
-        shifted.reshape(n_images * n_trans, -1),
-        image_shape,
+    ctf_half = config.compute_ctf_half(ctf_params)
+    noise_variance_half = jnp.asarray(noise_variance)
+    translation_phases_half = half_translation_phase_table(translations, config.image_shape)
+    return processed_half, ctf_half, noise_variance_half, translation_phases_half
+
+
+def preprocess_batch(
+    experiment_dataset,
+    batch,
+    ctf_params,
+    noise_variance,
+    translations,
+    config,
+    score_with_masked_images=False,
+):
+    """Preprocess one dense image batch for E-step scoring."""
+
+    processed_half, ctf_half, noise_variance_half, translation_phases_half = _dense_batch_half_inputs(
+        experiment_dataset,
+        batch,
+        ctf_params,
+        noise_variance,
+        translations,
+        config,
+        score_with_masked_images,
     )
+    score_weighted_half = processed_half * ctf_half / noise_variance_half
+    shifted_half = apply_half_translation_phases(score_weighted_half, translation_phases_half)
+    half_weights = make_half_image_weights(config.image_shape)
+    batch_norm = jnp.sum(
+        (jnp.abs(processed_half) ** 2 / noise_variance_half) * half_weights[None, :],
+        axis=-1,
+        keepdims=True,
+    ).real
+    ctf2_over_nv_half = ctf_half**2 / noise_variance_half
+    return shifted_half, batch_norm, ctf2_over_nv_half
+
+
+def prepare_reconstruction_batch(
+    experiment_dataset,
+    batch,
+    ctf_params,
+    noise_variance,
+    translations,
+    config,
+):
+    """Preprocess one dense image batch for the unmasked M-step path."""
+
+    processed_half, ctf_half, noise_variance_half, translation_phases_half = _dense_batch_half_inputs(
+        experiment_dataset,
+        batch,
+        ctf_params,
+        noise_variance,
+        translations,
+        config,
+        False,
+    )
+    return apply_half_translation_phases(processed_half * ctf_half / noise_variance_half, translation_phases_half)
+
+
+def preprocess_batch_firstiter_cc(
+    experiment_dataset,
+    batch,
+    ctf_params,
+    noise_variance,
+    translations,
+    config,
+    score_with_masked_images=False,
+):
+    """Preprocess one dense image batch for RELION's iter-1 normalized CC scoring."""
+
+    processed_half, ctf_half, noise_variance_half, translation_phases_half = _dense_batch_half_inputs(
+        experiment_dataset,
+        batch,
+        ctf_params,
+        noise_variance,
+        translations,
+        config,
+        score_with_masked_images,
+    )
+    safe_ctf_half = jnp.where(jnp.abs(ctf_half) > 1e-8, 1.0 / ctf_half, 0.0)
+    shifted_half = apply_half_translation_phases(
+        processed_half * safe_ctf_half,
+        translation_phases_half,
+    )
+    half_weights = make_half_image_weights(config.image_shape)
+    image_power = jnp.sum((jnp.abs(processed_half) ** 2) * half_weights[None, :], axis=-1, keepdims=True).real
+    ctf2_half = ctf_half**2
+    ctf2_over_nv_half = ctf2_half / noise_variance_half
+    return shifted_half, image_power, ctf2_half, ctf2_over_nv_half
 
 
 def half_translation_phase_table(translations, image_shape):

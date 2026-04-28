@@ -11,6 +11,10 @@ from .helpers.backprojection import (
     batch_adjoint_slice_volume_windowed as _batch_adjoint_slice_volume_windowed,
 )
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
+from .helpers.preprocessing import (
+    prepare_reconstruction_batch as _prepare_reconstruction_batch,
+    preprocess_batch as _preprocess_batch,
+)
 from .helpers.projection import (
     compute_noise_block as _compute_noise_block,
     compute_projections_block as _compute_projections_block,

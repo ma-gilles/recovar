@@ -235,6 +235,7 @@ def _compute_significance_batched(
     from recovar.core import fourier_transform_utils
     from recovar.core.configs import ForwardModelConfig
     from recovar import core
+    from recovar.reconstruction import noise as noise_utils
     from recovar.em.dense_single_volume.em_engine import (
         _e_step_block_scores,
         _e_step_block_scores_windowed,
@@ -312,10 +313,7 @@ def _compute_significance_batched(
         _uses_relion_background_fill(experiment_dataset)
         and __import__("os").environ.get("RECOVAR_RELION_NUMPY_IMAGE_FFT") == "1"
     )
-    noise_variance_half = fourier_transform_utils.full_image_to_half_image(
-        noise_variance.reshape(1, -1),
-        image_shape,
-    ).squeeze()
+    noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
     norm_half_weights = make_half_image_weights(image_shape)
 
     def _preprocess_batch_relion_numpy(batch_data, ctf_params, batch_size):
@@ -436,13 +434,12 @@ def _compute_significance_batched(
             )
         else:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+                experiment_dataset,
                 batch_data,
                 ctf_params,
-                noise_variance,
+                noise_variance_half,
                 translations,
                 config,
-                batch_size,
-                n_trans,
                 score_with_masked_images,
             )
 

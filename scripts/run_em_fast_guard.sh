@@ -52,7 +52,6 @@ tests=(
   tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid
   tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine
   tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_default_fused_path_matches_materialized_split
-  tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_forced_native_half_preprocess_matches_legacy
   tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_big_jit_bucket_matches_legacy
 )
 
