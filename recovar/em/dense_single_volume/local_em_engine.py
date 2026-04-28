@@ -5,13 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import time
-from pathlib import Path
+from dataclasses import dataclass
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
-from recovar import utils
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.padding as padding
 from recovar.core.configs import ForwardModelConfig
@@ -35,6 +34,13 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     integer_pre_shifts_or_none,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
+from recovar.em.dense_single_volume.local_debug import (
+    maybe_write_debug_noise_component_dump,
+    maybe_write_debug_score_dump,
+    noise_split_diagnostics_requested,
+    parse_debug_noise_component_dump_request,
+    parse_debug_score_dump_request,
+)
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
@@ -63,6 +69,56 @@ from recovar.em.dense_single_volume.local_score_pass import (
 from recovar.em.dense_single_volume.shape_buckets import pad_axis
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _LocalTiming:
+    """Mutable host-side timers for one exact-local EM call."""
+
+    bucket_build_s: float = 0.0
+    batch_fetch_s: float = 0.0
+    raw_cache_build_s: float = 0.0
+    processed_cache_build_s: float = 0.0
+    preprocess_s: float = 0.0
+    projection_s: float = 0.0
+    fused_score_mstep_s: float = 0.0
+    big_jit_bucket_s: float = 0.0
+    score_s: float = 0.0
+    normalize_s: float = 0.0
+    significance_s: float = 0.0
+    postprocess_s: float = 0.0
+    mstep_s: float = 0.0
+    pack_s: float = 0.0
+    adjoint_y_s: float = 0.0
+    adjoint_ctf_s: float = 0.0
+    noise_s: float = 0.0
+    host_stats_s: float = 0.0
+    final_accumulator_s: float = 0.0
+    stats_finalize_s: float = 0.0
+
+    def accounted_s(self) -> float:
+        return (
+            self.bucket_build_s
+            + self.raw_cache_build_s
+            + self.processed_cache_build_s
+            + self.batch_fetch_s
+            + self.preprocess_s
+            + self.projection_s
+            + self.big_jit_bucket_s
+            + self.fused_score_mstep_s
+            + self.score_s
+            + self.normalize_s
+            + self.significance_s
+            + self.mstep_s
+            + self.pack_s
+            + self.adjoint_y_s
+            + self.adjoint_ctf_s
+            + self.noise_s
+            + self.postprocess_s
+            + self.host_stats_s
+            + self.final_accumulator_s
+            + self.stats_finalize_s
+        )
 
 
 def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_params):
@@ -716,351 +772,6 @@ def _build_nonzero_reconstruction_pack_indices(
     )
 
 
-def _parse_debug_int_set(value: str | None) -> set[int] | None:
-    if not value:
-        return None
-    parsed = set()
-    for token in value.replace(",", " ").split():
-        token = token.strip()
-        if token:
-            parsed.add(int(token))
-    return parsed or None
-
-
-def _parse_debug_score_dump_request():
-    """Return the optional debug score-dump request from the environment.
-
-    This is intentionally debug-only and out of the public refinement API.
-    It lets us dump a handful of current exact-local score tensors for direct
-    RELION-vs-RECOVAR parity analysis without dragging heavyweight score-dump
-    plumbing through the hot path.
-    """
-
-    dump_dir = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_DIR")
-    dump_indices = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_GLOBAL_INDICES")
-    dump_current_size = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_CURRENT_SIZE")
-    dump_iterations = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_ITERATION")
-    if not dump_dir or not dump_indices:
-        return None, set(), None, None
-    targets = _parse_debug_int_set(dump_indices) or set()
-    if not targets:
-        return None, set(), None, None
-    requested_current_sizes = _parse_debug_int_set(dump_current_size)
-    requested_iterations = _parse_debug_int_set(dump_iterations)
-    dump_path = Path(dump_dir)
-    dump_path.mkdir(parents=True, exist_ok=True)
-    return dump_path, targets, requested_current_sizes, requested_iterations
-
-
-def _parse_debug_noise_component_dump_request():
-    """Return optional per-particle local noise component dump settings."""
-
-    dump_dir = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_DIR")
-    dump_indices = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_GLOBAL_INDICES")
-    dump_current_size = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_CURRENT_SIZE")
-    dump_iterations = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_ITERATION")
-    if not dump_dir or not dump_indices:
-        return None, set(), None, None
-    targets = _parse_debug_int_set(dump_indices) or set()
-    if not targets:
-        return None, set(), None, None
-    requested_current_sizes = _parse_debug_int_set(dump_current_size)
-    requested_iterations = _parse_debug_int_set(dump_iterations)
-    dump_path = Path(dump_dir)
-    dump_path.mkdir(parents=True, exist_ok=True)
-    return dump_path, targets, requested_current_sizes, requested_iterations
-
-
-def _noise_split_diagnostics_requested() -> bool:
-    """Return whether per-shell A2/XA noise split diagnostics are needed."""
-    return bool(
-        os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
-        or os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_DIR")
-    )
-
-
-def _bin_shell_values(values, shell_indices, n_shells):
-    return np.bincount(
-        np.asarray(shell_indices, dtype=np.int64),
-        weights=np.asarray(values, dtype=np.float64),
-        minlength=int(n_shells),
-    )[: int(n_shells)]
-
-
-def _maybe_write_debug_noise_component_dump(
-    *,
-    experiment_dataset,
-    bucket,
-    support_mass,
-    processed_noise_power_half,
-    proj_for_noise,
-    proj_abs2_for_noise,
-    summed_masked_noise,
-    ctf_probs,
-    noise_variance_for_noise,
-    shell_indices_half,
-    shell_indices_noise,
-    n_shells,
-    current_size,
-    debug_iteration,
-    reconstruction_sample_mask,
-    n_significant_samples,
-    dump_dir: Path | None,
-    pending_targets: set[int],
-    requested_current_sizes: set[int] | None = None,
-    requested_iterations: set[int] | None = None,
-):
-    """Dump per-particle RELION-style noise components for selected images."""
-
-    if dump_dir is None or not pending_targets:
-        return pending_targets
-    if requested_current_sizes is not None and int(current_size or -1) not in requested_current_sizes:
-        return pending_targets
-    if requested_iterations is not None and int(debug_iteration or -1) not in requested_iterations:
-        return pending_targets
-
-    original_image_indices = np.asarray(
-        experiment_dataset.original_image_indices_from_local(bucket.image_indices),
-        dtype=np.int64,
-    )
-    target_rows = [row for row, original_idx in enumerate(original_image_indices.tolist()) if int(original_idx) in pending_targets]
-    if not target_rows:
-        return pending_targets
-
-    support_mass_np = np.asarray(support_mass, dtype=np.float64)
-    processed_noise_power_np = np.asarray(processed_noise_power_half)
-    proj_np = np.asarray(proj_for_noise)
-    proj_abs2_np = np.asarray(proj_abs2_for_noise, dtype=np.float64)
-    summed_np = np.asarray(summed_masked_noise)
-    ctf_probs_np = np.asarray(ctf_probs, dtype=np.float64)
-    noise_variance_np = np.asarray(noise_variance_for_noise, dtype=np.float64)
-    shell_indices_half_np = np.asarray(shell_indices_half, dtype=np.int64)
-    shell_indices_noise_np = np.asarray(shell_indices_noise, dtype=np.int64)
-    reconstruction_sample_mask_np = np.asarray(reconstruction_sample_mask, dtype=bool)
-    n_significant_samples_np = np.asarray(n_significant_samples, dtype=np.int32)
-
-    for row in target_rows:
-        original_idx = int(original_image_indices[row])
-        local_idx = int(bucket.image_indices[row])
-        p_img_pixel = (np.abs(processed_noise_power_np[row]) ** 2) * support_mass_np[row]
-        p_img_shells = _bin_shell_values(p_img_pixel, shell_indices_half_np, n_shells)
-
-        ctf_probs_raw = ctf_probs_np[row] * noise_variance_np[None, :]
-        a2_pixel = np.sum(proj_abs2_np[row] * ctf_probs_raw, axis=0)
-        xa_pixel = noise_variance_np * np.real(np.sum(proj_np[row] * np.conj(summed_np[row]), axis=0))
-        a2_shells = _bin_shell_values(a2_pixel, shell_indices_noise_np, n_shells)
-        xa_shells = _bin_shell_values(xa_pixel, shell_indices_noise_np, n_shells)
-        total_shells = p_img_shells + a2_shells - 2.0 * xa_shells
-
-        significant = reconstruction_sample_mask_np[row, : int(bucket.actual_rotation_counts[row]), :]
-        dump_path = dump_dir / f"local_noise_components_it{int(debug_iteration or -1):03d}_image_{original_idx}.npz"
-        np.savez_compressed(
-            dump_path,
-            selected_global_image_indices=np.array([original_idx], dtype=np.int64),
-            selected_local_image_indices=np.array([local_idx], dtype=np.int64),
-            current_size=np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
-            debug_iteration=np.array([int(debug_iteration or -1)], dtype=np.int32),
-            support_mass=np.array([support_mass_np[row]], dtype=np.float64),
-            n_significant_samples=np.array([int(n_significant_samples_np[row])], dtype=np.int32),
-            significant_count=np.array([int(np.sum(significant))], dtype=np.int32),
-            p_img_shells=p_img_shells.astype(np.float64),
-            a2_shells=a2_shells.astype(np.float64),
-            xa_shells=xa_shells.astype(np.float64),
-            total_shells=total_shells.astype(np.float64),
-            shell_indices_half=shell_indices_half_np.astype(np.int32),
-            shell_indices_noise=shell_indices_noise_np.astype(np.int32),
-        )
-        if requested_iterations is None:
-            pending_targets.remove(original_idx)
-
-    return pending_targets
-
-
-def _maybe_write_debug_score_dump(
-    *,
-    experiment_dataset,
-    local_layout,
-    bucket,
-    image_pre_shifts,
-    scores,
-    probs,
-    log_Z,
-    best_log_score,
-    max_posterior,
-    reconstruction_sample_mask,
-    reconstruction_rotation_mask,
-    n_significant_samples,
-    current_size,
-    debug_iteration,
-    shifted_score_split=None,
-    ctf2_over_nv_score=None,
-    proj_weighted=None,
-    proj_abs2_weighted=None,
-    dump_dir: Path | None,
-    pending_targets: set[int],
-    requested_current_sizes: set[int] | None = None,
-    requested_iterations: set[int] | None = None,
-):
-    """Dump one-image local score tensors for the requested original ids."""
-
-    if dump_dir is None or not pending_targets:
-        return pending_targets
-    if requested_current_sizes is not None and int(current_size or -1) not in requested_current_sizes:
-        return pending_targets
-    if requested_iterations is not None and int(debug_iteration or -1) not in requested_iterations:
-        return pending_targets
-
-    original_image_indices = np.asarray(
-        experiment_dataset.original_image_indices_from_local(bucket.image_indices),
-        dtype=np.int64,
-    )
-    target_rows = [row for row, original_idx in enumerate(original_image_indices.tolist()) if int(original_idx) in pending_targets]
-    if not target_rows:
-        return pending_targets
-
-    scores_np = np.asarray(scores, dtype=np.float32)
-    probs_np = np.asarray(probs, dtype=np.float32)
-    log_Z_np = np.asarray(log_Z, dtype=np.float32)
-    best_log_score_np = np.asarray(best_log_score, dtype=np.float32)
-    max_posterior_np = np.asarray(max_posterior, dtype=np.float32)
-    reconstruction_sample_mask_np = np.asarray(reconstruction_sample_mask, dtype=bool)
-    reconstruction_rotation_mask_np = np.asarray(reconstruction_rotation_mask, dtype=bool)
-    n_significant_samples_np = np.asarray(n_significant_samples, dtype=np.int32)
-    dump_operands = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_OPERANDS", "").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    shifted_score_np = np.asarray(shifted_score_split) if dump_operands and shifted_score_split is not None else None
-    ctf2_over_nv_np = np.asarray(ctf2_over_nv_score) if dump_operands and ctf2_over_nv_score is not None else None
-    proj_weighted_np = np.asarray(proj_weighted) if dump_operands and proj_weighted is not None else None
-    proj_abs2_weighted_np = np.asarray(proj_abs2_weighted) if dump_operands and proj_abs2_weighted is not None else None
-
-    for row in target_rows:
-        original_idx = int(original_image_indices[row])
-        local_idx = int(bucket.image_indices[row])
-        actual_count = int(bucket.actual_rotation_counts[row])
-        local_rotation_ids = np.asarray(bucket.local_rotation_ids[row, :actual_count], dtype=np.int32)
-        local_rotation_matrices = np.asarray(bucket.local_rotations[row, :actual_count], dtype=np.float32)
-        local_rotation_eulers = np.asarray(
-            utils.R_to_relion(local_rotation_matrices, degrees=True),
-            dtype=np.float32,
-        )
-        rotation_mask = np.asarray(bucket.local_rotation_mask[row, :actual_count], dtype=bool)
-        rotation_log_prior = np.asarray(bucket.local_rotation_log_prior[row, :actual_count], dtype=np.float32)
-        translation_log_prior = np.asarray(bucket.translation_log_prior[row], dtype=np.float32)
-        total_scores = np.asarray(scores_np[row, :actual_count, :], dtype=np.float32)
-        raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
-        raw_scores = np.where(rotation_mask[:, None], raw_scores, -np.inf)
-        posterior = np.asarray(probs_np[row, :actual_count, :], dtype=np.float32)
-        n_trans = int(translation_log_prior.shape[0])
-        translation_indices = np.arange(n_trans, dtype=np.int32)
-        best_score_flat = int(np.argmax(total_scores))
-        best_score_rotation_index, best_score_translation_index = np.unravel_index(
-            best_score_flat,
-            total_scores.shape,
-        )
-        best_posterior_flat = int(np.argmax(posterior))
-        best_posterior_rotation_index, best_posterior_translation_index = np.unravel_index(
-            best_posterior_flat,
-            posterior.shape,
-        )
-        reconstruction_sample_mask_row = np.asarray(
-            reconstruction_sample_mask_np[row, :actual_count, :],
-            dtype=bool,
-        )
-        reconstruction_rotation_mask_row = np.asarray(
-            reconstruction_rotation_mask_np[row, :actual_count],
-            dtype=bool,
-        )
-
-        iteration_label = int(debug_iteration or -1)
-        dump_path = dump_dir / f"local_score_it{iteration_label:03d}_image_{original_idx}.npz"
-        payload = {
-            "selected_global_image_indices": np.array([original_idx], dtype=np.int64),
-            "selected_local_image_indices": np.array([local_idx], dtype=np.int64),
-            "pass2_scores_raw": raw_scores[None, :, :],
-            "pass2_scores_total": total_scores[None, :, :],
-            "rotation_log_prior": rotation_log_prior[None, :],
-            "translation_log_prior": translation_log_prior[None, :],
-            "rotation_candidate_mask": rotation_mask[None, :],
-            "local_rotation_indices": local_rotation_ids,
-            "local_rotation_pixel_indices": (local_rotation_ids % int(local_layout.n_pixels)).astype(np.int64),
-            "local_rotation_psi_indices": (local_rotation_ids // int(local_layout.n_pixels)).astype(np.int64),
-            "local_rotation_eulers": local_rotation_eulers,
-            "local_rotation_matrices": local_rotation_matrices,
-            "translations": np.asarray(local_layout.translation_grid, dtype=np.float32),
-            "candidate_pose_rotation_indices": np.repeat(local_rotation_ids[:, None], n_trans, axis=1),
-            "candidate_pose_translation_indices": np.broadcast_to(
-                translation_indices[None, :],
-                (actual_count, n_trans),
-            ),
-            "image_pre_shift": (
-                np.asarray(image_pre_shifts[local_idx], dtype=np.float32)
-                if image_pre_shifts is not None
-                else np.array([], dtype=np.float32)
-            ),
-            "posterior": posterior[None, :, :],
-            "reconstruction_sample_mask": reconstruction_sample_mask_row[None, :, :],
-            "reconstruction_rotation_mask": reconstruction_rotation_mask_row[None, :],
-            "n_significant_samples": np.array([int(n_significant_samples_np[row])], dtype=np.int32),
-            "max_posterior": np.array([float(max_posterior_np[row])], dtype=np.float32),
-            "log_Z": np.array([float(log_Z_np[row])], dtype=np.float32),
-            "best_score": np.array([float(best_log_score_np[row])], dtype=np.float32),
-            "best_score_rotation_local_index": np.array([int(best_score_rotation_index)], dtype=np.int32),
-            "best_score_translation_index": np.array([int(best_score_translation_index)], dtype=np.int32),
-            "best_score_rotation_global_id": np.array(
-                [int(local_rotation_ids[int(best_score_rotation_index)])],
-                dtype=np.int32,
-            ),
-            "best_score_translation": np.asarray(
-                local_layout.translation_grid[
-                    int(best_score_translation_index) : int(best_score_translation_index) + 1
-                ],
-                dtype=np.float32,
-            ),
-            "best_posterior_rotation_local_index": np.array([int(best_posterior_rotation_index)], dtype=np.int32),
-            "best_posterior_translation_index": np.array([int(best_posterior_translation_index)], dtype=np.int32),
-            "best_posterior_rotation_global_id": np.array(
-                [int(local_rotation_ids[int(best_posterior_rotation_index)])],
-                dtype=np.int32,
-            ),
-            "best_posterior_translation": np.asarray(
-                local_layout.translation_grid[
-                    int(best_posterior_translation_index) : int(best_posterior_translation_index) + 1
-                ],
-                dtype=np.float32,
-            ),
-            "current_size": np.array([int(current_size) if current_size is not None else -1], dtype=np.int32),
-            "debug_iteration": np.array([iteration_label], dtype=np.int32),
-            "n_rot": np.array([actual_count], dtype=np.int32),
-            "n_trans": np.array([n_trans], dtype=np.int32),
-            "grid_n_pixels": np.array([int(local_layout.n_pixels)], dtype=np.int32),
-            "grid_n_psi": np.array([int(local_layout.n_psi)], dtype=np.int32),
-        }
-        if dump_operands:
-            if shifted_score_np is not None:
-                payload["debug_shifted_score"] = np.asarray(shifted_score_np[row], dtype=np.complex64)
-            if ctf2_over_nv_np is not None:
-                payload["debug_ctf2_over_nv"] = np.asarray(ctf2_over_nv_np[row], dtype=np.float32)
-            if proj_weighted_np is not None:
-                payload["debug_proj_weighted"] = np.asarray(
-                    proj_weighted_np[row, :actual_count, :],
-                    dtype=np.complex64,
-                )
-            if proj_abs2_weighted_np is not None:
-                payload["debug_proj_abs2_weighted"] = np.asarray(
-                    proj_abs2_weighted_np[row, :actual_count, :],
-                    dtype=np.float32,
-                )
-        np.savez_compressed(dump_path, **payload)
-        if requested_iterations is None:
-            pending_targets.remove(original_idx)
-
-    return pending_targets
-
-
 def run_local_em_exact(
     experiment_dataset,
     mean,
@@ -1138,13 +849,13 @@ def run_local_em_exact(
         debug_score_dump_targets,
         debug_score_dump_current_sizes,
         debug_score_dump_iterations,
-    ) = _parse_debug_score_dump_request()
+    ) = parse_debug_score_dump_request()
     (
         debug_noise_dump_dir,
         debug_noise_dump_targets,
         debug_noise_dump_current_sizes,
         debug_noise_dump_iterations,
-    ) = _parse_debug_noise_component_dump_request()
+    ) = parse_debug_noise_component_dump_request()
     debug_score_dump_filter_matches = (
         debug_score_dump_dir is not None
         and (
@@ -1257,7 +968,7 @@ def run_local_em_exact(
     noise_xa = None
     noise_sigma2_offset = jnp.asarray(0.0, dtype=jnp.float32)
     noise_sumw = jnp.asarray(0.0, dtype=jnp.float32)
-    return_noise_split = _noise_split_diagnostics_requested()
+    return_noise_split = noise_split_diagnostics_requested()
     if accumulate_noise:
         n_shells = image_shape[0] // 2 + 1
         shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
@@ -1281,34 +992,15 @@ def run_local_em_exact(
         and normalization_log_z is None
     )
     fused_score_mstep_enabled = _local_fused_score_mstep_enabled(default_fused_score_mstep)
-    bucket_build_time = 0.0
-    batch_fetch_time = 0.0
-    raw_cache_build_time = 0.0
+    timing = _LocalTiming()
     raw_cache_enabled = False
-    processed_cache_build_time = 0.0
     processed_cache_enabled = False
     processed_score_half_cache = None
     processed_recon_half_cache = None
     processed_cache_real_space_pre_shift_applied = False
-    preprocess_time = 0.0
     preprocess_profile = _new_local_preprocess_timer()
     transfer_profile = _new_local_transfer_timer()
-    projection_time = 0.0
-    fused_score_mstep_time = 0.0
-    big_jit_bucket_time = 0.0
     big_jit_bucket_count = 0
-    score_time = 0.0
-    normalize_time = 0.0
-    significance_time = 0.0
-    postprocess_time = 0.0
-    mstep_time = 0.0
-    pack_time = 0.0
-    adjoint_y_time = 0.0
-    adjoint_ctf_time = 0.0
-    noise_time = 0.0
-    host_stats_time = 0.0
-    final_accumulator_time = 0.0
-    stats_finalize_time = 0.0
     total_local_rotations = int(local_layout.total_local_rotations)
     collect_profile_stats = bool(return_profile)
     seen_global_rotations = (
@@ -1349,7 +1041,7 @@ def run_local_em_exact(
         rotation_block_size=rotation_block_size,
         max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
     )
-    bucket_build_time += time.time() - bucket_build_t0
+    timing.bucket_build_s += time.time() - bucket_build_t0
 
     raw_batch_cache = None
     ctf_param_cache = None
@@ -1366,7 +1058,7 @@ def run_local_em_exact(
     if raw_cache_requested or processed_cache_requested:
         raw_cache_t0 = time.time()
         raw_batch_cache, ctf_param_cache = _build_local_raw_cache(experiment_dataset, n_images)
-        raw_cache_build_time = time.time() - raw_cache_t0
+        timing.raw_cache_build_s = time.time() - raw_cache_t0
         raw_cache_enabled = bool(raw_cache_requested)
 
         if processed_cache_requested:
@@ -1386,7 +1078,7 @@ def run_local_em_exact(
                 processed_cache_enabled = True
                 if return_profile:
                     _block_until_ready(processed_score_half_cache, processed_recon_half_cache)
-            processed_cache_build_time = time.time() - processed_cache_t0
+            timing.processed_cache_build_s = time.time() - processed_cache_t0
 
         if not raw_cache_requested:
             raw_batch_cache = None
@@ -1399,7 +1091,7 @@ def run_local_em_exact(
     if return_profile:
         _block_until_ready(translation_phases_half)
     translation_phase_time = time.time() - phase_t0
-    preprocess_time += translation_phase_time
+    timing.preprocess_s += translation_phase_time
     preprocess_profile["translation_phase_s"] += translation_phase_time
 
     backend = _image_preprocess_backend(experiment_dataset)
@@ -1448,7 +1140,7 @@ def run_local_em_exact(
             batch_data = raw_batch_cache[bucket_image_indices]
             ctf_params = ctf_param_cache[bucket_image_indices]
             fetched_indices = bucket_image_indices
-        batch_fetch_time += time.time() - fetch_t0
+        timing.batch_fetch_s += time.time() - fetch_t0
         bucket = _reorder_bucket_to_indices(bucket, fetched_indices)
         batch_size = int(bucket.image_indices.shape[0])
         translation_sqdist_ang = None
@@ -1684,7 +1376,7 @@ def run_local_em_exact(
                     noise_wsum,
                     noise_img_power,
                 )
-            big_jit_bucket_time += time.time() - big_jit_t0
+            timing.big_jit_bucket_s += time.time() - big_jit_t0
             big_jit_bucket_count += 1
 
             pack_t0 = time.time()
@@ -1696,7 +1388,7 @@ def run_local_em_exact(
             )
             reconstruction_pack_mask_np = reconstruction_rotation_mask_np & local_mask_np
             reconstruction_row_count = int(np.asarray(reconstruction_row_count_jax, dtype=np.int32))
-            pack_time += time.time() - pack_t0
+            timing.pack_s += time.time() - pack_t0
 
             postprocess_t0 = time.time()
             transfer_t0 = time.time()
@@ -1758,7 +1450,7 @@ def run_local_em_exact(
                     dtype=np.float32,
                 )[best_trans_idx]
                 best_pose_rotation_ids[unpadded_bucket.image_indices] = best_rotation_ids.astype(np.int32, copy=False)
-            postprocess_time += time.time() - postprocess_t0
+            timing.postprocess_s += time.time() - postprocess_t0
 
             host_stats_t0 = time.time()
             logger.debug(
@@ -1767,7 +1459,7 @@ def run_local_em_exact(
                 int(bucket.bucket_rotation_count),
                 int(np.sum(unpadded_bucket.actual_rotation_counts)),
             )
-            host_stats_time += time.time() - host_stats_t0
+            timing.host_stats_s += time.time() - host_stats_t0
             continue
 
         bucket_score_half_cache = None
@@ -1870,7 +1562,7 @@ def run_local_em_exact(
         else:
             shifted_score = shifted_score.astype(jnp.complex64)
             ctf2_over_nv_score = ctf2_over_nv_score.astype(jnp.float32)
-        preprocess_time += time.time() - preprocess_t0
+        timing.preprocess_s += time.time() - preprocess_t0
 
         projection_t0 = time.time()
         # NOTE(local-projection-dedupe): do not retry per-bucket projection
@@ -1937,7 +1629,7 @@ def run_local_em_exact(
                 proj_abs2_weighted = proj_abs2_weighted.astype(jnp.float32)
         if return_profile:
             _block_until_ready(proj_weighted if proj_abs2_weighted is None else (proj_weighted, proj_abs2_weighted))
-        projection_time += time.time() - projection_t0
+        timing.projection_s += time.time() - projection_t0
 
         shifted_score_split = shifted_score.reshape(batch_size, n_trans, -1)
         shifted_recon_split = shifted_recon.reshape(batch_size, n_trans, -1)
@@ -1995,7 +1687,7 @@ def run_local_em_exact(
                     max_posterior,
                 )
             fused_elapsed = time.time() - fused_t0
-            fused_score_mstep_time += fused_elapsed
+            timing.fused_score_mstep_s += fused_elapsed
         else:
             score_t0 = time.time()
             if proj_abs2_weighted is None:
@@ -2034,7 +1726,7 @@ def run_local_em_exact(
                 )
             if return_profile:
                 _block_until_ready(scores)
-            score_time += time.time() - score_t0
+            timing.score_s += time.time() - score_t0
 
             normalize_t0 = time.time()
             if normalization_log_z_np is None:
@@ -2061,7 +1753,7 @@ def run_local_em_exact(
                     )
             if return_profile:
                 _block_until_ready(log_Z, probs, best_log_score, best_argmax, max_posterior)
-            normalize_time += time.time() - normalize_t0
+            timing.normalize_s += time.time() - normalize_t0
 
             significance_t0 = time.time()
             if reconstruct_significant_only:
@@ -2081,9 +1773,9 @@ def run_local_em_exact(
                 reconstruction_probs = probs
             if return_profile:
                 _block_until_ready(reconstruction_probs, reconstruction_rotation_mask, n_significant_samples)
-            significance_time += time.time() - significance_t0
+            timing.significance_s += time.time() - significance_t0
 
-            debug_score_dump_targets = _maybe_write_debug_score_dump(
+            debug_score_dump_targets = maybe_write_debug_score_dump(
                 experiment_dataset=experiment_dataset,
                 local_layout=local_layout,
                 bucket=bucket,
@@ -2115,7 +1807,7 @@ def run_local_em_exact(
             ctf_probs = compute_local_ctf_sums(reconstruction_probs, ctf2_over_nv_recon)
             if return_profile:
                 _block_until_ready(summed, ctf_probs, probs_sum_t, reconstruction_probs_sum_t)
-            mstep_time += time.time() - mstep_t0
+            timing.mstep_s += time.time() - mstep_t0
             scores = None
 
         pack_t0 = time.time()
@@ -2190,7 +1882,7 @@ def run_local_em_exact(
         packed_flat_rotations = None
         if not disable_adjoint_y or not disable_adjoint_ctf:
             packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_rotations_np))
-        pack_time += time.time() - pack_t0
+        timing.pack_s += time.time() - pack_t0
 
         if batch_backproject_enabled and not disable_adjoint_y and not disable_adjoint_ctf:
             adjoint_y_t0 = time.time()
@@ -2234,7 +1926,7 @@ def run_local_em_exact(
             Ft_ctf = updated_volumes[1]
             if return_profile:
                 _block_until_ready(Ft_y, Ft_ctf)
-            adjoint_y_time += time.time() - adjoint_y_t0
+            timing.adjoint_y_s += time.time() - adjoint_y_t0
         else:
             if not disable_adjoint_y:
                 adjoint_y_t0 = time.time()
@@ -2264,7 +1956,7 @@ def run_local_em_exact(
                     )
                 if return_profile:
                     _block_until_ready(Ft_y)
-                adjoint_y_time += time.time() - adjoint_y_t0
+                timing.adjoint_y_s += time.time() - adjoint_y_t0
 
             if not disable_adjoint_ctf:
                 adjoint_ctf_t0 = time.time()
@@ -2294,7 +1986,7 @@ def run_local_em_exact(
                     )
                 if return_profile:
                     _block_until_ready(Ft_ctf)
-                adjoint_ctf_time += time.time() - adjoint_ctf_t0
+                timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
         if accumulate_noise:
             noise_t0 = time.time()
@@ -2320,7 +2012,7 @@ def run_local_em_exact(
 
             shifted_noise_split = shifted_noise.reshape(batch_size, n_trans, -1)
             summed_masked_noise = compute_local_weighted_sums(reconstruction_probs, shifted_noise_split)
-            debug_noise_dump_targets = _maybe_write_debug_noise_component_dump(
+            debug_noise_dump_targets = maybe_write_debug_noise_component_dump(
                 experiment_dataset=experiment_dataset,
                 bucket=bucket,
                 support_mass=support_mass,
@@ -2394,7 +2086,7 @@ def run_local_em_exact(
                 noise_a2 = noise_a2 + block_a2_shells
                 noise_xa = noise_xa + block_xa_shells
             noise_sigma2_offset = noise_sigma2_offset + noise_sumw_offset
-            noise_time += time.time() - noise_t0
+            timing.noise_s += time.time() - noise_t0
 
         postprocess_t0 = time.time()
         transfer_t0 = time.time()
@@ -2462,7 +2154,7 @@ def run_local_em_exact(
                 best_trans_idx
             ]
             best_pose_rotation_ids[bucket.image_indices] = best_rotation_ids.astype(np.int32, copy=False)
-        postprocess_time += time.time() - postprocess_t0
+        timing.postprocess_s += time.time() - postprocess_t0
 
         host_stats_t0 = time.time()
         logger.debug(
@@ -2471,7 +2163,7 @@ def run_local_em_exact(
             int(bucket.bucket_rotation_count),
             int(np.sum(bucket.actual_rotation_counts)),
         )
-        host_stats_time += time.time() - host_stats_t0
+        timing.host_stats_s += time.time() - host_stats_t0
 
     final_accumulator_t0 = time.time()
     if use_native_half_volume_mstep:
@@ -2490,7 +2182,7 @@ def run_local_em_exact(
 
     if return_profile:
         _block_until_ready(Ft_y, Ft_ctf)
-    final_accumulator_time += time.time() - final_accumulator_t0
+    timing.final_accumulator_s += time.time() - final_accumulator_t0
 
     stats_finalize_t0 = time.time()
     relion_stats = RelionStats(
@@ -2513,7 +2205,7 @@ def run_local_em_exact(
             wsum_noise_a2=(noise_a2.astype(jnp.float32) if return_noise_split else None),
             wsum_noise_xa=(noise_xa.astype(jnp.float32) if return_noise_split else None),
         )
-    stats_finalize_time += time.time() - stats_finalize_t0
+    timing.stats_finalize_s += time.time() - stats_finalize_t0
 
     if (
         debug_score_dump_filter_matches
@@ -2557,13 +2249,13 @@ def run_local_em_exact(
         "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
         "materialize_projection_abs2": np.asarray(materialize_projection_abs2),
         "keep_half_volume_accumulators": np.asarray(keep_half_volume_accumulators),
-        "bucket_build_time_s": np.float64(bucket_build_time),
-        "raw_cache_build_time_s": np.float64(raw_cache_build_time),
+        "bucket_build_time_s": np.float64(timing.bucket_build_s),
+        "raw_cache_build_time_s": np.float64(timing.raw_cache_build_s),
         "raw_cache_enabled": np.asarray(raw_cache_enabled),
-        "processed_cache_build_time_s": np.float64(processed_cache_build_time),
+        "processed_cache_build_time_s": np.float64(timing.processed_cache_build_s),
         "processed_cache_enabled": np.asarray(processed_cache_enabled),
-        "batch_fetch_time_s": np.float64(batch_fetch_time),
-        "preprocess_time_s": np.float64(preprocess_time),
+        "batch_fetch_time_s": np.float64(timing.batch_fetch_s),
+        "preprocess_time_s": np.float64(timing.preprocess_s),
         "preprocess_integer_shift_s": np.float64(preprocess_profile["integer_shift_s"]),
         "preprocess_translation_phase_s": np.float64(preprocess_profile["translation_phase_s"]),
         "preprocess_processed_cache_gather_s": np.float64(preprocess_profile["processed_cache_gather_s"]),
@@ -2591,71 +2283,25 @@ def run_local_em_exact(
         ),
         "transfer_final_noise_to_host_s": np.float64(transfer_profile["final_noise_to_host_s"]),
         "transfer_total_to_host_s": np.float64(sum(transfer_profile.values())),
-        "projection_time_s": np.float64(projection_time),
-        "big_jit_bucket_s": np.float64(big_jit_bucket_time),
-        "fused_score_mstep_s": np.float64(fused_score_mstep_time),
-        "local_score_s": np.float64(score_time),
-        "local_normalize_s": np.float64(normalize_time),
-        "local_significance_s": np.float64(significance_time),
-        "local_mstep_s": np.float64(mstep_time),
-        "local_pack_s": np.float64(pack_time),
-        "local_backproject_y_s": np.float64(adjoint_y_time),
-        "local_backproject_ctf_s": np.float64(adjoint_ctf_time),
-        "local_noise_s": np.float64(noise_time),
-        "local_postprocess_s": np.float64(postprocess_time),
-        "local_host_stats_s": np.float64(host_stats_time),
-        "local_final_accumulator_s": np.float64(final_accumulator_time),
-        "local_stats_finalize_s": np.float64(stats_finalize_time),
+        "projection_time_s": np.float64(timing.projection_s),
+        "big_jit_bucket_s": np.float64(timing.big_jit_bucket_s),
+        "fused_score_mstep_s": np.float64(timing.fused_score_mstep_s),
+        "local_score_s": np.float64(timing.score_s),
+        "local_normalize_s": np.float64(timing.normalize_s),
+        "local_significance_s": np.float64(timing.significance_s),
+        "local_mstep_s": np.float64(timing.mstep_s),
+        "local_pack_s": np.float64(timing.pack_s),
+        "local_backproject_y_s": np.float64(timing.adjoint_y_s),
+        "local_backproject_ctf_s": np.float64(timing.adjoint_ctf_s),
+        "local_noise_s": np.float64(timing.noise_s),
+        "local_postprocess_s": np.float64(timing.postprocess_s),
+        "local_host_stats_s": np.float64(timing.host_stats_s),
+        "local_final_accumulator_s": np.float64(timing.final_accumulator_s),
+        "local_stats_finalize_s": np.float64(timing.stats_finalize_s),
         "em_time_s": np.float64(total_wall_time),
-        "accounted_em_time_s": np.float64(
-            bucket_build_time
-            + raw_cache_build_time
-            + processed_cache_build_time
-            + batch_fetch_time
-            + preprocess_time
-            + projection_time
-            + big_jit_bucket_time
-            + fused_score_mstep_time
-            + score_time
-            + normalize_time
-            + significance_time
-            + mstep_time
-            + pack_time
-            + adjoint_y_time
-            + adjoint_ctf_time
-            + noise_time
-            + postprocess_time
-            + host_stats_time
-            + final_accumulator_time
-            + stats_finalize_time
-        ),
+        "accounted_em_time_s": np.float64(timing.accounted_s()),
         "unattributed_em_time_s": np.float64(
-            max(
-                total_wall_time
-                - (
-                    bucket_build_time
-                    + raw_cache_build_time
-                    + processed_cache_build_time
-                    + batch_fetch_time
-                    + preprocess_time
-                    + projection_time
-                    + big_jit_bucket_time
-                    + fused_score_mstep_time
-                    + score_time
-                    + normalize_time
-                    + significance_time
-                    + mstep_time
-                    + pack_time
-                    + adjoint_y_time
-                    + adjoint_ctf_time
-                    + noise_time
-                    + postprocess_time
-                    + host_stats_time
-                    + final_accumulator_time
-                    + stats_finalize_time
-                ),
-                0.0,
-            )
+            max(total_wall_time - timing.accounted_s(), 0.0)
         ),
         "n_chunks": np.int32(n_chunks),
         "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),

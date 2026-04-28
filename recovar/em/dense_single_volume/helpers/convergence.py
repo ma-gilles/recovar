@@ -236,40 +236,6 @@ class RefinementState:
         """True when HEALPix order is high enough for local search."""
         return self.healpix_order >= LOCAL_SEARCH_HEALPIX_ORDER
 
-    def crowther_angle_step_degrees(self) -> float:
-        """Resolution-driven angular step from RELION's Crowther formula.
-
-        Mirrors RELION ``ml_optimiser.cpp:9778``::
-
-            int nr_ang_steps = CEIL(PI * particle_diameter * mymodel.current_resolution)
-            myresol_angstep = 360. / nr_ang_steps
-
-        ``mymodel.current_resolution`` is in 1/Å, so
-
-            nr_ang_steps = ceil(pi * particle_diameter[Å] / resolution[Å])
-
-        Returns ``inf`` when ``particle_diameter_angstrom`` or
-        ``current_resolution`` are unset, so callers can fall back to the
-        legacy "always allow refinement" behavior.
-
-        Used as a per-iter proxy for ``acc_rot``: any angular step finer
-        than ``0.75 * crowther_step`` is finer than the resolution-driven
-        sampling requirement, so further bumping is unlikely to improve
-        anything.  This matches RELION's "stop when old_step <
-        0.75 * acc_rot" check (``ml_optimiser.cpp:9817``) for the cases
-        where the proper per-particle perturbation acc_rot is dominated
-        by the resolution limit (which is most cases at low/mid res).
-        """
-        pd = float(self.particle_diameter_angstrom)
-        res = float(self.current_resolution)
-        if pd <= 0.0 or not np.isfinite(res) or res <= 0.0:
-            return float("inf")
-        nr_ang_steps = int(np.ceil(np.pi * pd / res))
-        if nr_ang_steps <= 0:
-            return float("inf")
-        return 360.0 / float(nr_ang_steps)
-
-
 # ---------------------------------------------------------------------------
 # Assignment change tracking
 # ---------------------------------------------------------------------------

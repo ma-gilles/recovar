@@ -31,13 +31,13 @@ from recovar.em.dense_single_volume.local_backprojection import (
 )
 from recovar.em.dense_single_volume.local_em_engine import (
     _fetch_indexed_batch,
-    _maybe_write_debug_score_dump,
     _pad_local_big_jit_image_axis,
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
     _try_process_masked_and_unmasked_half_together,
     run_local_em_exact,
 )
+from recovar.em.dense_single_volume.local_debug import maybe_write_debug_score_dump
 from recovar.em.dense_single_volume.local_layout import (
     LocalBucketSpec,
     LocalHypothesisLayout,
@@ -610,7 +610,7 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
         translation_log_prior=np.zeros((1, 3), dtype=np.float32),
     )
     def write_dump(*, current_size):
-        return _maybe_write_debug_score_dump(
+        return maybe_write_debug_score_dump(
             experiment_dataset=_Dataset(),
             local_layout=layout,
             bucket=bucket,

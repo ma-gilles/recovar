@@ -38,6 +38,7 @@ import logging
 import os
 import pathlib
 import time
+from dataclasses import dataclass
 from functools import partial
 
 import jax
@@ -146,6 +147,74 @@ def _block_until_ready(*values):
     for value in values:
         if value is not None:
             jax.block_until_ready(value)
+
+
+@dataclass
+class _DenseTiming:
+    """Mutable host-side timers for one dense EM call."""
+
+    batch_fetch_s: float = 0.0
+    preprocess_s: float = 0.0
+    score_prep_s: float = 0.0
+    pass1_projection_s: float = 0.0
+    pass1_score_s: float = 0.0
+    pass1_postprocess_s: float = 0.0
+    pass1_logsumexp_s: float = 0.0
+    pass2_skipmask_s: float = 0.0
+    pass2_projection_s: float = 0.0
+    pass2_score_s: float = 0.0
+    pass2_postprocess_s: float = 0.0
+    mstep_s: float = 0.0
+    window_scatter_s: float = 0.0
+    adjoint_y_s: float = 0.0
+    adjoint_ctf_s: float = 0.0
+    noise_s: float = 0.0
+    assignment_s: float = 0.0
+    stats_finalize_s: float = 0.0
+    host_stats_s: float = 0.0
+    solve_s: float = 0.0
+
+    def accounted_s(self) -> float:
+        return (
+            self.batch_fetch_s
+            + self.preprocess_s
+            + self.score_prep_s
+            + self.pass1_projection_s
+            + self.pass1_score_s
+            + self.pass1_postprocess_s
+            + self.pass1_logsumexp_s
+            + self.pass2_skipmask_s
+            + self.pass2_projection_s
+            + self.pass2_score_s
+            + self.pass2_postprocess_s
+            + self.mstep_s
+            + self.window_scatter_s
+            + self.adjoint_y_s
+            + self.adjoint_ctf_s
+            + self.noise_s
+            + self.assignment_s
+            + self.stats_finalize_s
+            + self.host_stats_s
+            + self.solve_s
+        )
+
+
+@dataclass
+class _SparsePass2Profile:
+    """Sparse pass-2 counters for profiling and log summaries."""
+
+    log_threshold: float = float(np.log(1e-6))
+    total_blocks: int = 0
+    skipped_blocks: int = 0
+    omitted_mass_upper_sum: float = 0.0
+    omitted_mass_upper_max: float = 0.0
+    omitted_mass_upper_image_count: int = 0
+
+    @property
+    def omitted_mass_upper_mean(self) -> float:
+        if self.omitted_mass_upper_image_count == 0:
+            return 0.0
+        return self.omitted_mass_upper_sum / self.omitted_mass_upper_image_count
 
 
 def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int):
@@ -1168,33 +1237,9 @@ def run_em(
     else:
         rotations_padded = rotations
 
-    batch_fetch_time = 0.0
-    preprocess_time = 0.0
-    score_prep_time = 0.0
-    pass1_projection_time = 0.0
-    pass1_score_time = 0.0
-    pass1_postprocess_time = 0.0
-    pass1_logsumexp_time = 0.0
-    pass2_skipmask_time = 0.0
-    pass2_projection_time = 0.0
-    pass2_score_time = 0.0
-    pass2_postprocess_time = 0.0
-    mstep_time = 0.0
-    window_scatter_time = 0.0
-    adjoint_y_time = 0.0
-    adjoint_ctf_time = 0.0
-    noise_time = 0.0
-    assignment_time = 0.0
-    stats_finalize_time = 0.0
-    host_stats_time = 0.0
-    solve_time = 0.0
+    timing = _DenseTiming()
     sync_timers = bool(return_profile)
-    sparse_pass2_log_threshold = float(np.log(1e-6))
-    sparse_pass2_total_blocks = 0
-    sparse_pass2_skipped_blocks = 0
-    sparse_pass2_omitted_mass_upper_total = 0.0
-    sparse_pass2_omitted_mass_upper_max = 0.0
-    sparse_pass2_omitted_mass_upper_image_count = 0
+    sparse_profile = _SparsePass2Profile()
 
     # Prepare per-rotation log-prior (pad to match rotations_padded)
     per_image_log_prior = False
@@ -1389,7 +1434,6 @@ def run_em(
             shell_indices_noise = shell_indices_half[recon_window_indices]
         else:
             shell_indices_noise = shell_indices_half
-        # noise_variance in half-spectrum layout
         noise_variance_half = fourier_transform_utils.full_image_to_half_image(
             noise_variance.reshape(1, -1),
             image_shape,
@@ -1398,11 +1442,11 @@ def run_em(
             noise_variance_windowed = noise_variance_half[recon_window_indices]
         else:
             noise_variance_windowed = noise_variance_half
-        ## TODO: is this just here for DEBUGGING? IF SO WE NEED TO CLEAN IT UP, THE NON-DEBUGGING SHOULDNT HAVE A BUNCH OF EXTRA COMPUTE/MEMORY FOR TERMS THAT ARE USELESS IF WE'RE NOT IN DEBUGGING. ESEPCIALLY IF IT INVOLVES CPU<-> GPU TRANSFERS.
         noise_wsum = np.zeros(n_shells, dtype=np.float64)
         noise_img_power = np.zeros(n_shells, dtype=np.float64)
-        noise_a2 = np.zeros(n_shells, dtype=np.float64)
-        noise_xa = np.zeros(n_shells, dtype=np.float64)
+        if return_noise_split:
+            noise_a2 = np.zeros(n_shells, dtype=np.float64)
+            noise_xa = np.zeros(n_shells, dtype=np.float64)
     dense_big_jit_shell_indices_half = (
         shell_indices_half if accumulate_noise else make_shell_indices_half(image_shape)
     )
@@ -1417,16 +1461,14 @@ def run_em(
         indices=image_indices,
         by_image=False,
     )
-    ##TODO: WE NEED TO GIVE THIS PATH THE SAME TREAMENT AS THE LOCAL_EM_ENGINE... USE A BIG_JIT FUNCTION AND PUT AS MUCH IN IT AS POSSIBLE.
-    ## ALSO THERE IS SO MUCH BRANCHING WE NEED TO GET RID OFF.
     while True:
         batch_fetch_t0 = time.time()
         try:
             batch_data, _, _, ctf_params, _, _, indices = next(batch_iter)
         except StopIteration:
-            batch_fetch_time += time.time() - batch_fetch_t0
+            timing.batch_fetch_s += time.time() - batch_fetch_t0
             break
-        batch_fetch_time += time.time() - batch_fetch_t0
+        timing.batch_fetch_s += time.time() - batch_fetch_t0
         actual_batch_size = len(indices)
         batch_indices_np = np.asarray(indices)
         end_idx = start_idx + actual_batch_size
@@ -1511,7 +1553,7 @@ def run_em(
         if sync_timers:
             _block_until_ready(shifted_half, shifted_recon_half)
 
-        preprocess_time += time.time() - preprocess_t0
+        timing.preprocess_s += time.time() - preprocess_t0
 
         score_prep_t0 = time.time()
         if scale_corrections is not None:
@@ -1722,7 +1764,7 @@ def run_em(
             if accumulate_noise:
                 ready_values.append(shifted_masked_for_noise)
             _block_until_ready(*ready_values)
-        score_prep_time += time.time() - score_prep_t0
+        timing.score_prep_s += time.time() - score_prep_t0
 
         dense_big_jit_window_indices = (
             window_indices if window_indices is not None else jnp.arange(n_half, dtype=jnp.int32)
@@ -1824,7 +1866,7 @@ def run_em(
                     block_pose_counts.append(actual_rot * n_trans)
                 if sync_timers:
                     _block_until_ready(max_s, sum_exp)
-                pass1_score_time += time.time() - score_t0
+                timing.pass1_score_s += time.time() - score_t0
                 continue
 
             proj_t0 = time.time()
@@ -1838,7 +1880,7 @@ def run_em(
             )
             if sync_timers:
                 _block_until_ready(proj_half_b, proj_abs2_half_b)
-            pass1_projection_time += time.time() - proj_t0
+            timing.pass1_projection_s += time.time() - proj_t0
             if projection_cache is not None:
                 projection_cache.append((proj_half_b, proj_abs2_half_b))
 
@@ -1916,7 +1958,7 @@ def run_em(
 
             if sync_timers:
                 _block_until_ready(scores)
-            pass1_score_time += time.time() - score_t0
+            timing.pass1_score_s += time.time() - score_t0
 
             # Pre-prior per-pose dump for one targeted particle (env-gated debug).
             # When RECOVAR_DEBUG_PER_POSE_DUMP_PREPRIOR=1, dump scores BEFORE
@@ -2003,7 +2045,7 @@ def run_em(
 
             if sync_timers:
                 _block_until_ready(scores)
-            pass1_postprocess_time += time.time() - pass1_postprocess_t0
+            timing.pass1_postprocess_s += time.time() - pass1_postprocess_t0
 
             if relion_firstiter_winner_take_all:
                 block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
@@ -2016,7 +2058,7 @@ def run_em(
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
             if sync_timers:
                 _block_until_ready(max_s, sum_exp)
-            pass1_logsumexp_time += time.time() - logsumexp_t0
+            timing.pass1_logsumexp_s += time.time() - logsumexp_t0
 
         log_Z = max_s + jnp.log(sum_exp)  # (batch_size,)
         skip_pass2_block = np.zeros(n_blocks, dtype=bool)
@@ -2030,13 +2072,13 @@ def run_em(
                 block_log_pose_counts + block_max_matrix.astype(jnp.float64) - log_Z[None, :].astype(jnp.float64),
                 jnp.inf,
             )
-            skip_candidate = (log_omitted_mass_upper < sparse_pass2_log_threshold) | (~valid_image_mask[None, :])
+            skip_candidate = (log_omitted_mass_upper < sparse_profile.log_threshold) | (~valid_image_mask[None, :])
             skip_pass2_block = np.asarray(
                 jnp.all(skip_candidate, axis=1),
                 dtype=bool,
             )
-            sparse_pass2_total_blocks += int(n_blocks)
-            sparse_pass2_skipped_blocks += int(skip_pass2_block.sum())
+            sparse_profile.total_blocks += int(n_blocks)
+            sparse_profile.skipped_blocks += int(skip_pass2_block.sum())
             if np.any(skip_pass2_block):
                 skipped_mass_upper = jnp.sum(
                     jnp.where(
@@ -2047,15 +2089,15 @@ def run_em(
                     axis=0,
                 )
                 skipped_mass_upper_np = np.asarray(skipped_mass_upper, dtype=np.float64)
-                sparse_pass2_omitted_mass_upper_total += float(np.sum(skipped_mass_upper_np))
-                sparse_pass2_omitted_mass_upper_max = max(
-                    sparse_pass2_omitted_mass_upper_max,
+                sparse_profile.omitted_mass_upper_sum += float(np.sum(skipped_mass_upper_np))
+                sparse_profile.omitted_mass_upper_max = max(
+                    sparse_profile.omitted_mass_upper_max,
                     float(np.max(skipped_mass_upper_np)),
                 )
-                sparse_pass2_omitted_mass_upper_image_count += int(actual_batch_size)
+                sparse_profile.omitted_mass_upper_image_count += int(actual_batch_size)
             if sync_timers:
                 _block_until_ready(block_max_matrix, log_omitted_mass_upper)
-        pass2_skipmask_time += time.time() - pass2_skipmask_t0
+        timing.pass2_skipmask_s += time.time() - pass2_skipmask_t0
 
         # -- PASS 2: recompute scores, normalize, accumulate M-step --
         if relion_firstiter_winner_take_all:
@@ -2091,7 +2133,7 @@ def run_em(
                         dense_result.block_argmax,
                         dense_result.probs_sum_t,
                     )
-                pass2_score_time += time.time() - score_t0
+                timing.pass2_score_s += time.time() - score_t0
 
                 assignment_t0 = time.time()
                 improved = dense_result.block_best > best_score
@@ -2103,7 +2145,7 @@ def run_em(
                 )
                 if sync_timers:
                     _block_until_ready(best_score, best_argmax)
-                assignment_time += time.time() - assignment_t0
+                timing.assignment_s += time.time() - assignment_t0
 
                 if return_stats:
                     host_stats_t0 = time.time()
@@ -2114,7 +2156,7 @@ def run_em(
                             dtype=np.float64,
                         )
                         rotation_posterior_sums[r0 : r0 + actual_rot] += block_rotation_sums
-                    host_stats_time += time.time() - host_stats_t0
+                    timing.host_stats_s += time.time() - host_stats_t0
                 continue
 
             if projection_cache is not None:
@@ -2129,7 +2171,7 @@ def run_em(
                     disc_type,
                     **projection_kwargs,
                 )
-                pass2_projection_time += time.time() - proj_t0
+                timing.pass2_projection_s += time.time() - proj_t0
 
             score_t0 = time.time()
             if use_window:
@@ -2204,7 +2246,7 @@ def run_em(
 
             if sync_timers:
                 _block_until_ready(scores)
-            pass2_score_time += time.time() - score_t0
+            timing.pass2_score_s += time.time() - score_t0
 
             pass2_postprocess_t0 = time.time()
             if relion_firstiter_score_mode == "gaussian":
@@ -2234,7 +2276,7 @@ def run_em(
                 scores = jnp.where(mask[None, :, None], scores, -jnp.inf)
             if sync_timers:
                 _block_until_ready(scores)
-            pass2_postprocess_time += time.time() - pass2_postprocess_t0
+            timing.pass2_postprocess_s += time.time() - pass2_postprocess_t0
 
             if use_window:
                 # Windowed M-step: GEMM at reduced dimension, then scatter back
@@ -2284,7 +2326,7 @@ def run_em(
                         summed_windowed,
                         ctf_probs_windowed,
                     )
-                mstep_time += time.time() - mstep_t0
+                timing.mstep_s += time.time() - mstep_t0
 
                 if not disable_adjoint_y:
                     adjoint_y_t0 = time.time()
@@ -2302,7 +2344,7 @@ def run_em(
                     )
                     if sync_timers:
                         _block_until_ready(Ft_y)
-                    adjoint_y_time += time.time() - adjoint_y_t0
+                    timing.adjoint_y_s += time.time() - adjoint_y_t0
 
                 if not disable_adjoint_ctf:
                     adjoint_ctf_t0 = time.time()
@@ -2320,7 +2362,7 @@ def run_em(
                     )
                     if sync_timers:
                         _block_until_ready(Ft_ctf)
-                    adjoint_ctf_time += time.time() - adjoint_ctf_t0
+                    timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
             else:
                 # Non-windowed path: use with-DC ctf2 for M-step accumulation
                 mstep_t0 = time.time()
@@ -2362,7 +2404,7 @@ def run_em(
                         summed_half_block,
                         ctf_probs_half_block,
                     )
-                mstep_time += time.time() - mstep_t0
+                timing.mstep_s += time.time() - mstep_t0
 
                 if not disable_adjoint_y:
                     adjoint_y_t0 = time.time()
@@ -2377,7 +2419,7 @@ def run_em(
                     )
                     if sync_timers:
                         _block_until_ready(Ft_y)
-                    adjoint_y_time += time.time() - adjoint_y_t0
+                    timing.adjoint_y_s += time.time() - adjoint_y_t0
 
                 if not disable_adjoint_ctf:
                     adjoint_ctf_t0 = time.time()
@@ -2392,7 +2434,7 @@ def run_em(
                     )
                     if sync_timers:
                         _block_until_ready(Ft_ctf)
-                    adjoint_ctf_time += time.time() - adjoint_ctf_t0
+                    timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
 
             # -- Noise accumulation for this rotation block --
             if accumulate_noise:
@@ -2459,7 +2501,7 @@ def run_em(
                 if return_noise_split:
                     noise_a2 += np.asarray(block_a2_shells, dtype=np.float64)
                     noise_xa += np.asarray(block_xa_shells, dtype=np.float64)
-                noise_time += time.time() - noise_t0
+                timing.noise_s += time.time() - noise_t0
 
             if not relion_firstiter_winner_take_all:
                 assignment_t0 = time.time()
@@ -2468,7 +2510,7 @@ def run_em(
                 best_argmax = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax)
                 if sync_timers:
                     _block_until_ready(best_score, best_argmax)
-                assignment_time += time.time() - assignment_t0
+                timing.assignment_s += time.time() - assignment_t0
 
             if return_stats:
                 host_stats_t0 = time.time()
@@ -2479,7 +2521,7 @@ def run_em(
                         dtype=np.float64,
                     )
                     rotation_posterior_sums[r0 : r0 + actual_rot] += block_rotation_sums
-                host_stats_time += time.time() - host_stats_t0
+                timing.host_stats_s += time.time() - host_stats_t0
 
         if dense_noise_component_acc:
             for global_idx, state in dense_noise_component_acc.items():
@@ -2526,7 +2568,7 @@ def run_em(
             )
             if sync_timers:
                 _block_until_ready(log_Z, best_score, pmax)
-            stats_finalize_time += time.time() - stats_finalize_t0
+            timing.stats_finalize_s += time.time() - stats_finalize_t0
 
         hard_assignment[start_idx:end_idx] = np.asarray(best_argmax[:actual_batch_size])
         start_idx = end_idx
@@ -2547,7 +2589,7 @@ def run_em(
         ).reshape(-1)
         if sync_timers:
             _block_until_ready(new_mean)
-        solve_time += time.time() - solve_t0
+        timing.solve_s += time.time() - solve_t0
 
     noise_stats = None
     if accumulate_noise:
@@ -2593,21 +2635,16 @@ def run_em(
             wsum_noise_xa=(jnp.asarray(noise_xa, dtype=jnp.float32) if return_noise_split else None),
         )
 
-    if sparse_pass2 and sparse_pass2_total_blocks:
-        omitted_mass_upper_mean = (
-            sparse_pass2_omitted_mass_upper_total / sparse_pass2_omitted_mass_upper_image_count
-            if sparse_pass2_omitted_mass_upper_image_count
-            else 0.0
-        )
+    if sparse_pass2 and sparse_profile.total_blocks:
         logger.info(
             "Sparse pass2 skipped %d / %d pass2 rotation blocks (%.1f%% of pass2 blocks); "
             "omitted posterior mass upper bound mean=%.3e max=%.3e sum=%.3e",
-            sparse_pass2_skipped_blocks,
-            sparse_pass2_total_blocks,
-            100.0 * sparse_pass2_skipped_blocks / sparse_pass2_total_blocks,
-            omitted_mass_upper_mean,
-            sparse_pass2_omitted_mass_upper_max,
-            sparse_pass2_omitted_mass_upper_total,
+            sparse_profile.skipped_blocks,
+            sparse_profile.total_blocks,
+            100.0 * sparse_profile.skipped_blocks / sparse_profile.total_blocks,
+            sparse_profile.omitted_mass_upper_mean,
+            sparse_profile.omitted_mass_upper_max,
+            sparse_profile.omitted_mass_upper_sum,
         )
 
     if return_stats:
@@ -2618,7 +2655,7 @@ def run_em(
             max_posterior_per_image=jnp.asarray(max_posterior_per_image),
             rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
         )
-        host_stats_time += time.time() - host_stats_t0
+        timing.host_stats_s += time.time() - host_stats_t0
     if return_profile:
         ready_values = [new_mean, Ft_y, Ft_ctf]
         if noise_stats is not None:
@@ -2634,54 +2671,28 @@ def run_em(
             )
         _block_until_ready(*ready_values)
         total_wall_time = time.time() - overall_t0
-        omitted_mass_upper_mean = (
-            sparse_pass2_omitted_mass_upper_total / sparse_pass2_omitted_mass_upper_image_count
-            if sparse_pass2_omitted_mass_upper_image_count
-            else 0.0
-        )
-        attributed_time = (
-            batch_fetch_time
-            + preprocess_time
-            + score_prep_time
-            + pass1_projection_time
-            + pass1_score_time
-            + pass1_postprocess_time
-            + pass1_logsumexp_time
-            + pass2_skipmask_time
-            + pass2_projection_time
-            + pass2_score_time
-            + pass2_postprocess_time
-            + mstep_time
-            + window_scatter_time
-            + adjoint_y_time
-            + adjoint_ctf_time
-            + noise_time
-            + assignment_time
-            + stats_finalize_time
-            + host_stats_time
-            + solve_time
-        )
+        attributed_time = timing.accounted_s()
         em_profile = EMProfileStats(
-            batch_fetch_s=float(batch_fetch_time),
-            preprocess_s=float(preprocess_time),
-            score_prep_s=float(score_prep_time),
-            pass1_projection_s=float(pass1_projection_time),
-            pass1_score_s=float(pass1_score_time),
-            pass1_postprocess_s=float(pass1_postprocess_time),
-            pass1_logsumexp_s=float(pass1_logsumexp_time),
-            pass2_skipmask_s=float(pass2_skipmask_time),
-            pass2_projection_s=float(pass2_projection_time),
-            pass2_score_s=float(pass2_score_time),
-            pass2_postprocess_s=float(pass2_postprocess_time),
-            mstep_s=float(mstep_time),
-            window_scatter_s=float(window_scatter_time),
-            adjoint_y_s=float(adjoint_y_time),
-            adjoint_ctf_s=float(adjoint_ctf_time),
-            noise_s=float(noise_time),
-            assignment_s=float(assignment_time),
-            stats_finalize_s=float(stats_finalize_time),
-            host_stats_s=float(host_stats_time),
-            solve_s=float(solve_time),
+            batch_fetch_s=float(timing.batch_fetch_s),
+            preprocess_s=float(timing.preprocess_s),
+            score_prep_s=float(timing.score_prep_s),
+            pass1_projection_s=float(timing.pass1_projection_s),
+            pass1_score_s=float(timing.pass1_score_s),
+            pass1_postprocess_s=float(timing.pass1_postprocess_s),
+            pass1_logsumexp_s=float(timing.pass1_logsumexp_s),
+            pass2_skipmask_s=float(timing.pass2_skipmask_s),
+            pass2_projection_s=float(timing.pass2_projection_s),
+            pass2_score_s=float(timing.pass2_score_s),
+            pass2_postprocess_s=float(timing.pass2_postprocess_s),
+            mstep_s=float(timing.mstep_s),
+            window_scatter_s=float(timing.window_scatter_s),
+            adjoint_y_s=float(timing.adjoint_y_s),
+            adjoint_ctf_s=float(timing.adjoint_ctf_s),
+            noise_s=float(timing.noise_s),
+            assignment_s=float(timing.assignment_s),
+            stats_finalize_s=float(timing.stats_finalize_s),
+            host_stats_s=float(timing.host_stats_s),
+            solve_s=float(timing.solve_s),
             accounted_s=float(attributed_time),
             total_wall_s=float(total_wall_time),
             unattributed_s=float(max(total_wall_time - attributed_time, 0.0)),
@@ -2693,11 +2704,11 @@ def run_em(
             n_windowed=int(n_windowed),
             use_window=bool(use_window),
             reused_pass1_projections=True,
-            sparse_pass2_total_blocks=int(sparse_pass2_total_blocks),
-            sparse_pass2_skipped_blocks=int(sparse_pass2_skipped_blocks),
-            sparse_pass2_omitted_mass_upper_mean=float(omitted_mass_upper_mean),
-            sparse_pass2_omitted_mass_upper_max=float(sparse_pass2_omitted_mass_upper_max),
-            sparse_pass2_omitted_mass_upper_sum=float(sparse_pass2_omitted_mass_upper_total),
+            sparse_pass2_total_blocks=int(sparse_profile.total_blocks),
+            sparse_pass2_skipped_blocks=int(sparse_profile.skipped_blocks),
+            sparse_pass2_omitted_mass_upper_mean=float(sparse_profile.omitted_mass_upper_mean),
+            sparse_pass2_omitted_mass_upper_max=float(sparse_profile.omitted_mass_upper_max),
+            sparse_pass2_omitted_mass_upper_sum=float(sparse_profile.omitted_mass_upper_sum),
         )
     else:
         em_profile = None

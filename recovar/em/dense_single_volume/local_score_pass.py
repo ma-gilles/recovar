@@ -330,12 +330,3 @@ def fused_score_normalize_mstep_abs2_on_demand(
         summed,
         ctf_probs,
     )
-
-
-@partial(jax.jit, static_argnums=(2,))
-def decode_local_argmax(best_argmax, bucket_rotation_count, n_trans):
-    """Decode flattened local argmax indices into rotation and translation ids."""
-
-    local_rot_idx = best_argmax // n_trans
-    trans_idx = best_argmax % n_trans
-    return local_rot_idx, trans_idx
