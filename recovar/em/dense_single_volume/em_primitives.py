@@ -8,6 +8,8 @@ the dense `run_em(...)` orchestration.
 from .em_engine import (
     _adjoint_slice_volume_half,
     _adjoint_slice_volume_windowed,
+    _batch_adjoint_slice_volume_half,
+    _batch_adjoint_slice_volume_windowed,
     _block_until_ready,
     _compute_noise_block,
     _compute_projections_block,
@@ -21,6 +23,8 @@ from .em_engine import (
 __all__ = [
     "_adjoint_slice_volume_half",
     "_adjoint_slice_volume_windowed",
+    "_batch_adjoint_slice_volume_half",
+    "_batch_adjoint_slice_volume_windowed",
     "_block_until_ready",
     "_compute_noise_block",
     "_compute_projections_block",

@@ -78,37 +78,162 @@ def _count_compile_lines(log_path):
 
 def _collect_local_profile_rows(save_intermediates_dir):
     rows = []
+    scalar_keys = [
+        "n_chunks",
+        "em_time_s",
+        "accounted_em_time_s",
+        "unattributed_em_time_s",
+        "sum_union_rows",
+        "sum_padded_rows",
+        "sum_nonzero_posterior_rows",
+        "sum_reconstruction_rows",
+        "sum_significant_samples",
+        "unique_global_rotations",
+        "unique_nonzero_global_rotations",
+        "unique_reconstruction_global_rotations",
+        "duplicate_rotation_factor",
+        "reconstruction_duplicate_rotation_factor",
+        "sum_union_row_pixels",
+        "adjoint_seconds_per_row_pixel",
+        "union_waste_fraction",
+        "padded_waste_fraction",
+        "padding_only_waste_fraction",
+        "materialize_projection_abs2",
+        "preprocess_time_s",
+        "preprocess_integer_shift_s",
+        "preprocess_translation_phase_s",
+        "preprocess_processed_cache_gather_s",
+        "preprocess_combined_process_s",
+        "preprocess_score_process_s",
+        "preprocess_recon_process_s",
+        "preprocess_ctf_s",
+        "preprocess_tile_shift_score_s",
+        "preprocess_tile_shift_recon_s",
+        "preprocess_norm_s",
+        "projection_time_s",
+        "fused_score_mstep_s",
+        "local_score_s",
+        "local_normalize_s",
+        "local_significance_s",
+        "local_mstep_s",
+        "local_pack_s",
+        "local_backproject_y_s",
+        "local_backproject_ctf_s",
+        "local_noise_s",
+        "local_postprocess_s",
+        "local_host_stats_s",
+        "local_final_accumulator_s",
+        "local_stats_finalize_s",
+        "selector_time_s",
+        "metadata_build_time_s",
+        "translation_prior_time_s",
+        "raw_cache_build_time_s",
+        "bucket_build_time_s",
+        "batch_fetch_time_s",
+        "processed_cache_build_time_s",
+        "transfer_total_to_host_s",
+        "transfer_reconstruction_mask_to_host_s",
+        "transfer_mstep_posterior_sum_to_host_s",
+        "transfer_postprocess_argmax_to_host_s",
+        "transfer_postprocess_scores_to_host_s",
+        "transfer_postprocess_posterior_to_host_s",
+        "transfer_final_noise_to_host_s",
+        "local_total_hypotheses",
+        "local_mean_rotations_per_image",
+        "local_mean_significant_samples_per_image",
+        "local_mean_reconstruction_rows_per_image",
+        "local_num_buckets",
+        "local_pad_fraction",
+        "max_hypotheses_per_microbatch",
+        "n_windowed",
+        "batch_backproject_enabled",
+        "compact_zero_posterior_rows",
+        "native_half_preprocess",
+        "native_half_preprocess_mode",
+        "combined_masked_preprocess",
+        "fused_score_mstep_enabled",
+        "raw_cache_enabled",
+        "processed_cache_enabled",
+    ]
     for npz_path in sorted(Path(save_intermediates_dir).glob("*_local_profile.npz")):
         with np.load(npz_path) as profile_npz:
             row = {"path": str(npz_path)}
-            for key in [
-                "n_chunks",
-                "em_time_s",
-                "accounted_em_time_s",
-                "unattributed_em_time_s",
-                "sum_union_rows",
-                "sum_padded_rows",
-                "sum_nonzero_posterior_rows",
-                "unique_global_rotations",
-                "unique_nonzero_global_rotations",
-                "duplicate_rotation_factor",
-                "sum_union_row_pixels",
-                "adjoint_seconds_per_row_pixel",
-                "union_waste_fraction",
-                "padded_waste_fraction",
-                "padding_only_waste_fraction",
-                "em_total_wall_s",
-                "em_accounted_s",
-                "em_unattributed_s",
-                "em_adjoint_y_s",
-                "em_adjoint_ctf_s",
-                "em_batch_fetch_s",
-            ]:
+            for key in scalar_keys:
                 if key in profile_npz:
                     value = profile_npz[key]
                     row[key] = value.item() if np.ndim(value) == 0 else np.asarray(value).tolist()
             rows.append(row)
     return rows
+
+
+def _profile_value_to_jsonable(value):
+    arr = np.asarray(value)
+    if arr.ndim == 0:
+        return arr.item()
+    return arr.tolist()
+
+
+def _collect_local_profile_history(result):
+    return [
+        {key: _profile_value_to_jsonable(value) for key, value in row.items()}
+        for row in result.get("local_profile_history", [])
+    ]
+
+
+def _summarize_local_profile_rows(rows, wall_times):
+    """Aggregate exact-local profile rows for timing ledgers."""
+    if not rows:
+        return {}
+    sum_keys = [
+        "em_time_s",
+        "accounted_em_time_s",
+        "unattributed_em_time_s",
+        "preprocess_time_s",
+        "projection_time_s",
+        "fused_score_mstep_s",
+        "local_score_s",
+        "local_normalize_s",
+        "local_significance_s",
+        "local_mstep_s",
+        "local_pack_s",
+        "local_backproject_y_s",
+        "local_backproject_ctf_s",
+        "local_noise_s",
+        "local_postprocess_s",
+        "local_host_stats_s",
+        "local_final_accumulator_s",
+        "local_stats_finalize_s",
+        "selector_time_s",
+        "raw_cache_build_time_s",
+        "bucket_build_time_s",
+        "batch_fetch_time_s",
+        "processed_cache_build_time_s",
+        "transfer_total_to_host_s",
+    ]
+    summary = {
+        "n_profile_rows": len(rows),
+        "sum_wall_times_s": float(np.sum(np.asarray(wall_times, dtype=np.float64))) if wall_times else None,
+    }
+    for key in sum_keys:
+        values = [float(row[key]) for row in rows if key in row]
+        if values:
+            summary[f"sum_{key}"] = float(np.sum(values))
+    if summary["sum_wall_times_s"] is not None and "sum_em_time_s" in summary:
+        summary["wall_minus_exact_local_s"] = float(summary["sum_wall_times_s"] - summary["sum_em_time_s"])
+    if "sum_em_time_s" in summary and "sum_accounted_em_time_s" in summary:
+        summary["exact_local_unaccounted_check_s"] = float(
+            summary["sum_em_time_s"] - summary["sum_accounted_em_time_s"]
+        )
+    for key in (
+        "native_half_preprocess",
+        "native_half_preprocess_mode",
+        "materialize_projection_abs2",
+        "fused_score_mstep_enabled",
+    ):
+        values = [row[key] for row in rows if key in row]
+        if values:
+            summary[key] = values[0]
+    return summary
 
 
 def _read_relion_pmax_column(relion_df):
@@ -245,6 +370,15 @@ def main():
         type=str,
         default=None,
         help="Optional JSON path for a machine-readable benchmark/perf ledger summary.",
+    )
+    parser.add_argument(
+        "--timing_only",
+        action="store_true",
+        help=(
+            "Run refinement and write only the benchmark ledger. Skips "
+            "diagnostic volumes, per-particle comparisons, and diff scripts so "
+            "wall time reflects refinement rather than audit I/O."
+        ),
     )
     parser.add_argument(
         "--compile_log",
@@ -828,9 +962,12 @@ def main():
     out_dir = args.output_dir or str(relion_dir.parent / "_agent_scratch" / f"{args.max_iter}iter_parity")
     os.makedirs(out_dir, exist_ok=True)
     Path(out_dir).joinpath("SAFE_TO_DELETE").touch()
-    save_intermediates_dir = args.save_intermediates_dir or os.path.join(out_dir, "intermediates")
-    os.makedirs(save_intermediates_dir, exist_ok=True)
-    print(f"  Intermediate dumps: {save_intermediates_dir}")
+    if args.timing_only and args.save_intermediates_dir is None:
+        save_intermediates_dir = None
+    else:
+        save_intermediates_dir = args.save_intermediates_dir or os.path.join(out_dir, "intermediates")
+        os.makedirs(save_intermediates_dir, exist_ok=True)
+    print(f"  Intermediate dumps: {save_intermediates_dir if save_intermediates_dir is not None else '<disabled>'}")
 
     gt_path = None
     if args.gt_volume is not None:
@@ -918,6 +1055,45 @@ def main():
         )
     else:
         print(f"\nCompleted {completed_iters} emitted iterations in {elapsed:.1f}s")
+
+    if args.timing_only:
+        ledger_path = args.benchmark_ledger_json or os.path.join(out_dir, "benchmark_ledger.json")
+        local_profile_rows = _collect_local_profile_history(result)
+        if not local_profile_rows and save_intermediates_dir is not None:
+            local_profile_rows = _collect_local_profile_rows(save_intermediates_dir)
+        wall_times = [float(x) for x in result.get("wall_times", [])]
+        ledger = {
+            "git_commit": _safe_git_commit(),
+            "python_version": platform.python_version(),
+            "platform": platform.platform(),
+            "numpy_version": np.__version__,
+            "jax_version": getattr(jax, "__version__", None),
+            "jaxlib_version": getattr(jaxlib, "__version__", None),
+            "jax_devices": [str(device) for device in jax.devices()],
+            "relion_dir": str(relion_dir),
+            "data_star": str(args.data_star),
+            "iter_start": int(args.iter),
+            "max_iter": int(args.max_iter),
+            "completed_iterations": int(completed_iters),
+            "force_max_iter_after_convergence": bool(args.force_max_iter_after_convergence),
+            "elapsed_s": float(elapsed),
+            "timing_only": True,
+            "local_search_profile_mode": args.local_search_profile,
+            "local_engine": args.local_engine,
+            "disable_adjoint_y": bool(args.disable_adjoint_y),
+            "disable_adjoint_ctf": bool(args.disable_adjoint_ctf),
+            "compile_count_from_log": _count_compile_lines(args.compile_log),
+            "wall_times_trajectory": wall_times,
+            "current_sizes": [int(x) for x in result.get("current_sizes", [])],
+            "pixel_resolutions": [float(x) for x in result.get("pixel_resolutions", [])],
+            "ave_Pmax_trajectory": [float(x) for x in result.get("ave_Pmax_trajectory", [])],
+            "local_profile_rows": local_profile_rows,
+            "local_profile_summary": _summarize_local_profile_rows(local_profile_rows, wall_times),
+        }
+        with open(ledger_path, "w", encoding="utf-8") as f:
+            json.dump(ledger, f, indent=2, sort_keys=True)
+        print(f"Saved timing-only benchmark ledger: {ledger_path}")
+        return
 
     # ---- Save results ----
     save_dict = {
@@ -1136,6 +1312,8 @@ def main():
     print(f"Saved: {npz_path}")
 
     ledger_path = args.benchmark_ledger_json or os.path.join(out_dir, "benchmark_ledger.json")
+    local_profile_rows = _collect_local_profile_rows(save_intermediates_dir)
+    wall_times = [float(x) for x in result.get("wall_times", [])]
     ledger = {
         "git_commit": _safe_git_commit(),
         "python_version": platform.python_version(),
@@ -1156,10 +1334,11 @@ def main():
         "disable_adjoint_y": bool(args.disable_adjoint_y),
         "disable_adjoint_ctf": bool(args.disable_adjoint_ctf),
         "compile_count_from_log": _count_compile_lines(args.compile_log),
-        "wall_times_trajectory": [float(x) for x in result.get("wall_times", [])],
+        "wall_times_trajectory": wall_times,
         "current_sizes": [int(x) for x in result.get("current_sizes", [])],
         "pixel_resolutions": [float(x) for x in result.get("pixel_resolutions", [])],
-        "local_profile_rows": _collect_local_profile_rows(save_intermediates_dir),
+        "local_profile_rows": local_profile_rows,
+        "local_profile_summary": _summarize_local_profile_rows(local_profile_rows, wall_times),
     }
     with open(ledger_path, "w", encoding="utf-8") as f:
         json.dump(ledger, f, indent=2, sort_keys=True)

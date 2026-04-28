@@ -470,6 +470,72 @@ def adjoint_slice_volume_indexed(
     )
 
 
+def batch_adjoint_slice_volume_indexed(
+    slices,
+    pixel_indices,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    volumes=None,
+    half_image=False,
+    half_volume=False,
+    max_r=_AUTO,
+):
+    """Batched indexed adjoint slice extraction for shared rotations."""
+    slices = jnp.asarray(slices)
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    if slices.ndim != 3:
+        raise ValueError(
+            "Expected batched indexed slices with shape "
+            f"(batch, n_images, n_pixels), got {tuple(slices.shape)}",
+        )
+    if slices.shape[-1] != pixel_indices.shape[0]:
+        raise ValueError(
+            f"Indexed slices have {slices.shape[-1]} pixels per image but pixel_indices has "
+            f"{pixel_indices.shape[0]} entries",
+        )
+
+    max_r = _resolve_max_r(max_r, image_shape)
+    order = decide_order(disc_type)
+    vol_shape = ftu.volume_shape_to_half_volume_shape(volume_shape) if half_volume else volume_shape
+    vol_flat = int(np.prod(vol_shape))
+    if volumes is None:
+        volumes = jnp.zeros((slices.shape[0], vol_flat), dtype=slices.dtype)
+
+    if _use_cuda_backproject(order):
+        from recovar.cuda_backproject import batch_backproject_indexed
+
+        out_dtype = jnp.result_type(slices, volumes)
+        return batch_backproject_indexed(
+            volumes.astype(out_dtype),
+            slices.astype(out_dtype),
+            pixel_indices,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            order=order,
+            half_volume=half_volume,
+            half_image=half_image,
+            max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+        )
+
+    return jax.vmap(
+        lambda sl, vol: adjoint_slice_volume_indexed(
+            sl,
+            pixel_indices,
+            rotation_matrices,
+            image_shape,
+            volume_shape,
+            disc_type,
+            volume=vol,
+            half_image=half_image,
+            half_volume=half_volume,
+            max_r=max_r,
+        )
+    )(slices, volumes)
+
+
 def _vjp_adjoint_cubic(slices, rotation_matrices, image_shape, volume_shape, half_image=False, half_volume=False):
     """VJP-based cubic backprojection: gradient of original volume through
     coefficient computation + slice.
@@ -672,7 +738,9 @@ __all__ = [
     "slice_volume",
     "batch_slice_volume",
     "adjoint_slice_volume",
+    "adjoint_slice_volume_indexed",
     "batch_adjoint_slice_volume",
+    "batch_adjoint_slice_volume_indexed",
     "precompute_cubic_coefficients",
     "precompute_cubic_coefficients_half",
     "slice_from_cubic_coefficients",

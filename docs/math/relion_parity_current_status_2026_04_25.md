@@ -11,6 +11,72 @@ well as current results.
 the selected-only fine-grid speed fix is `2e2d8301`; this document entry is
 updated with the selected-only fix in the same branch.
 
+## 2026-04-28 exact-local speed investigation
+
+Fixed-state replay target:
+`particles.star` from the 5k/128 fixture, starting at RELION `run_it007` and
+emitting the matching RELION expectation iteration 8 via
+`scripts/run_multi_iter_parity.py --iter 7 --max_iter 1 --timing_only
+--local_engine exact_v1 --local_search_profile on`.
+
+Timing interpretation:
+
+- The earlier `~42 s` wall replay was correctly aligned to RELION iteration 8:
+  RECOVAR `ave_Pmax=0.88541466` vs RELION `ave_Pmax=0.88541598`.
+- The local profile has two rows, one per half-set. Summing only one row
+  undercounted the local EM work.
+- On the prior warm replay, the two rows sum to `35.83 s` local EM,
+  `35.12 s` accounted local stages, and only `0.34 s` explicit host transfer.
+  The remaining `~6.0 s` wall gap is outer setup/orchestration, not an
+  unaccounted hidden kernel.
+- RELION's log reports `NrOrientations=1320`, `NrTranslations=37`, and
+  `NrHiddenVariableSamplingPoints=48840`; that is per-particle local-grid
+  metadata. RECOVAR profile totals are image-weighted bucket work
+  (`~262.8 M` scored hypotheses across both half-sets) and should not be
+  compared as the same unit.
+
+Measured H100 A/B results:
+
+| Case | Wall (s) | Local EM (s) | Pmax | Status |
+|---|---:|---:|---:|---|
+| split measured | 36.91 | 27.50 | 0.88541466 | baseline |
+| fused score/M-step measured | 32.04 | 26.63 | 0.88541448 | same quality, modest speedup |
+| split measured in batch-BP job | 32.76 | 26.86 | 0.88541466 | baseline |
+| batch backproject measured | 32.71 | 26.78 | 0.88541466 | same quality, speed same |
+| fused + batch backproject measured | 32.64 | 26.53 | 0.88541448 | same quality, speed same vs batch |
+| default fused cold replay | 75.96 | 61.19 | 0.88541448 | parity-safe default path |
+| native half preprocess cold replay | 74.36 | 59.30 | 0.87842190 | rejected: quality regression |
+
+Artifacts:
+
+- Fused score/M-step A/B: `_agent_scratch/fused_score_mstep_ab_20260428_072451_16537`,
+  Slurm `7426920`.
+- Batch-backprojection A/B: `_agent_scratch/backproject_fused_ab_20260428_073216_24503`,
+  Slurm `7426958`.
+- Default-path validation: `_agent_scratch/default_fused_replay_20260428_074122_23958`,
+  Slurm `7427006`.
+- Native half-preprocess probe:
+  `_agent_scratch/default_native_half_replay_20260428_080552_18237`,
+  Slurm `7427103`.
+
+Code changes from this investigation:
+
+- Exact-local now defaults to on-demand projection norms instead of
+  materializing `|projection|^2` for weighted half-spectrum scoring.
+- Exact-local score, normalization, full-sort support, and M-step reductions
+  are fused by default only for uncapped significance (`max_significants <= 0`)
+  without external normalization. Capped top-k cases keep the old split path.
+- Batch backprojection remains opt-in because measured wall time was unchanged.
+- GPU-native half-image preprocessing remains opt-in
+  (`RECOVAR_RELION_EXACT_LOCAL_NATIVE_HALF_PREPROCESS=1`). It is correct
+  against the JAX full-FFT half-gather path on raw real-space test data, but it
+  is not yet RELION-source equivalent under `RECOVAR_RELION_NUMPY_IMAGE_FFT=1`;
+  the 5k replay changed ave Pmax by about `-0.0070` for only `~1.5 s` cold
+  local-EM speedup.
+- GPU-native local-engine v2 is tracked in the roadmap as a separate refactor:
+  the old RELION NumPy FFT/image-mask compatibility path should become a debug
+  override, not the normal performance path, once equivalence is proven.
+
 ## 2026-04-27 5k/128 timing and parity baselines
 
 Dataset:
@@ -1363,3 +1429,33 @@ Forced higher-iteration replay now running after the prior-center fix:
 - Status when launched: first emitted iteration completed in `161.9s` with
   iter-8 ave Pmax `0.8854`; job was entering emitted iteration 2
   (`current_size=84`) on `della-h20g2`.
+
+### Big-JIT implementation status on this branch
+
+- Exact-local big-JIT is now the default candidate path:
+  `RECOVAR_RELION_EXACT_LOCAL_BIG_JIT` defaults to `1`. Explicit false-like
+  values still force the older split local branches for bisects.
+- Exact-local native half preprocessing now defaults to `auto`, so eligible
+  raw real-space buckets can stay in the JAX half-rFFT path needed by big-JIT.
+- Dense/global `em_engine.py` now has an experimental opt-in bucket big-JIT:
+  `RECOVAR_RELION_DENSE_BIG_JIT=1`. It is intentionally default-off until dense
+  bucket parity and f5k refinement parity are measured.
+- Dense big-JIT currently covers the no-sparse-pass2, no-winner-take-all,
+  no-noise-accumulation bucket path. Unsupported cases log and fall back to the
+  existing dense implementation.
+- Shared shape-bucket helpers were added for padded compile-shape classes.
+  Local exact rotation bucketing preserves the previous minimum bucket size of
+  16 while centralizing the policy.
+
+Validation performed for this implementation slice:
+
+- `python -m compileall -q recovar/em/dense_single_volume`
+- `python -m pytest tests/unit/test_dense_shape_buckets.py`
+- Tiny synthetic JIT call of `run_dense_bucket_big_jit`
+
+Still required before claiming final performance/parity:
+
+- f5k RELION parity with local big-JIT default on.
+- Dense opt-in equivalence against current `run_em` on a deterministic fixture.
+- Warm-path timing repeated with explicit `block_until_ready()` measurements and
+  compile-count/shape-bucket logging.

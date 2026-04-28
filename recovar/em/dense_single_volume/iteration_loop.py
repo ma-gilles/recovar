@@ -90,6 +90,22 @@ from recovar.reconstruction.regularization import (
 logger = logging.getLogger(__name__)
 
 
+def _precompute_exact_local_fine_grid_enabled(healpix_order: int) -> bool:
+    """Return whether exact local search should materialize the fine grid once."""
+
+    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID", "auto").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"", "auto"}:
+        max_rotations = int(os.environ.get("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS", "3000000"))
+        return rotation_grid_size(int(healpix_order)) <= max_rotations
+    raise ValueError(
+        "RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID must be one of auto/1/0/true/false",
+    )
+
+
 def _parse_env_int_set(value: str | None) -> set[int] | None:
     if not value:
         return None
@@ -226,17 +242,27 @@ def _enable_relion_parity_defaults():
 def _relion_use_float64_scoring() -> bool:
     """Return whether RELION-mode E-step scoring should upcast to float64.
 
-    This is env-gated for source-level parity diagnostics: the accelerated
-    RELION path stores E-step weights as XFLOAT, which is float unless RELION
-    is compiled with ACC_DOUBLE_PRECISION. Keep the existing default while
-    allowing targeted replay comparisons without editing call sites.
+    RELION's accelerated path stores E-step weights as XFLOAT, which is float
+    unless RELION is compiled with ACC_DOUBLE_PRECISION. Keep the old double
+    path available for diagnostics by setting RECOVAR_RELION_FLOAT32_SCORING=0.
     """
-    return os.environ.get("RECOVAR_RELION_FLOAT32_SCORING", "").lower() not in {
+    return os.environ.get("RECOVAR_RELION_FLOAT32_SCORING", "1").lower() not in {
         "1",
         "true",
         "yes",
         "on",
     }
+
+
+def _relion_exact_local_image_batch_override() -> int | None:
+    """Return an optional debug override for exact local-search image batches."""
+    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_IMAGE_BATCH_SIZE")
+    if raw is None or raw.strip() == "":
+        return None
+    value = int(raw)
+    if value <= 0:
+        raise ValueError("RECOVAR_RELION_EXACT_LOCAL_IMAGE_BATCH_SIZE must be positive")
+    return value
 
 
 def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: int) -> int:
@@ -589,6 +615,7 @@ def _run_sparse_pass2_local_search_iteration(
     rotation_block_size=5000,
     adaptive_fraction=0.999,
     debug_iteration=None,
+    return_profile=False,
     normalization_log_z=None,
     translation_prior_centers=None,
 ):
@@ -644,7 +671,7 @@ def _run_sparse_pass2_local_search_iteration(
         scale_corrections=scale_corrections,
         image_pre_shifts=image_pre_shifts,
         score_with_masked_images=score_with_masked_images,
-        return_profile=False,
+        return_profile=return_profile,
         adaptive_fraction=adaptive_fraction,
         max_significants=-1,
         local_engine="exact_v1",
@@ -669,6 +696,17 @@ def _run_sparse_pass2_local_search_iteration(
         outputs[5],
     )
 
+    profile_summary = None
+    if return_profile:
+        profile_summary = outputs.pop()
+    if return_profile:
+        if return_stats and accumulate_noise:
+            return tuple(outputs + [profile_summary])
+        if return_stats:
+            return tuple(outputs[:-1] + [profile_summary])
+        if accumulate_noise:
+            return tuple(outputs[:6] + [outputs[-1], profile_summary])
+        return tuple(outputs[:6] + [profile_summary])
     if return_stats and accumulate_noise:
         return tuple(outputs)
     if return_stats:
@@ -1343,6 +1381,7 @@ def _run_local_search_iteration_exact_v1(
         score_with_masked_images=score_with_masked_images,
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_scoring=use_float64_scoring,
+        use_float64_normalization=use_float64_scoring,
         use_float64_projections=use_float64_projections,
         do_gridding_correction=do_gridding_correction,
         square_window=square_window,
@@ -2093,6 +2132,7 @@ def _run_relion_iteration_loop(
     smallest_change_offsets_trajectory = []
     best_rotation_eulers_history = []
     best_translations_history = []
+    local_profile_history = []
     relion_incr_size = 10  # RELION default
     relion_has_high_fsc_at_limit = bool(init_has_high_fsc_at_limit) if init_has_high_fsc_at_limit is not None else False
     global_direction_prior_per_half = [None, None]
@@ -2746,13 +2786,24 @@ def _run_relion_iteration_loop(
                         rotation_grid_size(local_search_order),
                         current_healpix_order,
                     )
-                    local_search_rotations = None
-                    local_search_rotation_eulers = None
-                    local_search_random_perturbation = float(random_perturbation)
                     local_search_angular_sampling_deg = relion_angular_sampling_deg(
                         local_search_order,
                         adaptive_oversampling=0,
                     )
+                    if _precompute_exact_local_fine_grid_enabled(local_search_order):
+                        local_search_rotation_eulers = get_relion_rotation_grid_eulers(local_search_order).astype(
+                            np.float32
+                        )
+                        local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
+                            local_search_rotation_eulers,
+                            float(random_perturbation),
+                            local_search_angular_sampling_deg,
+                        )
+                        local_search_random_perturbation = 0.0
+                    else:
+                        local_search_rotations = None
+                        local_search_rotation_eulers = None
+                        local_search_random_perturbation = float(random_perturbation)
             else:
                 local_search_rotations = effective_rotations
                 local_search_rotation_eulers = None
@@ -2787,11 +2838,13 @@ def _run_relion_iteration_loop(
         # coarse/fine (adaptive_oversampling>=1).
         iter_sig_counts = None
         use_adaptive = state.adaptive_oversampling > 0 and not use_local and effective_rotations.shape[0] > 16
+        is_initial_global_iteration = init_relion_iteration == 0 and iteration == 0 and not use_local
         use_global_significant_support = (
             state.adaptive_oversampling == 0
             and not use_local
             and effective_rotations.shape[0] > 16
             and adaptive_fraction < 1.0
+            and not is_initial_global_iteration
             and not (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter)
             and not first_iter_hard_reconstruction_this_iter
         )
@@ -2883,13 +2936,15 @@ def _run_relion_iteration_loop(
                     )
                 else:
                     translation_prior_translations = np.asarray(current_translations, dtype=np.float32)
-            translation_log_prior = make_relion_translation_log_prior(
-                translation_prior_translations,
-                cryo.voxel_size,
-                current_sigma_offset_angstrom,
-                trans_prior_center,
-                offset_range_pixels=None,
-            )
+            translation_log_prior = None
+            if not use_local:
+                translation_log_prior = make_relion_translation_log_prior(
+                    translation_prior_translations,
+                    cryo.voxel_size,
+                    current_sigma_offset_angstrom,
+                    trans_prior_center,
+                    offset_range_pixels=None,
+                )
             if experiment_datasets[k].n_units == 0:
                 logger.info("Skipping E-step/M-step accumulation for empty half-%d dataset", k + 1)
                 n_shells = int(cryo.image_shape[0] // 2 + 1)
@@ -2964,12 +3019,11 @@ def _run_relion_iteration_loop(
                     _eff_n_rot,
                     current_translations.shape[0],
                 )
-                if local_engine != "grouped_union":
-                    # The new per-image local engine is not yet batch-equivalent
-                    # to the grouped-union scorer for all late-iteration cases.
-                    # Keep exact local buckets to one image until the
-                    # multi-image batching path is proven parity-safe.
-                    safe_ibs = 1
+                exact_local_batch_override = (
+                    None if local_engine == "grouped_union" else _relion_exact_local_image_batch_override()
+                )
+                if exact_local_batch_override is not None:
+                    safe_ibs = min(int(exact_local_batch_override), image_batch_size)
                 logger.info(
                     "Local search batch sizing: cone_radius=%.3f rad "
                     "(%.2f deg), est_cone_rots=%d, eff_n_rot=%d "
@@ -3092,6 +3146,11 @@ def _run_relion_iteration_loop(
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = None
                 coarse_ha[k] = ha_k
+                if grouped_local_profile_k is not None:
+                    profile_row = dict(grouped_local_profile_k)
+                    profile_row["iteration"] = np.int32(iteration)
+                    profile_row["half_index"] = np.int32(k)
+                    local_profile_history.append(profile_row)
                 if save_intermediates_dir is not None and grouped_local_profile_k is not None:
                     np.savez_compressed(
                         os.path.join(
@@ -3276,16 +3335,8 @@ def _run_relion_iteration_loop(
                 else:
                     # --- Exact sparse pass 2 over significant coarse samples ---
                     t_pass2 = time.time()
-                    (
-                        Ft_y_k,
-                        Ft_ctf_k,
-                        ha_k,
-                        best_rots_k,
-                        best_trans_k,
-                        _best_rot_indices_k,
-                        em_stats_k,
-                        noise_stats_k,
-                    ) = _run_sparse_pass2_local_search_iteration(
+                    sparse_pass2_profile_k = None
+                    sparse_outputs = _run_sparse_pass2_local_search_iteration(
                         experiment_datasets[k],
                         means[k],
                         mean_variance,
@@ -3316,7 +3367,31 @@ def _run_relion_iteration_loop(
                         rotation_block_size=rotation_block_size,
                         adaptive_fraction=adaptive_fraction,
                         debug_iteration=iteration,
+                        return_profile=collect_local_search_profile,
                     )
+                    if collect_local_search_profile:
+                        (
+                            Ft_y_k,
+                            Ft_ctf_k,
+                            ha_k,
+                            best_rots_k,
+                            best_trans_k,
+                            _best_rot_indices_k,
+                            em_stats_k,
+                            noise_stats_k,
+                            sparse_pass2_profile_k,
+                        ) = sparse_outputs
+                    else:
+                        (
+                            Ft_y_k,
+                            Ft_ctf_k,
+                            ha_k,
+                            best_rots_k,
+                            best_trans_k,
+                            _best_rot_indices_k,
+                            em_stats_k,
+                            noise_stats_k,
+                        ) = sparse_outputs
                     noise_stats_per_half[k] = noise_stats_k
                     dt_pass2 = time.time() - t_pass2
                     logger.info(
@@ -3324,6 +3399,20 @@ def _run_relion_iteration_loop(
                         k,
                         dt_pass2,
                     )
+                    if sparse_pass2_profile_k is not None:
+                        profile_row = dict(sparse_pass2_profile_k)
+                        profile_row["iteration"] = np.int32(iteration)
+                        profile_row["half_index"] = np.int32(k)
+                        profile_row["profile_context"] = np.array("adaptive_sparse_pass2")
+                        local_profile_history.append(profile_row)
+                        if save_intermediates_dir is not None:
+                            np.savez_compressed(
+                                os.path.join(
+                                    save_intermediates_dir,
+                                    f"it{iteration:03d}_half{k + 1}_pass2_local_profile.npz",
+                                ),
+                                **sparse_pass2_profile_k,
+                            )
                     best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
                     best_pose_rotation_eulers[k] = utils.R_to_relion(
                         np.asarray(best_rots_k),
@@ -3406,16 +3495,8 @@ def _run_relion_iteration_loop(
                 )
 
                 t_pass2 = time.time()
-                (
-                    Ft_y_k,
-                    Ft_ctf_k,
-                    ha_k,
-                    best_rots_k,
-                    best_trans_k,
-                    _best_rot_indices_k,
-                    em_stats_k,
-                    noise_stats_k,
-                ) = _run_sparse_pass2_local_search_iteration(
+                sparse_pass2_profile_k = None
+                sparse_outputs = _run_sparse_pass2_local_search_iteration(
                     experiment_datasets[k],
                     means[k],
                     mean_variance,
@@ -3446,14 +3527,52 @@ def _run_relion_iteration_loop(
                     rotation_block_size=rotation_block_size,
                     adaptive_fraction=adaptive_fraction,
                     debug_iteration=iteration,
+                    return_profile=collect_local_search_profile,
                     translation_prior_centers=trans_prior_center,
                     normalization_log_z=(
                         None if full_coarse_stats is None else full_coarse_stats["normalization_log_z"]
                     ),
                 )
+                if collect_local_search_profile:
+                    (
+                        Ft_y_k,
+                        Ft_ctf_k,
+                        ha_k,
+                        best_rots_k,
+                        best_trans_k,
+                        _best_rot_indices_k,
+                        em_stats_k,
+                        noise_stats_k,
+                        sparse_pass2_profile_k,
+                    ) = sparse_outputs
+                else:
+                    (
+                        Ft_y_k,
+                        Ft_ctf_k,
+                        ha_k,
+                        best_rots_k,
+                        best_trans_k,
+                        _best_rot_indices_k,
+                        em_stats_k,
+                        noise_stats_k,
+                    ) = sparse_outputs
                 noise_stats_per_half[k] = noise_stats_k
                 dt_pass2 = time.time() - t_pass2
                 logger.info("Global significant support exact-local pass 2 (half %d): %.1fs", k, dt_pass2)
+                if sparse_pass2_profile_k is not None:
+                    profile_row = dict(sparse_pass2_profile_k)
+                    profile_row["iteration"] = np.int32(iteration)
+                    profile_row["half_index"] = np.int32(k)
+                    profile_row["profile_context"] = np.array("global_sparse_pass2")
+                    local_profile_history.append(profile_row)
+                    if save_intermediates_dir is not None:
+                        np.savez_compressed(
+                            os.path.join(
+                                save_intermediates_dir,
+                                f"it{iteration:03d}_half{k + 1}_global_pass2_local_profile.npz",
+                            ),
+                            **sparse_pass2_profile_k,
+                        )
 
                 if full_coarse_stats is not None:
                     # In this RELION os0 parity path the sparse pass-2
@@ -3803,36 +3922,51 @@ def _run_relion_iteration_loop(
         # --- Combined Fourier weights for data_vs_prior at next iteration ---
         Ft_ctf_combined = Ft_ctf_0 + Ft_ctf_1
 
-        # --- Compute unregularized half-maps for FSC and prior ---
+        # --- Compute unregularized half-maps only when diagnostics need them ---
+        #
+        # The FSC used for tau2 and convergence is already computed above
+        # directly from the BackProjector accumulators (`current_iter_fsc`),
+        # matching RELION's ordering. Reconstructing unregularized maps here is
+        # only needed for saved intermediates/parity dumps, so skip it in normal
+        # timing/production paths.
         _t_unreg = time.time()
-        unreg_means = [
-            _reconstruct_volume_eager(
-                Ft_ctf_0,
-                Ft_y_0,
-                volume_shape,
-                PADDING_FACTOR,
-                tau=None,
-                tau2_fudge=tau2_fudge,
-                projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                minres_map=RELION_MINRES_MAP,
-            ),
-            _reconstruct_volume_eager(
-                Ft_ctf_1,
-                Ft_y_1,
-                volume_shape,
-                PADDING_FACTOR,
-                tau=None,
-                tau2_fudge=tau2_fudge,
-                projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                minres_map=RELION_MINRES_MAP,
-            ),
-        ]
+        need_unreg_means = save_intermediates_dir is not None or _parity_dump.is_active()
+        if need_unreg_means:
+            unreg_means = [
+                _reconstruct_volume_eager(
+                    Ft_ctf_0,
+                    Ft_y_0,
+                    volume_shape,
+                    PADDING_FACTOR,
+                    tau=None,
+                    tau2_fudge=tau2_fudge,
+                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                    minres_map=RELION_MINRES_MAP,
+                ),
+                _reconstruct_volume_eager(
+                    Ft_ctf_1,
+                    Ft_y_1,
+                    volume_shape,
+                    PADDING_FACTOR,
+                    tau=None,
+                    tau2_fudge=tau2_fudge,
+                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                    minres_map=RELION_MINRES_MAP,
+                ),
+            ]
+        else:
+            unreg_means = [None, None]
         for k in range(2):
             means[k], sign_flipped = _align_fourier_volume_sign_to_reference(means[k], previous_means[k], volume_shape)
-            if sign_flipped:
+            if sign_flipped and unreg_means[k] is not None:
                 unreg_means[k] = -unreg_means[k]
+            if sign_flipped:
                 logger.info("Aligned half-%d volume sign to the previous reference", k + 1)
-        logger.info("Unregularized reconstruction (2 halves): %.1fs", time.time() - _t_unreg)
+        logger.info(
+            "Unregularized reconstruction (2 halves): %.1fs%s",
+            time.time() - _t_unreg,
+            "" if need_unreg_means else " (skipped; diagnostics disabled)",
+        )
 
         # FSC was already computed above in the RELION-exact ordering block
         # (current_iter_fsc) and used to derive tau2 BEFORE the Wiener solve.
@@ -4489,6 +4623,7 @@ def _run_relion_iteration_loop(
             "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
             "best_rotation_eulers_history": best_rotation_eulers_history,
             "best_translations_history": best_translations_history,
+            "local_profile_history": local_profile_history,
         }
 
     # --- RELION's final iteration: do_join_random_halves + do_use_all_data ---
@@ -4652,4 +4787,5 @@ def _run_relion_iteration_loop(
         "smallest_change_offsets_trajectory": smallest_change_offsets_trajectory,
         "best_rotation_eulers_history": best_rotation_eulers_history,
         "best_translations_history": best_translations_history,
+        "local_profile_history": local_profile_history,
     }

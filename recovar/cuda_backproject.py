@@ -74,6 +74,7 @@ _TARGET_BACKPROJECT = "cuda_backproject"
 _TARGET_BACKPROJECT_INDEXED = "cuda_backproject_indexed"
 _TARGET_PROJECT = "cuda_project"
 _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
+_TARGET_BATCH_BACKPROJECT_INDEXED = "cuda_batch_backproject_indexed"
 _TARGET_BATCH_PROJECT = "cuda_batch_project"
 
 
@@ -93,6 +94,11 @@ def _ensure_ffi():
         )
         jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
         jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")
+        jax.ffi.register_ffi_target(
+            _TARGET_BATCH_BACKPROJECT_INDEXED,
+            jax.ffi.pycapsule(lib.BatchBackprojectIndexed),
+            platform="CUDA",
+        )
         jax.ffi.register_ffi_target(_TARGET_BATCH_PROJECT, jax.ffi.pycapsule(lib.BatchProject), platform="CUDA")
         _ffi_registered = True
         logger.debug("Registered CUDA FFI targets")
@@ -331,6 +337,38 @@ def backproject_indexed(
         input_output_aliases={3: 0},
         vmap_method="sequential",
     )(images, pixel_indices, rot6, volume, **kw)
+
+
+@functools.partial(jax.jit, static_argnums=(4, 5, 6, 7, 8, 9))
+def batch_backproject_indexed(
+    volumes: jax.Array,
+    images: jax.Array,
+    pixel_indices: jax.Array,
+    rotation_matrices: jax.Array,
+    image_shape: Tuple[int, int] = (0, 0),
+    volume_shape: Tuple[int, int, int] = (0, 0, 0),
+    order: int = 1,
+    half_volume: bool = False,
+    half_image: bool = False,
+    max_r: float | None = None,
+) -> jax.Array:
+    """Back-project compact indexed images into a batch of volumes."""
+    _ensure_ffi()
+    _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
+    kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
+    kw["relion_fold_x"] = np.int64(
+        int(os.environ.get("RECOVAR_RELION_BACKPROJECT_FOLD_X", "0").lower() in {"1", "true", "yes", "on"})
+    )
+    rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
+    pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
+    out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)
+
+    return jax.ffi.ffi_call(
+        _TARGET_BATCH_BACKPROJECT_INDEXED,
+        out_type,
+        input_output_aliases={3: 0},
+        vmap_method="sequential",
+    )(images, pixel_indices, rot6, volumes, **kw)
 
 
 @functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))

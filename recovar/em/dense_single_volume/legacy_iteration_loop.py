@@ -24,6 +24,7 @@ from recovar.em.sampling import get_oversampled_translation_grid
 
 logger = logging.getLogger(__name__)
 
+### TODO: I THINK THIS WHOLE FILE CAN GO.
 
 def _run_legacy_iteration_loop(
     experiment_datasets,

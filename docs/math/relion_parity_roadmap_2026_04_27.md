@@ -105,6 +105,26 @@ branch. The detailed audit trail remains in
    - Existing related issue: https://github.com/ma-gilles/recovar/issues/113
    - Prior large runs were from an older snapshot and are not final evidence.
 
+7a. Refactor exact local search around GPU-native JAX kernels.
+   - Current `local_em_engine.py` is too long and mixes candidate layout,
+     image preprocessing, score normalization, M-step packing, backprojection,
+     noise, profile, and debug paths behind many if/else branches.
+   - Target shape: the local-search loop should look like a small number of
+     large JIT boundaries, e.g. bucket preprocessing, score/posterior/M-step
+     reductions, and backprojection/noise, instead of many small dispatches.
+   - Default preprocessing should stay on GPU and produce half-images
+     natively. Do not route normal local-search performance paths through the
+     RELION NumPy FFT/image-mask compatibility path; keep that only as a
+     source-parity/debug override.
+   - 2026-04-28 probe: forcing native half preprocessing for the current
+     exact-local path improved cold 5k/128 local EM by only about `1.9 s` and
+     regressed ave Pmax from `0.885414` to `0.878422`. Do not default this path
+     in RELION parity mode until the RELION NumPy FFT/background-fill semantic
+     delta is isolated and fixed.
+   - Equivalence gate: prove the GPU-native v2 path matches the old exact
+     local path on focused unit tests and fixed-state 5k/128 replays before
+     deleting or deprecating old code.
+
 ### Phase 3: cleanup once behavior is pinned
 
 8. Rebuild the PR #118 cleanup on top of the current branch.
