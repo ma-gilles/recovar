@@ -494,10 +494,22 @@ def run_iter_gpu_vdam(
         Ft_y_h0, Ft_ctf_h0, stats, e_step_s = _run_estep(ds)
         Ft_y_h1 = Ft_ctf_h1 = None
 
-    # Convert to BPref layout
+    # Convert recovar's centered-flat (Ft_y, Ft_ctf) accumulator to RELION's
+    # BPref slab layout, then apply the BPref-frame correction (-N² on bp_data,
+    # N⁴ on bp_weight). The vdam_* C++ M-step chain expects RELION-native
+    # frame inputs (its +0.9999 pinned test feeds RELION's dumped BPref
+    # directly). Without this correction, recovar's bp_data is sign-flipped
+    # and undermagnified relative to RELION's expected inputs, producing an
+    # iref_next in the WRONG sign direction and wrong magnitude.
+    n2_frame = float(ori) ** 2
+    n4_frame = float(ori) ** 4
     bp_data_h0, bp_weight_h0 = run_em_output_to_bpref(Ft_y_h0, Ft_ctf_h0, ori, r_max, padding_factor)
+    bp_data_h0 = -bp_data_h0 * n2_frame
+    bp_weight_h0 = bp_weight_h0 * n4_frame
     if pseudo_halfsets:
         bp_data_h1, bp_weight_h1 = run_em_output_to_bpref(Ft_y_h1, Ft_ctf_h1, ori, r_max, padding_factor)
+        bp_data_h1 = -bp_data_h1 * n2_frame
+        bp_weight_h1 = bp_weight_h1 * n4_frame
 
     t_m0 = time.time()
     mu_first = 0.9
@@ -515,7 +527,10 @@ def run_iter_gpu_vdam(
     if Igrad1 is None:
         Igrad1 = np.zeros((K * h_slots,) + half_shape, dtype=np.complex128)
     if Igrad2 is None:
-        Igrad2 = np.ones((K,) + half_shape, dtype=np.complex128)
+        # RELION inits Igrad2 to Complex(1, 1) per voxel (ml_model.cpp:1683
+        # MlModel::reset_class). With μ_second=0.999 EMA the init persists
+        # for hundreds of iters. `np.ones(complex128) = 1+0i` would diverge.
+        Igrad2 = np.full((K,) + half_shape, 1.0 + 1.0j, dtype=np.complex128)
 
     Igrad1_h0_post = np.asarray(
         bind.vdam_first_moment(bp_h0_rw, Igrad1[0].copy(), ori, padding_factor, 1, r_max, **{"lambda": mu_first})
@@ -558,9 +573,16 @@ def run_iter_gpu_vdam(
         grad_stepsize = compute_stepsize(iter=iter, phase_lengths=phase_lengths, is_3d_model=True, ref_dim=3)
 
     fsc = np.zeros(ori // 2 + 1, dtype=np.float64)
-    iref_next = np.asarray(
+    # Convert iref_real (recovar-frame) → RELION-native frame for the M-step
+    # chain, which expects the raw RELION-mrc layout (axes (2,1,0), no negate).
+    # The +0.9999 pinned chain test feeds RELION's iref_before.bin directly
+    # without any frame conversion, so we must do the same here.
+    from recovar.utils.helpers import recovar_volume_to_relion, relion_volume_to_recovar
+
+    iref_relion_frame = recovar_volume_to_relion(np.asarray(iref_real, dtype=np.float64))
+    iref_next_relion_frame = np.asarray(
         bind.vdam_reconstruct_grad(
-            iref_real.astype(np.float64),
+            iref_relion_frame,
             bp_final,
             bp_weight_h0,
             fsc,
@@ -576,6 +598,9 @@ def run_iter_gpu_vdam(
             mom1_np,
         )
     )
+    # Convert back to recovar-frame for downstream callers (so the next
+    # iter's iref input chains naturally).
+    iref_next = relion_volume_to_recovar(iref_next_relion_frame)
     m_step_s = time.time() - t_m0
 
     Igrad1_next = np.stack([Igrad1_h0_post, Igrad1_h1_post], axis=0) if pseudo_halfsets else Igrad1_h0_post[None]

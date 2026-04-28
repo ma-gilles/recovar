@@ -355,10 +355,15 @@ def test_estep_bpref_forward_parity():
     # to bring recovar's centered Ft_y / Ft_ctf into RELION's BPref slab frame.
     n2 = float(ori) ** 2
     n4 = float(ori) ** 4
-    bp_data_h0 = -np.asarray(intermediates["bp_data_h0"]) * n2
-    bp_data_h1 = -np.asarray(intermediates["bp_data_h1"]) * n2
-    bp_weight_h0 = np.asarray(intermediates["bp_weight_h0"]) * n4
-    bp_weight_h1 = np.asarray(intermediates["bp_weight_h1"]) * n4
+    # `run_iter_gpu_vdam` applies the BPref-frame correction (-N² on
+    # bp_data, N⁴ on bp_weight) before feeding the M-step chain (so the
+    # vdam_* C++ chain receives RELION-native frame inputs that match its
+    # +0.9999 pinned test). The intermediates exposed via stats_dict are
+    # therefore already in RELION-native frame for direct comparison.
+    bp_data_h0 = np.asarray(intermediates["bp_data_h0"])
+    bp_data_h1 = np.asarray(intermediates["bp_data_h1"])
+    bp_weight_h0 = np.asarray(intermediates["bp_weight_h0"])
+    bp_weight_h1 = np.asarray(intermediates["bp_weight_h1"])
 
     target_bp_data_h0 = _read_bin(RELION_DUMP_DIR / "pipe_it1_c0_bp_data_pre_reweight.bin")
     target_bp_data_h1 = _read_bin(RELION_DUMP_DIR / "pipe_it1_c0_bp_data_h_pre_reweight.bin")
