@@ -54,7 +54,6 @@ from .helpers.backprojection import (
     batch_adjoint_slice_volume_windowed as _batch_adjoint_slice_volume_windowed,
 )
 from .helpers.dtype_policy import DensePrecisionPolicy
-from .helpers.env_flags import parse_env_bool
 from .helpers.fourier_window import make_fourier_window_spec
 from .helpers.half_spectrum import (
     half_spectrum_dc_index,
@@ -120,17 +119,6 @@ def _noise_split_diagnostics_requested() -> bool:
         os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
         or os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_DIR")
     )
-
-
-def _dense_big_jit_enabled() -> bool:
-    """Return whether the experimental dense/global bucket big-JIT is enabled.
-
-    The default is on. Unsupported dense variants still fall back before the
-    batch loop, so the main RELION path gets the compiled bucket boundary where
-    eligible without mixing it into sparse/local/debug code paths.
-    """
-
-    return parse_env_bool("RECOVAR_RELION_DENSE_BIG_JIT", default=True)
 
 
 def _dense_big_jit_disabled_reason(
@@ -544,15 +532,14 @@ def run_em(
             score_constraints.candidate_mask_size,
         )
 
-    dense_big_jit_requested = _dense_big_jit_enabled()
     dense_big_jit_unsupported_reason = _dense_big_jit_disabled_reason(
         relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
         accumulate_noise=accumulate_noise,
         dense_noise_component_dump_enabled=debug_options.noise_component_dump_enabled,
         per_pose_debug_dump_enabled=debug_options.per_pose_score_dump.enabled,
     )
-    use_dense_big_jit = dense_big_jit_requested and dense_big_jit_unsupported_reason is None
-    if dense_big_jit_requested and not use_dense_big_jit:
+    use_dense_big_jit = dense_big_jit_unsupported_reason is None
+    if not use_dense_big_jit:
         logger.info("Dense big-JIT disabled for this run: unsupported %s", dense_big_jit_unsupported_reason)
     elif use_dense_big_jit:
         logger.info("Dense big-JIT enabled for dense/global rotation buckets")

@@ -1436,9 +1436,9 @@ Forced higher-iteration replay now running after the prior-center fix:
   tensors use the split debug path directly.
 - Exact-local native half preprocessing now defaults to `auto`, so eligible
   raw real-space buckets can stay in the JAX half-rFFT path needed by big-JIT.
-- Dense/global `em_engine.py` now defaults to the bucket big-JIT where eligible:
-  `RECOVAR_RELION_DENSE_BIG_JIT` defaults to `1`. Explicit false-like values
-  force the older split dense branches for bisects.
+- Dense/global `em_engine.py` now uses the bucket big-JIT wherever the run is
+  eligible. Unsupported debug/first-iteration variants still use the split
+  dense branches directly.
 - Dense big-JIT currently covers the dense/global bucket path including
   sparse-pass2 skip decisions fed by the big-JIT block maxima. Unsupported
   noise/winner/debug cases log and fall back to the existing dense

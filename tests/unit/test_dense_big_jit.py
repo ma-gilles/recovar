@@ -9,7 +9,6 @@ import jax.numpy as jnp
 from recovar.em.dense_single_volume.dense_big_jit import run_dense_bucket_big_jit
 from recovar.em.dense_single_volume.em_engine import (
     _dense_big_jit_disabled_reason,
-    _dense_big_jit_enabled,
     _pad_dense_big_jit_image_axis,
 )
 from recovar.em.dense_single_volume.helpers.adjoint import (
@@ -299,11 +298,6 @@ def test_dense_big_jit_pass1_matches_dense_primitives():
         rtol=1e-6,
         atol=1e-6,
     )
-
-
-def test_dense_big_jit_default_enabled(monkeypatch):
-    monkeypatch.delenv("RECOVAR_RELION_DENSE_BIG_JIT", raising=False)
-    assert _dense_big_jit_enabled()
 
 
 def test_dense_big_jit_allows_sparse_pass2_skip_path():
