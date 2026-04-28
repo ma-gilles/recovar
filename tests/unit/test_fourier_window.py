@@ -33,6 +33,7 @@ from recovar.em.dense_single_volume.em_engine import (
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import (
     ALLOWED_CURRENT_SIZES,
+    make_fourier_window_spec,
     make_fourier_window_indices_np,
     make_frequency_coords_half_np,
     make_frequency_radius_map_half,
@@ -450,6 +451,21 @@ class TestWindowedEStepMatchesFull:
             atol=1e-4,
             rtol=1e-5,
             err_msg="Windowed E-step with all indices should match non-windowed",
+        )
+
+
+class TestFourierWindowSpec:
+    def test_score_and_recon_values_gather_last_axis(self):
+        spec = make_fourier_window_spec(IMAGE_SHAPE, 6, N_HALF, include_recon_window=True)
+        values = jnp.arange(3 * N_HALF, dtype=jnp.float32).reshape(3, N_HALF)
+
+        np.testing.assert_array_equal(
+            np.asarray(spec.score_values(values)),
+            np.asarray(values)[:, np.asarray(spec.score_indices_np)],
+        )
+        np.testing.assert_array_equal(
+            np.asarray(spec.recon_values(values)),
+            np.asarray(values)[:, np.asarray(spec.recon_indices_np)],
         )
 
 
