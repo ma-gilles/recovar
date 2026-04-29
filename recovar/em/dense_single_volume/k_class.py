@@ -8,6 +8,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from .dense_k_class_engine import run_dense_k_class_em_native
 from .em_engine import run_em
 from .helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 from .local_em_engine import run_local_em_exact
@@ -276,6 +277,33 @@ def run_dense_k_class_em(
     n_classes = int(means_array.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
     base_engine_kwargs = dict(engine_kwargs)
+
+    native_dense_supported = (
+        not accumulate_noise
+        and base_engine_kwargs.get("sparse_pass2") is False
+        and not bool(base_engine_kwargs.get("relion_firstiter_winner_take_all", False))
+    )
+    if native_dense_supported:
+        native = run_dense_k_class_em_native(
+            experiment_dataset,
+            means_array,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            disc_type,
+            class_log_priors=log_priors,
+            **base_engine_kwargs,
+        )
+        return _assemble_result(
+            class_log_evidence=native.class_log_evidence,
+            new_means=native.new_means,
+            Ft_y=native.Ft_y,
+            Ft_ctf=native.Ft_ctf,
+            per_class_hard_assignments=native.hard_assignments,
+            per_class_stats=native.per_class_stats,
+            noise_stats=None,
+        )
 
     class_log_evidence = []
     for class_index in range(n_classes):

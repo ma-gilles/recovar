@@ -118,7 +118,8 @@ def _score_normalize_mstep(
     flat_scores = scores.reshape(scores.shape[0], -1)
     best_log_score = jnp.max(flat_scores, axis=1)
     if has_normalization_log_z:
-        log_Z = normalization_log_z.astype(scores.real.dtype)
+        normalization_dtype = jnp.float64 if use_float64_normalization else scores.real.dtype
+        log_Z = normalization_log_z.astype(normalization_dtype)
     else:
         log_shift = best_log_score[:, None, None]
         if use_float64_normalization:
