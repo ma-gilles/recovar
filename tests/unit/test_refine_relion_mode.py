@@ -1054,6 +1054,136 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     )
 
 
+def test_run_local_em_exact_class_log_prior_shifts_evidence_only(rng):
+    dataset = MockDataset(1, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=121)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=129)
+    translations = np.zeros((1, 2), dtype=np.float32)
+    class_log_prior = float(np.log(0.25))
+
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
+        rotation_offsets=np.array([0, 2], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1], dtype=np.int32),
+        rotations_flat=np.asarray(local_rotations, dtype=np.float32),
+        rotation_log_priors_flat=np.zeros(2, dtype=np.float32),
+        rotation_counts=np.array([2], dtype=np.int32),
+        translation_grid=np.asarray(translations, dtype=np.float32),
+        translation_log_priors=np.zeros((1, 1), dtype=np.float32),
+    )
+
+    Ft_y_base, Ft_ctf_base, ha_base, stats_base = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=None,
+        reconstruct_significant_only=False,
+    )
+    Ft_y_prior, Ft_ctf_prior, ha_prior, stats_prior = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=None,
+        reconstruct_significant_only=False,
+        class_log_prior=class_log_prior,
+    )
+
+    np.testing.assert_array_equal(ha_prior, ha_base)
+    np.testing.assert_allclose(np.asarray(Ft_y_prior), np.asarray(Ft_y_base), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_prior), np.asarray(Ft_ctf_base), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(stats_prior.log_evidence_per_image),
+        np.asarray(stats_base.log_evidence_per_image) + class_log_prior,
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(stats_prior.max_posterior_per_image),
+        np.asarray(stats_base.max_posterior_per_image),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+
+
+def test_run_local_em_exact_external_log_evidence_scales_posterior(rng):
+    dataset = MockDataset(1, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=131)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=139)
+    translations = np.zeros((1, 2), dtype=np.float32)
+
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
+        rotation_offsets=np.array([0, 2], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1], dtype=np.int32),
+        rotations_flat=np.asarray(local_rotations, dtype=np.float32),
+        rotation_log_priors_flat=np.zeros(2, dtype=np.float32),
+        rotation_counts=np.array([2], dtype=np.int32),
+        translation_grid=np.asarray(translations, dtype=np.float32),
+        translation_log_priors=np.zeros((1, 1), dtype=np.float32),
+    )
+
+    Ft_y_base, Ft_ctf_base, ha_base, stats_base = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=None,
+        reconstruct_significant_only=False,
+    )
+    external_log_evidence = np.asarray(stats_base.log_evidence_per_image, dtype=np.float64) + np.log(2.0)
+    Ft_y_scaled, Ft_ctf_scaled, ha_scaled, stats_scaled = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=None,
+        reconstruct_significant_only=False,
+        normalization_log_evidence=external_log_evidence,
+    )
+
+    np.testing.assert_array_equal(ha_scaled, ha_base)
+    np.testing.assert_allclose(np.asarray(Ft_y_scaled), 0.5 * np.asarray(Ft_y_base), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(Ft_ctf_scaled), 0.5 * np.asarray(Ft_ctf_base), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(stats_scaled.log_evidence_per_image),
+        external_log_evidence,
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(stats_scaled.max_posterior_per_image),
+        0.5 * np.asarray(stats_base.max_posterior_per_image),
+        rtol=5e-3,
+        atol=1e-6,
+    )
+
+
 def test_native_half_preprocess_requires_mask_for_masked_score(rng):
     dataset = RawRealImageDataset(1, rng)
 
