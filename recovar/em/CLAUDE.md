@@ -581,33 +581,30 @@ Benchmarked on A100-80GB, 5000 images, 128px, order 3 (36,864 rotations), 7×7 t
 | Old (E_with_precompute + M_with_precompute) | 68s | 1× |
 | engine_fused.py | 26s | 2.6× |
 | em_engine.py | 29s | 2.3× |
-| Half-spectrum GEMMs (benchmarked, not integrated) | 19s | 3.6× |
+| Half-spectrum GEMMs (current dense/local baseline) | 19s | 3.6× |
 
 RELION 5.0.1 on same hardware/data: ~163s per iteration (includes CPU M-step + overhead).
 
 ### Known optimization opportunities (in priority order)
 
-1. **Half-spectrum GEMMs**: operate on N_half=8320 instead of N=16384. Demonstrated 1.7× speedup. Not yet integrated into the engines.
+1. **Fourier cropping to current resolution**: RELION uses `current_size` to crop images to the current FSC resolution. At early iterations this is 50×+ fewer pixels. This is the single biggest gap vs RELION.
 
-2. **Fourier cropping to current resolution**: RELION uses `current_size` to crop images to the current FSC resolution. At early iterations this is 50×+ fewer pixels. This is the single biggest gap vs RELION.
+2. **Two-pass adaptive oversampling**: coarse angular search → prune to significant weights → fine search. Reduces effective orientations per image from 36K to ~100-500.
 
-3. **Two-pass adaptive oversampling**: coarse angular search → prune to significant weights → fine search. Reduces effective orientations per image from 36K to ~100-500.
+3. **Significant weight pruning**: only top-K orientations per image get the expensive fine-resolution evaluation.
 
-4. **Significant weight pruning**: only top-K orientations per image get the expensive fine-resolution evaluation.
+### RELION Parity Notes
 
-### Known correctness debt (post-parity)
-
-1. **Half-spectrum Hermitian weights (TODO RELION-parity-debt)**: RELION sums
-   over the rfft half-image with weight=1 for ALL pixels. The mathematically
+1. **Half-spectrum Hermitian weights**: RELION sums over the rfft half-image
+   with weight=1 for ALL pixels. The mathematically
    correct approach uses weight=2 for interior frequencies (which have a
    conjugate partner) and weight=1 for DC/Nyquist (self-conjugate). RELION's
    approach computes ~half the true Gaussian log-likelihood, making posteriors
    softer than the true Bayesian posterior. The MAP orientation is unchanged
    (same ranking). We match RELION for parity; switching to correct weights
    (`make_half_image_weights`) is a post-parity improvement that would sharpen
-   posteriors and may improve convergence speed. Code location:
-   `em_engine.py:run_em()` where `half_spectrum_scoring=True` sets
-   `half_weights = ones(...)`.
+   posteriors and may improve convergence speed. Dense/local code routes this
+   through `make_scoring_half_image_weights(..., relion_half_sum=True)`.
 
 ## Testing
 
@@ -615,6 +612,19 @@ RELION 5.0.1 on same hardware/data: ~163s per iteration (includes CPU M-step + o
 - `tests/unit/test_dense_em_plan.py` — 5 planner tests
 - Run `pixi run test-fast` (2454 tests) before pushing
 - Run `./scripts/run_tests_parallel.sh long-test` via Slurm before PR
+
+### 5k RELION parity replay
+
+`scripts/run_multi_iter_parity.py --max_iter` is the number of emitted recovar
+iterations, not the final RELION iteration number. For the standard 5k replay
+starting from RELION iteration 3 and comparing through RELION iteration 14, use
+`--iter 3 --max_iter 11`. Passing `--max_iter 14` asks for metadata through
+`run_it017_*`, so the run can fail after producing the intended `iter_004`
+through `iter_014` dumps.
+
+After the replay, run `scripts/parity/check_perf.py` on the dump directory
+against `tests/baselines/parity/perf_baseline_5k_128_a100.json`. Warning-level
+perf output is still useful and should be reported with the dump path.
 
 ## Rules
 
