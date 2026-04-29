@@ -101,7 +101,6 @@ def _collect_local_profile_rows(save_intermediates_dir):
         "preprocess_time_s",
         "preprocess_integer_shift_s",
         "preprocess_translation_phase_s",
-        "preprocess_processed_cache_gather_s",
         "preprocess_score_process_s",
         "preprocess_recon_process_s",
         "preprocess_ctf_s",
@@ -128,7 +127,6 @@ def _collect_local_profile_rows(save_intermediates_dir):
         "raw_cache_build_time_s",
         "bucket_build_time_s",
         "batch_fetch_time_s",
-        "processed_cache_build_time_s",
         "transfer_total_to_host_s",
         "transfer_reconstruction_mask_to_host_s",
         "transfer_mstep_posterior_sum_to_host_s",
@@ -148,7 +146,6 @@ def _collect_local_profile_rows(save_intermediates_dir):
         "native_half_preprocess_mode",
         "fused_score_mstep_enabled",
         "raw_cache_enabled",
-        "processed_cache_enabled",
     ]
     for npz_path in sorted(Path(save_intermediates_dir).glob("*_local_profile.npz")):
         with np.load(npz_path) as profile_npz:
@@ -202,7 +199,6 @@ def _summarize_local_profile_rows(rows, wall_times):
         "raw_cache_build_time_s",
         "bucket_build_time_s",
         "batch_fetch_time_s",
-        "processed_cache_build_time_s",
         "transfer_total_to_host_s",
     ]
     summary = {
