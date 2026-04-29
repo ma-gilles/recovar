@@ -76,6 +76,17 @@ Do not spend cycles launching full 5k/long-test jobs after every small edit.
 Use local GPUs for short GPU checks only after `nvidia-smi` confirms an idle
 device, and keep the provenance/CUDA-availability gate visible in the log.
 
+Recommended exact-local focused tests after helper/orchestration refactors:
+`tests/unit/test_refine_relion_mode.py::test_tracked_local_engine_todo_ids_are_present`,
+`tests/unit/test_refine_relion_mode.py::test_run_local_em_exact_windowed_path_computes_reconstruction_abs2_without_full_buffer`,
+`tests/unit/test_sparse_pass2_bucketed_perf.py::test_bucketed_call_count_bounded_versus_perimage`,
+and the touched dense profile/return-shape tests in
+`tests/unit/test_half_spectrum_em.py`. Run them through pixi with unique
+scratch roots under `/scratch/gpfs/GILLES/mg6942/`; do not leave long-lived
+interactive exec sessions open while waiting on GPU work. Use the 5k parity
+fixture only after multi-hour or behavior-changing chunks, not after small
+mechanical refactors.
+
 Keep algorithmic parity changes separate from performance changes. Batching,
 caps, memory layout, and scheduling changes are performance-only until output
 equivalence is proven against the old path.
