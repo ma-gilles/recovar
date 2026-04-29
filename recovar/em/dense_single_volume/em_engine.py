@@ -56,6 +56,7 @@ from .helpers.adjoint import (
 from .helpers.dtype_policy import DensePrecisionPolicy
 from .helpers.fourier_window import make_fourier_window_spec
 from .helpers.half_spectrum import (
+    bin_shell_values_np,
     half_spectrum_dc_index,
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
@@ -139,14 +140,6 @@ def _dense_big_jit_disabled_reason(
     if per_pose_debug_dump_enabled:
         return "per_pose_debug_dump"
     return None
-
-
-def _bin_shell_values_np(values, shell_indices, n_shells):
-    return np.bincount(
-        np.asarray(shell_indices, dtype=np.int64),
-        weights=np.asarray(values, dtype=np.float64),
-        minlength=int(n_shells),
-    )[: int(n_shells)]
 
 
 _DENSE_TIMING_FIELDS = (
@@ -809,7 +802,7 @@ def run_em(
                     dense_noise_component_acc[global_idx] = {
                         "row": int(row),
                         "local_idx": int(local_idx),
-                        "p_img_shells": _bin_shell_values_np(p_img_pixel, shell_indices_half, n_shells),
+                        "p_img_shells": bin_shell_values_np(p_img_pixel, shell_indices_half, n_shells),
                         "a2_shells": np.zeros(n_shells, dtype=np.float64),
                         "xa_shells": np.zeros(n_shells, dtype=np.float64),
                     }
@@ -1388,8 +1381,8 @@ def run_em(
                         row_xa_pixel = nv_for_noise * jnp.real(
                             jnp.sum(proj_for_noise * jnp.conj(row_summed_masked), axis=0)
                         )
-                        state["a2_shells"] += _bin_shell_values_np(row_a2_pixel, si_for_noise, n_shells)
-                        state["xa_shells"] += _bin_shell_values_np(row_xa_pixel, si_for_noise, n_shells)
+                        state["a2_shells"] += bin_shell_values_np(row_a2_pixel, si_for_noise, n_shells)
+                        state["xa_shells"] += bin_shell_values_np(row_xa_pixel, si_for_noise, n_shells)
 
                 block_noise_shells, block_a2_shells, block_xa_shells = _compute_noise_block(
                     proj_for_noise,

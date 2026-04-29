@@ -9,6 +9,8 @@ from pathlib import Path
 import numpy as np
 
 from recovar import utils
+from recovar.em.dense_single_volume.helpers.env_flags import parse_int_set
+from recovar.em.dense_single_volume.helpers.half_spectrum import bin_shell_values_np
 
 
 @dataclass(frozen=True)
@@ -24,17 +26,6 @@ class DensePerPoseScoreDumpRequest:
         return self.dump_dir is not None and self.target is not None
 
 
-def parse_debug_int_set(value: str | None) -> set[int] | None:
-    if not value:
-        return None
-    parsed = set()
-    for token in value.replace(",", " ").split():
-        token = token.strip()
-        if token:
-            parsed.add(int(token))
-    return parsed or None
-
-
 def parse_debug_score_dump_request():
     """Return the optional debug score-dump request from the environment."""
 
@@ -44,11 +35,11 @@ def parse_debug_score_dump_request():
     dump_iterations = os.environ.get("RECOVAR_LOCAL_SCORE_DUMP_ITERATION")
     if not dump_dir or not dump_indices:
         return None, set(), None, None
-    targets = parse_debug_int_set(dump_indices) or set()
+    targets = parse_int_set(dump_indices) or set()
     if not targets:
         return None, set(), None, None
-    requested_current_sizes = parse_debug_int_set(dump_current_size)
-    requested_iterations = parse_debug_int_set(dump_iterations)
+    requested_current_sizes = parse_int_set(dump_current_size)
+    requested_iterations = parse_int_set(dump_iterations)
     dump_path = Path(dump_dir)
     dump_path.mkdir(parents=True, exist_ok=True)
     return dump_path, targets, requested_current_sizes, requested_iterations
@@ -63,11 +54,11 @@ def parse_debug_noise_component_dump_request():
     dump_iterations = os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_ITERATION")
     if not dump_dir or not dump_indices:
         return None, set(), None, None
-    targets = parse_debug_int_set(dump_indices) or set()
+    targets = parse_int_set(dump_indices) or set()
     if not targets:
         return None, set(), None, None
-    requested_current_sizes = parse_debug_int_set(dump_current_size)
-    requested_iterations = parse_debug_int_set(dump_iterations)
+    requested_current_sizes = parse_int_set(dump_current_size)
+    requested_iterations = parse_int_set(dump_iterations)
     dump_path = Path(dump_dir)
     dump_path.mkdir(parents=True, exist_ok=True)
     return dump_path, targets, requested_current_sizes, requested_iterations
@@ -81,10 +72,10 @@ def parse_dense_noise_component_dump_request():
     dump_current_size = os.environ.get("RECOVAR_DENSE_NOISE_COMPONENT_DUMP_CURRENT_SIZE")
     if not dump_dir or not dump_indices:
         return None, set(), None
-    targets = parse_debug_int_set(dump_indices) or set()
+    targets = parse_int_set(dump_indices) or set()
     if not targets:
         return None, set(), None
-    requested_current_sizes = parse_debug_int_set(dump_current_size)
+    requested_current_sizes = parse_int_set(dump_current_size)
     dump_path = Path(dump_dir)
     dump_path.mkdir(parents=True, exist_ok=True)
     return dump_path, targets, requested_current_sizes
@@ -147,14 +138,6 @@ def noise_split_diagnostics_requested() -> bool:
         os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
         or os.environ.get("RECOVAR_LOCAL_NOISE_COMPONENT_DUMP_DIR")
     )
-
-
-def _bin_shell_values(values, shell_indices, n_shells):
-    return np.bincount(
-        np.asarray(shell_indices, dtype=np.int64),
-        weights=np.asarray(values, dtype=np.float64),
-        minlength=int(n_shells),
-    )[: int(n_shells)]
 
 
 def maybe_write_debug_noise_component_dump(
@@ -221,13 +204,13 @@ def maybe_write_debug_noise_component_dump(
         original_idx = int(original_image_indices[row])
         local_idx = int(bucket.image_indices[row])
         p_img_pixel = (np.abs(processed_noise_power_np[row]) ** 2) * support_mass_np[row]
-        p_img_shells = _bin_shell_values(p_img_pixel, shell_indices_half_np, n_shells)
+        p_img_shells = bin_shell_values_np(p_img_pixel, shell_indices_half_np, n_shells)
 
         ctf_probs_raw = ctf_probs_np[row] * noise_variance_np[None, :]
         a2_pixel = np.sum(proj_abs2_np[row] * ctf_probs_raw, axis=0)
         xa_pixel = noise_variance_np * np.real(np.sum(proj_np[row] * np.conj(summed_np[row]), axis=0))
-        a2_shells = _bin_shell_values(a2_pixel, shell_indices_noise_np, n_shells)
-        xa_shells = _bin_shell_values(xa_pixel, shell_indices_noise_np, n_shells)
+        a2_shells = bin_shell_values_np(a2_pixel, shell_indices_noise_np, n_shells)
+        xa_shells = bin_shell_values_np(xa_pixel, shell_indices_noise_np, n_shells)
         total_shells = p_img_shells + a2_shells - 2.0 * xa_shells
 
         significant = reconstruction_sample_mask_np[row, : int(bucket.actual_rotation_counts[row]), :]

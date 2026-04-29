@@ -76,3 +76,13 @@ def make_relion_noise_shell_indices_half(image_shape):
     keep &= ~((kx == 0) & (ky < 0))
     shell_indices = np.where(keep, shell_indices, n_shells)
     return jnp.asarray(shell_indices.reshape(-1), dtype=jnp.int32)
+
+
+def bin_shell_values_np(values, shell_indices, n_shells):
+    """Bin per-pixel values into integer shell indices on host."""
+
+    return np.bincount(
+        np.asarray(shell_indices, dtype=np.int64),
+        weights=np.asarray(values, dtype=np.float64),
+        minlength=int(n_shells),
+    )[: int(n_shells)]
