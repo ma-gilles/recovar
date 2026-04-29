@@ -60,6 +60,7 @@ def test_dump_iteration_writes_wall_and_stage_fields(parity_env):
     time.sleep(0.02)
     p.mark_stage(0, "e_step")
     p.mark_stage(0, "noise_update")
+    p.mark_stage(0, "convergence")
 
     p.dump_iteration(
         iteration=0,
@@ -89,6 +90,7 @@ def test_dump_iteration_writes_wall_and_stage_fields(parity_env):
     assert "wall_time_s" in npz.files
     assert "stage_seconds_e_step" in npz.files
     assert "stage_seconds_noise_update" in npz.files
+    assert "stage_seconds_convergence" in npz.files
     assert float(npz["wall_time_s"]) > 0.02
     # Timer entry should have been cleared after dump.
     assert 0 not in p._ITER_TIMERS
