@@ -668,6 +668,43 @@ class TestUpdateRefinementState:
         )
         assert abs(updated.ave_Pmax - 0.42) < 1e-6
 
+    def test_k_class_change_tracking_counts_hard_class_changes(self):
+        state = self._make_base_state()
+        n_rot, n_trans = 100, 5
+        assignments = np.zeros(5, dtype=np.int32)
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state,
+            assignments,
+            assignments,
+            n_rot,
+            n_trans,
+            translations,
+            new_resolution=4.0,
+            current_classes=np.array([0, 0, 1, 1, 2], dtype=np.int32),
+            previous_classes=np.array([0, 1, 1, 0, 2], dtype=np.int32),
+        )
+        assert updated.current_changes_optimal_classes == 2.0
+        assert updated.smallest_changes_optimal_classes == 2
+
+    def test_single_class_change_tracking_remains_zero_when_classes_omitted(self):
+        state = self._make_base_state()
+        n_rot, n_trans = 100, 5
+        assignments = np.zeros(5, dtype=np.int32)
+        translations = np.zeros((n_trans, 2), dtype=np.float32)
+
+        updated = update_refinement_state(
+            state,
+            assignments,
+            assignments,
+            n_rot,
+            n_trans,
+            translations,
+            new_resolution=4.0,
+        )
+        assert updated.current_changes_optimal_classes == 0.0
+
 
 # =========================================================================
 # get_rotation_grid_at_order (sampling.py)
