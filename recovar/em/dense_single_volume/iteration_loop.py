@@ -88,22 +88,13 @@ logger = logging.getLogger(__name__)
 
 RELION_SCORE_TENSOR_FLOAT_BUDGET = 200_000_000
 RELION_MAX_FULL_GRID_ORDER = 4
+EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS = 3_000_000
 
 
 def _precompute_exact_local_fine_grid_enabled(healpix_order: int) -> bool:
     """Return whether exact local search should materialize the fine grid once."""
 
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID", "auto").strip().lower()
-    if raw in {"0", "false", "no", "off"}:
-        return False
-    if raw in {"1", "true", "yes", "on"}:
-        return True
-    if raw in {"", "auto"}:
-        max_rotations = int(os.environ.get("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS", "3000000"))
-        return rotation_grid_size(int(healpix_order)) <= max_rotations
-    raise ValueError(
-        "RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID must be one of auto/1/0/true/false",
-    )
+    return rotation_grid_size(int(healpix_order)) <= EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS
 
 
 def _relion_half_plane_shell_counts(image_shape):
@@ -208,17 +199,6 @@ def _enable_relion_parity_defaults():
             enabled.append(name)
     if enabled:
         logger.info("RELION mode parity defaults enabled: %s", ", ".join(enabled))
-
-
-def _relion_exact_local_image_batch_override() -> int | None:
-    """Return an optional debug override for exact local-search image batches."""
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_IMAGE_BATCH_SIZE")
-    if raw is None or raw.strip() == "":
-        return None
-    value = int(raw)
-    if value <= 0:
-        raise ValueError("RECOVAR_RELION_EXACT_LOCAL_IMAGE_BATCH_SIZE must be positive")
-    return value
 
 
 def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: int) -> int:
@@ -2355,9 +2335,6 @@ def _run_relion_iteration_loop(
                     _eff_n_rot,
                     current_translations.shape[0],
                 )
-                exact_local_batch_override = _relion_exact_local_image_batch_override()
-                if exact_local_batch_override is not None:
-                    safe_ibs = min(int(exact_local_batch_override), image_batch_size)
                 logger.info(
                     "Local search batch sizing: cone_radius=%.3f rad "
                     "(%.2f deg), est_cone_rots=%d, eff_n_rot=%d "
