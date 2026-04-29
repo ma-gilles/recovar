@@ -26,6 +26,7 @@ import pytest
 pytest.importorskip("jax")
 import jax.numpy as jnp
 
+import recovar.core.fourier_transform_utils as ftu
 from recovar.em.dense_single_volume.helpers.oversampling import (
     compute_pass2_stats_sparse,
 )
@@ -41,11 +42,9 @@ VOLUME_SHAPE = (8, 8, 8)
 VOLUME_SIZE = 512
 
 
-def _hermitian_image_2d(image_shape, seed=42):
+def _raw_real_image_2d(image_shape, seed=42):
     rng = np.random.default_rng(seed)
-    real_img = rng.standard_normal(image_shape).astype(np.float32)
-    ft = np.fft.fftshift(np.fft.fft2(real_img))
-    return jnp.array(ft, dtype=jnp.complex64)
+    return rng.standard_normal(image_shape).astype(np.float32)
 
 
 def _hermitian_volume(volume_shape, seed=42):
@@ -64,9 +63,16 @@ def _identity_ctf(params, image_shape=None, voxel_size=None, *, half_image=False
     return jnp.ones((params.shape[0], sz), dtype=jnp.float32)
 
 
-def _identity_process(batch, apply_image_mask=False):
+def _raw_real_process(batch, apply_image_mask=False):
     _ = apply_image_mask
-    return batch
+    images = jnp.asarray(batch)
+    return ftu.get_dft2(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
+
+
+def _raw_real_process_half(batch, apply_image_mask=False):
+    _ = apply_image_mask
+    images = jnp.asarray(batch)
+    return ftu.get_dft2_real(images).reshape((images.shape[0], -1)).astype(jnp.complex64)
 
 
 class MockDataset:
@@ -82,17 +88,19 @@ class MockDataset:
         self.dtype = jnp.complex64
         self.CTF_params = np.zeros((n_images, 9), dtype=np.float32)
         self.ctf_evaluator = staticmethod(_identity_ctf)
-        self.process_images = staticmethod(_identity_process)
+        self.process_images = staticmethod(_raw_real_process)
+        self.process_images_half = staticmethod(_raw_real_process_half)
         self.rotation_matrices = np.tile(np.eye(3, dtype=np.float32), (n_images, 1, 1))
         self.translations = np.zeros((n_images, 2), dtype=np.float32)
         self.premultiplied_ctf = False
         rng = np.random.default_rng(seed)
-        self._images = np.zeros((n_images, IMAGE_SIZE), dtype=np.complex64)
+        self._images = np.zeros((n_images, *IMAGE_SHAPE), dtype=np.float32)
         for i in range(n_images):
-            self._images[i] = _hermitian_image_2d(IMAGE_SHAPE, seed=rng.integers(10000)).reshape(-1)
+            self._images[i] = _raw_real_image_2d(IMAGE_SHAPE, seed=rng.integers(10000))
 
         class _ImageSource:
-            process_images = staticmethod(_identity_process)
+            process_images = staticmethod(_raw_real_process)
+            process_images_half = staticmethod(_raw_real_process_half)
 
         self.image_source = _ImageSource()
 
@@ -176,7 +184,7 @@ def test_bucket_count_bounded_under_varied_per_image_rotation_counts():
 def test_bucketed_call_count_bounded_versus_perimage():
     """The bucketed path should make far fewer ``run_em``-style backend calls.
 
-    We count the number of times ``_score_pass2_bucket`` is invoked by the
+    We count the number of times ``_score_pass2_bucket_relion_gpu_diff2`` is invoked by the
     bucketed path: that should equal the number of buckets, much less than
     ``n_images`` (which is what the per-image reference invokes).
     """
@@ -209,14 +217,14 @@ def test_bucketed_call_count_bounded_versus_perimage():
     # Count score-bucket invocations
     from recovar.em.dense_single_volume.helpers import sparse_pass2_bucketed as bucketed_mod
 
-    original_score = bucketed_mod._score_pass2_bucket
+    original_score = bucketed_mod._score_pass2_bucket_relion_gpu_diff2
     score_call_count = {"n": 0}
 
     def counting_score(*args, **kwargs):
         score_call_count["n"] += 1
         return original_score(*args, **kwargs)
 
-    bucketed_mod._score_pass2_bucket = counting_score
+    bucketed_mod._score_pass2_bucket_relion_gpu_diff2 = counting_score
     try:
         # Warm jit cache by running once
         compute_pass2_stats_sparse(
@@ -228,7 +236,7 @@ def test_bucketed_call_count_bounded_versus_perimage():
             ds, volume, mean_variance, noise_variance, translations, sig_indices, **common_kwargs
         )
     finally:
-        bucketed_mod._score_pass2_bucket = original_score
+        bucketed_mod._score_pass2_bucket_relion_gpu_diff2 = original_score
 
     # The number of bucketed score calls is the number of buckets.  With
     # n_images=24 and counts in [1, 12], we expect at most ~5-6 buckets

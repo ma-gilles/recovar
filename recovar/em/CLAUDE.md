@@ -134,7 +134,6 @@ texture linear interpolation, direct diff2 scoring, and FFTW-style centered
 complex image FFTs. RECOVAR RELION-parity refinement now enables these defaults unless
 explicitly overridden:
 
-- `RECOVAR_RELION_DIRECT_DIFF2_SCORING=1`
 - `RECOVAR_RELION_TEXTURE_INTERP=1`
 - `RECOVAR_RELION_NUMPY_IMAGE_FFT=1`
 
