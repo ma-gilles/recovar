@@ -21,10 +21,12 @@ def project_half_spectrum(
     *,
     half_volume: bool = False,
     max_r=DEFAULT_PROJECTION_MAX_R,
+    relion_texture_interp: bool = True,
 ):
     """Forward-slice one rotation block into half-spectrum image layout."""
     kwargs = {
         "half_image": True,
+        "relion_texture_interp": relion_texture_interp,
     }
     if half_volume:
         kwargs["half_volume"] = True
@@ -49,6 +51,7 @@ def compute_projections_block(
     *,
     max_r=DEFAULT_PROJECTION_MAX_R,
     return_abs2: bool = True,
+    relion_texture_interp: bool = True,
 ):
     """Forward-slice one rotation block and optionally compute ``|proj|^2``.
 
@@ -63,6 +66,7 @@ def compute_projections_block(
         volume_shape,
         disc_type,
         max_r=max_r,
+        relion_texture_interp=relion_texture_interp,
     )
     proj_abs2_half = jnp.abs(proj_half) ** 2 if return_abs2 else None
     return proj_half, proj_abs2_half

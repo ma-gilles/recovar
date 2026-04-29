@@ -216,7 +216,15 @@ def _jax_slice_half_image(volume, rotation_matrices, image_shape, volume_shape, 
 
 
 def slice_volume(
-    volume, rotation_matrices, image_shape, volume_shape, disc_type, half_volume=False, half_image=False, max_r=_AUTO
+    volume,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_volume=False,
+    half_image=False,
+    max_r=_AUTO,
+    relion_texture_interp=False,
 ):
     """Project volume to images via interpolation.
 
@@ -249,6 +257,7 @@ def slice_volume(
                 half_volume,
                 half_image,
                 _cuda_max_r(max_r, image_shape, volume_shape),
+                relion_texture_interp,
             )
         except TypeError:
             pass  # JVP through custom_vjp not supported — fall through to JAX
@@ -279,7 +288,15 @@ def slice_volume(
 
 
 def batch_slice_volume(
-    volumes, rotation_matrices, image_shape, volume_shape, disc_type, half_volume=False, half_image=False, max_r=_AUTO
+    volumes,
+    rotation_matrices,
+    image_shape,
+    volume_shape,
+    disc_type,
+    half_volume=False,
+    half_image=False,
+    max_r=_AUTO,
+    relion_texture_interp=False,
 ):
     """Project a batch of volumes to images.
 
@@ -310,6 +327,7 @@ def batch_slice_volume(
             half_volume=half_volume,
             half_image=half_image,
             max_r=_cuda_max_r(max_r, image_shape, volume_shape),
+            relion_texture_interp=relion_texture_interp,
         )
     return jax.vmap(
         lambda v: slice_volume(
@@ -321,6 +339,7 @@ def batch_slice_volume(
             half_volume=half_volume,
             half_image=half_image,
             max_r=max_r,
+            relion_texture_interp=relion_texture_interp,
         )
     )(volumes)
 

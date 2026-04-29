@@ -131,10 +131,8 @@ RELION mode, seed the starting current resolution from `init_fsc` or `ini_high`.
 Source-level RELION comparison showed the accelerated path uses
 `Projector::initialiseData(current_size)` with `r_max=current_size/2`, CUDA
 texture linear interpolation, direct diff2 scoring, and FFTW-style centered
-complex image FFTs. RECOVAR RELION-parity refinement now enables these defaults unless
-explicitly overridden:
-
-- `RECOVAR_RELION_TEXTURE_INTERP=1`
+complex image FFTs. RECOVAR RELION-parity refinement now routes dense/local EM
+projection helpers through the RELION texture-interpolation projector directly.
 
 Latest tiny 1k / 64³ replay with automatic defaults:
 `_agent_scratch/20260426_tiny1k_auto_parity_15715` on local A100, 69.5s,

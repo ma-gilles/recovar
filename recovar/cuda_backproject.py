@@ -227,10 +227,6 @@ def _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r
     )
 
 
-def _relion_texture_interp_enabled() -> bool:
-    return os.environ.get("RECOVAR_RELION_TEXTURE_INTERP", "0") == "1"
-
-
 def _project_ffi_kwargs(
     image_shape,
     volume_shape,
@@ -242,10 +238,8 @@ def _project_ffi_kwargs(
 ):
     """FFI kwargs for forward projection.
 
-    ``RECOVAR_RELION_TEXTURE_INTERP=1`` enables a diagnostic CUDA texture
-    interpolation path for full complex64 order-1 projections, matching
-    RELION's accelerated projector. It is intentionally env-gated because the
-    first implementation stages the volume into texture arrays per launch.
+    ``relion_texture_interp=True`` enables CUDA texture interpolation for
+    full-volume order-1 projections, matching RELION's accelerated projector.
     """
     kw, ih, iw_eff = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
     kw["relion_texture_interp"] = np.int64(int(relion_texture_interp))
@@ -423,17 +417,17 @@ def project(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_texture_interp: bool = False,
 ) -> jax.Array:
     """Project *volume* to 2D images.
 
-    Set ``RECOVAR_RELION_TEXTURE_INTERP=1`` before the first call to use the
-    gated RELION CUDA texture interpolation path. The flag is forwarded as a
-    static argument so manual and texture traces cannot alias in JAX caches.
+    ``relion_texture_interp=True`` uses RELION-style CUDA texture
+    interpolation where the FFI backend supports it. The flag is forwarded as
+    a static argument so manual and texture traces cannot alias in JAX caches.
     """
     global _texture_debug_keys
-    texture_interp = _relion_texture_interp_enabled()
     debug_key = (
-        texture_interp,
+        relion_texture_interp,
         getattr(volume, "dtype", None),
         order,
         half_volume,
@@ -445,7 +439,7 @@ def project(
     if os.environ.get("RECOVAR_DEBUG_TEXTURE_PROJECT", "0") == "1" and debug_key not in _texture_debug_keys:
         print(
             "[RECOVAR_TEXTURE_PROJECT]",
-            f"enabled={texture_interp}",
+            f"enabled={relion_texture_interp}",
             f"dtype={getattr(volume, 'dtype', None)}",
             f"order={order}",
             f"half_volume={half_volume}",
@@ -465,7 +459,7 @@ def project(
         half_volume,
         half_image,
         max_r,
-        texture_interp,
+        relion_texture_interp,
     )
 
 
@@ -520,7 +514,7 @@ def batch_backproject(
     )(images, rot6, volumes, **kw)
 
 
-@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7))
+@functools.partial(jax.jit, static_argnums=(2, 3, 4, 5, 6, 7, 8))
 def batch_project(
     volumes: jax.Array,
     rotation_matrices: jax.Array,
@@ -530,6 +524,7 @@ def batch_project(
     half_volume: bool = False,
     half_image: bool = False,
     max_r: float | None = None,
+    relion_texture_interp: bool = False,
 ) -> jax.Array:
     """Project a batch of volumes to 2D images via vmap over single-volume project.
 
@@ -570,6 +565,7 @@ def batch_project(
             half_volume=half_volume,
             half_image=half_image,
             max_r=max_r,
+            relion_texture_interp=relion_texture_interp,
         )
     )(volumes)
 

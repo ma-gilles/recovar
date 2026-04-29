@@ -3494,10 +3494,7 @@ class TestRelionDefault:
     ):
         """Calling without mode= uses the RELION path."""
         sentinel = {"convergence_state": object()}
-        called = {"enabled_defaults": False, "ran_relion": False}
-
-        def fake_enable_defaults():
-            called["enabled_defaults"] = True
+        called = {"ran_relion": False}
 
         def fake_relion_loop(**kwargs):
             called["ran_relion"] = True
@@ -3506,11 +3503,6 @@ class TestRelionDefault:
             assert kwargs["init_healpix_order"] == 2
             return sentinel
 
-        monkeypatch.setattr(
-            iteration_loop_module,
-            "_enable_relion_parity_defaults",
-            fake_enable_defaults,
-        )
         monkeypatch.setattr(
             iteration_loop_module,
             "_run_relion_iteration_loop",
@@ -3534,7 +3526,7 @@ class TestRelionDefault:
         )
 
         assert result is sentinel
-        assert called == {"enabled_defaults": True, "ran_relion": True}
+        assert called == {"ran_relion": True}
 
 
 # ===========================================================================
