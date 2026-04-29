@@ -989,7 +989,6 @@ def main():
         rotations=None,
         translations=None,
         disc_type="linear_interp",
-        mode="relion",
         max_iter=args.max_iter,
         image_batch_size=500,
         rotation_block_size=5000,

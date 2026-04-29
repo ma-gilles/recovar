@@ -131,7 +131,7 @@ RELION mode, seed the starting current resolution from `init_fsc` or `ini_high`.
 Source-level RELION comparison showed the accelerated path uses
 `Projector::initialiseData(current_size)` with `r_max=current_size/2`, CUDA
 texture linear interpolation, direct diff2 scoring, and FFTW-style centered
-complex image FFTs. RECOVAR `mode="relion"` now enables these defaults unless
+complex image FFTs. RECOVAR RELION-parity refinement now enables these defaults unless
 explicitly overridden:
 
 - `RECOVAR_RELION_DIRECT_DIFF2_SCORING=1`
@@ -499,7 +499,7 @@ prevent the same drift.
 **Read `docs/math/plan_relion_parity.md` before making any changes to this module.**
 
 The plan describes a 7-phase effort to bring this module to RELION feature parity.
-All new work targets `dense_single_volume/em_engine.py`. Do not modify the legacy
+All new work targets `dense_single_volume/em_engine.py`. Do not modify the older
 `core.py`/`m_step.py` path unless needed for shared utilities. Do not modify
 `heterogeneity.py` (separate owners).
 

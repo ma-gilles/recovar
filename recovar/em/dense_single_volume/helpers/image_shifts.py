@@ -12,8 +12,8 @@ def integer_pre_shifts_or_none(image_pre_shifts, image_indices, *, batch=None, a
     """Return rounded integer pre-shifts when all selected shifts are integral.
 
     RELION rounds ``old_offset`` and applies that integer offset to the
-    real-space image with zero fill before FFT.  Non-integral shifts are kept
-    on the legacy Fourier-phase path for tests and non-RELION callers.
+    real-space image with zero fill before FFT.  Non-integral shifts use
+    Fourier phases for tests and non-RELION callers.
     """
 
     if image_pre_shifts is None:

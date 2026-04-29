@@ -129,7 +129,7 @@ def _prepare_per_image_pass2_inputs(
 ):
     """Compute per-image oversampled rotations / parent maps / candidate masks.
 
-    Mirrors the per-image branch in the legacy reference implementation in
+    Mirrors the per-image branch in the reference implementation in
     :func:`compute_pass2_stats_sparse_perimage_reference` exactly so the
     batched path is a strict per-image equivalent.
     """
@@ -770,9 +770,9 @@ def compute_pass2_stats_sparse_bucketed(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
 
-    # Recon volume layout: match the legacy per-image reference path by
-    # default, but allow native RELION-style half-volume accumulation as an
-    # isolated diagnostic for M-step parity against BackProjector.
+    # Recon volume layout: match the per-image reference path by default, but
+    # allow native RELION-style half-volume accumulation as an isolated
+    # diagnostic for M-step parity against BackProjector.
     use_native_half_volume_mstep = os.environ.get(
         "RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME",
         "",

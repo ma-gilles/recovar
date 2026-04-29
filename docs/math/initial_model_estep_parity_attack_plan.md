@@ -20,7 +20,7 @@ scoring divergence is the dominant gap, not pruning or perturbation.**
 
 The user's key observation: standard EM refinement in recovar achieves
 high RELION parity. We've been bypassing it. The existing
-`refine_single_volume(mode="relion")` in
+`refine_single_volume` in
 `recovar/em/dense_single_volume/iteration_loop.py` already supports:
 
 - `adaptive_oversampling=1`, `adaptive_fraction=0.999`,
@@ -37,7 +37,7 @@ scratch in `gpu_pipeline.run_iter_gpu_vdam`.
 
 ## The fixture mismatch
 
-`refine_single_volume(mode="relion")` expects an AUTO-REFINE RELION run
+`refine_single_volume` expects an AUTO-REFINE RELION run
 (`--auto_refine --split_random_halves`) with `run_itNNN_half1_model.star`
 files. The InitialModel fixture used here has `--grad --denovo_3dref`
 output without those files. The replay path doesn't directly apply.
@@ -112,7 +112,7 @@ already been demonstrated by the existing test infrastructure.
 
 Tested Path A end-to-end. Generated a fresh RELION `--auto_refine`
 reference run with the same particles + the existing E-step
-instrumentation patch, then drove `refine_single_volume(mode="relion",
+instrumentation patch, then drove `refine_single_volume(
 perturb_replay_relion_dir=...)` for one iteration via
 `scripts/run_multi_iter_parity.py`. Result:
 
@@ -120,7 +120,7 @@ perturb_replay_relion_dir=...)` for one iteration via
   pose refinement vs RELION: mean angle distance **126.8°**, **0%**
   within 5° of RELION's poses
 
-That is, the validated `refine_single_volume(mode="relion")` codepath
+That is, the validated `refine_single_volume` codepath
 gives essentially random iter-1 poses vs RELION's iter-1, even with
 all parity machinery enabled (perturbation replay, adaptive
 oversampling, firstiter_cc emulation). Same level we got with raw
@@ -167,7 +167,7 @@ Two parallel paths:
    500-particle box-64 fixture.
 2. Add the same instrumentation (`docs/patches/relion_estep_dump.patch`
    already in place; just enable for `--auto_refine` runs).
-3. Drive `refine_single_volume(mode="relion", perturb_replay_relion_dir=...,
+3. Drive `refine_single_volume(perturb_replay_relion_dir=...,
    adaptive_oversampling=1, save_intermediates_dir=...)` for iter 1.
 4. Compare `it000_Ft_y_0.npy` → BPref layout vs RELION's dumped
    `pipe_it1_c0_bp_data_pre_reweight.bin`.
@@ -176,7 +176,7 @@ Two parallel paths:
    M-step swapped to the bit-exact chain we already have).
 
 ### Path B — InitialModel-specific replay
-1. Add a `pseudo_halfsets=True` mode to `refine_single_volume(mode="relion")`
+1. Add a `pseudo_halfsets=True` option to `refine_single_volume`
    that mirrors RELION's halfset alternation logic.
 2. Add the equivalent of `--grad --denovo_3dref` E-step variations
    (mostly the absence of FSC join and the gradient blend M-step) on
