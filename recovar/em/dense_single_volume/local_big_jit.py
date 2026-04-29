@@ -195,7 +195,6 @@ def _score_normalize_mstep(
         "projection_max_r",
         "disable_adjoint_y",
         "disable_adjoint_ctf",
-        "use_native_half_volume_mstep",
         "accumulate_noise",
         "return_noise_split",
         "n_shells",
@@ -258,7 +257,6 @@ def run_local_bucket_big_jit(
     projection_max_r,
     disable_adjoint_y: bool,
     disable_adjoint_ctf: bool,
-    use_native_half_volume_mstep: bool,
     accumulate_noise: bool,
     return_noise_split: bool,
     n_shells: int,
@@ -455,7 +453,7 @@ def run_local_bucket_big_jit(
                 recon_volume_shape,
                 disc_type,
                 True,
-                use_native_half_volume_mstep,
+                True,
                 projection_max_r,
             )
         else:
@@ -467,7 +465,7 @@ def run_local_bucket_big_jit(
                 recon_volume_shape,
                 disc_type,
                 True,
-                use_native_half_volume_mstep,
+                True,
             )
         Ft_y = updated_volumes[0]
         Ft_ctf = updated_volumes[1]
@@ -482,7 +480,7 @@ def run_local_bucket_big_jit(
                 recon_volume_shape,
                 disc_type,
                 True,
-                use_native_half_volume_mstep,
+                True,
                 projection_max_r,
             )[0]
         else:
@@ -494,7 +492,7 @@ def run_local_bucket_big_jit(
                 recon_volume_shape,
                 disc_type,
                 True,
-                use_native_half_volume_mstep,
+                True,
             )[0]
     elif not disable_adjoint_ctf:
         if use_window:
@@ -507,7 +505,7 @@ def run_local_bucket_big_jit(
                 recon_volume_shape,
                 disc_type,
                 True,
-                use_native_half_volume_mstep,
+                True,
                 projection_max_r,
             )[0]
         else:
@@ -519,7 +517,7 @@ def run_local_bucket_big_jit(
                 recon_volume_shape,
                 disc_type,
                 True,
-                use_native_half_volume_mstep,
+                True,
             )[0]
 
     if accumulate_noise:

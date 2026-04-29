@@ -324,9 +324,7 @@ def backproject_indexed(
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
-    kw["relion_fold_x"] = np.int64(
-        int(os.environ.get("RECOVAR_RELION_BACKPROJECT_FOLD_X", "0").lower() in {"1", "true", "yes", "on"})
-    )
+    kw["relion_fold_x"] = np.int64(int(half_volume))
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volume))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volume.shape, volume.dtype)
@@ -356,9 +354,7 @@ def batch_backproject_indexed(
     _ensure_ffi()
     _validate_inputs(volume_shape, image_shape, order, half_volume, half_image)
     kw, _, _ = _ffi_kwargs(image_shape, volume_shape, order, half_volume, half_image, max_r)
-    kw["relion_fold_x"] = np.int64(
-        int(os.environ.get("RECOVAR_RELION_BACKPROJECT_FOLD_X", "0").lower() in {"1", "true", "yes", "on"})
-    )
+    kw["relion_fold_x"] = np.int64(int(half_volume))
     rot6 = _rot_to_compact(rotation_matrices, _volume_real_dtype(volumes))
     pixel_indices = jnp.asarray(pixel_indices, dtype=jnp.int32).reshape(-1)
     out_type = jax.ShapeDtypeStruct(volumes.shape, volumes.dtype)

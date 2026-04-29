@@ -209,12 +209,6 @@ def _enable_relion_parity_defaults():
         "RECOVAR_RELION_TEXTURE_INTERP": "1",
         # RELION image preprocessing uses FFTW-style centered complex FFTs.
         "RECOVAR_RELION_NUMPY_IMAGE_FFT": "1",
-        # RELION's BackProjector accumulates into a compact half-volume,
-        # folds negative stored-axis coordinates before interpolation, then
-        # enforces Hermitian symmetry on the x=0 plane before maximization.
-        "RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME": "1",
-        "RECOVAR_RELION_BACKPROJECT_FOLD_X": "1",
-        "RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME_ENFORCE_X0": "1",
     }
     enabled = []
     for name, value in defaults.items():

@@ -28,10 +28,9 @@ from recovar.em.dense_single_volume.helpers.env_flags import (
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-    enforce_half_volume_x0_if_requested,
+    enforce_half_volume_x0,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
-    native_half_volume_mstep_enabled,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
@@ -684,12 +683,8 @@ def run_local_em_exact(
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
     else:
         recon_volume_shape = volume_shape
-    use_native_half_volume_mstep = native_half_volume_mstep_enabled()
-    if use_native_half_volume_mstep:
-        logger.info("Exact local M-step: using native half-volume RELION backprojection")
-        recon_accum_shape = half_volume_accumulator_shape(recon_volume_shape)
-    else:
-        recon_accum_shape = recon_volume_shape
+    logger.info("Exact local M-step: using native half-volume RELION backprojection")
+    recon_accum_shape = half_volume_accumulator_shape(recon_volume_shape)
     recon_volume_size = int(np.prod(recon_accum_shape))
 
     window_spec = make_fourier_window_spec(
@@ -1094,7 +1089,6 @@ def run_local_em_exact(
                 projection_max_r=projection_max_r_big_jit,
                 disable_adjoint_y=disable_adjoint_y,
                 disable_adjoint_ctf=disable_adjoint_ctf,
-                use_native_half_volume_mstep=use_native_half_volume_mstep,
                 accumulate_noise=accumulate_noise,
                 return_noise_split=return_noise_split,
                 n_shells=n_shells_arg,
@@ -1556,7 +1550,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    use_native_half_volume_mstep,
+                    True,
                     float(current_size // 2),
                 )
             else:
@@ -1568,7 +1562,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    use_native_half_volume_mstep,
+                    True,
                 )
             if return_profile:
                 _block_until_ready(Ft_y)
@@ -1586,7 +1580,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    use_native_half_volume_mstep,
+                    True,
                     float(current_size // 2),
                 )
             else:
@@ -1598,7 +1592,7 @@ def run_local_em_exact(
                     recon_volume_shape,
                     "linear_interp",
                     True,
-                    use_native_half_volume_mstep,
+                    True,
                 )
             if return_profile:
                 _block_until_ready(Ft_ctf)
@@ -1769,15 +1763,14 @@ def run_local_em_exact(
         timing.host_stats_s += time.time() - host_stats_t0
 
     final_accumulator_t0 = time.time()
-    if use_native_half_volume_mstep:
-        Ft_y, Ft_ctf = enforce_half_volume_x0_if_requested(
-            Ft_y,
-            Ft_ctf,
-            recon_volume_shape,
-            logger=logger,
-            label="Exact local",
-        )
-        Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
+    Ft_y, Ft_ctf = enforce_half_volume_x0(
+        Ft_y,
+        Ft_ctf,
+        recon_volume_shape,
+        logger=logger,
+        label="Exact local",
+    )
+    Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
 
     if return_profile:
         _block_until_ready(Ft_y, Ft_ctf)
