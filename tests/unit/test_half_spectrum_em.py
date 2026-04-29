@@ -835,6 +835,167 @@ class TestFullIterationHalfMatches:
         assert np.all(np.asarray(stats.max_posterior_per_image) >= 0.0)
         assert np.all(np.asarray(stats.max_posterior_per_image) <= 1.0)
 
+    def test_class_log_prior_shifts_evidence_without_changing_single_class_posterior(self, seeded_inputs):
+        """A uniform class prior shifts scores but cancels in a single-class posterior."""
+        s = seeded_inputs
+        ds = s["dataset"]
+        volume = s["volume"]
+        noise_variance = s["noise_variance"]
+        rotations = np.array(s["rotations"])
+        translations = np.array(s["translations"])
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+        class_log_prior = float(np.log(0.25))
+
+        _, ha_base, Ft_y_base, Ft_ctf_base, stats_base, _ = run_em(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            return_stats=True,
+            accumulate_noise=True,
+            sparse_pass2=False,
+        )
+        _, ha_prior, Ft_y_prior, Ft_ctf_prior, stats_prior = run_em(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            class_log_prior=class_log_prior,
+            return_stats=True,
+            sparse_pass2=False,
+        )
+
+        np.testing.assert_array_equal(ha_prior, ha_base)
+        np.testing.assert_allclose(np.asarray(Ft_y_prior), np.asarray(Ft_y_base), rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(np.asarray(Ft_ctf_prior), np.asarray(Ft_ctf_base), rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(
+            np.asarray(stats_prior.log_evidence_per_image),
+            np.asarray(stats_base.log_evidence_per_image) + class_log_prior,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            np.asarray(stats_prior.best_log_score_per_image),
+            np.asarray(stats_base.best_log_score_per_image) + class_log_prior,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            np.asarray(stats_prior.max_posterior_per_image),
+            np.asarray(stats_base.max_posterior_per_image),
+            rtol=1e-5,
+            atol=1e-6,
+        )
+
+    def test_external_log_evidence_normalizes_dense_mstep_against_global_posterior(self, seeded_inputs):
+        """External evidence normalizer scales this class's posterior mass."""
+        s = seeded_inputs
+        ds = s["dataset"]
+        volume = s["volume"]
+        noise_variance = s["noise_variance"]
+        rotations = np.array(s["rotations"])
+        translations = np.array(s["translations"])
+        mean_variance = np.ones(VOLUME_SIZE, dtype=np.float32) * 100.0
+
+        _, ha_base, Ft_y_base, Ft_ctf_base, stats_base, _ = run_em(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            return_stats=True,
+            accumulate_noise=True,
+            sparse_pass2=False,
+        )
+        batch_data, _, _, ctf_params, _, _, _ = next(
+            ds.iter_batches(N_IMAGES, indices=np.arange(N_IMAGES), by_image=False)
+        )
+        config = ForwardModelConfig.from_dataset(
+            ds,
+            disc_type="linear_interp",
+            process_fn=ds.process_images,
+        )
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
+            jnp.asarray(batch_data),
+            jnp.asarray(ctf_params),
+            noise_variance,
+            translations,
+            config,
+        )
+        proj_half, proj_abs2_half = _compute_projections_block(
+            volume,
+            rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            "linear_interp",
+        )
+        half_weights = make_half_image_weights(IMAGE_SHAPE)
+        scores = _e_step_block_scores(
+            shifted_half,
+            batch_norm,
+            ctf2_over_nv_half,
+            proj_half * half_weights,
+            proj_abs2_half * half_weights,
+            half_weights,
+            N_IMAGES,
+            N_TRANSLATIONS,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+        )
+        scores_flat = np.asarray(scores).reshape(N_IMAGES, -1)
+        max_scores = np.max(scores_flat, axis=1)
+        direct_log_z = max_scores + np.log(
+            np.sum(np.exp((scores_flat - max_scores[:, None]).astype(np.float64)), axis=1),
+        )
+        log_score_offset = -0.5 * np.asarray(batch_norm).reshape(N_IMAGES)
+        external_log_evidence = direct_log_z + log_score_offset + np.log(2.0)
+        _, ha_scaled, Ft_y_scaled, Ft_ctf_scaled, stats_scaled, _ = run_em(
+            ds,
+            volume,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            "linear_interp",
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            normalization_log_evidence=external_log_evidence,
+            return_stats=True,
+            accumulate_noise=True,
+            sparse_pass2=False,
+        )
+
+        np.testing.assert_array_equal(ha_scaled, ha_base)
+        np.testing.assert_allclose(np.asarray(Ft_y_scaled), 0.5 * np.asarray(Ft_y_base), rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(np.asarray(Ft_ctf_scaled), 0.5 * np.asarray(Ft_ctf_base), rtol=1e-5, atol=1e-5)
+        np.testing.assert_allclose(
+            np.asarray(stats_scaled.log_evidence_per_image),
+            external_log_evidence,
+            rtol=1e-5,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            np.asarray(stats_scaled.max_posterior_per_image),
+            0.5 * np.asarray(stats_base.max_posterior_per_image),
+            rtol=1e-5,
+            atol=1e-6,
+        )
+
     def test_return_stats_stable_with_large_image_norm_constant(self, seeded_inputs):
         """Large per-image norm constants should not collapse the posterior to uniform."""
         s = seeded_inputs
