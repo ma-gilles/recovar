@@ -21,6 +21,7 @@ from recovar.em.dense_single_volume.em_primitives import (
     _compute_noise_block,
     _compute_projections_block,
 )
+from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_auto_bool,
@@ -238,16 +239,6 @@ def _exact_local_max_hypotheses_per_microbatch(default: int | None, n_windowed: 
         )
     return value
 
-def _fetch_indexed_batch(experiment_dataset, image_indices):
-    batch_iter = experiment_dataset.iter_batches(
-        len(image_indices),
-        indices=np.asarray(image_indices),
-        by_image=False,
-    )
-    batch_data, _, _, ctf_params, _, _, indices = next(batch_iter)
-    return batch_data, ctf_params, np.asarray(indices)
-
-
 def _local_raw_cache_enabled(n_images: int, image_shape, dtype) -> bool:
     parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_RAW_CACHE", default="auto")
     if parsed is not None:
@@ -289,7 +280,7 @@ def _build_local_raw_cache(experiment_dataset, n_images: int):
     """
 
     indices = np.arange(int(n_images), dtype=np.int32)
-    batch_data, ctf_params, fetched_indices = _fetch_indexed_batch(experiment_dataset, indices)
+    batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, indices)
     fetched_indices = np.asarray(fetched_indices, dtype=np.int32)
     batch_np = np.asarray(batch_data)
     ctf_np = np.asarray(ctf_params)
@@ -891,7 +882,7 @@ def run_local_em_exact(
             ctf_params = ctf_param_cache[bucket_image_indices]
             fetched_indices = bucket_image_indices
         elif raw_batch_cache is None:
-            batch_data, ctf_params, fetched_indices = _fetch_indexed_batch(experiment_dataset, bucket.image_indices)
+            batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, bucket.image_indices)
         else:
             bucket_image_indices = np.asarray(bucket.image_indices, dtype=np.int32)
             batch_data = raw_batch_cache[bucket_image_indices]

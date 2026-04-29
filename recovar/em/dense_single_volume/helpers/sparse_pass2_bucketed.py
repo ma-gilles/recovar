@@ -45,6 +45,7 @@ from recovar.em.dense_single_volume.em_primitives import (
     _compute_noise_block,
     _compute_projections_block,
 )
+from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
@@ -434,16 +435,6 @@ def _normalize_pass2_bucket_with_log_z(scores, log_z):
 # ---------------------------------------------------------------------------
 # Main bucketed driver
 # ---------------------------------------------------------------------------
-
-
-def _fetch_indexed_batch(experiment_dataset, image_indices):
-    batch_iter = experiment_dataset.iter_batches(
-        len(image_indices),
-        indices=np.asarray(image_indices),
-        by_image=False,
-    )
-    batch_data, _, _, ctf_params, _, _, indices = next(batch_iter)
-    return jnp.asarray(batch_data), ctf_params, np.asarray(indices)
 
 
 def _reorder_to_indices(image_indices_returned, requested_image_indices, *arrays):
@@ -983,7 +974,8 @@ def compute_pass2_stats_sparse_bucketed(
 
         # Fetch images (the dataset may reorder; we reorder our padded arrays
         # to match.)
-        batch_data, ctf_params, fetched_indices = _fetch_indexed_batch(experiment_dataset, image_indices)
+        batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, image_indices)
+        batch_data = jnp.asarray(batch_data)
         # Reorder bucket arrays to match fetched_indices
         if not np.array_equal(np.asarray(fetched_indices), image_indices):
             (
