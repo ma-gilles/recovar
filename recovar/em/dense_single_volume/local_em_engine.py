@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 
 import jax.numpy as jnp
 import numpy as np
@@ -150,6 +151,25 @@ class _LocalTiming(TimingAccumulator):
         super().__init__(_LOCAL_ACCOUNTED_TIMING_FIELDS)
 
 
+@dataclass
+class _LocalPostprocessBuffers:
+    hard_assignment: np.ndarray
+    log_evidence_per_image: np.ndarray
+    best_log_score_per_image: np.ndarray
+    max_posterior_per_image: np.ndarray
+    rotation_posterior_sums: np.ndarray
+    transfer_profile: dict[str, float]
+    chunk_nonzero_posterior_rows: list[int]
+    chunk_significant_samples: list[int]
+    chunk_reconstruction_rows: list[int]
+    seen_global_rotations: np.ndarray
+    seen_nonzero_global_rotations: np.ndarray
+    seen_reconstruction_global_rotations: np.ndarray
+    best_pose_rotations: np.ndarray | None = None
+    best_pose_translations: np.ndarray | None = None
+    best_pose_rotation_ids: np.ndarray | None = None
+
+
 def _local_em_return_tuple(
     Ft_y,
     Ft_ctf,
@@ -180,6 +200,101 @@ def _local_em_return_tuple(
     if return_profile:
         result.append(profile_summary)
     return tuple(result)
+
+
+def _postprocess_local_bucket(
+    *,
+    image_indices,
+    local_rotation_ids,
+    local_rotation_mask,
+    local_rotations,
+    local_rotation_posterior_ids,
+    translation_grid,
+    n_trans,
+    best_argmax,
+    batch_norm,
+    log_Z,
+    best_log_score,
+    max_posterior,
+    probs_sum_t,
+    n_significant_samples,
+    collect_profile_stats: bool,
+    reconstruction_row_count: int,
+    reconstruction_take_indices,
+    reconstruction_pack_mask,
+    buffers: _LocalPostprocessBuffers,
+):
+    """Scatter one local bucket's host-side pose, posterior, and profile stats."""
+
+    image_indices_np = np.asarray(image_indices, dtype=np.int32)
+    local_rotation_ids_np = np.asarray(local_rotation_ids, dtype=np.int32)
+    local_mask_np = np.asarray(local_rotation_mask, dtype=bool)
+
+    transfer_t0 = time.time()
+    best_rot_idx = np.asarray(best_argmax // n_trans, dtype=np.int32)
+    best_trans_idx = np.asarray(best_argmax % n_trans, dtype=np.int32)
+    buffers.transfer_profile["postprocess_argmax_to_host_s"] += time.time() - transfer_t0
+
+    best_rotation_ids = np.take_along_axis(
+        local_rotation_ids_np,
+        best_rot_idx[:, None],
+        axis=1,
+    ).reshape(-1)
+    if np.any(best_rotation_ids < 0):
+        raise RuntimeError("exact local engine selected padded local rotation")
+    buffers.hard_assignment[image_indices_np] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
+
+    transfer_t0 = time.time()
+    log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+    log_z_np = np.asarray(log_Z, dtype=np.float32)
+    best_log_score_np = np.asarray(best_log_score, dtype=np.float32)
+    max_posterior_np = np.asarray(max_posterior, dtype=np.float32)
+    buffers.transfer_profile["postprocess_scores_to_host_s"] += time.time() - transfer_t0
+    buffers.log_evidence_per_image[image_indices_np] = log_z_np + log_score_offset.astype(np.float32)
+    buffers.best_log_score_per_image[image_indices_np] = best_log_score_np + log_score_offset.astype(np.float32)
+    buffers.max_posterior_per_image[image_indices_np] = max_posterior_np
+
+    transfer_t0 = time.time()
+    probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
+    n_significant_samples_np = (
+        np.asarray(n_significant_samples, dtype=np.int32) if collect_profile_stats else None
+    )
+    buffers.transfer_profile["postprocess_posterior_to_host_s"] += time.time() - transfer_t0
+
+    posterior_ids_np = (
+        local_rotation_ids_np
+        if local_rotation_posterior_ids is None
+        else np.asarray(local_rotation_posterior_ids, dtype=np.int32)
+    )
+    np.add.at(buffers.rotation_posterior_sums, posterior_ids_np[local_mask_np], probs_sum_t_np[local_mask_np])
+
+    significant_sample_count = 0
+    if collect_profile_stats:
+        nonzero_mask = (probs_sum_t_np > 0.0) & local_mask_np
+        significant_sample_count = int(np.sum(n_significant_samples_np, dtype=np.int64))
+        buffers.chunk_nonzero_posterior_rows.append(int(np.count_nonzero(nonzero_mask)))
+        buffers.chunk_significant_samples.append(significant_sample_count)
+        buffers.chunk_reconstruction_rows.append(int(reconstruction_row_count))
+
+    if buffers.seen_global_rotations.size:
+        nonzero_mask = (probs_sum_t_np > 0.0) & local_mask_np
+        buffers.seen_global_rotations[posterior_ids_np[local_mask_np]] = True
+        buffers.seen_nonzero_global_rotations[posterior_ids_np[nonzero_mask]] = True
+        packed_posterior_ids_np = np.take_along_axis(posterior_ids_np, reconstruction_take_indices, axis=1)
+        buffers.seen_reconstruction_global_rotations[packed_posterior_ids_np[reconstruction_pack_mask]] = True
+
+    if buffers.best_pose_rotations is not None:
+        buffers.best_pose_rotations[image_indices_np] = np.take_along_axis(
+            np.asarray(local_rotations, dtype=np.float32),
+            best_rot_idx[:, None, None, None],
+            axis=1,
+        ).reshape(-1, 3, 3)
+        buffers.best_pose_translations[image_indices_np] = np.asarray(translation_grid, dtype=np.float32)[
+            best_trans_idx
+        ]
+        buffers.best_pose_rotation_ids[image_indices_np] = best_rotation_ids.astype(np.int32, copy=False)
+
+    return significant_sample_count, int(reconstruction_row_count)
 
 
 def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_params):
@@ -697,6 +812,23 @@ def run_local_em_exact(
     local_total_hypotheses = 0
     total_significant_samples = 0
     total_reconstruction_rows = 0
+    postprocess_buffers = _LocalPostprocessBuffers(
+        hard_assignment=hard_assignment,
+        log_evidence_per_image=log_evidence_per_image,
+        best_log_score_per_image=best_log_score_per_image,
+        max_posterior_per_image=max_posterior_per_image,
+        rotation_posterior_sums=rotation_posterior_sums,
+        transfer_profile=transfer_profile,
+        chunk_nonzero_posterior_rows=chunk_nonzero_posterior_rows,
+        chunk_significant_samples=chunk_significant_samples,
+        chunk_reconstruction_rows=chunk_reconstruction_rows,
+        seen_global_rotations=seen_global_rotations,
+        seen_nonzero_global_rotations=seen_nonzero_global_rotations,
+        seen_reconstruction_global_rotations=seen_reconstruction_global_rotations,
+        best_pose_rotations=best_pose_rotations,
+        best_pose_translations=best_pose_translations,
+        best_pose_rotation_ids=best_pose_rotation_ids,
+    )
     max_hypotheses_per_microbatch = _exact_local_max_hypotheses_per_microbatch(
         max_hypotheses_per_microbatch,
         n_windowed,
@@ -1030,65 +1162,34 @@ def run_local_em_exact(
             timing.pack_s += time.time() - pack_t0
 
             postprocess_t0 = time.time()
-            transfer_t0 = time.time()
-            best_rot_idx = np.asarray(best_argmax[:unpadded_batch_size] // n_trans, dtype=np.int32)
-            best_trans_idx = np.asarray(best_argmax[:unpadded_batch_size] % n_trans, dtype=np.int32)
-            transfer_profile["postprocess_argmax_to_host_s"] += time.time() - transfer_t0
-            best_rotation_ids = np.take_along_axis(
-                np.asarray(bucket.local_rotation_ids[:unpadded_batch_size], dtype=np.int32),
-                best_rot_idx[:, None],
-                axis=1,
-            ).reshape(-1)
-            if np.any(best_rotation_ids < 0):
-                raise RuntimeError("exact local engine selected padded local rotation")
-            hard_assignment[unpadded_bucket.image_indices] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
-            transfer_t0 = time.time()
-            log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm[:unpadded_batch_size], axis=1), dtype=np.float64)
-            log_z_np = np.asarray(log_Z[:unpadded_batch_size], dtype=np.float32)
-            best_log_score_np = np.asarray(best_log_score[:unpadded_batch_size], dtype=np.float32)
-            max_posterior_np = np.asarray(max_posterior[:unpadded_batch_size], dtype=np.float32)
-            transfer_profile["postprocess_scores_to_host_s"] += time.time() - transfer_t0
-            log_evidence_per_image[unpadded_bucket.image_indices] = log_z_np + log_score_offset.astype(np.float32)
-            best_log_score_per_image[unpadded_bucket.image_indices] = best_log_score_np + log_score_offset.astype(np.float32)
-            max_posterior_per_image[unpadded_bucket.image_indices] = max_posterior_np
-
-            transfer_t0 = time.time()
-            probs_sum_t_np = np.asarray(probs_sum_t[:unpadded_batch_size], dtype=np.float64)
-            n_significant_samples_np = (
-                np.asarray(n_significant_samples[:unpadded_batch_size], dtype=np.int32) if collect_profile_stats else None
+            significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
+                image_indices=unpadded_bucket.image_indices,
+                local_rotation_ids=bucket.local_rotation_ids[:unpadded_batch_size],
+                local_rotation_mask=bucket.local_rotation_mask[:unpadded_batch_size],
+                local_rotations=bucket.local_rotations[:unpadded_batch_size],
+                local_rotation_posterior_ids=(
+                    None
+                    if bucket.local_rotation_posterior_ids is None
+                    else bucket.local_rotation_posterior_ids[:unpadded_batch_size]
+                ),
+                translation_grid=local_layout.translation_grid,
+                n_trans=n_trans,
+                best_argmax=best_argmax[:unpadded_batch_size],
+                batch_norm=batch_norm[:unpadded_batch_size],
+                log_Z=log_Z[:unpadded_batch_size],
+                best_log_score=best_log_score[:unpadded_batch_size],
+                max_posterior=max_posterior[:unpadded_batch_size],
+                probs_sum_t=probs_sum_t[:unpadded_batch_size],
+                n_significant_samples=n_significant_samples[:unpadded_batch_size],
+                collect_profile_stats=collect_profile_stats,
+                reconstruction_row_count=reconstruction_row_count,
+                reconstruction_take_indices=reconstruction_take_indices,
+                reconstruction_pack_mask=reconstruction_pack_mask_np,
+                buffers=postprocess_buffers,
             )
-            transfer_profile["postprocess_posterior_to_host_s"] += time.time() - transfer_t0
-            local_ids_np = np.asarray(bucket.local_rotation_ids[:unpadded_batch_size], dtype=np.int32)
-            posterior_ids_np = (
-                local_ids_np
-                if bucket.local_rotation_posterior_ids is None
-                else np.asarray(bucket.local_rotation_posterior_ids[:unpadded_batch_size], dtype=np.int32)
-            )
-            np.add.at(rotation_posterior_sums, posterior_ids_np[local_mask_np], probs_sum_t_np[local_mask_np])
             if collect_profile_stats:
-                nonzero_mask = (probs_sum_t_np > 0.0) & local_mask_np
-                chunk_nonzero_posterior_rows.append(int(np.count_nonzero(nonzero_mask)))
-                chunk_significant_samples.append(int(np.sum(n_significant_samples_np, dtype=np.int64)))
-                chunk_reconstruction_rows.append(int(reconstruction_row_count))
-                total_significant_samples += int(np.sum(n_significant_samples_np, dtype=np.int64))
+                total_significant_samples += significant_sample_count
                 total_reconstruction_rows += int(reconstruction_row_count)
-            if seen_global_rotations.size:
-                nonzero_mask = (probs_sum_t_np > 0.0) & local_mask_np
-                seen_global_rotations[posterior_ids_np[local_mask_np]] = True
-                seen_nonzero_global_rotations[posterior_ids_np[nonzero_mask]] = True
-                packed_posterior_ids_np = np.take_along_axis(posterior_ids_np, reconstruction_take_indices, axis=1)
-                seen_reconstruction_global_rotations[packed_posterior_ids_np[reconstruction_pack_mask_np]] = True
-            if return_best_pose_details:
-                best_pose_rotations[unpadded_bucket.image_indices] = np.take_along_axis(
-                    np.asarray(bucket.local_rotations[:unpadded_batch_size], dtype=np.float32),
-                    best_rot_idx[:, None, None, None],
-                    axis=1,
-                ).reshape(-1, 3, 3)
-                best_pose_translations[unpadded_bucket.image_indices] = np.asarray(
-                    local_layout.translation_grid,
-                    dtype=np.float32,
-                )[best_trans_idx]
-                best_pose_rotation_ids[unpadded_bucket.image_indices] = best_rotation_ids.astype(np.int32, copy=False)
             timing.postprocess_s += time.time() - postprocess_t0
 
             host_stats_t0 = time.time()
@@ -1599,71 +1700,30 @@ def run_local_em_exact(
             timing.noise_s += time.time() - noise_t0
 
         postprocess_t0 = time.time()
-        transfer_t0 = time.time()
-        best_rot_idx = np.asarray(best_argmax // n_trans, dtype=np.int32)
-        best_trans_idx = np.asarray(best_argmax % n_trans, dtype=np.int32)
-        transfer_profile["postprocess_argmax_to_host_s"] += time.time() - transfer_t0
-        best_rotation_ids = np.take_along_axis(
-            np.asarray(bucket.local_rotation_ids, dtype=np.int32),
-            best_rot_idx[:, None],
-            axis=1,
-        ).reshape(-1)
-        if np.any(best_rotation_ids < 0):
-            raise RuntimeError("exact local engine selected padded local rotation")
-        hard_assignment[bucket.image_indices] = (best_rotation_ids * n_trans + best_trans_idx).astype(np.int32)
-        transfer_t0 = time.time()
-        log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
-        log_z_np = np.asarray(log_Z, dtype=np.float32)
-        best_log_score_np = np.asarray(best_log_score, dtype=np.float32)
-        max_posterior_np = np.asarray(max_posterior, dtype=np.float32)
-        transfer_profile["postprocess_scores_to_host_s"] += time.time() - transfer_t0
-        log_evidence_per_image[bucket.image_indices] = log_z_np + log_score_offset.astype(np.float32)
-        best_log_score_per_image[bucket.image_indices] = best_log_score_np + log_score_offset.astype(np.float32)
-        max_posterior_per_image[bucket.image_indices] = max_posterior_np
-
-        transfer_t0 = time.time()
-        if probs_sum_t_np is None:
-            probs_sum_t_np = np.asarray(probs_sum_t, dtype=np.float64)
-        n_significant_samples_np = (
-            np.asarray(n_significant_samples, dtype=np.int32) if collect_profile_stats else None
+        significant_sample_count, reconstruction_row_count = _postprocess_local_bucket(
+            image_indices=bucket.image_indices,
+            local_rotation_ids=bucket.local_rotation_ids,
+            local_rotation_mask=bucket.local_rotation_mask,
+            local_rotations=bucket.local_rotations,
+            local_rotation_posterior_ids=bucket.local_rotation_posterior_ids,
+            translation_grid=local_layout.translation_grid,
+            n_trans=n_trans,
+            best_argmax=best_argmax,
+            batch_norm=batch_norm,
+            log_Z=log_Z,
+            best_log_score=best_log_score,
+            max_posterior=max_posterior,
+            probs_sum_t=probs_sum_t if probs_sum_t_np is None else probs_sum_t_np,
+            n_significant_samples=n_significant_samples,
+            collect_profile_stats=collect_profile_stats,
+            reconstruction_row_count=reconstruction_row_count,
+            reconstruction_take_indices=reconstruction_take_indices,
+            reconstruction_pack_mask=reconstruction_pack_mask_np,
+            buffers=postprocess_buffers,
         )
-        transfer_profile["postprocess_posterior_to_host_s"] += time.time() - transfer_t0
-        local_ids_np = np.asarray(bucket.local_rotation_ids, dtype=np.int32)
-        posterior_ids_np = (
-            local_ids_np
-            if bucket.local_rotation_posterior_ids is None
-            else np.asarray(bucket.local_rotation_posterior_ids, dtype=np.int32)
-        )
-        local_mask_np = np.asarray(bucket.local_rotation_mask, dtype=bool)
-        np.add.at(rotation_posterior_sums, posterior_ids_np[local_mask_np], probs_sum_t_np[local_mask_np])
         if collect_profile_stats:
-            nonzero_mask = (probs_sum_t_np > 0.0) & local_mask_np
-            chunk_nonzero_posterior_rows.append(int(np.count_nonzero(nonzero_mask)))
-            chunk_significant_samples.append(int(np.sum(n_significant_samples_np, dtype=np.int64)))
-            chunk_reconstruction_rows.append(int(reconstruction_row_count))
-            total_significant_samples += int(np.sum(n_significant_samples_np, dtype=np.int64))
+            total_significant_samples += significant_sample_count
             total_reconstruction_rows += int(reconstruction_row_count)
-        if seen_global_rotations.size:
-            nonzero_mask = (probs_sum_t_np > 0.0) & local_mask_np
-            seen_global_rotations[posterior_ids_np[local_mask_np]] = True
-            seen_nonzero_global_rotations[posterior_ids_np[nonzero_mask]] = True
-            packed_rotation_ids_np = np.take_along_axis(
-                np.asarray(bucket.local_rotation_ids, dtype=np.int32),
-                reconstruction_take_indices,
-                axis=1,
-            )
-            packed_posterior_ids_np = np.take_along_axis(posterior_ids_np, reconstruction_take_indices, axis=1)
-            seen_reconstruction_global_rotations[packed_posterior_ids_np[reconstruction_pack_mask_np]] = True
-        if return_best_pose_details:
-            best_pose_rotations[bucket.image_indices] = np.take_along_axis(
-                np.asarray(bucket.local_rotations, dtype=np.float32),
-                best_rot_idx[:, None, None, None],
-                axis=1,
-            ).reshape(-1, 3, 3)
-            best_pose_translations[bucket.image_indices] = np.asarray(local_layout.translation_grid, dtype=np.float32)[
-                best_trans_idx
-            ]
-            best_pose_rotation_ids[bucket.image_indices] = best_rotation_ids.astype(np.int32, copy=False)
         timing.postprocess_s += time.time() - postprocess_t0
 
         host_stats_t0 = time.time()
