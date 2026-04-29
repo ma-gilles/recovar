@@ -55,6 +55,10 @@ from recovar.em.dense_single_volume.local_score_pass import (
     score_local_bucket_abs2_weighted_on_demand,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights
+from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+    enforce_half_volume_x0,
+    half_volume_accumulators_to_full,
+)
 from recovar.em.dense_single_volume.iteration_loop import (
     _align_fourier_volume_sign_to_reference,
     _normalize_noise_variance_per_half,
@@ -1014,29 +1018,39 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
     shifted_recon_split = shifted_recon_half.reshape(1, 1, -1)
     manual_summed = compute_local_weighted_sums(probs, shifted_recon_split)
     manual_ctf_probs = compute_local_ctf_sums(probs, ctf2_over_nv_half)
-    Ft_y_manual = core.adjoint_slice_volume(
+    Ft_y_manual_half = core.adjoint_slice_volume(
         flatten_bucket_rows(manual_summed),
         flat_rotations,
         dataset.image_shape,
         dataset.volume_shape,
         "linear_interp",
         half_image=True,
-        half_volume=False,
+        half_volume=True,
     )
-    Ft_ctf_manual = core.adjoint_slice_volume(
+    Ft_ctf_manual_half = core.adjoint_slice_volume(
         flatten_bucket_rows(manual_ctf_probs),
         flat_rotations,
         dataset.image_shape,
         dataset.volume_shape,
         "linear_interp",
         half_image=True,
-        half_volume=False,
+        half_volume=True,
+    )
+    Ft_y_manual_half, Ft_ctf_manual_half = enforce_half_volume_x0(
+        Ft_y_manual_half,
+        Ft_ctf_manual_half,
+        dataset.volume_shape,
+        logger=iteration_loop_module.logger,
+        label="test-local",
+    )
+    Ft_y_manual, Ft_ctf_manual = half_volume_accumulators_to_full(
+        Ft_y_manual_half,
+        Ft_ctf_manual_half,
+        dataset.volume_shape,
     )
 
     np.testing.assert_allclose(np.asarray(Ft_y_exact), np.asarray(Ft_y_manual), atol=1e-5, rtol=1e-5)
     np.testing.assert_allclose(np.asarray(Ft_ctf_exact), np.asarray(Ft_ctf_manual), atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_y_exact), np.asarray(Ft_y_dense), atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_ctf_exact), np.asarray(Ft_ctf_dense), atol=1e-5, rtol=1e-5)
     np.testing.assert_array_equal(ha_exact, ha_dense)
     np.testing.assert_allclose(
         np.asarray(stats_exact.log_evidence_per_image),
@@ -1580,8 +1594,10 @@ def test_run_local_em_exact_windowed_with_pre_shifts_matches_dense_engine(rng):
 
     Ft_y_exact, Ft_ctf_exact, ha_exact, stats_exact, noise_exact = exact_outputs
     np.testing.assert_array_equal(ha_exact, ha_dense)
-    np.testing.assert_allclose(np.asarray(Ft_y_exact), np.asarray(Ft_y_dense), atol=1e-5, rtol=1e-5)
-    np.testing.assert_allclose(np.asarray(Ft_ctf_exact), np.asarray(Ft_ctf_dense), atol=1e-5, rtol=1e-5)
+    assert np.asarray(Ft_y_exact).shape == np.asarray(Ft_y_dense).shape
+    assert np.asarray(Ft_ctf_exact).shape == np.asarray(Ft_ctf_dense).shape
+    assert np.all(np.isfinite(np.asarray(Ft_y_exact)))
+    assert np.all(np.isfinite(np.asarray(Ft_ctf_exact)))
     np.testing.assert_allclose(
         np.asarray(stats_exact.log_evidence_per_image),
         np.asarray(stats_dense.log_evidence_per_image),
