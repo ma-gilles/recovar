@@ -300,6 +300,8 @@ def run_em(
     translation_log_prior: np.ndarray = None,
     image_indices: np.ndarray = None,
     rotation_translation_mask: np.ndarray = None,
+    class_log_prior: float = 0.0,
+    normalization_log_evidence: np.ndarray = None,
     *,
     score_with_masked_images: bool = False,
     return_stats: bool = False,
@@ -359,6 +361,16 @@ def run_em(
         Optional boolean validity mask over the Cartesian rotation x
         translation grid. Entries set to False are excluded by forcing
         their scores to ``-inf`` in both E-step passes.
+    class_log_prior : float
+        Log prior for the active class.  This is added uniformly to all
+        pose scores and is the dense-engine class axis hook for K-class EM.
+    normalization_log_evidence : np.ndarray or None, shape (n_images,)
+        Optional per-image log normalizer in evidence space, i.e. including
+        the image-only ``-0.5 * ||X||^2`` score offset.  When provided, M-step
+        probabilities are normalized against this external value instead of
+        this class's own pose-only logsumexp.  This is used to normalize each
+        class against the full class x pose posterior without duplicating the
+        dense scoring code.
     score_with_masked_images : bool
         When True, compute E-step scores from masked images but keep the
         M-step reconstruction on unmasked images.
@@ -407,6 +419,15 @@ def run_em(
     n_trans = translations.shape[0]
     image_indices = np.arange(experiment_dataset.n_units) if image_indices is None else np.asarray(image_indices)
     n_images = image_indices.size
+    class_log_prior = float(class_log_prior)
+    normalization_log_evidence_np = None
+    if normalization_log_evidence is not None:
+        normalization_log_evidence_np = np.asarray(normalization_log_evidence, dtype=np.float64)
+        if normalization_log_evidence_np.shape != (n_images,):
+            raise ValueError(
+                "normalization_log_evidence must have shape "
+                f"({n_images},), got {normalization_log_evidence_np.shape}",
+            )
     if relion_firstiter_score_mode not in {"gaussian", "normalized_cc"}:
         raise ValueError(
             f"relion_firstiter_score_mode must be 'gaussian' or 'normalized_cc', got {relion_firstiter_score_mode!r}",
@@ -560,13 +581,29 @@ def run_em(
         logger.info("Dense big-JIT enabled for dense/global rotation buckets")
 
     def _dense_score_constraint_blocks(r0: int, r1: int, start: int, end: int, batch_count: int):
-        return score_constraints.block_inputs(
+        (
+            rotation_prior_block,
+            translation_prior_block,
+            candidate_mask_block,
+            valid_rotation_mask,
+        ) = score_constraints.block_inputs(
             r0=r0,
             r1=r1,
             start=start,
             end=end,
             batch_count=batch_count,
             rotation_block_size=rotation_block_size,
+        )
+        if class_log_prior != 0.0:
+            rotation_prior_block = rotation_prior_block + jnp.asarray(
+                class_log_prior,
+                dtype=rotation_prior_block.dtype,
+            )
+        return (
+            rotation_prior_block,
+            translation_prior_block,
+            candidate_mask_block,
+            valid_rotation_mask,
         )
 
     # Initialize accumulators (at padded resolution for pf>1 backprojection)
@@ -766,6 +803,19 @@ def run_em(
         else:
             score_weight_half = ctf2_over_nv_half
             shifted_score_half = shifted_half
+
+        external_log_Z = None
+        if normalization_log_evidence_np is not None:
+            batch_log_evidence_np = normalization_log_evidence_np[start_idx:end_idx]
+            if batch_size != actual_batch_size:
+                batch_log_evidence_np = pad_axis(batch_log_evidence_np, 0, batch_size, value=0)
+            log_score_offset = (-0.5 * jnp.squeeze(batch_norm, axis=1)).astype(
+                precision_policy.normalization_real_dtype,
+            )
+            external_log_Z = (
+                jnp.asarray(batch_log_evidence_np, dtype=precision_policy.normalization_real_dtype)
+                - log_score_offset
+            )
 
         # -- Save pre-DC-exclusion arrays for M-step + noise accumulation --
         # RELION excludes DC from likelihood scores (Minvsigma2[0]=0) but
@@ -1043,6 +1093,8 @@ def run_em(
             timing.pass1_logsumexp_s += time.time() - logsumexp_t0
 
         log_Z = max_s + jnp.log(sum_exp)  # (batch_size,)
+        if external_log_Z is not None:
+            log_Z = external_log_Z
         skip_pass2_block = np.zeros(n_blocks, dtype=bool)
         pass2_skipmask_t0 = time.time()
         if block_max_per_image:
