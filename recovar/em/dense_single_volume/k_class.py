@@ -50,6 +50,8 @@ def _class_log_priors(n_classes: int, class_log_priors) -> np.ndarray:
     priors = np.asarray(class_log_priors, dtype=np.float64)
     if priors.shape != (n_classes,):
         raise ValueError(f"class_log_priors must have shape ({n_classes},), got {priors.shape}")
+    if not np.all(np.isfinite(priors)):
+        raise ValueError("class_log_priors must be finite")
     return priors
 
 
@@ -67,6 +69,28 @@ def _select_class_value(value, class_index: int, n_classes: int):
     if value_array.ndim >= 2 and int(value_array.shape[0]) == n_classes:
         return value_array[class_index]
     return value
+
+
+def _select_required_class_value(value, class_index: int, n_classes: int, name: str):
+    value_array = jnp.asarray(value)
+    if value_array.ndim < 2 or int(value_array.shape[0]) != n_classes:
+        raise ValueError(f"{name} must have leading class axis of length {n_classes}, got {value_array.shape}")
+    return value_array[class_index]
+
+
+def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_classes: int) -> dict:
+    kwargs = dict(engine_kwargs)
+    class_rotation_log_prior = kwargs.pop("class_rotation_log_prior", None)
+    if class_rotation_log_prior is not None:
+        if "rotation_log_prior" in kwargs and kwargs["rotation_log_prior"] is not None:
+            raise ValueError("Provide only one of rotation_log_prior or class_rotation_log_prior")
+        kwargs["rotation_log_prior"] = _select_required_class_value(
+            class_rotation_log_prior,
+            class_index,
+            n_classes,
+            "class_rotation_log_prior",
+        )
+    return kwargs
 
 
 def _reject_kwargs(kwargs: dict, names: tuple[str, ...], caller: str) -> None:
@@ -168,7 +192,7 @@ def _assemble_result(
         [np.asarray(stats.max_posterior_per_image, dtype=np.float64) for stats in per_class_stats],
         axis=0,
     )
-    class_assignments = np.argmax(class_responsibilities, axis=0).astype(np.int32)
+    class_assignments = np.argmax(best_scores, axis=0).astype(np.int32)
     image_indices = np.arange(class_assignments.shape[0])
     pose_assignments = np.asarray(per_class_hard_assignments)[class_assignments, image_indices]
     rotation_posterior_sums = jnp.sum(
@@ -251,9 +275,11 @@ def run_dense_k_class_em(
     means_array = _as_class_means(means)
     n_classes = int(means_array.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
+    base_engine_kwargs = dict(engine_kwargs)
 
     class_log_evidence = []
     for class_index in range(n_classes):
+        class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
         probe = run_em(
             experiment_dataset,
             means_array[class_index],
@@ -267,7 +293,7 @@ def run_dense_k_class_em(
             class_log_prior=float(log_priors[class_index]),
             disable_adjoint_y=True,
             disable_adjoint_ctf=True,
-            **engine_kwargs,
+            **class_engine_kwargs,
         )
         class_log_evidence.append(np.asarray(probe[4].log_evidence_per_image, dtype=np.float64))
 
@@ -281,6 +307,7 @@ def run_dense_k_class_em(
     per_class_stats = []
     per_class_noise = [] if accumulate_noise else None
     for class_index in range(n_classes):
+        class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
         output = run_em(
             experiment_dataset,
             means_array[class_index],
@@ -293,7 +320,7 @@ def run_dense_k_class_em(
             accumulate_noise=accumulate_noise,
             class_log_prior=float(log_priors[class_index]),
             normalization_log_evidence=global_log_evidence,
-            **engine_kwargs,
+            **class_engine_kwargs,
         )
         new_mean, hard_assignment, class_Ft_y, class_Ft_ctf, stats, noise = _dense_outputs(
             output,

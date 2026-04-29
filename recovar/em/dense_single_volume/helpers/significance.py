@@ -769,3 +769,451 @@ def _compute_significance_batched(
     if return_full_stats:
         return sig_rot_any, n_sig_all, hard_assignment, full_stats
     return sig_rot_any, n_sig_all, hard_assignment
+
+
+def _compute_k_class_significance_batched(
+    experiment_dataset,
+    means,
+    noise_variance,
+    rotations,
+    translations,
+    disc_type,
+    *,
+    class_log_priors,
+    adaptive_fraction,
+    max_significants,
+    image_batch_size,
+    rotation_block_size,
+    current_size,
+    score_with_masked_images=False,
+    rotation_log_prior=None,
+    translation_log_prior=None,
+    image_corrections=None,
+    scale_corrections=None,
+    image_pre_shifts=None,
+    half_spectrum_scoring=False,
+    projection_padding_factor=1,
+    do_gridding_correction=False,
+    square_window=False,
+    use_float64_scoring=False,
+):
+    """Find significant samples from one posterior over ``class x rotation x translation``."""
+
+    from recovar.core.configs import ForwardModelConfig
+    from recovar import core
+    from recovar.reconstruction import noise as noise_utils
+    from recovar.em.dense_single_volume.helpers.preprocessing import (
+        preprocess_batch as _preprocess_batch,
+    )
+    from recovar.em.dense_single_volume.helpers.projection import (
+        compute_projections_block as _compute_projections_block,
+    )
+    from recovar.em.dense_single_volume.helpers.scoring import (
+        _e_step_block_scores,
+        _e_step_block_scores_windowed,
+        _update_logsumexp,
+    )
+    from recovar.em.dense_single_volume.helpers.half_spectrum import (
+        make_half_image_weights,
+        make_scoring_half_image_weights,
+    )
+    from recovar.em.dense_single_volume.helpers.oversampling import (
+        find_significant_rotations as _find_sig,
+    )
+    from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+    from recovar.em.dense_single_volume.helpers.image_shifts import (
+        apply_relion_integer_pre_shifts,
+        integer_pre_shifts_or_none,
+        tiled_half_image_phase_factors,
+    )
+
+    means_array = jnp.asarray(means)
+    if means_array.ndim != 2:
+        raise ValueError(f"means must have shape (n_classes, volume_size), got {means_array.shape}")
+    n_classes = int(means_array.shape[0])
+    class_log_priors_np = np.asarray(class_log_priors, dtype=np.float64).reshape(-1)
+    if class_log_priors_np.shape != (n_classes,):
+        raise ValueError(f"class_log_priors must have shape ({n_classes},), got {class_log_priors_np.shape}")
+
+    rotations = np.asarray(rotations, dtype=np.float32)
+    translations = np.asarray(translations, dtype=np.float32)
+    n_rot = int(rotations.shape[0])
+    n_trans = int(translations.shape[0])
+    n_images = int(experiment_dataset.n_units)
+    image_shape = experiment_dataset.image_shape
+    volume_shape = experiment_dataset.volume_shape
+    n_half = int(image_shape[0] * (image_shape[1] // 2 + 1))
+
+    if projection_padding_factor > 1:
+        from recovar.reconstruction.relion_functions import pad_volume_for_projection
+
+        means_for_proj = []
+        proj_volume_shape = None
+        for class_index in range(n_classes):
+            mean_for_proj, proj_volume_shape = pad_volume_for_projection(
+                means_array[class_index],
+                experiment_dataset.volume_shape,
+                projection_padding_factor,
+                do_gridding_correction=do_gridding_correction,
+                current_size=current_size,
+            )
+            means_for_proj.append(mean_for_proj)
+    else:
+        means_for_proj = [means_array[class_index] for class_index in range(n_classes)]
+        proj_volume_shape = experiment_dataset.volume_shape
+
+    half_weights = make_scoring_half_image_weights(
+        image_shape,
+        relion_half_sum=half_spectrum_scoring,
+    )
+    window_spec = make_fourier_window_spec(
+        image_shape,
+        current_size,
+        n_half,
+        square=square_window,
+        include_recon_window=False,
+    )
+    use_window = window_spec.use_window
+    window_indices = window_spec.score_indices
+    n_windowed = window_spec.n_score
+    projection_kwargs = window_spec.projection_kwargs()
+    if use_window:
+        half_weights_windowed = window_spec.score_values(half_weights)
+    if use_float64_scoring:
+        half_weights = half_weights.astype(jnp.float64)
+        if use_window:
+            half_weights_windowed = window_spec.score_values(half_weights)
+
+    n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
+    n_rot_padded = n_blocks * rotation_block_size
+    if n_rot_padded > n_rot:
+        pad_size = n_rot_padded - n_rot
+        rotations_padded = np.concatenate(
+            [rotations, np.tile(np.eye(3, dtype=np.float32), (pad_size, 1, 1))],
+            axis=0,
+        )
+    else:
+        rotations_padded = rotations
+
+    rotation_log_prior_padded = None
+    if rotation_log_prior is not None:
+        prior = np.asarray(rotation_log_prior, dtype=np.float32)
+        if prior.ndim == 1:
+            if prior.shape != (n_rot,):
+                raise ValueError(f"rotation_log_prior must have shape ({n_rot},), got {prior.shape}")
+            prior = np.broadcast_to(prior[None, :], (n_classes, n_rot)).copy()
+        elif prior.shape != (n_classes, n_rot):
+            raise ValueError(
+                "rotation_log_prior must have shape "
+                f"({n_rot},) or ({n_classes}, {n_rot}), got {prior.shape}",
+            )
+        if n_rot_padded > n_rot:
+            rotation_log_prior_padded = np.pad(
+                prior,
+                ((0, 0), (0, n_rot_padded - n_rot)),
+                mode="constant",
+            )
+        else:
+            rotation_log_prior_padded = prior
+
+    if translation_log_prior is not None:
+        translation_log_prior = np.asarray(translation_log_prior, dtype=np.float32)
+        if translation_log_prior.ndim == 1:
+            if translation_log_prior.shape != (n_trans,):
+                raise ValueError(f"translation_log_prior must have shape ({n_trans},), got {translation_log_prior.shape}")
+        elif translation_log_prior.ndim == 2:
+            if translation_log_prior.shape != (n_images, n_trans):
+                raise ValueError(
+                    "translation_log_prior must have shape "
+                    f"({n_images}, {n_trans}) when image-specific, got {translation_log_prior.shape}",
+                )
+        else:
+            raise ValueError(f"translation_log_prior must be 1D or 2D, got {translation_log_prior.ndim} dimensions")
+
+    config = ForwardModelConfig.from_dataset(
+        experiment_dataset,
+        disc_type=disc_type,
+        process_fn=experiment_dataset.process_images,
+    )
+    noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
+    norm_half_weights = make_half_image_weights(image_shape)
+    use_relion_numpy_preprocess = _uses_relion_background_fill(experiment_dataset)
+
+    def _preprocess_batch_relion_numpy(batch_data, ctf_params, batch_size):
+        processed_half = experiment_dataset.process_images_half(
+            np.asarray(batch_data),
+            apply_image_mask=score_with_masked_images,
+        )
+        processed_half = jnp.asarray(processed_half)
+        ctf_half = config.compute_ctf_half(ctf_params)
+        ctf2_over_nv_half = ctf_half**2 / noise_variance_half
+        ctf_weighted = processed_half * ctf_half / noise_variance_half
+        translations_tiled = jnp.repeat(jnp.asarray(translations)[None], batch_size, axis=0).reshape(
+            batch_size * n_trans,
+            -1,
+        )
+        weighted_tiled = jnp.repeat(ctf_weighted[:, None, :], n_trans, axis=1).reshape(
+            batch_size * n_trans,
+            -1,
+        )
+        shifted_half = core.translate_images(
+            weighted_tiled,
+            translations_tiled,
+            image_shape,
+            half_image=True,
+        )
+        batch_norm = jnp.sum(
+            (jnp.abs(processed_half) ** 2 / noise_variance_half) * norm_half_weights[None, :],
+            axis=-1,
+            keepdims=True,
+        ).real
+        return shifted_half, batch_norm, ctf2_over_nv_half
+
+    def _score_block(mean_for_proj, rots_b, shifted_data, batch_norm, ctf2_data, batch_size):
+        proj_half_b, proj_abs2_half_b = _compute_projections_block(
+            mean_for_proj,
+            rots_b,
+            image_shape,
+            proj_volume_shape,
+            disc_type,
+            **projection_kwargs,
+        )
+        if use_window:
+            proj_w = proj_half_b[:, window_indices]
+            proj_abs2_w = proj_abs2_half_b[:, window_indices]
+            if not use_float64_scoring:
+                proj_w = proj_w.astype(jnp.complex64)
+                proj_abs2_w = proj_abs2_w.astype(jnp.float32)
+            return _e_step_block_scores_windowed(
+                shifted_data,
+                batch_norm,
+                ctf2_data,
+                proj_w * half_weights_windowed,
+                proj_abs2_w * half_weights_windowed,
+                half_weights_windowed,
+                batch_size,
+                n_trans,
+                n_windowed,
+                image_shape,
+                volume_shape,
+            )
+        if not use_float64_scoring:
+            proj_half_b = proj_half_b.astype(jnp.complex64)
+            proj_abs2_half_b = proj_abs2_half_b.astype(jnp.float32)
+        return _e_step_block_scores(
+            shifted_data,
+            batch_norm,
+            ctf2_data,
+            proj_half_b * half_weights,
+            proj_abs2_half_b * half_weights,
+            half_weights,
+            batch_size,
+            n_trans,
+            image_shape,
+            volume_shape,
+        )
+
+    def _add_priors(scores, class_index, r0, r1, batch_translation_log_prior):
+        scores = scores + jnp.asarray(class_log_priors_np[class_index], dtype=scores.real.dtype)
+        if rotation_log_prior_padded is not None:
+            scores = scores + jnp.asarray(rotation_log_prior_padded[class_index, r0:r1])[None, :, None]
+        if batch_translation_log_prior is not None:
+            if translation_log_prior.ndim == 1:
+                scores = scores + batch_translation_log_prior[None, None, :]
+            else:
+                scores = scores + batch_translation_log_prior[:, None, :]
+        return scores
+
+    sig_rot_any = np.zeros((n_classes, n_rot), dtype=bool)
+    n_sig_all = np.empty(n_images, dtype=np.int32)
+    hard_assignment = np.empty(n_images, dtype=np.int32)
+    class_assignment = np.empty(n_images, dtype=np.int32)
+    significant_sample_indices = [[None] * n_images for _ in range(n_classes)]
+    normalization_log_z = np.empty(n_images, dtype=np.float64)
+    normalization_log_evidence = np.empty(n_images, dtype=np.float64)
+    log_evidence = np.empty(n_images, dtype=np.float32)
+    best_log_score = np.empty(n_images, dtype=np.float32)
+    max_posterior = np.empty(n_images, dtype=np.float32)
+    class_log_evidence = np.empty((n_classes, n_images), dtype=np.float64)
+
+    start_idx = 0
+    image_indices = np.arange(n_images)
+    for batch_data, _, _, ctf_params, _, _, indices in experiment_dataset.iter_batches(
+        image_batch_size,
+        indices=image_indices,
+        by_image=False,
+    ):
+        batch_size = len(indices)
+        end_idx = start_idx + batch_size
+        integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, indices, batch=batch_data)
+        real_space_pre_shift_applied = integer_pre_shifts is not None
+        if real_space_pre_shift_applied:
+            batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
+        batch_data = jnp.asarray(batch_data)
+        if translation_log_prior is None:
+            batch_translation_log_prior = None
+        elif translation_log_prior.ndim == 1:
+            batch_translation_log_prior = jnp.asarray(translation_log_prior)
+        else:
+            batch_translation_log_prior = jnp.asarray(translation_log_prior[start_idx:end_idx])
+
+        if use_relion_numpy_preprocess:
+            shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch_relion_numpy(
+                batch_data,
+                ctf_params,
+                batch_size,
+            )
+        else:
+            shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+                experiment_dataset,
+                batch_data,
+                ctf_params,
+                noise_variance_half,
+                translations,
+                config,
+                score_with_masked_images,
+            )
+        if image_corrections is not None:
+            batch_corr = jnp.asarray(image_corrections[np.asarray(indices)])
+            corr_expanded = jnp.repeat(batch_corr, n_trans)
+            shifted_half = shifted_half * corr_expanded[:, None]
+            batch_norm = batch_norm * (batch_corr**2)[:, None]
+        if scale_corrections is not None:
+            batch_scale = jnp.asarray(scale_corrections[np.asarray(indices)])
+            ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
+        if image_pre_shifts is not None and not real_space_pre_shift_applied:
+            batch_shifts = jnp.asarray(image_pre_shifts[np.asarray(indices)])
+            shifted_half = shifted_half * tiled_half_image_phase_factors(image_shape, batch_shifts, n_trans)
+        if half_spectrum_scoring:
+            from recovar.em.dense_single_volume.helpers.half_spectrum import make_shell_indices_half as _mshi
+
+            dc_mask = _mshi(image_shape) == 0
+            shifted_half = jnp.where(dc_mask[None, :], 0.0, shifted_half)
+            ctf2_over_nv_half = jnp.where(dc_mask[None, :], 0.0, ctf2_over_nv_half)
+        if use_window:
+            shifted_data = shifted_half[:, window_indices]
+            ctf2_data = ctf2_over_nv_half[:, window_indices]
+        else:
+            shifted_data = shifted_half
+            ctf2_data = ctf2_over_nv_half
+        if use_float64_scoring:
+            shifted_data = shifted_data.astype(jnp.complex128)
+            ctf2_data = ctf2_data.astype(jnp.float64)
+        else:
+            shifted_data = shifted_data.astype(jnp.complex64)
+            ctf2_data = ctf2_data.astype(jnp.float32)
+
+        global_max = jnp.full(batch_size, -jnp.inf)
+        global_sum = jnp.zeros(batch_size, dtype=jnp.float64)
+        class_max_values = []
+        class_sum_values = []
+        for class_index, mean_for_proj in enumerate(means_for_proj):
+            class_max = jnp.full(batch_size, -jnp.inf)
+            class_sum = jnp.zeros(batch_size, dtype=jnp.float64)
+            for block_index in range(n_blocks):
+                r0 = block_index * rotation_block_size
+                r1 = r0 + rotation_block_size
+                scores = _score_block(
+                    mean_for_proj,
+                    rotations_padded[r0:r1],
+                    shifted_data,
+                    batch_norm,
+                    ctf2_data,
+                    batch_size,
+                )
+                if r1 > n_rot:
+                    valid = n_rot - r0
+                    scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
+                scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
+                class_max, class_sum = _update_logsumexp(class_max, class_sum, scores)
+                global_max, global_sum = _update_logsumexp(global_max, global_sum, scores)
+            class_max_values.append(class_max)
+            class_sum_values.append(class_sum)
+
+        global_log_z = global_max + jnp.log(global_sum)
+        class_log_z_values = [class_max + jnp.log(class_sum) for class_max, class_sum in zip(class_max_values, class_sum_values)]
+
+        best_score_batch = jnp.full(batch_size, -jnp.inf)
+        best_argmax_batch = jnp.zeros(batch_size, dtype=jnp.int32)
+        best_class_batch = jnp.zeros(batch_size, dtype=jnp.int32)
+        class_weight_mats = []
+        for class_index, mean_for_proj in enumerate(means_for_proj):
+            class_weight_blocks = []
+            for block_index in range(n_blocks):
+                r0 = block_index * rotation_block_size
+                r1 = r0 + rotation_block_size
+                scores = _score_block(
+                    mean_for_proj,
+                    rotations_padded[r0:r1],
+                    shifted_data,
+                    batch_norm,
+                    ctf2_data,
+                    batch_size,
+                )
+                if r1 > n_rot:
+                    valid = n_rot - r0
+                    scores = jnp.where(jnp.arange(rotation_block_size)[None, :, None] < valid, scores, -jnp.inf)
+                scores = _add_priors(scores, class_index, r0, r1, batch_translation_log_prior)
+                probs = jnp.exp(scores - global_log_z[:, None, None])
+
+                block_best = jnp.max(scores.reshape(batch_size, -1), axis=1)
+                block_argmax = jnp.argmax(scores.reshape(batch_size, -1), axis=1)
+                improved = block_best > best_score_batch
+                best_score_batch = jnp.where(improved, block_best, best_score_batch)
+                best_argmax_batch = jnp.where(improved, block_argmax + r0 * n_trans, best_argmax_batch)
+                best_class_batch = jnp.where(improved, class_index, best_class_batch)
+
+                actual_rot = min(rotation_block_size, n_rot - r0)
+                class_weight_blocks.append(np.asarray(probs[:, :actual_rot, :].reshape(batch_size, -1)))
+            class_weight_mats.append(np.concatenate(class_weight_blocks, axis=1))
+
+        batch_weights = np.concatenate(class_weight_mats, axis=1)
+        batch_sig_mask, batch_sig_rot_mask, batch_n_sig = _find_sig(
+            jnp.asarray(batch_weights),
+            n_classes * n_rot,
+            n_trans,
+            adaptive_fraction=adaptive_fraction,
+            max_significants=max_significants,
+        )
+        batch_sig_mask_np = np.asarray(batch_sig_mask, dtype=bool)
+        sig_rot_any |= np.asarray(jnp.any(batch_sig_rot_mask, axis=0), dtype=bool).reshape(n_classes, n_rot)
+
+        hard_assignment[start_idx:end_idx] = np.asarray(best_argmax_batch, dtype=np.int32)
+        class_assignment[start_idx:end_idx] = np.asarray(best_class_batch, dtype=np.int32)
+        n_sig_all[start_idx:end_idx] = np.asarray(batch_n_sig, dtype=np.int32)
+
+        log_score_offset = -0.5 * np.asarray(jnp.squeeze(batch_norm, axis=1), dtype=np.float64)
+        global_log_z_np = np.asarray(global_log_z, dtype=np.float64)
+        best_score_np = np.asarray(best_score_batch, dtype=np.float64)
+        normalization_log_z[start_idx:end_idx] = global_log_z_np
+        normalization_log_evidence[start_idx:end_idx] = global_log_z_np + log_score_offset
+        log_evidence[start_idx:end_idx] = normalization_log_evidence[start_idx:end_idx].astype(np.float32)
+        best_log_score[start_idx:end_idx] = (best_score_np + log_score_offset).astype(np.float32)
+        max_posterior[start_idx:end_idx] = np.exp(best_score_np - global_log_z_np).astype(np.float32)
+        for class_index, class_log_z in enumerate(class_log_z_values):
+            class_log_evidence[class_index, start_idx:end_idx] = (
+                np.asarray(class_log_z, dtype=np.float64) + log_score_offset
+            )
+
+        samples_per_class = n_rot * n_trans
+        for local_idx, global_idx in enumerate(indices):
+            global_idx = int(global_idx)
+            for class_index in range(n_classes):
+                c0 = class_index * samples_per_class
+                c1 = c0 + samples_per_class
+                mask = batch_sig_mask_np[local_idx, c0:c1]
+                significant_sample_indices[class_index][global_idx] = (
+                    None if np.all(mask) else np.flatnonzero(mask).astype(np.int32)
+                )
+        start_idx = end_idx
+
+    full_stats = {
+        "normalization_log_z": normalization_log_z,
+        "normalization_log_evidence": normalization_log_evidence,
+        "log_evidence_per_image": log_evidence,
+        "best_log_score_per_image": best_log_score,
+        "max_posterior_per_image": max_posterior,
+        "class_log_evidence_per_image": class_log_evidence,
+        "class_assignments": class_assignment,
+    }
+    return sig_rot_any, n_sig_all, hard_assignment, class_assignment, significant_sample_indices, full_stats
