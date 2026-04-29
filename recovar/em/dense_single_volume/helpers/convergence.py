@@ -797,6 +797,8 @@ def update_refinement_state(
     previous_rotation_matrices: Optional[np.ndarray] = None,
     current_translations_pixel: Optional[np.ndarray] = None,
     previous_translations_pixel: Optional[np.ndarray] = None,
+    current_classes: Optional[np.ndarray] = None,
+    previous_classes: Optional[np.ndarray] = None,
     voxel_size_angstrom: float = 1.0,
 ) -> RefinementState:
     """Update RefinementState after one EM iteration.
@@ -836,6 +838,11 @@ def update_refinement_state(
         Per-particle translation vectors in PIXEL units, shape ``(n_images, 2)``.
         When both provided, the RELION-exact
         ``current_changes_optimal_offsets_angstrom`` is computed.
+    current_classes, previous_classes : np.ndarray, optional
+        Per-particle hard class assignments for K-class refinement.  When both
+        are provided, ``current_changes_optimal_classes`` is the number of
+        particles whose hard class changed.  When omitted, single-class refine
+        keeps the historical zero class-change behavior.
     voxel_size_angstrom : float, default 1.0
         Pixel size in angstroms. Required for the offset metric.
 
@@ -870,8 +877,19 @@ def update_refinement_state(
         previous_translations_pixel,
         voxel_size_angstrom,
     )
-    # Single-class refine: classes never change.
-    current_changes_classes = 0.0
+    if current_classes is None and previous_classes is None:
+        current_changes_classes = 0.0
+    elif current_classes is None or previous_classes is None:
+        current_changes_classes = float("inf")
+    else:
+        current_classes_arr = np.asarray(current_classes)
+        previous_classes_arr = np.asarray(previous_classes)
+        if current_classes_arr.shape != previous_classes_arr.shape:
+            raise ValueError(
+                "current_classes and previous_classes must have matching shapes; "
+                f"got {current_classes_arr.shape} and {previous_classes_arr.shape}",
+            )
+        current_changes_classes = float(np.count_nonzero(current_classes_arr != previous_classes_arr))
 
     # --- Compute Pmax ---
     ave_pmax = state.ave_Pmax
@@ -951,8 +969,8 @@ def update_refinement_state(
             smallest_orient = current_changes_orientations
         if current_changes_offsets_angstrom < smallest_offsets:
             smallest_offsets = current_changes_offsets_angstrom
-        if current_changes_classes < smallest_classes:
-            smallest_classes = round(current_changes_classes)
+    if np.isfinite(current_changes_classes) and current_changes_classes < smallest_classes:
+        smallest_classes = round(current_changes_classes)
 
     # --- Update accuracy estimates ---
     new_acc_rot = acc_rot if acc_rot is not None else state.acc_rot
@@ -995,7 +1013,7 @@ def update_refinement_state(
     logger.info(
         "Iteration %d: frac_changed=%.4f, resol=%.2f (prev=%.2f), "
         "stalls: resol=%d, assign=%d, hvc=%d, ave_Pmax=%.4f, "
-        "Δrot=%.3f deg, Δtrans=%.3f Å",
+        "Δrot=%.3f deg, Δtrans=%.3f Å, Δclass=%.0f",
         updated.iteration,
         frac_changed,
         new_resolution,
@@ -1006,6 +1024,7 @@ def update_refinement_state(
         ave_pmax,
         current_changes_orientations if np.isfinite(current_changes_orientations) else float("nan"),
         current_changes_offsets_angstrom if np.isfinite(current_changes_offsets_angstrom) else float("nan"),
+        current_changes_classes if np.isfinite(current_changes_classes) else float("nan"),
     )
 
     # --- Check if we should refine angular sampling ---
