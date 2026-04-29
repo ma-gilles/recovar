@@ -34,7 +34,19 @@ logger = logging.getLogger(__name__)
 
 
 def slurm_available() -> bool:
-    """Return True if ``sbatch`` is on PATH."""
+    """Return True if SLURM is the active executor.
+
+    Honours the ``RECOVAR_EXECUTOR`` env var (``local``, ``slurm``, or
+    ``auto`` — default ``auto``). When ``auto``, probes for ``sbatch`` on
+    PATH. ``local`` forces local-subprocess mode even on a SLURM login
+    node — useful for laptops, workstations, or running directly on a
+    compute node from inside an existing allocation.
+    """
+    override = os.environ.get("RECOVAR_EXECUTOR", "auto").strip().lower()
+    if override == "local":
+        return False
+    if override == "slurm":
+        return True  # caller will see the failure if sbatch is genuinely missing
     return shutil.which("sbatch") is not None
 
 
@@ -445,15 +457,25 @@ def _build_slurm_directives(
     memory: str,
     time: str,
     raw_directives: str | None,
+    gpu_resource_spec: str = "--gres=gpu:{gpus}",
 ) -> str:
-    """Build the #SBATCH directive block. Empty partition/account → omit (not blank)."""
+    """Build the #SBATCH directive block. Empty partition/account → omit (not blank).
+
+    ``gpu_resource_spec`` is a python-format string with a single ``{gpus}``
+    slot, which lets a site override the GPU directive for clusters that
+    use ``--gpus={gpus}``, ``--gres=gpu:a100:{gpus}``, etc. Default is
+    ``--gres=gpu:{gpus}`` for backward compatibility. When ``gpus == 0``
+    the GPU directive is omitted entirely.
+    """
     lines: list[str] = [f"#SBATCH --job-name={job_name}"]
     if partition:
         lines.append(f"#SBATCH --partition={partition}")
     if account:
         lines.append(f"#SBATCH --account={account}")
     if gpus:
-        lines.append(f"#SBATCH --gres=gpu:{gpus}")
+        gpu_directive = gpu_resource_spec.format(gpus=gpus).strip()
+        if gpu_directive:
+            lines.append(f"#SBATCH {gpu_directive}")
     lines.extend(
         [
             "#SBATCH --ntasks=1",
@@ -514,15 +536,32 @@ def _render_sbatch_script(
     time: str = "12:00:00",
     cache_dir: str | None = None,
     raw_directives: str | None = None,
+    gpu_resource_spec: str = "--gres=gpu:{gpus}",
+    template_path: str | None = None,
+    template_vars: dict[str, Any] | None = None,
     **_extra: Any,
 ) -> str:
     """Render an sbatch script from parameters.
 
-    Empty `partition` / `account` → those `#SBATCH` directives are omitted
-    rather than emitted with a blank value (which is a parse error on some
-    SLURM versions). The caller is expected to pass shell-safe strings;
-    `command` should already be `shlex.join(argv)` — the SlurmExecutor does
-    that. Env-var values are quoted here.
+    Two modes:
+
+    1. **Default (no ``template_path``)** — renders the built-in structured
+       template using the caller-provided slurm opts. Empty
+       ``partition`` / ``account`` cause those ``#SBATCH`` directives to
+       be OMITTED (not emitted with a blank value, which is a parse
+       error on some SLURM versions). The caller is expected to pass
+       shell-safe strings; ``command`` should already be
+       ``shlex.join(argv)`` — the SlurmExecutor does that. Env-var values
+       are quoted here.
+
+    2. **Jinja2 template (``template_path`` set)** — loads the file and
+       renders it with ``StrictUndefined``. Available variables include
+       all the structured fields plus ``slurm_directives``,
+       ``tmpdir_block``, ``cleanup_block``, ``extra_exports``,
+       ``pixi_bin_dir``, plus anything the caller passes in
+       ``template_vars``. A typo in the template (``{{ commnad }}`` vs
+       ``{{ command }}``) raises ``UndefinedError`` instead of silently
+       producing a broken submit.sh.
     """
     slurm_directives = _build_slurm_directives(
         job_name=job_name,
@@ -534,10 +573,36 @@ def _render_sbatch_script(
         memory=memory,
         time=time,
         raw_directives=raw_directives,
+        gpu_resource_spec=gpu_resource_spec,
     )
     cleanup_block = _build_cleanup_block(cache_dir=cache_dir)
     extra_exports = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env_vars.items())
     pixi_bin_dir = shlex.quote(str(Path(sys.executable).parent))
+
+    if template_path:
+        return _render_jinja_template(
+            template_path=template_path,
+            template_vars=template_vars,
+            # Reserved variables — same names as the structured slots.
+            job_name=job_name,
+            command=command,
+            output_path=output_path,
+            partition=partition,
+            account=account,
+            gpus=gpus,
+            cpus=cpus,
+            memory=memory,
+            time=time,
+            raw_directives=raw_directives or "",
+            gpu_resource_spec=gpu_resource_spec,
+            cache_dir=cache_dir or "",
+            slurm_directives=slurm_directives,
+            tmpdir_block=_TMPDIR_BLOCK,
+            cleanup_block=cleanup_block,
+            extra_exports=extra_exports,
+            pixi_bin_dir=pixi_bin_dir,
+            env_vars=env_vars,
+        )
 
     return _SBATCH_TEMPLATE.format(
         slurm_directives=slurm_directives,
@@ -547,6 +612,78 @@ def _render_sbatch_script(
         cleanup_block=cleanup_block,
         command=command,
     )
+
+
+# Reserved variable names that templates can use without the user putting
+# them in `template_vars`. Anything outside this set must come from
+# `template_vars` or the template will get UndefinedError at render time.
+_RESERVED_TEMPLATE_VARS = frozenset(
+    {
+        "job_name",
+        "command",
+        "output_path",
+        "partition",
+        "account",
+        "gpus",
+        "cpus",
+        "memory",
+        "time",
+        "raw_directives",
+        "gpu_resource_spec",
+        "cache_dir",
+        "slurm_directives",
+        "tmpdir_block",
+        "cleanup_block",
+        "extra_exports",
+        "pixi_bin_dir",
+        "env_vars",
+    }
+)
+
+
+def _render_jinja_template(
+    *,
+    template_path: str,
+    template_vars: dict[str, Any] | None,
+    **reserved: Any,
+) -> str:
+    """Render a user-supplied Jinja2 template with strict undefined.
+
+    Custom user variables (from ``template_vars``) cannot shadow reserved
+    variable names — that would silently break parts of the script that
+    expect specific contents. Attempts to do so raise ``ValueError``.
+    """
+    from jinja2 import Environment, FileSystemLoader, StrictUndefined, UndefinedError
+
+    template_vars = template_vars or {}
+    overlap = set(template_vars).intersection(_RESERVED_TEMPLATE_VARS)
+    if overlap:
+        raise ValueError(
+            f"template_vars uses reserved variable name(s): {sorted(overlap)}. "
+            f"Reserved names: {sorted(_RESERVED_TEMPLATE_VARS)}"
+        )
+
+    path = Path(template_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Sbatch template not found: {template_path}")
+
+    env = Environment(
+        loader=FileSystemLoader(str(path.parent)),
+        undefined=StrictUndefined,
+        keep_trailing_newline=True,
+        autoescape=False,  # this is a shell script, not HTML
+    )
+    template = env.get_template(path.name)
+    try:
+        return template.render(**reserved, **template_vars)
+    except UndefinedError as exc:
+        # Re-raise with a clearer message — preserves the rendering failure
+        # while making the typo / missing-var cause obvious.
+        raise ValueError(
+            f"Sbatch template {template_path} references an undefined variable: {exc}. "
+            f"Available reserved variables: {sorted(_RESERVED_TEMPLATE_VARS)}. "
+            f"Custom variables passed in template_vars: {sorted(template_vars)}."
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

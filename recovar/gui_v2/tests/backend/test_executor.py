@@ -445,6 +445,208 @@ class TestSbatchTemplate:
         assert "#SBATCH --qos=high" in script
         assert "#SBATCH --mail-user=me@example.com" in script
 
+    def test_gpu_resource_spec_override(self):
+        """Sites that use --gpus=N or --gres=gpu:a100:N can override the
+        default --gres=gpu:N directive."""
+        # Default
+        script = _render_sbatch_script(
+            job_name="g",
+            command="true",
+            env_vars={},
+            output_path="/tmp/out.log",
+            gpus=2,
+        )
+        assert "#SBATCH --gres=gpu:2" in script
+
+        # Override 1: --gpus=N
+        script = _render_sbatch_script(
+            job_name="g",
+            command="true",
+            env_vars={},
+            output_path="/tmp/out.log",
+            gpus=2,
+            gpu_resource_spec="--gpus={gpus}",
+        )
+        assert "#SBATCH --gpus=2" in script
+        assert "#SBATCH --gres=gpu:" not in script
+
+        # Override 2: typed GPU
+        script = _render_sbatch_script(
+            job_name="g",
+            command="true",
+            env_vars={},
+            output_path="/tmp/out.log",
+            gpus=1,
+            gpu_resource_spec="--gres=gpu:a100:{gpus}",
+        )
+        assert "#SBATCH --gres=gpu:a100:1" in script
+
+    def test_gpus_zero_omits_gpu_directive(self):
+        script = _render_sbatch_script(
+            job_name="cpu-only",
+            command="true",
+            env_vars={},
+            output_path="/tmp/out.log",
+            gpus=0,
+        )
+        assert "#SBATCH --gres=gpu" not in script
+        assert "#SBATCH --gpus" not in script
+
+
+class TestExecutorOverride:
+    """RECOVAR_EXECUTOR env var lets users force local even on a SLURM login node."""
+
+    def test_default_uses_path_probe(self, monkeypatch):
+        from recovar.gui_v2.backend.services import executor as ex
+
+        monkeypatch.delenv("RECOVAR_EXECUTOR", raising=False)
+        # We can't assume sbatch IS or isn't on PATH on the test host, but
+        # we CAN assert slurm_available reflects the probe by mocking which.
+        monkeypatch.setattr(ex.shutil, "which", lambda name: "/fake/sbatch" if name == "sbatch" else None)
+        assert ex.slurm_available() is True
+        monkeypatch.setattr(ex.shutil, "which", lambda name: None)
+        assert ex.slurm_available() is False
+
+    def test_force_local(self, monkeypatch):
+        from recovar.gui_v2.backend.services import executor as ex
+
+        monkeypatch.setenv("RECOVAR_EXECUTOR", "local")
+        # Even when sbatch IS on PATH, the override forces local.
+        monkeypatch.setattr(ex.shutil, "which", lambda name: "/fake/sbatch")
+        assert ex.slurm_available() is False
+
+    def test_force_slurm(self, monkeypatch):
+        from recovar.gui_v2.backend.services import executor as ex
+
+        monkeypatch.setenv("RECOVAR_EXECUTOR", "slurm")
+        # Even when sbatch is NOT on PATH, the override claims SLURM is
+        # available (caller will see the actual failure at sbatch time).
+        monkeypatch.setattr(ex.shutil, "which", lambda name: None)
+        assert ex.slurm_available() is True
+
+
+class TestJinjaTemplate:
+    """Sites can override the renderer with their own .sh template + Jinja2."""
+
+    def test_basic_jinja_template_renders(self, tmp_path):
+        tpl = tmp_path / "site.sh"
+        tpl.write_text("#!/bin/bash\n{{ slurm_directives }}\nmodule load cuda/12.4\n{{ command }}\n")
+        script = _render_sbatch_script(
+            job_name="jt",
+            command="recovar pipeline foo.cs",
+            env_vars={},
+            output_path="/tmp/out.log",
+            partition="gpu",
+            template_path=str(tpl),
+        )
+        assert "module load cuda/12.4" in script
+        assert "#SBATCH --partition=gpu" in script
+        assert "recovar pipeline foo.cs" in script
+
+    def test_template_typo_raises_clear_error(self, tmp_path):
+        tpl = tmp_path / "site.sh"
+        tpl.write_text("{{ commnad }}\n")  # typo: should be {{ command }}
+        with pytest.raises(ValueError, match=r"undefined variable"):
+            _render_sbatch_script(
+                job_name="jt",
+                command="recovar",
+                env_vars={},
+                output_path="/tmp/out.log",
+                template_path=str(tpl),
+            )
+
+    def test_template_custom_vars(self, tmp_path):
+        tpl = tmp_path / "site.sh"
+        tpl.write_text("{{ slurm_directives }}\n{% if qos %}#SBATCH --qos={{ qos }}{% endif %}\n{{ command }}\n")
+        script = _render_sbatch_script(
+            job_name="jt",
+            command="true",
+            env_vars={},
+            output_path="/tmp/out.log",
+            template_path=str(tpl),
+            template_vars={"qos": "high"},
+        )
+        assert "#SBATCH --qos=high" in script
+
+    def test_template_vars_cannot_shadow_reserved(self, tmp_path):
+        tpl = tmp_path / "site.sh"
+        tpl.write_text("{{ command }}\n")
+        with pytest.raises(ValueError, match=r"reserved variable name"):
+            _render_sbatch_script(
+                job_name="jt",
+                command="true",
+                env_vars={},
+                output_path="/tmp/out.log",
+                template_path=str(tpl),
+                template_vars={"command": "evil"},  # reserved!
+            )
+
+    def test_template_path_missing(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            _render_sbatch_script(
+                job_name="jt",
+                command="true",
+                env_vars={},
+                output_path="/tmp/out.log",
+                template_path=str(tmp_path / "does_not_exist.sh"),
+            )
+
+
+class TestProjectConfig:
+    """Per-project recovar.toml + user-global ~/.config/recovar/config.toml."""
+
+    def test_resolve_with_no_files_returns_defaults(self, tmp_path, monkeypatch):
+        from recovar.gui_v2.backend.services.project_config import resolve_slurm_defaults
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-empty"))
+        result = resolve_slurm_defaults(project_dir=tmp_path)
+        # Must contain DEFAULT_SLURM keys with their built-in (empty) values.
+        assert result["partition"] == ""
+        assert result["account"] == ""
+
+    def test_user_global_overrides_defaults(self, tmp_path, monkeypatch):
+        from recovar.gui_v2.backend.services.project_config import resolve_slurm_defaults
+
+        cfg = tmp_path / "recovar"
+        cfg.mkdir()
+        (cfg / "config.toml").write_text('[slurm]\npartition = "gpu"\naccount = "myacct"\n')
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        result = resolve_slurm_defaults(project_dir=None)
+        assert result["partition"] == "gpu"
+        assert result["account"] == "myacct"
+
+    def test_project_overrides_user_global(self, tmp_path, monkeypatch):
+        from recovar.gui_v2.backend.services.project_config import resolve_slurm_defaults
+
+        cfg = tmp_path / "recovar"
+        cfg.mkdir()
+        (cfg / "config.toml").write_text('[slurm]\npartition = "gpu"\naccount = "user-acct"\n')
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+        proj = tmp_path / "myproject"
+        proj.mkdir()
+        (proj / "recovar.toml").write_text(
+            "[slurm]\n"
+            'partition = "high-priority"\n'  # overrides
+            # account is inherited from user-global
+            "gpus = 4\n"
+        )
+        result = resolve_slurm_defaults(project_dir=proj)
+        assert result["partition"] == "high-priority"
+        assert result["account"] == "user-acct"
+        assert result["gpus"] == 4
+
+    def test_invalid_toml_falls_back_silently(self, tmp_path, monkeypatch):
+        from recovar.gui_v2.backend.services.project_config import resolve_slurm_defaults
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-empty"))
+        proj = tmp_path / "broken"
+        proj.mkdir()
+        (proj / "recovar.toml").write_text("this is not valid toml [[[")
+        result = resolve_slurm_defaults(project_dir=proj)
+        # Must not crash; falls back to built-in defaults.
+        assert result["partition"] == ""
+
 
 # ------------------------------------------------------------------
 # Reconnect / reconcile

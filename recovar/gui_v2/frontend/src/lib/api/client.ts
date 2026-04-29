@@ -137,11 +137,26 @@ export interface SlurmDefaults {
   cpus: number;
   memory: string;
   time: string;
+  gpu_resource_spec?: string;
+  template_path?: string | null;
 }
 
 export interface SbatchScript {
   script: string;
   source: string;
+}
+
+export interface SbatchPreview {
+  script: string;
+  warnings: string[];
+}
+
+export interface SbatchPreviewRequest {
+  command: string[];
+  env_vars?: Record<string, string>;
+  output_path?: string;
+  job_name?: string;
+  slurm_opts?: Record<string, unknown>;
 }
 
 // --- Projects ---
@@ -312,8 +327,16 @@ export function getSystemInfo(): Promise<SystemInfo> {
   return request("/system/info");
 }
 
-export function getSlurmDefaults(): Promise<SlurmDefaults> {
-  return request("/system/slurm-defaults");
+export function getSlurmDefaults(projectDir?: string): Promise<SlurmDefaults> {
+  const qs = projectDir ? `?project_dir=${encodeURIComponent(projectDir)}` : "";
+  return request(`/system/slurm-defaults${qs}`);
+}
+
+export function previewSbatchScript(req: SbatchPreviewRequest): Promise<SbatchPreview> {
+  return request("/jobs/preview-sbatch", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
 }
 
 // --- Jobs (extended) ---

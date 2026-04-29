@@ -392,3 +392,62 @@ v1.0.0 was almost shipped with `partition=cryoem`, `account=amits`, and
 - Cache-staging cleanup and tmpdir cleanup share a single
   `_recovar_cleanup` function and one `trap _recovar_cleanup EXIT TERM
   INT`. Stacking traps clobbers the previous one.
+
+## Executor selection
+
+`backend/services/executor.py::slurm_available()` reads the
+`RECOVAR_EXECUTOR` env var (set by `recovar gui --executor`). Values:
+
+- `auto` (default) — probe `sbatch` on PATH; SLURM if present, local
+  otherwise.
+- `local` — force local-subprocess mode even on a SLURM login node. The
+  frontend hides the SLURM panel because `/api/system/info` reports
+  `slurm_available: false` in this mode.
+- `slurm` — force SLURM. Caller sees the actual `sbatch: command not
+  found` if missing.
+
+The CLI flag (`recovar gui --executor {auto,local,slurm}`) is the
+canonical surface; the env var exists so the same logic works when the
+backend is launched some other way (uvicorn directly, Docker, etc.).
+
+## SLURM defaults are layered (not flat)
+
+`backend/services/project_config.py::resolve_slurm_defaults` merges, in
+order of increasing precedence:
+
+1. Built-in `DEFAULT_SLURM` in `backend/config.py` (intentionally
+   minimal: empty partition/account, sane CPU/mem/time).
+2. User-global `~/.config/recovar/config.toml` (or
+   `$XDG_CONFIG_HOME/recovar/config.toml`) `[slurm]` section.
+3. Project-local `<project_dir>/recovar.toml` `[slurm]` section.
+4. Per-job form override sent in the submit body (the frontend's SLURM
+   Settings panel — handled at the API layer, not in the loader).
+
+When adding a new SLURM-related field, plumb it through all four layers,
+not just one. The `/api/system/slurm-defaults?project_dir=...` endpoint
+returns the merged 1+2+3 view; the frontend uses this to pre-fill the
+form.
+
+## User-supplied templates (Jinja2)
+
+`backend/sbatch_templates/` ships preset `.sh` templates
+(`generic_slurm.sh`, `generic_pbs.sh`, `local.sh`,
+`princeton_della.sh`). Users opt in via `template_path = "..."` in their
+`recovar.toml` `[slurm]` section.
+
+Variables available to a template (passed positionally by the renderer):
+
+- Reserved: `job_name`, `command`, `output_path`, `partition`, `account`,
+  `gpus`, `cpus`, `memory`, `time`, `raw_directives`, `gpu_resource_spec`,
+  `cache_dir`, `slurm_directives` (pre-built `#SBATCH` block),
+  `tmpdir_block`, `cleanup_block`, `extra_exports`, `pixi_bin_dir`,
+  `env_vars`. These names cannot be shadowed by `template_vars`.
+- Custom: anything in `[slurm.template_vars]` in the TOML.
+
+Templates use Jinja2 with `StrictUndefined`. A typo (`{{ commnad }}`)
+raises `ValueError` at render time, surfaced to the GUI as a 400 from
+`POST /api/jobs/preview-sbatch` — never silently submits a broken script.
+
+When extending the renderer with new reserved names, update
+`_RESERVED_TEMPLATE_VARS` in `executor.py` AND add an entry to the list
+above.

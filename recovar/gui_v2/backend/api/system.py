@@ -14,7 +14,6 @@ import shutil
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from recovar.gui_v2.backend.config import DEFAULT_SLURM
 from recovar.gui_v2.backend.services.executor import slurm_available
 
 router = APIRouter(prefix="/api/system", tags=["system"])
@@ -39,6 +38,7 @@ class SystemInfoResponse(BaseModel):
 def _recovar_version() -> str:
     try:
         from recovar import __version__
+
         return str(__version__)
     except Exception:
         return "unknown"
@@ -51,9 +51,12 @@ def _gpu_count() -> int:
         return len(visible.split(","))
     try:
         import subprocess
+
         result = subprocess.run(
             ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode == 0:
             return len([l for l in result.stdout.strip().split("\n") if l.strip()])
@@ -97,16 +100,34 @@ class SlurmDefaultsResponse(BaseModel):
     cpus: int
     memory: str
     time: str
+    gpu_resource_spec: str = "--gres=gpu:{gpus}"
+    template_path: str | None = None
 
 
 @router.get("/slurm-defaults", response_model=SlurmDefaultsResponse)
-async def slurm_defaults() -> SlurmDefaultsResponse:
-    """Return default SLURM settings for pre-filling job submission forms."""
+async def slurm_defaults(project_dir: str | None = None) -> SlurmDefaultsResponse:
+    """Return effective SLURM defaults for pre-filling the job-submission form.
+
+    Layers, lowest to highest precedence:
+      1. Built-in DEFAULT_SLURM.
+      2. ``~/.config/recovar/config.toml`` ``[slurm]`` section.
+      3. ``<project_dir>/recovar.toml`` ``[slurm]`` section (if
+         ``project_dir`` query param is provided).
+
+    The frontend should pass ``project_dir`` whenever it knows which
+    project the form is being filled for, so per-project settings flow
+    through. When ``project_dir`` is omitted only layers 1+2 apply.
+    """
+    from recovar.gui_v2.backend.services.project_config import resolve_slurm_defaults
+
+    merged = resolve_slurm_defaults(project_dir=project_dir)
     return SlurmDefaultsResponse(
-        partition=DEFAULT_SLURM["partition"],
-        account=DEFAULT_SLURM["account"],
-        gpus=DEFAULT_SLURM["gpus"],
-        cpus=DEFAULT_SLURM["cpus"],
-        memory=DEFAULT_SLURM["memory"],
-        time=DEFAULT_SLURM["time"],
+        partition=merged.get("partition", ""),
+        account=merged.get("account", ""),
+        gpus=int(merged.get("gpus", 1)),
+        cpus=int(merged.get("cpus", 4)),
+        memory=str(merged.get("memory", "300G")),
+        time=str(merged.get("time", "12:00:00")),
+        gpu_resource_spec=str(merged.get("gpu_resource_spec", "--gres=gpu:{gpus}")),
+        template_path=merged.get("template_path") or None,
     )

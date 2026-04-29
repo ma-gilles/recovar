@@ -719,13 +719,22 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
     }
 
+    # Resolve effective slurm opts: built-in defaults ← user-global toml ←
+    # project-local recovar.toml ← per-job form override (form wins).
+    from recovar.gui_v2.backend.services.project_config import resolve_slurm_defaults
+
+    merged_slurm_opts = resolve_slurm_defaults(project_dir=project_path)
+    form_slurm_opts = params.get("slurm_opts") or {}
+    if isinstance(form_slurm_opts, dict):
+        merged_slurm_opts.update(form_slurm_opts)
+
     try:
         handle = await executor.submit(
             job_id=job_id,
             command=command,
             env=env,
             working_dir=job_dir,
-            slurm_opts=params.get("slurm_opts"),
+            slurm_opts=merged_slurm_opts,
         )
     except Exception as exc:
         # Update job as failed
