@@ -184,9 +184,15 @@ def _assemble_result(
     best_pose_rotations = _selected_by_class(per_class_best_pose_rotations, class_assignments)
     best_pose_translations = _selected_by_class(per_class_best_pose_translations, class_assignments)
     best_pose_rotation_ids = _selected_by_class(per_class_best_pose_rotation_ids, class_assignments)
+    if new_means is None or all(mean is None for mean in new_means):
+        stacked_new_means = None
+    elif any(mean is None for mean in new_means):
+        raise ValueError("Cannot stack mixed missing/present per-class new_means")
+    else:
+        stacked_new_means = jnp.stack([jnp.asarray(mean) for mean in new_means], axis=0)
 
     return KClassEMResult(
-        new_means=None if new_means is None else jnp.stack([jnp.asarray(mean) for mean in new_means], axis=0),
+        new_means=stacked_new_means,
         Ft_y=jnp.stack([jnp.asarray(value) for value in Ft_y], axis=0),
         Ft_ctf=jnp.stack([jnp.asarray(value) for value in Ft_ctf], axis=0),
         per_class_hard_assignments=jnp.asarray(per_class_hard_assignments, dtype=jnp.int32),

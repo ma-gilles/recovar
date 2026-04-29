@@ -22,6 +22,7 @@ from recovar.core import fourier_transform_utils
 from recovar.em.core import hard_assignment_idx_to_pose
 from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.em_engine import run_em
+from recovar.em.dense_single_volume.k_class import run_dense_k_class_em
 from recovar.em.dense_single_volume.helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
@@ -231,6 +232,78 @@ def _mean_noise_variance(noise_variance_per_half):
         jnp.stack([jnp.asarray(noise_k).reshape(-1) for noise_k in noise_variance_per_half], axis=0),
         axis=0,
     )
+
+
+def _normalize_class_log_priors(n_classes: int, class_log_priors=None) -> np.ndarray:
+    """Return normalized log priors for the class axis."""
+
+    if n_classes < 1:
+        raise ValueError(f"n_classes must be >= 1, got {n_classes}")
+    if class_log_priors is None:
+        return np.full(n_classes, -np.log(float(n_classes)), dtype=np.float64)
+    log_priors = np.asarray(class_log_priors, dtype=np.float64)
+    if log_priors.shape != (n_classes,):
+        raise ValueError(f"class_log_priors must have shape ({n_classes},), got {log_priors.shape}")
+    if not np.all(np.isfinite(log_priors)):
+        raise ValueError("class_log_priors must be finite")
+    max_log_prior = float(np.max(log_priors))
+    log_norm = max_log_prior + float(np.log(np.sum(np.exp(log_priors - max_log_prior))))
+    return log_priors - log_norm
+
+
+def _normalize_initial_means(init_volume, n_classes: int):
+    """Normalize initial references to the refine loop's half/class layout."""
+
+    def _as_class_array(value):
+        arr = jnp.asarray(value)
+        if n_classes == 1:
+            if arr.ndim == 1:
+                return arr
+            if arr.ndim == 2 and int(arr.shape[0]) == 1:
+                return arr[0]
+        else:
+            if arr.ndim == 1:
+                return jnp.tile(arr[None, :], (n_classes, 1))
+            if arr.ndim == 2 and int(arr.shape[0]) == n_classes:
+                return arr
+        raise ValueError(
+            "init_volume must be a flat reference, a per-class reference array, "
+            "or a pair of per-half references compatible with n_classes="
+            f"{n_classes}; got shape {tuple(arr.shape)}",
+        )
+
+    if isinstance(init_volume, (list, tuple)) and len(init_volume) == 2:
+        return [_as_class_array(init_volume[0]), _as_class_array(init_volume[1])]
+
+    arr = jnp.asarray(init_volume)
+    if n_classes == 1 and arr.ndim == 2 and int(arr.shape[0]) == 2:
+        return [arr[0], arr[1]]
+    if n_classes > 1 and arr.ndim == 3 and int(arr.shape[0]) == 2 and int(arr.shape[1]) == n_classes:
+        return [arr[0], arr[1]]
+    shared = _as_class_array(arr)
+    return [jnp.array(shared), jnp.array(shared)]
+
+
+def _class_weights_from_posterior(class_posterior_per_half, n_classes: int, previous_weights: np.ndarray) -> np.ndarray:
+    """Normalize class posterior sums across both half-sets."""
+
+    counts = np.zeros(n_classes, dtype=np.float64)
+    for posterior in class_posterior_per_half:
+        if posterior is not None:
+            counts += np.asarray(posterior, dtype=np.float64)
+    total = float(np.sum(counts))
+    if total <= 0.0:
+        return np.asarray(previous_weights, dtype=np.float64)
+    weights = np.maximum(counts / total, 1e-12)
+    return weights / float(np.sum(weights))
+
+
+def _merged_mean_from_halves(means, class_weights=None):
+    merged = (means[0] + means[1]) / 2
+    if class_weights is None:
+        return merged, None
+    class_weights_jax = jnp.asarray(class_weights, dtype=merged.real.dtype)
+    return jnp.sum(class_weights_jax[:, None] * merged, axis=0), merged
 
 
 def _optional_float32_half_pair(values):
@@ -1033,6 +1106,8 @@ def refine_single_volume(
     first_iteration_score_mode="gaussian",
     first_iteration_reconstruction_mode="soft",
     force_max_iter_after_convergence=False,
+    n_classes=1,
+    init_class_log_priors=None,
 ):
     """Multi-iteration RELION-parity EM refinement.
 
@@ -1180,6 +1255,8 @@ def refine_single_volume(
         first_iteration_score_mode=first_iteration_score_mode,
         first_iteration_reconstruction_mode=first_iteration_reconstruction_mode,
         force_max_iter_after_convergence=force_max_iter_after_convergence,
+        n_classes=n_classes,
+        init_class_log_priors=init_class_log_priors,
     )
 
 
@@ -1239,6 +1316,8 @@ def _run_relion_iteration_loop(
     first_iteration_score_mode="gaussian",
     first_iteration_reconstruction_mode="soft",
     force_max_iter_after_convergence=False,
+    n_classes=1,
+    init_class_log_priors=None,
 ):
     """RELION-parity refinement loop with convergence detection.
 
@@ -1258,6 +1337,10 @@ def _run_relion_iteration_loop(
     cryo = experiment_datasets[0]
     volume_shape = cryo.volume_shape
     grid_size = cryo.image_shape[0]  # ori_size in RELION terms
+    n_classes = int(n_classes)
+    k_class_enabled = n_classes > 1
+    class_log_priors = _normalize_class_log_priors(n_classes, init_class_log_priors)
+    class_weights = np.exp(class_log_priors)
 
     # --- RELION image mask (softMaskOutsideMap on particles) ---
     # RELION masks images to particle_diameter/(2*pixel_size) with a 5-pixel
@@ -1449,13 +1532,10 @@ def _run_relion_iteration_loop(
         )
         return ibs, rbs
 
-    # State: two half-set volumes, noise, prior.
-    # init_volume can be a single array (used for both halves) or a list/tuple
-    # of 2 arrays (one per half-set, matching RELION auto-refine).
-    if isinstance(init_volume, (list, tuple)) and len(init_volume) == 2:
-        means = [jnp.array(init_volume[0]), jnp.array(init_volume[1])]
-    else:
-        means = [jnp.array(init_volume), jnp.array(init_volume)]
+    # State: two half-set references.  For K-class refinement each half stores
+    # an explicit leading class axis; single-class callers keep the historical
+    # flat per-half reference layout.
+    means = _normalize_initial_means(init_volume, n_classes)
     noise_variance_per_half = _normalize_noise_variance_per_half(
         init_noise_variance,
         n_halves=2,
@@ -1471,6 +1551,8 @@ def _run_relion_iteration_loop(
     wall_times = []
     hard_assignments = [None, None]
     previous_assignments = [None, None]
+    class_assignments = [None, None]
+    previous_class_assignments = [None, None]
     previous_best_rotations = [None, None]
     relion_half_inputs = _RelionHalfInputState.from_initial_values(
         previous_best_translations=init_previous_best_translations,
@@ -1515,6 +1597,7 @@ def _run_relion_iteration_loop(
     smallest_change_offsets_trajectory = []
     best_rotation_eulers_history = []
     best_translations_history = []
+    class_weight_trajectory = []
     local_profile_history = []
     relion_incr_size = 10  # RELION default
     relion_has_high_fsc_at_limit = bool(init_has_high_fsc_at_limit) if init_has_high_fsc_at_limit is not None else False
@@ -2148,6 +2231,12 @@ def _run_relion_iteration_loop(
             and not (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter)
             and not first_iter_hard_reconstruction_this_iter
         )
+        if k_class_enabled and (use_local or use_adaptive or use_global_significant_support):
+            raise NotImplementedError(
+                "K-class refine loop currently supports the dense non-adaptive engine path. "
+                "The dense/local k-class engine wrappers are available, but this RELION "
+                "iteration-loop branch has not been wired yet.",
+            )
 
         # Track the rotation grids used for pose extraction.
         # When adaptive oversampling is active, ha_k indices refer to the
@@ -2166,6 +2255,7 @@ def _run_relion_iteration_loop(
         # into effective_rotations, even when adaptive oversampling is used).
         coarse_ha = [None, None]
         adaptive_pass1_diag = [None, None]
+        class_posterior_per_half = [None, None]
 
         if use_adaptive:
             # --- TWO-PASS ADAPTIVE OVERSAMPLING (RELION parity) ---
@@ -2250,9 +2340,16 @@ def _run_relion_iteration_loop(
                 logger.info("Skipping E-step/M-step accumulation for empty half-%d dataset", k + 1)
                 n_shells = int(cryo.image_shape[0] // 2 + 1)
                 n_rot_for_stats = int(rotation_grid_size(local_search_order) if use_local else effective_rotations.shape[0])
-                Ft_y_k = jnp.zeros(int(np.prod(padded_volume_shape)), dtype=jnp.complex128)
-                Ft_ctf_k = jnp.zeros(int(np.prod(padded_volume_shape)), dtype=jnp.complex128)
+                accumulator_shape = (
+                    (n_classes, int(np.prod(padded_volume_shape)))
+                    if k_class_enabled
+                    else (int(np.prod(padded_volume_shape)),)
+                )
+                Ft_y_k = jnp.zeros(accumulator_shape, dtype=jnp.complex128)
+                Ft_ctf_k = jnp.zeros(accumulator_shape, dtype=jnp.complex128)
                 ha_k = np.zeros(0, dtype=np.int32)
+                class_assignments[k] = np.zeros(0, dtype=np.int32)
+                class_posterior_per_half[k] = np.zeros(n_classes, dtype=np.float32)
                 em_stats_k = RelionStats(
                     log_evidence_per_image=jnp.zeros(0, dtype=jnp.float32),
                     best_log_score_per_image=jnp.zeros(0, dtype=jnp.float32),
@@ -2884,22 +2981,13 @@ def _run_relion_iteration_loop(
                     effective_rotations.shape[0],
                     current_translations.shape[0],
                 )
-                _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
-                    experiment_datasets[k],
-                    means[k],
-                    mean_variance,
-                    noise_variance_k,
-                    effective_rotations,
-                    current_translations,
-                    disc_type,
+                em_kwargs = dict(
                     image_batch_size=safe_ibs,
                     rotation_block_size=safe_rbs,
                     current_size=cs_for_engine,
                     rotation_log_prior=rotation_log_prior_k,
                     translation_log_prior=translation_log_prior,
                     score_with_masked_images=True,
-                    return_stats=True,
-                    accumulate_noise=True,
                     half_spectrum_scoring=True,
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
@@ -2912,8 +3000,6 @@ def _run_relion_iteration_loop(
                     do_gridding_correction=True,
                     square_window=RELION_FOURIER_WINDOW_SQUARE,
                     sparse_pass2=False,
-                    disable_adjoint_y=disable_adjoint_y,
-                    disable_adjoint_ctf=disable_adjoint_ctf,
                     relion_firstiter_score_mode=(
                         "normalized_cc"
                         if (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter)
@@ -2923,6 +3009,46 @@ def _run_relion_iteration_loop(
                         relion_firstiter_cc_this_iter or first_iter_hard_reconstruction_this_iter
                     ),
                 )
+                if k_class_enabled:
+                    if disable_adjoint_y or disable_adjoint_ctf:
+                        raise NotImplementedError("K-class refine does not support adjoint ablation flags")
+                    k_class_result = run_dense_k_class_em(
+                        experiment_datasets[k],
+                        means[k],
+                        mean_variance,
+                        noise_variance_k,
+                        effective_rotations,
+                        current_translations,
+                        disc_type,
+                        class_log_priors=class_log_priors,
+                        accumulate_noise=True,
+                        **em_kwargs,
+                    )
+                    ha_k = np.asarray(k_class_result.pose_assignments, dtype=np.int32)
+                    Ft_y_k = k_class_result.Ft_y
+                    Ft_ctf_k = k_class_result.Ft_ctf
+                    em_stats_k = k_class_result.stats
+                    noise_stats_k = k_class_result.aggregate_noise_stats
+                    class_assignments[k] = np.asarray(k_class_result.class_assignments, dtype=np.int32)
+                    class_posterior_per_half[k] = np.asarray(
+                        k_class_result.class_posterior_sums,
+                        dtype=np.float64,
+                    )
+                else:
+                    _, ha_k, Ft_y_k, Ft_ctf_k, em_stats_k, noise_stats_k = run_em(
+                        experiment_datasets[k],
+                        means[k],
+                        mean_variance,
+                        noise_variance_k,
+                        effective_rotations,
+                        current_translations,
+                        disc_type,
+                        return_stats=True,
+                        accumulate_noise=True,
+                        disable_adjoint_y=disable_adjoint_y,
+                        disable_adjoint_ctf=disable_adjoint_ctf,
+                        **em_kwargs,
+                    )
                 noise_stats_per_half[k] = noise_stats_k
                 pose_rotations[k] = effective_rotations
                 pose_rotation_eulers[k] = effective_rotation_eulers
@@ -3021,6 +3147,18 @@ def _run_relion_iteration_loop(
 
         # E-step + per-half M-step accumulators are now both populated.
         _parity_dump.mark_stage(iteration, "e_step")
+        if k_class_enabled:
+            class_weights = _class_weights_from_posterior(
+                class_posterior_per_half,
+                n_classes,
+                class_weights,
+            )
+            class_log_priors = np.log(class_weights)
+            class_weight_trajectory.append(class_weights.copy())
+            logger.info(
+                "K-class occupancies: %s",
+                ", ".join(f"class {idx + 1}={weight:.4f}" for idx, weight in enumerate(class_weights)),
+            )
 
         # --- RELION's --low_resol_join_halves: average the low-resolution
         # shells of the per-half Fourier accumulators between the two halves
@@ -3048,17 +3186,37 @@ def _run_relion_iteration_loop(
                     grid_size,
                     cryo.voxel_size,
                 )
-        Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
-            Ft_y_0,
-            Ft_y_1,
-            Ft_ctf_0,
-            Ft_ctf_1,
-            padded_volume_shape,
-            cryo.voxel_size,
-            grid_size,
-            low_resol_join_halves_angstrom,
-            current_resolution_angstrom=prev_res_angstrom,
-        )
+        if k_class_enabled:
+            joined = [
+                regularization.join_halves_at_low_resolution(
+                    Ft_y_0[class_idx],
+                    Ft_y_1[class_idx],
+                    Ft_ctf_0[class_idx],
+                    Ft_ctf_1[class_idx],
+                    padded_volume_shape,
+                    cryo.voxel_size,
+                    grid_size,
+                    low_resol_join_halves_angstrom,
+                    current_resolution_angstrom=prev_res_angstrom,
+                )
+                for class_idx in range(n_classes)
+            ]
+            Ft_y_0 = jnp.stack([item[0] for item in joined], axis=0)
+            Ft_y_1 = jnp.stack([item[1] for item in joined], axis=0)
+            Ft_ctf_0 = jnp.stack([item[2] for item in joined], axis=0)
+            Ft_ctf_1 = jnp.stack([item[3] for item in joined], axis=0)
+        else:
+            Ft_y_0, Ft_y_1, Ft_ctf_0, Ft_ctf_1 = regularization.join_halves_at_low_resolution(
+                Ft_y_0,
+                Ft_y_1,
+                Ft_ctf_0,
+                Ft_ctf_1,
+                padded_volume_shape,
+                cryo.voxel_size,
+                grid_size,
+                low_resol_join_halves_angstrom,
+                current_resolution_angstrom=prev_res_angstrom,
+            )
 
         # --- RELION-exact M-step ordering (auto-refine, split-half) ---
         # RELION (ml_optimiser_mpi.cpp:4031, 4091; backprojector.cpp:1044):
@@ -3084,15 +3242,38 @@ def _run_relion_iteration_loop(
         # unregularized maps; using the reconstructed maps underestimates the
         # joined low-resolution shells and depresses data_vs_prior.
         _t_unreg_first = time.time()
-        current_iter_fsc = regularization.compute_relion_fsc_from_backprojector(
-            Ft_y_0,
-            Ft_y_1,
-            Ft_ctf_0,
-            Ft_ctf_1,
-            volume_shape,
-            padding_factor=PADDING_FACTOR,
-            r_max=cs // 2,
-        )
+        if k_class_enabled:
+            current_iter_fsc_by_class = [
+                regularization.compute_relion_fsc_from_backprojector(
+                    Ft_y_0[class_idx],
+                    Ft_y_1[class_idx],
+                    Ft_ctf_0[class_idx],
+                    Ft_ctf_1[class_idx],
+                    volume_shape,
+                    padding_factor=PADDING_FACTOR,
+                    r_max=cs // 2,
+                )
+                for class_idx in range(n_classes)
+            ]
+            current_iter_fsc = jnp.asarray(
+                np.sum(
+                    np.asarray(class_weights, dtype=np.float64)[:, None]
+                    * np.stack([np.asarray(fsc_k, dtype=np.float64) for fsc_k in current_iter_fsc_by_class], axis=0),
+                    axis=0,
+                ),
+                dtype=jnp.float32,
+            )
+        else:
+            current_iter_fsc = regularization.compute_relion_fsc_from_backprojector(
+                Ft_y_0,
+                Ft_y_1,
+                Ft_ctf_0,
+                Ft_ctf_1,
+                volume_shape,
+                padding_factor=PADDING_FACTOR,
+                r_max=cs // 2,
+            )
+            current_iter_fsc_by_class = [current_iter_fsc]
         logger.info(
             "Computed iter-%d FSC for tau2 (RELION backprojector path): %.1fs",
             iteration + 1,
@@ -3104,23 +3285,44 @@ def _run_relion_iteration_loop(
         # come from each half's own Fourier weight outside the joined shells.
         tau2_update_details_per_half = []
         mean_signal_variance_per_half = []
-        for Ft_ctf_half in (Ft_ctf_0, Ft_ctf_1):
-            mean_signal_variance_k, _, tau2_update_details_k = regularization.compute_relion_tau2_from_weights(
-                Ft_ctf_half,
-                Ft_ctf_half,
-                current_iter_fsc,
-                volume_shape,
-                tau2_fudge=tau2_fudge,
-                padding_factor=PADDING_FACTOR,
-                r_max=cs // 2,
-                return_details=True,
-            )
-            mean_signal_variance_per_half.append(mean_signal_variance_k)
-            tau2_update_details_per_half.append(tau2_update_details_k)
-        mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
+        if k_class_enabled:
+            for Ft_ctf_half in (Ft_ctf_0, Ft_ctf_1):
+                half_variances = []
+                half_details = []
+                for class_idx in range(n_classes):
+                    mean_signal_variance_k, _, tau2_update_details_k = regularization.compute_relion_tau2_from_weights(
+                        Ft_ctf_half[class_idx],
+                        Ft_ctf_half[class_idx],
+                        current_iter_fsc_by_class[class_idx],
+                        volume_shape,
+                        tau2_fudge=tau2_fudge,
+                        padding_factor=PADDING_FACTOR,
+                        r_max=cs // 2,
+                        return_details=True,
+                    )
+                    half_variances.append(mean_signal_variance_k)
+                    half_details.append(tau2_update_details_k)
+                mean_signal_variance_per_half.append(jnp.stack(half_variances, axis=0))
+                tau2_update_details_per_half.append(half_details)
+            mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
+        else:
+            for Ft_ctf_half in (Ft_ctf_0, Ft_ctf_1):
+                mean_signal_variance_k, _, tau2_update_details_k = regularization.compute_relion_tau2_from_weights(
+                    Ft_ctf_half,
+                    Ft_ctf_half,
+                    current_iter_fsc,
+                    volume_shape,
+                    tau2_fudge=tau2_fudge,
+                    padding_factor=PADDING_FACTOR,
+                    r_max=cs // 2,
+                    return_details=True,
+                )
+                mean_signal_variance_per_half.append(mean_signal_variance_k)
+                tau2_update_details_per_half.append(tau2_update_details_k)
+            mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
         # Keep the single tau2 diagnostic fields aligned with RELION's half1
         # model.star, which is what the parity diff script reports.
-        tau2_update_details = tau2_update_details_per_half[0]
+        tau2_update_details = tau2_update_details_per_half[0][0] if k_class_enabled else tau2_update_details_per_half[0]
         logger.info(
             "tau2 update from THIS-iter FSC: old_max=%.4e new_max=%.4e half_max=(%.4e, %.4e)",
             float(jnp.max(jnp.abs(mean_variance))),
@@ -3144,39 +3346,80 @@ def _run_relion_iteration_loop(
         for k in range(2):
             Ft_y_k_local = Ft_y_0 if k == 0 else Ft_y_1
             Ft_ctf_k_local = Ft_ctf_0 if k == 0 else Ft_ctf_1
-            means[k] = _reconstruct_volume_eager(
-                Ft_ctf_k_local,
-                Ft_y_k_local,
-                volume_shape,
-                PADDING_FACTOR,
-                tau=mean_signal_variance_per_half[k],
-                tau2_fudge=tau2_fudge,
-                projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                minres_map=RELION_MINRES_MAP,
-            ).reshape(-1)
+            if k_class_enabled:
+                means[k] = jnp.stack(
+                    [
+                        _reconstruct_volume_eager(
+                            Ft_ctf_k_local[class_idx],
+                            Ft_y_k_local[class_idx],
+                            volume_shape,
+                            PADDING_FACTOR,
+                            tau=mean_signal_variance_per_half[k][class_idx],
+                            tau2_fudge=tau2_fudge,
+                            projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                            minres_map=RELION_MINRES_MAP,
+                        ).reshape(-1)
+                        for class_idx in range(n_classes)
+                    ],
+                    axis=0,
+                )
+            else:
+                means[k] = _reconstruct_volume_eager(
+                    Ft_ctf_k_local,
+                    Ft_y_k_local,
+                    volume_shape,
+                    PADDING_FACTOR,
+                    tau=mean_signal_variance_per_half[k],
+                    tau2_fudge=tau2_fudge,
+                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                    minres_map=RELION_MINRES_MAP,
+                ).reshape(-1)
 
             # RELION's solventFlatten (ml_optimiser.cpp:5469): mask the
             # reconstructed reference outside particle_diameter to remove
             # solvent noise before the next E-step's projections.
             if particle_diameter_ang is not None and particle_diameter_ang > 0:
                 flatten_radius = particle_diameter_ang / (2.0 * cryo.voxel_size)
-                vol_real = fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
                 solvent_mask = mask.raised_cosine_mask(
                     volume_shape,
                     radius=flatten_radius,
                     radius_p=flatten_radius + RELION_WIDTH_MASK_EDGE,
                     offset=jnp.zeros(3),
                 )
-                vol_real = vol_real * solvent_mask
-                means[k] = fourier_transform_utils.get_dft3(vol_real).reshape(-1)
+                if k_class_enabled:
+                    flattened_classes = []
+                    for class_idx in range(n_classes):
+                        vol_real = fourier_transform_utils.get_idft3(means[k][class_idx].reshape(volume_shape))
+                        flattened_classes.append(
+                            fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1),
+                        )
+                    means[k] = jnp.stack(flattened_classes, axis=0)
+                else:
+                    vol_real = fourier_transform_utils.get_idft3(means[k].reshape(volume_shape))
+                    means[k] = fourier_transform_utils.get_dft3(vol_real * solvent_mask).reshape(-1)
             if relion_firstiter_cc_this_iter:
-                means[k] = _apply_relion_initial_lowpass_filter(
-                    means[k],
-                    volume_shape,
-                    cryo.voxel_size,
-                    relion_firstiter_ini_high_angstrom,
-                    filter_edgewidth=RELION_WIDTH_MASK_EDGE,
-                )
+                if k_class_enabled:
+                    means[k] = jnp.stack(
+                        [
+                            _apply_relion_initial_lowpass_filter(
+                                means[k][class_idx],
+                                volume_shape,
+                                cryo.voxel_size,
+                                relion_firstiter_ini_high_angstrom,
+                                filter_edgewidth=RELION_WIDTH_MASK_EDGE,
+                            )
+                            for class_idx in range(n_classes)
+                        ],
+                        axis=0,
+                    )
+                else:
+                    means[k] = _apply_relion_initial_lowpass_filter(
+                        means[k],
+                        volume_shape,
+                        cryo.voxel_size,
+                        relion_firstiter_ini_high_angstrom,
+                        filter_edgewidth=RELION_WIDTH_MASK_EDGE,
+                    )
         if relion_firstiter_cc_this_iter and relion_firstiter_ini_high_angstrom is not None:
             logger.info(
                 "RELION iter-1 CC emulation: reapplying ini_high low-pass filter at %.2f A",
@@ -3212,36 +3455,79 @@ def _run_relion_iteration_loop(
         _t_unreg = time.time()
         need_unreg_means = save_intermediates_dir is not None or _parity_dump.is_active()
         if need_unreg_means:
-            unreg_means = [
-                _reconstruct_volume_eager(
-                    Ft_ctf_0,
-                    Ft_y_0,
-                    volume_shape,
-                    PADDING_FACTOR,
-                    tau=None,
-                    tau2_fudge=tau2_fudge,
-                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                    minres_map=RELION_MINRES_MAP,
-                ),
-                _reconstruct_volume_eager(
-                    Ft_ctf_1,
-                    Ft_y_1,
-                    volume_shape,
-                    PADDING_FACTOR,
-                    tau=None,
-                    tau2_fudge=tau2_fudge,
-                    projection_padding_factor=PROJECTION_PADDING_FACTOR,
-                    minres_map=RELION_MINRES_MAP,
-                ),
-            ]
+            if k_class_enabled:
+                unreg_means = [
+                    jnp.stack(
+                        [
+                            _reconstruct_volume_eager(
+                                Ft_ctf_half[class_idx],
+                                Ft_y_half[class_idx],
+                                volume_shape,
+                                PADDING_FACTOR,
+                                tau=None,
+                                tau2_fudge=tau2_fudge,
+                                projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                                minres_map=RELION_MINRES_MAP,
+                            )
+                            for class_idx in range(n_classes)
+                        ],
+                        axis=0,
+                    )
+                    for Ft_ctf_half, Ft_y_half in ((Ft_ctf_0, Ft_y_0), (Ft_ctf_1, Ft_y_1))
+                ]
+            else:
+                unreg_means = [
+                    _reconstruct_volume_eager(
+                        Ft_ctf_0,
+                        Ft_y_0,
+                        volume_shape,
+                        PADDING_FACTOR,
+                        tau=None,
+                        tau2_fudge=tau2_fudge,
+                        projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                        minres_map=RELION_MINRES_MAP,
+                    ),
+                    _reconstruct_volume_eager(
+                        Ft_ctf_1,
+                        Ft_y_1,
+                        volume_shape,
+                        PADDING_FACTOR,
+                        tau=None,
+                        tau2_fudge=tau2_fudge,
+                        projection_padding_factor=PROJECTION_PADDING_FACTOR,
+                        minres_map=RELION_MINRES_MAP,
+                    ),
+                ]
         else:
             unreg_means = [None, None]
         for k in range(2):
-            means[k], sign_flipped = _align_fourier_volume_sign_to_reference(means[k], previous_means[k], volume_shape)
-            if sign_flipped and unreg_means[k] is not None:
-                unreg_means[k] = -unreg_means[k]
-            if sign_flipped:
-                logger.info("Aligned half-%d volume sign to the previous reference", k + 1)
+            if k_class_enabled:
+                aligned_classes = []
+                unreg_classes = [] if unreg_means[k] is not None else None
+                for class_idx in range(n_classes):
+                    aligned_class, sign_flipped = _align_fourier_volume_sign_to_reference(
+                        means[k][class_idx],
+                        previous_means[k][class_idx],
+                        volume_shape,
+                    )
+                    aligned_classes.append(aligned_class)
+                    if unreg_classes is not None:
+                        unreg_classes.append(-unreg_means[k][class_idx] if sign_flipped else unreg_means[k][class_idx])
+                    if sign_flipped:
+                        logger.info("Aligned half-%d class-%d volume sign to the previous reference", k + 1, class_idx + 1)
+                means[k] = jnp.stack(aligned_classes, axis=0)
+                if unreg_classes is not None:
+                    unreg_means[k] = jnp.stack(unreg_classes, axis=0)
+            else:
+                means[k], sign_flipped = _align_fourier_volume_sign_to_reference(
+                    means[k],
+                    previous_means[k],
+                    volume_shape,
+                )
+                if sign_flipped and unreg_means[k] is not None:
+                    unreg_means[k] = -unreg_means[k]
+                if sign_flipped:
+                    logger.info("Aligned half-%d volume sign to the previous reference", k + 1)
         logger.info(
             "Unregularized reconstruction (2 halves): %.1fs%s",
             time.time() - _t_unreg,
@@ -3266,26 +3552,32 @@ def _run_relion_iteration_loop(
             np.save(os.path.join(save_intermediates_dir, f"it{iteration:03d}_Ft_ctf_0.npy"), np.asarray(Ft_ctf_0))
             np.save(os.path.join(save_intermediates_dir, f"it{iteration:03d}_Ft_ctf_1.npy"), np.asarray(Ft_ctf_1))
             for k_half in range(2):
-                save_volume(
-                    np.asarray(means[k_half]).reshape(-1),
-                    os.path.join(
-                        save_intermediates_dir,
-                        f"it{iteration:03d}_half{k_half + 1}_reg",
-                    ),
-                    volume_shape=volume_shape,
-                    from_ft=True,
-                    voxel_size=cryo.voxel_size,
-                )
-                save_volume(
-                    np.asarray(unreg_means[k_half]).reshape(-1),
-                    os.path.join(
-                        save_intermediates_dir,
-                        f"it{iteration:03d}_half{k_half + 1}_unreg",
-                    ),
-                    volume_shape=volume_shape,
-                    from_ft=True,
-                    voxel_size=cryo.voxel_size,
-                )
+                class_indices_to_save = range(n_classes) if k_class_enabled else (None,)
+                for class_idx in class_indices_to_save:
+                    suffix = f"_class{class_idx + 1}" if class_idx is not None else ""
+                    mean_to_save = means[k_half][class_idx] if class_idx is not None else means[k_half]
+                    save_volume(
+                        np.asarray(mean_to_save).reshape(-1),
+                        os.path.join(
+                            save_intermediates_dir,
+                            f"it{iteration:03d}_half{k_half + 1}{suffix}_reg",
+                        ),
+                        volume_shape=volume_shape,
+                        from_ft=True,
+                        voxel_size=cryo.voxel_size,
+                    )
+                    if unreg_means[k_half] is not None:
+                        unreg_to_save = unreg_means[k_half][class_idx] if class_idx is not None else unreg_means[k_half]
+                        save_volume(
+                            np.asarray(unreg_to_save).reshape(-1),
+                            os.path.join(
+                                save_intermediates_dir,
+                                f"it{iteration:03d}_half{k_half + 1}{suffix}_unreg",
+                            ),
+                            volume_shape=volume_shape,
+                            from_ft=True,
+                            voxel_size=cryo.voxel_size,
+                        )
             # Save FSC and noise/tau2 per iteration
             np.save(
                 os.path.join(save_intermediates_dir, f"it{iteration:03d}_fsc.npy"),
@@ -3391,6 +3683,21 @@ def _run_relion_iteration_loop(
             )
         else:
             previous_combined_ha = None
+        if k_class_enabled:
+            current_combined_classes = np.concatenate(
+                [np.asarray(cls, dtype=np.int32) for cls in class_assignments],
+                axis=0,
+            )
+            if all(cls is not None for cls in previous_class_assignments):
+                previous_combined_classes = np.concatenate(
+                    [np.asarray(cls, dtype=np.int32) for cls in previous_class_assignments],
+                    axis=0,
+                )
+            else:
+                previous_combined_classes = None
+        else:
+            current_combined_classes = None
+            previous_combined_classes = None
 
         # tau2 was already updated BEFORE the Wiener solve (matching RELION's
         # reconstruct() which calls updateSSNRarrays before the filter).
@@ -3717,6 +4024,8 @@ def _run_relion_iteration_loop(
             previous_rotation_matrices=previous_rotation_matrices_combined,
             current_translations_pixel=current_translations_pixel_combined,
             previous_translations_pixel=previous_translations_pixel_combined,
+            current_classes=current_combined_classes,
+            previous_classes=previous_combined_classes,
             voxel_size_angstrom=float(cryo.voxel_size if cryo.voxel_size > 0 else 1.0),
         )
 
@@ -3780,6 +4089,7 @@ def _run_relion_iteration_loop(
         # so that local search and convergence detection work correctly
         # regardless of whether adaptive oversampling was used.
         previous_assignments = [ha.copy() if ha is not None else None for ha in coarse_ha]
+        previous_class_assignments = [cls.copy() if cls is not None else None for cls in class_assignments]
         _parity_dump.mark_stage(iteration, "convergence")
 
         if _parity_dump.is_active():
@@ -3871,10 +4181,17 @@ def _run_relion_iteration_loop(
                 max_iter,
                 force_max_iter_after_convergence,
             )
-        merged_mean = (means[0] + means[1]) / 2
+        merged_mean, merged_class_means = _merged_mean_from_halves(
+            means,
+            class_weights if k_class_enabled else None,
+        )
         return {
             "mean": merged_mean,
             "means": means,
+            "class_means": merged_class_means,
+            "class_weights": class_weights if k_class_enabled else None,
+            "class_assignments": class_assignments if k_class_enabled else None,
+            "class_weight_trajectory": class_weight_trajectory,
             "fsc": fsc_history[-1] if fsc_history else None,
             "hard_assignments": hard_assignments,
             "current_sizes": current_sizes,
@@ -3906,6 +4223,11 @@ def _run_relion_iteration_loop(
             "best_translations_history": best_translations_history,
             "local_profile_history": local_profile_history,
         }
+    if k_class_enabled:
+        raise NotImplementedError(
+            "K-class final all-data iteration is not wired yet; run with "
+            "skip_final_iteration=True or max_iter exhaustion until this branch is implemented.",
+        )
 
     # --- RELION's final iteration: do_join_random_halves + do_use_all_data ---
     # After convergence, RELION runs ONE more iter with:
@@ -4041,6 +4363,10 @@ def _run_relion_iteration_loop(
     return {
         "mean": merged_mean,
         "means": means,
+        "class_means": None,
+        "class_weights": None,
+        "class_assignments": None,
+        "class_weight_trajectory": class_weight_trajectory,
         "fsc": fsc_history[-1] if fsc_history else None,
         "hard_assignments": hard_assignments,
         "current_sizes": current_sizes,

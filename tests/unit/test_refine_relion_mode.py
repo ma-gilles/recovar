@@ -2559,6 +2559,42 @@ class TestRelionModeSmokeTest:
             assert ha is not None
             assert np.all(ha >= 0)
 
+    def test_relion_mode_dense_k_class_finite_outputs(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+    ):
+        """Dense non-adaptive RELION loop supports an explicit class axis."""
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations,
+            translations,
+            disc_type="linear_interp",
+            max_iter=1,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            init_current_size=16,
+            init_healpix_order=2,
+            max_healpix_order=3,
+            n_classes=2,
+            init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+        )
+
+        assert np.all(np.isfinite(np.asarray(result["mean"])))
+        assert np.asarray(result["class_means"]).shape == (2, VOLUME_SIZE)
+        assert np.asarray(result["means"][0]).shape == (2, VOLUME_SIZE)
+        assert np.asarray(result["means"][1]).shape == (2, VOLUME_SIZE)
+        np.testing.assert_allclose(np.sum(result["class_weights"]), 1.0, rtol=1e-6, atol=1e-6)
+        assert len(result["class_weight_trajectory"]) == 1
+        for half_idx in range(2):
+            assert result["class_assignments"][half_idx].shape == (half_datasets[half_idx].n_units,)
+            assert np.all(result["class_assignments"][half_idx] >= 0)
+
     def test_relion_mode_uses_engine_pmax(
         self,
         half_datasets,
