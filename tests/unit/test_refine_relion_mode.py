@@ -362,21 +362,9 @@ def test_selected_rotation_matrices_match_full_perturbed_grid():
     )
 
 
-def test_exact_local_fine_grid_precompute_auto_policy(monkeypatch):
-    monkeypatch.delenv("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID", raising=False)
-    monkeypatch.delenv("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS", raising=False)
-
+def test_exact_local_fine_grid_precompute_auto_policy():
     assert iteration_loop_module._precompute_exact_local_fine_grid_enabled(5)
     assert not iteration_loop_module._precompute_exact_local_fine_grid_enabled(6)
-
-    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID_MAX_ROTATIONS", "100")
-    assert not iteration_loop_module._precompute_exact_local_fine_grid_enabled(5)
-
-    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID", "1")
-    assert iteration_loop_module._precompute_exact_local_fine_grid_enabled(6)
-
-    monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_PRECOMPUTE_FINE_GRID", "0")
-    assert not iteration_loop_module._precompute_exact_local_fine_grid_enabled(5)
 
 
 def test_bucket_local_hypothesis_layout_coarsens_large_exact_neighborhoods():
@@ -4424,8 +4412,6 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
     init_volume,
     translations,
     monkeypatch,
-    *,
-    env_override=None,
 ):
     import recovar.em.dense_single_volume.iteration_loop as refine_mod
 
@@ -4490,10 +4476,6 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
             ),
         )
 
-    if env_override is None:
-        monkeypatch.delenv("RECOVAR_RELION_EXACT_LOCAL_IMAGE_BATCH_SIZE", raising=False)
-    else:
-        monkeypatch.setenv("RECOVAR_RELION_EXACT_LOCAL_IMAGE_BATCH_SIZE", str(env_override))
     monkeypatch.setattr(refine_mod, "rotation_grid_size", fake_rotation_grid_size)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid", fake_get_grid)
     monkeypatch.setattr(refine_mod, "get_relion_rotation_grid_eulers", fake_get_grid_eulers)
@@ -4543,22 +4525,6 @@ def test_local_search_exact_path_uses_safe_multi_image_batches(
         monkeypatch,
     )
     assert image_batch_sizes == [N_IMAGES, N_IMAGES]
-
-
-def test_local_search_exact_batch_size_env_override(
-    half_datasets,
-    init_volume,
-    translations,
-    monkeypatch,
-):
-    image_batch_sizes = _run_refine_with_stubbed_exact_local_batch_sizes(
-        half_datasets,
-        init_volume,
-        translations,
-        monkeypatch,
-        env_override=2,
-    )
-    assert image_batch_sizes == [2, 2]
 
 
 def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_when_available(
