@@ -14,9 +14,9 @@ Usage::
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
+import shlex
 import shutil
 import signal
 import sys
@@ -133,10 +133,12 @@ class SlurmExecutor(Executor):
         opts = slurm_opts or {}
         slurm_output = os.path.join(working_dir, "slurm-%j.out")
 
-        # Build sbatch script
+        # Build sbatch script. shlex.join → command survives spaces, quotes,
+        # and special chars in argv (paths with spaces, etc.). The renderer
+        # will not re-quote it.
         script = _render_sbatch_script(
             job_name=f"recovar-{job_id[:8]}",
-            command=" ".join(command),
+            command=shlex.join(command),
             env_vars=env,
             output_path=slurm_output,
             **opts,
@@ -149,7 +151,9 @@ class SlurmExecutor(Executor):
 
         # sbatch --parsable
         proc = await asyncio.create_subprocess_exec(
-            "sbatch", "--parsable", script_path,
+            "sbatch",
+            "--parsable",
+            script_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=working_dir,
@@ -157,9 +161,7 @@ class SlurmExecutor(Executor):
         stdout, stderr = await proc.communicate()
 
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"sbatch failed (rc={proc.returncode}): {stderr.decode().strip()}"
-            )
+            raise RuntimeError(f"sbatch failed (rc={proc.returncode}): {stderr.decode().strip()}")
 
         slurm_id = stdout.decode().strip().split(";")[0]
         # Resolve actual log path (substitute %j with slurm_id)
@@ -184,7 +186,8 @@ class SlurmExecutor(Executor):
 
     async def cancel(self, handle: str) -> None:
         proc = await asyncio.create_subprocess_exec(
-            "scancel", handle,
+            "scancel",
+            handle,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -221,7 +224,11 @@ class SlurmExecutor(Executor):
     async def _squeue_state(slurm_id: str) -> str | None:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "squeue", "-j", slurm_id, "--noheader", "--format=%T",
+                "squeue",
+                "-j",
+                slurm_id,
+                "--noheader",
+                "--format=%T",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -237,8 +244,12 @@ class SlurmExecutor(Executor):
     async def _sacct_state(slurm_id: str) -> str | None:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "sacct", "-j", slurm_id,
-                "--format=State", "--noheader", "--parsable2",
+                "sacct",
+                "-j",
+                slurm_id,
+                "--format=State",
+                "--noheader",
+                "--parsable2",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -297,7 +308,9 @@ class LocalExecutor(Executor):
         self._processes[handle] = (proc, Path(log_file), pgid)
         logger.info(
             "Started local process pid=%s pgid=%d for job_id=%s",
-            handle, pgid, job_id,
+            handle,
+            pgid,
+            job_id,
         )
         return handle
 
@@ -373,29 +386,28 @@ class LocalExecutor(Executor):
 # ---------------------------------------------------------------------------
 
 
+# NOTE: site-portability rules — see recovar/gui_v2/CLAUDE.md.
+#   - No cluster-/lab-specific strings (partition, account, paths) may live in
+#     the template body. They are passed in by the caller; empty values mean
+#     "omit the directive" (not "emit `#SBATCH --foo=`", which is a parse error
+#     on some schedulers).
+#   - Shell-bearing fragments with `${...}` are built as Python strings
+#     OUTSIDE this format template and substituted in via named slots,
+#     because `str.format` would mis-parse `${TMPDIR:-x}` as a format spec.
+
 _SBATCH_TEMPLATE = """\
 #!/bin/bash
-#SBATCH --job-name={job_name}
-#SBATCH --partition={partition}
-#SBATCH --account={account}
-#SBATCH --gres=gpu:{gpus}
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task={cpus}
-#SBATCH --mem={memory}
-#SBATCH --time={time}
-#SBATCH --output={output_path}
-{raw_directives}
+{slurm_directives}
 # ── Environment ──
 export PYTHONNOUSERSITE=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export TMPDIR=/scratch/gpfs/GILLES/mg6942/tmp
-mkdir -p "$TMPDIR"
-# Add pixi bin to PATH so the recovar entry point (with its shebang) works
-export PATH="{pixi_bin_dir}:$PATH"
+{tmpdir_block}
+# Add the running Python's bin dir to PATH so `recovar` shebang resolves
+export PATH={pixi_bin_dir}:$PATH
 {extra_exports}
 
-# ── Staging cleanup trap ──
-{cache_setup}
+# ── Cleanup trap ──
+{cleanup_block}
 
 # ── Run the actual command ──
 {command}
@@ -405,14 +417,97 @@ exit $EXIT_CODE
 """
 
 
+# Prefer scheduler-provided job-local scratch. Inherited from caller env if any.
+# We only create a tmpdir ourselves as a last resort, and clean up only what we
+# created (never $SLURM_TMPDIR or a pre-set $TMPDIR — clusters reap those).
+_TMPDIR_BLOCK = """\
+RECOVAR_CREATED_TMPDIR=0
+if [ -n "${SLURM_TMPDIR:-}" ]; then
+    export TMPDIR="$SLURM_TMPDIR"
+elif [ -n "${TMPDIR:-}" ]; then
+    mkdir -p "$TMPDIR"
+else
+    export TMPDIR="$(mktemp -d -t recovar-${SLURM_JOB_ID:-job}-XXXXXX)"
+    RECOVAR_CREATED_TMPDIR=1
+fi
+mkdir -p "$TMPDIR"\
+"""
+
+
+def _build_slurm_directives(
+    *,
+    job_name: str,
+    output_path: str,
+    partition: str,
+    account: str,
+    gpus: int,
+    cpus: int,
+    memory: str,
+    time: str,
+    raw_directives: str | None,
+) -> str:
+    """Build the #SBATCH directive block. Empty partition/account → omit (not blank)."""
+    lines: list[str] = [f"#SBATCH --job-name={job_name}"]
+    if partition:
+        lines.append(f"#SBATCH --partition={partition}")
+    if account:
+        lines.append(f"#SBATCH --account={account}")
+    if gpus:
+        lines.append(f"#SBATCH --gres=gpu:{gpus}")
+    lines.extend(
+        [
+            "#SBATCH --ntasks=1",
+            f"#SBATCH --cpus-per-task={cpus}",
+            f"#SBATCH --mem={memory}",
+            f"#SBATCH --time={time}",
+            f"#SBATCH --output={output_path}",
+        ]
+    )
+
+    if raw_directives and raw_directives.strip():
+        for raw in raw_directives.strip().splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            if raw.startswith("#SBATCH"):
+                lines.append(raw)
+            elif raw.startswith("-"):
+                # Already a sbatch flag (`-p gpu` or `--qos=high`) — prefix only.
+                lines.append(f"#SBATCH {raw}")
+            else:
+                lines.append(f"#SBATCH --{raw}")
+
+    return "\n".join(lines)
+
+
+def _build_cleanup_block(*, cache_dir: str | None) -> str:
+    """Build the trap/cleanup block. One trap covers cache_dir + tmpdir-we-created."""
+    parts: list[str] = []
+    if cache_dir:
+        parts.append(f"export RECOVAR_CACHE_DIR={shlex.quote(cache_dir)}/recovar_cache_${{SLURM_JOB_ID}}")
+        parts.append('mkdir -p "$RECOVAR_CACHE_DIR"')
+
+    parts.append("_recovar_cleanup() {")
+    if cache_dir:
+        parts.append('    if [ -n "$RECOVAR_CACHE_DIR" ] && [ -d "$RECOVAR_CACHE_DIR" ]; then')
+        parts.append('        rm -rf "$RECOVAR_CACHE_DIR"')
+        parts.append("    fi")
+    parts.append('    if [ "${RECOVAR_CREATED_TMPDIR:-0}" = "1" ] && [ -n "$TMPDIR" ] && [ -d "$TMPDIR" ]; then')
+    parts.append('        rm -rf "$TMPDIR"')
+    parts.append("    fi")
+    parts.append("}")
+    parts.append("trap _recovar_cleanup EXIT TERM INT")
+    return "\n".join(parts)
+
+
 def _render_sbatch_script(
     *,
     job_name: str,
     command: str,
     env_vars: dict[str, str],
     output_path: str,
-    partition: str = "cryoem",
-    account: str = "amits",
+    partition: str = "",
+    account: str = "",
     gpus: int = 1,
     cpus: int = 4,
     memory: str = "300G",
@@ -421,57 +516,35 @@ def _render_sbatch_script(
     raw_directives: str | None = None,
     **_extra: Any,
 ) -> str:
-    """Render an sbatch script from parameters."""
-    extra_exports = "\n".join(
-        f"export {k}={v}" for k, v in env_vars.items()
-    )
-    # Derive pixi bin dir from the running Python executable
-    pixi_bin_dir = str(Path(sys.executable).parent)
+    """Render an sbatch script from parameters.
 
-    # Format raw SBATCH directives (user-supplied extra lines)
-    raw_lines = ""
-    if raw_directives and raw_directives.strip():
-        lines = []
-        for line in raw_directives.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            # Prefix with #SBATCH if user didn't include it
-            if line.startswith("#SBATCH"):
-                lines.append(line)
-            elif line.startswith("--"):
-                lines.append(f"#SBATCH {line}")
-            else:
-                lines.append(f"#SBATCH --{line}")
-        raw_lines = "\n".join(lines)
-
-    if cache_dir:
-        cache_setup = (
-            f'export RECOVAR_CACHE_DIR={cache_dir}/recovar_cache_${{SLURM_JOB_ID}}\n'
-            f'mkdir -p "$RECOVAR_CACHE_DIR"\n'
-            f'cleanup() {{\n'
-            f'    if [ -n "$RECOVAR_CACHE_DIR" ] && [ -d "$RECOVAR_CACHE_DIR" ]; then\n'
-            f'        rm -rf "$RECOVAR_CACHE_DIR"\n'
-            f'    fi\n'
-            f'}}\n'
-            f'trap cleanup EXIT TERM INT'
-        )
-    else:
-        cache_setup = "# No cache staging configured"
-
-    return _SBATCH_TEMPLATE.format(
+    Empty `partition` / `account` → those `#SBATCH` directives are omitted
+    rather than emitted with a blank value (which is a parse error on some
+    SLURM versions). The caller is expected to pass shell-safe strings;
+    `command` should already be `shlex.join(argv)` — the SlurmExecutor does
+    that. Env-var values are quoted here.
+    """
+    slurm_directives = _build_slurm_directives(
         job_name=job_name,
+        output_path=output_path,
         partition=partition,
         account=account,
         gpus=gpus,
         cpus=cpus,
         memory=memory,
         time=time,
-        output_path=output_path,
-        raw_directives=raw_lines,
+        raw_directives=raw_directives,
+    )
+    cleanup_block = _build_cleanup_block(cache_dir=cache_dir)
+    extra_exports = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env_vars.items())
+    pixi_bin_dir = shlex.quote(str(Path(sys.executable).parent))
+
+    return _SBATCH_TEMPLATE.format(
+        slurm_directives=slurm_directives,
+        tmpdir_block=_TMPDIR_BLOCK,
         pixi_bin_dir=pixi_bin_dir,
         extra_exports=extra_exports,
-        cache_setup=cache_setup,
+        cleanup_block=cleanup_block,
         command=command,
     )
 
@@ -507,11 +580,13 @@ async def reconcile_jobs(
     for job_info in inflight_jobs:
         handle = job_info.get("handle")
         if not handle:
-            updates.append({
-                "id": job_info["id"],
-                "new_status": JobStatus.FAILED.value,
-                "error": "No executor handle — cannot reconcile after restart.",
-            })
+            updates.append(
+                {
+                    "id": job_info["id"],
+                    "new_status": JobStatus.FAILED.value,
+                    "error": "No executor handle — cannot reconcile after restart.",
+                }
+            )
             continue
 
         actual = await executor.status(handle)
@@ -525,17 +600,16 @@ async def reconcile_jobs(
         if actual == JobStatus.UNKNOWN:
             actual = JobStatus.FAILED
             log = await executor.log_path(handle)
-            error = (
-                f"Job status unknown after server restart. "
-                f"Check output: {log}"
-            )
+            error = f"Job status unknown after server restart. Check output: {log}"
         elif actual == JobStatus.FAILED:
             error = "Job failed (detected on server restart)."
 
-        updates.append({
-            "id": job_info["id"],
-            "new_status": actual.value,
-            "error": error,
-        })
+        updates.append(
+            {
+                "id": job_info["id"],
+                "new_status": actual.value,
+                "error": error,
+            }
+        )
 
     return updates

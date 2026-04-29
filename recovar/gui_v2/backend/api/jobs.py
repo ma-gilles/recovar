@@ -24,12 +24,11 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from recovar.gui_v2.backend.api.project import _load_project_by_id, get_project_path
+from recovar.gui_v2.backend.api.project import get_project_path
 from recovar.gui_v2.backend.config import get_db_path
 from recovar.gui_v2.backend.db import init_db
 from recovar.gui_v2.backend.models.job import Job, JobStatus
@@ -323,8 +322,7 @@ def _build_fsc_response(data: Any) -> ChartDataResponse:
         if isinstance(fsc_vals, list) and len(fsc_vals) > 0:
             if isinstance(fsc_vals[0], list):
                 for i, curve in enumerate(fsc_vals):
-                    trace: dict[str, Any] = {"y": curve, "type": "scatter", "mode": "lines",
-                            "name": f"FSC {i}"}
+                    trace: dict[str, Any] = {"y": curve, "type": "scatter", "mode": "lines", "name": f"FSC {i}"}
                     if resolution:
                         trace["x"] = resolution
                     traces.append(trace)
@@ -338,13 +336,11 @@ def _build_fsc_response(data: Any) -> ChartDataResponse:
         if isinstance(arr, list):
             if isinstance(arr[0], list):
                 for i, curve in enumerate(arr):
-                    traces.append({"y": curve, "type": "scatter", "mode": "lines",
-                                   "name": f"FSC {i}"})
+                    traces.append({"y": curve, "type": "scatter", "mode": "lines", "name": f"FSC {i}"})
             else:
                 traces.append({"y": arr, "type": "scatter", "mode": "lines", "name": "FSC"})
 
-    layout: dict[str, Any] = {"xaxis": {"title": "Spatial Frequency"},
-                               "yaxis": {"title": "FSC", "range": [0, 1]}}
+    layout: dict[str, Any] = {"xaxis": {"title": "Spatial Frequency"}, "yaxis": {"title": "FSC", "range": [0, 1]}}
     return ChartDataResponse(chart_type="fsc", traces=traces, layout=layout)
 
 
@@ -355,13 +351,10 @@ def _build_eigenvalue_response(data: Any) -> ChartDataResponse:
         values = _numpy_to_list(values.get("eigenvalues", values.get("values", [])))
     if isinstance(values, list) and len(values) > 0:
         indices = list(range(1, len(values) + 1))
-        traces: list[dict[str, Any]] = [
-            {"x": indices, "y": values, "type": "bar", "name": "Eigenvalues"}
-        ]
+        traces: list[dict[str, Any]] = [{"x": indices, "y": values, "type": "bar", "name": "Eigenvalues"}]
     else:
         traces = []
-    layout: dict[str, Any] = {"xaxis": {"title": "Component"},
-                               "yaxis": {"title": "Eigenvalue"}}
+    layout: dict[str, Any] = {"xaxis": {"title": "Component"}, "yaxis": {"title": "Eigenvalue"}}
     return ChartDataResponse(chart_type="eigenvalues", traces=traces, layout=layout)
 
 
@@ -427,9 +420,7 @@ def _read_available_zdims(result_dir: str) -> list[int] | None:
     if os.path.isdir(output_dir):
         zdims = []
         for name in os.listdir(output_dir):
-            if name.startswith("analysis_") and os.path.isdir(
-                os.path.join(output_dir, name)
-            ):
+            if name.startswith("analysis_") and os.path.isdir(os.path.join(output_dir, name)):
                 try:
                     z = int(name.split("_")[1])
                     zdims.append(z)
@@ -451,15 +442,8 @@ def _check_mask_dims(mask_path: str, expected_box_size: int) -> str | None:
                 int(mrc.header.ny),
                 int(mrc.header.nz),
             )
-            if (
-                nx != expected_box_size
-                or ny != expected_box_size
-                or nz != expected_box_size
-            ):
-                return (
-                    f"Mask box size ({nx}x{ny}x{nz}) does not match "
-                    f"particle box size {expected_box_size}"
-                )
+            if nx != expected_box_size or ny != expected_box_size or nz != expected_box_size:
+                return f"Mask box size ({nx}x{ny}x{nz}) does not match particle box size {expected_box_size}"
     except Exception as e:
         return f"Cannot read mask file: {e}"
     return None
@@ -485,9 +469,7 @@ async def _validate_job_params(
         if particles and not os.path.isfile(particles):
             errors.append(f"Particles file not found: {particles}")
         mask = params.get("mask", "from_halfmaps")
-        if mask not in ("from_halfmaps", "sphere", "none", "") and not os.path.isfile(
-            mask
-        ):
+        if mask not in ("from_halfmaps", "sphere", "none", "") and not os.path.isfile(mask):
             errors.append(f"Mask file not found: {mask}")
 
         # Mask dimension validation
@@ -514,9 +496,7 @@ async def _validate_job_params(
                 if star_result.n_particles is not None:
                     info["particle_count"] = star_result.n_particles
             except asyncio.TimeoutError:
-                warnings.append(
-                    "Mask validation timed out (filesystem may be slow)."
-                )
+                warnings.append("Mask validation timed out (filesystem may be slow).")
             except Exception as exc:
                 warnings.append(f"Could not validate mask dimensions: {exc}")
 
@@ -548,14 +528,9 @@ async def _validate_job_params(
                     if available is not None:
                         info["available_zdims"] = available
                         if int(requested_zdim) not in available:
-                            errors.append(
-                                f"zdim={requested_zdim} not found in pipeline "
-                                f"output. Available: {available}"
-                            )
+                            errors.append(f"zdim={requested_zdim} not found in pipeline output. Available: {available}")
                 except asyncio.TimeoutError:
-                    warnings.append(
-                        "zdim validation timed out (filesystem may be slow)."
-                    )
+                    warnings.append("zdim validation timed out (filesystem may be slow).")
                 except Exception as exc:
                     warnings.append(f"Could not validate zdim: {exc}")
 
@@ -564,10 +539,7 @@ async def _validate_job_params(
         usage = os.statvfs(project_path)
         free_gb = (usage.f_frsize * usage.f_bavail) / (1024**3)
         if free_gb < 50:
-            warnings.append(
-                f"Less than {free_gb:.0f} GB free on disk. "
-                f"Jobs may fail if space runs out."
-            )
+            warnings.append(f"Less than {free_gb:.0f} GB free on disk. Jobs may fail if space runs out.")
     except OSError:
         pass
 
@@ -607,9 +579,7 @@ async def validate_job(req: ValidateJobRequest) -> ValidationResult:
         "postprocess": "Postprocess",
         "downsample": "Downsample",
     }
-    job_type = _type_aliases_local.get(
-        req.type.lower().replace("-", "_"), req.type
-    )
+    job_type = _type_aliases_local.get(req.type.lower().replace("-", "_"), req.type)
 
     return await _validate_job_params(project_path, job_type, req.params)
 
@@ -660,10 +630,7 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
     # Find next job number
     type_dir = os.path.join(project_path, dir_name)
     os.makedirs(type_dir, exist_ok=True)
-    existing = [
-        d for d in os.listdir(type_dir)
-        if os.path.isdir(os.path.join(type_dir, d)) and d.startswith("job_")
-    ]
+    existing = [d for d in os.listdir(type_dir) if os.path.isdir(os.path.join(type_dir, d)) and d.startswith("job_")]
     next_num = max((int(d.split("_")[1]) for d in existing), default=0) + 1
     job_dir = os.path.join(type_dir, f"job_{next_num:04d}")
     os.makedirs(job_dir, exist_ok=True)
@@ -685,7 +652,11 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         if result_dir and not os.path.isdir(result_dir):
             raise HTTPException(status_code=400, detail=f"Result directory not found: {result_dir}")
         metadata = os.path.join(result_dir, "model", "params.pkl") if result_dir else ""
-        if result_dir and not os.path.isfile(metadata) and not os.path.isfile(os.path.join(result_dir, "model", "metadata.json")):
+        if (
+            result_dir
+            and not os.path.isfile(metadata)
+            and not os.path.isfile(os.path.join(result_dir, "model", "metadata.json"))
+        ):
             raise HTTPException(status_code=400, detail=f"Not a valid pipeline output: {result_dir}")
 
     # Check disk space
@@ -849,8 +820,7 @@ async def get_job(job_id: str) -> JobDetailResponse:
 async def cancel_job(job_id: str) -> dict:
     job, session = await _get_job(job_id)
     try:
-        if job.status in (JobStatus.COMPLETED.value, JobStatus.FAILED.value,
-                          JobStatus.CANCELLED.value):
+        if job.status in (JobStatus.COMPLETED.value, JobStatus.FAILED.value, JobStatus.CANCELLED.value):
             raise HTTPException(
                 status_code=400,
                 detail=f"Cannot cancel job in {job.status} state",
@@ -912,12 +882,14 @@ async def list_volumes(job_id: str) -> list[VolumeEntry]:
                 size = 0
             # Use subfolder in display name for clarity
             display_name = fname if rel_dir == "." else os.path.join(rel_dir, fname)
-            volumes.append(VolumeEntry(
-                name=display_name,
-                path=full,
-                category=category,
-                size_bytes=size,
-            ))
+            volumes.append(
+                VolumeEntry(
+                    name=display_name,
+                    path=full,
+                    category=category,
+                    size_bytes=size,
+                )
+            )
 
     return volumes
 
@@ -953,36 +925,44 @@ async def suggested_next(job_id: str) -> list[SuggestedNext]:
         return suggestions
 
     if job.type == "Pipeline":
-        suggestions.append(SuggestedNext(
-            type="Analyze",
-            label="Analyze this pipeline output",
-            prefilled_params={"result_dir": job.output_dir},
-        ))
-        suggestions.append(SuggestedNext(
-            type="Density",
-            label="Estimate conformational density",
-            prefilled_params={"result_dir": job.output_dir},
-        ))
-    elif job.type == "Analyze":
-        suggestions.append(SuggestedNext(
-            type="ComputeState",
-            label="Compute volume at a latent point",
-            prefilled_params={"result_dir": job.params.get("result_dir", "")},
-        ))
-        suggestions.append(SuggestedNext(
-            type="ComputeTrajectory",
-            label="Compute trajectory between two points",
-            prefilled_params={"result_dir": job.params.get("result_dir", "")},
-        ))
-    elif job.type == "Density":
-        density_pkl = os.path.join(
-            job.output_dir, "data", "deconv_density_knee.pkl"
+        suggestions.append(
+            SuggestedNext(
+                type="Analyze",
+                label="Analyze this pipeline output",
+                prefilled_params={"result_dir": job.output_dir},
+            )
         )
-        suggestions.append(SuggestedNext(
-            type="StableStates",
-            label="Find stable states from density",
-            prefilled_params={"density": density_pkl},
-        ))
+        suggestions.append(
+            SuggestedNext(
+                type="Density",
+                label="Estimate conformational density",
+                prefilled_params={"result_dir": job.output_dir},
+            )
+        )
+    elif job.type == "Analyze":
+        suggestions.append(
+            SuggestedNext(
+                type="ComputeState",
+                label="Compute volume at a latent point",
+                prefilled_params={"result_dir": (job.params or {}).get("result_dir", "")},
+            )
+        )
+        suggestions.append(
+            SuggestedNext(
+                type="ComputeTrajectory",
+                label="Compute trajectory between two points",
+                prefilled_params={"result_dir": (job.params or {}).get("result_dir", "")},
+            )
+        )
+    elif job.type == "Density":
+        density_pkl = os.path.join(job.output_dir, "data", "deconv_density_knee.pkl")
+        suggestions.append(
+            SuggestedNext(
+                type="StableStates",
+                label="Find stable states from density",
+                prefilled_params={"density": density_pkl},
+            )
+        )
 
     return suggestions
 
@@ -1112,13 +1092,10 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
                     from recovar.gui_v2.backend.api.project import (
                         _project_registry,
                     )
+
                     project_path = _project_registry.get(job.project_id)
                     if project_path:
-                        task = asyncio.create_task(
-                            _poll_job_status(
-                                job_id, job.executor_handle, project_path
-                            )
-                        )
+                        task = asyncio.create_task(_poll_job_status(job_id, job.executor_handle, project_path))
                         _poll_tasks[job_id] = task
 
         return ReconcileResponse(
@@ -1135,6 +1112,60 @@ async def reconcile_job(job_id: str) -> ReconcileResponse:
 class SbatchScriptResponse(BaseModel):
     script: str
     source: str  # "file" (read from submit.sh) or "preview" (rendered)
+
+
+class SbatchPreviewRequest(BaseModel):
+    command: list[str]
+    env_vars: dict[str, str] = {}
+    output_path: str = "/tmp/slurm-%j.out"
+    job_name: str = "recovar-preview"
+    slurm_opts: dict[str, Any] = {}
+
+
+class SbatchPreviewResponse(BaseModel):
+    script: str
+    warnings: list[str] = []
+
+
+@router.post("/preview-sbatch", response_model=SbatchPreviewResponse)
+async def preview_sbatch_script(req: SbatchPreviewRequest) -> SbatchPreviewResponse:
+    """Render the sbatch script that *would* be submitted, without writing
+    or submitting anything. Used by the job-form preview pane so users can
+    see — and debug — their template/SLURM-opts before clicking Submit."""
+    import shlex
+
+    from recovar.gui_v2.backend.services.executor import _render_sbatch_script
+
+    warnings: list[str] = []
+    opts = dict(req.slurm_opts or {})
+
+    # Surface helpful warnings the renderer can't (it just omits silently).
+    if not opts.get("partition"):
+        warnings.append(
+            "Partition is blank — `#SBATCH --partition` will be omitted; the cluster's default partition will be used."
+        )
+    if not opts.get("account"):
+        warnings.append(
+            "Account is blank — `#SBATCH --account` will be omitted; the cluster's default account will be used."
+        )
+    if opts.get("gpus", 1) == 0:
+        warnings.append("gpus=0 — `#SBATCH --gres=gpu:N` will be omitted (CPU-only job).")
+
+    try:
+        script = _render_sbatch_script(
+            job_name=req.job_name,
+            command=shlex.join(req.command) if req.command else "",
+            env_vars=req.env_vars,
+            output_path=req.output_path,
+            **opts,
+        )
+    except (KeyError, ValueError) as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to render sbatch script: {exc}",
+        )
+
+    return SbatchPreviewResponse(script=script, warnings=warnings)
 
 
 @router.get("/{job_id}/sbatch-script", response_model=SbatchScriptResponse)
@@ -1165,8 +1196,8 @@ async def get_sbatch_script(job_id: str) -> SbatchScriptResponse:
         cmd_line = _format_cli_command(job)
         return SbatchScriptResponse(
             script=f"# This job ran locally (not via SLURM).\n"
-                   f"# PID: {job.executor_handle or 'unknown'}\n\n"
-                   f"{cmd_line}\n",
+            f"# PID: {job.executor_handle or 'unknown'}\n\n"
+            f"{cmd_line}\n",
             source="preview",
         )
 

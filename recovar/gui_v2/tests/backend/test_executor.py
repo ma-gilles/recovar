@@ -12,9 +12,8 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-import textwrap
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -25,9 +24,7 @@ from recovar.gui_v2.backend.services.executor import (
     SlurmExecutor,
     _render_sbatch_script,
     reconcile_jobs,
-    slurm_available,
 )
-
 
 # ------------------------------------------------------------------
 # LocalExecutor
@@ -298,12 +295,51 @@ class TestSbatchTemplate:
         )
         assert "#!/bin/bash" in script
         assert "#SBATCH --job-name=test-job" in script
-        assert "#SBATCH --partition=cryoem" in script
+        # No partition/account given → directives must be omitted (not blank).
+        assert "#SBATCH --partition" not in script
+        assert "#SBATCH --account" not in script
         assert "#SBATCH --gres=gpu:1" in script
         assert "export PYTHONNOUSERSITE=1" in script
         assert "export XLA_PYTHON_CLIENT_PREALLOCATE=false" in script
         assert "export MY_VAR=my_val" in script
         assert "python -m recovar pipeline --particles test.star" in script
+
+    def test_no_site_specific_strings_in_default_render(self):
+        """v1.0.0 invariant: default render must not leak any HARDCODED
+        Princeton identifier. The interpreter path (sys.executable) is
+        dynamic and reflects whatever filesystem the user installed into,
+        so we mock it to a neutral path — otherwise this test would falsely
+        fail on developers whose home dir happens to contain "GILLES" or
+        "princeton" purely by accident of installation location."""
+        with patch("recovar.gui_v2.backend.services.executor.sys") as mock_sys:
+            mock_sys.executable = "/usr/local/bin/python"
+            script = _render_sbatch_script(
+                job_name="default",
+                command="echo hi",
+                env_vars={},
+                output_path="/tmp/out.log",
+            )
+        lowered = script.lower()
+        for needle in ("cryoem", "amits", "gilles", "princeton", "/scratch/gpfs"):
+            assert needle not in lowered, (
+                f"Default sbatch render leaks hardcoded site-specific string {needle!r}.\nRendered script:\n{script}"
+            )
+
+    def test_empty_partition_account_omits_directives(self):
+        script = _render_sbatch_script(
+            job_name="empty",
+            command="true",
+            env_vars={},
+            output_path="/tmp/out.log",
+            partition="",
+            account="",
+        )
+        # Empty `--partition=` is a parse error on some SLURM versions; we
+        # must omit the directive line entirely.
+        assert "#SBATCH --partition=" not in script
+        assert "#SBATCH --partition\n" not in script
+        assert "#SBATCH --account=" not in script
+        assert "#SBATCH --account\n" not in script
 
     def test_with_cache_dir(self):
         script = _render_sbatch_script(
@@ -313,8 +349,67 @@ class TestSbatchTemplate:
             output_path="/tmp/out.log",
             cache_dir="/dev/shm",
         )
+        # shlex.quote leaves shell-safe paths unquoted; either form is valid.
         assert "RECOVAR_CACHE_DIR=/dev/shm/recovar_cache_${SLURM_JOB_ID}" in script
-        assert "trap cleanup EXIT TERM INT" in script
+        assert "trap _recovar_cleanup EXIT TERM INT" in script
+
+    def test_tmpdir_block_prefers_slurm_provided(self):
+        """SLURM_TMPDIR must be checked before falling back to mktemp; we
+        never delete a scheduler-provided dir."""
+        script = _render_sbatch_script(
+            job_name="tmpdir",
+            command="true",
+            env_vars={},
+            output_path="/tmp/out.log",
+        )
+        # Order: SLURM_TMPDIR first, then $TMPDIR, then mktemp last.
+        idx_slurm = script.find("SLURM_TMPDIR")
+        idx_mktemp = script.find("mktemp -d")
+        assert idx_slurm != -1, "SLURM_TMPDIR not referenced in tmpdir block"
+        assert idx_mktemp != -1, "mktemp fallback missing"
+        assert idx_slurm < idx_mktemp, "SLURM_TMPDIR must be checked before mktemp"
+        # Cleanup must guard on RECOVAR_CREATED_TMPDIR so we only rm dirs we made.
+        assert "RECOVAR_CREATED_TMPDIR" in script
+
+    def test_command_with_special_chars_is_quoted(self):
+        """If a path contains spaces, the rendered script must still execute
+        correctly. Caller is responsible for shlex.join — we assert that the
+        rendered output preserves whatever the caller passed."""
+        import shlex
+
+        argv = ["recovar", "pipeline", "/path with spaces/foo.cs"]
+        joined = shlex.join(argv)
+        script = _render_sbatch_script(
+            job_name="quoted",
+            command=joined,
+            env_vars={},
+            output_path="/tmp/out.log",
+        )
+        assert joined in script
+        assert "'/path with spaces/foo.cs'" in script
+
+    def test_env_var_values_are_quoted(self):
+        script = _render_sbatch_script(
+            job_name="qenv",
+            command="true",
+            env_vars={"PATH_WITH_SPACES": "/a b/c", "SIMPLE": "ok"},
+            output_path="/tmp/out.log",
+        )
+        assert "export PATH_WITH_SPACES='/a b/c'" in script
+        assert "export SIMPLE=ok" in script
+
+    def test_brace_format_safety_in_command(self):
+        """Commands containing literal `${VAR}` and `${X:-default}` must not
+        crash the renderer (.format) and must be preserved verbatim."""
+        script = _render_sbatch_script(
+            job_name="braces",
+            command='echo "${HOME}" "${UNSET:-default}" awk \'{print $1}\'',
+            env_vars={},
+            output_path="/tmp/out.log",
+        )
+        assert "${HOME}" in script
+        assert "${UNSET:-default}" in script
+        assert "awk '{print $1}'" in script
 
     def test_custom_slurm_opts(self):
         script = _render_sbatch_script(
@@ -336,6 +431,20 @@ class TestSbatchTemplate:
         assert "#SBATCH --mem=500G" in script
         assert "#SBATCH --time=24:00:00" in script
 
+    def test_raw_directives_with_short_flag(self):
+        """`-p gpu` must render as `#SBATCH -p gpu`, not `#SBATCH ---p gpu`."""
+        script = _render_sbatch_script(
+            job_name="raw",
+            command="true",
+            env_vars={},
+            output_path="/tmp/out.log",
+            raw_directives="-p gpu\n--qos=high\nmail-user=me@example.com",
+        )
+        assert "#SBATCH -p gpu" in script
+        assert "#SBATCH ---p gpu" not in script
+        assert "#SBATCH --qos=high" in script
+        assert "#SBATCH --mail-user=me@example.com" in script
+
 
 # ------------------------------------------------------------------
 # Reconnect / reconcile
@@ -349,9 +458,12 @@ class TestReconcileJobs:
         mock_executor = AsyncMock(spec=Executor)
         mock_executor.status.return_value = JobStatus.RUNNING
 
-        updates = await reconcile_jobs(mock_executor, [
-            {"id": "j1", "handle": "12345", "db_status": "running"},
-        ])
+        updates = await reconcile_jobs(
+            mock_executor,
+            [
+                {"id": "j1", "handle": "12345", "db_status": "running"},
+            ],
+        )
         assert len(updates) == 0
 
     @pytest.mark.asyncio
@@ -360,9 +472,12 @@ class TestReconcileJobs:
         mock_executor = AsyncMock(spec=Executor)
         mock_executor.status.return_value = JobStatus.COMPLETED
 
-        updates = await reconcile_jobs(mock_executor, [
-            {"id": "j1", "handle": "12345", "db_status": "running"},
-        ])
+        updates = await reconcile_jobs(
+            mock_executor,
+            [
+                {"id": "j1", "handle": "12345", "db_status": "running"},
+            ],
+        )
         assert len(updates) == 1
         assert updates[0]["new_status"] == "completed"
         assert updates[0]["error"] is None
@@ -372,9 +487,12 @@ class TestReconcileJobs:
         mock_executor = AsyncMock(spec=Executor)
         mock_executor.status.return_value = JobStatus.FAILED
 
-        updates = await reconcile_jobs(mock_executor, [
-            {"id": "j1", "handle": "12345", "db_status": "running"},
-        ])
+        updates = await reconcile_jobs(
+            mock_executor,
+            [
+                {"id": "j1", "handle": "12345", "db_status": "running"},
+            ],
+        )
         assert len(updates) == 1
         assert updates[0]["new_status"] == "failed"
         assert updates[0]["error"] is not None
@@ -386,9 +504,12 @@ class TestReconcileJobs:
         mock_executor.status.return_value = JobStatus.UNKNOWN
         mock_executor.log_path.return_value = Path("/tmp/some.log")
 
-        updates = await reconcile_jobs(mock_executor, [
-            {"id": "j1", "handle": "12345", "db_status": "running"},
-        ])
+        updates = await reconcile_jobs(
+            mock_executor,
+            [
+                {"id": "j1", "handle": "12345", "db_status": "running"},
+            ],
+        )
         assert len(updates) == 1
         assert updates[0]["new_status"] == "failed"
         assert "unknown after server restart" in updates[0]["error"]
@@ -398,9 +519,12 @@ class TestReconcileJobs:
         """Job with no handle → FAILED with error."""
         mock_executor = AsyncMock(spec=Executor)
 
-        updates = await reconcile_jobs(mock_executor, [
-            {"id": "j1", "handle": None, "db_status": "running"},
-        ])
+        updates = await reconcile_jobs(
+            mock_executor,
+            [
+                {"id": "j1", "handle": None, "db_status": "running"},
+            ],
+        )
         assert len(updates) == 1
         assert updates[0]["new_status"] == "failed"
 
@@ -414,11 +538,14 @@ class TestReconcileJobs:
             JobStatus.FAILED,
         ]
 
-        updates = await reconcile_jobs(mock_executor, [
-            {"id": "j1", "handle": "100", "db_status": "running"},
-            {"id": "j2", "handle": "200", "db_status": "running"},
-            {"id": "j3", "handle": "300", "db_status": "queued"},
-        ])
+        updates = await reconcile_jobs(
+            mock_executor,
+            [
+                {"id": "j1", "handle": "100", "db_status": "running"},
+                {"id": "j2", "handle": "200", "db_status": "running"},
+                {"id": "j3", "handle": "300", "db_status": "queued"},
+            ],
+        )
         # j1: running→completed = update
         # j2: running→running = no update
         # j3: queued→failed = update

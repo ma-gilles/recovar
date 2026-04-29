@@ -97,9 +97,12 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
     return null;
   }
 
+  // Empty partition/account → backend renderer omits the directive entirely,
+  // letting the cluster's default apply. Do NOT bake site-specific defaults
+  // here; doing so leaks them into every user's form regardless of cluster.
   const current = value ?? {
-    partition: serverDefaults?.partition ?? "cryoem",
-    account: serverDefaults?.account ?? "amits",
+    partition: serverDefaults?.partition ?? "",
+    account: serverDefaults?.account ?? "",
     gpus: serverDefaults?.gpus ?? 1,
     cpus: serverDefaults?.cpus ?? 4,
     memory: serverDefaults?.memory ?? "300G",
@@ -130,6 +133,7 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
               </div>
               <Input
                 value={current.partition}
+                placeholder="leave blank to use cluster default"
                 onChange={(e) => update("partition", e.target.value)}
               />
             </div>
@@ -140,6 +144,7 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
               </div>
               <Input
                 value={current.account}
+                placeholder="leave blank to use cluster default"
                 onChange={(e) => update("account", e.target.value)}
               />
             </div>

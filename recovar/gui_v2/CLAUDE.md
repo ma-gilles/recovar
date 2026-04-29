@@ -333,3 +333,62 @@ recovar/gui_v2/
 │   └── fixtures/              # Pre-computed pipeline + analyze outputs
 └── tooltips.json              # Contextual help text for all parameters
 ```
+
+## Site-portability rules (sbatch rendering)
+
+The GUI is shipped to users on arbitrary HPC clusters. The sbatch renderer
+(`backend/services/executor.py::_render_sbatch_script`) must produce a
+script that works on any reasonable SLURM site, with no implicit Princeton
+assumptions. Treat the rules below as load-bearing — they exist because
+v1.0.0 was almost shipped with `partition=cryoem`, `account=amits`, and
+`TMPDIR=/scratch/gpfs/GILLES/mg6942/tmp` baked into the default render.
+
+**Hardcoding bans.**
+- No site-specific identifier (partition name, account, group, host, path)
+  may appear as a literal string anywhere in the renderer source. This
+  includes function-default arguments and the `_SBATCH_TEMPLATE` body.
+  Defaults belong in `backend/config.py::DEFAULT_SLURM` and must be empty
+  strings, not site values.
+- The frontend (`frontend/src/components/job-form/SlurmSettings.tsx`) must
+  not have its own fallbacks. All defaults flow from the server's
+  `/api/system/slurm-defaults`.
+- The regression test
+  `tests/backend/test_executor.py::TestSbatchTemplate::test_no_site_specific_strings_in_default_render`
+  enforces this — keep it passing.
+
+**Empty values mean "omit the directive."**
+- `partition=""` / `account=""` → the renderer must NOT emit
+  `#SBATCH --partition=` (a parse error on some SLURM versions). It must
+  omit the directive entirely so the cluster's default applies.
+- Same rule for any future optional directive.
+
+**Shell-bearing fragments stay out of the format template.**
+- `_SBATCH_TEMPLATE` is processed by `str.format`. Anything containing
+  shell `${VAR}` or `${VAR:-default}` will be misparsed by `.format()` as
+  a format spec and crash.
+- Build such fragments as plain Python strings (see `_TMPDIR_BLOCK`,
+  `_build_cleanup_block`) and substitute them in via a single named slot.
+- When a future Phase 2 introduces user-editable templates, switch the
+  engine away from `str.format` (Jinja2 with `StrictUndefined` is the
+  intended target — surfaces typos as `UndefinedError` instead of
+  silently submitting a broken script).
+
+**Quote everything user-controlled.**
+- The submitted command must be `shlex.join(argv)` at the call site —
+  the renderer does not re-quote `command` (paths with spaces would
+  otherwise break).
+- Env-var values are `shlex.quote`d inside the renderer.
+- The interpreter path (`sys.executable`) is `shlex.quote`d before going
+  into `PATH=...`.
+
+**Scheduler-provided scratch wins over our own.**
+- The TMPDIR block prefers `$SLURM_TMPDIR` first, then an inherited
+  `$TMPDIR`, and only falls back to `mktemp` if neither exists. The
+  cleanup trap removes the tmpdir only if the renderer created it
+  (`RECOVAR_CREATED_TMPDIR=1`); never delete `$SLURM_TMPDIR` or an
+  inherited `$TMPDIR` — many clusters reap those automatically.
+
+**One trap, not two.**
+- Cache-staging cleanup and tmpdir cleanup share a single
+  `_recovar_cleanup` function and one `trap _recovar_cleanup EXIT TERM
+  INT`. Stacking traps clobbers the previous one.
