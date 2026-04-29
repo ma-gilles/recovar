@@ -243,20 +243,13 @@ class ParticleImageDataset:
         return images, index, index
 
     def process_images(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
-        use_relion_numpy_fft = (
-            self.image_mask_mode == "relion_background_fill"
-            and __import__("os").environ.get("RECOVAR_RELION_NUMPY_IMAGE_FFT") == "1"
-        )
-        if use_relion_numpy_fft:
+        if self.image_mask_mode == "relion_background_fill":
             try:
                 images_np = np.asarray(images)
             except Exception as exc:
                 if exc.__class__.__name__ != "TracerArrayConversionError":
                     raise
-                # Jitted callers cannot leave JAX. They keep the previous JAX
-                # path; non-jitted RELION pass-2 uses the NumPy/FFTW-compatible
-                # path above.
-                use_relion_numpy_fft = False
+                raise ValueError("RELION background-fill preprocessing requires host real-space images") from exc
             else:
                 if images_np.ndim == 2:
                     images_np = images_np[np.newaxis, ...]
@@ -283,17 +276,13 @@ class ParticleImageDataset:
     def process_images_half(self, images: np.ndarray, apply_image_mask: bool = False) -> np.ndarray:
         """Return preprocessed images directly in packed half-spectrum layout."""
 
-        use_relion_numpy_fft = (
-            self.image_mask_mode == "relion_background_fill"
-            and __import__("os").environ.get("RECOVAR_RELION_NUMPY_IMAGE_FFT") == "1"
-        )
-        if use_relion_numpy_fft:
+        if self.image_mask_mode == "relion_background_fill":
             try:
                 images_np = np.asarray(images)
             except Exception as exc:
                 if exc.__class__.__name__ != "TracerArrayConversionError":
                     raise
-                use_relion_numpy_fft = False
+                raise ValueError("RELION background-fill half preprocessing requires host real-space images") from exc
             else:
                 if images_np.ndim == 2:
                     images_np = images_np[np.newaxis, ...]

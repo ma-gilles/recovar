@@ -207,8 +207,6 @@ def _enable_relion_parity_defaults():
         # RELION's CUDA projector samples Fourier references through
         # cudaFilterModeLinear texture objects.
         "RECOVAR_RELION_TEXTURE_INTERP": "1",
-        # RELION image preprocessing uses FFTW-style centered complex FFTs.
-        "RECOVAR_RELION_NUMPY_IMAGE_FFT": "1",
     }
     enabled = []
     for name, value in defaults.items():
