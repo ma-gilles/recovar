@@ -221,21 +221,6 @@ def _enable_relion_parity_defaults():
         logger.info("RELION mode parity defaults enabled: %s", ", ".join(enabled))
 
 
-def _relion_use_float64_scoring() -> bool:
-    """Return whether RELION-mode E-step scoring should upcast to float64.
-
-    RELION's accelerated path stores E-step weights as XFLOAT, which is float
-    unless RELION is compiled with ACC_DOUBLE_PRECISION. Keep the old double
-    path available for diagnostics by setting RECOVAR_RELION_FLOAT32_SCORING=0.
-    """
-    return os.environ.get("RECOVAR_RELION_FLOAT32_SCORING", "1").lower() not in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
 def _relion_exact_local_image_batch_override() -> int | None:
     """Return an optional debug override for exact local-search image batches."""
     raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_IMAGE_BATCH_SIZE")
@@ -2443,7 +2428,7 @@ def _run_relion_iteration_loop(
                     accumulate_noise=True,
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     reconstruction_padding_factor=PADDING_FACTOR,
-                    use_float64_scoring=_relion_use_float64_scoring(),
+                    use_float64_scoring=False,
                     use_float64_projections=False,
                     do_gridding_correction=True,
                     square_window=RELION_FOURIER_WINDOW_SQUARE,
@@ -2544,7 +2529,7 @@ def _run_relion_iteration_loop(
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     do_gridding_correction=True,
                     square_window=RELION_FOURIER_WINDOW_SQUARE,
-                    use_float64_scoring=_relion_use_float64_scoring(),
+                    use_float64_scoring=False,
                 )
                 total_coarse_samples = int(
                     effective_rotations.shape[0] * current_translations.shape[0],
@@ -2607,7 +2592,7 @@ def _run_relion_iteration_loop(
                         scale_corrections=relion_half_inputs.scale_corrections[k],
                         image_pre_shifts=translation_search_base,
                         translation_prior_centers=trans_prior_center,
-                        use_float64_scoring=_relion_use_float64_scoring(),
+                        use_float64_scoring=False,
                         use_float64_projections=False,
                         do_gridding_correction=True,
                         square_window=RELION_FOURIER_WINDOW_SQUARE,
@@ -2657,7 +2642,7 @@ def _run_relion_iteration_loop(
                         image_corrections=relion_half_inputs.image_corrections[k],
                         scale_corrections=relion_half_inputs.scale_corrections[k],
                         image_pre_shifts=translation_search_base,
-                        use_float64_scoring=_relion_use_float64_scoring(),
+                        use_float64_scoring=False,
                         do_gridding_correction=True,
                         square_window=RELION_FOURIER_WINDOW_SQUARE,
                         random_perturbation=random_perturbation,
@@ -2712,7 +2697,7 @@ def _run_relion_iteration_loop(
                         image_corrections=relion_half_inputs.image_corrections[k],
                         scale_corrections=relion_half_inputs.scale_corrections[k],
                         image_pre_shifts=translation_search_base,
-                        use_float64_scoring=_relion_use_float64_scoring(),
+                        use_float64_scoring=False,
                         do_gridding_correction=True,
                         square_window=RELION_FOURIER_WINDOW_SQUARE,
                         random_perturbation=random_perturbation,
@@ -2820,7 +2805,7 @@ def _run_relion_iteration_loop(
                     projection_padding_factor=PROJECTION_PADDING_FACTOR,
                     do_gridding_correction=True,
                     square_window=RELION_FOURIER_WINDOW_SQUARE,
-                    use_float64_scoring=_relion_use_float64_scoring(),
+                    use_float64_scoring=False,
                     return_full_stats=True,
                 )
                 if len(_sig_result) == 5:
@@ -2872,7 +2857,7 @@ def _run_relion_iteration_loop(
                     image_corrections=relion_half_inputs.image_corrections[k],
                     scale_corrections=relion_half_inputs.scale_corrections[k],
                     image_pre_shifts=translation_search_base,
-                    use_float64_scoring=_relion_use_float64_scoring(),
+                    use_float64_scoring=False,
                     do_gridding_correction=True,
                     square_window=RELION_FOURIER_WINDOW_SQUARE,
                     random_perturbation=random_perturbation,
@@ -2980,7 +2965,7 @@ def _run_relion_iteration_loop(
                     scale_corrections=relion_half_inputs.scale_corrections[k],
                     image_pre_shifts=translation_search_base,
                     translation_prior_centers=trans_prior_center,
-                    use_float64_scoring=_relion_use_float64_scoring(),
+                    use_float64_scoring=False,
                     use_float64_projections=False,
                     do_gridding_correction=True,
                     square_window=RELION_FOURIER_WINDOW_SQUARE,
@@ -3034,7 +3019,7 @@ def _run_relion_iteration_loop(
                         "noise_variance": np.asarray(noise_variance_k),
                         "current_size": np.int32(cs_for_engine) if cs_for_engine is not None else np.int32(-1),
                         "half_spectrum_scoring": np.bool_(True),
-                        "use_float64_scoring": np.bool_(_relion_use_float64_scoring()),
+                        "use_float64_scoring": np.bool_(False),
                         "projection_padding_factor": np.int32(PROJECTION_PADDING_FACTOR),
                         "reconstruction_padding_factor": np.int32(PADDING_FACTOR),
                         "score_with_masked_images": np.bool_(True),
@@ -4030,7 +4015,7 @@ def _run_relion_iteration_loop(
             image_corrections=relion_half_inputs.image_corrections[k],
             scale_corrections=relion_half_inputs.scale_corrections[k],
             image_pre_shifts=relion_translation_search_base(relion_half_inputs.previous_best_translations[k]),
-            use_float64_scoring=_relion_use_float64_scoring(),
+            use_float64_scoring=False,
             use_float64_projections=False,
             do_gridding_correction=True,
             square_window=RELION_FOURIER_WINDOW_SQUARE,
@@ -4071,7 +4056,7 @@ def _run_relion_iteration_loop(
                 "noise_variance": np.asarray(noise_variance_per_half[k]),
                 "current_size": np.int32(final_cs),
                 "half_spectrum_scoring": np.bool_(True),
-                "use_float64_scoring": np.bool_(_relion_use_float64_scoring()),
+                "use_float64_scoring": np.bool_(False),
                 "projection_padding_factor": np.int32(PROJECTION_PADDING_FACTOR),
                 "reconstruction_padding_factor": np.int32(PADDING_FACTOR),
                 "score_with_masked_images": np.bool_(True),
