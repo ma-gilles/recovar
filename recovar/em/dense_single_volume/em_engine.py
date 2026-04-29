@@ -106,13 +106,6 @@ from .shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
 logger = logging.getLogger(__name__)
 
-# TRACKED TODOs: DENSE_ENGINE_BOUNDARY
-# TODO(DENSE_ENGINE_BOUNDARY/E001): this file is dense/global-only, local search belongs in local_em_engine.py
-# TODO(DENSE_ENGINE_BOUNDARY/E002): extract shared primitives, do not let local logic grow back here
-# TODO(DENSE_ENGINE_BOUNDARY/E004): dtype-policy cleanup needed, reduce ad hoc casts and flags
-# TODO(DENSE_ENGINE_BOUNDARY/E005): audit em_engine.py vs local_em_engine.py for copied implementations
-# See docs/relion_local_engine_refactor.md
-
 
 def _noise_split_diagnostics_requested() -> bool:
     """Return whether per-shell A2/XA noise split diagnostics are needed."""
@@ -453,13 +446,6 @@ def run_em(
         process_fn=experiment_dataset.process_images,
     )
 
-    # TODO(local-engine-debt): If we keep any dense score path after the local
-    # engine split, there is still an inner-product/GEMM-shaped optimization
-    # opportunity around the translation dimension. RELION appears to fuse
-    # project+translate+score in custom kernels instead of BLAS here, so this
-    # is not a parity requirement. Still, we should remember to revisit that
-    # opportunity once the local path stops forcing per-image neighborhoods
-    # through the shared-grid dense engine.
     half_weights = make_scoring_half_image_weights(
         image_shape,
         relion_half_sum=half_spectrum_scoring,

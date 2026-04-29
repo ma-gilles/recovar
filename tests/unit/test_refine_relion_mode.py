@@ -512,148 +512,6 @@ def test_local_score_debug_dump_records_attempted_pose_metadata(tmp_path):
         np.testing.assert_allclose(dump["best_score_translation"], np.array([[0.0, 1.0]], dtype=np.float32))
 
 
-def test_run_local_search_iteration_dispatches_exact_engine(monkeypatch, rng):
-    mock_dataset = MockDataset(N_IMAGES, rng)
-    called = {"engine": None}
-
-    def fake_exact(*args, **kwargs):
-        _ = args
-        called["engine"] = "exact_v1"
-        if kwargs.get("accumulate_noise", False):
-            return (
-                jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-                jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-                np.zeros(mock_dataset.n_units, dtype=np.int32),
-                RelionStats(
-                    log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
-                    best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
-                    max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
-                    rotation_posterior_sums=jnp.zeros(6, dtype=jnp.float32),
-                ),
-                NoiseStats(
-                    wsum_sigma2_noise=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
-                    wsum_img_power=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
-                    wsum_sigma2_offset=0.0,
-                    sumw=0.0,
-                ),
-            )
-        raise AssertionError("test expects accumulate_noise=True")
-
-    monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration_exact_v1", fake_exact)
-
-    prior_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], mock_dataset.n_units, axis=0)
-    rotation_grid_rotations = np.repeat(np.eye(3, dtype=np.float32)[None, :, :], 6, axis=0)
-    rotation_grid_eulers = np.zeros((6, 3), dtype=np.float32)
-    translations = np.zeros((N_TRANSLATIONS, 2), dtype=np.float32)
-    prior_translations = np.zeros((mock_dataset.n_units, 2), dtype=np.float32)
-
-    outputs = iteration_loop_module._run_local_search_iteration(
-        mock_dataset,
-        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
-        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-        prior_rotations,
-        rotation_grid_rotations,
-        rotation_grid_eulers,
-        healpix_order=1,
-        sigma_rot=0.1,
-        sigma_psi=0.1,
-        translations=translations,
-        prior_translations=prior_translations,
-        sigma_offset_angstrom=1.0,
-        offset_range_pixels=1.0,
-        disc_type="linear_interp",
-        image_batch_size=2,
-        rotation_block_size=4,
-        current_size=4,
-        accumulate_noise=True,
-    )
-
-    assert called["engine"] == "exact_v1"
-    assert len(outputs) == 5
-
-def test_run_local_search_iteration_exact_engine_uses_translation_prior_reference_grid(monkeypatch, rng):
-    mock_dataset = MockDataset(1, rng)
-    captured = {}
-
-    def fake_exact(*args, **kwargs):
-        _ = (
-            args,
-        )
-        captured["translation_prior_reference_translations"] = (
-            None
-            if kwargs.get("translation_prior_reference_translations") is None
-            else np.asarray(kwargs["translation_prior_reference_translations"], dtype=np.float32).copy()
-        )
-        captured["translation_prior_centers"] = (
-            None
-            if kwargs.get("translation_prior_centers") is None
-            else np.asarray(kwargs["translation_prior_centers"], dtype=np.float32).copy()
-        )
-        return (
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            jnp.zeros(mock_dataset.volume_size, dtype=mock_dataset.dtype),
-            np.zeros(mock_dataset.n_units, dtype=np.int32),
-            RelionStats(
-                log_evidence_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
-                best_log_score_per_image=jnp.zeros(mock_dataset.n_units, dtype=jnp.float32),
-                max_posterior_per_image=jnp.ones(mock_dataset.n_units, dtype=jnp.float32),
-                rotation_posterior_sums=jnp.zeros(6, dtype=jnp.float32),
-            ),
-            NoiseStats(
-                wsum_sigma2_noise=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
-                wsum_img_power=jnp.zeros(mock_dataset.image_shape[0] // 2 + 1, dtype=jnp.float32),
-                wsum_sigma2_offset=0.0,
-                sumw=0.0,
-            ),
-        )
-
-    monkeypatch.setattr(iteration_loop_module, "_run_local_search_iteration_exact_v1", fake_exact)
-
-    prior_rotations = np.zeros((1, 3), dtype=np.float32)
-    rotation_grid_rotations = get_relion_rotation_grid(0).astype(np.float32)
-    rotation_grid_eulers = get_relion_rotation_grid_eulers(0).astype(np.float32)
-    translations = np.array([[0.5, 0.5], [1.5, 0.5]], dtype=np.float32)
-    reference_translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
-    prior_centers = np.array([[0.25, -0.5]], dtype=np.float32)
-
-    outputs = iteration_loop_module._run_local_search_iteration(
-        mock_dataset,
-        jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
-        jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
-        jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-        prior_rotations,
-        rotation_grid_rotations,
-        rotation_grid_eulers,
-        healpix_order=0,
-        sigma_rot=0.1,
-        sigma_psi=0.1,
-        translations=translations,
-        prior_translations=np.zeros((1, 2), dtype=np.float32),
-        sigma_offset_angstrom=1.0,
-        offset_range_pixels=1.0,
-        disc_type="linear_interp",
-        image_batch_size=1,
-        rotation_block_size=4,
-        current_size=4,
-        accumulate_noise=True,
-        translation_prior_reference_translations=reference_translations,
-        translation_prior_centers=prior_centers,
-    )
-
-    np.testing.assert_allclose(
-        captured["translation_prior_reference_translations"],
-        reference_translations,
-        atol=1e-6,
-    )
-    np.testing.assert_allclose(
-        captured["translation_prior_centers"],
-        prior_centers,
-        atol=1e-6,
-    )
-    assert len(outputs) == 5
-
-
 def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translation_prior(monkeypatch, rng):
     mock_dataset = MockDataset(1, rng)
     captured = {}
@@ -729,7 +587,7 @@ def test_run_local_search_iteration_exact_engine_uses_model_sigma_for_translatio
     translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
     reference_translations = np.array([[0.0, 0.0], [2.0, 0.0]], dtype=np.float32)
 
-    outputs = iteration_loop_module._run_local_search_iteration_exact_v1(
+    outputs = iteration_loop_module._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
@@ -866,7 +724,7 @@ def test_run_local_search_iteration_exact_engine_uses_factorized_prior_metadata_
         grid_rotations=perturbed_rotations,
     )["mode"] == "full"
 
-    outputs = iteration_loop_module._run_local_search_iteration_exact_v1(
+    outputs = iteration_loop_module._run_local_search_iteration(
         mock_dataset,
         jnp.zeros(VOLUME_SIZE, dtype=jnp.complex64),
         jnp.ones(VOLUME_SIZE, dtype=jnp.float32),
@@ -1981,14 +1839,16 @@ def test_compute_reconstruction_support_matches_relion_style_threshold():
     )
 
 
-def test_tracked_local_engine_todo_ids_are_present():
+def test_tracked_local_engine_todo_ids_are_resolved():
     repo_root = Path(__file__).resolve().parents[2]
     iteration_loop_path = repo_root / "recovar" / "em" / "dense_single_volume" / "iteration_loop.py"
     em_engine_path = repo_root / "recovar" / "em" / "dense_single_volume" / "em_engine.py"
+    half_spectrum_path = repo_root / "recovar" / "em" / "dense_single_volume" / "helpers" / "half_spectrum.py"
     docs_path = repo_root / "docs" / "relion_local_engine_refactor.md"
 
     iteration_text = iteration_loop_path.read_text(encoding="utf-8")
     em_engine_text = em_engine_path.read_text(encoding="utf-8")
+    half_spectrum_text = half_spectrum_path.read_text(encoding="utf-8")
     docs_text = docs_path.read_text(encoding="utf-8")
 
     documented_ids = [
@@ -2005,13 +1865,12 @@ def test_tracked_local_engine_todo_ids_are_present():
     ]
     for todo_id in documented_ids:
         assert todo_id in docs_text
-    assert "RELION_LOCAL_ENGINE/T001" not in iteration_text
-    assert "DENSE_ENGINE_BOUNDARY/E001" in em_engine_text
-    assert "DENSE_ENGINE_BOUNDARY/E002" in em_engine_text
-    assert "DENSE_ENGINE_BOUNDARY/E004" in em_engine_text
-    assert "DENSE_ENGINE_BOUNDARY/E005" in em_engine_text
-    assert "DENSE_ENGINE_BOUNDARY/E003" not in em_engine_text
-    assert "DENSE_ENGINE_BOUNDARY/E006" not in em_engine_text
+        assert f"`{todo_id}` | RESOLVED" in docs_text
+
+    active_code = "\n".join([iteration_text, em_engine_text, half_spectrum_text])
+    assert "TODO(RELION_LOCAL_ENGINE" not in active_code
+    assert "TODO(DENSE_ENGINE_BOUNDARY" not in active_code
+    assert "TODO(RELION-parity-debt" not in active_code
 
 
 def test_local_engine_selector_is_removed():
