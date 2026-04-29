@@ -488,6 +488,82 @@ def _local_adjoint_one(
     )
 
 
+def _accumulate_local_adjoint_rows(
+    *,
+    packed_summed_rows,
+    packed_ctf_rows,
+    packed_flat_rotations,
+    Ft_y,
+    Ft_ctf,
+    recon_window_indices,
+    image_shape,
+    recon_volume_shape,
+    use_window: bool,
+    use_native_half_volume_mstep: bool,
+    current_size,
+    batch_backproject_enabled: bool,
+    disable_adjoint_y: bool,
+    disable_adjoint_ctf: bool,
+    return_profile: bool,
+    timing: _LocalTiming,
+):
+    if batch_backproject_enabled and not disable_adjoint_y and not disable_adjoint_ctf:
+        adjoint_y_t0 = time.time()
+        Ft_y, Ft_ctf = _local_batch_adjoint_pair(
+            packed_summed_rows,
+            packed_ctf_rows,
+            packed_flat_rotations,
+            Ft_y,
+            Ft_ctf,
+            recon_window_indices,
+            image_shape,
+            recon_volume_shape,
+            use_window=use_window,
+            use_native_half_volume_mstep=use_native_half_volume_mstep,
+            current_size=current_size,
+        )
+        if return_profile:
+            _block_until_ready(Ft_y, Ft_ctf)
+        timing.adjoint_y_s += time.time() - adjoint_y_t0
+        return Ft_y, Ft_ctf
+
+    if not disable_adjoint_y:
+        adjoint_y_t0 = time.time()
+        Ft_y = _local_adjoint_one(
+            packed_summed_rows,
+            packed_flat_rotations,
+            Ft_y,
+            recon_window_indices,
+            image_shape,
+            recon_volume_shape,
+            use_window=use_window,
+            use_native_half_volume_mstep=use_native_half_volume_mstep,
+            current_size=current_size,
+        )
+        if return_profile:
+            _block_until_ready(Ft_y)
+        timing.adjoint_y_s += time.time() - adjoint_y_t0
+
+    if not disable_adjoint_ctf:
+        adjoint_ctf_t0 = time.time()
+        Ft_ctf = _local_adjoint_one(
+            packed_ctf_rows,
+            packed_flat_rotations,
+            Ft_ctf,
+            recon_window_indices,
+            image_shape,
+            recon_volume_shape,
+            use_window=use_window,
+            use_native_half_volume_mstep=use_native_half_volume_mstep,
+            current_size=current_size,
+        )
+        if return_profile:
+            _block_until_ready(Ft_ctf)
+        timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
+
+    return Ft_y, Ft_ctf
+
+
 def _fetch_indexed_batch(experiment_dataset, image_indices):
     batch_iter = experiment_dataset.iter_batches(
         len(image_indices),
@@ -2016,58 +2092,24 @@ def run_local_em_exact(
         packed_ctf_rows = flatten_bucket_rows(packed_ctf_probs)
         timing.pack_s += time.time() - pack_t0
         ## TODO THIS CLEAN THIS INSSANE BRANCHING HERE
-        if batch_backproject_enabled and not disable_adjoint_y and not disable_adjoint_ctf:
-            adjoint_y_t0 = time.time()
-            Ft_y, Ft_ctf = _local_batch_adjoint_pair(
-                packed_summed_rows,
-                packed_ctf_rows,
-                packed_flat_rotations,
-                Ft_y,
-                Ft_ctf,
-                recon_window_indices,
-                image_shape,
-                recon_volume_shape,
-                use_window=use_window,
-                use_native_half_volume_mstep=use_native_half_volume_mstep,
-                current_size=current_size,
-            )
-            if return_profile:
-                _block_until_ready(Ft_y, Ft_ctf)
-            timing.adjoint_y_s += time.time() - adjoint_y_t0
-        else:
-            if not disable_adjoint_y:
-                adjoint_y_t0 = time.time()
-                Ft_y = _local_adjoint_one(
-                    packed_summed_rows,
-                    packed_flat_rotations,
-                    Ft_y,
-                    recon_window_indices,
-                    image_shape,
-                    recon_volume_shape,
-                    use_window=use_window,
-                    use_native_half_volume_mstep=use_native_half_volume_mstep,
-                    current_size=current_size,
-                )
-                if return_profile:
-                    _block_until_ready(Ft_y)
-                timing.adjoint_y_s += time.time() - adjoint_y_t0
-
-            if not disable_adjoint_ctf:
-                adjoint_ctf_t0 = time.time()
-                Ft_ctf = _local_adjoint_one(
-                    packed_ctf_rows,
-                    packed_flat_rotations,
-                    Ft_ctf,
-                    recon_window_indices,
-                    image_shape,
-                    recon_volume_shape,
-                    use_window=use_window,
-                    use_native_half_volume_mstep=use_native_half_volume_mstep,
-                    current_size=current_size,
-                )
-                if return_profile:
-                    _block_until_ready(Ft_ctf)
-                timing.adjoint_ctf_s += time.time() - adjoint_ctf_t0
+        Ft_y, Ft_ctf = _accumulate_local_adjoint_rows(
+            packed_summed_rows=packed_summed_rows,
+            packed_ctf_rows=packed_ctf_rows,
+            packed_flat_rotations=packed_flat_rotations,
+            Ft_y=Ft_y,
+            Ft_ctf=Ft_ctf,
+            recon_window_indices=recon_window_indices,
+            image_shape=image_shape,
+            recon_volume_shape=recon_volume_shape,
+            use_window=use_window,
+            use_native_half_volume_mstep=use_native_half_volume_mstep,
+            current_size=current_size,
+            batch_backproject_enabled=batch_backproject_enabled,
+            disable_adjoint_y=disable_adjoint_y,
+            disable_adjoint_ctf=disable_adjoint_ctf,
+            return_profile=return_profile,
+            timing=timing,
+        )
 
         if accumulate_noise:
             noise_t0 = time.time()
