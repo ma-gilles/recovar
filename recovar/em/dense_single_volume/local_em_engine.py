@@ -27,6 +27,12 @@ from recovar.em.dense_single_volume.helpers.env_flags import (
     parse_env_auto_bool,
 )
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+    enforce_half_volume_x0_if_requested,
+    half_volume_accumulator_shape,
+    half_volume_accumulators_to_full,
+    native_half_volume_mstep_enabled,
+)
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
@@ -55,7 +61,6 @@ from recovar.em.dense_single_volume.local_debug import (
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
-    enforce_relion_half_volume_x0_hermitian,
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
@@ -938,13 +943,10 @@ def run_local_em_exact(
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
     else:
         recon_volume_shape = volume_shape
-    use_native_half_volume_mstep = os.environ.get(
-        "RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME",
-        "",
-    ).lower() in {"1", "true", "yes", "on"}
+    use_native_half_volume_mstep = native_half_volume_mstep_enabled()
     if use_native_half_volume_mstep:
         logger.info("Exact local M-step: using native half-volume RELION backprojection")
-        recon_accum_shape = fourier_transform_utils.volume_shape_to_half_volume_shape(recon_volume_shape)
+        recon_accum_shape = half_volume_accumulator_shape(recon_volume_shape)
     else:
         recon_accum_shape = recon_volume_shape
     recon_volume_size = int(np.prod(recon_accum_shape))
@@ -1973,17 +1975,14 @@ def run_local_em_exact(
 
     final_accumulator_t0 = time.time()
     if use_native_half_volume_mstep:
-        if os.environ.get("RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME_ENFORCE_X0", "").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }:
-            logger.info("Exact local M-step: enforcing RELION half-volume x=0 Hermitian plane")
-            Ft_y = enforce_relion_half_volume_x0_hermitian(Ft_y, recon_volume_shape)
-            Ft_ctf = enforce_relion_half_volume_x0_hermitian(Ft_ctf, recon_volume_shape)
-        Ft_y = fourier_transform_utils.half_volume_to_full_volume(Ft_y, recon_volume_shape).reshape(-1)
-        Ft_ctf = fourier_transform_utils.half_volume_to_full_volume(Ft_ctf, recon_volume_shape).reshape(-1)
+        Ft_y, Ft_ctf = enforce_half_volume_x0_if_requested(
+            Ft_y,
+            Ft_ctf,
+            recon_volume_shape,
+            logger=logger,
+            label="Exact local",
+        )
+        Ft_y, Ft_ctf = half_volume_accumulators_to_full(Ft_y, Ft_ctf, recon_volume_shape)
 
     if return_profile:
         _block_until_ready(Ft_y, Ft_ctf)
