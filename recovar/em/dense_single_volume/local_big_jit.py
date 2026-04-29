@@ -16,10 +16,12 @@ from recovar import core
 from recovar.core import mask as core_mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.padding as padding
-from recovar.em.dense_single_volume.em_primitives import (
-    _batch_adjoint_slice_volume_half,
-    _batch_adjoint_slice_volume_windowed,
-    _compute_noise_block,
+from recovar.em.dense_single_volume.helpers.adjoint import (
+    batch_adjoint_slice_volume_half as _batch_adjoint_slice_volume_half,
+    batch_adjoint_slice_volume_windowed as _batch_adjoint_slice_volume_windowed,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_noise_block as _compute_noise_block,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.image_shifts import tiled_half_image_phase_factors
