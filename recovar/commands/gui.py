@@ -88,8 +88,8 @@ def main():
     print("  ╔══════════════════════════════════════════════╗")
     print("  ║           RECOVAR Web GUI                    ║")
     print("  ╠══════════════════════════════════════════════╣")
-    print(f"  ║  Local:    http://{args.host}:{args.port:<23s}║")
-    print(f"  ║  Executor: {args.executor:<33s} ║")
+    print(f"  ║  Local:    http://{args.host}:{args.port:<23}║")
+    print(f"  ║  Executor: {args.executor:<33} ║")
     if args.host == "127.0.0.1":
         print(f"  ║  SSH:      ssh -L {args.port}:localhost:{args.port} user@host ║")
     else:

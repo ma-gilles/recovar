@@ -411,8 +411,6 @@ _SBATCH_TEMPLATE = """\
 #!/bin/bash
 {slurm_directives}
 # ── Environment ──
-export PYTHONNOUSERSITE=1
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
 {tmpdir_block}
 # Add the running Python's bin dir to PATH so `recovar` shebang resolves
 export PATH={pixi_bin_dir}:$PATH
