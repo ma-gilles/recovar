@@ -46,7 +46,7 @@ from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
     compute_projections_block as _compute_projections_block,
 )
-from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
+from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.local_debug import (
     maybe_write_debug_noise_component_dump,
     maybe_write_debug_score_dump,
@@ -1949,11 +1949,11 @@ def run_local_em_exact(
     timing.final_accumulator_s += time.time() - final_accumulator_t0
 
     stats_finalize_t0 = time.time()
-    relion_stats = RelionStats(
-        log_evidence_per_image=jnp.asarray(log_evidence_per_image),
-        best_log_score_per_image=jnp.asarray(best_log_score_per_image),
-        max_posterior_per_image=jnp.asarray(max_posterior_per_image),
-        rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
+    relion_stats = make_relion_stats(
+        log_evidence_per_image=log_evidence_per_image,
+        best_log_score_per_image=best_log_score_per_image,
+        max_posterior_per_image=max_posterior_per_image,
+        rotation_posterior_sums=rotation_posterior_sums,
     )
     noise_stats = None
     if accumulate_noise:
@@ -1961,13 +1961,13 @@ def run_local_em_exact(
         noise_sigma2_offset_value = float(np.asarray(noise_sigma2_offset, dtype=np.float64))
         noise_sumw_value = float(np.asarray(noise_sumw, dtype=np.float64))
         transfer_profile["final_noise_to_host_s"] += time.time() - transfer_t0
-        noise_stats = NoiseStats(
-            wsum_sigma2_noise=noise_wsum.astype(jnp.float32),
-            wsum_img_power=noise_img_power.astype(jnp.float32),
+        noise_stats = make_noise_stats(
+            wsum_sigma2_noise=noise_wsum,
+            wsum_img_power=noise_img_power,
             wsum_sigma2_offset=noise_sigma2_offset_value,
             sumw=noise_sumw_value,
-            wsum_noise_a2=(noise_a2.astype(jnp.float32) if return_noise_split else None),
-            wsum_noise_xa=(noise_xa.astype(jnp.float32) if return_noise_split else None),
+            wsum_noise_a2=(noise_a2 if return_noise_split else None),
+            wsum_noise_xa=(noise_xa if return_noise_split else None),
         )
     timing.stats_finalize_s += time.time() - stats_finalize_t0
 

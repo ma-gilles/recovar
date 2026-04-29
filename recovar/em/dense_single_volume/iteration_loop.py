@@ -53,7 +53,7 @@ from recovar.em.dense_single_volume.helpers.resolution import (
     shell_index_to_resolution_angstrom,
     should_skip_adaptive_pass2,
 )
-from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
+from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.local_em_engine import run_local_em_exact
 from recovar.em.dense_single_volume.local_layout import (
     _selected_rotation_matrices,
@@ -2297,13 +2297,13 @@ def _run_relion_iteration_loop(
                 ha_k = np.zeros(0, dtype=np.int32)
                 class_assignments[k] = np.zeros(0, dtype=np.int32)
                 class_posterior_per_half[k] = np.zeros(n_classes, dtype=np.float32)
-                em_stats_k = RelionStats(
+                em_stats_k = make_relion_stats(
                     log_evidence_per_image=jnp.zeros(0, dtype=jnp.float32),
                     best_log_score_per_image=jnp.zeros(0, dtype=jnp.float32),
                     max_posterior_per_image=jnp.zeros(0, dtype=jnp.float32),
                     rotation_posterior_sums=jnp.zeros(n_rot_for_stats, dtype=jnp.float32),
                 )
-                noise_stats_k = NoiseStats(
+                noise_stats_k = make_noise_stats(
                     wsum_sigma2_noise=jnp.zeros(n_shells, dtype=jnp.float32),
                     wsum_img_power=jnp.zeros(n_shells, dtype=jnp.float32),
                     wsum_sigma2_offset=0.0,
@@ -2938,10 +2938,10 @@ def _run_relion_iteration_loop(
                     # coordinate system expected by downstream comparison
                     # scripts and local-search replay.
                     ha_k = ha_coarse
-                    em_stats_k = RelionStats(
-                        log_evidence_per_image=jnp.asarray(full_coarse_stats["log_evidence_per_image"]),
-                        best_log_score_per_image=jnp.asarray(full_coarse_stats["best_log_score_per_image"]),
-                        max_posterior_per_image=jnp.asarray(full_coarse_stats["max_posterior_per_image"]),
+                    em_stats_k = make_relion_stats(
+                        log_evidence_per_image=full_coarse_stats["log_evidence_per_image"],
+                        best_log_score_per_image=full_coarse_stats["best_log_score_per_image"],
+                        max_posterior_per_image=full_coarse_stats["max_posterior_per_image"],
                         rotation_posterior_sums=em_stats_k.rotation_posterior_sums,
                     )
 

@@ -72,7 +72,7 @@ from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_sqdist_angstrom,
     validate_translation_prior_centers,
 )
-from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
+from recovar.em.dense_single_volume.helpers.types import make_noise_stats, make_relion_stats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
@@ -1250,19 +1250,19 @@ def compute_pass2_stats_sparse_bucketed(
 
     merged_noise_stats = None
     if accumulate_noise:
-        merged_noise_stats = NoiseStats(
-            wsum_sigma2_noise=jnp.asarray(noise_wsum_total, dtype=jnp.float32),
-            wsum_img_power=jnp.asarray(noise_img_power_total, dtype=jnp.float32),
-            wsum_sigma2_offset=float(noise_sigma2_offset_total),
-            sumw=float(noise_sumw_total),
+        merged_noise_stats = make_noise_stats(
+            wsum_sigma2_noise=noise_wsum_total,
+            wsum_img_power=noise_img_power_total,
+            wsum_sigma2_offset=noise_sigma2_offset_total,
+            sumw=noise_sumw_total,
         )
 
     if return_stats:
-        relion_stats = RelionStats(
-            log_evidence_per_image=jnp.asarray(log_evidence),
-            best_log_score_per_image=jnp.asarray(best_log_score),
-            max_posterior_per_image=jnp.asarray(max_posterior),
-            rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
+        relion_stats = make_relion_stats(
+            log_evidence_per_image=log_evidence,
+            best_log_score_per_image=best_log_score,
+            max_posterior_per_image=max_posterior,
+            rotation_posterior_sums=rotation_posterior_sums,
         )
         result = (
             Ft_y_total,

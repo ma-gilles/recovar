@@ -27,7 +27,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-from .types import RelionStats
+from .types import RelionStats, make_noise_stats, make_relion_stats
 
 logger = logging.getLogger(__name__)
 _FAST_SIGNIFICANCE_TOPK = 64
@@ -359,7 +359,7 @@ def compute_pass2_stats(
         ha = np.zeros(n_images, dtype=np.int32)
         empty_indices = np.empty((0,), dtype=np.int64)
         if return_stats:
-            zero_stats = RelionStats(
+            zero_stats = make_relion_stats(
                 log_evidence_per_image=jnp.full(n_images, -jnp.inf, dtype=jnp.float32),
                 best_log_score_per_image=jnp.full(n_images, -jnp.inf, dtype=jnp.float32),
                 max_posterior_per_image=jnp.zeros(n_images, dtype=jnp.float32),
@@ -501,11 +501,11 @@ def compute_pass2_stats(
             sig_rot_indices[parent_map],
             np.asarray(relion_stats.rotation_posterior_sums, dtype=np.float64),
         )
-        relion_stats = RelionStats(
+        relion_stats = make_relion_stats(
             log_evidence_per_image=relion_stats.log_evidence_per_image,
             best_log_score_per_image=relion_stats.best_log_score_per_image,
             max_posterior_per_image=relion_stats.max_posterior_per_image,
-            rotation_posterior_sums=jnp.asarray(coarse_rotation_sums, dtype=jnp.float32),
+            rotation_posterior_sums=coarse_rotation_sums,
         )
         result = [Ft_y, Ft_ctf, ha, oversampled_rots]
         if return_rotation_indices:
@@ -687,8 +687,6 @@ def _compute_pass2_stats_sparse_perimage_reference(
     )
 
     from ..em_engine import run_em
-    from .types import NoiseStats
-
     if normalization_log_z is not None:
         raise NotImplementedError(
             "normalization_log_z is only implemented for the bucketed sparse pass-2 path",
@@ -893,19 +891,19 @@ def _compute_pass2_stats_sparse_perimage_reference(
 
     merged_noise_stats = None
     if accumulate_noise:
-        merged_noise_stats = NoiseStats(
-            wsum_sigma2_noise=jnp.asarray(noise_wsum_total, dtype=jnp.float32),
-            wsum_img_power=jnp.asarray(noise_img_power_total, dtype=jnp.float32),
-            wsum_sigma2_offset=float(noise_sigma2_offset_total),
-            sumw=float(noise_sumw_total),
+        merged_noise_stats = make_noise_stats(
+            wsum_sigma2_noise=noise_wsum_total,
+            wsum_img_power=noise_img_power_total,
+            wsum_sigma2_offset=noise_sigma2_offset_total,
+            sumw=noise_sumw_total,
         )
 
     if return_stats:
-        relion_stats = RelionStats(
-            log_evidence_per_image=jnp.asarray(log_evidence),
-            best_log_score_per_image=jnp.asarray(best_log_score),
-            max_posterior_per_image=jnp.asarray(max_posterior),
-            rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
+        relion_stats = make_relion_stats(
+            log_evidence_per_image=log_evidence,
+            best_log_score_per_image=best_log_score,
+            max_posterior_per_image=max_posterior,
+            rotation_posterior_sums=rotation_posterior_sums,
         )
         result = (
             Ft_y_total,
