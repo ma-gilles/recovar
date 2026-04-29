@@ -15,8 +15,8 @@ import jax.numpy as jnp
 from recovar.core import mask as core_mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 import recovar.core.padding as padding
-from recovar.em.dense_single_volume.em_primitives import (
-    _compute_noise_block,
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_noise_block as _compute_noise_block,
 )
 from recovar.em.dense_single_volume.helpers.backprojection import accumulate_adjoint_pair
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy

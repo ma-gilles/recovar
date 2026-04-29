@@ -13,14 +13,11 @@ import numpy as np
 import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import noise as noise_utils
-from recovar.em.dense_single_volume.em_primitives import (
-    _adjoint_slice_volume_half,
-    _adjoint_slice_volume_windowed,
-    _block_until_ready,
-    _compute_noise_block,
-    _compute_projections_block,
-)
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
+from recovar.em.dense_single_volume.helpers.adjoint import (
+    adjoint_slice_volume_half as _adjoint_slice_volume_half,
+    adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
+)
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
@@ -39,11 +36,16 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     integer_pre_shifts_or_none,
     tiled_half_image_phase_factors,
 )
+from recovar.em.dense_single_volume.helpers.jax_runtime import block_until_ready as _block_until_ready
 from recovar.em.dense_single_volume.helpers.preprocessing import (
     apply_half_translation_phases as _apply_half_translation_phases,
     half_translation_phase_table as _half_translation_phase_table,
     process_half_image,
     resolve_image_mask_for_half_preprocess,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_noise_block as _compute_noise_block,
+    compute_projections_block as _compute_projections_block,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.local_debug import (

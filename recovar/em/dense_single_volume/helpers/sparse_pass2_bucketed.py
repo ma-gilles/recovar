@@ -38,11 +38,13 @@ import numpy as np
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import noise as noise_utils
-from recovar.em.dense_single_volume.em_primitives import (
-    _adjoint_slice_volume_half,
-    _adjoint_slice_volume_windowed,
-    _compute_noise_block,
-    _compute_projections_block,
+from recovar.em.dense_single_volume.helpers.adjoint import (
+    adjoint_slice_volume_half as _adjoint_slice_volume_half,
+    adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
+)
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_noise_block as _compute_noise_block,
+    compute_projections_block as _compute_projections_block,
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
