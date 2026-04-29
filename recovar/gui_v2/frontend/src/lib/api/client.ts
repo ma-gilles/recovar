@@ -207,11 +207,12 @@ export function validateJob(
 export function submitJob(
   projectId: string,
   type: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  executor?: string | null,
 ): Promise<{ id: string; type: string; status: string; created: string; handle?: string }> {
   return request("/jobs", {
     method: "POST",
-    body: JSON.stringify({ project_id: projectId, type, params }),
+    body: JSON.stringify({ project_id: projectId, type, params, executor: executor || undefined }),
   });
 }
 

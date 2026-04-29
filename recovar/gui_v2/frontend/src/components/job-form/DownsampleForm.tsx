@@ -8,6 +8,7 @@ import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
+import { ExecutorSelector } from "./ExecutorSelector";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -33,6 +34,7 @@ export function DownsampleForm({
   const [stripPrefix, setStripPrefix] = useState("");
   const [batchSize, setBatchSize] = useState("1000");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const [executorMode, setExecutorMode] = useState<string | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const targetDValid = targetD.length > 0 && parseInt(targetD) > 0 && parseInt(targetD) % 2 === 0;
@@ -47,7 +49,7 @@ export function DownsampleForm({
       if (stripPrefix) params.strip_prefix = stripPrefix;
       if (batchSize) params.batch_size = parseInt(batchSize);
       if (slurmOpts) params.slurm_opts = slurmOpts;
-      return submitJob(projectId, "downsample", params);
+      return submitJob(projectId, "downsample", params, executorMode);
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
@@ -158,7 +160,10 @@ export function DownsampleForm({
       )}
 
       {/* SLURM Settings */}
-      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
+      {executorMode !== "local" && (
+        <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      )}
 
       {/* Submit */}
       <div className="flex items-center justify-between pt-2">

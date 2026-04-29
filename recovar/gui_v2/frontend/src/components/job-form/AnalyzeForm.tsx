@@ -8,6 +8,7 @@ import { Select } from "../ui/select";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
+import { ExecutorSelector } from "./ExecutorSelector";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob, validateJob, type ValidationResult } from "../../lib/api/client";
 
@@ -32,6 +33,7 @@ export function AnalyzeForm({
   const [nTrajectories, setNTrajectories] = useState("0");
   const [outputName, setOutputName] = useState("");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const [executorMode, setExecutorMode] = useState<string | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
   const [validating, setValidating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -50,7 +52,7 @@ export function AnalyzeForm({
   }, [resultDir, zdim, nClusters, nTrajectories, outputName, slurmOpts]);
 
   const mutation = useMutation({
-    mutationFn: () => submitJob(projectId, "analyze", buildParams()),
+    mutationFn: () => submitJob(projectId, "analyze", buildParams(), executorMode),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       onSubmitted?.(data.id);
@@ -164,7 +166,10 @@ export function AnalyzeForm({
       </div>
 
       {/* SLURM Settings */}
-      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
+      {executorMode !== "local" && (
+        <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      )}
 
       {/* Validation feedback */}
       {validationErrors.length > 0 && (

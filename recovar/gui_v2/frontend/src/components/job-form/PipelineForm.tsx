@@ -9,6 +9,7 @@ import { Select } from "../ui/select";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
+import { ExecutorSelector } from "./ExecutorSelector";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob, validateJob, type ValidationResult } from "../../lib/api/client";
 
@@ -50,6 +51,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
   const [outputName, setOutputName] = useState("");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
+  const [executorMode, setExecutorMode] = useState<string | null>(null);
   const [validating, setValidating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
@@ -77,7 +79,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
   }, [particles, mask, maskPath, zdim, downsample, lazy, correctContrast, focusMask, datadir, nImages, halfsets, poses, ctf, tiltSeries, stripPrefix, outputName, slurmOpts]);
 
   const mutation = useMutation({
-    mutationFn: () => submitJob(projectId, "pipeline", buildParams()),
+    mutationFn: () => submitJob(projectId, "pipeline", buildParams(), executorMode),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       onSubmitted?.(data.id);
@@ -366,7 +368,10 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
       )}
 
       {/* SLURM Settings */}
-      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
+      {executorMode !== "local" && (
+        <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      )}
 
       {/* Validation feedback */}
       {validationErrors.length > 0 && (

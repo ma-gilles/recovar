@@ -56,12 +56,10 @@ async def _reconcile_on_startup() -> None:
     from recovar.gui_v2.backend.api.jobs import (
         _poll_job_status,
         _poll_tasks,
-        get_executor,
+        get_executor_for_job,
     )
     from recovar.gui_v2.backend.api.project import _project_registry
     from recovar.gui_v2.backend.config import get_db_path
-
-    executor = get_executor()
 
     # Collect all project paths from the registry.
     # The registry may be empty on first start; in that case,
@@ -114,7 +112,16 @@ async def _reconcile_on_startup() -> None:
                 for j in inflight
             ]
 
-            updates = await reconcile_jobs(executor, inflight_dicts)
+            # Reconcile jobs grouped by executor type
+            slurm_jobs = [d for d, j in zip(inflight_dicts, inflight) if j.slurm_id]
+            local_jobs = [d for d, j in zip(inflight_dicts, inflight) if not j.slurm_id]
+            updates = []
+            if slurm_jobs:
+                from recovar.gui_v2.backend.api.jobs import _get_slurm_executor
+                updates.extend(await reconcile_jobs(_get_slurm_executor(), slurm_jobs))
+            if local_jobs:
+                from recovar.gui_v2.backend.api.jobs import _get_local_executor
+                updates.extend(await reconcile_jobs(_get_local_executor(), local_jobs))
 
             # Apply updates to DB
             for upd in updates:
@@ -143,9 +150,11 @@ async def _reconcile_on_startup() -> None:
                         u["id"] == j.id for u in updates
                     )
                     if not was_updated and j.id not in _poll_tasks:
+                        poll_mode = "slurm" if j.slurm_id else "local"
                         task = asyncio.create_task(
                             _poll_job_status(
-                                j.id, j.executor_handle, project_path
+                                j.id, j.executor_handle, project_path,
+                                executor_mode=poll_mode,
                             )
                         )
                         _poll_tasks[j.id] = task

@@ -28,7 +28,7 @@ class DiskInfo(BaseModel):
 
 class SystemInfoResponse(BaseModel):
     slurm_available: bool
-    executor_mode: str  # "slurm" or "local"
+    executor_mode: str  # "slurm", "local", or "both"
     recovar_version: str
     gpu_count: int
     hostname: str
@@ -68,6 +68,8 @@ def _gpu_count() -> int:
 @router.get("/info", response_model=SystemInfoResponse)
 async def system_info() -> SystemInfoResponse:
     has_slurm = slurm_available()
+    # sbatch on PATH means both executors are available (user can pick per job)
+    sbatch_on_path = shutil.which("sbatch") is not None
 
     # Disk usage for the current working directory
     disk = None
@@ -83,9 +85,16 @@ async def system_info() -> SystemInfoResponse:
     except OSError:
         pass
 
+    if sbatch_on_path:
+        mode = "both"
+    elif has_slurm:
+        mode = "slurm"
+    else:
+        mode = "local"
+
     return SystemInfoResponse(
-        slurm_available=has_slurm,
-        executor_mode="slurm" if has_slurm else "local",
+        slurm_available=has_slurm or sbatch_on_path,
+        executor_mode=mode,
         recovar_version=_recovar_version(),
         gpu_count=_gpu_count(),
         hostname=platform.node(),

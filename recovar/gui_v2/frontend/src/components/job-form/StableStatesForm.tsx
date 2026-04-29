@@ -8,6 +8,7 @@ import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
+import { ExecutorSelector } from "./ExecutorSelector";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -31,6 +32,7 @@ export function StableStatesForm({
   const [percentTop, setPercentTop] = useState("1");
   const [nLocalMaxs, setNLocalMaxs] = useState("3");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const [executorMode, setExecutorMode] = useState<string | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const mutation = useMutation({
@@ -41,7 +43,7 @@ export function StableStatesForm({
       if (percentTop) params.percent_top = parseFloat(percentTop);
       if (nLocalMaxs) params.n_local_maxs = parseInt(nLocalMaxs);
       if (slurmOpts) params.slurm_opts = slurmOpts;
-      return submitJob(projectId, "stable_states", params);
+      return submitJob(projectId, "stable_states", params, executorMode);
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
@@ -121,7 +123,10 @@ export function StableStatesForm({
       )}
 
       {/* SLURM Settings */}
-      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
+      {executorMode !== "local" && (
+        <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      )}
 
       {/* Submit */}
       <div className="flex items-center justify-between pt-2">

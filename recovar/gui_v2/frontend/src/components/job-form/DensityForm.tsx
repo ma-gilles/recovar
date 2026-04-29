@@ -8,6 +8,7 @@ import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
+import { ExecutorSelector } from "./ExecutorSelector";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -34,6 +35,7 @@ export function DensityForm({
   const [numDiscPoints, setNumDiscPoints] = useState("");
   const [percentileBound, setPercentileBound] = useState("1");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const [executorMode, setExecutorMode] = useState<string | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const mutation = useMutation({
@@ -47,7 +49,7 @@ export function DensityForm({
       if (numDiscPoints) params.num_disc_points = parseInt(numDiscPoints);
       if (percentileBound) params.percentile_bound = parseInt(percentileBound);
       if (slurmOpts) params.slurm_opts = slurmOpts;
-      return submitJob(projectId, "density", params);
+      return submitJob(projectId, "density", params, executorMode);
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
@@ -166,7 +168,10 @@ export function DensityForm({
       )}
 
       {/* SLURM Settings */}
-      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
+      {executorMode !== "local" && (
+        <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      )}
 
       {/* Submit */}
       <div className="flex items-center justify-between pt-2">

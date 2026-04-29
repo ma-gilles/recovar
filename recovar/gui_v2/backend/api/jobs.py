@@ -57,19 +57,50 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
 
 # ---------------------------------------------------------------------------
-# Module-level executor (initialized on first use)
+# Executor pool — both executors are available; jobs pick which to use.
 # ---------------------------------------------------------------------------
 
-_executor: Executor | None = None
+_slurm_executor: SlurmExecutor | None = None
+_local_executor: LocalExecutor | None = None
 
 
-def get_executor() -> Executor:
-    global _executor
-    if _executor is None:
-        _executor = SlurmExecutor() if slurm_available() else LocalExecutor()
-        mode = "SLURM" if isinstance(_executor, SlurmExecutor) else "local"
-        logger.info("Executor initialized: %s", mode)
-    return _executor
+def _get_slurm_executor() -> SlurmExecutor:
+    global _slurm_executor
+    if _slurm_executor is None:
+        _slurm_executor = SlurmExecutor()
+        logger.info("SLURM executor initialized")
+    return _slurm_executor
+
+
+def _get_local_executor() -> LocalExecutor:
+    global _local_executor
+    if _local_executor is None:
+        _local_executor = LocalExecutor()
+        logger.info("Local executor initialized")
+    return _local_executor
+
+
+def get_executor(mode: str | None = None) -> Executor:
+    """Return the executor for the given mode.
+
+    mode can be "slurm", "local", or None (use server default from
+    RECOVAR_EXECUTOR env var / auto-detection).
+    """
+    if mode == "slurm":
+        return _get_slurm_executor()
+    if mode == "local":
+        return _get_local_executor()
+    # Default: use server-wide setting
+    if slurm_available():
+        return _get_slurm_executor()
+    return _get_local_executor()
+
+
+def get_executor_for_job(job) -> Executor:
+    """Return the correct executor for an existing job (for polling/cancel)."""
+    if job.slurm_id:
+        return _get_slurm_executor()
+    return _get_local_executor()
 
 
 # ---------------------------------------------------------------------------
@@ -79,9 +110,9 @@ def get_executor() -> Executor:
 _poll_tasks: dict[str, asyncio.Task] = {}
 
 
-async def _poll_job_status(job_id: str, handle: str, project_path: str) -> None:
+async def _poll_job_status(job_id: str, handle: str, project_path: str, executor_mode: str | None = None) -> None:
     """Background task that polls executor status until terminal."""
-    executor = get_executor()
+    executor = get_executor(executor_mode)
     while True:
         try:
             status = await executor.status(handle)
@@ -139,6 +170,7 @@ class SubmitJobRequest(BaseModel):
     project_id: str
     type: str  # Pipeline, Analyze, ComputeState, ComputeTrajectory
     params: dict[str, Any]
+    executor: str | None = None  # "slurm", "local", or None (server default)
 
 
 class SubmitJobResponse(BaseModel):
@@ -712,8 +744,9 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         await session.refresh(job)
         job_id = job.id
 
-    # Submit to executor
-    executor = get_executor()
+    # Submit to executor — per-job choice overrides server default
+    chosen_mode = req.executor or params.pop("executor", None)
+    executor = get_executor(chosen_mode)
     env = {
         "PYTHONNOUSERSITE": "1",
         "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
@@ -759,7 +792,8 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
         await session.commit()
 
     # Start background status poller
-    task = asyncio.create_task(_poll_job_status(job_id, handle, project_path))
+    poll_mode = "slurm" if isinstance(executor, SlurmExecutor) else "local"
+    task = asyncio.create_task(_poll_job_status(job_id, handle, project_path, executor_mode=poll_mode))
     _poll_tasks[job_id] = task
 
     return SubmitJobResponse(

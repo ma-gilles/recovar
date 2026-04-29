@@ -1,0 +1,1 @@
+{"version":3,"file":"invariant.js","names":[],"sources":["../../src/invariant.ts"],"sourcesContent":["export function invariant(): never {\n  throw new Error('Invariant failed')\n}\n"],"mappings":";AAAA,SAAgB,YAAmB;AACjC,OAAM,IAAI,MAAM,mBAAmB"}

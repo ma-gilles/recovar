@@ -1,0 +1,1 @@
+{"version":3,"file":"client.js","names":[],"sources":["../../../src/scroll-restoration-script/client.ts"],"sourcesContent":["import type { AnyRouter } from '../router'\n\nexport function getScrollRestorationScriptForRouter(_router: AnyRouter) {\n  return null\n}\n"],"mappings":";AAEA,SAAgB,oCAAoC,SAAoB;AACtE,QAAO"}
