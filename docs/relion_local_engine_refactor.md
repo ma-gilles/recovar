@@ -7,24 +7,26 @@ Tracked TODO IDs in the active RELION local-search refactor.
 | ID | Status | Owning module | Rationale |
 |---|---|---|---|
 | `RELION_LOCAL_ENGINE/T001` | RESOLVED | `recovar/em/dense_single_volume/iteration_loop.py` | Grouped-union local search and the now-degenerate `local_engine` selector have been removed; local RELION refinement uses the exact per-image engine. |
-| `RELION_LOCAL_ENGINE/T002` | OPEN | `recovar/em/dense_single_volume/local_layout.py` | Active RELION local path must use per-image local hypotheses. |
-| `RELION_LOCAL_ENGINE/T003` | OPEN | `recovar/em/dense_single_volume/local_em_engine.py` | Local path should not depend on dense shared-grid engine orchestration. |
-| `RELION_LOCAL_ENGINE/T004` | OPEN | `recovar/em/dense_single_volume/iteration_loop.py` | RELION-parity hacks should move inward, out of outer-loop control flow. |
+| `RELION_LOCAL_ENGINE/T002` | RESOLVED | `recovar/em/dense_single_volume/local_layout.py` | Active RELION local search now builds `LocalHypothesisLayout` with per-image rotation neighborhoods; grouped-union dense-grid local search is gone. |
+| `RELION_LOCAL_ENGINE/T003` | RESOLVED | `recovar/em/dense_single_volume/local_em_engine.py` | Exact-local scoring and M-step run through `run_local_em_exact` / `run_local_bucket_big_jit`; local tests no longer assert equivalence to dense shared-grid M-step contracts. |
+| `RELION_LOCAL_ENGINE/T004` | RESOLVED | `recovar/em/dense_single_volume/iteration_loop.py` | The outer loop now owns only RELION iteration scheduling. Exact-local tuple handling is centralized in `_LocalSearchIterationResult`, and the obsolete exact-v1 dispatch shim has been removed. |
 
 ## DENSE_ENGINE_BOUNDARY
 
 | ID | Status | Owning module | Rationale |
 |---|---|---|---|
-| `DENSE_ENGINE_BOUNDARY/E001` | OPEN | `recovar/em/dense_single_volume/em_engine.py` | `em_engine.py` should remain dense/global-only. |
-| `DENSE_ENGINE_BOUNDARY/E002` | PARTIAL | `recovar/em/dense_single_volume/helpers/` | The transitional `em_primitives.py` re-export shim is gone; dense, local, and sparse pass-2 code now import shared kernels directly from helpers. Keep auditing new local work so it does not grow back through dense-engine orchestration. |
+| `DENSE_ENGINE_BOUNDARY/E001` | RESOLVED | `recovar/em/dense_single_volume/em_engine.py` | `em_engine.py` is dense/global-only; local search routing lives in `iteration_loop.py` and `local_em_engine.py`. |
+| `DENSE_ENGINE_BOUNDARY/E002` | RESOLVED | `recovar/em/dense_single_volume/helpers/` | The transitional `em_primitives.py` re-export shim is gone; dense, local, and sparse pass-2 code import shared kernels directly from helpers. |
 | `DENSE_ENGINE_BOUNDARY/E003` | RESOLVED | `recovar/em/dense_single_volume/helpers/preprocessing.py` | Dense/local image preprocessing now requires native packed-half Fourier preprocessing instead of dense-side full-to-half conversion fallbacks. |
-| `DENSE_ENGINE_BOUNDARY/E004` | PARTIAL | `recovar/em/dense_single_volume/helpers/dtype_policy.py` | Dense, local, sparse pass-2, and local big-JIT paths now route score dtype choices through the shared precision policy; dense/local big-JIT and exact-local projection abs2 no longer have materialized/fused/big-JIT/half-volume-accumulator env toggles, and sparse pass-2 now always uses the direct diff2 scoring path. Remaining work is to reduce user-facing float64 toggles once parity no longer needs them. |
-| `DENSE_ENGINE_BOUNDARY/E005` | PARTIAL | `recovar/em/dense_single_volume/em_engine.py` | Shared indexed batch fetch, half-volume M-step helpers, and host timing accumulators now cover dense/local duplicated support code. Continue auditing dense/local engines for copied implementation without hurting hot-path performance. |
+| `DENSE_ENGINE_BOUNDARY/E004` | RESOLVED | `recovar/em/dense_single_volume/helpers/dtype_policy.py` | Dense, local, sparse pass-2, and local big-JIT paths route score dtype choices through `DensePrecisionPolicy`; removed env toggles are not replaced by ad hoc branches. Remaining float64 options are internal diagnostic hooks, not outer-loop user-facing switches. |
+| `DENSE_ENGINE_BOUNDARY/E005` | RESOLVED | `recovar/em/dense_single_volume/em_engine.py` | Shared indexed batch fetch, half-volume M-step helpers, host timing accumulators, scoring helpers, and local result packing cover the audited dense/local duplicated support code without changing hot-path kernels. |
 | `DENSE_ENGINE_BOUNDARY/E006` | RESOLVED | `recovar/em/dense_single_volume/helpers/scoring.py` | Shared dense scoring/logsumexp/M-step kernels moved out of `em_engine.py`; significance code imports helpers directly instead of reaching back through the engine. |
 
 ## Review rule
 
-A tracked TODO ID may be removed from code only if:
+Tracked IDs should stay in this document after resolution so future agents can
+see why the code markers were removed. A tracked TODO ID may be removed from
+code only if:
 
 1. this file marks it `RESOLVED`
 2. the PR explicitly explains why
@@ -43,9 +45,9 @@ A tracked TODO ID may be removed from code only if:
   - The direct `half_volume=True` adjoint matches the JAX VJP of `slice_volume(..., half_volume=True, half_image=True)` on the weighted local rows, which is the contract the local engine should follow.
   - Do not reintroduce the “accumulate full then fold to half” workaround as a parity fix; fix tests and downstream consumers against the native packed-half contract instead.
 
-## Remaining Work After The Direct Half-Volume Fix
+## Resolved Work After The Direct Half-Volume Fix
 
-- Push the packed half-volume layout farther out of the RELION outer loop so the local path no longer depends on dense/global orchestration state (`T003`, `T004`).
+- The packed half-volume layout is enforced inside the exact-local engine; tests now compare against the native `half_volume=True` contract rather than the old full-volume reference path (`T003`, `T004`).
 - Benchmark the direct `half_volume=True` path on the larger local-search fixtures (`20k @ 128`, `20k @ 256`, `50k @ 256`) and update the comparison table against RELION warm/cold timings.
 - Keep the current warm `5k @ 128` parity benchmark as the guardrail:
   - direct `half_volume=True` exact local stays at about `20.8s` warm iteration wall

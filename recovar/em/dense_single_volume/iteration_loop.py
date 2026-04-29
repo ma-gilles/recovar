@@ -178,13 +178,6 @@ def _maybe_dump_noise_update_debug(
     logger.info("Wrote RECOVAR noise update debug dump: %s", path)
 
 
-# TRACKED TODOs: RELION_LOCAL_ENGINE
-# TODO(RELION_LOCAL_ENGINE/T002): active RELION local path uses exact per-image local hypotheses
-# TODO(RELION_LOCAL_ENGINE/T003): local path should not depend on dense shared-grid engine contracts
-# TODO(RELION_LOCAL_ENGINE/T004): parity hacks should move inward, out of outer-loop control flow
-# See docs/relion_local_engine_refactor.md
-
-
 @dataclass
 class _LocalSearchIterationResult:
     Ft_y: object
@@ -568,111 +561,6 @@ def _align_fourier_volume_sign_to_reference(volume_ft_flat, reference_ft_flat, v
     return volume_ft_flat, False
 
 
-def _run_local_search_iteration(
-    experiment_dataset,
-    mean,
-    mean_variance,
-    noise_variance,
-    prior_rotations,
-    rotation_grid_rotations,
-    rotation_grid_eulers,
-    healpix_order,
-    sigma_rot,
-    sigma_psi,
-    translations,
-    prior_translations,
-    sigma_offset_angstrom,
-    offset_range_pixels,
-    disc_type,
-    image_batch_size,
-    rotation_block_size,
-    current_size,
-    *,
-    accumulate_noise=False,
-    projection_padding_factor=1,
-    reconstruction_padding_factor=1,
-    use_float64_scoring=False,
-    use_float64_projections=False,
-    do_gridding_correction=False,
-    square_window=False,
-    half_spectrum_scoring=False,
-    image_corrections=None,
-    scale_corrections=None,
-    image_pre_shifts=None,
-    score_with_masked_images=True,
-    return_profile=False,
-    disable_adjoint_y=False,
-    disable_adjoint_ctf=False,
-    adaptive_fraction=0.999,
-    max_significants=-1,
-    reconstruct_significant_only=True,
-    translation_prior_reference_translations=None,
-    debug_iteration=None,
-    pass2_layout=None,
-    return_best_pose_details=False,
-    normalization_log_z=None,
-    translation_prior_centers=None,
-    rotation_grid_random_perturbation=0.0,
-    rotation_grid_angular_sampling_deg=None,
-    class_log_priors=None,
-    return_class_details=False,
-):
-    """Run exact local search on the fine HEALPix grid.
-
-    Each image carries its own exact prior orientation from the previous
-    iteration. ``prior_rotations`` may be either RELION Euler angles
-    ``(rot, tilt, psi)`` or rotation matrices.
-    """
-    return _run_local_search_iteration_exact_v1(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        prior_rotations,
-        rotation_grid_rotations,
-        rotation_grid_eulers,
-        healpix_order,
-        sigma_rot,
-        sigma_psi,
-        translations,
-        prior_translations,
-        sigma_offset_angstrom,
-        offset_range_pixels,
-        disc_type,
-        image_batch_size,
-        rotation_block_size,
-        current_size,
-        accumulate_noise=accumulate_noise,
-        projection_padding_factor=projection_padding_factor,
-        reconstruction_padding_factor=reconstruction_padding_factor,
-        use_float64_scoring=use_float64_scoring,
-        use_float64_projections=use_float64_projections,
-        do_gridding_correction=do_gridding_correction,
-        square_window=square_window,
-        half_spectrum_scoring=half_spectrum_scoring,
-        image_corrections=image_corrections,
-        scale_corrections=scale_corrections,
-        image_pre_shifts=image_pre_shifts,
-        score_with_masked_images=score_with_masked_images,
-        return_profile=return_profile,
-        disable_adjoint_y=disable_adjoint_y,
-        disable_adjoint_ctf=disable_adjoint_ctf,
-        adaptive_fraction=adaptive_fraction,
-        max_significants=max_significants,
-        reconstruct_significant_only=reconstruct_significant_only,
-        translation_prior_reference_translations=translation_prior_reference_translations,
-        debug_iteration=debug_iteration,
-        local_layout_override=pass2_layout,
-        return_best_pose_details=return_best_pose_details,
-        normalization_log_z=normalization_log_z,
-        translation_prior_centers=translation_prior_centers,
-        rotation_grid_random_perturbation=rotation_grid_random_perturbation,
-        rotation_grid_angular_sampling_deg=rotation_grid_angular_sampling_deg,
-        class_log_priors=class_log_priors,
-        return_class_details=return_class_details,
-    )
-
-
 def _run_sparse_pass2_local_search_iteration(
     experiment_dataset,
     mean,
@@ -883,7 +771,7 @@ def _decode_pass2_local_hard_assignment(
     return hard_assignment
 
 
-def _run_local_search_iteration_exact_v1(
+def _run_local_search_iteration(
     experiment_dataset,
     mean,
     mean_variance,
@@ -923,7 +811,7 @@ def _run_local_search_iteration_exact_v1(
     reconstruct_significant_only=True,
     translation_prior_reference_translations=None,
     debug_iteration=None,
-    local_layout_override=None,
+    pass2_layout=None,
     return_best_pose_details=False,
     normalization_log_z=None,
     translation_prior_centers=None,
@@ -932,7 +820,7 @@ def _run_local_search_iteration_exact_v1(
     class_log_priors=None,
     return_class_details=False,
 ):
-    """Per-image exact local engine over image-specific rotation neighborhoods."""
+    """Run exact local search over image-specific rotation neighborhoods."""
 
     rotation_block_size = _local_search_engine_rotation_block_size(rotation_block_size)
     prior_rotations = np.asarray(prior_rotations, dtype=np.float32)
@@ -953,7 +841,7 @@ def _run_local_search_iteration_exact_v1(
             np.asarray(translations).shape[1],
         )
 
-    if local_layout_override is None:
+    if pass2_layout is None:
         metadata_t0 = time.time()
         # RELION local priors remain factorized in canonical direction/psi index
         # space even when the scored trial rotations have been perturbed.
@@ -981,7 +869,7 @@ def _run_local_search_iteration_exact_v1(
         )
         selector_time = time.time() - layout_t0
     else:
-        local_layout = local_layout_override
+        local_layout = pass2_layout
         metadata_build_time = 0.0
         selector_time = 0.0
 

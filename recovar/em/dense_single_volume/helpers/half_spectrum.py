@@ -21,9 +21,9 @@ def make_half_image_weights(image_shape):
 def make_scoring_half_image_weights(image_shape, *, relion_half_sum: bool):
     """Return half-spectrum weights for likelihood scoring.
 
-    TODO(RELION-parity-debt): RELION scores the packed rfft half-plane with
-    unit weights rather than Hermitian weights. Keep this parity switch
-    centralized so dense/local/sparse scoring use the same convention.
+    RELION scores the packed rfft half-plane with unit weights rather than
+    Hermitian weights. Keep this convention centralized so dense/local/sparse
+    scoring cannot drift apart.
     """
 
     height, width = image_shape
