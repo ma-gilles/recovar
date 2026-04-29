@@ -545,8 +545,8 @@ def _build_slurm_directives(
     the GPU directive is omitted entirely.
     """
     # Sanitize: 0 or negative values → sensible defaults
-    if not gpus or gpus < 0:
-        gpus = 0
+    if not gpus or gpus < 1:
+        gpus = 1
     if not cpus or cpus < 1:
         cpus = 4
     if not memory:
