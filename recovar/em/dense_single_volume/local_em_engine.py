@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import time
 from dataclasses import dataclass
 
@@ -23,9 +22,6 @@ from recovar.em.dense_single_volume.em_primitives import (
 )
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
-from recovar.em.dense_single_volume.helpers.env_flags import (
-    parse_env_auto_bool,
-)
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
     enforce_half_volume_x0,
@@ -89,10 +85,12 @@ from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_dat
 
 logger = logging.getLogger(__name__)
 
+EXACT_LOCAL_TARGET_ROW_PIXELS = 180_000_000
+EXACT_LOCAL_RAW_CACHE_MAX_GB = 2.0
+
 _LOCAL_PREPROCESS_TIMER_KEYS = (
     "integer_shift_s",
     "translation_phase_s",
-    "processed_cache_gather_s",
     "score_process_s",
     "recon_process_s",
     "ctf_s",
@@ -131,7 +129,6 @@ _LOCAL_TIMING_PROFILE_FIELDS = (
 _LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS = (
     "bucket_build_s",
     "raw_cache_build_s",
-    "processed_cache_build_s",
     "batch_fetch_s",
     "preprocess_s",
 )
@@ -152,7 +149,6 @@ class _LocalTiming:
     bucket_build_s: float = 0.0
     batch_fetch_s: float = 0.0
     raw_cache_build_s: float = 0.0
-    processed_cache_build_s: float = 0.0
     preprocess_s: float = 0.0
     projection_s: float = 0.0
     fused_score_mstep_s: float = 0.0
@@ -222,46 +218,23 @@ def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_param
 
 
 def _exact_local_max_hypotheses_per_microbatch(default: int | None, n_windowed: int) -> int:
-    """Return exact-local microbatch cap, optionally overridden for profiling.
+    """Return exact-local microbatch cap.
 
     The automatic default targets the proven 5k/128 local-search working set
     while scaling down for larger Fourier windows.
     """
-    raw = os.environ.get("RECOVAR_RELION_EXACT_LOCAL_MAX_HYPOTHESES_PER_MICROBATCH")
-    if raw is None or raw.strip() == "":
-        if default is not None:
-            return int(default)
-        target_row_pixels = int(
-            os.environ.get("RECOVAR_RELION_EXACT_LOCAL_TARGET_ROW_PIXELS", "180000000"),
-        )
-        value = target_row_pixels // max(1, int(n_windowed))
-        return int(max(8192, min(65536, value)))
-    value = int(raw)
-    if value <= 0:
-        raise ValueError(
-            "RECOVAR_RELION_EXACT_LOCAL_MAX_HYPOTHESES_PER_MICROBATCH must be positive",
-        )
-    return value
+    if default is not None:
+        value = int(default)
+        if value <= 0:
+            raise ValueError("max_hypotheses_per_microbatch must be positive")
+        return value
+    value = EXACT_LOCAL_TARGET_ROW_PIXELS // max(1, int(n_windowed))
+    return int(max(8192, min(65536, value)))
 
 def _local_raw_cache_enabled(n_images: int, image_shape, dtype) -> bool:
-    parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_RAW_CACHE", default="auto")
-    if parsed is not None:
-        return parsed
-    max_gb = float(os.environ.get("RECOVAR_RELION_EXACT_LOCAL_RAW_CACHE_MAX_GB", "2.0"))
     bytes_per_pixel = np.dtype(dtype).itemsize if dtype is not None else np.dtype(np.float32).itemsize
     estimated_gb = int(n_images) * int(np.prod(image_shape)) * bytes_per_pixel / 1e9
-    return estimated_gb <= max_gb
-
-
-def _local_processed_cache_enabled(n_images: int, image_shape, score_with_masked_images: bool) -> bool:
-    parsed = parse_env_auto_bool("RECOVAR_RELION_EXACT_LOCAL_PROCESSED_CACHE", default="0")
-    if parsed is not None:
-        return parsed
-    max_gb = float(os.environ.get("RECOVAR_RELION_EXACT_LOCAL_PROCESSED_CACHE_MAX_GB", "2.0"))
-    n_half = int(image_shape[0]) * (int(image_shape[1]) // 2 + 1)
-    n_copies = 2 if score_with_masked_images else 1
-    estimated_gb = int(n_images) * n_half * np.dtype(np.complex64).itemsize * n_copies / 1e9
-    return estimated_gb <= max_gb
+    return estimated_gb <= EXACT_LOCAL_RAW_CACHE_MAX_GB
 
 
 def _validate_native_half_batch(batch, image_shape):
@@ -296,55 +269,6 @@ def _build_local_raw_cache(experiment_dataset, n_images: int):
     batch_cache[fetched_indices] = batch_np
     ctf_cache[fetched_indices] = ctf_np
     return batch_cache, ctf_cache
-
-
-def _processed_cache_shifted_raw(raw_cache, image_pre_shifts, n_images: int):
-    if image_pre_shifts is None:
-        return raw_cache, False, True
-    if getattr(raw_cache, "ndim", np.asarray(raw_cache).ndim) != 3:
-        return raw_cache, False, False
-    shifts = np.asarray(image_pre_shifts, dtype=np.float32)[np.arange(int(n_images), dtype=np.int32)]
-    if shifts.size == 0:
-        return raw_cache, True, True
-    rounded = np.rint(shifts)
-    row_integral = np.all(np.isclose(shifts, rounded, rtol=0.0, atol=1e-6), axis=1)
-    if np.all(row_integral):
-        return apply_relion_integer_pre_shifts(raw_cache, rounded.astype(np.int32)), True, True
-    if not np.any(row_integral):
-        return raw_cache, False, True
-    return raw_cache, False, False
-
-
-def _build_processed_half_cache(
-    experiment_dataset,
-    raw_cache,
-    image_pre_shifts,
-    n_images: int,
-    score_with_masked_images: bool,
-):
-    raw_for_processing, real_space_pre_shift_applied, can_cache = _processed_cache_shifted_raw(
-        raw_cache,
-        image_pre_shifts,
-        n_images,
-    )
-    if not can_cache:
-        return None, None, False
-
-    score_half = process_half_image(
-        experiment_dataset,
-        raw_for_processing,
-        score_with_masked_images,
-    )
-    if score_with_masked_images:
-        recon_half = process_half_image(
-            experiment_dataset,
-            raw_for_processing,
-            False,
-        )
-    else:
-        recon_half = score_half
-
-    return jnp.asarray(score_half), jnp.asarray(recon_half), real_space_pre_shift_applied
 
 
 def _new_local_preprocess_timer():
@@ -405,9 +329,6 @@ def _prepare_local_exact_bucket(
     n_trans: int,
     score_with_masked_images: bool,
     image_pre_shifts=None,
-    processed_score_half=None,
-    processed_recon_half=None,
-    real_space_pre_shift_applied_cache: bool = False,
     timer: dict[str, float] | None = None,
     synchronize_profile: bool = False,
 ):
@@ -418,18 +339,13 @@ def _prepare_local_exact_bucket(
     and noise-specific preprocessing.
     """
 
-    using_processed_cache = processed_score_half is not None
-    if using_processed_cache:
-        integer_pre_shifts = None
-        real_space_pre_shift_applied = bool(real_space_pre_shift_applied_cache)
-    else:
-        integer_t0 = time.time()
-        integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, image_indices, batch=batch)
-        if integer_pre_shifts is not None:
-            batch = apply_relion_integer_pre_shifts(batch, integer_pre_shifts)
-        if timer is not None:
-            timer["integer_shift_s"] += time.time() - integer_t0
-        real_space_pre_shift_applied = integer_pre_shifts is not None
+    integer_t0 = time.time()
+    integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, image_indices, batch=batch)
+    if integer_pre_shifts is not None:
+        batch = apply_relion_integer_pre_shifts(batch, integer_pre_shifts)
+    if timer is not None:
+        timer["integer_shift_s"] += time.time() - integer_t0
+    real_space_pre_shift_applied = integer_pre_shifts is not None
 
     phase_t0 = time.time()
     translation_phases_half = jnp.asarray(translation_phases_half)
@@ -462,15 +378,11 @@ def _prepare_local_exact_bucket(
         timer["ctf_s"] += time.time() - ctf_t0
 
     score_process_t0 = time.time()
-    if not using_processed_cache:
-        processed_score_half = _process_half(score_with_masked_images)
+    processed_score_half = _process_half(score_with_masked_images)
     if synchronize_profile:
         _block_until_ready(processed_score_half)
     if timer is not None:
-        if using_processed_cache:
-            timer["processed_cache_gather_s"] += time.time() - score_process_t0
-        else:
-            timer["score_process_s"] += time.time() - score_process_t0
+        timer["score_process_s"] += time.time() - score_process_t0
 
     shift_score_t0 = time.time()
     score_weighted_half = processed_score_half * ctf_half / noise_variance_half
@@ -493,15 +405,11 @@ def _prepare_local_exact_bucket(
 
     if score_with_masked_images:
         recon_process_t0 = time.time()
-        if not using_processed_cache:
-            processed_recon_half = _process_half(False)
+        processed_recon_half = _process_half(False)
         if synchronize_profile:
             _block_until_ready(processed_recon_half)
         if timer is not None:
-            if using_processed_cache:
-                timer["processed_cache_gather_s"] += time.time() - recon_process_t0
-            else:
-                timer["recon_process_s"] += time.time() - recon_process_t0
+            timer["recon_process_s"] += time.time() - recon_process_t0
 
         shift_recon_t0 = time.time()
         recon_weighted_half = processed_recon_half * ctf_half / noise_variance_half
@@ -744,10 +652,6 @@ def run_local_em_exact(
     fused_score_mstep_enabled = default_fused_score_mstep
     timing = _LocalTiming()
     raw_cache_enabled = False
-    processed_cache_enabled = False
-    processed_score_half_cache = None
-    processed_recon_half_cache = None
-    processed_cache_real_space_pre_shift_applied = False
     preprocess_profile = _new_local_preprocess_timer()
     transfer_profile = _new_local_transfer_timer()
     big_jit_bucket_count = 0
@@ -786,43 +690,15 @@ def run_local_em_exact(
 
     raw_batch_cache = None
     ctf_param_cache = None
-    raw_cache_requested = _local_raw_cache_enabled(
+    raw_cache_enabled = _local_raw_cache_enabled(
         n_images,
         image_shape,
         getattr(experiment_dataset, "dtype", np.float32),
     )
-    processed_cache_requested = _local_processed_cache_enabled(
-        n_images,
-        image_shape,
-        score_with_masked_images,
-    )
-    if raw_cache_requested or processed_cache_requested:
+    if raw_cache_enabled:
         raw_cache_t0 = time.time()
         raw_batch_cache, ctf_param_cache = _build_local_raw_cache(experiment_dataset, n_images)
         timing.raw_cache_build_s = time.time() - raw_cache_t0
-        raw_cache_enabled = bool(raw_cache_requested)
-
-        if processed_cache_requested:
-            processed_cache_t0 = time.time()
-            (
-                processed_score_half_cache,
-                processed_recon_half_cache,
-                processed_cache_real_space_pre_shift_applied,
-            ) = _build_processed_half_cache(
-                experiment_dataset,
-                raw_batch_cache,
-                image_pre_shifts,
-                n_images,
-                score_with_masked_images,
-            )
-            if processed_score_half_cache is not None:
-                processed_cache_enabled = True
-                if return_profile:
-                    _block_until_ready(processed_score_half_cache, processed_recon_half_cache)
-            timing.processed_cache_build_s = time.time() - processed_cache_t0
-
-        if not raw_cache_requested:
-            raw_batch_cache = None
 
     phase_t0 = time.time()
     translation_phases_half = _half_translation_phase_table(
@@ -850,11 +726,7 @@ def run_local_em_exact(
     disabled_noise_xa = jnp.zeros(1, dtype=jnp.float32)
     disabled_noise_shell_indices = jnp.zeros(n_half, dtype=jnp.int32)
 
-    use_big_jit_buckets = (
-        not processed_cache_enabled
-        and not debug_score_dump_filter_matches
-        and debug_noise_dump_dir is None
-    )
+    use_big_jit_buckets = not debug_score_dump_filter_matches and debug_noise_dump_dir is None
     mean_for_proj_big_jit = mean_for_proj
     projection_half_volume_big_jit = False
     if use_big_jit_buckets:
@@ -873,12 +745,7 @@ def run_local_em_exact(
             total_padded_rotations += int(bucket.image_indices.shape[0] * bucket.bucket_rotation_count)
             local_total_hypotheses += int(np.sum(bucket.actual_rotation_counts) * n_trans)
         fetch_t0 = time.time()
-        if processed_cache_enabled:
-            bucket_image_indices = np.asarray(bucket.image_indices, dtype=np.int32)
-            batch_data = None
-            ctf_params = ctf_param_cache[bucket_image_indices]
-            fetched_indices = bucket_image_indices
-        elif raw_batch_cache is None:
+        if raw_batch_cache is None:
             batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, bucket.image_indices)
         else:
             bucket_image_indices = np.asarray(bucket.image_indices, dtype=np.int32)
@@ -1196,13 +1063,6 @@ def run_local_em_exact(
             timing.host_stats_s += time.time() - host_stats_t0
             continue
 
-        bucket_score_half_cache = None
-        bucket_recon_half_cache = None
-        if processed_cache_enabled:
-            bucket_image_indices = np.asarray(bucket.image_indices, dtype=np.int32)
-            bucket_score_half_cache = processed_score_half_cache[bucket_image_indices]
-            bucket_recon_half_cache = processed_recon_half_cache[bucket_image_indices]
-
         preprocess_t0 = time.time()
         (
             shifted_half,
@@ -1224,9 +1084,6 @@ def run_local_em_exact(
             n_trans,
             score_with_masked_images,
             image_pre_shifts=image_pre_shifts,
-            processed_score_half=bucket_score_half_cache,
-            processed_recon_half=bucket_recon_half_cache,
-            real_space_pre_shift_applied_cache=processed_cache_real_space_pre_shift_applied,
             timer=preprocess_profile if return_profile else None,
             synchronize_profile=return_profile,
         )
@@ -1835,8 +1692,6 @@ def run_local_em_exact(
         "bucket_build_time_s": np.float64(timing.bucket_build_s),
         "raw_cache_build_time_s": np.float64(timing.raw_cache_build_s),
         "raw_cache_enabled": np.asarray(raw_cache_enabled),
-        "processed_cache_build_time_s": np.float64(timing.processed_cache_build_s),
-        "processed_cache_enabled": np.asarray(processed_cache_enabled),
         "batch_fetch_time_s": np.float64(timing.batch_fetch_s),
         "preprocess_time_s": np.float64(timing.preprocess_s),
         **_prefixed_timer_profile("preprocess_", preprocess_profile),
