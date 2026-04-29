@@ -49,10 +49,9 @@ from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPo
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
-    enforce_half_volume_x0_if_requested,
+    enforce_half_volume_x0,
     half_volume_accumulator_shape,
     half_volume_accumulators_to_full,
-    native_half_volume_mstep_enabled,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
@@ -740,19 +739,11 @@ def compute_pass2_stats_sparse_bucketed(
     image_shape = experiment_dataset.image_shape
     volume_shape = experiment_dataset.volume_shape
 
-    # Recon volume layout: match the per-image reference path by default, but
-    # allow native RELION-style half-volume accumulation as an isolated
-    # diagnostic for M-step parity against BackProjector.
-    use_native_half_volume_mstep = native_half_volume_mstep_enabled()
     if reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
     else:
         recon_volume_shape = volume_shape
-    recon_accum_shape = (
-        half_volume_accumulator_shape(recon_volume_shape)
-        if use_native_half_volume_mstep
-        else recon_volume_shape
-    )
+    recon_accum_shape = half_volume_accumulator_shape(recon_volume_shape)
     recon_volume_size = int(np.prod(recon_accum_shape))
     recon_accum_dtype = experiment_dataset.dtype
 
@@ -842,8 +833,7 @@ def compute_pass2_stats_sparse_bucketed(
         len(buckets),
         [b["bucket_size"] for b in buckets],
     )
-    if use_native_half_volume_mstep:
-        logger.info("Sparse pass-2 M-step: using native half-volume backprojection diagnostic")
+    logger.info("Sparse pass-2 M-step: using native half-volume backprojection")
 
     # Output accumulators (volume_size matches what original returned: full N**3)
     Ft_y_total = jnp.zeros(recon_volume_size, dtype=recon_accum_dtype)
@@ -1102,7 +1092,7 @@ def compute_pass2_stats_sparse_bucketed(
                 recon_volume_shape,
                 "linear_interp",
                 True,
-                use_native_half_volume_mstep,
+                True,
                 float(current_size // 2),
             )
             Ft_ctf_total = _adjoint_slice_volume_windowed(
@@ -1114,7 +1104,7 @@ def compute_pass2_stats_sparse_bucketed(
                 recon_volume_shape,
                 "linear_interp",
                 True,
-                use_native_half_volume_mstep,
+                True,
                 float(current_size // 2),
             )
         else:
@@ -1126,7 +1116,7 @@ def compute_pass2_stats_sparse_bucketed(
                 recon_volume_shape,
                 "linear_interp",
                 True,
-                use_native_half_volume_mstep,
+                True,
             )
             Ft_ctf_total = _adjoint_slice_volume_half(
                 flatten_bucket_rows(ctf_probs),
@@ -1136,7 +1126,7 @@ def compute_pass2_stats_sparse_bucketed(
                 recon_volume_shape,
                 "linear_interp",
                 True,
-                use_native_half_volume_mstep,
+                True,
             )
 
         # Noise accumulation
@@ -1226,37 +1216,34 @@ def compute_pass2_stats_sparse_bucketed(
         int(np.median(valid_candidate_counts)) if valid_candidate_counts else 0,
     )
 
-    if use_native_half_volume_mstep:
-        _maybe_dump_native_half_mstep(
-            Ft_y_total,
-            Ft_ctf_total,
-            current_size=current_size,
-            n_images=n_images,
-            recon_volume_shape=recon_volume_shape,
-            stage="pre_x0",
-        )
-        Ft_y_total, Ft_ctf_total = enforce_half_volume_x0_if_requested(
-            Ft_y_total,
-            Ft_ctf_total,
-            recon_volume_shape,
-            logger=logger,
-            label="Sparse pass-2",
-        )
-        _maybe_dump_native_half_mstep(
-            Ft_y_total,
-            Ft_ctf_total,
-            current_size=current_size,
-            n_images=n_images,
-            recon_volume_shape=recon_volume_shape,
-            stage="post_x0",
-        )
-        # Keep the public return contract unchanged while testing whether the
-        # RELION-style folded accumulation itself closes the Ft_ctf/Ft_y gap.
-        Ft_y_total, Ft_ctf_total = half_volume_accumulators_to_full(
-            Ft_y_total,
-            Ft_ctf_total,
-            recon_volume_shape,
-        )
+    _maybe_dump_native_half_mstep(
+        Ft_y_total,
+        Ft_ctf_total,
+        current_size=current_size,
+        n_images=n_images,
+        recon_volume_shape=recon_volume_shape,
+        stage="pre_x0",
+    )
+    Ft_y_total, Ft_ctf_total = enforce_half_volume_x0(
+        Ft_y_total,
+        Ft_ctf_total,
+        recon_volume_shape,
+        logger=logger,
+        label="Sparse pass-2",
+    )
+    _maybe_dump_native_half_mstep(
+        Ft_y_total,
+        Ft_ctf_total,
+        current_size=current_size,
+        n_images=n_images,
+        recon_volume_shape=recon_volume_shape,
+        stage="post_x0",
+    )
+    Ft_y_total, Ft_ctf_total = half_volume_accumulators_to_full(
+        Ft_y_total,
+        Ft_ctf_total,
+        recon_volume_shape,
+    )
 
     best_translations = fine_translations[hard_assignment % n_fine_trans]
 

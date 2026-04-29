@@ -194,7 +194,6 @@ def _score_normalize_mstep(
         "projection_max_r",
         "disable_adjoint_y",
         "disable_adjoint_ctf",
-        "use_native_half_volume_mstep",
         "accumulate_noise",
         "return_noise_split",
         "n_shells",
@@ -257,7 +256,6 @@ def run_local_bucket_big_jit(
     projection_max_r,
     disable_adjoint_y: bool,
     disable_adjoint_ctf: bool,
-    use_native_half_volume_mstep: bool,
     accumulate_noise: bool,
     return_noise_split: bool,
     n_shells: int,
@@ -444,7 +442,7 @@ def run_local_bucket_big_jit(
         use_window=use_window,
         disable_left=disable_adjoint_y,
         disable_right=disable_adjoint_ctf,
-        half_volume=use_native_half_volume_mstep,
+        half_volume=True,
         max_r=projection_max_r,
     )
 
