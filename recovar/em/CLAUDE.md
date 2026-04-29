@@ -135,7 +135,6 @@ complex image FFTs. RECOVAR RELION-parity refinement now enables these defaults 
 explicitly overridden:
 
 - `RECOVAR_RELION_TEXTURE_INTERP=1`
-- `RECOVAR_RELION_NUMPY_IMAGE_FFT=1`
 
 Latest tiny 1k / 64³ replay with automatic defaults:
 `_agent_scratch/20260426_tiny1k_auto_parity_15715` on local A100, 69.5s,

@@ -64,11 +64,9 @@ def test_particle_image_dataset_relion_background_fill_mask_mode(monkeypatch):
     )
     ds.image_mask_mode = "relion_background_fill"
 
-    import recovar.core.padding as pad
-
-    monkeypatch.setattr(pad, "padded_dft", lambda images, D, padding: images)
     processed = ds.process_images(imgs, apply_image_mask=True)
-    expected = mask.apply_relion_soft_image_mask(imgs, ds.image_mask).astype(np.complex64)
+    masked = image_backends._apply_relion_soft_image_mask_numpy(imgs, ds.image_mask)
+    expected = image_backends._centered_fft2_numpy(masked).reshape((1, -1)).astype(np.complex64)
 
     np.testing.assert_allclose(processed, expected, atol=1e-6)
 

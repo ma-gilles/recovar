@@ -303,10 +303,7 @@ def _compute_significance_batched(
         if use_window:
             half_weights_windowed = window_spec.score_values(half_weights)
 
-    use_relion_numpy_preprocess = (
-        _uses_relion_background_fill(experiment_dataset)
-        and __import__("os").environ.get("RECOVAR_RELION_NUMPY_IMAGE_FFT") == "1"
-    )
+    use_relion_numpy_preprocess = _uses_relion_background_fill(experiment_dataset)
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
     norm_half_weights = make_half_image_weights(image_shape)
 

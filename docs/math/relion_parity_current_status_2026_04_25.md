@@ -67,12 +67,10 @@ Code changes from this investigation:
   are fused by default only for uncapped significance (`max_significants <= 0`)
   without external normalization. Capped top-k cases keep the old split path.
 - Batch backprojection remains opt-in because measured wall time was unchanged.
-- GPU-native half-image preprocessing remains opt-in
-  (`RECOVAR_RELION_EXACT_LOCAL_NATIVE_HALF_PREPROCESS=1`). It is correct
-  against the JAX full-FFT half-gather path on raw real-space test data, but it
-  is not yet RELION-source equivalent under `RECOVAR_RELION_NUMPY_IMAGE_FFT=1`;
-  the 5k replay changed ave Pmax by about `-0.0070` for only `~1.5 s` cold
-  local-EM speedup.
+- GPU-native half-image preprocessing is correct against the JAX full-FFT
+  half-gather path on raw real-space test data, but it was not yet
+  RELION-source equivalent in this replay; the 5k replay changed ave Pmax by
+  about `-0.0070` for only `~1.5 s` cold local-EM speedup.
 - GPU-native local-engine v2 is tracked in the roadmap as a separate refactor:
   the old RELION NumPy FFT/image-mask compatibility path should become a debug
   override, not the normal performance path, once equivalence is proven.
@@ -497,7 +495,6 @@ for close E-step parity:
 RECOVAR RELION-parity refinement now defaults these on unless explicitly overridden:
 
 - `RECOVAR_RELION_TEXTURE_INTERP=1`
-- `RECOVAR_RELION_NUMPY_IMAGE_FFT=1`
 
 The windowed EM paths also pass `max_r=float(current_size // 2)` into
 projection calls.
