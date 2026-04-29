@@ -2,11 +2,25 @@
 
 After the pipeline finishes, use `recovar analyze` to generate volumes, compute k-means clusters, create trajectories, and run UMAP.
 
-## Basic usage
+!!! info "CLI and GUI"
+    Each step below has **CLI** and **GUI** tabs. Click a tab to switch — your choice is remembered across pages.
 
-```bash
-recovar analyze output --zdim=10
-```
+## Submitting an analyze job
+
+=== "CLI"
+
+    ```bash
+    recovar analyze output --zdim=10
+    ```
+
+=== "GUI"
+
+    ![Analyze job form](../../_static/gui/14_analyze_form.png)
+
+    1. From a completed pipeline job, click **Analyze this pipeline output** in Suggested Next Steps (auto-fills the result directory)
+    2. Or click **+ New Job** → **Analyze** and browse to the pipeline output directory
+    3. Set zdim, k-means clusters, and trajectories
+    4. Click **Submit Analyze Job**
 
 This generates:
 
@@ -132,20 +146,6 @@ Load the trajectory volumes as a series in ChimeraX to create conformational mov
 ```
 open state000.mrc state001.mrc state002.mrc ... as_series
 ```
-
-## Using the GUI
-
-Instead of the command line, you can submit analyze jobs through the web GUI.
-
-![Analyze job form](../../_static/gui/14_analyze_form.png)
-
-1. Click **+ New Job** in the sidebar, or click **Analyze this pipeline output** from a completed pipeline job's Suggested Next Steps
-2. Select **Analyze** from the Job Type dropdown
-3. The **Result Directory** is auto-filled when coming from Suggested Next Steps; otherwise browse to the pipeline output directory
-4. Set **zdim**, **K-means Clusters**, and **Trajectories** as needed
-5. Click **Submit Analyze Job**
-
-After the analyze job completes, click **Explore Latent Space** on the job detail page to interactively view PCA and UMAP scatter plots, click points to generate volumes, and use lasso selection to extract particle subsets. See the [GUI Guide](gui.md) for details.
 
 ## Example output
 

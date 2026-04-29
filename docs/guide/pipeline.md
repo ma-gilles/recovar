@@ -2,29 +2,43 @@
 
 The RECOVAR pipeline takes particle images and a mask, then computes the mean reconstruction, covariance, principal components, and embeddings.
 
-!!! tip "GUI alternative"
-    All pipeline options can be configured through the [web GUI](gui.md) (`recovar gui`), which provides a form-based interface with input validation and SLURM job submission. See [Using the GUI](#using-the-gui) below.
+!!! info "CLI and GUI"
+    Each step below has **CLI** and **GUI** tabs. Click a tab to switch — your choice is remembered across pages. For GUI setup, see [Launching the GUI](gui.md#launching-the-gui).
 
-## Basic usage
+## Submitting a pipeline job
 
-```bash
-# Recommended: run inside a project
-recovar init_project my_project
-cd my_project
-recovar pipeline particles.star --mask mask.mrc --project .
+=== "CLI"
 
-# cryoSPARC cs file
-recovar pipeline particles.cs --mask mask.mrc --datadir /project/ --project .
+    ```bash
+    # Recommended: run inside a project
+    recovar init_project my_project
+    cd my_project
+    recovar pipeline particles.star --mask mask.mrc --project .
 
-# With downsampling
-recovar pipeline particles.star --mask mask.mrc --downsample 128 --project .
+    # cryoSPARC cs file
+    recovar pipeline particles.cs --mask mask.mrc --datadir /project/ --project .
 
-# Standalone explicit output directory (still supported)
-recovar pipeline particles.star -o output --mask mask.mrc
+    # With downsampling
+    recovar pipeline particles.star --mask mask.mrc --downsample 128 --project .
 
-# Legacy pickle files
-recovar pipeline particles.128.mrcs -o output     --poses poses.pkl --ctf ctf.pkl --mask mask.mrc
-```
+    # Standalone explicit output directory (still supported)
+    recovar pipeline particles.star -o output --mask mask.mrc
+
+    # Legacy pickle files
+    recovar pipeline particles.128.mrcs -o output \
+        --poses poses.pkl --ctf ctf.pkl --mask mask.mrc
+    ```
+
+=== "GUI"
+
+    ![Pipeline job form](../../_static/gui/06_new_job_pipeline.png)
+
+    1. Click **+ New Job** in the sidebar
+    2. Select **Pipeline** from the Job Type dropdown
+    3. Browse to your particles file (`.star`, `.cs`, or `.mrcs`)
+    4. Choose a solvent mask (Auto, Sphere, None, or custom `.mrc`)
+    5. Choose **SLURM Cluster** or **Local GPU** under "Run on"
+    6. Click **Submit Pipeline Job**
 
 ## Required arguments
 
@@ -36,18 +50,73 @@ recovar pipeline particles.128.mrcs -o output     --poses poses.pkl --ctf ctf.pk
 
 ## Common options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--downsample D` | None | Downsample images to box size D (pre-downsamples to disk) |
-| `--poses` | Auto | Poses file (`.pkl`). Auto-extracted from `.star`/`.cs` |
-| `--ctf` | Auto | CTF file (`.pkl`). Auto-extracted from `.star`/`.cs` |
-| `--focus-mask` | None | Focus mask for targeted heterogeneity |
-| `--mask-dilate-iter` | 0 | Dilate the mask by this many iterations |
-| `--zdim` | 1,2,4,10,20 | PCA dimensions for embedding |
-| `--only-mean` | False | Only compute the mean (fast, for verifying setup) |
-| `--correct-contrast` | False | Estimate and correct amplitude scaling |
-| `--lazy` | False | Lazy loading for large datasets |
-| `--multi-gpu` | False | Multi-GPU parallelization (experimental) |
+=== "CLI"
+
+    | Flag | Default | Description |
+    |------|---------|-------------|
+    | `--downsample D` | None | Downsample images to box size D (pre-downsamples to disk) |
+    | `--poses` | Auto | Poses file (`.pkl`). Auto-extracted from `.star`/`.cs` |
+    | `--ctf` | Auto | CTF file (`.pkl`). Auto-extracted from `.star`/`.cs` |
+    | `--focus-mask` | None | Focus mask for targeted heterogeneity |
+    | `--mask-dilate-iter` | 0 | Dilate the mask by this many iterations |
+    | `--zdim` | 1,2,4,10,20 | PCA dimensions for embedding |
+    | `--only-mean` | False | Only compute the mean (fast, for verifying setup) |
+    | `--correct-contrast` | False | Estimate and correct amplitude scaling |
+    | `--lazy` | False | Lazy loading for large datasets |
+    | `--multi-gpu` | False | Multi-GPU parallelization (experimental) |
+
+=== "GUI"
+
+    ![Advanced pipeline options](../../_static/gui/06c_advanced.png)
+
+    Expand the **Advanced** section in the job form to set:
+
+    - **zdim** — PCA dimensions (default: 1,2,4,10,20)
+    - **Downsample** — target box size (e.g., 128)
+    - **Lazy loading** — for large datasets
+    - **Correct image scale** — amplitude scaling correction
+    - **Focus Mask** — browse to a custom focus mask
+    - **Tilt series** — enable for cryo-ET data
+
+    Under **Rarely Used**: Poses, CTF, N Images, Halfsets.
+
+## Execution settings
+
+=== "SLURM Cluster"
+
+    ![SLURM settings](../../_static/gui/06h_slurm_settings.png)
+
+    When submitting to SLURM (either from the GUI or CLI on a cluster), configure:
+
+    - **Partition** and **Account** — your cluster allocation
+    - **GPUs**, **CPUs**, **Memory**, **Time limit**
+
+    These can be saved as defaults in **Settings** (gear icon in sidebar) so you don't have to fill them in every time.
+
+    ```bash
+    # CLI: SLURM submission is handled by the GUI automatically.
+    # From the CLI, submit via your cluster's sbatch:
+    sbatch --partition=gpu --gres=gpu:1 --mem=100G --time=12:00:00 \
+        --wrap="recovar pipeline particles.star --mask mask.mrc -o output"
+    ```
+
+=== "Local GPU"
+
+    ![Local GPU settings](../../_static/gui/06g_local_selected.png)
+
+    Run directly on the current machine's GPUs without SLURM:
+
+    - **GPU picker** — select specific GPUs or use all
+    - **Setup command** — e.g., `module load cudatoolkit/12.8`
+    - **Environment variables** — extra env vars for the job
+
+    ```bash
+    # CLI equivalent: just run directly
+    recovar pipeline particles.star --mask mask.mrc -o output
+
+    # Select specific GPUs
+    CUDA_VISIBLE_DEVICES=0,1 recovar pipeline particles.star --mask mask.mrc -o output
+    ```
 
 ## Dataset loading options
 
@@ -149,9 +218,22 @@ output/
 
 When using the **project system** (`--project`), pipeline output is placed into auto-numbered directories like `Pipeline/job_0001/`. The numbered directories stay stable on disk, while RECOVAR records human-readable job names in project metadata for the CLI and GUI.
 
-## Example output
+## Viewing results
 
-See the [Tutorial](tutorial.md) for a full worked example with real pipeline output and plots on EMPIAR-10076 (50S ribosome, 131k particles).
+=== "CLI"
+
+    See the [Tutorial](tutorial.md) for a full worked example with real pipeline output and plots on EMPIAR-10076 (50S ribosome, 131k particles).
+
+=== "GUI"
+
+    ![Completed pipeline job](../../_static/gui/07_job_completed.png)
+
+    After the pipeline completes, the job detail page shows:
+
+    - **Quick Preview** — contrast histogram, eigenvalue spectrum, mean FSC
+    - **Volumes** tab — browse all output volumes (mean, eigenvolumes, variance maps)
+    - **Plots** tab — all diagnostic plots
+    - **Suggested Next Steps** — one-click links to run Analyze or Density Estimation
 
 ## Tips
 
@@ -163,28 +245,3 @@ See the [Tutorial](tutorial.md) for a full worked example with real pipeline out
 
 !!! tip "Memory"
     If you run out of GPU memory, try `--low-memory-option` or `--very-low-memory-option`. You can also limit memory with `--gpu-gb 8`.
-
-## Using the GUI
-
-Instead of the command line, you can submit pipeline jobs through the web GUI (`recovar gui`).
-
-![Pipeline job form](../../_static/gui/06_new_job_pipeline.png)
-
-1. Click **+ New Job** in the sidebar
-2. Select **Pipeline** from the Job Type dropdown
-3. Browse to your particles file (`.star`, `.cs`, or `.mrcs`)
-4. Choose a solvent mask option (Auto from halfmaps, Sphere, None, or a custom `.mrc` file)
-5. Optionally set a focus mask
-
-Expand **Advanced** to configure zdim, downsample, lazy loading, and other options:
-
-![Advanced pipeline options](../../_static/gui/06c_advanced.png)
-
-At the bottom of the form, choose whether to run on **SLURM Cluster** or **Local GPU**:
-
-- **SLURM**: expand SLURM Settings to set partition, account, GPUs, memory, and time limit
-- **Local GPU**: expand Local GPU Settings to pick specific GPUs and set a setup command
-
-![SLURM settings in job form](../../_static/gui/06h_slurm_settings.png)
-
-Click **Submit Pipeline Job** to launch. See the [GUI Guide](gui.md) for project setup, dashboard overview, and job monitoring.
