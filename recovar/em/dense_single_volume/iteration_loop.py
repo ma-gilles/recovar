@@ -22,7 +22,7 @@ from recovar.core import fourier_transform_utils
 from recovar.em.core import hard_assignment_idx_to_pose
 from recovar.em.dense_single_volume import parity_dump as _parity_dump
 from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.k_class import run_dense_k_class_em
+from recovar.em.dense_single_volume.k_class import run_dense_k_class_em, run_local_k_class_em
 from recovar.em.dense_single_volume.helpers.convergence import (
     LOCAL_SEARCH_HEALPIX_ORDER,
     RefinementState,
@@ -524,6 +524,8 @@ def _run_local_search_iteration(
     translation_prior_centers=None,
     rotation_grid_random_perturbation=0.0,
     rotation_grid_angular_sampling_deg=None,
+    class_log_priors=None,
+    return_class_details=False,
 ):
     """Run exact local search on the fine HEALPix grid.
 
@@ -580,6 +582,8 @@ def _run_local_search_iteration(
         translation_prior_centers=translation_prior_centers,
         rotation_grid_random_perturbation=rotation_grid_random_perturbation,
         rotation_grid_angular_sampling_deg=rotation_grid_angular_sampling_deg,
+        class_log_priors=class_log_priors,
+        return_class_details=return_class_details,
     )
 
 
@@ -839,6 +843,8 @@ def _run_local_search_iteration_exact_v1(
     translation_prior_centers=None,
     rotation_grid_random_perturbation=0.0,
     rotation_grid_angular_sampling_deg=None,
+    class_log_priors=None,
+    return_class_details=False,
 ):
     """Per-image exact local engine over image-specific rotation neighborhoods."""
 
@@ -893,43 +899,97 @@ def _run_local_search_iteration_exact_v1(
         metadata_build_time = 0.0
         selector_time = 0.0
 
-    engine_outputs = run_local_em_exact(
-        experiment_dataset,
-        mean,
-        mean_variance,
-        noise_variance,
-        local_layout,
-        disc_type,
-        image_batch_size=image_batch_size,
-        rotation_block_size=rotation_block_size,
-        current_size=current_size,
-        accumulate_noise=accumulate_noise,
-        projection_padding_factor=projection_padding_factor,
-        reconstruction_padding_factor=reconstruction_padding_factor,
-        score_with_masked_images=score_with_masked_images,
-        half_spectrum_scoring=half_spectrum_scoring,
-        use_float64_scoring=use_float64_scoring,
-        use_float64_normalization=use_float64_scoring,
-        use_float64_projections=use_float64_projections,
-        do_gridding_correction=do_gridding_correction,
-        square_window=square_window,
-        image_corrections=image_corrections,
-        scale_corrections=scale_corrections,
-        image_pre_shifts=image_pre_shifts,
-        return_profile=return_profile,
-        disable_adjoint_y=disable_adjoint_y,
-        disable_adjoint_ctf=disable_adjoint_ctf,
-        reconstruct_significant_only=reconstruct_significant_only,
-        adaptive_fraction=adaptive_fraction,
-        # RELION's maximum_significants cap is used to define the coarse pass-1
-        # adaptive support. In pass 2, the reconstruction threshold is governed
-        # by adaptive_fraction only; do not reapply the cap here.
-        max_significants=-1,
-        debug_iteration=debug_iteration,
-        return_best_pose_details=return_best_pose_details,
-        normalization_log_z=normalization_log_z,
-        translation_prior_centers=translation_prior_centers,
-    )
+    if class_log_priors is not None:
+        if return_profile:
+            raise NotImplementedError("K-class local search does not yet emit local profile summaries")
+        if disable_adjoint_y or disable_adjoint_ctf:
+            raise NotImplementedError("K-class local search does not support adjoint ablation flags")
+        if normalization_log_z is not None:
+            raise NotImplementedError("K-class local search requires evidence-space normalization, not pass-2 log_z")
+        k_class_result = run_local_k_class_em(
+            experiment_dataset,
+            mean,
+            mean_variance,
+            noise_variance,
+            local_layout,
+            disc_type,
+            class_log_priors=class_log_priors,
+            accumulate_noise=accumulate_noise,
+            return_best_pose_details=return_best_pose_details,
+            image_batch_size=image_batch_size,
+            rotation_block_size=rotation_block_size,
+            current_size=current_size,
+            projection_padding_factor=projection_padding_factor,
+            reconstruction_padding_factor=reconstruction_padding_factor,
+            score_with_masked_images=score_with_masked_images,
+            half_spectrum_scoring=half_spectrum_scoring,
+            use_float64_scoring=use_float64_scoring,
+            use_float64_normalization=use_float64_scoring,
+            use_float64_projections=use_float64_projections,
+            do_gridding_correction=do_gridding_correction,
+            square_window=square_window,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            reconstruct_significant_only=reconstruct_significant_only,
+            adaptive_fraction=adaptive_fraction,
+            max_significants=-1,
+            debug_iteration=debug_iteration,
+            translation_prior_centers=translation_prior_centers,
+        )
+        class_details = (
+            np.asarray(k_class_result.class_assignments, dtype=np.int32),
+            np.asarray(k_class_result.class_posterior_sums, dtype=np.float64),
+        )
+        engine_outputs = (
+            k_class_result.Ft_y,
+            k_class_result.Ft_ctf,
+            np.asarray(k_class_result.pose_assignments, dtype=np.int32),
+            k_class_result.best_pose_rotations,
+            k_class_result.best_pose_translations,
+            k_class_result.best_pose_rotation_ids,
+            k_class_result.stats,
+            k_class_result.aggregate_noise_stats,
+        )
+    else:
+        class_details = None
+        engine_outputs = run_local_em_exact(
+            experiment_dataset,
+            mean,
+            mean_variance,
+            noise_variance,
+            local_layout,
+            disc_type,
+            image_batch_size=image_batch_size,
+            rotation_block_size=rotation_block_size,
+            current_size=current_size,
+            accumulate_noise=accumulate_noise,
+            projection_padding_factor=projection_padding_factor,
+            reconstruction_padding_factor=reconstruction_padding_factor,
+            score_with_masked_images=score_with_masked_images,
+            half_spectrum_scoring=half_spectrum_scoring,
+            use_float64_scoring=use_float64_scoring,
+            use_float64_normalization=use_float64_scoring,
+            use_float64_projections=use_float64_projections,
+            do_gridding_correction=do_gridding_correction,
+            square_window=square_window,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            return_profile=return_profile,
+            disable_adjoint_y=disable_adjoint_y,
+            disable_adjoint_ctf=disable_adjoint_ctf,
+            reconstruct_significant_only=reconstruct_significant_only,
+            adaptive_fraction=adaptive_fraction,
+            # RELION's maximum_significants cap is used to define the coarse pass-1
+            # adaptive support. In pass 2, the reconstruction threshold is governed
+            # by adaptive_fraction only; do not reapply the cap here.
+            max_significants=-1,
+            debug_iteration=debug_iteration,
+            return_best_pose_details=return_best_pose_details,
+            normalization_log_z=normalization_log_z,
+            translation_prior_centers=translation_prior_centers,
+        )
 
     if accumulate_noise:
         if return_profile:
@@ -999,10 +1059,17 @@ def _run_local_search_iteration_exact_v1(
         profile_summary["selector_time_s"] = np.float64(selector_time)
         profile_summary["translation_prior_time_s"] = np.float64(0.0)
 
+    def _with_class_details(result):
+        if not return_class_details:
+            return result
+        if class_details is None:
+            raise ValueError("return_class_details=True requires class_log_priors")
+        return tuple(result) + class_details
+
     if accumulate_noise:
         if return_best_pose_details:
             if return_profile:
-                return (
+                return _with_class_details((
                     Ft_y,
                     Ft_ctf,
                     hard_assignment,
@@ -1012,8 +1079,8 @@ def _run_local_search_iteration_exact_v1(
                     relion_stats,
                     noise_stats,
                     profile_summary,
-                )
-            return (
+                ))
+            return _with_class_details((
                 Ft_y,
                 Ft_ctf,
                 hard_assignment,
@@ -1022,13 +1089,13 @@ def _run_local_search_iteration_exact_v1(
                 best_pose_rotation_ids,
                 relion_stats,
                 noise_stats,
-            )
+            ))
         if return_profile:
-            return Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats, profile_summary
-        return Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats
+            return _with_class_details((Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats, profile_summary))
+        return _with_class_details((Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats))
     if return_best_pose_details:
         if return_profile:
-            return (
+            return _with_class_details((
                 Ft_y,
                 Ft_ctf,
                 hard_assignment,
@@ -1037,11 +1104,13 @@ def _run_local_search_iteration_exact_v1(
                 best_pose_rotation_ids,
                 relion_stats,
                 profile_summary,
-            )
-        return Ft_y, Ft_ctf, hard_assignment, best_pose_rotations, best_pose_translations, best_pose_rotation_ids, relion_stats
+            ))
+        return _with_class_details(
+            (Ft_y, Ft_ctf, hard_assignment, best_pose_rotations, best_pose_translations, best_pose_rotation_ids, relion_stats),
+        )
     if return_profile:
-        return Ft_y, Ft_ctf, hard_assignment, relion_stats, profile_summary
-    return Ft_y, Ft_ctf, hard_assignment, relion_stats
+        return _with_class_details((Ft_y, Ft_ctf, hard_assignment, relion_stats, profile_summary))
+    return _with_class_details((Ft_y, Ft_ctf, hard_assignment, relion_stats))
 
 
 from recovar.em.dense_single_volume.helpers.significance import (
@@ -2231,9 +2300,9 @@ def _run_relion_iteration_loop(
             and not (relion_firstiter_cc_this_iter or first_iter_normalized_cc_this_iter)
             and not first_iter_hard_reconstruction_this_iter
         )
-        if k_class_enabled and (use_local or use_adaptive or use_global_significant_support):
+        if k_class_enabled and (use_adaptive or use_global_significant_support):
             raise NotImplementedError(
-                "K-class refine loop currently supports the dense non-adaptive engine path. "
+                "K-class refine loop currently supports dense and exact-local non-adaptive engine paths. "
                 "The dense/local k-class engine wrappers are available, but this RELION "
                 "iteration-loop branch has not been wired yet.",
             )
@@ -2489,31 +2558,65 @@ def _run_relion_iteration_loop(
                     translation_prior_centers=trans_prior_center,
                     rotation_grid_random_perturbation=local_search_random_perturbation,
                     rotation_grid_angular_sampling_deg=local_search_angular_sampling_deg,
+                    class_log_priors=class_log_priors if k_class_enabled else None,
+                    return_class_details=k_class_enabled,
                 )
                 if collect_local_search_profile:
-                    (
-                        Ft_y_k,
-                        Ft_ctf_k,
-                        ha_k,
-                        best_rots_k,
-                        best_trans_k,
-                        _best_rot_ids_k,
-                        em_stats_k,
-                        noise_stats_k,
-                        grouped_local_profile_k,
-                    ) = local_outputs
+                    if k_class_enabled:
+                        (
+                            Ft_y_k,
+                            Ft_ctf_k,
+                            ha_k,
+                            best_rots_k,
+                            best_trans_k,
+                            _best_rot_ids_k,
+                            em_stats_k,
+                            noise_stats_k,
+                            grouped_local_profile_k,
+                            class_assignments_k,
+                            class_posterior_sums_k,
+                        ) = local_outputs
+                    else:
+                        (
+                            Ft_y_k,
+                            Ft_ctf_k,
+                            ha_k,
+                            best_rots_k,
+                            best_trans_k,
+                            _best_rot_ids_k,
+                            em_stats_k,
+                            noise_stats_k,
+                            grouped_local_profile_k,
+                        ) = local_outputs
                 else:
                     grouped_local_profile_k = None
-                    (
-                        Ft_y_k,
-                        Ft_ctf_k,
-                        ha_k,
-                        best_rots_k,
-                        best_trans_k,
-                        _best_rot_ids_k,
-                        em_stats_k,
-                        noise_stats_k,
-                    ) = local_outputs
+                    if k_class_enabled:
+                        (
+                            Ft_y_k,
+                            Ft_ctf_k,
+                            ha_k,
+                            best_rots_k,
+                            best_trans_k,
+                            _best_rot_ids_k,
+                            em_stats_k,
+                            noise_stats_k,
+                            class_assignments_k,
+                            class_posterior_sums_k,
+                        ) = local_outputs
+                    else:
+                        (
+                            Ft_y_k,
+                            Ft_ctf_k,
+                            ha_k,
+                            best_rots_k,
+                            best_trans_k,
+                            _best_rot_ids_k,
+                            em_stats_k,
+                            noise_stats_k,
+                        ) = local_outputs
+                if k_class_enabled:
+                    class_assignments[k] = np.asarray(class_assignments_k, dtype=np.int32)
+                    class_posterior_per_half[k] = np.asarray(class_posterior_sums_k, dtype=np.float64)
                 best_pose_rotations[k] = np.asarray(best_rots_k, dtype=np.float32)
                 best_pose_rotation_eulers[k] = utils.R_to_relion(
                     np.asarray(best_rots_k),
