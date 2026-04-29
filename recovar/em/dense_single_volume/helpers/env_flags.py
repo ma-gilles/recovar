@@ -41,3 +41,18 @@ def parse_env_auto_mode(name: str, default: str = "auto") -> str:
     if parsed is None:
         return "auto"
     return "on" if parsed else "off"
+
+
+def parse_int_set(value: str | None) -> set[int] | None:
+    """Parse comma/semicolon/whitespace separated integer sets."""
+
+    if not value:
+        return None
+    parsed = {int(token) for token in value.replace(",", " ").replace(";", " ").split()}
+    return parsed or None
+
+
+def parse_env_int_set(name: str) -> set[int] | None:
+    """Parse an integer-set environment variable."""
+
+    return parse_int_set(os.environ.get(name))

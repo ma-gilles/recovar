@@ -8,17 +8,7 @@ Called by ``refine_single_volume`` and ``_run_relion_iteration_loop`` in ``refin
 import jax.numpy as jnp
 import numpy as np
 
-
-def _parse_int_set_env(name):
-    value = __import__("os").environ.get(name)
-    if not value:
-        return None
-    out = set()
-    for part in value.replace(";", ",").split(","):
-        part = part.strip()
-        if part:
-            out.add(int(part))
-    return out
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 
 
 def _maybe_dump_significance_batch(
@@ -54,7 +44,7 @@ def _maybe_dump_significance_batch(
     dump_dir = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR")
     if not dump_dir:
         return
-    target_original_indices = _parse_int_set_env("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
+    target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
     if not target_original_indices:
         return
     target_current_size = os.environ.get("RECOVAR_SIGNIFICANCE_DUMP_CURRENT_SIZE")
@@ -503,7 +493,7 @@ def _compute_significance_batched(
         dump_score_pre_prior_blocks = None
         dump_score_with_prior_blocks = None
         if __import__("os").environ.get("RECOVAR_SIGNIFICANCE_DUMP_DIR"):
-            target_original_indices = _parse_int_set_env("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
+            target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
             if target_original_indices:
                 local_indices_for_dump = np.asarray(indices, dtype=np.int64)
                 original_indices_all = getattr(experiment_dataset, "dataset_indices", None)

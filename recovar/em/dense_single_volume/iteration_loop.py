@@ -29,6 +29,7 @@ from recovar.em.dense_single_volume.helpers.convergence import (
     healpix_angular_step,
     update_refinement_state,
 )
+from recovar.em.dense_single_volume.helpers.env_flags import parse_int_set
 from recovar.em.dense_single_volume.helpers.fourier_window import quantize_current_size
 from recovar.em.dense_single_volume.helpers.local_search import _local_search_engine_rotation_block_size
 from recovar.em.dense_single_volume.helpers.orientation_priors import (
@@ -105,17 +106,6 @@ def _precompute_exact_local_fine_grid_enabled(healpix_order: int) -> bool:
     )
 
 
-def _parse_env_int_set(value: str | None) -> set[int] | None:
-    if not value:
-        return None
-    parsed = set()
-    for token in value.replace(",", " ").split():
-        token = token.strip()
-        if token:
-            parsed.add(int(token))
-    return parsed or None
-
-
 def _relion_half_plane_shell_counts(image_shape):
     """Count RELION's non-redundant FFTW half-plane shell pixels."""
 
@@ -149,7 +139,7 @@ def _maybe_dump_noise_update_debug(
     dump_dir = os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_DIR")
     if not dump_dir:
         return
-    requested_iterations = _parse_env_int_set(os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_ITERATION"))
+    requested_iterations = parse_int_set(os.environ.get("RECOVAR_NOISE_DEBUG_DUMP_ITERATION"))
     if requested_iterations is not None and int(iteration) not in requested_iterations:
         return
 

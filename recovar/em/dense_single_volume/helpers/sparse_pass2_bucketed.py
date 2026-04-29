@@ -46,6 +46,7 @@ from recovar.em.dense_single_volume.em_primitives import (
     _compute_projections_block,
 )
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
+from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
@@ -454,18 +455,6 @@ def _reorder_to_indices(image_indices_returned, requested_image_indices, *arrays
     return tuple(arr[order] for arr in arrays)
 
 
-def _parse_int_set_env(name):
-    value = os.environ.get(name)
-    if not value:
-        return None
-    out = set()
-    for part in value.replace(";", ",").split(","):
-        part = part.strip()
-        if part:
-            out.add(int(part))
-    return out
-
-
 def _maybe_dump_pass2_bucket(
     *,
     experiment_dataset,
@@ -490,9 +479,9 @@ def _maybe_dump_pass2_bucket(
     dump_dir = os.environ.get("RECOVAR_PASS2_DUMP_DIR")
     if not dump_dir:
         return
-    target_original_indices = _parse_int_set_env("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES")
+    target_original_indices = parse_env_int_set("RECOVAR_PASS2_DUMP_ORIGINAL_INDICES")
     if not target_original_indices:
-        target_original_indices = _parse_int_set_env("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
+        target_original_indices = parse_env_int_set("RECOVAR_SIGNIFICANCE_DUMP_ORIGINAL_INDICES")
     if not target_original_indices:
         return
     target_current_size = os.environ.get("RECOVAR_PASS2_DUMP_CURRENT_SIZE")
