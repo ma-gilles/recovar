@@ -225,6 +225,29 @@ class _SparsePass2Profile:
         }
 
 
+def _dense_em_return_tuple(
+    new_mean,
+    hard_assignment,
+    Ft_y,
+    Ft_ctf,
+    *,
+    return_stats: bool,
+    accumulate_noise: bool,
+    return_profile: bool,
+    relion_stats=None,
+    noise_stats=None,
+    em_profile=None,
+):
+    result = [new_mean, hard_assignment, Ft_y, Ft_ctf]
+    if return_stats:
+        result.append(relion_stats)
+    if accumulate_noise:
+        result.append(noise_stats)
+    if return_profile:
+        result.append(em_profile)
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class _DenseDebugOptions:
     """Environment-gated dense debug outputs for one EM call."""
@@ -1549,6 +1572,7 @@ def run_em(
             sparse_profile.omitted_mass_upper_sum,
         )
 
+    relion_stats = None
     if return_stats:
         host_stats_t0 = time.time()
         relion_stats = RelionStats(
@@ -1592,23 +1616,18 @@ def run_em(
     else:
         em_profile = None
 
-    if return_stats:
-        if accumulate_noise:
-            if return_profile:
-                return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats, noise_stats, em_profile
-            return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats, noise_stats
-        if return_profile:
-            return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats, em_profile
-        return new_mean, hard_assignment, Ft_y, Ft_ctf, relion_stats
-
-    if accumulate_noise:
-        if return_profile:
-            return new_mean, hard_assignment, Ft_y, Ft_ctf, noise_stats, em_profile
-        return new_mean, hard_assignment, Ft_y, Ft_ctf, noise_stats
-
-    if return_profile:
-        return new_mean, hard_assignment, Ft_y, Ft_ctf, em_profile
-    return new_mean, hard_assignment, Ft_y, Ft_ctf
+    return _dense_em_return_tuple(
+        new_mean,
+        hard_assignment,
+        Ft_y,
+        Ft_ctf,
+        return_stats=return_stats,
+        accumulate_noise=accumulate_noise,
+        return_profile=return_profile,
+        relion_stats=relion_stats,
+        noise_stats=noise_stats,
+        em_profile=em_profile,
+    )
 
 
 def compute_e_step_weights(

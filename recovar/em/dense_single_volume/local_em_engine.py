@@ -209,6 +209,38 @@ class _LocalPackSelection:
     probs_sum_t: np.ndarray
 
 
+def _local_em_return_tuple(
+    Ft_y,
+    Ft_ctf,
+    hard_assignment,
+    relion_stats,
+    *,
+    accumulate_noise: bool,
+    return_profile: bool,
+    return_best_pose_details: bool,
+    best_pose_rotations=None,
+    best_pose_translations=None,
+    best_pose_rotation_ids=None,
+    noise_stats=None,
+    profile_summary=None,
+):
+    result = [Ft_y, Ft_ctf, hard_assignment]
+    if return_best_pose_details:
+        result.extend(
+            [
+                best_pose_rotations,
+                best_pose_translations,
+                best_pose_rotation_ids,
+            ]
+        )
+    result.append(relion_stats)
+    if accumulate_noise:
+        result.append(noise_stats)
+    if return_profile:
+        result.append(profile_summary)
+    return tuple(result)
+
+
 def _pad_local_big_jit_image_axis(bucket: LocalBucketSpec, batch_data, ctf_params):
     """Pad a local big-JIT bucket to its planned image shape class."""
 
@@ -1869,22 +1901,19 @@ def run_local_em_exact(
         )
 
     if not return_profile:
-        if return_best_pose_details:
-            if accumulate_noise:
-                return (
-                    Ft_y,
-                    Ft_ctf,
-                    hard_assignment,
-                    best_pose_rotations,
-                    best_pose_translations,
-                    best_pose_rotation_ids,
-                    relion_stats,
-                    noise_stats,
-                )
-            return Ft_y, Ft_ctf, hard_assignment, best_pose_rotations, best_pose_translations, best_pose_rotation_ids, relion_stats
-        if accumulate_noise:
-            return Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats
-        return Ft_y, Ft_ctf, hard_assignment, relion_stats
+        return _local_em_return_tuple(
+            Ft_y,
+            Ft_ctf,
+            hard_assignment,
+            relion_stats,
+            accumulate_noise=accumulate_noise,
+            return_profile=False,
+            return_best_pose_details=return_best_pose_details,
+            best_pose_rotations=best_pose_rotations,
+            best_pose_translations=best_pose_translations,
+            best_pose_rotation_ids=best_pose_rotation_ids,
+            noise_stats=noise_stats,
+        )
 
     _block_until_ready(Ft_y, Ft_ctf)
     total_wall_time = time.time() - overall_t0
@@ -1943,29 +1972,17 @@ def run_local_em_exact(
         ),
         "n_windowed": np.int32(n_windowed),
     }
-    if return_best_pose_details:
-        if accumulate_noise:
-            return (
-                Ft_y,
-                Ft_ctf,
-                hard_assignment,
-                best_pose_rotations,
-                best_pose_translations,
-                best_pose_rotation_ids,
-                relion_stats,
-                noise_stats,
-                profile_summary,
-            )
-        return (
-            Ft_y,
-            Ft_ctf,
-            hard_assignment,
-            best_pose_rotations,
-            best_pose_translations,
-            best_pose_rotation_ids,
-            relion_stats,
-            profile_summary,
-        )
-    if accumulate_noise:
-        return Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats, profile_summary
-    return Ft_y, Ft_ctf, hard_assignment, relion_stats, profile_summary
+    return _local_em_return_tuple(
+        Ft_y,
+        Ft_ctf,
+        hard_assignment,
+        relion_stats,
+        accumulate_noise=accumulate_noise,
+        return_profile=True,
+        return_best_pose_details=return_best_pose_details,
+        best_pose_rotations=best_pose_rotations,
+        best_pose_translations=best_pose_translations,
+        best_pose_rotation_ids=best_pose_rotation_ids,
+        noise_stats=noise_stats,
+        profile_summary=profile_summary,
+    )
