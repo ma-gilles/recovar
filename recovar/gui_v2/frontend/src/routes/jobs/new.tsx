@@ -88,6 +88,7 @@ export function NewJobPage(): React.JSX.Element {
               projectId={project.id}
               projectPath={project.path}
               onSubmitted={handleSubmitted}
+              prefilledParams={searchParams.params ? JSON.parse(searchParams.params) : undefined}
             />
           )}
           {jobType === "analyze" && (
