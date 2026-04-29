@@ -190,11 +190,22 @@ function OverviewTab({
         </div>
       )}
 
-      {suggestions && suggestions.length > 0 && (
+      {/* Clone / Suggested Next Steps — shown for terminal jobs */}
+      {(job.status === "completed" || job.status === "failed" || job.status === "cancelled") && (
         <div className="space-y-2">
-          <h3 className="text-sm font-medium text-zinc-400">Suggested Next Steps</h3>
+          <h3 className="text-sm font-medium text-zinc-400">
+            {job.status === "failed" ? "Retry" : "Next Steps"}
+          </h3>
           <div className="flex flex-wrap gap-2">
-            {suggestions.map((s) => (
+            <Link
+              to="/jobs/new"
+              search={buildCloneSearchParams(job)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-blue-600/50 bg-blue-600/10 px-3 py-1.5 text-sm text-blue-300 hover:bg-blue-600/20"
+            >
+              <Copy className="h-3.5 w-3.5" />
+              {job.status === "failed" ? "Retry with same settings" : "Clone Job"}
+            </Link>
+            {suggestions?.map((s) => (
               <Link
                 key={s.type}
                 to="/jobs/new"

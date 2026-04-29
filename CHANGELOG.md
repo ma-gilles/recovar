@@ -9,6 +9,16 @@
 - Organized output layout: `plots/`, `data/`, `kmeans/`, `traj000/` subdirectories in analyze output
 - Per-volume diagnostics in `diagnostics/{stem}/` subdirectories
 - `--save-all-plots` flag for junk/outlier detection commands
+- Web GUI v2 (`recovar gui`): complete rewrite with FastAPI backend + React/TypeScript frontend
+  - Per-job executor selection (SLURM / Local GPU toggle)
+  - Settings page with layered config (built-in < user-global TOML < per-project TOML < per-job override)
+  - GPU picker and local execution settings (setup command, env vars)
+  - Jobs survive GUI server restarts (SQLite-backed job tracking with reconnect)
+  - Interactive latent space explorer with PCA/UMAP scatter plots (50K+ points)
+  - 3D volume viewer (vtk.js isosurface rendering) and slice viewer
+  - Lasso/rectangle selection for particle subset export
+  - File browser with path validation
+- Built-in fast-marching C++ extension (replaces external `scikit-fmm` dependency)
 - CLAUDE.md infrastructure for AI-assisted development
 - CI pipeline: ruff lint/format + unit tests on every push/PR
 - `@claude` GitHub integration for PR review and issue handling
@@ -26,6 +36,7 @@
 - Volume naming: `center000.mrc`/`state000.mrc` (zero-padded, with half-maps alongside)
 - K-means results saved to `data/kmeans_result.pkl` (was `centers.pkl`)
 - Removed `filtered_noB.mrc` from volume outputs
+- Old Flask-based GUI (`recovar/gui/`) removed, replaced by `recovar/gui_v2/`
 
 ### Fixed
 - CUDA coordinate swap in `_rot_to_compact` (commit ba75416)
