@@ -31,3 +31,6 @@ from .helpers.fourier_window import (
     quantize_current_size as quantize_current_size,
 )
 from .helpers.types import MeanStats as MeanStats
+from .k_class import KClassEMResult as KClassEMResult
+from .k_class import run_dense_k_class_em as run_dense_k_class_em
+from .k_class import run_local_k_class_em as run_local_k_class_em
