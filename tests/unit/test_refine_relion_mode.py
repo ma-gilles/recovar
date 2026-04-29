@@ -2604,6 +2604,54 @@ class TestRelionModeSmokeTest:
         assert len(run_em_mean_ids) == 4
         assert run_em_mean_ids[-2:] == [id(result["means"][0]), id(result["means"][1])]
 
+    def test_relion_final_iteration_supports_k_class(
+        self,
+        half_datasets,
+        init_volume,
+        rotations,
+        translations,
+        monkeypatch,
+    ):
+        """K-class refinement can run the final all-data iteration."""
+        original_update = iteration_loop_module.update_refinement_state
+
+        def force_convergence_after_first_iter(*args, **kwargs):
+            updated = original_update(*args, **kwargs)
+            updated.has_converged = True
+            return updated
+
+        monkeypatch.setattr(
+            iteration_loop_module,
+            "update_refinement_state",
+            force_convergence_after_first_iter,
+        )
+
+        result = refine_single_volume(
+            half_datasets,
+            init_volume,
+            jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
+            jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
+            rotations,
+            translations,
+            disc_type="linear_interp",
+            max_iter=2,
+            image_batch_size=N_IMAGES,
+            rotation_block_size=N_ROTATIONS,
+            init_current_size=4,
+            init_healpix_order=2,
+            max_healpix_order=2,
+            low_resol_join_halves_angstrom=0.0,
+            n_classes=2,
+            init_class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+        )
+
+        assert result["convergence_state"].has_converged is True
+        assert len(result["wall_times"]) == 2
+        assert np.asarray(result["class_means"]).shape == (2, VOLUME_SIZE)
+        np.testing.assert_allclose(np.sum(result["class_weights"]), 1.0, rtol=1e-6, atol=1e-6)
+        for half_classes in result["class_assignments"]:
+            assert np.asarray(half_classes).shape == (N_IMAGES // 2,)
+
     def test_relion_mode_finite_outputs(
         self,
         half_datasets,
