@@ -35,7 +35,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import noise as noise_utils
@@ -49,6 +48,12 @@ from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_bat
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
 from recovar.em.dense_single_volume.helpers.fourier_window import make_fourier_window_spec
+from recovar.em.dense_single_volume.helpers.half_volume_mstep import (
+    enforce_half_volume_x0_if_requested,
+    half_volume_accumulator_shape,
+    half_volume_accumulators_to_full,
+    native_half_volume_mstep_enabled,
+)
 from recovar.em.dense_single_volume.helpers.half_spectrum import (
     make_half_image_weights,
     make_relion_noise_shell_indices_half,
@@ -70,7 +75,6 @@ from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
-    enforce_relion_half_volume_x0_hermitian,
     flatten_bucket_rotations,
     flatten_bucket_rows,
 )
@@ -773,16 +777,13 @@ def compute_pass2_stats_sparse_bucketed(
     # Recon volume layout: match the per-image reference path by default, but
     # allow native RELION-style half-volume accumulation as an isolated
     # diagnostic for M-step parity against BackProjector.
-    use_native_half_volume_mstep = os.environ.get(
-        "RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME",
-        "",
-    ).lower() in {"1", "true", "yes", "on"}
+    use_native_half_volume_mstep = native_half_volume_mstep_enabled()
     if reconstruction_padding_factor > 1:
         recon_volume_shape = tuple(d * reconstruction_padding_factor for d in volume_shape)
     else:
         recon_volume_shape = volume_shape
     recon_accum_shape = (
-        fourier_transform_utils.volume_shape_to_half_volume_shape(recon_volume_shape)
+        half_volume_accumulator_shape(recon_volume_shape)
         if use_native_half_volume_mstep
         else recon_volume_shape
     )
@@ -1314,15 +1315,13 @@ def compute_pass2_stats_sparse_bucketed(
             recon_volume_shape=recon_volume_shape,
             stage="pre_x0",
         )
-        if os.environ.get("RECOVAR_RELION_SPARSE_PASS2_HALF_VOLUME_ENFORCE_X0", "").lower() in {
-            "1",
-            "true",
-            "yes",
-            "on",
-        }:
-            logger.info("Sparse pass-2 M-step: enforcing RELION half-volume x=0 Hermitian plane")
-            Ft_y_total = enforce_relion_half_volume_x0_hermitian(Ft_y_total, recon_volume_shape)
-            Ft_ctf_total = enforce_relion_half_volume_x0_hermitian(Ft_ctf_total, recon_volume_shape)
+        Ft_y_total, Ft_ctf_total = enforce_half_volume_x0_if_requested(
+            Ft_y_total,
+            Ft_ctf_total,
+            recon_volume_shape,
+            logger=logger,
+            label="Sparse pass-2",
+        )
         _maybe_dump_native_half_mstep(
             Ft_y_total,
             Ft_ctf_total,
@@ -1333,14 +1332,11 @@ def compute_pass2_stats_sparse_bucketed(
         )
         # Keep the public return contract unchanged while testing whether the
         # RELION-style folded accumulation itself closes the Ft_ctf/Ft_y gap.
-        Ft_y_total = fourier_transform_utils.half_volume_to_full_volume(
+        Ft_y_total, Ft_ctf_total = half_volume_accumulators_to_full(
             Ft_y_total,
-            recon_volume_shape,
-        ).reshape(-1)
-        Ft_ctf_total = fourier_transform_utils.half_volume_to_full_volume(
             Ft_ctf_total,
             recon_volume_shape,
-        ).reshape(-1)
+        )
 
     best_translations = fine_translations[hard_assignment % n_fine_trans]
 
