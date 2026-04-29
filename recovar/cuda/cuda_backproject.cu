@@ -1429,6 +1429,61 @@ fill_relion_texture_compact_kernel(
     imag[idx] = im;
 }
 
+template <typename T>
+__global__ void __launch_bounds__(BLOCK_SIZE)
+fill_relion_texture_compact_half_kernel(
+    const T* __restrict__ vol,
+    float* __restrict__ real,
+    float* __restrict__ imag,
+    int texX, int texY, int texZ,
+    int yinit, int zinit,
+    int N0, int N1, int N2)
+{
+    const int idx = blockIdx.x * BLOCK_SIZE + threadIdx.x;
+    const int n = texX * texY * texZ;
+    if (idx >= n) return;
+
+    const int x = idx % texX;
+    const int yidx = (idx / texX) % texY;
+    const int zidx = idx / (texX * texY);
+    const int y = yidx + yinit;
+    const int z = zidx + zinit;
+
+    const int i0 = N0 / 2 + x;
+    const int i1 = N1 / 2 + y;
+    const int i2 = N2 / 2 + z;
+    const int ic2 = N2 / 2;
+    const int N2_half = ic2 + 1;
+
+    float re = 0.0f;
+    float im = 0.0f;
+    if ((unsigned)i0 < (unsigned)N0 && (unsigned)i1 < (unsigned)N1 && (unsigned)i2 < (unsigned)N2) {
+        int kz = i2 - ic2;
+        bool conj = false;
+        int ri0 = i0;
+        int ri1 = i1;
+        int rkz;
+        if (kz >= 0) {
+            rkz = kz;
+        } else if (-kz == ic2) {
+            rkz = ic2;
+        } else {
+            ri0 = (N0 - (N0 & 1) - i0) % N0;
+            ri1 = (N1 - (N1 & 1) - i1) % N1;
+            rkz = -kz;
+            conj = true;
+        }
+        if ((unsigned)rkz < (unsigned)N2_half) {
+            using V2 = vec2_t<T>;
+            const V2 v = reinterpret_cast<const V2*>(vol)[ri0 * N1 * N2_half + ri1 * N2_half + rkz];
+            re = (float)v.x;
+            im = conj ? (float)-v.y : (float)v.y;
+        }
+    }
+    real[idx] = re;
+    imag[idx] = im;
+}
+
 template <bool HALF_IMG>
 __global__ void __launch_bounds__(BLOCK_SIZE)
 project_texture_kernel(
@@ -1755,7 +1810,7 @@ cudaError_t launch_project_texture_float(
     int64_t n_images, int64_t n_pixels,
     int64_t ih, int64_t iw,
     int64_t N0, int64_t N1, int64_t N2,
-    int64_t ups, int64_t half_img,
+    int64_t ups, int64_t half_vol, int64_t half_img,
     int64_t full_iw, int64_t max_r2_x4 = -1)
 {
     const float max_r2 = max_r2_x4 < 0 ? (float)((N0 / 2 - 1) * (N0 / 2 - 1)) : (float)max_r2_x4 / 4.0f;
@@ -1778,8 +1833,13 @@ cudaError_t launch_project_texture_float(
     {
         dim3 block(BLOCK_SIZE);
         dim3 grid((n_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE);
-        fill_relion_texture_compact_kernel<float><<<grid, block, 0, s>>>(
-            vol, real, imag, texX, texY, texZ, texYInit, texZInit, (int)N0, (int)N1, (int)N2);
+        if (half_vol) {
+            fill_relion_texture_compact_half_kernel<float><<<grid, block, 0, s>>>(
+                vol, real, imag, texX, texY, texZ, texYInit, texZInit, (int)N0, (int)N1, (int)N2);
+        } else {
+            fill_relion_texture_compact_kernel<float><<<grid, block, 0, s>>>(
+                vol, real, imag, texX, texY, texZ, texYInit, texZInit, (int)N0, (int)N1, (int)N2);
+        }
         err = cudaGetLastError();
         if (err != cudaSuccess) goto cleanup;
     }
@@ -1857,7 +1917,7 @@ cudaError_t launch_project_texture_double(
     int64_t n_images, int64_t n_pixels,
     int64_t ih, int64_t iw,
     int64_t N0, int64_t N1, int64_t N2,
-    int64_t ups, int64_t half_img,
+    int64_t ups, int64_t half_vol, int64_t half_img,
     int64_t full_iw, int64_t max_r2_x4 = -1)
 {
     const float max_r2 = max_r2_x4 < 0 ? (float)((N0 / 2 - 1) * (N0 / 2 - 1)) : (float)max_r2_x4 / 4.0f;
@@ -1880,8 +1940,13 @@ cudaError_t launch_project_texture_double(
     {
         dim3 block(BLOCK_SIZE);
         dim3 grid((n_voxels + BLOCK_SIZE - 1) / BLOCK_SIZE);
-        fill_relion_texture_compact_kernel<double><<<grid, block, 0, s>>>(
-            vol, real, imag, texX, texY, texZ, texYInit, texZInit, (int)N0, (int)N1, (int)N2);
+        if (half_vol) {
+            fill_relion_texture_compact_half_kernel<double><<<grid, block, 0, s>>>(
+                vol, real, imag, texX, texY, texZ, texYInit, texZInit, (int)N0, (int)N1, (int)N2);
+        } else {
+            fill_relion_texture_compact_kernel<double><<<grid, block, 0, s>>>(
+                vol, real, imag, texX, texY, texZ, texYInit, texZInit, (int)N0, (int)N1, (int)N2);
+        }
         err = cudaGetLastError();
         if (err != cudaSuccess) goto cleanup;
     }
@@ -2857,11 +2922,11 @@ ffi::Error ProjectImpl(
     cudaError_t err;
     switch (vol.element_type()) {
     case ffi::DataType::C64:
-        if (relion_texture_interp && order == 1 && !half_volume) {
+        if (relion_texture_interp && order == 1) {
             err = launch_project_texture_float(
                 stream, (const float*)vol_ptr, (float*)img_ptr, (const float*)rot_ptr,
                 n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-                half_image, full_image_w, max_r2_x4);
+                half_volume, half_image, full_image_w, max_r2_x4);
         } else {
             err = launch_project<float>(
                 stream, (const float*)vol_ptr, (float*)img_ptr, (const float*)rot_ptr,
@@ -2870,11 +2935,11 @@ ffi::Error ProjectImpl(
         }
         break;
     case ffi::DataType::C128:
-        if (relion_texture_interp && order == 1 && !half_volume) {
+        if (relion_texture_interp && order == 1) {
             err = launch_project_texture_double(
                 stream, (const double*)vol_ptr, (double*)img_ptr, (const double*)rot_ptr,
                 n_images, n_pixels, image_h, image_w, N0, N1, N2, upsampling,
-                half_image, full_image_w, max_r2_x4);
+                half_volume, half_image, full_image_w, max_r2_x4);
         } else {
             err = launch_project<double>(
                 stream, (const double*)vol_ptr, (double*)img_ptr, (const double*)rot_ptr,

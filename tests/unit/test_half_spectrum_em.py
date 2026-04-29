@@ -25,7 +25,7 @@ from recovar.core.configs import ForwardModelConfig
 import recovar.em.dense_single_volume.em_engine as em_engine_module
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume.em_engine import run_em
-from recovar.em.dense_single_volume.helpers.adjoint import (
+from recovar.em.dense_single_volume.helpers.backprojection import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
 )
 from recovar.em.dense_single_volume.helpers.half_spectrum import make_half_image_weights

@@ -857,6 +857,7 @@ def test_run_local_em_exact_matches_dense_engine_on_single_image_local_grid(rng)
         dataset.volume_shape,
         "linear_interp",
         half_image=True,
+        relion_texture_interp=True,
     )
     proj_abs2_half_flat = jnp.abs(proj_half_flat) ** 2
     proj_half = proj_half_flat.reshape(1, bucket.bucket_rotation_count, n_half)

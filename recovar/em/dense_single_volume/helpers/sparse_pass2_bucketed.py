@@ -38,7 +38,7 @@ import numpy as np
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import noise as noise_utils
-from recovar.em.dense_single_volume.helpers.adjoint import (
+from recovar.em.dense_single_volume.helpers.backprojection import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )

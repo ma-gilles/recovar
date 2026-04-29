@@ -13,7 +13,7 @@ import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import noise as noise_utils
 from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch
-from recovar.em.dense_single_volume.helpers.adjoint import (
+from recovar.em.dense_single_volume.helpers.backprojection import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
     adjoint_slice_volume_windowed as _adjoint_slice_volume_windowed,
 )
@@ -1031,11 +1031,11 @@ def run_local_em_exact(
     noise_sigma2_offset = jnp.asarray(0.0, dtype=jnp.float32)
     noise_sumw = jnp.asarray(0.0, dtype=jnp.float32)
     return_noise_split = noise_split_diagnostics_requested()
+    n_shells = image_shape[0] // 2 + 1
+    shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
+    shell_indices_noise = window_spec.recon_values(shell_indices_half)
+    noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
     if accumulate_noise:
-        n_shells = image_shape[0] // 2 + 1
-        shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
-        shell_indices_noise = window_spec.recon_values(shell_indices_half)
-        noise_variance_for_noise = window_spec.recon_values(noise_variance_half)
         noise_wsum = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_img_power = jnp.zeros(n_shells, dtype=jnp.float32)
         noise_a2 = jnp.zeros(n_shells, dtype=jnp.float32)

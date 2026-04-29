@@ -4,14 +4,16 @@ import numpy as np
 import pytest
 
 pytest.importorskip("jax")
+import jax
 import jax.numpy as jnp
 
+import recovar.core.fourier_transform_utils as ftu
 from recovar.em.dense_single_volume.dense_big_jit import run_dense_bucket_big_jit
 from recovar.em.dense_single_volume.em_engine import (
     _dense_big_jit_disabled_reason,
     _pad_dense_big_jit_image_axis,
 )
-from recovar.em.dense_single_volume.helpers.adjoint import (
+from recovar.em.dense_single_volume.helpers.backprojection import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
 )
 from recovar.em.dense_single_volume.helpers import projection as projection_helpers
@@ -132,6 +134,58 @@ def test_dense_projection_helpers_use_relion_texture_interpolation(monkeypatch):
     assert captured_kwargs["relion_texture_interp"] is True
     np.testing.assert_allclose(np.asarray(proj_abs2_half), np.ones_like(np.asarray(proj_abs2_half)))
     assert proj_half.shape == (N_ROT, N_HALF)
+
+
+@pytest.mark.gpu
+def test_relion_texture_projection_matches_from_half_volume(gpu_device):
+    from recovar.core import slicing
+    from recovar.cuda_backproject import cuda_available
+
+    if not cuda_available():
+        pytest.skip("CUDA backproject not available")
+
+    image_shape = (8, 8)
+    volume_shape = (8, 8, 8)
+    rng = np.random.default_rng(551)
+    real_volume = rng.standard_normal(volume_shape).astype(np.float32)
+    volume_full = jnp.asarray(np.fft.fftshift(np.fft.fftn(real_volume)).ravel(), dtype=jnp.complex64)
+    volume_half = ftu.full_volume_to_half_volume(volume_full.reshape(volume_shape), volume_shape).reshape(-1)
+    rotations = jnp.asarray(
+        np.stack(
+            [
+                np.eye(3, dtype=np.float32),
+                _rot_z(np.pi / 5.0),
+                _rot_z(np.pi / 2.0),
+            ],
+            axis=0,
+        ),
+        dtype=jnp.float32,
+    )
+
+    with jax.default_device(gpu_device):
+        full_proj = slicing.slice_volume(
+            jax.device_put(volume_full),
+            jax.device_put(rotations),
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            half_image=True,
+            max_r=3.0,
+            relion_texture_interp=True,
+        )
+        half_proj = slicing.slice_volume(
+            jax.device_put(volume_half),
+            jax.device_put(rotations),
+            image_shape,
+            volume_shape,
+            "linear_interp",
+            half_volume=True,
+            half_image=True,
+            max_r=3.0,
+            relion_texture_interp=True,
+        )
+
+    np.testing.assert_allclose(np.asarray(half_proj), np.asarray(full_proj), atol=1e-5, rtol=1e-5)
 
 
 def _window_indices(current_size):
