@@ -78,6 +78,7 @@ class Executor(ABC):
         working_dir: str,
         *,
         slurm_opts: dict[str, Any] | None = None,
+        local_opts: dict[str, Any] | None = None,
     ) -> str:
         """Submit a job.  Returns an executor-specific handle."""
 
@@ -141,6 +142,7 @@ class SlurmExecutor(Executor):
         working_dir: str,
         *,
         slurm_opts: dict[str, Any] | None = None,
+        local_opts: dict[str, Any] | None = None,
     ) -> str:
         opts = slurm_opts or {}
         slurm_output = os.path.join(working_dir, "slurm-%j.out")
