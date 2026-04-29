@@ -546,6 +546,8 @@ def run_local_em_exact(
     debug_iteration: int | None = None,
     return_best_pose_details: bool = False,
     normalization_log_z: np.ndarray | None = None,
+    class_log_prior: float = 0.0,
+    normalization_log_evidence: np.ndarray | None = None,
     translation_prior_centers: np.ndarray | None = None,
 ):
     """Run exact local EM over per-image local hypothesis sets."""
@@ -557,6 +559,7 @@ def run_local_em_exact(
     n_half = H * (W // 2 + 1)
     n_trans = int(local_layout.translation_grid.shape[0])
     n_images = int(local_layout.n_images)
+    class_log_prior = float(class_log_prior)
     normalization_log_z_np = None
     if normalization_log_z is not None:
         normalization_log_z_np = np.asarray(normalization_log_z, dtype=np.float64)
@@ -565,6 +568,16 @@ def run_local_em_exact(
                 "normalization_log_z must have shape "
                 f"({n_images},), got {normalization_log_z_np.shape}",
             )
+    normalization_log_evidence_np = None
+    if normalization_log_evidence is not None:
+        normalization_log_evidence_np = np.asarray(normalization_log_evidence, dtype=np.float64)
+        if normalization_log_evidence_np.shape != (n_images,):
+            raise ValueError(
+                "normalization_log_evidence must have shape "
+                f"({n_images},), got {normalization_log_evidence_np.shape}",
+            )
+    if normalization_log_z_np is not None and normalization_log_evidence_np is not None:
+        raise ValueError("Provide only one of normalization_log_z or normalization_log_evidence")
     translation_prior_centers_np = validate_translation_prior_centers(
         translation_prior_centers,
         n_images=n_images,
@@ -891,11 +904,25 @@ def run_local_em_exact(
             normalization_log_z_arg = (
                 jnp.asarray(
                     pad_axis(normalization_log_z_np[bucket_image_indices], 0, batch_size, value=0),
-                    dtype=jnp.float32,
+                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
                 )
                 if normalization_log_z_np is not None
                 else jnp.zeros(batch_size, dtype=jnp.float32)
             )
+            normalization_log_evidence_arg = (
+                jnp.asarray(
+                    pad_axis(normalization_log_evidence_np[bucket_image_indices], 0, batch_size, value=0),
+                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
+                )
+                if normalization_log_evidence_np is not None
+                else jnp.zeros(batch_size, dtype=jnp.float32)
+            )
+            local_rotation_log_prior_arg = jnp.asarray(bucket.local_rotation_log_prior)
+            if class_log_prior != 0.0:
+                local_rotation_log_prior_arg = local_rotation_log_prior_arg + jnp.asarray(
+                    class_log_prior,
+                    dtype=local_rotation_log_prior_arg.dtype,
+                )
             if accumulate_noise:
                 noise_wsum_arg = noise_wsum
                 noise_img_power_arg = noise_img_power
@@ -963,12 +990,13 @@ def run_local_em_exact(
                 shell_indices_noise_arg,
                 noise_variance_for_noise_arg,
                 jnp.asarray(bucket.local_rotations),
-                jnp.asarray(bucket.local_rotation_log_prior),
+                local_rotation_log_prior_arg,
                 jnp.asarray(bucket.translation_log_prior),
                 jnp.asarray(bucket.local_rotation_mask),
                 sample_mask_arg,
                 jnp.asarray(valid_image_mask),
                 normalization_log_z_arg,
+                normalization_log_evidence_arg,
                 config,
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
@@ -993,6 +1021,7 @@ def run_local_em_exact(
                 return_noise_split=return_noise_split,
                 n_shells=n_shells_arg,
                 has_normalization_log_z=normalization_log_z_np is not None,
+                has_normalization_log_evidence=normalization_log_evidence_np is not None,
             )
             if return_profile:
                 _block_until_ready(
@@ -1227,9 +1256,16 @@ def run_local_em_exact(
 
         shifted_score_split = shifted_score.reshape(batch_size, n_trans, -1)
         shifted_recon_split = shifted_recon.reshape(batch_size, n_trans, -1)
+        local_rotation_log_prior = jnp.asarray(bucket.local_rotation_log_prior)
+        if class_log_prior != 0.0:
+            local_rotation_log_prior = local_rotation_log_prior + jnp.asarray(
+                class_log_prior,
+                dtype=local_rotation_log_prior.dtype,
+            )
         can_use_fused_score_mstep = (
             fused_score_mstep_enabled
             and normalization_log_z_np is None
+            and normalization_log_evidence_np is None
             and not debug_score_dump_filter_matches
         )
         if can_use_fused_score_mstep:
@@ -1253,7 +1289,7 @@ def run_local_em_exact(
                 ctf2_over_nv_score,
                 proj_weighted,
                 half_weights_windowed if use_window else half_weights,
-                jnp.asarray(bucket.local_rotation_log_prior),
+                local_rotation_log_prior,
                 jnp.asarray(bucket.translation_log_prior),
                 jnp.asarray(bucket.local_rotation_mask),
                 None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
@@ -1288,7 +1324,7 @@ def run_local_em_exact(
                     shifted_score_split,
                     ctf2_over_nv_score,
                     proj_weighted,
-                    jnp.asarray(bucket.local_rotation_log_prior),
+                    local_rotation_log_prior,
                     jnp.asarray(bucket.translation_log_prior),
                     jnp.asarray(bucket.local_rotation_mask),
                     None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
@@ -1300,7 +1336,7 @@ def run_local_em_exact(
                     ctf2_over_nv_score,
                     proj_weighted,
                     score_half_weights,
-                    jnp.asarray(bucket.local_rotation_log_prior),
+                    local_rotation_log_prior,
                     jnp.asarray(bucket.translation_log_prior),
                     jnp.asarray(bucket.local_rotation_mask),
                     None if bucket.local_sample_mask is None else jnp.asarray(bucket.local_sample_mask),
@@ -1310,16 +1346,27 @@ def run_local_em_exact(
             timing.score_s += time.time() - score_t0
 
             normalize_t0 = time.time()
-            if normalization_log_z_np is None:
+            if normalization_log_z_np is None and normalization_log_evidence_np is None:
                 if use_float64_normalization:
                     log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores(scores)
                 else:
                     log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores_float32(scores)
             else:
-                bucket_log_z = jnp.asarray(
-                    normalization_log_z_np[np.asarray(bucket.image_indices)],
-                    dtype=scores.real.dtype,
-                )
+                if normalization_log_evidence_np is None:
+                    bucket_log_z = jnp.asarray(
+                        normalization_log_z_np[np.asarray(bucket.image_indices)],
+                        dtype=scores.real.dtype,
+                    )
+                else:
+                    normalization_dtype = precision_policy.normalization_real_dtype
+                    log_score_offset = (-0.5 * jnp.squeeze(batch_norm, axis=1)).astype(normalization_dtype)
+                    bucket_log_z = (
+                        jnp.asarray(
+                            normalization_log_evidence_np[np.asarray(bucket.image_indices)],
+                            dtype=normalization_dtype,
+                        )
+                        - log_score_offset
+                    )
                 if use_float64_normalization:
                     log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores_with_log_z(
                         scores,

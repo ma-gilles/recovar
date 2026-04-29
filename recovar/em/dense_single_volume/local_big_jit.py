@@ -201,6 +201,7 @@ def _score_normalize_mstep(
         "return_noise_split",
         "n_shells",
         "has_normalization_log_z",
+        "has_normalization_log_evidence",
     ),
 )
 def run_local_bucket_big_jit(
@@ -238,6 +239,7 @@ def run_local_bucket_big_jit(
     sample_mask,
     valid_image_mask,
     normalization_log_z,
+    normalization_log_evidence,
     config,
     *,
     mask_mode: str,
@@ -263,6 +265,7 @@ def run_local_bucket_big_jit(
     return_noise_split: bool,
     n_shells: int,
     has_normalization_log_z: bool,
+    has_normalization_log_evidence: bool,
 ):
     """Run one exact-local bucket in a single compiled numeric boundary.
 
@@ -409,6 +412,13 @@ def run_local_bucket_big_jit(
 
     shifted_score_split = shifted_score.reshape(batch_size, n_trans, -1)
     shifted_recon_split = shifted_recon.reshape(batch_size, n_trans, -1)
+    effective_normalization_log_z = normalization_log_z
+    effective_has_normalization_log_z = has_normalization_log_z
+    if has_normalization_log_evidence:
+        normalization_dtype = jnp.float64 if use_float64_normalization else batch_norm.dtype
+        log_score_offset = (-0.5 * jnp.squeeze(batch_norm, axis=1)).astype(normalization_dtype)
+        effective_normalization_log_z = normalization_log_evidence.astype(normalization_dtype) - log_score_offset
+        effective_has_normalization_log_z = True
     (
         log_Z,
         best_log_score,
@@ -431,10 +441,10 @@ def run_local_bucket_big_jit(
         rotation_mask,
         sample_mask,
         valid_image_mask,
-        normalization_log_z,
+        effective_normalization_log_z,
         shifted_recon_split,
         ctf2_over_nv_recon,
-        has_normalization_log_z=has_normalization_log_z,
+        has_normalization_log_z=effective_has_normalization_log_z,
         half_spectrum_scoring=half_spectrum_scoring,
         use_float64_normalization=use_float64_normalization,
         reconstruct_significant_only=reconstruct_significant_only,
