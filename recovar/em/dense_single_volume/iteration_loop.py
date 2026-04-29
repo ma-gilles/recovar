@@ -177,6 +177,96 @@ def _maybe_dump_noise_update_debug(
     np.savez_compressed(path, **payload)
     logger.info("Wrote RECOVAR noise update debug dump: %s", path)
 
+# TRACKED TODOs: RELION_LOCAL_ENGINE
+# TODO(RELION_LOCAL_ENGINE/T002): active RELION local path uses exact per-image local hypotheses
+# TODO(RELION_LOCAL_ENGINE/T003): local path should not depend on dense shared-grid engine contracts
+# TODO(RELION_LOCAL_ENGINE/T004): parity hacks should move inward, out of outer-loop control flow
+# See docs/relion_local_engine_refactor.md
+
+
+@dataclass
+class _LocalSearchIterationResult:
+    Ft_y: object
+    Ft_ctf: object
+    hard_assignment: object
+    relion_stats: RelionStats
+    noise_stats: NoiseStats | None = None
+    profile_summary: dict | None = None
+    best_pose_rotations: object | None = None
+    best_pose_translations: object | None = None
+    best_pose_rotation_ids: object | None = None
+    class_assignments: np.ndarray | None = None
+    class_posterior_sums: np.ndarray | None = None
+
+
+def _unpack_local_search_engine_outputs(
+    engine_outputs,
+    *,
+    accumulate_noise: bool,
+    return_profile: bool,
+    return_best_pose_details: bool,
+    class_details=None,
+) -> _LocalSearchIterationResult:
+    cursor = 0
+    Ft_y, Ft_ctf, hard_assignment = engine_outputs[cursor : cursor + 3]
+    cursor += 3
+    best_pose_rotations = best_pose_translations = best_pose_rotation_ids = None
+    if return_best_pose_details:
+        best_pose_rotations, best_pose_translations, best_pose_rotation_ids = engine_outputs[cursor : cursor + 3]
+        cursor += 3
+    relion_stats = engine_outputs[cursor]
+    cursor += 1
+    noise_stats = engine_outputs[cursor] if accumulate_noise else None
+    cursor += int(accumulate_noise)
+    profile_summary = engine_outputs[cursor] if return_profile else None
+    if class_details is None:
+        class_assignments = class_posterior_sums = None
+    else:
+        class_assignments, class_posterior_sums = class_details
+    return _LocalSearchIterationResult(
+        Ft_y=Ft_y,
+        Ft_ctf=Ft_ctf,
+        hard_assignment=hard_assignment,
+        relion_stats=relion_stats,
+        noise_stats=noise_stats,
+        profile_summary=profile_summary,
+        best_pose_rotations=best_pose_rotations,
+        best_pose_translations=best_pose_translations,
+        best_pose_rotation_ids=best_pose_rotation_ids,
+        class_assignments=class_assignments,
+        class_posterior_sums=class_posterior_sums,
+    )
+
+
+def _pack_local_search_iteration_result(
+    result: _LocalSearchIterationResult,
+    *,
+    accumulate_noise: bool,
+    return_profile: bool,
+    return_best_pose_details: bool,
+    return_class_details: bool,
+):
+    output = [result.Ft_y, result.Ft_ctf, result.hard_assignment]
+    if return_best_pose_details:
+        output.extend(
+            [
+                result.best_pose_rotations,
+                result.best_pose_translations,
+                result.best_pose_rotation_ids,
+            ],
+        )
+    output.append(result.relion_stats)
+    if accumulate_noise:
+        output.append(result.noise_stats)
+    if return_profile:
+        output.append(result.profile_summary)
+    if return_class_details:
+        if result.class_assignments is None or result.class_posterior_sums is None:
+            raise ValueError("return_class_details=True requires class_log_priors")
+        output.extend([result.class_assignments, result.class_posterior_sums])
+    return tuple(output)
+
+
 # RELION stores windowFourierTransform(in, out, current_size) as a rectangular
 # FFTW half image, but the likelihood support is the nonzero Minvsigma2 mask:
 # rounded radial shells, no DC, no redundant negative-row kx=0 entries.
@@ -991,126 +1081,27 @@ def _run_local_search_iteration_exact_v1(
             translation_prior_centers=translation_prior_centers,
         )
 
-    if accumulate_noise:
-        if return_profile:
-            if return_best_pose_details:
-                (
-                    Ft_y,
-                    Ft_ctf,
-                    hard_assignment,
-                    best_pose_rotations,
-                    best_pose_translations,
-                    best_pose_rotation_ids,
-                    relion_stats,
-                    noise_stats,
-                    profile_summary,
-                ) = engine_outputs
-            else:
-                Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats, profile_summary = engine_outputs
-        else:
-            if return_best_pose_details:
-                (
-                    Ft_y,
-                    Ft_ctf,
-                    hard_assignment,
-                    best_pose_rotations,
-                    best_pose_translations,
-                    best_pose_rotation_ids,
-                    relion_stats,
-                    noise_stats,
-                ) = engine_outputs
-            else:
-                Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats = engine_outputs
-            profile_summary = None
-    else:
-        if return_profile:
-            if return_best_pose_details:
-                (
-                    Ft_y,
-                    Ft_ctf,
-                    hard_assignment,
-                    best_pose_rotations,
-                    best_pose_translations,
-                    best_pose_rotation_ids,
-                    relion_stats,
-                    profile_summary,
-                ) = engine_outputs
-            else:
-                Ft_y, Ft_ctf, hard_assignment, relion_stats, profile_summary = engine_outputs
-        else:
-            if return_best_pose_details:
-                (
-                    Ft_y,
-                    Ft_ctf,
-                    hard_assignment,
-                    best_pose_rotations,
-                    best_pose_translations,
-                    best_pose_rotation_ids,
-                    relion_stats,
-                ) = engine_outputs
-            else:
-                Ft_y, Ft_ctf, hard_assignment, relion_stats = engine_outputs
-            profile_summary = None
-            noise_stats = None
+    result = _unpack_local_search_engine_outputs(
+        engine_outputs,
+        accumulate_noise=accumulate_noise,
+        return_profile=return_profile,
+        return_best_pose_details=return_best_pose_details,
+        class_details=class_details,
+    )
 
-    if return_profile and profile_summary is not None:
-        profile_summary = dict(profile_summary)
-        profile_summary["metadata_build_time_s"] = np.float64(metadata_build_time)
-        profile_summary["selector_time_s"] = np.float64(selector_time)
-        profile_summary["translation_prior_time_s"] = np.float64(0.0)
+    if return_profile and result.profile_summary is not None:
+        result.profile_summary = dict(result.profile_summary)
+        result.profile_summary["metadata_build_time_s"] = np.float64(metadata_build_time)
+        result.profile_summary["selector_time_s"] = np.float64(selector_time)
+        result.profile_summary["translation_prior_time_s"] = np.float64(0.0)
 
-    def _with_class_details(result):
-        if not return_class_details:
-            return result
-        if class_details is None:
-            raise ValueError("return_class_details=True requires class_log_priors")
-        return tuple(result) + class_details
-
-    if accumulate_noise:
-        if return_best_pose_details:
-            if return_profile:
-                return _with_class_details((
-                    Ft_y,
-                    Ft_ctf,
-                    hard_assignment,
-                    best_pose_rotations,
-                    best_pose_translations,
-                    best_pose_rotation_ids,
-                    relion_stats,
-                    noise_stats,
-                    profile_summary,
-                ))
-            return _with_class_details((
-                Ft_y,
-                Ft_ctf,
-                hard_assignment,
-                best_pose_rotations,
-                best_pose_translations,
-                best_pose_rotation_ids,
-                relion_stats,
-                noise_stats,
-            ))
-        if return_profile:
-            return _with_class_details((Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats, profile_summary))
-        return _with_class_details((Ft_y, Ft_ctf, hard_assignment, relion_stats, noise_stats))
-    if return_best_pose_details:
-        if return_profile:
-            return _with_class_details((
-                Ft_y,
-                Ft_ctf,
-                hard_assignment,
-                best_pose_rotations,
-                best_pose_translations,
-                best_pose_rotation_ids,
-                relion_stats,
-                profile_summary,
-            ))
-        return _with_class_details(
-            (Ft_y, Ft_ctf, hard_assignment, best_pose_rotations, best_pose_translations, best_pose_rotation_ids, relion_stats),
-        )
-    if return_profile:
-        return _with_class_details((Ft_y, Ft_ctf, hard_assignment, relion_stats, profile_summary))
-    return _with_class_details((Ft_y, Ft_ctf, hard_assignment, relion_stats))
+    return _pack_local_search_iteration_result(
+        result,
+        accumulate_noise=accumulate_noise,
+        return_profile=return_profile,
+        return_best_pose_details=return_best_pose_details,
+        return_class_details=return_class_details,
+    )
 
 
 from recovar.em.dense_single_volume.helpers.significance import (
