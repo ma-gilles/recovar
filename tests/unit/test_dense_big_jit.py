@@ -14,6 +14,7 @@ from recovar.em.dense_single_volume.em_engine import (
 from recovar.em.dense_single_volume.helpers.adjoint import (
     adjoint_slice_volume_half as _adjoint_slice_volume_half,
 )
+from recovar.em.dense_single_volume.helpers import projection as projection_helpers
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_projections_block as _compute_projections_block,
 )
@@ -108,6 +109,29 @@ def _inputs():
         ),
         "valid_rotation_mask": jnp.asarray([True, True, False], dtype=bool),
     }
+
+
+def test_dense_projection_helpers_use_relion_texture_interpolation(monkeypatch):
+    captured_kwargs = {}
+
+    def fake_slice_volume(volume, rotations_block, image_shape, volume_shape, disc_type, **kwargs):
+        captured_kwargs.update(kwargs)
+        return jnp.ones((rotations_block.shape[0], N_HALF), dtype=jnp.complex64)
+
+    monkeypatch.setattr(projection_helpers.core, "slice_volume", fake_slice_volume)
+
+    proj_half, proj_abs2_half = projection_helpers.compute_projections_block(
+        jnp.ones(VOLUME_SIZE, dtype=jnp.complex64),
+        jnp.ones((N_ROT, 3, 3), dtype=jnp.float32),
+        IMAGE_SHAPE,
+        VOLUME_SHAPE,
+        "linear_interp",
+    )
+
+    assert captured_kwargs["half_image"] is True
+    assert captured_kwargs["relion_texture_interp"] is True
+    np.testing.assert_allclose(np.asarray(proj_abs2_half), np.ones_like(np.asarray(proj_abs2_half)))
+    assert proj_half.shape == (N_ROT, N_HALF)
 
 
 def _window_indices(current_size):

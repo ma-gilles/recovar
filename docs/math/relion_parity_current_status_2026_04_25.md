@@ -492,9 +492,8 @@ for close E-step parity:
 - RELION's accelerated score kernel computes diff2 directly, and image
   preprocessing follows RELION/FFTW-style centered complex FFTs.
 
-RECOVAR RELION-parity refinement now defaults these on unless explicitly overridden:
-
-- `RECOVAR_RELION_TEXTURE_INTERP=1`
+RECOVAR RELION-parity refinement now uses the RELION texture-interpolation
+projector directly from dense/local EM projection helpers.
 
 The windowed EM paths also pass `max_r=float(current_size // 2)` into
 projection calls.

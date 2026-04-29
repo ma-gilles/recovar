@@ -332,6 +332,6 @@ Current-branch rerun plan:
 2. Rerun current branch after pass-2 routing is fixed.
 3. If box192 still fails, run an iter-5-only repro with
    `CUDA_LAUNCH_BLOCKING=1`.
-4. Isolate with `RECOVAR_RELION_TEXTURE_INTERP=0` and
-   `RECOVAR_DISABLE_CUDA=1` on a smaller/subset repro to distinguish texture
-   projector issues from indexed backproject/local-support issues.
+4. Isolate with a smaller/subset repro and, if needed, explicitly call the
+   generic projector path without RELION texture interpolation to distinguish
+   texture-projector issues from indexed backproject/local-support issues.

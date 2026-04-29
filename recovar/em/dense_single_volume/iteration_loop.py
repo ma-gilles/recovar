@@ -185,22 +185,6 @@ RELION_FOURIER_WINDOW_SQUARE = False
 RELION_MINRES_MAP = 5
 
 
-def _enable_relion_parity_defaults():
-    """Enable source-matched RELION arithmetic unless explicitly overridden."""
-    defaults = {
-        # RELION's CUDA projector samples Fourier references through
-        # cudaFilterModeLinear texture objects.
-        "RECOVAR_RELION_TEXTURE_INTERP": "1",
-    }
-    enabled = []
-    for name, value in defaults.items():
-        if name not in os.environ:
-            os.environ[name] = value
-            enabled.append(name)
-    if enabled:
-        logger.info("RELION mode parity defaults enabled: %s", ", ".join(enabled))
-
-
 def _replay_control_model_iteration(init_relion_iteration: int, loop_iteration: int) -> int:
     """Return the RELION model.star index whose control state governs this replay step."""
     return int(init_relion_iteration) + int(loop_iteration) + 1
@@ -1145,7 +1129,6 @@ def refine_single_volume(
     if relion_current_sizes is not None and len(relion_current_sizes) == 0:
         raise ValueError("relion_current_sizes must be non-empty when provided")
 
-    _enable_relion_parity_defaults()
     return _run_relion_iteration_loop(
         experiment_datasets=experiment_datasets,
         init_volume=init_volume,
