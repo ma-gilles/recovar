@@ -9,7 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from .em_engine import run_em
-from .helpers.types import NoiseStats, RelionStats
+from .helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
 from .local_em_engine import run_local_em_exact
 from .local_layout import LocalHypothesisLayout
 
@@ -133,11 +133,11 @@ def _sum_noise_stats(noise_stats: tuple[NoiseStats, ...] | None) -> NoiseStats |
             raise ValueError(f"Cannot aggregate mixed missing/present noise field {name}")
         return jnp.sum(jnp.stack([jnp.asarray(value) for value in values], axis=0), axis=0)
 
-    return NoiseStats(
+    return make_noise_stats(
         wsum_sigma2_noise=_sum_field("wsum_sigma2_noise"),
         wsum_img_power=_sum_field("wsum_img_power"),
-        wsum_sigma2_offset=float(sum(float(stats.wsum_sigma2_offset) for stats in noise_stats)),
-        sumw=float(sum(float(stats.sumw) for stats in noise_stats)),
+        wsum_sigma2_offset=sum(float(stats.wsum_sigma2_offset) for stats in noise_stats),
+        sumw=sum(float(stats.sumw) for stats in noise_stats),
         wsum_noise_a2=_sum_field("wsum_noise_a2"),
         wsum_noise_xa=_sum_field("wsum_noise_xa"),
     )
@@ -175,11 +175,12 @@ def _assemble_result(
         jnp.stack([jnp.asarray(stats.rotation_posterior_sums) for stats in per_class_stats], axis=0),
         axis=0,
     )
-    stats = RelionStats(
-        log_evidence_per_image=jnp.asarray(global_log_evidence, dtype=jnp.float32),
-        best_log_score_per_image=jnp.asarray(np.max(best_scores, axis=0), dtype=jnp.float32),
-        max_posterior_per_image=jnp.asarray(np.max(pmax, axis=0), dtype=jnp.float32),
+    stats = make_relion_stats(
+        log_evidence_per_image=global_log_evidence,
+        best_log_score_per_image=np.max(best_scores, axis=0),
+        max_posterior_per_image=np.max(pmax, axis=0),
         rotation_posterior_sums=rotation_posterior_sums,
+        image_dtype=jnp.float32,
     )
     best_pose_rotations = _selected_by_class(per_class_best_pose_rotations, class_assignments)
     best_pose_translations = _selected_by_class(per_class_best_pose_translations, class_assignments)

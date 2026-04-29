@@ -96,7 +96,7 @@ from .helpers.translation_prior import (
     validate_translation_prior_centers,
 )
 from .helpers.timing import TimingAccumulator
-from .helpers.types import EMProfileStats, NoiseStats, RelionStats
+from .helpers.types import EMProfileStats, make_noise_stats, make_relion_stats
 from .local_debug import (
     maybe_write_dense_per_pose_score_dump,
     parse_dense_noise_component_dump_request,
@@ -1562,13 +1562,13 @@ def run_em(
             )
         except Exception as exc:
             logger.warning("noise diagnostic logging failed: %s", exc)
-        noise_stats = NoiseStats(
-            wsum_sigma2_noise=jnp.asarray(noise_wsum, dtype=jnp.float32),
-            wsum_img_power=jnp.asarray(noise_img_power, dtype=jnp.float32),
-            wsum_sigma2_offset=float(noise_sigma2_offset),
-            sumw=float(noise_sumw),
-            wsum_noise_a2=(jnp.asarray(noise_a2, dtype=jnp.float32) if debug_options.return_noise_split else None),
-            wsum_noise_xa=(jnp.asarray(noise_xa, dtype=jnp.float32) if debug_options.return_noise_split else None),
+        noise_stats = make_noise_stats(
+            wsum_sigma2_noise=noise_wsum,
+            wsum_img_power=noise_img_power,
+            wsum_sigma2_offset=noise_sigma2_offset,
+            sumw=noise_sumw,
+            wsum_noise_a2=(noise_a2 if debug_options.return_noise_split else None),
+            wsum_noise_xa=(noise_xa if debug_options.return_noise_split else None),
         )
 
     if sparse_pass2 and sparse_profile.total_blocks:
@@ -1586,11 +1586,11 @@ def run_em(
     relion_stats = None
     if return_stats:
         host_stats_t0 = time.time()
-        relion_stats = RelionStats(
-            log_evidence_per_image=jnp.asarray(log_evidence_per_image),
-            best_log_score_per_image=jnp.asarray(best_log_score_per_image),
-            max_posterior_per_image=jnp.asarray(max_posterior_per_image),
-            rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=jnp.float32),
+        relion_stats = make_relion_stats(
+            log_evidence_per_image=log_evidence_per_image,
+            best_log_score_per_image=best_log_score_per_image,
+            max_posterior_per_image=max_posterior_per_image,
+            rotation_posterior_sums=rotation_posterior_sums,
         )
         timing.host_stats_s += time.time() - host_stats_t0
     if return_profile:

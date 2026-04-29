@@ -3,6 +3,7 @@
 from typing import NamedTuple
 
 import jax
+import jax.numpy as jnp
 
 
 class MeanStats(NamedTuple):
@@ -79,6 +80,47 @@ class NoiseStats(NamedTuple):
     sumw: float
     wsum_noise_a2: jax.Array | None = None
     wsum_noise_xa: jax.Array | None = None
+
+
+def make_relion_stats(
+    *,
+    log_evidence_per_image,
+    best_log_score_per_image,
+    max_posterior_per_image,
+    rotation_posterior_sums,
+    image_dtype=None,
+    rotation_dtype=jnp.float32,
+) -> RelionStats:
+    """Build a ``RelionStats`` object with consistent array conversion."""
+
+    return RelionStats(
+        log_evidence_per_image=jnp.asarray(log_evidence_per_image, dtype=image_dtype),
+        best_log_score_per_image=jnp.asarray(best_log_score_per_image, dtype=image_dtype),
+        max_posterior_per_image=jnp.asarray(max_posterior_per_image, dtype=image_dtype),
+        rotation_posterior_sums=jnp.asarray(rotation_posterior_sums, dtype=rotation_dtype),
+    )
+
+
+def make_noise_stats(
+    *,
+    wsum_sigma2_noise,
+    wsum_img_power,
+    wsum_sigma2_offset,
+    sumw,
+    wsum_noise_a2=None,
+    wsum_noise_xa=None,
+    array_dtype=jnp.float32,
+) -> NoiseStats:
+    """Build a ``NoiseStats`` object with consistent array and scalar coercion."""
+
+    return NoiseStats(
+        wsum_sigma2_noise=jnp.asarray(wsum_sigma2_noise, dtype=array_dtype),
+        wsum_img_power=jnp.asarray(wsum_img_power, dtype=array_dtype),
+        wsum_sigma2_offset=float(wsum_sigma2_offset),
+        sumw=float(sumw),
+        wsum_noise_a2=None if wsum_noise_a2 is None else jnp.asarray(wsum_noise_a2, dtype=array_dtype),
+        wsum_noise_xa=None if wsum_noise_xa is None else jnp.asarray(wsum_noise_xa, dtype=array_dtype),
+    )
 
 
 class EMProfileStats(NamedTuple):
