@@ -29,8 +29,9 @@ leave residual per-pose score and Pmax differences at that level. Treat exact
 pose agreement plus Pmax/score gaps near `1e-4` as arithmetic-level parity
 unless a source/dump comparison shows otherwise. Escalate gaps at `1e-3` or
 larger, pose flips, or systematic multi-iteration drift. If unsure, rerun the
-RECOVAR side with float64 scoring (`JAX_ENABLE_X64=1` and do not set
-`RECOVAR_RELION_FLOAT32_SCORING=1`) and, when needed, obtain a RELION
+RECOVAR side with float64 scoring (`JAX_ENABLE_X64=1` and the current
+float64 scoring option for the replay/refine entry point) and, when needed,
+obtain a RELION
 CPU/double or `ACC_DOUBLE_PRECISION` dump for the same particle/candidate set
 before changing algorithmic behavior.
 

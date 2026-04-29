@@ -575,7 +575,7 @@ def _prepare_bucket_io(
     else:
         batch_scale = jnp.ones(batch_size, dtype=ctf_half.dtype)
 
-    # Per-image image corrections (matches run_em lines 1062-1069).
+    # Per-image image corrections follow dense run_em's image-only convention.
     if image_corrections is not None:
         batch_corr = jnp.asarray(np.asarray(image_corrections)[np.asarray(image_indices)])
         image_only_corr = batch_corr / batch_scale
@@ -590,7 +590,7 @@ def _prepare_bucket_io(
         batch_norm = batch_norm * (image_only_corr**2)[:, None]
         processed_score_half_for_noise = processed_score_half_for_noise * image_only_corr[:, None]
 
-    # Per-image scale correction on CTF^2/noise (matches run_em lines 1077-1079).
+    # Per-image scale correction on CTF^2/noise.
     if scale_corrections is not None:
         ctf2_over_nv_half = ctf2_over_nv_half * (batch_scale**2)[:, None]
         if return_direct_scoring_io:
@@ -604,8 +604,7 @@ def _prepare_bucket_io(
             direct_corrected_score_half,
         )
 
-    # Per-image pre-centering (matches run_em lines 1087-1098): phase shift
-    # in Fourier space.  Applied AFTER per-image scalar corrections.
+    # Per-image pre-centering: phase shift in Fourier space after scalar corrections.
     if image_pre_shifts is not None and not real_space_pre_shift_applied:
         batch_shifts = jnp.asarray(np.asarray(image_pre_shifts)[np.asarray(image_indices)])
         phase_factors = half_image_phase_factors(image_shape, batch_shifts)

@@ -3,10 +3,8 @@
 Verifies:
 1. RELION mode runs without error on a tiny dataset (4 images, 8px, 2 iters)
 2. Returns the expected dict keys (including RELION-specific ones)
-3. Legacy mode is rejected
-4. Invalid mode raises ValueError
-5. Convergence state is a RefinementState instance
-6. data_vs_prior_trajectory and ave_Pmax_trajectory are populated
+3. Convergence state is a RefinementState instance
+4. data_vs_prior_trajectory and ave_Pmax_trajectory are populated
 """
 
 from pathlib import Path

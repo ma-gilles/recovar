@@ -6,7 +6,6 @@ import logging
 import time
 from dataclasses import dataclass
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 
