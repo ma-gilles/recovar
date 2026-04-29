@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import jax.numpy as jnp
 import numpy as np
@@ -84,57 +84,64 @@ from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_dat
 
 logger = logging.getLogger(__name__)
 
-EXACT_LOCAL_TARGET_ROW_PIXELS = 180_000_000
-EXACT_LOCAL_RAW_CACHE_MAX_GB = 2.0
 
-_LOCAL_PREPROCESS_TIMER_KEYS = (
-    "integer_shift_s",
-    "translation_phase_s",
-    "score_process_s",
-    "recon_process_s",
-    "ctf_s",
-    "tile_shift_score_s",
-    "tile_shift_recon_s",
-    "norm_s",
-)
+@dataclass(frozen=True)
+class _LocalMemoryPolicy:
+    target_row_pixels: int = 180_000_000
+    raw_cache_max_gb: float = 2.0
 
-_LOCAL_TRANSFER_TIMER_KEYS = (
-    "reconstruction_mask_to_host_s",
-    "mstep_posterior_sum_to_host_s",
-    "postprocess_argmax_to_host_s",
-    "postprocess_scores_to_host_s",
-    "postprocess_posterior_to_host_s",
-    "final_noise_to_host_s",
-)
 
-_LOCAL_TIMING_PROFILE_FIELDS = (
-    ("projection_time_s", "projection_s"),
-    ("big_jit_bucket_s", "big_jit_bucket_s"),
-    ("fused_score_mstep_s", "fused_score_mstep_s"),
-    ("local_score_s", "score_s"),
-    ("local_normalize_s", "normalize_s"),
-    ("local_significance_s", "significance_s"),
-    ("local_mstep_s", "mstep_s"),
-    ("local_pack_s", "pack_s"),
-    ("local_backproject_y_s", "adjoint_y_s"),
-    ("local_backproject_ctf_s", "adjoint_ctf_s"),
-    ("local_noise_s", "noise_s"),
-    ("local_postprocess_s", "postprocess_s"),
-    ("local_host_stats_s", "host_stats_s"),
-    ("local_final_accumulator_s", "final_accumulator_s"),
-    ("local_stats_finalize_s", "stats_finalize_s"),
-)
+@dataclass(frozen=True)
+class _LocalTimerSchema:
+    preprocess: tuple[str, ...] = (
+        "integer_shift_s",
+        "translation_phase_s",
+        "score_process_s",
+        "recon_process_s",
+        "ctf_s",
+        "tile_shift_score_s",
+        "tile_shift_recon_s",
+        "norm_s",
+    )
+    transfer: tuple[str, ...] = (
+        "reconstruction_mask_to_host_s",
+        "mstep_posterior_sum_to_host_s",
+        "postprocess_argmax_to_host_s",
+        "postprocess_scores_to_host_s",
+        "postprocess_posterior_to_host_s",
+        "final_noise_to_host_s",
+    )
+    profile: tuple[tuple[str, str], ...] = (
+        ("projection_time_s", "projection_s"),
+        ("big_jit_bucket_s", "big_jit_bucket_s"),
+        ("fused_score_mstep_s", "fused_score_mstep_s"),
+        ("local_score_s", "score_s"),
+        ("local_normalize_s", "normalize_s"),
+        ("local_significance_s", "significance_s"),
+        ("local_mstep_s", "mstep_s"),
+        ("local_pack_s", "pack_s"),
+        ("local_backproject_y_s", "adjoint_y_s"),
+        ("local_backproject_ctf_s", "adjoint_ctf_s"),
+        ("local_noise_s", "noise_s"),
+        ("local_postprocess_s", "postprocess_s"),
+        ("local_host_stats_s", "host_stats_s"),
+        ("local_final_accumulator_s", "final_accumulator_s"),
+        ("local_stats_finalize_s", "stats_finalize_s"),
+    )
+    setup: tuple[str, ...] = (
+        "bucket_build_s",
+        "raw_cache_build_s",
+        "batch_fetch_s",
+        "preprocess_s",
+    )
 
-_LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS = (
-    "bucket_build_s",
-    "raw_cache_build_s",
-    "batch_fetch_s",
-    "preprocess_s",
-)
+    @property
+    def accounted(self) -> tuple[str, ...]:
+        return self.setup + tuple(timing_attr for _, timing_attr in self.profile)
 
-_LOCAL_ACCOUNTED_TIMING_FIELDS = _LOCAL_ACCOUNTED_TIMING_SETUP_FIELDS + tuple(
-    timing_attr for _, timing_attr in _LOCAL_TIMING_PROFILE_FIELDS
-)
+
+_LOCAL_MEMORY_POLICY = _LocalMemoryPolicy()
+_LOCAL_TIMER_SCHEMA = _LocalTimerSchema()
 
 
 def _new_zero_timer(keys):
@@ -145,7 +152,89 @@ class _LocalTiming(TimingAccumulator):
     """Mutable host-side timers for one exact-local EM call."""
 
     def __init__(self):
-        super().__init__(_LOCAL_ACCOUNTED_TIMING_FIELDS)
+        super().__init__(_LOCAL_TIMER_SCHEMA.accounted)
+
+
+@dataclass(frozen=True)
+class _LocalNormalizationState:
+    """Validated external normalization values for local EM buckets."""
+
+    log_z: np.ndarray | None
+    log_evidence: np.ndarray | None
+
+    @classmethod
+    def from_inputs(
+        cls,
+        log_z,
+        log_evidence,
+        *,
+        n_images: int,
+    ) -> "_LocalNormalizationState":
+        log_z_np = cls._as_vector(log_z, "normalization_log_z", n_images)
+        log_evidence_np = cls._as_vector(log_evidence, "normalization_log_evidence", n_images)
+        if log_z_np is not None and log_evidence_np is not None:
+            raise ValueError("Provide only one of normalization_log_z or normalization_log_evidence")
+        return cls(log_z=log_z_np, log_evidence=log_evidence_np)
+
+    @staticmethod
+    def _as_vector(values, name: str, n_images: int) -> np.ndarray | None:
+        if values is None:
+            return None
+        values_np = np.asarray(values, dtype=np.float64)
+        if values_np.shape != (n_images,):
+            raise ValueError(f"{name} must have shape ({n_images},), got {values_np.shape}")
+        return values_np
+
+    @property
+    def has_log_z(self) -> bool:
+        return self.log_z is not None
+
+    @property
+    def has_log_evidence(self) -> bool:
+        return self.log_evidence is not None
+
+    @property
+    def has_external_values(self) -> bool:
+        return self.has_log_z or self.has_log_evidence
+
+    def padded_log_z_arg(self, image_indices, batch_size: int, dtype) -> jax.Array:
+        if self.log_z is None:
+            return jnp.zeros(batch_size, dtype=jnp.float32)
+        return jnp.asarray(
+            pad_axis(self.log_z[np.asarray(image_indices, dtype=np.int32)], 0, batch_size, value=0),
+            dtype=dtype,
+        )
+
+    def padded_log_evidence_arg(self, image_indices, batch_size: int, dtype) -> jax.Array:
+        if self.log_evidence is None:
+            return jnp.zeros(batch_size, dtype=jnp.float32)
+        return jnp.asarray(
+            pad_axis(self.log_evidence[np.asarray(image_indices, dtype=np.int32)], 0, batch_size, value=0),
+            dtype=dtype,
+        )
+
+    def bucket_log_z(self, image_indices, batch_norm, *, score_dtype, evidence_dtype) -> jax.Array | None:
+        image_indices = np.asarray(image_indices, dtype=np.int32)
+        if self.log_z is not None:
+            return jnp.asarray(self.log_z[image_indices], dtype=score_dtype)
+        if self.log_evidence is None:
+            return None
+        return jnp.asarray(self.log_evidence[image_indices], dtype=evidence_dtype) - (
+            -0.5 * jnp.squeeze(batch_norm, axis=1)
+        ).astype(evidence_dtype)
+
+
+def _can_use_fused_score_mstep(
+    *,
+    fused_score_mstep_enabled: bool,
+    normalization: _LocalNormalizationState,
+    debug_score_dump_filter_matches: bool,
+) -> bool:
+    return (
+        fused_score_mstep_enabled
+        and not normalization.has_external_values
+        and not debug_score_dump_filter_matches
+    )
 
 
 @dataclass(frozen=True)
@@ -202,6 +291,130 @@ class _LocalPostprocessBuffers:
     best_pose_rotations: np.ndarray | None = None
     best_pose_translations: np.ndarray | None = None
     best_pose_rotation_ids: np.ndarray | None = None
+
+
+@dataclass
+class _LocalProfileCounters:
+    """Host-side profile counters that are summarized only when requested."""
+
+    collect: bool
+    seen_global_rotations: np.ndarray
+    seen_nonzero_global_rotations: np.ndarray
+    seen_reconstruction_global_rotations: np.ndarray
+    n_chunks: int = 0
+    total_padded_rotations: int = 0
+    total_significant_samples: int = 0
+    total_reconstruction_rows: int = 0
+    local_total_hypotheses: int = 0
+    chunk_sizes: list[int] = field(default_factory=list)
+    chunk_local_rotations: list[int] = field(default_factory=list)
+    chunk_padded_rotations: list[int] = field(default_factory=list)
+    chunk_nonzero_posterior_rows: list[int] = field(default_factory=list)
+    chunk_reconstruction_rows: list[int] = field(default_factory=list)
+    chunk_significant_samples: list[int] = field(default_factory=list)
+
+    @classmethod
+    def create(cls, collect: bool, n_global_rotations: int) -> "_LocalProfileCounters":
+        seen = np.zeros(int(n_global_rotations), dtype=bool) if collect and n_global_rotations else np.zeros(0, dtype=bool)
+        return cls(
+            collect=bool(collect),
+            seen_global_rotations=seen,
+            seen_nonzero_global_rotations=np.zeros_like(seen),
+            seen_reconstruction_global_rotations=np.zeros_like(seen),
+        )
+
+    def observe_bucket(self, bucket: LocalBucketSpec, n_trans: int) -> None:
+        self.n_chunks += 1
+        if not self.collect:
+            return
+        chunk_size = int(bucket.image_indices.shape[0])
+        local_rotations = int(np.sum(bucket.actual_rotation_counts))
+        padded_rotations = int(chunk_size * bucket.bucket_rotation_count)
+        self.chunk_sizes.append(chunk_size)
+        self.chunk_local_rotations.append(local_rotations)
+        self.chunk_padded_rotations.append(padded_rotations)
+        self.total_padded_rotations += padded_rotations
+        self.local_total_hypotheses += int(local_rotations * n_trans)
+
+    def observe_postprocess(self, significant_sample_count: int, reconstruction_row_count: int) -> None:
+        if not self.collect:
+            return
+        self.total_significant_samples += int(significant_sample_count)
+        self.total_reconstruction_rows += int(reconstruction_row_count)
+
+    @staticmethod
+    def _duplicate_factor(total_rows: int, seen: np.ndarray) -> np.float64:
+        unique_rows = int(np.count_nonzero(seen))
+        return np.float64(0.0 if unique_rows == 0 else total_rows / unique_rows)
+
+    def summary(
+        self,
+        *,
+        timing: _LocalTiming,
+        preprocess_profile: dict[str, float],
+        transfer_profile: dict[str, float],
+        total_wall_time: float,
+        big_jit_bucket_count: int,
+        fused_score_mstep_enabled: bool,
+        raw_cache_enabled: bool,
+        total_local_rotations: int,
+        n_images: int,
+        max_hypotheses_per_microbatch: int,
+        n_windowed: int,
+    ) -> dict[str, object]:
+        accounted_s = timing.accounted_s()
+        return {
+            "big_jit_bucket_count": np.int32(big_jit_bucket_count),
+            "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
+            "bucket_build_time_s": np.float64(timing.bucket_build_s),
+            "raw_cache_build_time_s": np.float64(timing.raw_cache_build_s),
+            "raw_cache_enabled": np.asarray(raw_cache_enabled),
+            "batch_fetch_time_s": np.float64(timing.batch_fetch_s),
+            "preprocess_time_s": np.float64(timing.preprocess_s),
+            **_prefixed_timer_profile("preprocess_", preprocess_profile),
+            **_prefixed_timer_profile("transfer_", transfer_profile),
+            "transfer_total_to_host_s": np.float64(sum(transfer_profile.values())),
+            **_local_timing_profile(timing),
+            "em_time_s": np.float64(total_wall_time),
+            "accounted_em_time_s": np.float64(accounted_s),
+            "unattributed_em_time_s": np.float64(max(total_wall_time - accounted_s, 0.0)),
+            "n_chunks": np.int32(self.n_chunks),
+            "chunk_sizes": np.asarray(self.chunk_sizes, dtype=np.int32),
+            "chunk_local_rotations": np.asarray(self.chunk_local_rotations, dtype=np.int32),
+            "chunk_padded_rotations": np.asarray(self.chunk_padded_rotations, dtype=np.int32),
+            "chunk_nonzero_posterior_rows": np.asarray(self.chunk_nonzero_posterior_rows, dtype=np.int32),
+            "chunk_reconstruction_rows": np.asarray(self.chunk_reconstruction_rows, dtype=np.int32),
+            "chunk_significant_samples": np.asarray(self.chunk_significant_samples, dtype=np.int32),
+            "sum_union_rows": np.int64(total_local_rotations),
+            "sum_padded_rows": np.int64(self.total_padded_rotations),
+            "sum_nonzero_posterior_rows": np.int64(np.sum(self.chunk_nonzero_posterior_rows)),
+            "sum_reconstruction_rows": np.int64(self.total_reconstruction_rows),
+            "sum_significant_samples": np.int64(self.total_significant_samples),
+            "unique_global_rotations": np.int64(np.count_nonzero(self.seen_global_rotations)),
+            "unique_nonzero_global_rotations": np.int64(np.count_nonzero(self.seen_nonzero_global_rotations)),
+            "unique_reconstruction_global_rotations": np.int64(np.count_nonzero(self.seen_reconstruction_global_rotations)),
+            "duplicate_rotation_factor": self._duplicate_factor(total_local_rotations, self.seen_global_rotations),
+            "reconstruction_duplicate_rotation_factor": self._duplicate_factor(
+                self.total_reconstruction_rows,
+                self.seen_reconstruction_global_rotations,
+            ),
+            "local_total_hypotheses": np.int64(self.local_total_hypotheses),
+            "local_mean_rotations_per_image": np.float64(
+                0.0 if n_images == 0 else total_local_rotations / n_images
+            ),
+            "local_mean_reconstruction_rows_per_image": np.float64(
+                0.0 if n_images == 0 else self.total_reconstruction_rows / n_images
+            ),
+            "local_mean_significant_samples_per_image": np.float64(
+                0.0 if n_images == 0 else self.total_significant_samples / n_images
+            ),
+            "local_num_buckets": np.int32(self.n_chunks),
+            "max_hypotheses_per_microbatch": np.int64(max_hypotheses_per_microbatch),
+            "local_pad_fraction": np.float64(
+                0.0 if self.total_padded_rotations == 0 else 1.0 - total_local_rotations / self.total_padded_rotations
+            ),
+            "n_windowed": np.int32(n_windowed),
+        }
 
 
 def _local_em_return_tuple(
@@ -386,7 +599,7 @@ def _exact_local_max_hypotheses_per_microbatch(default: int | None, n_windowed: 
         if value <= 0:
             raise ValueError("max_hypotheses_per_microbatch must be positive")
         return value
-    value = EXACT_LOCAL_TARGET_ROW_PIXELS // max(1, int(n_windowed))
+    value = _LOCAL_MEMORY_POLICY.target_row_pixels // max(1, int(n_windowed))
     return int(max(8192, min(65536, value)))
 
 def _make_local_spectrum_setup(
@@ -451,19 +664,22 @@ def _local_big_jit_noise_args(
     )
 
 
-def _can_use_local_big_jit_bucket(
+def _local_big_jit_disabled_reason(
     *,
     use_big_jit_buckets: bool,
     batch_data,
     debug_score_dump_filter_matches: bool,
     debug_noise_dump_dir,
-) -> bool:
-    return (
-        use_big_jit_buckets
-        and batch_data is not None
-        and not debug_score_dump_filter_matches
-        and debug_noise_dump_dir is None
-    )
+) -> str | None:
+    if not use_big_jit_buckets:
+        return "disabled"
+    if batch_data is None:
+        return "no_raw_batch"
+    if debug_score_dump_filter_matches:
+        return "score_debug_dump"
+    if debug_noise_dump_dir is not None:
+        return "noise_debug_dump"
+    return None
 
 
 def _local_big_jit_reconstruction_pack(
@@ -577,7 +793,7 @@ def _accumulate_local_adjoint_rows(
 def _local_raw_cache_enabled(n_images: int, image_shape, dtype) -> bool:
     bytes_per_pixel = np.dtype(dtype).itemsize if dtype is not None else np.dtype(np.float32).itemsize
     estimated_gb = int(n_images) * int(np.prod(image_shape)) * bytes_per_pixel / 1e9
-    return estimated_gb <= EXACT_LOCAL_RAW_CACHE_MAX_GB
+    return estimated_gb <= _LOCAL_MEMORY_POLICY.raw_cache_max_gb
 
 
 def _validate_native_half_batch(batch, image_shape):
@@ -615,11 +831,11 @@ def _build_local_raw_cache(experiment_dataset, n_images: int):
 
 
 def _new_local_preprocess_timer():
-    return _new_zero_timer(_LOCAL_PREPROCESS_TIMER_KEYS)
+    return _new_zero_timer(_LOCAL_TIMER_SCHEMA.preprocess)
 
 
 def _new_local_transfer_timer():
-    return _new_zero_timer(_LOCAL_TRANSFER_TIMER_KEYS)
+    return _new_zero_timer(_LOCAL_TIMER_SCHEMA.transfer)
 
 
 def _prefixed_timer_profile(prefix: str, timer: dict[str, float]) -> dict[str, np.float64]:
@@ -629,7 +845,7 @@ def _prefixed_timer_profile(prefix: str, timer: dict[str, float]) -> dict[str, n
 def _local_timing_profile(timing: _LocalTiming) -> dict[str, np.float64]:
     return {
         output_key: np.float64(getattr(timing, timing_attr))
-        for output_key, timing_attr in _LOCAL_TIMING_PROFILE_FIELDS
+        for output_key, timing_attr in _LOCAL_TIMER_SCHEMA.profile
     }
 
 
@@ -906,24 +1122,11 @@ def run_local_em_exact(
     n_trans = int(local_layout.translation_grid.shape[0])
     n_images = int(local_layout.n_images)
     class_log_prior = float(class_log_prior)
-    normalization_log_z_np = None
-    if normalization_log_z is not None:
-        normalization_log_z_np = np.asarray(normalization_log_z, dtype=np.float64)
-        if normalization_log_z_np.shape != (n_images,):
-            raise ValueError(
-                "normalization_log_z must have shape "
-                f"({n_images},), got {normalization_log_z_np.shape}",
-            )
-    normalization_log_evidence_np = None
-    if normalization_log_evidence is not None:
-        normalization_log_evidence_np = np.asarray(normalization_log_evidence, dtype=np.float64)
-        if normalization_log_evidence_np.shape != (n_images,):
-            raise ValueError(
-                "normalization_log_evidence must have shape "
-                f"({n_images},), got {normalization_log_evidence_np.shape}",
-            )
-    if normalization_log_z_np is not None and normalization_log_evidence_np is not None:
-        raise ValueError("Provide only one of normalization_log_z or normalization_log_evidence")
+    normalization = _LocalNormalizationState.from_inputs(
+        normalization_log_z,
+        normalization_log_evidence,
+        n_images=n_images,
+    )
     translation_prior_centers_np = validate_translation_prior_centers(
         translation_prior_centers,
         n_images=n_images,
@@ -1000,7 +1203,6 @@ def run_local_em_exact(
     n_windowed = window_spec.n_score
     n_recon_windowed = window_spec.n_recon
     projection_kwargs = window_spec.projection_kwargs()
-    ## TODO: THE NEXT 100 LINES ARE JSUT DEFINING VARIABLES AND CONSTANTS. CLEAN THIS UP.
     spectrum_setup = _make_local_spectrum_setup(
         image_shape,
         n_half,
@@ -1043,7 +1245,7 @@ def run_local_em_exact(
 
     default_fused_score_mstep = (
         (max_significants is None or int(max_significants) <= 0)
-        and normalization_log_z is None
+        and not normalization.has_log_z
     )
     fused_score_mstep_enabled = default_fused_score_mstep
     timing = _LocalTiming()
@@ -1053,24 +1255,10 @@ def run_local_em_exact(
     big_jit_bucket_count = 0
     total_local_rotations = int(local_layout.total_local_rotations)
     collect_profile_stats = bool(return_profile)
-    seen_global_rotations = (
-        np.zeros(rotation_posterior_sums.shape[0], dtype=bool)
-        if collect_profile_stats and rotation_posterior_sums.size
-        else np.zeros(0, dtype=bool)
+    profile_counters = _LocalProfileCounters.create(
+        collect_profile_stats,
+        rotation_posterior_sums.shape[0],
     )
-    seen_nonzero_global_rotations = np.zeros_like(seen_global_rotations)
-    seen_reconstruction_global_rotations = np.zeros_like(seen_global_rotations)
-    total_padded_rotations = 0
-    chunk_sizes = []
-    chunk_local_rotations = []
-    chunk_padded_rotations = []
-    chunk_nonzero_posterior_rows = []
-    chunk_reconstruction_rows = []
-    chunk_significant_samples = []
-    n_chunks = 0
-    local_total_hypotheses = 0
-    total_significant_samples = 0
-    total_reconstruction_rows = 0
     postprocess_buffers = _LocalPostprocessBuffers(
         hard_assignment=hard_assignment,
         log_evidence_per_image=log_evidence_per_image,
@@ -1078,12 +1266,12 @@ def run_local_em_exact(
         max_posterior_per_image=max_posterior_per_image,
         rotation_posterior_sums=rotation_posterior_sums,
         transfer_profile=transfer_profile,
-        chunk_nonzero_posterior_rows=chunk_nonzero_posterior_rows,
-        chunk_significant_samples=chunk_significant_samples,
-        chunk_reconstruction_rows=chunk_reconstruction_rows,
-        seen_global_rotations=seen_global_rotations,
-        seen_nonzero_global_rotations=seen_nonzero_global_rotations,
-        seen_reconstruction_global_rotations=seen_reconstruction_global_rotations,
+        chunk_nonzero_posterior_rows=profile_counters.chunk_nonzero_posterior_rows,
+        chunk_significant_samples=profile_counters.chunk_significant_samples,
+        chunk_reconstruction_rows=profile_counters.chunk_reconstruction_rows,
+        seen_global_rotations=profile_counters.seen_global_rotations,
+        seen_nonzero_global_rotations=profile_counters.seen_nonzero_global_rotations,
+        seen_reconstruction_global_rotations=profile_counters.seen_reconstruction_global_rotations,
         best_pose_rotations=best_pose_rotations,
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
@@ -1145,13 +1333,7 @@ def run_local_em_exact(
         projection_half_volume_big_jit = True
 
     for bucket in bucket_specs:
-        n_chunks += 1
-        if collect_profile_stats:
-            chunk_sizes.append(int(bucket.image_indices.shape[0]))
-            chunk_local_rotations.append(int(np.sum(bucket.actual_rotation_counts)))
-            chunk_padded_rotations.append(int(bucket.image_indices.shape[0] * bucket.bucket_rotation_count))
-            total_padded_rotations += int(bucket.image_indices.shape[0] * bucket.bucket_rotation_count)
-            local_total_hypotheses += int(np.sum(bucket.actual_rotation_counts) * n_trans)
+        profile_counters.observe_bucket(bucket, n_trans)
         fetch_t0 = time.time()
         if raw_batch_cache is None:
             batch_data, ctf_params, fetched_indices = fetch_indexed_batch(experiment_dataset, bucket.image_indices)
@@ -1175,14 +1357,13 @@ def run_local_em_exact(
                 centers,
                 experiment_dataset.voxel_size,
             )
-        ## TODO: THIS IS INSANE BRANCHING LOGIC. HOW MANY OF THESE ARE USEFU?  CAN WE DELETE SOME/MANY OF THESE FLAGS?
-        can_use_big_jit_bucket = _can_use_local_big_jit_bucket(
+        big_jit_disabled_reason = _local_big_jit_disabled_reason(
             use_big_jit_buckets=use_big_jit_buckets,
             batch_data=batch_data,
             debug_score_dump_filter_matches=debug_score_dump_filter_matches,
             debug_noise_dump_dir=debug_noise_dump_dir,
         )
-        if can_use_big_jit_bucket:
+        if big_jit_disabled_reason is None:
             big_jit_t0 = time.time()
             unpadded_bucket = bucket
             unpadded_batch_size = batch_size
@@ -1265,21 +1446,16 @@ def run_local_em_exact(
                 if bucket.local_sample_mask is not None
                 else jnp.ones((batch_size, int(bucket.bucket_rotation_count), n_trans), dtype=bool)
             )
-            normalization_log_z_arg = (
-                jnp.asarray(
-                    pad_axis(normalization_log_z_np[bucket_image_indices], 0, batch_size, value=0),
-                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
-                )
-                if normalization_log_z_np is not None
-                else jnp.zeros(batch_size, dtype=jnp.float32)
+            normalization_dtype = jnp.float64 if use_float64_normalization else jnp.float32
+            normalization_log_z_arg = normalization.padded_log_z_arg(
+                bucket_image_indices,
+                batch_size,
+                normalization_dtype,
             )
-            normalization_log_evidence_arg = (
-                jnp.asarray(
-                    pad_axis(normalization_log_evidence_np[bucket_image_indices], 0, batch_size, value=0),
-                    dtype=(jnp.float64 if use_float64_normalization else jnp.float32),
-                )
-                if normalization_log_evidence_np is not None
-                else jnp.zeros(batch_size, dtype=jnp.float32)
+            normalization_log_evidence_arg = normalization.padded_log_evidence_arg(
+                bucket_image_indices,
+                batch_size,
+                normalization_dtype,
             )
             local_rotation_log_prior_arg = jnp.asarray(bucket.local_rotation_log_prior)
             if class_log_prior != 0.0:
@@ -1378,8 +1554,8 @@ def run_local_em_exact(
                 accumulate_noise=accumulate_noise,
                 return_noise_split=return_noise_split,
                 n_shells=noise_args.n_shells,
-                has_normalization_log_z=normalization_log_z_np is not None,
-                has_normalization_log_evidence=normalization_log_evidence_np is not None,
+                has_normalization_log_z=normalization.has_log_z,
+                has_normalization_log_evidence=normalization.has_log_evidence,
             )
             if return_profile:
                 _block_until_ready(
@@ -1396,10 +1572,9 @@ def run_local_em_exact(
                     reconstruction_row_count_jax,
                     noise_wsum,
                     noise_img_power,
-                )
+            )
             timing.big_jit_bucket_s += time.time() - big_jit_t0
             big_jit_bucket_count += 1
-            ## TODO: NEXT BLOCK OF CODE SEEMS VERY NON-PYTHONIC. CLEAN UP
             pack_t0 = time.time()
             reconstruction_pack = _local_big_jit_reconstruction_pack(
                 bucket,
@@ -1439,9 +1614,7 @@ def run_local_em_exact(
                 reconstruction_pack_mask=reconstruction_pack_mask_np,
                 buffers=postprocess_buffers,
             )
-            if collect_profile_stats:
-                total_significant_samples += significant_sample_count
-                total_reconstruction_rows += int(reconstruction_row_count)
+            profile_counters.observe_postprocess(significant_sample_count, reconstruction_row_count)
             timing.postprocess_s += time.time() - postprocess_t0
 
             host_stats_t0 = time.time()
@@ -1585,19 +1758,16 @@ def run_local_em_exact(
 
         shifted_score_split = shifted_score.reshape(batch_size, n_trans, -1)
         shifted_recon_split = shifted_recon.reshape(batch_size, n_trans, -1)
-        ## TODO: ONCE AGIN: INSANE  BRANCIGN LOGIC. I WANT TO DELETE AS MANY OF THESE AS POSSIBLE.  HOW MANY OF THESE FLAGS ARE REALLY USEFUL?
-        ## AND REMOVE AS MANY IF STATEMENTS. ANY FLAGS USELESS FOR OUR 5K PARITY RUN SHOULD BE REMOVED (UNLESS GREAT REASON TO STAY)
         local_rotation_log_prior = jnp.asarray(bucket.local_rotation_log_prior)
         if class_log_prior != 0.0:
             local_rotation_log_prior = local_rotation_log_prior + jnp.asarray(
                 class_log_prior,
                 dtype=local_rotation_log_prior.dtype,
             )
-        can_use_fused_score_mstep = (
-            fused_score_mstep_enabled
-            and normalization_log_z_np is None
-            and normalization_log_evidence_np is None
-            and not debug_score_dump_filter_matches
+        can_use_fused_score_mstep = _can_use_fused_score_mstep(
+            fused_score_mstep_enabled=fused_score_mstep_enabled,
+            normalization=normalization,
+            debug_score_dump_filter_matches=debug_score_dump_filter_matches,
         )
         if can_use_fused_score_mstep:
             fused_t0 = time.time()
@@ -1677,25 +1847,11 @@ def run_local_em_exact(
             timing.score_s += time.time() - score_t0
 
             normalize_t0 = time.time()
-            ## TODO: NEEDS A LOT OF CLEAN UP FOR THIS STUFF
-            ## TODO: THIS IS AN INSANE BRANCH FOR EXAMPLE, AND INSANE THAT THERE ARE TWO FUNCTIONS FOR THIS. THIS SHOULD BE FIGURED OUT BY DTYPE. DUCK TYPING.
-            bucket_log_z = (
-                None
-                if normalization_log_z_np is None and normalization_log_evidence_np is None
-                else (
-                    jnp.asarray(
-                        normalization_log_z_np[np.asarray(bucket.image_indices)],
-                        dtype=scores.real.dtype,
-                    )
-                    if normalization_log_evidence_np is None
-                    else (
-                        jnp.asarray(
-                            normalization_log_evidence_np[np.asarray(bucket.image_indices)],
-                            dtype=precision_policy.normalization_real_dtype,
-                        )
-                        - (-0.5 * jnp.squeeze(batch_norm, axis=1)).astype(precision_policy.normalization_real_dtype)
-                    )
-                )
+            bucket_log_z = normalization.bucket_log_z(
+                bucket.image_indices,
+                batch_norm,
+                score_dtype=scores.real.dtype,
+                evidence_dtype=precision_policy.normalization_real_dtype,
             )
             log_Z, probs, best_log_score, best_argmax, max_posterior = normalize_local_scores_auto(
                 scores,
@@ -1920,9 +2076,7 @@ def run_local_em_exact(
             reconstruction_pack_mask=reconstruction_pack_mask_np,
             buffers=postprocess_buffers,
         )
-        if collect_profile_stats:
-            total_significant_samples += significant_sample_count
-            total_reconstruction_rows += int(reconstruction_row_count)
+        profile_counters.observe_postprocess(significant_sample_count, reconstruction_row_count)
         timing.postprocess_s += time.time() - postprocess_t0
 
         host_stats_t0 = time.time()
@@ -1998,61 +2152,19 @@ def run_local_em_exact(
 
     _block_until_ready(Ft_y, Ft_ctf)
     total_wall_time = time.time() - overall_t0
-    profile_summary = {
-        "big_jit_bucket_count": np.int32(big_jit_bucket_count),
-        "fused_score_mstep_enabled": np.asarray(fused_score_mstep_enabled),
-        "bucket_build_time_s": np.float64(timing.bucket_build_s),
-        "raw_cache_build_time_s": np.float64(timing.raw_cache_build_s),
-        "raw_cache_enabled": np.asarray(raw_cache_enabled),
-        "batch_fetch_time_s": np.float64(timing.batch_fetch_s),
-        "preprocess_time_s": np.float64(timing.preprocess_s),
-        **_prefixed_timer_profile("preprocess_", preprocess_profile),
-        **_prefixed_timer_profile("transfer_", transfer_profile),
-        "transfer_total_to_host_s": np.float64(sum(transfer_profile.values())),
-        **_local_timing_profile(timing),
-        "em_time_s": np.float64(total_wall_time),
-        "accounted_em_time_s": np.float64(timing.accounted_s()),
-        "unattributed_em_time_s": np.float64(
-            max(total_wall_time - timing.accounted_s(), 0.0)
-        ),
-        "n_chunks": np.int32(n_chunks),
-        "chunk_sizes": np.asarray(chunk_sizes, dtype=np.int32),
-        "chunk_local_rotations": np.asarray(chunk_local_rotations, dtype=np.int32),
-        "chunk_padded_rotations": np.asarray(chunk_padded_rotations, dtype=np.int32),
-        "chunk_nonzero_posterior_rows": np.asarray(chunk_nonzero_posterior_rows, dtype=np.int32),
-        "chunk_reconstruction_rows": np.asarray(chunk_reconstruction_rows, dtype=np.int32),
-        "chunk_significant_samples": np.asarray(chunk_significant_samples, dtype=np.int32),
-        "sum_union_rows": np.int64(total_local_rotations),
-        "sum_padded_rows": np.int64(total_padded_rotations),
-        "sum_nonzero_posterior_rows": np.int64(np.sum(chunk_nonzero_posterior_rows)),
-        "sum_reconstruction_rows": np.int64(total_reconstruction_rows),
-        "sum_significant_samples": np.int64(total_significant_samples),
-        "unique_global_rotations": np.int64(np.count_nonzero(seen_global_rotations)),
-        "unique_nonzero_global_rotations": np.int64(np.count_nonzero(seen_nonzero_global_rotations)),
-        "unique_reconstruction_global_rotations": np.int64(np.count_nonzero(seen_reconstruction_global_rotations)),
-        "duplicate_rotation_factor": np.float64(
-            0.0 if not np.any(seen_global_rotations) else total_local_rotations / np.count_nonzero(seen_global_rotations)
-        ),
-        "reconstruction_duplicate_rotation_factor": np.float64(
-            0.0
-            if not np.any(seen_reconstruction_global_rotations)
-            else total_reconstruction_rows / np.count_nonzero(seen_reconstruction_global_rotations)
-        ),
-        "local_total_hypotheses": np.int64(local_total_hypotheses),
-        "local_mean_rotations_per_image": np.float64(0.0 if n_images == 0 else total_local_rotations / n_images),
-        "local_mean_reconstruction_rows_per_image": np.float64(
-            0.0 if n_images == 0 else total_reconstruction_rows / n_images
-        ),
-        "local_mean_significant_samples_per_image": np.float64(
-            0.0 if n_images == 0 else total_significant_samples / n_images
-        ),
-        "local_num_buckets": np.int32(n_chunks),
-        "max_hypotheses_per_microbatch": np.int64(max_hypotheses_per_microbatch),
-        "local_pad_fraction": np.float64(
-            0.0 if total_padded_rotations == 0 else 1.0 - total_local_rotations / total_padded_rotations
-        ),
-        "n_windowed": np.int32(n_windowed),
-    }
+    profile_summary = profile_counters.summary(
+        timing=timing,
+        preprocess_profile=preprocess_profile,
+        transfer_profile=transfer_profile,
+        total_wall_time=total_wall_time,
+        big_jit_bucket_count=big_jit_bucket_count,
+        fused_score_mstep_enabled=fused_score_mstep_enabled,
+        raw_cache_enabled=raw_cache_enabled,
+        total_local_rotations=total_local_rotations,
+        n_images=n_images,
+        max_hypotheses_per_microbatch=max_hypotheses_per_microbatch,
+        n_windowed=n_windowed,
+    )
     return _local_em_return_tuple(
         Ft_y,
         Ft_ctf,

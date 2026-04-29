@@ -241,6 +241,41 @@ class _DenseDebugOptions:
         )
 
 
+@dataclass(frozen=True)
+class _DenseBigJitScratch:
+    """Constant scratch inputs needed by dense big-JIT buckets."""
+
+    window_indices: object
+    recon_window_indices: object
+    max_r: int
+    noise_wsum0: object
+    noise_a20: object
+    noise_xa0: object
+    offset0: object
+    translation_sqdist0: object
+
+
+def _make_dense_big_jit_scratch(window_spec, n_half: int, batch_size: int, n_trans: int) -> _DenseBigJitScratch:
+    return _DenseBigJitScratch(
+        window_indices=window_spec.score_or_full_indices(n_half),
+        recon_window_indices=window_spec.recon_or_full_indices(n_half),
+        max_r=window_spec.dense_big_jit_max_r(),
+        noise_wsum0=jnp.zeros(1, dtype=jnp.float32),
+        noise_a20=jnp.zeros(1, dtype=jnp.float32),
+        noise_xa0=jnp.zeros(1, dtype=jnp.float32),
+        offset0=jnp.asarray(0.0, dtype=jnp.float32),
+        translation_sqdist0=jnp.zeros((batch_size, n_trans), dtype=jnp.float32),
+    )
+
+
+def _iter_rotation_blocks(n_blocks: int, rotation_block_size: int, skip_mask=None):
+    for block_index in range(n_blocks):
+        if skip_mask is not None and bool(skip_mask[block_index]):
+            continue
+        r0 = block_index * rotation_block_size
+        yield block_index, r0, r0 + rotation_block_size
+
+
 def _pad_dense_big_jit_image_axis(batch_data, ctf_params, target_batch_size: int):
     """Pad dense big-JIT raw batch inputs to a stable image shape class."""
 
@@ -867,14 +902,12 @@ def run_em(
             _block_until_ready(*ready_values)
         timing.score_prep_s += time.time() - score_prep_t0
 
-        dense_big_jit_window_indices = window_spec.score_or_full_indices(n_half)
-        dense_big_jit_recon_window_indices = window_spec.recon_or_full_indices(n_half)
-        dense_big_jit_max_r = window_spec.dense_big_jit_max_r()
-        dense_big_jit_noise_wsum0 = jnp.zeros(1, dtype=jnp.float32)
-        dense_big_jit_noise_a20 = jnp.zeros(1, dtype=jnp.float32)
-        dense_big_jit_noise_xa0 = jnp.zeros(1, dtype=jnp.float32)
-        dense_big_jit_offset0 = jnp.asarray(0.0, dtype=jnp.float32)
-        dense_big_jit_translation_sqdist0 = jnp.zeros((batch_size, n_trans), dtype=jnp.float32)
+        dense_big_jit_scratch = _make_dense_big_jit_scratch(
+            window_spec,
+            n_half,
+            batch_size,
+            n_trans,
+        )
 
         def _run_dense_big_jit_bucket(r0: int, r1: int, *, run_mstep: bool, log_z):
             (
@@ -900,16 +933,16 @@ def run_em(
                 valid_rotation_mask,
                 valid_image_mask,
                 log_z,
-                dense_big_jit_noise_wsum0,
-                dense_big_jit_noise_a20,
-                dense_big_jit_noise_xa0,
-                dense_big_jit_offset0,
+                dense_big_jit_scratch.noise_wsum0,
+                dense_big_jit_scratch.noise_a20,
+                dense_big_jit_scratch.noise_xa0,
+                dense_big_jit_scratch.offset0,
                 shifted_half_with_dc,
                 dense_big_jit_noise_variance_half,
                 dense_big_jit_shell_indices_half,
-                dense_big_jit_translation_sqdist0,
-                dense_big_jit_window_indices,
-                dense_big_jit_recon_window_indices,
+                dense_big_jit_scratch.translation_sqdist0,
+                dense_big_jit_scratch.window_indices,
+                dense_big_jit_scratch.recon_window_indices,
                 score_mode=relion_firstiter_score_mode,
                 zero_dc_for_scoring=half_spectrum_scoring,
                 use_window=use_window,
@@ -923,8 +956,8 @@ def run_em(
                 proj_volume_shape=proj_volume_shape,
                 recon_volume_shape=recon_volume_shape,
                 disc_type=disc_type,
-                projection_max_r=dense_big_jit_max_r,
-                backprojection_max_r=dense_big_jit_max_r,
+                projection_max_r=dense_big_jit_scratch.max_r,
+                backprojection_max_r=dense_big_jit_scratch.max_r,
                 disable_adjoint_y=disable_adjoint_y,
                 disable_adjoint_ctf=disable_adjoint_ctf,
                 n_shells=1,
@@ -936,9 +969,7 @@ def run_em(
         best_score_pass1 = jnp.full(batch_size, -jnp.inf)
         best_argmax_pass1 = jnp.zeros(batch_size, dtype=jnp.int32)
 
-        for b in range(n_blocks):
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
+        for b, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
             rots_b = rotations_padded[r0:r1]
 
             if use_dense_big_jit:
@@ -1107,12 +1138,7 @@ def run_em(
             best_score = jnp.full(batch_size, -jnp.inf)
             best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
 
-        for b in range(n_blocks):
-            if skip_pass2_block[b]:
-                continue
-
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
+        for b, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size, skip_mask=skip_pass2_block):
             rots_b = rotations_padded[r0:r1]
 
             if use_dense_big_jit:
@@ -1759,9 +1785,7 @@ def compute_e_step_weights(
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=precision_policy.normalization_real_dtype)
 
-        for b in range(n_blocks):
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
+        for _, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
@@ -1821,9 +1845,7 @@ def compute_e_step_weights(
         best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
         batch_weights_blocks = []
 
-        for b in range(n_blocks):
-            r0 = b * rotation_block_size
-            r1 = r0 + rotation_block_size
+        for _, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
             rots_b = rotations_padded[r0:r1]
 
             proj_half_b, proj_abs2_half_b = _compute_projections_block(
