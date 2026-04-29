@@ -1321,6 +1321,80 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
     )
 
 
+def test_local_search_iteration_k_class_returns_class_details(rng):
+    dataset = MockDataset(2, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=161)
+    means = jnp.stack([mean, mean], axis=0)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=169)
+    translations = np.zeros((1, 2), dtype=np.float32)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
+        rotation_offsets=np.array([0, 2, 4], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1, 0, 1], dtype=np.int32),
+        rotations_flat=np.tile(np.asarray(local_rotations, dtype=np.float32), (2, 1, 1)),
+        rotation_log_priors_flat=np.zeros(4, dtype=np.float32),
+        rotation_counts=np.array([2, 2], dtype=np.int32),
+        translation_grid=np.asarray(translations, dtype=np.float32),
+        translation_log_priors=np.zeros((2, 1), dtype=np.float32),
+    )
+
+    outputs = iteration_loop_module._run_local_search_iteration(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        np.zeros((2, 3), dtype=np.float32),
+        local_rotations,
+        None,
+        1,
+        0.0,
+        0.0,
+        translations,
+        np.zeros((2, 2), dtype=np.float32),
+        1.0,
+        None,
+        "linear_interp",
+        2,
+        4,
+        None,
+        accumulate_noise=True,
+        projection_padding_factor=1,
+        reconstruction_padding_factor=1,
+        half_spectrum_scoring=False,
+        pass2_layout=local_layout,
+        return_best_pose_details=True,
+        class_log_priors=np.log(np.array([0.5, 0.5], dtype=np.float64)),
+        return_class_details=True,
+    )
+
+    (
+        Ft_y,
+        Ft_ctf,
+        hard_assignment,
+        best_rotations,
+        best_translations,
+        best_rotation_ids,
+        stats,
+        noise_stats,
+        class_assignments_out,
+        class_posterior_sums,
+    ) = outputs
+    assert np.asarray(Ft_y).shape == (2, VOLUME_SIZE)
+    assert np.asarray(Ft_ctf).shape == (2, VOLUME_SIZE)
+    assert np.asarray(hard_assignment).shape == (2,)
+    assert np.asarray(best_rotations).shape == (2, 3, 3)
+    assert np.asarray(best_translations).shape == (2, 2)
+    assert np.asarray(best_rotation_ids).shape == (2,)
+    assert np.asarray(stats.log_evidence_per_image).shape == (2,)
+    assert noise_stats is not None
+    assert np.asarray(class_assignments_out).shape == (2,)
+    np.testing.assert_allclose(np.sum(class_posterior_sums), dataset.n_images, rtol=5e-3, atol=1e-5)
+
+
 def test_native_half_preprocess_requires_mask_for_masked_score(rng):
     dataset = RawRealImageDataset(1, rng)
 
