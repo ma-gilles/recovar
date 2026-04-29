@@ -1,6 +1,6 @@
 # RELION Local Engine Refactor
 
-Tracked TODO IDs in the active RELION local-search refactor.
+Tracked refactor IDs for the active RELION local-search refactor.
 
 ## RELION_LOCAL_ENGINE
 
@@ -25,8 +25,8 @@ Tracked TODO IDs in the active RELION local-search refactor.
 ## Review rule
 
 Tracked IDs should stay in this document after resolution so future agents can
-see why the code markers were removed. A tracked TODO ID may be removed from
-code only if:
+see why the code markers were removed. A tracked code marker may be removed only
+if:
 
 1. this file marks it `RESOLVED`
 2. the PR explicitly explains why
