@@ -42,7 +42,6 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 import numpy as np
 
-import recovar.core.fourier_transform_utils as fourier_transform_utils
 from recovar.core.configs import ForwardModelConfig
 from recovar.reconstruction import noise as noise_utils
 
