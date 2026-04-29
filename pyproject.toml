@@ -108,6 +108,7 @@ gui = [
     "python-multipart>=0.0.9",
     "sqlalchemy>=2.0",
     "aiofiles>=23.0",
+    "tomli_w>=1.0",
 ]
 # Development and testing
 dev = [

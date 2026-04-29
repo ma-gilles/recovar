@@ -26,6 +26,7 @@ from recovar.gui_v2.backend.api.files import router as files_router
 from recovar.gui_v2.backend.api.jobs import router as jobs_router
 from recovar.gui_v2.backend.api.project import router as project_router
 from recovar.gui_v2.backend.api.subsets import router as subsets_router
+from recovar.gui_v2.backend.api.settings import router as settings_router
 from recovar.gui_v2.backend.api.system import router as system_router
 from recovar.gui_v2.backend.api.volumes import router as volumes_router
 from recovar.gui_v2.backend.api.ws import router as ws_router
@@ -210,6 +211,7 @@ def create_app() -> FastAPI:
     app.include_router(volumes_router)
     app.include_router(embeddings_router)
     app.include_router(subsets_router)
+    app.include_router(settings_router)
     app.include_router(system_router)
     app.include_router(ws_router)
 

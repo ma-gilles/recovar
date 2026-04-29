@@ -345,6 +345,52 @@ export function getJobSbatchScript(id: string): Promise<SbatchScript> {
   return request(`/jobs/${id}/sbatch-script`);
 }
 
+// --- Settings ---
+
+export interface SlurmDefaultsLayered {
+  builtin: Record<string, unknown>;
+  user: Record<string, unknown>;
+  project: Record<string, unknown>;
+  effective: Record<string, unknown>;
+  user_config_path: string;
+  project_config_path: string | null;
+}
+
+export interface SlurmDefaultsUpdate {
+  partition?: string;
+  account?: string;
+  gpus?: number;
+  cpus?: number;
+  memory?: string;
+  time?: string;
+}
+
+export function getSlurmDefaultsLayered(projectDir?: string): Promise<SlurmDefaultsLayered> {
+  const qs = projectDir ? `?project_dir=${encodeURIComponent(projectDir)}` : "";
+  return request(`/settings/slurm-defaults${qs}`);
+}
+
+export function updateUserSlurmDefaults(
+  data: SlurmDefaultsUpdate,
+  projectDir?: string,
+): Promise<SlurmDefaultsLayered> {
+  const qs = projectDir ? `?project_dir=${encodeURIComponent(projectDir)}` : "";
+  return request(`/settings/slurm-defaults/user${qs}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateProjectSlurmDefaults(
+  projectDir: string,
+  data: SlurmDefaultsUpdate,
+): Promise<SlurmDefaultsLayered> {
+  return request("/settings/slurm-defaults/project", {
+    method: "PUT",
+    body: JSON.stringify({ ...data, project_dir: projectDir }),
+  });
+}
+
 // --- Charts ---
 
 export interface ChartData {

@@ -94,5 +94,69 @@ def resolve_slurm_defaults(project_dir: str | Path | None = None) -> dict[str, A
     return merged
 
 
+def resolve_slurm_defaults_layered(
+    project_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Return SLURM defaults broken out by layer for the Settings UI."""
+    builtin = dict(DEFAULT_SLURM)
+
+    user_toml = _load_toml(_user_config_path())
+    user_slurm = user_toml.get("slurm", {})
+    if not isinstance(user_slurm, dict):
+        user_slurm = {}
+
+    project_slurm: dict[str, Any] = {}
+    project_path: str | None = None
+    if project_dir is not None:
+        p = Path(project_dir) / PROJECT_CONFIG_FILENAME
+        project_path = str(p)
+        project_toml = _load_toml(p)
+        ps = project_toml.get("slurm", {})
+        if isinstance(ps, dict):
+            project_slurm = ps
+
+    effective = dict(builtin)
+    effective.update(user_slurm)
+    effective.update(project_slurm)
+
+    return {
+        "builtin": builtin,
+        "user": user_slurm,
+        "project": project_slurm,
+        "effective": effective,
+        "user_config_path": str(_user_config_path()),
+        "project_config_path": project_path,
+    }
+
+
+def _save_toml_slurm(path: Path, values: dict[str, Any]) -> None:
+    """Update the [slurm] section of a TOML file, preserving other sections."""
+    import tomli_w
+
+    existing: dict[str, Any] = {}
+    if path.is_file():
+        existing = _load_toml(path)
+
+    clean = {k: v for k, v in values.items() if v != "" and v is not None}
+    existing["slurm"] = clean
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        tomli_w.dump(existing, f)
+    logger.info("Wrote SLURM defaults to %s", path)
+
+
+def save_user_slurm_defaults(values: dict[str, Any]) -> None:
+    """Write SLURM defaults to the user-global config file."""
+    _save_toml_slurm(_user_config_path(), values)
+
+
+def save_project_slurm_defaults(
+    project_dir: str | Path, values: dict[str, Any]
+) -> None:
+    """Write SLURM defaults to the per-project recovar.toml."""
+    _save_toml_slurm(Path(project_dir) / PROJECT_CONFIG_FILENAME, values)
+
+
 def project_config_exists(project_dir: str | Path) -> bool:
     return (Path(project_dir) / PROJECT_CONFIG_FILENAME).is_file()

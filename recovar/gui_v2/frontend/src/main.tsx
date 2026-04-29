@@ -11,6 +11,7 @@ import { DashboardPage } from "./routes/index";
 import { NewJobPage } from "./routes/jobs/new";
 import { JobDetailPage } from "./routes/jobs/$jobId";
 import { ExplorePage } from "./routes/explore/$jobId";
+import { SettingsPage } from "./routes/settings";
 
 // Define routes
 const rootRoute = createRootRoute({ component: RootLayout });
@@ -47,11 +48,18 @@ const exploreRoute = createRoute({
   component: ExplorePage,
 });
 
+const settingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/settings",
+  component: SettingsPage,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   newJobRoute,
   jobDetailRoute,
   exploreRoute,
+  settingsRoute,
 ]);
 
 const router = createRouter({ routeTree });
