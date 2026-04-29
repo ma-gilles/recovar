@@ -1,9 +1,12 @@
-"""Settings API for editing SLURM defaults from the GUI.
+"""Settings API for editing SLURM and local execution defaults from the GUI.
 
 Endpoints:
     GET  /api/settings/slurm-defaults       — Layered view of SLURM defaults
-    PUT  /api/settings/slurm-defaults/user   — Update user-global defaults
-    PUT  /api/settings/slurm-defaults/project — Update per-project defaults
+    PUT  /api/settings/slurm-defaults/user   — Update user-global SLURM defaults
+    PUT  /api/settings/slurm-defaults/project — Update per-project SLURM defaults
+    GET  /api/settings/local-defaults        — Layered view of local exec defaults
+    PUT  /api/settings/local-defaults/user   — Update user-global local defaults
+    PUT  /api/settings/local-defaults/project — Update per-project local defaults
 """
 
 from __future__ import annotations
@@ -85,3 +88,72 @@ async def update_project_slurm_defaults(
     values = {k: v for k, v in req.model_dump(exclude={"project_dir"}).items() if v is not None}
     save_project_slurm_defaults(req.project_dir, values)
     return SlurmDefaultsLayered(**resolve_slurm_defaults_layered(project_dir=req.project_dir))
+
+
+# ---------------------------------------------------------------------------
+# Local execution defaults
+# ---------------------------------------------------------------------------
+
+
+class LocalDefaultsLayered(BaseModel):
+    builtin: dict[str, Any]
+    user: dict[str, Any]
+    project: dict[str, Any]
+    effective: dict[str, Any]
+    user_config_path: str
+    project_config_path: str | None = None
+
+
+class LocalDefaultsUpdate(BaseModel):
+    gpus: str | None = None  # "all", "0", "0,1", etc.
+    setup_command: str | None = None
+    env_vars: dict[str, str] | None = None
+
+
+class ProjectLocalDefaultsUpdate(LocalDefaultsUpdate):
+    project_dir: str
+
+
+@router.get("/local-defaults", response_model=LocalDefaultsLayered)
+async def get_local_defaults_layered(
+    project_dir: str | None = None,
+) -> LocalDefaultsLayered:
+    from recovar.gui_v2.backend.services.project_config import (
+        resolve_local_defaults_layered,
+    )
+
+    return LocalDefaultsLayered(**resolve_local_defaults_layered(project_dir=project_dir))
+
+
+@router.put("/local-defaults/user", response_model=LocalDefaultsLayered)
+async def update_user_local_defaults(
+    req: LocalDefaultsUpdate,
+    project_dir: str | None = None,
+) -> LocalDefaultsLayered:
+    from recovar.gui_v2.backend.services.project_config import (
+        resolve_local_defaults_layered,
+        save_user_local_defaults,
+    )
+
+    values = {k: v for k, v in req.model_dump().items() if v is not None}
+    save_user_local_defaults(values)
+    return LocalDefaultsLayered(**resolve_local_defaults_layered(project_dir=project_dir))
+
+
+@router.put("/local-defaults/project", response_model=LocalDefaultsLayered)
+async def update_project_local_defaults(
+    req: ProjectLocalDefaultsUpdate,
+) -> LocalDefaultsLayered:
+    import os
+
+    from recovar.gui_v2.backend.services.project_config import (
+        resolve_local_defaults_layered,
+        save_project_local_defaults,
+    )
+
+    if not os.path.isdir(req.project_dir):
+        raise HTTPException(status_code=400, detail=f"Directory not found: {req.project_dir}")
+
+    values = {k: v for k, v in req.model_dump(exclude={"project_dir"}).items() if v is not None}
+    save_project_local_defaults(req.project_dir, values)
+    return LocalDefaultsLayered(**resolve_local_defaults_layered(project_dir=req.project_dir))

@@ -9,6 +9,7 @@ import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
+import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -40,6 +41,7 @@ export function PostprocessForm({
   const [local, setLocal] = useState(false);
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const [executorMode, setExecutorMode] = useState<string | null>(null);
+  const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const mutation = useMutation({
@@ -57,6 +59,7 @@ export function PostprocessForm({
       if (estimateBFactor) params.estimate_B_factor = true;
       if (local) params.local = true;
       if (slurmOpts) params.slurm_opts = slurmOpts;
+      if (localOpts && executorMode === "local") params.local_opts = localOpts;
       return submitJob(projectId, "postprocess", params, executorMode);
     },
     onSuccess: (data) => {
@@ -226,7 +229,9 @@ export function PostprocessForm({
 
       {/* SLURM Settings */}
       <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
-      {executorMode !== "local" && (
+      {executorMode === "local" ? (
+        <LocalSettings value={localOpts} onChange={setLocalOpts} />
+      ) : (
         <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
       )}
 

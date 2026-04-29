@@ -9,6 +9,7 @@ import { Select } from "../ui/select";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
+import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob, validateJob, type ValidationResult } from "../../lib/api/client";
@@ -52,6 +53,7 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
   const [executorMode, setExecutorMode] = useState<string | null>(null);
+  const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
   const [validating, setValidating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
@@ -74,7 +76,8 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
     if (tiltSeries) params.tilt_series = true;
     if (stripPrefix) params.strip_prefix = stripPrefix;
     if (outputName) params.output_name = outputName;
-    if (slurmOpts) params.slurm_opts = slurmOpts;
+    if (slurmOpts && executorMode !== "local") params.slurm_opts = slurmOpts;
+    if (localOpts && executorMode === "local") params.local_opts = localOpts;
     return params;
   }, [particles, mask, maskPath, zdim, downsample, lazy, correctContrast, focusMask, datadir, nImages, halfsets, poses, ctf, tiltSeries, stripPrefix, outputName, slurmOpts]);
 
@@ -369,7 +372,9 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
 
       {/* SLURM Settings */}
       <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
-      {executorMode !== "local" && (
+      {executorMode === "local" ? (
+        <LocalSettings value={localOpts} onChange={setLocalOpts} />
+      ) : (
         <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
       )}
 

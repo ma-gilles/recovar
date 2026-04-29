@@ -1,0 +1,6 @@
+//#region src/scroll-restoration-inline.ts?script-string
+var scroll_restoration_inline_default = "function(t){let s;try{s=JSON.parse(sessionStorage.getItem(t.storageKey)||\"{}\")}catch(e){console.error(e);return}const c=t.key||window.history.state?.__TSR_key,r=c?s[c]:void 0;if(t.shouldScrollRestoration&&r&&typeof r==\"object\"&&Object.keys(r).length>0){for(const e in r){const o=r[e];if(!o||typeof o!=\"object\")continue;const l=o.scrollX,i=o.scrollY;if(!(!Number.isFinite(l)||!Number.isFinite(i))){if(e===\"window\")window.scrollTo({top:i,left:l,behavior:t.behavior});else if(e){let n;try{n=document.querySelector(e)}catch{continue}n&&(n.scrollLeft=l,n.scrollTop=i)}}}return}const a=window.location.hash.split(\"#\",2)[1];if(a){const e=window.history.state?.__hashScrollIntoViewOptions??!0;if(e){const o=document.getElementById(a);o&&o.scrollIntoView(e)}return}window.scrollTo({top:0,left:0,behavior:t.behavior})}";
+//#endregion
+exports.default = scroll_restoration_inline_default;
+
+//# sourceMappingURL=scroll-restoration-inline.cjs.map

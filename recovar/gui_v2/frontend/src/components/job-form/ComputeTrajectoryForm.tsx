@@ -7,6 +7,7 @@ import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
+import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -35,6 +36,7 @@ export function ComputeTrajectoryForm({
   const [nVols, setNVols] = useState("6");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const [executorMode, setExecutorMode] = useState<string | null>(null);
+  const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const parseCoords = (s: string) => s.split(",").map((v) => parseFloat(v.trim()));
@@ -59,6 +61,7 @@ export function ComputeTrajectoryForm({
         n_vols_along_path: parseInt(nVols),
       };
       if (slurmOpts) params.slurm_opts = slurmOpts;
+      if (localOpts && executorMode === "local") params.local_opts = localOpts;
       return submitJob(projectId, "compute_trajectory", params, executorMode);
     },
     onSuccess: (data) => {
@@ -147,7 +150,9 @@ export function ComputeTrajectoryForm({
 
       {/* SLURM Settings */}
       <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
-      {executorMode !== "local" && (
+      {executorMode === "local" ? (
+        <LocalSettings value={localOpts} onChange={setLocalOpts} />
+      ) : (
         <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
       )}
 

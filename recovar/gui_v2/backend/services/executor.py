@@ -295,21 +295,45 @@ class LocalExecutor(Executor):
         working_dir: str,
         *,
         slurm_opts: dict[str, Any] | None = None,
+        local_opts: dict[str, Any] | None = None,
     ) -> str:
         log_file = os.path.join(working_dir, "run.log")
         full_env = {**os.environ, **env}
 
+        # Apply local execution options
+        opts = local_opts or {}
+        gpu_selection = opts.get("gpus", "all")
+        if gpu_selection and gpu_selection != "all":
+            full_env["CUDA_VISIBLE_DEVICES"] = str(gpu_selection)
+        extra_env = opts.get("env_vars", {})
+        if isinstance(extra_env, dict):
+            full_env.update(extra_env)
+        setup_command = opts.get("setup_command", "").strip()
+
         # Open log file for stdout/stderr
         log_fh = open(log_file, "w")
 
-        proc = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=log_fh,
-            stderr=asyncio.subprocess.STDOUT,
-            env=full_env,
-            cwd=working_dir,
-            start_new_session=True,  # new process group for clean cancel
-        )
+        if setup_command:
+            # Wrap command in a shell that runs setup first
+            cmd_str = shlex.join(command)
+            shell_cmd = f"{setup_command} && {cmd_str}"
+            proc = await asyncio.create_subprocess_exec(
+                "/bin/bash", "-c", shell_cmd,
+                stdout=log_fh,
+                stderr=asyncio.subprocess.STDOUT,
+                env=full_env,
+                cwd=working_dir,
+                start_new_session=True,
+            )
+        else:
+            proc = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=log_fh,
+                stderr=asyncio.subprocess.STDOUT,
+                env=full_env,
+                cwd=working_dir,
+                start_new_session=True,
+            )
 
         handle = str(proc.pid)
         try:

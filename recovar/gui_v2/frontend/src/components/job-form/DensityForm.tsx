@@ -9,6 +9,7 @@ import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
+import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob } from "../../lib/api/client";
 
@@ -36,6 +37,7 @@ export function DensityForm({
   const [percentileBound, setPercentileBound] = useState("1");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const [executorMode, setExecutorMode] = useState<string | null>(null);
+  const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
 
   const mutation = useMutation({
@@ -49,6 +51,7 @@ export function DensityForm({
       if (numDiscPoints) params.num_disc_points = parseInt(numDiscPoints);
       if (percentileBound) params.percentile_bound = parseInt(percentileBound);
       if (slurmOpts) params.slurm_opts = slurmOpts;
+      if (localOpts && executorMode === "local") params.local_opts = localOpts;
       return submitJob(projectId, "density", params, executorMode);
     },
     onSuccess: (data) => {
@@ -169,7 +172,9 @@ export function DensityForm({
 
       {/* SLURM Settings */}
       <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
-      {executorMode !== "local" && (
+      {executorMode === "local" ? (
+        <LocalSettings value={localOpts} onChange={setLocalOpts} />
+      ) : (
         <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
       )}
 

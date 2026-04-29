@@ -37,7 +37,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from recovar.gui_v2.backend.config import DEFAULT_SLURM
+from recovar.gui_v2.backend.config import DEFAULT_LOCAL, DEFAULT_SLURM
 
 logger = logging.getLogger(__name__)
 
@@ -156,6 +156,95 @@ def save_project_slurm_defaults(
 ) -> None:
     """Write SLURM defaults to the per-project recovar.toml."""
     _save_toml_slurm(Path(project_dir) / PROJECT_CONFIG_FILENAME, values)
+
+
+def resolve_local_defaults(project_dir: str | Path | None = None) -> dict[str, Any]:
+    """Resolve local-execution defaults, same layering as SLURM defaults."""
+    merged: dict[str, Any] = dict(DEFAULT_LOCAL)
+    # Deep-copy env_vars so we don't mutate the default
+    merged["env_vars"] = dict(DEFAULT_LOCAL.get("env_vars", {}))
+
+    user_toml = _load_toml(_user_config_path())
+    user_local = user_toml.get("local")
+    if isinstance(user_local, dict):
+        if "env_vars" in user_local and isinstance(user_local["env_vars"], dict):
+            merged["env_vars"].update(user_local["env_vars"])
+        merged.update({k: v for k, v in user_local.items() if k != "env_vars"})
+
+    if project_dir is not None:
+        project_toml = _load_toml(Path(project_dir) / PROJECT_CONFIG_FILENAME)
+        project_local = project_toml.get("local")
+        if isinstance(project_local, dict):
+            if "env_vars" in project_local and isinstance(project_local["env_vars"], dict):
+                merged["env_vars"].update(project_local["env_vars"])
+            merged.update({k: v for k, v in project_local.items() if k != "env_vars"})
+
+    return merged
+
+
+def resolve_local_defaults_layered(
+    project_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    """Return local defaults broken out by layer for the Settings UI."""
+    builtin = dict(DEFAULT_LOCAL)
+
+    user_toml = _load_toml(_user_config_path())
+    user_local = user_toml.get("local", {})
+    if not isinstance(user_local, dict):
+        user_local = {}
+
+    project_local: dict[str, Any] = {}
+    project_path: str | None = None
+    if project_dir is not None:
+        p = Path(project_dir) / PROJECT_CONFIG_FILENAME
+        project_path = str(p)
+        project_toml = _load_toml(p)
+        pl = project_toml.get("local", {})
+        if isinstance(pl, dict):
+            project_local = pl
+
+    effective = dict(builtin)
+    effective.update(user_local)
+    effective.update(project_local)
+
+    return {
+        "builtin": builtin,
+        "user": user_local,
+        "project": project_local,
+        "effective": effective,
+        "user_config_path": str(_user_config_path()),
+        "project_config_path": project_path,
+    }
+
+
+def save_user_local_defaults(values: dict[str, Any]) -> None:
+    """Write local-execution defaults to the user-global config file."""
+    path = _user_config_path()
+    existing: dict[str, Any] = {}
+    if path.is_file():
+        existing = _load_toml(path)
+    clean = {k: v for k, v in values.items() if v != "" and v is not None}
+    existing["local"] = clean
+    import tomli_w
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        tomli_w.dump(existing, f)
+
+
+def save_project_local_defaults(
+    project_dir: str | Path, values: dict[str, Any]
+) -> None:
+    """Write local-execution defaults to the per-project recovar.toml."""
+    path = Path(project_dir) / PROJECT_CONFIG_FILENAME
+    existing: dict[str, Any] = {}
+    if path.is_file():
+        existing = _load_toml(path)
+    clean = {k: v for k, v in values.items() if v != "" and v is not None}
+    existing["local"] = clean
+    import tomli_w
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        tomli_w.dump(existing, f)
 
 
 def project_config_exists(project_dir: str | Path) -> bool:

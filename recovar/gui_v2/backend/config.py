@@ -25,6 +25,13 @@ DEFAULT_SLURM = {
     "time": "12:00:00",
 }
 
+# Default local-execution settings.
+DEFAULT_LOCAL = {
+    "gpus": "all",           # "all", "0", "0,1", etc.
+    "setup_command": "",     # Shell command to run before the pipeline (e.g. "module load cuda")
+    "env_vars": {},          # Extra environment variables as {key: value}
+}
+
 # Write retry delays (ms) for SQLite "database is locked" errors.
 WRITE_RETRY_DELAYS_MS: list[int] = [100, 500, 2000]
 

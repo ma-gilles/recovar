@@ -26,11 +26,17 @@ class DiskInfo(BaseModel):
     free: int
 
 
+class GpuInfo(BaseModel):
+    index: int
+    name: str
+
+
 class SystemInfoResponse(BaseModel):
     slurm_available: bool
     executor_mode: str  # "slurm", "local", or "both"
     recovar_version: str
     gpu_count: int
+    gpu_list: list[GpuInfo] = []
     hostname: str
     disk: DiskInfo | None = None
 
@@ -44,25 +50,30 @@ def _recovar_version() -> str:
         return "unknown"
 
 
-def _gpu_count() -> int:
-    """Count GPUs via CUDA_VISIBLE_DEVICES or nvidia-smi."""
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    if visible:
-        return len(visible.split(","))
+def _gpu_info() -> tuple[int, list[dict]]:
+    """Return (count, list of {index, name}) for available GPUs."""
     try:
         import subprocess
 
         result = subprocess.run(
-            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            ["nvidia-smi", "--query-gpu=index,name", "--format=csv,noheader"],
             capture_output=True,
             text=True,
             timeout=5,
         )
         if result.returncode == 0:
-            return len([l for l in result.stdout.strip().split("\n") if l.strip()])
+            gpus = []
+            for line in result.stdout.strip().split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                parts = line.split(", ", 1)
+                if len(parts) == 2:
+                    gpus.append({"index": int(parts[0]), "name": parts[1]})
+            return len(gpus), gpus
     except Exception:
         pass
-    return 0
+    return 0, []
 
 
 @router.get("/info", response_model=SystemInfoResponse)
@@ -92,11 +103,14 @@ async def system_info() -> SystemInfoResponse:
     else:
         mode = "local"
 
+    gpu_count, gpu_list = _gpu_info()
+
     return SystemInfoResponse(
         slurm_available=has_slurm or sbatch_on_path,
         executor_mode=mode,
         recovar_version=_recovar_version(),
-        gpu_count=_gpu_count(),
+        gpu_count=gpu_count,
+        gpu_list=[GpuInfo(**g) for g in gpu_list],
         hostname=platform.node(),
         disk=disk,
     )

@@ -9,6 +9,7 @@ import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
 import { ExecutorSelector } from "./ExecutorSelector";
+import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob, validateJob, type ValidationResult } from "../../lib/api/client";
 
@@ -34,6 +35,7 @@ export function AnalyzeForm({
   const [outputName, setOutputName] = useState("");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const [executorMode, setExecutorMode] = useState<string | null>(null);
+  const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
   const [validating, setValidating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -48,6 +50,7 @@ export function AnalyzeForm({
     if (nTrajectories) params.n_trajectories = parseInt(nTrajectories);
     if (outputName) params.output_name = outputName;
     if (slurmOpts) params.slurm_opts = slurmOpts;
+      if (localOpts && executorMode === "local") params.local_opts = localOpts;
     return params;
   }, [resultDir, zdim, nClusters, nTrajectories, outputName, slurmOpts]);
 
@@ -167,7 +170,9 @@ export function AnalyzeForm({
 
       {/* SLURM Settings */}
       <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
-      {executorMode !== "local" && (
+      {executorMode === "local" ? (
+        <LocalSettings value={localOpts} onChange={setLocalOpts} />
+      ) : (
         <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
       )}
 

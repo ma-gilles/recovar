@@ -392,6 +392,49 @@ export function updateProjectSlurmDefaults(
   });
 }
 
+// --- Local execution defaults ---
+
+export interface LocalDefaultsLayered {
+  builtin: Record<string, unknown>;
+  user: Record<string, unknown>;
+  project: Record<string, unknown>;
+  effective: Record<string, unknown>;
+  user_config_path: string;
+  project_config_path: string | null;
+}
+
+export interface LocalDefaultsUpdate {
+  gpus?: string;
+  setup_command?: string;
+  env_vars?: Record<string, string>;
+}
+
+export function getLocalDefaultsLayered(projectDir?: string): Promise<LocalDefaultsLayered> {
+  const qs = projectDir ? `?project_dir=${encodeURIComponent(projectDir)}` : "";
+  return request(`/settings/local-defaults${qs}`);
+}
+
+export function updateUserLocalDefaults(
+  data: LocalDefaultsUpdate,
+  projectDir?: string,
+): Promise<LocalDefaultsLayered> {
+  const qs = projectDir ? `?project_dir=${encodeURIComponent(projectDir)}` : "";
+  return request(`/settings/local-defaults/user${qs}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateProjectLocalDefaults(
+  projectDir: string,
+  data: LocalDefaultsUpdate,
+): Promise<LocalDefaultsLayered> {
+  return request("/settings/local-defaults/project", {
+    method: "PUT",
+    body: JSON.stringify({ ...data, project_dir: projectDir }),
+  });
+}
+
 // --- Charts ---
 
 export interface ChartData {

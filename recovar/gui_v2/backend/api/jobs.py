@@ -754,12 +754,21 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
 
     # Resolve effective slurm opts: built-in defaults ← user-global toml ←
     # project-local recovar.toml ← per-job form override (form wins).
-    from recovar.gui_v2.backend.services.project_config import resolve_slurm_defaults
+    from recovar.gui_v2.backend.services.project_config import (
+        resolve_local_defaults,
+        resolve_slurm_defaults,
+    )
 
     merged_slurm_opts = resolve_slurm_defaults(project_dir=project_path)
     form_slurm_opts = params.get("slurm_opts") or {}
     if isinstance(form_slurm_opts, dict):
         merged_slurm_opts.update(form_slurm_opts)
+
+    # Resolve local execution opts
+    merged_local_opts = resolve_local_defaults(project_dir=project_path)
+    form_local_opts = params.get("local_opts") or {}
+    if isinstance(form_local_opts, dict):
+        merged_local_opts.update(form_local_opts)
 
     try:
         handle = await executor.submit(
@@ -768,6 +777,7 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
             env=env,
             working_dir=job_dir,
             slurm_opts=merged_slurm_opts,
+            local_opts=merged_local_opts,
         )
     except Exception as exc:
         # Update job as failed
