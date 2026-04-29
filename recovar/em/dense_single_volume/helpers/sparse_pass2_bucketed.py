@@ -329,37 +329,6 @@ def _build_bucket_arrays(
 
 
 @jax.jit
-def _score_pass2_bucket(
-    shifted_score,  # (B, T, N) complex
-    ctf2_over_nv_score,  # (B, N) real
-    proj_weighted,  # (B, R, N) complex
-    proj_abs2_weighted,  # (B, R, N) real
-    rotation_log_prior,  # (B, R) real
-    translation_log_prior,  # (B, T) real
-    candidate_mask,  # (B, R, T) bool
-):
-    """Compute (B, R, T) scores; mask invalid (rot, trans) cells to -inf."""
-    cross = -2.0 * jnp.einsum(
-        "btn,brn->btr",
-        jnp.conj(shifted_score),
-        proj_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    ).real
-    cross = cross.swapaxes(1, 2)  # (B, R, T)
-    norms = jnp.einsum(
-        "bn,brn->br",
-        ctf2_over_nv_score,
-        proj_abs2_weighted,
-        precision=jax.lax.Precision.HIGHEST,
-    )  # (B, R)
-    scores = -0.5 * (cross + norms[..., None])
-    scores = scores + rotation_log_prior[:, :, None]
-    scores = scores + translation_log_prior[:, None, :]
-    scores = jnp.where(candidate_mask, scores, -jnp.inf)
-    return scores
-
-
-@jax.jit
 def _score_pass2_bucket_relion_gpu_diff2(
     shifted_corrected,  # (B, T, N) complex, image / (CTF * scale)
     corr_img_score,  # (B, N) real, Minvsigma2 * CTF^2 * scale^2
@@ -463,7 +432,6 @@ def _maybe_dump_pass2_bucket(
     rotation_log_prior,
     translation_log_prior,
     candidate_mask,
-    shifted_score_split,
     ctf2_over_nv_score,
     proj_half,
     half_weights_used,
@@ -501,7 +469,6 @@ def _maybe_dump_pass2_bucket(
     rot_prior_np = np.asarray(rotation_log_prior, dtype=np.float64)
     trans_prior_np = np.asarray(translation_log_prior, dtype=np.float64)
     mask_np = np.asarray(candidate_mask, dtype=bool)
-    shifted_score_np = np.asarray(shifted_score_split)
     ctf2_np = np.asarray(ctf2_over_nv_score, dtype=np.float64)
     proj_np = np.asarray(proj_half)
     shifted_corrected_np = (
@@ -534,7 +501,6 @@ def _maybe_dump_pass2_bucket(
             probs=probs_np[row, :cnt, :],
             rotation_log_prior=rot_prior_np[row, :cnt],
             translation_log_prior=trans_prior_np[row],
-            shifted_score=shifted_score_np[row],
             shifted_corrected=(
                 shifted_corrected_np[row] if shifted_corrected_np is not None else np.empty((0,), dtype=np.complex64)
             ),
@@ -862,23 +828,12 @@ def compute_pass2_stats_sparse_bucketed(
     local_rot_counts = [int(rots.shape[0]) for rots in per_image_inputs["oversampled_rots"]]
     valid_candidate_counts = [int(np.asarray(m).sum()) for m in per_image_inputs["candidate_mask"]]
 
-    use_relion_direct_diff2_scoring = os.environ.get("RECOVAR_RELION_DIRECT_DIFF2_SCORING", "").lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-    use_relion_adjoint_inverse = os.environ.get(
-        "RECOVAR_RELION_SPARSE_PASS2_ADJOINT_INVERSE",
-        "",
-    ).lower() in {"1", "true", "yes", "on"}
-
     # Bucket
     buckets = _bucket_pass2_inputs(
         per_image_inputs,
         n_fine_trans=n_fine_trans,
         rotation_block_size_for_quantization=rotation_block_size_for_quantization,
-        max_hypotheses_per_microbatch=100_000 if use_relion_direct_diff2_scoring else 2_000_000,
+        max_hypotheses_per_microbatch=100_000,
     )
 
     logger.info(
@@ -889,8 +844,6 @@ def compute_pass2_stats_sparse_bucketed(
     )
     if use_native_half_volume_mstep:
         logger.info("Sparse pass-2 M-step: using native half-volume backprojection diagnostic")
-    if use_relion_adjoint_inverse:
-        logger.info("Sparse pass-2 M-step: using transposed rotations for RELION A.inv() diagnostic")
 
     # Output accumulators (volume_size matches what original returned: full N**3)
     Ft_y_total = jnp.zeros(recon_volume_size, dtype=recon_accum_dtype)
@@ -1046,7 +999,7 @@ def compute_pass2_stats_sparse_bucketed(
             scale_corrections,
             image_pre_shifts,
             use_float64_scoring,
-            return_direct_scoring_io=use_relion_direct_diff2_scoring,
+            return_direct_scoring_io=True,
         )
 
         # Window gather (if applicable)
@@ -1056,24 +1009,18 @@ def compute_pass2_stats_sparse_bucketed(
             ctf2_over_nv_score = ctf2_over_nv_half[:, window_indices]
             ctf2_over_nv_recon = ctf2_over_nv_half_with_dc[:, recon_window_indices]
             shifted_noise = shifted_score_half_with_dc[:, recon_window_indices]
-            if use_relion_direct_diff2_scoring:
-                shifted_corrected_score = shifted_corrected_score_half[:, window_indices]
+            shifted_corrected_score = shifted_corrected_score_half[:, window_indices]
         else:
             shifted_score = shifted_score_half
             shifted_recon = shifted_recon_half
             ctf2_over_nv_score = ctf2_over_nv_half
             ctf2_over_nv_recon = ctf2_over_nv_half_with_dc
             shifted_noise = shifted_score_half_with_dc
-            if use_relion_direct_diff2_scoring:
-                shifted_corrected_score = shifted_corrected_score_half
+            shifted_corrected_score = shifted_corrected_score_half
 
         # Project (B*R, 3, 3) -> (B*R, n_half) -> reshape (B, R, n_half)
         flat_rotations = flatten_bucket_rotations(jnp.asarray(rotations))
-        flat_backproject_rotations = (
-            jnp.swapaxes(flat_rotations, -1, -2)
-            if use_relion_adjoint_inverse
-            else flat_rotations
-        )
+        flat_backproject_rotations = flat_rotations
         projection_kwargs = window_spec.projection_kwargs(return_abs2=False if use_window else None)
         proj_half_flat, proj_abs2_half_flat = _compute_projections_block(
             mean_for_proj,
@@ -1085,56 +1032,30 @@ def compute_pass2_stats_sparse_bucketed(
         )
         if use_window:
             proj_half = proj_half_flat[:, window_indices].reshape(batch, bucket_size, n_windowed)
-            proj_abs2 = jnp.abs(proj_half) ** 2
-            proj_weighted = proj_half * half_weights_windowed[None, None, :]
-            proj_abs2_weighted = proj_abs2 * half_weights_windowed[None, None, :]
             proj_for_noise = proj_half_flat[:, recon_window_indices].reshape(batch, bucket_size, n_recon_windowed)
             proj_abs2_for_noise = jnp.abs(proj_for_noise) ** 2
         else:
             proj_half = proj_half_flat.reshape(batch, bucket_size, n_half)
-            proj_abs2 = proj_abs2_half_flat.reshape(batch, bucket_size, n_half)
-            proj_weighted = proj_half * half_weights[None, None, :]
-            proj_abs2_weighted = proj_abs2 * half_weights[None, None, :]
+            proj_abs2_for_noise = proj_abs2_half_flat.reshape(batch, bucket_size, n_half)
             proj_for_noise = proj_half
-            proj_abs2_for_noise = proj_abs2
 
-        (
-            proj_weighted,
+        proj_for_noise, proj_abs2_for_noise = precision_policy.cast_local_noise_projection_scores(
             proj_for_noise,
-            proj_abs2_weighted,
-            proj_abs2_for_noise,
-        ) = precision_policy.cast_local_projection_scores(
-            proj_weighted,
-            proj_for_noise,
-            proj_abs2_weighted,
             proj_abs2_for_noise,
         )
 
         # Score: (B, R, T)
-        shifted_score_split = shifted_score.reshape(batch, n_fine_trans, -1)
-        shifted_corrected_score_split = None
-        if use_relion_direct_diff2_scoring:
-            shifted_corrected_score_split = shifted_corrected_score.reshape(batch, n_fine_trans, -1)
-            direct_half_weights = half_weights_windowed if use_window else half_weights
-            scores = _score_pass2_bucket_relion_gpu_diff2(
-                shifted_corrected_score_split,
-                ctf2_over_nv_score,
-                proj_half,
-                direct_half_weights,
-                jnp.asarray(log_prior),
-                bucket_translation_prior,
-                jnp.asarray(candidate_mask),
-            )
-        else:
-            scores = _score_pass2_bucket(
-                shifted_score_split,
-                ctf2_over_nv_score,
-                proj_weighted,
-                proj_abs2_weighted,
-                jnp.asarray(log_prior),
-                bucket_translation_prior,
-                jnp.asarray(candidate_mask),
-            )
+        shifted_corrected_score_split = shifted_corrected_score.reshape(batch, n_fine_trans, -1)
+        direct_half_weights = half_weights_windowed if use_window else half_weights
+        scores = _score_pass2_bucket_relion_gpu_diff2(
+            shifted_corrected_score_split,
+            ctf2_over_nv_score,
+            proj_half,
+            direct_half_weights,
+            jnp.asarray(log_prior),
+            bucket_translation_prior,
+            jnp.asarray(candidate_mask),
+        )
 
         if normalization_log_z_np is None:
             log_Z, probs, best_log_score_bucket, best_argmax, max_posterior_bucket = _normalize_pass2_bucket(scores)
@@ -1156,7 +1077,6 @@ def compute_pass2_stats_sparse_bucketed(
             rotation_log_prior=jnp.asarray(log_prior),
             translation_log_prior=bucket_translation_prior,
             candidate_mask=jnp.asarray(candidate_mask),
-            shifted_score_split=shifted_score_split,
             ctf2_over_nv_score=ctf2_over_nv_score,
             proj_half=proj_half,
             half_weights_used=half_weights_windowed if use_window else half_weights,
@@ -1237,7 +1157,7 @@ def compute_pass2_stats_sparse_bucketed(
             if half_spectrum_scoring:
                 shifted_noise_split = shifted_noise.reshape(batch, n_fine_trans, -1)
             else:
-                shifted_noise_split = shifted_score_split
+                shifted_noise_split = shifted_score.reshape(batch, n_fine_trans, -1)
             summed_masked_noise = compute_local_weighted_sums(probs, shifted_noise_split)
             block_noise_shells, _, _ = _compute_noise_block(
                 flatten_bucket_rows(proj_for_noise),

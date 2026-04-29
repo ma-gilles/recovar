@@ -496,7 +496,6 @@ for close E-step parity:
 
 RECOVAR RELION-parity refinement now defaults these on unless explicitly overridden:
 
-- `RECOVAR_RELION_DIRECT_DIFF2_SCORING=1`
 - `RECOVAR_RELION_TEXTURE_INTERP=1`
 - `RECOVAR_RELION_NUMPY_IMAGE_FFT=1`
 

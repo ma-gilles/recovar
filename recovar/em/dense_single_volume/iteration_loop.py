@@ -204,9 +204,6 @@ RELION_MINRES_MAP = 5
 def _enable_relion_parity_defaults():
     """Enable source-matched RELION arithmetic unless explicitly overridden."""
     defaults = {
-        # RELION's accelerated E-step computes diff2 directly rather than via
-        # an algebraically equivalent <y, A x> - |A x|^2 expansion.
-        "RECOVAR_RELION_DIRECT_DIFF2_SCORING": "1",
         # RELION's CUDA projector samples Fourier references through
         # cudaFilterModeLinear texture objects.
         "RECOVAR_RELION_TEXTURE_INTERP": "1",
