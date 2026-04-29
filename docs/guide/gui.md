@@ -85,16 +85,39 @@ After a pipeline completes, the **Suggested Next Steps** section offers a one-cl
 - **Postprocess** — sharpen and filter volumes
 - **Downsample** — pre-downsample particle images
 
-### SLURM execution
+### Executor selection (SLURM or Local GPU)
 
-On clusters with SLURM, the GUI auto-detects `sbatch` and shows SLURM settings:
+Each job can be submitted to either **SLURM** (for cluster batch scheduling) or **Local GPU** (direct subprocess on the current machine). When `sbatch` is detected on the system, every job form shows an **executor toggle** so you can choose per job.
+
+#### SLURM execution
+
+On clusters with SLURM, the SLURM settings panel appears when the SLURM executor is selected:
 
 - Partition and account
 - Number of GPUs, CPUs, and memory
 - Time limit
 - Extra SBATCH directives (for advanced users)
 
-You can **save SLURM defaults per project** so they persist across sessions.
+#### Local GPU execution
+
+When the Local GPU executor is selected, the local settings panel lets you configure:
+
+- **GPU picker** — select which GPU(s) to use (sets `CUDA_VISIBLE_DEVICES`)
+- **Setup command** — a shell command run before the pipeline (e.g., `module load cudatoolkit/12.8`)
+- **Environment variables** — extra env vars for the job
+
+#### Jobs survive GUI restarts
+
+Jobs submitted through the GUI (both SLURM and local) are tracked in the project database. If the GUI server restarts, it reconnects to all in-flight jobs automatically — no work is lost.
+
+### Settings page
+
+The **Settings page** (gear icon in the sidebar) lets you configure SLURM and local execution defaults at two levels:
+
+- **User-global** — stored in `~/.config/recovar/config.toml`, applies to all projects
+- **Per-project** — stored in `<project_dir>/recovar.toml`, overrides user-global for that project
+
+The page shows an **effective defaults** summary with provenance badges (built-in / user / project) so you can see where each value comes from. Defaults are layered: built-in < user-global < per-project < per-job form override.
 
 ## Exploring results
 
@@ -158,10 +181,12 @@ The GUI mirrors the CLI workflow, adding interactivity:
 
 ## Requirements
 
-The GUI requires FastAPI and uvicorn, which are included when you install with:
+The GUI requires FastAPI, uvicorn, SQLAlchemy, and a few other packages, which are all included when you install with:
 
 ```bash
-pip install recovar[gui]
+pip install "recovar[gui]"
 ```
+
+This installs the `gui` extra, which includes `fastapi`, `uvicorn`, `python-multipart`, `sqlalchemy`, `aiofiles`, and `tomli_w` (for writing TOML settings files).
 
 The frontend is pre-built and bundled — no Node.js required at runtime.

@@ -53,6 +53,13 @@ Project mode is the standard workflow: pass `--project <dir>` (or run from insid
 | `reconstruct_from_external_embedding` | Volume generation from external latent spaces |
 | `postprocess` | Post-processing and output refinement |
 
+## Diagnostics
+
+| Command | Description |
+|---------|-------------|
+| `check_paths` | Preview how image paths resolve without running the pipeline |
+| `build_custom_cuda` | Pre-build the custom CUDA backproject/project extension |
+
 ## Testing
 
 | Command | Description |

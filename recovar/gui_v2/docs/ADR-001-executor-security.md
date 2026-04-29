@@ -240,9 +240,9 @@ Local-execution defaults follow the same layering as SLURM defaults
 (built-in, user-global `[local]`, project `[local]`, per-job override).
 See `backend/services/project_config.py` for the merge logic.
 
-The `--executor` CLI flag still works (sets `RECOVAR_EXECUTOR` env var)
-but is no longer the primary way to select an executor. In the common case
-(`auto`), both executors are available and the user picks per job.
+The `RECOVAR_EXECUTOR` env var can override auto-detection as a
+power-user escape hatch (values: `auto`, `local`, `slurm`). There is
+no CLI flag — auto-detection handles all normal cases.
 
 ---
 

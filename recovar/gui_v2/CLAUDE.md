@@ -405,19 +405,18 @@ PATH, `/api/system/info` returns `executor_mode: "both"` and every job
 form shows an `ExecutorSelector` toggle (SLURM Cluster / Local GPU).
 The user picks at submit time; each job can go to a different executor.
 
-`backend/services/executor.py::slurm_available()` still reads the
-`RECOVAR_EXECUTOR` env var (set by `recovar gui --executor`). Values:
+`backend/services/executor.py::slurm_available()` reads the
+`RECOVAR_EXECUTOR` env var (power-user override, not exposed as a CLI
+flag). Values:
 
 - `auto` (default) — probe `sbatch` on PATH; when found, mode is
   `"both"` (both executors available, user picks per job). When absent,
   only the local executor is available.
 - `local` — force local-subprocess mode even on a SLURM login node.
-- `slurm` — force SLURM. Caller sees the actual `sbatch: command not
-  found` if missing.
+- `slurm` — force SLURM only.
 
-The `--executor` CLI flag still works but is no longer the primary way
-to control execution mode.  In the common case (`auto`), both executors
-are available simultaneously and the user picks per job via the toggle.
+In the common case, both executors are available simultaneously and the
+user picks per job via the toggle in the job form.
 
 **Frontend components for executor selection:**
 - `ExecutorSelector.tsx` — per-job toggle shown when `executor_mode === "both"`.
