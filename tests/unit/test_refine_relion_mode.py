@@ -31,12 +31,12 @@ from recovar.em.dense_single_volume.local_backprojection import (
     flatten_bucket_rows,
 )
 from recovar.em.dense_single_volume.local_em_engine import (
-    _fetch_indexed_batch,
     _pad_local_big_jit_image_axis,
     _prepare_local_exact_bucket,
     _reorder_bucket_to_indices,
     run_local_em_exact,
 )
+from recovar.em.dense_single_volume.helpers.batch_fetch import fetch_indexed_batch as _fetch_indexed_batch
 from recovar.em.dense_single_volume.local_debug import maybe_write_debug_score_dump
 from recovar.em.dense_single_volume.local_layout import (
     LocalBucketSpec,
@@ -1902,7 +1902,7 @@ def translations():
 
 
 def test_sparse_pass2_local_search_matches_per_image_reference(rng, init_volume, translations):
-    """Exact-local sparse pass 2 preserves the legacy per-image pass-2 contract."""
+    """Exact-local sparse pass 2 preserves the per-image pass-2 reference contract."""
 
     dataset = MockDataset(2, rng)
     mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
@@ -1990,12 +1990,12 @@ def test_sparse_pass2_local_search_matches_per_image_reference(rng, init_volume,
 
 
 # ===========================================================================
-# Test 1: RELION mode smoke test -- runs without error
+# Test 1: RELION-parity smoke test -- runs without error
 # ===========================================================================
 
 
 class TestRelionModeSmokeTest:
-    """Call refine_single_volume with mode='relion' and verify it runs."""
+    """Call refine_single_volume and verify it runs."""
 
     def test_relion_bootstrap_current_size_matches_benchmark_case(self):
         """128px, 4.25A/px, ini_high=30A should bootstrap from 36 -> 56."""
@@ -2126,7 +2126,7 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(got[0], half1)
         np.testing.assert_allclose(got[1], half2)
 
-    def test_normalize_direction_prior_per_half_keeps_legacy_shared_prior(self):
+    def test_normalize_direction_prior_per_half_keeps_shared_prior(self):
         shared = np.array([0.7, 0.3], dtype=np.float32)
 
         got = normalize_direction_prior_per_half(shared)
@@ -2135,7 +2135,7 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(got[1], shared)
         assert got[0] is not got[1]
 
-    def test_normalize_noise_variance_per_half_keeps_legacy_shared_noise(self):
+    def test_normalize_noise_variance_per_half_keeps_shared_noise(self):
         shared = jnp.arange(IMAGE_SIZE, dtype=jnp.float32) + 1.0
 
         got = _normalize_noise_variance_per_half(shared, n_halves=2)
@@ -2153,14 +2153,14 @@ class TestRelionModeSmokeTest:
         np.testing.assert_allclose(np.asarray(got[0]), half1)
         np.testing.assert_allclose(np.asarray(got[1]), half2)
 
-    def test_relion_mode_runs_2_iterations(
+    def test_relion_refinement_runs_2_iterations(
         self,
         half_datasets,
         init_volume,
         rotations,
         translations,
     ):
-        """mode='relion' completes 2 iterations on a tiny dataset."""
+        """RELION-parity refinement completes 2 iterations on a tiny dataset."""
         result = refine_single_volume(
             half_datasets,
             init_volume,
@@ -2173,7 +2173,6 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -2214,7 +2213,6 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             init_current_size=4,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=2,
             low_resol_join_halves_angstrom=0.0,
@@ -2266,7 +2264,6 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             init_current_size=4,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=2,
             low_resol_join_halves_angstrom=0.0,
@@ -2297,7 +2294,6 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -2353,7 +2349,6 @@ class TestRelionModeSmokeTest:
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
             adaptive_oversampling=0,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -2404,7 +2399,6 @@ class TestRelionModeSmokeTest:
             init_current_size=16,
             adaptive_oversampling=1,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
             particle_diameter_ang=200.0,
@@ -2458,7 +2452,6 @@ class TestRelionModeSmokeTest:
             init_current_size=16,
             adaptive_oversampling=1,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
             init_image_corrections=[
@@ -2727,7 +2720,6 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -2774,7 +2766,6 @@ class TestRelionModeSmokeTest:
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
             adaptive_oversampling=0,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
             init_fsc=np.ones(grid_size // 2),
@@ -2811,7 +2802,6 @@ class TestRelionModeSmokeTest:
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
             adaptive_oversampling=0,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -2838,7 +2828,6 @@ class TestRelionModeSmokeTest:
             image_batch_size=N_IMAGES,
             rotation_block_size=N_ROTATIONS,
             init_current_size=16,
-            mode="relion",
             init_healpix_order=2,
             max_healpix_order=3,
         )
@@ -2920,7 +2909,6 @@ class TestRelionModeSmokeTest:
             init_current_size=16,
             adaptive_oversampling=1,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
         )
@@ -3010,7 +2998,6 @@ class TestRelionModeSmokeTest:
             adaptive_oversampling=1,
             adaptive_pass2_skip_threshold=-1.0,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
         )
@@ -3092,7 +3079,6 @@ class TestRelionModeSmokeTest:
             adaptive_oversampling=1,
             adaptive_fraction=0.97,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
         )
@@ -3146,7 +3132,6 @@ class TestRelionModeSmokeTest:
             adaptive_fraction=0.97,
             max_significants=123,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
         )
@@ -3272,7 +3257,6 @@ class TestRelionModeSmokeTest:
             adaptive_oversampling=0,
             adaptive_fraction=0.97,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
             init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
@@ -3365,7 +3349,6 @@ class TestRelionModeSmokeTest:
             adaptive_oversampling=0,
             adaptive_fraction=1.0,
             nside_level=1,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
         )
@@ -3438,7 +3421,6 @@ class TestRelionModeSmokeTest:
             init_current_size=8,
             adaptive_oversampling=0,
             adaptive_fraction=1.0,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
             skip_final_iteration=True,
@@ -3496,7 +3478,6 @@ class TestRelionModeSmokeTest:
             adaptive_oversampling=1,
             adaptive_pass2_skip_threshold=-1.0,
             nside_level=3,
-            mode="relion",
             init_healpix_order=1,
             max_healpix_order=2,
         )
@@ -3504,36 +3485,11 @@ class TestRelionModeSmokeTest:
         assert captured["grid_order"] == 1
 
 # ===========================================================================
-# Test 2: Legacy mode removed
+# Test 2: Default RELION path
 # ===========================================================================
 
 
-class TestLegacyModeRemoved:
-    """Verify that mode='legacy' is no longer part of the API."""
-
-    def test_legacy_mode_explicit_raises(
-        self,
-        half_datasets,
-        init_volume,
-        rotations,
-        translations,
-    ):
-        """Explicit mode='legacy' is rejected."""
-        with pytest.raises(ValueError, match="expected 'relion'"):
-            refine_single_volume(
-                half_datasets,
-                init_volume,
-                jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-                jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-                rotations,
-                translations,
-                disc_type="linear_interp",
-                max_iter=1,
-                image_batch_size=N_IMAGES,
-                rotation_block_size=N_ROTATIONS,
-                mode="legacy",
-            )
-
+class TestRelionDefault:
     def test_default_mode_is_relion(
         self,
         half_datasets,
@@ -3806,7 +3762,6 @@ def test_local_search_uses_selected_only_fine_rotation_grid_when_oversampling_is
         init_current_size=16,
         adaptive_oversampling=1,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
     )
@@ -3990,7 +3945,6 @@ def test_local_search_applies_perturbation_to_generated_fine_rotation_grid(
         init_current_size=16,
         adaptive_oversampling=1,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         perturb_factor=0.5,
@@ -4171,7 +4125,6 @@ def test_local_search_uses_negative_previous_offsets_for_translation_prior(
         init_current_size=16,
         adaptive_oversampling=1,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
@@ -4341,7 +4294,6 @@ def test_local_search_coarse_translation_prior_mode_uses_unperturbed_base_grid(
         init_current_size=16,
         adaptive_oversampling=1,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
@@ -4454,7 +4406,6 @@ def test_local_search_os0_keeps_full_local_support_for_mstep(
         init_current_size=16,
         adaptive_oversampling=0,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
     )
@@ -4565,7 +4516,6 @@ def _run_refine_with_stubbed_exact_local_batch_sizes(
         init_current_size=16,
         adaptive_oversampling=0,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
     )
@@ -4783,7 +4733,6 @@ def test_local_search_coarse_translation_prior_mode_uses_replay_sampling_grid_wh
         init_current_size=16,
         adaptive_oversampling=1,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
@@ -4948,7 +4897,6 @@ def test_first_local_iteration_uses_previous_best_rotations_without_dense_bootst
         init_current_size=16,
         adaptive_oversampling=0,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         replay_iteration_overrides=[
@@ -5107,7 +5055,6 @@ def test_init_previous_best_rotation_eulers_seed_first_local_iteration(
         init_current_size=16,
         adaptive_oversampling=0,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         init_previous_best_rotation_eulers=[prev_h1, prev_h2],
@@ -5184,7 +5131,6 @@ def test_relion_mode_writes_absolute_translations_from_previous_offset(
         init_current_size=16,
         adaptive_oversampling=0,
         nside_level=1,
-        mode="relion",
         init_healpix_order=1,
         max_healpix_order=1,
         init_previous_best_translations=[prev_h1.copy(), prev_h2.copy()],
@@ -5363,7 +5309,6 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         init_current_size=16,
         adaptive_oversampling=1,
         nside_level=4,
-        mode="relion",
         init_healpix_order=4,
         max_healpix_order=4,
         perturb_factor=0.0,
@@ -5383,30 +5328,3 @@ def test_local_search_decodes_hard_assignments_on_fine_grid(
         rtol=1e-6,
         atol=1e-6,
     )
-
-
-# ===========================================================================
-# Test 3: Invalid mode
-# ===========================================================================
-
-
-class TestInvalidMode:
-    def test_invalid_mode_raises(
-        self,
-        half_datasets,
-        init_volume,
-        rotations,
-        translations,
-    ):
-        """Only RELION mode is supported."""
-        with pytest.raises(ValueError, match="only 'relion' is supported"):
-            refine_single_volume(
-                half_datasets,
-                init_volume,
-                jnp.ones(IMAGE_SIZE, dtype=jnp.float32),
-                jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 100.0,
-                rotations,
-                translations,
-                mode="bogus",
-                max_iter=1,
-            )

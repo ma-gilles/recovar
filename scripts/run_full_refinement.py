@@ -92,9 +92,6 @@ def _find_relion_optimiser_star(args):
 
 def _maybe_apply_relion_image_mask(ds, args):
     """Override the dataset scoring mask with RELION's particle-diameter mask."""
-    if args.mode != "relion":
-        return None
-
     optimiser_star = _find_relion_optimiser_star(args)
     if optimiser_star is None:
         logger.info("RELION optimiser STAR not found; keeping dataset image mask")
@@ -144,12 +141,6 @@ def main():
     )
     parser.add_argument("--max_iter", type=int, default=10, help="Maximum EM iterations")
     parser.add_argument(
-        "--mode",
-        choices=["relion"],
-        default="relion",
-        help="Refinement mode to run. Only 'relion' is supported.",
-    )
-    parser.add_argument(
         "--healpix_order",
         type=int,
         default=3,
@@ -172,7 +163,7 @@ def main():
         type=int,
         default=None,
         help="Max significant samples per image. Use <=0 for RELION-style uncapped mode. "
-        "If omitted in RELION mode, read _rlnMaximumSignificantPoses from the optimiser STAR.",
+        "If omitted, read _rlnMaximumSignificantPoses from the optimiser STAR.",
     )
     parser.add_argument(
         "--adaptive_skip_threshold",
@@ -298,7 +289,7 @@ def main():
     logger.info("Half-sets: %d + %d images", ds_half1.n_units, ds_half2.n_units)
 
     optimiser_star = _find_relion_optimiser_star(args)
-    if args.mode == "relion" and args.max_significants is None and optimiser_star is not None:
+    if args.max_significants is None and optimiser_star is not None:
         relion_max_significants = _load_relion_max_significants(optimiser_star)
         if relion_max_significants is not None:
             args.max_significants = relion_max_significants
@@ -330,18 +321,14 @@ def main():
     # ---- Set up rotation and translation grids ----
     from recovar.em.sampling import get_rotation_grid, get_translation_grid
 
-    if args.mode == "relion":
-        init_healpix_order = max(args.healpix_order - args.adaptive_oversampling, 0)
-        rotation_grid_order = init_healpix_order
-        logger.info(
-            "RELION grid orders: coarse=%d, finest=%d (adaptive_oversampling=%d)",
-            init_healpix_order,
-            args.healpix_order,
-            args.adaptive_oversampling,
-        )
-    else:
-        init_healpix_order = args.healpix_order
-        rotation_grid_order = args.healpix_order
+    init_healpix_order = max(args.healpix_order - args.adaptive_oversampling, 0)
+    rotation_grid_order = init_healpix_order
+    logger.info(
+        "RELION grid orders: coarse=%d, finest=%d (adaptive_oversampling=%d)",
+        init_healpix_order,
+        args.healpix_order,
+        args.adaptive_oversampling,
+    )
 
     rotations = get_rotation_grid(rotation_grid_order, matrices=True).astype(np.float32)
     translations = get_translation_grid(args.offset_range, args.offset_step).astype(np.float32)
@@ -367,12 +354,11 @@ def main():
     # MUST come from masked images too — otherwise sigma2 is dominated by the
     # solvent area and the iter-1 chi² is ~3.3-6× too small (verified
     # 2026-04-08 against the tiny parity dataset, see tmp/check_sigma2_mask.py).
-    bootstrap_apply_mask = args.mode == "relion"
     initial_noise_radial = recon_noise.estimate_initial_noise_spectrum_from_unaligned_images(
         ds,
         initial_noise_subset,
         batch_size=min(args.image_batch_size, initial_noise_subset.size),
-        apply_image_mask=bootstrap_apply_mask,
+        apply_image_mask=True,
     )
     noise_variance = recon_noise.make_radial_noise(initial_noise_radial, ds.image_shape)
     logger.info(
@@ -405,8 +391,7 @@ def main():
 
     logger.info("=" * 70)
     logger.info(
-        "Starting refinement: mode=%s, max_iter=%d, adaptive_oversampling=%d",
-        args.mode,
+        "Starting RELION-parity refinement: max_iter=%d, adaptive_oversampling=%d",
         args.max_iter,
         args.adaptive_oversampling,
     )
@@ -428,7 +413,6 @@ def main():
         rotations=rotations,
         translations=translations_jnp,
         disc_type="linear_interp",
-        mode=args.mode,
         max_iter=args.max_iter,
         image_batch_size=args.image_batch_size,
         rotation_block_size=args.rotation_block_size,

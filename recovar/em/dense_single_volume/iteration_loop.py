@@ -853,7 +853,7 @@ def _run_local_search_iteration_exact_v1(
             prior_translations,
             sigma_offset_angstrom,
             # Match the grouped RELION-mode path: local translation priors use the
-            # learned/model sigma, not the legacy range/3 override.
+            # learned/model sigma, not the older range/3 override.
             None,
             experiment_dataset.voxel_size,
             grid_metadata=local_grid_metadata,
@@ -1046,7 +1046,6 @@ def refine_single_volume(
     max_significants=500,
     nside_level=None,
     translation_pixel_offset=None,
-    mode="relion",
     adaptive_pass2_skip_threshold=ADAPTIVE_PASS2_MAX_SIGNIFICANT_FRACTION,
     # --- RELION-mode parameters ---
     init_healpix_order=2,
@@ -1084,9 +1083,7 @@ def refine_single_volume(
 ):
     """Multi-iteration RELION-parity EM refinement.
 
-    The legacy FSC-driven refinement loop has been removed. ``mode`` remains
-    as a compatibility keyword for callers that already pass ``"relion"``,
-    but ``"relion"`` is the only supported value.
+    This API always runs the RELION-parity refinement loop.
 
     Parameters
     ----------
@@ -1136,8 +1133,6 @@ def refine_single_volume(
     translation_pixel_offset : float or None
         Step size between coarse translation grid points (pixels).
         Required when adaptive_oversampling > 0.
-    mode : str
-        Only ``"relion"`` is supported.
     adaptive_pass2_skip_threshold : float
         Skip adaptive pass 2 when the mean significant-sample fraction is at
         least this value. Set to a negative value to disable this shortcut and
@@ -1178,8 +1173,6 @@ def refine_single_volume(
         healpix_order_trajectory : list of int -- HEALPix order per iter
         ave_Pmax_trajectory : list of float -- average Pmax per iter
     """
-    if mode != "relion":
-        raise ValueError(f"Unknown mode={mode!r}; expected 'relion'")
     if relion_current_sizes is not None and len(relion_current_sizes) == 0:
         raise ValueError("relion_current_sizes must be non-empty when provided")
 
@@ -1519,7 +1512,7 @@ def _run_relion_iteration_loop(
     mean_variance = jnp.array(init_mean_variance)
     ## TODO: WE NEED TO FIND A BETTER WAY TO DO THIS THAN TO DEFINE ALL VARIABLES BELOW.
     # History tracking. Keep these plain lists for now because they are
-    # serialized directly into legacy intermediate files.
+    # serialized directly into intermediate files.
     current_sizes = []
     fsc_history = []
     pixel_resolutions = []
@@ -3176,8 +3169,8 @@ def _run_relion_iteration_loop(
             mean_signal_variance_per_half.append(mean_signal_variance_k)
             tau2_update_details_per_half.append(tau2_update_details_k)
         mean_signal_variance = 0.5 * (mean_signal_variance_per_half[0] + mean_signal_variance_per_half[1])
-        # Keep the legacy single tau2 diagnostic fields aligned with RELION's
-        # half1 model.star, which is what the parity diff script reports.
+        # Keep the single tau2 diagnostic fields aligned with RELION's half1
+        # model.star, which is what the parity diff script reports.
         tau2_update_details = tau2_update_details_per_half[0]
         logger.info(
             "tau2 update from THIS-iter FSC: old_max=%.4e new_max=%.4e half_max=(%.4e, %.4e)",
@@ -3833,6 +3826,13 @@ def _run_relion_iteration_loop(
         smallest_change_angles_trajectory.append(float(state.current_changes_optimal_orientations))
         smallest_change_offsets_trajectory.append(float(state.current_changes_optimal_offsets_angstrom))
 
+        # Save assignments for next iteration's change tracking.
+        # Use coarse_ha (indexed into effective_rotations/current_rotations)
+        # so that local search and convergence detection work correctly
+        # regardless of whether adaptive oversampling was used.
+        previous_assignments = [ha.copy() if ha is not None else None for ha in coarse_ha]
+        _parity_dump.mark_stage(iteration, "convergence")
+
         if _parity_dump.is_active():
             try:
                 _parity_dump.dump_iteration(
@@ -3862,13 +3862,6 @@ def _run_relion_iteration_loop(
                 )
             except Exception as exc:
                 logger.warning("parity_dump.dump_iteration failed at iter %d: %s", iteration, exc)
-
-        # Save assignments for next iteration's change tracking.
-        # Use coarse_ha (indexed into effective_rotations/current_rotations)
-        # so that local search and convergence detection work correctly
-        # regardless of whether adaptive oversampling was used.
-        previous_assignments = [ha.copy() if ha is not None else None for ha in coarse_ha]
-        _parity_dump.mark_stage(iteration, "convergence")
 
         # --- Timing ---
         elapsed = time.time() - t0

@@ -96,8 +96,8 @@ average of half1/half2 weights into the tau2 update, which created an apparent
 noise/tau2 gap after the low-resolution join boundary.
 
 RECOVAR now computes tau2 once per half from that half's own `Ft_ctf`, keeps the
-legacy saved `tau2_*_iter` arrays aligned to RELION half1 model.star for diff
-scripts, and reconstructs each half with its own tau2 radial prior. The shared
+saved `tau2_*_iter` arrays aligned to RELION half1 model.star for diff scripts,
+and reconstructs each half with its own tau2 radial prior. The shared
 `mean_variance` remains the average of the two half priors for the next E-step.
 
 Focused 5k replay artifact:
@@ -303,8 +303,8 @@ whereas RECOVAR had modeled that same integer pre-centering as a circular
 Fourier phase shift.
 
 RECOVAR now applies RELION-style zero-filled real-space integer pre-shifts for
-integral `image_pre_shifts` on real-space batches, and keeps the legacy
-Fourier-phase path only for non-integral or already-Fourier test inputs.
+integral `image_pre_shifts` on real-space batches, and uses Fourier phases only
+for non-integral or already-Fourier test inputs.
 
 Focused validation:
 `_agent_scratch/focused_it008_stack4603_zerofill_20260427_090904`, local A100,
@@ -494,7 +494,7 @@ for close E-step parity:
 - RELION's accelerated score kernel computes diff2 directly, and image
   preprocessing follows RELION/FFTW-style centered complex FFTs.
 
-RECOVAR `mode="relion"` now defaults these on unless explicitly overridden:
+RECOVAR RELION-parity refinement now defaults these on unless explicitly overridden:
 
 - `RECOVAR_RELION_DIRECT_DIFF2_SCORING=1`
 - `RECOVAR_RELION_TEXTURE_INTERP=1`
@@ -1446,7 +1446,7 @@ Forced higher-iteration replay now running after the prior-center fix:
 - The dense big-JIT call construction in `em_engine.py` is factored through one
   per-batch helper so pass 1 and pass 2 share the same bucket argument setup.
 - `exact_v2` has been removed; use `exact_v1` for the active exact local
-  engine. Grouped-union is documented as legacy/fallback only.
+  engine. Grouped-union has been removed from the active path.
 - Local big-JIT now passes identity/zero correction operands instead of using
   static branches for optional image corrections, scale corrections, and
   translation-distance noise offsets.

@@ -142,7 +142,6 @@ echo "=== Run recovar full refinement in RELION mode ==="
 "$PIXI_PY" scripts/run_full_refinement.py \
   --data_dir "$DATA_DIR" \
   --output "$OUR_RESULTS_DIR" \
-  --mode relion \
   --max_iter "$MAX_ITER" \
   --healpix_order "$HEALPIX_ORDER" \
   --offset_range "$OFFSET_RANGE" \
@@ -165,7 +164,6 @@ echo "=== Run head-to-head comparison (own FSC + oracle) ==="
   --data_dir "$DATA_DIR" \
   --relion_ref_dir "$RELION_REF_DIR" \
   --output "$OUTPUT_DIR" \
-  --mode relion \
   --max_iter "$MAX_ITER" \
   --adaptive_oversampling "$ADAPTIVE_OVERSAMPLING" \
   --adaptive_fraction "$ADAPTIVE_FRACTION" \

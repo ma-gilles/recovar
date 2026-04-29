@@ -194,8 +194,8 @@ class RefinementState:
     smallest_changes_optimal_classes: float = SMALLEST_CHANGES_INIT_CLASSES
     # Counter incremented when current changes meet the "small enough"
     # criterion (within 3% of smallest OR ratio < 0.4 of sampling step).
-    # Replaces the older `nr_iter_wo_assignment_changes` for the
-    # check_convergence path; the older field is kept for legacy logging.
+    # Replaces `nr_iter_wo_assignment_changes` for the check_convergence path;
+    # the older field is kept for assignment-change logging.
     nr_iter_wo_large_hidden_variable_changes: int = 0
 
     def __post_init__(self):
@@ -545,7 +545,7 @@ def check_convergence(state: RefinementState) -> bool:
        MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES iterations.
 
     The third condition uses the RELION-exact ``nr_iter_wo_large_hidden_variable_changes``
-    counter (B4) when available; falls back to the legacy
+    counter (B4) when available; falls back to the assignment-change
     ``nr_iter_wo_assignment_changes`` if the per-particle change tracking
     has never been populated (e.g. very early iterations or callers that
     haven't passed rotation matrices to ``update_refinement_state``).
@@ -567,7 +567,8 @@ def check_convergence(state: RefinementState) -> bool:
         return False
 
     # Prefer the RELION-exact counter when populated; fall back to the
-    # legacy fraction-based counter for backwards compatibility.
+    # fraction-based assignment counter for callers without per-particle pose
+    # deltas.
     relion_changes_seen = state.smallest_changes_optimal_orientations < SMALLEST_CHANGES_INIT_ORIENTATIONS
     if relion_changes_seen:
         if state.nr_iter_wo_large_hidden_variable_changes < MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES:
@@ -603,7 +604,7 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
        (B3+B4) >= MAX_NR_ITER_WO_LARGE_HIDDEN_VARIABLE_CHANGES.  When that
        counter has not been populated yet (very early iterations or callers
        that don't pass rotation matrices to ``update_refinement_state``),
-       fall back to the legacy ``nr_iter_wo_assignment_changes``.
+       fall back to ``nr_iter_wo_assignment_changes``.
     3. Current angular step is NOT already finer than 75% of acc_rot
     4. ``healpix_order`` is below the RECOVAR hard cap. The cap only prevents
        runaway grid growth; it is not a RELION convergence criterion.
@@ -641,7 +642,7 @@ def should_refine_angular_sampling(state: RefinementState) -> bool:
 
     # Hidden-variable stalls: prefer the RELION-exact B3+B4 counter
     # (`nr_iter_wo_large_hidden_variable_changes`) when available.  Fall
-    # back to the legacy `nr_iter_wo_assignment_changes` plus the extended
+    # back to `nr_iter_wo_assignment_changes` plus the extended
     # resol-stall escape hatch only when B3+B4 hasn't been populated.
     relion_changes_seen = state.smallest_changes_optimal_orientations < SMALLEST_CHANGES_INIT_ORIENTATIONS
     if relion_changes_seen:
@@ -829,7 +830,7 @@ def update_refinement_state(
         Per-particle rotation matrices for the current and previous
         iterations, shape ``(n_images, 3, 3)``. When both provided, the
         RELION-exact ``current_changes_optimal_orientations`` is computed
-        and used in the new check_convergence path. The legacy
+        and used in the new check_convergence path. The assignment-change
         ``frac_changed`` is still computed from the integer assignments.
     current_translations_pixel, previous_translations_pixel : np.ndarray, optional
         Per-particle translation vectors in PIXEL units, shape ``(n_images, 2)``.
@@ -843,7 +844,7 @@ def update_refinement_state(
     RefinementState
         Updated state reflecting this iteration's results.
     """
-    # --- Compute assignment changes (legacy path, still used by logging) ---
+    # --- Compute assignment changes, still used by logging ---
     frac_changed = compute_assignment_changes(
         current_assignments,
         previous_assignments,
@@ -892,7 +893,7 @@ def update_refinement_state(
     else:
         nr_iter_wo_resol_gain = state.nr_iter_wo_resol_gain + 1
 
-    # --- Assignment stability detection (legacy) ---
+    # --- Assignment stability detection ---
     # "Large changes" threshold: fraction_changed > 0 means some images changed.
     # RELION considers assignments "stable" when fraction_changed is small.
     # We use fraction_changed < 0.01 (1%) as "no large changes".
@@ -912,7 +913,7 @@ def update_refinement_state(
     #       ratio < 0.4) OR (within 3% of smallest).
     # When the inputs are missing (early iters before per-particle data is
     # collected), we conservatively skip the relion counter and fall back
-    # to the legacy nr_iter_wo_assignment_changes path.
+    # to the nr_iter_wo_assignment_changes path.
     nr_iter_wo_large_hidden_variable_changes = state.nr_iter_wo_large_hidden_variable_changes
     smallest_orient = state.smallest_changes_optimal_orientations
     smallest_offsets = state.smallest_changes_optimal_offsets_angstrom

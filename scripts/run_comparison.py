@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """Head-to-head comparison of our EM refinement vs RELION.
 
-Runs two comparison modes:
+Runs two comparison cases:
   1. Same half-sets as RELION, own FSC->current_size logic
   2. Same half-sets + oracle current_sizes from RELION (isolates quality)
 
@@ -152,7 +152,7 @@ def run_refinement(
     ds, half1_idx, half2_idx, max_iter, output_subdir,
     oracle_current_sizes=None, adaptive_oversampling=0,
     healpix_order=3, offset_range=3.0, offset_step=1.0,
-    mode="relion", adaptive_fraction=0.999, max_significants=-1,
+    adaptive_fraction=0.999, max_significants=-1,
     offset_sigma_angstrom=10.0,
     image_batch_size=500, rotation_block_size=5000,
     adaptive_skip_threshold=0.5,
@@ -206,7 +206,6 @@ def run_refinement(
         rotations=rotations,
         translations=jnp.asarray(translations),
         disc_type="linear_interp",
-        mode=mode,
         max_iter=max_iter,
         image_batch_size=image_batch_size,
         rotation_block_size=rotation_block_size,
@@ -276,12 +275,6 @@ def main():
              "<data_dir>/relion_ref when present, otherwise fall back to "
              "<data_dir>/relion_ref_benchmark.",
     )
-    parser.add_argument(
-        "--mode",
-        choices=["relion"],
-        default="relion",
-        help="Refinement mode to benchmark. Only 'relion' is supported.",
-    )
     parser.add_argument("--adaptive_oversampling", type=int, default=0)
     parser.add_argument("--adaptive_fraction", type=float, default=0.999)
     parser.add_argument(
@@ -342,7 +335,6 @@ def main():
         ds = load_dataset(our_star, lazy=False)
         class _Args:
             data_dir = DATA_DIR
-            mode = args.mode
             relion_half_sets = relion_star
         _maybe_apply_relion_image_mask(ds, _Args)
         volume_shape = ds.volume_shape
@@ -366,7 +358,6 @@ def main():
             offset_sigma_angstrom=args.offset_sigma_angstrom,
             image_batch_size=args.image_batch_size,
             rotation_block_size=args.rotation_block_size,
-            mode=args.mode,
             adaptive_skip_threshold=args.adaptive_skip_threshold,
         )
 
@@ -388,7 +379,6 @@ def main():
             offset_sigma_angstrom=args.offset_sigma_angstrom,
             image_batch_size=args.image_batch_size,
             rotation_block_size=args.rotation_block_size,
-            mode=args.mode,
             adaptive_skip_threshold=args.adaptive_skip_threshold,
         )
     else:
@@ -398,7 +388,6 @@ def main():
         ds = load_dataset(our_star, lazy=False)
         class _Args:
             data_dir = DATA_DIR
-            mode = args.mode
             relion_half_sets = relion_star
         _maybe_apply_relion_image_mask(ds, _Args)
         volume_shape = ds.volume_shape
