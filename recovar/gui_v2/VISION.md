@@ -52,8 +52,8 @@ recovar/gui_v2/
 │   │   ├── subset.py
 │   │   └── mask.py
 │   ├── services/             # Business logic
-│   │   ├── slurm.py          # SLURM submission, status polling, template rendering
-│   │   ├── local_runner.py   # Local subprocess execution (no-SLURM mode)
+│   │   ├── executor.py       # Executor ABC + SlurmExecutor + LocalExecutor
+│   │   ├── project_config.py # Layered SLURM + local defaults, TOML read/write
 │   │   ├── scanner.py        # Scan directories for existing pipeline outputs
 │   │   └── notifier.py       # Browser notification triggers
 │   ├── db.py                 # SQLite connection, migrations
@@ -71,11 +71,11 @@ recovar/gui_v2/
 │   │   │   │   ├── new.tsx   # New job form
 │   │   │   │   └── $jobId.tsx # Job detail view
 │   │   │   ├── explore/      # Latent space explorer
-│   │   │   ├── masks/        # Mask editor
+│   │   │   ├── settings.tsx   # Settings page (SLURM + local defaults, user-global and per-project)
+│   │   │   ├── masks/        # Mask editor (Phase 3)
 │   │   │   ├── subsets/      # Particle subset browser
-│   │   │   ├── compare/      # Job comparison view
-│   │   │   ├── settings/     # Global settings
-│   │   │   └── external/     # External tools (RELION plugin)
+│   │   │   ├── compare/      # Job comparison view (Phase 4)
+│   │   │   └── external/     # External tools (RELION plugin, Phase 4)
 │   │   ├── components/       # Reusable React components
 │   │   │   ├── ui/           # Shadcn/ui primitives
 │   │   │   ├── volume-viewer/ # vtk.js 3D viewer
@@ -271,41 +271,39 @@ Every recovar CLI command is available as a job type in the GUI:
 
 ### 2. SLURM / Local Execution
 
-**Auto-detect mode:** On startup, check for `sbatch`. If available: cluster mode. If not: local mode (subprocess). Same UI either way.
+**Per-job executor selection:** When `sbatch` is on PATH, both SLURM and local executors are available simultaneously. Each job form shows a toggle to pick where to run. When only one executor is available, the toggle is hidden and the executor is chosen automatically.
 
-**Global defaults** stored in project settings:
+**Settings page** at `/settings` lets users configure defaults for both executors at user-global and per-project levels:
+
+**SLURM defaults** (layered: built-in -> user-global -> project -> per-job):
 ```toml
+# ~/.config/recovar/config.toml or <project>/recovar.toml
 [slurm]
-partition = "cryoem"
-account = "amits"
+partition = ""       # empty = use cluster default
+account = ""
 gpus = 1
 cpus = 4
 memory = "300G"
 time = "12:00:00"
-extra_flags = "--exclusive"
-
-[slurm.environment]
-PYTHONNOUSERSITE = "1"
-XLA_PYTHON_CLIENT_PREALLOCATE = "false"
-
-[staging]
-# RECOVAR_CACHE_DIR: local staging directory for MRC particle stacks.
-# Copies particle data to fast local storage on first access; all subsequent
-# reads (across all pipeline passes) hit the local copy instead of the
-# parallel filesystem. Typically gives 3-6x speedup.
-#
-# SLURM mode: defaults to /dev/shm (RAM-backed, always available, fastest).
-#   Alternatives: $TMPDIR (node-local NVMe, if cluster supports --tmp),
-#   or /local/scratch/$(whoami).
-# Local mode: defaults to "" (disabled, no staging).
-recovar_cache_dir = "/dev/shm"
 ```
+
+**Local-execution defaults** (same layering):
+```toml
+[local]
+gpus = "all"         # "all", "0", "0,1", etc.
+setup_command = ""   # e.g. "module load cudatoolkit/12.8"
+
+[local.env_vars]
+# Extra environment variables
+```
+
+**GPU picker:** The local executor settings show individual GPUs by name (queried via `nvidia-smi`), letting users select specific GPUs to share a node.
 
 **Editable sbatch template:** Power users can edit the raw template in Settings. Template uses Jinja2 variables (`{{ partition }}`, `{{ gpus }}`, etc.) filled from the form.
 
-**Per-job overrides:** Each job form shows SLURM settings pre-filled from global defaults, editable before submission.
+**Per-job overrides:** Each job form shows executor-specific settings (SLURM resources or local GPU/env) pre-filled from defaults, editable before submission.
 
-**Live resource monitoring (running jobs):**
+**Live resource monitoring (running jobs):** (Phase 4)
 - Poll `nvidia-smi` on the compute node during execution (via SSH or SLURM job wrapper)
 - Display in the job detail view: GPU utilization %, GPU memory usage, temperature
 - Show estimated time remaining based on log progress parsing (e.g. "Pass 3/5, ~12 min left")
@@ -593,12 +591,14 @@ When a job completes or fails, send a browser push notification. User gets alert
 - Project creation/opening
 - FastAPI backend with SQLite
 - React shell with sidebar layout, dark theme
-- Pipeline + Analyze job forms with SLURM submission
+- Pipeline + Analyze job forms with per-job executor selection (SLURM or local GPU)
+- Settings page for SLURM and local GPU defaults (user-global and per-project)
+- GPU picker showing individual GPUs by name
 - Input validation and contextual help tooltips on all parameters
 - Job status monitoring (WebSocket logs)
 - Basic volume viewer (vtk.js isosurface, threshold slider, multi-volume pin/overlay)
 - File browser (defaults to project dir)
-- Auto-detect SLURM vs local mode
+- Both SLURM and local executors available simultaneously when sbatch is on PATH
 - SSH tunnel access
 
 ### Phase 2: Interactive Analysis

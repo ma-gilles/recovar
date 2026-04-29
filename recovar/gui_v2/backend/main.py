@@ -108,6 +108,7 @@ async def _reconcile_on_startup() -> None:
                     "id": j.id,
                     "handle": j.executor_handle,
                     "db_status": j.status,
+                    "working_dir": j.output_dir,
                 }
                 for j in inflight
             ]
@@ -155,6 +156,7 @@ async def _reconcile_on_startup() -> None:
                             _poll_job_status(
                                 j.id, j.executor_handle, project_path,
                                 executor_mode=poll_mode,
+                                working_dir=j.output_dir,
                             )
                         )
                         _poll_tasks[j.id] = task

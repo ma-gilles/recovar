@@ -18,7 +18,7 @@ The bridge between frontend and backend. Endpoints, request/response shapes, Web
 
 | Method | Path | Request | Response | Notes |
 |--------|------|---------|----------|-------|
-| `POST` | `/api/jobs` | `{ project_id, type, params: {...} }` | `{ id, type, status, created, handle }` | Validates params, submits to executor |
+| `POST` | `/api/jobs` | `{ project_id, type, params: {...}, executor?: "slurm"\|"local" }` | `{ id, type, status, created, handle }` | Validates params, submits to executor. `executor` selects per-job; when omitted, uses server default. For local jobs, `params.local_opts` can contain `{ gpus, setup_command, env_vars }`. |
 | `GET` | `/api/jobs/:id` | — | `{ id, type, status, params, created, completed, handle, slurm_id, error, parent_jobs, output_dir }` | |
 | `POST` | `/api/jobs/:id/cancel` | — | `{ status: "cancelled" }` | Calls executor.cancel |
 | `DELETE` | `/api/jobs/:id` | — | `204` | Removes DB record + optionally output files |
@@ -103,7 +103,19 @@ type SubsetMethod =
 
 | Method | Path | Request | Response | Notes |
 |--------|------|---------|----------|-------|
-| `GET` | `/api/system/info` | — | `{ slurm_available, executor_mode, recovar_version, gpu_count, hostname, disk: { path, total, used, free } }` | |
+| `GET` | `/api/system/info` | — | `{ slurm_available, executor_mode, recovar_version, gpu_count, gpu_list: [{index, name}], hostname, disk: { path, total, used, free } }` | `executor_mode` is `"both"`, `"slurm"`, or `"local"`. `gpu_list` enumerates individual GPUs by name via `nvidia-smi`. |
+| `GET` | `/api/system/slurm-defaults` | `?project_dir=<path>` | `{ partition, account, gpus, cpus, memory, time, gpu_resource_spec, template_path }` | Legacy endpoint, returns merged effective defaults. |
+
+### Settings
+
+| Method | Path | Request | Response | Notes |
+|--------|------|---------|----------|-------|
+| `GET` | `/api/settings/slurm-defaults` | `?project_dir=<path>` | `{ builtin, user, project, effective, user_config_path, project_config_path }` | Layered view of SLURM defaults. Each layer is a dict of set fields. |
+| `PUT` | `/api/settings/slurm-defaults/user` | `{ partition?, account?, gpus?, cpus?, memory?, time? }` | Same as GET | Saves to `~/.config/recovar/config.toml` `[slurm]`. |
+| `PUT` | `/api/settings/slurm-defaults/project` | `{ project_dir, partition?, account?, gpus?, cpus?, memory?, time? }` | Same as GET | Saves to `<project_dir>/recovar.toml` `[slurm]`. |
+| `GET` | `/api/settings/local-defaults` | `?project_dir=<path>` | `{ builtin, user, project, effective, user_config_path, project_config_path }` | Layered view of local-execution defaults. |
+| `PUT` | `/api/settings/local-defaults/user` | `{ gpus?, setup_command?, env_vars? }` | Same as GET | Saves to `~/.config/recovar/config.toml` `[local]`. |
+| `PUT` | `/api/settings/local-defaults/project` | `{ project_dir, gpus?, setup_command?, env_vars? }` | Same as GET | Saves to `<project_dir>/recovar.toml` `[local]`. |
 
 ---
 

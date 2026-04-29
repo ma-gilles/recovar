@@ -110,12 +110,16 @@ def get_executor_for_job(job) -> Executor:
 _poll_tasks: dict[str, asyncio.Task] = {}
 
 
-async def _poll_job_status(job_id: str, handle: str, project_path: str, executor_mode: str | None = None) -> None:
+async def _poll_job_status(job_id: str, handle: str, project_path: str, executor_mode: str | None = None, working_dir: str | None = None) -> None:
     """Background task that polls executor status until terminal."""
     executor = get_executor(executor_mode)
     while True:
         try:
-            status = await executor.status(handle)
+            # Local executor needs working_dir to read exit code file
+            if working_dir and hasattr(executor, "status_with_dir"):
+                status = await executor.status_with_dir(handle, working_dir)
+            else:
+                status = await executor.status(handle)
         except Exception:
             logger.exception("Error polling job %s", job_id)
             await asyncio.sleep(15)
@@ -803,7 +807,7 @@ async def submit_job(req: SubmitJobRequest) -> SubmitJobResponse:
 
     # Start background status poller
     poll_mode = "slurm" if isinstance(executor, SlurmExecutor) else "local"
-    task = asyncio.create_task(_poll_job_status(job_id, handle, project_path, executor_mode=poll_mode))
+    task = asyncio.create_task(_poll_job_status(job_id, handle, project_path, executor_mode=poll_mode, working_dir=job_dir))
     _poll_tasks[job_id] = task
 
     return SubmitJobResponse(

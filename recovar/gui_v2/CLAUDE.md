@@ -215,12 +215,12 @@ The QA agent (`.claude/agents/gui-qa.md`) runs `gui_qa.sh`, reads all screenshot
 
 ### Job Execution
 The full flow is documented in `docs/ADR-001-executor-security.md`. Summary:
-1. Frontend `POST /api/jobs` with validated parameters
-2. Backend creates job record (status: QUEUED), renders sbatch/command
-3. Executor submits (sbatch or subprocess), stores handle
+1. Frontend `POST /api/jobs` with validated parameters and `executor` field (`"slurm"` or `"local"`)
+2. Backend creates job record (status: QUEUED), picks executor from pool based on `executor` field
+3. For SLURM: renders sbatch script, submits via `sbatch`. For local: applies `local_opts` (GPU selection, setup command, env vars), starts subprocess
 4. Background task polls status, tails logs, pushes to WebSocket
 5. On terminal state: update SQLite, close WebSocket stream
-6. On server restart: reconnect procedure syncs all in-flight jobs
+6. On server restart: reconnect procedure syncs all in-flight jobs (uses `slurm_id` presence to pick the right executor)
 
 ### Volume Serving
 See `docs/API.md` for endpoint details.
@@ -286,7 +286,8 @@ recovar/gui_v2/
 │   │   ├── subsets.py         # Subset CRUD, .ind export
 │   │   ├── project.py         # Project CRUD, scan/import
 │   │   ├── files.py           # File browser, .star/.mrc validation
-│   │   ├── system.py          # SLURM detection, disk usage
+│   │   ├── system.py          # SLURM detection, GPU enumeration, disk usage
+│   │   ├── settings.py        # SLURM + local defaults CRUD (layered)
 │   │   └── ws.py              # WebSocket log/status stream
 │   ├── models/
 │   │   ├── job.py
@@ -308,6 +309,7 @@ recovar/gui_v2/
 │   │   ├── routes/
 │   │   │   ├── __root.tsx     # Sidebar + main layout
 │   │   │   ├── index.tsx      # Dashboard
+│   │   │   ├── settings.tsx   # Settings page (SLURM + local defaults)
 │   │   │   ├── jobs/
 │   │   │   │   ├── new.tsx    # New job form
 │   │   │   │   └── $jobId.tsx # Job detail (tabs: overview, logs, params, volumes, plots)
@@ -318,6 +320,9 @@ recovar/gui_v2/
 │   │   │   ├── volume-viewer/ # vtk.js 3D viewer + multi-volume controls
 │   │   │   ├── latent-explorer/ # regl-scatterplot + linked views + click/lasso
 │   │   │   ├── job-form/      # Pipeline, Analyze, ComputeState, ComputeTrajectory forms
+│   │   │   │   ├── ExecutorSelector.tsx  # Per-job SLURM/Local toggle
+│   │   │   │   ├── LocalSettings.tsx     # GPU picker, setup cmd, env vars
+│   │   │   │   └── SlurmSettings.tsx     # SLURM resource settings
 │   │   │   ├── file-browser/  # Server filesystem browser
 │   │   │   ├── log-viewer/    # WebSocket log streamer
 │   │   │   └── sidebar/       # Project tree
@@ -395,22 +400,37 @@ v1.0.0 was almost shipped with `partition=cryoem`, `account=amits`, and
 
 ## Executor selection
 
-`backend/services/executor.py::slurm_available()` reads the
+Executor selection is **per-job**, not server-wide.  When `sbatch` is on
+PATH, `/api/system/info` returns `executor_mode: "both"` and every job
+form shows an `ExecutorSelector` toggle (SLURM Cluster / Local GPU).
+The user picks at submit time; each job can go to a different executor.
+
+`backend/services/executor.py::slurm_available()` still reads the
 `RECOVAR_EXECUTOR` env var (set by `recovar gui --executor`). Values:
 
-- `auto` (default) — probe `sbatch` on PATH; SLURM if present, local
-  otherwise.
-- `local` — force local-subprocess mode even on a SLURM login node. The
-  frontend hides the SLURM panel because `/api/system/info` reports
-  `slurm_available: false` in this mode.
+- `auto` (default) — probe `sbatch` on PATH; when found, mode is
+  `"both"` (both executors available, user picks per job). When absent,
+  only the local executor is available.
+- `local` — force local-subprocess mode even on a SLURM login node.
 - `slurm` — force SLURM. Caller sees the actual `sbatch: command not
   found` if missing.
 
-The CLI flag (`recovar gui --executor {auto,local,slurm}`) is the
-canonical surface; the env var exists so the same logic works when the
-backend is launched some other way (uvicorn directly, Docker, etc.).
+The `--executor` CLI flag still works but is no longer the primary way
+to control execution mode.  In the common case (`auto`), both executors
+are available simultaneously and the user picks per job via the toggle.
 
-## SLURM defaults are layered (not flat)
+**Frontend components for executor selection:**
+- `ExecutorSelector.tsx` — per-job toggle shown when `executor_mode === "both"`.
+- `LocalSettings.tsx` — collapsible panel for GPU picker, setup command,
+  and env-var editor (shown when local executor is selected).
+- `SlurmSettings.tsx` — SLURM resource settings panel (shown when SLURM
+  executor is selected).
+
+## Defaults are layered (not flat)
+
+Both SLURM and local-execution defaults use the same layering system.
+
+### SLURM defaults
 
 `backend/services/project_config.py::resolve_slurm_defaults` merges, in
 order of increasing precedence:
@@ -423,10 +443,50 @@ order of increasing precedence:
 4. Per-job form override sent in the submit body (the frontend's SLURM
    Settings panel — handled at the API layer, not in the loader).
 
-When adding a new SLURM-related field, plumb it through all four layers,
-not just one. The `/api/system/slurm-defaults?project_dir=...` endpoint
-returns the merged 1+2+3 view; the frontend uses this to pre-fill the
-form.
+### Local-execution defaults
+
+`backend/services/project_config.py::resolve_local_defaults` merges:
+
+1. Built-in `DEFAULT_LOCAL` in `backend/config.py` (`gpus: "all"`,
+   empty `setup_command`, empty `env_vars`).
+2. User-global `~/.config/recovar/config.toml` `[local]` section.
+3. Project-local `<project_dir>/recovar.toml` `[local]` section.
+4. Per-job form override via `local_opts` in the submit body.
+
+`LocalExecutor.submit()` accepts `local_opts` with fields:
+- `gpus` — `"all"`, or comma-separated GPU indices (`"0"`, `"0,1"`).
+  Sets `CUDA_VISIBLE_DEVICES`.
+- `setup_command` — Shell command run before the pipeline (e.g.
+  `module load cudatoolkit/12.8`). When set, the command is wrapped in
+  `bash -c "setup_command && pipeline_command"`.
+- `env_vars` — Extra environment variables as `{key: value}`.
+
+### Settings page
+
+The Settings page at `/settings` (gear icon in sidebar) lets users view
+and edit both SLURM and local defaults at the user-global and per-project
+levels.  It shows an "effective defaults" summary with provenance badges
+(built-in / user / project) and provides save buttons per layer.
+
+API endpoints for settings:
+- `GET /api/settings/slurm-defaults` — layered view (built-in + user + project + effective)
+- `PUT /api/settings/slurm-defaults/user` — update user-global SLURM defaults
+- `PUT /api/settings/slurm-defaults/project` — update per-project SLURM defaults
+- `GET /api/settings/local-defaults` — layered view
+- `PUT /api/settings/local-defaults/user` — update user-global local defaults
+- `PUT /api/settings/local-defaults/project` — update per-project local defaults
+
+The legacy `/api/system/slurm-defaults` endpoint still exists for
+backward compatibility but the Settings page uses the layered endpoints.
+
+When adding a new field to either executor, plumb it through all four
+layers, not just one.
+
+### TOML writing
+
+Settings are persisted to TOML files using `tomli_w` (added as a
+dependency in `pyproject.toml`). The `project_config.py` module handles
+reading with `tomllib` (stdlib) and writing with `tomli_w`.
 
 ## User-supplied templates (Jinja2)
 

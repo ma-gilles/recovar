@@ -132,9 +132,13 @@ class LocalExecutor(Executor):
 **Submit:**
 1. Build command list: `[sys.executable, "-m", "recovar.commands.pipeline", ...args]`
 2. Set environment: inherit current env + `PYTHONNOUSERSITE=1` + `XLA_PYTHON_CLIENT_PREALLOCATE=false` + `RECOVAR_CACHE_DIR` if configured (per-job: `{base}/recovar_cache_{job_id}/`)
-3. Start via `asyncio.create_subprocess_exec` with `start_new_session=True` (creates a new process group so cancel kills child processes too — CUDA workers, data loaders, etc.)
-4. Store `(job.id, pid, pgid)` in SQLite
-5. Redirect stdout/stderr to `{job_output_dir}/run.log`
+3. Apply `local_opts` if provided:
+   - `gpus`: set `CUDA_VISIBLE_DEVICES` (unless `"all"`)
+   - `env_vars`: merge extra env vars into the process environment
+   - `setup_command`: wrap command in `bash -c "setup_command && pipeline_command"`
+4. Start via `asyncio.create_subprocess_exec` with `start_new_session=True` (creates a new process group so cancel kills child processes too — CUDA workers, data loaders, etc.)
+5. Store `(job.id, pid, pgid)` in SQLite
+6. Redirect stdout/stderr to `{job_output_dir}/run.log`
 
 **Status:**
 - Check if PID is alive via `os.kill(pid, 0)`
@@ -214,9 +218,39 @@ This is explicitly deferred — do not implement any of it in Phase 1.
 
 ---
 
+## Update: Per-Job Executor Selection
+
+The original design assumed a server-wide executor mode. The implementation
+now supports **per-job executor selection**:
+
+- When `sbatch` is on PATH, `/api/system/info` returns `executor_mode: "both"`.
+- Each job form shows an `ExecutorSelector` toggle (SLURM Cluster / Local GPU).
+- The `POST /api/jobs` body accepts an `executor` field (`"slurm"` or `"local"`).
+- Both `SlurmExecutor` and `LocalExecutor` instances are kept in a pool
+  (`backend/api/jobs.py`), created lazily on first use.
+- For existing jobs, `get_executor_for_job()` picks the right executor
+  based on whether the job has a `slurm_id`.
+
+`LocalExecutor.submit()` accepts `local_opts` with:
+- `gpus` — `"all"` or comma-separated indices. Sets `CUDA_VISIBLE_DEVICES`.
+- `setup_command` — Shell command run before the pipeline.
+- `env_vars` — Extra environment variables as `{key: value}`.
+
+Local-execution defaults follow the same layering as SLURM defaults
+(built-in, user-global `[local]`, project `[local]`, per-job override).
+See `backend/services/project_config.py` for the merge logic.
+
+The `--executor` CLI flag still works (sets `RECOVAR_EXECUTOR` env var)
+but is no longer the primary way to select an executor. In the common case
+(`auto`), both executors are available and the user picks per job.
+
+---
+
 ## Consequences
 
 - Two executor implementations to maintain (SLURM + Local), but they share the same interface and the same test harness (mock executor).
+- Both executors are instantiated simultaneously when `sbatch` is on PATH.
+  Each job picks its executor at submit time.
 - No GPU metrics via SSH — the wrapper script approach is simpler and doesn't require network access to compute nodes.
 - Filesystem sandboxing adds a validation step to every file API call. This is cheap (one `Path.resolve()` + set membership check) but must never be bypassed.
 - SSH-tunnel-only means no "share a link with your PI" in Phase 1. This is an acceptable trade-off for zero security complexity.
