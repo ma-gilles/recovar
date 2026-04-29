@@ -49,3 +49,11 @@ Without `--density`, trajectories follow straight lines in latent space. With de
 
 !!! tip "GUI alternative"
     In the GUI's latent space explorer, you can select two points on the scatter plot to compute a trajectory interactively. See the [GUI Guide](gui.md#latent-space-explorer).
+
+## Using the GUI
+
+In the web GUI (`recovar gui`), click **+ New Job** and select **Density Estimation** from the Job Type dropdown. Set the result directory (path to pipeline output), PCA dimension, and latent dimension, then submit.
+
+You can also reach density estimation from a completed pipeline job's **Suggested Next Steps** by clicking **Estimate conformational density**, which pre-fills the result directory.
+
+After density estimation completes, use the **Latent Space Explorer** to color particles by conformational density and visually identify stable states.

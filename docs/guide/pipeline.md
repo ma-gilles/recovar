@@ -3,7 +3,7 @@
 The RECOVAR pipeline takes particle images and a mask, then computes the mean reconstruction, covariance, principal components, and embeddings.
 
 !!! tip "GUI alternative"
-    All pipeline options can be configured through the [web GUI](gui.md) (`recovar gui`), which provides a form-based interface with input validation and SLURM job submission.
+    All pipeline options can be configured through the [web GUI](gui.md) (`recovar gui`), which provides a form-based interface with input validation and SLURM job submission. See [Using the GUI](#using-the-gui) below.
 
 ## Basic usage
 
@@ -163,3 +163,28 @@ See the [Tutorial](tutorial.md) for a full worked example with real pipeline out
 
 !!! tip "Memory"
     If you run out of GPU memory, try `--low-memory-option` or `--very-low-memory-option`. You can also limit memory with `--gpu-gb 8`.
+
+## Using the GUI
+
+Instead of the command line, you can submit pipeline jobs through the web GUI (`recovar gui`).
+
+![Pipeline job form](../../_static/gui/06_new_job_pipeline.png)
+
+1. Click **+ New Job** in the sidebar
+2. Select **Pipeline** from the Job Type dropdown
+3. Browse to your particles file (`.star`, `.cs`, or `.mrcs`)
+4. Choose a solvent mask option (Auto from halfmaps, Sphere, None, or a custom `.mrc` file)
+5. Optionally set a focus mask
+
+Expand **Advanced** to configure zdim, downsample, lazy loading, and other options:
+
+![Advanced pipeline options](../../_static/gui/06c_advanced.png)
+
+At the bottom of the form, choose whether to run on **SLURM Cluster** or **Local GPU**:
+
+- **SLURM**: expand SLURM Settings to set partition, account, GPUs, memory, and time limit
+- **Local GPU**: expand Local GPU Settings to pick specific GPUs and set a setup command
+
+![SLURM settings in job form](../../_static/gui/06h_slurm_settings.png)
+
+Click **Submit Pipeline Job** to launch. See the [GUI Guide](gui.md) for project setup, dashboard overview, and job monitoring.

@@ -133,6 +133,20 @@ Load the trajectory volumes as a series in ChimeraX to create conformational mov
 open state000.mrc state001.mrc state002.mrc ... as_series
 ```
 
+## Using the GUI
+
+Instead of the command line, you can submit analyze jobs through the web GUI.
+
+![Analyze job form](../../_static/gui/14_analyze_form.png)
+
+1. Click **+ New Job** in the sidebar, or click **Analyze this pipeline output** from a completed pipeline job's Suggested Next Steps
+2. Select **Analyze** from the Job Type dropdown
+3. The **Result Directory** is auto-filled when coming from Suggested Next Steps; otherwise browse to the pipeline output directory
+4. Set **zdim**, **K-means Clusters**, and **Trajectories** as needed
+5. Click **Submit Analyze Job**
+
+After the analyze job completes, click **Explore Latent Space** on the job detail page to interactively view PCA and UMAP scatter plots, click points to generate volumes, and use lasso selection to extract particle subsets. See the [GUI Guide](gui.md) for details.
+
 ## Example output
 
 See the [Tutorial](tutorial.md) for a complete worked example with all output plots from `recovar analyze` on EMPIAR-10076.

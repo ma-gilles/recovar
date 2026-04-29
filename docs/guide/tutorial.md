@@ -55,7 +55,7 @@ recovar pipeline particles.256.mrcs \
     ```
 
 !!! tip "GUI alternative"
-    In the GUI, click **New Job** :material-plus:, select **Pipeline**, browse to your particle file, select a mask, and click **Submit**. The GUI auto-detects the file format and validates inputs before submission. See [GUI: Creating Jobs](gui.md#creating-jobs).
+    In the GUI, click **New Job** :material-plus:, select **Pipeline**, browse to your particle file, select a mask, and click **Submit**. The GUI auto-detects the file format and validates inputs before submission. See [GUI: Submitting Jobs](gui.md#submitting-jobs).
 
 #### Key pipeline outputs
 
@@ -302,19 +302,19 @@ Now open **http://localhost:8080** in your local browser — the SSH tunnel make
 
 ### First steps in the GUI
 
-Once the GUI is open, create a project (or open an existing one) and use **Scan for Existing Jobs** to import your pipeline outputs.
+Once the GUI is open, create a project (or open an existing one) and use **Scan for Existing Jobs** to import your pipeline outputs. The dashboard shows all your jobs at a glance:
 
-The GUI provides:
+![Dashboard with project](../../_static/gui/04_dashboard.png)
 
-- **Dashboard** — overview of all jobs with status indicators
-- **Latent Space Explorer** — interactive PCA and UMAP scatter plots with k-means coloring
-- **On-demand volumes** — click any point in the latent space to generate a volume at that coordinate
-- **3D volume viewer** — browser-based isosurface rendering with adjustable threshold
-- **Slice viewer** — orthogonal slices through any volume
-- **Trajectory builder** — select two endpoints to compute and animate a conformational transition
-- **Volume browser** — organized listing of all output volumes (mean, eigenvolumes, k-means centers, trajectories)
+The sidebar lists all jobs organized by type with color-coded status indicators. Click any job to view its details, logs, volumes, and plots.
 
-For the full GUI reference, see the [GUI Guide](gui.md).
+When a pipeline job completes, the job detail page shows quick preview plots and suggested next steps:
+
+![Completed pipeline job](../../_static/gui/07_job_completed.png)
+
+Click **Analyze this pipeline output** to pre-fill an analyze job, or **Explore Latent Space** to open the interactive latent space explorer.
+
+For full GUI documentation, see the [GUI Guide](gui.md).
 
 ---
 
