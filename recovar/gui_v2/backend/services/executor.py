@@ -544,6 +544,16 @@ def _build_slurm_directives(
     ``--gres=gpu:{gpus}`` for backward compatibility. When ``gpus == 0``
     the GPU directive is omitted entirely.
     """
+    # Sanitize: 0 or negative values → sensible defaults
+    if not gpus or gpus < 0:
+        gpus = 0
+    if not cpus or cpus < 1:
+        cpus = 4
+    if not memory:
+        memory = "300G"
+    if not time:
+        time = "12:00:00"
+
     lines: list[str] = [f"#SBATCH --job-name={job_name}"]
     if partition:
         lines.append(f"#SBATCH --partition={partition}")
