@@ -46,7 +46,6 @@ def _project_half(
     proj_volume_shape,
     disc_type,
     *,
-    projection_half_volume: bool,
     projection_max_r,
 ):
     max_r = DEFAULT_PROJECTION_MAX_R if projection_max_r == "auto" else projection_max_r
@@ -56,7 +55,6 @@ def _project_half(
         image_shape,
         proj_volume_shape,
         disc_type,
-        half_volume=projection_half_volume,
         max_r=max_r,
     )
 
@@ -140,7 +138,6 @@ def _adjoint_dense_bucket(
     use_window: bool,
     disable_adjoint_y: bool,
     disable_adjoint_ctf: bool,
-    mstep_half_volume: bool,
     backprojection_max_r,
 ):
     if disable_adjoint_y and disable_adjoint_ctf:
@@ -160,7 +157,6 @@ def _adjoint_dense_bucket(
                     disc_type,
                     volumes=volumes,
                     half_image=True,
-                    half_volume=mstep_half_volume,
                 )
             else:
                 updated = core.batch_adjoint_slice_volume_indexed(
@@ -172,7 +168,6 @@ def _adjoint_dense_bucket(
                     disc_type,
                     volumes=volumes,
                     half_image=True,
-                    half_volume=mstep_half_volume,
                     max_r=backprojection_max_r,
                 )
         else:
@@ -184,7 +179,6 @@ def _adjoint_dense_bucket(
                 disc_type,
                 volumes=volumes,
                 half_image=True,
-                half_volume=mstep_half_volume,
             )
         return updated[0], updated[1]
 
@@ -200,7 +194,6 @@ def _adjoint_dense_bucket(
                     disc_type,
                     volumes=Ft_y[None, :],
                     half_image=True,
-                    half_volume=mstep_half_volume,
                 )[0]
             else:
                 Ft_y = core.batch_adjoint_slice_volume_indexed(
@@ -212,7 +205,6 @@ def _adjoint_dense_bucket(
                     disc_type,
                     volumes=Ft_y[None, :],
                     half_image=True,
-                    half_volume=mstep_half_volume,
                     max_r=backprojection_max_r,
                 )[0]
         else:
@@ -224,7 +216,6 @@ def _adjoint_dense_bucket(
                 disc_type,
                 volumes=Ft_y[None, :],
                 half_image=True,
-                half_volume=mstep_half_volume,
             )[0]
     else:
         if use_window:
@@ -238,7 +229,6 @@ def _adjoint_dense_bucket(
                     disc_type,
                     volumes=Ft_ctf[None, :],
                     half_image=True,
-                    half_volume=mstep_half_volume,
                 )[0]
             else:
                 Ft_ctf = core.batch_adjoint_slice_volume_indexed(
@@ -250,7 +240,6 @@ def _adjoint_dense_bucket(
                     disc_type,
                     volumes=Ft_ctf[None, :],
                     half_image=True,
-                    half_volume=mstep_half_volume,
                     max_r=backprojection_max_r,
                 )[0]
         else:
@@ -262,7 +251,6 @@ def _adjoint_dense_bucket(
                 disc_type,
                 volumes=Ft_ctf[None, :],
                 half_image=True,
-                half_volume=mstep_half_volume,
             )[0]
     return Ft_y, Ft_ctf
 
@@ -283,9 +271,7 @@ def _adjoint_dense_bucket(
         "proj_volume_shape",
         "recon_volume_shape",
         "disc_type",
-        "projection_half_volume",
         "projection_max_r",
-        "mstep_half_volume",
         "backprojection_max_r",
         "disable_adjoint_y",
         "disable_adjoint_ctf",
@@ -333,9 +319,7 @@ def run_dense_bucket_big_jit(
     proj_volume_shape,
     recon_volume_shape,
     disc_type: str,
-    projection_half_volume: bool = False,
     projection_max_r="auto",
-    mstep_half_volume: bool = False,
     backprojection_max_r="auto",
     disable_adjoint_y: bool = False,
     disable_adjoint_ctf: bool = False,
@@ -369,7 +353,6 @@ def run_dense_bucket_big_jit(
         image_shape,
         proj_volume_shape,
         disc_type,
-        projection_half_volume=projection_half_volume,
         projection_max_r=projection_max_r,
     )
 
@@ -479,7 +462,6 @@ def run_dense_bucket_big_jit(
             use_window=use_window,
             disable_adjoint_y=disable_adjoint_y,
             disable_adjoint_ctf=disable_adjoint_ctf,
-            mstep_half_volume=mstep_half_volume,
             backprojection_max_r=backprojection_max_r,
         )
 
