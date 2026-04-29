@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
 
 import jax.numpy as jnp
 import numpy as np
@@ -82,6 +81,7 @@ from recovar.em.dense_single_volume.helpers.translation_prior import (
     translation_sqdist_angstrom,
     validate_translation_prior_centers,
 )
+from recovar.em.dense_single_volume.helpers.timing import TimingAccumulator
 from recovar.em.dense_single_volume.shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
 logger = logging.getLogger(__name__)
@@ -143,35 +143,11 @@ def _new_zero_timer(keys):
     return {key: 0.0 for key in keys}
 
 
-@dataclass
-class _LocalTiming:
+class _LocalTiming(TimingAccumulator):
     """Mutable host-side timers for one exact-local EM call."""
 
-    bucket_build_s: float = 0.0
-    batch_fetch_s: float = 0.0
-    raw_cache_build_s: float = 0.0
-    preprocess_s: float = 0.0
-    projection_s: float = 0.0
-    fused_score_mstep_s: float = 0.0
-    big_jit_bucket_s: float = 0.0
-    score_s: float = 0.0
-    normalize_s: float = 0.0
-    significance_s: float = 0.0
-    postprocess_s: float = 0.0
-    mstep_s: float = 0.0
-    pack_s: float = 0.0
-    adjoint_y_s: float = 0.0
-    adjoint_ctf_s: float = 0.0
-    noise_s: float = 0.0
-    host_stats_s: float = 0.0
-    final_accumulator_s: float = 0.0
-    stats_finalize_s: float = 0.0
-
-    def accounted_s(self) -> float:
-        return sum(
-            getattr(self, timing_attr)
-            for timing_attr in _LOCAL_ACCOUNTED_TIMING_FIELDS
-        )
+    def __init__(self):
+        super().__init__(_LOCAL_ACCOUNTED_TIMING_FIELDS)
 
 
 def _local_em_return_tuple(

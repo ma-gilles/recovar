@@ -95,6 +95,7 @@ from .helpers.translation_prior import (
     translation_sqdist_angstrom,
     validate_translation_prior_centers,
 )
+from .helpers.timing import TimingAccumulator
 from .helpers.types import EMProfileStats, NoiseStats, RelionStats
 from .local_debug import (
     maybe_write_dense_per_pose_score_dump,
@@ -165,36 +166,11 @@ _DENSE_TIMING_FIELDS = (
 )
 
 
-@dataclass
-class _DenseTiming:
+class _DenseTiming(TimingAccumulator):
     """Mutable host-side timers for one dense EM call."""
 
-    batch_fetch_s: float = 0.0
-    preprocess_s: float = 0.0
-    score_prep_s: float = 0.0
-    pass1_projection_s: float = 0.0
-    pass1_score_s: float = 0.0
-    pass1_postprocess_s: float = 0.0
-    pass1_logsumexp_s: float = 0.0
-    pass2_skipmask_s: float = 0.0
-    pass2_projection_s: float = 0.0
-    pass2_score_s: float = 0.0
-    pass2_postprocess_s: float = 0.0
-    mstep_s: float = 0.0
-    window_scatter_s: float = 0.0
-    adjoint_y_s: float = 0.0
-    adjoint_ctf_s: float = 0.0
-    noise_s: float = 0.0
-    assignment_s: float = 0.0
-    stats_finalize_s: float = 0.0
-    host_stats_s: float = 0.0
-    solve_s: float = 0.0
-
-    def accounted_s(self) -> float:
-        return sum(float(getattr(self, field)) for field in _DENSE_TIMING_FIELDS)
-
-    def profile_kwargs(self) -> dict[str, float]:
-        return {field: float(getattr(self, field)) for field in _DENSE_TIMING_FIELDS}
+    def __init__(self):
+        super().__init__(_DENSE_TIMING_FIELDS)
 
 
 @dataclass
