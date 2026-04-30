@@ -1,11 +1,17 @@
 import { useState, useEffect, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronDown, ChevronRight, Save, Code2 } from "lucide-react";
+import { ChevronDown, ChevronRight, Save, Code2, Eye } from "lucide-react";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { tooltips } from "../../lib/tooltips";
-import { getSlurmDefaults as getServerDefaults, getSystemInfo, type SlurmDefaults } from "../../lib/api/client";
+import {
+  getSlurmDefaults as getServerDefaults,
+  getSystemInfo,
+  previewSbatchScript,
+  type SlurmDefaults,
+  type SbatchPreview,
+} from "../../lib/api/client";
 import { useProject } from "../../lib/project-context";
 import {
   getSlurmDefaults as getLocalDefaults,
@@ -41,6 +47,10 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
   const [expanded, setExpanded] = useState(false);
   const [showRawEditor, setShowRawEditor] = useState(false);
   const [savedToast, setSavedToast] = useState(false);
+  const [showPreview, setShowPreview] = useState(false);
+  const [preview, setPreview] = useState<SbatchPreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
 
   const { project } = useProject();
   const projectPath = project?.path ?? "";
@@ -51,9 +61,11 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
     staleTime: 60_000,
   });
 
+  // Pass projectPath so the server merges per-project recovar.toml on top
+  // of its built-in defaults.
   const { data: serverDefaults } = useQuery<SlurmDefaults>({
-    queryKey: ["slurm-defaults"],
-    queryFn: getServerDefaults,
+    queryKey: ["slurm-defaults", projectPath],
+    queryFn: () => getServerDefaults(projectPath || undefined),
     staleTime: 60_000,
     enabled: sysInfo?.slurm_available === true,
   });
@@ -92,14 +104,41 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
     setTimeout(() => setSavedToast(false), 2000);
   }, [projectPath, value]);
 
+  // Render the would-be submit.sh on demand. We don't know the user's exact
+  // command yet (that's built by the parent form when they pick a job type),
+  // so we show a placeholder argv that demonstrates the wrapper structure.
+  const handlePreview = useCallback(async () => {
+    setShowPreview(true);
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const result = await previewSbatchScript({
+        command: ["recovar", "<job-type>", "<args...>"],
+        env_vars: {},
+        output_path: "<job_dir>/slurm-%j.out",
+        job_name: "recovar-preview",
+        slurm_opts: value ? { ...value } : {},
+      });
+      setPreview(result);
+    } catch (e) {
+      setPreviewError(e instanceof Error ? e.message : String(e));
+      setPreview(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [value]);
+
   // Don't render if SLURM is not available
   if (!sysInfo?.slurm_available) {
     return null;
   }
 
+  // Empty partition/account → backend renderer omits the directive entirely,
+  // letting the cluster's default apply. Do NOT bake site-specific defaults
+  // here; doing so leaks them into every user's form regardless of cluster.
   const current = value ?? {
-    partition: serverDefaults?.partition ?? "cryoem",
-    account: serverDefaults?.account ?? "amits",
+    partition: serverDefaults?.partition ?? "",
+    account: serverDefaults?.account ?? "",
     gpus: serverDefaults?.gpus ?? 1,
     cpus: serverDefaults?.cpus ?? 4,
     memory: serverDefaults?.memory ?? "300G",
@@ -130,6 +169,7 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
               </div>
               <Input
                 value={current.partition}
+                placeholder="leave blank to use cluster default"
                 onChange={(e) => update("partition", e.target.value)}
               />
             </div>
@@ -140,6 +180,7 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
               </div>
               <Input
                 value={current.account}
+                placeholder="leave blank to use cluster default"
                 onChange={(e) => update("account", e.target.value)}
               />
             </div>
@@ -235,6 +276,46 @@ export function SlurmSettings({ value, onChange }: SlurmSettingsProps): React.JS
               )}
             </div>
           )}
+
+          {/* Preview generated submit.sh */}
+          <div>
+            <button
+              onClick={() => (showPreview ? setShowPreview(false) : handlePreview())}
+              className="flex items-center gap-1 rounded px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+            >
+              <Eye className="h-3 w-3" />
+              {showPreview ? "Hide" : "Preview"} generated submit.sh
+            </button>
+            {showPreview && (
+              <div className="mt-2 space-y-2">
+                {previewLoading && (
+                  <div className="text-xs text-zinc-500">Rendering…</div>
+                )}
+                {previewError && (
+                  <div className="rounded border border-red-800 bg-red-950/40 px-2 py-1 text-xs text-red-300">
+                    Failed to render preview: {previewError}
+                  </div>
+                )}
+                {preview && preview.warnings.length > 0 && (
+                  <ul className="space-y-1 text-xs text-amber-400">
+                    {preview.warnings.map((w, i) => (
+                      <li key={i}>• {w}</li>
+                    ))}
+                  </ul>
+                )}
+                {preview && (
+                  <pre className="max-h-80 overflow-auto rounded border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-300">
+                    {preview.script}
+                  </pre>
+                )}
+                <p className="text-xs text-zinc-600">
+                  Note: the actual command line is filled in at submit time.
+                  This preview uses a placeholder so you can verify the
+                  surrounding wrapper (directives, modules, paths).
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       )}
     </div>

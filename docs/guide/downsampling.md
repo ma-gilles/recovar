@@ -89,3 +89,12 @@ The box size must be even and no larger than the original image size.
 
 !!! tip
     Start with `--downsample 128` for initial exploration, then re-run at higher resolution if needed for publication figures.
+
+## Using the GUI
+
+In the web GUI (`recovar gui`), you can downsample in two ways:
+
+- **As part of a Pipeline job**: expand **Advanced** options and set the **Downsample** field to your target box size (e.g., 128). The pipeline handles caching automatically.
+- **As a standalone job**: click **+ New Job**, select **Downsample** from the Job Type dropdown, browse to your particle file, and set the target box size.
+
+See the [GUI Guide](gui.md) for project setup and job submission.

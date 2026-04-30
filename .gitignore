@@ -159,3 +159,4 @@ logs/
 .tmp/
 logs/
 .test_results/
+recovar/gui_v2/frontend/node_modules/

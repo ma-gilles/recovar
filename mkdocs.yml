@@ -5,6 +5,9 @@ site_url: https://ma-gilles.github.io/recovar
 repo_name: ma-gilles/recovar
 repo_url: https://github.com/ma-gilles/recovar
 
+extra_css:
+  - stylesheets/extra.css
+
 theme:
   name: material
   features:
@@ -80,13 +83,13 @@ nav:
     - Docker & Containers: getting-started/docker.md
     - Test Your Installation: getting-started/testing.md
   - Guide:
+    - Web GUI: guide/gui.md
     - Tutorial: guide/tutorial.md
     - Input Data: guide/input-data.md
     - Masks: guide/masks.md
     - Downsampling: guide/downsampling.md
     - Running the Pipeline: guide/pipeline.md
     - Analyzing Results: guide/analysis.md
-    - Web GUI: guide/gui.md
     - Conformational Density: guide/conformational-density.md
     - Extracting Subsets: guide/extracting-subsets.md
     - Outlier Detection: guide/outlier-detection.md

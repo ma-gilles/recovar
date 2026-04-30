@@ -166,6 +166,4 @@ chmod +x scripts/run_test.sh scripts/run_test_presets.sh
 
 ## See Also
 
-- `PERFORMANCE_ANALYSIS.md` - Detailed performance analysis and optimization guide
 - Nsight Systems documentation: https://docs.nvidia.com/nsight-systems/
-

@@ -10,7 +10,7 @@ See `VISION.md` for the full long-term vision.
 
 Phase 1 is done when a user can:
 
-1. Open the GUI in a browser (via SSH tunnel), create a project, select a .star file, configure a pipeline job, and submit it to SLURM — without touching a terminal.
+1. Open the GUI in a browser (via SSH tunnel), create a project, select a .star file, configure a pipeline job, and submit it (to SLURM or local GPU) — without touching a terminal.
 2. Watch real-time logs while the job runs.
 3. Open the completed pipeline output: view the mean volume as a 3D isosurface, browse eigenvolumes, view diagnostic plots.
 4. Submit an analyze job on that pipeline output (suggested as next step).
@@ -120,10 +120,12 @@ Every parameter in every job form has a tooltip (? icon next to the label). Tool
 
 See `ADR-001-executor-security.md` for the full executor design. Summary:
 
-- **Auto-detect:** On startup, check `shutil.which("sbatch")`. Result is logged and shown in the UI footer ("Cluster mode" or "Local mode").
-- **SLURM mode:** Jobs submitted via `sbatch`. Status polled via `sacct`. Logs tailed from SLURM output files.
-- **Local mode:** Jobs run as subprocesses. Status tracked via PID. Logs captured from stdout/stderr.
-- **Settings:** Global SLURM defaults in `project/.recovar/settings.toml`. Per-job overrides on the form.
+- **Auto-detect:** On startup, check `shutil.which("sbatch")`. When found, `executor_mode` is `"both"` — both SLURM and local executors are available simultaneously.
+- **Per-job selection:** When both executors are available, each job form shows an ExecutorSelector toggle (SLURM Cluster / Local GPU). The user picks at submit time.
+- **SLURM mode:** Jobs submitted via `sbatch`. Status polled via `squeue`/`sacct`. Logs tailed from SLURM output files.
+- **Local mode:** Jobs run as subprocesses. Status tracked via PID. Logs captured from stdout/stderr. Supports GPU selection (`CUDA_VISIBLE_DEVICES`), setup commands (e.g. `module load cudatoolkit/12.8`), and extra env vars via `local_opts`.
+- **Settings page:** Available at `/settings` for configuring SLURM and local execution defaults at user-global and per-project levels. Replaces editing TOML files by hand.
+- **Defaults layering:** Built-in defaults -> user-global `~/.config/recovar/config.toml` -> project `recovar.toml` -> per-job form override. Both `[slurm]` and `[local]` sections are supported in TOML config.
 - **Staging:** `RECOVAR_CACHE_DIR` configured in settings. Default: `/dev/shm` (SLURM), disabled (local).
 
 ### Volume Viewer

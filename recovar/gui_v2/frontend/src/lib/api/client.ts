@@ -137,11 +137,26 @@ export interface SlurmDefaults {
   cpus: number;
   memory: string;
   time: string;
+  gpu_resource_spec?: string;
+  template_path?: string | null;
 }
 
 export interface SbatchScript {
   script: string;
   source: string;
+}
+
+export interface SbatchPreview {
+  script: string;
+  warnings: string[];
+}
+
+export interface SbatchPreviewRequest {
+  command: string[];
+  env_vars?: Record<string, string>;
+  output_path?: string;
+  job_name?: string;
+  slurm_opts?: Record<string, unknown>;
 }
 
 // --- Projects ---
@@ -192,11 +207,12 @@ export function validateJob(
 export function submitJob(
   projectId: string,
   type: string,
-  params: Record<string, unknown>
+  params: Record<string, unknown>,
+  executor?: string | null,
 ): Promise<{ id: string; type: string; status: string; created: string; handle?: string }> {
   return request("/jobs", {
     method: "POST",
-    body: JSON.stringify({ project_id: projectId, type, params }),
+    body: JSON.stringify({ project_id: projectId, type, params, executor: executor || undefined }),
   });
 }
 
@@ -312,14 +328,111 @@ export function getSystemInfo(): Promise<SystemInfo> {
   return request("/system/info");
 }
 
-export function getSlurmDefaults(): Promise<SlurmDefaults> {
-  return request("/system/slurm-defaults");
+export function getSlurmDefaults(projectDir?: string): Promise<SlurmDefaults> {
+  const qs = projectDir ? `?project_dir=${encodeURIComponent(projectDir)}` : "";
+  return request(`/system/slurm-defaults${qs}`);
+}
+
+export function previewSbatchScript(req: SbatchPreviewRequest): Promise<SbatchPreview> {
+  return request("/jobs/preview-sbatch", {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
 }
 
 // --- Jobs (extended) ---
 
 export function getJobSbatchScript(id: string): Promise<SbatchScript> {
   return request(`/jobs/${id}/sbatch-script`);
+}
+
+// --- Settings ---
+
+export interface SlurmDefaultsLayered {
+  builtin: Record<string, unknown>;
+  user: Record<string, unknown>;
+  project: Record<string, unknown>;
+  effective: Record<string, unknown>;
+  user_config_path: string;
+  project_config_path: string | null;
+}
+
+export interface SlurmDefaultsUpdate {
+  partition?: string;
+  account?: string;
+  gpus?: number;
+  cpus?: number;
+  memory?: string;
+  time?: string;
+}
+
+export function getSlurmDefaultsLayered(projectDir?: string): Promise<SlurmDefaultsLayered> {
+  const qs = projectDir ? `?project_dir=${encodeURIComponent(projectDir)}` : "";
+  return request(`/settings/slurm-defaults${qs}`);
+}
+
+export function updateUserSlurmDefaults(
+  data: SlurmDefaultsUpdate,
+  projectDir?: string,
+): Promise<SlurmDefaultsLayered> {
+  const qs = projectDir ? `?project_dir=${encodeURIComponent(projectDir)}` : "";
+  return request(`/settings/slurm-defaults/user${qs}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateProjectSlurmDefaults(
+  projectDir: string,
+  data: SlurmDefaultsUpdate,
+): Promise<SlurmDefaultsLayered> {
+  return request("/settings/slurm-defaults/project", {
+    method: "PUT",
+    body: JSON.stringify({ ...data, project_dir: projectDir }),
+  });
+}
+
+// --- Local execution defaults ---
+
+export interface LocalDefaultsLayered {
+  builtin: Record<string, unknown>;
+  user: Record<string, unknown>;
+  project: Record<string, unknown>;
+  effective: Record<string, unknown>;
+  user_config_path: string;
+  project_config_path: string | null;
+}
+
+export interface LocalDefaultsUpdate {
+  gpus?: string;
+  setup_command?: string;
+  env_vars?: Record<string, string>;
+}
+
+export function getLocalDefaultsLayered(projectDir?: string): Promise<LocalDefaultsLayered> {
+  const qs = projectDir ? `?project_dir=${encodeURIComponent(projectDir)}` : "";
+  return request(`/settings/local-defaults${qs}`);
+}
+
+export function updateUserLocalDefaults(
+  data: LocalDefaultsUpdate,
+  projectDir?: string,
+): Promise<LocalDefaultsLayered> {
+  const qs = projectDir ? `?project_dir=${encodeURIComponent(projectDir)}` : "";
+  return request(`/settings/local-defaults/user${qs}`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  });
+}
+
+export function updateProjectLocalDefaults(
+  projectDir: string,
+  data: LocalDefaultsUpdate,
+): Promise<LocalDefaultsLayered> {
+  return request("/settings/local-defaults/project", {
+    method: "PUT",
+    body: JSON.stringify({ ...data, project_dir: projectDir }),
+  });
 }
 
 // --- Charts ---

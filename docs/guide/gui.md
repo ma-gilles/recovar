@@ -1,6 +1,6 @@
 # Web GUI
 
-RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces interactively, and viewing 3D volumes — all without writing commands.
+RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces interactively, and viewing 3D volumes -- all without writing commands.
 
 ## Launching the GUI
 
@@ -34,134 +34,172 @@ recovar gui
 
 The tunnel forwards traffic so the remote server appears local. If port 8080 is taken, use a different port in both the SSH command and `recovar gui --port <port>`.
 
-## Projects
 
-The GUI organizes work into **projects** — directories that contain your pipeline outputs, analyses, and computed volumes. On first launch, create a project by pointing to an existing directory or choosing a new one.
+## Getting Started
 
-The GUI stores a lightweight SQLite index in each project directory (`recovar_project.db`). This database is fully rebuildable — if you delete it, use **Scan for Existing Jobs** to re-import everything from the filesystem.
+### First Launch
 
-### Importing existing results
+When you first open the GUI, you will see the initial dashboard with no project loaded. The sidebar offers two actions: **Create Project** and **Open Project**. The system info bar at the top shows the hostname, execution mode (Local or SLURM), recovar version, and available GPUs.
 
-Click **Scan for Existing Jobs** on the dashboard and point to the directory *containing* your pipeline outputs. For example, if your output is at `/scratch/my_project/Pipeline/job_0001/`, scan `/scratch/my_project/`.
+![Initial Dashboard](../../_static/gui/01_initial_dashboard.png)
+
+### Creating a Project
+
+Click **Create Project** in the sidebar or in the main content area. A dialog opens with a built-in file browser that lets you navigate the filesystem.
+
+![Create Project Dialog](../../_static/gui/02_create_project.png)
+
+To create a project:
+
+1. **Navigate** to the directory where you want the project.
+2. Click **Select this directory** to confirm the location.
+3. **Name your project** in the Project Name field.
+4. Click the blue **Create Project** button.
+
+The GUI creates a `recovar_project.db` SQLite file in that directory.
+
+
+### Opening an Existing Project
+
+Click **Open Project** to open a directory that already contains a recovar project.
+
+![Open Project Dialog](../../_static/gui/03_open_project.png)
+
 
 ## Dashboard
 
-The dashboard shows all jobs with status indicators:
+Once a project is open, the dashboard shows a complete overview of your work.
 
-- **Running** — currently executing (with SLURM job tracking if on a cluster)
-- **Queued** — submitted to SLURM, waiting for resources
-- **Completed** — finished successfully
-- **Failed** — exited with an error (click to view error details)
+![Dashboard with Project](../../_static/gui/04_dashboard.png)
 
-The sidebar groups jobs by type (Pipeline, Analyze, Compute State, Trajectory, Density, etc.) for quick navigation.
+Key areas:
 
-## Creating jobs
+- **Sidebar job tree** (left) -- All jobs organized by type with color-coded status icons
+- **Job count cards** -- Quick summary of total jobs and counts per type
+- **Run Pipeline / Scan for Jobs** -- Start a new pipeline job or import existing CLI outputs
+- **Recent Jobs** -- Chronological list with status badges
+- **Disk usage** (bottom-left) -- Filesystem usage monitor
+- **Settings** (bottom-left) -- Configure SLURM and local execution defaults
 
-Click **New Job** to create a pipeline or analysis run.
 
-### Pipeline job
+## Settings
 
-Configure all pipeline parameters through the form:
+The Settings page (gear icon at the bottom of the sidebar) lets you configure default values for SLURM and local GPU execution. These defaults are pre-filled into every new job form.
 
-- **Particles** — browse to select your `.star`, `.cs`, or `.mrcs` file.
-- **Mask** — select an `.mrc` mask file.
-- **Downsampling** — set the target box size (e.g., 128, 256).
-- **Advanced options** — focus mask, contrast correction, lazy loading, B-factor, and more.
+### SLURM Cluster Tab
 
-### Analyze job
+![Settings - SLURM](../../_static/gui/05_settings_slurm.png)
 
-After a pipeline completes, the **Suggested Next Steps** section offers a one-click link to run analysis with the result directory pre-filled:
+Three sections with cascading priority:
 
-- **Z-dimension** — which latent dimension to use (default: 4).
-- **K-means clusters** — number of clusters (default: 40).
-- **Trajectories** — number of trajectories between most-distant cluster pairs.
+1. **Effective SLURM Defaults** -- Summary bar showing current values with provenance badges ("user", "project", or "built-in")
+2. **User-Global Defaults** -- Settings for all projects, stored in `~/.config/recovar/config.toml`
+3. **Project Defaults** -- Per-project overrides, stored in `<project_dir>/recovar.toml`
 
-### Other job types
+### Local GPU Tab
 
-- **Compute State** — generate a volume at a specific latent coordinate
-- **Compute Trajectory** — generate volumes along a path between two latent points (optionally density-guided)
-- **Density Estimation** — estimate conformational density in latent space
-- **Stable States** — find local maxima of the conformational density
-- **Postprocess** — sharpen and filter volumes
-- **Downsample** — pre-downsample particle images
+![Settings - Local GPU](../../_static/gui/05b_settings_local_gpu.png)
 
-### SLURM execution
+Same layered structure with GPU-specific options:
 
-On clusters with SLURM, the GUI auto-detects `sbatch` and shows SLURM settings:
+- **GPU picker buttons** -- Select which GPUs to use (sets `CUDA_VISIBLE_DEVICES`)
+- **Setup command** -- Shell command run before every local job (e.g., `module load cudatoolkit/12.8`)
+- **Environment variables** -- Extra environment variables for jobs
 
-- Partition and account
-- Number of GPUs, CPUs, and memory
-- Time limit
-- Extra SBATCH directives (for advanced users)
 
-You can **save SLURM defaults per project** so they persist across sessions.
+## Submitting Jobs
 
-## Exploring results
+Click **+ New Job** in the sidebar or the dashboard. Each job type has its own form. For detailed screenshots and field descriptions, see the relevant guide page:
 
-### Latent space explorer
+- **Pipeline** -- See [Running the Pipeline](pipeline.md#using-the-gui)
+- **Analyze** -- See [Analyzing Results](analysis.md#using-the-gui)
+- **Downsample** -- See [Downsampling](downsampling.md#using-the-gui)
+- **Density Estimation** -- See [Conformational Density](conformational-density.md#using-the-gui)
+- **Compute State** -- Generate a 3D volume at a specific latent coordinate
+- **Compute Trajectory** -- Generate volumes along a path between two latent points
+- **Stable States** -- Find local maxima of the conformational density
+- **Postprocess** -- Sharpen and filter volumes
 
-The **Explore** page shows interactive scatter plots of the full particle latent space (50K+ points at 60 fps), with:
+Each form includes an executor toggle (SLURM Cluster or Local GPU) with configurable resource settings.
 
-- **PCA and UMAP** projections side by side
+
+## Job Detail Page
+
+Click any job in the sidebar to view its details. The job detail page has multiple tabs:
+
+- **Overview** -- Status, duration, execution details, output directory, suggested next steps, and quick preview plots
+- **Logs** -- Full job output with color-coded messages and real-time streaming for running jobs
+- **Parameters** -- All parameters used, with **Show CLI Command** and **Clone Job** buttons
+- **Volumes** -- Output volumes organized by category, with a built-in 3D isosurface viewer
+- **Plots** -- All diagnostic plots in a grid (click to view full resolution)
+
+**Completed job:**
+
+![Completed Job](../../_static/gui/07_job_completed.png)
+
+**Running job:**
+
+![Running Job](../../_static/gui/13_job_running.png)
+
+**Failed job:**
+
+![Failed Job](../../_static/gui/12_job_failed.png)
+
+
+## Clone Job Flow
+
+From the **Parameters** tab of any job, click **Clone Job** to open a new form with all parameters pre-filled. Modify what you need and resubmit.
+
+![Cloned Form](../../_static/gui/19_cloned_form.png)
+
+
+## Exploring Results
+
+### Latent Space Explorer
+
+After running an Analyze job, click **Explore Latent Space** to open the interactive explorer:
+
+- **PCA and UMAP** projections side by side (50K+ points at 60 fps via WebGL)
 - **Color by** k-means cluster, point density, or deconvolved conformational density
-- **Selectable zdim** — switch between latent dimensions (1, 2, 4, 10, 20, etc.)
-- Axis selectors for PCA components
+- **Click** a particle or k-means center to see its coordinates and generate a volume
+- **Lasso / rectangle / polygon selection** to select particles and export `.star` or `.ind` files (see [Extracting Subsets](extracting-subsets.md#using-the-gui))
 
-#### Point clicks
+### 3D Volume Viewer
 
-Click a particle or k-means center to see its full latent coordinate vector and density value. From there:
+View isosurface renderings of any volume directly in the browser with adjustable sigma threshold, slice views, and side-by-side comparison of up to 4 volumes.
 
-- **Compute State** — submit a job to generate a volume at that point
-- **Compute Trajectory** — select two points and submit a trajectory job (with optional density-guided path)
 
-#### Lasso / rectangle / polygon selection
-
-Use the selection tools to draw a region on the scatter plot:
-
-- See the number of selected particles
-- **Export .star** — one-click export of selected particles as a RELION .star file (if the original .star is available)
-- **Export .ind** — export particle indices as an index file
-- A link to **rerun pipeline** with the exported subset appears immediately
-
-### 3D volume viewer
-
-View isosurface renderings of any volume directly in the browser:
-
-- Adjustable **sigma threshold** for isosurface level
-- **Slice view** with axis selection and slider navigation
-- Click volumes in the **Volumes** tab to load them
-
-### Volume browser
-
-Organized listing of all output volumes, categorized by type (K-means centers, trajectories, eigenvectors, half-maps, etc.). Toggle display of half-map and unfiltered volumes.
-
-### Result images
-
-Pipeline diagnostic plots (eigenvalue spectrum, mean FSC, contrast histogram) are displayed as a preview grid on the job detail page.
-
-## GUI vs CLI workflow
+## GUI vs CLI Workflow
 
 The GUI mirrors the CLI workflow, adding interactivity:
 
 | CLI step | GUI equivalent |
 |----------|----------------|
-| `recovar pipeline ...` | New Job → Pipeline form |
-| `recovar analyze ...` | New Job → Analyze form (or click "Suggested Next Step") |
-| `recovar compute_state ...` | Click a point in the latent space explorer |
-| `recovar compute_trajectory ...` | Select two points in the latent space explorer |
-| View `.mrc` in ChimeraX | Built-in 3D viewer and slice viewer |
-| Inspect `.png` plots | Result images tab |
-| `recovar estimate_conformational_density ...` | New Job → Density Estimation form |
+| `recovar pipeline ...` | New Job -> Pipeline form |
+| `recovar analyze ...` | New Job -> Analyze form (or click "Suggested Next Step") |
+| `recovar compute_state ...` | Click a point in the latent space explorer, or New Job -> Compute State form |
+| `recovar compute_trajectory ...` | Select two points in the latent space explorer, or New Job -> Trajectory form |
+| View `.mrc` in ChimeraX | Built-in 3D volume viewer and slice viewer |
+| Inspect `.png` plots | Plots tab on the job detail page |
+| `recovar estimate_conformational_density ...` | New Job -> Density Estimation form |
 
 !!! tip "Use both"
     The GUI and CLI work on the same output directories. You can run `pipeline` and `analyze` from the command line, then launch `recovar gui` and scan the directory to explore the results interactively. Or do everything through the GUI.
 
+
+## Jobs Survive GUI Restarts
+
+Jobs submitted through the GUI (both SLURM and local) are tracked in the project database. If the GUI server restarts, it reconnects to all in-flight jobs automatically -- no work is lost.
+
+
 ## Requirements
 
-The GUI requires FastAPI and uvicorn, which are included when you install with:
+The GUI requires FastAPI, uvicorn, SQLAlchemy, and a few other packages, which are all included when you install with:
 
 ```bash
-pip install recovar[gui]
+pip install "recovar[gui]"
 ```
 
-The frontend is pre-built and bundled — no Node.js required at runtime.
+This installs the `gui` extra, which includes `fastapi`, `uvicorn`, `python-multipart`, `sqlalchemy`, `aiofiles`, and `tomli_w` (for writing TOML settings files).
+
+The frontend is pre-built and bundled -- no Node.js required at runtime.

@@ -4,7 +4,9 @@ RECOVAR analyzes conformational heterogeneity in cryo-EM and cryo-ET datasets. I
 
 **[Full Documentation](https://ma-gilles.github.io/recovar)** | **[Paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122)** | **[Talk](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s)**
 
-**License**: Princeton University Academic/Non-Commercial License (see [LICENSE](LICENSE)).
+> **Looking for the older release?** Active development happens on the `dev` branch. If you want the previous stable release (`0.4.5`, possibly more stable but missing recent features like `.cs`/`.star` auto-extraction), install with `pip install recovar==0.4.5` or check out the [`legacy-0.4.5`](https://github.com/ma-gilles/recovar/tree/legacy-0.4.5) branch.
+
+**License**: the code has been modified and is now under the PU-RL v2.0 license, and the code imports libraries that are under non-PU-RL v2.0 (including GPL) licenses. See [LICENSE](LICENSE).
 
 ## Key features
 
@@ -87,6 +89,16 @@ RECOVAR ships two compiled extensions:
 
 - The fast-marching C++ extension is bundled in published Linux and macOS wheels for supported builds. Source and editable installs build it locally when a C++ compiler is available. If that build fails, RECOVAR falls back to the pure-Python implementation.
 - Installing `recovar[gpu]` gives you the CUDA-enabled JAX wheels. On GPU, RECOVAR also tries to build and use its faster custom CUDA backproject/project extension by default. That requires a local CUDA toolkit/compiler reachable through `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`. You can prebuild it with `recovar build_custom_cuda`. If that custom CUDA build/load fails, RECOVAR stops with fix instructions. `RECOVAR_DISABLE_CUDA=1` forces the slower JAX GPU path as a temporary workaround, but that is not the preferred configuration.
+
+**Minimum GPU compute capability: 7.0** (NVIDIA Volta or newer). The custom CUDA kernel ships precompiled targets for sm_70, sm_75, sm_80, sm_86, sm_89, sm_90 plus a compute_75 PTX fallback. For Pascal (sm_60/61) or other archs not in the default set, rebuild locally:
+
+```bash
+cd recovar/cuda
+make clean
+make CUDA_ARCH="-gencode arch=compute_60,code=sm_60 -gencode arch=compute_60,code=compute_60"
+```
+
+As a temporary alternative, set `RECOVAR_DISABLE_CUDA=1` to use the slower JAX-native path (≈2x slower; matches recovar 0.4.5 behavior). For one-off runs on small datasets that's fine; for production, rebuild.
 
 ### Docker
 

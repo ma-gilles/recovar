@@ -26,6 +26,7 @@ from recovar.gui_v2.backend.api.files import router as files_router
 from recovar.gui_v2.backend.api.jobs import router as jobs_router
 from recovar.gui_v2.backend.api.project import router as project_router
 from recovar.gui_v2.backend.api.subsets import router as subsets_router
+from recovar.gui_v2.backend.api.settings import router as settings_router
 from recovar.gui_v2.backend.api.system import router as system_router
 from recovar.gui_v2.backend.api.volumes import router as volumes_router
 from recovar.gui_v2.backend.api.ws import router as ws_router
@@ -55,12 +56,10 @@ async def _reconcile_on_startup() -> None:
     from recovar.gui_v2.backend.api.jobs import (
         _poll_job_status,
         _poll_tasks,
-        get_executor,
+        get_executor_for_job,
     )
     from recovar.gui_v2.backend.api.project import _project_registry
     from recovar.gui_v2.backend.config import get_db_path
-
-    executor = get_executor()
 
     # Collect all project paths from the registry.
     # The registry may be empty on first start; in that case,
@@ -109,11 +108,21 @@ async def _reconcile_on_startup() -> None:
                     "id": j.id,
                     "handle": j.executor_handle,
                     "db_status": j.status,
+                    "working_dir": j.output_dir,
                 }
                 for j in inflight
             ]
 
-            updates = await reconcile_jobs(executor, inflight_dicts)
+            # Reconcile jobs grouped by executor type
+            slurm_jobs = [d for d, j in zip(inflight_dicts, inflight) if j.slurm_id]
+            local_jobs = [d for d, j in zip(inflight_dicts, inflight) if not j.slurm_id]
+            updates = []
+            if slurm_jobs:
+                from recovar.gui_v2.backend.api.jobs import _get_slurm_executor
+                updates.extend(await reconcile_jobs(_get_slurm_executor(), slurm_jobs))
+            if local_jobs:
+                from recovar.gui_v2.backend.api.jobs import _get_local_executor
+                updates.extend(await reconcile_jobs(_get_local_executor(), local_jobs))
 
             # Apply updates to DB
             for upd in updates:
@@ -142,9 +151,12 @@ async def _reconcile_on_startup() -> None:
                         u["id"] == j.id for u in updates
                     )
                     if not was_updated and j.id not in _poll_tasks:
+                        poll_mode = "slurm" if j.slurm_id else "local"
                         task = asyncio.create_task(
                             _poll_job_status(
-                                j.id, j.executor_handle, project_path
+                                j.id, j.executor_handle, project_path,
+                                executor_mode=poll_mode,
+                                working_dir=j.output_dir,
                             )
                         )
                         _poll_tasks[j.id] = task
@@ -210,6 +222,7 @@ def create_app() -> FastAPI:
     app.include_router(volumes_router)
     app.include_router(embeddings_router)
     app.include_router(subsets_router)
+    app.include_router(settings_router)
     app.include_router(system_router)
     app.include_router(ws_router)
 

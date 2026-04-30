@@ -9,6 +9,8 @@ import { Select } from "../ui/select";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
+import { LocalSettings, type LocalOpts } from "./LocalSettings";
+import { ExecutorSelector } from "./ExecutorSelector";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob, validateJob, type ValidationResult } from "../../lib/api/client";
 
@@ -16,16 +18,18 @@ interface PipelineFormProps {
   projectId: string;
   projectPath: string;
   onSubmitted?: (jobId: string) => void;
+  prefilledParams?: Record<string, unknown>;
 }
 
-export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFormProps): React.JSX.Element {
+export function PipelineForm({ projectId, projectPath, onSubmitted, prefilledParams }: PipelineFormProps): React.JSX.Element {
   const queryClient = useQueryClient();
-  const [particles, setParticles] = useState("");
-  const [mask, setMask] = useState("from_halfmaps");
+  const p = prefilledParams ?? {};
+  const [particles, setParticles] = useState(String(p.particles ?? ""));
+  const [mask, setMask] = useState(String(p.mask ?? "from_halfmaps"));
   const [maskPath, setMaskPath] = useState("");
   const [showParticleBrowser, setShowParticleBrowser] = useState(false);
   const [showMaskBrowser, setShowMaskBrowser] = useState(false);
-  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(!!prefilledParams);
   const [showRarelyUsed, setShowRarelyUsed] = useState(false);
   const [showFocusMaskBrowser, setShowFocusMaskBrowser] = useState(false);
   const [validationInfo, setValidationInfo] = useState<{
@@ -35,21 +39,23 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
   } | null>(null);
 
   // Advanced fields
-  const [zdim, setZdim] = useState("1,2,4,10,20");
-  const [downsample, setDownsample] = useState("256");
-  const [lazy, setLazy] = useState(false);
-  const [correctContrast, setCorrectContrast] = useState(true);
-  const [focusMask, setFocusMask] = useState("");
-  const [datadir, setDatadir] = useState("");
-  const [nImages, setNImages] = useState("");
-  const [halfsets, setHalfsets] = useState("");
-  const [poses, setPoses] = useState("");
-  const [ctf, setCtf] = useState("");
-  const [tiltSeries, setTiltSeries] = useState(false);
-  const [stripPrefix, setStripPrefix] = useState("");
+  const [zdim, setZdim] = useState(String(p.zdim ?? "1,2,4,10,20"));
+  const [downsample, setDownsample] = useState(String(p.downsample ?? "256"));
+  const [lazy, setLazy] = useState(Boolean(p.lazy));
+  const [correctContrast, setCorrectContrast] = useState(p.correct_contrast !== false);
+  const [focusMask, setFocusMask] = useState(String(p.focus_mask ?? ""));
+  const [datadir, setDatadir] = useState(String(p.datadir ?? ""));
+  const [nImages, setNImages] = useState(p.n_images ? String(p.n_images) : "");
+  const [halfsets, setHalfsets] = useState(String(p.halfsets ?? ""));
+  const [poses, setPoses] = useState(String(p.poses ?? ""));
+  const [ctf, setCtf] = useState(String(p.ctf ?? ""));
+  const [tiltSeries, setTiltSeries] = useState(Boolean(p.tilt_series));
+  const [stripPrefix, setStripPrefix] = useState(String(p.strip_prefix ?? ""));
   const [outputName, setOutputName] = useState("");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
+  const [executorMode, setExecutorMode] = useState<string | null>(null);
+  const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
   const [validating, setValidating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [validationWarnings, setValidationWarnings] = useState<string[]>([]);
@@ -72,12 +78,13 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
     if (tiltSeries) params.tilt_series = true;
     if (stripPrefix) params.strip_prefix = stripPrefix;
     if (outputName) params.output_name = outputName;
-    if (slurmOpts) params.slurm_opts = slurmOpts;
+    if (slurmOpts && executorMode !== "local") params.slurm_opts = slurmOpts;
+    if (localOpts && executorMode === "local") params.local_opts = localOpts;
     return params;
   }, [particles, mask, maskPath, zdim, downsample, lazy, correctContrast, focusMask, datadir, nImages, halfsets, poses, ctf, tiltSeries, stripPrefix, outputName, slurmOpts]);
 
   const mutation = useMutation({
-    mutationFn: () => submitJob(projectId, "pipeline", buildParams()),
+    mutationFn: () => submitJob(projectId, "pipeline", buildParams(), executorMode),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       onSubmitted?.(data.id);
@@ -366,7 +373,12 @@ export function PipelineForm({ projectId, projectPath, onSubmitted }: PipelineFo
       )}
 
       {/* SLURM Settings */}
-      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
+      {executorMode === "local" ? (
+        <LocalSettings value={localOpts} onChange={setLocalOpts} />
+      ) : (
+        <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      )}
 
       {/* Validation feedback */}
       {validationErrors.length > 0 && (

@@ -16,6 +16,7 @@ import {
   FolderOpen,
   FolderPlus,
   AlertTriangle,
+  Settings,
 } from "lucide-react";
 import { clsx } from "clsx";
 import { getProject, createProject, ApiError, type ProjectDetail, type JobSummary } from "../../lib/api/client";
@@ -347,6 +348,18 @@ export function Sidebar({ projectId, onProjectCreated, onProjectNotFound }: Side
           </nav>
         </>
       )}
+
+      {/* Settings link */}
+      <div className="border-t border-zinc-800 p-2">
+        <Link
+          to="/settings"
+          className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-zinc-50"
+          activeProps={{ className: "bg-zinc-700/50 text-zinc-50" }}
+        >
+          <Settings className="h-3.5 w-3.5" />
+          Settings
+        </Link>
+      </div>
 
       {/* Create/Open project modals rendered outside the aside */}
       {(showCreateForm || showOpenForm) && (

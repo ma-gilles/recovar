@@ -8,6 +8,10 @@ Usage::
 
 Access via browser at http://localhost:<port>.
 When using SSH, forward the port: ssh -L 8080:localhost:8080 user@cluster
+
+The GUI auto-detects whether SLURM is available. If ``sbatch`` is on
+PATH, both SLURM and local-GPU execution are available and the user
+picks per job. If not, only local execution is shown.
 """
 
 import argparse
@@ -66,9 +70,15 @@ def main():
     print("  ╔══════════════════════════════════════════════╗")
     print("  ║           RECOVAR Web GUI                    ║")
     print("  ╠══════════════════════════════════════════════╣")
-    print(f"  ║  Local:   http://{args.host}:{args.port:<24s}║")
+    print(f"  ║  Local:    http://{args.host}:{args.port:<23}║")
     if args.host == "127.0.0.1":
-        print(f"  ║  SSH:     ssh -L {args.port}:localhost:{args.port} user@host  ║")
+        print(f"  ║  SSH:      ssh -L {args.port}:localhost:{args.port} user@host ║")
+    else:
+        print(
+            "  ║  ⚠  Non-loopback host: anyone with network access can ║\n"
+            "  ║     run jobs as your Unix user. Do not expose to     ║\n"
+            "  ║     untrusted networks.                              ║"
+        )
     print("  ╚══════════════════════════════════════════════╝")
     print()
 

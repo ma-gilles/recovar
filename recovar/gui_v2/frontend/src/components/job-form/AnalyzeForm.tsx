@@ -8,6 +8,8 @@ import { Select } from "../ui/select";
 import { TooltipIcon } from "../ui/tooltip-icon";
 import { FileBrowser } from "../file-browser/FileBrowser";
 import { SlurmSettings, type SlurmOpts } from "./SlurmSettings";
+import { ExecutorSelector } from "./ExecutorSelector";
+import { LocalSettings, type LocalOpts } from "./LocalSettings";
 import { tooltips } from "../../lib/tooltips";
 import { submitJob, validateJob, type ValidationResult } from "../../lib/api/client";
 
@@ -32,6 +34,8 @@ export function AnalyzeForm({
   const [nTrajectories, setNTrajectories] = useState("0");
   const [outputName, setOutputName] = useState("");
   const [slurmOpts, setSlurmOpts] = useState<SlurmOpts | null>(null);
+  const [executorMode, setExecutorMode] = useState<string | null>(null);
+  const [localOpts, setLocalOpts] = useState<LocalOpts | null>(null);
   const handleSlurmChange = useCallback((opts: SlurmOpts | null) => setSlurmOpts(opts), []);
   const [validating, setValidating] = useState(false);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -46,11 +50,12 @@ export function AnalyzeForm({
     if (nTrajectories) params.n_trajectories = parseInt(nTrajectories);
     if (outputName) params.output_name = outputName;
     if (slurmOpts) params.slurm_opts = slurmOpts;
+      if (localOpts && executorMode === "local") params.local_opts = localOpts;
     return params;
   }, [resultDir, zdim, nClusters, nTrajectories, outputName, slurmOpts]);
 
   const mutation = useMutation({
-    mutationFn: () => submitJob(projectId, "analyze", buildParams()),
+    mutationFn: () => submitJob(projectId, "analyze", buildParams(), executorMode),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
       onSubmitted?.(data.id);
@@ -164,7 +169,12 @@ export function AnalyzeForm({
       </div>
 
       {/* SLURM Settings */}
-      <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      <ExecutorSelector value={executorMode} onChange={setExecutorMode} />
+      {executorMode === "local" ? (
+        <LocalSettings value={localOpts} onChange={setLocalOpts} />
+      ) : (
+        <SlurmSettings value={slurmOpts} onChange={handleSlurmChange} />
+      )}
 
       {/* Validation feedback */}
       {validationErrors.length > 0 && (

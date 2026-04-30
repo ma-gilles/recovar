@@ -14,9 +14,9 @@ Usage::
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
+import shlex
 import shutil
 import signal
 import sys
@@ -34,7 +34,19 @@ logger = logging.getLogger(__name__)
 
 
 def slurm_available() -> bool:
-    """Return True if ``sbatch`` is on PATH."""
+    """Return True if SLURM is the active executor.
+
+    Honours the ``RECOVAR_EXECUTOR`` env var (``local``, ``slurm``, or
+    ``auto`` — default ``auto``). When ``auto``, probes for ``sbatch`` on
+    PATH. ``local`` forces local-subprocess mode even on a SLURM login
+    node — useful for laptops, workstations, or running directly on a
+    compute node from inside an existing allocation.
+    """
+    override = os.environ.get("RECOVAR_EXECUTOR", "auto").strip().lower()
+    if override == "local":
+        return False
+    if override == "slurm":
+        return True  # caller will see the failure if sbatch is genuinely missing
     return shutil.which("sbatch") is not None
 
 
@@ -66,6 +78,7 @@ class Executor(ABC):
         working_dir: str,
         *,
         slurm_opts: dict[str, Any] | None = None,
+        local_opts: dict[str, Any] | None = None,
     ) -> str:
         """Submit a job.  Returns an executor-specific handle."""
 
@@ -129,14 +142,17 @@ class SlurmExecutor(Executor):
         working_dir: str,
         *,
         slurm_opts: dict[str, Any] | None = None,
+        local_opts: dict[str, Any] | None = None,
     ) -> str:
         opts = slurm_opts or {}
         slurm_output = os.path.join(working_dir, "slurm-%j.out")
 
-        # Build sbatch script
+        # Build sbatch script. shlex.join → command survives spaces, quotes,
+        # and special chars in argv (paths with spaces, etc.). The renderer
+        # will not re-quote it.
         script = _render_sbatch_script(
             job_name=f"recovar-{job_id[:8]}",
-            command=" ".join(command),
+            command=shlex.join(command),
             env_vars=env,
             output_path=slurm_output,
             **opts,
@@ -149,7 +165,9 @@ class SlurmExecutor(Executor):
 
         # sbatch --parsable
         proc = await asyncio.create_subprocess_exec(
-            "sbatch", "--parsable", script_path,
+            "sbatch",
+            "--parsable",
+            script_path,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=working_dir,
@@ -157,9 +175,7 @@ class SlurmExecutor(Executor):
         stdout, stderr = await proc.communicate()
 
         if proc.returncode != 0:
-            raise RuntimeError(
-                f"sbatch failed (rc={proc.returncode}): {stderr.decode().strip()}"
-            )
+            raise RuntimeError(f"sbatch failed (rc={proc.returncode}): {stderr.decode().strip()}")
 
         slurm_id = stdout.decode().strip().split(";")[0]
         # Resolve actual log path (substitute %j with slurm_id)
@@ -184,7 +200,8 @@ class SlurmExecutor(Executor):
 
     async def cancel(self, handle: str) -> None:
         proc = await asyncio.create_subprocess_exec(
-            "scancel", handle,
+            "scancel",
+            handle,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -221,7 +238,11 @@ class SlurmExecutor(Executor):
     async def _squeue_state(slurm_id: str) -> str | None:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "squeue", "-j", slurm_id, "--noheader", "--format=%T",
+                "squeue",
+                "-j",
+                slurm_id,
+                "--noheader",
+                "--format=%T",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -237,8 +258,12 @@ class SlurmExecutor(Executor):
     async def _sacct_state(slurm_id: str) -> str | None:
         try:
             proc = await asyncio.create_subprocess_exec(
-                "sacct", "-j", slurm_id,
-                "--format=State", "--noheader", "--parsable2",
+                "sacct",
+                "-j",
+                slurm_id,
+                "--format=State",
+                "--noheader",
+                "--parsable2",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
@@ -259,10 +284,14 @@ class SlurmExecutor(Executor):
 
 
 class LocalExecutor(Executor):
-    """Runs jobs as local subprocesses with process-group isolation."""
+    """Runs jobs as local subprocesses that survive GUI restarts.
 
-    # handle -> (process, log_path, pgid)
-    _processes: dict[str, tuple[asyncio.subprocess.Process, Path, int]] = {}
+    Each job gets a ``run.sh`` wrapper script and a ``run.pid`` file in
+    the working directory.  The subprocess is launched via ``nohup`` and
+    fully detached from the server process, so it keeps running even if
+    the GUI is restarted.  On restart, ``status()`` reconnects to the
+    process by reading the PID file.
+    """
 
     async def submit(
         self,
@@ -272,99 +301,174 @@ class LocalExecutor(Executor):
         working_dir: str,
         *,
         slurm_opts: dict[str, Any] | None = None,
+        local_opts: dict[str, Any] | None = None,
     ) -> str:
         log_file = os.path.join(working_dir, "run.log")
-        full_env = {**os.environ, **env}
+        pid_file = os.path.join(working_dir, "run.pid")
+        rc_file = os.path.join(working_dir, "run.exitcode")
+        script_file = os.path.join(working_dir, "run.sh")
 
-        # Open log file for stdout/stderr
-        log_fh = open(log_file, "w")
+        # Build environment exports
+        env_lines = []
+        for k, v in env.items():
+            env_lines.append(f"export {k}={shlex.quote(v)}")
 
+        # Apply local execution options
+        opts = local_opts or {}
+        gpu_selection = opts.get("gpus", "all")
+        if gpu_selection and gpu_selection != "all":
+            env_lines.append(f"export CUDA_VISIBLE_DEVICES={shlex.quote(str(gpu_selection))}")
+        extra_env = opts.get("env_vars", {})
+        if isinstance(extra_env, dict):
+            for k, v in extra_env.items():
+                if k:
+                    env_lines.append(f"export {k}={shlex.quote(str(v))}")
+        setup_command = opts.get("setup_command", "").strip()
+
+        # Build the wrapper script
+        cmd_str = shlex.join(command)
+        script_lines = [
+            "#!/bin/bash",
+            "# Auto-generated by recovar GUI (local executor)",
+            f"echo $$ > {shlex.quote(pid_file)}",
+            "",
+            "# Environment",
+            *env_lines,
+            "",
+        ]
+        if setup_command:
+            script_lines.append(f"# Setup command")
+            script_lines.append(setup_command)
+            script_lines.append("")
+        script_lines.extend([
+            "# Run the pipeline",
+            cmd_str,
+            "EXIT_CODE=$?",
+            "",
+            f"echo $EXIT_CODE > {shlex.quote(rc_file)}",
+            "exit $EXIT_CODE",
+        ])
+
+        script_content = "\n".join(script_lines) + "\n"
+        with open(script_file, "w") as f:
+            f.write(script_content)
+        os.chmod(script_file, 0o755)
+
+        # Launch fully detached via nohup + bash
         proc = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=log_fh,
-            stderr=asyncio.subprocess.STDOUT,
-            env=full_env,
+            "/bin/bash", "-c",
+            f"nohup {shlex.quote(script_file)} > {shlex.quote(log_file)} 2>&1 &",
             cwd=working_dir,
-            start_new_session=True,  # new process group for clean cancel
+            start_new_session=True,
         )
+        await proc.wait()
 
-        handle = str(proc.pid)
+        # Wait briefly for the PID file to be written
+        for _ in range(20):
+            if os.path.isfile(pid_file):
+                break
+            await asyncio.sleep(0.1)
+
+        # Read PID from file
         try:
-            pgid = os.getpgid(proc.pid)
+            with open(pid_file) as f:
+                handle = f.read().strip()
         except OSError:
-            pgid = proc.pid
+            raise RuntimeError("Local job started but PID file was not written")
 
-        self._processes[handle] = (proc, Path(log_file), pgid)
         logger.info(
-            "Started local process pid=%s pgid=%d for job_id=%s",
-            handle, pgid, job_id,
+            "Started local job pid=%s for job_id=%s (detached, survives restart)",
+            handle, job_id,
         )
         return handle
 
     async def status(self, handle: str) -> JobStatus:
-        entry = self._processes.get(handle)
-        if entry is None:
+        pid = int(handle)
+
+        # Check if process is alive
+        try:
+            os.kill(pid, 0)
+            return JobStatus.RUNNING
+        except ProcessLookupError:
+            pass  # Process finished — check exit code
+        except OSError:
             return JobStatus.UNKNOWN
 
-        proc = entry[0]
-        if proc.returncode is None:
-            # Still running — check
-            try:
-                os.kill(proc.pid, 0)
-                return JobStatus.RUNNING
-            except ProcessLookupError:
-                # Reap the process
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=1)
-                except asyncio.TimeoutError:
-                    pass
-            except OSError:
-                return JobStatus.UNKNOWN
+        # Process is gone — check exit code file
+        # We need the working dir to find run.exitcode.
+        # Try to find it via /proc or the DB (the poller passes it).
+        # For now, scan for run.exitcode relative to the handle.
+        # The poller has the working_dir context; this fallback checks
+        # if the process simply completed.
+        return JobStatus.UNKNOWN
 
-        rc = proc.returncode
-        if rc is None:
+    async def status_with_dir(self, handle: str, working_dir: str) -> JobStatus:
+        """Check status using the working directory for exit code file."""
+        pid = int(handle)
+
+        try:
+            os.kill(pid, 0)
             return JobStatus.RUNNING
-        if rc == 0:
-            return JobStatus.COMPLETED
-        if rc == -signal.SIGTERM or rc == -signal.SIGKILL:
-            return JobStatus.CANCELLED
-        return JobStatus.FAILED
+        except ProcessLookupError:
+            pass
+        except OSError:
+            return JobStatus.UNKNOWN
+
+        # Process is gone — read exit code
+        rc_file = os.path.join(working_dir, "run.exitcode")
+        if os.path.isfile(rc_file):
+            try:
+                with open(rc_file) as f:
+                    rc = int(f.read().strip())
+                return JobStatus.COMPLETED if rc == 0 else JobStatus.FAILED
+            except (ValueError, OSError):
+                pass
+
+        # No exit code file but process is gone — check if run.log has
+        # the "Job completed" or "Job failed" marker
+        log_file = os.path.join(working_dir, "run.log")
+        if os.path.isfile(log_file):
+            try:
+                with open(log_file, "rb") as f:
+                    f.seek(max(0, os.fstat(f.fileno()).st_size - 2048))
+                    tail = f.read().decode("utf-8", errors="replace")
+                if "Job completed:" in tail:
+                    return JobStatus.COMPLETED
+                if "Job failed:" in tail or "Traceback" in tail:
+                    return JobStatus.FAILED
+            except OSError:
+                pass
+
+        return JobStatus.FAILED  # Process gone, no exit code — assume failed
 
     async def cancel(self, handle: str) -> None:
-        entry = self._processes.get(handle)
-        if entry is None:
-            return
-
-        _proc, _log, pgid = entry
+        pid = int(handle)
         try:
+            pgid = os.getpgid(pid)
             os.killpg(pgid, signal.SIGTERM)
         except OSError:
-            pass
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
 
         # Grace period then SIGKILL
         await asyncio.sleep(10)
         try:
+            pgid = os.getpgid(pid)
             os.killpg(pgid, signal.SIGKILL)
         except OSError:
-            pass
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
 
-        logger.info("Cancelled local process group pgid=%d", pgid)
+        logger.info("Cancelled local process pid=%s", handle)
 
     async def log_path(self, handle: str) -> Path | None:
-        entry = self._processes.get(handle)
-        if entry is None:
-            return None
-        return entry[1]
+        return None  # Log path is resolved by the job layer from working_dir
 
     async def cleanup(self, handle: str) -> None:
-        entry = self._processes.pop(handle, None)
-        if entry is None:
-            return
-        proc = entry[0]
-        if proc.returncode is None:
-            try:
-                proc.kill()
-            except OSError:
                 pass
 
 
@@ -373,29 +477,26 @@ class LocalExecutor(Executor):
 # ---------------------------------------------------------------------------
 
 
+# NOTE: site-portability rules — see recovar/gui_v2/CLAUDE.md.
+#   - No cluster-/lab-specific strings (partition, account, paths) may live in
+#     the template body. They are passed in by the caller; empty values mean
+#     "omit the directive" (not "emit `#SBATCH --foo=`", which is a parse error
+#     on some schedulers).
+#   - Shell-bearing fragments with `${...}` are built as Python strings
+#     OUTSIDE this format template and substituted in via named slots,
+#     because `str.format` would mis-parse `${TMPDIR:-x}` as a format spec.
+
 _SBATCH_TEMPLATE = """\
 #!/bin/bash
-#SBATCH --job-name={job_name}
-#SBATCH --partition={partition}
-#SBATCH --account={account}
-#SBATCH --gres=gpu:{gpus}
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task={cpus}
-#SBATCH --mem={memory}
-#SBATCH --time={time}
-#SBATCH --output={output_path}
-{raw_directives}
+{slurm_directives}
 # ── Environment ──
-export PYTHONNOUSERSITE=1
-export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export TMPDIR=/scratch/gpfs/GILLES/mg6942/tmp
-mkdir -p "$TMPDIR"
-# Add pixi bin to PATH so the recovar entry point (with its shebang) works
-export PATH="{pixi_bin_dir}:$PATH"
+{tmpdir_block}
+# Add the running Python's bin dir to PATH so `recovar` shebang resolves
+export PATH={pixi_bin_dir}:$PATH
 {extra_exports}
 
-# ── Staging cleanup trap ──
-{cache_setup}
+# ── Cleanup trap ──
+{cleanup_block}
 
 # ── Run the actual command ──
 {command}
@@ -405,75 +506,271 @@ exit $EXIT_CODE
 """
 
 
+# Prefer scheduler-provided job-local scratch. Inherited from caller env if any.
+# We only create a tmpdir ourselves as a last resort, and clean up only what we
+# created (never $SLURM_TMPDIR or a pre-set $TMPDIR — clusters reap those).
+_TMPDIR_BLOCK = """\
+RECOVAR_CREATED_TMPDIR=0
+if [ -n "${SLURM_TMPDIR:-}" ]; then
+    export TMPDIR="$SLURM_TMPDIR"
+elif [ -n "${TMPDIR:-}" ]; then
+    mkdir -p "$TMPDIR"
+else
+    export TMPDIR="$(mktemp -d -t recovar-${SLURM_JOB_ID:-job}-XXXXXX)"
+    RECOVAR_CREATED_TMPDIR=1
+fi
+mkdir -p "$TMPDIR"\
+"""
+
+
+def _build_slurm_directives(
+    *,
+    job_name: str,
+    output_path: str,
+    partition: str,
+    account: str,
+    gpus: int,
+    cpus: int,
+    memory: str,
+    time: str,
+    raw_directives: str | None,
+    gpu_resource_spec: str = "--gres=gpu:{gpus}",
+) -> str:
+    """Build the #SBATCH directive block. Empty partition/account → omit (not blank).
+
+    ``gpu_resource_spec`` is a python-format string with a single ``{gpus}``
+    slot, which lets a site override the GPU directive for clusters that
+    use ``--gpus={gpus}``, ``--gres=gpu:a100:{gpus}``, etc. Default is
+    ``--gres=gpu:{gpus}`` for backward compatibility. When ``gpus == 0``
+    the GPU directive is omitted entirely.
+    """
+    # Sanitize: 0 or negative values → sensible defaults
+    if not gpus or gpus < 1:
+        gpus = 1
+    if not cpus or cpus < 1:
+        cpus = 4
+    if not memory:
+        memory = "300G"
+    if not time:
+        time = "12:00:00"
+
+    lines: list[str] = [f"#SBATCH --job-name={job_name}"]
+    if partition:
+        lines.append(f"#SBATCH --partition={partition}")
+    if account:
+        lines.append(f"#SBATCH --account={account}")
+    if gpus:
+        gpu_directive = gpu_resource_spec.format(gpus=gpus).strip()
+        if gpu_directive:
+            lines.append(f"#SBATCH {gpu_directive}")
+    lines.extend(
+        [
+            "#SBATCH --ntasks=1",
+            f"#SBATCH --cpus-per-task={cpus}",
+            f"#SBATCH --mem={memory}",
+            f"#SBATCH --time={time}",
+            f"#SBATCH --output={output_path}",
+        ]
+    )
+
+    if raw_directives and raw_directives.strip():
+        for raw in raw_directives.strip().splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            if raw.startswith("#SBATCH"):
+                lines.append(raw)
+            elif raw.startswith("-"):
+                # Already a sbatch flag (`-p gpu` or `--qos=high`) — prefix only.
+                lines.append(f"#SBATCH {raw}")
+            else:
+                lines.append(f"#SBATCH --{raw}")
+
+    return "\n".join(lines)
+
+
+def _build_cleanup_block(*, cache_dir: str | None) -> str:
+    """Build the trap/cleanup block. One trap covers cache_dir + tmpdir-we-created."""
+    parts: list[str] = []
+    if cache_dir:
+        parts.append(f"export RECOVAR_CACHE_DIR={shlex.quote(cache_dir)}/recovar_cache_${{SLURM_JOB_ID}}")
+        parts.append('mkdir -p "$RECOVAR_CACHE_DIR"')
+
+    parts.append("_recovar_cleanup() {")
+    if cache_dir:
+        parts.append('    if [ -n "$RECOVAR_CACHE_DIR" ] && [ -d "$RECOVAR_CACHE_DIR" ]; then')
+        parts.append('        rm -rf "$RECOVAR_CACHE_DIR"')
+        parts.append("    fi")
+    parts.append('    if [ "${RECOVAR_CREATED_TMPDIR:-0}" = "1" ] && [ -n "$TMPDIR" ] && [ -d "$TMPDIR" ]; then')
+    parts.append('        rm -rf "$TMPDIR"')
+    parts.append("    fi")
+    parts.append("}")
+    parts.append("trap _recovar_cleanup EXIT TERM INT")
+    return "\n".join(parts)
+
+
 def _render_sbatch_script(
     *,
     job_name: str,
     command: str,
     env_vars: dict[str, str],
     output_path: str,
-    partition: str = "cryoem",
-    account: str = "amits",
+    partition: str = "",
+    account: str = "",
     gpus: int = 1,
     cpus: int = 4,
     memory: str = "300G",
     time: str = "12:00:00",
     cache_dir: str | None = None,
     raw_directives: str | None = None,
+    gpu_resource_spec: str = "--gres=gpu:{gpus}",
+    template_path: str | None = None,
+    template_vars: dict[str, Any] | None = None,
     **_extra: Any,
 ) -> str:
-    """Render an sbatch script from parameters."""
-    extra_exports = "\n".join(
-        f"export {k}={v}" for k, v in env_vars.items()
-    )
-    # Derive pixi bin dir from the running Python executable
-    pixi_bin_dir = str(Path(sys.executable).parent)
+    """Render an sbatch script from parameters.
 
-    # Format raw SBATCH directives (user-supplied extra lines)
-    raw_lines = ""
-    if raw_directives and raw_directives.strip():
-        lines = []
-        for line in raw_directives.strip().splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            # Prefix with #SBATCH if user didn't include it
-            if line.startswith("#SBATCH"):
-                lines.append(line)
-            elif line.startswith("--"):
-                lines.append(f"#SBATCH {line}")
-            else:
-                lines.append(f"#SBATCH --{line}")
-        raw_lines = "\n".join(lines)
+    Two modes:
 
-    if cache_dir:
-        cache_setup = (
-            f'export RECOVAR_CACHE_DIR={cache_dir}/recovar_cache_${{SLURM_JOB_ID}}\n'
-            f'mkdir -p "$RECOVAR_CACHE_DIR"\n'
-            f'cleanup() {{\n'
-            f'    if [ -n "$RECOVAR_CACHE_DIR" ] && [ -d "$RECOVAR_CACHE_DIR" ]; then\n'
-            f'        rm -rf "$RECOVAR_CACHE_DIR"\n'
-            f'    fi\n'
-            f'}}\n'
-            f'trap cleanup EXIT TERM INT'
-        )
-    else:
-        cache_setup = "# No cache staging configured"
+    1. **Default (no ``template_path``)** — renders the built-in structured
+       template using the caller-provided slurm opts. Empty
+       ``partition`` / ``account`` cause those ``#SBATCH`` directives to
+       be OMITTED (not emitted with a blank value, which is a parse
+       error on some SLURM versions). The caller is expected to pass
+       shell-safe strings; ``command`` should already be
+       ``shlex.join(argv)`` — the SlurmExecutor does that. Env-var values
+       are quoted here.
 
-    return _SBATCH_TEMPLATE.format(
+    2. **Jinja2 template (``template_path`` set)** — loads the file and
+       renders it with ``StrictUndefined``. Available variables include
+       all the structured fields plus ``slurm_directives``,
+       ``tmpdir_block``, ``cleanup_block``, ``extra_exports``,
+       ``pixi_bin_dir``, plus anything the caller passes in
+       ``template_vars``. A typo in the template (``{{ commnad }}`` vs
+       ``{{ command }}``) raises ``UndefinedError`` instead of silently
+       producing a broken submit.sh.
+    """
+    slurm_directives = _build_slurm_directives(
         job_name=job_name,
+        output_path=output_path,
         partition=partition,
         account=account,
         gpus=gpus,
         cpus=cpus,
         memory=memory,
         time=time,
-        output_path=output_path,
-        raw_directives=raw_lines,
+        raw_directives=raw_directives,
+        gpu_resource_spec=gpu_resource_spec,
+    )
+    cleanup_block = _build_cleanup_block(cache_dir=cache_dir)
+    extra_exports = "\n".join(f"export {k}={shlex.quote(v)}" for k, v in env_vars.items())
+    pixi_bin_dir = shlex.quote(str(Path(sys.executable).parent))
+
+    if template_path:
+        return _render_jinja_template(
+            template_path=template_path,
+            template_vars=template_vars,
+            # Reserved variables — same names as the structured slots.
+            job_name=job_name,
+            command=command,
+            output_path=output_path,
+            partition=partition,
+            account=account,
+            gpus=gpus,
+            cpus=cpus,
+            memory=memory,
+            time=time,
+            raw_directives=raw_directives or "",
+            gpu_resource_spec=gpu_resource_spec,
+            cache_dir=cache_dir or "",
+            slurm_directives=slurm_directives,
+            tmpdir_block=_TMPDIR_BLOCK,
+            cleanup_block=cleanup_block,
+            extra_exports=extra_exports,
+            pixi_bin_dir=pixi_bin_dir,
+            env_vars=env_vars,
+        )
+
+    return _SBATCH_TEMPLATE.format(
+        slurm_directives=slurm_directives,
+        tmpdir_block=_TMPDIR_BLOCK,
         pixi_bin_dir=pixi_bin_dir,
         extra_exports=extra_exports,
-        cache_setup=cache_setup,
+        cleanup_block=cleanup_block,
         command=command,
     )
+
+
+# Reserved variable names that templates can use without the user putting
+# them in `template_vars`. Anything outside this set must come from
+# `template_vars` or the template will get UndefinedError at render time.
+_RESERVED_TEMPLATE_VARS = frozenset(
+    {
+        "job_name",
+        "command",
+        "output_path",
+        "partition",
+        "account",
+        "gpus",
+        "cpus",
+        "memory",
+        "time",
+        "raw_directives",
+        "gpu_resource_spec",
+        "cache_dir",
+        "slurm_directives",
+        "tmpdir_block",
+        "cleanup_block",
+        "extra_exports",
+        "pixi_bin_dir",
+        "env_vars",
+    }
+)
+
+
+def _render_jinja_template(
+    *,
+    template_path: str,
+    template_vars: dict[str, Any] | None,
+    **reserved: Any,
+) -> str:
+    """Render a user-supplied Jinja2 template with strict undefined.
+
+    Custom user variables (from ``template_vars``) cannot shadow reserved
+    variable names — that would silently break parts of the script that
+    expect specific contents. Attempts to do so raise ``ValueError``.
+    """
+    from jinja2 import Environment, FileSystemLoader, StrictUndefined, UndefinedError
+
+    template_vars = template_vars or {}
+    overlap = set(template_vars).intersection(_RESERVED_TEMPLATE_VARS)
+    if overlap:
+        raise ValueError(
+            f"template_vars uses reserved variable name(s): {sorted(overlap)}. "
+            f"Reserved names: {sorted(_RESERVED_TEMPLATE_VARS)}"
+        )
+
+    path = Path(template_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Sbatch template not found: {template_path}")
+
+    env = Environment(
+        loader=FileSystemLoader(str(path.parent)),
+        undefined=StrictUndefined,
+        keep_trailing_newline=True,
+        autoescape=False,  # this is a shell script, not HTML
+    )
+    template = env.get_template(path.name)
+    try:
+        return template.render(**reserved, **template_vars)
+    except UndefinedError as exc:
+        # Re-raise with a clearer message — preserves the rendering failure
+        # while making the typo / missing-var cause obvious.
+        raise ValueError(
+            f"Sbatch template {template_path} references an undefined variable: {exc}. "
+            f"Available reserved variables: {sorted(_RESERVED_TEMPLATE_VARS)}. "
+            f"Custom variables passed in template_vars: {sorted(template_vars)}."
+        ) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -507,14 +804,20 @@ async def reconcile_jobs(
     for job_info in inflight_jobs:
         handle = job_info.get("handle")
         if not handle:
-            updates.append({
-                "id": job_info["id"],
-                "new_status": JobStatus.FAILED.value,
-                "error": "No executor handle — cannot reconcile after restart.",
-            })
+            updates.append(
+                {
+                    "id": job_info["id"],
+                    "new_status": JobStatus.FAILED.value,
+                    "error": "No executor handle — cannot reconcile after restart.",
+                }
+            )
             continue
 
-        actual = await executor.status(handle)
+        working_dir = job_info.get("working_dir")
+        if working_dir and hasattr(executor, "status_with_dir"):
+            actual = await executor.status_with_dir(handle, working_dir)
+        else:
+            actual = await executor.status(handle)
         db_status = job_info.get("db_status", "")
 
         if actual.value == db_status:
@@ -525,17 +828,16 @@ async def reconcile_jobs(
         if actual == JobStatus.UNKNOWN:
             actual = JobStatus.FAILED
             log = await executor.log_path(handle)
-            error = (
-                f"Job status unknown after server restart. "
-                f"Check output: {log}"
-            )
+            error = f"Job status unknown after server restart. Check output: {log}"
         elif actual == JobStatus.FAILED:
             error = "Job failed (detected on server restart)."
 
-        updates.append({
-            "id": job_info["id"],
-            "new_status": actual.value,
-            "error": error,
-        })
+        updates.append(
+            {
+                "id": job_info["id"],
+                "new_status": actual.value,
+                "error": error,
+            }
+        )
 
     return updates

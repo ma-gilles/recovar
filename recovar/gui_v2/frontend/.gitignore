@@ -4,3 +4,4 @@ test-results/
 qa_interactions.mjs
 _qa_browser_tests.mjs
 _bug_test*.mjs
+node_modules

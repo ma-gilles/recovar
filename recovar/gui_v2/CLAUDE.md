@@ -215,12 +215,12 @@ The QA agent (`.claude/agents/gui-qa.md`) runs `gui_qa.sh`, reads all screenshot
 
 ### Job Execution
 The full flow is documented in `docs/ADR-001-executor-security.md`. Summary:
-1. Frontend `POST /api/jobs` with validated parameters
-2. Backend creates job record (status: QUEUED), renders sbatch/command
-3. Executor submits (sbatch or subprocess), stores handle
+1. Frontend `POST /api/jobs` with validated parameters and `executor` field (`"slurm"` or `"local"`)
+2. Backend creates job record (status: QUEUED), picks executor from pool based on `executor` field
+3. For SLURM: renders sbatch script, submits via `sbatch`. For local: applies `local_opts` (GPU selection, setup command, env vars), starts subprocess
 4. Background task polls status, tails logs, pushes to WebSocket
 5. On terminal state: update SQLite, close WebSocket stream
-6. On server restart: reconnect procedure syncs all in-flight jobs
+6. On server restart: reconnect procedure syncs all in-flight jobs (uses `slurm_id` presence to pick the right executor)
 
 ### Volume Serving
 See `docs/API.md` for endpoint details.
@@ -286,7 +286,8 @@ recovar/gui_v2/
 │   │   ├── subsets.py         # Subset CRUD, .ind export
 │   │   ├── project.py         # Project CRUD, scan/import
 │   │   ├── files.py           # File browser, .star/.mrc validation
-│   │   ├── system.py          # SLURM detection, disk usage
+│   │   ├── system.py          # SLURM detection, GPU enumeration, disk usage
+│   │   ├── settings.py        # SLURM + local defaults CRUD (layered)
 │   │   └── ws.py              # WebSocket log/status stream
 │   ├── models/
 │   │   ├── job.py
@@ -308,6 +309,7 @@ recovar/gui_v2/
 │   │   ├── routes/
 │   │   │   ├── __root.tsx     # Sidebar + main layout
 │   │   │   ├── index.tsx      # Dashboard
+│   │   │   ├── settings.tsx   # Settings page (SLURM + local defaults)
 │   │   │   ├── jobs/
 │   │   │   │   ├── new.tsx    # New job form
 │   │   │   │   └── $jobId.tsx # Job detail (tabs: overview, logs, params, volumes, plots)
@@ -318,6 +320,9 @@ recovar/gui_v2/
 │   │   │   ├── volume-viewer/ # vtk.js 3D viewer + multi-volume controls
 │   │   │   ├── latent-explorer/ # regl-scatterplot + linked views + click/lasso
 │   │   │   ├── job-form/      # Pipeline, Analyze, ComputeState, ComputeTrajectory forms
+│   │   │   │   ├── ExecutorSelector.tsx  # Per-job SLURM/Local toggle
+│   │   │   │   ├── LocalSettings.tsx     # GPU picker, setup cmd, env vars
+│   │   │   │   └── SlurmSettings.tsx     # SLURM resource settings
 │   │   │   ├── file-browser/  # Server filesystem browser
 │   │   │   ├── log-viewer/    # WebSocket log streamer
 │   │   │   └── sidebar/       # Project tree
@@ -333,3 +338,175 @@ recovar/gui_v2/
 │   └── fixtures/              # Pre-computed pipeline + analyze outputs
 └── tooltips.json              # Contextual help text for all parameters
 ```
+
+## Site-portability rules (sbatch rendering)
+
+The GUI is shipped to users on arbitrary HPC clusters. The sbatch renderer
+(`backend/services/executor.py::_render_sbatch_script`) must produce a
+script that works on any reasonable SLURM site, with no implicit Princeton
+assumptions. Treat the rules below as load-bearing — they exist because
+v1.0.0 was almost shipped with `partition=cryoem`, `account=amits`, and
+`TMPDIR=/scratch/gpfs/GILLES/mg6942/tmp` baked into the default render.
+
+**Hardcoding bans.**
+- No site-specific identifier (partition name, account, group, host, path)
+  may appear as a literal string anywhere in the renderer source. This
+  includes function-default arguments and the `_SBATCH_TEMPLATE` body.
+  Defaults belong in `backend/config.py::DEFAULT_SLURM` and must be empty
+  strings, not site values.
+- The frontend (`frontend/src/components/job-form/SlurmSettings.tsx`) must
+  not have its own fallbacks. All defaults flow from the server's
+  `/api/system/slurm-defaults`.
+- The regression test
+  `tests/backend/test_executor.py::TestSbatchTemplate::test_no_site_specific_strings_in_default_render`
+  enforces this — keep it passing.
+
+**Empty values mean "omit the directive."**
+- `partition=""` / `account=""` → the renderer must NOT emit
+  `#SBATCH --partition=` (a parse error on some SLURM versions). It must
+  omit the directive entirely so the cluster's default applies.
+- Same rule for any future optional directive.
+
+**Shell-bearing fragments stay out of the format template.**
+- `_SBATCH_TEMPLATE` is processed by `str.format`. Anything containing
+  shell `${VAR}` or `${VAR:-default}` will be misparsed by `.format()` as
+  a format spec and crash.
+- Build such fragments as plain Python strings (see `_TMPDIR_BLOCK`,
+  `_build_cleanup_block`) and substitute them in via a single named slot.
+- When a future Phase 2 introduces user-editable templates, switch the
+  engine away from `str.format` (Jinja2 with `StrictUndefined` is the
+  intended target — surfaces typos as `UndefinedError` instead of
+  silently submitting a broken script).
+
+**Quote everything user-controlled.**
+- The submitted command must be `shlex.join(argv)` at the call site —
+  the renderer does not re-quote `command` (paths with spaces would
+  otherwise break).
+- Env-var values are `shlex.quote`d inside the renderer.
+- The interpreter path (`sys.executable`) is `shlex.quote`d before going
+  into `PATH=...`.
+
+**Scheduler-provided scratch wins over our own.**
+- The TMPDIR block prefers `$SLURM_TMPDIR` first, then an inherited
+  `$TMPDIR`, and only falls back to `mktemp` if neither exists. The
+  cleanup trap removes the tmpdir only if the renderer created it
+  (`RECOVAR_CREATED_TMPDIR=1`); never delete `$SLURM_TMPDIR` or an
+  inherited `$TMPDIR` — many clusters reap those automatically.
+
+**One trap, not two.**
+- Cache-staging cleanup and tmpdir cleanup share a single
+  `_recovar_cleanup` function and one `trap _recovar_cleanup EXIT TERM
+  INT`. Stacking traps clobbers the previous one.
+
+## Executor selection
+
+Executor selection is **per-job**, not server-wide.  When `sbatch` is on
+PATH, `/api/system/info` returns `executor_mode: "both"` and every job
+form shows an `ExecutorSelector` toggle (SLURM Cluster / Local GPU).
+The user picks at submit time; each job can go to a different executor.
+
+`backend/services/executor.py::slurm_available()` reads the
+`RECOVAR_EXECUTOR` env var (power-user override, not exposed as a CLI
+flag). Values:
+
+- `auto` (default) — probe `sbatch` on PATH; when found, mode is
+  `"both"` (both executors available, user picks per job). When absent,
+  only the local executor is available.
+- `local` — force local-subprocess mode even on a SLURM login node.
+- `slurm` — force SLURM only.
+
+In the common case, both executors are available simultaneously and the
+user picks per job via the toggle in the job form.
+
+**Frontend components for executor selection:**
+- `ExecutorSelector.tsx` — per-job toggle shown when `executor_mode === "both"`.
+- `LocalSettings.tsx` — collapsible panel for GPU picker, setup command,
+  and env-var editor (shown when local executor is selected).
+- `SlurmSettings.tsx` — SLURM resource settings panel (shown when SLURM
+  executor is selected).
+
+## Defaults are layered (not flat)
+
+Both SLURM and local-execution defaults use the same layering system.
+
+### SLURM defaults
+
+`backend/services/project_config.py::resolve_slurm_defaults` merges, in
+order of increasing precedence:
+
+1. Built-in `DEFAULT_SLURM` in `backend/config.py` (intentionally
+   minimal: empty partition/account, sane CPU/mem/time).
+2. User-global `~/.config/recovar/config.toml` (or
+   `$XDG_CONFIG_HOME/recovar/config.toml`) `[slurm]` section.
+3. Project-local `<project_dir>/recovar.toml` `[slurm]` section.
+4. Per-job form override sent in the submit body (the frontend's SLURM
+   Settings panel — handled at the API layer, not in the loader).
+
+### Local-execution defaults
+
+`backend/services/project_config.py::resolve_local_defaults` merges:
+
+1. Built-in `DEFAULT_LOCAL` in `backend/config.py` (`gpus: "all"`,
+   empty `setup_command`, empty `env_vars`).
+2. User-global `~/.config/recovar/config.toml` `[local]` section.
+3. Project-local `<project_dir>/recovar.toml` `[local]` section.
+4. Per-job form override via `local_opts` in the submit body.
+
+`LocalExecutor.submit()` accepts `local_opts` with fields:
+- `gpus` — `"all"`, or comma-separated GPU indices (`"0"`, `"0,1"`).
+  Sets `CUDA_VISIBLE_DEVICES`.
+- `setup_command` — Shell command run before the pipeline (e.g.
+  `module load cudatoolkit/12.8`). When set, the command is wrapped in
+  `bash -c "setup_command && pipeline_command"`.
+- `env_vars` — Extra environment variables as `{key: value}`.
+
+### Settings page
+
+The Settings page at `/settings` (gear icon in sidebar) lets users view
+and edit both SLURM and local defaults at the user-global and per-project
+levels.  It shows an "effective defaults" summary with provenance badges
+(built-in / user / project) and provides save buttons per layer.
+
+API endpoints for settings:
+- `GET /api/settings/slurm-defaults` — layered view (built-in + user + project + effective)
+- `PUT /api/settings/slurm-defaults/user` — update user-global SLURM defaults
+- `PUT /api/settings/slurm-defaults/project` — update per-project SLURM defaults
+- `GET /api/settings/local-defaults` — layered view
+- `PUT /api/settings/local-defaults/user` — update user-global local defaults
+- `PUT /api/settings/local-defaults/project` — update per-project local defaults
+
+The legacy `/api/system/slurm-defaults` endpoint still exists for
+backward compatibility but the Settings page uses the layered endpoints.
+
+When adding a new field to either executor, plumb it through all four
+layers, not just one.
+
+### TOML writing
+
+Settings are persisted to TOML files using `tomli_w` (added as a
+dependency in `pyproject.toml`). The `project_config.py` module handles
+reading with `tomllib` (stdlib) and writing with `tomli_w`.
+
+## User-supplied templates (Jinja2)
+
+`backend/sbatch_templates/` ships preset `.sh` templates
+(`generic_slurm.sh`, `generic_pbs.sh`, `local.sh`,
+`princeton_della.sh`). Users opt in via `template_path = "..."` in their
+`recovar.toml` `[slurm]` section.
+
+Variables available to a template (passed positionally by the renderer):
+
+- Reserved: `job_name`, `command`, `output_path`, `partition`, `account`,
+  `gpus`, `cpus`, `memory`, `time`, `raw_directives`, `gpu_resource_spec`,
+  `cache_dir`, `slurm_directives` (pre-built `#SBATCH` block),
+  `tmpdir_block`, `cleanup_block`, `extra_exports`, `pixi_bin_dir`,
+  `env_vars`. These names cannot be shadowed by `template_vars`.
+- Custom: anything in `[slurm.template_vars]` in the TOML.
+
+Templates use Jinja2 with `StrictUndefined`. A typo (`{{ commnad }}`)
+raises `ValueError` at render time, surfaced to the GUI as a 400 from
+`POST /api/jobs/preview-sbatch` — never silently submits a broken script.
+
+When extending the renderer with new reserved names, update
+`_RESERVED_TEMPLATE_VARS` in `executor.py` AND add an entry to the list
+above.
