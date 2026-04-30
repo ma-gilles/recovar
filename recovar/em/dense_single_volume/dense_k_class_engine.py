@@ -355,17 +355,72 @@ def _k_class_m_step_block(shifted_recon, scores, log_z, ctf2_over_nv, n_trans: i
 
 
 @jax.jit
-def _k_class_block_best(scores):
-    """Return per-class and global winners for a class x pose score block."""
+def _update_k_class_wta_pass1(
+    max_s,
+    sum_exp,
+    class_max_s,
+    class_sum_exp,
+    best_score_class,
+    best_argmax_class,
+    global_best_score,
+    global_best_argmax,
+    scores,
+    r0,
+    n_rot_padded,
+    n_trans,
+):
+    """Update evidence and WTA winners from one class x pose score block."""
 
     batch_size, n_classes, rotation_block_size, _ = scores.shape
     class_scores_flat = scores.reshape(batch_size, n_classes, rotation_block_size * scores.shape[-1])
     block_best_class = jnp.max(class_scores_flat, axis=2)
+    accumulator_dtype = class_sum_exp.dtype
+    block_class_sum_exp = jnp.sum(
+        jnp.exp((class_scores_flat - block_best_class[:, :, None]).astype(accumulator_dtype)),
+        axis=2,
+    )
+
+    new_class_max = jnp.maximum(class_max_s, block_best_class)
+    class_sum_exp = (
+        class_sum_exp * jnp.exp((class_max_s - new_class_max).astype(accumulator_dtype))
+        + block_class_sum_exp * jnp.exp((block_best_class - new_class_max).astype(accumulator_dtype))
+    )
+    class_max_s = new_class_max
+
+    block_best_global = jnp.max(block_best_class, axis=1)
+    block_sum_exp_global = jnp.sum(
+        block_class_sum_exp * jnp.exp((block_best_class - block_best_global[:, None]).astype(accumulator_dtype)),
+        axis=1,
+    )
+    new_max = jnp.maximum(max_s, block_best_global)
+    sum_exp = (
+        sum_exp * jnp.exp((max_s - new_max).astype(accumulator_dtype))
+        + block_sum_exp_global * jnp.exp((block_best_global - new_max).astype(accumulator_dtype))
+    )
+    max_s = new_max
+
     block_argmax_class = jnp.argmax(class_scores_flat, axis=2)
-    global_scores_flat = scores.reshape(batch_size, n_classes * rotation_block_size * scores.shape[-1])
-    block_best_global = jnp.max(global_scores_flat, axis=1)
-    block_argmax_global = jnp.argmax(global_scores_flat, axis=1)
-    return block_best_class, block_argmax_class, block_best_global, block_argmax_global
+    improved_class = block_best_class > best_score_class
+    best_score_class = jnp.where(improved_class, block_best_class, best_score_class)
+    best_argmax_class = jnp.where(improved_class, block_argmax_class + r0 * n_trans, best_argmax_class)
+
+    block_class = jnp.argmax(block_best_class, axis=1)
+    block_pose = block_argmax_class[jnp.arange(batch_size), block_class]
+    block_global_argmax = block_class * (n_rot_padded * n_trans) + block_pose + r0 * n_trans
+    improved = block_best_global > global_best_score
+    global_best_score = jnp.where(improved, block_best_global, global_best_score)
+    global_best_argmax = jnp.where(improved, block_global_argmax, global_best_argmax)
+
+    return (
+        max_s,
+        sum_exp,
+        class_max_s,
+        class_sum_exp,
+        best_score_class,
+        best_argmax_class,
+        global_best_score,
+        global_best_argmax,
+    )
 
 
 @partial(jax.jit, static_argnums=(3, 4, 5, 7, 8))
@@ -416,6 +471,48 @@ def _k_class_wta_m_step_block(
     )
     rotation_sums = jnp.sum(probs, axis=(0, 3))
     return probs, summed, ctf_probs, rotation_sums
+
+
+@partial(jax.jit, static_argnums=(4, 5, 6))
+def _k_class_wta_image_m_step(
+    shifted_recon,
+    global_best_argmax,
+    rotations_padded,
+    ctf2_over_nv,
+    n_rot_padded: int,
+    n_trans: int,
+    n_classes: int,
+):
+    """Pack global WTA winners as one adjoint row per image instead of per rotation."""
+
+    batch_size = int(global_best_argmax.shape[0])
+    shifted_by_translation = shifted_recon.reshape(batch_size, int(n_trans), shifted_recon.shape[-1])
+    class_stride = int(n_rot_padded) * int(n_trans)
+    winning_class = global_best_argmax // class_stride
+    winner_within_class = global_best_argmax % class_stride
+    winning_rot = winner_within_class // int(n_trans)
+    winning_trans = winner_within_class % int(n_trans)
+
+    image_rows = shifted_by_translation[jnp.arange(batch_size), winning_trans]
+    class_mask = jax.nn.one_hot(
+        winning_class,
+        int(n_classes),
+        dtype=image_rows.real.dtype,
+    ).T
+    summed_by_image = class_mask[:, :, None] * image_rows[None, :, :]
+    ctf_by_image = class_mask.astype(ctf2_over_nv.dtype)[:, :, None] * ctf2_over_nv[None, :, :]
+    winner_rots = rotations_padded[winning_rot]
+
+    class_rot = winning_class * int(n_rot_padded) + winning_rot
+    rotation_sums = jnp.sum(
+        jax.nn.one_hot(
+            class_rot,
+            int(n_classes) * int(n_rot_padded),
+            dtype=image_rows.real.dtype,
+        ),
+        axis=0,
+    ).reshape(int(n_classes), int(n_rot_padded))
+    return summed_by_image, ctf_by_image, winner_rots, rotation_sums
 
 
 def _iter_rotation_blocks(n_blocks: int, rotation_block_size: int):
@@ -516,6 +613,69 @@ def _project_k_class_block(
     proj_half_by_class = jnp.stack([proj_half for proj_half, _ in projections], axis=0)
     proj_abs2_by_class = jnp.stack([proj_abs2 for _, proj_abs2 in projections], axis=0)
     return proj_half_by_class, proj_abs2_by_class
+
+
+def _accumulate_k_class_adjoint(
+    Ft_y,
+    Ft_ctf,
+    summed_half,
+    ctf_probs_half,
+    rotations_block,
+    *,
+    window_spec,
+    current_size,
+    image_shape,
+    recon_volume_shape,
+):
+    """Backproject per-class adjoint slices through the active Fourier layout."""
+
+    if window_spec.use_window:
+        max_r = float(current_size // 2)
+        Ft_y = _batch_adjoint_slice_volume_windowed(
+            summed_half,
+            window_spec.recon_indices,
+            rotations_block,
+            Ft_y,
+            image_shape,
+            recon_volume_shape,
+            "linear_interp",
+            True,
+            False,
+            max_r,
+        )
+        Ft_ctf = _batch_adjoint_slice_volume_windowed(
+            ctf_probs_half,
+            window_spec.recon_indices,
+            rotations_block,
+            Ft_ctf,
+            image_shape,
+            recon_volume_shape,
+            "linear_interp",
+            True,
+            False,
+            max_r,
+        )
+        return Ft_y, Ft_ctf
+
+    Ft_y = _batch_adjoint_slice_volume_half(
+        summed_half,
+        rotations_block,
+        Ft_y,
+        image_shape,
+        recon_volume_shape,
+        "linear_interp",
+        True,
+    )
+    Ft_ctf = _batch_adjoint_slice_volume_half(
+        ctf_probs_half,
+        rotations_block,
+        Ft_ctf,
+        image_shape,
+        recon_volume_shape,
+        "linear_interp",
+        True,
+    )
+    return Ft_y, Ft_ctf
 
 
 def run_dense_k_class_em_native(
@@ -854,24 +1014,33 @@ def run_dense_k_class_em_native(
                 valid_rotation_mask,
                 score_mode=relion_firstiter_score_mode,
             )
-            max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
-            class_max_s, class_sum_exp = _update_class_logsumexp(class_max_s, class_sum_exp, scores)
             if relion_firstiter_winner_take_all:
                 (
-                    block_best_class,
-                    block_argmax_class,
-                    block_best_global,
-                    block_argmax_global,
-                ) = _k_class_block_best(scores)
-                improved_class = block_best_class > best_score_class
-                best_score_class = jnp.where(improved_class, block_best_class, best_score_class)
-                best_argmax_class = jnp.where(improved_class, block_argmax_class + r0 * n_trans, best_argmax_class)
-                block_class = block_argmax_global // (rotation_block_size * n_trans)
-                block_pose = block_argmax_global % (rotation_block_size * n_trans)
-                block_global_argmax = block_class * (n_rot_padded * n_trans) + block_pose + r0 * n_trans
-                improved = block_best_global > global_best_score
-                global_best_score = jnp.where(improved, block_best_global, global_best_score)
-                global_best_argmax = jnp.where(improved, block_global_argmax, global_best_argmax)
+                    max_s,
+                    sum_exp,
+                    class_max_s,
+                    class_sum_exp,
+                    best_score_class,
+                    best_argmax_class,
+                    global_best_score,
+                    global_best_argmax,
+                ) = _update_k_class_wta_pass1(
+                    max_s,
+                    sum_exp,
+                    class_max_s,
+                    class_sum_exp,
+                    best_score_class,
+                    best_argmax_class,
+                    global_best_score,
+                    global_best_argmax,
+                    scores,
+                    r0,
+                    n_rot_padded,
+                    n_trans,
+                )
+            else:
+                max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
+                class_max_s, class_sum_exp = _update_class_logsumexp(class_max_s, class_sum_exp, scores)
 
         log_Z = max_s + jnp.log(sum_exp)
         class_log_Z = class_max_s + jnp.log(class_sum_exp)
@@ -879,210 +1048,204 @@ def run_dense_k_class_em_native(
             best_score_class = jnp.full((batch_size, n_classes), -jnp.inf)
             best_argmax_class = jnp.zeros((batch_size, n_classes), dtype=jnp.int32)
 
-        for _, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
-            rots_b = rotations_padded[r0:r1]
-            proj_half_by_class = proj_abs2_by_class = None
-            if (not relion_firstiter_winner_take_all) or accumulate_noise:
-                proj_half_by_class, proj_abs2_by_class = _project_k_class_block(
-                    mean_for_proj_by_class,
-                    rots_b,
-                    image_shape,
-                    proj_volume_shape,
-                    disc_type,
-                    projection_kwargs,
-                )
-            if not relion_firstiter_winner_take_all:
-                scores = _score_k_class_block(
-                    window_spec=window_spec,
-                    shifted_windowed=shifted_windowed,
-                    batch_norm=batch_norm,
-                    ctf2_over_nv_windowed=ctf2_over_nv_windowed,
-                    proj_half_by_class=proj_half_by_class,
-                    proj_abs2_by_class=proj_abs2_by_class,
-                    half_weights=half_weights,
-                    batch_size=batch_size,
-                    n_classes=n_classes,
-                    n_trans=n_trans,
-                    image_shape=image_shape,
-                    volume_shape=volume_shape,
-                    score_mode=relion_firstiter_score_mode,
-                    precision_policy=precision_policy,
-                )
-                (
-                    rotation_prior_block,
-                    translation_prior_block,
-                    candidate_mask_block,
-                    valid_rotation_mask,
-                ) = score_constraints.block_inputs(
-                    r0=r0,
-                    r1=r1,
-                    start=start_idx,
-                    end=end_idx,
-                    batch_count=batch_size,
-                    rotation_block_size=rotation_block_size,
-                )
-                scores = _apply_k_class_score_constraints(
-                    scores,
-                    rotation_prior_block,
-                    translation_prior_block,
-                    class_log_priors,
-                    candidate_mask_block,
-                    valid_rotation_mask,
-                    score_mode=relion_firstiter_score_mode,
-                )
+        if relion_firstiter_winner_take_all and not accumulate_noise:
             shifted_for_mstep = shifted_recon_windowed if window_spec.use_window else shifted_recon_half
             ctf_for_mstep = ctf2_over_nv_windowed_mstep if window_spec.use_window else ctf2_over_nv_half_with_dc
-            if relion_firstiter_winner_take_all:
-                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
-                probs, summed_half, ctf_probs_half, rotation_sums = _k_class_wta_m_step_block(
-                    shifted_for_mstep,
-                    global_best_argmax,
-                    r0,
-                    actual_rot,
-                    rotation_block_size,
-                    n_rot_padded,
-                    ctf_for_mstep,
-                    n_trans,
-                    n_classes,
-                )
-            else:
-                (
-                    probs,
-                    block_best_class,
-                    block_argmax_class,
-                    _block_best_global,
-                    _block_argmax_global,
-                    summed_half,
-                    ctf_probs_half,
-                    rotation_sums,
-                ) = _k_class_m_step_block(
-                    shifted_for_mstep,
-                    scores,
-                    log_Z,
-                    ctf_for_mstep,
-                    n_trans,
-                )
-                improved = block_best_class > best_score_class
-                best_score_class = jnp.where(improved, block_best_class, best_score_class)
-                best_argmax_class = jnp.where(improved, block_argmax_class + r0 * n_trans, best_argmax_class)
-
-            actual_rot = max(0, min(rotation_block_size, n_rot - r0))
-            if actual_rot > 0:
-                class_rotation_posterior_sums[:, r0 : r0 + actual_rot] += np.asarray(
-                    rotation_sums[:, :actual_rot],
-                    dtype=np.float64,
-                )
-            if accumulate_noise:
-                class_mass = jnp.sum(probs, axis=(2, 3))
-                class_img_power = jnp.einsum(
-                    "bk,bn->kn",
-                    class_mass,
-                    jnp.abs(processed_masked_half) ** 2,
-                    precision=jax.lax.Precision.HIGHEST,
-                )
-                batch_img_power_shells = jax.vmap(
-                    lambda values: jnp.zeros(n_shells, dtype=jnp.float32).at[shell_indices_half].add(
-                        values.astype(jnp.float32),
+            summed_half, ctf_probs_half, winner_rots, rotation_sums = _k_class_wta_image_m_step(
+                shifted_for_mstep,
+                global_best_argmax,
+                jnp.asarray(rotations_padded),
+                ctf_for_mstep,
+                n_rot_padded,
+                n_trans,
+                n_classes,
+            )
+            class_rotation_posterior_sums += np.asarray(
+                rotation_sums[:, :n_rot],
+                dtype=np.float64,
+            )
+            Ft_y, Ft_ctf = _accumulate_k_class_adjoint(
+                Ft_y,
+                Ft_ctf,
+                summed_half,
+                ctf_probs_half,
+                winner_rots,
+                window_spec=window_spec,
+                current_size=current_size,
+                image_shape=image_shape,
+                recon_volume_shape=recon_volume_shape,
+            )
+        else:
+            for _, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
+                rots_b = rotations_padded[r0:r1]
+                proj_half_by_class = proj_abs2_by_class = None
+                if (not relion_firstiter_winner_take_all) or accumulate_noise:
+                    proj_half_by_class, proj_abs2_by_class = _project_k_class_block(
+                        mean_for_proj_by_class,
+                        rots_b,
+                        image_shape,
+                        proj_volume_shape,
+                        disc_type,
+                        projection_kwargs,
                     )
-                )(class_img_power)
-                noise_state.add_image_power(batch_img_power_shells, class_mass)
-                noise_state.add_translation_offset(probs, translation_sqdist_ang)
-
-                shifted_by_translation_noise = shifted_masked_for_noise.reshape(
-                    batch_size,
-                    n_trans,
-                    shifted_masked_for_noise.shape[-1],
-                )
-                summed_masked_noise = jnp.einsum(
-                    "bkrt,btn->krn",
-                    probs,
-                    shifted_by_translation_noise,
-                    precision=jax.lax.Precision.HIGHEST,
-                )
-                probs_sum_t_noise = jnp.sum(probs, axis=-1)
-                if window_spec.use_window:
-                    ctf2_nv_noise = window_spec.recon_values(ctf2_over_nv_half_with_dc)
-                    ctf_probs_for_noise = jnp.einsum(
-                        "bkr,bn->krn",
-                        probs_sum_t_noise,
-                        ctf2_nv_noise,
-                        precision=jax.lax.Precision.HIGHEST,
+                if not relion_firstiter_winner_take_all:
+                    scores = _score_k_class_block(
+                        window_spec=window_spec,
+                        shifted_windowed=shifted_windowed,
+                        batch_norm=batch_norm,
+                        ctf2_over_nv_windowed=ctf2_over_nv_windowed,
+                        proj_half_by_class=proj_half_by_class,
+                        proj_abs2_by_class=proj_abs2_by_class,
+                        half_weights=half_weights,
+                        batch_size=batch_size,
+                        n_classes=n_classes,
+                        n_trans=n_trans,
+                        image_shape=image_shape,
+                        volume_shape=volume_shape,
+                        score_mode=relion_firstiter_score_mode,
+                        precision_policy=precision_policy,
                     )
-                    nv_for_noise = noise_variance_windowed
-                    si_for_noise = shell_indices_noise
-                    proj_for_noise = window_spec.recon_values(proj_half_by_class)
-                    proj_abs2_for_noise = window_spec.recon_values(proj_abs2_by_class)
+                    (
+                        rotation_prior_block,
+                        translation_prior_block,
+                        candidate_mask_block,
+                        valid_rotation_mask,
+                    ) = score_constraints.block_inputs(
+                        r0=r0,
+                        r1=r1,
+                        start=start_idx,
+                        end=end_idx,
+                        batch_count=batch_size,
+                        rotation_block_size=rotation_block_size,
+                    )
+                    scores = _apply_k_class_score_constraints(
+                        scores,
+                        rotation_prior_block,
+                        translation_prior_block,
+                        class_log_priors,
+                        candidate_mask_block,
+                        valid_rotation_mask,
+                        score_mode=relion_firstiter_score_mode,
+                    )
+                shifted_for_mstep = shifted_recon_windowed if window_spec.use_window else shifted_recon_half
+                ctf_for_mstep = ctf2_over_nv_windowed_mstep if window_spec.use_window else ctf2_over_nv_half_with_dc
+                if relion_firstiter_winner_take_all:
+                    actual_rot = max(0, min(rotation_block_size, n_rot - r0))
+                    probs, summed_half, ctf_probs_half, rotation_sums = _k_class_wta_m_step_block(
+                        shifted_for_mstep,
+                        global_best_argmax,
+                        r0,
+                        actual_rot,
+                        rotation_block_size,
+                        n_rot_padded,
+                        ctf_for_mstep,
+                        n_trans,
+                        n_classes,
+                    )
                 else:
-                    ctf_probs_for_noise = jnp.einsum(
-                        "bkr,bn->krn",
-                        probs_sum_t_noise,
-                        ctf2_over_nv_half_with_dc,
+                    (
+                        probs,
+                        block_best_class,
+                        block_argmax_class,
+                        _block_best_global,
+                        _block_argmax_global,
+                        summed_half,
+                        ctf_probs_half,
+                        rotation_sums,
+                    ) = _k_class_m_step_block(
+                        shifted_for_mstep,
+                        scores,
+                        log_Z,
+                        ctf_for_mstep,
+                        n_trans,
+                    )
+                    improved = block_best_class > best_score_class
+                    best_score_class = jnp.where(improved, block_best_class, best_score_class)
+                    best_argmax_class = jnp.where(improved, block_argmax_class + r0 * n_trans, best_argmax_class)
+
+                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
+                if actual_rot > 0:
+                    class_rotation_posterior_sums[:, r0 : r0 + actual_rot] += np.asarray(
+                        rotation_sums[:, :actual_rot],
+                        dtype=np.float64,
+                    )
+                if accumulate_noise:
+                    class_mass = jnp.sum(probs, axis=(2, 3))
+                    class_img_power = jnp.einsum(
+                        "bk,bn->kn",
+                        class_mass,
+                        jnp.abs(processed_masked_half) ** 2,
                         precision=jax.lax.Precision.HIGHEST,
                     )
-                    nv_for_noise = noise_variance_half
-                    si_for_noise = shell_indices_noise
-                    proj_for_noise = proj_half_by_class
-                    proj_abs2_for_noise = proj_abs2_by_class
+                    batch_img_power_shells = jax.vmap(
+                        lambda values: jnp.zeros(n_shells, dtype=jnp.float32).at[shell_indices_half].add(
+                            values.astype(jnp.float32),
+                        )
+                    )(class_img_power)
+                    noise_state.add_image_power(batch_img_power_shells, class_mass)
+                    noise_state.add_translation_offset(probs, translation_sqdist_ang)
 
-                block_noise_shells = []
-                for class_index in range(n_classes):
-                    class_noise_shells, _, _ = _compute_noise_block(
-                        proj_for_noise[class_index],
-                        proj_abs2_for_noise[class_index],
-                        summed_masked_noise[class_index],
-                        ctf_probs_for_noise[class_index],
-                        nv_for_noise,
-                        si_for_noise,
-                        n_shells,
-                        False,
+                    shifted_by_translation_noise = shifted_masked_for_noise.reshape(
+                        batch_size,
+                        n_trans,
+                        shifted_masked_for_noise.shape[-1],
                     )
-                    block_noise_shells.append(class_noise_shells)
-                noise_state.add_noise_shells(block_noise_shells)
+                    summed_masked_noise = jnp.einsum(
+                        "bkrt,btn->krn",
+                        probs,
+                        shifted_by_translation_noise,
+                        precision=jax.lax.Precision.HIGHEST,
+                    )
+                    probs_sum_t_noise = jnp.sum(probs, axis=-1)
+                    if window_spec.use_window:
+                        ctf2_nv_noise = window_spec.recon_values(ctf2_over_nv_half_with_dc)
+                        ctf_probs_for_noise = jnp.einsum(
+                            "bkr,bn->krn",
+                            probs_sum_t_noise,
+                            ctf2_nv_noise,
+                            precision=jax.lax.Precision.HIGHEST,
+                        )
+                        nv_for_noise = noise_variance_windowed
+                        si_for_noise = shell_indices_noise
+                        proj_for_noise = window_spec.recon_values(proj_half_by_class)
+                        proj_abs2_for_noise = window_spec.recon_values(proj_abs2_by_class)
+                    else:
+                        ctf_probs_for_noise = jnp.einsum(
+                            "bkr,bn->krn",
+                            probs_sum_t_noise,
+                            ctf2_over_nv_half_with_dc,
+                            precision=jax.lax.Precision.HIGHEST,
+                        )
+                        nv_for_noise = noise_variance_half
+                        si_for_noise = shell_indices_noise
+                        proj_for_noise = proj_half_by_class
+                        proj_abs2_for_noise = proj_abs2_by_class
 
-            if window_spec.use_window:
-                max_r = float(current_size // 2)
-                Ft_y = _batch_adjoint_slice_volume_windowed(
-                    summed_half,
-                    window_spec.recon_indices,
-                    rots_b,
+                    block_noise_shells = []
+                    for class_index in range(n_classes):
+                        class_noise_shells, _, _ = _compute_noise_block(
+                            proj_for_noise[class_index],
+                            proj_abs2_for_noise[class_index],
+                            summed_masked_noise[class_index],
+                            ctf_probs_for_noise[class_index],
+                            nv_for_noise,
+                            si_for_noise,
+                            n_shells,
+                            False,
+                        )
+                        block_noise_shells.append(class_noise_shells)
+                    noise_state.add_noise_shells(block_noise_shells)
+
+                Ft_y, Ft_ctf = _accumulate_k_class_adjoint(
                     Ft_y,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    True,
-                    False,
-                    max_r,
-                )
-                Ft_ctf = _batch_adjoint_slice_volume_windowed(
-                    ctf_probs_half,
-                    window_spec.recon_indices,
-                    rots_b,
                     Ft_ctf,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    True,
-                    False,
-                    max_r,
-                )
-            else:
-                Ft_y = _batch_adjoint_slice_volume_half(
                     summed_half,
-                    rots_b,
-                    Ft_y,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    True,
-                )
-                Ft_ctf = _batch_adjoint_slice_volume_half(
                     ctf_probs_half,
                     rots_b,
-                    Ft_ctf,
-                    image_shape,
-                    recon_volume_shape,
-                    "linear_interp",
-                    True,
+                    window_spec=window_spec,
+                    current_size=current_size,
+                    image_shape=image_shape,
+                    recon_volume_shape=recon_volume_shape,
                 )
 
         log_score_offset = -0.5 * jnp.squeeze(batch_norm[:actual_batch_size], axis=1)
