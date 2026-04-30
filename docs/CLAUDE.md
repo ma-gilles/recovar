@@ -44,9 +44,9 @@ GitHub Pages deploys from the `main` branch automatically.
 ```
 docs/
   index.md                    # Homepage — hero, features, example outputs
-  getting-started/            # Install, quickstart, docker, testing
-  guide/                      # User guides (pipeline, analysis, GUI, etc.)
-  reference/                  # CLI commands, file formats, Python API
+  getting-started/            # Install tab: installation, quickstart, docker, testing
+  guide/                      # Processing tab: tutorials, workflow, advanced topics
+  reference/                  # CLI & API tab: CLI commands, file formats, Python API
   troubleshooting.md          # Common issues
   _static/gui/                # Annotated GUI screenshots
   _static/examples/           # Example output images (plots, volumes)
@@ -82,9 +82,11 @@ Note: GUI tab comes FIRST (it's the default).
 
 ## Navigation Hierarchy
 
-Guide section is grouped into:
-- **Getting Started** — GUI, Tutorial (essential)
-- **Core Workflow** — Input Data, Pipeline, Analysis (the main steps)
+Top-level tabs: **Home**, **Install**, **Processing**, **CLI & API**, **Troubleshooting**
+
+Processing section is grouped into:
+- **First Steps** — GUI, Tutorial (essential)
+- **Basics** — Input Data, Pipeline, Analysis (the main steps)
 - **Advanced** — Masks, Downsampling, Density, Subsets, Outliers, Cryo-ET, External Embeddings
 
 ## Admonition Styles

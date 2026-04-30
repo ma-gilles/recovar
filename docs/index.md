@@ -45,6 +45,10 @@ hide:
 
 ## Typical workflow
 
+The easiest way to use RECOVAR is through the [Web GUI](guide/gui.md) -- launch it with `recovar gui`, then create jobs, explore the latent space, and generate volumes all from your browser.
+
+Or use the command line:
+
 ```bash
 # 1. Run the pipeline (~10 min for a small dataset)
 recovar pipeline particles.star -o output --mask mask.mrc
@@ -55,8 +59,6 @@ recovar analyze output --zdim=10
 # 3. Explore interactively in the browser
 recovar gui
 ```
-
-Or do it all from the [Web GUI](guide/gui.md) -- no command line needed.
 
 ---
 

@@ -77,16 +77,16 @@ extra_javascript:
 
 nav:
   - Home: index.md
-  - Getting Started:
+  - Install:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
     - Docker & Containers: getting-started/docker.md
     - Test Your Installation: getting-started/testing.md
-  - Guide:
-    - Getting Started:
+  - Processing:
+    - First Steps:
         - Web GUI: guide/gui.md
         - Tutorial: guide/tutorial.md
-    - Core Workflow:
+    - Basics:
         - Input Data: guide/input-data.md
         - Running the Pipeline: guide/pipeline.md
         - Analyzing Results: guide/analysis.md
@@ -98,7 +98,7 @@ nav:
         - Outlier Detection: guide/outlier-detection.md
         - Cryo-ET: guide/cryo-et.md
         - External Embeddings: guide/external-embeddings.md
-  - Reference:
+  - CLI & API:
     - CLI Commands: reference/cli.md
     - File Formats: reference/file-formats.md
     - Python API:
