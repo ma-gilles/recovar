@@ -1279,6 +1279,69 @@ def test_dense_k_class_profile_is_optional(rng):
     )
 
 
+def test_dense_k_class_projection_cache_matches_uncached(rng):
+    dataset = MockDataset(3, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=146)
+    means = jnp.stack([mean, _hermitian_volume(VOLUME_SHAPE, seed=147)], axis=0)
+    mean_variance = jnp.ones((2, VOLUME_SIZE), dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    rotations = _make_rotations(3, seed=155)
+    translations = get_translation_grid(max_pixel=1, pixel_offset=1).astype(np.float32)
+    common_kwargs = dict(
+        image_batch_size=2,
+        rotation_block_size=2,
+        current_size=6,
+        projection_padding_factor=1,
+        reconstruction_padding_factor=1,
+        score_with_masked_images=True,
+        sparse_pass2=False,
+        return_profile=True,
+    )
+
+    uncached = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        cache_projection_blocks=False,
+        **common_kwargs,
+    )
+    cached = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        cache_projection_blocks=True,
+        **common_kwargs,
+    )
+
+    assert cached.profile_summary is not None
+    assert uncached.profile_summary is not None
+    assert cached.profile_summary["cache_projection_blocks"] is True
+    assert uncached.profile_summary["cache_projection_blocks"] is False
+    assert cached.profile_summary["projection_cache_hits"] == (
+        cached.profile_summary["batches"] * cached.profile_summary["rotation_blocks"]
+    )
+    assert uncached.profile_summary["projection_cache_misses"] == (
+        uncached.profile_summary["batches"] * uncached.profile_summary["rotation_blocks"]
+    )
+    np.testing.assert_array_equal(np.asarray(cached.class_assignments), np.asarray(uncached.class_assignments))
+    np.testing.assert_allclose(np.asarray(cached.Ft_y), np.asarray(uncached.Ft_y), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(cached.Ft_ctf), np.asarray(uncached.Ft_ctf), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(cached.stats.log_evidence_per_image),
+        np.asarray(uncached.stats.log_evidence_per_image),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+
 def test_dense_k_class_uses_device_relion_background_preprocess(rng):
     dataset = MockDataset(2, rng)
     host_pair_calls = 0
