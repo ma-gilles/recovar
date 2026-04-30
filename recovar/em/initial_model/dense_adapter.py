@@ -29,6 +29,7 @@ _ENGINE_DEFAULTS: dict[str, Any] = {
     "score_with_masked_images": True,
     "sparse_pass2": False,
 }
+_INACTIVE_CLASS_LOG_PRIOR = -1.0e30
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -76,14 +77,24 @@ def split_pseudo_halfset_particle_ids(
 
 
 def class_log_priors_from_state(state: InitialModelState) -> np.ndarray:
-    """Return finite log class priors from ``state.pdf_class``."""
+    """Return log class priors from ``state.pdf_class``.
+
+    RELION permits class probabilities to collapse to zero and then treats
+    those classes as inactive. Encode that as a finite log-probability
+    sentinel so the dense log-sum-exp path underflows cleanly.
+    """
     weights = np.asarray(state.pdf_class, dtype=np.float64)
     if weights.shape != (state.K,):
         raise ValueError(f"state.pdf_class must have shape ({state.K},), got {weights.shape}")
-    if not np.all(np.isfinite(weights)) or np.any(weights <= 0.0):
-        raise ValueError("state.pdf_class must contain positive finite class probabilities")
-    weights = weights / np.sum(weights)
-    return np.log(weights)
+    if not np.all(np.isfinite(weights)) or np.any(weights < 0.0):
+        raise ValueError("state.pdf_class must contain non-negative finite class probabilities")
+    total = float(np.sum(weights))
+    if total <= 0.0:
+        raise ValueError("state.pdf_class must contain at least one positive class probability")
+    out = np.full(state.K, _INACTIVE_CLASS_LOG_PRIOR, dtype=np.float64)
+    positive = weights > 0.0
+    out[positive] = np.log(weights[positive] / total)
+    return out
 
 
 def _image_groups(
@@ -290,9 +301,13 @@ def _grouped_result_to_accumulators(
 
 def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
     meta: dict[str, Any] = {"halfset_ids": tuple(sorted(halfset_results))}
+    class_posterior_sums = None
+    class_direction_posterior_sums = None
     for h, result in halfset_results.items():
         if getattr(result, "class_posterior_sums", None) is not None:
-            meta[f"halfset_{h}_class_posterior_sums"] = np.asarray(result.class_posterior_sums, dtype=np.float64)
+            sums = np.asarray(result.class_posterior_sums, dtype=np.float64)
+            meta[f"halfset_{h}_class_posterior_sums"] = sums
+            class_posterior_sums = sums if class_posterior_sums is None else class_posterior_sums + sums
         if getattr(result, "class_assignments", None) is not None:
             meta[f"halfset_{h}_class_assignments"] = np.asarray(result.class_assignments, dtype=np.int32)
         stats = getattr(result, "stats", None)
@@ -301,6 +316,21 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
         profile_summary = getattr(result, "profile_summary", None)
         if profile_summary is not None:
             meta[f"halfset_{h}_profile_summary"] = dict(profile_summary)
+        per_class_stats = getattr(result, "per_class_stats", None)
+        if per_class_stats is not None:
+            direction_sums = np.stack(
+                [np.asarray(class_stats.rotation_posterior_sums, dtype=np.float64) for class_stats in per_class_stats],
+                axis=0,
+            )
+            class_direction_posterior_sums = (
+                direction_sums
+                if class_direction_posterior_sums is None
+                else class_direction_posterior_sums + direction_sums
+            )
+    if class_posterior_sums is not None:
+        meta["class_posterior_sums"] = class_posterior_sums
+    if class_direction_posterior_sums is not None:
+        meta["class_direction_posterior_sums"] = class_direction_posterior_sums
     return meta
 
 
@@ -313,6 +343,14 @@ def _grouped_estep_meta(result, groups: list[tuple[int, np.ndarray]]) -> dict[st
     class_assignments = getattr(result, "class_assignments", None)
     stats = getattr(result, "stats", None)
     pmax = None if stats is None else getattr(stats, "max_posterior_per_image", None)
+    if getattr(result, "class_posterior_sums", None) is not None:
+        meta["class_posterior_sums"] = np.asarray(result.class_posterior_sums, dtype=np.float64)
+    per_class_stats = getattr(result, "per_class_stats", None)
+    if per_class_stats is not None:
+        meta["class_direction_posterior_sums"] = np.stack(
+            [np.asarray(class_stats.rotation_posterior_sums, dtype=np.float64) for class_stats in per_class_stats],
+            axis=0,
+        )
 
     cursor = 0
     for h, image_ids in sorted(groups):

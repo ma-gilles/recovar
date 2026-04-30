@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 
 from recovar.em.initial_model import initialise_denovo_state
-from recovar.em.initial_model.iteration_loop import run_vdam_iterations
+from recovar.em.initial_model.iteration_loop import run_vdam_iterations, update_probabilities_from_estep_meta
 from recovar.em.initial_model.m_step import VdamAccumulator
 from recovar.em.initial_model.subset import numpy_rnd_unif_factory
 
@@ -65,6 +65,61 @@ def _stub_estep_factory(ori_size: int):
 
 
 class TestRunVdamIterations:
+    def test_updates_class_and_direction_priors_from_estep_meta(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=2,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.pdf_class = np.asarray([0.5, 0.5], dtype=np.float64)
+        state.pdf_direction = np.full((2, 3), 1.0 / 6.0, dtype=np.float64)
+        state.subset_size = 50
+        meta = {
+            "class_posterior_sums": np.asarray([30.0, 70.0]),
+            "class_direction_posterior_sums": np.asarray(
+                [
+                    [10.0, 15.0, 5.0],
+                    [20.0, 30.0, 20.0],
+                ]
+            ),
+        }
+
+        out = update_probabilities_from_estep_meta(state, meta, do_grad=True, mu=0.9)
+
+        np.testing.assert_allclose(out.pdf_class, [0.48, 0.52])
+        np.testing.assert_allclose(
+            out.pdf_direction,
+            state.pdf_direction * 0.9 + 0.1 * meta["class_direction_posterior_sums"] / 100.0,
+        )
+        np.testing.assert_allclose(state.pdf_class, [0.5, 0.5])
+
+    def test_all_particle_probability_update_replaces_priors_and_allows_zero_class(self):
+        state = initialise_denovo_state(
+            ori_size=8,
+            pixel_size=1.0,
+            K=2,
+            nr_iter=1,
+            n_directions=3,
+            pseudo_halfsets=True,
+        )
+        state.pdf_class = np.asarray([0.5, 0.5], dtype=np.float64)
+        state.subset_size = -1
+
+        out = update_probabilities_from_estep_meta(
+            state,
+            {
+                "halfset_0_class_posterior_sums": np.asarray([0.0, 4.0]),
+                "halfset_1_class_posterior_sums": np.asarray([0.0, 6.0]),
+            },
+            do_grad=True,
+            mu=0.9,
+        )
+
+        np.testing.assert_allclose(out.pdf_class, [0.0, 1.0])
+
     def test_5_iter_smoke(self, bind):
         ori = 16
         K = 1

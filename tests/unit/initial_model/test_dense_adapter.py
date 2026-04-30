@@ -25,6 +25,9 @@ class _Dataset:
 def _fake_result(n_classes: int, n: int, *, n_images: int = 2, n_groups: int = 2):
     Ft_y = [np.full(n**3, k + 1, dtype=np.complex64) for k in range(n_classes)]
     Ft_ctf = [np.full(n**3, (k + 1) * 2, dtype=np.float32) for k in range(n_classes)]
+    per_class_stats = tuple(
+        SimpleNamespace(rotation_posterior_sums=np.full(3, k + 1, dtype=np.float32)) for k in range(n_classes)
+    )
     return SimpleNamespace(
         Ft_y=Ft_y,
         Ft_ctf=Ft_ctf,
@@ -34,6 +37,7 @@ def _fake_result(n_classes: int, n: int, *, n_images: int = 2, n_groups: int = 2
         class_posterior_sums=np.arange(n_classes, dtype=np.float32),
         class_assignments=np.zeros(n_images, dtype=np.int32),
         stats=SimpleNamespace(max_posterior_per_image=np.linspace(0.25, 0.75, n_images, dtype=np.float32)),
+        per_class_stats=per_class_stats,
     )
 
 
@@ -56,6 +60,14 @@ def test_class_log_priors_from_state_normalizes_weights():
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=2, nr_iter=1, n_directions=4)
     state.pdf_class = np.asarray([2.0, 1.0])
     np.testing.assert_allclose(class_log_priors_from_state(state), np.log([2.0 / 3.0, 1.0 / 3.0]))
+
+
+def test_class_log_priors_from_state_allows_inactive_class():
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=2, nr_iter=1, n_directions=4)
+    state.pdf_class = np.asarray([1.0, 0.0])
+    out = class_log_priors_from_state(state)
+    assert out[0] == 0.0
+    assert out[1] < -1.0e20
 
 
 def test_dense_initial_model_estep_calls_joint_k_class_once_for_grouped_halfsets(monkeypatch):
@@ -120,6 +132,11 @@ def test_dense_initial_model_estep_calls_joint_k_class_once_for_grouped_halfsets
     np.testing.assert_allclose(result.accumulators[1].weight, 4.0)
     assert result.meta["halfset_ids"] == (0, 1)
     assert result.meta["fused_pseudo_halfsets"] is True
+    np.testing.assert_allclose(result.meta["class_posterior_sums"], [0.0, 1.0])
+    np.testing.assert_allclose(
+        result.meta["class_direction_posterior_sums"],
+        np.asarray([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]),
+    )
 
 
 def test_dense_initial_model_estep_meta_includes_optional_profiles(monkeypatch):
@@ -152,6 +169,8 @@ def test_dense_initial_model_estep_meta_includes_optional_profiles(monkeypatch):
     result = run_dense_initial_model_estep(_Dataset(), state, config)
 
     assert result.meta["halfset_0_profile_summary"] == {"em_time_s": 1.25, "batches": 1}
+    np.testing.assert_allclose(result.meta["class_posterior_sums"], [0.0])
+    np.testing.assert_allclose(result.meta["class_direction_posterior_sums"], [[1.0, 1.0, 1.0]])
 
 
 def test_dense_initial_model_estep_grouped_meta_includes_fused_profile(monkeypatch):
