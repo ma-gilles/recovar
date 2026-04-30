@@ -195,6 +195,62 @@ def _phase_shift(main_star) -> np.ndarray:
     return np.asarray(main_star["_rlnPhaseShift"].astype(float).to_numpy(), dtype=np.float64)
 
 
+def _star_column(main_star, name: str):
+    if name in main_star.columns:
+        return main_star[name]
+    no_prefix = name[1:] if name.startswith("_") else name
+    if no_prefix in main_star.columns:
+        return main_star[no_prefix]
+    return None
+
+
+def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
+    """Return RELION old-offset image pre-shifts in pixel units.
+
+    Dense EM uses these as the per-image pre-centering base before applying
+    the sampled translation grid. RELION rounds old offsets and applies an
+    integer zero-filled real-space shift in its accelerated path; pass the
+    rounded values so the shared dense engine uses the same fast path.
+    """
+
+    n_images = int(len(main_star))
+    origin_x_ang = _star_column(main_star, "_rlnOriginXAngst")
+    origin_y_ang = _star_column(main_star, "_rlnOriginYAngst")
+    if (origin_x_ang is None) != (origin_y_ang is None):
+        raise ValueError("STAR file must provide both _rlnOriginXAngst and _rlnOriginYAngst")
+    if origin_x_ang is not None and origin_y_ang is not None:
+        pixel_size = float(dataset.voxel_size)
+        if pixel_size <= 0.0:
+            raise ValueError("dataset voxel_size must be positive to convert STAR origins from Angstroms")
+        shifts = np.stack(
+            [
+                np.asarray(origin_x_ang.astype(float).to_numpy(), dtype=np.float64) / pixel_size,
+                np.asarray(origin_y_ang.astype(float).to_numpy(), dtype=np.float64) / pixel_size,
+            ],
+            axis=1,
+        )
+    else:
+        origin_x_px = _star_column(main_star, "_rlnOriginX")
+        origin_y_px = _star_column(main_star, "_rlnOriginY")
+        if (origin_x_px is None) != (origin_y_px is None):
+            raise ValueError("STAR file must provide both _rlnOriginX and _rlnOriginY")
+        if origin_x_px is None or origin_y_px is None:
+            return np.zeros((n_images, 2), dtype=np.float32)
+        shifts = np.stack(
+            [
+                np.asarray(origin_x_px.astype(float).to_numpy(), dtype=np.float64),
+                np.asarray(origin_y_px.astype(float).to_numpy(), dtype=np.float64),
+            ],
+            axis=1,
+        )
+
+    if shifts.shape != (n_images, 2):
+        raise ValueError(f"STAR origin shifts must have shape ({n_images}, 2), got {shifts.shape}")
+    if not np.all(np.isfinite(shifts)):
+        raise ValueError("STAR origin shifts must be finite")
+    return np.rint(shifts).astype(np.float32)
+
+
 def _load_raw_images(dataset, image_indices: np.ndarray, *, batch_size: int) -> np.ndarray:
     """Load raw real-space particle images through ``CryoEMDataset`` I/O."""
 
@@ -361,6 +417,7 @@ def _dense_estep_config(
     opts: NativeInitialModelOptions,
     noise_variance: np.ndarray,
     sampling_plan: NativeSamplingPlan,
+    image_pre_shifts: np.ndarray,
 ) -> DenseInitialModelEstepConfig:
     translation_log_prior = _translation_log_prior(
         sampling_plan.translations,
@@ -371,7 +428,7 @@ def _dense_estep_config(
     engine_kwargs = {
         "score_with_masked_images": True,
         "relion_firstiter_score_mode": "gaussian",
-        "image_pre_shifts": np.zeros((int(dataset.n_images), 2), dtype=np.float32),
+        "image_pre_shifts": np.asarray(image_pre_shifts, dtype=np.float32),
         "sparse_pass2": False,
     }
     if translation_log_prior is not None:
@@ -389,10 +446,15 @@ def _dense_estep_config(
     )
 
 
-def _native_expectation_step(dataset, opts: NativeInitialModelOptions, noise_variance: np.ndarray):
+def _native_expectation_step(
+    dataset,
+    opts: NativeInitialModelOptions,
+    noise_variance: np.ndarray,
+    image_pre_shifts: np.ndarray,
+):
     def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
         sampling_plan = _build_sampling_plan(opts, iteration=max(1, int(state.iter)))
-        config = _dense_estep_config(dataset, opts, noise_variance, sampling_plan)
+        config = _dense_estep_config(dataset, opts, noise_variance, sampling_plan, image_pre_shifts)
         result = run_dense_initial_model_estep(
             dataset,
             state,
@@ -575,6 +637,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
 
     _configure_relion_image_mask(dataset, opts)
     sampling_plan = _build_sampling_plan(opts, iteration=1)
+    image_pre_shifts = _image_pre_shifts_from_star(main_star, dataset)
     state, optics_group_by_particle = _initial_state_from_particles(
         dataset,
         main_star,
@@ -583,7 +646,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         sampling_plan.rotations,
     )
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
-    expectation_step = _native_expectation_step(dataset, opts, noise_variance)
+    expectation_step = _native_expectation_step(dataset, opts, noise_variance, image_pre_shifts)
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
 
     if opts.write_iter_artifacts:

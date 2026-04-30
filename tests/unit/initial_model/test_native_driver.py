@@ -51,6 +51,38 @@ def test_translation_log_prior_uses_angstrom_distance():
     np.testing.assert_allclose(prior, np.asarray([0.0, -0.5, -0.125], dtype=np.float32), rtol=1e-6)
 
 
+def test_image_pre_shifts_from_star_converts_angstrom_origins_to_rounded_pixels():
+    main = pd.DataFrame(
+        {
+            "_rlnOriginXAngst": ["4.2", "-3.9", "0.0"],
+            "_rlnOriginYAngst": ["-8.1", "2.0", "0.4"],
+        }
+    )
+
+    shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
+
+    np.testing.assert_array_equal(
+        shifts,
+        np.asarray([[2.0, -4.0], [-2.0, 1.0], [0.0, 0.0]], dtype=np.float32),
+    )
+
+
+def test_image_pre_shifts_from_star_uses_legacy_pixel_origins():
+    main = pd.DataFrame({"_rlnOriginX": ["0.5", "-1.4"], "_rlnOriginY": ["1.6", "-0.49"]})
+
+    shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
+
+    np.testing.assert_array_equal(shifts, np.asarray([[0.0, 2.0], [-1.0, 0.0]], dtype=np.float32))
+
+
+def test_image_pre_shifts_from_star_defaults_to_zero_without_origins():
+    main = pd.DataFrame({"_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"]})
+
+    shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
+
+    np.testing.assert_array_equal(shifts, np.zeros((2, 2), dtype=np.float32))
+
+
 def test_sampling_plan_oversamples_relion_grid():
     opts = driver.NativeInitialModelOptions(
         fn_img="particles.star",
@@ -90,6 +122,10 @@ def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
     def fake_run_dense(dataset, state, config, *, particle_ids, halfset_ids):
         assert config.rotations.shape == (3, 3, 3)
         assert config.translations.shape == (4, 2)
+        np.testing.assert_array_equal(
+            config.engine_kwargs["image_pre_shifts"],
+            np.asarray([[1.0, -1.0], [0.0, 2.0]], dtype=np.float32),
+        )
         assert particle_ids.tolist() == [0, 1]
         return SimpleNamespace(accumulators=["acc"], meta={})
 
@@ -103,6 +139,7 @@ def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
         dataset,
         driver.NativeInitialModelOptions(fn_img="particles.star"),
         np.ones(33, dtype=np.float32),
+        np.asarray([[1.0, -1.0], [0.0, 2.0]], dtype=np.float32),
     )
     accumulators, meta = expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
 
