@@ -33,9 +33,9 @@ hide:
 
 <div class="example-outputs" markdown>
 
-| Eigenvalue spectrum | Principal component space |
+| Eigenvalue spectrum | UMAP latent space (EMPIAR-10076) |
 |:---:|:---:|
-| ![Eigenvalue spectrum](_static/examples/eigenvalues.png) | ![PCA scatter](_static/examples/principal_component_space_analysis.png) |
+| ![Eigenvalue spectrum](_static/examples/eigenvalues.png) | ![UMAP colored by assembly state](_static/examples/umap_10076.png) |
 
 </div>
 
