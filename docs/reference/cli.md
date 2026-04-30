@@ -311,7 +311,7 @@ recovar init_project [directory] [--name "Project Name"]
 | `directory` | `.` | Directory to initialize (created if needed) |
 | `--name` | Directory name | Human-readable project name |
 
-Creates a `project.json` file in the directory. Subsequent commands using `--project` will auto-generate numbered job directories (e.g. `Pipeline/job_0001/`, `Analyze/job_0001/`).
+Creates a `recovar_project.db` file in the directory. Subsequent commands using `--project` will auto-generate numbered job directories (e.g. `Pipeline/job_0001/`, `Analyze/job_0001/`).
 
 ---
 
@@ -332,7 +332,7 @@ recovar project_status [directory] [--tree]
 
 ## Common flag: `--project`
 
-All commands that produce output accept `--project <dir>` to enable project mode. This is the recommended way to run RECOVAR. When active, output directories are auto-generated, downstream commands may omit `result_dir` to use the latest completed Pipeline job, and RECOVAR stores human-readable job names alongside the numbered directories. If you run from within a project directory (containing `project.json`), it is auto-detected without needing the flag.
+All commands that produce output accept `--project <dir>` to enable project mode. This is the recommended way to run RECOVAR. When active, output directories are auto-generated, downstream commands may omit `result_dir` to use the latest completed Pipeline job, and RECOVAR stores human-readable job names alongside the numbered directories. If you run from within a project directory (containing `recovar_project.db`), it is auto-detected without needing the flag.
 
 Each job creates `job.json`, `command.txt`, `run.log`, and `README.txt` metadata files.
 

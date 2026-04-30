@@ -98,10 +98,10 @@ nav:
         - Outlier Detection: guide/outlier-detection.md
         - Cryo-ET: guide/cryo-et.md
         - External Embeddings: guide/external-embeddings.md
-  - CLI & API:
+  - Reference:
     - CLI Commands: reference/cli.md
     - File Formats: reference/file-formats.md
-    - Python API:
+    - Developer API:
       - recovar.core: reference/api/core.md
       - recovar.data_io: reference/api/data_io.md
       - recovar.heterogeneity: reference/api/heterogeneity.md

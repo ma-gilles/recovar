@@ -82,7 +82,7 @@ Note: GUI tab comes FIRST (it's the default).
 
 ## Navigation Hierarchy
 
-Top-level tabs: **Home**, **Install**, **Processing**, **CLI & API**, **Troubleshooting**
+Top-level tabs: **Home**, **Install**, **Processing**, **Reference**, **Troubleshooting**
 
 Processing section is grouped into:
 - **First Steps** — GUI, Tutorial (essential)

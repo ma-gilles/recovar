@@ -27,6 +27,15 @@ hide:
 - **Direct input** from RELION (`.star`) and cryoSPARC (`.cs`) -- no format conversion
 - **No hallucinations** -- kernel regression produces transparent, verifiable volumes
 
+!!! info "What you need before starting"
+    RECOVAR starts **after consensus refinement** in RELION or cryoSPARC. You need:
+
+    1. A particle stack with poses and CTF — a RELION `.star` file or cryoSPARC `.cs` file
+    2. A solvent mask (`.mrc`) — or let RECOVAR generate one automatically
+    3. An NVIDIA GPU (any Volta or newer — V100, RTX 20/30/40-series, A100, H100)
+
+    RECOVAR outputs: mean reconstruction, variance maps, eigenvolumes, latent coordinates, k-means cluster volumes, UMAP embeddings, and trajectories — all exportable back to RELION/cryoSPARC.
+
 ---
 
 ## Example output

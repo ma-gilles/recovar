@@ -9,7 +9,7 @@ Before starting, make sure you have:
 | **Particle stack** | A `.star` file (RELION) or `.cs` file (cryoSPARC) with CTF parameters |
 | **Mask** | A `.mrc` binary mask covering your molecule of interest |
 | **GPU** | NVIDIA GPU with 16+ GB VRAM (40+ GB recommended for large datasets) |
-| **RECOVAR installed** | See [Installation](installation.md) if you haven't set up RECOVAR yet |
+| **RECOVAR installed** | `pip install "recovar[gpu]"` for pipeline use; add `pip install "recovar[gui]"` for GUI support. See [Installation](installation.md) for details |
 
 !!! tip "Timing"
     A small dataset (~50k particles at 128px) takes about 10 minutes end-to-end. Larger datasets (500k+ particles at 256px) may take 30--60 minutes.
@@ -17,6 +17,13 @@ Before starting, make sure you have:
 ---
 
 ## Run your first job
+
+??? info "Key terms"
+    - **zdim**: Number of latent-space dimensions. Start with 10. Higher = more detail but slower.
+    - **K-means**: Groups particles into representative conformational states.
+    - **UMAP**: 2D visualization of the latent space for exploring heterogeneity.
+    - **Eigenvalues**: Measure how much variance each principal component captures. Sharp drop = clear signal.
+    - **Trajectory**: A series of volumes showing a conformational path between two states.
 
 === ":material-monitor: GUI"
 
@@ -28,7 +35,7 @@ Before starting, make sure you have:
     recovar gui
     ```
 
-    This opens a browser window at `http://localhost:5000`.
+    This opens a browser window at `http://localhost:8080`.
 
     **2. Create a project and submit a pipeline job**
 
@@ -92,7 +99,7 @@ Before starting, make sure you have:
 
 ??? note "Expected output after each step"
 
-    **After `recovar init_project`:** Creates the project directory with a `.recovar_project` metadata file.
+    **After `recovar init_project`:** Creates the project directory with a `recovar_project.db` metadata file.
 
     **After `recovar pipeline`:** Creates `Pipeline/job_0001/` containing:
 

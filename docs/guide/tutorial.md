@@ -283,10 +283,10 @@ More commonly, your data lives on a compute cluster and you want to view the GUI
 ssh -L 8080:localhost:8080 user@cluster
 ```
 
-For example, to connect to the Princeton della cluster:
+For example, to connect to your HPC cluster:
 
 ```bash
-ssh -L 8080:localhost:8080 mg6942@della.princeton.edu
+ssh -L 8080:localhost:8080 user@cluster.example.edu
 ```
 
 **Step 2.** On the cluster (inside the SSH session), launch the GUI:

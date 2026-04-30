@@ -49,6 +49,14 @@ Results are saved to `output/analysis_10/`.
 !!! tip "How to choose zdim"
     Look at the eigenvalue spectrum plot. Choose the zdim where eigenvalues start to flatten -- this is where signal transitions to noise. Typical values: 2-4 for simple motions, 10-20 for complex heterogeneity.
 
+!!! tip "What to inspect first after analyze"
+    1. **Mean map** — is the reconstruction sensible? Open `mean_filt.mrc` in ChimeraX
+    2. **Eigenvalue spectrum** — how many modes before it flattens? That's your signal
+    3. **PCA scatter** — isolated clusters or continuous gradients?
+    4. **K-means volumes** — do the differences correspond to real density changes?
+    5. **UMAP** — does it confirm the structure seen in PCA?
+    6. **Subsets** — export only after visually inspecting volumes, not just scatter plots
+
 !!! tip "Sampling many states"
     To sample many conformational states (e.g., 100-200), use `--n-clusters=200` and `--n-bins=10` for speed, then recompute selected states at higher resolution with `compute_state`.
 
