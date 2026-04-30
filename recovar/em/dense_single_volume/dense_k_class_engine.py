@@ -803,6 +803,8 @@ def run_dense_k_class_em_native(
         class_sum_exp = jnp.zeros((batch_size, n_classes), dtype=precision_policy.normalization_real_dtype)
         global_best_score = jnp.full(batch_size, -jnp.inf)
         global_best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
+        best_score_class = jnp.full((batch_size, n_classes), -jnp.inf)
+        best_argmax_class = jnp.zeros((batch_size, n_classes), dtype=jnp.int32)
 
         for _, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
             rots_b = rotations_padded[r0:r1]
@@ -856,11 +858,14 @@ def run_dense_k_class_em_native(
             class_max_s, class_sum_exp = _update_class_logsumexp(class_max_s, class_sum_exp, scores)
             if relion_firstiter_winner_take_all:
                 (
-                    _block_best_class,
-                    _block_argmax_class,
+                    block_best_class,
+                    block_argmax_class,
                     block_best_global,
                     block_argmax_global,
                 ) = _k_class_block_best(scores)
+                improved_class = block_best_class > best_score_class
+                best_score_class = jnp.where(improved_class, block_best_class, best_score_class)
+                best_argmax_class = jnp.where(improved_class, block_argmax_class + r0 * n_trans, best_argmax_class)
                 block_class = block_argmax_global // (rotation_block_size * n_trans)
                 block_pose = block_argmax_global % (rotation_block_size * n_trans)
                 block_global_argmax = block_class * (n_rot_padded * n_trans) + block_pose + r0 * n_trans
@@ -870,66 +875,64 @@ def run_dense_k_class_em_native(
 
         log_Z = max_s + jnp.log(sum_exp)
         class_log_Z = class_max_s + jnp.log(class_sum_exp)
-        best_score_class = jnp.full((batch_size, n_classes), -jnp.inf)
-        best_argmax_class = jnp.zeros((batch_size, n_classes), dtype=jnp.int32)
+        if not relion_firstiter_winner_take_all:
+            best_score_class = jnp.full((batch_size, n_classes), -jnp.inf)
+            best_argmax_class = jnp.zeros((batch_size, n_classes), dtype=jnp.int32)
 
         for _, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
             rots_b = rotations_padded[r0:r1]
-            proj_half_by_class, proj_abs2_by_class = _project_k_class_block(
-                mean_for_proj_by_class,
-                rots_b,
-                image_shape,
-                proj_volume_shape,
-                disc_type,
-                projection_kwargs,
-            )
-            scores = _score_k_class_block(
-                window_spec=window_spec,
-                shifted_windowed=shifted_windowed,
-                batch_norm=batch_norm,
-                ctf2_over_nv_windowed=ctf2_over_nv_windowed,
-                proj_half_by_class=proj_half_by_class,
-                proj_abs2_by_class=proj_abs2_by_class,
-                half_weights=half_weights,
-                batch_size=batch_size,
-                n_classes=n_classes,
-                n_trans=n_trans,
-                image_shape=image_shape,
-                volume_shape=volume_shape,
-                score_mode=relion_firstiter_score_mode,
-                precision_policy=precision_policy,
-            )
-            (
-                rotation_prior_block,
-                translation_prior_block,
-                candidate_mask_block,
-                valid_rotation_mask,
-            ) = score_constraints.block_inputs(
-                r0=r0,
-                r1=r1,
-                start=start_idx,
-                end=end_idx,
-                batch_count=batch_size,
-                rotation_block_size=rotation_block_size,
-            )
-            scores = _apply_k_class_score_constraints(
-                scores,
-                rotation_prior_block,
-                translation_prior_block,
-                class_log_priors,
-                candidate_mask_block,
-                valid_rotation_mask,
-                score_mode=relion_firstiter_score_mode,
-            )
+            proj_half_by_class = proj_abs2_by_class = None
+            if (not relion_firstiter_winner_take_all) or accumulate_noise:
+                proj_half_by_class, proj_abs2_by_class = _project_k_class_block(
+                    mean_for_proj_by_class,
+                    rots_b,
+                    image_shape,
+                    proj_volume_shape,
+                    disc_type,
+                    projection_kwargs,
+                )
+            if not relion_firstiter_winner_take_all:
+                scores = _score_k_class_block(
+                    window_spec=window_spec,
+                    shifted_windowed=shifted_windowed,
+                    batch_norm=batch_norm,
+                    ctf2_over_nv_windowed=ctf2_over_nv_windowed,
+                    proj_half_by_class=proj_half_by_class,
+                    proj_abs2_by_class=proj_abs2_by_class,
+                    half_weights=half_weights,
+                    batch_size=batch_size,
+                    n_classes=n_classes,
+                    n_trans=n_trans,
+                    image_shape=image_shape,
+                    volume_shape=volume_shape,
+                    score_mode=relion_firstiter_score_mode,
+                    precision_policy=precision_policy,
+                )
+                (
+                    rotation_prior_block,
+                    translation_prior_block,
+                    candidate_mask_block,
+                    valid_rotation_mask,
+                ) = score_constraints.block_inputs(
+                    r0=r0,
+                    r1=r1,
+                    start=start_idx,
+                    end=end_idx,
+                    batch_count=batch_size,
+                    rotation_block_size=rotation_block_size,
+                )
+                scores = _apply_k_class_score_constraints(
+                    scores,
+                    rotation_prior_block,
+                    translation_prior_block,
+                    class_log_priors,
+                    candidate_mask_block,
+                    valid_rotation_mask,
+                    score_mode=relion_firstiter_score_mode,
+                )
             shifted_for_mstep = shifted_recon_windowed if window_spec.use_window else shifted_recon_half
             ctf_for_mstep = ctf2_over_nv_windowed_mstep if window_spec.use_window else ctf2_over_nv_half_with_dc
             if relion_firstiter_winner_take_all:
-                (
-                    block_best_class,
-                    block_argmax_class,
-                    _block_best_global,
-                    _block_argmax_global,
-                ) = _k_class_block_best(scores)
                 actual_rot = max(0, min(rotation_block_size, n_rot - r0))
                 probs, summed_half, ctf_probs_half, rotation_sums = _k_class_wta_m_step_block(
                     shifted_for_mstep,
@@ -959,9 +962,9 @@ def run_dense_k_class_em_native(
                     ctf_for_mstep,
                     n_trans,
                 )
-            improved = block_best_class > best_score_class
-            best_score_class = jnp.where(improved, block_best_class, best_score_class)
-            best_argmax_class = jnp.where(improved, block_argmax_class + r0 * n_trans, best_argmax_class)
+                improved = block_best_class > best_score_class
+                best_score_class = jnp.where(improved, block_best_class, best_score_class)
+                best_argmax_class = jnp.where(improved, block_argmax_class + r0 * n_trans, best_argmax_class)
 
             actual_rot = max(0, min(rotation_block_size, n_rot - r0))
             if actual_rot > 0:
