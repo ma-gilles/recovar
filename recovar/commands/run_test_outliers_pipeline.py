@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 
 import argparse
-import glob
 import logging
 import os
 import pickle
@@ -22,7 +21,11 @@ def main():
     parser.add_argument(
         "--no-delete", action="store_true", help="Do not delete the test dataset directory after successful tests"
     )
-    parser.add_argument("--cpu", action="store_true", help="Run on CPU only (skip GPU check)")
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU-only execution. Sets JAX_PLATFORMS=cpu so JAX ignores any visible GPUs, AND passes --accept-cpu to the inner pipeline so it doesn't bail on the no-GPU check.",
+    )
     parser.add_argument("--tilt-series", action="store_true", help="Test with tilt series dataset")
     parser.add_argument("--n-images", type=int, default=10000, help="Number of images to generate in test dataset")
     parser.add_argument("--k-rounds", type=int, default=2, help="Number of rounds for outlier detection pipeline")
@@ -66,6 +69,13 @@ def main():
     k_rounds = args.k_rounds
     percent_outliers = args.percent_outliers
     percent_tilt_series_outliers = args.percent_tilt_series_outliers
+
+    # Force CPU-only mode in any spawned subprocess. This wrapper has already
+    # imported jax above, so this env var doesn't affect THIS process's jax
+    # state — but it does propagate to the `recovar pipeline ...` subprocesses
+    # we spawn below, which is where the actual work happens.
+    if run_on_cpu:
+        os.environ["JAX_PLATFORMS"] = "cpu"
 
     # Base command is now "recovar" (which dispatches to the appropriate subcommand)
     BASE_CMD = "python -m recovar.command_line"

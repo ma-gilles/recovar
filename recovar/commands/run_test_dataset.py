@@ -22,7 +22,11 @@ def main():
     parser.add_argument(
         "--no-delete", action="store_true", help="Do not delete the test dataset directory after successful tests"
     )
-    parser.add_argument("--cpu", action="store_true", help="Run on CPU only (skip GPU check)")
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU-only execution. Sets JAX_PLATFORMS=cpu so JAX ignores any visible GPUs, AND passes --accept-cpu to the inner pipeline so it doesn't bail on the no-GPU check.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -32,6 +36,13 @@ def main():
     delete_everything = not args.no_delete
     run_on_cpu = args.cpu
     dataset_dir = args.output_dir
+
+    # Force CPU-only mode in any spawned subprocess. This wrapper itself has
+    # already imported jax above, so this env var doesn't affect THIS process's
+    # jax state — but it does propagate to the `recovar pipeline ...`
+    # subprocesses we spawn below, which is where the actual work happens.
+    if run_on_cpu:
+        os.environ["JAX_PLATFORMS"] = "cpu"
 
     BASE_CMD = f"{shlex.quote(sys.executable)} -m recovar.command_line"
 
@@ -65,6 +76,7 @@ def main():
         # Verify the CUDA kernel loads on this GPU (catches arch mismatches early)
         try:
             from recovar.cuda_backproject import cuda_available
+
             if cuda_available():
                 logger.info("CUDA backproject/project kernels: OK")
             else:

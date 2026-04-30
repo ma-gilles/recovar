@@ -1,22 +1,23 @@
-import os
-import sys
-import json
-import pickle
 import argparse
+import json
+import logging
 import math
+import os
+import pickle
+import sys
 import time
 from pathlib import Path
-import logging
-import numpy as np
-import matplotlib.pyplot as plt
+
 import jax
+import matplotlib.pyplot as plt
+import numpy as np
 import psutil
 
-from recovar import utils
-from recovar.simulation import simulator, synthetic_dataset
-from recovar.output import output, metrics, plot_utils
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-from recovar.commands import pipeline, compute_state
+from recovar import utils
+from recovar.commands import compute_state, pipeline
+from recovar.output import metrics, output, plot_utils
+from recovar.simulation import simulator, synthetic_dataset
 
 LOWER_IS_BETTER_TOKENS = (
     "error",
@@ -132,9 +133,7 @@ def _stage_perf(before, after):
 # ---------------------------------------------------------------------------
 # PDB-based trajectory volume generation
 # ---------------------------------------------------------------------------
-from recovar.simulation.trajectory_generation import (
-    CHAIN_GROUPS_5NRL as _5NRL_CHAIN_GROUPS,
-    split_atom_group_by_chains as _split_atom_group_by_chains,
+from recovar.simulation.trajectory_generation import (  # noqa: E402
     generate_trajectory_volumes as generate_pdb_trajectory_volumes,
 )
 
@@ -675,7 +674,11 @@ def main():
     parser.add_argument(
         "--no-delete", action="store_true", help="Do not delete the test dataset directory after successful tests"
     )
-    parser.add_argument("--cpu", action="store_true", help="Run on CPU only (skip GPU check)")
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Force CPU-only execution. Sets JAX_PLATFORMS=cpu so JAX ignores any visible GPUs, AND passes --accept-cpu to the inner pipeline so it doesn't bail on the no-GPU check.",
+    )
     parser.add_argument("--n-images", type=float, default=5e4, help="Number of images in the test dataset")
     parser.add_argument(
         "--grid-size", type=int, default=64, help="Grid size for the test dataset (default: 64, matching 5nrl notebook)"
@@ -834,7 +837,13 @@ def main():
         except Exception as e:
             error_message(f"Error checking GPU devices: {e}")
 
-    if not args.cpu:
+    # Force CPU-only mode in any spawned subprocess. This wrapper has likely
+    # already imported jax above, so this env var doesn't affect THIS process's
+    # jax state — but it does propagate to the `recovar pipeline ...`
+    # subprocesses we spawn below, which is where the actual work happens.
+    if args.cpu:
+        os.environ["JAX_PLATFORMS"] = "cpu"
+    else:
         check_gpu()
 
     perf = {"gpu_name": _gpu_name()}
