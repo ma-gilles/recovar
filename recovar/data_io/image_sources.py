@@ -176,6 +176,12 @@ class ImageSource:
     def process_images_half(self, images, apply_image_mask=False):
         raise NotImplementedError("ImageSource subclasses must implement native process_images_half")
 
+    def process_images_half_pair(self, images, *, apply_image_mask_a: bool, apply_image_mask_b: bool):
+        return (
+            self.process_images_half(images, apply_image_mask=apply_image_mask_a),
+            self.process_images_half(images, apply_image_mask=apply_image_mask_b),
+        )
+
     def iter_batches(
         self,
         batch_size: int,
@@ -269,6 +275,19 @@ class BackendImageSource(ImageSource):
         if not hasattr(self.backend, "process_images_half"):
             raise ValueError("Image backend must implement native process_images_half")
         return self.backend.process_images_half(images, apply_image_mask=apply_image_mask)
+
+    def process_images_half_pair(self, images, *, apply_image_mask_a: bool, apply_image_mask_b: bool):
+        if hasattr(self.backend, "process_images_half_pair"):
+            return self.backend.process_images_half_pair(
+                images,
+                apply_image_mask_a=apply_image_mask_a,
+                apply_image_mask_b=apply_image_mask_b,
+            )
+        return super().process_images_half_pair(
+            images,
+            apply_image_mask_a=apply_image_mask_a,
+            apply_image_mask_b=apply_image_mask_b,
+        )
 
     def iter_batches(
         self,
@@ -372,6 +391,13 @@ class SubsetImageSource(ImageSource):
 
     def process_images_half(self, images, apply_image_mask=False):
         return self.parent.process_images_half(images, apply_image_mask=apply_image_mask)
+
+    def process_images_half_pair(self, images, *, apply_image_mask_a: bool, apply_image_mask_b: bool):
+        return self.parent.process_images_half_pair(
+            images,
+            apply_image_mask_a=apply_image_mask_a,
+            apply_image_mask_b=apply_image_mask_b,
+        )
 
     def _remap_parent_images(self, parent_local_image_indices):
         parent_original_image_indices = self.parent.index_layout.original_image_indices_for_local(

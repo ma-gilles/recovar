@@ -259,6 +259,43 @@ class ParticleImageDataset:
         half_images = padding.padded_rfft(images * self.mult, self.D, self.padding)
         return half_images.astype(self.dtype, copy=False)
 
+    def process_images_half_pair(
+        self,
+        images: np.ndarray,
+        *,
+        apply_image_mask_a: bool,
+        apply_image_mask_b: bool,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        """Return two half-spectrum preprocessing variants for the same images."""
+
+        if apply_image_mask_a == apply_image_mask_b:
+            processed = self.process_images_half(images, apply_image_mask=apply_image_mask_a)
+            return processed, processed
+
+        if self.image_mask_mode != "relion_background_fill":
+            return (
+                self.process_images_half(images, apply_image_mask=apply_image_mask_a),
+                self.process_images_half(images, apply_image_mask=apply_image_mask_b),
+            )
+
+        try:
+            images_np = np.asarray(images)
+        except Exception as exc:
+            if exc.__class__.__name__ != "TracerArrayConversionError":
+                raise
+            raise ValueError("RELION background-fill half preprocessing requires host real-space images") from exc
+        if images_np.ndim == 2:
+            images_np = images_np[np.newaxis, ...]
+
+        raw = images_np * self.mult
+        masked = _apply_relion_soft_image_mask_numpy(images_np, self.image_mask) * self.mult
+        raw_half = _centered_rfft2_numpy(raw).reshape((raw.shape[0], -1)).astype(self.dtype, copy=False)
+        masked_half = _centered_rfft2_numpy(masked).reshape((masked.shape[0], -1)).astype(self.dtype, copy=False)
+        return (
+            masked_half if apply_image_mask_a else raw_half,
+            masked_half if apply_image_mask_b else raw_half,
+        )
+
     def get_dataset_generator(
         self,
         batch_size: int,

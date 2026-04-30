@@ -32,6 +32,31 @@ def process_half_image(
     return process_half_fn(batch, apply_image_mask=apply_image_mask)
 
 
+def process_half_image_pair(
+    experiment_dataset,
+    batch,
+    *,
+    apply_image_mask_a: bool,
+    apply_image_mask_b: bool,
+):
+    """Return two half-spectrum preprocessing variants for the same batch."""
+
+    if apply_image_mask_a == apply_image_mask_b:
+        processed = process_half_image(experiment_dataset, batch, apply_image_mask_a)
+        return processed, processed
+    process_pair_fn = getattr(experiment_dataset, "process_images_half_pair", None)
+    if process_pair_fn is None:
+        return (
+            process_half_image(experiment_dataset, batch, apply_image_mask_a),
+            process_half_image(experiment_dataset, batch, apply_image_mask_b),
+        )
+    return process_pair_fn(
+        batch,
+        apply_image_mask_a=apply_image_mask_a,
+        apply_image_mask_b=apply_image_mask_b,
+    )
+
+
 def _dense_batch_half_inputs(
     experiment_dataset,
     batch,
@@ -50,6 +75,31 @@ def _dense_batch_half_inputs(
     noise_variance_half = jnp.asarray(noise_variance)
     translation_phases_half = half_translation_phase_table(translations, config.image_shape)
     return processed_half, ctf_half, noise_variance_half, translation_phases_half
+
+
+def dense_batch_half_input_pair(
+    experiment_dataset,
+    batch,
+    ctf_params,
+    noise_variance,
+    translations,
+    config,
+    *,
+    apply_image_mask_a: bool,
+    apply_image_mask_b: bool,
+):
+    """Shared inputs plus two preprocessed half-image variants."""
+
+    processed_a, processed_b = process_half_image_pair(
+        experiment_dataset,
+        batch,
+        apply_image_mask_a=apply_image_mask_a,
+        apply_image_mask_b=apply_image_mask_b,
+    )
+    ctf_half = config.compute_ctf_half(ctf_params)
+    noise_variance_half = jnp.asarray(noise_variance)
+    translation_phases_half = half_translation_phase_table(translations, config.image_shape)
+    return processed_a, processed_b, ctf_half, noise_variance_half, translation_phases_half
 
 
 def preprocess_batch(

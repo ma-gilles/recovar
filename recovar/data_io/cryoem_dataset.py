@@ -376,6 +376,14 @@ class CryoEMDataset:
         """Apply windowing + rfft2 preprocessing → half-spectrum output."""
         return self.image_source.process_images_half(images, apply_image_mask=apply_image_mask)
 
+    def process_images_half_pair(self, images, *, apply_image_mask_a: bool, apply_image_mask_b: bool):
+        """Apply two half-spectrum preprocessing variants to the same raw images."""
+        return self.image_source.process_images_half_pair(
+            images,
+            apply_image_mask_a=apply_image_mask_a,
+            apply_image_mask_b=apply_image_mask_b,
+        )
+
     @property
     def image_mask(self):
         """Circular window mask from the image stack."""

@@ -71,6 +71,28 @@ def test_particle_image_dataset_relion_background_fill_mask_mode(monkeypatch):
     np.testing.assert_allclose(processed, expected, atol=1e-6)
 
 
+def test_particle_image_dataset_process_images_half_pair_matches_individual_calls(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)
+    ds.image_mask = mask.relion_soft_image_mask(
+        image_size=ds.image_size,
+        pixel_size=1.0,
+        particle_diameter_ang=6.0,
+        width_mask_edge_px=2.0,
+    )
+    ds.image_mask_mode = "relion_background_fill"
+
+    imgs, _p_idx, _t_idx = ds[[1, 2]]
+    masked_pair, raw_pair = ds.process_images_half_pair(
+        imgs,
+        apply_image_mask_a=True,
+        apply_image_mask_b=False,
+    )
+
+    np.testing.assert_allclose(masked_pair, ds.process_images_half(imgs, apply_image_mask=True), atol=1e-6)
+    np.testing.assert_allclose(raw_pair, ds.process_images_half(imgs, apply_image_mask=False), atol=1e-6)
+
+
 def test_particle_image_dataset_subset_generators_preserve_order_and_duplicates(monkeypatch):
     monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=5, D=8))
     ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=False)

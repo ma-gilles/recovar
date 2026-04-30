@@ -33,6 +33,8 @@ from .helpers.image_shifts import (
 )
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
 from .helpers.preprocessing import (
+    apply_half_translation_phases,
+    dense_batch_half_input_pair,
     prepare_reconstruction_batch as _prepare_reconstruction_batch,
     process_half_image,
     preprocess_batch as _preprocess_batch,
@@ -899,6 +901,44 @@ def run_dense_k_class_em_native(
                 config,
                 score_with_masked_images,
             )
+            shifted_recon_half = _prepare_reconstruction_batch(
+                experiment_dataset,
+                batch_data,
+                ctf_params,
+                noise_variance_half,
+                translations,
+                config,
+            )
+        elif score_with_masked_images:
+            processed_score_half, processed_recon_half, ctf_half, noise_variance_raw_half, translation_phases_half = (
+                dense_batch_half_input_pair(
+                    experiment_dataset,
+                    batch_data,
+                    ctf_params,
+                    noise_variance_half,
+                    translations,
+                    config,
+                    apply_image_mask_a=True,
+                    apply_image_mask_b=False,
+                )
+            )
+            score_weighted_half = processed_score_half * ctf_half / noise_variance_raw_half
+            shifted_half = apply_half_translation_phases(score_weighted_half, translation_phases_half)
+            half_weights_for_norm = make_scoring_half_image_weights(
+                image_shape,
+                relion_half_sum=False,
+            )
+            batch_norm = jnp.sum(
+                (jnp.abs(processed_score_half) ** 2 / noise_variance_raw_half) * half_weights_for_norm[None, :],
+                axis=-1,
+                keepdims=True,
+            ).real
+            ctf2_over_nv_half = ctf_half**2 / noise_variance_raw_half
+            ctf2_half_score = None
+            shifted_recon_half = apply_half_translation_phases(
+                processed_recon_half * ctf_half / noise_variance_raw_half,
+                translation_phases_half,
+            )
         else:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
                 experiment_dataset,
@@ -910,18 +950,7 @@ def run_dense_k_class_em_native(
                 score_with_masked_images,
             )
             ctf2_half_score = None
-        shifted_recon_half = (
-            _prepare_reconstruction_batch(
-                experiment_dataset,
-                batch_data,
-                ctf_params,
-                noise_variance_half,
-                translations,
-                config,
-            )
-            if (score_with_masked_images or relion_firstiter_score_mode == "normalized_cc")
-            else shifted_half
-        )
+            shifted_recon_half = shifted_half
 
         if scale_corrections is not None:
             batch_scale = jnp.asarray(np.asarray(scale_corrections, dtype=np.float32)[batch_indices_np])
