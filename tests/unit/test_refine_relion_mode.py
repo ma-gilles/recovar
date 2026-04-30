@@ -1115,6 +1115,60 @@ def test_dense_k_class_identical_means_split_global_posterior(rng):
     )
 
 
+def test_dense_k_class_profile_is_optional(rng):
+    dataset = MockDataset(2, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=145)
+    means = jnp.stack([mean, mean], axis=0)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    rotations = _make_rotations(2, seed=153)
+    translations = np.zeros((1, 2), dtype=np.float32)
+
+    unprofiled = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        score_with_masked_images=True,
+        sparse_pass2=False,
+    )
+    profiled = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        score_with_masked_images=True,
+        sparse_pass2=False,
+        return_profile=True,
+    )
+
+    assert unprofiled.profile_summary is None
+    assert profiled.profile_summary is not None
+    assert profiled.profile_summary["n_classes"] == 2
+    assert profiled.profile_summary["batches"] == 1
+    assert profiled.profile_summary["rotation_blocks"] == 1
+    assert profiled.profile_summary["em_time_s"] >= profiled.profile_summary["accounted_em_time_s"] > 0.0
+    np.testing.assert_allclose(np.asarray(profiled.Ft_y), np.asarray(unprofiled.Ft_y), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(profiled.stats.log_evidence_per_image),
+        np.asarray(unprofiled.stats.log_evidence_per_image),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+
 def test_dense_k_class_identical_means_split_noise_stats(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=151)

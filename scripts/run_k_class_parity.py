@@ -643,6 +643,11 @@ def main() -> None:
         help="Run the RECOVAR E/M call repeatedly in one process; summary uses the final run.",
     )
     parser.add_argument(
+        "--k-class-profile",
+        action="store_true",
+        help="Synchronize and record native K-class timing breakdown for the final E/M repeat.",
+    )
+    parser.add_argument(
         "--winner-take-all-mstep",
         action="store_true",
         help="Use RELION first-iteration winner-take-all reconstruction weights while keeping soft evidence stats.",
@@ -848,6 +853,7 @@ def main() -> None:
             do_gridding_correction=True,
             square_window=False,
             sparse_pass2=False,
+            return_profile=args.k_class_profile,
             relion_firstiter_winner_take_all=args.winner_take_all_mstep,
         )
         elapsed_s = time.time() - t0
@@ -1142,6 +1148,8 @@ def main() -> None:
         "elapsed_s": float(elapsed_s),
         "em_repeat_times_s": [float(value) for value in em_times],
         "em_repeats": int(args.em_repeats),
+        "k_class_profile_enabled": bool(args.k_class_profile),
+        "k_class_profile": None if result.profile_summary is None else dict(result.profile_summary),
         "recovar_class_weights": recovar_weights,
         "relion_class_weights": relion_weights,
         "relion_class_weights_in_recovar_order": relion_weights[perm],
@@ -1189,6 +1197,11 @@ def main() -> None:
         f"image_batch_size={summary['image_batch_size']}, rotation_block_size={summary['rotation_block_size']}, "
         f"em_repeats={summary['em_repeats']}"
     )
+    if result.profile_summary is not None:
+        print("  K-class profile:")
+        for key, value in sorted(result.profile_summary.items()):
+            if key.endswith("_s"):
+                print(f"    {key}: {float(value):.3f}")
     print(f"  class assignment accuracy after permutation: {class_accuracy:.4f}")
     print(
         "  Pmax abs diff: "

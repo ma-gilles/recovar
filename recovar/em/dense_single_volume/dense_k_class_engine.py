@@ -63,6 +63,7 @@ class DenseKClassNativeOutputs(NamedTuple):
     hard_assignments: np.ndarray
     per_class_stats: tuple[object, ...]
     noise_stats: tuple[object, ...] | None
+    profile_summary: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -712,6 +713,7 @@ def run_dense_k_class_em_native(
     square_window: bool = False,
     sparse_pass2: bool = False,
     accumulate_noise: bool = False,
+    return_profile: bool = False,
 ) -> DenseKClassNativeOutputs:
     """Run dense K-class EM with one E-step over class and pose axes."""
 
@@ -724,6 +726,19 @@ def run_dense_k_class_em_native(
         )
 
     overall_t0 = time.time()
+    sync_timers = bool(return_profile)
+    profile = {
+        "projection_pass1_s": 0.0,
+        "score_pass1_s": 0.0,
+        "projection_pass2_s": 0.0,
+        "score_mstep_pass2_s": 0.0,
+        "wta_mstep_s": 0.0,
+        "adjoint_s": 0.0,
+        "noise_s": 0.0,
+        "postprocess_s": 0.0,
+        "batches": 0,
+        "rotation_blocks": int((int(rotations.shape[0]) + int(rotation_block_size) - 1) // int(rotation_block_size)),
+    }
     means_array = jnp.asarray(means)
     n_classes = int(means_array.shape[0])
     n_rot = int(rotations.shape[0])
@@ -957,6 +972,13 @@ def run_dense_k_class_em_native(
             )
             if image_corrections is not None:
                 processed_masked_half = processed_masked_half * image_only_corr[:, None]
+        if sync_timers:
+            _block_until_ready(
+                shifted_windowed,
+                shifted_recon_windowed,
+                ctf2_over_nv_windowed,
+                ctf2_over_nv_windowed_mstep,
+            )
 
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=precision_policy.normalization_real_dtype)
@@ -967,8 +989,10 @@ def run_dense_k_class_em_native(
         best_score_class = jnp.full((batch_size, n_classes), -jnp.inf)
         best_argmax_class = jnp.zeros((batch_size, n_classes), dtype=jnp.int32)
 
+        profile["batches"] += 1
         for _, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
             rots_b = rotations_padded[r0:r1]
+            t0 = time.time()
             proj_half_by_class, proj_abs2_by_class = _project_k_class_block(
                 mean_for_proj_by_class,
                 rots_b,
@@ -977,6 +1001,10 @@ def run_dense_k_class_em_native(
                 disc_type,
                 projection_kwargs,
             )
+            if sync_timers:
+                _block_until_ready(proj_half_by_class, proj_abs2_by_class)
+                profile["projection_pass1_s"] += time.time() - t0
+                t0 = time.time()
             scores = _score_k_class_block(
                 window_spec=window_spec,
                 shifted_windowed=shifted_windowed,
@@ -1042,6 +1070,9 @@ def run_dense_k_class_em_native(
             else:
                 max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
                 class_max_s, class_sum_exp = _update_class_logsumexp(class_max_s, class_sum_exp, scores)
+            if sync_timers:
+                _block_until_ready(max_s, sum_exp, class_max_s, class_sum_exp)
+                profile["score_pass1_s"] += time.time() - t0
 
         log_Z = max_s + jnp.log(sum_exp)
         class_log_Z = class_max_s + jnp.log(class_sum_exp)
@@ -1052,6 +1083,7 @@ def run_dense_k_class_em_native(
         if relion_firstiter_winner_take_all and not accumulate_noise:
             shifted_for_mstep = shifted_recon_windowed if window_spec.use_window else shifted_recon_half
             ctf_for_mstep = ctf2_over_nv_windowed_mstep if window_spec.use_window else ctf2_over_nv_half_with_dc
+            t0 = time.time()
             summed_half, ctf_probs_half, winner_rots, rotation_sums = _k_class_wta_image_m_step(
                 shifted_for_mstep,
                 global_best_argmax,
@@ -1061,10 +1093,14 @@ def run_dense_k_class_em_native(
                 n_trans,
                 n_classes,
             )
+            if sync_timers:
+                _block_until_ready(summed_half, ctf_probs_half, rotation_sums)
+                profile["wta_mstep_s"] += time.time() - t0
             class_rotation_posterior_sums += np.asarray(
                 rotation_sums[:, :n_rot],
                 dtype=np.float64,
             )
+            t0 = time.time()
             Ft_y, Ft_ctf = _accumulate_k_class_adjoint(
                 Ft_y,
                 Ft_ctf,
@@ -1076,11 +1112,15 @@ def run_dense_k_class_em_native(
                 image_shape=image_shape,
                 recon_volume_shape=recon_volume_shape,
             )
+            if sync_timers:
+                _block_until_ready(Ft_y, Ft_ctf)
+                profile["adjoint_s"] += time.time() - t0
         else:
             for _, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
                 rots_b = rotations_padded[r0:r1]
                 proj_half_by_class = proj_abs2_by_class = None
                 if (not relion_firstiter_winner_take_all) or accumulate_noise:
+                    t0 = time.time()
                     proj_half_by_class, proj_abs2_by_class = _project_k_class_block(
                         mean_for_proj_by_class,
                         rots_b,
@@ -1089,7 +1129,11 @@ def run_dense_k_class_em_native(
                         disc_type,
                         projection_kwargs,
                     )
+                    if sync_timers:
+                        _block_until_ready(proj_half_by_class, proj_abs2_by_class)
+                        profile["projection_pass2_s"] += time.time() - t0
                 if not relion_firstiter_winner_take_all:
+                    t0 = time.time()
                     scores = _score_k_class_block(
                         window_spec=window_spec,
                         shifted_windowed=shifted_windowed,
@@ -1163,6 +1207,16 @@ def run_dense_k_class_em_native(
                     improved = block_best_class > best_score_class
                     best_score_class = jnp.where(improved, block_best_class, best_score_class)
                     best_argmax_class = jnp.where(improved, block_argmax_class + r0 * n_trans, best_argmax_class)
+                    if sync_timers:
+                        _block_until_ready(
+                            probs,
+                            summed_half,
+                            ctf_probs_half,
+                            rotation_sums,
+                            best_score_class,
+                            best_argmax_class,
+                        )
+                        profile["score_mstep_pass2_s"] += time.time() - t0
 
                 actual_rot = max(0, min(rotation_block_size, n_rot - r0))
                 if actual_rot > 0:
@@ -1171,6 +1225,7 @@ def run_dense_k_class_em_native(
                         dtype=np.float64,
                     )
                 if accumulate_noise:
+                    t0 = time.time()
                     class_mass = jnp.sum(probs, axis=(2, 3))
                     class_img_power = jnp.einsum(
                         "bk,bn->kn",
@@ -1236,7 +1291,11 @@ def run_dense_k_class_em_native(
                         )
                         block_noise_shells.append(class_noise_shells)
                     noise_state.add_noise_shells(block_noise_shells)
+                    if sync_timers:
+                        _block_until_ready(block_noise_shells)
+                        profile["noise_s"] += time.time() - t0
 
+                t0 = time.time()
                 Ft_y, Ft_ctf = _accumulate_k_class_adjoint(
                     Ft_y,
                     Ft_ctf,
@@ -1248,7 +1307,11 @@ def run_dense_k_class_em_native(
                     image_shape=image_shape,
                     recon_volume_shape=recon_volume_shape,
                 )
+                if sync_timers:
+                    _block_until_ready(Ft_y, Ft_ctf)
+                    profile["adjoint_s"] += time.time() - t0
 
+        t0 = time.time()
         log_score_offset = -0.5 * jnp.squeeze(batch_norm[:actual_batch_size], axis=1)
         log_Z_actual = log_Z[:actual_batch_size]
         class_log_Z_actual = class_log_Z[:actual_batch_size]
@@ -1264,6 +1327,8 @@ def run_dense_k_class_em_native(
         )
         class_max_posterior[:, start_idx:end_idx] = np.asarray(pmax_class.T, dtype=np.float32)
         hard_assignments[:, start_idx:end_idx] = np.asarray(best_argmax_class[:actual_batch_size].T, dtype=np.int32)
+        if sync_timers:
+            profile["postprocess_s"] += time.time() - t0
         start_idx = end_idx
 
     from recovar.reconstruction import relion_functions
@@ -1283,13 +1348,41 @@ def run_dense_k_class_em_native(
         ]
 
     _block_until_ready(Ft_y, Ft_ctf)
+    elapsed_s = time.time() - overall_t0
+    profile_summary = None
+    if return_profile:
+        accounted_s = sum(float(profile[name]) for name in (
+            "projection_pass1_s",
+            "score_pass1_s",
+            "projection_pass2_s",
+            "score_mstep_pass2_s",
+            "wta_mstep_s",
+            "adjoint_s",
+            "noise_s",
+            "postprocess_s",
+        ))
+        profile_summary = {
+            **profile,
+            "em_time_s": float(elapsed_s),
+            "accounted_em_time_s": float(accounted_s),
+            "unattributed_em_time_s": float(max(elapsed_s - accounted_s, 0.0)),
+            "n_images": int(n_images),
+            "n_classes": int(n_classes),
+            "n_rotations": int(n_rot),
+            "n_translations": int(n_trans),
+            "image_batch_size": int(image_batch_size),
+            "rotation_block_size": int(rotation_block_size),
+            "current_size": None if current_size is None else int(current_size),
+            "winner_take_all_mstep": bool(relion_firstiter_winner_take_all),
+            "accumulate_noise": bool(accumulate_noise),
+        }
     logger.info(
         "Native dense K-class EM completed: K=%d images=%d rotations=%d translations=%d elapsed=%.1fs",
         n_classes,
         n_images,
         n_rot,
         n_trans,
-        time.time() - overall_t0,
+        elapsed_s,
     )
     per_class_stats = tuple(
         make_relion_stats(
@@ -1309,4 +1402,5 @@ def run_dense_k_class_em_native(
         hard_assignments=hard_assignments,
         per_class_stats=per_class_stats,
         noise_stats=noise_stats,
+        profile_summary=profile_summary,
     )

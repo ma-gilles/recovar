@@ -35,6 +35,7 @@ class KClassEMResult(NamedTuple):
     best_pose_rotations: jax.Array | None = None
     best_pose_translations: jax.Array | None = None
     best_pose_rotation_ids: jax.Array | None = None
+    profile_summary: dict[str, object] | None = None
 
 
 def _logsumexp_np(values: np.ndarray, axis: int) -> np.ndarray:
@@ -118,6 +119,7 @@ def _assemble_result(
     per_class_best_pose_rotations=None,
     per_class_best_pose_translations=None,
     per_class_best_pose_rotation_ids=None,
+    profile_summary: dict[str, object] | None = None,
 ) -> KClassEMResult:
     global_log_evidence = _logsumexp_np(class_log_evidence, axis=0).astype(np.float64)
     class_responsibilities = np.exp(class_log_evidence - global_log_evidence[None, :])
@@ -180,6 +182,7 @@ def _assemble_result(
         best_pose_rotations=best_pose_rotations,
         best_pose_translations=best_pose_translations,
         best_pose_rotation_ids=best_pose_rotation_ids,
+        profile_summary=profile_summary,
     )
 
 
@@ -207,7 +210,6 @@ def run_dense_k_class_em(
             "normalization_log_evidence",
             "disable_adjoint_y",
             "disable_adjoint_ctf",
-            "return_profile",
         ),
         "run_dense_k_class_em",
     )
@@ -236,6 +238,7 @@ def run_dense_k_class_em(
         per_class_hard_assignments=native.hard_assignments,
         per_class_stats=native.per_class_stats,
         noise_stats=native.noise_stats,
+        profile_summary=native.profile_summary,
     )
 
 
