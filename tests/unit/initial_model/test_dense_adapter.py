@@ -32,6 +32,12 @@ def _fake_result(n_classes: int, n: int):
     )
 
 
+def _fake_result_with_profile(n_classes: int, n: int):
+    result = _fake_result(n_classes, n)
+    result.profile_summary = {"em_time_s": 1.25, "batches": 1}
+    return result
+
+
 def test_split_pseudo_halfset_particle_ids_sorts_by_micrograph_name():
     h0, h1 = split_pseudo_halfset_particle_ids(
         5,
@@ -105,6 +111,38 @@ def test_dense_initial_model_estep_calls_joint_k_class_once_per_halfset(monkeypa
     np.testing.assert_allclose(result.accumulators[0].data, 1.0)
     np.testing.assert_allclose(result.accumulators[1].weight, 4.0)
     assert result.meta["halfset_ids"] == (0, 1)
+
+
+def test_dense_initial_model_estep_meta_includes_optional_profiles(monkeypatch):
+    def fake_run_dense_k_class_em(*args, **kwargs):
+        assert kwargs["return_profile"] is True
+        return _fake_result_with_profile(n_classes=1, n=8)
+
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.run_dense_k_class_em",
+        fake_run_dense_k_class_em,
+    )
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=1,
+        n_directions=4,
+        pseudo_halfsets=False,
+    )
+    config = DenseInitialModelEstepConfig(
+        means=np.zeros((1, 8**3), dtype=np.complex64),
+        mean_variance=np.ones((1, 8**3), dtype=np.float32),
+        noise_variance=np.ones(8 * 8, dtype=np.float32),
+        rotations=np.eye(3, dtype=np.float32)[None],
+        translations=np.zeros((1, 2), dtype=np.float32),
+        relion_bpref_frame=False,
+        engine_kwargs={"return_profile": True},
+    )
+
+    result = run_dense_initial_model_estep(_Dataset(), state, config)
+
+    assert result.meta["halfset_0_profile_summary"] == {"em_time_s": 1.25, "batches": 1}
 
 
 def test_dense_initial_model_estep_uses_current_state_reference_when_means_omitted(monkeypatch):

@@ -229,6 +229,9 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
         stats = getattr(result, "stats", None)
         if stats is not None and getattr(stats, "max_posterior_per_image", None) is not None:
             meta[f"halfset_{h}_pmax_mean"] = float(np.mean(np.asarray(stats.max_posterior_per_image)))
+        profile_summary = getattr(result, "profile_summary", None)
+        if profile_summary is not None:
+            meta[f"halfset_{h}_profile_summary"] = dict(profile_summary)
     return meta
 
 
