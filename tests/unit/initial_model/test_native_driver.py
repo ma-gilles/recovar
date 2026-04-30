@@ -51,6 +51,21 @@ def test_translation_log_prior_uses_angstrom_distance():
     np.testing.assert_allclose(prior, np.asarray([0.0, -0.5, -0.125], dtype=np.float32), rtol=1e-6)
 
 
+def test_sampling_plan_oversamples_relion_grid():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        healpix_order=1,
+        oversampling=1,
+        random_perturbation=0.0,
+    )
+
+    plan = driver._build_sampling_plan(opts)
+
+    assert plan.rotations.shape == (4608, 3, 3)
+    assert plan.translations.shape == (116, 2)
+    assert plan.random_perturbation == 0.0
+
+
 def test_driver_output_mrc_path_matches_relion_snapshot():
     assert driver._initial_model_mrc_from_prefix("ab_initio/run") == "ab_initio/initial_model.mrc"
 
@@ -94,6 +109,10 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
             "250",
             "--random_seed",
             "17",
+            "--oversampling",
+            "0",
+            "--random_perturbation",
+            "0.25",
             "--translation_sigma_angstrom",
             "6.5",
             "--no_iter_artifacts",
@@ -108,6 +127,8 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
     assert opts.nr_classes == 2
     assert opts.particle_diameter == 250.0
     assert opts.random_seed == 17
+    assert opts.oversampling == 0
+    assert opts.random_perturbation == 0.25
     assert opts.translation_sigma_angstrom == 6.5
     assert opts.write_iter_artifacts is False
     assert "recovar InitialModel complete: out/initial_model.mrc" in capsys.readouterr().out

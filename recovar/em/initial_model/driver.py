@@ -38,6 +38,8 @@ DEFAULT_HEALPIX_ORDER = 1
 DEFAULT_OFFSET_RANGE_PX = 6.0
 DEFAULT_OFFSET_STEP_PX = 2.0
 DEFAULT_RANDOM_SEED = 0
+DEFAULT_OVERSAMPLING = 1
+DEFAULT_PERTURBATION_FACTOR = 0.5
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -62,6 +64,9 @@ class NativeInitialModelOptions:
     random_seed: int = DEFAULT_RANDOM_SEED
     width_mask_edge_px: float = DEFAULT_WIDTH_MASK_EDGE_PX
     healpix_order: int = DEFAULT_HEALPIX_ORDER
+    oversampling: int = DEFAULT_OVERSAMPLING
+    perturbation_factor: float = DEFAULT_PERTURBATION_FACTOR
+    random_perturbation: float | None = None
     offset_range_px: float = DEFAULT_OFFSET_RANGE_PX
     offset_step_px: float = DEFAULT_OFFSET_STEP_PX
     image_batch_size: int = 500
@@ -86,6 +91,15 @@ class NativeInitialModelResult:
     final_model_star: str
     final_mrc: str
     class_mrcs: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class NativeSamplingPlan:
+    """Dense trial grid used by one native InitialModel E-step."""
+
+    rotations: np.ndarray
+    translations: np.ndarray
+    random_perturbation: float
 
 
 def _relion_rnd_unif_factory(seed: int) -> RndUnifFn:
@@ -235,17 +249,64 @@ def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> No
         backend.image_mask_mode = "relion_background_fill"
 
 
-def _build_sampling_grids(opts: NativeInitialModelOptions) -> tuple[np.ndarray, np.ndarray]:
-    rotations = sampling.get_rotation_grid(
-        nside_level=int(opts.healpix_order),
-        n_in_planes=sampling.rotation_grid_n_in_planes(int(opts.healpix_order)),
-        matrices=True,
-    ).astype(np.float32)
-    translations = sampling.get_translation_grid(
+def _build_sampling_plan(opts: NativeInitialModelOptions) -> NativeSamplingPlan:
+    healpix_order = int(opts.healpix_order)
+    oversampling = int(opts.oversampling)
+    if oversampling < 0:
+        raise ValueError("oversampling must be >= 0")
+
+    random_perturbation = (
+        float(opts.random_perturbation)
+        if opts.random_perturbation is not None
+        else _initial_random_perturbation(int(opts.random_seed), float(opts.perturbation_factor))
+    )
+
+    coarse_translations = sampling.get_translation_grid(
         max_pixel=float(opts.offset_range_px),
         pixel_offset=float(opts.offset_step_px),
     ).astype(np.float32)
-    return rotations, translations
+    if oversampling == 0:
+        rotations = sampling.get_rotation_grid(
+            nside_level=healpix_order,
+            n_in_planes=sampling.rotation_grid_n_in_planes(healpix_order),
+            matrices=True,
+        ).astype(np.float32)
+        translations = coarse_translations
+        if abs(random_perturbation) > 1e-12:
+            rotations = sampling.apply_relion_rotation_perturbation(
+                rotations,
+                random_perturbation,
+                sampling.relion_angular_sampling_deg(healpix_order),
+            ).astype(np.float32)
+            translations = sampling.apply_relion_translation_perturbation(
+                translations,
+                random_perturbation,
+                float(opts.offset_step_px),
+            ).astype(np.float32)
+        return NativeSamplingPlan(rotations=rotations, translations=translations, random_perturbation=random_perturbation)
+
+    coarse_indices = np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64)
+    rotations, _rotation_parent = sampling.get_oversampled_rotation_grid_from_samples(
+        coarse_indices,
+        parent_nside_level=healpix_order,
+        oversampling_order=oversampling,
+        random_perturbation=random_perturbation,
+    )
+    translations, _translation_parent = sampling.get_oversampled_translation_grid(
+        coarse_translations,
+        pixel_offset=float(opts.offset_step_px),
+        oversampling_order=oversampling,
+    )
+    translations = sampling.apply_relion_translation_perturbation(
+        translations.astype(np.float32, copy=False),
+        random_perturbation,
+        offset_step_pixels=float(opts.offset_step_px),
+    )
+    return NativeSamplingPlan(
+        rotations=np.asarray(rotations, dtype=np.float32),
+        translations=np.asarray(translations, dtype=np.float32),
+        random_perturbation=random_perturbation,
+    )
 
 
 def _translation_log_prior(
@@ -262,6 +323,19 @@ def _translation_log_prior(
     translations = np.asarray(translations, dtype=np.float32)
     dist2_angstrom = np.sum(translations[:, :2] ** 2, axis=1) * float(voxel_size) ** 2
     return (-0.5 * dist2_angstrom / (sigma_angstrom**2)).astype(np.float32)
+
+
+def _initial_random_perturbation(random_seed: int, perturbation_factor: float) -> float:
+    if perturbation_factor <= 0.0:
+        return 0.0
+    rnd = _relion_rnd_unif_factory(int(random_seed))
+    pf = float(perturbation_factor)
+    value = 0.5 * pf + (pf - 0.5 * pf) * rnd(0)
+    while value > pf:
+        value -= 2.0 * pf
+    while value < -pf:
+        value += 2.0 * pf
+    return float(value)
 
 
 def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.ndarray:
@@ -440,11 +514,17 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise NotImplementedError("native InitialModel currently supports SPA particle STAR files, not tilt-series")
 
     _configure_relion_image_mask(dataset, opts)
-    rotations, translations = _build_sampling_grids(opts)
-    state, optics_group_by_particle = _initial_state_from_particles(dataset, main_star, optics_star, opts, rotations)
+    sampling_plan = _build_sampling_plan(opts)
+    state, optics_group_by_particle = _initial_state_from_particles(
+        dataset,
+        main_star,
+        optics_star,
+        opts,
+        sampling_plan.rotations,
+    )
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
     translation_log_prior = _translation_log_prior(
-        translations,
+        sampling_plan.translations,
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=opts.translation_sigma_angstrom,
     )
@@ -460,8 +540,8 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
 
     estep_config = DenseInitialModelEstepConfig(
         noise_variance=noise_variance,
-        rotations=rotations,
-        translations=translations,
+        rotations=sampling_plan.rotations,
+        translations=sampling_plan.translations,
         image_batch_size=int(opts.image_batch_size),
         rotation_block_size=int(opts.rotation_block_size),
         padding_factor=int(opts.padding_factor),
