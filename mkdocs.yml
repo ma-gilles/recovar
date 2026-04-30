@@ -83,18 +83,21 @@ nav:
     - Docker & Containers: getting-started/docker.md
     - Test Your Installation: getting-started/testing.md
   - Guide:
-    - Web GUI: guide/gui.md
-    - Tutorial: guide/tutorial.md
-    - Input Data: guide/input-data.md
-    - Masks: guide/masks.md
-    - Downsampling: guide/downsampling.md
-    - Running the Pipeline: guide/pipeline.md
-    - Analyzing Results: guide/analysis.md
-    - Conformational Density: guide/conformational-density.md
-    - Extracting Subsets: guide/extracting-subsets.md
-    - Outlier Detection: guide/outlier-detection.md
-    - Cryo-ET: guide/cryo-et.md
-    - External Embeddings: guide/external-embeddings.md
+    - Getting Started:
+        - Web GUI: guide/gui.md
+        - Tutorial: guide/tutorial.md
+    - Core Workflow:
+        - Input Data: guide/input-data.md
+        - Running the Pipeline: guide/pipeline.md
+        - Analyzing Results: guide/analysis.md
+    - Advanced:
+        - Masks: guide/masks.md
+        - Downsampling: guide/downsampling.md
+        - Conformational Density: guide/conformational-density.md
+        - Extracting Subsets: guide/extracting-subsets.md
+        - Outlier Detection: guide/outlier-detection.md
+        - Cryo-ET: guide/cryo-et.md
+        - External Embeddings: guide/external-embeddings.md
   - Reference:
     - CLI Commands: reference/cli.md
     - File Formats: reference/file-formats.md

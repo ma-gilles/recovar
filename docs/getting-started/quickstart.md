@@ -1,45 +1,115 @@
 # Quick Start
 
-## Interactive wizard
+## What you'll need
 
-The easiest way to set up your first run:
+Before starting, make sure you have:
 
-```bash
-recovar quickstart
-```
+| Requirement | Details |
+|---|---|
+| **Particle stack** | A `.star` file (RELION) or `.cs` file (cryoSPARC) with CTF parameters |
+| **Mask** | A `.mrc` binary mask covering your molecule of interest |
+| **GPU** | NVIDIA GPU with 16+ GB VRAM (40+ GB recommended for large datasets) |
+| **RECOVAR installed** | See [Installation](installation.md) if you haven't set up RECOVAR yet |
 
-The wizard walks you through selecting your input files, mask, downsampling, and other options, then generates and optionally executes the pipeline command. Works over SSH with no extra dependencies.
+!!! tip "Timing"
+    A small dataset (~50k particles at 128px) takes about 10 minutes end-to-end. Larger datasets (500k+ particles at 256px) may take 30--60 minutes.
 
-## Manual quick start
+---
 
-### Recommended: project workflow
+## Run your first job
 
-```bash
-recovar init_project my_project
-cd my_project
+=== ":material-monitor: GUI"
 
-# RELION
-recovar pipeline particles.star --mask mask.mrc --project .
+    The easiest way to get started is through the web GUI.
 
-# cryoSPARC
-recovar pipeline particles.cs --mask mask.mrc --datadir /path/to/cryosparc/project --project .
+    **1. Launch the GUI**
 
-# Analyze the latest completed Pipeline job
-recovar analyze --zdim=10 --project .
-```
+    ```bash
+    recovar gui
+    ```
 
-In project mode, RECOVAR keeps machine-stable numbered directories on disk (for example `Pipeline/job_0001/`) and stores readable job aliases in project metadata for the CLI and GUI.
+    This opens a browser window at `http://localhost:5000`.
 
-### Optional: standalone output directories
+    **2. Create a project and submit a pipeline job**
 
-If you prefer the older explicit-path style, it still works:
+    ![Pipeline job form](../_static/gui/06_new_job_pipeline.png)
 
-```bash
-recovar pipeline particles.star -o output --mask mask.mrc
-recovar analyze output --zdim=10
-```
+    1. Click **Create Project** and choose a directory
+    2. Click **+ New Job** > **Pipeline**
+    3. Browse to your particles file (`.star` or `.cs`)
+    4. Select a mask (or use Auto/Sphere)
+    5. Click **Submit Pipeline Job**
 
-### With downsampling
+    **3. Analyze results**
+
+    Once the pipeline completes, click **Analyze this pipeline output** in Suggested Next Steps. Set zdim (try 10) and click **Submit Analyze Job**.
+
+    **4. Explore**
+
+    The GUI shows eigenvalue spectra, UMAP scatter plots, and lets you click to generate volumes at any point in latent space. See the [GUI Guide](../guide/gui.md) for details.
+
+=== ":octicons-terminal-16: CLI"
+
+    **1. Interactive wizard (recommended for first-time users)**
+
+    ```bash
+    recovar quickstart
+    ```
+
+    The wizard walks you through selecting input files, mask, downsampling, and other options, then runs the pipeline. Works over SSH.
+
+    **2. Or run directly**
+
+    ```bash
+    recovar init_project my_project
+    cd my_project
+
+    # RELION
+    recovar pipeline particles.star --mask mask.mrc --project .
+
+    # cryoSPARC
+    recovar pipeline particles.cs --mask mask.mrc --datadir /path/to/cryosparc/project --project .
+
+    # Analyze
+    recovar analyze --zdim=10 --project .
+    ```
+
+    **3. View volumes**
+
+    Open `.mrc` files in ChimeraX or any MRC viewer:
+
+    ```
+    Analyze/job_0001/kmeans/center000.mrc
+    Analyze/job_0001/kmeans/center001.mrc
+    ```
+
+    If you prefer explicit output directories (no project system):
+
+    ```bash
+    recovar pipeline particles.star -o output --mask mask.mrc
+    recovar analyze output --zdim=10
+    ```
+
+??? note "Expected output after each step"
+
+    **After `recovar init_project`:** Creates the project directory with a `.recovar_project` metadata file.
+
+    **After `recovar pipeline`:** Creates `Pipeline/job_0001/` containing:
+
+    - `mean_half1.mrc`, `mean_half2.mrc` -- half-map mean reconstructions
+    - `cov_coeffs.pkl` -- covariance matrix coefficients
+    - `svd/` -- eigenvalues and eigenvectors
+    - `pipeline_output.json` -- run metadata and parameters
+
+    **After `recovar analyze`:** Creates `Analyze/job_0001/` containing:
+
+    - `kmeans/center000.mrc`, `center001.mrc`, ... -- cluster center volumes
+    - `umap.pkl` -- UMAP embedding coordinates
+    - `z_values.pkl` -- per-particle latent coordinates
+
+---
+
+## With downsampling
 
 If your images are larger than ~256 pixels, downsample for faster processing:
 
@@ -47,55 +117,32 @@ If your images are larger than ~256 pixels, downsample for faster processing:
 recovar pipeline particles.star --mask mask.mrc --downsample 128 --project .
 ```
 
-This automatically pre-downsamples images into the shared project cache on the first run and reuses that cache across matching project runs.
+This pre-downsamples images into the shared project cache on the first run and reuses that cache across matching project runs.
 
-
-### View volumes
-
-Open the generated `.mrc` files in ChimeraX, Chimera, or any MRC viewer:
-
-```
-output/analysis_10/kmeans/center000.mrc
-output/analysis_10/kmeans/center001.mrc
-...
-```
+---
 
 ## Project system
 
-For multi-step workflows, use the project system. It is the standard RECOVAR workflow: numbered job directories stay stable on disk (e.g. `Pipeline/job_0001/`, `Analyze/job_0001/`), while the CLI and GUI show human-readable job names from project metadata.
+The project system is the standard RECOVAR workflow. Numbered job directories stay stable on disk (e.g. `Pipeline/job_0001/`, `Analyze/job_0001/`), while the CLI and GUI show human-readable job names from project metadata.
 
 ```bash
-# Initialize a project directory
 recovar init_project my_project
 cd my_project
-
-# Run pipeline (auto-creates Pipeline/job_0001/)
 recovar pipeline particles.star --mask mask.mrc --project .
-
-# Analyze the latest completed pipeline (auto-creates Analyze/job_0001/)
 recovar analyze --zdim=10 --project .
-
-# Check status of all jobs and aliases
 recovar project_status
 ```
 
-All commands accept `--project <dir>` to enable project mode. If you run from within a project directory, it is auto-detected. Downstream commands can omit `result_dir`; RECOVAR then uses the latest completed Pipeline job in that project.
+All commands accept `--project <dir>` to enable project mode. If you run from within a project directory, it is auto-detected.
 
-## Web GUI
+---
 
-For a visual interface, launch the RECOVAR web GUI:
+## Next steps
 
-```bash
-recovar gui
-```
+Now that you have results, here's where to go next:
 
-The GUI lets you configure and launch jobs, interactively explore the latent space, and view 3D volumes — all from your browser. See the [GUI Guide](../guide/gui.md) for details.
-
-## What's next
-
-- [Tutorial](../guide/tutorial.md) — full worked example with plots on EMPIAR-10076
-- [Web GUI](../guide/gui.md) — browser-based interface for job management and interactive analysis
-- [Input Data](../guide/input-data.md) — understand supported formats and data preparation
-- [Downsampling](../guide/downsampling.md) — when and how to downsample
-- [Running the Pipeline](../guide/pipeline.md) — all pipeline options explained
-- [Analyzing Results](../guide/analysis.md) — interpreting and visualizing output
+- **[Tutorial](../guide/tutorial.md)** -- full worked example with plots on EMPIAR-10076
+- **[Web GUI](../guide/gui.md)** -- launch the browser interface to interactively explore latent spaces and view 3D volumes
+- **[Analyzing Results](../guide/analysis.md)** -- deep dive into k-means, trajectories, UMAP, and volume generation options
+- **[Input Data](../guide/input-data.md)** -- supported formats and data preparation
+- **[Downsampling](../guide/downsampling.md)** -- when and how to downsample for optimal results

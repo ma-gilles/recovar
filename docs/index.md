@@ -1,79 +1,93 @@
+---
+hide:
+  - navigation
+  - toc
+---
+
+<!-- Hero section -->
+<div class="recovar-hero" markdown>
+
 # RECOVAR
 
-**Tools for cryo-EM heterogeneity analysis**
+## Tools for cryo-EM heterogeneity analysis
 
-RECOVAR is a software tool for analyzing conformational heterogeneity in cryo-EM and cryo-ET datasets. It reconstructs high-resolution volumes, estimates conformational density and low free-energy motions, and automatically identifies subsets of images with a particular volume feature.
-
-<div class="grid cards" markdown>
-
--   :material-rocket-launch:{ .lg .middle } **Get started in 5 minutes**
-
-    ---
-
-    Install RECOVAR and run your first analysis
-
-    [:octicons-arrow-right-24: Quick Start](getting-started/quickstart.md)
-
--   :material-file-document:{ .lg .middle } **Input any format**
-
-    ---
-
-    Accepts RELION `.star` and cryoSPARC `.cs` files directly
-
-    [:octicons-arrow-right-24: Input Data](guide/input-data.md)
-
--   :material-magnify:{ .lg .middle } **Analyze results**
-
-    ---
-
-    K-means clustering, trajectories, UMAP, and volume generation
-
-    [:octicons-arrow-right-24: Analysis](guide/analysis.md)
-
--   :material-cube-outline:{ .lg .middle } **Cryo-ET support**
-
-    ---
-
-    Tilt-series data with focus masks
-
-    [:octicons-arrow-right-24: Cryo-ET](guide/cryo-et.md)
-
--   :material-monitor-dashboard:{ .lg .middle } **Web GUI**
-
-    ---
-
-    Browser-based interface for job management and interactive analysis
-
-    [:octicons-arrow-right-24: Web GUI](guide/gui.md)
+[Get Started](getting-started/quickstart.md){ .md-button .md-button--primary .md-button--lg }
+[Web GUI](guide/gui.md){ .md-button }
 
 </div>
 
-## Key features
+---
 
-- **High resolution** — achieves higher resolution than other methods in most cases according to [CryoBench](https://cryobench.cs.princeton.edu)
-- **Image-to-volume attribution** — automatically extract the set of images that produced a particular volume feature
-- **Conformational density estimation** — accurate estimation of probability density in latent space
-- **Free-energy motions** — estimation of low free-energy conformational motions
-- **Focus masks** — supports focus masks for targeted heterogeneity analysis
-- **Cryo-ET support** — tilt-series data with focus masks (same format as cryoDRGN-ET)
-- **Transparent volume generation** — kernel regression method produces no hallucinations, useful for validating other methods
-- **Web GUI** — browser-based interface for launching jobs, exploring latent spaces, and viewing 3D volumes interactively
+## Why RECOVAR?
 
-## How it works
+- **Highest resolution** on [CryoBench](https://cryobench.cs.princeton.edu) across multiple datasets
+- **Conformational density** and free-energy landscape estimation
+- **Cryo-ET support** for tilt-series heterogeneity analysis
+- **Web GUI** with interactive latent-space exploration and sub-particle selection
+- **Direct input** from RELION (`.star`) and cryoSPARC (`.cs`) -- no format conversion
+- **No hallucinations** -- kernel regression produces transparent, verifiable volumes
 
-RECOVAR uses principal component analysis of the 3D covariance to find a low-dimensional latent space describing the heterogeneity. It then uses kernel regression to generate volumes at any point in this space. See the [paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122) and [recorded talk](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s) for details.
+---
+
+## Example output
+
+<div class="example-outputs" markdown>
+
+| Eigenvalue spectrum | Principal component space |
+|:---:|:---:|
+| ![Eigenvalue spectrum](_static/examples/eigenvalues.png) | ![PCA scatter](_static/examples/principal_component_space_analysis.png) |
+
+</div>
+
+![GUI dashboard with completed job](_static/gui/07_job_completed.png)
+
+---
 
 ## Typical workflow
 
 ```bash
-# 1. Run the pipeline
+# 1. Run the pipeline (~10 min for a small dataset)
 recovar pipeline particles.star -o output --mask mask.mrc
 
 # 2. Analyze results (k-means, trajectories, UMAP)
 recovar analyze output --zdim=10
 
-# 3. Explore results interactively
+# 3. Explore interactively in the browser
 recovar gui
-# Or view volumes in ChimeraX:
-# chimerax output/analysis_10/kmeans/center000.mrc
 ```
+
+Or do it all from the [Web GUI](guide/gui.md) -- no command line needed.
+
+---
+
+## How it works
+
+<div class="pipeline-flow" markdown>
+
+**Particles** :material-arrow-right: **Mean reconstruction** :material-arrow-right: **3D Covariance** :material-arrow-right: **PCA** :material-arrow-right: **Embedding** :material-arrow-right: **Volumes**
+
+</div>
+
+RECOVAR estimates a regularized 3D covariance from your particle images, extracts principal components to build a low-dimensional latent space, and uses kernel regression to generate volumes at any point in that space.
+
+For the full method, see the [paper](https://www.pnas.org/doi/abs/10.1073/pnas.2419140122) or [recorded talk](https://www.youtube.com/watch?v=cQBQlCCRp8Q&t=740s).
+
+---
+
+## Citing RECOVAR
+
+If you use RECOVAR in your research, please cite:
+
+!!! quote "Citation"
+
+    Gilles, M.A., Bhatt, A., & Singer, A. "Regularized covariance estimation for analysis of heterogeneity in cryo-EM." *PNAS* (2025). DOI: [10.1073/pnas.2419140122](https://doi.org/10.1073/pnas.2419140122)
+
+    ```bibtex
+    @article{gilles2025recovar,
+      title={Regularized covariance estimation for analysis of heterogeneity in cryo-EM},
+      author={Gilles, Marc Aur{\`e}le and Bhatt, Amit and Singer, Amit},
+      journal={Proceedings of the National Academy of Sciences},
+      year={2025},
+      doi={10.1073/pnas.2419140122}
+    }
+    ```

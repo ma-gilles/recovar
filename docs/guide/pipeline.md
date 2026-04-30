@@ -7,6 +7,17 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 
 ## Submitting a pipeline job
 
+=== ":material-monitor: GUI"
+
+    ![Pipeline job form](../../_static/gui/06_new_job_pipeline.png)
+
+    1. Click **+ New Job** in the sidebar
+    2. Select **Pipeline** from the Job Type dropdown
+    3. Browse to your particles file (`.star`, `.cs`, or `.mrcs`)
+    4. Choose a solvent mask (Auto, Sphere, None, or custom `.mrc`)
+    5. Choose **SLURM Cluster** or **Local GPU** under "Run on"
+    6. Click **Submit Pipeline Job**
+
 === ":octicons-terminal-16: CLI"
 
     ```bash
@@ -29,17 +40,6 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
         --poses poses.pkl --ctf ctf.pkl --mask mask.mrc
     ```
 
-=== ":material-monitor: GUI"
-
-    ![Pipeline job form](../../_static/gui/06_new_job_pipeline.png)
-
-    1. Click **+ New Job** in the sidebar
-    2. Select **Pipeline** from the Job Type dropdown
-    3. Browse to your particles file (`.star`, `.cs`, or `.mrcs`)
-    4. Choose a solvent mask (Auto, Sphere, None, or custom `.mrc`)
-    5. Choose **SLURM Cluster** or **Local GPU** under "Run on"
-    6. Click **Submit Pipeline Job**
-
 ## Required arguments
 
 | Argument | Description |
@@ -49,6 +49,21 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 | `--mask` | Solvent mask (`.mrc`), or `from_halfmaps`, `sphere`, `none` |
 
 ## Common options
+
+=== ":material-monitor: GUI"
+
+    ![Advanced pipeline options](../../_static/gui/06c_advanced.png)
+
+    Expand the **Advanced** section in the job form to set:
+
+    - **zdim** -- PCA dimensions (default: 1,2,4,10,20)
+    - **Downsample** -- target box size (e.g., 128)
+    - **Lazy loading** -- for large datasets
+    - **Correct image scale** -- amplitude scaling correction
+    - **Focus Mask** -- browse to a custom focus mask
+    - **Tilt series** -- enable for cryo-ET data
+
+    Under **Rarely Used**: Poses, CTF, N Images, Halfsets.
 
 === ":octicons-terminal-16: CLI"
 
@@ -64,21 +79,6 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
     | `--correct-contrast` | False | Estimate and correct amplitude scaling |
     | `--lazy` | False | Lazy loading for large datasets |
     | `--multi-gpu` | False | Multi-GPU parallelization (experimental) |
-
-=== ":material-monitor: GUI"
-
-    ![Advanced pipeline options](../../_static/gui/06c_advanced.png)
-
-    Expand the **Advanced** section in the job form to set:
-
-    - **zdim** — PCA dimensions (default: 1,2,4,10,20)
-    - **Downsample** — target box size (e.g., 128)
-    - **Lazy loading** — for large datasets
-    - **Correct image scale** — amplitude scaling correction
-    - **Focus Mask** — browse to a custom focus mask
-    - **Tilt series** — enable for cryo-ET data
-
-    Under **Rarely Used**: Poses, CTF, N Images, Halfsets.
 
 ## Execution settings
 
@@ -220,22 +220,28 @@ When using the **project system** (`--project`), pipeline output is placed into 
 
 ## Viewing results
 
-=== ":octicons-terminal-16: CLI"
-
-    See the [Tutorial](tutorial.md) for a full worked example with real pipeline output and plots on EMPIAR-10076 (50S ribosome, 131k particles).
-
 === ":material-monitor: GUI"
 
     ![Completed pipeline job](../../_static/gui/07_job_completed.png)
 
     After the pipeline completes, the job detail page shows:
 
-    - **Quick Preview** — contrast histogram, eigenvalue spectrum, mean FSC
-    - **Volumes** tab — browse all output volumes (mean, eigenvolumes, variance maps)
-    - **Plots** tab — all diagnostic plots
-    - **Suggested Next Steps** — one-click links to run Analyze or Density Estimation
+    - **Quick Preview** -- contrast histogram, eigenvalue spectrum, mean FSC
+    - **Volumes** tab -- browse all output volumes (mean, eigenvolumes, variance maps)
+    - **Plots** tab -- all diagnostic plots
+    - **Suggested Next Steps** -- one-click links to run Analyze or Density Estimation
+
+=== ":octicons-terminal-16: CLI"
+
+    See the [Tutorial](tutorial.md) for a full worked example with real pipeline output and plots on EMPIAR-10076 (50S ribosome, 131k particles).
 
 ## Tips
+
+!!! tip "Recommended starting parameters"
+    - **Downsample**: 128 for speed, 256 for quality
+    - **zdim**: Start with `1,2,4,10,20` (default). For publication, also try `--zdim 40`
+    - **n-images**: Use 10000-50000 for initial exploration, all images for final run
+    - **--correct-contrast**: Always enable this unless you know your data is already contrast-corrected
 
 !!! tip "Quick setup check"
     Use `--only-mean` for a fast run that only computes the mean reconstruction. This verifies your data, mask, and CTF are correct before committing to a full run.

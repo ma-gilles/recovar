@@ -7,20 +7,20 @@ After the pipeline finishes, use `recovar analyze` to generate volumes, compute 
 
 ## Submitting an analyze job
 
-=== ":octicons-terminal-16: CLI"
-
-    ```bash
-    recovar analyze output --zdim=10
-    ```
-
 === ":material-monitor: GUI"
 
     ![Analyze job form](../../_static/gui/14_analyze_form.png)
 
     1. From a completed pipeline job, click **Analyze this pipeline output** in Suggested Next Steps (auto-fills the result directory)
-    2. Or click **+ New Job** → **Analyze** and browse to the pipeline output directory
+    2. Or click **+ New Job** > **Analyze** and browse to the pipeline output directory
     3. Set zdim, k-means clusters, and trajectories
     4. Click **Submit Analyze Job**
+
+=== ":octicons-terminal-16: CLI"
+
+    ```bash
+    recovar analyze output --zdim=10
+    ```
 
 This generates:
 
@@ -45,6 +45,9 @@ Results are saved to `output/analysis_10/`.
 | `--skip-centers` | False | Skip generating cluster center volumes |
 | `--lazy` | False | Lazy loading for large datasets |
 | `--no-z-regularization` | False | Use unregularized latent variables |
+
+!!! tip "How to choose zdim"
+    Look at the eigenvalue spectrum plot. Choose the zdim where eigenvalues start to flatten -- this is where signal transitions to noise. Typical values: 2-4 for simple motions, 10-20 for complex heterogeneity.
 
 !!! tip "Sampling many states"
     To sample many conformational states (e.g., 100-200), use `--n-clusters=200` and `--n-bins=10` for speed, then recompute selected states at higher resolution with `compute_state`.
