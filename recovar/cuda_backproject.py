@@ -252,6 +252,207 @@ _TARGET_BATCH_BACKPROJECT = "cuda_batch_backproject"
 _TARGET_BATCH_PROJECT = "cuda_batch_project"
 
 
+_preflight_ok: bool | None = None  # None = not checked yet
+
+
+def _detect_gpu_compute_cap() -> tuple[str, str] | None:
+    """Return (gpu_name, compute_cap) like ("NVIDIA A100", "80"), or None."""
+    # Try JAX first
+    try:
+        dev = jax.devices("gpu")[0]
+        cap = getattr(dev, "compute_capability", None)
+        if cap:
+            name = getattr(dev, "device_kind", "GPU")
+            # cap may be "8.0" or "80" or (8, 0)
+            if isinstance(cap, tuple):
+                cap_str = f"{cap[0]}{cap[1]}"
+            elif isinstance(cap, str) and "." in cap:
+                cap_str = cap.replace(".", "")
+            else:
+                cap_str = str(cap)
+            return name, cap_str
+    except Exception:
+        pass
+    # Try nvidia-smi
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,compute_cap", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            line = result.stdout.strip().split("\n")[0]
+            parts = line.split(", ")
+            if len(parts) == 2:
+                name = parts[0].strip()
+                cap_str = parts[1].strip().replace(".", "")
+                return name, cap_str
+    except Exception:
+        pass
+    return None
+
+
+def _detect_so_arches(so_path: pathlib.Path) -> tuple[set[str], set[str]]:
+    """Return (sass_arches, ptx_arches) from cuobjdump --list-elf."""
+    sass: set[str] = set()
+    ptx: set[str] = set()
+    try:
+        result = subprocess.run(
+            ["cuobjdump", "--list-elf", str(so_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            import re
+            for line in result.stdout.splitlines():
+                m = re.search(r"sm_(\d+)", line)
+                if m:
+                    sass.add(m.group(1))
+        # Also check for PTX
+        result2 = subprocess.run(
+            ["cuobjdump", "--list-ptx", str(so_path)],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result2.returncode == 0:
+            import re
+            for line in result2.stdout.splitlines():
+                m = re.search(r"sm_(\d+)", line)
+                if m:
+                    ptx.add(m.group(1))
+    except Exception:
+        pass
+    return sass, ptx
+
+
+def _detect_nvcc_version() -> str | None:
+    """Return nvcc version string like '12.8.93' or None."""
+    try:
+        result = subprocess.run(
+            ["nvcc", "--version"], capture_output=True, text=True, timeout=5,
+        )
+        if result.returncode == 0:
+            import re
+            m = re.search(r"release (\d+\.\d+)", result.stdout)
+            if m:
+                return m.group(1)
+    except Exception:
+        pass
+    return None
+
+
+def _preflight_check(so_path: pathlib.Path) -> None:
+    """One-time check that the loaded .so supports the running GPU.
+
+    Raises RuntimeError with a detailed, actionable message if the GPU's
+    compute capability is not covered by the .so's compiled targets.
+    Silently succeeds (logs a warning) if the probe tools are unavailable.
+    """
+    global _preflight_ok
+    if _preflight_ok is not None:
+        return
+    _preflight_ok = True  # assume OK; set False only on confirmed mismatch
+
+    gpu_info = _detect_gpu_compute_cap()
+    if gpu_info is None:
+        logger.warning(
+            "recovar could not preflight the CUDA kernel against your GPU; "
+            "if the next call fails with 'no kernel image', see "
+            "https://github.com/ma-gilles/recovar/issues/131"
+        )
+        return
+
+    gpu_name, gpu_cap = gpu_info
+    sass_arches, ptx_arches = _detect_so_arches(so_path)
+    if not sass_arches and not ptx_arches:
+        # cuobjdump not available — can't check
+        logger.warning(
+            "recovar could not inspect the CUDA kernel targets (cuobjdump not found); "
+            "if the next call fails with 'no kernel image', see "
+            "https://github.com/ma-gilles/recovar/issues/131"
+        )
+        return
+
+    # Check if GPU is covered by SASS or compatible PTX
+    gpu_cap_int = int(gpu_cap)
+    sass_covered = gpu_cap in sass_arches
+    ptx_covered = any(int(p) <= gpu_cap_int for p in ptx_arches)
+
+    if sass_covered or ptx_covered:
+        _preflight_ok = True
+        return
+
+    # Not covered — build the detailed error message
+    _preflight_ok = False
+    nvcc_ver = _detect_nvcc_version()
+    makefile_dir = str(_LIB_DIR)
+    makefile_path = str(_LIB_DIR / "Makefile")
+    so_arches_str = ", ".join(f"sm_{a}" for a in sorted(sass_arches))
+    ptx_desc = (
+        f"targets {', '.join(f'sm_{p}' for p in sorted(ptx_arches))} or higher only"
+        if ptx_arches
+        else "none"
+    )
+
+    msg = f"""\
+recovar's custom CUDA kernel cannot run on your GPU.
+
+What's going wrong
+------------------
+Your GPU:           {gpu_name} (compute capability sm_{gpu_cap})
+Loaded kernel:      {so_path}
+Compiled targets:   {so_arches_str}
+PTX fallback:       {ptx_desc}
+
+The kernel was built only for compute capabilities that don't include
+yours, so the CUDA driver has no executable code to dispatch to. This
+is what produced the underlying "no kernel image is available for
+execution on the device" error.
+
+The right fix (recommended)
+---------------------------
+Rebuild the kernel for your GPU. This restores full performance.
+
+    cd {makefile_dir}
+    make clean
+    make CUDA_ARCH="-gencode arch=compute_{gpu_cap},code=sm_{gpu_cap} \\
+                    -gencode arch=compute_{gpu_cap},code=compute_{gpu_cap}"
+
+Then re-run your recovar command. The new .so will live at {so_path}."""
+
+    # CUDA 13 edge case
+    if nvcc_ver and nvcc_ver.startswith("13.") and gpu_cap_int < 75:
+        msg += f"""
+
+NOTE: nvcc {nvcc_ver} (CUDA toolkit 13) does not support compute
+capabilities below 7.5. Your GPU (sm_{gpu_cap}) requires a CUDA 12
+toolkit. Install one alongside, e.g.:
+    conda install -c nvidia cuda-toolkit=12.4
+or download from https://developer.nvidia.com/cuda-12-4-0-download-archive
+Then re-run the make command above with that nvcc on PATH."""
+
+    msg += f"""
+
+The temporary bypass (slower)
+-----------------------------
+If you can't rebuild right now, set this environment variable to fall
+back to the JAX-native projection/backprojection path:
+
+    export RECOVAR_DISABLE_CUDA=1
+
+This is the same code path recovar 0.4.5 used. WARNING: it is roughly
+2x slower for typical pipelines and uses noticeably more GPU memory.
+For a one-off run on a small dataset it's fine; for production, rebuild.
+
+Why this happened
+-----------------
+recovar's CUDA kernel ships precompiled targets for sm_70..sm_90 plus a
+compute_75 PTX fallback (covers V100, T4, RTX 20/30/40-series, A100,
+A40, H100). Your GPU is outside that range. Override CUDA_ARCH at make
+time to add it. See {makefile_path} for the full default and
+https://docs.nvidia.com/cuda/cuda-compiler-driver-nvcc/#gpu-compilation
+for what the gencode flags mean."""
+
+    raise RuntimeError(msg)
+
+
 def _ensure_ffi():
     global _ffi_registered
     if _ffi_registered:
@@ -260,6 +461,9 @@ def _ensure_ffi():
         if _ffi_registered:
             return
         lib = _get_lib()
+        # Preflight: check that the .so covers this GPU before FFI registration
+        if _loaded_lib_path:
+            _preflight_check(pathlib.Path(_loaded_lib_path))
         jax.ffi.register_ffi_target(_TARGET_BACKPROJECT, jax.ffi.pycapsule(lib.Backproject), platform="CUDA")
         jax.ffi.register_ffi_target(_TARGET_PROJECT, jax.ffi.pycapsule(lib.Project), platform="CUDA")
         jax.ffi.register_ffi_target(_TARGET_BATCH_BACKPROJECT, jax.ffi.pycapsule(lib.BatchBackproject), platform="CUDA")

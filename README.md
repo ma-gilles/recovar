@@ -90,6 +90,16 @@ RECOVAR ships two compiled extensions:
 - The fast-marching C++ extension is bundled in published Linux and macOS wheels for supported builds. Source and editable installs build it locally when a C++ compiler is available. If that build fails, RECOVAR falls back to the pure-Python implementation.
 - Installing `recovar[gpu]` gives you the CUDA-enabled JAX wheels. On GPU, RECOVAR also tries to build and use its faster custom CUDA backproject/project extension by default. That requires a local CUDA toolkit/compiler reachable through `NVCC`, `CUDACXX`, `PATH`, `LOCAL_CUDA_PATH`, `CUDA_HOME`, or `CUDA_PATH`. You can prebuild it with `recovar build_custom_cuda`. If that custom CUDA build/load fails, RECOVAR stops with fix instructions. `RECOVAR_DISABLE_CUDA=1` forces the slower JAX GPU path as a temporary workaround, but that is not the preferred configuration.
 
+**Minimum GPU compute capability: 7.0** (NVIDIA Volta or newer). The custom CUDA kernel ships precompiled targets for sm_70, sm_75, sm_80, sm_86, sm_89, sm_90 plus a compute_75 PTX fallback. For Pascal (sm_60/61) or other archs not in the default set, rebuild locally:
+
+```bash
+cd recovar/cuda
+make clean
+make CUDA_ARCH="-gencode arch=compute_60,code=sm_60 -gencode arch=compute_60,code=compute_60"
+```
+
+As a temporary alternative, set `RECOVAR_DISABLE_CUDA=1` to use the slower JAX-native path (≈2x slower; matches recovar 0.4.5 behavior). For one-off runs on small datasets that's fine; for production, rebuild.
+
 ### Docker
 
 See the [Docker & Containers guide](https://ma-gilles.github.io/recovar/getting-started/docker/) for Docker and Apptainer/Singularity instructions.
