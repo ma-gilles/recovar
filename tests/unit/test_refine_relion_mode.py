@@ -1113,12 +1113,174 @@ def test_dense_k_class_identical_means_split_global_posterior(rng):
         rtol=1e-5,
         atol=1e-5,
     )
+
+
+def test_dense_k_class_identical_means_split_noise_stats(rng):
+    dataset = MockDataset(2, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=151)
+    means = jnp.stack([mean, mean], axis=0)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    rotations = _make_rotations(2, seed=159)
+    translations = np.zeros((1, 2), dtype=np.float32)
+
+    _, _, _, _, _, noise_base = run_em(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        score_with_masked_images=True,
+        return_stats=True,
+        accumulate_noise=True,
+        sparse_pass2=False,
+    )
+    result = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        score_with_masked_images=True,
+        accumulate_noise=True,
+        sparse_pass2=False,
+    )
+
+    assert result.noise_stats is not None
+    assert result.aggregate_noise_stats is not None
+    for class_noise in result.noise_stats:
+        np.testing.assert_allclose(
+            np.asarray(class_noise.wsum_sigma2_noise),
+            0.5 * np.asarray(noise_base.wsum_sigma2_noise),
+            rtol=5e-3,
+            atol=1e-5,
+        )
+        np.testing.assert_allclose(
+            np.asarray(class_noise.wsum_img_power),
+            0.5 * np.asarray(noise_base.wsum_img_power),
+            rtol=5e-3,
+            atol=1e-5,
+        )
+        assert class_noise.sumw == pytest.approx(0.5 * noise_base.sumw, rel=5e-3, abs=1e-5)
     np.testing.assert_allclose(
-        np.asarray(result.class_posterior_sums),
-        np.full(2, dataset.n_images / 2.0, dtype=np.float32),
+        np.asarray(result.aggregate_noise_stats.wsum_sigma2_noise),
+        np.asarray(noise_base.wsum_sigma2_noise),
         rtol=5e-3,
         atol=1e-5,
     )
+    np.testing.assert_allclose(
+        np.asarray(result.aggregate_noise_stats.wsum_img_power),
+        np.asarray(noise_base.wsum_img_power),
+        rtol=5e-3,
+        atol=1e-5,
+    )
+    assert result.aggregate_noise_stats.sumw == pytest.approx(noise_base.sumw, rel=5e-3, abs=1e-5)
+
+
+def test_dense_k_class_k1_wta_matches_single_class_engine(rng):
+    dataset = MockDataset(2, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=161)
+    means = mean[None, :]
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    rotations = _make_rotations(3, seed=169)
+    translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+
+    _, ha_base, Ft_y_base, Ft_ctf_base, stats_base, noise_base = run_em(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        score_with_masked_images=True,
+        return_stats=True,
+        accumulate_noise=True,
+        sparse_pass2=False,
+        relion_firstiter_winner_take_all=True,
+    )
+    result = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        score_with_masked_images=True,
+        accumulate_noise=True,
+        sparse_pass2=False,
+        relion_firstiter_winner_take_all=True,
+    )
+
+    np.testing.assert_array_equal(np.asarray(result.pose_assignments), ha_base)
+    np.testing.assert_allclose(np.asarray(result.Ft_y[0]), np.asarray(Ft_y_base), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(result.Ft_ctf[0]), np.asarray(Ft_ctf_base), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(result.stats.log_evidence_per_image),
+        np.asarray(stats_base.log_evidence_per_image),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    assert result.aggregate_noise_stats is not None
+    np.testing.assert_allclose(
+        np.asarray(result.aggregate_noise_stats.wsum_sigma2_noise),
+        np.asarray(noise_base.wsum_sigma2_noise),
+        rtol=5e-3,
+        atol=1e-5,
+    )
+
+
+def test_dense_k_class_wta_uses_one_global_class_pose_winner(rng):
+    dataset = MockDataset(2, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=171)
+    means = jnp.stack([mean, mean], axis=0)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    rotations = _make_rotations(3, seed=179)
+    translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+
+    result = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        class_log_priors=np.log(np.asarray([0.9, 0.1], dtype=np.float64)),
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        score_with_masked_images=True,
+        accumulate_noise=True,
+        sparse_pass2=False,
+        relion_firstiter_winner_take_all=True,
+    )
+
+    assert np.all(np.asarray(result.class_assignments) == 0)
+    assert np.linalg.norm(np.asarray(result.Ft_y[0])) > 0.0
+    np.testing.assert_allclose(np.asarray(result.Ft_y[1]), 0.0, atol=1e-6)
+    assert result.noise_stats is not None
+    assert result.noise_stats[0].sumw == pytest.approx(float(dataset.n_images), rel=5e-3, abs=1e-5)
+    assert result.noise_stats[1].sumw == pytest.approx(0.0, abs=1e-6)
 
 
 def test_local_k_class_identical_means_split_global_posterior(rng):
@@ -1188,6 +1350,132 @@ def test_local_k_class_identical_means_split_global_posterior(rng):
         rtol=5e-3,
         atol=1e-5,
     )
+
+
+def test_local_k_class_k1_matches_single_class_engine(rng):
+    dataset = MockDataset(2, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=181)
+    means = mean[None, :]
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=191)
+    translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
+        rotation_offsets=np.array([0, 2, 4], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1, 0, 1], dtype=np.int32),
+        rotations_flat=np.tile(np.asarray(local_rotations, dtype=np.float32), (2, 1, 1)),
+        rotation_log_priors_flat=np.zeros(4, dtype=np.float32),
+        rotation_counts=np.array([2, 2], dtype=np.int32),
+        translation_grid=np.asarray(translations, dtype=np.float32),
+        translation_log_priors=np.zeros((2, 2), dtype=np.float32),
+    )
+
+    Ft_y_base, Ft_ctf_base, ha_base, stats_base, noise_base = run_local_em_exact(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        accumulate_noise=True,
+        reconstruct_significant_only=False,
+    )
+    result = run_local_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        accumulate_noise=True,
+        reconstruct_significant_only=False,
+    )
+
+    np.testing.assert_array_equal(np.asarray(result.pose_assignments), ha_base)
+    np.testing.assert_allclose(np.asarray(result.Ft_y[0]), np.asarray(Ft_y_base), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(result.Ft_ctf[0]), np.asarray(Ft_ctf_base), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(result.stats.log_evidence_per_image),
+        np.asarray(stats_base.log_evidence_per_image),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    assert result.aggregate_noise_stats is not None
+    np.testing.assert_allclose(
+        np.asarray(result.aggregate_noise_stats.wsum_sigma2_noise),
+        np.asarray(noise_base.wsum_sigma2_noise),
+        rtol=5e-3,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(result.aggregate_noise_stats.wsum_img_power),
+        np.asarray(noise_base.wsum_img_power),
+        rtol=5e-3,
+        atol=1e-5,
+    )
+    assert result.aggregate_noise_stats.sumw == pytest.approx(noise_base.sumw, rel=5e-3, abs=1e-5)
+
+
+def test_local_k_class_identical_means_obey_asymmetric_class_priors(rng):
+    dataset = MockDataset(2, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=193)
+    means = jnp.stack([mean, mean], axis=0)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=197)
+    translations = np.zeros((1, 2), dtype=np.float32)
+    local_layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=2,
+        n_psi=1,
+        rotation_offsets=np.array([0, 2, 4], dtype=np.int64),
+        rotation_ids_flat=np.array([0, 1, 0, 1], dtype=np.int32),
+        rotations_flat=np.tile(np.asarray(local_rotations, dtype=np.float32), (2, 1, 1)),
+        rotation_log_priors_flat=np.zeros(4, dtype=np.float32),
+        rotation_counts=np.array([2, 2], dtype=np.int32),
+        translation_grid=np.asarray(translations, dtype=np.float32),
+        translation_log_priors=np.zeros((2, 1), dtype=np.float32),
+    )
+
+    result = run_local_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        "linear_interp",
+        class_log_priors=np.log(np.asarray([0.8, 0.2], dtype=np.float64)),
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        accumulate_noise=True,
+        reconstruct_significant_only=False,
+    )
+
+    np.testing.assert_allclose(
+        np.asarray(result.class_posterior_sums),
+        np.asarray([0.8, 0.2], dtype=np.float32) * dataset.n_images,
+        rtol=5e-3,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(
+        np.asarray(result.Ft_y[1]),
+        0.25 * np.asarray(result.Ft_y[0]),
+        rtol=5e-3,
+        atol=1e-5,
+    )
+    assert result.noise_stats is not None
+    assert result.noise_stats[0].sumw == pytest.approx(0.8 * dataset.n_images, rel=5e-3, abs=1e-5)
+    assert result.noise_stats[1].sumw == pytest.approx(0.2 * dataset.n_images, rel=5e-3, abs=1e-5)
 
 
 def test_local_search_iteration_k_class_returns_class_details(rng):

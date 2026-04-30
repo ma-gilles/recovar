@@ -9,9 +9,8 @@ import jax.numpy as jnp
 import numpy as np
 
 from .dense_k_class_engine import run_dense_k_class_em_native
-from .em_engine import run_em
 from .helpers.types import NoiseStats, RelionStats, make_noise_stats, make_relion_stats
-from .local_em_engine import run_local_em_exact
+from .local_k_class_engine import run_local_k_class_em_native
 from .local_layout import LocalHypothesisLayout
 
 
@@ -65,71 +64,10 @@ def _as_class_means(means) -> jax.Array:
     return means_array
 
 
-def _select_class_value(value, class_index: int, n_classes: int):
-    value_array = jnp.asarray(value)
-    if value_array.ndim >= 2 and int(value_array.shape[0]) == n_classes:
-        return value_array[class_index]
-    return value
-
-
-def _select_required_class_value(value, class_index: int, n_classes: int, name: str):
-    value_array = jnp.asarray(value)
-    if value_array.ndim < 2 or int(value_array.shape[0]) != n_classes:
-        raise ValueError(f"{name} must have leading class axis of length {n_classes}, got {value_array.shape}")
-    return value_array[class_index]
-
-
-def _dense_engine_kwargs_for_class(engine_kwargs: dict, class_index: int, n_classes: int) -> dict:
-    kwargs = dict(engine_kwargs)
-    class_rotation_log_prior = kwargs.pop("class_rotation_log_prior", None)
-    if class_rotation_log_prior is not None:
-        if "rotation_log_prior" in kwargs and kwargs["rotation_log_prior"] is not None:
-            raise ValueError("Provide only one of rotation_log_prior or class_rotation_log_prior")
-        kwargs["rotation_log_prior"] = _select_required_class_value(
-            class_rotation_log_prior,
-            class_index,
-            n_classes,
-            "class_rotation_log_prior",
-        )
-    return kwargs
-
-
 def _reject_kwargs(kwargs: dict, names: tuple[str, ...], caller: str) -> None:
     present = sorted(name for name in names if name in kwargs)
     if present:
         raise ValueError(f"{caller} controls these arguments directly: {', '.join(present)}")
-
-
-def _dense_outputs(output, *, accumulate_noise: bool):
-    new_mean, hard_assignment, Ft_y, Ft_ctf, stats = output[:5]
-    noise_stats = output[5] if accumulate_noise else None
-    return new_mean, hard_assignment, Ft_y, Ft_ctf, stats, noise_stats
-
-
-def _local_outputs(output, *, accumulate_noise: bool, return_best_pose_details: bool):
-    Ft_y, Ft_ctf, hard_assignment = output[:3]
-    next_index = 3
-    best_pose_rotations = None
-    best_pose_translations = None
-    best_pose_rotation_ids = None
-    if return_best_pose_details:
-        best_pose_rotations = output[next_index]
-        best_pose_translations = output[next_index + 1]
-        best_pose_rotation_ids = output[next_index + 2]
-        next_index += 3
-    stats = output[next_index]
-    next_index += 1
-    noise_stats = output[next_index] if accumulate_noise else None
-    return (
-        Ft_y,
-        Ft_ctf,
-        hard_assignment,
-        best_pose_rotations,
-        best_pose_translations,
-        best_pose_rotation_ids,
-        stats,
-        noise_stats,
-    )
 
 
 def _stack_or_none(values):
@@ -258,7 +196,7 @@ def run_dense_k_class_em(
     accumulate_noise: bool = False,
     **engine_kwargs,
 ) -> KClassEMResult:
-    """Run dense K-class EM using ``run_em`` as the only scoring/M-step kernel."""
+    """Run dense K-class EM over the joint class x pose grid."""
 
     _reject_kwargs(
         engine_kwargs,
@@ -276,100 +214,28 @@ def run_dense_k_class_em(
     means_array = _as_class_means(means)
     n_classes = int(means_array.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
-    base_engine_kwargs = dict(engine_kwargs)
-
-    native_dense_supported = (
-        not accumulate_noise
-        and base_engine_kwargs.get("sparse_pass2") is False
-        and not bool(base_engine_kwargs.get("relion_firstiter_winner_take_all", False))
+    if bool(engine_kwargs.get("sparse_pass2", False)):
+        raise NotImplementedError("Dense K-class sparse pass-2 must use a joint class x pose native implementation")
+    native = run_dense_k_class_em_native(
+        experiment_dataset,
+        means_array,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        disc_type,
+        class_log_priors=log_priors,
+        accumulate_noise=accumulate_noise,
+        **engine_kwargs,
     )
-    if native_dense_supported:
-        native = run_dense_k_class_em_native(
-            experiment_dataset,
-            means_array,
-            mean_variance,
-            noise_variance,
-            rotations,
-            translations,
-            disc_type,
-            class_log_priors=log_priors,
-            **base_engine_kwargs,
-        )
-        return _assemble_result(
-            class_log_evidence=native.class_log_evidence,
-            new_means=native.new_means,
-            Ft_y=native.Ft_y,
-            Ft_ctf=native.Ft_ctf,
-            per_class_hard_assignments=native.hard_assignments,
-            per_class_stats=native.per_class_stats,
-            noise_stats=None,
-        )
-
-    class_log_evidence = []
-    for class_index in range(n_classes):
-        class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
-        probe = run_em(
-            experiment_dataset,
-            means_array[class_index],
-            _select_class_value(mean_variance, class_index, n_classes),
-            _select_class_value(noise_variance, class_index, n_classes),
-            rotations,
-            translations,
-            disc_type,
-            return_stats=True,
-            accumulate_noise=False,
-            class_log_prior=float(log_priors[class_index]),
-            disable_adjoint_y=True,
-            disable_adjoint_ctf=True,
-            **class_engine_kwargs,
-        )
-        class_log_evidence.append(np.asarray(probe[4].log_evidence_per_image, dtype=np.float64))
-
-    class_log_evidence_np = np.stack(class_log_evidence, axis=0)
-    global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
-
-    new_means = []
-    Ft_y = []
-    Ft_ctf = []
-    hard_assignments = []
-    per_class_stats = []
-    per_class_noise = [] if accumulate_noise else None
-    for class_index in range(n_classes):
-        class_engine_kwargs = _dense_engine_kwargs_for_class(base_engine_kwargs, class_index, n_classes)
-        output = run_em(
-            experiment_dataset,
-            means_array[class_index],
-            _select_class_value(mean_variance, class_index, n_classes),
-            _select_class_value(noise_variance, class_index, n_classes),
-            rotations,
-            translations,
-            disc_type,
-            return_stats=True,
-            accumulate_noise=accumulate_noise,
-            class_log_prior=float(log_priors[class_index]),
-            normalization_log_evidence=global_log_evidence,
-            **class_engine_kwargs,
-        )
-        new_mean, hard_assignment, class_Ft_y, class_Ft_ctf, stats, noise = _dense_outputs(
-            output,
-            accumulate_noise=accumulate_noise,
-        )
-        new_means.append(new_mean)
-        Ft_y.append(class_Ft_y)
-        Ft_ctf.append(class_Ft_ctf)
-        hard_assignments.append(np.asarray(hard_assignment, dtype=np.int32))
-        per_class_stats.append(stats)
-        if per_class_noise is not None:
-            per_class_noise.append(noise)
-
     return _assemble_result(
-        class_log_evidence=class_log_evidence_np,
-        new_means=new_means,
-        Ft_y=Ft_y,
-        Ft_ctf=Ft_ctf,
-        per_class_hard_assignments=np.stack(hard_assignments, axis=0),
-        per_class_stats=tuple(per_class_stats),
-        noise_stats=None if per_class_noise is None else tuple(per_class_noise),
+        class_log_evidence=native.class_log_evidence,
+        new_means=native.new_means,
+        Ft_y=native.Ft_y,
+        Ft_ctf=native.Ft_ctf,
+        per_class_hard_assignments=native.hard_assignments,
+        per_class_stats=native.per_class_stats,
+        noise_stats=native.noise_stats,
     )
 
 
@@ -386,7 +252,7 @@ def run_local_k_class_em(
     return_best_pose_details: bool = False,
     **engine_kwargs,
 ) -> KClassEMResult:
-    """Run exact-local K-class EM using ``run_local_em_exact`` for all kernels."""
+    """Run exact-local K-class EM over the joint class x local-pose grid."""
 
     _reject_kwargs(
         engine_kwargs,
@@ -406,83 +272,27 @@ def run_local_k_class_em(
     n_classes = int(means_array.shape[0])
     log_priors = _class_log_priors(n_classes, class_log_priors)
 
-    class_log_evidence = []
-    for class_index in range(n_classes):
-        probe = run_local_em_exact(
-            experiment_dataset,
-            means_array[class_index],
-            _select_class_value(mean_variance, class_index, n_classes),
-            _select_class_value(noise_variance, class_index, n_classes),
-            local_layout,
-            disc_type,
-            accumulate_noise=False,
-            return_best_pose_details=False,
-            class_log_prior=float(log_priors[class_index]),
-            disable_adjoint_y=True,
-            disable_adjoint_ctf=True,
-            **engine_kwargs,
-        )
-        class_log_evidence.append(np.asarray(probe[3].log_evidence_per_image, dtype=np.float64))
-
-    class_log_evidence_np = np.stack(class_log_evidence, axis=0)
-    global_log_evidence = _logsumexp_np(class_log_evidence_np, axis=0)
-
-    Ft_y = []
-    Ft_ctf = []
-    hard_assignments = []
-    per_class_stats = []
-    per_class_noise = [] if accumulate_noise else None
-    per_class_best_pose_rotations = [] if return_best_pose_details else None
-    per_class_best_pose_translations = [] if return_best_pose_details else None
-    per_class_best_pose_rotation_ids = [] if return_best_pose_details else None
-    for class_index in range(n_classes):
-        output = run_local_em_exact(
-            experiment_dataset,
-            means_array[class_index],
-            _select_class_value(mean_variance, class_index, n_classes),
-            _select_class_value(noise_variance, class_index, n_classes),
-            local_layout,
-            disc_type,
-            accumulate_noise=accumulate_noise,
-            return_best_pose_details=return_best_pose_details,
-            class_log_prior=float(log_priors[class_index]),
-            normalization_log_evidence=global_log_evidence,
-            **engine_kwargs,
-        )
-        (
-            class_Ft_y,
-            class_Ft_ctf,
-            hard_assignment,
-            best_pose_rotations,
-            best_pose_translations,
-            best_pose_rotation_ids,
-            stats,
-            noise,
-        ) = _local_outputs(
-            output,
-            accumulate_noise=accumulate_noise,
-            return_best_pose_details=return_best_pose_details,
-        )
-        Ft_y.append(class_Ft_y)
-        Ft_ctf.append(class_Ft_ctf)
-        hard_assignments.append(np.asarray(hard_assignment, dtype=np.int32))
-        per_class_stats.append(stats)
-        if per_class_noise is not None:
-            per_class_noise.append(noise)
-        if return_best_pose_details:
-            per_class_best_pose_rotations.append(best_pose_rotations)
-            per_class_best_pose_translations.append(best_pose_translations)
-            per_class_best_pose_rotation_ids.append(best_pose_rotation_ids)
-
+    native = run_local_k_class_em_native(
+        experiment_dataset,
+        means_array,
+        mean_variance,
+        noise_variance,
+        local_layout,
+        disc_type,
+        class_log_priors=log_priors,
+        accumulate_noise=accumulate_noise,
+        return_best_pose_details=return_best_pose_details,
+        **engine_kwargs,
+    )
     return _assemble_result(
-        class_log_evidence=class_log_evidence_np,
-        new_means=None,
-        Ft_y=Ft_y,
-        Ft_ctf=Ft_ctf,
-        per_class_hard_assignments=np.stack(hard_assignments, axis=0),
-        per_class_stats=tuple(per_class_stats),
-        noise_stats=None if per_class_noise is None else tuple(per_class_noise),
-        per_class_best_pose_rotations=per_class_best_pose_rotations,
-        per_class_best_pose_translations=per_class_best_pose_translations,
-        per_class_best_pose_rotation_ids=per_class_best_pose_rotation_ids,
+        class_log_evidence=native.class_log_evidence,
+        new_means=native.new_means,
+        Ft_y=native.Ft_y,
+        Ft_ctf=native.Ft_ctf,
+        per_class_hard_assignments=native.hard_assignments,
+        per_class_stats=native.per_class_stats,
+        noise_stats=native.noise_stats,
+        per_class_best_pose_rotations=native.per_class_best_pose_rotations,
+        per_class_best_pose_translations=native.per_class_best_pose_translations,
+        per_class_best_pose_rotation_ids=native.per_class_best_pose_rotation_ids,
     )

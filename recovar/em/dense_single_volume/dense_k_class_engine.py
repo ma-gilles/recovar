@@ -21,7 +21,11 @@ from .helpers.backprojection import (
 )
 from .helpers.dtype_policy import DensePrecisionPolicy
 from .helpers.fourier_window import make_fourier_window_spec
-from .helpers.half_spectrum import half_spectrum_dc_index, make_scoring_half_image_weights
+from .helpers.half_spectrum import (
+    half_spectrum_dc_index,
+    make_relion_noise_shell_indices_half,
+    make_scoring_half_image_weights,
+)
 from .helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     integer_pre_shifts_or_none,
@@ -30,12 +34,21 @@ from .helpers.image_shifts import (
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
 from .helpers.preprocessing import (
     prepare_reconstruction_batch as _prepare_reconstruction_batch,
+    process_half_image,
     preprocess_batch as _preprocess_batch,
     preprocess_batch_firstiter_cc as _preprocess_batch_firstiter_cc,
 )
-from .helpers.projection import compute_projections_block as _compute_projections_block
+from .helpers.projection import (
+    compute_noise_block as _compute_noise_block,
+    compute_projections_block as _compute_projections_block,
+)
 from .helpers.scoring import _score_rotation_block, _update_logsumexp
-from .helpers.types import make_relion_stats
+from .helpers.translation_prior import (
+    translation_prior_centers_for_images,
+    translation_sqdist_angstrom,
+    validate_translation_prior_centers,
+)
+from .helpers.types import make_noise_stats, make_relion_stats
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +62,7 @@ class DenseKClassNativeOutputs(NamedTuple):
     Ft_ctf: list[object]
     hard_assignments: np.ndarray
     per_class_stats: tuple[object, ...]
+    noise_stats: tuple[object, ...] | None
 
 
 @dataclass(frozen=True)
@@ -216,6 +230,53 @@ class _KClassScoreConstraints:
         return rotation_prior, translation_prior, candidate_mask, valid_rotation_mask
 
 
+@dataclass
+class _DenseKClassNoiseState:
+    """Host-side per-class noise accumulators for one dense K-class EM pass."""
+
+    wsum: np.ndarray
+    img_power: np.ndarray
+    sumw: np.ndarray
+    sigma2_offset: np.ndarray
+
+    @classmethod
+    def zeros(cls, *, n_classes: int, n_shells: int) -> "_DenseKClassNoiseState":
+        return cls(
+            wsum=np.zeros((n_classes, n_shells), dtype=np.float64),
+            img_power=np.zeros((n_classes, n_shells), dtype=np.float64),
+            sumw=np.zeros(n_classes, dtype=np.float64),
+            sigma2_offset=np.zeros(n_classes, dtype=np.float64),
+        )
+
+    def add_image_power(self, batch_img_power_shells, class_mass) -> None:
+        self.img_power += np.asarray(batch_img_power_shells, dtype=np.float64)
+        self.sumw += np.asarray(class_mass, dtype=np.float64).sum(axis=0)
+
+    def add_translation_offset(self, probs, translation_sqdist_ang) -> None:
+        if translation_sqdist_ang is None:
+            return
+        translation_posterior = np.asarray(jnp.sum(probs, axis=2), dtype=np.float64)
+        self.sigma2_offset += np.sum(
+            translation_posterior * translation_sqdist_ang[:, None, :],
+            axis=(0, 2),
+            dtype=np.float64,
+        )
+
+    def add_noise_shells(self, block_noise_shells) -> None:
+        self.wsum += np.asarray(jnp.stack(block_noise_shells, axis=0), dtype=np.float64)
+
+    def stats(self):
+        return tuple(
+            make_noise_stats(
+                wsum_sigma2_noise=self.wsum[class_index],
+                wsum_img_power=self.img_power[class_index],
+                wsum_sigma2_offset=self.sigma2_offset[class_index],
+                sumw=self.sumw[class_index],
+            )
+            for class_index in range(int(self.wsum.shape[0]))
+        )
+
+
 @jax.jit
 def _update_class_logsumexp(max_s, sum_exp, scores):
     """Streaming class-wise logsumexp update from one ``(image, class, pose)`` block."""
@@ -291,6 +352,70 @@ def _k_class_m_step_block(shifted_recon, scores, log_z, ctf2_over_nv, n_trans: i
         ctf_probs,
         rotation_sums,
     )
+
+
+@jax.jit
+def _k_class_block_best(scores):
+    """Return per-class and global winners for a class x pose score block."""
+
+    batch_size, n_classes, rotation_block_size, _ = scores.shape
+    class_scores_flat = scores.reshape(batch_size, n_classes, rotation_block_size * scores.shape[-1])
+    block_best_class = jnp.max(class_scores_flat, axis=2)
+    block_argmax_class = jnp.argmax(class_scores_flat, axis=2)
+    global_scores_flat = scores.reshape(batch_size, n_classes * rotation_block_size * scores.shape[-1])
+    block_best_global = jnp.max(global_scores_flat, axis=1)
+    block_argmax_global = jnp.argmax(global_scores_flat, axis=1)
+    return block_best_class, block_argmax_class, block_best_global, block_argmax_global
+
+
+@partial(jax.jit, static_argnums=(3, 4, 5, 7, 8))
+def _k_class_wta_m_step_block(
+    shifted_recon,
+    global_best_argmax,
+    r0,
+    actual_rot: int,
+    rotation_block_size: int,
+    n_rot_padded: int,
+    ctf2_over_nv,
+    n_trans: int,
+    n_classes: int,
+):
+    """Form hard M-step slices for global class x pose winners."""
+
+    batch_size = int(global_best_argmax.shape[0])
+    shifted_by_translation = shifted_recon.reshape(batch_size, n_trans, shifted_recon.shape[-1])
+    class_stride = int(n_rot_padded) * int(n_trans)
+    winning_class = global_best_argmax // class_stride
+    winner_within_class = global_best_argmax % class_stride
+    winning_rot = winner_within_class // n_trans
+    winning_trans = winner_within_class % n_trans
+    in_block = (winning_rot >= r0) & (winning_rot < (r0 + int(actual_rot)))
+    local_rot = jnp.clip(winning_rot - r0, 0, max(int(rotation_block_size), 1) - 1)
+    flat_local = (
+        (winning_class * int(rotation_block_size) + local_rot) * n_trans
+        + winning_trans
+    )
+    probs = jax.nn.one_hot(
+        flat_local,
+        n_classes * int(rotation_block_size) * n_trans,
+        dtype=shifted_recon.real.dtype,
+    ).reshape(batch_size, n_classes, int(rotation_block_size), n_trans)
+    probs = probs * in_block[:, None, None, None]
+    summed = jnp.einsum(
+        "bkrt,btn->krn",
+        probs,
+        shifted_by_translation,
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    probs_sum_t = jnp.sum(probs, axis=-1)
+    ctf_probs = jnp.einsum(
+        "bkr,bn->krn",
+        probs_sum_t,
+        ctf2_over_nv,
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    rotation_sums = jnp.sum(probs, axis=(0, 3))
+    return probs, summed, ctf_probs, rotation_sums
 
 
 def _iter_rotation_blocks(n_blocks: int, rotation_block_size: int):
@@ -426,12 +551,10 @@ def run_dense_k_class_em_native(
     do_gridding_correction: bool = False,
     square_window: bool = False,
     sparse_pass2: bool = False,
+    accumulate_noise: bool = False,
 ) -> DenseKClassNativeOutputs:
     """Run dense K-class EM with one E-step over class and pose axes."""
 
-    del translation_prior_centers
-    if relion_firstiter_winner_take_all:
-        raise NotImplementedError("native dense K-class does not yet support winner-take-all M-step")
     if sparse_pass2:
         raise NotImplementedError("native dense K-class does not yet support sparse pass-2 skipping")
     if relion_firstiter_score_mode not in {"gaussian", "normalized_cc"}:
@@ -499,6 +622,11 @@ def run_dense_k_class_em_native(
     projection_kwargs = window_spec.projection_kwargs()
     n_recon_windowed = window_spec.n_recon
     score_dc_index = half_spectrum_dc_index(image_shape)
+    translation_prior_centers_np = validate_translation_prior_centers(
+        translation_prior_centers,
+        n_images=n_images,
+        n_dims=translations.shape[1],
+    )
 
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
     n_rot_padded = n_blocks * rotation_block_size
@@ -530,6 +658,13 @@ def run_dense_k_class_em_native(
     class_best_log_score = np.empty((n_classes, n_images), dtype=np.float32)
     class_max_posterior = np.empty((n_classes, n_images), dtype=np.float32)
     class_rotation_posterior_sums = np.zeros((n_classes, n_rot), dtype=np.float64)
+    noise_state = None
+    if accumulate_noise:
+        n_shells = image_shape[0] // 2 + 1
+        shell_indices_half = make_relion_noise_shell_indices_half(image_shape)
+        shell_indices_noise = window_spec.recon_values(shell_indices_half)
+        noise_variance_windowed = window_spec.recon_values(noise_variance_half)
+        noise_state = _DenseKClassNoiseState.zeros(n_classes=n_classes, n_shells=n_shells)
 
     start_idx = 0
     batch_iter = experiment_dataset.iter_batches(
@@ -553,6 +688,18 @@ def run_dense_k_class_em_native(
 
         batch_size = int(np.asarray(batch_data).shape[0])
         batch_data = jnp.asarray(batch_data)
+        translation_sqdist_ang = None
+        if translation_prior_centers_np is not None:
+            centers = translation_prior_centers_for_images(
+                translation_prior_centers_np,
+                np.arange(start_idx, end_idx, dtype=np.int64),
+                batch_size=actual_batch_size,
+            )
+            translation_sqdist_ang = translation_sqdist_angstrom(
+                translations,
+                centers,
+                experiment_dataset.voxel_size,
+            )
 
         if relion_firstiter_score_mode == "normalized_cc":
             shifted_half, batch_norm, ctf2_half_score, ctf2_over_nv_half = _preprocess_batch_firstiter_cc(
@@ -624,6 +771,7 @@ def run_dense_k_class_em_native(
             score_weight_half = ctf2_over_nv_half
             shifted_score_half = shifted_half
 
+        shifted_half_with_dc = shifted_score_half
         ctf2_over_nv_half_with_dc = ctf2_over_nv_half
         if half_spectrum_scoring and relion_firstiter_score_mode != "normalized_cc":
             shifted_score_half = shifted_score_half.at[:, score_dc_index].set(0.0)
@@ -638,11 +786,23 @@ def run_dense_k_class_em_native(
         shifted_recon_windowed = window_spec.recon_values(shifted_recon_half)
         ctf2_over_nv_windowed = window_spec.score_values(score_weight_half)
         ctf2_over_nv_windowed_mstep = window_spec.recon_values(ctf2_over_nv_half_with_dc)
+        shifted_masked_for_noise = None
+        if accumulate_noise:
+            shifted_masked_for_noise = window_spec.recon_values(shifted_half_with_dc)
+            processed_masked_half = process_half_image(
+                experiment_dataset,
+                batch_data,
+                score_with_masked_images,
+            )
+            if image_corrections is not None:
+                processed_masked_half = processed_masked_half * image_only_corr[:, None]
 
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=precision_policy.normalization_real_dtype)
         class_max_s = jnp.full((batch_size, n_classes), -jnp.inf)
         class_sum_exp = jnp.zeros((batch_size, n_classes), dtype=precision_policy.normalization_real_dtype)
+        global_best_score = jnp.full(batch_size, -jnp.inf)
+        global_best_argmax = jnp.zeros(batch_size, dtype=jnp.int32)
 
         for _, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
             rots_b = rotations_padded[r0:r1]
@@ -694,6 +854,19 @@ def run_dense_k_class_em_native(
             )
             max_s, sum_exp = _update_logsumexp(max_s, sum_exp, scores)
             class_max_s, class_sum_exp = _update_class_logsumexp(class_max_s, class_sum_exp, scores)
+            if relion_firstiter_winner_take_all:
+                (
+                    _block_best_class,
+                    _block_argmax_class,
+                    block_best_global,
+                    block_argmax_global,
+                ) = _k_class_block_best(scores)
+                block_class = block_argmax_global // (rotation_block_size * n_trans)
+                block_pose = block_argmax_global % (rotation_block_size * n_trans)
+                block_global_argmax = block_class * (n_rot_padded * n_trans) + block_pose + r0 * n_trans
+                improved = block_best_global > global_best_score
+                global_best_score = jnp.where(improved, block_best_global, global_best_score)
+                global_best_argmax = jnp.where(improved, block_global_argmax, global_best_argmax)
 
         log_Z = max_s + jnp.log(sum_exp)
         class_log_Z = class_max_s + jnp.log(class_sum_exp)
@@ -750,22 +923,42 @@ def run_dense_k_class_em_native(
             )
             shifted_for_mstep = shifted_recon_windowed if window_spec.use_window else shifted_recon_half
             ctf_for_mstep = ctf2_over_nv_windowed_mstep if window_spec.use_window else ctf2_over_nv_half_with_dc
-            (
-                _probs,
-                block_best_class,
-                block_argmax_class,
-                _block_best_global,
-                _block_argmax_global,
-                summed_half,
-                ctf_probs_half,
-                rotation_sums,
-            ) = _k_class_m_step_block(
-                shifted_for_mstep,
-                scores,
-                log_Z,
-                ctf_for_mstep,
-                n_trans,
-            )
+            if relion_firstiter_winner_take_all:
+                (
+                    block_best_class,
+                    block_argmax_class,
+                    _block_best_global,
+                    _block_argmax_global,
+                ) = _k_class_block_best(scores)
+                actual_rot = max(0, min(rotation_block_size, n_rot - r0))
+                probs, summed_half, ctf_probs_half, rotation_sums = _k_class_wta_m_step_block(
+                    shifted_for_mstep,
+                    global_best_argmax,
+                    r0,
+                    actual_rot,
+                    rotation_block_size,
+                    n_rot_padded,
+                    ctf_for_mstep,
+                    n_trans,
+                    n_classes,
+                )
+            else:
+                (
+                    probs,
+                    block_best_class,
+                    block_argmax_class,
+                    _block_best_global,
+                    _block_argmax_global,
+                    summed_half,
+                    ctf_probs_half,
+                    rotation_sums,
+                ) = _k_class_m_step_block(
+                    shifted_for_mstep,
+                    scores,
+                    log_Z,
+                    ctf_for_mstep,
+                    n_trans,
+                )
             improved = block_best_class > best_score_class
             best_score_class = jnp.where(improved, block_best_class, best_score_class)
             best_argmax_class = jnp.where(improved, block_argmax_class + r0 * n_trans, best_argmax_class)
@@ -776,6 +969,72 @@ def run_dense_k_class_em_native(
                     rotation_sums[:, :actual_rot],
                     dtype=np.float64,
                 )
+            if accumulate_noise:
+                class_mass = jnp.sum(probs, axis=(2, 3))
+                class_img_power = jnp.einsum(
+                    "bk,bn->kn",
+                    class_mass,
+                    jnp.abs(processed_masked_half) ** 2,
+                    precision=jax.lax.Precision.HIGHEST,
+                )
+                batch_img_power_shells = jax.vmap(
+                    lambda values: jnp.zeros(n_shells, dtype=jnp.float32).at[shell_indices_half].add(
+                        values.astype(jnp.float32),
+                    )
+                )(class_img_power)
+                noise_state.add_image_power(batch_img_power_shells, class_mass)
+                noise_state.add_translation_offset(probs, translation_sqdist_ang)
+
+                shifted_by_translation_noise = shifted_masked_for_noise.reshape(
+                    batch_size,
+                    n_trans,
+                    shifted_masked_for_noise.shape[-1],
+                )
+                summed_masked_noise = jnp.einsum(
+                    "bkrt,btn->krn",
+                    probs,
+                    shifted_by_translation_noise,
+                    precision=jax.lax.Precision.HIGHEST,
+                )
+                probs_sum_t_noise = jnp.sum(probs, axis=-1)
+                if window_spec.use_window:
+                    ctf2_nv_noise = window_spec.recon_values(ctf2_over_nv_half_with_dc)
+                    ctf_probs_for_noise = jnp.einsum(
+                        "bkr,bn->krn",
+                        probs_sum_t_noise,
+                        ctf2_nv_noise,
+                        precision=jax.lax.Precision.HIGHEST,
+                    )
+                    nv_for_noise = noise_variance_windowed
+                    si_for_noise = shell_indices_noise
+                    proj_for_noise = window_spec.recon_values(proj_half_by_class)
+                    proj_abs2_for_noise = window_spec.recon_values(proj_abs2_by_class)
+                else:
+                    ctf_probs_for_noise = jnp.einsum(
+                        "bkr,bn->krn",
+                        probs_sum_t_noise,
+                        ctf2_over_nv_half_with_dc,
+                        precision=jax.lax.Precision.HIGHEST,
+                    )
+                    nv_for_noise = noise_variance_half
+                    si_for_noise = shell_indices_noise
+                    proj_for_noise = proj_half_by_class
+                    proj_abs2_for_noise = proj_abs2_by_class
+
+                block_noise_shells = []
+                for class_index in range(n_classes):
+                    class_noise_shells, _, _ = _compute_noise_block(
+                        proj_for_noise[class_index],
+                        proj_abs2_for_noise[class_index],
+                        summed_masked_noise[class_index],
+                        ctf_probs_for_noise[class_index],
+                        nv_for_noise,
+                        si_for_noise,
+                        n_shells,
+                        False,
+                    )
+                    block_noise_shells.append(class_noise_shells)
+                noise_state.add_noise_shells(block_noise_shells)
 
             if window_spec.use_window:
                 max_r = float(current_size // 2)
@@ -874,6 +1133,7 @@ def run_dense_k_class_em_native(
         )
         for class_index in range(n_classes)
     )
+    noise_stats = noise_state.stats() if noise_state is not None else None
     return DenseKClassNativeOutputs(
         class_log_evidence=class_log_evidence,
         new_means=new_means,
@@ -881,4 +1141,5 @@ def run_dense_k_class_em_native(
         Ft_ctf=[Ft_ctf[class_index] for class_index in range(n_classes)],
         hard_assignments=hard_assignments,
         per_class_stats=per_class_stats,
+        noise_stats=noise_stats,
     )
