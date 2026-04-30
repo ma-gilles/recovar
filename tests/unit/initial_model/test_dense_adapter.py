@@ -107,6 +107,53 @@ def test_dense_initial_model_estep_calls_joint_k_class_once_per_halfset(monkeypa
     assert result.meta["halfset_ids"] == (0, 1)
 
 
+def test_dense_initial_model_estep_uses_current_state_reference_when_means_omitted(monkeypatch):
+    calls = []
+
+    def fake_reference_to_dense_means(references):
+        refs = np.asarray(references)
+        return np.full((refs.shape[0], refs.shape[1] ** 3), refs[0, 0, 0, 0], dtype=np.complex64)
+
+    def fake_run_dense_k_class_em(dataset, means, mean_variance, noise_variance, rotations, translations, disc_type, **kwargs):
+        calls.append(
+            {
+                "means": np.asarray(means).copy(),
+                "mean_variance": np.asarray(mean_variance).copy(),
+            }
+        )
+        return _fake_result(n_classes=1, n=8)
+
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.reference_to_dense_means",
+        fake_reference_to_dense_means,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.run_dense_k_class_em",
+        fake_run_dense_k_class_em,
+    )
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=1,
+        n_directions=4,
+        pseudo_halfsets=False,
+    )
+    state.Iref[0, 0, 0, 0] = 7.0
+    config = DenseInitialModelEstepConfig(
+        noise_variance=np.ones(8 * 8, dtype=np.float32),
+        rotations=np.eye(3, dtype=np.float32)[None],
+        translations=np.zeros((1, 2), dtype=np.float32),
+        relion_bpref_frame=False,
+    )
+
+    run_dense_initial_model_estep(_Dataset(), state, config)
+
+    assert len(calls) == 1
+    np.testing.assert_allclose(calls[0]["means"], 7.0)
+    np.testing.assert_allclose(calls[0]["mean_variance"], 49.0)
+
+
 def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
     calls = []
 

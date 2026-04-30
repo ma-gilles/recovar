@@ -16,6 +16,7 @@ from .dense_adapter import (
     DenseInitialModelEstepResult,
     class_log_priors_from_state,
     dense_initial_model_expectation_step,
+    reference_to_dense_means,
     run_dense_initial_model_estep,
     split_pseudo_halfset_particle_ids,
 )
@@ -99,6 +100,7 @@ __all__ = [
     "DenseInitialModelEstepResult",
     "class_log_priors_from_state",
     "dense_initial_model_expectation_step",
+    "reference_to_dense_means",
     "run_dense_initial_model_estep",
     "split_pseudo_halfset_particle_ids",
     "run_em_output_to_bpref",

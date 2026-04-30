@@ -30,12 +30,12 @@ _ENGINE_DEFAULTS: dict[str, Any] = {
 }
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, kw_only=True)
 class DenseInitialModelEstepConfig:
     """Configuration for one InitialModel dense K-class E-step."""
 
-    means: Any
-    mean_variance: Any
+    means: Any | None = None
+    mean_variance: Any | None = None
     noise_variance: Any
     rotations: Any
     translations: Any
@@ -130,6 +130,44 @@ def _dense_engine_kwargs(state: InitialModelState, config: DenseInitialModelEste
     return engine_kwargs
 
 
+def reference_to_dense_means(references: np.ndarray) -> np.ndarray:
+    """Convert RELION-frame real-space InitialModel references to dense EM means.
+
+    VDAM stores ``Iref`` as RELION real-space volumes. The dense EM engine
+    scores centered Fourier volumes in recovar convention. The conversion
+    mirrors the fixture-backed InitialModel E-step recipe: apply RELION's
+    gridding correction at ``pad=1``, FFT, and use RELION's sign/scale
+    convention for backprojector-frame references.
+    """
+    import jax.numpy as jnp
+
+    from recovar.core import fourier_transform_utils as ftu
+    from recovar.reconstruction.relion_functions import griddingCorrect
+
+    refs = np.asarray(references)
+    if refs.ndim != 4:
+        raise ValueError(f"references must have shape (K, N, N, N), got {refs.shape}")
+    n = int(refs.shape[-1])
+    means = []
+    for ref in refs:
+        corrected, _ = griddingCorrect(jnp.asarray(ref), n, padding_factor=1, order=1)
+        ft = ftu.get_dft3(corrected).reshape(-1)
+        means.append(np.asarray(ft) * (-1.0 / float(n**2)))
+    return np.asarray(means, dtype=np.complex64)
+
+
+def _resolve_class_inputs(
+    state: InitialModelState,
+    config: DenseInitialModelEstepConfig,
+) -> tuple[Any, Any]:
+    means = config.means if config.means is not None else reference_to_dense_means(state.Iref)
+    if config.mean_variance is not None:
+        mean_variance = config.mean_variance
+    else:
+        mean_variance = np.abs(np.asarray(means)) ** 2
+    return means, mean_variance
+
+
 def _empty_accumulator(state: InitialModelState, class_idx: int, halfset_idx: int) -> VdamAccumulator:
     if state.current_size <= 0:
         r_max = state.ori_size // 2
@@ -217,6 +255,7 @@ def run_dense_initial_model_estep(
         pseudo_halfsets=state.pseudo_halfsets,
     )
     engine_kwargs = _dense_engine_kwargs(state, config)
+    means, mean_variance = _resolve_class_inputs(state, config)
 
     halfset_results: dict[int, Any] = {}
     by_halfset: dict[int, list[VdamAccumulator]] = {}
@@ -226,8 +265,8 @@ def run_dense_initial_model_estep(
             continue
         result = run_dense_k_class_em(
             experiment_dataset,
-            config.means,
-            config.mean_variance,
+            means,
+            mean_variance,
             config.noise_variance,
             config.rotations,
             config.translations,

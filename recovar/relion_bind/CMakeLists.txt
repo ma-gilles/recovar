@@ -27,6 +27,10 @@ find_library(FFTW3_LIBRARY NAMES fftw3
     HINTS "${PIXI_PREFIX}/lib"
     PATHS /usr/lib64 /usr/lib /usr/local/lib)
 
+find_library(TIFF_LIBRARY NAMES tiff
+    HINTS "${PIXI_PREFIX}/lib"
+    PATHS /usr/lib64 /usr/lib /usr/local/lib)
+
 if(NOT FFTW3_INCLUDE_DIR)
     message(FATAL_ERROR "Cannot find fftw3.h — set FFTW3_INCLUDE_DIR")
 endif()
@@ -93,6 +97,7 @@ target_include_directories(_relion_bind_core PRIVATE
     # RELION headers use #include "src/xxx.h" — so include the parent
     "${RELION_SRC_DIR}/.."
     "${RELION_SRC_DIR}/Healpix_2.15a"
+    "${PIXI_PREFIX}/include"
     "${FFTW3_INCLUDE_DIR}"
 )
 
@@ -104,6 +109,10 @@ target_compile_options(_relion_bind_core PRIVATE
 
 if(FFTW3_LIBRARY)
     target_link_libraries(_relion_bind_core PRIVATE ${FFTW3_LIBRARY})
+endif()
+
+if(TIFF_LIBRARY)
+    target_link_libraries(_relion_bind_core PRIVATE ${TIFF_LIBRARY})
 endif()
 
 # Link system FFTW if .so symlink missing but .so.3 exists

@@ -44,7 +44,7 @@ def build():
     print(f"Configuring: {' '.join(cmake_cmd)}")
     subprocess.check_call(cmake_cmd, cwd=BUILD_DIR)
 
-    ncpu = os.cpu_count() or 4
+    ncpu = int(os.environ.get("SLURM_CPUS_PER_TASK") or os.cpu_count() or 4)
     make_cmd = ["make", f"-j{ncpu}"]
     print(f"Building: {' '.join(make_cmd)}")
     subprocess.check_call(make_cmd, cwd=BUILD_DIR)

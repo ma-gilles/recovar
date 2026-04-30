@@ -195,9 +195,10 @@ def vdam_m_step_single_class(
     mom1_noise_power = np.asarray(mom1_noise_power)
     _post_data = np.asarray(_post_data)
 
-    # Step 6. reconstructGrad updates Iref[k]
-    # Pass weight from the h0 accumulator (RELION uses the latest-accumulated
-    # buffer; Phase 4 fixture parity will verify this is what RELION does).
+    # Step 6. reconstructGrad updates Iref[k].
+    # Pass weight from the h0 accumulator and the noise-power spectrum emitted
+    # by applyMomenta. This is the RELION pseudo-halfset path; omitting
+    # mom1_noise_power silently falls back to the wrong FSC/tau weighting.
     new_Iref = state.Iref.copy()
     new_Iref[k] = np.asarray(
         bind.vdam_reconstruct_grad(
@@ -213,10 +214,8 @@ def vdam_m_step_single_class(
             r_max,
             grad_min_resol_shell,
             False,
-            False,  # skip_gridding; stub tests feed random weights which NaN
-            # under the skip_gridding=True path used for RELION parity.
-            # Fixture parity (F8b) uses skip_gridding=True; see
-            # test_reconstruct_grad_fixture.
+            True,
+            mom1_noise_power,
         )
     )
 
