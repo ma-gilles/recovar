@@ -1802,6 +1802,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#jaxruntimeerror-internal-autotuning-failed-for-hlo-not_found-no-valid-config-found" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JaxRuntimeError: INTERNAL: Autotuning failed for HLO ... NOT_FOUND: No valid config found!
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2086,6 +2097,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#jaxruntimeerror-internal-autotuning-failed-for-hlo-not_found-no-valid-config-found" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        JaxRuntimeError: INTERNAL: Autotuning failed for HLO ... NOT_FOUND: No valid config found!
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -2333,6 +2355,35 @@ explicitly first:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="nv">RECOVAR_DISABLE_CUDA</span><span class="o">=</span><span class="m">1</span><span class="w"> </span>recovar<span class="w"> </span>...
 </code></pre></div>
 <p>That workaround is supported, but it is not the preferred configuration.</p>
+<h3 id="jaxruntimeerror-internal-autotuning-failed-for-hlo-not_found-no-valid-config-found"><code>JaxRuntimeError: INTERNAL: Autotuning failed for HLO ... NOT_FOUND: No valid config found!</code><a class="headerlink" href="#jaxruntimeerror-internal-autotuning-failed-for-hlo-not_found-no-valid-config-found" title="Permanent link">&para;</a></h3>
+<p>This is XLA's GPU autotuner — the part of JAX that picks an optimal CUDA
+kernel at JIT time — failing because it has no tuning data for your GPU.
+Symptoms include the message above, sometimes preceded by repeated
+<code>Allocator (GPU_X_bfc) ran out of memory</code> warnings (those are autotuner
+candidate-kernel probes failing, not real OOM).</p>
+<p>This happens on <strong>GPUs newer than the JAX version was tuned for</strong> —
+most often Blackwell (sm_100, sm_120: B100/B200, RTX 50-series, RTX
+PRO Blackwell) on JAX versions cut before Blackwell support landed.</p>
+<p>Workaround — disable autotuning so XLA falls back to default heuristic
+kernel selection:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">XLA_FLAGS</span><span class="o">=</span><span class="s2">&quot;--xla_gpu_autotune_level=0&quot;</span>
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>recovar<span class="w"> </span>...
+</code></pre></div>
+<p>You can stack this with <code>RECOVAR_DISABLE_CUDA=1</code> if you also need to
+avoid recovar's custom kernel:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">RECOVAR_DISABLE_CUDA</span><span class="o">=</span><span class="m">1</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a><span class="nb">export</span><span class="w"> </span><span class="nv">XLA_FLAGS</span><span class="o">=</span><span class="s2">&quot;--xla_gpu_autotune_level=0&quot;</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>recovar<span class="w"> </span>...
+</code></pre></div>
+<p>If <code>--xla_gpu_autotune_level=0</code> doesn't help, two more knobs to try:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nb">export</span><span class="w"> </span><span class="nv">XLA_FLAGS</span><span class="o">=</span><span class="s2">&quot;--xla_gpu_autotune_level=0 --xla_gpu_enable_triton_gemm=false&quot;</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="c1"># or</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="nb">export</span><span class="w"> </span><span class="nv">XLA_FLAGS</span><span class="o">=</span><span class="s2">&quot;--xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer=&quot;</span>
+</code></pre></div>
+<p>If none of these work, your GPU is past what your JAX version's XLA can
+lower at all. The fix is upgrading JAX once a release with tuning data
+for your hardware is available — there is no recovar-side workaround.
+This is a JAX/XLA limitation, not a recovar bug.</p>
 <h2 id="pipeline-issues">Pipeline issues<a class="headerlink" href="#pipeline-issues" title="Permanent link">&para;</a></h2>
 <h3 id="mean-looks-wrong">Mean looks wrong<a class="headerlink" href="#mean-looks-wrong" title="Permanent link">&para;</a></h3>
 <ol>
@@ -2359,12 +2410,12 @@ explicitly first:</p>
 <h2 id="analysis-issues">Analysis issues<a class="headerlink" href="#analysis-issues" title="Permanent link">&para;</a></h2>
 <h3 id="umap-is-slow">UMAP is slow<a class="headerlink" href="#umap-is-slow" title="Permanent link">&para;</a></h3>
 <p>For large datasets (&gt;200k particles), UMAP can take a long time:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>output<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span>--skip-umap
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>recovar<span class="w"> </span>analyze<span class="w"> </span>output<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span>--skip-umap
 </code></pre></div>
 <p>You can run UMAP separately later on a subset of particles.</p>
 <h3 id="density-estimation-runtime">Density estimation runtime<a class="headerlink" href="#density-estimation-runtime" title="Permanent link">&para;</a></h3>
 <p>Runtime scales as O(N^pca_dim). Keep <code>--pca_dim</code> at 4 or below:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a>recovar<span class="w"> </span>estimate_conformational_density<span class="w"> </span>output<span class="w"> </span>--pca_dim<span class="w"> </span><span class="m">3</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a>recovar<span class="w"> </span>estimate_conformational_density<span class="w"> </span>output<span class="w"> </span>--pca_dim<span class="w"> </span><span class="m">3</span>
 </code></pre></div>
 <p>Check <code>all_densities.png</code> and <code>Lcurve.png</code> to verify the optimal regularization was selected correctly.</p>
 <h2 id="installation-issues">Installation issues<a class="headerlink" href="#installation-issues" title="Permanent link">&para;</a></h2>
@@ -2377,15 +2428,15 @@ succeeds and RECOVAR uses the pure-Python fallback.</p>
 reinstall RECOVAR.</p>
 <h3 id="jax-version-conflicts">JAX version conflicts<a class="headerlink" href="#jax-version-conflicts" title="Permanent link">&para;</a></h3>
 <p>RECOVAR requires JAX 0.9.0.1. Pin the version:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;recovar[gpu]&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;recovar[gpu]&quot;</span>
 </code></pre></div>
 <h3 id="multiple-recovar-installations">Multiple recovar installations<a class="headerlink" href="#multiple-recovar-installations" title="Permanent link">&para;</a></h3>
 <p>If you have multiple editable installs, the wrong one may be imported:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a><span class="c1"># Check which recovar is active</span>
-<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import recovar; print(recovar.__file__)&quot;</span>
-<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>
-<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a><span class="c1"># Force isolation</span>
-<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONNOUSERSITE</span><span class="o">=</span><span class="m">1</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="c1"># Check which recovar is active</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>python<span class="w"> </span>-c<span class="w"> </span><span class="s2">&quot;import recovar; print(recovar.__file__)&quot;</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="c1"># Force isolation</span>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONNOUSERSITE</span><span class="o">=</span><span class="m">1</span>
 </code></pre></div>
 
 
