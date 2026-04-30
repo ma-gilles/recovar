@@ -316,7 +316,7 @@
   
     
   
-  CLI & API
+  Reference
 
         </a>
       </li>
@@ -1460,7 +1460,7 @@
   <span class="md-ellipsis">
     
   
-    CLI & API
+    Reference
   
 
     
@@ -1476,7 +1476,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    CLI & API
+    Reference
   
 
           </label>
@@ -1586,7 +1586,7 @@
   <span class="md-ellipsis">
     
   
-    Python API
+    Developer API
   
 
     
@@ -1602,7 +1602,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Python API
+    Developer API
   
 
           </label>
@@ -2171,6 +2171,17 @@
 <div class="admonition tip">
 <p class="admonition-title">How to choose zdim</p>
 <p>Look at the eigenvalue spectrum plot. Choose the zdim where eigenvalues start to flatten -- this is where signal transitions to noise. Typical values: 2-4 for simple motions, 10-20 for complex heterogeneity.</p>
+</div>
+<div class="admonition tip">
+<p class="admonition-title">What to inspect first after analyze</p>
+<ol>
+<li><strong>Mean map</strong> — is the reconstruction sensible? Open <code>mean_filt.mrc</code> in ChimeraX</li>
+<li><strong>Eigenvalue spectrum</strong> — how many modes before it flattens? That's your signal</li>
+<li><strong>PCA scatter</strong> — isolated clusters or continuous gradients?</li>
+<li><strong>K-means volumes</strong> — do the differences correspond to real density changes?</li>
+<li><strong>UMAP</strong> — does it confirm the structure seen in PCA?</li>
+<li><strong>Subsets</strong> — export only after visually inspecting volumes, not just scatter plots</li>
+</ol>
 </div>
 <div class="admonition tip">
 <p class="admonition-title">Sampling many states</p>

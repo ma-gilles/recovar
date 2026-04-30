@@ -314,7 +314,7 @@
   
     
   
-  CLI & API
+  Reference
 
         </a>
       </li>
@@ -1352,7 +1352,7 @@
   <span class="md-ellipsis">
     
   
-    CLI & API
+    Reference
   
 
     
@@ -1368,7 +1368,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    CLI & API
+    Reference
   
 
           </label>
@@ -1478,7 +1478,7 @@
   <span class="md-ellipsis">
     
   
-    Python API
+    Developer API
   
 
     
@@ -1494,7 +1494,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Python API
+    Developer API
   
 
           </label>
@@ -1892,7 +1892,7 @@
 </tr>
 <tr>
 <td><strong>RECOVAR installed</strong></td>
-<td>See <a href="../installation/">Installation</a> if you haven't set up RECOVAR yet</td>
+<td><code>pip install "recovar[gpu]"</code> for pipeline use; add <code>pip install "recovar[gui]"</code> for GUI support. See <a href="../installation/">Installation</a> for details</td>
 </tr>
 </tbody>
 </table>
@@ -1902,6 +1902,16 @@
 </div>
 <hr />
 <h2 id="run-your-first-job">Run your first job<a class="headerlink" href="#run-your-first-job" title="Permanent link">&para;</a></h2>
+<details class="info">
+<summary>Key terms</summary>
+<ul>
+<li><strong>zdim</strong>: Number of latent-space dimensions. Start with 10. Higher = more detail but slower.</li>
+<li><strong>K-means</strong>: Groups particles into representative conformational states.</li>
+<li><strong>UMAP</strong>: 2D visualization of the latent space for exploring heterogeneity.</li>
+<li><strong>Eigenvalues</strong>: Measure how much variance each principal component captures. Sharp drop = clear signal.</li>
+<li><strong>Trajectory</strong>: A series of volumes showing a conformational path between two states.</li>
+</ul>
+</details>
 <div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 16H3V4h18m0-2H3c-1.11 0-2 .89-2 2v12a2 2 0 0 0 2 2h7v2H8v2h8v-2h-2v-2h7a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2"/></svg></span> GUI</label><label for="__tabbed_1_2"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM7.25 8a.75.75 0 0 1-.22.53l-2.25 2.25a.749.749 0 0 1-1.275-.326.75.75 0 0 1 .215-.734L5.44 8 3.72 6.28a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l2.25 2.25c.141.14.22.331.22.53m1.5 1.5h3a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1 0-1.5"/></svg></span> CLI</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
@@ -1909,7 +1919,7 @@
 <p><strong>1. Launch the GUI</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>gui
 </code></pre></div>
-<p>This opens a browser window at <code>http://localhost:5000</code>.</p>
+<p>This opens a browser window at <code>http://localhost:8080</code>.</p>
 <p><strong>2. Create a project and submit a pipeline job</strong></p>
 <p><img alt="Pipeline job form" src="../../_static/gui/06_new_job_pipeline.png" /></p>
 <ol>
@@ -1956,7 +1966,7 @@
 </div>
 <details class="note">
 <summary>Expected output after each step</summary>
-<p><strong>After <code>recovar init_project</code>:</strong> Creates the project directory with a <code>.recovar_project</code> metadata file.</p>
+<p><strong>After <code>recovar init_project</code>:</strong> Creates the project directory with a <code>recovar_project.db</code> metadata file.</p>
 <p><strong>After <code>recovar pipeline</code>:</strong> Creates <code>Pipeline/job_0001/</code> containing:</p>
 <ul>
 <li><code>mean_half1.mrc</code>, <code>mean_half2.mrc</code> -- half-map mean reconstructions</li>

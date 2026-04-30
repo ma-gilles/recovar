@@ -314,7 +314,7 @@
   
     
   
-  CLI & API
+  Reference
 
         </a>
       </li>
@@ -1250,7 +1250,7 @@
   <span class="md-ellipsis">
     
   
-    CLI & API
+    Reference
   
 
     
@@ -1266,7 +1266,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    CLI & API
+    Reference
   
 
           </label>
@@ -1713,7 +1713,7 @@
   <span class="md-ellipsis">
     
   
-    Python API
+    Developer API
   
 
     
@@ -1729,7 +1729,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Python API
+    Developer API
   
 
           </label>
@@ -3037,7 +3037,7 @@
 </tr>
 </tbody>
 </table>
-<p>Creates a <code>project.json</code> file in the directory. Subsequent commands using <code>--project</code> will auto-generate numbered job directories (e.g. <code>Pipeline/job_0001/</code>, <code>Analyze/job_0001/</code>).</p>
+<p>Creates a <code>recovar_project.db</code> file in the directory. Subsequent commands using <code>--project</code> will auto-generate numbered job directories (e.g. <code>Pipeline/job_0001/</code>, <code>Analyze/job_0001/</code>).</p>
 <hr />
 <h2 id="project_status"><code>project_status</code><a class="headerlink" href="#project_status" title="Permanent link">&para;</a></h2>
 <p>Show status of all jobs in a project.</p>
@@ -3066,7 +3066,7 @@
 </table>
 <hr />
 <h2 id="common-flag-project">Common flag: <code>--project</code><a class="headerlink" href="#common-flag-project" title="Permanent link">&para;</a></h2>
-<p>All commands that produce output accept <code>--project &lt;dir&gt;</code> to enable project mode. This is the recommended way to run RECOVAR. When active, output directories are auto-generated, downstream commands may omit <code>result_dir</code> to use the latest completed Pipeline job, and RECOVAR stores human-readable job names alongside the numbered directories. If you run from within a project directory (containing <code>project.json</code>), it is auto-detected without needing the flag.</p>
+<p>All commands that produce output accept <code>--project &lt;dir&gt;</code> to enable project mode. This is the recommended way to run RECOVAR. When active, output directories are auto-generated, downstream commands may omit <code>result_dir</code> to use the latest completed Pipeline job, and RECOVAR stores human-readable job names alongside the numbered directories. If you run from within a project directory (containing <code>recovar_project.db</code>), it is auto-detected without needing the flag.</p>
 <p>Each job creates <code>job.json</code>, <code>command.txt</code>, <code>run.log</code>, and <code>README.txt</code> metadata files.</p>
 <h3 id="project-directory-naming">Project directory naming<a class="headerlink" href="#project-directory-naming" title="Permanent link">&para;</a></h3>
 <table>

@@ -312,7 +312,7 @@
   
     
   
-  CLI & API
+  Reference
 
         </a>
       </li>
@@ -1358,7 +1358,7 @@
   <span class="md-ellipsis">
     
   
-    CLI & API
+    Reference
   
 
     
@@ -1374,7 +1374,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    CLI & API
+    Reference
   
 
           </label>
@@ -1484,7 +1484,7 @@
   <span class="md-ellipsis">
     
   
-    Python API
+    Developer API
   
 
     
@@ -1500,7 +1500,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Python API
+    Developer API
   
 
           </label>
@@ -1905,6 +1905,16 @@
 <li><strong>Direct input</strong> from RELION (<code>.star</code>) and cryoSPARC (<code>.cs</code>) -- no format conversion</li>
 <li><strong>No hallucinations</strong> -- kernel regression produces transparent, verifiable volumes</li>
 </ul>
+<div class="admonition info">
+<p class="admonition-title">What you need before starting</p>
+<p>RECOVAR starts <strong>after consensus refinement</strong> in RELION or cryoSPARC. You need:</p>
+<ol>
+<li>A particle stack with poses and CTF — a RELION <code>.star</code> file or cryoSPARC <code>.cs</code> file</li>
+<li>A solvent mask (<code>.mrc</code>) — or let RECOVAR generate one automatically</li>
+<li>An NVIDIA GPU (any Volta or newer — V100, RTX 20/30/40-series, A100, H100)</li>
+</ol>
+<p>RECOVAR outputs: mean reconstruction, variance maps, eigenvolumes, latent coordinates, k-means cluster volumes, UMAP embeddings, and trajectories — all exportable back to RELION/cryoSPARC.</p>
+</div>
 <hr />
 <h2 id="example-output">Example output<a class="headerlink" href="#example-output" title="Permanent link">&para;</a></h2>
 <div class="example-outputs">
