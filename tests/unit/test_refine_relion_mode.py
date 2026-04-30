@@ -86,7 +86,10 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     apply_relion_integer_pre_shifts,
     integer_pre_shifts_or_none,
 )
-from recovar.em.dense_single_volume.helpers.preprocessing import resolve_image_mask_for_half_preprocess
+from recovar.em.dense_single_volume.helpers.preprocessing import (
+    half_preprocess_requires_host_images,
+    resolve_image_mask_for_half_preprocess,
+)
 from recovar.em.dense_single_volume.helpers.significance import (
     _compute_significance_batched,
 )
@@ -1167,6 +1170,68 @@ def test_dense_k_class_profile_is_optional(rng):
         rtol=1e-5,
         atol=1e-5,
     )
+
+
+def test_dense_k_class_keeps_relion_background_preprocess_on_host(rng):
+    dataset = MockDataset(2, rng)
+    host_batch_types = []
+
+    def _iter_batches_host(batch_size, *, indices=None, by_image=False, **kwargs):
+        _ = by_image, kwargs
+        if indices is None:
+            indices = np.arange(dataset.n_images)
+        indices = np.asarray(indices)
+        for chunk_start in range(0, len(indices), max(1, batch_size)):
+            chunk_end = min(chunk_start + max(1, batch_size), len(indices))
+            idx = np.asarray(indices[chunk_start:chunk_end])
+            yield (
+                dataset._images[idx],
+                dataset.rotation_matrices[idx],
+                dataset.translations[idx],
+                np.asarray(dataset.CTF_params[idx]),
+                None,
+                idx,
+                idx,
+            )
+
+    def _host_half_pair(batch, *, apply_image_mask_a: bool, apply_image_mask_b: bool):
+        host_batch_types.append(type(batch).__module__)
+        assert isinstance(batch, np.ndarray)
+        return (
+            _raw_real_process_half(batch, apply_image_mask=apply_image_mask_a),
+            _raw_real_process_half(batch, apply_image_mask=apply_image_mask_b),
+        )
+
+    dataset.iter_batches = _iter_batches_host
+    dataset.process_images_half_pair = _host_half_pair
+    dataset.image_source.backend.image_mask_mode = "relion_background_fill"
+    dataset.image_source.process_images_half_pair = _host_half_pair
+
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=147)
+    means = jnp.stack([mean, mean], axis=0)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    rotations = _make_rotations(2, seed=155)
+    translations = np.zeros((1, 2), dtype=np.float32)
+
+    result = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        score_with_masked_images=True,
+        sparse_pass2=False,
+    )
+
+    assert half_preprocess_requires_host_images(dataset)
+    assert host_batch_types
+    assert np.asarray(result.Ft_y).shape == (2, VOLUME_SIZE)
 
 
 def test_dense_k_class_identical_means_split_noise_stats(rng):

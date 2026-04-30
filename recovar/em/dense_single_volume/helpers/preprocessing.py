@@ -207,6 +207,13 @@ def image_preprocess_backend(experiment_dataset):
     return getattr(image_source, "backend", image_source)
 
 
+def half_preprocess_requires_host_images(experiment_dataset) -> bool:
+    """Return whether native half preprocessing currently runs on host arrays."""
+
+    backend = image_preprocess_backend(experiment_dataset)
+    return getattr(backend, "image_mask_mode", "multiply") == "relion_background_fill"
+
+
 def resolve_image_mask_for_half_preprocess(
     experiment_dataset,
     image_shape,

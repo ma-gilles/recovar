@@ -9,6 +9,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from recovar.em.dense_single_volume.helpers.env_flags import parse_env_int_set
+from recovar.em.dense_single_volume.helpers.preprocessing import half_preprocess_requires_host_images
 
 
 def _maybe_dump_significance_batch(
@@ -161,14 +162,6 @@ def _maybe_dump_significance_batch(
         )
 
 
-def _uses_relion_background_fill(experiment_dataset) -> bool:
-    image_source = getattr(experiment_dataset, "image_source", None)
-    while hasattr(image_source, "parent"):
-        image_source = image_source.parent
-    backend = getattr(image_source, "backend", image_source)
-    return getattr(backend, "image_mask_mode", None) == "relion_background_fill"
-
-
 def _compute_significance_batched(
     experiment_dataset,
     mean,
@@ -303,7 +296,7 @@ def _compute_significance_batched(
         if use_window:
             half_weights_windowed = window_spec.score_values(half_weights)
 
-    use_relion_numpy_preprocess = _uses_relion_background_fill(experiment_dataset)
+    use_relion_numpy_preprocess = half_preprocess_requires_host_images(experiment_dataset)
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
     norm_half_weights = make_half_image_weights(image_shape)
 
@@ -937,7 +930,7 @@ def _compute_k_class_significance_batched(
     )
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
     norm_half_weights = make_half_image_weights(image_shape)
-    use_relion_numpy_preprocess = _uses_relion_background_fill(experiment_dataset)
+    use_relion_numpy_preprocess = half_preprocess_requires_host_images(experiment_dataset)
 
     def _preprocess_batch_relion_numpy(batch_data, ctf_params, batch_size):
         processed_half = experiment_dataset.process_images_half(

@@ -35,6 +35,7 @@ from .helpers.jax_runtime import block_until_ready as _block_until_ready
 from .helpers.preprocessing import (
     apply_half_translation_phases,
     dense_batch_half_input_pair,
+    half_preprocess_requires_host_images,
     prepare_reconstruction_batch as _prepare_reconstruction_batch,
     process_half_image,
     preprocess_batch as _preprocess_batch,
@@ -524,6 +525,13 @@ def _iter_rotation_blocks(n_blocks: int, rotation_block_size: int):
         yield block_index, r0, r0 + rotation_block_size
 
 
+def _batch_image_count(batch) -> int:
+    shape = getattr(batch, "shape", None)
+    if shape is None:
+        shape = np.asarray(batch).shape
+    return int(shape[0])
+
+
 def _select_class_or_shared(value, class_index: int, n_classes: int):
     value_array = jnp.asarray(value)
     if value_array.ndim >= 2 and int(value_array.shape[0]) == n_classes:
@@ -856,6 +864,7 @@ def run_dense_k_class_em_native(
         indices=image_indices,
         by_image=False,
     )
+    use_host_half_preprocess = half_preprocess_requires_host_images(experiment_dataset)
     if sync_timers:
         profile["setup_s"] += time.time() - overall_t0
     while True:
@@ -876,8 +885,8 @@ def run_dense_k_class_em_native(
         if real_space_pre_shift_applied:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
 
-        batch_size = int(np.asarray(batch_data).shape[0])
-        batch_data = jnp.asarray(batch_data)
+        batch_size = _batch_image_count(batch_data)
+        preprocess_batch_data = batch_data if use_host_half_preprocess else jnp.asarray(batch_data)
         translation_sqdist_ang = None
         if translation_prior_centers_np is not None:
             centers = translation_prior_centers_for_images(
@@ -894,7 +903,7 @@ def run_dense_k_class_em_native(
         if relion_firstiter_score_mode == "normalized_cc":
             shifted_half, batch_norm, ctf2_half_score, ctf2_over_nv_half = _preprocess_batch_firstiter_cc(
                 experiment_dataset,
-                batch_data,
+                preprocess_batch_data,
                 ctf_params,
                 noise_variance_half,
                 translations,
@@ -903,7 +912,7 @@ def run_dense_k_class_em_native(
             )
             shifted_recon_half = _prepare_reconstruction_batch(
                 experiment_dataset,
-                batch_data,
+                preprocess_batch_data,
                 ctf_params,
                 noise_variance_half,
                 translations,
@@ -913,7 +922,7 @@ def run_dense_k_class_em_native(
             processed_score_half, processed_recon_half, ctf_half, noise_variance_raw_half, translation_phases_half = (
                 dense_batch_half_input_pair(
                     experiment_dataset,
-                    batch_data,
+                    preprocess_batch_data,
                     ctf_params,
                     noise_variance_half,
                     translations,
@@ -942,7 +951,7 @@ def run_dense_k_class_em_native(
         else:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
                 experiment_dataset,
-                batch_data,
+                preprocess_batch_data,
                 ctf_params,
                 noise_variance_half,
                 translations,
@@ -1008,7 +1017,7 @@ def run_dense_k_class_em_native(
             shifted_masked_for_noise = window_spec.recon_values(shifted_half_with_dc)
             processed_masked_half = process_half_image(
                 experiment_dataset,
-                batch_data,
+                preprocess_batch_data,
                 score_with_masked_images,
             )
             if image_corrections is not None:
