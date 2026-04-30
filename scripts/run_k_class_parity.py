@@ -719,6 +719,12 @@ def main() -> None:
 
     print(f"RELION K-class replay: K={n_classes}, N={grid_size}, prev={args.prev_iter}, target={args.target_iter}")
     print(f"  current_size={current_size}, pixel_size={pixel_size}, tau2_fudge={tau2_fudge}")
+    print(
+        "  runtime knobs: "
+        f"image_batch_size={args.image_batch_size}, rotation_block_size={args.rotation_block_size}, "
+        f"em_repeats={args.em_repeats}, projection_padding={args.projection_padding_factor}, "
+        f"reconstruction_padding={args.reconstruction_padding_factor}"
+    )
     print(f"  output_dir={output_dir}")
     print(f"  JAX devices: {jax.devices()}")
 
@@ -1128,6 +1134,11 @@ def main() -> None:
         "n_rotations": int(rotations.shape[0]),
         "n_translations": int(translations.shape[0]),
         "random_perturbation": float(random_perturbation),
+        "image_batch_size": int(args.image_batch_size),
+        "rotation_block_size": int(args.rotation_block_size),
+        "projection_padding_factor": int(args.projection_padding_factor),
+        "reconstruction_padding_factor": int(args.reconstruction_padding_factor),
+        "disc_type": str(args.disc_type),
         "elapsed_s": float(elapsed_s),
         "em_repeat_times_s": [float(value) for value in em_times],
         "em_repeats": int(args.em_repeats),
@@ -1139,7 +1150,9 @@ def main() -> None:
         "best_permutation": best_perm,
         "reconstruction_variants": variant_results,
         "best_reconstruction_variant": best_variant,
+        "winner_take_all_mstep": bool(args.winner_take_all_mstep),
         "significant_mstep": bool(args.significant_mstep),
+        "significance_adaptive_fraction": float(args.significance_adaptive_fraction),
         "significant_samples": significant_summary,
         "relion_bpref_mstep": bool(args.relion_bpref_mstep),
         "relion_bpref_summary": relion_bpref_summary,
@@ -1171,6 +1184,11 @@ def main() -> None:
     print("K-class parity summary:")
     print(f"  recovar weights: {recovar_weights.round(6).tolist()}")
     print(f"  relion weights in recovar order: {relion_weights[perm].round(6).tolist()}")
+    print(
+        "  runtime knobs: "
+        f"image_batch_size={summary['image_batch_size']}, rotation_block_size={summary['rotation_block_size']}, "
+        f"em_repeats={summary['em_repeats']}"
+    )
     print(f"  class assignment accuracy after permutation: {class_accuracy:.4f}")
     print(
         "  Pmax abs diff: "
