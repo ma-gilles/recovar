@@ -15,7 +15,7 @@
         <link rel="canonical" href="https://ma-gilles.github.io/recovar/guide/conformational-density/">
       
       
-        <link rel="prev" href="../gui/">
+        <link rel="prev" href="../analysis/">
       
       
         <link rel="next" href="../extracting-subsets/">
@@ -56,6 +56,8 @@
     
     
       <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
     
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
@@ -274,7 +276,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../tutorial/" class="md-tabs__link">
+        <a href="../gui/" class="md-tabs__link">
           
   
   
@@ -672,6 +674,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web GUI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../tutorial/" class="md-nav__link">
         
   
@@ -837,34 +867,6 @@
                 
   
   
-  
-  
-    <li class="md-nav__item">
-      <a href="../gui/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Web GUI
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
     
   
   
@@ -954,6 +956,17 @@
     <span class="md-ellipsis">
       
         Using density for trajectories
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using the GUI
       
     </span>
   </a>
@@ -1599,6 +1612,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#using-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using the GUI
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1680,6 +1704,10 @@
 <p class="admonition-title">GUI alternative</p>
 <p>In the GUI's latent space explorer, you can select two points on the scatter plot to compute a trajectory interactively. See the <a href="../gui/#latent-space-explorer">GUI Guide</a>.</p>
 </div>
+<h2 id="using-the-gui">Using the GUI<a class="headerlink" href="#using-the-gui" title="Permanent link">&para;</a></h2>
+<p>In the web GUI (<code>recovar gui</code>), click <strong>+ New Job</strong> and select <strong>Density Estimation</strong> from the Job Type dropdown. Set the result directory (path to pipeline output), PCA dimension, and latent dimension, then submit.</p>
+<p>You can also reach density estimation from a completed pipeline job's <strong>Suggested Next Steps</strong> by clicking <strong>Estimate conformational density</strong>, which pre-fills the result directory.</p>
+<p>After density estimation completes, use the <strong>Latent Space Explorer</strong> to color particles by conformational density and visually identify stable states.</p>
 
 
 

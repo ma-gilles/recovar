@@ -57,6 +57,8 @@
     
       <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
     
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -274,7 +276,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../tutorial/" class="md-tabs__link">
+        <a href="../gui/" class="md-tabs__link">
           
   
   
@@ -672,6 +674,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web GUI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../tutorial/" class="md-nav__link">
         
   
@@ -820,34 +850,6 @@
     
   
     Analyzing Results
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../gui/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Web GUI
   
 
     
@@ -1027,6 +1029,17 @@
     <span class="md-ellipsis">
       
         Using extracted subsets
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#using-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using the GUI
       
     </span>
   </a>
@@ -1689,6 +1702,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#using-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using the GUI
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1817,6 +1841,16 @@
 <a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="n">starfile</span><span class="o">.</span><span class="n">write</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="s2">&quot;particles_subset.star&quot;</span><span class="p">)</span>
 </code></pre></div>
 <p>You can then import <code>particles_subset.star</code> back into RELION or cryoSPARC for focused refinement.</p>
+<h2 id="using-the-gui">Using the GUI<a class="headerlink" href="#using-the-gui" title="Permanent link">&para;</a></h2>
+<p>In the web GUI's <strong>Latent Space Explorer</strong> (available after running Analyze), you can interactively select particles using lasso, rectangle, or polygon tools:</p>
+<ol>
+<li>Open a completed pipeline or analyze job and click <strong>Explore Latent Space</strong></li>
+<li>Use the selection tools to draw a region on the PCA or UMAP scatter plot</li>
+<li>The number of selected particles is displayed immediately</li>
+<li>Click <strong>Export .star</strong> to save the selected particles as a RELION-compatible <code>.star</code> file, or <strong>Export .ind</strong> to save particle indices</li>
+<li>A link to <strong>rerun pipeline</strong> with the exported subset appears for one-click re-processing</li>
+</ol>
+<p>This provides a visual, interactive alternative to the CLI-based k-means cluster extraction described above. See the <a href="../gui/">GUI Guide</a> for details.</p>
 
 
 

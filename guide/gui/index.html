@@ -15,10 +15,10 @@
         <link rel="canonical" href="https://ma-gilles.github.io/recovar/guide/gui/">
       
       
-        <link rel="prev" href="../analysis/">
+        <link rel="prev" href="../../getting-started/testing/">
       
       
-        <link rel="next" href="../conformational-density/">
+        <link rel="next" href="../tutorial/">
       
       
         
@@ -56,6 +56,8 @@
     
     
       <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
     
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
@@ -274,7 +276,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../tutorial/" class="md-tabs__link">
+        <a href="./" class="md-tabs__link">
           
   
   
@@ -669,6 +671,325 @@
                 
   
   
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web GUI
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web GUI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#launching-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Launching the GUI
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Launching the GUI">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#options" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Options
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#remote-access-via-ssh" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Remote access via SSH
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#getting-started" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Getting Started
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Getting Started">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#first-launch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        First Launch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#creating-a-project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating a Project
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#opening-an-existing-project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opening an Existing Project
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#dashboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Dashboard
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#settings" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Settings
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Settings">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#slurm-cluster-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SLURM Cluster Tab
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#local-gpu-tab" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Local GPU Tab
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#submitting-jobs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Submitting Jobs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#job-detail-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Job Detail Page
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clone-job-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clone Job Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exploring-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exploring Results
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Exploring Results">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#latent-space-explorer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Latent Space Explorer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3d-volume-viewer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3D Volume Viewer
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gui-vs-cli-workflow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GUI vs CLI Workflow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jobs-survive-gui-restarts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Jobs Survive GUI Restarts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#requirements" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Requirements
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
   
   
     <li class="md-nav__item">
@@ -828,331 +1149,6 @@
   
 
       </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-    
-  
-  
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Web GUI
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Web GUI
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#launching-the-gui" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Launching the GUI
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Launching the GUI">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#options" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Options
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#remote-access-via-ssh" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Remote access via SSH
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#projects" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Projects
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Projects">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#importing-existing-results" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Importing existing results
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#dashboard" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Dashboard
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#creating-jobs" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Creating jobs
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Creating jobs">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#pipeline-job" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Pipeline job
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#analyze-job" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Analyze job
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#other-job-types" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Other job types
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#slurm-execution" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        SLURM execution
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#exploring-results" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Exploring results
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Exploring results">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#latent-space-explorer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Latent space explorer
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Latent space explorer">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#point-clicks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Point clicks
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#lasso-rectangle-polygon-selection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Lasso / rectangle / polygon selection
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#3d-volume-viewer" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        3D volume viewer
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#volume-browser" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Volume browser
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#result-images" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Result images
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#gui-vs-cli-workflow" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        GUI vs CLI workflow
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#requirements" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Requirements
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1823,22 +1819,44 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#projects" class="md-nav__link">
+  <a href="#getting-started" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Projects
+        Getting Started
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Projects">
+    <nav class="md-nav" aria-label="Getting Started">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#importing-existing-results" class="md-nav__link">
+  <a href="#first-launch" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Importing existing results
+        First Launch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#creating-a-project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Creating a Project
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#opening-an-existing-project" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Opening an Existing Project
       
     </span>
   </a>
@@ -1862,22 +1880,22 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#creating-jobs" class="md-nav__link">
+  <a href="#settings" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Creating jobs
+        Settings
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Creating jobs">
+    <nav class="md-nav" aria-label="Settings">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#pipeline-job" class="md-nav__link">
+  <a href="#slurm-cluster-tab" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Pipeline job
+        SLURM Cluster Tab
       
     </span>
   </a>
@@ -1885,32 +1903,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#analyze-job" class="md-nav__link">
+  <a href="#local-gpu-tab" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Analyze job
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#other-job-types" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Other job types
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#slurm-execution" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        SLURM execution
+        Local GPU Tab
       
     </span>
   </a>
@@ -1923,53 +1919,58 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#exploring-results" class="md-nav__link">
+  <a href="#submitting-jobs" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Exploring results
+        Submitting Jobs
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Exploring results">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#job-detail-page" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Job Detail Page
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#clone-job-flow" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Clone Job Flow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exploring-results" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exploring Results
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Exploring Results">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
   <a href="#latent-space-explorer" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Latent space explorer
+        Latent Space Explorer
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Latent space explorer">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#point-clicks" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Point clicks
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#lasso-rectangle-polygon-selection" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Lasso / rectangle / polygon selection
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
         
@@ -1977,29 +1978,7 @@
   <a href="#3d-volume-viewer" class="md-nav__link">
     <span class="md-ellipsis">
       
-        3D volume viewer
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#volume-browser" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Volume browser
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#result-images" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Result images
+        3D Volume Viewer
       
     </span>
   </a>
@@ -2015,7 +1994,18 @@
   <a href="#gui-vs-cli-workflow" class="md-nav__link">
     <span class="md-ellipsis">
       
-        GUI vs CLI workflow
+        GUI vs CLI Workflow
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#jobs-survive-gui-restarts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Jobs Survive GUI Restarts
       
     </span>
   </a>
@@ -2054,7 +2044,7 @@
 
 
 <h1 id="web-gui">Web GUI<a class="headerlink" href="#web-gui" title="Permanent link">&para;</a></h1>
-<p>RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces interactively, and viewing 3D volumes — all without writing commands.</p>
+<p>RECOVAR includes a browser-based GUI for launching jobs, exploring latent spaces interactively, and viewing 3D volumes -- all without writing commands.</p>
 <h2 id="launching-the-gui">Launching the GUI<a class="headerlink" href="#launching-the-gui" title="Permanent link">&para;</a></h2>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>gui
 </code></pre></div>
@@ -2097,90 +2087,97 @@
 <a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Step 3: Open http://localhost:8080 in your local browser</span>
 </code></pre></div>
 <p>The tunnel forwards traffic so the remote server appears local. If port 8080 is taken, use a different port in both the SSH command and <code>recovar gui --port &lt;port&gt;</code>.</p>
-<h2 id="projects">Projects<a class="headerlink" href="#projects" title="Permanent link">&para;</a></h2>
-<p>The GUI organizes work into <strong>projects</strong> — directories that contain your pipeline outputs, analyses, and computed volumes. On first launch, create a project by pointing to an existing directory or choosing a new one.</p>
-<p>The GUI stores a lightweight SQLite index in each project directory (<code>recovar_project.db</code>). This database is fully rebuildable — if you delete it, use <strong>Scan for Existing Jobs</strong> to re-import everything from the filesystem.</p>
-<h3 id="importing-existing-results">Importing existing results<a class="headerlink" href="#importing-existing-results" title="Permanent link">&para;</a></h3>
-<p>Click <strong>Scan for Existing Jobs</strong> on the dashboard and point to the directory <em>containing</em> your pipeline outputs. For example, if your output is at <code>/scratch/my_project/Pipeline/job_0001/</code>, scan <code>/scratch/my_project/</code>.</p>
+<h2 id="getting-started">Getting Started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h2>
+<h3 id="first-launch">First Launch<a class="headerlink" href="#first-launch" title="Permanent link">&para;</a></h3>
+<p>When you first open the GUI, you will see the initial dashboard with no project loaded. The sidebar offers two actions: <strong>Create Project</strong> and <strong>Open Project</strong>. The system info bar at the top shows the hostname, execution mode (Local or SLURM), recovar version, and available GPUs.</p>
+<p><img alt="Initial Dashboard" src="../../_static/gui/01_initial_dashboard.png" /></p>
+<h3 id="creating-a-project">Creating a Project<a class="headerlink" href="#creating-a-project" title="Permanent link">&para;</a></h3>
+<p>Click <strong>Create Project</strong> in the sidebar or in the main content area. A dialog opens with a built-in file browser that lets you navigate the filesystem.</p>
+<p><img alt="Create Project Dialog" src="../../_static/gui/02_create_project.png" /></p>
+<p>To create a project:</p>
+<ol>
+<li><strong>Navigate</strong> to the directory where you want the project.</li>
+<li>Click <strong>Select this directory</strong> to confirm the location.</li>
+<li><strong>Name your project</strong> in the Project Name field.</li>
+<li>Click the blue <strong>Create Project</strong> button.</li>
+</ol>
+<p>The GUI creates a <code>recovar_project.db</code> SQLite file in that directory.</p>
+<h3 id="opening-an-existing-project">Opening an Existing Project<a class="headerlink" href="#opening-an-existing-project" title="Permanent link">&para;</a></h3>
+<p>Click <strong>Open Project</strong> to open a directory that already contains a recovar project.</p>
+<p><img alt="Open Project Dialog" src="../../_static/gui/03_open_project.png" /></p>
 <h2 id="dashboard">Dashboard<a class="headerlink" href="#dashboard" title="Permanent link">&para;</a></h2>
-<p>The dashboard shows all jobs with status indicators:</p>
+<p>Once a project is open, the dashboard shows a complete overview of your work.</p>
+<p><img alt="Dashboard with Project" src="../../_static/gui/04_dashboard.png" /></p>
+<p>Key areas:</p>
 <ul>
-<li><strong>Running</strong> — currently executing (with SLURM job tracking if on a cluster)</li>
-<li><strong>Queued</strong> — submitted to SLURM, waiting for resources</li>
-<li><strong>Completed</strong> — finished successfully</li>
-<li><strong>Failed</strong> — exited with an error (click to view error details)</li>
+<li><strong>Sidebar job tree</strong> (left) -- All jobs organized by type with color-coded status icons</li>
+<li><strong>Job count cards</strong> -- Quick summary of total jobs and counts per type</li>
+<li><strong>Run Pipeline / Scan for Jobs</strong> -- Start a new pipeline job or import existing CLI outputs</li>
+<li><strong>Recent Jobs</strong> -- Chronological list with status badges</li>
+<li><strong>Disk usage</strong> (bottom-left) -- Filesystem usage monitor</li>
+<li><strong>Settings</strong> (bottom-left) -- Configure SLURM and local execution defaults</li>
 </ul>
-<p>The sidebar groups jobs by type (Pipeline, Analyze, Compute State, Trajectory, Density, etc.) for quick navigation.</p>
-<h2 id="creating-jobs">Creating jobs<a class="headerlink" href="#creating-jobs" title="Permanent link">&para;</a></h2>
-<p>Click <strong>New Job</strong> to create a pipeline or analysis run.</p>
-<h3 id="pipeline-job">Pipeline job<a class="headerlink" href="#pipeline-job" title="Permanent link">&para;</a></h3>
-<p>Configure all pipeline parameters through the form:</p>
+<h2 id="settings">Settings<a class="headerlink" href="#settings" title="Permanent link">&para;</a></h2>
+<p>The Settings page (gear icon at the bottom of the sidebar) lets you configure default values for SLURM and local GPU execution. These defaults are pre-filled into every new job form.</p>
+<h3 id="slurm-cluster-tab">SLURM Cluster Tab<a class="headerlink" href="#slurm-cluster-tab" title="Permanent link">&para;</a></h3>
+<p><img alt="Settings - SLURM" src="../../_static/gui/05_settings_slurm.png" /></p>
+<p>Three sections with cascading priority:</p>
+<ol>
+<li><strong>Effective SLURM Defaults</strong> -- Summary bar showing current values with provenance badges ("user", "project", or "built-in")</li>
+<li><strong>User-Global Defaults</strong> -- Settings for all projects, stored in <code>~/.config/recovar/config.toml</code></li>
+<li><strong>Project Defaults</strong> -- Per-project overrides, stored in <code>&lt;project_dir&gt;/recovar.toml</code></li>
+</ol>
+<h3 id="local-gpu-tab">Local GPU Tab<a class="headerlink" href="#local-gpu-tab" title="Permanent link">&para;</a></h3>
+<p><img alt="Settings - Local GPU" src="../../_static/gui/05b_settings_local_gpu.png" /></p>
+<p>Same layered structure with GPU-specific options:</p>
 <ul>
-<li><strong>Particles</strong> — browse to select your <code>.star</code>, <code>.cs</code>, or <code>.mrcs</code> file.</li>
-<li><strong>Mask</strong> — select an <code>.mrc</code> mask file.</li>
-<li><strong>Downsampling</strong> — set the target box size (e.g., 128, 256).</li>
-<li><strong>Advanced options</strong> — focus mask, contrast correction, lazy loading, B-factor, and more.</li>
+<li><strong>GPU picker buttons</strong> -- Select which GPUs to use (sets <code>CUDA_VISIBLE_DEVICES</code>)</li>
+<li><strong>Setup command</strong> -- Shell command run before every local job (e.g., <code>module load cudatoolkit/12.8</code>)</li>
+<li><strong>Environment variables</strong> -- Extra environment variables for jobs</li>
 </ul>
-<h3 id="analyze-job">Analyze job<a class="headerlink" href="#analyze-job" title="Permanent link">&para;</a></h3>
-<p>After a pipeline completes, the <strong>Suggested Next Steps</strong> section offers a one-click link to run analysis with the result directory pre-filled:</p>
+<h2 id="submitting-jobs">Submitting Jobs<a class="headerlink" href="#submitting-jobs" title="Permanent link">&para;</a></h2>
+<p>Click <strong>+ New Job</strong> in the sidebar or the dashboard. Each job type has its own form. For detailed screenshots and field descriptions, see the relevant guide page:</p>
 <ul>
-<li><strong>Z-dimension</strong> — which latent dimension to use (default: 4).</li>
-<li><strong>K-means clusters</strong> — number of clusters (default: 40).</li>
-<li><strong>Trajectories</strong> — number of trajectories between most-distant cluster pairs.</li>
+<li><strong>Pipeline</strong> -- See <a href="../pipeline/#using-the-gui">Running the Pipeline</a></li>
+<li><strong>Analyze</strong> -- See <a href="../analysis/#using-the-gui">Analyzing Results</a></li>
+<li><strong>Downsample</strong> -- See <a href="../downsampling/#using-the-gui">Downsampling</a></li>
+<li><strong>Density Estimation</strong> -- See <a href="../conformational-density/#using-the-gui">Conformational Density</a></li>
+<li><strong>Compute State</strong> -- Generate a 3D volume at a specific latent coordinate</li>
+<li><strong>Compute Trajectory</strong> -- Generate volumes along a path between two latent points</li>
+<li><strong>Stable States</strong> -- Find local maxima of the conformational density</li>
+<li><strong>Postprocess</strong> -- Sharpen and filter volumes</li>
 </ul>
-<h3 id="other-job-types">Other job types<a class="headerlink" href="#other-job-types" title="Permanent link">&para;</a></h3>
+<p>Each form includes an executor toggle (SLURM Cluster or Local GPU) with configurable resource settings.</p>
+<h2 id="job-detail-page">Job Detail Page<a class="headerlink" href="#job-detail-page" title="Permanent link">&para;</a></h2>
+<p>Click any job in the sidebar to view its details. The job detail page has multiple tabs:</p>
 <ul>
-<li><strong>Compute State</strong> — generate a volume at a specific latent coordinate</li>
-<li><strong>Compute Trajectory</strong> — generate volumes along a path between two latent points (optionally density-guided)</li>
-<li><strong>Density Estimation</strong> — estimate conformational density in latent space</li>
-<li><strong>Stable States</strong> — find local maxima of the conformational density</li>
-<li><strong>Postprocess</strong> — sharpen and filter volumes</li>
-<li><strong>Downsample</strong> — pre-downsample particle images</li>
+<li><strong>Overview</strong> -- Status, duration, execution details, output directory, suggested next steps, and quick preview plots</li>
+<li><strong>Logs</strong> -- Full job output with color-coded messages and real-time streaming for running jobs</li>
+<li><strong>Parameters</strong> -- All parameters used, with <strong>Show CLI Command</strong> and <strong>Clone Job</strong> buttons</li>
+<li><strong>Volumes</strong> -- Output volumes organized by category, with a built-in 3D isosurface viewer</li>
+<li><strong>Plots</strong> -- All diagnostic plots in a grid (click to view full resolution)</li>
 </ul>
-<h3 id="slurm-execution">SLURM execution<a class="headerlink" href="#slurm-execution" title="Permanent link">&para;</a></h3>
-<p>On clusters with SLURM, the GUI auto-detects <code>sbatch</code> and shows SLURM settings:</p>
+<p><strong>Completed job:</strong></p>
+<p><img alt="Completed Job" src="../../_static/gui/07_job_completed.png" /></p>
+<p><strong>Running job:</strong></p>
+<p><img alt="Running Job" src="../../_static/gui/13_job_running.png" /></p>
+<p><strong>Failed job:</strong></p>
+<p><img alt="Failed Job" src="../../_static/gui/12_job_failed.png" /></p>
+<h2 id="clone-job-flow">Clone Job Flow<a class="headerlink" href="#clone-job-flow" title="Permanent link">&para;</a></h2>
+<p>From the <strong>Parameters</strong> tab of any job, click <strong>Clone Job</strong> to open a new form with all parameters pre-filled. Modify what you need and resubmit.</p>
+<p><img alt="Cloned Form" src="../../_static/gui/19_cloned_form.png" /></p>
+<h2 id="exploring-results">Exploring Results<a class="headerlink" href="#exploring-results" title="Permanent link">&para;</a></h2>
+<h3 id="latent-space-explorer">Latent Space Explorer<a class="headerlink" href="#latent-space-explorer" title="Permanent link">&para;</a></h3>
+<p>After running an Analyze job, click <strong>Explore Latent Space</strong> to open the interactive explorer:</p>
 <ul>
-<li>Partition and account</li>
-<li>Number of GPUs, CPUs, and memory</li>
-<li>Time limit</li>
-<li>Extra SBATCH directives (for advanced users)</li>
-</ul>
-<p>You can <strong>save SLURM defaults per project</strong> so they persist across sessions.</p>
-<h2 id="exploring-results">Exploring results<a class="headerlink" href="#exploring-results" title="Permanent link">&para;</a></h2>
-<h3 id="latent-space-explorer">Latent space explorer<a class="headerlink" href="#latent-space-explorer" title="Permanent link">&para;</a></h3>
-<p>The <strong>Explore</strong> page shows interactive scatter plots of the full particle latent space (50K+ points at 60 fps), with:</p>
-<ul>
-<li><strong>PCA and UMAP</strong> projections side by side</li>
+<li><strong>PCA and UMAP</strong> projections side by side (50K+ points at 60 fps via WebGL)</li>
 <li><strong>Color by</strong> k-means cluster, point density, or deconvolved conformational density</li>
-<li><strong>Selectable zdim</strong> — switch between latent dimensions (1, 2, 4, 10, 20, etc.)</li>
-<li>Axis selectors for PCA components</li>
+<li><strong>Click</strong> a particle or k-means center to see its coordinates and generate a volume</li>
+<li><strong>Lasso / rectangle / polygon selection</strong> to select particles and export <code>.star</code> or <code>.ind</code> files (see <a href="../extracting-subsets/#using-the-gui">Extracting Subsets</a>)</li>
 </ul>
-<h4 id="point-clicks">Point clicks<a class="headerlink" href="#point-clicks" title="Permanent link">&para;</a></h4>
-<p>Click a particle or k-means center to see its full latent coordinate vector and density value. From there:</p>
-<ul>
-<li><strong>Compute State</strong> — submit a job to generate a volume at that point</li>
-<li><strong>Compute Trajectory</strong> — select two points and submit a trajectory job (with optional density-guided path)</li>
-</ul>
-<h4 id="lasso-rectangle-polygon-selection">Lasso / rectangle / polygon selection<a class="headerlink" href="#lasso-rectangle-polygon-selection" title="Permanent link">&para;</a></h4>
-<p>Use the selection tools to draw a region on the scatter plot:</p>
-<ul>
-<li>See the number of selected particles</li>
-<li><strong>Export .star</strong> — one-click export of selected particles as a RELION .star file (if the original .star is available)</li>
-<li><strong>Export .ind</strong> — export particle indices as an index file</li>
-<li>A link to <strong>rerun pipeline</strong> with the exported subset appears immediately</li>
-</ul>
-<h3 id="3d-volume-viewer">3D volume viewer<a class="headerlink" href="#3d-volume-viewer" title="Permanent link">&para;</a></h3>
-<p>View isosurface renderings of any volume directly in the browser:</p>
-<ul>
-<li>Adjustable <strong>sigma threshold</strong> for isosurface level</li>
-<li><strong>Slice view</strong> with axis selection and slider navigation</li>
-<li>Click volumes in the <strong>Volumes</strong> tab to load them</li>
-</ul>
-<h3 id="volume-browser">Volume browser<a class="headerlink" href="#volume-browser" title="Permanent link">&para;</a></h3>
-<p>Organized listing of all output volumes, categorized by type (K-means centers, trajectories, eigenvectors, half-maps, etc.). Toggle display of half-map and unfiltered volumes.</p>
-<h3 id="result-images">Result images<a class="headerlink" href="#result-images" title="Permanent link">&para;</a></h3>
-<p>Pipeline diagnostic plots (eigenvalue spectrum, mean FSC, contrast histogram) are displayed as a preview grid on the job detail page.</p>
-<h2 id="gui-vs-cli-workflow">GUI vs CLI workflow<a class="headerlink" href="#gui-vs-cli-workflow" title="Permanent link">&para;</a></h2>
+<h3 id="3d-volume-viewer">3D Volume Viewer<a class="headerlink" href="#3d-volume-viewer" title="Permanent link">&para;</a></h3>
+<p>View isosurface renderings of any volume directly in the browser with adjustable sigma threshold, slice views, and side-by-side comparison of up to 4 volumes.</p>
+<h2 id="gui-vs-cli-workflow">GUI vs CLI Workflow<a class="headerlink" href="#gui-vs-cli-workflow" title="Permanent link">&para;</a></h2>
 <p>The GUI mirrors the CLI workflow, adding interactivity:</p>
 <table>
 <thead>
@@ -2192,31 +2189,31 @@
 <tbody>
 <tr>
 <td><code>recovar pipeline ...</code></td>
-<td>New Job → Pipeline form</td>
+<td>New Job -&gt; Pipeline form</td>
 </tr>
 <tr>
 <td><code>recovar analyze ...</code></td>
-<td>New Job → Analyze form (or click "Suggested Next Step")</td>
+<td>New Job -&gt; Analyze form (or click "Suggested Next Step")</td>
 </tr>
 <tr>
 <td><code>recovar compute_state ...</code></td>
-<td>Click a point in the latent space explorer</td>
+<td>Click a point in the latent space explorer, or New Job -&gt; Compute State form</td>
 </tr>
 <tr>
 <td><code>recovar compute_trajectory ...</code></td>
-<td>Select two points in the latent space explorer</td>
+<td>Select two points in the latent space explorer, or New Job -&gt; Trajectory form</td>
 </tr>
 <tr>
 <td>View <code>.mrc</code> in ChimeraX</td>
-<td>Built-in 3D viewer and slice viewer</td>
+<td>Built-in 3D volume viewer and slice viewer</td>
 </tr>
 <tr>
 <td>Inspect <code>.png</code> plots</td>
-<td>Result images tab</td>
+<td>Plots tab on the job detail page</td>
 </tr>
 <tr>
 <td><code>recovar estimate_conformational_density ...</code></td>
-<td>New Job → Density Estimation form</td>
+<td>New Job -&gt; Density Estimation form</td>
 </tr>
 </tbody>
 </table>
@@ -2224,11 +2221,14 @@
 <p class="admonition-title">Use both</p>
 <p>The GUI and CLI work on the same output directories. You can run <code>pipeline</code> and <code>analyze</code> from the command line, then launch <code>recovar gui</code> and scan the directory to explore the results interactively. Or do everything through the GUI.</p>
 </div>
+<h2 id="jobs-survive-gui-restarts">Jobs Survive GUI Restarts<a class="headerlink" href="#jobs-survive-gui-restarts" title="Permanent link">&para;</a></h2>
+<p>Jobs submitted through the GUI (both SLURM and local) are tracked in the project database. If the GUI server restarts, it reconnects to all in-flight jobs automatically -- no work is lost.</p>
 <h2 id="requirements">Requirements<a class="headerlink" href="#requirements" title="Permanent link">&para;</a></h2>
-<p>The GUI requires FastAPI and uvicorn, which are included when you install with:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>pip<span class="w"> </span>install<span class="w"> </span>recovar<span class="o">[</span>gui<span class="o">]</span>
+<p>The GUI requires FastAPI, uvicorn, SQLAlchemy, and a few other packages, which are all included when you install with:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>pip<span class="w"> </span>install<span class="w"> </span><span class="s2">&quot;recovar[gui]&quot;</span>
 </code></pre></div>
-<p>The frontend is pre-built and bundled — no Node.js required at runtime.</p>
+<p>This installs the <code>gui</code> extra, which includes <code>fastapi</code>, <code>uvicorn</code>, <code>python-multipart</code>, <code>sqlalchemy</code>, <code>aiofiles</code>, and <code>tomli_w</code> (for writing TOML settings files).</p>
+<p>The frontend is pre-built and bundled -- no Node.js required at runtime.</p>
 
 
 

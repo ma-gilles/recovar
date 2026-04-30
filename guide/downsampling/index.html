@@ -57,6 +57,8 @@
     
       <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
     
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -274,7 +276,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="../tutorial/" class="md-tabs__link">
+        <a href="../gui/" class="md-tabs__link">
           
   
   
@@ -672,6 +674,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web GUI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../tutorial/" class="md-nav__link">
         
   
@@ -898,6 +928,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#using-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using the GUI
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -950,34 +991,6 @@
     
   
     Analyzing Results
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../gui/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Web GUI
   
 
     
@@ -1699,6 +1712,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#using-the-gui" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Using the GUI
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -1831,6 +1855,13 @@
 <p class="admonition-title">Tip</p>
 <p>Start with <code>--downsample 128</code> for initial exploration, then re-run at higher resolution if needed for publication figures.</p>
 </div>
+<h2 id="using-the-gui">Using the GUI<a class="headerlink" href="#using-the-gui" title="Permanent link">&para;</a></h2>
+<p>In the web GUI (<code>recovar gui</code>), you can downsample in two ways:</p>
+<ul>
+<li><strong>As part of a Pipeline job</strong>: expand <strong>Advanced</strong> options and set the <strong>Downsample</strong> field to your target box size (e.g., 128). The pipeline handles caching automatically.</li>
+<li><strong>As a standalone job</strong>: click <strong>+ New Job</strong>, select <strong>Downsample</strong> from the Job Type dropdown, browse to your particle file, and set the target box size.</li>
+</ul>
+<p>See the <a href="../gui/">GUI Guide</a> for project setup and job submission.</p>
 
 
 

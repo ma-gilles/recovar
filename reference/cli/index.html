@@ -57,6 +57,8 @@
     
       <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
     
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
+    
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
@@ -272,7 +274,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../guide/tutorial/" class="md-tabs__link">
+        <a href="../../guide/gui/" class="md-tabs__link">
           
   
   
@@ -667,6 +669,34 @@
   
   
     <li class="md-nav__item">
+      <a href="../../guide/gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web GUI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
       <a href="../../guide/tutorial/" class="md-nav__link">
         
   
@@ -815,34 +845,6 @@
     
   
     Analyzing Results
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../../guide/gui/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Web GUI
   
 
     
@@ -1194,6 +1196,17 @@
     <span class="md-ellipsis">
       
         Advanced
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnostics
       
     </span>
   </a>
@@ -1879,6 +1892,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#diagnostics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Diagnostics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#testing" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2250,6 +2274,25 @@
 <tr>
 <td><code>postprocess</code></td>
 <td>Post-processing and output refinement</td>
+</tr>
+</tbody>
+</table>
+<h2 id="diagnostics">Diagnostics<a class="headerlink" href="#diagnostics" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>check_paths</code></td>
+<td>Preview how image paths resolve without running the pipeline</td>
+</tr>
+<tr>
+<td><code>build_custom_cuda</code></td>
+<td>Pre-build the custom CUDA backproject/project extension</td>
 </tr>
 </tbody>
 </table>

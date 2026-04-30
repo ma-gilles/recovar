@@ -15,7 +15,7 @@
         <link rel="canonical" href="https://ma-gilles.github.io/recovar/guide/tutorial/">
       
       
-        <link rel="prev" href="../../getting-started/testing/">
+        <link rel="prev" href="../gui/">
       
       
         <link rel="next" href="../input-data/">
@@ -56,6 +56,8 @@
     
     
       <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+      <link rel="stylesheet" href="../../stylesheets/extra.css">
     
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
@@ -274,7 +276,7 @@
     
     
       <li class="md-tabs__item md-tabs__item--active">
-        <a href="./" class="md-tabs__link">
+        <a href="../gui/" class="md-tabs__link">
           
   
   
@@ -664,6 +666,34 @@
 
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../gui/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web GUI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
             
               
                 
@@ -1273,34 +1303,6 @@
     
   
     Analyzing Results
-  
-
-    
-  </span>
-  
-  
-
-      </a>
-    </li>
-  
-
-              
-            
-              
-                
-  
-  
-  
-  
-    <li class="md-nav__item">
-      <a href="../gui/" class="md-nav__link">
-        
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Web GUI
   
 
     
@@ -2433,7 +2435,7 @@
 </div>
 <div class="admonition tip">
 <p class="admonition-title">GUI alternative</p>
-<p>In the GUI, click <strong>New Job</strong> <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg></span>, select <strong>Pipeline</strong>, browse to your particle file, select a mask, and click <strong>Submit</strong>. The GUI auto-detects the file format and validates inputs before submission. See <a href="../gui/#creating-jobs">GUI: Creating Jobs</a>.</p>
+<p>In the GUI, click <strong>New Job</strong> <span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6z"/></svg></span>, select <strong>Pipeline</strong>, browse to your particle file, select a mask, and click <strong>Submit</strong>. The GUI auto-detects the file format and validates inputs before submission. See <a href="../gui/#submitting-jobs">GUI: Submitting Jobs</a>.</p>
 </div>
 <h4 id="key-pipeline-outputs">Key pipeline outputs<a class="headerlink" href="#key-pipeline-outputs" title="Permanent link">&para;</a></h4>
 <p><strong>Eigenvalue spectrum</strong> — the variance captured by each principal component. A steep drop-off means most heterogeneity is captured in the first few components. The gap between signal eigenvalues and the noise floor indicates the intrinsic dimensionality of the conformational landscape.</p>
@@ -2661,18 +2663,13 @@
 <p>If port 8080 is already in use, pick another port (e.g. 8085) and use it consistently in both the SSH tunnel and the GUI launch: <code>ssh -L 8085:localhost:8085 ...</code> and <code>recovar gui --port 8085</code>.</p>
 </div>
 <h3 id="first-steps-in-the-gui">First steps in the GUI<a class="headerlink" href="#first-steps-in-the-gui" title="Permanent link">&para;</a></h3>
-<p>Once the GUI is open, create a project (or open an existing one) and use <strong>Scan for Existing Jobs</strong> to import your pipeline outputs.</p>
-<p>The GUI provides:</p>
-<ul>
-<li><strong>Dashboard</strong> — overview of all jobs with status indicators</li>
-<li><strong>Latent Space Explorer</strong> — interactive PCA and UMAP scatter plots with k-means coloring</li>
-<li><strong>On-demand volumes</strong> — click any point in the latent space to generate a volume at that coordinate</li>
-<li><strong>3D volume viewer</strong> — browser-based isosurface rendering with adjustable threshold</li>
-<li><strong>Slice viewer</strong> — orthogonal slices through any volume</li>
-<li><strong>Trajectory builder</strong> — select two endpoints to compute and animate a conformational transition</li>
-<li><strong>Volume browser</strong> — organized listing of all output volumes (mean, eigenvolumes, k-means centers, trajectories)</li>
-</ul>
-<p>For the full GUI reference, see the <a href="../gui/">GUI Guide</a>.</p>
+<p>Once the GUI is open, create a project (or open an existing one) and use <strong>Scan for Existing Jobs</strong> to import your pipeline outputs. The dashboard shows all your jobs at a glance:</p>
+<p><img alt="Dashboard with project" src="../../_static/gui/04_dashboard.png" /></p>
+<p>The sidebar lists all jobs organized by type with color-coded status indicators. Click any job to view its details, logs, volumes, and plots.</p>
+<p>When a pipeline job completes, the job detail page shows quick preview plots and suggested next steps:</p>
+<p><img alt="Completed pipeline job" src="../../_static/gui/07_job_completed.png" /></p>
+<p>Click <strong>Analyze this pipeline output</strong> to pre-fill an analyze job, or <strong>Explore Latent Space</strong> to open the interactive latent space explorer.</p>
+<p>For full GUI documentation, see the <a href="../gui/">GUI Guide</a>.</p>
 <hr />
 <h2 id="output-directory-reference">Output directory reference<a class="headerlink" href="#output-directory-reference" title="Permanent link">&para;</a></h2>
 <h3 id="pipeline-output">Pipeline output<a class="headerlink" href="#pipeline-output" title="Permanent link">&para;</a></h3>
