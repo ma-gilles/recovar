@@ -93,12 +93,12 @@ If you use RECOVAR in your research, please cite:
 
 !!! quote "Citation"
 
-    Gilles, M.A., Bhatt, A., & Singer, A. "Regularized covariance estimation for analysis of heterogeneity in cryo-EM." *PNAS* (2025). DOI: [10.1073/pnas.2419140122](https://doi.org/10.1073/pnas.2419140122)
+    Gilles, M.A. & Singer, A. "Cryo-EM heterogeneity analysis using regularized covariance estimation and kernel regression." *PNAS* (2025). DOI: [10.1073/pnas.2419140122](https://doi.org/10.1073/pnas.2419140122)
 
     ```bibtex
     @article{gilles2025recovar,
-      title={Regularized covariance estimation for analysis of heterogeneity in cryo-EM},
-      author={Gilles, Marc Aur{\`e}le and Bhatt, Amit and Singer, Amit},
+      title={Cryo-EM heterogeneity analysis using regularized covariance estimation and kernel regression},
+      author={Gilles, Marc Aur{\`e}le and Singer, Amit},
       journal={Proceedings of the National Academy of Sciences},
       year={2025},
       doi={10.1073/pnas.2419140122}
