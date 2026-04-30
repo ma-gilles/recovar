@@ -1325,11 +1325,13 @@ def test_dense_k_class_projection_cache_matches_uncached(rng):
     assert uncached.profile_summary is not None
     assert cached.profile_summary["cache_projection_blocks"] is True
     assert uncached.profile_summary["cache_projection_blocks"] is False
+    cached_projection_uses = 2 * cached.profile_summary["batches"] * cached.profile_summary["rotation_blocks"]
+    assert cached.profile_summary["projection_cache_misses"] == cached.profile_summary["rotation_blocks"]
     assert cached.profile_summary["projection_cache_hits"] == (
-        cached.profile_summary["batches"] * cached.profile_summary["rotation_blocks"]
+        cached_projection_uses - cached.profile_summary["projection_cache_misses"]
     )
     assert uncached.profile_summary["projection_cache_misses"] == (
-        uncached.profile_summary["batches"] * uncached.profile_summary["rotation_blocks"]
+        2 * uncached.profile_summary["batches"] * uncached.profile_summary["rotation_blocks"]
     )
     np.testing.assert_array_equal(np.asarray(cached.class_assignments), np.asarray(uncached.class_assignments))
     np.testing.assert_allclose(np.asarray(cached.Ft_y), np.asarray(uncached.Ft_y), rtol=1e-5, atol=1e-5)

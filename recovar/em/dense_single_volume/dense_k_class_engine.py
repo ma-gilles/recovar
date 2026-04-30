@@ -905,8 +905,8 @@ def run_dense_k_class_em_native(
 
     if cache_projection_blocks is None:
         # Windowed RELION-style runs keep projection tensors compact and reuse
-        # them immediately in pass 2.  Full-resolution K-class projections can
-        # be multi-GB per image batch, so do not cache those unless requested.
+        # them across image batches and pass 2.  Full-resolution K-class
+        # projections can be multi-GB, so do not cache those unless requested.
         cache_projection_blocks = bool(window_spec.use_window and not relion_firstiter_winner_take_all)
     cache_projection_blocks = bool(cache_projection_blocks)
 
@@ -960,6 +960,28 @@ def run_dense_k_class_em_native(
         indices=image_indices,
         by_image=False,
     )
+    projection_cache = [None] * n_blocks if cache_projection_blocks else None
+
+    def project_block(block_index: int, rotations_block):
+        nonlocal projection_cache
+        if projection_cache is not None:
+            cached = projection_cache[int(block_index)]
+            if cached is not None:
+                profile["projection_cache_hits"] += 1
+                return cached
+        projected = _project_k_class_block(
+            mean_for_proj_by_class,
+            rotations_block,
+            image_shape,
+            proj_volume_shape,
+            disc_type,
+            projection_kwargs,
+        )
+        if projection_cache is not None:
+            projection_cache[int(block_index)] = projected
+        profile["projection_cache_misses"] += 1
+        return projected
+
     use_host_half_preprocess = backend_half_preprocess_uses_host_images(experiment_dataset)
     device_half_mask = None
     device_half_mask_mode = None
@@ -1180,18 +1202,10 @@ def run_dense_k_class_em_native(
         best_argmax_class = jnp.zeros((batch_size, n_classes), dtype=jnp.int32)
 
         profile["batches"] += 1
-        projection_cache = [] if cache_projection_blocks else None
-        for _, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
+        for block_index, r0, r1 in _iter_rotation_blocks(n_blocks, rotation_block_size):
             rots_b = rotations_padded[r0:r1]
             t0 = time.time()
-            proj_half_by_class, proj_abs2_by_class = _project_k_class_block(
-                mean_for_proj_by_class,
-                rots_b,
-                image_shape,
-                proj_volume_shape,
-                disc_type,
-                projection_kwargs,
-            )
+            proj_half_by_class, proj_abs2_by_class = project_block(block_index, rots_b)
             if sync_timers:
                 projection_enqueue_s = time.time() - t0
                 _block_until_ready(proj_half_by_class, proj_abs2_by_class)
@@ -1200,8 +1214,6 @@ def run_dense_k_class_em_native(
                 profile["projection_pass1_enqueue_s"] += projection_enqueue_s
                 profile["projection_pass1_sync_s"] += projection_total_s - projection_enqueue_s
                 t0 = time.time()
-            if projection_cache is not None:
-                projection_cache.append((proj_half_by_class, proj_abs2_by_class))
             scores = _score_k_class_block(
                 window_spec=window_spec,
                 shifted_windowed=shifted_windowed,
@@ -1320,27 +1332,15 @@ def run_dense_k_class_em_native(
                 rots_b = rotations_padded[r0:r1]
                 proj_half_by_class = proj_abs2_by_class = None
                 if (not relion_firstiter_winner_take_all) or accumulate_noise:
-                    if projection_cache is not None:
-                        proj_half_by_class, proj_abs2_by_class = projection_cache[block_index]
-                        profile["projection_cache_hits"] += 1
-                    else:
-                        t0 = time.time()
-                        proj_half_by_class, proj_abs2_by_class = _project_k_class_block(
-                            mean_for_proj_by_class,
-                            rots_b,
-                            image_shape,
-                            proj_volume_shape,
-                            disc_type,
-                            projection_kwargs,
-                        )
-                        profile["projection_cache_misses"] += 1
-                        if sync_timers:
-                            projection_enqueue_s = time.time() - t0
-                            _block_until_ready(proj_half_by_class, proj_abs2_by_class)
-                            projection_total_s = time.time() - t0
-                            profile["projection_pass2_s"] += projection_total_s
-                            profile["projection_pass2_enqueue_s"] += projection_enqueue_s
-                            profile["projection_pass2_sync_s"] += projection_total_s - projection_enqueue_s
+                    t0 = time.time()
+                    proj_half_by_class, proj_abs2_by_class = project_block(block_index, rots_b)
+                    if sync_timers:
+                        projection_enqueue_s = time.time() - t0
+                        _block_until_ready(proj_half_by_class, proj_abs2_by_class)
+                        projection_total_s = time.time() - t0
+                        profile["projection_pass2_s"] += projection_total_s
+                        profile["projection_pass2_enqueue_s"] += projection_enqueue_s
+                        profile["projection_pass2_sync_s"] += projection_total_s - projection_enqueue_s
                 if not relion_firstiter_winner_take_all:
                     t0 = time.time()
                     scores = _score_k_class_block(
