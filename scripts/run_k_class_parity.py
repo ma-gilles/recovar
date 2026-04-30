@@ -637,6 +637,12 @@ def main() -> None:
     parser.add_argument("--reconstruction-padding-factor", type=int, default=2)
     parser.add_argument("--disc-type", default="linear_interp")
     parser.add_argument(
+        "--em-repeats",
+        type=int,
+        default=1,
+        help="Run the RECOVAR E/M call repeatedly in one process; summary uses the final run.",
+    )
+    parser.add_argument(
         "--winner-take-all-mstep",
         action="store_true",
         help="Use RELION first-iteration winner-take-all reconstruction weights while keeping soft evidence stats.",
@@ -802,38 +808,51 @@ def main() -> None:
         f"image_corr_mean={float(image_corrections.mean()):.6f}, scale_mean={float(scale_corrections.mean()):.6f}"
     )
 
-    t0 = time.time()
-    result = run_dense_k_class_em(
-        ds,
-        means,
-        mean_variance_prev,
-        noise_variance,
-        rotations.astype(np.float32),
-        translations.astype(np.float32),
-        args.disc_type,
-        class_log_priors=np.zeros(n_classes, dtype=np.float32),
-        accumulate_noise=False,
-        image_batch_size=args.image_batch_size,
-        rotation_block_size=args.rotation_block_size,
-        current_size=current_size,
-        class_rotation_log_prior=class_rotation_log_prior,
-        translation_log_prior=translation_log_prior,
-        score_with_masked_images=True,
-        half_spectrum_scoring=True,
-        projection_padding_factor=args.projection_padding_factor,
-        reconstruction_padding_factor=args.reconstruction_padding_factor,
-        image_corrections=image_corrections,
-        scale_corrections=scale_corrections,
-        image_pre_shifts=image_pre_shifts,
-        use_float64_scoring=False,
-        use_float64_projections=False,
-        do_gridding_correction=True,
-        square_window=False,
-        sparse_pass2=False,
-        relion_firstiter_winner_take_all=args.winner_take_all_mstep,
-    )
-    elapsed_s = time.time() - t0
-    print(f"  RECOVAR K-class E/M step completed in {elapsed_s:.1f}s")
+    if args.em_repeats < 1:
+        raise ValueError("--em-repeats must be >= 1")
+
+    result = None
+    em_times = []
+    for repeat_idx in range(args.em_repeats):
+        t0 = time.time()
+        result = run_dense_k_class_em(
+            ds,
+            means,
+            mean_variance_prev,
+            noise_variance,
+            rotations.astype(np.float32),
+            translations.astype(np.float32),
+            args.disc_type,
+            class_log_priors=np.zeros(n_classes, dtype=np.float32),
+            accumulate_noise=False,
+            image_batch_size=args.image_batch_size,
+            rotation_block_size=args.rotation_block_size,
+            current_size=current_size,
+            class_rotation_log_prior=class_rotation_log_prior,
+            translation_log_prior=translation_log_prior,
+            score_with_masked_images=True,
+            half_spectrum_scoring=True,
+            projection_padding_factor=args.projection_padding_factor,
+            reconstruction_padding_factor=args.reconstruction_padding_factor,
+            image_corrections=image_corrections,
+            scale_corrections=scale_corrections,
+            image_pre_shifts=image_pre_shifts,
+            use_float64_scoring=False,
+            use_float64_projections=False,
+            do_gridding_correction=True,
+            square_window=False,
+            sparse_pass2=False,
+            relion_firstiter_winner_take_all=args.winner_take_all_mstep,
+        )
+        elapsed_s = time.time() - t0
+        em_times.append(elapsed_s)
+        if args.em_repeats == 1:
+            print(f"  RECOVAR K-class E/M step completed in {elapsed_s:.1f}s")
+        else:
+            print(f"  RECOVAR K-class E/M repeat {repeat_idx + 1}/{args.em_repeats}: {elapsed_s:.1f}s")
+    elapsed_s = em_times[-1]
+    if args.em_repeats > 1:
+        print(f"  RECOVAR K-class E/M step completed in {elapsed_s:.1f}s (final repeat)")
 
     significant_summary = None
     significant_sample_indices = None
