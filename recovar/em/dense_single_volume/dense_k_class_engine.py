@@ -728,6 +728,9 @@ def run_dense_k_class_em_native(
     overall_t0 = time.time()
     sync_timers = bool(return_profile)
     profile = {
+        "setup_s": 0.0,
+        "batch_fetch_s": 0.0,
+        "preprocess_s": 0.0,
         "projection_pass1_s": 0.0,
         "score_pass1_s": 0.0,
         "projection_pass2_s": 0.0,
@@ -735,7 +738,10 @@ def run_dense_k_class_em_native(
         "wta_mstep_s": 0.0,
         "adjoint_s": 0.0,
         "noise_s": 0.0,
+        "host_accumulate_s": 0.0,
         "postprocess_s": 0.0,
+        "new_means_s": 0.0,
+        "final_sync_s": 0.0,
         "batches": 0,
         "rotation_blocks": int((int(rotations.shape[0]) + int(rotation_block_size) - 1) // int(rotation_block_size)),
     }
@@ -848,12 +854,18 @@ def run_dense_k_class_em_native(
         indices=image_indices,
         by_image=False,
     )
+    if sync_timers:
+        profile["setup_s"] += time.time() - overall_t0
     while True:
         try:
+            t0 = time.time()
             batch_data, _, _, ctf_params, _, _, indices = next(batch_iter)
+            if sync_timers:
+                profile["batch_fetch_s"] += time.time() - t0
         except StopIteration:
             break
 
+        preprocess_t0 = time.time()
         actual_batch_size = len(indices)
         batch_indices_np = np.asarray(indices)
         end_idx = start_idx + actual_batch_size
@@ -979,6 +991,7 @@ def run_dense_k_class_em_native(
                 ctf2_over_nv_windowed,
                 ctf2_over_nv_windowed_mstep,
             )
+            profile["preprocess_s"] += time.time() - preprocess_t0
 
         max_s = jnp.full(batch_size, -jnp.inf)
         sum_exp = jnp.zeros(batch_size, dtype=precision_policy.normalization_real_dtype)
@@ -1096,10 +1109,13 @@ def run_dense_k_class_em_native(
             if sync_timers:
                 _block_until_ready(summed_half, ctf_probs_half, rotation_sums)
                 profile["wta_mstep_s"] += time.time() - t0
+            t0 = time.time()
             class_rotation_posterior_sums += np.asarray(
                 rotation_sums[:, :n_rot],
                 dtype=np.float64,
             )
+            if sync_timers:
+                profile["host_accumulate_s"] += time.time() - t0
             t0 = time.time()
             Ft_y, Ft_ctf = _accumulate_k_class_adjoint(
                 Ft_y,
@@ -1220,10 +1236,13 @@ def run_dense_k_class_em_native(
 
                 actual_rot = max(0, min(rotation_block_size, n_rot - r0))
                 if actual_rot > 0:
+                    t0 = time.time()
                     class_rotation_posterior_sums[:, r0 : r0 + actual_rot] += np.asarray(
                         rotation_sums[:, :actual_rot],
                         dtype=np.float64,
                     )
+                    if sync_timers:
+                        profile["host_accumulate_s"] += time.time() - t0
                 if accumulate_noise:
                     t0 = time.time()
                     class_mass = jnp.sum(probs, axis=(2, 3))
@@ -1333,6 +1352,7 @@ def run_dense_k_class_em_native(
 
     from recovar.reconstruction import relion_functions
 
+    t0 = time.time()
     if reconstruction_padding_factor > 1:
         new_means = [None for _ in range(n_classes)]
     else:
@@ -1346,12 +1366,20 @@ def run_dense_k_class_em_native(
             ).reshape(-1)
             for class_index in range(n_classes)
         ]
+    if sync_timers:
+        profile["new_means_s"] += time.time() - t0
 
+    t0 = time.time()
     _block_until_ready(Ft_y, Ft_ctf)
+    if sync_timers:
+        profile["final_sync_s"] += time.time() - t0
     elapsed_s = time.time() - overall_t0
     profile_summary = None
     if return_profile:
         accounted_s = sum(float(profile[name]) for name in (
+            "setup_s",
+            "batch_fetch_s",
+            "preprocess_s",
             "projection_pass1_s",
             "score_pass1_s",
             "projection_pass2_s",
@@ -1359,7 +1387,10 @@ def run_dense_k_class_em_native(
             "wta_mstep_s",
             "adjoint_s",
             "noise_s",
+            "host_accumulate_s",
             "postprocess_s",
+            "new_means_s",
+            "final_sync_s",
         ))
         profile_summary = {
             **profile,
