@@ -26,8 +26,8 @@ RECOVAR requires Python 3.11. A CUDA GPU is strongly recommended for real worklo
 ### Quick install (pip)
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv recovar_env
+source recovar_env/bin/activate
 pip install -U pip
 pip install "recovar[gpu]"
 ```
@@ -48,8 +48,8 @@ For the latest version or contributing:
 git clone https://github.com/ma-gilles/recovar.git
 cd recovar
 
-python3.11 -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv recovar_env
+source recovar_env/bin/activate
 pip install -U pip
 
 pip install -e ".[gpu,dev]"
@@ -64,8 +64,8 @@ recovar run_test_dataset
 For testing without a GPU (not practical for real datasets):
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
+python3.11 -m venv recovar_env
+source recovar_env/bin/activate
 pip install -U pip
 pip install recovar
 recovar run_test_dataset --cpu
