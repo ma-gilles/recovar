@@ -70,6 +70,8 @@ class DenseKClassNativeOutputs(NamedTuple):
     per_class_stats: tuple[object, ...]
     noise_stats: tuple[object, ...] | None
     profile_summary: dict[str, object] | None = None
+    grouped_Ft_y: object | None = None
+    grouped_Ft_ctf: object | None = None
 
 
 @dataclass(frozen=True)
@@ -357,6 +359,56 @@ def _k_class_m_step_block(shifted_recon, scores, log_z, ctf2_over_nv, n_trans: i
         block_argmax_global,
         summed,
         ctf_probs,
+        rotation_sums,
+    )
+
+
+@partial(jax.jit, static_argnums=(5, 6))
+def _grouped_k_class_m_step_block(
+    shifted_recon,
+    scores,
+    log_z,
+    ctf2_over_nv,
+    group_ids,
+    n_trans: int,
+    n_groups: int,
+):
+    """Normalize scores and form per-class adjoint slices split by image group."""
+
+    batch_size, n_classes, rotation_block_size, _ = scores.shape
+    probs = jnp.exp(scores - log_z[:, None, None, None])
+    shifted_by_translation = shifted_recon.reshape(probs.shape[0], int(n_trans), shifted_recon.shape[-1])
+    group_mask = jax.nn.one_hot(group_ids, int(n_groups), dtype=probs.real.dtype)
+    grouped_probs = probs[:, None, :, :, :] * group_mask[:, :, None, None, None]
+    grouped_summed = jnp.einsum(
+        "bgkrt,btn->gkrn",
+        grouped_probs,
+        shifted_by_translation,
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    grouped_probs_sum_t = jnp.sum(grouped_probs, axis=-1)
+    grouped_ctf_probs = jnp.einsum(
+        "bgkr,bn->gkrn",
+        grouped_probs_sum_t,
+        ctf2_over_nv,
+        precision=jax.lax.Precision.HIGHEST,
+    )
+
+    class_scores_flat = scores.reshape(batch_size, n_classes, rotation_block_size * n_trans)
+    block_best_class = jnp.max(class_scores_flat, axis=2)
+    block_argmax_class = jnp.argmax(class_scores_flat, axis=2)
+    global_scores_flat = scores.reshape(batch_size, n_classes * rotation_block_size * n_trans)
+    block_best_global = jnp.max(global_scores_flat, axis=1)
+    block_argmax_global = jnp.argmax(global_scores_flat, axis=1)
+    rotation_sums = jnp.sum(probs, axis=(0, 3))
+    return (
+        probs,
+        block_best_class,
+        block_argmax_class,
+        block_best_global,
+        block_argmax_global,
+        grouped_summed,
+        grouped_ctf_probs,
         rotation_sums,
     )
 
@@ -726,11 +778,15 @@ def run_dense_k_class_em_native(
     sparse_pass2: bool = False,
     accumulate_noise: bool = False,
     return_profile: bool = False,
+    reconstruction_group_ids=None,
+    reconstruction_group_count=None,
 ) -> DenseKClassNativeOutputs:
     """Run dense K-class EM with one E-step over class and pose axes."""
 
     if sparse_pass2:
         raise NotImplementedError("native dense K-class does not yet support sparse pass-2 skipping")
+    if reconstruction_group_ids is not None and relion_firstiter_winner_take_all:
+        raise NotImplementedError("dense K-class reconstruction groups are only implemented for soft M-step")
     if relion_firstiter_score_mode not in {"gaussian", "normalized_cc"}:
         raise ValueError(
             "relion_firstiter_score_mode must be 'gaussian' or 'normalized_cc', "
@@ -767,6 +823,24 @@ def run_dense_k_class_em_native(
     n_trans = int(translations.shape[0])
     image_indices = np.arange(experiment_dataset.n_units) if image_indices is None else np.asarray(image_indices)
     n_images = int(image_indices.size)
+    grouped_reconstruction = reconstruction_group_ids is not None
+    if grouped_reconstruction:
+        reconstruction_group_ids = np.asarray(reconstruction_group_ids, dtype=np.int32)
+        if reconstruction_group_ids.shape != (n_images,):
+            raise ValueError(
+                "reconstruction_group_ids must have one entry per selected image: "
+                f"expected ({n_images},), got {reconstruction_group_ids.shape}",
+            )
+        if reconstruction_group_count is None:
+            reconstruction_group_count = int(np.max(reconstruction_group_ids)) + 1 if n_images else 0
+        reconstruction_group_count = int(reconstruction_group_count)
+        if reconstruction_group_count <= 0:
+            raise ValueError("reconstruction_group_count must be positive when reconstruction_group_ids is set")
+        if np.any(reconstruction_group_ids < 0) or np.any(reconstruction_group_ids >= reconstruction_group_count):
+            raise ValueError("reconstruction_group_ids contains entries outside reconstruction_group_count")
+    else:
+        reconstruction_group_ids = None
+        reconstruction_group_count = 0
     noise_variance_array = jnp.asarray(noise_variance)
     if noise_variance_array.ndim >= 2 and int(noise_variance_array.shape[0]) == n_classes:
         raise NotImplementedError("native dense K-class does not yet support class-specific noise variance")
@@ -851,6 +925,12 @@ def run_dense_k_class_em_native(
 
     Ft_y = jnp.zeros((n_classes, recon_volume_size), dtype=experiment_dataset.dtype)
     Ft_ctf = jnp.zeros((n_classes, recon_volume_size), dtype=experiment_dataset.dtype)
+    grouped_Ft_y = None
+    grouped_Ft_ctf = None
+    if grouped_reconstruction:
+        grouped_shape = (reconstruction_group_count, n_classes, recon_volume_size)
+        grouped_Ft_y = jnp.zeros(grouped_shape, dtype=experiment_dataset.dtype)
+        grouped_Ft_ctf = jnp.zeros(grouped_shape, dtype=experiment_dataset.dtype)
     hard_assignments = np.empty((n_classes, n_images), dtype=np.int32)
     class_log_evidence = np.empty((n_classes, n_images), dtype=np.float32)
     class_best_log_score = np.empty((n_classes, n_images), dtype=np.float32)
@@ -895,12 +975,24 @@ def run_dense_k_class_em_native(
         actual_batch_size = len(indices)
         batch_indices_np = np.asarray(indices)
         end_idx = start_idx + actual_batch_size
+        batch_size = _batch_image_count(batch_data)
+        if grouped_reconstruction:
+            batch_group_ids = jnp.asarray(reconstruction_group_ids[start_idx:end_idx], dtype=jnp.int32)
+            if int(batch_group_ids.shape[0]) > int(batch_size):
+                raise ValueError("batch data has fewer rows than returned image indices")
+            if int(batch_group_ids.shape[0]) < int(batch_size):
+                batch_group_ids = jnp.pad(
+                    batch_group_ids,
+                    (0, int(batch_size) - int(batch_group_ids.shape[0])),
+                    constant_values=0,
+                )
+        else:
+            batch_group_ids = None
         integer_pre_shifts = integer_pre_shifts_or_none(image_pre_shifts, indices, batch=batch_data)
         real_space_pre_shift_applied = integer_pre_shifts is not None
         if real_space_pre_shift_applied:
             batch_data = apply_relion_integer_pre_shifts(batch_data, integer_pre_shifts)
 
-        batch_size = _batch_image_count(batch_data)
         preprocess_batch_data = batch_data if use_host_half_preprocess else jnp.asarray(batch_data)
         translation_sqdist_ang = None
         if translation_prior_centers_np is not None:
@@ -1287,30 +1379,53 @@ def run_dense_k_class_em_native(
                         n_classes,
                     )
                 else:
-                    (
-                        probs,
-                        block_best_class,
-                        block_argmax_class,
-                        _block_best_global,
-                        _block_argmax_global,
-                        summed_half,
-                        ctf_probs_half,
-                        rotation_sums,
-                    ) = _k_class_m_step_block(
-                        shifted_for_mstep,
-                        scores,
-                        log_Z,
-                        ctf_for_mstep,
-                        n_trans,
-                    )
+                    if grouped_reconstruction:
+                        (
+                            probs,
+                            block_best_class,
+                            block_argmax_class,
+                            _block_best_global,
+                            _block_argmax_global,
+                            grouped_summed_half,
+                            grouped_ctf_probs_half,
+                            rotation_sums,
+                        ) = _grouped_k_class_m_step_block(
+                            shifted_for_mstep,
+                            scores,
+                            log_Z,
+                            ctf_for_mstep,
+                            batch_group_ids,
+                            n_trans,
+                            reconstruction_group_count,
+                        )
+                        grouped_ready_values = (grouped_summed_half, grouped_ctf_probs_half)
+                        adjoint_ready_values = grouped_ready_values
+                    else:
+                        (
+                            probs,
+                            block_best_class,
+                            block_argmax_class,
+                            _block_best_global,
+                            _block_argmax_global,
+                            summed_half,
+                            ctf_probs_half,
+                            rotation_sums,
+                        ) = _k_class_m_step_block(
+                            shifted_for_mstep,
+                            scores,
+                            log_Z,
+                            ctf_for_mstep,
+                            n_trans,
+                        )
+                        grouped_ready_values = ()
+                        adjoint_ready_values = (summed_half, ctf_probs_half)
                     improved = block_best_class > best_score_class
                     best_score_class = jnp.where(improved, block_best_class, best_score_class)
                     best_argmax_class = jnp.where(improved, block_argmax_class + r0 * n_trans, best_argmax_class)
                     if sync_timers:
                         _block_until_ready(
                             probs,
-                            summed_half,
-                            ctf_probs_half,
+                            *adjoint_ready_values,
                             rotation_sums,
                             best_score_class,
                             best_argmax_class,
@@ -1398,20 +1513,50 @@ def run_dense_k_class_em_native(
                         profile["noise_s"] += time.time() - t0
 
                 t0 = time.time()
-                Ft_y, Ft_ctf = _accumulate_k_class_adjoint(
-                    Ft_y,
-                    Ft_ctf,
-                    summed_half,
-                    ctf_probs_half,
-                    rots_b,
-                    window_spec=window_spec,
-                    current_size=current_size,
-                    image_shape=image_shape,
-                    recon_volume_shape=recon_volume_shape,
-                )
-                if sync_timers:
-                    _block_until_ready(Ft_y, Ft_ctf)
-                    profile["adjoint_s"] += time.time() - t0
+                if grouped_reconstruction:
+                    flat_grouped_Ft_y, flat_grouped_Ft_ctf = _accumulate_k_class_adjoint(
+                        grouped_Ft_y.reshape(reconstruction_group_count * n_classes, recon_volume_size),
+                        grouped_Ft_ctf.reshape(reconstruction_group_count * n_classes, recon_volume_size),
+                        grouped_summed_half.reshape(
+                            reconstruction_group_count * n_classes,
+                            grouped_summed_half.shape[2],
+                            grouped_summed_half.shape[3],
+                        ),
+                        grouped_ctf_probs_half.reshape(
+                            reconstruction_group_count * n_classes,
+                            grouped_ctf_probs_half.shape[2],
+                            grouped_ctf_probs_half.shape[3],
+                        ),
+                        rots_b,
+                        window_spec=window_spec,
+                        current_size=current_size,
+                        image_shape=image_shape,
+                        recon_volume_shape=recon_volume_shape,
+                    )
+                    grouped_Ft_y = flat_grouped_Ft_y.reshape(reconstruction_group_count, n_classes, recon_volume_size)
+                    grouped_Ft_ctf = flat_grouped_Ft_ctf.reshape(
+                        reconstruction_group_count,
+                        n_classes,
+                        recon_volume_size,
+                    )
+                    if sync_timers:
+                        _block_until_ready(grouped_Ft_y, grouped_Ft_ctf)
+                        profile["adjoint_s"] += time.time() - t0
+                else:
+                    Ft_y, Ft_ctf = _accumulate_k_class_adjoint(
+                        Ft_y,
+                        Ft_ctf,
+                        summed_half,
+                        ctf_probs_half,
+                        rots_b,
+                        window_spec=window_spec,
+                        current_size=current_size,
+                        image_shape=image_shape,
+                        recon_volume_shape=recon_volume_shape,
+                    )
+                    if sync_timers:
+                        _block_until_ready(Ft_y, Ft_ctf)
+                        profile["adjoint_s"] += time.time() - t0
 
         t0 = time.time()
         log_score_offset = -0.5 * jnp.squeeze(batch_norm[:actual_batch_size], axis=1)
@@ -1433,6 +1578,10 @@ def run_dense_k_class_em_native(
             profile["postprocess_s"] += time.time() - t0
         start_idx = end_idx
 
+    if grouped_reconstruction:
+        Ft_y = jnp.sum(grouped_Ft_y, axis=0)
+        Ft_ctf = jnp.sum(grouped_Ft_ctf, axis=0)
+
     from recovar.reconstruction import relion_functions
 
     t0 = time.time()
@@ -1453,7 +1602,10 @@ def run_dense_k_class_em_native(
         profile["new_means_s"] += time.time() - t0
 
     t0 = time.time()
-    _block_until_ready(Ft_y, Ft_ctf)
+    if grouped_reconstruction:
+        _block_until_ready(Ft_y, Ft_ctf, grouped_Ft_y, grouped_Ft_ctf)
+    else:
+        _block_until_ready(Ft_y, Ft_ctf)
     if sync_timers:
         profile["final_sync_s"] += time.time() - t0
     elapsed_s = time.time() - overall_t0
@@ -1489,6 +1641,7 @@ def run_dense_k_class_em_native(
             "current_size": None if current_size is None else int(current_size),
             "winner_take_all_mstep": bool(relion_firstiter_winner_take_all),
             "accumulate_noise": bool(accumulate_noise),
+            "reconstruction_group_count": int(reconstruction_group_count),
         }
     logger.info(
         "Native dense K-class EM completed: K=%d images=%d rotations=%d translations=%d elapsed=%.1fs",
@@ -1517,4 +1670,6 @@ def run_dense_k_class_em_native(
         per_class_stats=per_class_stats,
         noise_stats=noise_stats,
         profile_summary=profile_summary,
+        grouped_Ft_y=grouped_Ft_y,
+        grouped_Ft_ctf=grouped_Ft_ctf,
     )

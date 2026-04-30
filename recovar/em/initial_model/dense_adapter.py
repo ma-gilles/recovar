@@ -2,9 +2,10 @@
 
 This is the ab-initio bridge we want long-term: the hidden variable axis is
 ``class x pose`` inside the dense K-class engine. There is no outer loop over
-classes here. Pseudo-halfsets are currently separate dense passes because the
-VDAM M-step needs independent halfset BackProjectors; the performance parity
-work can fuse those accumulators later without changing this public API.
+classes here. Pseudo-halfsets share one dense E-step and ask the dense engine
+to split reconstruction accumulators by halfset, so projection/scoring work is
+not duplicated while the VDAM M-step still receives independent halfset
+BackProjectors.
 """
 
 from __future__ import annotations
@@ -113,6 +114,21 @@ def _image_groups(
     return [(0, h0), (1, h1)]
 
 
+def _pack_image_groups(groups: list[tuple[int, np.ndarray]]) -> tuple[np.ndarray, np.ndarray, int]:
+    """Pack halfset groups into one image list plus dense reconstruction ids."""
+
+    if not groups:
+        return np.empty(0, dtype=np.int64), np.empty(0, dtype=np.int32), 0
+    image_indices = [np.asarray(group_ids, dtype=np.int64) for _, group_ids in groups]
+    group_ids = [
+        np.full(np.asarray(group_image_ids).shape, int(group_index), dtype=np.int32)
+        for group_index, group_image_ids in groups
+    ]
+    packed_images = np.concatenate(image_indices) if image_indices else np.empty(0, dtype=np.int64)
+    packed_groups = np.concatenate(group_ids) if group_ids else np.empty(0, dtype=np.int32)
+    return packed_images, packed_groups, max(int(group_index) for group_index, _ in groups) + 1
+
+
 def _dense_engine_kwargs(state: InitialModelState, config: DenseInitialModelEstepConfig) -> dict[str, Any]:
     engine_kwargs = dict(_ENGINE_DEFAULTS)
     engine_kwargs["current_size"] = None if state.current_size <= 0 else state.current_size
@@ -120,6 +136,10 @@ def _dense_engine_kwargs(state: InitialModelState, config: DenseInitialModelEste
     engine_kwargs["reconstruction_padding_factor"] = config.padding_factor
     engine_kwargs.update(config.engine_kwargs)
 
+    controlled = ("image_indices", "reconstruction_group_ids", "reconstruction_group_count")
+    present = sorted(name for name in controlled if name in config.engine_kwargs)
+    if present:
+        raise ValueError(f"InitialModel dense E-step controls these dense-engine arguments: {', '.join(present)}")
     if engine_kwargs["sparse_pass2"]:
         raise NotImplementedError(
             "InitialModel dense E-step currently requires dense K-class pass2; "
@@ -194,6 +214,25 @@ def _result_to_accumulators(
     relion_bpref_frame: bool,
     padding_factor: int,
 ) -> list[VdamAccumulator]:
+    return _arrays_to_accumulators(
+        result.Ft_y,
+        result.Ft_ctf,
+        state,
+        halfset_idx=halfset_idx,
+        relion_bpref_frame=relion_bpref_frame,
+        padding_factor=padding_factor,
+    )
+
+
+def _arrays_to_accumulators(
+    Ft_y_by_class,
+    Ft_ctf_by_class,
+    state: InitialModelState,
+    *,
+    halfset_idx: int,
+    relion_bpref_frame: bool,
+    padding_factor: int,
+) -> list[VdamAccumulator]:
     r_max = state.ori_size // 2 if state.current_size <= 0 else state.current_size // 2
     data_scale, weight_scale = (1.0, 1.0)
     if relion_bpref_frame:
@@ -202,8 +241,8 @@ def _result_to_accumulators(
     accumulators: list[VdamAccumulator] = []
     for k in range(state.K):
         bp_data, bp_weight = run_em_output_to_bpref(
-            np.asarray(result.Ft_y[k]),
-            np.asarray(result.Ft_ctf[k]),
+            np.asarray(Ft_y_by_class[k]),
+            np.asarray(Ft_ctf_by_class[k]),
             state.ori_size,
             r_max,
             padding_factor=padding_factor,
@@ -214,6 +253,36 @@ def _result_to_accumulators(
                 weight=bp_weight * weight_scale,
                 class_idx=k,
                 halfset_idx=halfset_idx,
+            )
+        )
+    return accumulators
+
+
+def _grouped_result_to_accumulators(
+    result,
+    state: InitialModelState,
+    groups: list[tuple[int, np.ndarray]],
+    *,
+    relion_bpref_frame: bool,
+    padding_factor: int,
+) -> list[VdamAccumulator]:
+    grouped_Ft_y = getattr(result, "grouped_Ft_y", None)
+    grouped_Ft_ctf = getattr(result, "grouped_Ft_ctf", None)
+    if grouped_Ft_y is None or grouped_Ft_ctf is None:
+        raise RuntimeError("dense K-class result did not return grouped reconstruction accumulators")
+
+    accumulators: list[VdamAccumulator] = []
+    grouped_Ft_y = np.asarray(grouped_Ft_y)
+    grouped_Ft_ctf = np.asarray(grouped_Ft_ctf)
+    for halfset_idx, _ in sorted(groups):
+        accumulators.extend(
+            _arrays_to_accumulators(
+                grouped_Ft_y[int(halfset_idx)],
+                grouped_Ft_ctf[int(halfset_idx)],
+                state,
+                halfset_idx=int(halfset_idx),
+                relion_bpref_frame=relion_bpref_frame,
+                padding_factor=padding_factor,
             )
         )
     return accumulators
@@ -235,6 +304,38 @@ def _estep_meta(halfset_results: dict[int, Any]) -> dict[str, Any]:
     return meta
 
 
+def _grouped_estep_meta(result, groups: list[tuple[int, np.ndarray]]) -> dict[str, Any]:
+    meta: dict[str, Any] = {
+        "halfset_ids": tuple(int(group_index) for group_index, _ in sorted(groups)),
+        "fused_pseudo_halfsets": True,
+    }
+    class_responsibilities = getattr(result, "class_responsibilities", None)
+    class_assignments = getattr(result, "class_assignments", None)
+    stats = getattr(result, "stats", None)
+    pmax = None if stats is None else getattr(stats, "max_posterior_per_image", None)
+
+    cursor = 0
+    for h, image_ids in sorted(groups):
+        count = int(np.asarray(image_ids).size)
+        rows = slice(cursor, cursor + count)
+        if class_responsibilities is not None:
+            meta[f"halfset_{h}_class_posterior_sums"] = np.sum(
+                np.asarray(class_responsibilities, dtype=np.float64)[:, rows],
+                axis=1,
+            )
+        if class_assignments is not None:
+            meta[f"halfset_{h}_class_assignments"] = np.asarray(class_assignments, dtype=np.int32)[rows]
+        if pmax is not None:
+            pmax_rows = np.asarray(pmax, dtype=np.float64)[rows]
+            meta[f"halfset_{h}_pmax_mean"] = float(np.mean(pmax_rows)) if pmax_rows.size else 0.0
+        cursor += count
+
+    profile_summary = getattr(result, "profile_summary", None)
+    if profile_summary is not None:
+        meta["fused_profile_summary"] = dict(profile_summary)
+    return meta
+
+
 def run_dense_initial_model_estep(
     experiment_dataset,
     state: InitialModelState,
@@ -245,8 +346,9 @@ def run_dense_initial_model_estep(
 ) -> DenseInitialModelEstepResult:
     """Run the InitialModel E-step and return VDAM accumulators.
 
-    The dense K-class engine sees all classes at once. For pseudo-halfsets we
-    run one dense pass per halfset to keep the VDAM moment update exact.
+    The dense K-class engine sees all classes at once. For pseudo-halfsets it
+    also sees both halfsets at once and returns separate halfset
+    backprojection accumulators from the same posterior calculation.
     """
     class_log_priors = (
         class_log_priors_from_state(state) if config.class_log_priors is None else np.asarray(config.class_log_priors)
@@ -259,6 +361,48 @@ def run_dense_initial_model_estep(
     )
     engine_kwargs = _dense_engine_kwargs(state, config)
     means, mean_variance = _resolve_class_inputs(state, config)
+
+    if state.pseudo_halfsets:
+        packed_image_indices, reconstruction_group_ids, reconstruction_group_count = _pack_image_groups(groups)
+        if packed_image_indices.size == 0:
+            accumulators = [
+                _empty_accumulator(state, k, halfset_idx)
+                for halfset_idx, _ in sorted(groups)
+                for k in range(state.K)
+            ]
+            return DenseInitialModelEstepResult(
+                accumulators=accumulators,
+                meta={"halfset_ids": tuple(int(group_index) for group_index, _ in sorted(groups))},
+                halfset_results={},
+            )
+
+        result = run_dense_k_class_em(
+            experiment_dataset,
+            means,
+            mean_variance,
+            config.noise_variance,
+            config.rotations,
+            config.translations,
+            config.disc_type,
+            class_log_priors=class_log_priors,
+            image_batch_size=config.image_batch_size,
+            rotation_block_size=config.rotation_block_size,
+            image_indices=packed_image_indices,
+            reconstruction_group_ids=reconstruction_group_ids,
+            reconstruction_group_count=reconstruction_group_count,
+            **engine_kwargs,
+        )
+        return DenseInitialModelEstepResult(
+            accumulators=_grouped_result_to_accumulators(
+                result,
+                state,
+                groups,
+                relion_bpref_frame=config.relion_bpref_frame,
+                padding_factor=config.padding_factor,
+            ),
+            meta=_grouped_estep_meta(result, groups),
+            halfset_results={int(halfset_idx): result for halfset_idx, _ in groups},
+        )
 
     halfset_results: dict[int, Any] = {}
     by_halfset: dict[int, list[VdamAccumulator]] = {}

@@ -1159,6 +1159,72 @@ def test_dense_k_class_projection_block_matches_per_class_loop(rng):
     np.testing.assert_allclose(np.asarray(projected[1]), np.asarray(loop_projected[1]), rtol=0, atol=0)
 
 
+def test_dense_k_class_reconstruction_groups_match_separate_subset_runs(rng):
+    dataset = MockDataset(4, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=154)
+    means = jnp.stack([mean, mean], axis=0)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    rotations = _make_rotations(2, seed=162)
+    translations = np.zeros((1, 2), dtype=np.float32)
+    common_kwargs = dict(
+        image_batch_size=1,
+        rotation_block_size=4,
+        current_size=None,
+        score_with_masked_images=True,
+        sparse_pass2=False,
+    )
+
+    grouped = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        reconstruction_group_ids=np.asarray([0, 1, 0, 1], dtype=np.int32),
+        reconstruction_group_count=2,
+        **common_kwargs,
+    )
+    group0 = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        image_indices=np.asarray([0, 2], dtype=np.int64),
+        **common_kwargs,
+    )
+    group1 = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        image_indices=np.asarray([1, 3], dtype=np.int64),
+        **common_kwargs,
+    )
+
+    assert grouped.grouped_Ft_y is not None
+    assert grouped.grouped_Ft_ctf is not None
+    assert np.asarray(grouped.grouped_Ft_y).shape == (2, 2, VOLUME_SIZE)
+    np.testing.assert_allclose(
+        np.asarray(jnp.sum(grouped.grouped_Ft_y, axis=0)),
+        np.asarray(grouped.Ft_y),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(np.asarray(grouped.grouped_Ft_y[0]), np.asarray(group0.Ft_y), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(grouped.grouped_Ft_ctf[0]), np.asarray(group0.Ft_ctf), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(grouped.grouped_Ft_y[1]), np.asarray(group1.Ft_y), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(grouped.grouped_Ft_ctf[1]), np.asarray(group1.Ft_ctf), rtol=5e-3, atol=1e-5)
+
+
 def test_dense_k_class_profile_is_optional(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=145)
