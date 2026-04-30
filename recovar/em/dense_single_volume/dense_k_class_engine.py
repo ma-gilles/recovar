@@ -786,6 +786,7 @@ def run_dense_k_class_em_native(
         translation_prior_centers,
         n_images=n_images,
         n_dims=translations.shape[1],
+        max_image_index=int(np.max(image_indices)) if image_indices.size else None,
     )
 
     n_blocks = (n_rot + rotation_block_size - 1) // rotation_block_size
@@ -852,7 +853,7 @@ def run_dense_k_class_em_native(
         if translation_prior_centers_np is not None:
             centers = translation_prior_centers_for_images(
                 translation_prior_centers_np,
-                np.arange(start_idx, end_idx, dtype=np.int64),
+                batch_indices_np,
                 batch_size=actual_batch_size,
             )
             translation_sqdist_ang = translation_sqdist_angstrom(

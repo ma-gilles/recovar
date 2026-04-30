@@ -5,7 +5,13 @@ from __future__ import annotations
 import numpy as np
 
 
-def validate_translation_prior_centers(translation_prior_centers, *, n_images: int, n_dims: int):
+def validate_translation_prior_centers(
+    translation_prior_centers,
+    *,
+    n_images: int,
+    n_dims: int,
+    max_image_index: int | None = None,
+):
     if translation_prior_centers is None:
         return None
     centers = np.asarray(translation_prior_centers, dtype=np.float32)
@@ -16,7 +22,12 @@ def validate_translation_prior_centers(translation_prior_centers, *, n_images: i
                 f"({int(n_dims)},), got {centers.shape}",
             )
     elif centers.ndim == 2:
-        if centers.shape != (int(n_images), int(n_dims)):
+        valid_shape = centers.shape == (int(n_images), int(n_dims))
+        if max_image_index is not None:
+            valid_shape = valid_shape or (
+                centers.shape[1] == int(n_dims) and centers.shape[0] > int(max_image_index)
+            )
+        if not valid_shape:
             raise ValueError(
                 "translation_prior_centers must have shape "
                 f"({int(n_images)}, {int(n_dims)}) when image-specific, got {centers.shape}",

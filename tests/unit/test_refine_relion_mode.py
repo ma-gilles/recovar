@@ -1283,6 +1283,41 @@ def test_dense_k_class_wta_uses_one_global_class_pose_winner(rng):
     assert result.noise_stats[1].sumw == pytest.approx(0.0, abs=1e-6)
 
 
+def test_dense_k_class_translation_prior_centers_use_requested_image_indices(rng):
+    dataset = MockDataset(4, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=181)
+    means = mean[None, :]
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    rotations = _make_rotations(2, seed=191)
+    translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    centers = np.zeros((4, 2), dtype=np.float32)
+    centers[1] = [100.0, 0.0]
+    centers[3] = [200.0, 0.0]
+
+    result = run_dense_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        score_with_masked_images=True,
+        accumulate_noise=True,
+        sparse_pass2=False,
+        image_indices=np.asarray([1, 3], dtype=np.int64),
+        translation_prior_centers=centers,
+    )
+
+    assert result.aggregate_noise_stats is not None
+    assert result.aggregate_noise_stats.sumw == pytest.approx(2.0, rel=5e-3, abs=1e-5)
+    assert result.aggregate_noise_stats.wsum_sigma2_offset > 0.0
+
+
 def test_local_k_class_identical_means_split_global_posterior(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=151)

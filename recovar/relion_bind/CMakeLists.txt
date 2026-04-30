@@ -58,6 +58,7 @@ set(RELION_SOURCES
     ${RELION_SRC_DIR}/filename.cpp
     ${RELION_SRC_DIR}/strings.cpp
     ${RELION_SRC_DIR}/metadata_table.cpp
+    ${RELION_SRC_DIR}/metadata_container.cpp
     ${RELION_SRC_DIR}/symmetries.cpp
     ${RELION_SRC_DIR}/mask.cpp
     ${RELION_SRC_DIR}/complex.cpp
@@ -83,6 +84,7 @@ pybind11_add_module(_relion_bind_core
     ${CMAKE_CURRENT_SOURCE_DIR}/sampling_bind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/backprojector_bind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/estep_bind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/initialmodel_bind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/obs_model_stub.cpp
     ${RELION_SOURCES}
 )

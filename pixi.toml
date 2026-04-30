@@ -15,6 +15,7 @@ pip = "*"
 setuptools = "*"
 wheel = "*"
 git = "*"
+pybind11 = "*"
 
 # Core scientific computing packages available in conda-forge
 numpy = ">=2.2.0,<2.3.0"
