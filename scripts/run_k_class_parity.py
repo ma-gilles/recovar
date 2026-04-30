@@ -825,6 +825,7 @@ def main() -> None:
     result = None
     em_times = []
     for repeat_idx in range(args.em_repeats):
+        profile_repeat = args.k_class_profile and repeat_idx == args.em_repeats - 1
         t0 = time.time()
         result = run_dense_k_class_em(
             ds,
@@ -853,7 +854,7 @@ def main() -> None:
             do_gridding_correction=True,
             square_window=False,
             sparse_pass2=False,
-            return_profile=args.k_class_profile,
+            return_profile=profile_repeat,
             relion_firstiter_winner_take_all=args.winner_take_all_mstep,
         )
         elapsed_s = time.time() - t0
