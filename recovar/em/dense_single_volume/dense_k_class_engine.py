@@ -34,12 +34,15 @@ from .helpers.image_shifts import (
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
 from .helpers.preprocessing import (
     apply_half_translation_phases,
+    backend_half_preprocess_uses_host_images,
     dense_batch_half_input_pair,
-    half_preprocess_requires_host_images,
+    half_translation_phase_table,
+    preprocess_half_image_pair_device,
     prepare_reconstruction_batch as _prepare_reconstruction_batch,
     process_half_image,
     preprocess_batch as _preprocess_batch,
     preprocess_batch_firstiter_cc as _preprocess_batch_firstiter_cc,
+    resolve_image_mask_for_half_preprocess,
 )
 from .helpers.projection import (
     compute_noise_block as _compute_noise_block,
@@ -864,7 +867,16 @@ def run_dense_k_class_em_native(
         indices=image_indices,
         by_image=False,
     )
-    use_host_half_preprocess = half_preprocess_requires_host_images(experiment_dataset)
+    use_host_half_preprocess = backend_half_preprocess_uses_host_images(experiment_dataset)
+    device_half_mask = None
+    device_half_mask_mode = None
+    if use_host_half_preprocess and relion_firstiter_score_mode == "gaussian" and score_with_masked_images:
+        device_half_mask, device_half_mask_mode = resolve_image_mask_for_half_preprocess(
+            experiment_dataset,
+            image_shape,
+            require_mask=True,
+        )
+        use_host_half_preprocess = False
     if sync_timers:
         profile["setup_s"] += time.time() - overall_t0
     while True:
@@ -900,6 +912,7 @@ def run_dense_k_class_em_native(
                 experiment_dataset.voxel_size,
             )
 
+        processed_score_half_for_noise = None
         if relion_firstiter_score_mode == "normalized_cc":
             shifted_half, batch_norm, ctf2_half_score, ctf2_over_nv_half = _preprocess_batch_firstiter_cc(
                 experiment_dataset,
@@ -919,8 +932,14 @@ def run_dense_k_class_em_native(
                 config,
             )
         elif score_with_masked_images:
-            processed_score_half, processed_recon_half, ctf_half, noise_variance_raw_half, translation_phases_half = (
-                dense_batch_half_input_pair(
+            if device_half_mask is None:
+                (
+                    processed_score_half,
+                    processed_recon_half,
+                    ctf_half,
+                    noise_variance_raw_half,
+                    translation_phases_half,
+                ) = dense_batch_half_input_pair(
                     experiment_dataset,
                     preprocess_batch_data,
                     ctf_params,
@@ -930,7 +949,19 @@ def run_dense_k_class_em_native(
                     apply_image_mask_a=True,
                     apply_image_mask_b=False,
                 )
-            )
+            else:
+                processed_score_half, processed_recon_half = preprocess_half_image_pair_device(
+                    preprocess_batch_data,
+                    device_half_mask,
+                    config,
+                    apply_image_mask_a=True,
+                    apply_image_mask_b=False,
+                    mask_mode=device_half_mask_mode,
+                )
+                ctf_half = config.compute_ctf_half(ctf_params)
+                noise_variance_raw_half = jnp.asarray(noise_variance_half)
+                translation_phases_half = half_translation_phase_table(translations, config.image_shape)
+                processed_score_half_for_noise = processed_score_half
             score_weighted_half = processed_score_half * ctf_half / noise_variance_raw_half
             shifted_half = apply_half_translation_phases(score_weighted_half, translation_phases_half)
             half_weights_for_norm = make_scoring_half_image_weights(
@@ -1015,11 +1046,14 @@ def run_dense_k_class_em_native(
         shifted_masked_for_noise = None
         if accumulate_noise:
             shifted_masked_for_noise = window_spec.recon_values(shifted_half_with_dc)
-            processed_masked_half = process_half_image(
-                experiment_dataset,
-                preprocess_batch_data,
-                score_with_masked_images,
-            )
+            if processed_score_half_for_noise is None:
+                processed_masked_half = process_half_image(
+                    experiment_dataset,
+                    preprocess_batch_data,
+                    score_with_masked_images,
+                )
+            else:
+                processed_masked_half = processed_score_half_for_noise
             if image_corrections is not None:
                 processed_masked_half = processed_masked_half * image_only_corr[:, None]
         if sync_timers:

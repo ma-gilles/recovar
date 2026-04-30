@@ -4,8 +4,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+pytest.importorskip("jax")
+import jax.numpy as jnp
+
 from recovar.data_io import image_backends
 from recovar.core import fourier_transform_utils, mask
+from recovar.em.dense_single_volume.helpers.preprocessing import preprocess_half_image_pair_device
 from helpers import tiny_synthetic
 
 pytestmark = pytest.mark.unit
@@ -91,6 +95,41 @@ def test_particle_image_dataset_process_images_half_pair_matches_individual_call
 
     np.testing.assert_allclose(masked_pair, ds.process_images_half(imgs, apply_image_mask=True), atol=1e-6)
     np.testing.assert_allclose(raw_pair, ds.process_images_half(imgs, apply_image_mask=False), atol=1e-6)
+
+
+def test_device_relion_background_half_pair_matches_backend(monkeypatch):
+    monkeypatch.setattr(image_backends.ImageLoader, "from_file", lambda *args, **kwargs: _DummySource(n=4, D=8))
+    ds = image_backends.ParticleImageDataset("dummy.mrcs", lazy=True, invert_data=True)
+    ds.image_mask = mask.relion_soft_image_mask(
+        image_size=ds.image_size,
+        pixel_size=1.0,
+        particle_diameter_ang=6.0,
+        width_mask_edge_px=2.0,
+    )
+    ds.image_mask_mode = "relion_background_fill"
+
+    imgs, _p_idx, _t_idx = ds[[1, 2]]
+    masked_backend, raw_backend = ds.process_images_half_pair(
+        imgs,
+        apply_image_mask_a=True,
+        apply_image_mask_b=False,
+    )
+    config = SimpleNamespace(
+        data_multiplier=float(ds.mult),
+        grid_size=int(ds.D),
+        padding=int(ds.padding),
+    )
+    masked_device, raw_device = preprocess_half_image_pair_device(
+        jnp.asarray(imgs),
+        ds.image_mask,
+        config,
+        apply_image_mask_a=True,
+        apply_image_mask_b=False,
+        mask_mode="relion_background_fill",
+    )
+
+    np.testing.assert_allclose(np.asarray(masked_device), masked_backend, rtol=5e-5, atol=5e-4)
+    np.testing.assert_allclose(np.asarray(raw_device), raw_backend, rtol=1e-5, atol=1e-5)
 
 
 def test_particle_image_dataset_subset_generators_preserve_order_and_duplicates(monkeypatch):

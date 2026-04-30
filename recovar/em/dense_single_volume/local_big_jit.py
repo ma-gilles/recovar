@@ -12,9 +12,7 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 
-from recovar.core import mask as core_mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
-import recovar.core.padding as padding
 from recovar.em.dense_single_volume.helpers.projection import (
     compute_noise_block as _compute_noise_block,
 )
@@ -22,6 +20,7 @@ from recovar.em.dense_single_volume.helpers.backprojection import accumulate_adj
 from recovar.em.dense_single_volume.helpers.dtype_policy import DensePrecisionPolicy
 from recovar.em.dense_single_volume.helpers.image_shifts import tiled_half_image_phase_factors
 from recovar.em.dense_single_volume.helpers.oversampling import _find_significant_mask_full_sort
+from recovar.em.dense_single_volume.helpers.preprocessing import preprocess_half_image_device
 from recovar.em.dense_single_volume.helpers.projection import project_half_spectrum
 
 
@@ -55,18 +54,13 @@ def _preprocess_half(
     apply_image_mask: bool,
     mask_mode: str,
 ):
-    images = jnp.asarray(batch)
-    if apply_image_mask:
-        if mask_mode == "relion_background_fill":
-            images = core_mask.apply_relion_soft_image_mask(images, image_mask)
-        elif mask_mode == "multiply":
-            images = images * jnp.asarray(image_mask)
-        elif mask_mode == "none":
-            pass
-        else:
-            raise ValueError(f"unknown image mask mode {mask_mode!r}")
-    images = images * jnp.asarray(config.data_multiplier, dtype=images.dtype)
-    return padding.padded_rfft(images, int(config.grid_size), int(config.padding))
+    return preprocess_half_image_device(
+        batch,
+        image_mask,
+        config,
+        apply_image_mask=apply_image_mask,
+        mask_mode=mask_mode,
+    )
 
 
 def _score_normalize_mstep(

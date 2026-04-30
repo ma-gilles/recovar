@@ -6,7 +6,9 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from recovar.core import mask as core_mask
 import recovar.core.fourier_transform_utils as fourier_transform_utils
+import recovar.core.padding as padding
 
 from .half_spectrum import make_half_image_weights
 
@@ -55,6 +57,60 @@ def process_half_image_pair(
         apply_image_mask_a=apply_image_mask_a,
         apply_image_mask_b=apply_image_mask_b,
     )
+
+
+def preprocess_half_image_device(
+    batch,
+    image_mask,
+    config,
+    *,
+    apply_image_mask: bool,
+    mask_mode: str,
+):
+    """JAX packed-half preprocessing for raw real-space image batches."""
+
+    images = jnp.asarray(batch)
+    if apply_image_mask:
+        if mask_mode == "relion_background_fill":
+            images = core_mask.apply_relion_soft_image_mask(images, image_mask)
+        elif mask_mode == "multiply":
+            images = images * jnp.asarray(image_mask)
+        elif mask_mode == "none":
+            pass
+        else:
+            raise ValueError(f"unknown image mask mode {mask_mode!r}")
+    images = images * jnp.asarray(config.data_multiplier, dtype=images.dtype)
+    return padding.padded_rfft(images, int(config.grid_size), int(config.padding))
+
+
+def preprocess_half_image_pair_device(
+    batch,
+    image_mask,
+    config,
+    *,
+    apply_image_mask_a: bool,
+    apply_image_mask_b: bool,
+    mask_mode: str,
+):
+    """Return two device-side half-spectrum preprocessing variants."""
+
+    processed_a = preprocess_half_image_device(
+        batch,
+        image_mask,
+        config,
+        apply_image_mask=apply_image_mask_a,
+        mask_mode=mask_mode,
+    )
+    if apply_image_mask_a == apply_image_mask_b:
+        return processed_a, processed_a
+    processed_b = preprocess_half_image_device(
+        batch,
+        image_mask,
+        config,
+        apply_image_mask=apply_image_mask_b,
+        mask_mode=mask_mode,
+    )
+    return processed_a, processed_b
 
 
 def _dense_batch_half_inputs(
@@ -207,8 +263,8 @@ def image_preprocess_backend(experiment_dataset):
     return getattr(image_source, "backend", image_source)
 
 
-def half_preprocess_requires_host_images(experiment_dataset) -> bool:
-    """Return whether native half preprocessing currently runs on host arrays."""
+def backend_half_preprocess_uses_host_images(experiment_dataset) -> bool:
+    """Return whether the dataset backend half preprocessing expects host arrays."""
 
     backend = image_preprocess_backend(experiment_dataset)
     return getattr(backend, "image_mask_mode", "multiply") == "relion_background_fill"

@@ -87,7 +87,7 @@ from recovar.em.dense_single_volume.helpers.image_shifts import (
     integer_pre_shifts_or_none,
 )
 from recovar.em.dense_single_volume.helpers.preprocessing import (
-    half_preprocess_requires_host_images,
+    backend_half_preprocess_uses_host_images,
     resolve_image_mask_for_half_preprocess,
 )
 from recovar.em.dense_single_volume.helpers.significance import (
@@ -1172,9 +1172,9 @@ def test_dense_k_class_profile_is_optional(rng):
     )
 
 
-def test_dense_k_class_keeps_relion_background_preprocess_on_host(rng):
+def test_dense_k_class_uses_device_relion_background_preprocess(rng):
     dataset = MockDataset(2, rng)
-    host_batch_types = []
+    host_pair_calls = 0
 
     def _iter_batches_host(batch_size, *, indices=None, by_image=False, **kwargs):
         _ = by_image, kwargs
@@ -1195,12 +1195,10 @@ def test_dense_k_class_keeps_relion_background_preprocess_on_host(rng):
             )
 
     def _host_half_pair(batch, *, apply_image_mask_a: bool, apply_image_mask_b: bool):
-        host_batch_types.append(type(batch).__module__)
-        assert isinstance(batch, np.ndarray)
-        return (
-            _raw_real_process_half(batch, apply_image_mask=apply_image_mask_a),
-            _raw_real_process_half(batch, apply_image_mask=apply_image_mask_b),
-        )
+        _ = batch, apply_image_mask_a, apply_image_mask_b
+        nonlocal host_pair_calls
+        host_pair_calls += 1
+        raise AssertionError("dense K-class should use device-side RELION background preprocessing")
 
     dataset.iter_batches = _iter_batches_host
     dataset.process_images_half_pair = _host_half_pair
@@ -1229,8 +1227,8 @@ def test_dense_k_class_keeps_relion_background_preprocess_on_host(rng):
         sparse_pass2=False,
     )
 
-    assert half_preprocess_requires_host_images(dataset)
-    assert host_batch_types
+    assert backend_half_preprocess_uses_host_images(dataset)
+    assert host_pair_calls == 0
     assert np.asarray(result.Ft_y).shape == (2, VOLUME_SIZE)
 
 
