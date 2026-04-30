@@ -161,6 +161,39 @@ def _dense_engine_kwargs(state: InitialModelState, config: DenseInitialModelEste
     return engine_kwargs
 
 
+def _engine_kwargs_for_image_indices(
+    engine_kwargs: dict[str, Any],
+    image_indices: np.ndarray,
+    *,
+    n_images: int,
+) -> dict[str, Any]:
+    """Adapt dense-engine kwargs whose first axis is selected-image order.
+
+    Most dense engine per-image inputs are indexed internally by global image
+    ids. ``translation_log_prior`` is different: the dense engine streams it
+    by selected-image row. Accepting a full-dataset prior here keeps callers
+    from duplicating pseudo-halfset packing logic.
+    """
+
+    out = dict(engine_kwargs)
+    prior = out.get("translation_log_prior")
+    if prior is None:
+        return out
+    prior_np = np.asarray(prior)
+    if prior_np.ndim != 2:
+        return out
+
+    image_indices = np.asarray(image_indices, dtype=np.int64)
+    if prior_np.shape[0] == int(n_images):
+        out["translation_log_prior"] = prior_np[image_indices]
+    elif prior_np.shape[0] != int(image_indices.size):
+        raise ValueError(
+            "translation_log_prior must be shared, selected-image, or full-dataset shaped; "
+            f"got first axis {prior_np.shape[0]} for {image_indices.size} selected images and {n_images} total images"
+        )
+    return out
+
+
 def reference_to_dense_means(references: np.ndarray) -> np.ndarray:
     """Convert RELION-frame real-space InitialModel references to dense EM means.
 
@@ -341,6 +374,7 @@ def _grouped_estep_meta(result, groups: list[tuple[int, np.ndarray]]) -> dict[st
     }
     class_responsibilities = getattr(result, "class_responsibilities", None)
     class_assignments = getattr(result, "class_assignments", None)
+    pose_assignments = getattr(result, "pose_assignments", None)
     stats = getattr(result, "stats", None)
     pmax = None if stats is None else getattr(stats, "max_posterior_per_image", None)
     if getattr(result, "class_posterior_sums", None) is not None:
@@ -353,9 +387,12 @@ def _grouped_estep_meta(result, groups: list[tuple[int, np.ndarray]]) -> dict[st
         )
 
     cursor = 0
+    selected_particle_ids = []
     for h, image_ids in sorted(groups):
-        count = int(np.asarray(image_ids).size)
+        image_ids = np.asarray(image_ids, dtype=np.int64)
+        count = int(image_ids.size)
         rows = slice(cursor, cursor + count)
+        selected_particle_ids.append(image_ids)
         if class_responsibilities is not None:
             meta[f"halfset_{h}_class_posterior_sums"] = np.sum(
                 np.asarray(class_responsibilities, dtype=np.float64)[:, rows],
@@ -367,6 +404,10 @@ def _grouped_estep_meta(result, groups: list[tuple[int, np.ndarray]]) -> dict[st
             pmax_rows = np.asarray(pmax, dtype=np.float64)[rows]
             meta[f"halfset_{h}_pmax_mean"] = float(np.mean(pmax_rows)) if pmax_rows.size else 0.0
         cursor += count
+    if selected_particle_ids:
+        meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
+    if pose_assignments is not None:
+        meta["pose_assignments"] = np.asarray(pose_assignments, dtype=np.int32)
 
     profile_summary = getattr(result, "profile_summary", None)
     if profile_summary is not None:
@@ -428,7 +469,11 @@ def run_dense_initial_model_estep(
             image_indices=packed_image_indices,
             reconstruction_group_ids=reconstruction_group_ids,
             reconstruction_group_count=reconstruction_group_count,
-            **engine_kwargs,
+            **_engine_kwargs_for_image_indices(
+                engine_kwargs,
+                packed_image_indices,
+                n_images=int(experiment_dataset.n_images),
+            ),
         )
         return DenseInitialModelEstepResult(
             accumulators=_grouped_result_to_accumulators(
@@ -460,7 +505,11 @@ def run_dense_initial_model_estep(
             image_batch_size=config.image_batch_size,
             rotation_block_size=config.rotation_block_size,
             image_indices=image_indices,
-            **engine_kwargs,
+            **_engine_kwargs_for_image_indices(
+                engine_kwargs,
+                image_indices,
+                n_images=int(experiment_dataset.n_images),
+            ),
         )
         halfset_results[halfset_idx] = result
         by_halfset[halfset_idx] = _result_to_accumulators(
@@ -474,9 +523,21 @@ def run_dense_initial_model_estep(
     accumulators: list[VdamAccumulator] = []
     for halfset_idx in sorted(by_halfset):
         accumulators.extend(by_halfset[halfset_idx])
+    selected_particle_ids = []
+    pose_assignments = []
+    for halfset_idx, image_indices in groups:
+        result = halfset_results.get(halfset_idx)
+        if result is None or getattr(result, "pose_assignments", None) is None:
+            continue
+        selected_particle_ids.append(np.asarray(image_indices, dtype=np.int64))
+        pose_assignments.append(np.asarray(result.pose_assignments, dtype=np.int32))
+    meta = _estep_meta(halfset_results)
+    if selected_particle_ids:
+        meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
+        meta["pose_assignments"] = np.concatenate(pose_assignments).astype(np.int32, copy=False)
     return DenseInitialModelEstepResult(
         accumulators=accumulators,
-        meta=_estep_meta(halfset_results),
+        meta=meta,
         halfset_results=halfset_results,
     )
 

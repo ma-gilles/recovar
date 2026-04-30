@@ -36,6 +36,7 @@ def _fake_result(n_classes: int, n: int, *, n_images: int = 2, n_groups: int = 2
         class_responsibilities=np.full((n_classes, n_images), 1.0 / n_classes, dtype=np.float32),
         class_posterior_sums=np.arange(n_classes, dtype=np.float32),
         class_assignments=np.zeros(n_images, dtype=np.int32),
+        pose_assignments=np.arange(n_images, dtype=np.int32),
         stats=SimpleNamespace(max_posterior_per_image=np.linspace(0.25, 0.75, n_images, dtype=np.float32)),
         per_class_stats=per_class_stats,
     )
@@ -137,6 +138,43 @@ def test_dense_initial_model_estep_calls_joint_k_class_once_for_grouped_halfsets
         result.meta["class_direction_posterior_sums"],
         np.asarray([[1.0, 1.0, 1.0], [2.0, 2.0, 2.0]]),
     )
+    np.testing.assert_array_equal(result.meta["selected_particle_ids"], [0, 2, 1, 3])
+    np.testing.assert_array_equal(result.meta["pose_assignments"], [0, 1, 2, 3])
+
+
+def test_dense_initial_model_estep_packs_full_translation_prior_for_grouped_halfsets(monkeypatch):
+    calls = []
+
+    def fake_run_dense_k_class_em(*args, **kwargs):
+        calls.append(np.asarray(kwargs["translation_log_prior"]).copy())
+        return _fake_result(n_classes=1, n=8, n_images=int(np.asarray(kwargs["image_indices"]).size), n_groups=2)
+
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.run_dense_k_class_em",
+        fake_run_dense_k_class_em,
+    )
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
+    full_prior = np.arange(8, dtype=np.float32).reshape(4, 2)
+    config = DenseInitialModelEstepConfig(
+        means=np.zeros((1, 8**3), dtype=np.complex64),
+        mean_variance=np.ones((1, 8**3), dtype=np.float32),
+        noise_variance=np.ones(8 * 8, dtype=np.float32),
+        rotations=np.eye(3, dtype=np.float32)[None],
+        translations=np.zeros((2, 2), dtype=np.float32),
+        relion_bpref_frame=False,
+        engine_kwargs={"translation_log_prior": full_prior},
+    )
+
+    run_dense_initial_model_estep(
+        _Dataset(),
+        state,
+        config,
+        particle_ids=np.asarray([0, 1, 2, 3]),
+        halfset_ids=np.asarray([0, 1, 0, 1], dtype=np.int8),
+    )
+
+    assert len(calls) == 1
+    np.testing.assert_array_equal(calls[0], full_prior[[0, 2, 1, 3]])
 
 
 def test_dense_initial_model_estep_meta_includes_optional_profiles(monkeypatch):

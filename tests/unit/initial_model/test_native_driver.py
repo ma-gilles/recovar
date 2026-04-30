@@ -50,6 +50,18 @@ def test_translation_log_prior_uses_angstrom_distance():
 
     np.testing.assert_allclose(prior, np.asarray([0.0, -0.5, -0.125], dtype=np.float32), rtol=1e-6)
 
+    centered = driver._translation_log_prior(
+        translations,
+        voxel_size=3.0,
+        sigma_angstrom=6.0,
+        centers=np.asarray([[-1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
+    )
+    np.testing.assert_allclose(
+        centered,
+        np.asarray([[-0.125, -1.125, -0.25], [-0.125, -0.625, -0.5]], dtype=np.float32),
+        rtol=1e-6,
+    )
+
 
 def test_image_pre_shifts_from_star_converts_angstrom_origins_to_rounded_pixels():
     main = pd.DataFrame(
@@ -59,8 +71,15 @@ def test_image_pre_shifts_from_star_converts_angstrom_origins_to_rounded_pixels(
         }
     )
 
+    raw = driver._image_origin_offsets_pixels_from_star(main, SimpleNamespace(voxel_size=2.0))
     shifts = driver._image_pre_shifts_from_star(main, SimpleNamespace(voxel_size=2.0))
 
+    np.testing.assert_allclose(
+        raw,
+        np.asarray([[2.1, -4.05], [-1.95, 1.0], [0.0, 0.2]], dtype=np.float32),
+        rtol=1e-6,
+        atol=1e-6,
+    )
     np.testing.assert_array_equal(
         shifts,
         np.asarray([[2.0, -4.0], [-2.0, 1.0], [0.0, 0.0]], dtype=np.float32),
@@ -148,6 +167,53 @@ def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
     assert meta["random_perturbation"] == 0.125
     assert meta["n_rotations"] == 3
     assert meta["n_translations"] == 4
+
+
+def test_native_expectation_step_updates_translation_offsets_between_iterations(monkeypatch):
+    calls = []
+
+    def fake_build_sampling_plan(opts, *, iteration):
+        return driver.NativeSamplingPlan(
+            rotations=np.zeros((1, 3, 3), dtype=np.float32),
+            translations=np.asarray([[0.0, 0.0], [2.0, -1.0], [4.0, 0.0]], dtype=np.float32),
+            random_perturbation=0.0,
+        )
+
+    def fake_run_dense(dataset, state, config, *, particle_ids, halfset_ids):
+        calls.append(
+            {
+                "pre_shifts": np.asarray(config.engine_kwargs["image_pre_shifts"], dtype=np.float32).copy(),
+                "prior": np.asarray(config.engine_kwargs["translation_log_prior"], dtype=np.float32).copy(),
+            }
+        )
+        return SimpleNamespace(
+            accumulators=[],
+            meta={
+                "selected_particle_ids": np.asarray([0, 1], dtype=np.int64),
+                "pose_assignments": np.asarray([1, 2], dtype=np.int32),
+            },
+        )
+
+    monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
+    monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
+    dataset = SimpleNamespace(voxel_size=1.0, n_images=2)
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=2, n_directions=1)
+    expectation_step = driver._native_expectation_step(
+        dataset,
+        driver.NativeInitialModelOptions(fn_img="particles.star", translation_sigma_angstrom=2.0),
+        np.ones(33, dtype=np.float32),
+        np.asarray([[0.0, 0.0], [1.1, -1.0]], dtype=np.float32),
+    )
+
+    expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
+    expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
+
+    np.testing.assert_array_equal(calls[0]["pre_shifts"], np.asarray([[0.0, 0.0], [1.0, -1.0]], dtype=np.float32))
+    np.testing.assert_array_equal(calls[1]["pre_shifts"], np.asarray([[2.0, -1.0], [5.0, -1.0]], dtype=np.float32))
+    assert calls[0]["prior"].shape == (2, 3)
+    assert calls[1]["prior"].shape == (2, 3)
+    assert calls[0]["prior"][0, 0] == pytest.approx(0.0)
+    assert calls[1]["prior"][0, 0] < calls[0]["prior"][0, 0]
 
 
 def test_driver_output_mrc_path_matches_relion_snapshot():

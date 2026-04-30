@@ -204,15 +204,7 @@ def _star_column(main_star, name: str):
     return None
 
 
-def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
-    """Return RELION old-offset image pre-shifts in pixel units.
-
-    Dense EM uses these as the per-image pre-centering base before applying
-    the sampled translation grid. RELION rounds old offsets and applies an
-    integer zero-filled real-space shift in its accelerated path; pass the
-    rounded values so the shared dense engine uses the same fast path.
-    """
-
+def _image_origin_offsets_pixels_from_star(main_star, dataset) -> np.ndarray:
     n_images = int(len(main_star))
     origin_x_ang = _star_column(main_star, "_rlnOriginXAngst")
     origin_y_ang = _star_column(main_star, "_rlnOriginYAngst")
@@ -248,7 +240,19 @@ def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
         raise ValueError(f"STAR origin shifts must have shape ({n_images}, 2), got {shifts.shape}")
     if not np.all(np.isfinite(shifts)):
         raise ValueError("STAR origin shifts must be finite")
-    return np.rint(shifts).astype(np.float32)
+    return shifts.astype(np.float32)
+
+
+def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
+    """Return RELION rounded old-offset image pre-shifts in pixel units.
+
+    Dense EM uses these as the per-image pre-centering base before applying
+    the sampled translation grid. RELION rounds old offsets and applies an
+    integer zero-filled real-space shift in its accelerated path; pass the
+    rounded values so the shared dense engine uses the same fast path.
+    """
+
+    return np.rint(_image_origin_offsets_pixels_from_star(main_star, dataset)).astype(np.float32)
 
 
 def _load_raw_images(dataset, image_indices: np.ndarray, *, batch_size: int) -> np.ndarray:
@@ -366,6 +370,7 @@ def _translation_log_prior(
     *,
     voxel_size: float,
     sigma_angstrom: float | None,
+    centers: np.ndarray | None = None,
 ) -> np.ndarray | None:
     if sigma_angstrom is None:
         return None
@@ -373,7 +378,14 @@ def _translation_log_prior(
     if sigma_angstrom <= 0.0:
         raise ValueError("translation_sigma_angstrom must be positive when provided")
     translations = np.asarray(translations, dtype=np.float32)
-    dist2_angstrom = np.sum(translations[:, :2] ** 2, axis=1) * float(voxel_size) ** 2
+    if centers is None:
+        delta = translations[:, :2]
+    else:
+        centers = np.asarray(centers, dtype=np.float32)
+        if centers.ndim != 2 or centers.shape[1] != 2:
+            raise ValueError(f"translation prior centers must have shape (N, 2), got {centers.shape}")
+        delta = translations[None, :, :2] - centers[:, None, :]
+    dist2_angstrom = np.sum(delta**2, axis=-1) * float(voxel_size) ** 2
     return (-0.5 * dist2_angstrom / (sigma_angstrom**2)).astype(np.float32)
 
 
@@ -417,12 +429,14 @@ def _dense_estep_config(
     opts: NativeInitialModelOptions,
     noise_variance: np.ndarray,
     sampling_plan: NativeSamplingPlan,
-    image_pre_shifts: np.ndarray,
+    translation_offsets: np.ndarray,
 ) -> DenseInitialModelEstepConfig:
+    image_pre_shifts = np.rint(np.asarray(translation_offsets, dtype=np.float32)).astype(np.float32)
     translation_log_prior = _translation_log_prior(
         sampling_plan.translations,
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=opts.translation_sigma_angstrom,
+        centers=-image_pre_shifts,
     )
 
     engine_kwargs = {
@@ -450,11 +464,13 @@ def _native_expectation_step(
     dataset,
     opts: NativeInitialModelOptions,
     noise_variance: np.ndarray,
-    image_pre_shifts: np.ndarray,
+    initial_translation_offsets: np.ndarray,
 ):
+    translation_offsets = np.asarray(initial_translation_offsets, dtype=np.float32).copy()
+
     def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
         sampling_plan = _build_sampling_plan(opts, iteration=max(1, int(state.iter)))
-        config = _dense_estep_config(dataset, opts, noise_variance, sampling_plan, image_pre_shifts)
+        config = _dense_estep_config(dataset, opts, noise_variance, sampling_plan, translation_offsets)
         result = run_dense_initial_model_estep(
             dataset,
             state,
@@ -465,9 +481,44 @@ def _native_expectation_step(
         result.meta["random_perturbation"] = float(sampling_plan.random_perturbation)
         result.meta["n_rotations"] = int(sampling_plan.rotations.shape[0])
         result.meta["n_translations"] = int(sampling_plan.translations.shape[0])
+        _update_translation_offsets_from_estep_meta(
+            translation_offsets,
+            result.meta,
+            sampling_plan.translations,
+        )
         return result.accumulators, result.meta
 
     return _expectation_step
+
+
+def _update_translation_offsets_from_estep_meta(
+    translation_offsets: np.ndarray,
+    meta: dict,
+    translations: np.ndarray,
+) -> None:
+    selected_particle_ids = meta.get("selected_particle_ids")
+    pose_assignments = meta.get("pose_assignments")
+    if selected_particle_ids is None or pose_assignments is None:
+        return
+
+    particle_ids = np.asarray(selected_particle_ids, dtype=np.int64).reshape(-1)
+    assignments = np.asarray(pose_assignments, dtype=np.int64).reshape(-1)
+    translations = np.asarray(translations, dtype=np.float32)
+    if particle_ids.shape != assignments.shape:
+        raise ValueError(
+            "selected_particle_ids and pose_assignments must have matching shape, "
+            f"got {particle_ids.shape} and {assignments.shape}"
+        )
+    if translations.ndim != 2 or translations.shape[1] < 2:
+        raise ValueError(f"translations must have shape (T, >=2), got {translations.shape}")
+    if particle_ids.size == 0:
+        return
+    if np.any(particle_ids < 0) or np.any(particle_ids >= translation_offsets.shape[0]):
+        raise ValueError("selected_particle_ids contains entries outside the translation offset table")
+    n_trans = int(translations.shape[0])
+    translation_ids = np.mod(assignments, n_trans)
+    base = np.rint(translation_offsets[particle_ids]).astype(np.float32)
+    translation_offsets[particle_ids] = base + translations[translation_ids, :2]
 
 
 def _initial_state_from_particles(
@@ -637,7 +688,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
 
     _configure_relion_image_mask(dataset, opts)
     sampling_plan = _build_sampling_plan(opts, iteration=1)
-    image_pre_shifts = _image_pre_shifts_from_star(main_star, dataset)
+    translation_offsets = _image_origin_offsets_pixels_from_star(main_star, dataset)
     state, optics_group_by_particle = _initial_state_from_particles(
         dataset,
         main_star,
@@ -646,7 +697,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         sampling_plan.rotations,
     )
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
-    expectation_step = _native_expectation_step(dataset, opts, noise_variance, image_pre_shifts)
+    expectation_step = _native_expectation_step(dataset, opts, noise_variance, translation_offsets)
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
 
     if opts.write_iter_artifacts:
