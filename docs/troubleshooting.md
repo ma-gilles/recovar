@@ -121,6 +121,48 @@ RECOVAR_DISABLE_CUDA=1 recovar ...
 
 That workaround is supported, but it is not the preferred configuration.
 
+### `JaxRuntimeError: INTERNAL: Autotuning failed for HLO ... NOT_FOUND: No valid config found!`
+
+This is XLA's GPU autotuner — the part of JAX that picks an optimal CUDA
+kernel at JIT time — failing because it has no tuning data for your GPU.
+Symptoms include the message above, sometimes preceded by repeated
+`Allocator (GPU_X_bfc) ran out of memory` warnings (those are autotuner
+candidate-kernel probes failing, not real OOM).
+
+This happens on **GPUs newer than the JAX version was tuned for** —
+most often Blackwell (sm_100, sm_120: B100/B200, RTX 50-series, RTX
+PRO Blackwell) on JAX versions cut before Blackwell support landed.
+
+Workaround — disable autotuning so XLA falls back to default heuristic
+kernel selection:
+
+```bash
+export XLA_FLAGS="--xla_gpu_autotune_level=0"
+recovar ...
+```
+
+You can stack this with `RECOVAR_DISABLE_CUDA=1` if you also need to
+avoid recovar's custom kernel:
+
+```bash
+export RECOVAR_DISABLE_CUDA=1
+export XLA_FLAGS="--xla_gpu_autotune_level=0"
+recovar ...
+```
+
+If `--xla_gpu_autotune_level=0` doesn't help, two more knobs to try:
+
+```bash
+export XLA_FLAGS="--xla_gpu_autotune_level=0 --xla_gpu_enable_triton_gemm=false"
+# or
+export XLA_FLAGS="--xla_gpu_autotune_level=0 --xla_gpu_enable_command_buffer="
+```
+
+If none of these work, your GPU is past what your JAX version's XLA can
+lower at all. The fix is upgrading JAX once a release with tuning data
+for your hardware is available — there is no recovar-side workaround.
+This is a JAX/XLA limitation, not a recovar bug.
+
 ## Pipeline issues
 
 ### Mean looks wrong
