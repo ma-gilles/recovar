@@ -39,7 +39,9 @@ hide:
 
 </div>
 
-![GUI dashboard with completed job](_static/gui/07_job_completed.png)
+*Inspect results directly in the browser -- 3D volume viewer with adjustable isosurface threshold:*
+
+![3D volume viewer in the GUI](_static/gui/homepage_volume_viewer.png)
 
 ---
 
