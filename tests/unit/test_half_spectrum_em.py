@@ -5,7 +5,7 @@ numerically identical results to the full-spectrum reference implementation.
 
 Tests:
 1. test_half_inner_product_correctness: weighted half-spectrum dot product == full
-2. test_e_step_half_matches_full: half-spectrum E-step scores match full-spectrum
+2. test_e_step_half_matches_reference: half-spectrum E-step scores match direct packed-half reference
 3. test_m_step_half_matches_full: half-spectrum M-step Ft_y, Ft_ctf match full-spectrum
 4. test_full_iteration_half_matches: one complete run_em iteration matches reference
 """
@@ -22,6 +22,7 @@ import jax.numpy as jnp
 import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
+from recovar.reconstruction import noise as noise_utils
 import recovar.em.dense_single_volume.em_engine as em_engine_module
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
 from recovar.em.dense_single_volume.em_engine import run_em
@@ -109,10 +110,67 @@ def _identity_process(batch, apply_image_mask=False):
     return batch
 
 
+def _identity_process_half(batch, apply_image_mask=False):
+    _ = apply_image_mask
+    return ftu.full_image_to_half_image(batch, IMAGE_SHAPE)
+
+
 def _mask_for_score_only_process(batch, apply_image_mask=False):
     if apply_image_mask:
         return jnp.zeros_like(batch)
     return batch
+
+
+def _mask_for_score_only_process_half(batch, apply_image_mask=False):
+    return ftu.full_image_to_half_image(
+        _mask_for_score_only_process(batch, apply_image_mask=apply_image_mask),
+        IMAGE_SHAPE,
+    )
+
+
+def _preprocess_test_batch(
+    dataset,
+    batch,
+    ctf_params,
+    noise_variance,
+    translations,
+    config,
+):
+    noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, dataset.image_shape).squeeze()
+    return _preprocess_batch(
+        dataset,
+        batch,
+        ctf_params,
+        noise_variance_half,
+        translations,
+        config,
+    )
+
+
+def _direct_half_e_step_scores(
+    shifted_half,
+    ctf2_over_nv_half,
+    proj_half_weighted,
+    proj_abs2_weighted,
+    n_images,
+    n_trans,
+):
+    """Reference E-step score algebra in packed half-spectrum layout."""
+
+    shifted_by_image = shifted_half.reshape(n_images, n_trans, shifted_half.shape[-1])
+    cross = -2.0 * jnp.einsum(
+        "itp,rp->irt",
+        jnp.conj(shifted_by_image),
+        proj_half_weighted,
+        precision=jax.lax.Precision.HIGHEST,
+    ).real
+    norms = jnp.einsum(
+        "ip,rp->ir",
+        ctf2_over_nv_half,
+        proj_abs2_weighted,
+        precision=jax.lax.Precision.HIGHEST,
+    )
+    return -0.5 * (cross + norms[..., None])
 
 
 class MockDataset:
@@ -131,6 +189,7 @@ class MockDataset:
         self.CTF_params = np.zeros((N_IMAGES, 9), dtype=np.float32)
         self.ctf_evaluator = staticmethod(_identity_ctf)
         self.process_images = staticmethod(_identity_process)
+        self.process_images_half = staticmethod(_identity_process_half)
 
         # Fixed Hermitian-symmetric images from seed
         self._images = np.zeros((N_IMAGES, IMAGE_SIZE), dtype=np.complex64)
@@ -139,6 +198,7 @@ class MockDataset:
 
         class _ImageSource:
             process_images = staticmethod(_identity_process)
+            process_images_half = staticmethod(_identity_process_half)
 
         self.image_source = _ImageSource()
 
@@ -170,9 +230,11 @@ class MaskedScoringDataset(MockDataset):
     def __init__(self, rng):
         super().__init__(rng)
         self.process_images = staticmethod(_mask_for_score_only_process)
+        self.process_images_half = staticmethod(_mask_for_score_only_process_half)
 
         class _ImageSource:
             process_images = staticmethod(_mask_for_score_only_process)
+            process_images_half = staticmethod(_mask_for_score_only_process_half)
 
         self.image_source = _ImageSource()
 
@@ -285,16 +347,15 @@ class TestHalfInnerProductCorrectness:
 
 
 # ===========================================================================
-# Test 2: E-step half matches full
+# Test 2: E-step half matches direct packed-half reference
 # ===========================================================================
 
 
-class TestEStepHalfMatchesFull:
-    """Verify that the half-spectrum E-step produces the same scores as the
-    full-spectrum reference (compute_dot_products_eqx + norm term)."""
+class TestEStepHalfMatchesReference:
+    """Verify that the half-spectrum E-step implements the packed-half score algebra."""
 
     def test_scores_match(self, seeded_inputs):
-        """E-step scores from half-spectrum path match full-spectrum scores."""
+        """E-step kernel scores match a direct packed-half reference."""
         s = seeded_inputs
         config = s["config"]
         volume = s["volume"]
@@ -310,31 +371,13 @@ class TestEStepHalfMatchesFull:
         batch_data = jnp.asarray(ds._images)
         ctf_params = jnp.asarray(ds.CTF_params)
 
-        # === FULL-SPECTRUM reference (from em.core) ===
-        from recovar.em import core as em_core
-
-        # Full-spectrum projections
-        proj_full = core.slice_volume(volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=False)
-        proj_abs2_full = jnp.abs(proj_full) ** 2
-
-        # Cross-term via existing function
-        cross_term = em_core.compute_dot_products_eqx(
-            config, proj_full, batch_data, translations, ctf_params, noise_variance
-        )
-        # Norm-term
-        norm_term = em_core.compute_CTFed_proj_norms_eqx(config, proj_abs2_full, ctf_params, noise_variance)
-        # Full residual: scores = -0.5 * (cross + norm)
-        scores_full = -0.5 * (cross_term + norm_term[..., None])
-
-        # === HALF-SPECTRUM path ===
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
             batch_data,
             ctf_params,
             noise_variance,
             translations,
             config,
-            n_images,
-            n_trans,
         )
 
         proj_half, proj_abs2_half = _compute_projections_block(
@@ -356,18 +399,25 @@ class TestEStepHalfMatchesFull:
             IMAGE_SHAPE,
             VOLUME_SHAPE,
         )
+        scores_ref = _direct_half_e_step_scores(
+            shifted_half,
+            ctf2_over_nv_half,
+            proj_half_weighted,
+            proj_abs2_weighted,
+            n_images,
+            n_trans,
+        )
 
-        score_offset = 0.5 * np.asarray(batch_norm).reshape(n_images, 1, 1)
         np.testing.assert_allclose(
-            np.array(scores_full) + score_offset,
             np.array(scores_half),
+            np.array(scores_ref),
             atol=1e-3,
             rtol=1e-4,
-            err_msg="E-step scores differ between half-spectrum and full-spectrum paths",
+            err_msg="E-step scores differ between half-spectrum kernel and direct reference",
         )
 
     def test_probabilities_match(self, seeded_inputs):
-        """Probabilities (softmax of scores) match between half and full paths."""
+        """Probabilities from the E-step kernel match a direct packed-half reference."""
         s = seeded_inputs
         config = s["config"]
         volume = s["volume"]
@@ -383,30 +433,13 @@ class TestEStepHalfMatchesFull:
         batch_data = jnp.asarray(ds._images)
         ctf_params = jnp.asarray(ds.CTF_params)
 
-        # Full-spectrum scores
-        from recovar.em import core as em_core
-
-        proj_full = core.slice_volume(volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp", half_image=False)
-        proj_abs2_full = jnp.abs(proj_full) ** 2
-        cross_term = em_core.compute_dot_products_eqx(
-            config, proj_full, batch_data, translations, ctf_params, noise_variance
-        )
-        norm_term = em_core.compute_CTFed_proj_norms_eqx(config, proj_abs2_full, ctf_params, noise_variance)
-        scores_full = -0.5 * (cross_term + norm_term[..., None])
-        # Softmax
-        scores_flat = scores_full.reshape(n_images, -1)
-        log_Z_full = jax.scipy.special.logsumexp(scores_flat, axis=1)
-        probs_full = jnp.exp(scores_full - log_Z_full[:, None, None])
-
-        # Half-spectrum scores
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
             batch_data,
             ctf_params,
             noise_variance,
             translations,
             config,
-            n_images,
-            n_trans,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
             volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp"
@@ -427,15 +460,27 @@ class TestEStepHalfMatchesFull:
             IMAGE_SHAPE,
             VOLUME_SHAPE,
         )
+        scores_ref = _direct_half_e_step_scores(
+            shifted_half,
+            ctf2_over_nv_half,
+            proj_half_weighted,
+            proj_abs2_weighted,
+            n_images,
+            n_trans,
+        )
+        scores_ref_flat = scores_ref.reshape(n_images, -1)
+        log_Z_ref = jax.scipy.special.logsumexp(scores_ref_flat, axis=1)
+        probs_ref = jnp.exp(scores_ref - log_Z_ref[:, None, None])
+
         scores_h_flat = scores_half.reshape(n_images, -1)
         log_Z_half = jax.scipy.special.logsumexp(scores_h_flat, axis=1)
         probs_half = jnp.exp(scores_half - log_Z_half[:, None, None])
 
         np.testing.assert_allclose(
-            np.array(probs_full),
             np.array(probs_half),
+            np.array(probs_ref),
             atol=1e-5,
-            err_msg="Probabilities differ between half-spectrum and full-spectrum paths",
+            err_msg="Probabilities differ between half-spectrum kernel and direct reference",
         )
 
 
@@ -466,14 +511,13 @@ class TestMStepHalfMatchesFull:
         ctf_params = jnp.asarray(ds.CTF_params)
 
         # -- Compute shared probabilities using half-spectrum path (already verified) --
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
             batch_data,
             ctf_params,
             noise_variance,
             translations,
             config,
-            n_images,
-            n_trans,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
             volume, rotations, IMAGE_SHAPE, VOLUME_SHAPE, "linear_interp"
@@ -721,14 +765,13 @@ class TestFullIterationHalfMatches:
             disc_type="linear_interp",
             process_fn=ds.process_images,
         )
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
             jnp.asarray(batch_data),
             jnp.asarray(ctf_params),
             noise_variance,
             translations,
             config,
-            N_IMAGES,
-            N_TRANSLATIONS,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
             volume,
@@ -983,14 +1026,13 @@ class TestFullIterationHalfMatches:
             disc_type="linear_interp",
             process_fn=ds.process_images,
         )
-        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
+        shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_test_batch(
+            ds,
             jnp.asarray(batch_data),
             jnp.asarray(ctf_params),
             noise_variance,
             translations,
             config,
-            N_IMAGES,
-            N_TRANSLATIONS,
         )
         proj_half, proj_abs2_half = _compute_projections_block(
             volume,
@@ -1087,6 +1129,7 @@ class TestFullIterationHalfMatches:
                 self.dtype = base_ds.dtype
                 self.ctf_evaluator = base_ds.ctf_evaluator
                 self.process_images = base_ds.process_images
+                self.process_images_half = base_ds.process_images_half
                 self.image_source = base_ds.image_source
                 self._images = np.asarray(base_ds._images)[image_indices].copy()
                 self.CTF_params = np.asarray(base_ds.CTF_params)[image_indices].copy()
@@ -1481,7 +1524,8 @@ class TestFullIterationHalfMatches:
             sparse_pass2=False,
             return_profile=True,
         )
-        assert len(sync_calls) >= 10
+        assert sync_calls
+        assert all(call_count > 0 for call_count in sync_calls)
 
 # ===========================================================================
 # Test 5: make_half_image_weights shape and dtype

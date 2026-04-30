@@ -21,7 +21,7 @@ import recovar.core.fourier_transform_utils as ftu
 from recovar import core
 from recovar.core.configs import ForwardModelConfig
 import recovar.em.dense_single_volume.iteration_loop as iteration_loop_module
-from recovar.em.dense_single_volume.em_engine import run_em
+from recovar.em.dense_single_volume.em_engine import _should_cache_projection_blocks_by_default, run_em
 from recovar.em.dense_single_volume.local_backprojection import (
     compute_local_ctf_sums,
     compute_local_weighted_sums,
@@ -1341,6 +1341,98 @@ def test_dense_k_class_projection_cache_matches_uncached(rng):
         np.asarray(uncached.stats.log_evidence_per_image),
         rtol=1e-5,
         atol=1e-5,
+    )
+
+
+def test_dense_single_volume_projection_cache_matches_uncached(rng):
+    dataset = MockDataset(3, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=149)
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    rotations = _make_rotations(3, seed=158)
+    translations = get_translation_grid(max_pixel=1, pixel_offset=1).astype(np.float32)
+    common_kwargs = dict(
+        image_batch_size=2,
+        rotation_block_size=2,
+        current_size=6,
+        projection_padding_factor=1,
+        reconstruction_padding_factor=1,
+        score_with_masked_images=True,
+        relion_firstiter_winner_take_all=True,
+        sparse_pass2=False,
+        return_stats=True,
+        return_profile=True,
+    )
+
+    uncached = run_em(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        cache_projection_blocks=False,
+        **common_kwargs,
+    )
+    cached = run_em(
+        dataset,
+        mean,
+        mean_variance,
+        noise_variance,
+        rotations,
+        translations,
+        "linear_interp",
+        cache_projection_blocks=True,
+        **common_kwargs,
+    )
+    _, ha_uncached, ft_y_uncached, ft_ctf_uncached, stats_uncached, profile_uncached = uncached
+    _, ha_cached, ft_y_cached, ft_ctf_cached, stats_cached, profile_cached = cached
+
+    assert profile_cached.cache_projection_blocks is True
+    assert profile_uncached.cache_projection_blocks is False
+    cached_projection_uses = 2 * int(np.ceil(dataset.n_units / common_kwargs["image_batch_size"])) * profile_cached.n_blocks
+    assert profile_cached.projection_cache_misses == profile_cached.n_blocks
+    assert profile_cached.projection_cache_hits == cached_projection_uses - profile_cached.projection_cache_misses
+    assert profile_uncached.projection_cache_hits == cached_projection_uses // 2
+    assert profile_uncached.projection_cache_misses == cached_projection_uses // 2
+    np.testing.assert_array_equal(ha_cached, ha_uncached)
+    np.testing.assert_allclose(np.asarray(ft_y_cached), np.asarray(ft_y_uncached), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(ft_ctf_cached), np.asarray(ft_ctf_uncached), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(
+        np.asarray(stats_cached.log_evidence_per_image),
+        np.asarray(stats_uncached.log_evidence_per_image),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+
+
+def test_dense_single_volume_projection_cache_auto_has_memory_bound():
+    common = dict(
+        use_window=True,
+        use_dense_big_jit=False,
+        relion_firstiter_winner_take_all=False,
+        use_float64_projections=False,
+    )
+    assert _should_cache_projection_blocks_by_default(
+        n_rot_padded=4608,
+        n_half=128 * (128 // 2 + 1),
+        **common,
+    )
+    assert not _should_cache_projection_blocks_by_default(
+        n_rot_padded=60000,
+        n_half=256 * (256 // 2 + 1),
+        **common,
+    )
+    assert not _should_cache_projection_blocks_by_default(
+        n_rot_padded=4608,
+        n_half=128 * (128 // 2 + 1),
+        **{**common, "use_window": False},
+    )
+    assert not _should_cache_projection_blocks_by_default(
+        n_rot_padded=4608,
+        n_half=128 * (128 // 2 + 1),
+        **{**common, "relion_firstiter_winner_take_all": True},
     )
 
 

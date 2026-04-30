@@ -69,6 +69,7 @@ from .helpers.image_shifts import (
 )
 from .helpers.jax_runtime import block_until_ready as _block_until_ready
 from .helpers.preprocessing import (
+    half_translation_phase_table,
     prepare_reconstruction_batch as _prepare_reconstruction_batch,
     process_half_image,
     preprocess_batch as _preprocess_batch,
@@ -105,6 +106,27 @@ from .local_debug import (
 from .shape_buckets import pad_axis, pad_batch_data_ctf_and_valid_mask
 
 logger = logging.getLogger(__name__)
+
+
+_DEFAULT_PROJECTION_CACHE_LIMIT_BYTES = 8 * 1024**3
+
+
+def _should_cache_projection_blocks_by_default(
+    *,
+    use_window: bool,
+    use_dense_big_jit: bool,
+    relion_firstiter_winner_take_all: bool,
+    n_rot_padded: int,
+    n_half: int,
+    use_float64_projections: bool,
+) -> bool:
+    """Return whether cross-batch projection caching is safe by default."""
+
+    if not use_window or use_dense_big_jit or relion_firstiter_winner_take_all:
+        return False
+    bytes_per_rotation_pixel = 24 if use_float64_projections else 12
+    estimated_cache_bytes = int(n_rot_padded) * int(n_half) * bytes_per_rotation_pixel
+    return estimated_cache_bytes <= _DEFAULT_PROJECTION_CACHE_LIMIT_BYTES
 
 
 def _noise_split_diagnostics_requested() -> bool:
@@ -325,6 +347,7 @@ def run_em(
     square_window: bool = False,
     return_profile: bool = False,
     sparse_pass2: bool = True,
+    cache_projection_blocks: bool | None = None,
     disable_adjoint_y: bool = False,
     disable_adjoint_ctf: bool = False,
 ):
@@ -411,6 +434,10 @@ def run_em(
     sparse_pass2 : bool
         When True, use pass-1 block maxima to skip pass-2 rotation blocks
         whose posterior mass is negligible for every image in the batch.
+    cache_projection_blocks : bool or None
+        When True, retain rotation-block projections across image batches for
+        this EM call.  When None, enable only for windowed non-big-JIT runs
+        where a bounded memory estimate makes the speed tradeoff favorable.
     disable_adjoint_y : bool
         Experimental ablation flag. When True, skip the weighted-image
         adjoint accumulation into ``Ft_y``.
@@ -480,6 +507,7 @@ def run_em(
         disc_type=disc_type,
         process_fn=experiment_dataset.process_images,
     )
+    translation_phases_half = half_translation_phase_table(translations, config.image_shape)
 
     half_weights = make_scoring_half_image_weights(
         image_shape,
@@ -641,6 +669,21 @@ def run_em(
         noise_variance_half if accumulate_noise else jnp.ones(n_half, dtype=jnp.float32)
     )
     score_dc_index = half_spectrum_dc_index(image_shape)
+    global_projection_cache = None
+    if cache_projection_blocks is None:
+        cache_projection_blocks = _should_cache_projection_blocks_by_default(
+            use_window=use_window,
+            use_dense_big_jit=use_dense_big_jit,
+            relion_firstiter_winner_take_all=relion_firstiter_winner_take_all,
+            n_rot_padded=n_rot_padded,
+            n_half=n_half,
+            use_float64_projections=use_float64_projections,
+        )
+    else:
+        cache_projection_blocks = bool(cache_projection_blocks and not use_dense_big_jit)
+    if cache_projection_blocks:
+        global_projection_cache = [None] * n_blocks
+    projection_cache_stats = {"hits": 0, "misses": 0}
 
     start_idx = 0
 
@@ -690,9 +733,30 @@ def run_em(
             )
             if use_dense_big_jit and batch_size != actual_batch_size:
                 translation_sqdist_ang = pad_axis(translation_sqdist_ang, 0, batch_size, value=0)
-        projection_cache = None if use_dense_big_jit else []
+        projection_cache = None
+        if not use_dense_big_jit:
+            projection_cache = global_projection_cache if global_projection_cache is not None else [None] * n_blocks
         block_max_per_image = [] if sparse_pass2 else None
         block_pose_counts = [] if sparse_pass2 else None
+
+        def _project_block(block_index: int, rotations_block):
+            if projection_cache is not None:
+                cached = projection_cache[int(block_index)]
+                if cached is not None:
+                    projection_cache_stats["hits"] += 1
+                    return cached, True
+            projected = _compute_projections_block(
+                mean_for_proj,
+                rotations_block,
+                image_shape,
+                proj_volume_shape,
+                disc_type,
+                **projection_kwargs,
+            )
+            if projection_cache is not None:
+                projection_cache[int(block_index)] = projected
+            projection_cache_stats["misses"] += 1
+            return projected, False
 
         # -- PREPROCESS (once per image batch) -- returns half-spectrum --
         preprocess_t0 = time.time()
@@ -705,6 +769,7 @@ def run_em(
                 translations,
                 config,
                 score_with_masked_images,
+                translation_phases_half=translation_phases_half,
             )
         else:
             shifted_half, batch_norm, ctf2_over_nv_half = _preprocess_batch(
@@ -715,6 +780,7 @@ def run_em(
                 translations,
                 config,
                 score_with_masked_images,
+                translation_phases_half=translation_phases_half,
             )
             ctf2_half_score = None
         shifted_recon_half = (
@@ -725,6 +791,7 @@ def run_em(
                 noise_variance_half,
                 translations,
                 config,
+                translation_phases_half=translation_phases_half,
             )
             if (score_with_masked_images or relion_firstiter_score_mode == "normalized_cc")
             else shifted_half
@@ -996,19 +1063,11 @@ def run_em(
                 continue
 
             proj_t0 = time.time()
-            proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                mean_for_proj,
-                rots_b,
-                image_shape,
-                proj_volume_shape,
-                disc_type,
-                **projection_kwargs,
-            )
-            if sync_timers:
+            (proj_half_b, proj_abs2_half_b), projection_cache_hit = _project_block(b, rots_b)
+            if sync_timers and not projection_cache_hit:
                 _block_until_ready(proj_half_b, proj_abs2_half_b)
-            timing.pass1_projection_s += time.time() - proj_t0
-            if projection_cache is not None:
-                projection_cache.append((proj_half_b, proj_abs2_half_b))
+            if not projection_cache_hit:
+                timing.pass1_projection_s += time.time() - proj_t0
 
             score_t0 = time.time()
             scores = _score_rotation_block(
@@ -1185,18 +1244,11 @@ def run_em(
                     timing.host_stats_s += time.time() - host_stats_t0
                 continue
 
-            if projection_cache is not None:
-                proj_half_b, proj_abs2_half_b = projection_cache[b]
-            else:
-                proj_t0 = time.time()
-                proj_half_b, proj_abs2_half_b = _compute_projections_block(
-                    mean_for_proj,
-                    rots_b,
-                    image_shape,
-                    proj_volume_shape,
-                    disc_type,
-                    **projection_kwargs,
-                )
+            proj_t0 = time.time()
+            (proj_half_b, proj_abs2_half_b), projection_cache_hit = _project_block(b, rots_b)
+            if not projection_cache_hit:
+                if sync_timers:
+                    _block_until_ready(proj_half_b, proj_abs2_half_b)
                 timing.pass2_projection_s += time.time() - proj_t0
 
             score_t0 = time.time()
@@ -1648,6 +1700,9 @@ def run_em(
             n_windowed=int(n_windowed),
             use_window=bool(use_window),
             reused_pass1_projections=True,
+            cache_projection_blocks=bool(cache_projection_blocks),
+            projection_cache_hits=int(projection_cache_stats["hits"]),
+            projection_cache_misses=int(projection_cache_stats["misses"]),
             **sparse_profile.profile_kwargs(),
         )
     else:
@@ -1722,6 +1777,7 @@ def compute_e_step_weights(
         disc_type=disc_type,
         process_fn=experiment_dataset.process_images,
     )
+    translation_phases_half = half_translation_phase_table(translations, config.image_shape)
     noise_variance_half = noise_utils.to_batched_half_pixel_noise(noise_variance, image_shape).squeeze()
 
     half_weights = make_half_image_weights(image_shape)
@@ -1772,6 +1828,7 @@ def compute_e_step_weights(
             translations,
             config,
             score_with_masked_images,
+            translation_phases_half=translation_phases_half,
         )
 
         if use_window:
