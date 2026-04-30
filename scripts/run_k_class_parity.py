@@ -1129,6 +1129,8 @@ def main() -> None:
         "n_translations": int(translations.shape[0]),
         "random_perturbation": float(random_perturbation),
         "elapsed_s": float(elapsed_s),
+        "em_repeat_times_s": [float(value) for value in em_times],
+        "em_repeats": int(args.em_repeats),
         "recovar_class_weights": recovar_weights,
         "relion_class_weights": relion_weights,
         "relion_class_weights_in_recovar_order": relion_weights[perm],
