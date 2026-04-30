@@ -198,10 +198,9 @@ def reference_to_dense_means(references: np.ndarray) -> np.ndarray:
     """Convert RELION-frame real-space InitialModel references to dense EM means.
 
     VDAM stores ``Iref`` as RELION real-space volumes. The dense EM engine
-    scores centered Fourier volumes in recovar convention. The conversion
-    mirrors the fixture-backed InitialModel E-step recipe: apply RELION's
-    gridding correction at ``pad=1``, FFT, and use RELION's sign/scale
-    convention for backprojector-frame references.
+    scores unnormalised, centered Fourier volumes. Keep this conversion in
+    that scoring frame. The BPref bridge applies RELION's sign/scale convention
+    later when moving dense M-step accumulators back into VDAM.
     """
     import jax.numpy as jnp
 
@@ -216,7 +215,7 @@ def reference_to_dense_means(references: np.ndarray) -> np.ndarray:
     for ref in refs:
         corrected, _ = griddingCorrect(jnp.asarray(ref), n, padding_factor=1, order=1)
         ft = ftu.get_dft3(corrected).reshape(-1)
-        means.append(np.asarray(ft) * (-1.0 / float(n**2)))
+        means.append(np.asarray(ft))
     return np.asarray(means, dtype=np.complex64)
 
 

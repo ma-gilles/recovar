@@ -11,6 +11,7 @@ from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import (
     DenseInitialModelEstepConfig,
     class_log_priors_from_state,
+    reference_to_dense_means,
     run_dense_initial_model_estep,
     split_pseudo_halfset_particle_ids,
 )
@@ -314,6 +315,24 @@ def test_dense_initial_model_estep_uses_current_state_reference_when_means_omitt
     assert len(calls) == 1
     np.testing.assert_allclose(calls[0]["means"], 7.0)
     np.testing.assert_allclose(calls[0]["mean_variance"], 49.0)
+
+
+def test_reference_to_dense_means_uses_scoring_fourier_scale(monkeypatch):
+    def fake_dft3(values):
+        return np.asarray(values) + 2.0j
+
+    def fake_gridding_correct(values, *args, **kwargs):
+        return np.asarray(values) + 1.0, None
+
+    monkeypatch.setattr("recovar.core.fourier_transform_utils.get_dft3", fake_dft3)
+    monkeypatch.setattr("recovar.reconstruction.relion_functions.griddingCorrect", fake_gridding_correct)
+
+    refs = np.zeros((1, 4, 4, 4), dtype=np.float32)
+
+    means = reference_to_dense_means(refs)
+
+    assert means.shape == (1, 4**3)
+    np.testing.assert_allclose(means, 1.0 + 2.0j)
 
 
 def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
