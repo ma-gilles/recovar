@@ -258,7 +258,7 @@
   
     
   
-  Getting Started
+  Install
 
         </a>
       </li>
@@ -287,7 +287,7 @@
   
     
   
-  Guide
+  Processing
 
         </a>
       </li>
@@ -312,7 +312,7 @@
   
     
   
-  Reference
+  CLI & API
 
         </a>
       </li>
@@ -566,7 +566,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    Install
   
 
     
@@ -582,7 +582,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Getting Started
+    Install
   
 
           </label>
@@ -745,7 +745,7 @@
   <span class="md-ellipsis">
     
   
-    Guide
+    Processing
   
 
     
@@ -761,7 +761,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Guide
+    Processing
   
 
           </label>
@@ -803,7 +803,7 @@
   <span class="md-ellipsis">
     
   
-    Getting Started
+    First Steps
   
 
     
@@ -819,7 +819,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Getting Started
+    First Steps
   
 
           </label>
@@ -927,7 +927,7 @@
   <span class="md-ellipsis">
     
   
-    Core Workflow
+    Basics
   
 
     
@@ -943,7 +943,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Core Workflow
+    Basics
   
 
           </label>
@@ -1358,7 +1358,7 @@
   <span class="md-ellipsis">
     
   
-    Reference
+    CLI & API
   
 
     
@@ -1374,7 +1374,7 @@
             <span class="md-nav__icon md-icon"></span>
             
   
-    Reference
+    CLI & API
   
 
           </label>
@@ -1926,6 +1926,8 @@
 <p><img alt="GUI dashboard with completed job" src="_static/gui/07_job_completed.png" /></p>
 <hr />
 <h2 id="typical-workflow">Typical workflow<a class="headerlink" href="#typical-workflow" title="Permanent link">&para;</a></h2>
+<p>The easiest way to use RECOVAR is through the <a href="guide/gui/">Web GUI</a> -- launch it with <code>recovar gui</code>, then create jobs, explore the latent space, and generate volumes all from your browser.</p>
+<p>Or use the command line:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># 1. Run the pipeline (~10 min for a small dataset)</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>-o<span class="w"> </span>output<span class="w"> </span>--mask<span class="w"> </span>mask.mrc
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
@@ -1935,7 +1937,6 @@
 <a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="c1"># 3. Explore interactively in the browser</span>
 <a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>recovar<span class="w"> </span>gui
 </code></pre></div>
-<p>Or do it all from the <a href="guide/gui/">Web GUI</a> -- no command line needed.</p>
 <hr />
 <h2 id="how-it-works">How it works<a class="headerlink" href="#how-it-works" title="Permanent link">&para;</a></h2>
 <div class="pipeline-flow">
