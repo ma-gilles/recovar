@@ -97,6 +97,10 @@ from recovar.em.dense_single_volume.helpers.oversampling import (
     _compute_pass2_stats_sparse_perimage_reference,
 )
 from recovar.em.dense_single_volume.helpers.types import NoiseStats, RelionStats
+from recovar.em.dense_single_volume.dense_k_class_engine import _project_k_class_block
+from recovar.em.dense_single_volume.helpers.projection import (
+    compute_projections_block as _compute_projections_block,
+)
 from recovar.em.sampling import (
     apply_relion_rotation_perturbation,
     apply_relion_rotation_perturbation_to_eulers,
@@ -1116,6 +1120,43 @@ def test_dense_k_class_identical_means_split_global_posterior(rng):
         rtol=1e-5,
         atol=1e-5,
     )
+
+
+def test_dense_k_class_projection_block_matches_per_class_loop(rng):
+    means = jnp.stack(
+        [
+            _hermitian_volume(VOLUME_SHAPE, seed=143),
+            _hermitian_volume(VOLUME_SHAPE, seed=144),
+        ],
+        axis=0,
+    )
+    rotations = _make_rotations(3, seed=157)
+
+    projected = _project_k_class_block(
+        means,
+        rotations,
+        IMAGE_SHAPE,
+        VOLUME_SHAPE,
+        "linear_interp",
+        {},
+    )
+    per_class_projected = [
+        _compute_projections_block(
+            means[class_index],
+            rotations,
+            IMAGE_SHAPE,
+            VOLUME_SHAPE,
+            "linear_interp",
+        )
+        for class_index in range(int(means.shape[0]))
+    ]
+    loop_projected = (
+        jnp.stack([value[0] for value in per_class_projected], axis=0),
+        jnp.stack([value[1] for value in per_class_projected], axis=0),
+    )
+
+    np.testing.assert_allclose(np.asarray(projected[0]), np.asarray(loop_projected[0]), rtol=0, atol=0)
+    np.testing.assert_allclose(np.asarray(projected[1]), np.asarray(loop_projected[1]), rtol=0, atol=0)
 
 
 def test_dense_k_class_profile_is_optional(rng):

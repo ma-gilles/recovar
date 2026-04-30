@@ -613,20 +613,19 @@ def _project_k_class_block(
     disc_type: str,
     projection_kwargs: dict,
 ):
-    projections = [
-        _compute_projections_block(
-            mean_for_proj_by_class[class_index],
+    """Project every class volume for one rotation block in one JAX transform."""
+
+    def _project_one_class(mean_for_proj):
+        return _compute_projections_block(
+            mean_for_proj,
             rotations_block,
             image_shape,
             proj_volume_shape,
             disc_type,
             **projection_kwargs,
         )
-        for class_index in range(int(mean_for_proj_by_class.shape[0]))
-    ]
-    proj_half_by_class = jnp.stack([proj_half for proj_half, _ in projections], axis=0)
-    proj_abs2_by_class = jnp.stack([proj_abs2 for _, proj_abs2 in projections], axis=0)
-    return proj_half_by_class, proj_abs2_by_class
+
+    return jax.vmap(_project_one_class)(mean_for_proj_by_class)
 
 
 def _accumulate_k_class_adjoint(
@@ -745,8 +744,12 @@ def run_dense_k_class_em_native(
         "batch_fetch_s": 0.0,
         "preprocess_s": 0.0,
         "projection_pass1_s": 0.0,
+        "projection_pass1_enqueue_s": 0.0,
+        "projection_pass1_sync_s": 0.0,
         "score_pass1_s": 0.0,
         "projection_pass2_s": 0.0,
+        "projection_pass2_enqueue_s": 0.0,
+        "projection_pass2_sync_s": 0.0,
         "score_mstep_pass2_s": 0.0,
         "wta_mstep_s": 0.0,
         "adjoint_s": 0.0,
@@ -1087,8 +1090,12 @@ def run_dense_k_class_em_native(
                 projection_kwargs,
             )
             if sync_timers:
+                projection_enqueue_s = time.time() - t0
                 _block_until_ready(proj_half_by_class, proj_abs2_by_class)
-                profile["projection_pass1_s"] += time.time() - t0
+                projection_total_s = time.time() - t0
+                profile["projection_pass1_s"] += projection_total_s
+                profile["projection_pass1_enqueue_s"] += projection_enqueue_s
+                profile["projection_pass1_sync_s"] += projection_total_s - projection_enqueue_s
                 t0 = time.time()
             scores = _score_k_class_block(
                 window_spec=window_spec,
@@ -1218,8 +1225,12 @@ def run_dense_k_class_em_native(
                         projection_kwargs,
                     )
                     if sync_timers:
+                        projection_enqueue_s = time.time() - t0
                         _block_until_ready(proj_half_by_class, proj_abs2_by_class)
-                        profile["projection_pass2_s"] += time.time() - t0
+                        projection_total_s = time.time() - t0
+                        profile["projection_pass2_s"] += projection_total_s
+                        profile["projection_pass2_enqueue_s"] += projection_enqueue_s
+                        profile["projection_pass2_sync_s"] += projection_total_s - projection_enqueue_s
                 if not relion_firstiter_winner_take_all:
                     t0 = time.time()
                     scores = _score_k_class_block(
