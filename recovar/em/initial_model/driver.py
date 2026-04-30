@@ -437,11 +437,17 @@ def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteratio
 def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, n_steps: int) -> float:
     if perturbation_factor <= 0.0:
         return 0.0
-    rnd = _relion_rnd_unif_factory(int(random_seed))
     pf = float(perturbation_factor)
     value = 0.0
-    for step in range(max(1, int(n_steps))):
-        value += 0.5 * pf + (pf - 0.5 * pf) * rnd(step)
+    n_steps = max(1, int(n_steps))
+    for step in range(n_steps + 1):
+        # RELION advances once during sampling.initialise() before
+        # initialiseWorkLoad() calls init_random_generator(random_seed). C's
+        # default rand state is the same as srand(1) on glibc. Then each
+        # expectationSetup() reinitializes with random_seed + iter.
+        seed = 1 if step == 0 else int(random_seed) + step
+        rnd = _relion_rnd_unif_factory(seed)
+        value += 0.5 * pf + (pf - 0.5 * pf) * rnd(0)
         while value > pf:
             value -= 2.0 * pf
         while value < -pf:

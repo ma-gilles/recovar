@@ -185,7 +185,10 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--datadir", default=None, help="Directory used to resolve relative STAR image paths")
     p.add_argument("--strip_prefix", default=None, help="Prefix to strip from STAR image paths before --datadir")
     p.add_argument("--random_seed", type=int, default=0, help="Native path seed for bootstrap and VDAM subsets")
+    p.add_argument("--healpix_order", type=int, default=1, help="Native path base Healpix order")
     p.add_argument("--oversampling", type=int, default=1, help="Native path adaptive oversampling level")
+    p.add_argument("--offset_range", type=float, default=6.0, help="Native path translation search range in pixels")
+    p.add_argument("--offset_step", type=float, default=2.0, help="Native path translation search step in pixels")
     p.add_argument("--perturbation_factor", type=float, default=0.5)
     p.add_argument("--random_perturbation", type=float, default=None)
     p.add_argument("--image_batch_size", type=int, default=500)
@@ -239,7 +242,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         do_zero_mask=True,
         do_ctf_correction=opts.do_ctf_correction,
         random_seed=args.random_seed,
+        healpix_order=args.healpix_order,
         oversampling=args.oversampling,
+        offset_range_px=args.offset_range,
+        offset_step_px=args.offset_step,
         perturbation_factor=args.perturbation_factor,
         random_perturbation=args.random_perturbation,
         image_batch_size=args.image_batch_size,

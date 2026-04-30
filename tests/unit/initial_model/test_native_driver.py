@@ -144,6 +144,17 @@ def test_random_perturbation_override_is_fixed():
     assert driver._random_perturbation_for_iteration(opts, 7) == -0.125
 
 
+def test_random_perturbation_sequence_matches_relion_initialmodel_fixture():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        random_seed=1776701668,
+        perturbation_factor=0.5,
+    )
+
+    assert driver._random_perturbation_for_iteration(opts, 1) == pytest.approx(-0.25278, abs=5e-6)
+    assert driver._random_perturbation_for_iteration(opts, 2) == pytest.approx(0.125066, abs=5e-6)
+
+
 def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
     calls = []
 
@@ -327,8 +338,14 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
             "250",
             "--random_seed",
             "17",
+            "--healpix_order",
+            "2",
             "--oversampling",
             "0",
+            "--offset_range",
+            "4.5",
+            "--offset_step",
+            "1.5",
             "--random_perturbation",
             "0.25",
             "--translation_sigma_angstrom",
@@ -345,7 +362,10 @@ def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):
     assert opts.nr_classes == 2
     assert opts.particle_diameter == 250.0
     assert opts.random_seed == 17
+    assert opts.healpix_order == 2
     assert opts.oversampling == 0
+    assert opts.offset_range_px == 4.5
+    assert opts.offset_step_px == 1.5
     assert opts.random_perturbation == 0.25
     assert opts.translation_sigma_angstrom == 6.5
     assert opts.write_iter_artifacts is False
