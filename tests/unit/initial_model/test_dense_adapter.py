@@ -140,6 +140,11 @@ def test_dense_initial_model_estep_calls_joint_k_class_once_for_grouped_halfsets
     )
     np.testing.assert_array_equal(result.meta["selected_particle_ids"], [0, 2, 1, 3])
     np.testing.assert_array_equal(result.meta["pose_assignments"], [0, 1, 2, 3])
+    np.testing.assert_array_equal(result.meta["class_assignments"], [0, 0, 0, 0])
+    np.testing.assert_allclose(
+        result.meta["max_posterior_per_image"],
+        np.linspace(0.25, 0.75, 4, dtype=np.float32),
+    )
 
 
 def test_dense_initial_model_estep_packs_full_translation_prior_for_grouped_halfsets(monkeypatch):
@@ -180,7 +185,11 @@ def test_dense_initial_model_estep_packs_full_translation_prior_for_grouped_half
 def test_dense_initial_model_estep_meta_includes_optional_profiles(monkeypatch):
     def fake_run_dense_k_class_em(*args, **kwargs):
         assert kwargs["return_profile"] is True
-        return _fake_result_with_profile(n_classes=1, n=8)
+        return _fake_result_with_profile(
+            n_classes=1,
+            n=8,
+            n_images=int(np.asarray(kwargs["image_indices"]).size),
+        )
 
     monkeypatch.setattr(
         "recovar.em.initial_model.dense_adapter.run_dense_k_class_em",
@@ -209,6 +218,12 @@ def test_dense_initial_model_estep_meta_includes_optional_profiles(monkeypatch):
     assert result.meta["halfset_0_profile_summary"] == {"em_time_s": 1.25, "batches": 1}
     np.testing.assert_allclose(result.meta["class_posterior_sums"], [0.0])
     np.testing.assert_allclose(result.meta["class_direction_posterior_sums"], [[1.0, 1.0, 1.0]])
+    np.testing.assert_array_equal(result.meta["selected_particle_ids"], [0, 1, 2, 3])
+    np.testing.assert_array_equal(result.meta["class_assignments"], [0, 0, 0, 0])
+    np.testing.assert_allclose(
+        result.meta["max_posterior_per_image"],
+        np.linspace(0.25, 0.75, 4, dtype=np.float32),
+    )
 
 
 def test_dense_initial_model_estep_grouped_meta_includes_fused_profile(monkeypatch):

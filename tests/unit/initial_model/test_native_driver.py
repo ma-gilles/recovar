@@ -11,6 +11,7 @@ import pandas as pd
 import pytest
 
 import recovar.em.initial_model.driver as driver
+from recovar.data_io.starfile import read_star
 from recovar.em.initial_model import initialise_denovo_state
 
 SCRIPT_PATH = Path(__file__).resolve().parents[3] / "scripts" / "run_ab_initio.py"
@@ -102,6 +103,22 @@ def test_image_pre_shifts_from_star_defaults_to_zero_without_origins():
     np.testing.assert_array_equal(shifts, np.zeros((2, 2), dtype=np.float32))
 
 
+def test_particle_state_from_star_preserves_class_and_pmax_columns():
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnClassNumber": ["2", "1"],
+            "_rlnMaxValueProbDistribution": ["0.9", "0.25"],
+        }
+    )
+
+    state = driver._particle_state_from_star(main, SimpleNamespace(voxel_size=1.0, n_images=2))
+
+    np.testing.assert_array_equal(state.translation_offsets, np.zeros((2, 2), dtype=np.float32))
+    np.testing.assert_array_equal(state.class_assignments, [1, 0])
+    np.testing.assert_allclose(state.max_posterior, [0.9, 0.25])
+
+
 def test_sampling_plan_oversamples_relion_grid():
     opts = driver.NativeInitialModelOptions(
         fn_img="particles.star",
@@ -191,6 +208,8 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
             meta={
                 "selected_particle_ids": np.asarray([0, 1], dtype=np.int64),
                 "pose_assignments": np.asarray([1, 2], dtype=np.int32),
+                "class_assignments": np.asarray([1, 0], dtype=np.int32),
+                "max_posterior_per_image": np.asarray([0.9, 0.8], dtype=np.float32),
             },
         )
 
@@ -198,11 +217,16 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
     dataset = SimpleNamespace(voxel_size=1.0, n_images=2)
     state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=2, n_directions=1)
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.asarray([[0.0, 0.0], [1.1, -1.0]], dtype=np.float32),
+        class_assignments=np.zeros(2, dtype=np.int32),
+        max_posterior=np.zeros(2, dtype=np.float32),
+    )
     expectation_step = driver._native_expectation_step(
         dataset,
         driver.NativeInitialModelOptions(fn_img="particles.star", translation_sigma_angstrom=2.0),
         np.ones(33, dtype=np.float32),
-        np.asarray([[0.0, 0.0], [1.1, -1.0]], dtype=np.float32),
+        particle_state,
     )
 
     expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
@@ -214,6 +238,12 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     assert calls[1]["prior"].shape == (2, 3)
     assert calls[0]["prior"][0, 0] == pytest.approx(0.0)
     assert calls[1]["prior"][0, 0] < calls[0]["prior"][0, 0]
+    np.testing.assert_array_equal(
+        particle_state.translation_offsets,
+        np.asarray([[4.0, -2.0], [9.0, -1.0]], dtype=np.float32),
+    )
+    np.testing.assert_array_equal(particle_state.class_assignments, [1, 0])
+    np.testing.assert_allclose(particle_state.max_posterior, [0.9, 0.8])
 
 
 def test_driver_output_mrc_path_matches_relion_snapshot():
@@ -233,6 +263,44 @@ def test_model_star_uses_relion_model_blocks(tmp_path):
     assert "_rlnReferenceImage" in text
     assert "run_it001_class001.mrc 0.25 0" in text
     assert "run_it001_class002.mrc 0.75 0" in text
+
+
+def test_data_star_preserves_optics_and_updates_particle_metadata(tmp_path):
+    main = pd.DataFrame(
+        {
+            "_rlnImageName": ["1@stack.mrcs", "2@stack.mrcs"],
+            "_rlnOpticsGroup": ["1", "1"],
+            "_rlnOriginXAngst": ["0.0", "0.0"],
+            "_rlnOriginYAngst": ["0.0", "0.0"],
+            "_rlnOriginX": ["0.0", "0.0"],
+            "_rlnOriginY": ["0.0", "0.0"],
+        }
+    )
+    optics = pd.DataFrame({"_rlnOpticsGroup": ["1"], "_rlnImageSize": ["8"]})
+    particle_state = driver.NativeParticleState(
+        translation_offsets=np.asarray([[2.0, -1.0], [0.5, 1.25]], dtype=np.float32),
+        class_assignments=np.asarray([1, 0], dtype=np.int32),
+        max_posterior=np.asarray([0.875, 0.25], dtype=np.float32),
+    )
+    out = tmp_path / "run_it001_data.star"
+
+    driver._write_data_star(
+        str(out),
+        main,
+        optics,
+        SimpleNamespace(voxel_size=1.5, n_images=2),
+        particle_state,
+    )
+
+    data, data_optics = read_star(str(out))
+    assert data_optics is not None
+    assert data_optics["_rlnImageSize"].tolist() == ["8"]
+    np.testing.assert_allclose(data["_rlnOriginXAngst"].astype(float).to_numpy(), [3.0, 0.75])
+    np.testing.assert_allclose(data["_rlnOriginYAngst"].astype(float).to_numpy(), [-1.5, 1.875])
+    np.testing.assert_allclose(data["_rlnOriginX"].astype(float).to_numpy(), [2.0, 0.5])
+    np.testing.assert_allclose(data["_rlnOriginY"].astype(float).to_numpy(), [-1.0, 1.25])
+    np.testing.assert_array_equal(data["_rlnClassNumber"].astype(int).to_numpy(), [2, 1])
+    np.testing.assert_allclose(data["_rlnMaxValueProbDistribution"].astype(float).to_numpy(), [0.875, 0.25])
 
 
 def test_cli_non_dry_run_calls_native_driver(monkeypatch, capsys):

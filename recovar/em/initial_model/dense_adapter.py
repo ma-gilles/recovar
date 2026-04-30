@@ -388,6 +388,8 @@ def _grouped_estep_meta(result, groups: list[tuple[int, np.ndarray]]) -> dict[st
 
     cursor = 0
     selected_particle_ids = []
+    selected_class_assignments = []
+    selected_pmax = []
     for h, image_ids in sorted(groups):
         image_ids = np.asarray(image_ids, dtype=np.int64)
         count = int(image_ids.size)
@@ -399,13 +401,20 @@ def _grouped_estep_meta(result, groups: list[tuple[int, np.ndarray]]) -> dict[st
                 axis=1,
             )
         if class_assignments is not None:
-            meta[f"halfset_{h}_class_assignments"] = np.asarray(class_assignments, dtype=np.int32)[rows]
+            class_rows = np.asarray(class_assignments, dtype=np.int32)[rows]
+            meta[f"halfset_{h}_class_assignments"] = class_rows
+            selected_class_assignments.append(class_rows)
         if pmax is not None:
             pmax_rows = np.asarray(pmax, dtype=np.float64)[rows]
             meta[f"halfset_{h}_pmax_mean"] = float(np.mean(pmax_rows)) if pmax_rows.size else 0.0
+            selected_pmax.append(pmax_rows)
         cursor += count
     if selected_particle_ids:
         meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
+    if selected_class_assignments:
+        meta["class_assignments"] = np.concatenate(selected_class_assignments).astype(np.int32, copy=False)
+    if selected_pmax:
+        meta["max_posterior_per_image"] = np.concatenate(selected_pmax).astype(np.float32, copy=False)
     if pose_assignments is not None:
         meta["pose_assignments"] = np.asarray(pose_assignments, dtype=np.int32)
 
@@ -525,16 +534,34 @@ def run_dense_initial_model_estep(
         accumulators.extend(by_halfset[halfset_idx])
     selected_particle_ids = []
     pose_assignments = []
+    class_assignments = []
+    max_posterior = []
     for halfset_idx, image_indices in groups:
         result = halfset_results.get(halfset_idx)
-        if result is None or getattr(result, "pose_assignments", None) is None:
+        if result is None:
+            continue
+        result_pose_assignments = getattr(result, "pose_assignments", None)
+        result_class_assignments = getattr(result, "class_assignments", None)
+        result_stats = getattr(result, "stats", None)
+        result_pmax = None if result_stats is None else getattr(result_stats, "max_posterior_per_image", None)
+        if result_pose_assignments is None and result_class_assignments is None and result_pmax is None:
             continue
         selected_particle_ids.append(np.asarray(image_indices, dtype=np.int64))
-        pose_assignments.append(np.asarray(result.pose_assignments, dtype=np.int32))
+        if result_pose_assignments is not None:
+            pose_assignments.append(np.asarray(result_pose_assignments, dtype=np.int32))
+        if result_class_assignments is not None:
+            class_assignments.append(np.asarray(result_class_assignments, dtype=np.int32))
+        if result_pmax is not None:
+            max_posterior.append(np.asarray(result_pmax, dtype=np.float32))
     meta = _estep_meta(halfset_results)
     if selected_particle_ids:
         meta["selected_particle_ids"] = np.concatenate(selected_particle_ids).astype(np.int64, copy=False)
+    if pose_assignments:
         meta["pose_assignments"] = np.concatenate(pose_assignments).astype(np.int32, copy=False)
+    if class_assignments:
+        meta["class_assignments"] = np.concatenate(class_assignments).astype(np.int32, copy=False)
+    if max_posterior:
+        meta["max_posterior_per_image"] = np.concatenate(max_posterior).astype(np.float32, copy=False)
     return DenseInitialModelEstepResult(
         accumulators=accumulators,
         meta=meta,

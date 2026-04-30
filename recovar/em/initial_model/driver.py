@@ -18,7 +18,7 @@ import numpy as np
 
 from recovar.core import mask as core_mask
 from recovar.data_io.cryoem_dataset import load_dataset
-from recovar.data_io.starfile import read_star
+from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
 from recovar.reconstruction.noise import make_radial_noise
 from recovar.utils.helpers import write_relion_mrc
@@ -100,6 +100,15 @@ class NativeSamplingPlan:
     rotations: np.ndarray
     translations: np.ndarray
     random_perturbation: float
+
+
+@dataclass
+class NativeParticleState:
+    """Per-particle metadata carried between native InitialModel iterations."""
+
+    translation_offsets: np.ndarray
+    class_assignments: np.ndarray
+    max_posterior: np.ndarray
 
 
 def _relion_rnd_unif_factory(seed: int) -> RndUnifFn:
@@ -253,6 +262,32 @@ def _image_pre_shifts_from_star(main_star, dataset) -> np.ndarray:
     """
 
     return np.rint(_image_origin_offsets_pixels_from_star(main_star, dataset)).astype(np.float32)
+
+
+def _particle_state_from_star(main_star, dataset) -> NativeParticleState:
+    n_images = int(getattr(dataset, "n_images", len(main_star)))
+    if len(main_star) != n_images:
+        raise ValueError(f"STAR table has {len(main_star)} particles but dataset has {n_images} images")
+    class_col = _star_column(main_star, "_rlnClassNumber")
+    if class_col is None:
+        class_assignments = np.zeros(n_images, dtype=np.int32)
+    else:
+        class_assignments = np.asarray(class_col.astype(int).to_numpy(), dtype=np.int32) - 1
+        if np.any(class_assignments < 0):
+            raise ValueError("_rlnClassNumber values must be one-indexed positive class ids")
+
+    pmax_col = _star_column(main_star, "_rlnMaxValueProbDistribution")
+    if pmax_col is None:
+        max_posterior = np.zeros(n_images, dtype=np.float32)
+    else:
+        max_posterior = np.asarray(pmax_col.astype(float).to_numpy(), dtype=np.float32)
+        if not np.all(np.isfinite(max_posterior)):
+            raise ValueError("_rlnMaxValueProbDistribution values must be finite")
+    return NativeParticleState(
+        translation_offsets=_image_origin_offsets_pixels_from_star(main_star, dataset),
+        class_assignments=class_assignments,
+        max_posterior=max_posterior,
+    )
 
 
 def _load_raw_images(dataset, image_indices: np.ndarray, *, batch_size: int) -> np.ndarray:
@@ -464,13 +499,18 @@ def _native_expectation_step(
     dataset,
     opts: NativeInitialModelOptions,
     noise_variance: np.ndarray,
-    initial_translation_offsets: np.ndarray,
+    particle_state: NativeParticleState | np.ndarray,
 ):
-    translation_offsets = np.asarray(initial_translation_offsets, dtype=np.float32).copy()
+    if not isinstance(particle_state, NativeParticleState):
+        particle_state = NativeParticleState(
+            translation_offsets=np.asarray(particle_state, dtype=np.float32).copy(),
+            class_assignments=np.zeros(int(dataset.n_images), dtype=np.int32),
+            max_posterior=np.zeros(int(dataset.n_images), dtype=np.float32),
+        )
 
     def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
         sampling_plan = _build_sampling_plan(opts, iteration=max(1, int(state.iter)))
-        config = _dense_estep_config(dataset, opts, noise_variance, sampling_plan, translation_offsets)
+        config = _dense_estep_config(dataset, opts, noise_variance, sampling_plan, particle_state.translation_offsets)
         result = run_dense_initial_model_estep(
             dataset,
             state,
@@ -481,8 +521,8 @@ def _native_expectation_step(
         result.meta["random_perturbation"] = float(sampling_plan.random_perturbation)
         result.meta["n_rotations"] = int(sampling_plan.rotations.shape[0])
         result.meta["n_translations"] = int(sampling_plan.translations.shape[0])
-        _update_translation_offsets_from_estep_meta(
-            translation_offsets,
+        _update_particle_state_from_estep_meta(
+            particle_state,
             result.meta,
             sampling_plan.translations,
         )
@@ -496,29 +536,64 @@ def _update_translation_offsets_from_estep_meta(
     meta: dict,
     translations: np.ndarray,
 ) -> None:
+    particle_state = NativeParticleState(
+        translation_offsets=translation_offsets,
+        class_assignments=np.zeros(translation_offsets.shape[0], dtype=np.int32),
+        max_posterior=np.zeros(translation_offsets.shape[0], dtype=np.float32),
+    )
+    _update_particle_state_from_estep_meta(particle_state, meta, translations)
+
+
+def _update_particle_state_from_estep_meta(
+    particle_state: NativeParticleState,
+    meta: dict,
+    translations: np.ndarray,
+) -> None:
     selected_particle_ids = meta.get("selected_particle_ids")
-    pose_assignments = meta.get("pose_assignments")
-    if selected_particle_ids is None or pose_assignments is None:
+    if selected_particle_ids is None:
         return
 
     particle_ids = np.asarray(selected_particle_ids, dtype=np.int64).reshape(-1)
-    assignments = np.asarray(pose_assignments, dtype=np.int64).reshape(-1)
-    translations = np.asarray(translations, dtype=np.float32)
-    if particle_ids.shape != assignments.shape:
-        raise ValueError(
-            "selected_particle_ids and pose_assignments must have matching shape, "
-            f"got {particle_ids.shape} and {assignments.shape}"
-        )
-    if translations.ndim != 2 or translations.shape[1] < 2:
-        raise ValueError(f"translations must have shape (T, >=2), got {translations.shape}")
     if particle_ids.size == 0:
         return
-    if np.any(particle_ids < 0) or np.any(particle_ids >= translation_offsets.shape[0]):
-        raise ValueError("selected_particle_ids contains entries outside the translation offset table")
-    n_trans = int(translations.shape[0])
-    translation_ids = np.mod(assignments, n_trans)
-    base = np.rint(translation_offsets[particle_ids]).astype(np.float32)
-    translation_offsets[particle_ids] = base + translations[translation_ids, :2]
+    if np.any(particle_ids < 0) or np.any(particle_ids >= particle_state.translation_offsets.shape[0]):
+        raise ValueError("selected_particle_ids contains entries outside the particle state table")
+
+    pose_assignments = meta.get("pose_assignments")
+    if pose_assignments is not None:
+        assignments = np.asarray(pose_assignments, dtype=np.int64).reshape(-1)
+        translations = np.asarray(translations, dtype=np.float32)
+        if particle_ids.shape != assignments.shape:
+            raise ValueError(
+                "selected_particle_ids and pose_assignments must have matching shape, "
+                f"got {particle_ids.shape} and {assignments.shape}"
+            )
+        if translations.ndim != 2 or translations.shape[1] < 2:
+            raise ValueError(f"translations must have shape (T, >=2), got {translations.shape}")
+        n_trans = int(translations.shape[0])
+        translation_ids = np.mod(assignments, n_trans)
+        base = np.rint(particle_state.translation_offsets[particle_ids]).astype(np.float32)
+        particle_state.translation_offsets[particle_ids] = base + translations[translation_ids, :2]
+
+    class_assignments = meta.get("class_assignments")
+    if class_assignments is not None:
+        classes = np.asarray(class_assignments, dtype=np.int32).reshape(-1)
+        if particle_ids.shape != classes.shape:
+            raise ValueError(
+                "selected_particle_ids and class_assignments must have matching shape, "
+                f"got {particle_ids.shape} and {classes.shape}"
+            )
+        particle_state.class_assignments[particle_ids] = classes
+
+    max_posterior = meta.get("max_posterior_per_image")
+    if max_posterior is not None:
+        pmax = np.asarray(max_posterior, dtype=np.float32).reshape(-1)
+        if particle_ids.shape != pmax.shape:
+            raise ValueError(
+                "selected_particle_ids and max_posterior_per_image must have matching shape, "
+                f"got {particle_ids.shape} and {pmax.shape}"
+            )
+        particle_state.max_posterior[particle_ids] = pmax
 
 
 def _initial_state_from_particles(
@@ -625,7 +700,63 @@ def _write_model_star(path: str, state: InitialModelState, class_mrcs: tuple[str
             f.write(f"{int(shell)} 0 {float(sigma2):.12g}\n")
 
 
-def _write_iteration_artifacts(output_prefix: str, state: InitialModelState, iteration: int, meta: dict) -> None:
+def _set_star_column(table, column: str, values) -> None:
+    target = column
+    no_prefix = column[1:] if column.startswith("_") else column
+    if target not in table.columns and no_prefix in table.columns:
+        target = no_prefix
+    table[target] = values
+
+
+def _format_float_column(values: np.ndarray, precision: int = 6) -> list[str]:
+    return [f"{float(value):.{precision}f}" for value in np.asarray(values).reshape(-1)]
+
+
+def _write_data_star(path: str, main_star, optics_star, dataset, particle_state: NativeParticleState) -> None:
+    n_images = int(getattr(dataset, "n_images", len(main_star)))
+    if len(main_star) != n_images:
+        raise ValueError(f"STAR table has {len(main_star)} particles but dataset has {n_images} images")
+    if particle_state.translation_offsets.shape != (n_images, 2):
+        raise ValueError(
+            f"translation_offsets must have shape ({n_images}, 2), got {particle_state.translation_offsets.shape}"
+        )
+    if particle_state.class_assignments.shape != (n_images,):
+        raise ValueError(
+            f"class_assignments must have shape ({n_images},), got {particle_state.class_assignments.shape}"
+        )
+    if particle_state.max_posterior.shape != (n_images,):
+        raise ValueError(f"max_posterior must have shape ({n_images},), got {particle_state.max_posterior.shape}")
+
+    table = main_star.copy()
+    offsets_angstrom = np.asarray(particle_state.translation_offsets, dtype=np.float64) * float(dataset.voxel_size)
+    _set_star_column(table, "_rlnOriginXAngst", _format_float_column(offsets_angstrom[:, 0]))
+    _set_star_column(table, "_rlnOriginYAngst", _format_float_column(offsets_angstrom[:, 1]))
+    has_legacy_x = _star_column(table, "_rlnOriginX") is not None
+    has_legacy_y = _star_column(table, "_rlnOriginY") is not None
+    if has_legacy_x or has_legacy_y:
+        offsets_pixels = np.asarray(particle_state.translation_offsets, dtype=np.float64)
+        _set_star_column(table, "_rlnOriginX", _format_float_column(offsets_pixels[:, 0]))
+        _set_star_column(table, "_rlnOriginY", _format_float_column(offsets_pixels[:, 1]))
+    _set_star_column(table, "_rlnClassNumber", (np.asarray(particle_state.class_assignments, dtype=np.int32) + 1))
+    _set_star_column(table, "_rlnMaxValueProbDistribution", _format_float_column(particle_state.max_posterior))
+
+    out_path = Path(path)
+    if str(out_path.parent) not in ("", "."):
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    write_star(str(out_path), table, optics_star.copy() if optics_star is not None else None)
+
+
+def _write_iteration_artifacts(
+    output_prefix: str,
+    state: InitialModelState,
+    iteration: int,
+    meta: dict,
+    *,
+    main_star=None,
+    optics_star=None,
+    dataset=None,
+    particle_state: NativeParticleState | None = None,
+) -> None:
     out_dir = _output_dir_from_prefix(output_prefix)
     out_dir.mkdir(parents=True, exist_ok=True)
     class_mrcs = _class_mrc_paths(output_prefix, iteration, int(state.K))
@@ -636,6 +767,14 @@ def _write_iteration_artifacts(output_prefix: str, state: InitialModelState, ite
     meta_path = f"{output_prefix}_it{iteration:03d}_recovar_meta.json"
     with open(meta_path, "w") as f:
         json.dump(_json_ready(meta), f, indent=2, sort_keys=True)
+    if main_star is not None and dataset is not None and particle_state is not None:
+        _write_data_star(
+            f"{output_prefix}_it{iteration:03d}_data.star",
+            main_star,
+            optics_star,
+            dataset,
+            particle_state,
+        )
 
 
 def _json_ready(value):
@@ -688,7 +827,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
 
     _configure_relion_image_mask(dataset, opts)
     sampling_plan = _build_sampling_plan(opts, iteration=1)
-    translation_offsets = _image_origin_offsets_pixels_from_star(main_star, dataset)
+    particle_state = _particle_state_from_star(main_star, dataset)
     state, optics_group_by_particle = _initial_state_from_particles(
         dataset,
         main_star,
@@ -697,7 +836,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         sampling_plan.rotations,
     )
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
-    expectation_step = _native_expectation_step(dataset, opts, noise_variance, translation_offsets)
+    expectation_step = _native_expectation_step(dataset, opts, noise_variance, particle_state)
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
 
     if opts.write_iter_artifacts:
@@ -707,7 +846,18 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
             json.dump(asdict(opts), f, indent=2, sort_keys=True)
 
     artifact_sink = (
-        (lambda current, iteration, meta: _write_iteration_artifacts(opts.outputname, current, iteration, meta))
+        (
+            lambda current, iteration, meta: _write_iteration_artifacts(
+                opts.outputname,
+                current,
+                iteration,
+                meta,
+                main_star=main_star,
+                optics_star=optics_star,
+                dataset=dataset,
+                particle_state=particle_state,
+            )
+        )
         if opts.write_iter_artifacts
         else (lambda *args, **kwargs: None)
     )
