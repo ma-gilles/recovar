@@ -25,7 +25,7 @@ from recovar.utils.helpers import write_relion_mrc
 
 from .avg_unaligned import compute_avg_unaligned_and_sigma2
 from .bootstrap_iref import compute_bootstrap_iref_via_cpp, initial_low_pass_filter_references
-from .dense_adapter import DenseInitialModelEstepConfig, dense_initial_model_expectation_step
+from .dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
 from .init import initialise_denovo_state, seed_noise_from_mavg
 from .iteration_loop import run_vdam_iterations
 from .schedules import DEFAULT_GRAD_EM_ITERS, DEFAULT_GRAD_MU, default_subset_sizes_for_3d_initial_model
@@ -249,17 +249,13 @@ def _configure_relion_image_mask(dataset, opts: NativeInitialModelOptions) -> No
         backend.image_mask_mode = "relion_background_fill"
 
 
-def _build_sampling_plan(opts: NativeInitialModelOptions) -> NativeSamplingPlan:
+def _build_sampling_plan(opts: NativeInitialModelOptions, *, iteration: int = 1) -> NativeSamplingPlan:
     healpix_order = int(opts.healpix_order)
     oversampling = int(opts.oversampling)
     if oversampling < 0:
         raise ValueError("oversampling must be >= 0")
 
-    random_perturbation = (
-        float(opts.random_perturbation)
-        if opts.random_perturbation is not None
-        else _initial_random_perturbation(int(opts.random_seed), float(opts.perturbation_factor))
-    )
+    random_perturbation = _random_perturbation_for_iteration(opts, iteration)
 
     coarse_translations = sampling.get_translation_grid(
         max_pixel=float(opts.offset_range_px),
@@ -325,16 +321,28 @@ def _translation_log_prior(
     return (-0.5 * dist2_angstrom / (sigma_angstrom**2)).astype(np.float32)
 
 
-def _initial_random_perturbation(random_seed: int, perturbation_factor: float) -> float:
+def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteration: int) -> float:
+    if opts.random_perturbation is not None:
+        return float(opts.random_perturbation)
+    return _random_perturbation_sequence(
+        int(opts.random_seed),
+        float(opts.perturbation_factor),
+        max(1, int(iteration)),
+    )
+
+
+def _random_perturbation_sequence(random_seed: int, perturbation_factor: float, n_steps: int) -> float:
     if perturbation_factor <= 0.0:
         return 0.0
     rnd = _relion_rnd_unif_factory(int(random_seed))
     pf = float(perturbation_factor)
-    value = 0.5 * pf + (pf - 0.5 * pf) * rnd(0)
-    while value > pf:
-        value -= 2.0 * pf
-    while value < -pf:
-        value += 2.0 * pf
+    value = 0.0
+    for step in range(max(1, int(n_steps))):
+        value += 0.5 * pf + (pf - 0.5 * pf) * rnd(step)
+        while value > pf:
+            value -= 2.0 * pf
+        while value < -pf:
+            value += 2.0 * pf
     return float(value)
 
 
@@ -346,6 +354,58 @@ def _noise_variance_from_sigma2(sigma2_noise: np.ndarray, ori_size: int) -> np.n
         np.float32,
         copy=False,
     ).reshape(-1)
+
+
+def _dense_estep_config(
+    dataset,
+    opts: NativeInitialModelOptions,
+    noise_variance: np.ndarray,
+    sampling_plan: NativeSamplingPlan,
+) -> DenseInitialModelEstepConfig:
+    translation_log_prior = _translation_log_prior(
+        sampling_plan.translations,
+        voxel_size=float(dataset.voxel_size),
+        sigma_angstrom=opts.translation_sigma_angstrom,
+    )
+
+    engine_kwargs = {
+        "score_with_masked_images": True,
+        "relion_firstiter_score_mode": "gaussian",
+        "image_pre_shifts": np.zeros((int(dataset.n_images), 2), dtype=np.float32),
+        "sparse_pass2": False,
+    }
+    if translation_log_prior is not None:
+        engine_kwargs["translation_log_prior"] = translation_log_prior
+
+    return DenseInitialModelEstepConfig(
+        noise_variance=noise_variance,
+        rotations=sampling_plan.rotations,
+        translations=sampling_plan.translations,
+        image_batch_size=int(opts.image_batch_size),
+        rotation_block_size=int(opts.rotation_block_size),
+        padding_factor=int(opts.padding_factor),
+        relion_bpref_frame=True,
+        engine_kwargs=engine_kwargs,
+    )
+
+
+def _native_expectation_step(dataset, opts: NativeInitialModelOptions, noise_variance: np.ndarray):
+    def _expectation_step(state: InitialModelState, particle_ids: np.ndarray, halfset_ids: np.ndarray):
+        sampling_plan = _build_sampling_plan(opts, iteration=max(1, int(state.iter)))
+        config = _dense_estep_config(dataset, opts, noise_variance, sampling_plan)
+        result = run_dense_initial_model_estep(
+            dataset,
+            state,
+            config,
+            particle_ids=particle_ids,
+            halfset_ids=halfset_ids,
+        )
+        result.meta["random_perturbation"] = float(sampling_plan.random_perturbation)
+        result.meta["n_rotations"] = int(sampling_plan.rotations.shape[0])
+        result.meta["n_translations"] = int(sampling_plan.translations.shape[0])
+        return result.accumulators, result.meta
+
+    return _expectation_step
 
 
 def _initial_state_from_particles(
@@ -514,7 +574,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         raise NotImplementedError("native InitialModel currently supports SPA particle STAR files, not tilt-series")
 
     _configure_relion_image_mask(dataset, opts)
-    sampling_plan = _build_sampling_plan(opts)
+    sampling_plan = _build_sampling_plan(opts, iteration=1)
     state, optics_group_by_particle = _initial_state_from_particles(
         dataset,
         main_star,
@@ -523,32 +583,7 @@ def run_native_initial_model(opts: NativeInitialModelOptions) -> NativeInitialMo
         sampling_plan.rotations,
     )
     noise_variance = _noise_variance_from_sigma2(state.sigma2_noise, int(state.ori_size))
-    translation_log_prior = _translation_log_prior(
-        sampling_plan.translations,
-        voxel_size=float(dataset.voxel_size),
-        sigma_angstrom=opts.translation_sigma_angstrom,
-    )
-
-    engine_kwargs = {
-        "score_with_masked_images": True,
-        "relion_firstiter_score_mode": "gaussian",
-        "image_pre_shifts": np.zeros((int(dataset.n_images), 2), dtype=np.float32),
-        "sparse_pass2": False,
-    }
-    if translation_log_prior is not None:
-        engine_kwargs["translation_log_prior"] = translation_log_prior
-
-    estep_config = DenseInitialModelEstepConfig(
-        noise_variance=noise_variance,
-        rotations=sampling_plan.rotations,
-        translations=sampling_plan.translations,
-        image_batch_size=int(opts.image_batch_size),
-        rotation_block_size=int(opts.rotation_block_size),
-        padding_factor=int(opts.padding_factor),
-        relion_bpref_frame=True,
-        engine_kwargs=engine_kwargs,
-    )
-    expectation_step = dense_initial_model_expectation_step(dataset, estep_config)
+    expectation_step = _native_expectation_step(dataset, opts, noise_variance)
     grad_ini_subset_size, grad_fin_subset_size = default_subset_sizes_for_3d_initial_model(int(dataset.n_images))
 
     if opts.write_iter_artifacts:

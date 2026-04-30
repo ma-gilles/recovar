@@ -66,6 +66,53 @@ def test_sampling_plan_oversamples_relion_grid():
     assert plan.random_perturbation == 0.0
 
 
+def test_random_perturbation_override_is_fixed():
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        random_perturbation=-0.125,
+    )
+
+    assert driver._random_perturbation_for_iteration(opts, 1) == -0.125
+    assert driver._random_perturbation_for_iteration(opts, 7) == -0.125
+
+
+def test_native_expectation_step_rebuilds_sampling_per_iteration(monkeypatch):
+    calls = []
+
+    def fake_build_sampling_plan(opts, *, iteration):
+        calls.append(iteration)
+        return driver.NativeSamplingPlan(
+            rotations=np.zeros((iteration, 3, 3), dtype=np.float32),
+            translations=np.zeros((iteration + 1, 2), dtype=np.float32),
+            random_perturbation=0.125,
+        )
+
+    def fake_run_dense(dataset, state, config, *, particle_ids, halfset_ids):
+        assert config.rotations.shape == (3, 3, 3)
+        assert config.translations.shape == (4, 2)
+        assert particle_ids.tolist() == [0, 1]
+        return SimpleNamespace(accumulators=["acc"], meta={})
+
+    monkeypatch.setattr(driver, "_build_sampling_plan", fake_build_sampling_plan)
+    monkeypatch.setattr(driver, "run_dense_initial_model_estep", fake_run_dense)
+    dataset = SimpleNamespace(voxel_size=1.0, n_images=2)
+    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=3, n_directions=3)
+    state.iter = 3
+
+    expectation_step = driver._native_expectation_step(
+        dataset,
+        driver.NativeInitialModelOptions(fn_img="particles.star"),
+        np.ones(33, dtype=np.float32),
+    )
+    accumulators, meta = expectation_step(state, np.asarray([0, 1]), np.asarray([0, 1], dtype=np.int8))
+
+    assert accumulators == ["acc"]
+    assert calls == [3]
+    assert meta["random_perturbation"] == 0.125
+    assert meta["n_rotations"] == 3
+    assert meta["n_translations"] == 4
+
+
 def test_driver_output_mrc_path_matches_relion_snapshot():
     assert driver._initial_model_mrc_from_prefix("ab_initio/run") == "ab_initio/initial_model.mrc"
 
