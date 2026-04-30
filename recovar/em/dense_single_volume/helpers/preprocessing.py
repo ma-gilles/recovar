@@ -121,6 +121,7 @@ def _dense_batch_half_inputs(
     translations,
     config,
     apply_image_mask: bool,
+    translation_phases_half=None,
 ):
     processed_half = process_half_image(
         experiment_dataset,
@@ -129,7 +130,8 @@ def _dense_batch_half_inputs(
     )
     ctf_half = config.compute_ctf_half(ctf_params)
     noise_variance_half = jnp.asarray(noise_variance)
-    translation_phases_half = half_translation_phase_table(translations, config.image_shape)
+    if translation_phases_half is None:
+        translation_phases_half = half_translation_phase_table(translations, config.image_shape)
     return processed_half, ctf_half, noise_variance_half, translation_phases_half
 
 
@@ -143,6 +145,7 @@ def dense_batch_half_input_pair(
     *,
     apply_image_mask_a: bool,
     apply_image_mask_b: bool,
+    translation_phases_half=None,
 ):
     """Shared inputs plus two preprocessed half-image variants."""
 
@@ -154,7 +157,8 @@ def dense_batch_half_input_pair(
     )
     ctf_half = config.compute_ctf_half(ctf_params)
     noise_variance_half = jnp.asarray(noise_variance)
-    translation_phases_half = half_translation_phase_table(translations, config.image_shape)
+    if translation_phases_half is None:
+        translation_phases_half = half_translation_phase_table(translations, config.image_shape)
     return processed_a, processed_b, ctf_half, noise_variance_half, translation_phases_half
 
 
@@ -166,6 +170,7 @@ def preprocess_batch(
     translations,
     config,
     score_with_masked_images=False,
+    translation_phases_half=None,
 ):
     """Preprocess one dense image batch for E-step scoring."""
 
@@ -177,6 +182,7 @@ def preprocess_batch(
         translations,
         config,
         score_with_masked_images,
+        translation_phases_half=translation_phases_half,
     )
     score_weighted_half = processed_half * ctf_half / noise_variance_half
     shifted_half = apply_half_translation_phases(score_weighted_half, translation_phases_half)
@@ -197,6 +203,8 @@ def prepare_reconstruction_batch(
     noise_variance,
     translations,
     config,
+    *,
+    translation_phases_half=None,
 ):
     """Preprocess one dense image batch for the unmasked M-step path."""
 
@@ -208,6 +216,7 @@ def prepare_reconstruction_batch(
         translations,
         config,
         False,
+        translation_phases_half=translation_phases_half,
     )
     return apply_half_translation_phases(processed_half * ctf_half / noise_variance_half, translation_phases_half)
 
@@ -220,6 +229,7 @@ def preprocess_batch_firstiter_cc(
     translations,
     config,
     score_with_masked_images=False,
+    translation_phases_half=None,
 ):
     """Preprocess one dense image batch for RELION's iter-1 normalized CC scoring."""
 
@@ -231,6 +241,7 @@ def preprocess_batch_firstiter_cc(
         translations,
         config,
         score_with_masked_images,
+        translation_phases_half=translation_phases_half,
     )
     safe_ctf_half = jnp.where(jnp.abs(ctf_half) > 1e-8, 1.0 / ctf_half, 0.0)
     shifted_half = apply_half_translation_phases(

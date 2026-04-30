@@ -961,6 +961,7 @@ def run_dense_k_class_em_native(
         by_image=False,
     )
     projection_cache = [None] * n_blocks if cache_projection_blocks else None
+    translation_phases_half = half_translation_phase_table(translations, config.image_shape)
 
     def project_block(block_index: int, rotations_block):
         nonlocal projection_cache
@@ -1049,6 +1050,7 @@ def run_dense_k_class_em_native(
                 translations,
                 config,
                 score_with_masked_images,
+                translation_phases_half=translation_phases_half,
             )
             shifted_recon_half = _prepare_reconstruction_batch(
                 experiment_dataset,
@@ -1057,6 +1059,7 @@ def run_dense_k_class_em_native(
                 noise_variance_half,
                 translations,
                 config,
+                translation_phases_half=translation_phases_half,
             )
         elif score_with_masked_images:
             if device_half_mask is None:
@@ -1075,6 +1078,7 @@ def run_dense_k_class_em_native(
                     config,
                     apply_image_mask_a=True,
                     apply_image_mask_b=False,
+                    translation_phases_half=translation_phases_half,
                 )
             else:
                 processed_score_half, processed_recon_half = preprocess_half_image_pair_device(
@@ -1087,7 +1091,6 @@ def run_dense_k_class_em_native(
                 )
                 ctf_half = config.compute_ctf_half(ctf_params)
                 noise_variance_raw_half = jnp.asarray(noise_variance_half)
-                translation_phases_half = half_translation_phase_table(translations, config.image_shape)
                 processed_score_half_for_noise = processed_score_half
             score_weighted_half = processed_score_half * ctf_half / noise_variance_raw_half
             shifted_half = apply_half_translation_phases(score_weighted_half, translation_phases_half)
@@ -1115,6 +1118,7 @@ def run_dense_k_class_em_native(
                 translations,
                 config,
                 score_with_masked_images,
+                translation_phases_half=translation_phases_half,
             )
             ctf2_half_score = None
             shifted_recon_half = shifted_half
