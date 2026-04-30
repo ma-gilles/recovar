@@ -5,7 +5,7 @@ from pathlib import Path
 
 def test_makefile_covers_v1_release_floor():
     mk = Path("recovar/cuda/Makefile").read_text()
-    m = re.search(r"CUDA_ARCH\s*\?=([^\n]+(?:\\\n[^\n]+)*)", mk)
+    m = re.search(r"CUDA_ARCH\s*\?=((?:[^\n]*\\\n)*[^\n]*)", mk)
     assert m, "CUDA_ARCH default not found in Makefile"
     block = m.group(1)
     for sm in ("70", "75", "80", "86", "89", "90"):

@@ -62,6 +62,21 @@ def main():
 
     if not run_on_cpu:
         check_gpu()
+        # Verify the CUDA kernel loads on this GPU (catches arch mismatches early)
+        try:
+            from recovar.cuda_backproject import cuda_available
+            if cuda_available():
+                logger.info("CUDA backproject/project kernels: OK")
+            else:
+                logger.warning(
+                    "Custom CUDA kernels not available — falling back to JAX GPU path "
+                    "(~2x slower). Run 'recovar build_custom_cuda' to build them, or "
+                    "see https://github.com/ma-gilles/recovar/issues/131"
+                )
+        except RuntimeError as e:
+            # The preflight check raises RuntimeError with a detailed message
+            logger.error("%s", e)
+            sys.exit(1)
 
     def run_command(command, description, function_name):
         logger.info("Running: %s", description)
