@@ -12,31 +12,27 @@
         <meta name="author" content="Marc Aurele Gilles">
       
       
-        <link rel="canonical" href="https://ma-gilles.github.io/recovar/guide/conformational-density/">
+        <link rel="canonical" href="https://ma-gilles.github.io/recovar/CLAUDE/">
       
       
-        <link rel="prev" href="../downsampling/">
-      
-      
-        <link rel="next" href="../extracting-subsets/">
       
       
         
       
       
-      <link rel="icon" href="../../assets/images/favicon.png">
+      <link rel="icon" href="../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
     
     
       
-        <title>Conformational Density - RECOVAR</title>
+        <title>Documentation Development Guide - RECOVAR</title>
       
     
     
-      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      <link rel="stylesheet" href="../assets/stylesheets/main.484c7ddc.min.css">
       
         
-        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
       
       
 
@@ -55,11 +51,11 @@
       
     
     
-      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
     
-      <link rel="stylesheet" href="../../stylesheets/extra.css">
+      <link rel="stylesheet" href="../stylesheets/extra.css">
     
-    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
       
 
@@ -84,7 +80,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#conformational-density" class="md-skip">
+        <a href="#documentation-development-guide" class="md-skip">
           Skip to content
         </a>
       
@@ -98,7 +94,7 @@
 
 <header class="md-header" data-md-component="header">
   <nav class="md-header__inner md-grid" aria-label="Header">
-    <a href="../.." title="RECOVAR" class="md-header__button md-logo" aria-label="RECOVAR" data-md-component="logo">
+    <a href=".." title="RECOVAR" class="md-header__button md-logo" aria-label="RECOVAR" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -118,7 +114,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              Conformational Density
+              Documentation Development Guide
             
           </span>
         </div>
@@ -231,7 +227,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../.." class="md-tabs__link">
+      <a href=".." class="md-tabs__link">
         
   
   
@@ -252,7 +248,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../getting-started/installation/" class="md-tabs__link">
+        <a href="../getting-started/installation/" class="md-tabs__link">
           
   
   
@@ -270,8 +266,6 @@
   
   
   
-    
-  
   
     
     
@@ -279,13 +273,11 @@
   
   
   
-    
-  
   
     
     
-      <li class="md-tabs__item md-tabs__item--active">
-        <a href="../gui/" class="md-tabs__link">
+      <li class="md-tabs__item">
+        <a href="../guide/gui/" class="md-tabs__link">
           
   
   
@@ -310,7 +302,7 @@
     
     
       <li class="md-tabs__item">
-        <a href="../../reference/cli/" class="md-tabs__link">
+        <a href="../reference/cli/" class="md-tabs__link">
           
   
   
@@ -330,7 +322,7 @@
   
   
     <li class="md-tabs__item">
-      <a href="../../troubleshooting/" class="md-tabs__link">
+      <a href="../troubleshooting/" class="md-tabs__link">
         
   
   
@@ -365,7 +357,7 @@
 
 <nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
   <label class="md-nav__title" for="__drawer">
-    <a href="../.." title="RECOVAR" class="md-nav__button md-logo" aria-label="RECOVAR" data-md-component="logo">
+    <a href=".." title="RECOVAR" class="md-nav__button md-logo" aria-label="RECOVAR" data-md-component="logo">
       
   
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
@@ -395,7 +387,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../.." class="md-nav__link">
+      <a href=".." class="md-nav__link">
         
   
   
@@ -484,7 +476,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/installation/" class="md-nav__link">
+      <a href="../getting-started/installation/" class="md-nav__link">
         
   
   
@@ -512,7 +504,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/quickstart/" class="md-nav__link">
+      <a href="../getting-started/quickstart/" class="md-nav__link">
         
   
   
@@ -540,7 +532,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/docker/" class="md-nav__link">
+      <a href="../getting-started/docker/" class="md-nav__link">
         
   
   
@@ -568,7 +560,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../getting-started/testing/" class="md-nav__link">
+      <a href="../getting-started/testing/" class="md-nav__link">
         
   
   
@@ -600,10 +592,8 @@
       
   
   
-    
   
   
-  
     
     
       
@@ -617,22 +607,19 @@
     
     
       
-        
-        
-      
       
         
       
     
     
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
         
           
-          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
             
   
   
@@ -650,7 +637,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -680,20 +667,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_1" >
         
           
-          <label class="md-nav__link" for="__nav_3_1" id="__nav_3_1_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_1" id="__nav_3_1_label" tabindex="0">
             
   
   
@@ -729,7 +713,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../gui/" class="md-nav__link">
+      <a href="../guide/gui/" class="md-nav__link">
         
   
   
@@ -757,7 +741,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../tutorial/" class="md-nav__link">
+      <a href="../guide/tutorial/" class="md-nav__link">
         
   
   
@@ -807,20 +791,17 @@
       
       
         
-          
-          
-        
       
     
     
-    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+    <li class="md-nav__item md-nav__item--nested">
       
         
         
         <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_2" >
         
           
-          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
             
   
   
@@ -856,7 +837,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../input-data/" class="md-nav__link">
+      <a href="../guide/input-data/" class="md-nav__link">
         
   
   
@@ -884,7 +865,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../pipeline/" class="md-nav__link">
+      <a href="../guide/pipeline/" class="md-nav__link">
         
   
   
@@ -912,7 +893,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../analysis/" class="md-nav__link">
+      <a href="../guide/analysis/" class="md-nav__link">
         
   
   
@@ -945,10 +926,8 @@
                 
   
   
-    
   
   
-  
     
     
       
@@ -971,21 +950,18 @@
     
       
       
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" >
         
           
-          
-        
-      
-    
-    
-    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
-      
-        
-        
-        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3_3" checked>
-        
-          
-          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="">
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
             
   
   
@@ -1003,7 +979,7 @@
             <span class="md-nav__icon md-icon"></span>
           </label>
         
-        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="true">
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
           <label class="md-nav__title" for="__nav_3_3">
             <span class="md-nav__icon md-icon"></span>
             
@@ -1021,7 +997,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../masks/" class="md-nav__link">
+      <a href="../guide/masks/" class="md-nav__link">
         
   
   
@@ -1049,7 +1025,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../downsampling/" class="md-nav__link">
+      <a href="../guide/downsampling/" class="md-nav__link">
         
   
   
@@ -1074,37 +1050,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    Conformational Density
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../guide/conformational-density/" class="md-nav__link">
         
   
   
@@ -1120,70 +1069,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#estimating-density" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Estimating density
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#estimating-stable-states" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Estimating stable states
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#using-density-for-trajectories" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Using density for trajectories
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#using-the-gui" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Using the GUI
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -1196,7 +1081,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../extracting-subsets/" class="md-nav__link">
+      <a href="../guide/extracting-subsets/" class="md-nav__link">
         
   
   
@@ -1224,7 +1109,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../outlier-detection/" class="md-nav__link">
+      <a href="../guide/outlier-detection/" class="md-nav__link">
         
   
   
@@ -1252,7 +1137,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../cryo-et/" class="md-nav__link">
+      <a href="../guide/cryo-et/" class="md-nav__link">
         
   
   
@@ -1280,7 +1165,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../external-embeddings/" class="md-nav__link">
+      <a href="../guide/external-embeddings/" class="md-nav__link">
         
   
   
@@ -1383,7 +1268,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/cli/" class="md-nav__link">
+      <a href="../reference/cli/" class="md-nav__link">
         
   
   
@@ -1411,7 +1296,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/file-formats/" class="md-nav__link">
+      <a href="../reference/file-formats/" class="md-nav__link">
         
   
   
@@ -1509,7 +1394,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api/core/" class="md-nav__link">
+      <a href="../reference/api/core/" class="md-nav__link">
         
   
   
@@ -1537,7 +1422,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api/data_io/" class="md-nav__link">
+      <a href="../reference/api/data_io/" class="md-nav__link">
         
   
   
@@ -1565,7 +1450,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api/heterogeneity/" class="md-nav__link">
+      <a href="../reference/api/heterogeneity/" class="md-nav__link">
         
   
   
@@ -1593,7 +1478,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api/reconstruction/" class="md-nav__link">
+      <a href="../reference/api/reconstruction/" class="md-nav__link">
         
   
   
@@ -1621,7 +1506,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api/simulation/" class="md-nav__link">
+      <a href="../reference/api/simulation/" class="md-nav__link">
         
   
   
@@ -1649,7 +1534,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api/output/" class="md-nav__link">
+      <a href="../reference/api/output/" class="md-nav__link">
         
   
   
@@ -1677,7 +1562,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api/em/" class="md-nav__link">
+      <a href="../reference/api/em/" class="md-nav__link">
         
   
   
@@ -1705,7 +1590,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../reference/api/utils/" class="md-nav__link">
+      <a href="../reference/api/utils/" class="md-nav__link">
         
   
   
@@ -1748,7 +1633,7 @@
   
   
     <li class="md-nav__item">
-      <a href="../../troubleshooting/" class="md-nav__link">
+      <a href="../troubleshooting/" class="md-nav__link">
         
   
   
@@ -1795,10 +1680,93 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
-  <a href="#estimating-density" class="md-nav__link">
+  <a href="#vision" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Estimating density
+        Vision
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Vision">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#audience" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Audience
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#first-impression" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        First Impression
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tone" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tone
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gui-vs-cli" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GUI vs CLI
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#user-pain-points-prioritize-in-docs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        User Pain Points (prioritize in docs)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#do-not-include" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Do NOT include
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#build-preview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Build &amp; Preview
       
     </span>
   </a>
@@ -1806,10 +1774,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#estimating-stable-states" class="md-nav__link">
+  <a href="#structure" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Estimating stable states
+        Structure
       
     </span>
   </a>
@@ -1817,10 +1785,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#using-density-for-trajectories" class="md-nav__link">
+  <a href="#design-principles" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Using density for trajectories
+        Design Principles
       
     </span>
   </a>
@@ -1828,10 +1796,43 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#using-the-gui" class="md-nav__link">
+  <a href="#content-tabs-pattern-gui-first" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Using the GUI
+        Content Tabs Pattern (GUI-first)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#navigation-hierarchy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Navigation Hierarchy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#admonition-styles" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Admonition Styles
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#screenshots" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Screenshots
       
     </span>
   </a>
@@ -1858,71 +1859,93 @@
   
 
 
-<h1 id="conformational-density">Conformational Density<a class="headerlink" href="#conformational-density" title="Permanent link">&para;</a></h1>
-<p>RECOVAR can estimate the probability density of conformations in the latent space. This enables:</p>
+<h1 id="documentation-development-guide">Documentation Development Guide<a class="headerlink" href="#documentation-development-guide" title="Permanent link">&para;</a></h1>
+<h2 id="vision">Vision<a class="headerlink" href="#vision" title="Permanent link">&para;</a></h2>
+<p>The docs should be the <strong>best documentation among cryo-EM heterogeneity tools</strong> (cryoDRGN, RELION multi-body, 3DFlex, etc.). Inspired by <strong>cryoSPARC docs</strong>: clean, GUI-focused, professional, good screenshots.</p>
+<h3 id="audience">Audience<a class="headerlink" href="#audience" title="Permanent link">&para;</a></h3>
+<p>Tool users — structural biologists who want to process their cryo-EM data. Not methods developers.</p>
+<h3 id="first-impression">First Impression<a class="headerlink" href="#first-impression" title="Permanent link">&para;</a></h3>
+<p>When a user lands on the homepage, they should immediately see:
+- A short feature list: CryoBench resolution, conformational density estimation, cryo-ET support, GUI with sub-particle selection
+- Prominent example output images (eigenvalue plots, UMAP scatter, 3D volumes)
+- A clear path to get started</p>
+<h3 id="tone">Tone<a class="headerlink" href="#tone" title="Permanent link">&para;</a></h3>
+<p><strong>Friendly and approachable</strong> — like napari or scikit-learn. Welcoming, explains concepts, encourages exploration. No marketing hype ("revolutionary", "cutting-edge", "state-of-the-art").</p>
+<h3 id="gui-vs-cli">GUI vs CLI<a class="headerlink" href="#gui-vs-cli" title="Permanent link">&para;</a></h3>
+<p><strong>GUI-first.</strong> The default tab should be GUI with screenshots. CLI is the alternative tab. Most users coming to the docs will prefer the visual approach.</p>
+<h3 id="user-pain-points-prioritize-in-docs">User Pain Points (prioritize in docs)<a class="headerlink" href="#user-pain-points-prioritize-in-docs" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Installation/GPU setup</strong> — make this foolproof with clear troubleshooting</li>
+<li><strong>Choosing parameters</strong> — explain what zdim, downsample, n-clusters mean and when to change them</li>
+<li><strong>Interpreting results</strong> — what do eigenvalues mean? How to pick the right zdim? What's a good FSC?</li>
+</ol>
+<h3 id="do-not-include">Do NOT include<a class="headerlink" href="#do-not-include" title="Permanent link">&para;</a></h3>
 <ul>
-<li>Free energy estimation (free energy = -kT ln(density))</li>
-<li>Identification of stable conformational states</li>
-<li>High-density trajectory computation</li>
+<li>Marketing language or hype</li>
+<li>Too many screenshots (1-2 per page max, not a gallery)</li>
+<li>Math/equations (link to paper for theory)</li>
 </ul>
-<div class="admonition tip">
-<p class="admonition-title">Worked example</p>
-<p>The <a href="../tutorial/#step-3-estimate-conformational-density">Tutorial</a> demonstrates conformational density estimation on EMPIAR-10180 (spliceosome), including trajectory computation through the density landscape.</p>
-</div>
-<h2 id="estimating-density">Estimating density<a class="headerlink" href="#estimating-density" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>recovar<span class="w"> </span>estimate_conformational_density<span class="w"> </span>output<span class="w"> </span>--pca_dim<span class="o">=</span><span class="m">4</span><span class="w"> </span>--z_dim_used<span class="o">=</span><span class="m">4</span>
+<h2 id="build-preview">Build &amp; Preview<a class="headerlink" href="#build-preview" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>pip<span class="w"> </span>install<span class="w"> </span>mkdocs<span class="w"> </span>mkdocs-material<span class="w"> </span>mkdocstrings<span class="w"> </span>mkdocstrings-python
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>mkdocs<span class="w"> </span>serve<span class="w">    </span><span class="c1"># preview at http://localhost:8000/recovar/</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>mkdocs<span class="w"> </span>build<span class="w">    </span><span class="c1"># build to site/</span>
 </code></pre></div>
-<p>This deconvolves the particle distribution in latent space to produce density estimates at multiple regularization levels. The output includes a recommended "knee" regularization (<code>deconv_density_knee.pkl</code>) that balances noise suppression with resolution.</p>
-<table>
-<thead>
-<tr>
-<th>Flag</th>
-<th>Default</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>--pca_dim</code></td>
-<td>4</td>
-<td>PCA dimensions for density estimation</td>
-</tr>
-<tr>
-<td><code>--z_dim_used</code></td>
-<td>Auto</td>
-<td>Latent dimension to use</td>
-</tr>
-<tr>
-<td><code>--percentile_reject</code></td>
-<td>10</td>
-<td>Reject % of data with large covariance</td>
-</tr>
-</tbody>
-</table>
-<div class="admonition note">
-<p class="admonition-title">Note</p>
-<p>Runtime scales exponentially with <code>--pca_dim</code>. Keep it at 4 or below.</p>
-</div>
-<h2 id="estimating-stable-states">Estimating stable states<a class="headerlink" href="#estimating-stable-states" title="Permanent link">&para;</a></h2>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>recovar<span class="w"> </span>estimate_stable_states<span class="w"> </span>density_output/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="w">    </span>-o<span class="w"> </span>stable_states
+<p>GitHub Pages deploys from the <code>main</code> branch automatically.</p>
+<h2 id="structure">Structure<a class="headerlink" href="#structure" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>docs/
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  index.md                    # Homepage — hero, features, example outputs
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  getting-started/            # Install, quickstart, docker, testing
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  guide/                      # User guides (pipeline, analysis, GUI, etc.)
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  reference/                  # CLI commands, file formats, Python API
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  troubleshooting.md          # Common issues
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>  _static/gui/                # Annotated GUI screenshots
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>  _static/examples/           # Example output images (plots, volumes)
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  stylesheets/extra.css       # Custom CSS overrides
 </code></pre></div>
-<p>Identifies local minima in the free energy landscape. The first argument is the density <code>.pkl</code> file produced by <code>estimate_conformational_density</code>.</p>
-<h2 id="using-density-for-trajectories">Using density for trajectories<a class="headerlink" href="#using-density-for-trajectories" title="Permanent link">&para;</a></h2>
-<p>The density can guide trajectory computation to follow low free-energy paths:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>recovar<span class="w"> </span>compute_trajectory<span class="w"> </span>output<span class="w"> </span>-o<span class="w"> </span>trajectory<span class="w"> </span>--zdim<span class="o">=</span><span class="m">10</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">    </span>--density<span class="w"> </span>density_output/data/deconv_density_knee.pkl<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span>--endpts<span class="w"> </span>centers.txt<span class="w"> </span>--ind<span class="w"> </span><span class="m">0</span>,1
+<h2 id="design-principles">Design Principles<a class="headerlink" href="#design-principles" title="Permanent link">&para;</a></h2>
+<ol>
+<li><strong>GUI-first.</strong> Default tab is always GUI with screenshots. CLI is the alternative.</li>
+<li><strong>Goal-oriented.</strong> Lead with what the user wants to achieve, not what the tool does.</li>
+<li><strong>Show results early.</strong> Every guide page should show what the output looks like before explaining how to get there.</li>
+<li><strong>Help with decisions.</strong> Explain parameter choices (zdim, downsample, n-clusters) with concrete guidance: "For a first run, use zdim=4. For publication, try 10 or 20."</li>
+<li><strong>Progressive disclosure.</strong> Essential content first, advanced/optional behind collapsible sections.</li>
+<li><strong>1-2 screenshots per page max.</strong> Don't make pages into screenshot galleries. Each screenshot should earn its place.</li>
+</ol>
+<h2 id="content-tabs-pattern-gui-first">Content Tabs Pattern (GUI-first)<a class="headerlink" href="#content-tabs-pattern-gui-first" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>=== &quot;:material-monitor: GUI&quot;
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    ![<span class="nt">Screenshot</span>](<span class="na">../../_static/gui/06_new_job_pipeline.png</span>)
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    Click <span class="gs">**+ New Job**</span> &gt; <span class="gs">**Pipeline**</span>, browse to your particles file.
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>=== &quot;:octicons-terminal-16: CLI&quot;
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="sb">    ```bash</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">    </span>recovar<span class="w"> </span>pipeline<span class="w"> </span>particles.star<span class="w"> </span>--mask<span class="w"> </span>mask.mrc
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="sb">    ```</span>
 </code></pre></div>
-<p>Without <code>--density</code>, trajectories follow straight lines in latent space. With density, they curve to follow high-density (low free-energy) regions.</p>
-<div class="admonition tip">
-<p class="admonition-title">GUI alternative</p>
-<p>In the GUI's latent space explorer, you can select two points on the scatter plot to compute a trajectory interactively. See the <a href="../gui/#latent-space-explorer">GUI Guide</a>.</p>
-</div>
-<h2 id="using-the-gui">Using the GUI<a class="headerlink" href="#using-the-gui" title="Permanent link">&para;</a></h2>
-<p>In the web GUI (<code>recovar gui</code>), click <strong>+ New Job</strong> and select <strong>Density Estimation</strong> from the Job Type dropdown. Set the result directory (path to pipeline output), PCA dimension, and latent dimension, then submit.</p>
-<p>You can also reach density estimation from a completed pipeline job's <strong>Suggested Next Steps</strong> by clicking <strong>Estimate conformational density</strong>, which pre-fills the result directory.</p>
-<p>After density estimation completes, use the <strong>Latent Space Explorer</strong> to color particles by conformational density and visually identify stable states.</p>
+<p>Note: GUI tab comes FIRST (it's the default).</p>
+<h2 id="navigation-hierarchy">Navigation Hierarchy<a class="headerlink" href="#navigation-hierarchy" title="Permanent link">&para;</a></h2>
+<p>Guide section is grouped into:
+- <strong>Getting Started</strong> — GUI, Tutorial (essential)
+- <strong>Core Workflow</strong> — Input Data, Pipeline, Analysis (the main steps)
+- <strong>Advanced</strong> — Masks, Downsampling, Density, Subsets, Outliers, Cryo-ET, External Embeddings</p>
+<h2 id="admonition-styles">Admonition Styles<a class="headerlink" href="#admonition-styles" title="Permanent link">&para;</a></h2>
+<ul>
+<li><code>!!! tip</code> — helpful advice, parameter recommendations</li>
+<li><code>!!! warning</code> — things that can go wrong</li>
+<li><code>!!! info</code> — background context</li>
+<li><code>!!! example "Choose your workflow"</code> — CLI/GUI mode selector banner</li>
+<li><code>??? note "Advanced"</code> — collapsible advanced content</li>
+</ul>
+<h2 id="screenshots">Screenshots<a class="headerlink" href="#screenshots" title="Permanent link">&para;</a></h2>
+<ul>
+<li>Capture with Playwright (headless Chromium)</li>
+<li>Annotate with Pillow: colored rectangles + text labels</li>
+<li>Save as PNG in <code>docs/_static/gui/</code></li>
+<li>Max 1-2 per page — make each one count</li>
+<li>Reference: <code>![Alt text](../../_static/gui/filename.png)</code></li>
+</ul>
 
 
 
@@ -1980,10 +2003,10 @@
     
       
       
-      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "search.suggest", "search.highlight", "content.code.copy", "content.tabs.link"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.tabs", "navigation.sections", "navigation.top", "navigation.indexes", "search.suggest", "search.highlight", "content.code.copy", "content.tabs.link"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
     
     
-      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      <script src="../assets/javascripts/bundle.79ae519e.min.js"></script>
       
         <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
       

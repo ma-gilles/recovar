@@ -1,21 +1,125 @@
-/* Make CLI/GUI content tabs more prominent */
+/* ===== Hero section ===== */
 
-/* Larger tab labels with icons */
+.recovar-hero {
+  text-align: center;
+  padding: 2.5rem 1rem 2rem;
+  margin-bottom: 1rem;
+  background: linear-gradient(135deg,
+    rgba(63, 81, 181, 0.06) 0%,
+    rgba(63, 81, 181, 0.02) 100%);
+  border-radius: 0.75rem;
+}
+
+[data-md-color-scheme="slate"] .recovar-hero {
+  background: linear-gradient(135deg,
+    rgba(92, 107, 192, 0.12) 0%,
+    rgba(92, 107, 192, 0.04) 100%);
+}
+
+.recovar-hero h1 {
+  font-size: 2.8rem;
+  margin-bottom: 0.25rem;
+}
+
+.recovar-hero h2 {
+  font-size: 1.3rem;
+  font-weight: 400;
+  color: var(--md-default-fg-color--light);
+  margin-top: 0;
+  margin-bottom: 1.25rem;
+  border-bottom: none;
+}
+
+.recovar-hero p {
+  font-size: 1.05rem;
+  color: var(--md-default-fg-color--light);
+  max-width: 40rem;
+  margin: 0 auto 1.5rem;
+}
+
+.recovar-hero .md-button {
+  margin: 0.25rem 0.5rem;
+}
+
+.recovar-hero .md-button--lg {
+  padding: 0.7em 2em;
+  font-size: 1rem;
+}
+
+/* ===== Pipeline flow diagram ===== */
+
+.pipeline-flow {
+  text-align: center;
+  padding: 1.25rem 1rem;
+  margin: 1rem 0;
+  background: var(--md-code-bg-color);
+  border-radius: 0.5rem;
+  font-size: 1rem;
+  letter-spacing: 0.01em;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.pipeline-flow p {
+  margin: 0;
+}
+
+/* ===== Homepage grid cards ===== */
+
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid.cards > :is(ul, ol) > li {
+  padding: 1rem 1.25rem;
+}
+
+.md-typeset .grid.cards > ul > li p,
+.md-typeset .grid.cards > :is(ul, ol) > li p {
+  margin: 0.3em 0;
+}
+
+/* ===== Code blocks ===== */
+
+.md-typeset code,
+.md-typeset pre code {
+  font-size: 0.82rem;
+}
+
+.md-typeset pre {
+  line-height: 1.55;
+}
+
+/* ===== CLI/GUI content tabs ===== */
+
 .md-typeset .tabbed-labels > label {
   font-size: 0.85rem;
   font-weight: 600;
   padding: 0.6em 1.2em;
   border-radius: 0.4em 0.4em 0 0;
+  transition: background 0.15s, color 0.15s;
 }
 
-/* Active tab styling */
+.md-typeset .tabbed-labels > label:hover {
+  background: var(--md-accent-fg-color--transparent);
+}
+
 .md-typeset .tabbed-labels > label:has(input:checked) {
   background: var(--md-primary-fg-color);
   color: var(--md-primary-bg-color);
   border-color: var(--md-primary-fg-color);
 }
 
-/* Mode selector banner at top of pages */
+.md-typeset .tabbed-set {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  margin: 1rem 0;
+}
+
+.md-typeset .tabbed-content {
+  padding: 0.25rem 0.5rem;
+}
+
+/* ===== Mode selector banner ===== */
+
 .mode-selector {
   display: flex;
   align-items: center;
@@ -39,4 +143,53 @@
   font-size: 0.75rem;
   color: var(--md-default-fg-color--lighter);
   margin-left: auto;
+}
+
+/* ===== Citation block ===== */
+
+.md-typeset .admonition.quote,
+.md-typeset details.quote {
+  border-left-color: var(--md-primary-fg-color);
+}
+
+/* ===== Horizontal rule spacing ===== */
+
+.md-typeset hr {
+  margin: 2rem 0;
+}
+
+/* ===== Example output images ===== */
+
+.example-outputs table {
+  border: none;
+  box-shadow: none;
+}
+
+.example-outputs table td,
+.example-outputs table th {
+  border: none;
+  background: transparent;
+  vertical-align: middle;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--md-default-fg-color--light);
+}
+
+.example-outputs table img {
+  max-width: 100%;
+  border-radius: 0.4rem;
+}
+
+/* ===== Responsive adjustments ===== */
+
+@media screen and (max-width: 600px) {
+  .recovar-hero h1 {
+    font-size: 2rem;
+  }
+  .recovar-hero h2 {
+    font-size: 1.1rem;
+  }
+  .pipeline-flow {
+    font-size: 0.85rem;
+  }
 }
