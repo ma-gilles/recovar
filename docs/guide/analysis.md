@@ -2,18 +2,18 @@
 
 After the pipeline finishes, use `recovar analyze` to generate volumes, compute k-means clusters, create trajectories, and run UMAP.
 
-!!! info "CLI and GUI"
-    Each step below has **CLI** and **GUI** tabs. Click a tab to switch — your choice is remembered across pages.
+!!! example "Choose your workflow: :octicons-terminal-16: **CLI** or :material-monitor: **GUI**"
+    This page has tabbed instructions for both the **command line** and the **web GUI**. Click the tab headers below each section to switch. Your choice is remembered across all pages. [How to launch the GUI →](gui.md#launching-the-gui)
 
 ## Submitting an analyze job
 
-=== "CLI"
+=== ":octicons-terminal-16: CLI"
 
     ```bash
     recovar analyze output --zdim=10
     ```
 
-=== "GUI"
+=== ":material-monitor: GUI"
 
     ![Analyze job form](../../_static/gui/14_analyze_form.png)
 

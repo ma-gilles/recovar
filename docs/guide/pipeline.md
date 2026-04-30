@@ -2,12 +2,12 @@
 
 The RECOVAR pipeline takes particle images and a mask, then computes the mean reconstruction, covariance, principal components, and embeddings.
 
-!!! info "CLI and GUI"
-    Each step below has **CLI** and **GUI** tabs. Click a tab to switch — your choice is remembered across pages. For GUI setup, see [Launching the GUI](gui.md#launching-the-gui).
+!!! example "Choose your workflow: :octicons-terminal-16: **CLI** or :material-monitor: **GUI**"
+    This page has tabbed instructions for both the **command line** and the **web GUI**. Click the tab headers below each section to switch. Your choice is remembered across all pages. [How to launch the GUI →](gui.md#launching-the-gui)
 
 ## Submitting a pipeline job
 
-=== "CLI"
+=== ":octicons-terminal-16: CLI"
 
     ```bash
     # Recommended: run inside a project
@@ -29,7 +29,7 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
         --poses poses.pkl --ctf ctf.pkl --mask mask.mrc
     ```
 
-=== "GUI"
+=== ":material-monitor: GUI"
 
     ![Pipeline job form](../../_static/gui/06_new_job_pipeline.png)
 
@@ -50,7 +50,7 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 
 ## Common options
 
-=== "CLI"
+=== ":octicons-terminal-16: CLI"
 
     | Flag | Default | Description |
     |------|---------|-------------|
@@ -65,7 +65,7 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
     | `--lazy` | False | Lazy loading for large datasets |
     | `--multi-gpu` | False | Multi-GPU parallelization (experimental) |
 
-=== "GUI"
+=== ":material-monitor: GUI"
 
     ![Advanced pipeline options](../../_static/gui/06c_advanced.png)
 
@@ -82,7 +82,7 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
 
 ## Execution settings
 
-=== "SLURM Cluster"
+=== ":material-server-network: SLURM Cluster"
 
     ![SLURM settings](../../_static/gui/06h_slurm_settings.png)
 
@@ -100,7 +100,7 @@ The RECOVAR pipeline takes particle images and a mask, then computes the mean re
         --wrap="recovar pipeline particles.star --mask mask.mrc -o output"
     ```
 
-=== "Local GPU"
+=== ":material-desktop-tower: Local GPU"
 
     ![Local GPU settings](../../_static/gui/06g_local_selected.png)
 
@@ -220,11 +220,11 @@ When using the **project system** (`--project`), pipeline output is placed into 
 
 ## Viewing results
 
-=== "CLI"
+=== ":octicons-terminal-16: CLI"
 
     See the [Tutorial](tutorial.md) for a full worked example with real pipeline output and plots on EMPIAR-10076 (50S ribosome, 131k particles).
 
-=== "GUI"
+=== ":material-monitor: GUI"
 
     ![Completed pipeline job](../../_static/gui/07_job_completed.png)
 

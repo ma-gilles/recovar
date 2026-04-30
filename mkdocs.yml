@@ -5,6 +5,9 @@ site_url: https://ma-gilles.github.io/recovar
 repo_name: ma-gilles/recovar
 repo_url: https://github.com/ma-gilles/recovar
 
+extra_css:
+  - stylesheets/extra.css
+
 theme:
   name: material
   features:
