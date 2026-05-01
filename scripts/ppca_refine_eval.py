@@ -89,6 +89,10 @@ class CellSpec:
     seed: int = 42
     voxel_size: float = 1.0
     halfset_combine: str = "mean"
+    healpix_order: int = 0  # 0 = use cryo.rotation_matrices subsample (legacy);
+    # >0 = full HEALPix sphere via sampling.get_rotation_grid(order, matrices=True)
+    # order 2: 4608 rotations (14.7° sampling) — recommended for science runs.
+    n_in_planes: int | None = None  # override psi sampling for HEALPix mode
     extra: dict = field(default_factory=dict)
 
     def cell_id(self) -> str:
@@ -123,7 +127,7 @@ def _build_ribosembly_bundle(spec: CellSpec):
     mask = np.maximum(mask_left, mask_right).astype(np.float32)
 
     n_rot = max(4, min(spec.rotation_block_size, spec.n_images // 8))
-    rotation_grid = np.asarray(cryo.rotation_matrices[:n_rot], dtype=np.float32)
+    rotation_grid = _make_rotation_grid(spec, cryo, n_rot)
     translation_grid = np.zeros((1, 2), dtype=np.float32)
     halfset_indices = (
         np.asarray(cryo.halfset_indices[0]),
@@ -181,6 +185,24 @@ def _load_volumes_from_dir(vol_dir: str, n_states: int, grid_size: int):
     vol_shape = (grid_size, grid_size, grid_size)
     vols_fourier = np.array([ftu.get_dft3(v).ravel() for v in vols_real])
     return vols_real, vols_fourier, vol_shape
+
+
+def _make_rotation_grid(spec: "CellSpec", cryo, n_rot_legacy: int) -> np.ndarray:
+    """Return the rotation grid for an eval cell.
+
+    spec.healpix_order > 0 → full HEALPix sphere via sampling.get_rotation_grid.
+    spec.healpix_order == 0 → legacy 'first n_rot rotations from cryo' shortcut.
+    """
+    if spec.healpix_order > 0:
+        from recovar.em.sampling import get_rotation_grid
+
+        rotations = get_rotation_grid(
+            spec.healpix_order,
+            n_in_planes=spec.n_in_planes,
+            matrices=True,
+        ).astype(np.float32)
+        return rotations
+    return np.asarray(cryo.rotation_matrices[:n_rot_legacy], dtype=np.float32)
 
 
 def _pca_init_from_volumes(vols_real: np.ndarray, q: int):
@@ -247,7 +269,7 @@ def _bundle_from_volumes(spec: CellSpec, vols_real, vols_fourier, vol_shape):
     mu_init, W_init = _pca_init_from_volumes(vols_real, q=spec.zdim)
     mask = np.maximum(mask_left, mask_right).astype(np.float32)
     n_rot = max(4, min(spec.rotation_block_size, spec.n_images // 8))
-    rotation_grid = np.asarray(cryo.rotation_matrices[:n_rot], dtype=np.float32)
+    rotation_grid = _make_rotation_grid(spec, cryo, n_rot)
     translation_grid = np.zeros((1, 2), dtype=np.float32)
     halfset_indices = (
         np.asarray(cryo.halfset_indices[0]),
@@ -419,10 +441,10 @@ def _run_kclass_refinement(spec: CellSpec, bundle, out_dir: Path):
         axis=0,
     ).astype(jnp.complex64)  # (K, vol_size)
 
-    # Use the dataset's own rotations as the rotation grid (same convention
-    # used elsewhere in the eval).
+    # Rotation grid: HEALPix sphere when spec.healpix_order > 0, else legacy
+    # subsample of cryo.rotation_matrices.
     n_rot = max(4, min(spec.rotation_block_size, spec.n_images // 8))
-    rotations = jnp.asarray(cryo.rotation_matrices[:n_rot], dtype=jnp.float32)
+    rotations = jnp.asarray(_make_rotation_grid(spec, cryo, n_rot), dtype=jnp.float32)
     translations = jnp.zeros((1, 2), dtype=jnp.float32)
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -633,6 +655,8 @@ def _expand_cells(args) -> list[CellSpec]:
                     rotation_block_size=args.rotation_block_size,
                     seed=args.seed,
                     halfset_combine=args.halfset_combine,
+                    healpix_order=getattr(args, "healpix_order", 0),
+                    n_in_planes=getattr(args, "n_in_planes", None),
                 )
             )
     return cells
@@ -744,9 +768,13 @@ def _slurm_template(spec: CellSpec, results_root: Path, datadir: str | None) -> 
         str(spec.seed),
         "--halfset-combine",
         spec.halfset_combine,
+        "--healpix-order",
+        str(spec.healpix_order),
         "--results-root",
         str(results_root),
     ]
+    if spec.n_in_planes is not None:
+        cmd_parts += ["--n-in-planes", str(spec.n_in_planes)]
     if datadir:
         cmd_parts += ["--datadir", datadir]
     cmd_str = " ".join(shlex.quote(p) for p in cmd_parts)
@@ -819,6 +847,20 @@ def build_parser():
     common.add_argument("--rotation-block-size", type=int, default=64)
     common.add_argument("--seed", type=int, default=42)
     common.add_argument("--halfset-combine", choices=("mean", "low_resol_join"), default="mean")
+    common.add_argument(
+        "--healpix-order",
+        type=int,
+        default=0,
+        help="HEALPix order for the rotation grid (0=legacy 32-rot shortcut, "
+        "2=192 px ×24 psi=4608 rotations / 14.7° sampling, "
+        "3=18432 / 7.3°). Recommended ≥ 2 for science runs.",
+    )
+    common.add_argument(
+        "--n-in-planes",
+        type=int,
+        default=None,
+        help="Override default in-plane psi sampling (default: 6·2^order).",
+    )
     common.add_argument("--results-root", default=_DEFAULT_RESULTS_ROOT)
     common.add_argument(
         "--datadir", default=None, help="Path to CryoBench data root (required for igg-* / tomotwin-*)."
