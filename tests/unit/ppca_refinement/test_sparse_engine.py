@@ -228,6 +228,68 @@ def test_sparse_q_zero_returns_trivial_moments():
     assert np.all(np.isfinite(np.asarray(diag.logZ)))
 
 
+def test_sparse_d7_significance_mask_default_off():
+    """D7: default off in sparse engine matches old behavior."""
+    rng = np.random.default_rng(7)
+    Y1, proj_aug, ctf2, y_norm = _random_dense_block(rng, B=2, T=2, R=3, F=8, q=1)
+    layout = _flatten_dense_to_sparse(Y1, proj_aug, ctf2, y_norm, pose_log_prior=None)
+    stats_default, _ = sparse_pose_ppca_E_step_flat(layout, significance_threshold=0.5)
+    stats_off, _ = sparse_pose_ppca_E_step_flat(layout, significance_threshold=0.5, apply_significance_mask=False)
+    np.testing.assert_array_equal(
+        np.asarray(stats_default.alpha_aug_acc),
+        np.asarray(stats_off.alpha_aug_acc),
+    )
+
+
+def test_sparse_d7_significance_mask_drops_low_gamma():
+    """D7: with apply_significance_mask=True and threshold=2.0 (above
+    γ ≤ 1), the sparse engine moments collapse to zero."""
+    rng = np.random.default_rng(13)
+    Y1, proj_aug, ctf2, y_norm = _random_dense_block(rng, B=2, T=2, R=3, F=8, q=1)
+    layout = _flatten_dense_to_sparse(Y1, proj_aug, ctf2, y_norm, pose_log_prior=None)
+    stats, _ = sparse_pose_ppca_E_step_flat(layout, significance_threshold=2.0, apply_significance_mask=True)
+    np.testing.assert_allclose(
+        np.asarray(stats.alpha_aug_acc),
+        np.zeros_like(np.asarray(stats.alpha_aug_acc)),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(stats.G_aug_tri_acc),
+        np.zeros_like(np.asarray(stats.G_aug_tri_acc)),
+        atol=1e-12,
+    )
+
+
+def test_sparse_d7_matches_dense_when_masked():
+    """Sanity: with apply_significance_mask=True and the same threshold,
+    sparse and dense engines must accumulate the same masked moments
+    when the sparse layout enumerates every (b, t, r) hypothesis."""
+    rng = np.random.default_rng(31)
+    Y1, proj_aug, ctf2, y_norm = _random_dense_block(rng, B=2, T=2, R=4, F=8, q=2)
+    dense_stats, _ = dense_pose_ppca_E_step_blocked(
+        jnp.asarray(Y1),
+        jnp.asarray(proj_aug),
+        jnp.asarray(ctf2),
+        jnp.asarray(y_norm),
+        significance_threshold=0.1,
+        apply_significance_mask=True,
+    )
+    layout = _flatten_dense_to_sparse(Y1, proj_aug, ctf2, y_norm, pose_log_prior=None)
+    sparse_stats, _ = sparse_pose_ppca_E_step_flat(layout, significance_threshold=0.1, apply_significance_mask=True)
+    np.testing.assert_allclose(
+        np.asarray(sparse_stats.alpha_aug_acc),
+        np.asarray(dense_stats.alpha_aug_acc),
+        rtol=2e-3,
+        atol=5e-3,
+    )
+    np.testing.assert_allclose(
+        np.asarray(sparse_stats.G_aug_tri_acc),
+        np.asarray(dense_stats.G_aug_tri_acc),
+        rtol=2e-3,
+        atol=5e-3,
+    )
+
+
 def test_sparse_d12_diagnostic_fields():
     """D12: best_log_score_per_image (sparse) must agree with the dense
     engine's value computed on the same hypothesis set."""

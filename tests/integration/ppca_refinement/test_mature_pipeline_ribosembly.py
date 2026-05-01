@@ -253,3 +253,41 @@ def test_mature_two_iter_log_evidence_progresses(setup_ribosembly):
     assert le0 != le1
     # μ should have moved from initial.
     assert not np.allclose(np.asarray(final_state.mu_score), np.asarray(state.mu_score), atol=1e-6)
+
+
+def test_mature_with_significance_mask_runs(setup_ribosembly):
+    """D7 wired through PPCAScheduleOpts: a 1-iter mature run with
+    apply_significance_mask=True (and a tiny threshold) must produce
+    finite log_evidence and updated μ. Smoke test that the flag
+    threads cleanly through driver → engine."""
+    s = setup_ribosembly
+    cryo = s["cryo"]
+    state = _initial_state(cryo, s["vols_real"], q=1)
+    halfset_indices = (
+        np.asarray(cryo.halfset_indices[0]),
+        np.asarray(cryo.halfset_indices[1]),
+    )
+    final_state, log = run_pose_marginal_refinement(
+        state,
+        cryo,
+        halfset_indices=halfset_indices,
+        mask=jnp.asarray(s["mask"]),
+        image_batch_size=16,
+        rotation_block_size=8,
+        schedule_opts=PPCAScheduleOpts(
+            healpix_order_init=0,
+            healpix_order_max=0,
+            max_iters=1,
+            min_iters=0,
+            enable_low_resol_join=False,
+            enable_per_iter_prior=False,
+            enable_per_iter_noise=False,
+            enable_x0_hermitian=False,
+            apply_significance_mask=True,  # D7 flag
+            use_local_search_at_high_order=False,
+        ),
+        iteration_opts=IterationOpts(EM_iter=1, pcg_maxiter=5, significance_threshold=1e-3),
+    )
+    assert len(log) == 1
+    assert np.isfinite(log[0]["log_evidence_total"])
+    assert not np.any(np.isnan(np.asarray(final_state.mu_score)))
