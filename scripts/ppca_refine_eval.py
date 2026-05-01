@@ -654,7 +654,12 @@ def _score_kclass_vs_gt(pred_vols: np.ndarray, gt_vols: np.ndarray, vol_shape: t
 def _score_ppca_vs_gt(out_dir: Path, vols_real_gt: np.ndarray, vol_shape: tuple, q: int) -> dict:
     """For pose-marginal output, FSC the (μ + W_k) and (μ - W_k) volumes
     against the GT class set. The PPCA model spans μ + span(W); we
-    evaluate the q+1 "extreme" volumes vs GT via Hungarian matching."""
+    evaluate the q+1 "extreme" volumes vs GT via Hungarian matching.
+
+    Also reports a "fair" variant with exactly K_gt trial volumes built
+    from a least-squares fit μ + W·z_k → GT_k (one per GT class). This
+    addresses the bias that the ±W variant has more candidates than
+    K-gt, which inflates Hungarian-matched FSC."""
     import mrcfile
 
     # Locate the latest iter_NNN/ subdirectory (filter out iter_log.pkl + similar).
@@ -677,17 +682,41 @@ def _score_ppca_vs_gt(out_dir: Path, vols_real_gt: np.ndarray, vol_shape: tuple,
         return {"fsc_score_skipped": True, "fsc_skip_reason": "no W_*_score.mrc"}
     W = np.stack(W_list)  # (q, D, D, D)
 
-    # Build q+1 "trial" volumes by sweeping z = ±1 along each PC direction.
+    # Standard scoring: 2q+1 trial volumes (μ, μ ± rms_scaled W_k for each k).
     trial_vols = [mu]
     for k in range(W.shape[0]):
-        # Scale W_k to have the same RMS as μ for a sensible perturbation.
         rms_mu = float(np.sqrt(np.mean(mu**2)) + 1e-12)
         rms_W = float(np.sqrt(np.mean(W[k] ** 2)) + 1e-12)
         scale = rms_mu / rms_W if rms_W > 0 else 0.0
         trial_vols.append(mu + scale * W[k])
         trial_vols.append(mu - scale * W[k])
     trial_vols = np.stack(trial_vols)
-    return _score_kclass_vs_gt(trial_vols, vols_real_gt, vol_shape)
+    standard = _score_kclass_vs_gt(trial_vols, vols_real_gt, vol_shape)
+
+    # Fair scoring: K_gt trial volumes via least-squares fit μ + W·z_k → GT_k.
+    # For each GT class, solve z_k = argmin_z ||GT_k - (μ + W·z)||² in voxel space.
+    # This enforces exactly K_gt candidates against K_gt classes — no
+    # combinatorial advantage from extra trial volumes.
+    K_gt = int(vols_real_gt.shape[0])
+    mu_flat = mu.reshape(-1)
+    W_flat = W.reshape(W.shape[0], -1)  # (q, D³)
+    fair_trials = []
+    # Solve W_flat^T @ z = (GT_k - μ).flat for each GT_k, in least-squares.
+    for k in range(K_gt):
+        b = vols_real_gt[k].reshape(-1).astype(np.float32) - mu_flat
+        z_k, *_ = np.linalg.lstsq(W_flat.T, b, rcond=None)
+        fair_trials.append(mu_flat + W_flat.T @ z_k)
+    fair_trials = np.stack([t.reshape(mu.shape) for t in fair_trials])
+    fair = _score_kclass_vs_gt(fair_trials, vols_real_gt, vol_shape)
+
+    return {
+        **standard,
+        "fair_fsc_assignment": fair["fsc_assignment"],
+        "fair_fsc_area_per_class": fair["fsc_area_per_class"],
+        "fair_fsc_at_05_per_class": fair["fsc_at_05_per_class"],
+        "fair_fsc_area_mean": fair["fsc_area_mean"],
+        "fair_fsc_at_05_mean": fair["fsc_at_05_mean"],
+    }
 
 
 def run_one_cell(spec: CellSpec, results_root: Path, datadir: str | None) -> dict:
