@@ -270,6 +270,25 @@ def test_fused_engine_diagnostics_match_unfused():
         np.asarray(fused_diag.best_translation_idx),
         np.asarray(unfused_diag.best_translation_idx),
     )
+    # D12 fields must match too.
+    np.testing.assert_allclose(
+        np.asarray(fused_diag.best_log_score_per_image),
+        np.asarray(unfused_diag.best_log_score_per_image),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        np.asarray(fused_diag.rotation_posterior_sums),
+        np.asarray(unfused_diag.rotation_posterior_sums),
+        rtol=1e-5,
+        atol=1e-6,
+    )
+    np.testing.assert_allclose(
+        np.asarray(fused_diag.max_posterior_per_image),
+        np.asarray(unfused_diag.max_posterior_per_image),
+        rtol=1e-5,
+        atol=1e-6,
+    )
 
 
 def test_fused_engine_q_zero_runs():

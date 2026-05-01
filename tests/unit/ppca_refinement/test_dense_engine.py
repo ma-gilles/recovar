@@ -279,3 +279,35 @@ def test_dense_engine_omitted_log_mass_is_zero_for_dense():
         jnp.asarray(y_norm),
     )
     np.testing.assert_array_equal(np.asarray(diag.omitted_log_mass), np.zeros(3, dtype=np.float32))
+
+
+def test_dense_engine_d12_diagnostic_fields():
+    """D12: best_log_score_per_image, rotation_posterior_sums,
+    max_posterior_per_image must agree with brute force."""
+    rng = np.random.default_rng(2026)
+    Y1, proj_aug, ctf2, y_norm = _random_problem(rng, B=3, T=2, R=4, F=8, q=2)
+    B, T, F = Y1.shape
+    R = proj_aug.shape[0]
+
+    _, diag = dense_pose_ppca_E_step_blocked(
+        jnp.asarray(Y1),
+        jnp.asarray(proj_aug),
+        jnp.asarray(ctf2),
+        jnp.asarray(y_norm),
+    )
+    logZ_bf, _, _, _, gamma_bf = _brute_force(Y1, proj_aug, ctf2, y_norm)
+    score_bf = np.log(gamma_bf) + logZ_bf[:, None, None]
+    best_score_bf = score_bf.reshape(B, T * R).max(axis=-1).astype(np.float32)
+    rot_marg_bf = gamma_bf.sum(axis=(0, 1)).astype(np.float32)  # [R]
+
+    # Shapes.
+    assert diag.best_log_score_per_image.shape == (B,)
+    assert diag.rotation_posterior_sums.shape == (R,)
+    assert diag.max_posterior_per_image.shape == (B,)
+    # max_posterior_per_image is an alias for pmax.
+    np.testing.assert_array_equal(np.asarray(diag.max_posterior_per_image), np.asarray(diag.pmax))
+    # Values match brute force.
+    np.testing.assert_allclose(np.asarray(diag.best_log_score_per_image), best_score_bf, rtol=2e-3, atol=5e-3)
+    np.testing.assert_allclose(np.asarray(diag.rotation_posterior_sums), rot_marg_bf, rtol=2e-3, atol=5e-3)
+    # Per-image gamma sums to 1, so rotation marginal sums equal n_images.
+    np.testing.assert_allclose(float(np.sum(np.asarray(diag.rotation_posterior_sums))), float(B), rtol=2e-3)

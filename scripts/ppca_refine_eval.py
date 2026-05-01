@@ -714,9 +714,19 @@ def run_one_cell(spec: CellSpec, results_root: Path, datadir: str | None) -> dic
         metrics = _run_kclass_refinement(spec, bundle, cell_dir)
     elif spec.full_pipeline:
         metrics = _run_pose_marginal_full_pipeline(spec, bundle, cell_dir)
+        try:
+            fsc_metrics = _score_ppca_vs_gt(
+                cell_dir,
+                bundle["vols_real_gt"],
+                bundle["vol_shape"],
+                spec.zdim,
+            )
+            metrics.update(fsc_metrics)
+        except Exception as exc:  # noqa: BLE001
+            metrics["fsc_score_skipped"] = True
+            metrics["fsc_skip_reason"] = str(exc)
     else:
         metrics = _run_pose_marginal(spec, bundle, cell_dir)
-        # FSC-vs-GT scoring for pose-marginal cells.
         try:
             fsc_metrics = _score_ppca_vs_gt(
                 cell_dir,

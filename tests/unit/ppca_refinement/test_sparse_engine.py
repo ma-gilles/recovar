@@ -226,3 +226,35 @@ def test_sparse_q_zero_returns_trivial_moments():
         np.ones((3, 1), dtype=np.complex64),
     )
     assert np.all(np.isfinite(np.asarray(diag.logZ)))
+
+
+def test_sparse_d12_diagnostic_fields():
+    """D12: best_log_score_per_image (sparse) must agree with the dense
+    engine's value computed on the same hypothesis set."""
+    rng = np.random.default_rng(2026)
+    Y1, proj_aug, ctf2, y_norm = _random_dense_block(rng, B=3, T=2, R=4, F=8, q=2)
+
+    _, dense_diag = dense_pose_ppca_E_step_blocked(
+        jnp.asarray(Y1),
+        jnp.asarray(proj_aug),
+        jnp.asarray(ctf2),
+        jnp.asarray(y_norm),
+    )
+    layout = _flatten_dense_to_sparse(Y1, proj_aug, ctf2, y_norm, pose_log_prior=None)
+    _, sparse_diag = sparse_pose_ppca_E_step_flat(layout)
+
+    # Shapes.
+    assert sparse_diag.best_log_score_per_image.shape == (Y1.shape[0],)
+    assert sparse_diag.max_posterior_per_image.shape == (Y1.shape[0],)
+    # max_posterior_per_image is alias for pmax.
+    np.testing.assert_array_equal(
+        np.asarray(sparse_diag.max_posterior_per_image),
+        np.asarray(sparse_diag.pmax),
+    )
+    # Best log-score must agree with dense version (same hypothesis set).
+    np.testing.assert_allclose(
+        np.asarray(sparse_diag.best_log_score_per_image),
+        np.asarray(dense_diag.best_log_score_per_image),
+        rtol=2e-3,
+        atol=5e-3,
+    )
