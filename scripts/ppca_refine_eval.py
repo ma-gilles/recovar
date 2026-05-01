@@ -117,7 +117,9 @@ def _build_ribosembly_bundle(spec: CellSpec):
         noise_level=1.0,
         seed=spec.seed,
     )
-    mu_init = np.real(np.fft.ifftn(vols_fourier.mean(axis=0).reshape(vol_shape))).astype(np.float32)
+    # Initialization: μ = mean of GT vols; W = top-q PCA of (vols − mean).
+    # See "Initialization scheme" in the eval docstring.
+    mu_init, W_init = _pca_init_from_volumes(vols_real, q=spec.zdim)
     mask = np.maximum(mask_left, mask_right).astype(np.float32)
 
     n_rot = max(4, min(spec.rotation_block_size, spec.n_images // 8))
@@ -130,7 +132,8 @@ def _build_ribosembly_bundle(spec: CellSpec):
     return {
         "cryo": cryo,
         "mu_init": mu_init,
-        "W_init": None,
+        "W_init": W_init,
+        "vols_real_gt": vols_real,  # for FSC-vs-GT scoring + k-class init
         "mask": mask,
         "halfset_indices": halfset_indices,
         "rotation_grid": rotation_grid,
@@ -180,6 +183,43 @@ def _load_volumes_from_dir(vol_dir: str, n_states: int, grid_size: int):
     return vols_real, vols_fourier, vol_shape
 
 
+def _pca_init_from_volumes(vols_real: np.ndarray, q: int):
+    """Top-q real-space PCA of the volume bank.
+
+    Returns:
+      mu_init  (D, D, D) real32 — mean over the K input volumes
+      W_init   (q, D, D, D) real32 — top-q principal components, orthonormal
+                                      in the flattened-voxel inner product
+                                      (NumPy-default SVD convention)
+
+    For initialization purposes; the production driver re-orthonormalizes
+    in the PPCA Fourier convention internally during finalize_ppca_state.
+    """
+    K = vols_real.shape[0]
+    vol_shape = vols_real.shape[1:]
+    flat = vols_real.reshape(K, -1).astype(np.float32)
+    mu_flat = flat.mean(axis=0)
+    centered = flat - mu_flat[None, :]  # (K, vol_size)
+    if q <= 0:
+        return (
+            mu_flat.reshape(vol_shape).astype(np.float32),
+            np.zeros((0,) + vol_shape, dtype=np.float32),
+        )
+    # SVD on (K, vol_size). Top-q rows of Vt are the principal directions.
+    U, S, Vt = np.linalg.svd(centered, full_matrices=False)
+    n_comp = min(q, Vt.shape[0])
+    W_flat = Vt[:n_comp].astype(np.float32)  # (n_comp, vol_size)
+    if n_comp < q:
+        # Pad with zeros if K-1 < q (more PCs requested than rank allows).
+        W_flat = np.concatenate(
+            [W_flat, np.zeros((q - n_comp, W_flat.shape[1]), dtype=np.float32)],
+            axis=0,
+        )
+    mu_init = mu_flat.reshape(vol_shape).astype(np.float32)
+    W_init = W_flat.reshape((q,) + vol_shape).astype(np.float32)
+    return mu_init, W_init
+
+
 def _bundle_from_volumes(spec: CellSpec, vols_real, vols_fourier, vol_shape):
     """Reuse the synthetic ``_simulate_dataset`` + ``_make_split_masks``
     helpers to build a plug-compatible production bundle from any
@@ -204,7 +244,7 @@ def _bundle_from_volumes(spec: CellSpec, vols_real, vols_fourier, vol_shape):
         noise_level=1.0,
         seed=spec.seed,
     )
-    mu_init = np.real(np.fft.ifftn(vols_fourier.mean(axis=0).reshape(vol_shape))).astype(np.float32)
+    mu_init, W_init = _pca_init_from_volumes(vols_real, q=spec.zdim)
     mask = np.maximum(mask_left, mask_right).astype(np.float32)
     n_rot = max(4, min(spec.rotation_block_size, spec.n_images // 8))
     rotation_grid = np.asarray(cryo.rotation_matrices[:n_rot], dtype=np.float32)
@@ -216,7 +256,8 @@ def _bundle_from_volumes(spec: CellSpec, vols_real, vols_fourier, vol_shape):
     return {
         "cryo": cryo,
         "mu_init": mu_init,
-        "W_init": None,
+        "W_init": W_init,
+        "vols_real_gt": vols_real,
         "mask": mask,
         "halfset_indices": halfset_indices,
         "rotation_grid": rotation_grid,
@@ -352,15 +393,186 @@ def _run_pose_marginal(spec: CellSpec, bundle, out_dir: Path):
     }
 
 
+def _run_kclass_refinement(spec: CellSpec, bundle, out_dir: Path):
+    """K-class refinement initialized from K downsampled GT volumes.
+
+    Uses ``recovar.em.dense_single_volume.k_class.run_dense_k_class_em``
+    as the per-iteration engine. Iterates ``spec.em_iters`` times,
+    updating each class's mean from its previous iter's posterior-weighted
+    backprojection. Writes per-iter MRCs and final per-class MRCs.
+    """
+    import jax.numpy as jnp
+    import mrcfile
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.dense_single_volume.k_class import run_dense_k_class_em
+
+    cryo = bundle["cryo"]
+    vols_real_gt = bundle["vols_real_gt"]  # (K, D, D, D) real32
+    vol_shape = bundle["vol_shape"]
+    K = vols_real_gt.shape[0]
+
+    # Initialize per-class means in flat-Fourier (the form k-class engine expects).
+    vol_size = int(np.prod(vol_shape))
+    means = jnp.stack(
+        [ftu.get_dft3(jnp.asarray(v, dtype=jnp.float32)).reshape(vol_size) for v in vols_real_gt],
+        axis=0,
+    ).astype(jnp.complex64)  # (K, vol_size)
+
+    # Use the dataset's own rotations as the rotation grid (same convention
+    # used elsewhere in the eval).
+    n_rot = max(4, min(spec.rotation_block_size, spec.n_images // 8))
+    rotations = jnp.asarray(cryo.rotation_matrices[:n_rot], dtype=jnp.float32)
+    translations = jnp.zeros((1, 2), dtype=jnp.float32)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / _SAFE_TO_DELETE_NAME).touch()
+
+    image_size = int(np.prod(cryo.image_shape))
+    noise_variance = jnp.ones((image_size,), dtype=jnp.float32)  # image-flat
+    mean_variance = jnp.ones((vol_size,), dtype=jnp.float32)  # volume-flat
+
+    runtimes = []
+    log_evidences = []
+    t_total0 = time.time()
+    for it in range(spec.em_iters):
+        t0 = time.time()
+        result = run_dense_k_class_em(
+            cryo,
+            means,
+            mean_variance,
+            noise_variance,
+            rotations,
+            translations,
+            disc_type="linear_interp",
+        )
+        means = jnp.asarray(result.new_means)  # (K, vol_size) complex
+        runtimes.append(time.time() - t0)
+        try:
+            log_evidences.append(float(jnp.sum(result.stats.log_evidence_per_image)))
+        except Exception:
+            log_evidences.append(float("nan"))
+
+        # Per-iter real-space MRC dumps.
+        iter_dir = out_dir / f"iter_{it:03d}"
+        iter_dir.mkdir(exist_ok=True)
+        for k in range(K):
+            real = np.real(np.asarray(ftu.get_idft3(means[k].reshape(vol_shape)))).astype(np.float32)
+            with mrcfile.new(str(iter_dir / f"class_{k:02d}.mrc"), overwrite=True) as mrc:
+                mrc.set_data(real)
+                mrc.voxel_size = cryo.voxel_size
+
+    runtime_s = time.time() - t_total0
+    # Final per-class real-space MRCs.
+    final_real = np.stack(
+        [np.real(np.asarray(ftu.get_idft3(means[k].reshape(vol_shape)))).astype(np.float32) for k in range(K)]
+    )
+    for k in range(K):
+        with mrcfile.new(str(out_dir / f"class_{k:02d}.mrc"), overwrite=True) as mrc:
+            mrc.set_data(final_real[k])
+            mrc.voxel_size = cryo.voxel_size
+    np.save(out_dir / "final_classes_real.npy", final_real)
+
+    # FSC vs GT (Hungarian-matched).
+    fsc_metrics = _score_kclass_vs_gt(final_real, vols_real_gt, vol_shape)
+
+    return {
+        "runtime_s": runtime_s,
+        "n_iters": spec.em_iters,
+        "log_evidence_final": log_evidences[-1] if log_evidences else float("nan"),
+        "log_evidence_history": log_evidences,
+        **fsc_metrics,
+    }
+
+
+def _score_kclass_vs_gt(pred_vols: np.ndarray, gt_vols: np.ndarray, vol_shape: tuple) -> dict:
+    """Hungarian-match predicted classes to GT classes by per-pair FSC area,
+    then return per-class FSC@0.5 + mean FSC area + best assignment."""
+    from scipy.optimize import linear_sum_assignment
+
+    from recovar.reconstruction.regularization import get_fsc
+
+    K_pred = pred_vols.shape[0]
+    K_gt = gt_vols.shape[0]
+    K = min(K_pred, K_gt)
+
+    # Pair-wise FSC area matrix.
+    fsc_curves = np.zeros((K_pred, K_gt), dtype=object)
+    fsc_areas = np.zeros((K_pred, K_gt), dtype=np.float32)
+    for i in range(K_pred):
+        for j in range(K_gt):
+            v1 = np.asarray(pred_vols[i]).reshape(-1)
+            v2 = np.asarray(gt_vols[j]).reshape(-1)
+            try:
+                fsc = np.asarray(get_fsc(v1, v2, vol_shape))
+            except Exception:
+                fsc = np.zeros(vol_shape[0] // 2, dtype=np.float32)
+            fsc_curves[i, j] = fsc
+            fsc_areas[i, j] = float(np.mean(fsc))
+
+    # Hungarian assignment: maximize FSC area.
+    row, col = linear_sum_assignment(-fsc_areas[:K_pred, :K_gt])
+    matched = list(zip(row.tolist(), col.tolist()))
+    fsc_at_05 = []
+    for i, j in matched:
+        curve = fsc_curves[i, j]
+        below = np.where(np.asarray(curve) < 0.5)[0]
+        first_below = int(below[0]) if below.size else int(len(curve))
+        fsc_at_05.append(first_below)
+    return {
+        "fsc_assignment": matched,
+        "fsc_area_per_class": [float(fsc_areas[i, j]) for i, j in matched],
+        "fsc_at_05_per_class": fsc_at_05,
+        "fsc_area_mean": float(np.mean([fsc_areas[i, j] for i, j in matched])),
+        "fsc_at_05_mean": float(np.mean(fsc_at_05)),
+    }
+
+
+def _score_ppca_vs_gt(out_dir: Path, vols_real_gt: np.ndarray, vol_shape: tuple, q: int) -> dict:
+    """For pose-marginal output, FSC the (μ + W_k) and (μ - W_k) volumes
+    against the GT class set. The PPCA model spans μ + span(W); we
+    evaluate the q+1 "extreme" volumes vs GT via Hungarian matching."""
+    import mrcfile
+
+    # Locate the latest iter_NNN/ subdirectory (filter out iter_log.pkl + similar).
+    iter_dirs = sorted(p for p in out_dir.glob("iter_*") if p.is_dir())
+    if not iter_dirs:
+        return {"fsc_score_skipped": True, "fsc_skip_reason": "no iter_*/ dirs"}
+    mu_path = iter_dirs[-1] / "mu_score.mrc"
+    if not mu_path.exists():
+        return {"fsc_score_skipped": True, "fsc_skip_reason": f"no mu_score.mrc at {mu_path}"}
+    with mrcfile.open(str(mu_path), permissive=True) as mrc:
+        mu = mrc.data.copy().astype(np.float32)
+    W_list = []
+    for k in range(q):
+        wp = mu_path.parent / f"W_{k:02d}_score.mrc"
+        if not wp.exists():
+            continue
+        with mrcfile.open(str(wp), permissive=True) as mrc:
+            W_list.append(mrc.data.copy().astype(np.float32))
+    if not W_list:
+        return {"fsc_score_skipped": True, "fsc_skip_reason": "no W_*_score.mrc"}
+    W = np.stack(W_list)  # (q, D, D, D)
+
+    # Build q+1 "trial" volumes by sweeping z = ±1 along each PC direction.
+    trial_vols = [mu]
+    for k in range(W.shape[0]):
+        # Scale W_k to have the same RMS as μ for a sensible perturbation.
+        rms_mu = float(np.sqrt(np.mean(mu**2)) + 1e-12)
+        rms_W = float(np.sqrt(np.mean(W[k] ** 2)) + 1e-12)
+        scale = rms_mu / rms_W if rms_W > 0 else 0.0
+        trial_vols.append(mu + scale * W[k])
+        trial_vols.append(mu - scale * W[k])
+    trial_vols = np.stack(trial_vols)
+    return _score_kclass_vs_gt(trial_vols, vols_real_gt, vol_shape)
+
+
 def run_one_cell(spec: CellSpec, results_root: Path, datadir: str | None) -> dict:
     cell_dir = results_root / spec.cell_id()
     cell_dir.mkdir(parents=True, exist_ok=True)
     (results_root / _SAFE_TO_DELETE_NAME).touch()
 
     if spec.pose_mode == "fixed":
-        # The 'fixed' label is redundant with 'baseline' (which runs the
-        # canonical legacy ``recovar.ppca.ppca.EM`` fixed-pose path).
-        # Skip with a clear marker so the cell can be re-run via baseline.
         return {
             **asdict(spec),
             "cell_id": spec.cell_id(),
@@ -368,15 +580,29 @@ def run_one_cell(spec: CellSpec, results_root: Path, datadir: str | None) -> dic
             "skip_reason": (
                 "fixed-pose is covered by baseline; the M3 driver is an "
                 "informational stub from the CLI side. Use --pose-modes "
-                "baseline,dense,local for the real eval grid."
+                "baseline,dense,local,kclass for the real eval grid."
             ),
         }
 
     bundle = _make_bundle(spec, datadir)
     if spec.pose_mode == "baseline":
         metrics = _run_baseline_ppca(spec, bundle, cell_dir)
+    elif spec.pose_mode == "kclass":
+        metrics = _run_kclass_refinement(spec, bundle, cell_dir)
     else:
         metrics = _run_pose_marginal(spec, bundle, cell_dir)
+        # FSC-vs-GT scoring for pose-marginal cells.
+        try:
+            fsc_metrics = _score_ppca_vs_gt(
+                cell_dir,
+                bundle["vols_real_gt"],
+                bundle["vol_shape"],
+                spec.zdim,
+            )
+            metrics.update(fsc_metrics)
+        except Exception as exc:  # noqa: BLE001
+            metrics["fsc_score_skipped"] = True
+            metrics["fsc_skip_reason"] = str(exc)
 
     record = {**asdict(spec), **metrics, "cell_id": spec.cell_id()}
     with (cell_dir / "metrics.json").open("w") as fh:
