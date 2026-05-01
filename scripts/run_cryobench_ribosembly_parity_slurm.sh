@@ -16,9 +16,11 @@ GRID_SIZE="${GRID_SIZE:-256}"
 N_IMAGES="${N_IMAGES:-100000}"
 PDB_DIR="${PDB_DIR:-/home/mg6942/mytigress/cryobench2/Ribosembly/pdbs}"
 DATA_ROOT="${DATA_ROOT:-/scratch/gpfs/GILLES/mg6942/em_relion_proj}"
-DATA_DIR="${DATA_DIR:-${DATA_ROOT}/ribosembly_allk_g${GRID_SIZE}_n${N_IMAGES}_snr${SNR}}"
+DISC_TYPE="${DISC_TYPE:-cubic}"
+DATA_DIR="${DATA_DIR:-${DATA_ROOT}/ribosembly_allk_g${GRID_SIZE}_n${N_IMAGES}_snr${SNR}_${DISC_TYPE}}"
 RELION_REFINE="${RELION_REFINE:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine}"
 RELION_REFINE_MPI="${RELION_REFINE_MPI:-/scratch/gpfs/GILLES/mg6942/relion/build_patched/bin/relion_refine_mpi}"
+RELION_MODULE="${RELION_MODULE:-relion/5.0.1/gcc-11.5.0-gpu}"
 PARTICLE_DIAMETER="${PARTICLE_DIAMETER:-380}"
 CLASS3D_HEALPIX_ORDER="${CLASS3D_HEALPIX_ORDER:-2}"
 CLASS3D_OFFSET_RANGE="${CLASS3D_OFFSET_RANGE:-3}"
@@ -71,6 +73,7 @@ echo "=== Prepare Ribosembly PDB multiclass benchmark ==="
   --n-images "$N_IMAGES" \
   --grid-size "$GRID_SIZE" \
   --snr "$SNR" \
+  --disc-type "$DISC_TYPE" \
   --relion-normalize \
   --streaming-mmap
 
@@ -88,8 +91,11 @@ CLASS3D_DIR="$DATA_DIR/relion_class3d_k${N_CLASSES}_os0_ref"
 if [ ! -f "$CLASS3D_DIR/run_it001_model.star" ]; then
   mkdir -p "$CLASS3D_DIR"
   (
+    export PS1="${PS1-}"
+    module load "$RELION_MODULE"
+    command -v mpirun
     cd "$DATA_DIR"
-    srun -n 3 "$RELION_REFINE_MPI" \
+    mpirun -n 3 "$RELION_REFINE_MPI" \
       --i particles.star \
       --ref reference_init_classes_relion.star \
       --o "$CLASS3D_DIR/run" \
@@ -187,8 +193,10 @@ IM_DIR="$DATA_DIR/relion_initialmodel_k${N_CLASSES}_it001"
 if [ ! -f "$IM_DIR/run_it001_model.star" ]; then
   mkdir -p "$IM_DIR"
   (
+    export PS1="${PS1-}"
+    module load "$RELION_MODULE"
     cd "$DATA_DIR"
-    srun -n 1 "$RELION_REFINE" \
+    "$RELION_REFINE" \
       --o "$IM_DIR/run" \
       --iter 1 \
       --grad \
