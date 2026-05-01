@@ -34,7 +34,8 @@ AGENT_ID="ribo_k16_snr${SNR}_${SLURM_JOB_ID}"
 export TMPDIR="/scratch/gpfs/GILLES/mg6942/tmp/${AGENT_ID}"
 export PIXI_HOME="/scratch/gpfs/GILLES/mg6942/pixi_home/${AGENT_ID}"
 export RATTLER_CACHE_DIR="/scratch/gpfs/GILLES/mg6942/rattler_cache/${AGENT_ID}"
-mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR" /scratch/gpfs/GILLES/mg6942/slurmo "$DATA_DIR"
+ENV_SETUP_LOCK="/scratch/gpfs/GILLES/mg6942/locks/recovar_relion_parity_env_setup.lock"
+mkdir -p "$TMPDIR" "$PIXI_HOME" "$RATTLER_CACHE_DIR" /scratch/gpfs/GILLES/mg6942/slurmo "$DATA_DIR" "$(dirname "$ENV_SETUP_LOCK")"
 
 unset PYTHONPATH PYTHONHOME CONDA_PREFIX VIRTUAL_ENV
 export PYTHONNOUSERSITE=1
@@ -51,12 +52,16 @@ git rev-parse HEAD
 git status --short
 
 echo "=== Environment setup ==="
-pixi install
+(
+  flock 9
+  pixi install
+  PIXI_PY="$(pixi run which python)"
+  "$PIXI_PY" -m pip uninstall -y recovar || true
+  "$PIXI_PY" -m pip install -e . --no-deps --no-build-isolation --ignore-installed
+  PYTHON="$PIXI_PY" make -C recovar/cuda clean all
+  pixi run smoke-import-recovar
+) 9>"$ENV_SETUP_LOCK"
 PIXI_PY="$(pixi run which python)"
-"$PIXI_PY" -m pip uninstall -y recovar || true
-"$PIXI_PY" -m pip install -e . --no-deps --no-build-isolation --ignore-installed
-PYTHON="$PIXI_PY" make -C recovar/cuda clean all
-pixi run smoke-import-recovar
 "$PIXI_PY" -c "import pathlib,recovar,jax; repo=pathlib.Path.cwd().resolve(); assert str(pathlib.Path(recovar.__file__).resolve()).startswith(str(repo)+'/'); assert '.pixi/envs/default/' in str(pathlib.Path(jax.__file__).resolve()); print(jax.devices())"
 
 echo "=== Prepare Ribosembly PDB multiclass benchmark ==="
