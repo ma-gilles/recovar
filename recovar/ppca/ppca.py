@@ -373,23 +373,28 @@ def E_M_step_batch_half(
             max_r=_max_r,
         )  # (half_vol, n_images)
 
-        ## TODO: memory-inefficient GEMM — see original comment
-        lhs_summed = lhs_summed + (ctf2_bp @ second_moment_tri.real.astype(real_dtype))
-        # except Exception:
-        #     # Fallback: standard per-column backprojection (slower but works on CPU)
-        #     tri_sz = second_moment_tri.shape[1]
-        #     for k in range(tri_sz):
-        #         w = ctf_squared_full.real.astype(real_dtype) * second_moment_tri[:, k : k + 1].real.astype(real_dtype)
-        #         bp_col = core.batch_adjoint_slice_volume(
-        #             w[:, :, None].transpose(2, 0, 1),
-        #             rotation_matrices,
-        #             image_shape,
-        #             volume_shape,
-        #             disc_type,
-        #             half_image=False,
-        #             half_volume=True,
-        #         )
-        #         lhs_summed = lhs_summed.at[:, k].add(bp_col.reshape(-1).real)
+        # LHS accumulation: (half_vol, batch) @ (batch, tri_sz) → (half_vol, tri_sz).
+        # The matmul result is the same size as lhs_summed.  At 256³/30 PCs
+        # lhs_summed is 15.7 GB, so the unchunked matmul needs 2×15.7 = 31 GB
+        # (old + new) which can OOM on 80 GB GPUs.
+        #
+        # Strategy: if the matmul result fits comfortably on GPU (<10 GB),
+        # do the fast all-GPU path.  Otherwise, chunk and accumulate on CPU.
+        _smt_real = second_moment_tri.real.astype(real_dtype)
+        _matmul_bytes = half_volume_size * _smt_real.shape[1] * 4
+        _GPU_MATMUL_BUDGET = 10e9  # 10 GB threshold
+
+        if _matmul_bytes <= _GPU_MATMUL_BUDGET:
+            # Fast path: full GPU matmul (small PC count)
+            lhs_summed = lhs_summed + (ctf2_bp @ _smt_real)
+        else:
+            # Memory-safe path: chunk and accumulate on CPU
+            _VCHUNK = max(1, int(2e9 / (4 * _smt_real.shape[1])))
+            lhs_cpu = np.array(lhs_summed)
+            for _v0 in range(0, half_volume_size, _VCHUNK):
+                _v1 = min(_v0 + _VCHUNK, half_volume_size)
+                lhs_cpu[_v0:_v1] += np.asarray(ctf2_bp[_v0:_v1] @ _smt_real)
+            lhs_summed = lhs_cpu
 
         # The W-update always uses the basis adjoint P_W*, so both RHS terms
         # must backproject through the basis interpolation disc_type. For c=1
@@ -804,8 +809,15 @@ def EM_step_half(
         disc_type_mean,
     )
 
-    # Half-volume accumulators
-    lhs_summed = jnp.zeros((half_volume_size, tri_sz), dtype=ref.dtype_real)
+    # Half-volume accumulators.  lhs scales as O(half_vol × q²) — at 256³ it
+    # is 7.1 GB for 20 PCs but 15.7 GB for 30 PCs.  For small lhs we keep
+    # it on GPU for speed; for large lhs we start on CPU and transfer to
+    # GPU only at the M-step.  The threshold matches E_M_step_batch_half.
+    _lhs_bytes = half_volume_size * tri_sz * 4
+    if _lhs_bytes <= 10e9:
+        lhs_summed = jnp.zeros((half_volume_size, tri_sz), dtype=ref.dtype_real)
+    else:
+        lhs_summed = np.zeros((half_volume_size, tri_sz), dtype=np.float32)
     rhs_summed = jnp.zeros((half_volume_size, basis_size), dtype=ref.dtype)
 
     ll_sum = jnp.array(0.0, dtype=ref.dtype)
@@ -893,6 +905,9 @@ def EM_step_half(
     if W_prev_real is not None:
         W0 = jnp.array(W_prev_real.T.reshape(basis_size, *volume_shape))
 
+    # Ensure lhs is on GPU for the M-step solve (no-op if already there).
+    if not isinstance(lhs_summed, jnp.ndarray):
+        lhs_summed = jnp.asarray(lhs_summed)
     W_real = _pcg_hard_mstep(
         lhs_summed,
         rhs_summed,
