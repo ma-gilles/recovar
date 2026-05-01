@@ -1,5 +1,6 @@
 """Public PPCA surface."""
 
+from .pc_prior_config import PCPriorConfig
 from .ppca import (
     EM,
     E_M_step_batch_half,
@@ -39,4 +40,6 @@ __all__ = [
     "make_gt_prior_from_variance_total",
     "estimate_gaussian_shell_prior_from_data",
     "estimate_hybrid_shell_prior_from_data",
+    # ppca-refine project
+    "PCPriorConfig",
 ]

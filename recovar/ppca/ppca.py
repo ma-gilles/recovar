@@ -1256,6 +1256,7 @@ def EM(
     pc_mask_assignment=None,
     update_noise=False,
     noise_update_ema=0.5,
+    pc_prior_config=None,
 ):
     """Run EM for L2-regularized PPCA.
 
@@ -1610,6 +1611,8 @@ def EM(
             "mean_c_bar": _mean_c_bar,
             "std_c": float(np.std(mean_c)) if _contrast_mode != "none" else 0.0,
         }
+        if pc_prior_config is not None and iter_i == 0:
+            iter_info["pc_prior_config"] = pc_prior_config.to_dict()
         iteration_data.append(iter_info)
 
         marg_str = f"{neg_marginal_ll:12.6e}" if neg_marginal_ll is not None else f"{'N/A':>12}"
