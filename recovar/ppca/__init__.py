@@ -1,6 +1,8 @@
 """Public PPCA surface."""
 
+from .augmented_mstep import solve_augmented_ppca_mstep
 from .pc_prior_config import PCPriorConfig
+from .pose_accumulators import AugmentedPPCAStats
 from .ppca import (
     EM,
     E_M_step_batch_half,
@@ -42,4 +44,6 @@ __all__ = [
     "estimate_hybrid_shell_prior_from_data",
     # ppca-refine project
     "PCPriorConfig",
+    "AugmentedPPCAStats",
+    "solve_augmented_ppca_mstep",
 ]
