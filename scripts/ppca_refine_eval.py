@@ -357,6 +357,21 @@ def run_one_cell(spec: CellSpec, results_root: Path, datadir: str | None) -> dic
     cell_dir.mkdir(parents=True, exist_ok=True)
     (results_root / _SAFE_TO_DELETE_NAME).touch()
 
+    if spec.pose_mode == "fixed":
+        # The 'fixed' label is redundant with 'baseline' (which runs the
+        # canonical legacy ``recovar.ppca.ppca.EM`` fixed-pose path).
+        # Skip with a clear marker so the cell can be re-run via baseline.
+        return {
+            **asdict(spec),
+            "cell_id": spec.cell_id(),
+            "skipped": True,
+            "skip_reason": (
+                "fixed-pose is covered by baseline; the M3 driver is an "
+                "informational stub from the CLI side. Use --pose-modes "
+                "baseline,dense,local for the real eval grid."
+            ),
+        }
+
     bundle = _make_bundle(spec, datadir)
     if spec.pose_mode == "baseline":
         metrics = _run_baseline_ppca(spec, bundle, cell_dir)
