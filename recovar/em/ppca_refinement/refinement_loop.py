@@ -92,6 +92,13 @@ class PPCAScheduleOpts:
     enable_per_iter_noise: bool = True
     enable_x0_hermitian: bool = True
 
+    # D9: translation auto-grid + log prior. translation_max_pixels=0 means
+    # "single zero translation" (no translation search). When > 0 we build
+    # get_translation_grid(...) + make_relion_translation_log_prior(...).
+    translation_max_pixels: int = 0
+    translation_pixel_offset: int = 1
+    translation_sigma_offset_angstrom: float = 5.0
+
     # Convergence / stopping.
     max_iters: int = 25
     min_iters: int = 5
@@ -605,7 +612,15 @@ def run_pose_marginal_refinement(
     log_evidence_history: list[float] = []
 
     if translation_grid is None:
-        translation_grid = np.zeros((1, 2), dtype=np.float32)
+        if schedule_opts.translation_max_pixels > 0:
+            from recovar.em.sampling import get_translation_grid
+
+            translation_grid = get_translation_grid(
+                schedule_opts.translation_max_pixels,
+                schedule_opts.translation_pixel_offset,
+            ).astype(np.float32)
+        else:
+            translation_grid = np.zeros((1, 2), dtype=np.float32)
 
     iter_log = []
     for it in range(schedule_opts.max_iters):

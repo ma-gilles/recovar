@@ -93,6 +93,11 @@ class CellSpec:
     # >0 = full HEALPix sphere via sampling.get_rotation_grid(order, matrices=True)
     # order 2: 4608 rotations (14.7° sampling) — recommended for science runs.
     n_in_planes: int | None = None  # override psi sampling for HEALPix mode
+    full_pipeline: bool = False  # D13: route pose-marginal cells through
+    # run_pose_marginal_refinement (mature multi-iter loop with HEALPix
+    # angular schedule + low_resol_join + per-iter prior + per-iter noise +
+    # x=0 Hermitian + auto translation prior). Default off preserves the
+    # simple-test path used by current dev evals.
     extra: dict = field(default_factory=dict)
 
     def cell_id(self) -> str:
@@ -365,6 +370,102 @@ def _run_baseline_ppca(spec: CellSpec, bundle, out_dir: Path):
     }
 
 
+def _run_pose_marginal_full_pipeline(spec: CellSpec, bundle, out_dir: Path):
+    """Run the mature multi-iter PPCA refinement via run_pose_marginal_refinement
+    (D1+D2+D4+D5+D6+D8+D9). HEALPix angular schedule + low_resol_join +
+    per-iter prior + per-iter noise + x=0 Hermitian + auto translation prior."""
+    import jax.numpy as jnp
+    import mrcfile
+
+    import recovar.core.fourier_transform_utils as ftu
+    from recovar.em.ppca_refinement.iterations import IterationOpts
+    from recovar.em.ppca_refinement.postprocess import save_state
+    from recovar.em.ppca_refinement.refinement_loop import (
+        PPCAScheduleOpts,
+        run_pose_marginal_refinement,
+    )
+    from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
+
+    cryo = bundle["cryo"]
+    vol_shape = bundle["vol_shape"]
+    half_vol = int(np.prod(ftu.volume_shape_to_half_volume_shape(vol_shape)))
+    q = spec.zdim
+    mu_init = bundle["mu_init"]
+    W_init = bundle["W_init"]
+    if W_init is None:
+        rng = np.random.default_rng(0)
+        W_init = (rng.standard_normal((q,) + vol_shape) * 1e-3).astype(np.float32)
+    mask = bundle["mask"]
+    halfset_indices = bundle["halfset_indices"]
+
+    state = PoseMarginalPPCAEMState(
+        mu_half=(jnp.asarray(mu_init), jnp.asarray(mu_init)),
+        W_half=(jnp.asarray(W_init), jnp.asarray(W_init)),
+        mu_score=jnp.asarray(mu_init),
+        W_score=jnp.asarray(W_init),
+        W_prior=jnp.full((half_vol, q), 1.0, dtype=jnp.float32),
+        mean_prior=jnp.full((half_vol,), 1.0, dtype=jnp.float32),
+        z_prior_precision_diag=jnp.ones((q,), dtype=jnp.float32),
+        noise_variance=jnp.ones((half_vol,), dtype=jnp.float32),
+        contrast_params=None,
+        masks=None,
+        pose_estimates={},
+        pose_priors=None,
+        refinement_schedule_state=None,
+        hyperparams=None,
+    )
+
+    schedule_opts = PPCAScheduleOpts(
+        healpix_order_init=max(1, spec.healpix_order),
+        healpix_order_max=max(spec.healpix_order, 4),
+        max_iters=spec.em_iters,
+        min_iters=min(spec.em_iters, 5),
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / _SAFE_TO_DELETE_NAME).touch()
+
+    iter_log_for_dump = []
+
+    def _cb(it, st, info):
+        iter_log_for_dump.append(info)
+        iter_dir = out_dir / f"iter_{it:03d}"
+        iter_dir.mkdir(exist_ok=True)
+        with mrcfile.new(str(iter_dir / "mu_score.mrc"), overwrite=True) as mrc:
+            mrc.set_data(np.asarray(st.mu_score, dtype=np.float32))
+            mrc.voxel_size = cryo.voxel_size
+        for k in range(q):
+            with mrcfile.new(str(iter_dir / f"W_{k:02d}_score.mrc"), overwrite=True) as mrc:
+                mrc.set_data(np.asarray(st.W_score[k], dtype=np.float32))
+                mrc.voxel_size = cryo.voxel_size
+
+    t0 = time.time()
+    final_state, _ = run_pose_marginal_refinement(
+        state,
+        cryo,
+        halfset_indices=halfset_indices,
+        mask=jnp.asarray(mask),
+        image_batch_size=spec.image_batch_size,
+        rotation_block_size=spec.rotation_block_size,
+        schedule_opts=schedule_opts,
+        iteration_opts=IterationOpts(EM_iter=spec.em_iters, pcg_maxiter=20),
+        iteration_callback=_cb,
+    )
+    runtime_s = time.time() - t0
+    save_state(final_state, out_dir / "state.pkl")
+    with (out_dir / "iter_log.pkl").open("wb") as fh:
+        pickle.dump(iter_log_for_dump, fh)
+
+    final_logZ = float(iter_log_for_dump[-1]["log_evidence_total"]) if iter_log_for_dump else float("nan")
+    pmax_mean_final = float(iter_log_for_dump[-1]["pmax_mean"]) if iter_log_for_dump else float("nan")
+    return {
+        "runtime_s": runtime_s,
+        "n_iters": len(iter_log_for_dump),
+        "log_evidence_final": final_logZ,
+        "pmax_mean_final": pmax_mean_final,
+        "full_pipeline": True,
+    }
+
+
 def _run_pose_marginal(spec: CellSpec, bundle, out_dir: Path):
     """Run the production --pose-mode dense EM loop via the CLI test hook."""
     from recovar.em.ppca_refinement.cli import main
@@ -611,6 +712,8 @@ def run_one_cell(spec: CellSpec, results_root: Path, datadir: str | None) -> dic
         metrics = _run_baseline_ppca(spec, bundle, cell_dir)
     elif spec.pose_mode == "kclass":
         metrics = _run_kclass_refinement(spec, bundle, cell_dir)
+    elif spec.full_pipeline:
+        metrics = _run_pose_marginal_full_pipeline(spec, bundle, cell_dir)
     else:
         metrics = _run_pose_marginal(spec, bundle, cell_dir)
         # FSC-vs-GT scoring for pose-marginal cells.
@@ -657,6 +760,7 @@ def _expand_cells(args) -> list[CellSpec]:
                     halfset_combine=args.halfset_combine,
                     healpix_order=getattr(args, "healpix_order", 0),
                     n_in_planes=getattr(args, "n_in_planes", None),
+                    full_pipeline=getattr(args, "full_pipeline", False),
                 )
             )
     return cells
@@ -775,6 +879,8 @@ def _slurm_template(spec: CellSpec, results_root: Path, datadir: str | None) -> 
     ]
     if spec.n_in_planes is not None:
         cmd_parts += ["--n-in-planes", str(spec.n_in_planes)]
+    if spec.full_pipeline:
+        cmd_parts += ["--full-pipeline"]
     if datadir:
         cmd_parts += ["--datadir", datadir]
     cmd_str = " ".join(shlex.quote(p) for p in cmd_parts)
@@ -860,6 +966,15 @@ def build_parser():
         type=int,
         default=None,
         help="Override default in-plane psi sampling (default: 6·2^order).",
+    )
+    common.add_argument(
+        "--full-pipeline",
+        action="store_true",
+        help="Route pose-marginal cells (dense, local) through the mature "
+        "multi-iter refinement_loop with HEALPix angular schedule + "
+        "low_resol_join + per-iter prior + per-iter noise + x=0 "
+        "Hermitian + auto translation prior. Default off (uses simple "
+        "single-iter dispatch).",
     )
     common.add_argument("--results-root", default=_DEFAULT_RESULTS_ROOT)
     common.add_argument(
