@@ -140,6 +140,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Iteration after which to recompute mean_prior (default: never).",
     )
 
+    # Sparse / local-pose options (--pose-mode local).
+    parser.add_argument(
+        "--n-local-rotations",
+        type=int,
+        default=8,
+        help="Per-image rotation neighborhood size for --pose-mode local.",
+    )
+    parser.add_argument(
+        "--local-sigma-rad",
+        type=float,
+        default=0.05,
+        help="Stddev of local rotation perturbations (radians) for --pose-mode local.",
+    )
+
     return parser
 
 
@@ -201,6 +215,7 @@ def _run_production_em_loop(args, *, bundle_override=None) -> int:
     )
     from recovar.em.ppca_refinement.production_driver import (
         run_pose_marginal_iteration_dense_production,
+        run_pose_marginal_iteration_sparse_production,
     )
     from recovar.em.ppca_refinement.state import PoseMarginalPPCAEMState
     from recovar.ppca import PCPriorConfig
@@ -272,19 +287,34 @@ def _run_production_em_loop(args, *, bundle_override=None) -> int:
 
     iter_log = []
     for it in range(args.em_iters):
-        state, diag = run_pose_marginal_iteration_dense_production(
-            state,
-            cryo,
-            rotation_grid=rotation_grid,
-            translation_grid=translation_grid,
-            halfset_indices=halfset_indices,
-            mask=jnp.asarray(mask),
-            image_batch_size=args.image_batch_size,
-            rotation_block_size=args.rotation_block_size,
-            halfset_combiner=halfset_combiner,
-            iteration_index=it,
-            opts=opts,
-        )
+        if args.pose_mode == "local":
+            state, diag = run_pose_marginal_iteration_sparse_production(
+                state,
+                cryo,
+                halfset_indices=halfset_indices,
+                mask=jnp.asarray(mask),
+                n_local_rotations=args.n_local_rotations,
+                local_sigma_rad=args.local_sigma_rad,
+                translation_grid=translation_grid,
+                image_batch_size=args.image_batch_size,
+                halfset_combiner=halfset_combiner,
+                iteration_index=it,
+                opts=opts,
+            )
+        else:
+            state, diag = run_pose_marginal_iteration_dense_production(
+                state,
+                cryo,
+                rotation_grid=rotation_grid,
+                translation_grid=translation_grid,
+                halfset_indices=halfset_indices,
+                mask=jnp.asarray(mask),
+                image_batch_size=args.image_batch_size,
+                rotation_block_size=args.rotation_block_size,
+                halfset_combiner=halfset_combiner,
+                iteration_index=it,
+                opts=opts,
+            )
         iter_log.append({"iteration": it, **diag})
         # Per-iter MRCs.
         iter_dir = out_dir / f"iter_{it:03d}"

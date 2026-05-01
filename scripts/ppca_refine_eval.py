@@ -56,6 +56,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
 import pickle
 import shlex
 import subprocess
@@ -139,23 +140,113 @@ def _build_ribosembly_bundle(spec: CellSpec):
     }
 
 
-def _build_cryobench_bundle(spec: CellSpec, datadir: str):
-    """Stub for IgG-1D / IgG-RL / Tomotwin-100. Defers to
-    ``recovar.ppca.compare_covariance_vs_ppca_pipeline.generate_dataset``
-    for the full CryoBench loading; emits a clear error if that path
-    isn't available yet."""
-    raise NotImplementedError(
-        f"CryoBench dataset {spec.dataset!r} requires the production loader to be "
-        "wired through scripts/ppca_refine_eval.py. The stub points to "
-        "recovar.ppca.compare_covariance_vs_ppca_pipeline.generate_dataset "
-        f"with --datadir {datadir} — adapt for ppca-refine end-to-end."
+# CryoBench dataset → on-disk volume directory layout (mirrors the
+# convention in recovar.ppca.compare_covariance_vs_ppca_pipeline). Each
+# entry is the relative path under ``--datadir`` containing the .mrc
+# ground-truth volumes (one per state).
+_CRYOBENCH_VOL_DIRS = {
+    "ribosembly": "Ribosembly/vols/128_org",
+    "igg-1d": "IgG-1D/vols/128_org",
+    "igg-rl": "IgG-RL/vols/128_org",
+    "tomotwin-100": "Tomotwin-100/vols/128_org",
+}
+
+
+def _load_volumes_from_dir(vol_dir: str, n_states: int, grid_size: int):
+    """Load up to ``n_states`` MRCs from ``vol_dir`` and downsample to
+    ``grid_size``. Mirrors ``_load_ribosembly_volumes`` from the test
+    helper but with a configurable directory."""
+    import glob
+
+    import mrcfile
+    from scipy.ndimage import zoom
+
+    import recovar.core.fourier_transform_utils as ftu
+
+    files = sorted(glob.glob(os.path.join(vol_dir, "*.mrc")))
+    if len(files) < n_states:
+        raise FileNotFoundError(f"Need {n_states} .mrc volumes at {vol_dir}, found {len(files)}.")
+    vols_real = []
+    for f in files[:n_states]:
+        with mrcfile.open(f, mode="r", permissive=True) as mrc:
+            v = mrc.data.copy().astype(np.float32)
+        if v.shape[0] != grid_size:
+            factor = grid_size / v.shape[0]
+            v = zoom(v, factor, order=1).astype(np.float32)
+        vols_real.append(v)
+    vols_real = np.array(vols_real)
+    vol_shape = (grid_size, grid_size, grid_size)
+    vols_fourier = np.array([ftu.get_dft3(v).ravel() for v in vols_real])
+    return vols_real, vols_fourier, vol_shape
+
+
+def _bundle_from_volumes(spec: CellSpec, vols_real, vols_fourier, vol_shape):
+    """Reuse the synthetic ``_simulate_dataset`` + ``_make_split_masks``
+    helpers to build a plug-compatible production bundle from any
+    pre-loaded GT volume bank. Synthetic projections (uniform pose
+    distribution + Gaussian noise) — same convention used by
+    ``compare_covariance_vs_ppca_pipeline.generate_dataset``. Sufficient
+    for the dev / regression eval; full PR-grade evaluation should swap
+    in actual CryoBench particle stacks."""
+    import importlib.util
+
+    here = Path(__file__).resolve().parent
+    src = here.parent / "tests" / "unit" / "test_ppca_multimask_synthetic.py"
+    spec_mod = importlib.util.spec_from_file_location("_ppca_synthetic_helpers", src)
+    helpers = importlib.util.module_from_spec(spec_mod)
+    spec_mod.loader.exec_module(helpers)
+
+    mask_left, mask_right, _ = helpers._make_split_masks(vol_shape, vols_real)
+    cryo, _ = helpers._simulate_dataset(
+        vols_fourier,
+        vol_shape,
+        n_images=spec.n_images,
+        noise_level=1.0,
+        seed=spec.seed,
     )
+    mu_init = np.real(np.fft.ifftn(vols_fourier.mean(axis=0).reshape(vol_shape))).astype(np.float32)
+    mask = np.maximum(mask_left, mask_right).astype(np.float32)
+    n_rot = max(4, min(spec.rotation_block_size, spec.n_images // 8))
+    rotation_grid = np.asarray(cryo.rotation_matrices[:n_rot], dtype=np.float32)
+    translation_grid = np.zeros((1, 2), dtype=np.float32)
+    halfset_indices = (
+        np.asarray(cryo.halfset_indices[0]),
+        np.asarray(cryo.halfset_indices[1]),
+    )
+    return {
+        "cryo": cryo,
+        "mu_init": mu_init,
+        "W_init": None,
+        "mask": mask,
+        "halfset_indices": halfset_indices,
+        "rotation_grid": rotation_grid,
+        "translation_grid": translation_grid,
+        "vols_fourier": vols_fourier,
+        "vol_shape": vol_shape,
+    }
 
 
 def _make_bundle(spec: CellSpec, datadir: str | None):
-    if spec.dataset == "ribosembly":
+    """Dispatch by dataset name. ``ribosembly`` honors the test helper's
+    hard-coded path; other CryoBench datasets require ``--datadir``."""
+    if spec.dataset == "ribosembly" and not datadir:
+        # Fall through to the existing helper (its hard-coded path is
+        # the canonical Ribosembly location).
         return _build_ribosembly_bundle(spec)
-    return _build_cryobench_bundle(spec, datadir or "")
+    if spec.dataset not in _CRYOBENCH_VOL_DIRS:
+        raise ValueError(f"Unknown dataset {spec.dataset!r}. Supported: {sorted(_CRYOBENCH_VOL_DIRS)}.")
+    if not datadir:
+        raise ValueError(
+            f"Dataset {spec.dataset!r} requires --datadir pointing at the "
+            "CryoBench root (e.g. /home/mg6942/mytigress/cryobench2)."
+        )
+    vol_dir = os.path.join(datadir, _CRYOBENCH_VOL_DIRS[spec.dataset])
+    vols_real, vols_fourier, vol_shape = _load_volumes_from_dir(
+        vol_dir,
+        n_states=4,
+        grid_size=spec.grid_size,
+    )
+    return _bundle_from_volumes(spec, vols_real, vols_fourier, vol_shape)
 
 
 # ===========================================================================
