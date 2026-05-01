@@ -43,6 +43,7 @@ import jax.numpy as jnp
 from recovar.ppca.pose_marginal import (
     compute_ppca_pose_scores_and_moments_no_contrast,
 )
+from recovar.ppca.ppca import _tri_size
 
 from .dense_engine import DenseImageStats
 
@@ -50,6 +51,7 @@ __all__ = [
     "SparseHypothesisLayout",
     "SparsePosteriorDiagnostics",
     "sparse_pose_ppca_E_step_flat",
+    "fused_sparse_pose_ppca_block",
 ]
 
 
@@ -272,3 +274,147 @@ def _segment_first_true(mask, image_id, n_images):
     sentinel = jnp.int32(Nh)
     masked_pos = jnp.where(mask, pos, sentinel)
     return jax.ops.segment_min(masked_pos, image_id, num_segments=n_images)
+
+
+# ===========================================================================
+# Fused sparse engine (Phase A.3 — M10 follow-up)
+# ===========================================================================
+#
+# Per-hypothesis γα is consumed immediately by ``batch_adjoint_slice_volume_half``
+# in a single batched call across all Nh hypotheses (each carrying its own
+# rotation). This is the sparse analogue of ``fused_dense_pose_ppca_block``;
+# it works for both Mode A (coarse-to-fine) and Mode B (local-around-current)
+# layouts since each hypothesis carries its own rotation independently.
+
+
+def fused_sparse_pose_ppca_block(
+    layout: SparseHypothesisLayout,
+    rotations_per_hyp,  # [Nh, 3, 3] real32 — per-hypothesis rotation
+    image_shape,
+    volume_shape,
+    rhs_volume,  # [P, half_vol] complex64 accumulator
+    lhs_tri_volume,  # [tri(P), half_vol] real32 accumulator
+    *,
+    significance_threshold: float = 1e-3,
+    disc_type_backproject: str = "linear_interp",
+):
+    """Sparse fused engine: pass-1 logZ + pass-2 batched backprojection.
+
+    Each hypothesis carries its own rotation in ``rotations_per_hyp``;
+    after computing γ_h per hypothesis, the per-hypothesis weighted
+    image ``γ_h · α_h,p · Y1_h`` is backprojected at the matching
+    rotation in a single batched call.
+
+    Returns ``(rhs_volume, lhs_tri_volume, SparsePosteriorDiagnostics)``.
+
+    Memory: per-block tensors are ``[Nh, P, F]`` and ``[Nh, tri(P), F]``;
+    the caller is responsible for keeping Nh-per-block bounded (typical
+    upstream pattern: bucket layouts by per-image hypothesis count).
+    """
+    from recovar.em.dense_single_volume.helpers.backprojection import (
+        batch_adjoint_slice_volume_half,
+    )
+
+    Nh, F = layout.Y1.shape
+    P = layout.proj_aug.shape[1]
+    q = P - 1
+    tri_size = _tri_size(P)
+    n_images = layout.n_images
+    if rotations_per_hyp.shape != (Nh, 3, 3):
+        raise ValueError(f"rotations_per_hyp shape {rotations_per_hyp.shape} != ({Nh}, 3, 3)")
+    if rhs_volume.shape[0] != P:
+        raise ValueError(f"rhs_volume shape {rhs_volume.shape} not compatible with P={P}")
+    if lhs_tri_volume.shape[0] != tri_size:
+        raise ValueError(f"lhs_tri_volume shape {lhs_tri_volume.shape} not compatible with tri({P})={tri_size}")
+
+    # Per-hypothesis sufficient stats.
+    K_aug = jnp.einsum(
+        "hf, hpf, hqf -> hpq",
+        layout.ctf2_over_noise.astype(layout.proj_aug.dtype),
+        jnp.conj(layout.proj_aug),
+        layout.proj_aug,
+    )
+    nu_mm = K_aug[..., 0, 0].real
+    h_zm = K_aug[..., 1:, 0]
+    Hzz = K_aug[..., 1:, 1:]
+    D = jnp.einsum("hf, hpf -> hp", jnp.conj(layout.Y1), layout.proj_aug)
+    t_mx = D[..., 0].real
+    g_zx = D[..., 1:]
+
+    # ---- Pass 1: scores + segmented logsumexp + per-image stats ----
+    score, _, _ = compute_ppca_pose_scores_and_moments_no_contrast(
+        layout.y_norm,
+        t_mx,
+        nu_mm,
+        g_zx,
+        h_zm,
+        Hzz,
+        return_moments=False,
+    )
+    if layout.pose_log_prior is not None:
+        score = score + layout.pose_log_prior
+
+    logZ = _segmented_logsumexp(score, layout.image_id, n_images)  # [n_images]
+    logZ_per_h = logZ[layout.image_id]  # [Nh]
+    gamma_pass1 = jnp.exp(score - logZ_per_h)
+    pmax = jax.ops.segment_max(gamma_pass1, layout.image_id, num_segments=n_images)
+    significant_mask = (gamma_pass1 > significance_threshold).astype(jnp.int32)
+    n_sig = jax.ops.segment_sum(significant_mask, layout.image_id, num_segments=n_images)
+    seg_max_score = jax.ops.segment_max(score, layout.image_id, num_segments=n_images)
+    is_argmax = score >= seg_max_score[layout.image_id] - 1e-12
+    best_hyp_idx = _segment_first_true(is_argmax, layout.image_id, n_images)
+    omitted_log_mass = jnp.zeros((n_images,), dtype=jnp.float32)
+
+    # ---- Pass 2: moments + batched backprojection ----
+    score2, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
+        layout.y_norm,
+        t_mx,
+        nu_mm,
+        g_zx,
+        h_zm,
+        Hzz,
+        return_moments=True,
+    )
+    if layout.pose_log_prior is not None:
+        score2 = score2 + layout.pose_log_prior
+    gamma = jnp.exp(score2 - logZ_per_h)  # [Nh]
+
+    # RHS: Z_h_p = γ_h · α_h,p · Y1[h]   shape [Nh, P, F]
+    weighted_alpha = (gamma[:, None].astype(alpha.dtype)) * alpha  # [Nh, P]
+    Z_hpf = weighted_alpha[:, :, None] * layout.Y1[:, None, :]  # [Nh, P, F]
+    # batch_adjoint_slice_volume_half expects [n_volumes=P, n_images=Nh, F]
+    Z_pHf = jnp.transpose(Z_hpf, (1, 0, 2)).astype(rhs_volume.dtype)
+    rhs_volume = batch_adjoint_slice_volume_half(
+        Z_pHf,
+        rotations_per_hyp,
+        rhs_volume,
+        image_shape,
+        volume_shape,
+        disc_type_backproject,
+        half_image=True,
+        half_volume=True,
+    )
+
+    # LHS: w_h_rs = γ_h · G_aug_tri_h,rs · ctf2_over_noise[h, f]
+    w_hk = (gamma[:, None] * G_tri).real.astype(lhs_tri_volume.dtype)  # [Nh, tri(P)]
+    weighted_ctf2 = w_hk[:, :, None] * layout.ctf2_over_noise[:, None, :]  # [Nh, tri(P), F]
+    weighted_kHf = jnp.transpose(weighted_ctf2, (1, 0, 2)).astype(lhs_tri_volume.dtype)
+    lhs_tri_volume = batch_adjoint_slice_volume_half(
+        weighted_kHf,
+        rotations_per_hyp,
+        lhs_tri_volume,
+        image_shape,
+        volume_shape,
+        disc_type_backproject,
+        half_image=True,
+        half_volume=True,
+    )
+
+    diagnostics = SparsePosteriorDiagnostics(
+        logZ=logZ,
+        pmax=pmax,
+        n_significant_per_image=n_sig,
+        omitted_log_mass=omitted_log_mass,
+        best_hypothesis_idx=best_hyp_idx,
+    )
+    return rhs_volume, lhs_tri_volume, diagnostics
