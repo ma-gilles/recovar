@@ -51,6 +51,8 @@ from .ppca import _tri_size
 
 __all__ = [
     "compute_ppca_pose_scores_and_moments_no_contrast",
+    "compute_ppca_pose_scores_and_moments_with_contrast",
+    "renormalize_contrast_into_theta",
     "_pack_upper_tri",
 ]
 
@@ -183,3 +185,190 @@ def compute_ppca_pose_scores_and_moments_no_contrast(
     assert G_aug_tri.shape[-1] == _tri_size(q + 1)
 
     return score, alpha_aug, G_aug_tri
+
+
+# ===========================================================================
+# Contrast-aware variant (Milestone 8)
+# ===========================================================================
+
+
+def _build_aug_moments_with_contrast(mean_c, mean_cz, second_c, mean_c2z, second_c2zz):
+    """Build (alpha_aug, G_aug_tri) from contrast posterior moments.
+
+    Per CLAUDE.md §5.2:
+        alpha_aug[0]   = E[c]
+        alpha_aug[1:]  = E[c z]
+        G_aug[0, 0]    = E[c²]
+        G_aug[0, 1:]   = E[c² z]      (top row, conjugate of column)
+        G_aug[1:, 0]   = E[c² z]
+        G_aug[1:, 1:]  = E[c² z z*]
+    """
+    leading = mean_c.shape
+    cdtype = mean_cz.dtype
+    # alpha_aug: complex64 with mean_c in slot 0 and mean_cz in slots 1..q.
+    mean_c_c = mean_c.astype(cdtype)[..., None]  # [..., 1]
+    alpha_aug = jnp.concatenate([mean_c_c, mean_cz], axis=-1)  # [..., q+1]
+
+    q = mean_cz.shape[-1]
+    P = q + 1
+    second_c_c = second_c.astype(cdtype)
+    # Build G_aug full then pack upper triangle (consistent with the
+    # no-contrast variant's _pack_upper_tri convention).
+    top_row_left = second_c_c[..., None, None]  # [..., 1, 1]
+    top_row_right = mean_c2z[..., None, :]  # [..., 1, q]
+    bot_left = mean_c2z[..., :, None]  # [..., q, 1]
+    G_top = jnp.concatenate([top_row_left, top_row_right], axis=-1)  # [..., 1, P]
+    G_bot = jnp.concatenate([bot_left, second_c2zz], axis=-1)  # [..., q, P]
+    G_full = jnp.concatenate([G_top, G_bot], axis=-2)  # [..., P, P]
+    G_aug_tri = _pack_upper_tri(G_full)  # [..., tri(P)]
+
+    assert G_aug_tri.shape[-1] == _tri_size(P)
+    return alpha_aug, G_aug_tri
+
+
+def compute_ppca_pose_scores_and_moments_with_contrast(
+    y_norm,
+    t_mx,
+    nu_mm,
+    g_zx,
+    h_zm,
+    Hzz,
+    *,
+    contrast_mode: str = "marginalize",
+    contrast_nodes=None,
+    contrast_weights=None,
+    contrast_mean: float = 1.0,
+    contrast_variance: float = float("inf"),
+    contrast_rule: str = "gauss_legendre",
+    contrast_interval: tuple[float, float] = (0.0, 3.0),
+    n_contrast_nodes: int = 32,
+    return_moments: bool,
+):
+    """Contrast-aware per-pose score + augmented moments (Milestone 8).
+
+    Wraps :func:`recovar.ppca.contrast_posterior.solve_latent_posterior`.
+    The latent prior is identity (CLAUDE.md non-negotiable #2): we pass
+    ``lambdas = ones(q)``.
+
+    Parameters
+    ----------
+    Same per-pose stats as :func:`compute_ppca_pose_scores_and_moments_no_contrast`,
+    plus contrast options forwarded to ``solve_latent_posterior``.
+    ``contrast_mode`` is one of ``"profile"`` or ``"marginalize"``.
+
+    Returns
+    -------
+    score : real, shape ``[...]``
+        ``marginal_ll`` for ``contrast_mode="marginalize"``;
+        the per-image profile-MAP log-score for ``contrast_mode="profile"``.
+    alpha_aug : complex, shape ``[..., q+1]`` or None
+        Augmented first-moment ``[E[c]; E[c z]]``.
+    G_aug_tri : complex, shape ``[..., (q+1)(q+2)/2]`` or None
+        Upper triangle of the augmented second-moment matrix
+        with ``E[c²]``, ``E[c² z]``, ``E[c² z z*]`` blocks.
+    """
+    if contrast_mode not in ("profile", "marginalize"):
+        raise ValueError(
+            f"contrast_mode must be 'profile' or 'marginalize', got {contrast_mode!r}. "
+            "Use compute_ppca_pose_scores_and_moments_no_contrast for c=1."
+        )
+
+    # Lazy import to avoid the heavy contrast solver showing up in the
+    # no-contrast hot path.
+    from .contrast_posterior import solve_latent_posterior
+
+    # Flatten arbitrary leading dims to a single batch axis so the
+    # contrast solver (which expects [B, …]) can run.
+    leading_shape = y_norm.shape
+    flat = (-1,)
+    y_norm_f = y_norm.reshape(flat)
+    t_mx_f = t_mx.reshape(flat)
+    nu_mm_f = nu_mm.reshape(flat)
+    q = Hzz.shape[-1]
+    g_zx_f = g_zx.reshape(flat + (q,))
+    h_zm_f = h_zm.reshape(flat + (q,))
+    Hzz_f = Hzz.reshape(flat + (q, q))
+    # ``solve_latent_posterior`` operates on the real-valued projection of
+    # the per-pose Gram and inner products — the same convention the
+    # legacy ``recovar.ppca.ppca._e_step_half_inner`` uses (H = (...).real,
+    # g = (...).real). For half-spectrum images with full-spec Parseval
+    # weights these are real up to roundoff.
+    Hzz_f = Hzz_f.real.astype(jnp.float32)
+    g_zx_f = g_zx_f.real.astype(jnp.float32)
+    h_zm_f = h_zm_f.real.astype(jnp.float32)
+    lambdas = jnp.ones((q,), dtype=jnp.float32)  # latent prior identity in v1
+
+    posterior = solve_latent_posterior(
+        Hzz_f,
+        g_zx_f,
+        h_zm_f,
+        t_mx_f,
+        nu_mm_f,
+        y_norm_f,
+        lambdas,
+        contrast_mode=contrast_mode,
+        contrast_nodes=contrast_nodes,
+        contrast_weights=contrast_weights,
+        contrast_mean=contrast_mean,
+        contrast_variance=contrast_variance,
+        contrast_rule=contrast_rule,
+        contrast_interval=contrast_interval,
+        n_contrast_nodes=n_contrast_nodes,
+    )
+
+    # Score: marginal_ll for marginalize; max profile_score per image for profile.
+    if contrast_mode == "marginalize":
+        score_flat = posterior.marginal_ll
+    else:
+        # profile: take the maximum profile score per image.
+        score_flat = jnp.max(posterior.profile_scores, axis=-1)
+
+    score = score_flat.reshape(leading_shape)
+
+    if not return_moments:
+        return score, None, None
+
+    alpha_aug_flat, G_aug_tri_flat = _build_aug_moments_with_contrast(
+        posterior.mean_c,
+        posterior.mean_cz,
+        posterior.second_moment_c,
+        posterior.mean_c2z,
+        posterior.second_moment_czz,
+    )
+    alpha_aug = alpha_aug_flat.reshape(leading_shape + (q + 1,))
+    G_aug_tri = G_aug_tri_flat.reshape(leading_shape + (_tri_size(q + 1),))
+    return score, alpha_aug, G_aug_tri
+
+
+def renormalize_contrast_into_theta(mu, W, mean_contrast: float):
+    """Absorb a global contrast scale into ``(μ, W)`` so ``E[c] → 1``.
+
+    When the contrast posterior reports a per-batch mean ``<c>``, the
+    natural fix is to scale BOTH ``μ`` AND ``W`` by ``<c>`` while
+    rescaling ``z → z / <c>``. The latent prior remains ``z ~ N(0, I)``
+    after rescaling because ``Var(z / <c>) = 1 / <c>²`` ⇒ rescaling
+    ``W → <c> · W`` preserves the model identity.
+
+    The failure mode this guards against (CLAUDE.md anti-pattern: "Contrast
+    renormalization that scales only μ not W") would silently change the
+    PPCA subspace amplitude. This helper enforces "scale both" by
+    construction.
+
+    Parameters
+    ----------
+    mu : array
+        Mean volume in any representation (real or Fourier).
+    W : array
+        Loading bank with shape ``(q, *vs)`` matching ``mu`` representation.
+    mean_contrast : float
+        ``<c>`` — typically the average of ``E[c | y]`` across images.
+
+    Returns
+    -------
+    (mu_new, W_new) : tuple of arrays
+        ``mu_new = mean_contrast * mu``, ``W_new = mean_contrast * W``.
+    """
+    if mean_contrast <= 0:
+        raise ValueError(f"mean_contrast must be positive, got {mean_contrast}.")
+    scale = jnp.asarray(mean_contrast, dtype=jnp.float32)
+    return scale * mu, scale * W
