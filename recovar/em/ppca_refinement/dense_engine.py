@@ -53,6 +53,7 @@ __all__ = [
     "DenseImageStats",
     "PosteriorDiagnostics",
     "dense_pose_ppca_E_step_blocked",
+    "fused_dense_pose_ppca_block",
 ]
 
 
@@ -267,3 +268,197 @@ def dense_pose_ppca_E_step_blocked(
         n_significant_per_image=n_sig,
         omitted_log_mass=omitted_log_mass,
     )
+
+
+# ===========================================================================
+# Fused production engine (Phase A.1 — M10 follow-up)
+# ===========================================================================
+#
+# The non-fused ``dense_pose_ppca_E_step_blocked`` returns image-level
+# aggregates that are too aggregated for proper per-rotation backprojection
+# (it sums γα across both R and T inside a block). The fused production
+# engine interleaves pass-2 score normalization with per-rotation
+# backprojection so γα at each rotation r is consumed immediately and never
+# materialized across all R rotations.
+#
+# Memory invariant: per-rotation tensors stay in [B, P, F] / [B, tri(P), F]
+# scope; no [B, R, P, F] or [B, R, tri(P), F] global accumulator.
+
+
+def fused_dense_pose_ppca_block(
+    Y1,
+    proj_aug,
+    ctf2_over_noise,
+    y_norm,
+    rotations_block,
+    image_shape,
+    volume_shape,
+    rhs_volume,
+    lhs_tri_volume,
+    pose_log_prior=None,
+    *,
+    significance_threshold: float = 1e-3,
+    disc_type_backproject: str = "linear_interp",
+):
+    """One pass of the fused dense engine: pass-1 (logZ + best pose) +
+    pass-2 (γ + per-rotation backprojection).
+
+    Parameters
+    ----------
+    Y1, proj_aug, ctf2_over_noise, y_norm, pose_log_prior:
+        Same as :func:`dense_pose_ppca_E_step_blocked`.
+    rotations_block:
+        ``[R, 3, 3]`` real32. The per-rotation matrices that produced
+        ``proj_aug``. Required so backprojection happens at the matching
+        rotation.
+    image_shape, volume_shape:
+        Forwarded to ``batch_adjoint_slice_volume_half``.
+    rhs_volume:
+        ``[P, half_vol]`` complex64. Mutable RHS accumulator (this
+        function returns a new array; caller assigns).
+    lhs_tri_volume:
+        ``[tri(P), half_vol]`` real32. Mutable LHS-tri accumulator.
+    disc_type_backproject:
+        Discretization for backprojection. Must be one of ``"linear_interp"``
+        or ``"nearest"`` — the slicing kernel forbids cubic backprojection.
+
+    Returns
+    -------
+    rhs_volume_new, lhs_tri_volume_new : updated accumulators.
+    diagnostics : :class:`PosteriorDiagnostics`.
+
+    Note on the LHS real-projection
+    -------------------------------
+    The augmented Gram ``G_aug`` is complex-Hermitian. The legacy
+    ``recovar.ppca.ppca._pcg_hard_mstep`` accepts a REAL ``lhs_tri``;
+    the upper-triangle pack via ``unpack_tri_to_full`` produces a
+    *symmetric* (not Hermitian) operator. To match the legacy contract
+    we project ``γ · G_aug_tri`` to its real part before backprojecting.
+    For half-spectrum images with full-spec Parseval weights the
+    imaginary cross-component parts approximately cancel — same
+    approximation the legacy E-step makes.
+    """
+    # Lazy import to avoid pulling the dense_single_volume backprojection
+    # helpers when only the test-only ``dense_pose_ppca_E_step_blocked``
+    # is used.
+    from recovar.em.dense_single_volume.helpers.backprojection import (
+        batch_adjoint_slice_volume_half,
+    )
+
+    B, T, F = Y1.shape
+    R, P, _ = proj_aug.shape
+    q = P - 1
+    if rotations_block.shape != (R, 3, 3):
+        raise ValueError(f"rotations_block shape {rotations_block.shape} != ({R}, 3, 3)")
+    if rhs_volume.shape[0] != P:
+        raise ValueError(f"rhs_volume shape {rhs_volume.shape} not compatible with P={P}")
+    tri_size = P * (P + 1) // 2
+    if lhs_tri_volume.shape[0] != tri_size:
+        raise ValueError(f"lhs_tri_volume shape {lhs_tri_volume.shape} not compatible with tri({P})={tri_size}")
+
+    # ---- Pass 1 -------------------------------------------------------------
+    yn, tm, num, g, hz, Hz = _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm)
+    score, _, _ = compute_ppca_pose_scores_and_moments_no_contrast(
+        yn,
+        tm,
+        num,
+        g,
+        hz,
+        Hz,
+        return_moments=False,
+    )
+    if pose_log_prior is not None:
+        if pose_log_prior.shape != (B, R, T):
+            raise ValueError(f"pose_log_prior shape {pose_log_prior.shape} != (B={B}, R={R}, T={T})")
+        score = score + jnp.swapaxes(pose_log_prior, -1, -2)
+
+    score_flat = score.reshape(B, T * R)
+    logZ = jax.scipy.special.logsumexp(score_flat, axis=-1)
+    best_flat = jnp.argmax(score_flat, axis=-1)
+    best_t = (best_flat // R).astype(jnp.int32)
+    best_r = (best_flat % R).astype(jnp.int32)
+
+    gamma_for_diag = jnp.exp(score - logZ[:, None, None])
+    pmax = jnp.max(gamma_for_diag.reshape(B, T * R), axis=-1)
+    n_sig = jnp.sum(gamma_for_diag > significance_threshold, axis=(-1, -2)).astype(jnp.int32)
+    omitted_log_mass = jnp.zeros((B,), dtype=jnp.float32)
+
+    # ---- Pass 2 + per-rotation backprojection -------------------------------
+    score2, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
+        yn,
+        tm,
+        num,
+        g,
+        hz,
+        Hz,
+        return_moments=True,
+    )
+    if pose_log_prior is not None:
+        score2 = score2 + jnp.swapaxes(pose_log_prior, -1, -2)
+    gamma = jnp.exp(score2 - logZ[:, None, None])  # [B, T, R]
+
+    rhs_dtype = rhs_volume.dtype
+    lhs_dtype = lhs_tri_volume.dtype
+    ctf2_c = ctf2_over_noise.astype(rhs_dtype)
+
+    # Loop over rotations in the block, applying backprojection immediately.
+    # JAX-static loop via Python (ok for production block sizes ~ 10² rotations
+    # per block; the legacy K-class engine uses the same pattern).
+    for r_idx in range(R):
+        gamma_r = gamma[:, :, r_idx]  # [B, T]
+        alpha_r = alpha[:, :, r_idx, :]  # [B, T, P]
+        G_tri_r = G_tri[:, :, r_idx, :]  # [B, T, tri(P)]
+        rotation = rotations_block[r_idx]  # [3, 3]
+        rotations_per_image = jnp.broadcast_to(rotation[None, :, :], (B, 3, 3))
+
+        # RHS: Z_rp[B, P, F] = sum_t γ_brt α_brt,p · Y1[b, t]
+        Z_rp = jnp.einsum(
+            "bt, btp, btf -> bpf",
+            gamma_r.astype(rhs_dtype),
+            alpha_r,
+            Y1,
+        )  # [B, P, F]
+        # batch_adjoint_slice_volume_half wants [n_volumes, n_images, half_F]
+        # with one accumulator per volume. n_volumes = P, n_images = B.
+        Z_pbf = jnp.transpose(Z_rp, (1, 0, 2)).astype(rhs_dtype)  # [P, B, F]
+        rhs_volume = batch_adjoint_slice_volume_half(
+            Z_pbf,
+            rotations_per_image,
+            rhs_volume,
+            image_shape,
+            volume_shape,
+            disc_type_backproject,
+            half_image=True,
+            half_volume=True,
+        )
+
+        # LHS: w_rs[B, tri(P)] = sum_t γ_brt G_aug_tri_brt,rs
+        # Project to real per the legacy lhs_tri convention.
+        w_rs = jnp.einsum(
+            "bt, btk -> bk",
+            gamma_r,
+            G_tri_r,
+        ).real.astype(lhs_dtype)  # [B, tri(P)]
+        # weighted_ctf2[B, tri(P), F] = w_rs[..., None] * ctf2_over_noise[:, None, :]
+        weighted_ctf2 = w_rs[:, :, None] * ctf2_over_noise[:, None, :]  # [B, tri(P), F]
+        weighted_ctf2_sbf = jnp.transpose(weighted_ctf2, (1, 0, 2))  # [tri(P), B, F]
+        lhs_tri_volume = batch_adjoint_slice_volume_half(
+            weighted_ctf2_sbf.astype(lhs_dtype),
+            rotations_per_image,
+            lhs_tri_volume,
+            image_shape,
+            volume_shape,
+            disc_type_backproject,
+            half_image=True,
+            half_volume=True,
+        )
+
+    diagnostics = PosteriorDiagnostics(
+        logZ=logZ,
+        pmax=pmax,
+        best_rotation_idx=best_r,
+        best_translation_idx=best_t,
+        n_significant_per_image=n_sig,
+        omitted_log_mass=omitted_log_mass,
+    )
+    return rhs_volume, lhs_tri_volume, diagnostics
