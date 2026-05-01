@@ -10,7 +10,6 @@ script.
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import os
 import re
@@ -157,17 +156,42 @@ def _volume_corr(lhs, rhs) -> float:
 
 def _best_class_permutation(recovar_real, relion_real):
     n_classes = len(recovar_real)
-    best = None
-    for perm in itertools.permutations(range(n_classes)):
-        corrs = [_volume_corr(recovar_real[k], relion_real[perm[k]]) for k in range(n_classes)]
-        score = float(np.nanmean(corrs))
-        if best is None or score > best["mean_corr"]:
-            best = {
-                "recovar_to_relion": [int(idx) for idx in perm],
-                "map_correlations": [float(value) for value in corrs],
-                "mean_corr": score,
-            }
-    return best
+    corr_matrix = np.asarray(
+        [
+            [_volume_corr(recovar_real[recovar_idx], relion_real[relion_idx]) for relion_idx in range(n_classes)]
+            for recovar_idx in range(n_classes)
+        ],
+        dtype=np.float64,
+    )
+    finite_corr_matrix = np.nan_to_num(corr_matrix, nan=-2.0, posinf=-2.0, neginf=-2.0)
+    try:
+        from scipy.optimize import linear_sum_assignment
+
+        # Correlations are bounded by [-1, 1]. Use a finite sentinel so
+        # scipy's Hungarian solver never sees infinite assignment costs.
+        rows, cols = linear_sum_assignment(-finite_corr_matrix)
+        perm = np.empty(n_classes, dtype=np.int64)
+        perm[rows] = cols
+    except Exception:
+        # Fallback for environments without scipy. This is not globally
+        # optimal for large K, but keeps diagnostics usable instead of
+        # factorially exploding.
+        perm = np.full(n_classes, -1, dtype=np.int64)
+        unused = set(range(n_classes))
+        for recovar_idx in range(n_classes):
+            best_relion = max(unused, key=lambda relion_idx: finite_corr_matrix[recovar_idx, relion_idx])
+            perm[recovar_idx] = best_relion
+            unused.remove(best_relion)
+
+    corrs = [float(corr_matrix[recovar_idx, perm[recovar_idx]]) for recovar_idx in range(n_classes)]
+    finite_corrs = [corr for corr in corrs if np.isfinite(corr)]
+    return {
+        "recovar_to_relion": [int(idx) for idx in perm],
+        "map_correlations": corrs,
+        "mean_corr": float(np.mean(finite_corrs)) if finite_corrs else float("nan"),
+        "nonfinite_corr_count": int(np.size(corr_matrix) - np.count_nonzero(np.isfinite(corr_matrix))),
+        "chosen_nonfinite_corr_count": int(sum(not np.isfinite(corr) for corr in corrs)),
+    }
 
 
 def _nonempty_per_class_support(significant_sample_indices_by_class):
