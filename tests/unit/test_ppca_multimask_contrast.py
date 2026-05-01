@@ -250,8 +250,8 @@ class TestPipelineWiring:
         nodes, weights = _resolve_ppca_contrast_grid("marginalize")
         assert nodes is not None
         assert weights is not None
-        assert nodes.shape == (16,)
-        assert weights.shape == (16,)
+        assert nodes.shape == (32,)
+        assert weights.shape == (32,)
         np.testing.assert_allclose(weights.sum(), 2.0, rtol=1e-5)
 
     def test_resolve_ppca_contrast_grid_none_mode(self):

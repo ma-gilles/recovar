@@ -14,19 +14,16 @@ from recovar.core import linalg
 logger = logging.getLogger(__name__)
 
 
-def _normalize_experiment_datasets(experiment_datasets):
-    if hasattr(experiment_datasets, "materialize_halfset_datasets"):
-        return experiment_datasets, list(experiment_datasets.materialize_halfset_datasets())
-    if isinstance(experiment_datasets, (list, tuple)):
-        datasets = list(experiment_datasets)
-        if not datasets:
-            raise ValueError("experiment_datasets cannot be empty")
-        full_dataset = None
-        if len(datasets) == 1 and hasattr(datasets[0], "materialize_halfset_datasets"):
-            full_dataset = datasets[0]
-            datasets = list(full_dataset.materialize_halfset_datasets())
-        return full_dataset, datasets
-    raise TypeError("experiment_datasets must be a CryoEMDataset or a sequence of CryoEMDataset objects")
+def _materialize_halfsets(dataset):
+    """Split a CryoEMDataset into its two halfset datasets.
+
+    Called once at the start of :func:`EM`; the returned list is reused
+    across all iterations so that file handles, mmaps, and noise models
+    stay stable.
+    """
+    if hasattr(dataset, "materialize_halfset_datasets"):
+        return list(dataset.materialize_halfset_datasets())
+    raise TypeError(f"Expected a CryoEMDataset with halfset support, got {type(dataset).__name__}")
 
 
 def _iter_processed_batches(experiment_dataset, batch_size):
@@ -221,6 +218,12 @@ def _e_step_half_inner(
         ll_per_image = -0.5 * (d_n * jnp.log(2.0 * jnp.pi) + r2 - quad + logdetM)
         ll_sum = jnp.sum(ll_per_image)
 
+    # Whitened residual power per half-pixel, summed over batch (c=1 approximation).
+    # Used by the noise update: new_σ²(k) ≈ σ²_old(k) * <|r_w|²>_shell.
+    Wz = jnp.einsum("bqp,bq->bp", PW_half, expected_zs)
+    residual_w = images_half - projected_mean_half - Wz
+    residual_power_half = jnp.sum(jnp.real(jnp.conj(residual_w) * residual_w), axis=0)
+
     return (
         expected_zs,
         second_moment_zs,
@@ -235,6 +238,7 @@ def _e_step_half_inner(
         t,
         nu,
         y_norm_sq,
+        residual_power_half,
     )
 
 
@@ -298,6 +302,7 @@ def E_M_step_batch_half(
         t,
         nu,
         y_norm_sq,
+        residual_power_half,
     ) = _e_step_half_inner(
         images_half,
         mean,
@@ -315,8 +320,9 @@ def E_M_step_batch_half(
         disc_type,
         z_prior_precision_diag,
     )
-
+    ## TODO: WHY IS THIS OUTSIDE OF JIT?
     # --- Contrast dispatch (outside JIT) ---
+    marginal_ll_batch = None
     if contrast_mode == "none":
         mean_cz = expected_zs
         mean_c2z = expected_zs
@@ -344,6 +350,7 @@ def E_M_step_batch_half(
         mean_c2z = result.mean_c2z
         second_moment_czz = result.second_moment_czz
         mean_c = result.mean_c
+        marginal_ll_batch = result.marginal_ll
 
     # --- backprojection ---
     if compute_stats:
@@ -404,7 +411,20 @@ def E_M_step_batch_half(
         rhs_summed = rhs_summed + bp_rhs.T
 
     ll_per_image = jnp.zeros((0,), dtype=images_half.dtype)
-    return lhs_summed, rhs_summed, expected_zs, second_moment_czz, ll_sum, ll_per_image, mean_c
+    marginal_ll_sum = jnp.sum(marginal_ll_batch) if marginal_ll_batch is not None else None
+    n_images_batch = images_half.shape[0]
+    return (
+        lhs_summed,
+        rhs_summed,
+        expected_zs,
+        second_moment_czz,
+        ll_sum,
+        ll_per_image,
+        mean_c,
+        marginal_ll_sum,
+        residual_power_half,
+        n_images_batch,
+    )
 
 
 def unpack_tri_to_full(lhs_tri, basis_size):
@@ -577,6 +597,12 @@ def _mstep_cg_projected(matvec, b, x0, maxiter, tol, precond, project):
 def _build_pc_mask_projection(masks, pc_mask_assignment, sup, q, vol):
     """Build a per-PC mask indicator on the union support.
 
+    For each union-support voxel ``i`` and PC ``k``, returns True iff voxel
+    ``i`` lies inside the mask assigned to PC ``k``.  Used by ``project_pc``
+    in the CG loop to zero out each PC outside its assigned region, which is
+    what actually enforces multi-mask localization (the union support alone
+    just defines the shared index set).
+
     Returns
     -------
     pc_sup_mask : (n_sup, q) bool array
@@ -615,8 +641,21 @@ def _pcg_hard_mstep(
     Multi-mask support
     ------------------
     When ``masks`` (M, D, D, D) and ``pc_mask_assignment`` (q,) are provided,
-    the solver uses the union of all masks as the support and runs projected CG:
-    after each iteration, each PC k is zeroed outside its assigned mask.
+    the solver runs projected CG: after each iteration, each PC k is zeroed
+    outside its assigned mask via a per-PC binary projection.
+
+    The CG state lives in "support coordinates" — a compressed vector of size
+    ``n_sup * q`` where ``n_sup`` is the number of voxels in the union of all
+    masks.  This is inherited from the single-mask code path (which avoids
+    putting signal outside the molecule support).  The union just defines the
+    common index set so all PCs share one gather/scatter pair; the actual
+    per-PC localization comes from ``project_pc`` which zeros each PC at
+    union-support voxels that are outside that PC's assigned mask.
+
+    Note: the matvec still touches the full N³ grid (scatter → FFT-domain op
+    → gather), so the union only saves memory on the CG state vectors, not
+    on the operator application.  Working in full N³ with per-PC binary masks
+    would be equivalent but slightly more memory-hungry.
     """
     G = _compute_gridding_kernel(vs)
     vol = int(np.prod(vs))
@@ -708,7 +747,7 @@ def _iter_processed_batches_half(experiment_dataset, batch_size):
 
 
 def EM_step_half(
-    experiment_datasets,
+    halfset_datasets,
     mean_estimate,
     W_estimate,
     batch_size,
@@ -732,14 +771,19 @@ def EM_step_half(
 ):
     """Half-spectrum EM step for L2-regularized PPCA.
 
+    Parameters
+    ----------
+    halfset_datasets : list[CryoEMDataset]
+        Pre-materialized halfset datasets (typically two).  Created once
+        by :func:`EM` and reused across iterations.
+
     Accumulates ``lhs`` (half_vol, tri_sz) and ``rhs`` (half_vol, q) in
     half-volume / upper-triangular format, then runs the K-internalised
     masked PCG hard solver to produce the new W. The returned W is in
     half-Fourier shape, already mask-zeroed and gridding-corrected — the
     outer EM loop does not need any post-step cleanup.
     """
-    full_dataset, dataset_list = _normalize_experiment_datasets(experiment_datasets)
-    ref = full_dataset if full_dataset is not None else dataset_list[0]
+    ref = halfset_datasets[0]
     basis_size = W_estimate.shape[-1]
     volume_shape = ref.volume_shape
     half_volume_shape = ftu.volume_shape_to_half_volume_shape(volume_shape)
@@ -765,16 +809,30 @@ def EM_step_half(
     rhs_summed = jnp.zeros((half_volume_size, basis_size), dtype=ref.dtype)
 
     ll_sum = jnp.array(0.0, dtype=ref.dtype)
+    marginal_ll_sum = 0.0
     expected_zs = []
     second_moment_zs = []
     mean_cs = []
+    residual_power_sum = None
+    n_images_total = 0
 
-    for experiment_dataset in dataset_list:
+    for ds in halfset_datasets:
         for batch_half, ctf_params, rotation_matrices, translations, batch_image_ind in _iter_processed_batches_half(
-            experiment_dataset, batch_size
+            ds, batch_size
         ):
-            noise_variance_half = experiment_dataset.noise.get_half(batch_image_ind)
-            lhs_summed, rhs_summed, ez_batch, smz_batch, ll_batch, _, _mc = E_M_step_batch_half(
+            noise_variance_half = ds.noise.get_half(batch_image_ind)
+            (
+                lhs_summed,
+                rhs_summed,
+                ez_batch,
+                smz_batch,
+                ll_batch,
+                _,
+                _mc,
+                _mll_batch,
+                _res_pow,
+                _n_batch,
+            ) = E_M_step_batch_half(
                 batch_half,
                 lhs_summed,
                 rhs_summed,
@@ -783,12 +841,12 @@ def EM_step_half(
                 ctf_params,
                 rotation_matrices,
                 translations,
-                experiment_dataset.image_shape,
-                experiment_dataset.volume_shape,
-                experiment_dataset.grid_size,
-                experiment_dataset.voxel_size,
+                ds.image_shape,
+                ds.volume_shape,
+                ds.grid_size,
+                ds.voxel_size,
                 noise_variance_half,
-                experiment_dataset.ctf_evaluator,
+                ds.ctf_evaluator,
                 compute_ll=True,
                 disc_type_mean=disc_type_mean,
                 disc_type=disc_type,
@@ -802,8 +860,14 @@ def EM_step_half(
             )
             expected_zs.append(np.array(ez_batch))
             second_moment_zs.append(np.array(smz_batch))
+            if residual_power_sum is None:
+                residual_power_sum = jnp.zeros_like(_res_pow)
+            residual_power_sum = residual_power_sum + _res_pow
+            n_images_total += int(_n_batch)
             mean_cs.append(np.array(_mc))
             ll_sum += ll_batch
+            if _mll_batch is not None:
+                marginal_ll_sum += float(_mll_batch)
 
     expected_zs = np.concatenate(expected_zs, axis=0)
     second_moment_zs = np.concatenate(second_moment_zs, axis=0)
@@ -860,6 +924,8 @@ def EM_step_half(
     neg_ll_total = float(-ll_sum.real + ll_prior.real)
     neg_ll_data = float(-ll_sum.real)
     neg_ll_prior = float(ll_prior.real)
+    # Marginalized LL (only meaningful when contrast_mode != "none")
+    neg_marginal_ll = float(-marginal_ll_sum) if marginal_ll_sum != 0.0 else None
 
     if jnp.isnan(W).any():
         logger.error("EM_step_half produced NaN in W")
@@ -876,8 +942,23 @@ def EM_step_half(
             neg_ll_data,
             neg_ll_prior,
             mean_cs,
+            neg_marginal_ll,
+            residual_power_sum,
+            n_images_total,
         )
-    return W, expected_zs, second_moment_zs, expected_zs_mean, expected_zs_var, neg_ll_total, neg_ll_data, neg_ll_prior
+    return (
+        W,
+        expected_zs,
+        second_moment_zs,
+        expected_zs_mean,
+        expected_zs_var,
+        neg_ll_total,
+        neg_ll_data,
+        neg_ll_prior,
+        neg_marginal_ll,
+        residual_power_sum,
+        n_images_total,
+    )
 
 
 # @functools.partial(jax.jit, static_argnums = [5])
@@ -917,6 +998,42 @@ def _orthonormalize_W_to_basis(W_half, volume_shape):
     U_flat = U_flat / np.sqrt(vol_size)
     U_real = U_flat.T.reshape(q, *vs).astype(np.float32)
     return U_real, s, Vt
+
+
+def _orthonormalize_W_to_basis_multimask(W_half, volume_shape, pc_mask_assignment):
+    """Per-mask-block SVD: orthonormalise each mask group independently.
+
+    This preserves mask localization that the projected CG M-step enforces.
+    PCs assigned to different masks are never mixed by the SVD.
+    """
+    vs = volume_shape
+    half_vs = ftu.volume_shape_to_half_volume_shape(vs)
+    q = W_half.shape[1]
+    vol_size = int(np.prod(vs))
+    assignment = np.asarray(pc_mask_assignment)
+
+    W_half_arr = np.asarray(W_half).T.reshape(q, *half_vs)
+    W_real_vol = np.asarray(ftu.get_idft3_real(W_half_arr, vs))
+    W_real = W_real_vol.reshape(q, vol_size).T.astype(np.float32)
+
+    U_out = np.zeros_like(W_real)
+    s_out = np.zeros(q, dtype=np.float32)
+
+    for mask_idx in range(int(assignment.max()) + 1):
+        cols = np.where(assignment == mask_idx)[0]
+        if len(cols) == 0:
+            continue
+        W_block = W_real[:, cols]
+        U_block, S_block, _Vt = np.linalg.svd(W_block, full_matrices=False)
+        s_block = (S_block**2 * vol_size).astype(np.float32)
+        U_block = U_block / np.sqrt(vol_size)
+        # Place back into the original column order
+        for i, c in enumerate(cols):
+            U_out[:, c] = U_block[:, i]
+            s_out[c] = s_block[i]
+
+    U_real = U_out.T.reshape(q, *vs).astype(np.float32)
+    return U_real, s_out, None
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -1042,6 +1159,72 @@ def _refitb_em_steps(G_all, h_all, B_init, n_inner_iters=3, eps=1e-8, B_prior=No
     return B
 
 
+def _update_noise_from_residuals(halfset_datasets, residual_power_sum, n_images_total, image_shape, ema_alpha, iter_i):
+    """Update radial noise model from accumulated whitened residual power.
+
+    The whitened residual power per half-pixel is ``|r_w|² = |(y - μ - Wz) / √σ²|²``.
+    If the noise model is correct, ``<|r_w|²> ≈ 1`` per pixel. The ratio
+    ``<|r_w|²>_shell`` tells us how to scale the current noise estimate:
+    ``σ²_new(k) = σ²_old(k) * <|r_w|²>_k``.
+
+    We use EMA smoothing: ``σ² ← α·σ²_new + (1−α)·σ²_old``.
+
+    Supports RadialNoiseModel (single profile) and VariableRadialNoiseModel
+    (per-dose-level profiles — all levels scaled by the same ratio).
+    ConstantNoiseModel is skipped with a warning.
+    """
+    from recovar.reconstruction import noise as noise_module
+
+    # Mean whitened residual power per half-pixel
+    mean_res_half = np.asarray(residual_power_sum) / n_images_total  # (half_pix,)
+
+    # Bin into radial shells on the half-spectrum
+    radial_grid = np.asarray(ftu.get_grid_of_radial_distances_real(image_shape).reshape(-1), dtype=np.int32)
+    max_shell = image_shape[0] // 2 - 1
+    # Compute per-shell mean of whitened residual power
+    shell_sum = np.bincount(radial_grid, weights=mean_res_half.reshape(-1), minlength=max_shell)[:max_shell]
+    shell_count = np.bincount(radial_grid, minlength=max_shell)[:max_shell]
+    shell_count = np.maximum(shell_count, 1)
+    ratio = shell_sum / shell_count  # per-shell correction factor, should be ~1 if noise is correct
+
+    for ds in halfset_datasets:
+        noise_model = ds.noise
+        if isinstance(noise_model, noise_module.RadialNoiseModel):
+            old_radial = np.asarray(noise_model.noise_variance_radial)
+            n_shells = min(len(old_radial), len(ratio))
+            new_radial = old_radial.copy()
+            new_radial[:n_shells] = old_radial[:n_shells] * ratio[:n_shells]
+            smoothed = ema_alpha * new_radial + (1 - ema_alpha) * old_radial
+            smoothed = np.maximum(smoothed, 1e-16)
+            noise_model.set_variance(jnp.asarray(smoothed, dtype=jnp.float32))
+            logger.info(
+                "  iter %d noise update: ratio range [%.3f, %.3f], mean %.3f",
+                iter_i,
+                float(ratio[:n_shells].min()),
+                float(ratio[:n_shells].max()),
+                float(ratio[:n_shells].mean()),
+            )
+        elif isinstance(noise_model, noise_module.VariableRadialNoiseModel):
+            old_radials = np.asarray(noise_model.noise_variance_radials)
+            n_shells = min(old_radials.shape[1], len(ratio))
+            new_radials = old_radials.copy()
+            new_radials[:, :n_shells] = old_radials[:, :n_shells] * ratio[None, :n_shells]
+            smoothed = ema_alpha * new_radials + (1 - ema_alpha) * old_radials
+            smoothed = np.maximum(smoothed, 1e-16)
+            noise_model.set_variance(jnp.asarray(smoothed, dtype=jnp.float32))
+            logger.info(
+                "  iter %d noise update (variable): ratio range [%.3f, %.3f], mean %.3f",
+                iter_i,
+                float(ratio[:n_shells].min()),
+                float(ratio[:n_shells].max()),
+                float(ratio[:n_shells].mean()),
+            )
+        else:
+            logger.warning(
+                "  iter %d: noise update skipped — unsupported noise model type %s", iter_i, type(noise_model).__name__
+            )
+
+
 def EM(
     experiment_dataset,
     mean_estimate,
@@ -1071,6 +1254,8 @@ def EM(
     gpu_memory_to_use=40,
     masks=None,
     pc_mask_assignment=None,
+    update_noise=False,
+    noise_update_ema=0.5,
 ):
     """Run EM for L2-regularized PPCA.
 
@@ -1110,13 +1295,13 @@ def EM(
     # W = jr.normal(matrix_key, (experiment_dataset.volume_size, basis_size), dtype = experiment_dataset.dtype_real)
     # W = linalg.batch_dft3(W, experiment_dataset.volume_shape, basis_size)
     # eigenvalue = np.ones(basis_size)
-    full_dataset, dataset_list = _normalize_experiment_datasets(experiment_dataset)
-    reference_dataset = full_dataset if full_dataset is not None else dataset_list[0]
+    halfset_datasets = _materialize_halfsets(experiment_dataset)
     if volume_mask is None:
-        volume_mask = np.ones(reference_dataset.volume_shape)
+        volume_mask = np.ones(experiment_dataset.volume_shape)
     if dilated_volume_mask is None:
         dilated_volume_mask = volume_mask
     basis_size = W_initial.shape[-1]
+    volume_shape = experiment_dataset.volume_shape
 
     if projcov_every > 0:
         # Lazy import to avoid pulling heterogeneity into the cold path.
@@ -1146,14 +1331,17 @@ def EM(
     posterior_info = None
 
     # Print table header
-    print("\n" + "=" * 130)
+    print("\n" + "=" * 140)
     print("EM ALGORITHM CONVERGENCE TABLE")
-    print("=" * 130)
-    header = f"{'Iter':>4} | {'Neg_LL_Total':>12} | {'Neg_LL_Data':>12} | {'Neg_LL_Prior':>12} | {'Exp_ZS_Mean':>12} | {'Exp_ZS_Var':>12}"
+    print("=" * 140)
+    noise_cols = " | {'Noise_Mean':>10}" if update_noise else ""
+    header = f"{'Iter':>4} | {'Neg_LL_Total':>12} | {'Neg_LL_Data':>12} | {'Neg_LL_Prior':>12} | {'Neg_Marg_LL':>12} | {'Exp_ZS_Mean':>12} | {'Exp_ZS_Var':>12}"
+    if update_noise:
+        header += f" | {'Noise_Mean':>10}"
     print(header)
     print("-" * len(header))
 
-    vs = reference_dataset.volume_shape
+    vs = volume_shape
     half_vs = ftu.volume_shape_to_half_volume_shape(vs)
 
     for iter_i in range(EM_iter):
@@ -1172,8 +1360,11 @@ def EM(
             neg_ll_data,
             neg_ll_prior,
             mean_c,
+            neg_marginal_ll,
+            _residual_power_sum,
+            _n_images_total,
         ) = EM_step_half(
-            experiment_dataset,
+            halfset_datasets,
             mean_estimate,
             W,
             batch_size,
@@ -1197,6 +1388,31 @@ def EM(
         )
         posterior_info = {"mean_c": np.asarray(mean_c, dtype=np.float32)}
 
+        # ── Contrast renormalization ──────────────────────────────────────
+        # W and c are not jointly identifiable: if E[c] drifts to c_bar,
+        # the M-step compensates by shrinking W by ~1/c_bar. This positive
+        # feedback loop inflates contrast estimates and deflates eigenvalues.
+        # Fix: after each M-step, absorb the mean contrast into W so that
+        # the next E-step sees the correctly-scaled model and E[c] ≈ 1.
+        if _contrast_mode != "none":
+            c_bar = float(np.mean(mean_c))
+            if abs(c_bar - 1.0) > 1e-3:
+                W = W * c_bar
+                logger.info("  iter %d: E[c]=%.4f, rescaled W by c_bar to enforce identifiability", iter_i, c_bar)
+
+        # ── Noise update ──────────────────────────────────────────────────
+        # Update radial noise from the c=1 whitened residual power spectrum.
+        # new_σ²(k) = EMA(σ²_old(k) * <|r_w|²>_k, σ²_old(k))
+        if update_noise and _residual_power_sum is not None and _n_images_total > 0:
+            _update_noise_from_residuals(
+                halfset_datasets,
+                _residual_power_sum,
+                _n_images_total,
+                experiment_dataset.image_shape,
+                noise_update_ema,
+                iter_i,
+            )
+
         # The K-internalised PCG hard solver inside EM_step_half returns W
         # in half-Fourier shape, already mask-zeroed and K-deconvolved. No
         # post-step mask projection or gridding correction needed.
@@ -1216,7 +1432,7 @@ def EM(
             vol_size = int(np.prod(vs))
             basis_fourier = np.asarray(ftu.get_dft3(U_real)).reshape(q_loc, vol_size).T.astype(np.complex64)
             refined_u, projcov_s = principal_components.pca_by_projected_covariance(
-                reference_dataset,
+                experiment_dataset,
                 basis_fourier,
                 mean_estimate_raw,
                 dilated_volume_mask,
@@ -1246,7 +1462,7 @@ def EM(
             # is doing something we don't account for in the rebake math.
             # ⚠ Run-by-default sanity gate — delete once we trust it.
             _, projcov_s_check = principal_components.pca_by_projected_covariance(
-                reference_dataset,
+                experiment_dataset,
                 W_full,
                 mean_estimate_raw,
                 dilated_volume_mask,
@@ -1278,10 +1494,10 @@ def EM(
             U_real, s_em_rb, _ = _orthonormalize_W_to_basis(W, vs)
             q_rb = U_real.shape[0]
             vol_size = int(np.prod(vs))
-            voxel_size = float(getattr(reference_dataset, "voxel_size", 1.0))
+            voxel_size = float(getattr(experiment_dataset, "voxel_size", 1.0))
 
             G_all, h_all = _refitb_compute_Gi_hi_from_U_real(
-                reference_dataset,
+                experiment_dataset,
                 mean_estimate_raw,
                 np.asarray(U_real),
                 vs,
@@ -1333,14 +1549,13 @@ def EM(
             mean_for_slicing = _prepare_mean_estimate_for_slicing(
                 mean_estimate,
                 mean_estimate_raw,
-                reference_dataset.volume_shape,
+                volume_shape,
                 disc_type_mean,
             )
-            _, _ds_list = _normalize_experiment_datasets(experiment_dataset)
-            for _ds in _ds_list:
+            for _ds in halfset_datasets:
                 for _bh, _cp, _rm, _tr, _bi in _iter_processed_batches_half(_ds, batch_size):
                     _nvh = _ds.noise.get_half(_bi)
-                    _, _, _, _, _llb, _, _ = E_M_step_batch_half(
+                    _, _, _, _, _llb, _, _, _, _, _ = E_M_step_batch_half(
                         _bh,
                         jnp.zeros((_hv, _tsz), dtype=jnp.float32),
                         jnp.zeros((_hv, basis_size), dtype=jnp.complex64),
@@ -1379,6 +1594,7 @@ def EM(
         E_mean_outer = np.asarray(E_mean_outer)
         q = W.shape[1]
         I_q = jnp.eye(q, dtype=W.dtype)
+        _mean_c_bar = float(np.mean(mean_c)) if _contrast_mode != "none" else 1.0
         iter_info = {
             "Iteration": iter_i,
             "Neg_LL_Total": float(neg_ll_total),
@@ -1391,10 +1607,16 @@ def EM(
             "constraint_violation": float(jnp.linalg.norm(C_z - I_q)),
             "trace_E_mean_outer": float(np.trace(E_mean_outer)),
             "norm_E_mean_outer_minus_I": float(np.linalg.norm(E_mean_outer - np.eye(q))),
+            "mean_c_bar": _mean_c_bar,
+            "std_c": float(np.std(mean_c)) if _contrast_mode != "none" else 0.0,
         }
         iteration_data.append(iter_info)
 
-        row = f"{iter_i:>4} | {neg_ll_total:12.6e} | {neg_ll_data:12.6e} | {neg_ll_prior:12.6e} | {np.mean(expected_zs_mean):12.6e} | {np.mean(expected_zs_var):12.6e}"
+        marg_str = f"{neg_marginal_ll:12.6e}" if neg_marginal_ll is not None else f"{'N/A':>12}"
+        row = f"{iter_i:>4} | {neg_ll_total:12.6e} | {neg_ll_data:12.6e} | {neg_ll_prior:12.6e} | {marg_str} | {np.mean(expected_zs_mean):12.6e} | {np.mean(expected_zs_var):12.6e}"
+        if update_noise:
+            _noise_mean = float(np.mean(np.asarray(experiment_dataset.noise.get_average_radial_noise())))
+            row += f" | {_noise_mean:10.6f}"
         print(row)
 
     # Print final summary
@@ -1407,15 +1629,20 @@ def EM(
     # orthonormal in the rfft-weighted inner product but NOT orthonormal in
     # the full-Fourier (or equivalently real-space) inner product. Downstream
     # consumers (the scorer, the embedding code, the variance volume builder)
-    # all assume real-space orthonormality. Use _orthonormalize_W_to_basis,
-    # which goes through irfft → real-space SVD → re-applies the PPCA
-    # convention (U_real has unit norm in the Fourier-space sum / 1/√vol_size
-    # in real space, and S² are the Fourier-space squared singular values).
-    # We expand U_real back to half-Fourier so callers can keep treating U
-    # as a (half_vol, q) basis in the same shape as W.
-    U_real, S_squared, _Vt = _orthonormalize_W_to_basis(W, reference_dataset.volume_shape)
+    # all assume real-space orthonormality.
+    #
+    # When multi-mask is active, use per-mask-block SVD to preserve
+    # localization: PCs assigned to different masks are never mixed.
+    if pc_mask_assignment is not None:
+        U_real, S_squared, _Vt = _orthonormalize_W_to_basis_multimask(
+            W,
+            volume_shape,
+            pc_mask_assignment,
+        )
+    else:
+        U_real, S_squared, _Vt = _orthonormalize_W_to_basis(W, volume_shape)
     q_out = U_real.shape[0]
-    half_vs_out = ftu.volume_shape_to_half_volume_shape(reference_dataset.volume_shape)
+    half_vs_out = ftu.volume_shape_to_half_volume_shape(volume_shape)
     U_half_F = ftu.get_dft3_real(jnp.array(U_real))  # (q, *half_vs)
     U = U_half_F.reshape(q_out, -1).T  # (half_vol, q)
     S = jnp.array(np.sqrt(np.maximum(S_squared, 0.0)).astype(np.float32))

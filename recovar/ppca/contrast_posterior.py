@@ -36,7 +36,6 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-
 # ---------------------------------------------------------------------------
 # Output data structures
 # ---------------------------------------------------------------------------
@@ -73,6 +72,9 @@ class LatentPosteriorResult(NamedTuple):
         Contrast value with highest posterior weight (or profile-MAP argmin).
     profile_scores : (B, C) or None
         Raw profile / marginal scores at each contrast node.
+    marginal_ll : (B,) or None
+        Per-image marginalized log-likelihood ``log sum_j w_j p(y_i | c_j)``.
+        Only set when contrast_mode="marginalize"; None otherwise.
     """
 
     mean_z: jax.Array
@@ -87,6 +89,7 @@ class LatentPosteriorResult(NamedTuple):
     contrast_weights_posterior: jax.Array
     best_contrast: jax.Array
     profile_scores: Optional[jax.Array]
+    marginal_ll: Optional[jax.Array]
 
 
 class LegacyEmbeddingResult(NamedTuple):
@@ -115,7 +118,7 @@ class LegacyEmbeddingResult(NamedTuple):
 def make_contrast_quadrature(
     rule: Literal["gauss_legendre", "trapezoid", "custom"] = "gauss_legendre",
     interval: tuple[float, float] = (0.0, 3.0),
-    n_nodes: int = 16,
+    n_nodes: int = 32,
     nodes: Optional[np.ndarray] = None,
     weights: Optional[np.ndarray] = None,
 ) -> tuple[jax.Array, jax.Array]:
@@ -221,6 +224,113 @@ def _spectral_decomposition(H, lambdas, g, h):
 
 
 # ---------------------------------------------------------------------------
+# Shared contrast-score and moment computation
+# ---------------------------------------------------------------------------
+
+
+class _SpectralScores(NamedTuple):
+    """Intermediate spectral quantities shared by profile and marginalize."""
+
+    d: jax.Array  # (B, K) eigenvalues
+    T: jax.Array  # (B, K, K) transform matrix
+    s: jax.Array  # (B, C, K) posterior precisions per node
+    r_spec: jax.Array  # (B, C, K) spectral-basis posterior means per node
+    quad: jax.Array  # (B, C) quadratic form
+    rho: jax.Array  # (B, C) residual
+    log_prior: jax.Array  # (C,) contrast prior
+
+
+def _compute_contrast_scores(H, g, h, t, nu, y_norm_sq, lambdas, contrast_nodes, contrast_mean, contrast_variance):
+    """Spectral decomposition + per-node scores shared by profile and marginalize.
+
+    Returns all intermediate quantities that both solvers need.
+    """
+    d, T, alpha, beta = _spectral_decomposition(H, lambdas, g, h)
+
+    c = contrast_nodes  # (C,)
+    c2 = c**2  # (C,)
+
+    # s(c) = 1 / (1 + c^2 d)  -- (B, C, K)
+    s = 1.0 / (1.0 + d[:, None, :] * c2[None, :, None])
+    # v(c) = c alpha - c^2 beta  -- (B, C, K)
+    v = c[None, :, None] * alpha[:, None, :] - c2[None, :, None] * beta[:, None, :]
+    # r_spec = s * v  -- (B, C, K)
+    r_spec = s * v
+
+    # quad = sum_k s_k v_k^2  -- (B, C)
+    quad = jnp.sum(v * r_spec, axis=-1)
+    # rho = ||y||^2 - 2c <y, m> + c^2 ||m||^2  -- (B, C)
+    rho = y_norm_sq[:, None] - 2.0 * c[None, :] * t[:, None] + c2[None, :] * nu[:, None]
+
+    # Contrast prior (handles both finite and infinite variance)
+    is_finite_var = jnp.isfinite(contrast_variance)
+    log_prior = jnp.where(
+        is_finite_var,
+        -0.5 * (contrast_nodes - contrast_mean) ** 2 / jnp.where(is_finite_var, contrast_variance, 1.0),
+        0.0,
+    )  # (C,)
+
+    return _SpectralScores(d=d, T=T, s=s, r_spec=r_spec, quad=quad, rho=rho, log_prior=log_prior)
+
+
+def _compute_weighted_moments(T, s, r_spec, contrast_nodes, omega):
+    """Compute all posterior moments given node weights omega.
+
+    Works for both profile (one-hot omega) and marginalize (softmax omega).
+
+    Parameters
+    ----------
+    T : (B, K, K)  spectral transform
+    s : (B, C, K)  posterior precisions per node
+    r_spec : (B, C, K)  spectral-basis posterior means per node
+    contrast_nodes : (C,)
+    omega : (B, C)  normalized weights over nodes
+
+    Returns
+    -------
+    mean_z, cov_z, second_moment_z, mean_c, second_moment_c,
+    mean_cz, mean_c2z, second_moment_czz
+    """
+    K = T.shape[-1]
+    c = contrast_nodes
+    c2 = c**2
+
+    # E[z | y] = T @ sum_j omega_j r_j
+    mean_spec = jnp.sum(omega[:, :, None] * r_spec, axis=1)  # (B, K)
+    mean_z = jnp.einsum("bij,bj->bi", T, mean_spec)  # (B, K)
+
+    # E[zz^T | y] = T @ (diag(sum_j omega_j s_j) + sum_j omega_j r_j r_j^T) @ T^T
+    Sigma_diag_spec = jnp.sum(omega[:, :, None] * s, axis=1)  # (B, K)
+    R = jnp.einsum("bc,bci,bcj->bij", omega, r_spec, r_spec)  # (B, K, K)
+    M = jnp.diag(jnp.ones(K)) * Sigma_diag_spec[:, None, :] + R  # (B, K, K)
+    second_moment_z = jnp.einsum("bij,bjl,bkl->bik", T, M, T)  # (B, K, K)
+    second_moment_z = 0.5 * (second_moment_z + jnp.swapaxes(second_moment_z, -1, -2))
+    cov_z = second_moment_z - mean_z[:, :, None] * mean_z[:, None, :]
+    cov_z = 0.5 * (cov_z + jnp.swapaxes(cov_z, -1, -2))
+
+    # Contrast moments
+    mean_c = jnp.sum(omega * c[None, :], axis=-1)  # (B,)
+    second_moment_c = jnp.sum(omega * c2[None, :], axis=-1)  # (B,)
+
+    # E[c z | y]
+    mean_cz_spec = jnp.sum(omega[:, :, None] * (c[None, :, None] * r_spec), axis=1)  # (B, K)
+    mean_cz = jnp.einsum("bij,bj->bi", T, mean_cz_spec)  # (B, K)
+
+    # E[c^2 z | y]
+    mean_c2z_spec = jnp.sum(omega[:, :, None] * (c2[None, :, None] * r_spec), axis=1)  # (B, K)
+    mean_c2z = jnp.einsum("bij,bj->bi", T, mean_c2z_spec)  # (B, K)
+
+    # E[c^2 z z^T | y]
+    Sigma_c2_diag_spec = jnp.sum(omega[:, :, None] * (c2[None, :, None] * s), axis=1)  # (B, K)
+    R_c2 = jnp.einsum("bc,bci,bcj->bij", omega * c2[None, :], r_spec, r_spec)  # (B, K, K)
+    M_c2 = jnp.diag(jnp.ones(K)) * Sigma_c2_diag_spec[:, None, :] + R_c2
+    second_moment_czz = jnp.einsum("bij,bjl,bkl->bik", T, M_c2, T)  # (B, K, K)
+    second_moment_czz = 0.5 * (second_moment_czz + jnp.swapaxes(second_moment_czz, -1, -2))
+
+    return mean_z, cov_z, second_moment_z, mean_c, second_moment_c, mean_cz, mean_c2z, second_moment_czz
+
+
+# ---------------------------------------------------------------------------
 # Core solvers
 # ---------------------------------------------------------------------------
 
@@ -283,6 +393,7 @@ def solve_no_contrast(
         contrast_weights_posterior=jnp.ones((B, 1), dtype=g.dtype),
         best_contrast=c_scalar,
         profile_scores=None,
+        marginal_ll=None,
     )
 
     if not return_legacy:
@@ -319,81 +430,44 @@ def solve_profile_contrast(
     Returns full posterior moments at the selected contrast, as if that
     contrast were known with certainty.
     """
-    B = g.shape[0]
-    K = lambdas.shape[0]
     C = contrast_nodes.shape[0]
 
-    # Spectral decomposition
-    d, T, alpha, beta = _spectral_decomposition(H, lambdas, g, h)
+    # Shared spectral precomputation
+    ss = _compute_contrast_scores(H, g, h, t, nu, y_norm_sq, lambdas, contrast_nodes, contrast_mean, contrast_variance)
 
-    c = contrast_nodes  # (C,)
-    c2 = c ** 2  # (C,)
-
-    # s(c) = 1 / (1 + c^2 d)  -- shape (B, C, K)
-    s = 1.0 / (1.0 + d[:, None, :] * c2[None, :, None])
-    # v(c) = c * alpha - c^2 * beta  -- shape (B, C, K)
-    v = c[None, :, None] * alpha[:, None, :] - c2[None, :, None] * beta[:, None, :]
-    # r_spec = s * v
-    r_spec = s * v  # (B, C, K)
-
-    # Profile score (no logdet term):
-    # quad = sum_k s_k v_k^2
-    quad = jnp.sum(v * r_spec, axis=-1)  # (B, C)
-    # rho = -2c t + c^2 nu + y_norm_sq  (but y_norm_sq is constant across c, so we can drop it for argmin)
-    rho = y_norm_sq[:, None] - 2.0 * c[None, :] * t[:, None] + c2[None, :] * nu[:, None]  # (B, C)
-
-    # Contrast prior
-    log_prior = -0.5 * (contrast_nodes - contrast_mean) ** 2 / contrast_variance  # (C,)
-
-    # Profile objective (lower is better)
-    scores = rho - quad - 2.0 * log_prior[None, :]  # (B, C)
+    # Profile objective (lower is better): no logdet term
+    scores = ss.rho - ss.quad - 2.0 * ss.log_prior[None, :]  # (B, C)
 
     best_idx = jnp.argmin(scores, axis=-1)  # (B,)
     best_c = contrast_nodes[best_idx]  # (B,)
-    best_c2 = best_c ** 2
 
-    # Extract spectral quantities at best contrast
-    # s_best: (B, K)
-    s_best = 1.0 / (1.0 + d * best_c2[:, None])
-    v_best = best_c[:, None] * alpha - best_c2[:, None] * beta  # (B, K)
-    r_best = s_best * v_best  # (B, K)
-
-    # mean_z = T @ r_best
-    mean_z = jnp.einsum("bij,bj->bi", T, r_best)  # (B, K)
-
-    # Sigma in spectral basis = diag(s_best)
-    # second_moment in spectral = diag(s_best) + r_best r_best^T
-    # Transform: T @ M @ T^T
-    # Sigma_z = T diag(s_best) T^T — symmetrize for float32 stability
-    Sigma_z = jnp.einsum("bij,bj,bkj->bik", T, s_best, T)  # (B, K, K)
-    Sigma_z = 0.5 * (Sigma_z + jnp.swapaxes(Sigma_z, -1, -2))
-    second_moment_z = Sigma_z + mean_z[:, :, None] * mean_z[:, None, :]
-    cov_z = Sigma_z
-
-    # Contrast moments (delta at best_c)
-    mean_cz = best_c[:, None] * mean_z
-    mean_c2z = best_c2[:, None] * mean_z
-    second_moment_czz = best_c2[:, None, None] * second_moment_z
+    # One-hot weights at best contrast → shared moment computation
+    omega = jax.nn.one_hot(best_idx, C, dtype=g.dtype)  # (B, C)
+    mean_z, cov_z, second_moment_z, mean_c, second_moment_c, mean_cz, mean_c2z, second_moment_czz = (
+        _compute_weighted_moments(ss.T, ss.s, ss.r_spec, contrast_nodes, omega)
+    )
 
     result = LatentPosteriorResult(
         mean_z=mean_z,
         cov_z=cov_z,
         second_moment_z=second_moment_z,
-        mean_c=best_c,
-        second_moment_c=best_c2,
+        mean_c=mean_c,
+        second_moment_c=second_moment_c,
         mean_cz=mean_cz,
         mean_c2z=mean_c2z,
         second_moment_czz=second_moment_czz,
         contrast_nodes=contrast_nodes,
-        contrast_weights_posterior=jax.nn.one_hot(best_idx, C, dtype=g.dtype),
+        contrast_weights_posterior=omega,
         best_contrast=best_c,
         profile_scores=scores,
+        marginal_ll=None,
     )
 
     if not return_legacy:
         return result
 
     # Legacy precision
+    best_c2 = best_c**2
     gram = best_c2[:, None, None] * H
     A_best = gram + jnp.diag(1.0 / lambdas)
     precision = A_best @ jnp.linalg.pinv(gram, rcond=1e-6, hermitian=True) @ A_best
@@ -430,89 +504,32 @@ def solve_marginalized_contrast(
 
     Scope: supports one contrast scalar per solve only.
     """
-    B = g.shape[0]
-    K = lambdas.shape[0]
-    C = contrast_nodes.shape[0]
+    # Shared spectral precomputation
+    ss = _compute_contrast_scores(H, g, h, t, nu, y_norm_sq, lambdas, contrast_nodes, contrast_mean, contrast_variance)
 
-    # Spectral decomposition (one batched eigh)
-    d, T, alpha, beta = _spectral_decomposition(H, lambdas, g, h)
-
-    c = contrast_nodes  # (C,)
-    c2 = c ** 2  # (C,)
-
-    # s(c) = 1 / (1 + c^2 d)  -- (B, C, K)
-    s = 1.0 / (1.0 + d[:, None, :] * c2[None, :, None])
-    # v(c) = c alpha - c^2 beta  -- (B, C, K)
-    v = c[None, :, None] * alpha[:, None, :] - c2[None, :, None] * beta[:, None, :]
-    # r_spec = s * v  -- (B, C, K)
-    r_spec = s * v
-
-    # Quadratic form: quad = sum_k s_k v_k^2
-    quad = jnp.sum(v * r_spec, axis=-1)  # (B, C)
+    c2 = contrast_nodes**2
 
     # Log-determinant: log det A(c) = const + sum_k log(1 + c^2 d_k)
     # The constant (sum_k log(1/lambda_k)) cancels in normalization
-    logdet = jnp.sum(jnp.log1p(d[:, None, :] * c2[None, :, None]), axis=-1)  # (B, C)
-
-    # Residual rho
-    rho = y_norm_sq[:, None] - 2.0 * c[None, :] * t[:, None] + c2[None, :] * nu[:, None]  # (B, C)
-
-    # Contrast prior (log scale)
-    is_finite_var = jnp.isfinite(contrast_variance)
-    # Flat prior when variance is inf; Gaussian prior otherwise
-    log_prior = jnp.where(
-        is_finite_var,
-        -0.5 * (contrast_nodes - contrast_mean) ** 2 / jnp.where(is_finite_var, contrast_variance, 1.0),
-        0.0,
-    )  # (C,)
+    logdet = jnp.sum(jnp.log1p(ss.d[:, None, :] * c2[None, :, None]), axis=-1)  # (B, C)
 
     # Log unnormalized weights: log w_j + log p(c_j) - 0.5 * (rho - quad + logdet)
     log_unnorm = (
         jnp.log(jnp.clip(contrast_weights, min=1e-30))[None, :]
-        + log_prior[None, :]
-        - 0.5 * (rho - quad + logdet)
+        + ss.log_prior[None, :]
+        - 0.5 * (ss.rho - ss.quad + logdet)
     )  # (B, C)
 
-    # Stable softmax via logsumexp
+    # Stable softmax → normalized weights
     omega = jax.nn.softmax(log_unnorm, axis=-1)  # (B, C)
 
-    # --- Posterior moments via weighted sums over contrast nodes ---
+    # Marginal log-likelihood: log sum_j exp(log_unnorm_j)
+    marginal_ll = jax.scipy.special.logsumexp(log_unnorm, axis=-1)  # (B,)
 
-    # E[z | y] = sum_j omega_j T r_j
-    mean_spec = jnp.sum(omega[:, :, None] * r_spec, axis=1)  # (B, K)
-    mean_z = jnp.einsum("bij,bj->bi", T, mean_spec)  # (B, K)
-
-    # E[zz^T | y] = sum_j omega_j (Sigma_j + mu_j mu_j^T)
-    # In spectral basis: Sigma_j = diag(s_j), mu_j = r_j
-    # M = diag(sum_j omega_j s_j) + sum_j omega_j r_j r_j^T
-    Sigma_diag_spec = jnp.sum(omega[:, :, None] * s, axis=1)  # (B, K)
-    R = jnp.einsum("bc,bci,bcj->bij", omega, r_spec, r_spec)  # (B, K, K)
-    M = jnp.diag(jnp.ones(K)) * Sigma_diag_spec[:, None, :] + R  # broadcast diag: (B, K, K)
-
-    # Transform to original basis: T M T^T — symmetrize for float32 stability
-    second_moment_z = jnp.einsum("bij,bjl,bkl->bik", T, M, T)  # (B, K, K)
-    second_moment_z = 0.5 * (second_moment_z + jnp.swapaxes(second_moment_z, -1, -2))
-    cov_z = second_moment_z - mean_z[:, :, None] * mean_z[:, None, :]
-    cov_z = 0.5 * (cov_z + jnp.swapaxes(cov_z, -1, -2))
-
-    # Contrast moments
-    mean_c = jnp.sum(omega * c[None, :], axis=-1)  # (B,)
-    second_moment_c = jnp.sum(omega * c2[None, :], axis=-1)  # (B,)
-
-    # E[c z | y]
-    mean_cz_spec = jnp.sum(omega[:, :, None] * (c[None, :, None] * r_spec), axis=1)  # (B, K)
-    mean_cz = jnp.einsum("bij,bj->bi", T, mean_cz_spec)  # (B, K)
-
-    # E[c^2 z | y]
-    mean_c2z_spec = jnp.sum(omega[:, :, None] * (c2[None, :, None] * r_spec), axis=1)  # (B, K)
-    mean_c2z = jnp.einsum("bij,bj->bi", T, mean_c2z_spec)  # (B, K)
-
-    # E[c^2 z z^T | y] = sum_j omega_j c_j^2 (diag(s_j) + r_j r_j^T)
-    Sigma_c2_diag_spec = jnp.sum(omega[:, :, None] * (c2[None, :, None] * s), axis=1)  # (B, K)
-    R_c2 = jnp.einsum("bc,bci,bcj->bij", omega * c2[None, :], r_spec, r_spec)  # (B, K, K)
-    M_c2 = jnp.diag(jnp.ones(K)) * Sigma_c2_diag_spec[:, None, :] + R_c2
-    second_moment_czz = jnp.einsum("bij,bjl,bkl->bik", T, M_c2, T)  # (B, K, K)
-    second_moment_czz = 0.5 * (second_moment_czz + jnp.swapaxes(second_moment_czz, -1, -2))
+    # Shared moment computation
+    mean_z, cov_z, second_moment_z, mean_c, second_moment_c, mean_cz, mean_c2z, second_moment_czz = (
+        _compute_weighted_moments(ss.T, ss.s, ss.r_spec, contrast_nodes, omega)
+    )
 
     # Best contrast (MAP of posterior weights)
     best_idx = jnp.argmax(omega, axis=-1)
@@ -531,6 +548,7 @@ def solve_marginalized_contrast(
         contrast_weights_posterior=omega,
         best_contrast=best_contrast,
         profile_scores=-log_unnorm,  # negative log for consistency
+        marginal_ll=marginal_ll,
     )
 
     if not return_legacy:
@@ -565,7 +583,7 @@ def solve_latent_posterior(
     contrast_variance: float = np.inf,
     contrast_rule: Literal["gauss_legendre", "trapezoid", "custom"] = "gauss_legendre",
     contrast_interval: tuple[float, float] = (0.0, 3.0),
-    n_contrast_nodes: int = 16,
+    n_contrast_nodes: int = 32,
     return_legacy: bool = False,
 ) -> LatentPosteriorResult | tuple[LatentPosteriorResult, LegacyEmbeddingResult]:
     """Unified dispatch for latent posterior inference.
@@ -618,7 +636,13 @@ def solve_latent_posterior(
 
     if contrast_mode == "none":
         return solve_no_contrast(
-            H, g, h, t, nu, y_norm_sq, lambdas,
+            H,
+            g,
+            h,
+            t,
+            nu,
+            y_norm_sq,
+            lambdas,
             return_legacy=return_legacy,
         )
 
@@ -636,19 +660,37 @@ def solve_latent_posterior(
         else:
             # Trapezoid weights for user-supplied nodes
             _, weights = make_contrast_quadrature(
-                rule="trapezoid", nodes=np.asarray(nodes),
+                rule="trapezoid",
+                nodes=np.asarray(nodes),
             )
 
     if contrast_mode == "profile":
         return solve_profile_contrast(
-            H, g, h, t, nu, y_norm_sq, lambdas,
-            nodes, contrast_mean_jax, contrast_variance_jax,
+            H,
+            g,
+            h,
+            t,
+            nu,
+            y_norm_sq,
+            lambdas,
+            nodes,
+            contrast_mean_jax,
+            contrast_variance_jax,
             return_legacy=return_legacy,
         )
     elif contrast_mode == "marginalize":
         return solve_marginalized_contrast(
-            H, g, h, t, nu, y_norm_sq, lambdas,
-            nodes, weights, contrast_mean_jax, contrast_variance_jax,
+            H,
+            g,
+            h,
+            t,
+            nu,
+            y_norm_sq,
+            lambdas,
+            nodes,
+            weights,
+            contrast_mean_jax,
+            contrast_variance_jax,
             return_legacy=return_legacy,
         )
     else:

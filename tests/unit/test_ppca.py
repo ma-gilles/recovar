@@ -1,6 +1,7 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
-from types import SimpleNamespace
 
 jax = pytest.importorskip("jax")
 import jax.numpy as jnp
@@ -212,7 +213,7 @@ def test_E_M_step_batch_half_shapes():
     lhs_init = jnp.zeros((d["half_volume_size"], tri_sz), dtype=np.float32)
     rhs_init = jnp.zeros((d["half_volume_size"], d["basis_size"]), dtype=np.complex64)
 
-    lhs, rhs, ez, smz, ll, ll_pi, _mc = E_M_step_batch_half(
+    lhs, rhs, ez, smz, ll, ll_pi, _mc, _mll, _rp, _nb = E_M_step_batch_half(
         d["images_half"],
         lhs_init,
         rhs_init,
@@ -252,7 +253,9 @@ def test_prepare_mean_estimate_for_slicing_cubic_matches_explicit_coefficients()
     volume_shape = (grid_size, grid_size, grid_size)
 
     real_vol = rng.normal(size=volume_shape).astype(np.float32)
-    mean_full = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(real_vol), norm="backward")).reshape(-1).astype(np.complex64)
+    mean_full = (
+        np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(real_vol), norm="backward")).reshape(-1).astype(np.complex64)
+    )
     rotations = np.tile(np.eye(3, dtype=np.float32), (1, 1, 1))
 
     prepared = _prepare_mean_estimate_for_slicing(
@@ -267,9 +270,7 @@ def test_prepare_mean_estimate_for_slicing_cubic_matches_explicit_coefficients()
     prepared_proj = np.asarray(
         core.slice_volume(prepared, rotations, image_shape, volume_shape, "cubic", half_image=True)
     )
-    manual_proj = np.asarray(
-        core.slice_volume(manual, rotations, image_shape, volume_shape, "cubic", half_image=True)
-    )
+    manual_proj = np.asarray(core.slice_volume(manual, rotations, image_shape, volume_shape, "cubic", half_image=True))
     raw_proj = np.asarray(
         core.slice_volume(jnp.array(mean_full), rotations, image_shape, volume_shape, "cubic", half_image=True)
     )
@@ -286,7 +287,9 @@ def test_prepare_mean_estimate_for_slicing_keeps_precomputed_cubic_coefficients(
     rng = np.random.default_rng(125)
     volume_shape = (8, 8, 8)
     real_vol = rng.normal(size=volume_shape).astype(np.float32)
-    mean_full = np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(real_vol), norm="backward")).reshape(-1).astype(np.complex64)
+    mean_full = (
+        np.fft.fftshift(np.fft.fftn(np.fft.ifftshift(real_vol), norm="backward")).reshape(-1).astype(np.complex64)
+    )
 
     coeffs = core.precompute_cubic_coefficients(jnp.array(mean_full), volume_shape)
     prepared = _prepare_mean_estimate_for_slicing(coeffs, None, volume_shape, "cubic")
@@ -353,8 +356,6 @@ def test_E_M_step_batch_half_contrast_rhs_uses_basis_adjoint(monkeypatch):
     assert calls == [("linear_interp", True, True)]
 
 
-
-
 def test_E_M_step_batch_half_no_stats():
     """Verify compute_stats=False skips LHS/RHS accumulation."""
     from recovar.ppca.ppca import E_M_step_batch_half, _tri_size
@@ -366,7 +367,7 @@ def test_E_M_step_batch_half_no_stats():
     lhs_init = jnp.zeros((d["half_volume_size"], tri_sz), dtype=np.float32)
     rhs_init = jnp.zeros((d["half_volume_size"], d["basis_size"]), dtype=np.complex64)
 
-    lhs, rhs, ez, smz, ll, _, _mc = E_M_step_batch_half(
+    lhs, rhs, ez, smz, ll, _, _mc, _mll, _rp, _nb = E_M_step_batch_half(
         d["images_half"],
         lhs_init,
         rhs_init,
@@ -393,14 +394,20 @@ def test_E_M_step_batch_half_no_stats():
     assert np.isfinite(float(ll.real))
 
 
-
 def test_em_return_posterior_info_exposes_mean_c(monkeypatch):
     from recovar.ppca import ppca as ppca_impl
 
+    halfset_stub = SimpleNamespace(
+        volume_shape=(2, 2, 2),
+        volume_size=8,
+        grid_size=2,
+    )
     fake_dataset = SimpleNamespace(
         volume_shape=(2, 2, 2),
         volume_size=8,
         grid_size=2,
+        image_shape=(2, 2),
+        materialize_halfset_datasets=lambda: [halfset_stub, halfset_stub],
     )
     W_initial = np.ones((8, 2), dtype=np.float32)
     W_prior = np.ones((8, 2), dtype=np.float32)
@@ -416,12 +423,15 @@ def test_em_return_posterior_info_exposes_mean_c(monkeypatch):
             8.0,
             2.0,
             np.array([1.3], dtype=np.float32),
+            5.0,  # neg_marginal_ll
+            np.zeros(4, dtype=np.float32),  # residual_power_sum
+            1,  # n_images_total
         )
 
     monkeypatch.setattr(ppca_impl, "EM_step_half", _fake_em_step_half)
 
     U, S, W, expected_zs, second_moment_zs, iteration_data, posterior_info = ppca_impl.EM(
-        [fake_dataset],
+        fake_dataset,
         np.zeros(8, dtype=np.complex64),
         W_initial,
         W_prior,

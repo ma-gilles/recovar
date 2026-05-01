@@ -447,6 +447,26 @@ def add_args(parser: argparse.ArgumentParser):
         ),
     )
     adv.add_argument(
+        "--ppca-embed-use-em-contrasts",
+        dest="ppca_embed_use_em_contrasts",
+        action="store_true",
+        help=(
+            "Use EM's marginalized posterior contrasts at embedding time instead "
+            "of re-profiling. Only effective when --ppca-contrast-mode=marginalize. "
+            "Avoids the profile-MAP bias that over-estimates contrast."
+        ),
+    )
+    adv.add_argument(
+        "--ppca-update-noise",
+        dest="ppca_update_noise",
+        action="store_true",
+        help=(
+            "Update the radial noise model during PPCA EM iterations using "
+            "whitened residual power. Inspired by RELION's per-iteration "
+            "sigma2_noise update. Uses EMA smoothing (alpha=0.5)."
+        ),
+    )
+    adv.add_argument(
         "--ppca-pcs-per-mask",
         dest="ppca_pcs_per_mask",
         type=str,
@@ -836,7 +856,7 @@ def _resolve_ppca_contrast_grid(contrast_mode):
     """Return PPCA contrast quadrature nodes and weights.
 
     Uses Gauss-Legendre quadrature on [0, 2] (matching the covariance path's
-    default contrast interval) with 16 nodes.
+    default contrast interval) with 32 nodes.
 
     Returns
     -------
@@ -849,7 +869,6 @@ def _resolve_ppca_contrast_grid(contrast_mode):
     nodes, weights = make_contrast_quadrature(
         rule="gauss_legendre",
         interval=(0.0, 2.0),
-        n_nodes=16,
     )
     return np.asarray(nodes, dtype=np.float32), np.asarray(weights, dtype=np.float32)
 
@@ -1043,6 +1062,8 @@ def _run_ppca_refinement(
 
     rebakes_basis = projcov_every > 0 or refitb_every > 0
 
+    ppca_update_noise = bool(getattr(args, "ppca_update_noise", False))
+
     (
         U_ppca,
         S_ppca,
@@ -1076,75 +1097,84 @@ def _run_ppca_refinement(
         gpu_memory_to_use=gpu_memory,
         masks=ppca_masks,
         pc_mask_assignment=ppca_pc_mask_assignment,
+        update_noise=ppca_update_noise,
     )
 
-    # Embeddings: ALWAYS go through _compute_embeddings (= the same path the
-    # covariance pipeline uses), regardless of whether projcov/refitb fired.
-    # This guarantees that ``latent_coords`` is in the same convention across
-    # cov / plain ppca / ppca+projcov / ppca+refitb (covariance-PCA "true alpha"
-    # units, computed from the per-image posterior MAP in the eigenbasis using
-    # the actual saved (U, s)). The previous shortcut for plain PPCA used
-    # _build_ppca_embedding_outputs, which scaled PPCA's z ~ N(0,I) by √s_ppca
-    # — but s_ppca is the *biased* PPCA spectrum (under-calibrated by the
-    # standard (1 + σ²/λ) factor), so the resulting "alpha" was off by that
-    # bias and not directly comparable to cov/projcov/refitb.
     half_vol_size = int(np.prod(fourier_transform_utils.volume_shape_to_half_volume_shape(dataset.volume_shape)))
     U_full = U_ppca
     if U_full.shape[0] == half_vol_size:
         U_full = fourier_transform_utils.half_volume_to_full_volume(np.asarray(U_full).T, dataset.volume_shape).T
     U_full = _as_pipeline_basis_dtype(U_full)
-    u = {"rescaled": U_full, "real": None}
-
-    # ── Optional: truncate trailing PCs at embed time (off by default) ──
-    # When --ppca-effective-zdim K is set with 0 < K < basis_size, floor the
-    # trailing eigenvalues to a tiny value so the per-image MAP gives z≈0
-    # for those dimensions. PPCA still fit the full basis_size basis; this
-    # only changes the embedding solver's prior precision per direction.
-    # Motivation: at low SNR, PPCA EM redistributes variance into the
-    # trailing (noise-dominated) PCs as iters increase, and the embedding
-    # solver lets that noise leak in via large prior variance. Killing the
-    # trailing PCs at embed time recovers a cleaner embedding without
-    # touching the basis itself (so pc_metric is unchanged).
-    s_for_embed = np.asarray(S_ppca, dtype=np.float32).copy()
-    eff_zdim = int(getattr(args, "ppca_effective_zdim", 0))
-    if eff_zdim > 0 and eff_zdim < basis_size:
-        s_for_embed[eff_zdim:] = 1e-12
-        logger.info(
-            "PPCA: --ppca-effective-zdim=%d; floored trailing %d eigenvalues for embedding",
-            eff_zdim,
-            basis_size - eff_zdim,
-        )
-
-    s = {"rescaled": s_for_embed, "real": None}
-    (
-        latent_coords,
-        latent_coords_noreg,
-        latent_precision,
-        latent_precision_noreg,
-        contrasts,
-        contrasts_noreg,
-    ) = _compute_embeddings(
-        means,
-        u,
-        s,
-        dataset,
-        np.asarray(focus_mask, dtype=np.float32),
-        options,
-        gpu_memory,
-        focus_masks,
-        zdim_for_rest,
-        args,
-    )
     u_rescaled = U_full
 
-    if projcov_every > 0 and refitb_every > 0:
-        embedding_source = "projcov+refitb"
-    elif projcov_every > 0:
-        embedding_source = "projected_covariance"
-    elif refitb_every > 0:
-        embedding_source = "refitb"
+    use_em_contrasts = (
+        bool(getattr(args, "ppca_embed_use_em_contrasts", False))
+        and contrast_mode == "marginalize"
+        and posterior_info is not None
+        and posterior_info.get("mean_c") is not None
+    )
+
+    if use_em_contrasts:
+        # Use EM's marginalized posterior contrasts directly, bypassing the
+        # profile-MAP grid search. The EM posteriors (z, c) are consistent
+        # with each other; re-profiling would discard the logdet correction
+        # and over-estimate contrast.
+        logger.info("PPCA: using EM marginalized contrasts for embedding (--ppca-embed-use-em-contrasts)")
+        (
+            latent_coords,
+            latent_coords_noreg,
+            latent_precision,
+            latent_precision_noreg,
+            contrasts,
+            contrasts_noreg,
+        ) = _build_ppca_embedding_outputs(expected_zs, second_moment_zs, S_ppca, posterior_info["mean_c"], basis_size)
+        embedding_source = "em_posteriors"
     else:
-        embedding_source = "compute_embeddings"
+        # Default: re-profile contrasts via the embedding grid search.
+        # This is the same path the covariance pipeline uses, guaranteeing
+        # ``latent_coords`` is in the covariance-PCA "true alpha" convention.
+        u = {"rescaled": U_full, "real": None}
+
+        # ── Optional: truncate trailing PCs at embed time (off by default) ──
+        s_for_embed = np.asarray(S_ppca, dtype=np.float32).copy()
+        eff_zdim = int(getattr(args, "ppca_effective_zdim", 0))
+        if eff_zdim > 0 and eff_zdim < basis_size:
+            s_for_embed[eff_zdim:] = 1e-12
+            logger.info(
+                "PPCA: --ppca-effective-zdim=%d; floored trailing %d eigenvalues for embedding",
+                eff_zdim,
+                basis_size - eff_zdim,
+            )
+
+        s = {"rescaled": s_for_embed, "real": None}
+        (
+            latent_coords,
+            latent_coords_noreg,
+            latent_precision,
+            latent_precision_noreg,
+            contrasts,
+            contrasts_noreg,
+        ) = _compute_embeddings(
+            means,
+            u,
+            s,
+            dataset,
+            np.asarray(focus_mask, dtype=np.float32),
+            options,
+            gpu_memory,
+            focus_masks,
+            zdim_for_rest,
+            args,
+        )
+
+        if projcov_every > 0 and refitb_every > 0:
+            embedding_source = "projcov+refitb"
+        elif projcov_every > 0:
+            embedding_source = "projected_covariance"
+        elif refitb_every > 0:
+            embedding_source = "refitb"
+        else:
+            embedding_source = "compute_embeddings"
 
     logger.info(
         "PPCA solve complete: q=%d iters=%d projcov_every=%d refitb_every=%d contrast_mode=%s",
@@ -1170,6 +1200,7 @@ def _run_ppca_refinement(
         "latent_precision_noreg": latent_precision_noreg,
         "contrasts": contrasts,
         "contrasts_noreg": contrasts_noreg,
+        "em_mean_c": posterior_info.get("mean_c") if posterior_info else None,
     }
 
 
