@@ -150,6 +150,9 @@ def run_pose_marginal_iteration_dense_production(
     rotation_block_size: int = 64,
     disc_type_project: str = "linear_interp",
     disc_type_backproject: str = "linear_interp",
+    halfset_combiner=None,
+    prior_recompute_fn=None,
+    iteration_index: int = 0,
     opts: IterationOpts = IterationOpts(),
 ):
     """One full EM iteration: fused E-step + M-step + halfset combine.
@@ -165,13 +168,35 @@ def run_pose_marginal_iteration_dense_production(
       4. Wrap into AugmentedPPCAStats; call solve_augmented_ppca_mstep.
       5. Record (mu_h, W_h).
 
-    After both halves: halfset combine via the simple mean (M10 helper);
-    return updated state.
+    After both halves: halfset combine via ``halfset_combiner`` (default
+    simple mean — see :mod:`recovar.em.ppca_refinement.halfset_combine`
+    for the 40 Å low-resolution-join variant); return updated state.
 
-    The mean prior used in the M-step is ``state.mean_prior`` (caller
-    is responsible for recomputing it via ``make_mean_prior_provider``
-    on the appropriate iteration per the §7.4 schedule).
+    Mean prior recompute (§7.4 schedule)
+    ------------------------------------
+    When ``prior_recompute_fn`` is provided, it is called BEFORE the
+    M-step at iterations matching the
+    :func:`~recovar.em.ppca_refinement.iterations._should_recompute_prior`
+    check on ``opts.pc_prior_config``. The callback signature is
+    ``(state) -> mean_prior_per_voxel`` (matches
+    :func:`recovar.em.ppca_refinement.prior_provider.make_mean_prior_provider`).
+    The returned ``mean_prior`` replaces ``state.mean_prior`` for the
+    M-step in this iteration.
     """
+    # Lazy imports to avoid circular dependency on iterations.py.
+    from recovar.em.ppca_refinement.halfset_combine import mean_halfset_combine
+    from recovar.em.ppca_refinement.iterations import _should_recompute_prior
+    from recovar.ppca import PCPriorConfig
+
+    if halfset_combiner is None:
+        halfset_combiner = mean_halfset_combine
+
+    # Optional mean-prior recompute per §7.4 schedule.
+    pc_prior_cfg = opts.pc_prior_config or PCPriorConfig()
+    mean_prior_for_mstep = state.mean_prior
+    if prior_recompute_fn is not None and _should_recompute_prior(iteration_index, pc_prior_cfg):
+        mean_prior_for_mstep = prior_recompute_fn(state)
+
     image_shape = cryo.image_shape
     volume_shape = (cryo.grid_size, cryo.grid_size, cryo.grid_size)
     full_F = int(np.prod(image_shape))
@@ -302,7 +327,7 @@ def run_pose_marginal_iteration_dense_production(
         )
         mu_h, W_h = solve_augmented_ppca_mstep(
             stats,
-            mean_prior=state.mean_prior,
+            mean_prior=mean_prior_for_mstep,
             W_prior=state.W_prior,
             mask=mask,
             masks=masks,
@@ -322,14 +347,16 @@ def run_pose_marginal_iteration_dense_production(
             iter_diag["iteration_n_significant_mean"][half_idx] = sum_nsig / n_total
             iter_diag["iteration_pmax_mean"][half_idx] = sum_pmax / n_total
 
-    # Halfset combine — simple mean for now (M10).
-    mu_score_new = 0.5 * (new_mu_half[0] + new_mu_half[1])
-    W_score_new = 0.5 * (new_W_half[0] + new_W_half[1])
+    # Halfset combine via the supplied combiner (default = simple mean).
+    mu_score_new = halfset_combiner(new_mu_half[0], new_mu_half[1], "mu")
+    W_score_new = halfset_combiner(new_W_half[0], new_W_half[1], "W")
 
     new_state = state.replace(
         mu_half=(new_mu_half[0], new_mu_half[1]),
         W_half=(new_W_half[0], new_W_half[1]),
         mu_score=mu_score_new,
         W_score=W_score_new,
+        mean_prior=mean_prior_for_mstep,
     )
+    iter_diag["prior_recomputed"] = mean_prior_for_mstep is not state.mean_prior
     return new_state, iter_diag

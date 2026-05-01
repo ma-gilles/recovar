@@ -134,3 +134,74 @@ def test_production_dense_iteration_runs_on_ribosembly(ribosembly_setup):
     # n_significant tracked per halfset.
     assert diag["iteration_n_significant_mean"][0] >= 0
     assert diag["iteration_n_significant_mean"][1] >= 0
+
+
+def test_production_dense_with_halfset_combiner_and_prior_recompute(ribosembly_setup):
+    """Exercise the halfset_combiner + prior_recompute_fn callbacks
+    on the production driver. Uses make_halfset_combiner('low_resol_join')
+    and a stub prior_recompute_fn that asserts it was called at the
+    right iteration index."""
+    from recovar.em.ppca_refinement.halfset_combine import make_halfset_combiner
+    from recovar.ppca import PCPriorConfig
+
+    s = ribosembly_setup
+    cryo = s["cryo"]
+    vol_shape = s["vol_shape"]
+    half_vs = ftu.volume_shape_to_half_volume_shape(vol_shape)
+    half_vol = int(np.prod(half_vs))
+    q = 1
+
+    mu0 = np.real(np.fft.ifftn(s["vols_fourier"].mean(axis=0).reshape(vol_shape))).astype(np.float32)
+    rng = np.random.default_rng(0)
+    W0 = (rng.standard_normal((q,) + vol_shape) * 1e-3).astype(np.float32)
+
+    state = PoseMarginalPPCAEMState(
+        mu_half=(jnp.asarray(mu0), jnp.asarray(mu0)),
+        W_half=(jnp.asarray(W0), jnp.asarray(W0)),
+        mu_score=jnp.asarray(mu0),
+        W_score=jnp.asarray(W0),
+        W_prior=jnp.full((half_vol, q), 1.0, dtype=jnp.float32),
+        mean_prior=jnp.full((half_vol,), 1.0, dtype=jnp.float32),
+        z_prior_precision_diag=jnp.ones((q,), dtype=jnp.float32),
+        noise_variance=jnp.ones((half_vol,), dtype=jnp.float32),
+        contrast_params=None,
+        masks=None,
+        pose_estimates={},
+        pose_priors=None,
+        refinement_schedule_state=None,
+        hyperparams=None,
+    )
+    rotation_grid = np.asarray(cryo.rotation_matrices[:4], dtype=np.float32)
+    translation_grid = np.zeros((1, 2), dtype=np.float32)
+    halfset_indices = (np.asarray(cryo.halfset_indices[0]), np.asarray(cryo.halfset_indices[1]))
+
+    # low-res-join combiner + prior recompute callback.
+    combiner = make_halfset_combiner(method="low_resol_join", voxel_size=cryo.voxel_size)
+    recompute_calls = []
+
+    def prior_recompute_fn(st):
+        recompute_calls.append(1)
+        # Return a different prior so we can detect the swap.
+        return jnp.full((half_vol,), 5.0, dtype=jnp.float32)
+
+    cfg = PCPriorConfig(prior_freeze_iters=0, recompute_once_after_iter=0)
+
+    # iteration_index=0 → schedule says recompute fires.
+    new_state, diag = run_pose_marginal_iteration_dense_production(
+        state,
+        cryo,
+        rotation_grid=rotation_grid,
+        translation_grid=translation_grid,
+        halfset_indices=halfset_indices,
+        mask=jnp.asarray(s["mask"]),
+        image_batch_size=16,
+        rotation_block_size=4,
+        halfset_combiner=combiner,
+        prior_recompute_fn=prior_recompute_fn,
+        iteration_index=0,
+        opts=IterationOpts(EM_iter=1, pcg_maxiter=10, pc_prior_config=cfg),
+    )
+
+    assert sum(recompute_calls) == 1
+    assert diag["prior_recomputed"] is True
+    np.testing.assert_array_equal(np.asarray(new_state.mean_prior), np.full(half_vol, 5.0, dtype=np.float32))
