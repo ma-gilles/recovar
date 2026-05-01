@@ -1,83 +1,8 @@
-# RECOVAR / RELION Ab Initio InitialModel Algorithm
+# RECOVAR / RELION InitialModel Ab-Initio Algorithm
 
-Reviewed against the current checkout on 2026-05-01. This note documents the
-RELION `InitialModel` / ab-initio gradient-refine path, RECOVAR's corresponding
-code, and how it differs from the standard RELION EM / Class3D path.
-
-This is a developer-facing parity map. It intentionally focuses on the math,
-state transitions, and code paths that matter when debugging RELION parity.
-
-## Scope and Code Map
-
-Primary RECOVAR code paths:
-
-- `scripts/run_ab_initio.py::build_command`, lines 68-143: RELION GUI-equivalent
-  InitialModel command assembly.
-- `scripts/run_ab_initio.py::main`, lines 216-229: current real-execution caveat;
-  the script assembles commands but does not yet run the full RECOVAR pipeline.
-- `recovar/em/initial_model/init.py::initialise_denovo_state`, lines 97-191:
-  denovo state initialization.
-- `recovar/em/initial_model/avg_unaligned.py::compute_avg_unaligned_and_sigma2`,
-  lines 171-240: initial average image and noise-spectrum estimate.
-- `recovar/em/initial_model/bootstrap_iref.py::compute_bootstrap_iref_via_cpp`,
-  lines 187-262: RELION-style random-orientation bootstrap reference.
-- `recovar/em/initial_model/iteration_loop.py::run_vdam_iterations`, lines
-  140-205: pure VDAM iteration orchestrator.
-- `recovar/em/initial_model/schedules.py`, lines 98-170 and 178-369: RELION
-  subset, step-size, and tau2-fudge schedules.
-- `recovar/em/initial_model/subset.py::select_vdam_subset`, lines 141-171:
-  shuffle-prefix, optics-group stable sort, and pseudo-halfset assignment.
-- `recovar/em/initial_model/gpu_pipeline.py::run_iter_gpu_vdam`, lines 560-1040:
-  current GPU E-step plus RELION-bound VDAM M-step path.
-- `recovar/em/initial_model/m_step.py::vdam_m_step`, lines 232-273, and
-  `vdam_m_step_single_class`, lines 79-229: generic Python wrapper for RELION
-  VDAM M-step primitives.
-- `recovar/em/dense_single_volume/em_engine.py::run_em`, lines 592-688:
-  standard dense EM E/M engine contract.
-- `recovar/em/dense_single_volume/helpers/scoring.py::_score_rotation_block`,
-  lines 11-64: shared Gaussian and normalized-CC score block.
-- `recovar/em/dense_single_volume/iteration_loop.py`, lines 1597-1604,
-  2411-2450, and 3694-3832: standard RELION EM / Class3D loop conventions.
-- `recovar/em/dense_single_volume/k_class.py::run_dense_k_class_em`, lines
-  315-413: K-class posterior normalization over class x pose.
-
-Useful existing notes:
-
-- `docs/math/relion_initial_model_em_parity_conventions.md`
-- `docs/math/relion_refinement_algorithm.md`
-- `docs/math/dense_single_volume_em.md`
-- `docs/math/relion_updateSSNR_algorithm_2026_04_25.md`
-
-RELION source entry points mirrored by the RECOVAR comments and tests:
-
-- `pipeline_jobs.cpp::initialiseInimodelJob` / `getCommandsInimodelJob`
-- `ml_model.cpp::initialiseFromImages`
-- `ml_optimiser.cpp::calculateSumOfPowerSpectraAndAverageImage`
-- `ml_optimiser.cpp::iterate`
-- `ml_optimiser.cpp::updateSubsetSize`, `updateStepSize`, `updateTau2Fudge`
-- `ml_optimiser.cpp::storeWeightedSums`
-- `backprojector.cpp::reweightGrad`, `getFristMoment`, `getSecondMoment`,
-  `applyMomenta`, `reconstructGrad`
-
-## High-Level Algorithm
-
-RELION InitialModel is not "standard EM from a supplied map." It is a denovo
-gradient-refine procedure:
-
-1. Build a zero/reference state and VDAM moment buffers.
-2. Estimate initial noise spectra and an average image from masked, unaligned
-   particles.
-3. Bootstrap initial 3D references by assigning random orientations to particles
-   and reconstructing low-resolution maps.
-4. Run many VDAM mini-batch iterations. Each iteration selects a subset of
-   particles, performs an E-step over class/orientation/translation hypotheses,
-   accumulates RELION `BackProjector` sufficient statistics, updates first and
-   second gradient moments, and applies a momentum-normalized reference update.
-5. At the end of the RELION GUI job, run `relion_align_symmetry` to select the
-   largest class, align to the requested symmetry, and write `initial_model.mrc`.
-
-The GUI-equivalent RELION command is encoded in
-`scripts/run_ab_initio.py::build_command`:
+Reviewed against this checkout on 2026-05-01. This is a developer-facing
+description of the native RECOVAR implementation of RELION GUI
+`InitialModel`:
 
 ```text
 relion_refine --grad --denovo_3dref --pad 1 --auto_sampling \
@@ -86,38 +11,257 @@ relion_refine --grad --denovo_3dref --pad 1 --auto_sampling \
 relion_align_symmetry --apply_sym --select_largest_class ...
 ```
 
-Those flags come from RELION's InitialModel GUI setup, not from the standard
-AutoRefine/Class3D defaults. In particular, InitialModel uses `--grad` and
-`--denovo_3dref`, rejects MPI in the GUI path, defaults to 200 VDAM mini-batches,
-defaults to `K=1`, and runs in C1 before optional symmetry alignment.
+`InitialModel` is not standard dense EM from a supplied reference. It is
+RELION's denovo gradient-refinement path: initialize references from randomly
+oriented particles, run VDAM mini-batch E/M iterations, update gradient momenta,
+and finally choose the largest class for `initial_model.mrc`.
 
-## Forward Model and Objective
+## Code Map
 
-For particle image \(y_i\), class \(k\), rotation \(r\), translation \(t\), CTF
-\(C_i\), projection \(P_r\), and volume \(\mu_k\):
+Entry points and driver:
+
+- [`scripts/run_ab_initio.py::InitialModelJobOptions`](../../scripts/run_ab_initio.py)
+  stores the GUI-equivalent command options.
+- [`scripts/run_ab_initio.py::build_command`](../../scripts/run_ab_initio.py)
+  snapshots the RELION command tokens.
+- [`scripts/run_ab_initio.py::build_align_symmetry_command`](../../scripts/run_ab_initio.py)
+  snapshots the post-run `relion_align_symmetry` command.
+- [`scripts/run_ab_initio.py::main`](../../scripts/run_ab_initio.py) calls the
+  native RECOVAR path for non-`--dry_run` execution.
+- [`recovar/em/initial_model/driver.py::NativeInitialModelOptions`](../../recovar/em/initial_model/driver.py)
+  is the native option surface.
+- [`recovar/em/initial_model/driver.py::run_native_initial_model`](../../recovar/em/initial_model/driver.py)
+  is the executable native InitialModel driver.
+
+State, initialization, and schedules:
+
+- [`recovar/em/initial_model/state.py::InitialModelState`](../../recovar/em/initial_model/state.py)
+  is the mutable VDAM state.
+- [`recovar/em/initial_model/init.py::initialise_denovo_state`](../../recovar/em/initial_model/init.py)
+  builds zero references, gradient moment buffers, spectra, and priors.
+- [`recovar/em/initial_model/avg_unaligned.py::compute_avg_unaligned_and_sigma2`](../../recovar/em/initial_model/avg_unaligned.py)
+  estimates `Mavg` and `sigma2_noise`.
+- [`recovar/em/initial_model/bootstrap_iref.py::compute_bootstrap_iref_via_cpp`](../../recovar/em/initial_model/bootstrap_iref.py)
+  runs the RELION C++ bootstrap reference path.
+- [`recovar/em/initial_model/bootstrap_iref.py::initial_low_pass_filter_references`](../../recovar/em/initial_model/bootstrap_iref.py)
+  applies RELION's initial low-pass filter.
+- [`recovar/em/initial_model/schedules.py`](../../recovar/em/initial_model/schedules.py)
+  implements subset, step-size, and `tau2_fudge` schedules.
+- [`recovar/em/initial_model/subset.py::select_vdam_subset`](../../recovar/em/initial_model/subset.py)
+  implements shuffle-prefix, optics stable sort, and pseudo-halfset assignment.
+
+E-step, M-step, and layout bridges:
+
+- [`recovar/em/initial_model/iteration_loop.py::run_vdam_iterations`](../../recovar/em/initial_model/iteration_loop.py)
+  is the pure VDAM loop.
+- [`recovar/em/initial_model/driver.py::_native_expectation_step`](../../recovar/em/initial_model/driver.py)
+  builds the per-iteration native E-step closure.
+- [`recovar/em/initial_model/dense_adapter.py::run_dense_initial_model_estep`](../../recovar/em/initial_model/dense_adapter.py)
+  adapts dense K-class EM output to VDAM accumulators.
+- [`recovar/em/initial_model/dense_adapter.py::_run_sparse_pass2_initial_model_estep`](../../recovar/em/initial_model/dense_adapter.py)
+  implements RELION-style coarse significance plus oversampled sparse pass 2.
+- [`recovar/em/initial_model/layout.py::run_em_output_to_bpref`](../../recovar/em/initial_model/layout.py)
+  converts dense `Ft_y` / `Ft_ctf` into RELION BackProjector slabs.
+- [`recovar/em/initial_model/layout.py::relion_bpref_frame_scales`](../../recovar/em/initial_model/layout.py)
+  applies the current dense-to-RELION frame scale convention.
+- [`recovar/em/initial_model/m_step.py::vdam_m_step`](../../recovar/em/initial_model/m_step.py)
+  runs the VDAM M-step for all classes.
+- [`recovar/em/initial_model/m_step.py::vdam_m_step_single_class`](../../recovar/em/initial_model/m_step.py)
+  wraps RELION `BackProjector` gradient primitives.
+- [`recovar/em/initial_model/gpu_pipeline.py`](../../recovar/em/initial_model/gpu_pipeline.py)
+  is now a compatibility export for old imports; new code should import
+  `dense_adapter` and `layout` directly.
+
+Shared dense EM code used by the adapter:
+
+- [`recovar/em/dense_single_volume/k_class.py::run_dense_k_class_em`](../../recovar/em/dense_single_volume/k_class.py)
+  runs joint dense K-class EM over class x pose.
+- [`recovar/em/dense_single_volume/k_class.py::run_local_k_class_em`](../../recovar/em/dense_single_volume/k_class.py)
+  runs exact local K-class EM on a per-image sparse hypothesis layout.
+- [`recovar/em/dense_single_volume/em_engine.py::run_em`](../../recovar/em/dense_single_volume/em_engine.py)
+  is the single-class dense EM engine whose scoring, prior, and reconstruction
+  contract is wrapped by the K-class orchestrators.
+- [`recovar/em/dense_single_volume/helpers/significance.py::_compute_k_class_significance_batched`](../../recovar/em/dense_single_volume/helpers/significance.py)
+  computes coarse significant support.
+- [`recovar/em/dense_single_volume/local_layout.py::build_pass2_hypothesis_layout`](../../recovar/em/dense_single_volume/local_layout.py)
+  expands coarse parents to oversampled fine hypotheses.
+- [`recovar/em/dense_single_volume/helpers/scoring.py::_score_rotation_block`](../../recovar/em/dense_single_volume/helpers/scoring.py)
+  is the shared Gaussian score kernel.
+
+Related notes:
+
+- [`relion_initial_model_em_parity_conventions.md`](relion_initial_model_em_parity_conventions.md)
+- [`relion_refinement_algorithm.md`](relion_refinement_algorithm.md)
+- [`dense_single_volume_em.md`](dense_single_volume_em.md)
+- [`relion_updateSSNR_algorithm_2026_04_25.md`](relion_updateSSNR_algorithm_2026_04_25.md)
+
+## Native Driver Flow
+
+`run_native_initial_model` is the top-level RECOVAR implementation:
+
+1. Read the input STAR and dataset with `read_star` and `load_dataset`.
+2. Reject unsupported modes early: `padding_factor != 1`,
+   `run_relion_align_symmetry=True`, and tilt-series input.
+3. Configure RELION-style image masking in
+   `driver.py::_configure_relion_image_mask`.
+4. Build the iteration-1 sampling plan with `driver.py::_build_sampling_plan`.
+5. Initialize per-particle offsets/classes/Pmax with
+   `driver.py::_particle_state_from_star`.
+6. Build the denovo state with `driver.py::_initial_state_from_particles`.
+7. Convert `sigma2_noise` to the dense scoring noise image with
+   `driver.py::_noise_variance_from_sigma2`.
+8. Build an expectation-step closure with `driver.py::_native_expectation_step`.
+9. Run VDAM iterations with `iteration_loop.py::run_vdam_iterations`.
+10. Write per-iteration STAR/MRC/JSON artifacts and the final selected-class
+    MRC via `driver.py::_write_iteration_artifacts` and
+    `driver.py::_write_final_outputs`.
+
+The script remains intentionally thin. `build_command` and `--dry_run` are
+command snapshots for RELION parity; the real native implementation is in
+`driver.py`.
+
+## Denovo State and Bootstrap
+
+The initial state is split into data-independent and data-dependent parts.
+
+`initialise_denovo_state` constructs:
+
+- `Iref[k] = 0` in RELION real-space volume convention.
+- `Igrad1[h*K + k] = 0` for first-moment slots. With pseudo-halfsets active
+  there are `2K` slots.
+- `Igrad2[k] = 1 + 1j`, matching RELION's `MOM2_INIT_CONSTANT`.
+- `pdf_class[k] = 1/K`.
+- `pdf_direction[k, r] = 1/(K * n_directions)`.
+- Empty `sigma2_noise`, `tau2_class`, `fsc_halves_class`, and
+  `data_vs_prior_class`.
+- `ini_high`, `current_resolution_shell`, and `current_size` from RELION's
+  `0.07 * ori_size` rule.
+
+The initial resolution helpers are:
 
 ```text
-y_i = S_t C_i P_r mu_k + eps_i,
-eps_i ~ complex Gaussian(0, Sigma_i).
+ini_shell = ROUND(0.07 * N)
+ini_high_A = N * pixel_size / ini_shell
+current_size = min(N, 2 * (ini_shell + 10))
 ```
 
-The hidden variable is \(z=(k,r,t)\). The standard EM posterior is
+`compute_avg_unaligned_and_sigma2` mirrors RELION's average-unaligned noise
+setup. For each optics group and up to `minimum_nr_particles` particles:
+
+```text
+Mavg = mean(masked image)
+particle_power_g[s] = mean_i radial_average(|FFT(masked image_i)|^2)[s]
+Mavg_power[s] = radial_average(|FFT(Mavg)|^2)[s]
+sigma2_noise[g, s] = particle_power_g[s] / 2 - Mavg_power[s] / 2
+```
+
+Non-positive shells are repaired by copying a positive neighbor, matching the
+RELION source behavior.
+
+`compute_bootstrap_iref_via_cpp` is the recommended bootstrap path. It calls the
+local RELION binding so the following C++ operations are not reimplemented in
+Python:
+
+- per-particle RNG reset with `random_seed + part_id`,
+- random Euler angle draw,
+- soft real-space mask,
+- RELION FFT normalization and `CenterFFTbySign`,
+- CTF image construction,
+- `BackProjector::set2DFourierTransform`,
+- `BackProjector::reconstruct(..., do_map=false)`.
+
+The Python wrapper currently defaults the bootstrap binding to `padding_factor=2`
+because that matches the available RELION fixture better than `1`, even though
+the GUI command uses `--pad 1` for the later refinement. Treat this as a known
+bootstrap parity quirk, not as a license to change the VDAM E/M padding.
+
+## VDAM Iteration Loop
+
+`run_vdam_iterations` owns the RELION gradient-refine control flow:
+
+```text
+phase_lengths = compute_phase_lengths(nr_iter, grad_ini_frac, grad_fin_frac)
+
+for iter = 1 .. nr_iter:
+    do_grad = ((nr_iter - iter) >= grad_em_iters) and not state.has_converged
+    state = default_schedule_update(...)
+    state = select_subset_for_iter(..., do_grad=do_grad)
+    accumulators, meta = expectation_step(state, subset_particle_ids, halfset_ids)
+    state = vdam_m_step(state, accumulators, stepsize, tau2_fudge)
+    state = update_probabilities_from_estep_meta(state, meta, do_grad, mu)
+    iter_artifact_sink(state, iter, meta)
+```
+
+This module deliberately does not know about JAX, particle stacks, or dense
+projection kernels. The E-step is an injected callback. That separation makes
+it easier to debug whether a parity failure is caused by scheduling/subset
+state, posterior math, BPref conversion, or RELION M-step bindings.
+
+Schedule defaults mirror RELION GUI InitialModel:
+
+```text
+nr_iter = 200
+K = 1
+tau2_fudge_arg = 4
+grad_ini_frac = 0.3
+grad_fin_frac = 0.2
+grad_em_iters = 0
+mu = 0.9
+base grad_current_stepsize = 0.5
+```
+
+Subset sizes come from `default_subset_sizes_for_3d_initial_model`:
+
+```text
+grad_ini_subset_size = clamp(round(0.005 * N_particles), 200, 5000)
+grad_fin_subset_size = clamp(round(0.1   * N_particles), 1000, 50000)
+```
+
+`compute_subset_size` returns `-1` to mean "all particles" when gradient mode
+is off, convergence flags are set, the requested subset covers the effective
+particle count, suspended local searches are active, or the final multiclass
+iteration requires all particles.
+
+`select_subset_for_iter` uses the exact RELION ordering contract:
+
+```text
+shuffle all particle ids with seed random_seed + iter
+take the prefix of length subset_size
+stable-sort the prefix by optics group
+if pseudo-halfsets active, assign 0,1,0,1,... along the stable-sorted prefix
+```
+
+This is not equivalent to sorting first or alternating halfsets in STAR order.
+The halfset routing changes the M-step because `Igrad1[k]` and `Igrad1[K+k]`
+receive different BackProjectors.
+
+## E-Step Math
+
+For image \(y_i\), class \(k\), rotation \(r\), translation \(t\), CTF \(C_i\),
+projection \(P_r\), and reference \(\mu_k\):
+
+```text
+y_i = S_t C_i P_r mu_k + eps_i
+eps_i ~ N_C(0, Sigma_i)
+z_i = (k, r, t)
+```
+
+The posterior normalized over the active support is:
 
 ```text
 gamma_i(k,r,t) =
-  p(k,r,t) exp(score_i(k,r,t)) /
-  sum_{k',r',t'} p(k',r',t') exp(score_i(k',r',t')).
+  exp(log pi_k + log p_r + log p_t + score_i(k,r,t))
+  / sum_{k',r',t' in support_i} exp(log pi_k' + log p_r' + log p_t' + score_i(k',r',t'))
 ```
 
-The Gaussian score used by the standard dense engine is
+The Gaussian score used by the dense kernels is, up to image-only constants:
 
 ```text
 score_i(k,r,t) =
   -0.5 * || y_i - S_t C_i P_r mu_k ||^2_{Sigma_i^-1}
 ```
 
-up to image-only constants. `helpers/scoring.py::_score_rotation_block` expands
-this into a cross term and a projection norm term:
+The implementation expands this in `_score_rotation_block`:
 
 ```text
 cross = -2 Re(conj(shifted_image) @ projected_volume)
@@ -125,297 +269,461 @@ norm  = (CTF^2 / sigma2) @ |projected_volume|^2
 score = -0.5 * (cross + norm)
 ```
 
-The M-step sufficient statistics for a class are
+Dense K-class EM computes class evidence and normalizes over the joint
+`class x pose` hidden variable. InitialModel uses that same posterior algebra,
+but its support and M-step differ from standard reconstruction EM.
+
+## Dense Adapter, Sparse Pass 2, and BPref Conversion
+
+`dense_adapter.py` is the bridge between native dense K-class EM and RELION
+VDAM. Its responsibilities are:
+
+- Convert `InitialModelState.Iref` to dense Fourier means with
+  `reference_to_dense_means`.
+- Build class log priors from `state.pdf_class` with
+  `class_log_priors_from_state`.
+- Split or pack selected particles into pseudo-halfset reconstruction groups.
+- Run the dense or sparse-pass2 K-class E-step.
+- Convert dense `Ft_y` / `Ft_ctf` into `VdamAccumulator` objects.
+- Return E-step metadata used for `pdf_class`, `pdf_direction`, particle
+  offsets, class assignments, and per-iteration artifacts.
+
+The dense, non-sparse path calls `run_dense_k_class_em` once with all classes.
+When pseudo-halfsets are active, both halves are packed into one dense E-step
+and separated only in the returned grouped reconstruction accumulators. This
+avoids duplicating projection/scoring work while still giving VDAM independent
+halfset BackProjectors.
+
+The sparse pass-2 path is closer to RELION adaptive InitialModel:
 
 ```text
-Ft_y(k) =
-  sum_i,r,t gamma_i(k,r,t)
-    P_r^* C_i Sigma_i^-1 S_t^* y_i
+pass 1:
+  score all coarse class x rotation x translation hypotheses
+  compute per-image significant coarse support
 
-Ft_ctf(k) =
-  sum_i,r,t gamma_i(k,r,t)
-    P_r^* C_i Sigma_i^-1 C_i P_r.
+pass 2:
+  union significant coarse parents across classes for each image
+  expand parents to oversampled fine rotations/translations
+  run exact local K-class EM only on that sparse fine support
+  normalize posterior over retained fine support
+  accumulate only retained/support-weighted hypotheses
 ```
 
-Standard EM reconstructs by a regularized filtered backprojection / Wiener solve:
+This support restriction is mathematically important. A full fine-grid
+implementation can match candidate scores but still disagree with RELION's
+BackProjectors because it normalizes over hypotheses that RELION never
+retained.
+
+The dense-to-VDAM bridge is:
 
 ```text
-mu_k_new ~= Ft_y(k) / (Ft_ctf(k) + prior_precision(k)).
+dense Ft_y[k], Ft_ctf[k]
+  -> layout.py::run_em_output_to_bpref
+  -> optional z flip when relion_projector_frame=True
+  -> optional frame scales from relion_bpref_frame_scales
+  -> VdamAccumulator(data, weight, class_idx=k, halfset_idx=h)
 ```
 
-InitialModel shares the same likelihood and posterior logic, but its M-step does
-not simply replace `mu` with a Wiener map. It routes the accumulated
-`BackProjector` data through RELION's VDAM gradient-momentum update.
-
-## Denovo Initialization
-
-`recovar/em/initial_model/init.py::initialise_denovo_state` mirrors RELION's
-`fn_ref == "None"` initialization:
-
-- `Iref[k]` starts as a zero real-space reference.
-- `Igrad1` first-moment buffers start at zero; there are `2K` slots when
-  pseudo-halfsets are active.
-- `Igrad2[k]` starts at `Complex(1, 1)`, matching RELION's
-  `MOM2_INIT_CONSTANT` behavior.
-- `pdf_class` is uniform over classes.
-- `pdf_direction` is uniform over class x direction.
-- The initial resolution uses RELION's `0.07 * ori_size` rule; for example, the
-  code computes `current_size = 2 * (ROUND(0.07 * ori_size) + 10)` before
-  clamping to the box.
-
-`avg_unaligned.py::compute_avg_unaligned_and_sigma2` implements the first
-data-dependent preprocessing step:
+For the default native InitialModel config, `relion_bpref_frame=True`, so
+`relion_bpref_frame_scales(N)` applies:
 
 ```text
-Mavg = average of masked images
-sigma2_noise[group, shell] =
-  average_particle_power[group, shell] / 2
-  - average_image_power[shell] / 2
+bp_data   *= -N^2
+bp_weight *=  N^4
 ```
 
-with RELION's correction for non-positive shells by copying the nearest positive
-neighbor.
+Do not mix this dense-frame conversion with a path that already emits native
+RELION BPref arrays. Frame/sign mistakes usually show up as good score parity
+but bad `BPref` or `Iref` parity.
 
-`bootstrap_iref.py::compute_bootstrap_iref_via_cpp` is the most RELION-faithful
-reference bootstrap path. For each selected particle, RELION resets the RNG with
-`random_seed + part_id`, draws random Euler angles, masks the image, FFTs it in
-RELION's normalized convention, multiplies by CTF, and inserts it into
-`BPref[iclass]`. Then `BPref.reconstruct(..., do_map=false)` reconstructs a
-low-resolution reference, followed by the InitialModel low-pass filter.
+`gpu_pipeline.py` used to contain the old monolithic GPU path. On this branch it
+only re-exports `DenseInitialModelEstepConfig`, `run_dense_initial_model_estep`,
+and the layout helpers for compatibility. New InitialModel work should not add
+logic there.
 
-## VDAM Iteration Flow
+## M-Step Math and VDAM Momenta
 
-`iteration_loop.py::run_vdam_iterations` is the pure orchestration layer:
-
-1. Compute phase lengths from `grad_ini_frac`, `grad_fin_frac`, and `nr_iter`.
-2. For each iteration, update the subset-size, step-size, and tau2-fudge
-   schedules.
-3. Shuffle particles with seed `random_seed + iter`.
-4. Select the current subset and pseudo-halfset ids.
-5. Run the caller-provided E-step adapter to produce `VdamAccumulator` objects.
-6. Run `vdam_m_step`.
-7. Write iteration artifacts.
-
-The schedule code mirrors RELION scalar behavior:
-
-- `default_subset_sizes_for_3d_initial_model`: `grad_ini_subset_size` is
-  clamped `round(0.005 N)` in `[200, 5000]`; `grad_fin_subset_size` is clamped
-  `round(0.1 N)` in `[1000, 50000]`.
-- `compute_subset_size`: the subset grows across the in-between phase and
-  becomes `-1` for all particles when gradient mode stops, convergence triggers,
-  the requested subset exceeds the available particles, or on the last
-  multi-class iteration.
-- `compute_stepsize`: 3D InitialModel defaults to a base step size of `0.5`
-  with a `0.9 / stepsize` sigmoid scheme.
-- `compute_tau2_fudge`: 3D InitialModel defaults to `tau2_fudge=4` with a
-  sigmoid transition from about `1` toward `4`.
-
-Particle subset selection is not just "take random N particles." In
-`subset.py::select_vdam_subset`, RECOVAR mirrors RELION's sequence:
+The E-step accumulates standard EM sufficient statistics per class and halfset:
 
 ```text
-shuffle full particle order with seed random_seed + iter
-take prefix of length subset_size
-stable-sort that prefix by optics group
-assign pseudo-halfsets by alternating 0, 1, 0, 1, ...
+Ft_y_h(k) =
+  sum_{i in halfset h} sum_{r,t}
+    gamma_i(k,r,t) P_r^* C_i Sigma_i^-1 S_t^* y_i
+
+Ft_ctf_h(k) =
+  sum_{i in halfset h} sum_{r,t}
+    gamma_i(k,r,t) P_r^* C_i Sigma_i^-1 C_i P_r
 ```
 
-This ordering matters because `storeWeightedSums` uses particle parity to route
-backprojections into pseudo-halfsets when gradient refinement is active.
-
-## E-Step Details
-
-The InitialModel parity E-step currently lives in
-`gpu_pipeline.py::run_iter_gpu_vdam`.
-
-There are two E-step modes:
-
-- `estep_mode="dense"`: diagnostic mode that calls `run_em` over the explicit
-  dense rotation x translation grid. This is useful for algebra and scaling
-  checks, but it is not RELION InitialModel parity mode.
-- `estep_mode="relion_adaptive"`: parity mode. It scores a coarse RELION grid,
-  retains image-specific significant support, then scores only oversampled child
-  hypotheses in sparse pass 2.
-
-The adaptive path uses the same conceptual posterior as standard EM, but it
-changes the support:
+Standard dense EM would reconstruct a new mean approximately as:
 
 ```text
-coarse pass: score all coarse (r,t), find significant parents
-fine pass:   score children of significant parents only
-posterior:   normalize over the retained fine support
-M-step:      accumulate only retained/support-weighted hypotheses
+mu_k_new ~= Ft_y(k) / (Ft_ctf(k) + prior_precision(k))
 ```
 
-This is the dominant difference from a naive full fine-grid implementation. A
-full fine grid can match RELION scores for individual candidates and still fail
-BPref parity because it assigns posterior mass to candidates RELION never
-backprojects.
+InitialModel does not use that replacement M-step. `m_step.py` sends each
+class's BPref data through RELION VDAM primitives:
 
-Important InitialModel-specific E-step conventions in `run_iter_gpu_vdam`:
+1. `vdam_reweight_grad(data, weight)`: normalize raw data by
+   `max(1, weight)` inside the active Fourier radius.
+2. `vdam_first_moment`: update each first-moment slot:
+   `m1_h <- 0.9 * m1_h + 0.1 * reweighted_data_h`.
+3. `vdam_second_moment`: update the class second moment from the normalized
+   halfset difference with `lambda = 0.999`.
+4. `vdam_apply_momenta`: combine halfset first moments, divide by
+   `sqrt(m2)`, and estimate `mom1_noise_power`.
+5. `vdam_reconstruct_grad`: update `Iref[k]` using the current reference,
+   post-momentum data, BPref weights, `grad_current_stepsize`,
+   `tau2_fudge_factor`, and `mom1_noise_power`.
 
-- `padding_factor=1` by default for GUI InitialModel scoring.
-- RELION-adaptive mode consumes `sigma2_noise` in RELION's `Minvsigma2` frame
-  (`noise_scale = 1.0`), while dense RECOVAR mode uses the historical `N^4`
-  noise conversion.
-- RELION-adaptive mode builds `Projector::data` / PPref via the RELION binding
-  (`compute_fourier_transform_map`) rather than scoring from RECOVAR's centered
-  full Fourier grid.
-- The returned projector data is multiplied by `ori_size` to match RELION dumped
-  PPref/Fref amplitudes.
-- The adaptive image correction is `-1 / N^2`; in that mode the final BPref
-  data and weights are already in RELION's frame.
-- The translation prior path intentionally follows the current RELION replay
-  convention:
+The critical state layout is:
 
 ```text
-log p(t_px) = -0.5 * ||t_px||^2 * pixel_size^4 / sigma_offset_A^2.
+Igrad1[k]     = halfset-0 first moment for class k
+Igrad1[K + k] = halfset-1 first moment for class k
+Igrad2[k]     = second moment for class k
 ```
 
-This `pixel_size^4` factor is a source-level parity convention, not the clean
-statistical expression one would choose from first principles.
+`vdam_m_step` expects accumulators ordered as all halfset-0 classes followed by
+all halfset-1 classes when pseudo-halfsets are active. The adapter preserves
+this by sorting halfset groups before appending accumulators.
 
-## VDAM M-Step Details
+## Volume Prior, Tau2, and Regularization
 
-`m_step.py::vdam_m_step_single_class` wraps RELION's gradient primitives:
+This section separates what is known directly from RECOVAR code in this branch
+from behavior inferred from RELION's InitialModel/Class3D conventions and the
+local RELION C++ bindings. The word "prior" is overloaded: RELION uses class,
+direction, and translation priors in the E-step, and a Fourier-shell reference
+variance prior (`tau2`, also written as reference variance/sigma2 in STAR files)
+in the M-step reconstruction filter.
 
-1. `reweightGrad`: divide raw `data` by `max(1, weight)` inside the active
-   Fourier radius.
-2. `getFristMoment`: update first moment
-   `m1 <- lambda1 * m1 + (1 - lambda1) * reweighted_data`, except RELION copies
-   into an all-zero moment buffer on first use.
-3. `getSecondMoment`: update second moment from the normalized halfset
-   difference, using `lambda2`.
-4. `applyMomenta`: average pseudo-halfset first moments, divide by
-   `sqrt(m2)`, and estimate per-shell noise from halfset moment differences.
-5. `reconstructGrad`: compute the current reference's RELION projector, estimate
-   FSC/noise if requested, and apply a gradient update controlled by
-   `grad_current_stepsize` and `tau2_fudge_factor`.
+### RELION settings and STAR/model state
 
-RECOVAR uses RELION's defaults:
+In standard RELION EM, AutoRefine, and Class3D, the previous iteration's
+`run_itNNN_model.star` is part of the model state for the next iteration. The
+important blocks are:
+
+- `data_model_classes`: `_rlnReferenceImage` points at each class map and
+  `_rlnClassDistribution` stores class weights.
+- `data_model_class_1`, `data_model_class_2`, ...: per-shell reference
+  variance is stored as `_rlnReferenceTau2` or `_rlnReferenceSigma2` depending
+  on the RELION/version path; these tables also carry FSC/SSNR/data-vs-prior
+  quantities in mature refinement output.
+- `data_model_pdf_orient_class_1`, ...: `_rlnOrientationDistribution` stores
+  learned direction priors for the next E-step.
+- `data_model_general`: stores control scalars such as current image size,
+  current resolution, `rlnTau2FudgeFactor`, and `rlnSigmaOffsetsAngst` when
+  present in the produced model file.
+- `run_itNNN_optimiser.star`: stores optimiser/control metadata, including
+  convergence counters and accuracy estimates used by replay code.
+
+RECOVAR parsing helpers for this state are concentrated in
+[`recovar/em/sampling.py`](../../recovar/em/sampling.py). In particular,
+`read_relion_model_metadata` reads current image size/resolution,
+`read_relion_optimiser_metadata` reads optimiser counters, and
+`read_relion_direction_prior` reads `model_pdf_orient_class_1`.
+[`scripts/run_k_class_parity.py`](../../scripts/run_k_class_parity.py) contains
+the K-class replay-specific readers: `_tau_spectrum` reads
+`rlnReferenceTau2`/`rlnReferenceSigma2`, `_class_distributions` reads
+`rlnClassDistribution`, and `_read_class_direction_priors` reads every
+`model_pdf_orient_class_N` table.
+
+Native RECOVAR InitialModel currently writes a much smaller model STAR in
+[`driver.py::_write_model_star`](../../recovar/em/initial_model/driver.py):
+`data_model_classes` contains reference map paths and class distributions, and
+`data_model_optics_group_1` contains `_rlnSigma2Noise`. It does not yet write
+per-class `model_class_N` tau2/FSC/data-vs-prior tables or
+`model_pdf_orient_class_N` direction-prior tables. That is a current code-level
+difference from mature RELION model output, not an inferred RELION rule.
+
+### InitialModel startup vs later iterations
+
+Native InitialModel starts cold. In
+[`init.py::initialise_denovo_state`](../../recovar/em/initial_model/init.py),
+`tau2_class`, `fsc_halves_class`, and `data_vs_prior_class` are allocated as
+zeros for every class. The initial class prior is uniform (`pdf_class[k]=1/K`),
+and the initial direction prior is uniform over class x direction. The first
+data-dependent spectral state is `sigma2_noise`, estimated by
+[`avg_unaligned.py::compute_avg_unaligned_and_sigma2`](../../recovar/em/initial_model/avg_unaligned.py).
+
+The InitialModel M-step in this branch does not explicitly compute and store a
+new `tau2_class` array after each native iteration. Instead,
+[`m_step.py::vdam_m_step_single_class`](../../recovar/em/initial_model/m_step.py)
+passes the current reference, BPref data, BPref weights, `fsc_halves_class[k]`,
+`grad_current_stepsize`, the scheduled `tau2_fudge_factor`, and
+`mom1_noise_power` to the RELION binding `vdam_reconstruct_grad`. From RECOVAR
+code, the known contract is that `reconstructGrad` receives `use_fsc=False` and
+`do_grad=True`, so RELION's gradient reconstruction derives its effective FSC /
+noise weighting internally from the momentum-noise spectrum. The exact
+per-shell tau2 update inside that binding is RELION behavior inferred from the
+C++ primitive, not reimplemented Python code in this branch.
+
+Later native InitialModel iterations therefore reuse the same Python-carried
+state fields but update the reference through RELION's VDAM binding. The
+regularization strength seen by that binding changes through
+[`schedules.py::compute_tau2_fudge`](../../recovar/em/initial_model/schedules.py),
+which mirrors RELION `updateTau2Fudge`: for GUI InitialModel defaults
+`--tau2_fudge 4` and an empty scheme, the scheduled value grows from near `1`
+toward `4` over the gradient phases. This is different from standard dense EM,
+where the Python reconstruction path receives an explicit tau spectrum.
+
+### Standard EM/Class3D tau2 path
+
+The dense single-volume RELION-parity loop in
+[`recovar/em/dense_single_volume/iteration_loop.py`](../../recovar/em/dense_single_volume/iteration_loop.py)
+does use explicit tau2-like arrays. `_reconstruct_volume_eager` calls
+[`relion_functions.post_process_from_filter_v2`](../../recovar/reconstruction/relion_functions.py)
+with `tau=mean_variance`, `tau2_fudge`, `use_spherical_mask=True`,
+`grid_correct=True`, and `minres_map=RELION_MINRES_MAP` unless a diagnostic
+variant overrides those defaults. `RELION_MINRES_MAP` is `5` in this branch.
+
+The lower-level regularization formula is in
+[`relion_functions.adjust_regularization_relion_style`](../../recovar/reconstruction/relion_functions.py):
 
 ```text
-lambda1 = 0.9
-lambda2 = 0.999
+regularized_weight = Ft_ctf + inv_tau
+inv_tau = 1 / (padding_factor^3 * tau2_fudge * tau2[shell])
 ```
 
-The active GPU VDAM path converts `Ft_y` / `Ft_ctf` into RELION BPref layout via
-`run_em_output_to_bpref`. In adaptive InitialModel mode, no extra frame scale is
-applied:
+`minres_map` gates the prior term: shells below `minres_map` do not receive the
+tau2 prior penalty. If tau is effectively zero where there is data, RECOVAR
+matches RELION's floor by using `1 / (0.001 * shell-averaged weight)` rather
+than an infinite penalty. After division by the regularized filter,
+`post_process_from_filter_v2` inverse-FFTs, crops, optionally applies RELION's
+soft spherical mask, optionally applies a supplied mask, optionally applies
+gridding correction, and returns the Fourier map.
+
+For RELION-style tau2 updates from half-map weights, RECOVAR implements
+[`regularization.compute_relion_tau2_from_weights`](../../recovar/reconstruction/regularization.py):
 
 ```text
-bp_data_scale   = 1
-bp_weight_scale = 1
+SSNR[s] = FSC[s] / (1 - FSC[s]) * tau2_fudge
+sigma2[s] = 1 / (padding_factor^3 * avg_weight[s])
+tau2[s] = SSNR[s] * sigma2[s]
 ```
 
-In dense diagnostic mode, the historical conversion remains:
+[`regularization.compute_data_vs_prior`](../../recovar/reconstruction/regularization.py)
+computes RELION's resolution-control ratio:
 
 ```text
-bp_data_scale   = -N^2
-bp_weight_scale =  N^4
+data_vs_prior[s] = avg_weight[s] * tau2_fudge * tau2[s] * padding_factor^3
 ```
 
-This distinction is critical. A score-parity fix in one Fourier/noise frame can
-produce a wrong M-step if the accumulator is converted with the other frame's
-scale/sign convention.
+The dense refinement loop records these diagnostics in
+`tau2_radial_trajectory`, `tau2_sigma2_trajectory`,
+`tau2_avg_weight_trajectory`, `tau2_fsc_used_trajectory`,
+`tau2_ssnr_trajectory`, and `data_vs_prior_trajectory`. In contrast, native
+InitialModel currently carries `tau2_class`/`data_vs_prior_class` fields but
+does not populate equivalent per-iteration trajectories in Python.
 
-## Standard EM / Class3D Path
+### 1-class vs K-class behavior
 
-The standard RELION-style EM loop in `dense_single_volume/iteration_loop.py`
-starts from an existing map/model state and performs gold-standard refinement:
+For `K=1`, the class prior is a scalar and the volume prior is a single tau2
+spectrum/reference variance curve. For K-class RELION Class3D, each class has
+its own reference image, class distribution, direction-prior table, and
+per-class reference-variance table. The K-class E-step normalizes over the
+joint class x pose hidden variable, but the M-step reconstructs each class with
+that class's own `Ft_y`, `Ft_ctf`, class weight/normalisation, and tau spectrum.
 
-- two independent half-set references,
-- projection and reconstruction padding factor `2`,
-- current-size growth from FSC/data-vs-prior logic,
-- adaptive oversampling or exact local search as the refinement progresses,
-- low-resolution half-map joining before reconstruction,
-- per-iteration FSC, tau2, noise, sigma-offset, direction-prior, and
-  convergence updates.
+RECOVAR's current dense K-class replay mirrors that layout at the E-step level:
+[`k_class.py::run_dense_k_class_em`](../../recovar/em/dense_single_volume/k_class.py)
+and `run_local_k_class_em` accept one mean and one `mean_variance` per class,
+then normalize evidence over class x pose. The parity harness
+[`scripts/run_k_class_parity.py`](../../scripts/run_k_class_parity.py) reads
+per-class tau spectra from target or previous RELION model files, reconstructs
+diagnostic variants through `_reconstruct_volume_eager`, and compares class
+maps after the best permutation.
 
-The dense engine (`em_engine.py::run_em`) streams over image batches and rotation
-blocks with two passes:
+Native InitialModel is also K-aware in state layout and in
+[`dense_adapter.py::class_log_priors_from_state`](../../recovar/em/initial_model/dense_adapter.py):
+`pdf_class` becomes class log priors, sparse pass 2 unions significant support
+across classes per image, and `vdam_m_step` loops per class. However, because
+native InitialModel delegates the gradient reconstruction to `vdam_reconstruct_grad`
+and does not write full RELION tau2/model blocks, K-class InitialModel parity is
+limited by RELION support selection, bootstrap class assignment, VDAM state, and
+the opaque RELION binding's per-class regularization behavior.
+
+### Solvent flattening, spherical masks, grid correction, and BPref weights
+
+RELION GUI InitialModel command construction in
+[`scripts/run_ab_initio.py::build_command`](../../scripts/run_ab_initio.py)
+adds `--flatten_solvent` by default when `InitialModelJobOptions.do_solvent` is
+true, and also adds `--zero_mask`. In native RECOVAR InitialModel, image masking
+is configured in `driver.py::_configure_relion_image_mask`, but the final
+native `initial_model.mrc` is written directly from `state.Iref[best_class]`;
+there is no separate native `relion_align_symmetry` postprocess or documented
+Python-side solvent-flattening pass for the final selected InitialModel map in
+this branch.
+
+In dense EM/Class3D replay, solvent/mask effects are explicit and easier to
+audit. The dense loop reconstructs with `_reconstruct_volume_eager`, which uses
+`post_process_from_filter_v2` with the RELION-style spherical mask and gridding
+correction enabled by default. The loop also applies RELION-style
+`solventFlatten` to real-space maps before the next E-step in the relevant
+branches. `scripts/run_k_class_parity.py` deliberately tests variants with and
+without spherical mask, solvent mask, grid correction, and `minres_map`, which
+is useful because those operations can change map parity even when the same
+`Ft_y`/`Ft_ctf` and tau2 are used.
+
+The data-vs-weight part of regularization enters through BPref / reconstruction
+weights. In standard reconstruction, `Ft_ctf` is the data weight and tau2 adds
+`inv_tau` to its denominator. In native InitialModel, dense E-step accumulators
+are converted to RELION BackProjector slabs by
+[`layout.py::run_em_output_to_bpref`](../../recovar/em/initial_model/layout.py)
+and then handed to `vdam_reconstruct_grad`; that binding sees the BPref weight
+array, the current reference, `tau2_fudge_factor`, and `mom1_noise_power`. The
+Python-visible dense-to-BPref frame conversion is documented above: dense
+InitialModel uses `bp_data *= -N^2` and `bp_weight *= N^4` when
+`relion_bpref_frame=True`. Adaptive/replay paths that already emit RELION-frame
+BPref rows must not receive that extra conversion.
+
+### Current limitations and known differences
+
+- Native InitialModel does not currently write full RELION `model_class_N`
+  tau2/FSC/data-vs-prior tables or `model_pdf_orient_class_N` prior maps in
+  `_write_model_star`.
+- Native InitialModel's effective tau2 update is inside the RELION
+  `vdam_reconstruct_grad` binding; Python code schedules `tau2_fudge` and
+  supplies BPref weights/noise power but does not expose the resulting tau2
+  spectrum as a first-class per-iteration artifact.
+- Dense K-class replay reads per-class tau2/reference variance from RELION
+  model files and reconstructs with explicit Python RELION-style regularization;
+  native InitialModel does not yet have the same replay-from-model-star startup
+  surface.
+- Native InitialModel defaults to RELION GUI `--pad 1` for refinement, while
+  dense refinement/Class3D replay commonly uses projection/reconstruction
+  padding factors from the dense loop and parity harness.
+- `minres_map`, spherical masking, solvent flattening, and gridding correction
+  are explicit switches in dense replay diagnostics; in native InitialModel,
+  parts of the equivalent behavior are either in the RELION binding or not yet
+  implemented as separate Python-visible artifact steps.
+- The current final native InitialModel output selects the largest `pdf_class`
+  and writes it directly; it does not run native `relion_align_symmetry
+  --select_largest_class`.
+
+## Posterior Priors and Metadata Updates
+
+After each M-step, `update_probabilities_from_estep_meta` updates class and
+direction priors from dense E-step metadata:
 
 ```text
-pass 1: compute scores and logsumexp normalizers
-pass 2: recompute scores, normalize posterior weights, accumulate Ft_y/Ft_ctf
+if do_grad and subset_size != -1:
+    my_mu = mu        # default 0.9
+else:
+    my_mu = 0
+
+pdf_class_new =
+  my_mu * pdf_class_old
+  + (1 - my_mu) * class_posterior_sums / sum_weight
 ```
 
-Class3D adds a class axis to the hidden state. `k_class.py::run_dense_k_class_em`
-first computes per-class log evidence, then normalizes each class against the
-global class x pose evidence before accumulating class-specific `Ft_y` and
-`Ft_ctf`.
+If `class_direction_posterior_sums` is present, `pdf_direction` is updated by
+the same momentum rule. InitialModel sparse pass 2 uses fine rotation ids for
+direction posterior updates via `_initial_model_pass2_layout`; standard local
+refinement may instead track parent coarse rotations.
 
-Mathematically, standard Class3D and InitialModel both estimate
-\(\gamma_i(k,r,t)\). The implementation contracts differ:
+`driver.py::_update_particle_state_from_estep_meta` also updates:
 
-- Standard Class3D updates class maps by the regularized EM reconstruction path.
-- InitialModel updates references through VDAM momenta and `reconstructGrad`.
-- Standard Class3D assumes mature model metadata and half-set state.
-- InitialModel creates denovo references, noise spectra, gradient moment buffers,
-  pseudo-halfsets, and increasing particle subsets.
+- STAR origin offsets from best translation assignments,
+- `_rlnClassNumber` from best class assignments,
+- `_rlnMaxValueProbDistribution` from per-image max posterior.
 
-## Key Differences from Standard EM / Class3D
+Those values are written into per-iteration data STAR files when iteration
+artifacts are enabled.
 
-| Topic | Standard EM / Class3D | InitialModel / ab initio |
+## RELION Parity Assumptions
+
+The native path intentionally encodes these RELION GUI InitialModel assumptions:
+
+- `--grad` and `--denovo_3dref` are required.
+- MPI is rejected for gradient refinement in `build_command`.
+- Refinement padding is `--pad 1`; native execution rejects other padding.
+- Default sampling is `healpix_order=1`, `oversampling=1`,
+  `offset_range=6`, and `offset_step=2`.
+- Default `tau2_fudge` is `4`, with the RELION sigmoid schedule.
+- Default `K` is `1`, but the current dense adapter and M-step are K-aware.
+- The driver runs in C1 by default and writes the best class as
+  `initial_model.mrc`; external `relion_align_symmetry` execution is not wired.
+- Native bootstrap currently supports one optics group.
+- Native execution supports SPA particle STAR files, not tilt-series.
+- The current scoring path uses masked images for scores but unmasked images
+  for reconstruction accumulation, matching the dense-engine contract.
+- The dense scoring noise uses `sigma2_noise * N^4` via
+  `driver.py::_noise_variance_from_sigma2`.
+- `e_step.py::minvsigma2_with_dc_zero` documents the RELION DC-exclusion
+  convention; use it when debugging direct InitialModel half-spectrum scoring.
+- RELION/RECOVAR volume frames differ. Use the helpers documented in
+  [`recovar/CLAUDE.md`](../../recovar/CLAUDE.md), not raw MRC loading, when
+  comparing RELION and RECOVAR volumes.
+
+## Differences from Standard Class3D / Dense EM
+
+| Topic | Standard dense EM / Class3D | InitialModel / ab initio |
 |---|---|---|
 | Entry point | Existing map/model refinement | `--grad --denovo_3dref` |
-| Initialization | Supplied initial reference and model metadata | Zero refs, initial noise estimate, random-orientation bootstrap refs |
-| Padding | RELION replay uses projection/reconstruction pad 2 | GUI InitialModel command uses `--pad 1`; bootstrap has additional BPref quirks |
-| Dataset split | Gold-standard halfsets | VDAM pseudo-halfsets while `do_grad` is active |
-| Particle usage | Usually all particles per iteration, subject to halfsets | Iteration-dependent mini-batch subset schedule |
-| E-step support | Dense, adaptive, or local depending on refinement state | RELION-adaptive coarse support plus oversampled sparse pass for parity |
-| M-step | Wiener/regularized reconstruction from `Ft_y`, `Ft_ctf` | `reweightGrad -> first moment -> second moment -> applyMomenta -> reconstructGrad` |
-| Step size | Not a VDAM gradient step in the same sense | `grad_current_stepsize` schedule, default base 0.5 |
-| Tau2 fudge | Auto-refine default is usually 1 unless overridden | GUI InitialModel default is 4 with a sigmoid schedule |
-| Class behavior | K-class posterior is implemented in dense/local class wrappers | Generic state/M-step are K-aware, but active GPU VDAM iteration is K=1-only today |
-| Final map | Current refined half/full maps | `relion_align_symmetry --select_largest_class` output |
+| Initial references | Supplied maps/model state | Random-orientation bootstrap references |
+| State | Dense EM means and regularization state | `InitialModelState`: `Iref`, `Igrad1`, `Igrad2`, priors, schedules |
+| Dataset split | Gold-standard halves or explicit image groups | VDAM pseudo-halfsets during gradient mode |
+| Particle usage | Usually all particles or refinement-specific local subsets | RELION subset schedule from 0.5% to 10% of particles |
+| E-step hidden variable | Pose, or class x pose for K-class | Class x pose over dense or adaptive sparse support |
+| E-step support | Dense grid, local search, or refinement adaptive support | Coarse significance plus oversampled sparse pass 2 when enabled |
+| M-step | Regularized reconstruction / Wiener-style solve | RELION VDAM momentum update and `reconstructGrad` |
+| Step size | Not a VDAM gradient step | `grad_current_stepsize` sigmoid schedule, base 0.5 |
+| Tau2 | Refinement/model update path | InitialModel `tau2_fudge=4` sigmoid schedule |
+| Output | Refined maps/halfmaps/model STAR | Largest class written as `initial_model.mrc` |
 
-## Current RECOVAR Parity Caveats
+Mathematically both paths estimate posterior weights
+\(\gamma_i(k,r,t)\). The debugging mistake to avoid is assuming that equal
+scores imply equal maps. InitialModel parity also requires equal support,
+normalization domain, pseudo-halfset routing, BPref layout/scales, VDAM moment
+state, and RELION volume frame.
 
-The following caveats are confirmed in current code and should be treated as
-debugging constraints:
+## Current Limitations
 
-- The public `scripts/run_ab_initio.py` execution path is not wired to run a full
-  RECOVAR InitialModel job. It builds the RELION-equivalent command and returns a
-  "real-execution path not yet wired" message in `main`.
-- `InitialModelState` and `m_step.py::vdam_m_step` are written for generic `K`,
-  including `2K` pseudo-halfset first-moment slots.
-- The active GPU VDAM iteration path in
-  `gpu_pipeline.py::run_iter_gpu_vdam` hardcodes `K = 1` around line 955, creates
-  one-class `Igrad1` / `Igrad2` buffers, and returns one reference update.
-- `scripts/run_cryobench_ribosembly_parity_slurm.sh`, lines 215-228, records
-  multi-class InitialModel parity as unsupported for this reason.
-- Dense full-grid InitialModel mode is diagnostic. RELION parity should use
-  `estep_mode="relion_adaptive"` unless a fixture proves RELION used a different
-  path.
-- Adaptive InitialModel and dense RECOVAR mode use different Fourier/noise frames;
-  do not mix their BPref scale/sign conversions.
-- RELION volume/frame conversions remain a high-risk source of false parity
-  failures. Use the existing helpers documented in `recovar/CLAUDE.md`; do not
-  raw-load RELION MRCs for comparisons.
+These are code-level limitations in the current branch:
 
-## Developer Debugging Checklist
+- `run_native_initial_model` rejects `padding_factor != 1`.
+- `run_native_initial_model` rejects `run_relion_align_symmetry=True`; the
+  command can be built, but native execution does not spawn RELION's symmetry
+  tool.
+- `run_native_initial_model` rejects tilt-series datasets.
+- `_initial_state_from_particles` rejects multiple optics groups because
+  `compute_bootstrap_iref_via_cpp` currently takes scalar optics parameters.
+- `compute_bootstrap_iref_via_cpp` carries a documented bootstrap
+  `padding_factor=2` fixture quirk.
+- Sparse pass 2 currently rejects empty pseudo-halfsets.
+- The dense adapter is K-aware, but multiclass quality parity still depends on
+  RELION support, bootstrap class assignment, and VDAM state parity; do not
+  claim K>1 parity from type support alone.
+- `gpu_pipeline.py` is a compatibility shim. Any reference to
+  `run_iter_gpu_vdam` is stale for this branch.
+- The final native `initial_model.mrc` is selected by largest `pdf_class`; it is
+  not postprocessed by native `relion_align_symmetry`.
 
-When RECOVAR InitialModel diverges from RELION, check these in order:
+## Debugging Checklist
 
-1. Confirm the exact RELION command flags: `--grad`, `--denovo_3dref`, `--pad 1`,
-   `--auto_sampling`, `--oversampling 1`, `--healpix_order 1`, `--offset_range 6`,
-   `--offset_step 2`, and `--tau2_fudge 4` for GUI defaults.
-2. Confirm particle order. RELION sorted order, STAR row order, stack index order,
-   optics-group stable sorting, and pseudo-halfset alternation are distinct.
-3. Confirm denovo initialization: `Igrad2` must be `1+1j`, not `1+0j`.
-4. Confirm `current_size`, `r_max`, and pass-1/pass-2 Fourier windows from the
-   RELION model/sampling STARs.
-5. Confirm the E-step path is RELION-adaptive, not dense full-grid, when comparing
-   to RELION InitialModel output.
-6. Confirm projector frame: adaptive mode should score against RELION PPref
-   (`compute_fourier_transform_map`), not a RECOVAR full Fourier grid.
-7. Confirm noise frame: adaptive InitialModel uses `noise_scale=1`; dense mode
-   uses `N^4`.
-8. Confirm translation-prior sigma comes from the correct previous model metadata
-   and that the current replay path uses the documented pixel-size behavior.
-9. Confirm BPref conversion: adaptive mode should not apply the dense `-N^2` /
-   `N^4` conversion.
-10. If score parity is good but BPref parity is bad, suspect support membership,
-    posterior normalization, particle ordering, or frame conversion before
-    suspecting the projection operator.
+When RECOVAR diverges from RELION InitialModel, isolate the first mismatch:
+
+1. Confirm the RELION command flags produced by
+   `scripts/run_ab_initio.py::build_command`.
+2. Confirm the input order: micrograph stable sort, bootstrap first-N selection,
+   VDAM shuffle seed `random_seed + iter`, optics stable sort, and pseudo-halfset
+   alternation are separate ordering rules.
+3. Confirm denovo state values: `Igrad2 = 1 + 1j`, uniform `pdf_class`, uniform
+   `pdf_direction`, `ini_high`, and `current_size`.
+4. Confirm `Mavg` and `sigma2_noise` before scoring.
+5. Confirm bootstrap settings, especially CTF metadata and the current
+   `padding_factor=2` bootstrap quirk.
+6. Confirm the E-step mode: full dense and sparse pass 2 normalize over
+   different supports.
+7. Confirm class priors and translation priors are shaped in selected-image
+   order after subset packing.
+8. Confirm dense-to-BPref conversion: active `r_max`, half-complex slab layout,
+   optional z flip, and `-N^2` / `N^4` scales.
+9. If score parity is good but BPref parity is bad, inspect support membership,
+   posterior normalization, reconstruction group ids, and frame scales before
+   changing projection math.
+10. If BPref parity is good but map parity is bad, inspect `Igrad1`, `Igrad2`,
+    `mom1_noise_power`, `tau2_fudge_factor`, and `grad_current_stepsize`.
+11. Compare RELION-produced MRCs only after converting volume conventions with
+    the documented RELION helpers.
