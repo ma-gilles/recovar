@@ -47,6 +47,11 @@ from .dense_engine import (
     PosteriorDiagnostics,
     dense_pose_ppca_E_step_blocked,
 )
+from .sparse_engine import (
+    SparseHypothesisLayout,
+    SparsePosteriorDiagnostics,
+    sparse_pose_ppca_E_step_flat,
+)
 from .state import FixedPosePPCAState, PoseMarginalPPCAEMState
 
 __all__ = [
@@ -54,8 +59,11 @@ __all__ = [
     "run_pose_marginal_ppca_refine",
     "IterationOpts",
     "PoseBlock",
+    "SparsePoseBlock",
     "BlockProvider",
+    "SparseBlockProvider",
     "Backprojector",
+    "SparseBackprojector",
     "HalfsetCombiner",
 ]
 
@@ -180,6 +188,43 @@ class HalfsetCombiner(Protocol):
     def __call__(self, vol_h0: Any, vol_h1: Any, kind: str) -> Any: ...
 
 
+class SparsePoseBlock(NamedTuple):
+    """Wrapper around :class:`SparseHypothesisLayout` carrying the
+    halfset index and side metadata needed by the backprojector
+    (rotations + translations indexed by hypothesis)."""
+
+    layout: SparseHypothesisLayout
+    halfset_idx: int
+    rotations_per_hyp: Any  # [Nh, 3, 3] real32 — rotation matrix per hypothesis
+    translations_per_hyp: Any  # [Nh, 2] real32 — translation offset per hypothesis
+    image_indices: Any  # [n_images] int32 — global image index per local image_id
+
+
+class SparseBlockProvider(Protocol):
+    """Yields :class:`SparsePoseBlock` per E-step pass for the M7
+    local-pose driver. The provider is responsible for building local
+    angular + shift hypotheses around ``state.pose_estimates`` (Mode B)
+    or expanding from a coarse parent grid (Mode A).
+    """
+
+    def __call__(
+        self,
+        theta_score_for_half: tuple[Any, Any],
+        pose_estimates: Any,
+        iteration: int,
+    ) -> Iterable[SparsePoseBlock]: ...
+
+
+class SparseBackprojector(Protocol):
+    """Sparse-engine analogue of :class:`Backprojector`."""
+
+    def __call__(
+        self,
+        stats_blocks: list[tuple[SparsePoseBlock, DenseImageStats, "SparsePosteriorDiagnostics"]],
+        halfset_idx: int,
+    ) -> AugmentedPPCAStats: ...
+
+
 def _default_halfset_combine(vol_h0, vol_h1, kind: str):
     """Simple arithmetic mean — placeholder for the M10 production combine
     via ``RefinementState`` filtered averaging."""
@@ -206,8 +251,10 @@ def _should_recompute_prior(it: int, cfg: PCPriorConfig) -> bool:
 def run_pose_marginal_ppca_refine(
     initial_state: PoseMarginalPPCAEMState,
     *,
-    block_provider: BlockProvider,
-    backprojector: Backprojector,
+    block_provider: BlockProvider | None = None,
+    sparse_block_provider: SparseBlockProvider | None = None,
+    backprojector: Backprojector | None = None,
+    sparse_backprojector: SparseBackprojector | None = None,
     halfset_combiner: HalfsetCombiner | None = None,
     mask: Any,
     masks: Any | None = None,
@@ -253,40 +300,84 @@ def run_pose_marginal_ppca_refine(
     if halfset_combiner is None:
         halfset_combiner = _default_halfset_combine
 
+    if (block_provider is None) == (sparse_block_provider is None):
+        raise ValueError("Provide exactly one of block_provider (dense) or sparse_block_provider (sparse, M7+).")
+    use_sparse = sparse_block_provider is not None
+    if use_sparse and sparse_backprojector is None:
+        raise ValueError("sparse_block_provider requires sparse_backprojector.")
+    if not use_sparse and backprojector is None:
+        raise ValueError("block_provider requires backprojector.")
+
     state = initial_state
     iteration_log: list[dict] = []
     cfg = opts.pc_prior_config or PCPriorConfig()
+    pose_estimates = state.pose_estimates  # used by sparse provider for Mode B
 
     for it in range(opts.EM_iter):
         # ------------------------------ E-step --------------------------------
-        all_blocks = list(block_provider((state.mu_score, state.W_score), it))
-        h0_blocks, h1_blocks = _split_blocks_by_halfset(all_blocks)
-
         per_half_image_stats: dict[int, list] = {0: [], 1: []}
         all_logZ: list[float] = []
         all_pmax: list[float] = []
         all_nsig: list[int] = []
+        # Per-image best-pose tracking (sparse engine path only). Maps
+        # (halfset_idx, local_image_id) → (rotation_3x3, translation_2)
+        best_pose_records: dict[tuple[int, int], tuple[Any, Any]] = {}
 
-        for half_idx, half_blocks in [(0, h0_blocks), (1, h1_blocks)]:
-            for block in half_blocks:
-                img_stats, diag = dense_pose_ppca_E_step_blocked(
-                    block.Y1,
-                    block.proj_aug,
-                    block.ctf2_over_noise,
-                    block.y_norm,
-                    block.pose_log_prior,
+        if use_sparse:
+            all_blocks = list(sparse_block_provider((state.mu_score, state.W_score), pose_estimates, it))
+            for block in all_blocks:
+                half_idx = block.halfset_idx
+                img_stats, diag = sparse_pose_ppca_E_step_flat(
+                    block.layout,
                     significance_threshold=opts.significance_threshold,
                 )
                 per_half_image_stats[half_idx].append((block, img_stats, diag))
                 all_logZ.extend([float(x) for x in jnp.asarray(diag.logZ)])
                 all_pmax.extend([float(x) for x in jnp.asarray(diag.pmax)])
                 all_nsig.extend([int(x) for x in jnp.asarray(diag.n_significant_per_image)])
+                # Record best (rotation, translation) per local image.
+                best_h = jnp.asarray(diag.best_hypothesis_idx)
+                rots = jnp.asarray(block.rotations_per_hyp)
+                trans = jnp.asarray(block.translations_per_hyp)
+                for local_i, h_idx in enumerate(best_h.tolist()):
+                    if h_idx < block.layout.image_id.shape[0]:
+                        best_pose_records[(half_idx, int(jnp.asarray(block.image_indices)[local_i]))] = (
+                            rots[h_idx],
+                            trans[h_idx],
+                        )
+        else:
+            all_blocks = list(block_provider((state.mu_score, state.W_score), it))
+            h0_blocks, h1_blocks = _split_blocks_by_halfset(all_blocks)
+            for half_idx, half_blocks in [(0, h0_blocks), (1, h1_blocks)]:
+                for block in half_blocks:
+                    img_stats, diag = dense_pose_ppca_E_step_blocked(
+                        block.Y1,
+                        block.proj_aug,
+                        block.ctf2_over_noise,
+                        block.y_norm,
+                        block.pose_log_prior,
+                        significance_threshold=opts.significance_threshold,
+                    )
+                    per_half_image_stats[half_idx].append((block, img_stats, diag))
+                    all_logZ.extend([float(x) for x in jnp.asarray(diag.logZ)])
+                    all_pmax.extend([float(x) for x in jnp.asarray(diag.pmax)])
+                    all_nsig.extend([int(x) for x in jnp.asarray(diag.n_significant_per_image)])
+
+        # Update hard-pose estimates from posterior maxima (sparse only).
+        if use_sparse and best_pose_records:
+            pose_estimates = dict(best_pose_records)  # M7: simple dict; M10 may use a richer structure
 
         # ------------------------------ M-step --------------------------------
         new_mu_half: list[Any] = []
         new_W_half: list[Any] = []
         for half_idx in (0, 1):
-            stats: AugmentedPPCAStats = backprojector(per_half_image_stats[half_idx], half_idx)
+            if use_sparse:
+                stats: AugmentedPPCAStats = sparse_backprojector(
+                    per_half_image_stats[half_idx],
+                    half_idx,
+                )
+            else:
+                stats = backprojector(per_half_image_stats[half_idx], half_idx)
             mu_init, W_init = state.mu_half[half_idx], state.W_half[half_idx]
             mu_real, W_real = solve_augmented_ppca_mstep(
                 stats,
@@ -318,6 +409,7 @@ def run_pose_marginal_ppca_refine(
             mu_score=mu_score_new,
             W_score=W_score_new,
             W_prior=new_W_prior,
+            pose_estimates=pose_estimates,
         )
 
         # ------------------------------ Diagnostics ---------------------------

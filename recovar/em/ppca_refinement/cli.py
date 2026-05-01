@@ -103,25 +103,27 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if args.pose_mode != "fixed":
-        print(
-            f"--pose-mode {args.pose_mode!r} is not yet implemented "
-            f"(lands at M{'5' if args.pose_mode == 'dense' else '7'}).",
-            file=sys.stderr,
-        )
-        return 2
-
-    # The full pipeline glue (particles.star → CryoEMDataset → call
-    # ``run_fixed_pose_ppca_refine``) lands together with M5's
-    # ``run_pose_marginal_ppca_refine`` since it shares the same I/O. For
-    # M3 we expose the Python API only, which is the primary parity gate.
+    # Python APIs available:
+    #   --pose-mode fixed  → recovar.em.ppca_refinement.iterations.run_fixed_pose_ppca_refine
+    #   --pose-mode dense  → run_pose_marginal_ppca_refine(..., block_provider=...)
+    #   --pose-mode local  → run_pose_marginal_ppca_refine(..., sparse_block_provider=...)
+    # Full CLI pipeline glue (particles.star → CryoEMDataset → block provider →
+    # backprojector → output) lands at M10 alongside dataset wiring.
+    py_api = {
+        "fixed": "recovar.em.ppca_refinement.iterations.run_fixed_pose_ppca_refine",
+        "dense": "recovar.em.ppca_refinement.iterations.run_pose_marginal_ppca_refine "
+        "(block_provider= for dense engine)",
+        "local": "recovar.em.ppca_refinement.iterations.run_pose_marginal_ppca_refine "
+        "(sparse_block_provider= for local-pose Mode B)",
+    }[args.pose_mode]
     print(
-        "M3 Python API is in place: "
-        "``from recovar.em.ppca_refinement.iterations import run_fixed_pose_ppca_refine``. "
+        f"Python API for --pose-mode {args.pose_mode}: {py_api}. "
         "Full CLI pipeline glue (particles → dataset → refinement → output) "
-        "lands at M5.",
+        "lands at M10.",
         file=sys.stderr,
     )
+    if args.reuse_kclass_pose_schedule and args.pose_mode != "local":
+        print("--reuse-kclass-pose-schedule only applies to --pose-mode local.", file=sys.stderr)
     return 0
 
 

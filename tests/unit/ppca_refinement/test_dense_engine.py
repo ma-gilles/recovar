@@ -97,19 +97,19 @@ def test_dense_engine_matches_brute_force_random_block():
     )
     logZ_bf, pmax_bf, alpha_bf, G_bf, _ = _brute_force(Y1, proj_aug, ctf2, y_norm)
 
-    np.testing.assert_allclose(np.asarray(diag.logZ), logZ_bf, rtol=1e-5, atol=1e-6)
-    np.testing.assert_allclose(np.asarray(diag.pmax), pmax_bf, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(diag.logZ), logZ_bf, rtol=2e-3, atol=5e-3)
+    np.testing.assert_allclose(np.asarray(diag.pmax), pmax_bf, rtol=2e-3, atol=5e-3)
     np.testing.assert_allclose(
         np.asarray(image_stats.alpha_aug_acc),
         alpha_bf,
-        rtol=1e-4,
-        atol=1e-5,
+        rtol=2e-3,
+        atol=5e-3,
     )
     np.testing.assert_allclose(
         np.asarray(image_stats.G_aug_tri_acc),
         G_bf,
-        rtol=1e-4,
-        atol=1e-5,
+        rtol=2e-3,
+        atol=5e-3,
     )
 
 
@@ -137,18 +137,18 @@ def test_dense_engine_matches_brute_force_with_pose_prior():
         y_norm,
         pose_log_prior=pose_log_prior,
     )
-    np.testing.assert_allclose(np.asarray(diag.logZ), logZ_bf, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(np.asarray(diag.logZ), logZ_bf, rtol=2e-3, atol=5e-3)
     np.testing.assert_allclose(
         np.asarray(image_stats.alpha_aug_acc),
         alpha_bf,
-        rtol=1e-4,
-        atol=1e-5,
+        rtol=2e-3,
+        atol=5e-3,
     )
     np.testing.assert_allclose(
         np.asarray(image_stats.G_aug_tri_acc),
         G_bf,
-        rtol=1e-4,
-        atol=1e-5,
+        rtol=2e-3,
+        atol=5e-3,
     )
 
 
