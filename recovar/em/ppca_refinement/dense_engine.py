@@ -72,12 +72,16 @@ class DenseImageStats(NamedTuple):
 
 
 class PosteriorDiagnostics(NamedTuple):
-    logZ: jax.Array  # [B] real32
-    pmax: jax.Array  # [B] real32
-    best_rotation_idx: jax.Array  # [B] int32
-    best_translation_idx: jax.Array  # [B] int32
+    logZ: jax.Array  # [B] real32                — per-image log-evidence
+    pmax: jax.Array  # [B] real32                — per-image max posterior γ
+    best_rotation_idx: jax.Array  # [B] int32     — argmax rotation per image
+    best_translation_idx: jax.Array  # [B] int32  — argmax translation per image
     n_significant_per_image: jax.Array  # [B] int32 — count of (r, t) with γ > τ_sig
-    omitted_log_mass: jax.Array  # [B] real32 — log(1 - Σ γ inside support); 0 here (dense)
+    omitted_log_mass: jax.Array  # [B] real32     — log(1 - Σ γ inside support); 0 here (dense)
+    # D12: richer RelionStats diagnostics.
+    best_log_score_per_image: jax.Array  # [B] real32 — max_a (ℓ_ia + log π_ia)
+    rotation_posterior_sums: jax.Array  # [R] real32  — Σ_i Σ_t γ_irt (per-rotation marginal)
+    max_posterior_per_image: jax.Array  # [B] real32  — same as pmax (kept for RELION naming)
 
 
 def _per_pose_stats_block(Y1, proj_aug, ctf2_over_noise, y_norm):
@@ -209,6 +213,9 @@ def dense_pose_ppca_E_step_blocked(
     pmax = jnp.max(gamma_pass1.reshape(B, T * R), axis=-1)  # [B]
     n_sig = jnp.sum(gamma_pass1 > significance_threshold, axis=(-1, -2)).astype(jnp.int32)
     omitted_log_mass = jnp.zeros((B,), dtype=jnp.float32)  # dense engine: full support
+    # D12: richer RelionStats diagnostics.
+    best_log_score_per_image = jnp.max(score_flat, axis=-1).astype(jnp.float32)
+    rotation_posterior_sums = jnp.sum(gamma_pass1, axis=(0, 1)).astype(jnp.float32)  # [R]
 
     # ---- Pass 2: recompute and accumulate moments --------------------------
     if q == 0:
@@ -227,6 +234,9 @@ def dense_pose_ppca_E_step_blocked(
             best_translation_idx=best_t,
             n_significant_per_image=n_sig,
             omitted_log_mass=omitted_log_mass,
+            best_log_score_per_image=best_log_score_per_image,
+            rotation_posterior_sums=rotation_posterior_sums,
+            max_posterior_per_image=pmax,
         )
 
     score2, alpha_brt, G_tri_brt = compute_ppca_pose_scores_and_moments_no_contrast(
@@ -267,6 +277,9 @@ def dense_pose_ppca_E_step_blocked(
         best_translation_idx=best_t,
         n_significant_per_image=n_sig,
         omitted_log_mass=omitted_log_mass,
+        best_log_score_per_image=best_log_score_per_image,
+        rotation_posterior_sums=rotation_posterior_sums,
+        max_posterior_per_image=pmax,
     )
 
 
@@ -382,6 +395,9 @@ def fused_dense_pose_ppca_block(
     pmax = jnp.max(gamma_for_diag.reshape(B, T * R), axis=-1)
     n_sig = jnp.sum(gamma_for_diag > significance_threshold, axis=(-1, -2)).astype(jnp.int32)
     omitted_log_mass = jnp.zeros((B,), dtype=jnp.float32)
+    # D12: richer RelionStats diagnostics.
+    best_log_score_per_image = jnp.max(score_flat, axis=-1).astype(jnp.float32)
+    rotation_posterior_sums = jnp.sum(gamma_for_diag, axis=(0, 1)).astype(jnp.float32)  # [R]
 
     # ---- Pass 2 + per-rotation backprojection -------------------------------
     score2, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
@@ -460,5 +476,8 @@ def fused_dense_pose_ppca_block(
         best_translation_idx=best_t,
         n_significant_per_image=n_sig,
         omitted_log_mass=omitted_log_mass,
+        best_log_score_per_image=best_log_score_per_image,
+        rotation_posterior_sums=rotation_posterior_sums,
+        max_posterior_per_image=pmax,
     )
     return rhs_volume, lhs_tri_volume, diagnostics

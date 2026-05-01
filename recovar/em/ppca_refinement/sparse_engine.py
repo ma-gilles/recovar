@@ -105,6 +105,12 @@ class SparsePosteriorDiagnostics(NamedTuple):
     n_significant_per_image: jax.Array  # [n_images]
     omitted_log_mass: jax.Array  # [n_images] — log(1 - Σ γ inside support)
     best_hypothesis_idx: jax.Array  # [n_images] int32 — flat index into Nh per image's argmax
+    # D12: richer RelionStats diagnostics. Sparse layouts have per-image
+    # rotation subsets, so a global rotation_posterior_sums field has no
+    # natural meaning here — only image-level fields are exposed. Callers
+    # that want per-rotation marginals should use the dense engine.
+    best_log_score_per_image: jax.Array  # [n_images] real32 — max_a (ℓ_ia + log π_ia)
+    max_posterior_per_image: jax.Array  # [n_images] real32 — same as pmax (RELION naming)
 
 
 def _segmented_logsumexp(scores, image_id, n_images):
@@ -198,6 +204,8 @@ def sparse_pose_ppca_E_step_flat(
 
     # No omitted mass for unpruned layouts; pruners must adjust.
     omitted_log_mass = jnp.zeros((n_images,), dtype=jnp.float32)
+    # D12: best log score per image = segment_max of (ℓ + log π).
+    best_log_score_per_image = seg_max_score.astype(jnp.float32)
 
     # ---- Pass 2: recompute moments + accumulate gamma·alpha, gamma·G_tri ----
     if q == 0:
@@ -216,6 +224,8 @@ def sparse_pose_ppca_E_step_flat(
             n_significant_per_image=n_sig,
             omitted_log_mass=omitted_log_mass,
             best_hypothesis_idx=best_hyp_idx,
+            best_log_score_per_image=best_log_score_per_image,
+            max_posterior_per_image=pmax,
         )
 
     score2, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
@@ -257,6 +267,8 @@ def sparse_pose_ppca_E_step_flat(
         n_significant_per_image=n_sig,
         omitted_log_mass=omitted_log_mass,
         best_hypothesis_idx=best_hyp_idx,
+        best_log_score_per_image=best_log_score_per_image,
+        max_posterior_per_image=pmax,
     )
 
 
@@ -364,6 +376,8 @@ def fused_sparse_pose_ppca_block(
     is_argmax = score >= seg_max_score[layout.image_id] - 1e-12
     best_hyp_idx = _segment_first_true(is_argmax, layout.image_id, n_images)
     omitted_log_mass = jnp.zeros((n_images,), dtype=jnp.float32)
+    # D12: richer RelionStats diagnostics.
+    best_log_score_per_image = seg_max_score.astype(jnp.float32)
 
     # ---- Pass 2: moments + batched backprojection ----
     score2, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
@@ -416,5 +430,7 @@ def fused_sparse_pose_ppca_block(
         n_significant_per_image=n_sig,
         omitted_log_mass=omitted_log_mass,
         best_hypothesis_idx=best_hyp_idx,
+        best_log_score_per_image=best_log_score_per_image,
+        max_posterior_per_image=pmax,
     )
     return rhs_volume, lhs_tri_volume, diagnostics
