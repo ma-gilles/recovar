@@ -60,7 +60,8 @@ static py::tuple compute_fourier_transform_map(
     int padding_factor,
     int interpolator,
     int current_size,
-    bool do_gridding
+    bool do_gridding,
+    int data_dim
 ) {
     auto buf = vol_in.request();
     if (buf.ndim != 3)
@@ -73,7 +74,7 @@ static py::tuple compute_fourier_transform_map(
     std::memcpy(vol.data, (double*)buf.ptr, N * N * N * sizeof(RFLOAT));
 
     // Create projector
-    Projector proj(ori_size, interpolator, (RFLOAT)padding_factor, 10, 3);
+    Projector proj(ori_size, interpolator, (RFLOAT)padding_factor, 10, data_dim);
 
     // Compute power spectrum (required output parameter)
     MultidimArray<RFLOAT> power_spectrum;
@@ -130,7 +131,9 @@ static py::array_t<std::complex<double>> project_volume(
     int padding_factor,
     int interpolator,
     int current_size,
-    bool do_gridding
+    bool do_gridding,
+    int data_dim,
+    bool current_size_output
 ) {
     auto vol_buf = vol_in.request();
     if (vol_buf.ndim != 3)
@@ -147,7 +150,7 @@ static py::array_t<std::complex<double>> project_volume(
     std::memcpy(vol.data, (double*)vol_buf.ptr, N * N * N * sizeof(RFLOAT));
 
     // Create projector and initialize
-    Projector proj(ori_size, interpolator, (RFLOAT)padding_factor, 10, 3);
+    Projector proj(ori_size, interpolator, (RFLOAT)padding_factor, 10, data_dim);
     MultidimArray<RFLOAT> power_spectrum;
     proj.computeFourierTransformMap(vol, power_spectrum, current_size, 1,
                                     do_gridding);
@@ -161,7 +164,8 @@ static py::array_t<std::complex<double>> project_volume(
 
     // Pre-allocate output (RELION project() uses DIRECT indexing, no Xmipp origin needed)
     MultidimArray<Complex> img_out;
-    img_out.resize(ori_size, ori_size / 2 + 1);
+    int output_size = current_size_output && current_size > 0 ? current_size : ori_size;
+    img_out.resize(output_size, output_size / 2 + 1);
     img_out.initZeros();
 
     // Project
@@ -218,6 +222,7 @@ ndarray, shape (N, N, N), float64
           py::arg("interpolator") = 1,
           py::arg("current_size") = -1,
           py::arg("do_gridding") = true,
+          py::arg("data_dim") = 2,
           R"doc(
 Initialize RELION Projector from a real-space volume.
 
@@ -237,6 +242,8 @@ shape (pad_size, pad_size, pad_size//2+1) complex128.
           py::arg("interpolator") = 1,
           py::arg("current_size") = -1,
           py::arg("do_gridding") = true,
+          py::arg("data_dim") = 2,
+          py::arg("current_size_output") = false,
           R"doc(
 Project a volume using RELION's Projector::project.
 
@@ -256,6 +263,12 @@ current_size : int
     Resolution limit (-1 = full).
 do_gridding : bool
     Apply gridding correction before FFT.
+data_dim : int
+    Projection data dimensionality. Use 2 for SPA 3D-reference-to-2D-image
+    scoring; RELION changes projector normalisation based on this value.
+current_size_output : bool
+    If true, allocate the output Fourier image as
+    (current_size, current_size//2+1), matching RELION E-step buffers.
 
 Returns
 -------

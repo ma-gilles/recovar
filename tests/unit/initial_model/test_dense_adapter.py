@@ -11,16 +11,22 @@ from recovar.em.initial_model import initialise_denovo_state
 from recovar.em.initial_model.dense_adapter import (
     DenseInitialModelEstepConfig,
     class_log_priors_from_state,
+    _initial_model_pass2_layout,
     reference_to_dense_means,
     run_dense_initial_model_estep,
     split_pseudo_halfset_particle_ids,
 )
+from recovar.em.dense_single_volume.local_layout import LocalHypothesisLayout
 
 pytestmark = pytest.mark.unit
 
 
 class _Dataset:
     n_images = 4
+
+    def subset(self, image_indices):
+        n_images = int(np.asarray(image_indices).size)
+        return SimpleNamespace(n_images=n_images, n_units=n_images)
 
 
 def _fake_result(n_classes: int, n: int, *, n_images: int = 2, n_groups: int = 2):
@@ -374,16 +380,139 @@ def test_dense_initial_model_estep_handles_empty_halfset(monkeypatch):
     np.testing.assert_allclose(result.accumulators[1].weight, 0.0)
 
 
-def test_dense_initial_model_estep_rejects_sparse_pass2():
-    state = initialise_denovo_state(ori_size=8, pixel_size=1.0, K=1, nr_iter=1, n_directions=4)
+def test_dense_initial_model_estep_sparse_pass2_uses_coarse_and_fine_priors(monkeypatch):
+    calls = {}
+
+    def fake_significance(dataset, means, noise_variance, rotations, translations, disc_type, **kwargs):
+        del means, noise_variance, disc_type
+        calls["pass1_rotations"] = np.asarray(rotations, dtype=np.float32).copy()
+        calls["pass1_translations"] = np.asarray(translations).copy()
+        calls["pass1_prior"] = np.asarray(kwargs["translation_log_prior"], dtype=np.float32).copy()
+        n_images = int(dataset.n_units)
+        n_rot = int(np.asarray(rotations).shape[0])
+        significant = [[np.array([0], dtype=np.int32) for _ in range(n_images)]]
+        return (
+            np.ones((1, n_rot), dtype=bool),
+            np.ones(n_images, dtype=np.int32),
+            np.zeros(n_images, dtype=np.int32),
+            np.zeros(n_images, dtype=np.int32),
+            significant,
+            None,
+        )
+
+    def fake_build_layout(*args, **kwargs):
+        calls["fine_prior"] = np.asarray(kwargs["fine_translation_log_prior"], dtype=np.float32).copy()
+        calls["layout_translations"] = np.asarray(args[4], dtype=np.float32).copy() if args else None
+        return LocalHypothesisLayout(
+            n_global_rotations=1,
+            n_pixels=1,
+            n_psi=1,
+            rotation_offsets=np.array([0, 1, 2], dtype=np.int64),
+            rotation_ids_flat=np.array([0, 0], dtype=np.int32),
+            rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (2, 3, 3)).copy(),
+            rotation_log_priors_flat=np.zeros(2, dtype=np.float32),
+            rotation_counts=np.array([1, 1], dtype=np.int32),
+            translation_grid=np.zeros((4, 2), dtype=np.float32),
+            translation_log_priors=np.zeros((2, 4), dtype=np.float32),
+            rotation_posterior_ids_flat=np.array([0, 0], dtype=np.int32),
+        )
+
+    def fake_run_local(dataset, means, mean_variance, noise_variance, local_layout, disc_type, **kwargs):
+        del means, mean_variance, noise_variance, disc_type
+        calls["local_n_global_rotations"] = int(local_layout.n_global_rotations)
+        calls["local_pre_shifts"] = np.asarray(kwargs["image_pre_shifts"], dtype=np.float32).copy()
+        return _fake_result(n_classes=1, n=8, n_images=int(dataset.n_units), n_groups=1)
+
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter._compute_k_class_significance_batched",
+        fake_significance,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.build_pass2_hypothesis_layout",
+        fake_build_layout,
+    )
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.run_local_k_class_em",
+        fake_run_local,
+    )
+
+    def fake_perturb(rotations, random_perturbation, angular_sampling_deg):
+        calls["rotation_perturbation"] = (float(random_perturbation), float(angular_sampling_deg))
+        return np.asarray(rotations, dtype=np.float32) + np.float32(7.0)
+
+    monkeypatch.setattr(
+        "recovar.em.initial_model.dense_adapter.apply_relion_rotation_perturbation",
+        fake_perturb,
+    )
+
+    state = initialise_denovo_state(
+        ori_size=8,
+        pixel_size=1.0,
+        K=1,
+        nr_iter=1,
+        n_directions=4,
+        pseudo_halfsets=False,
+    )
+    fine_prior = np.arange(16, dtype=np.float32).reshape(4, 4)
+    coarse_prior = np.arange(8, dtype=np.float32).reshape(4, 2)
+    pre_shifts = np.arange(8, dtype=np.float32).reshape(4, 2)
+    coarse_translations = np.asarray([[0.25, 0.25], [1.25, 0.25]], dtype=np.float32)
     config = DenseInitialModelEstepConfig(
         means=np.zeros((1, 8**3), dtype=np.complex64),
         mean_variance=np.ones((1, 8**3), dtype=np.float32),
         noise_variance=np.ones(8 * 8, dtype=np.float32),
-        rotations=np.eye(3, dtype=np.float32)[None],
-        translations=np.zeros((1, 2), dtype=np.float32),
-        engine_kwargs={"sparse_pass2": True},
+        rotations=np.zeros((12, 3, 3), dtype=np.float32),
+        translations=np.zeros((4, 2), dtype=np.float32),
+        relion_bpref_frame=False,
+        engine_kwargs={
+            "sparse_pass2": True,
+            "healpix_order": 0,
+            "oversampling_order": 1,
+            "translation_step": 1.0,
+            "random_perturbation": 0.25,
+            "coarse_translations": coarse_translations,
+            "translation_log_prior": fine_prior,
+            "coarse_translation_log_prior": coarse_prior,
+            "image_pre_shifts": pre_shifts,
+        },
     )
 
-    with pytest.raises(NotImplementedError, match="sparse_pass2 must be disabled"):
-        run_dense_initial_model_estep(_Dataset(), state, config)
+    result = run_dense_initial_model_estep(
+        _Dataset(),
+        state,
+        config,
+        particle_ids=np.asarray([1, 3], dtype=np.int64),
+    )
+
+    np.testing.assert_allclose(calls["pass1_translations"], coarse_translations)
+    np.testing.assert_allclose(calls["pass1_prior"], coarse_prior[[1, 3]])
+    assert calls["rotation_perturbation"] == (0.25, 60.0)
+    assert np.max(calls["pass1_rotations"]) > 6.0
+    np.testing.assert_allclose(calls["fine_prior"], fine_prior[[1, 3]])
+    np.testing.assert_allclose(calls["local_pre_shifts"], pre_shifts[[1, 3]])
+    assert calls["local_n_global_rotations"] == 12
+    assert result.meta["sparse_pass2"] is True
+    np.testing.assert_array_equal(result.meta["selected_particle_ids"], [1, 3])
+
+
+def test_initial_model_pass2_layout_uses_fine_rotation_ids_for_posterior_bins():
+    layout = LocalHypothesisLayout(
+        n_global_rotations=2,
+        n_pixels=12,
+        n_psi=1,
+        rotation_offsets=np.array([0, 3], dtype=np.int64),
+        rotation_ids_flat=np.array([4, 8, 9], dtype=np.int32),
+        rotations_flat=np.broadcast_to(np.eye(3, dtype=np.float32), (3, 3, 3)).copy(),
+        rotation_log_priors_flat=np.zeros(3, dtype=np.float32),
+        rotation_counts=np.array([3], dtype=np.int32),
+        translation_grid=np.zeros((2, 2), dtype=np.float32),
+        translation_log_priors=np.zeros((1, 2), dtype=np.float32),
+        rotation_posterior_ids_flat=np.array([0, 0, 1], dtype=np.int32),
+        sample_mask_flat=np.ones((3, 2), dtype=bool),
+    )
+
+    out = _initial_model_pass2_layout(layout, n_global_rotations=12)
+
+    assert out.n_global_rotations == 12
+    assert out.rotation_posterior_ids_flat is None
+    np.testing.assert_array_equal(out.rotation_ids_flat, layout.rotation_ids_flat)

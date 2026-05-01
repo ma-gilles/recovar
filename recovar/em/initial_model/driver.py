@@ -100,6 +100,8 @@ class NativeSamplingPlan:
     rotations: np.ndarray
     translations: np.ndarray
     random_perturbation: float
+    coarse_translations: np.ndarray | None = None
+    translation_parent: np.ndarray | None = None
 
 
 @dataclass
@@ -356,6 +358,13 @@ def _build_sampling_plan(opts: NativeInitialModelOptions, *, iteration: int = 1)
         max_pixel=float(opts.offset_range_px),
         pixel_offset=float(opts.offset_step_px),
     ).astype(np.float32)
+    coarse_pass1_translations = coarse_translations
+    if abs(random_perturbation) > 1e-12:
+        coarse_pass1_translations = sampling.apply_relion_translation_perturbation(
+            coarse_translations.astype(np.float32, copy=False),
+            random_perturbation,
+            float(opts.offset_step_px),
+        ).astype(np.float32)
     if oversampling == 0:
         rotations = sampling.get_rotation_grid(
             nside_level=healpix_order,
@@ -374,7 +383,13 @@ def _build_sampling_plan(opts: NativeInitialModelOptions, *, iteration: int = 1)
                 random_perturbation,
                 float(opts.offset_step_px),
             ).astype(np.float32)
-        return NativeSamplingPlan(rotations=rotations, translations=translations, random_perturbation=random_perturbation)
+        return NativeSamplingPlan(
+            rotations=rotations,
+            translations=translations,
+            random_perturbation=random_perturbation,
+            coarse_translations=coarse_pass1_translations,
+            translation_parent=None,
+        )
 
     coarse_indices = np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64)
     rotations, _rotation_parent = sampling.get_oversampled_rotation_grid_from_samples(
@@ -397,6 +412,8 @@ def _build_sampling_plan(opts: NativeInitialModelOptions, *, iteration: int = 1)
         rotations=np.asarray(rotations, dtype=np.float32),
         translations=np.asarray(translations, dtype=np.float32),
         random_perturbation=random_perturbation,
+        coarse_translations=coarse_pass1_translations,
+        translation_parent=np.asarray(_translation_parent, dtype=np.int64),
     )
 
 
@@ -473,21 +490,49 @@ def _dense_estep_config(
     translation_offsets: np.ndarray,
 ) -> DenseInitialModelEstepConfig:
     image_pre_shifts = np.rint(np.asarray(translation_offsets, dtype=np.float32)).astype(np.float32)
-    translation_log_prior = _translation_log_prior(
-        sampling_plan.translations,
+    coarse_translations = (
+        np.asarray(sampling_plan.coarse_translations, dtype=np.float32)
+        if sampling_plan.coarse_translations is not None
+        else np.asarray(sampling_plan.translations, dtype=np.float32)
+    )
+    coarse_translation_log_prior = _translation_log_prior(
+        coarse_translations,
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=opts.translation_sigma_angstrom,
         centers=-image_pre_shifts,
     )
+    if coarse_translation_log_prior is not None and sampling_plan.translation_parent is not None:
+        translation_parent = np.asarray(sampling_plan.translation_parent, dtype=np.int64)
+        translation_log_prior = coarse_translation_log_prior[:, translation_parent]
+    else:
+        translation_log_prior = _translation_log_prior(
+            sampling_plan.translations,
+            voxel_size=float(dataset.voxel_size),
+            sigma_angstrom=opts.translation_sigma_angstrom,
+            centers=-image_pre_shifts,
+        )
 
     engine_kwargs = {
         "score_with_masked_images": True,
         "relion_firstiter_score_mode": "gaussian",
         "image_pre_shifts": np.asarray(image_pre_shifts, dtype=np.float32),
-        "sparse_pass2": False,
+        "sparse_pass2": int(opts.oversampling) > 0,
     }
+    if int(opts.oversampling) > 0:
+        engine_kwargs.update(
+            {
+                "healpix_order": int(opts.healpix_order),
+                "oversampling_order": int(opts.oversampling),
+                "translation_step": float(opts.offset_step_px),
+                "random_perturbation": float(sampling_plan.random_perturbation),
+                "coarse_translations": coarse_translations,
+                "return_profile": True,
+            }
+        )
     if translation_log_prior is not None:
         engine_kwargs["translation_log_prior"] = translation_log_prior
+    if coarse_translation_log_prior is not None:
+        engine_kwargs["coarse_translation_log_prior"] = coarse_translation_log_prior
 
     return DenseInitialModelEstepConfig(
         noise_variance=noise_variance,

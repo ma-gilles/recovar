@@ -394,7 +394,34 @@ def _fine_translation_log_prior(
     fine_translation_parent: np.ndarray,
     n_images: int,
     n_fine_translations: int,
+    *,
+    fine_translation_log_prior: np.ndarray | None = None,
 ) -> np.ndarray:
+    if fine_translation_log_prior is not None:
+        if translation_log_prior is not None:
+            raise ValueError("Pass either translation_log_prior or fine_translation_log_prior, not both")
+        fine_prior_np = np.asarray(fine_translation_log_prior, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
+        if fine_prior_np.ndim == 1:
+            if fine_prior_np.shape != (n_fine_translations,):
+                raise ValueError(
+                    f"fine_translation_log_prior must have shape ({n_fine_translations},), "
+                    f"got {fine_prior_np.shape}"
+                )
+            return np.broadcast_to(fine_prior_np[None, :], (n_images, n_fine_translations)).astype(
+                _LOCAL_LAYOUT_FLOAT_DTYPE,
+                copy=False,
+            )
+        if fine_prior_np.ndim == 2:
+            if fine_prior_np.shape != (n_images, n_fine_translations):
+                raise ValueError(
+                    "fine_translation_log_prior must have shape "
+                    f"({n_images}, {n_fine_translations}) when image-specific, got {fine_prior_np.shape}",
+                )
+            return fine_prior_np.astype(_LOCAL_LAYOUT_FLOAT_DTYPE, copy=False)
+        raise ValueError(
+            f"fine_translation_log_prior must be 1D or 2D, got {fine_prior_np.ndim} dimensions"
+        )
+
     if translation_log_prior is None:
         return np.zeros((n_images, n_fine_translations), dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
     translation_log_prior_np = np.asarray(translation_log_prior, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
@@ -425,6 +452,7 @@ def build_pass2_hypothesis_layout(
     translation_step: float | None = None,
     rotation_log_prior: np.ndarray | None = None,
     translation_log_prior: np.ndarray | None = None,
+    fine_translation_log_prior: np.ndarray | None = None,
     random_perturbation: float = 0.0,
 ) -> LocalHypothesisLayout:
     """Build exact-local layout for RELION adaptive pass-2 hypotheses.
@@ -548,6 +576,7 @@ def build_pass2_hypothesis_layout(
             fine_translation_parent,
             n_images,
             n_fine_translations,
+            fine_translation_log_prior=fine_translation_log_prior,
         ),
         rotation_posterior_ids_flat=posterior_ids_flat,
         sample_mask_flat=sample_mask_flat,

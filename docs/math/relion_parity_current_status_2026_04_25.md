@@ -426,6 +426,17 @@ scatter detail at the edge of the reconstructed support. Treat it as a known
 low-priority boundary issue while first pursuing full end-to-end parity in
 scores, poses, maps, tau2, noise, and runtime.
 
+InitialModel iter-1 has a related but stricter tiny-window fixture:
+`tests/unit/initial_model/test_estep_fixture.py::test_estep_bpref_forward_parity`
+uses `current_size=28` (`rmax=14`) and intentionally gates BPref data CC at
+`>0.7` rather than arithmetic parity. On 2026-04-30, the observed data CC was
+about `0.7366` globally and only improved to about `0.7399` when shell-binning
+through shell `13`; the matching lower-level projection/windowing and
+M-step/bootstrap parity tests passed. Treat this as safe to de-prioritize for
+now because it is covered by the explicit regression gate and does not implicate
+the M-step/write path, but do not claim the shell-bin diagnostic alone proves a
+pure outer-edge-only effect.
+
 ### p933 boundary-stress score decomposition — 2026-04-26
 
 Latest two-iteration replay after the compact BPref boundary patch:

@@ -25,11 +25,19 @@ import numpy as np
 import pytest
 
 FIXTURE_DIR = Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run")
-PARTICLES_STAR = Path(
-    "/scratch/gpfs/GILLES/mg6942/recovar_dev/recovar/.tmp/"
-    "slurm_7178672/pytest-of-mg6942/pytest-0/test_pipeline_spa_gpu0/"
-    "gpu_spa/test_dataset/particles.star"
-)
+
+
+def _infer_particles_star_from_fixture() -> Path:
+    optimiser_star = FIXTURE_DIR / "run_it000_optimiser.star"
+    if not optimiser_star.exists():
+        return Path("__missing_relion_initialmodel_particles_star__")
+    match = re.search(r"(?:^|\s)--i\s+(\S+)", optimiser_star.read_text())
+    if match is None:
+        return Path("__missing_relion_initialmodel_particles_star__")
+    return Path(match.group(1))
+
+
+PARTICLES_STAR = _infer_particles_star_from_fixture()
 
 
 pytestmark = pytest.mark.unit
@@ -63,6 +71,27 @@ def _read_iter1_pmax_mean() -> float:
     main, _ = read_star(str(FIXTURE_DIR / "run_it001_data.star"))
     pmax = main["_rlnMaxValueProbDistribution"].astype(float)
     return float(pmax.mean())
+
+
+def _configure_relion_image_mask(dataset, *, particle_diameter_ang: float = 544.0, width_mask_edge_px: float = 5.0) -> None:
+    from recovar.core import mask as core_mask
+
+    source = dataset.image_source
+    backend = getattr(source, "backend", source)
+    if backend is None:
+        return
+    image_mask = core_mask.relion_soft_image_mask(
+        int(dataset.grid_size),
+        float(dataset.voxel_size),
+        float(particle_diameter_ang),
+        float(width_mask_edge_px),
+    )
+    if hasattr(backend, "image_mask"):
+        backend.image_mask = image_mask
+    if hasattr(backend, "mask"):
+        backend.mask = image_mask
+    if hasattr(backend, "image_mask_mode"):
+        backend.image_mask_mode = "relion_background_fill"
 
 
 @requires_fixture
@@ -264,13 +293,7 @@ def test_estep_bpref_forward_parity():
 
     # Enable RELION-exact mask geometry + softMaskOutsideMap blend so our
     # masked Fimg matches RELION's exp_Fimg at machine precision.
-    backend = ds.image_source.backend if hasattr(ds.image_source, "backend") else None
-    if backend is not None and hasattr(backend, "set_relion_image_mask"):
-        backend.set_relion_image_mask(
-            pixel_size=float(ds.voxel_size),
-            particle_diameter_ang=544.0,
-            width_mask_edge_px=5.0,
-        )
+    _configure_relion_image_mask(ds)
 
     if not hasattr(ds, "subset"):
         pytest.skip("dataset has no subset()")
@@ -289,6 +312,7 @@ def test_estep_bpref_forward_parity():
     relion_estep_dump = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
     eulers_bin = relion_estep_dump / "p0_oversampled_eulers.bin"
     trans_bin = relion_estep_dump / "p0_oversampled_translations.bin"
+    coarse_translations = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
     if eulers_bin.exists() and trans_bin.exists():
         from recovar.utils.helpers import R_from_relion as _R_from_relion
 
@@ -306,7 +330,6 @@ def test_estep_bpref_forward_parity():
             coarse_indices, parent_nside_level=1, oversampling_order=1, random_perturbation=random_perturbation
         )
         rotations = rotations.astype(np.float32)
-        coarse_translations = get_translation_grid(max_pixel=6, pixel_offset=2).astype(np.float32)
         translations, _ = get_oversampled_translation_grid(coarse_translations, pixel_offset=2, oversampling_order=1)
         translations = apply_relion_translation_perturbation(
             translations.astype(np.float32), random_perturbation, offset_step_pixels=2.0
@@ -339,8 +362,15 @@ def test_estep_bpref_forward_parity():
 
     noise_variance = np.asarray(make_radial_noise(sigma2 * n4, (ori, ori))).astype(np.float32).reshape(-1)
     translations_np = np.asarray(translations, dtype=np.float32)
-    t_dist2_Ang2 = (translations_np[:, 0] ** 2 + translations_np[:, 1] ** 2) * (float(ds.voxel_size) ** 2)
-    translation_log_prior = (-0.5 * t_dist2_Ang2 / (sigma_offset_Ang**2)).astype(np.float32)
+    n_coarse_trans = int(coarse_translations.shape[0])
+    n_fine_trans = int(translations_np.shape[0])
+    assert n_coarse_trans > 0 and n_fine_trans % n_coarse_trans == 0
+    over_trans = n_fine_trans // n_coarse_trans
+    fine_translation_parent = np.repeat(np.arange(n_coarse_trans, dtype=np.int32), over_trans)
+    coarse_for_prior = translations_np[::over_trans]
+    t_dist2_Ang2 = (coarse_for_prior[:, 0] ** 2 + coarse_for_prior[:, 1] ** 2) * (float(ds.voxel_size) ** 2)
+    coarse_translation_log_prior = (-0.5 * t_dist2_Ang2 / (sigma_offset_Ang**2)).astype(np.float32)
+    translation_log_prior = coarse_translation_log_prior[fine_translation_parent].astype(np.float32, copy=False)
 
     state = initialise_denovo_state(
         ori_size=ori,

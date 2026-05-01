@@ -279,6 +279,24 @@ def test_build_pass2_hypothesis_layout_preserves_sparse_rotation_translation_mas
     assert not np.any(buckets[0].local_sample_mask[row_for_image0, 2:])
 
 
+def test_build_pass2_hypothesis_layout_accepts_direct_fine_translation_prior():
+    translations = np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    fine_prior = np.arange(16, dtype=np.float32).reshape(2, 8)
+
+    layout = build_pass2_hypothesis_layout(
+        [np.array([0], dtype=np.int32), np.array([1], dtype=np.int32)],
+        n_coarse_rotations=rotation_grid_size(0),
+        n_coarse_translations=2,
+        nside_level=0,
+        translations=translations,
+        oversampling_order=1,
+        translation_step=1.0,
+        fine_translation_log_prior=fine_prior,
+    )
+
+    np.testing.assert_array_equal(layout.translation_log_priors, fine_prior)
+
+
 def test_score_local_bucket_honors_rotation_translation_sample_mask():
     scores = score_local_bucket(
         shifted=jnp.zeros((1, 2, 1), dtype=jnp.complex64),

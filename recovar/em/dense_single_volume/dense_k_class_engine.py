@@ -55,6 +55,7 @@ from .helpers.translation_prior import (
     validate_translation_prior_centers,
 )
 from .helpers.types import make_noise_stats, make_relion_stats
+from .local_debug import maybe_write_dense_per_pose_score_dump, parse_dense_per_pose_score_dump_request
 
 logger = logging.getLogger(__name__)
 
@@ -820,6 +821,7 @@ def run_dense_k_class_em_native(
         "batches": 0,
         "rotation_blocks": int((int(rotations.shape[0]) + int(rotation_block_size) - 1) // int(rotation_block_size)),
     }
+    per_pose_score_dump = parse_dense_per_pose_score_dump_request()
     means_array = jnp.asarray(means)
     n_classes = int(means_array.shape[0])
     n_rot = int(rotations.shape[0])
@@ -1234,6 +1236,13 @@ def run_dense_k_class_em_native(
                 score_mode=relion_firstiter_score_mode,
                 precision_policy=precision_policy,
             )
+            maybe_write_dense_per_pose_score_dump(
+                request=per_pose_score_dump,
+                indices=indices,
+                scores=scores,
+                block_index=block_index,
+                preprior=True,
+            )
             (
                 rotation_prior_block,
                 translation_prior_block,
@@ -1255,6 +1264,12 @@ def run_dense_k_class_em_native(
                 candidate_mask_block,
                 valid_rotation_mask,
                 score_mode=relion_firstiter_score_mode,
+            )
+            maybe_write_dense_per_pose_score_dump(
+                request=per_pose_score_dump,
+                indices=indices,
+                scores=scores,
+                block_index=block_index,
             )
             if relion_firstiter_winner_take_all:
                 (
@@ -1363,6 +1378,13 @@ def run_dense_k_class_em_native(
                         score_mode=relion_firstiter_score_mode,
                         precision_policy=precision_policy,
                     )
+                    maybe_write_dense_per_pose_score_dump(
+                        request=per_pose_score_dump,
+                        indices=indices,
+                        scores=scores,
+                        block_index=block_index,
+                        preprior=True,
+                    )
                     (
                         rotation_prior_block,
                         translation_prior_block,
@@ -1384,6 +1406,12 @@ def run_dense_k_class_em_native(
                         candidate_mask_block,
                         valid_rotation_mask,
                         score_mode=relion_firstiter_score_mode,
+                    )
+                    maybe_write_dense_per_pose_score_dump(
+                        request=per_pose_score_dump,
+                        indices=indices,
+                        scores=scores,
+                        block_index=block_index,
                     )
                 shifted_for_mstep = shifted_recon_windowed if window_spec.use_window else shifted_recon_half
                 ctf_for_mstep = ctf2_over_nv_windowed_mstep if window_spec.use_window else ctf2_over_nv_half_with_dc
