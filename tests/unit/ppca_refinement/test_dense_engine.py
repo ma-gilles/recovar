@@ -281,6 +281,116 @@ def test_dense_engine_omitted_log_mass_is_zero_for_dense():
     np.testing.assert_array_equal(np.asarray(diag.omitted_log_mass), np.zeros(3, dtype=np.float32))
 
 
+def test_dense_engine_d7_significance_mask_default_off():
+    """D7: with apply_significance_mask=False (default), the engine
+    matches the old behavior — moments accumulate full γ regardless of
+    significance threshold."""
+    rng = np.random.default_rng(7)
+    Y1, proj_aug, ctf2, y_norm = _random_problem(rng, B=2, T=2, R=3, F=8, q=1)
+    image_stats_default, _ = dense_pose_ppca_E_step_blocked(
+        jnp.asarray(Y1),
+        jnp.asarray(proj_aug),
+        jnp.asarray(ctf2),
+        jnp.asarray(y_norm),
+        significance_threshold=0.5,
+    )
+    image_stats_explicit_off, _ = dense_pose_ppca_E_step_blocked(
+        jnp.asarray(Y1),
+        jnp.asarray(proj_aug),
+        jnp.asarray(ctf2),
+        jnp.asarray(y_norm),
+        significance_threshold=0.5,
+        apply_significance_mask=False,
+    )
+    np.testing.assert_array_equal(
+        np.asarray(image_stats_default.alpha_aug_acc),
+        np.asarray(image_stats_explicit_off.alpha_aug_acc),
+    )
+
+
+def test_dense_engine_d7_significance_mask_drops_low_gamma():
+    """D7: with apply_significance_mask=True and a high threshold, the
+    moments accumulator drops to the contribution of only the dominant
+    poses. Compare against an extreme threshold above 1.0 (drops all γ)
+    which gives zero accumulators."""
+    rng = np.random.default_rng(13)
+    Y1, proj_aug, ctf2, y_norm = _random_problem(rng, B=2, T=2, R=3, F=8, q=1)
+
+    # γ ∈ [0, 1] always. Threshold = 2.0 zeros every entry.
+    image_stats, _ = dense_pose_ppca_E_step_blocked(
+        jnp.asarray(Y1),
+        jnp.asarray(proj_aug),
+        jnp.asarray(ctf2),
+        jnp.asarray(y_norm),
+        significance_threshold=2.0,
+        apply_significance_mask=True,
+    )
+    # All accumulators are zero.
+    np.testing.assert_allclose(
+        np.asarray(image_stats.alpha_aug_acc),
+        np.zeros_like(np.asarray(image_stats.alpha_aug_acc)),
+        atol=1e-12,
+    )
+    np.testing.assert_allclose(
+        np.asarray(image_stats.G_aug_tri_acc),
+        np.zeros_like(np.asarray(image_stats.G_aug_tri_acc)),
+        atol=1e-12,
+    )
+
+    # Mid threshold: should match a hand-rolled mask.
+    image_stats_mid, _ = dense_pose_ppca_E_step_blocked(
+        jnp.asarray(Y1),
+        jnp.asarray(proj_aug),
+        jnp.asarray(ctf2),
+        jnp.asarray(y_norm),
+        significance_threshold=0.1,
+        apply_significance_mask=True,
+    )
+    # Brute force.
+    _, _, alpha_bf, G_bf, gamma_bf = _brute_force(Y1, proj_aug, ctf2, y_norm)
+    gamma_masked = np.where(gamma_bf > 0.1, gamma_bf, 0.0)
+    # Recompute moments by hand.
+    K_aug = np.einsum("bf, rpf, rqf -> brpq", ctf2.astype(np.complex64), np.conj(proj_aug), proj_aug)
+    nu_mm = K_aug[..., 0, 0].real
+    h_zm = K_aug[..., 1:, 0]
+    Hzz = K_aug[..., 1:, 1:]
+    D = np.einsum("btf, rpf -> btrp", np.conj(Y1), proj_aug)
+    t_mx = D[..., 0].real
+    g_zx = D[..., 1:]
+    B, T, F = Y1.shape
+    R = proj_aug.shape[0]
+    q = proj_aug.shape[1] - 1
+    yn = np.broadcast_to(y_norm[:, None, None], (B, T, R)).astype(np.float32)
+    num = np.broadcast_to(nu_mm[:, None, :], (B, T, R)).astype(np.float32)
+    hz = np.broadcast_to(h_zm[:, None, :, :], (B, T, R, q)).astype(np.complex64)
+    Hz = np.broadcast_to(Hzz[:, None, :, :, :], (B, T, R, q, q)).astype(np.complex64)
+    _, alpha, G_tri = compute_ppca_pose_scores_and_moments_no_contrast(
+        jnp.asarray(yn),
+        jnp.asarray(t_mx),
+        jnp.asarray(num),
+        jnp.asarray(g_zx),
+        jnp.asarray(hz),
+        jnp.asarray(Hz),
+        return_moments=True,
+    )
+    alpha = np.asarray(alpha)
+    G_tri = np.asarray(G_tri)
+    alpha_acc_expected = np.einsum("btr, btrp -> bp", gamma_masked.astype(alpha.dtype), alpha)
+    G_acc_expected = np.einsum("btr, btrk -> bk", gamma_masked.astype(G_tri.dtype), G_tri)
+    np.testing.assert_allclose(
+        np.asarray(image_stats_mid.alpha_aug_acc),
+        alpha_acc_expected,
+        rtol=2e-3,
+        atol=5e-3,
+    )
+    np.testing.assert_allclose(
+        np.asarray(image_stats_mid.G_aug_tri_acc),
+        G_acc_expected,
+        rtol=2e-3,
+        atol=5e-3,
+    )
+
+
 def test_dense_engine_d12_diagnostic_fields():
     """D12: best_log_score_per_image, rotation_posterior_sums,
     max_posterior_per_image must agree with brute force."""

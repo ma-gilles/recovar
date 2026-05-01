@@ -135,6 +135,7 @@ def dense_pose_ppca_E_step_blocked(
     pose_log_prior: jax.Array | None = None,
     *,
     significance_threshold: float = 1e-3,
+    apply_significance_mask: bool = False,
 ):
     """Two-pass dense pose-marginalized E-step on a (B, R, T, F) block.
 
@@ -161,6 +162,13 @@ def dense_pose_ppca_E_step_blocked(
         ``γ_irt > τ_sig`` counts as significant for the per-image
         ``n_significant`` diagnostic. Same threshold convention as the
         k-class engine.
+    apply_significance_mask:
+        If True (D7), zero out γ entries below ``significance_threshold``
+        in pass 2 before accumulating moments. This is a numerical
+        robustness pass that excludes negligibly-weighted poses from
+        the M-step accumulators. The truncation error is bounded by
+        ``Σ_{γ<τ} γ · ||contribution||``, which is small when τ is
+        small. Default False to preserve exact pose-marginal semantics.
 
     Returns
     -------
@@ -252,6 +260,11 @@ def dense_pose_ppca_E_step_blocked(
         score2 = score2 + jnp.swapaxes(pose_log_prior, -1, -2)
     gamma = jnp.exp(score2 - logZ[:, None, None])  # [B, T, R]
 
+    # D7: optional significance masking — zero γ below threshold so
+    # negligibly-weighted poses don't contribute to the M-step.
+    if apply_significance_mask:
+        gamma = jnp.where(gamma > significance_threshold, gamma, 0.0)
+
     # Accumulate γ·α and γ·G_tri across (T, R) per image.
     # Broadcast γ over the trailing P / tri(P) axis.
     alpha_aug_acc = jnp.einsum(
@@ -311,6 +324,7 @@ def fused_dense_pose_ppca_block(
     pose_log_prior=None,
     *,
     significance_threshold: float = 1e-3,
+    apply_significance_mask: bool = False,
     disc_type_backproject: str = "linear_interp",
 ):
     """One pass of the fused dense engine: pass-1 (logZ + best pose) +
@@ -412,6 +426,11 @@ def fused_dense_pose_ppca_block(
     if pose_log_prior is not None:
         score2 = score2 + jnp.swapaxes(pose_log_prior, -1, -2)
     gamma = jnp.exp(score2 - logZ[:, None, None])  # [B, T, R]
+
+    # D7: optional significance masking — zero γ below threshold so
+    # negligibly-weighted poses don't contribute to backprojection.
+    if apply_significance_mask:
+        gamma = jnp.where(gamma > significance_threshold, gamma, 0.0)
 
     rhs_dtype = rhs_volume.dtype
     lhs_dtype = lhs_tri_volume.dtype

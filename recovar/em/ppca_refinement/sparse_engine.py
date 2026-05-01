@@ -131,6 +131,7 @@ def sparse_pose_ppca_E_step_flat(
     layout: SparseHypothesisLayout,
     *,
     significance_threshold: float = 1e-3,
+    apply_significance_mask: bool = False,
 ):
     """Two-pass sparse E-step on a flat hypothesis layout.
 
@@ -241,6 +242,10 @@ def sparse_pose_ppca_E_step_flat(
         score2 = score2 + layout.pose_log_prior
     gamma = jnp.exp(score2 - logZ_per_h)  # [Nh]
 
+    # D7: optional significance masking — same convention as the dense engine.
+    if apply_significance_mask:
+        gamma = jnp.where(gamma > significance_threshold, gamma, 0.0)
+
     # Weighted segment-sum into per-image accumulators.
     weight = gamma.astype(alpha.dtype)
     alpha_weighted = weight[:, None] * alpha  # [Nh, P]
@@ -308,6 +313,7 @@ def fused_sparse_pose_ppca_block(
     lhs_tri_volume,  # [tri(P), half_vol] real32 accumulator
     *,
     significance_threshold: float = 1e-3,
+    apply_significance_mask: bool = False,
     disc_type_backproject: str = "linear_interp",
 ):
     """Sparse fused engine: pass-1 logZ + pass-2 batched backprojection.
@@ -392,6 +398,10 @@ def fused_sparse_pose_ppca_block(
     if layout.pose_log_prior is not None:
         score2 = score2 + layout.pose_log_prior
     gamma = jnp.exp(score2 - logZ_per_h)  # [Nh]
+
+    # D7: optional significance masking — same convention as the dense engine.
+    if apply_significance_mask:
+        gamma = jnp.where(gamma > significance_threshold, gamma, 0.0)
 
     # RHS: Z_h_p = γ_h · α_h,p · Y1[h]   shape [Nh, P, F]
     weighted_alpha = (gamma[:, None].astype(alpha.dtype)) * alpha  # [Nh, P]

@@ -92,6 +92,12 @@ class PPCAScheduleOpts:
     enable_per_iter_noise: bool = True
     enable_x0_hermitian: bool = True
 
+    # D7: drop γ entries below significance_threshold from the M-step
+    # accumulators in pass 2. Default off — preserves exact pose-marginal
+    # semantics. Turning it on saves no FLOPs but improves numerical
+    # robustness against negligibly weighted poses.
+    apply_significance_mask: bool = False
+
     # D9: translation auto-grid + log prior. translation_max_pixels=0 means
     # "single zero translation" (no translation search). When > 0 we build
     # get_translation_grid(...) + make_relion_translation_log_prior(...).
@@ -126,6 +132,7 @@ def _e_step_dense_accumulate(
     significance_threshold: float,
     disc_type_project: str = "linear_interp",
     disc_type_backproject: str = "linear_interp",
+    apply_significance_mask: bool = False,
 ):
     """Run the dense fused E-step + per-rotation backprojection per halfset
     and return the per-half (rhs, lhs_tri, log_evidence, residual_stats).
@@ -223,6 +230,7 @@ def _e_step_dense_accumulate(
                     rhs_acc,
                     lhs_tri_acc,
                     significance_threshold=significance_threshold,
+                    apply_significance_mask=apply_significance_mask,
                     disc_type_backproject=disc_type_backproject,
                 )
                 sum_logZ += float(jnp.sum(diag.logZ))
@@ -263,6 +271,7 @@ def _e_step_local_accumulate(
     disc_type_project: str = "linear_interp",
     disc_type_backproject: str = "linear_interp",
     iteration_index: int = 0,
+    apply_significance_mask: bool = False,
 ):
     """Sparse / local-pose analogue of :func:`_e_step_dense_accumulate`."""
     from recovar import core
@@ -374,6 +383,7 @@ def _e_step_local_accumulate(
                 rhs_acc,
                 lhs_tri_acc,
                 significance_threshold=significance_threshold,
+                apply_significance_mask=apply_significance_mask,
                 disc_type_backproject=disc_type_backproject,
             )
             sum_logZ += float(jnp.sum(diag.logZ))
@@ -647,6 +657,7 @@ def run_pose_marginal_refinement(
                 image_batch_size=image_batch_size,
                 significance_threshold=iteration_opts.significance_threshold,
                 iteration_index=it,
+                apply_significance_mask=schedule_opts.apply_significance_mask,
             )
         else:
             per_half = _e_step_dense_accumulate(
@@ -659,6 +670,7 @@ def run_pose_marginal_refinement(
                 rotation_block_size=rotation_block_size,
                 current_size=current_size,
                 significance_threshold=iteration_opts.significance_threshold,
+                apply_significance_mask=schedule_opts.apply_significance_mask,
             )
 
         # ---- (c) D8 + (d) D4 ----
