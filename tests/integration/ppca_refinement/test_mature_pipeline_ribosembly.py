@@ -212,3 +212,44 @@ def test_simple_and_full_disagree_on_state_updates(setup_ribosembly):
         np.asarray(fs2.noise_variance),
         np.asarray(state.noise_variance),
     )
+
+
+def test_mature_two_iter_log_evidence_progresses(setup_ribosembly):
+    """A 2-iter mature run must produce iter records with valid totals
+    that vary across iterations (not stuck at a fixed point)."""
+    s = setup_ribosembly
+    cryo = s["cryo"]
+    state = _initial_state(cryo, s["vols_real"], q=1)
+    halfset_indices = (
+        np.asarray(cryo.halfset_indices[0]),
+        np.asarray(cryo.halfset_indices[1]),
+    )
+    final_state, log = run_pose_marginal_refinement(
+        state,
+        cryo,
+        halfset_indices=halfset_indices,
+        mask=jnp.asarray(s["mask"]),
+        image_batch_size=16,
+        rotation_block_size=8,
+        schedule_opts=PPCAScheduleOpts(
+            healpix_order_init=0,
+            healpix_order_max=0,
+            max_iters=2,
+            min_iters=2,
+            convergence_log_evidence_rtol=-1.0,  # never converge early
+            enable_low_resol_join=False,
+            enable_per_iter_prior=False,
+            enable_per_iter_noise=True,
+            enable_x0_hermitian=True,
+            use_local_search_at_high_order=False,
+        ),
+        iteration_opts=IterationOpts(EM_iter=1, pcg_maxiter=5),
+    )
+    assert len(log) == 2
+    le0 = log[0]["log_evidence_total"]
+    le1 = log[1]["log_evidence_total"]
+    # Both finite and not identical (state changed between iters).
+    assert np.isfinite(le0) and np.isfinite(le1)
+    assert le0 != le1
+    # μ should have moved from initial.
+    assert not np.allclose(np.asarray(final_state.mu_score), np.asarray(state.mu_score), atol=1e-6)
