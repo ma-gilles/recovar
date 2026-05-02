@@ -141,6 +141,12 @@ def main():
     )
     parser.add_argument("--max_iter", type=int, default=10, help="Maximum EM iterations")
     parser.add_argument(
+        "--downsample_D",
+        type=int,
+        default=None,
+        help="Downsample particles to this grid size on load (default: native).",
+    )
+    parser.add_argument(
         "--healpix_order",
         type=int,
         default=3,
@@ -237,6 +243,7 @@ def main():
     ds = load_dataset(
         os.path.join(args.data_dir, "particles.star"),
         lazy=False,
+        downsample_D=args.downsample_D,
     )
     relion_mask_params = _maybe_apply_relion_image_mask(ds, args)
     particle_diameter_ang = None if relion_mask_params is None else float(relion_mask_params[0])
