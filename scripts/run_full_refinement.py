@@ -320,6 +320,34 @@ def main():
 
     init_mrc_path = os.path.join(args.data_dir, "reference_init.mrc")
     init_vol_real = _load_mrc(init_mrc_path).astype(np.float32)
+
+    # Downsample the init reference to match the dataset's working grid
+    # when --downsample_D was applied. Real-space block-mean preserves
+    # the band-limited content. This mirrors the canonical CryoBench
+    # downsampling for the particles inside load_dataset().
+    target = ds.volume_shape[0]
+    src = init_vol_real.shape[0]
+    if src != target:
+        if src < target or src % target != 0:
+            raise ValueError(
+                f"reference_init shape {init_vol_real.shape} not a clean multiple of "
+                f"working grid {ds.volume_shape}; cannot downsample.",
+            )
+        ratio = src // target
+        init_vol_real = (
+            init_vol_real.reshape(
+                target,
+                ratio,
+                target,
+                ratio,
+                target,
+                ratio,
+            )
+            .mean(axis=(1, 3, 5))
+            .astype(np.float32)
+        )
+        logger.info("Downsampled reference_init %s → %s (ratio %d)", (src,) * 3, init_vol_real.shape, ratio)
+
     assert init_vol_real.shape == ds.volume_shape, f"Volume shape mismatch: {init_vol_real.shape} vs {ds.volume_shape}"
     # Convert to centered Fourier space using the proper helper.
     init_vol_ft = np.array(ftu.get_dft3(jnp.asarray(init_vol_real))).astype(np.complex64).reshape(-1)

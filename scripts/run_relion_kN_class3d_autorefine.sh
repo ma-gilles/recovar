@@ -17,7 +17,10 @@
 # Output goes to $DATA_DIR/relion_class3d_k{K}_autorefine/ so the recovar
 # k=N quality script can find it for side-by-side comparison.
 
-set -euo pipefail
+set -eo pipefail
+# `module load` reads init scripts that touch PS1 etc.; set -u trips on those,
+# so we leave nounset off here. Variables we depend on are set explicitly.
+export PS1="${PS1:-}"
 
 DATA_DIR="${DATA_DIR:-/scratch/gpfs/GILLES/mg6942/em_relion_proj/ribosembly_allk_g256_n100000_snr1_cubic}"
 N_CLASSES="${N_CLASSES:-4}"
