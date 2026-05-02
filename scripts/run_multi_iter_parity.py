@@ -15,12 +15,18 @@ import logging
 import os
 import platform
 import re
-import subprocess
 import sys
 import time
 from pathlib import Path
 
 import numpy as np
+
+from recovar.utils.parity_provenance import (
+    _safe_git_commit,
+)
+from recovar.utils.parity_provenance import (
+    assert_parity_ancestors_or_exit as _print_provenance_banner_and_assert_parity_ancestors,
+)
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -55,84 +61,6 @@ def map_pose_arrays_to_particle_order(our_names, gt_rot_all, gt_trans_all=None):
         if gt_translations_orig is not None and 0 <= pose_idx < len(gt_trans_all):
             gt_translations_orig[j] = gt_trans_all[pose_idx]
     return gt_rotations_orig, gt_translations_orig
-
-
-def _safe_git_commit():
-    try:
-        return (
-            subprocess.check_output(["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL).strip() or None
-        )
-    except Exception:
-        return None
-
-
-# Load-bearing parity fix commits. If any of these is NOT an ancestor of HEAD,
-# the worktree is missing a known-required parity fix and replay results will
-# not be machine-precision against RELION. Update only when adding new fixes.
-REQUIRED_PARITY_ANCESTORS = (
-    "7834dc0b",  # current_size off-by-one + circular Fourier window
-    "0650b550",  # image pre-centering, normcorr, prior sign, float64 logsumexp
-    "b125883f",  # shell mapping at pf=2
-)
-
-
-def _git_ancestor_of_head(sha: str) -> bool:
-    try:
-        subprocess.check_call(
-            ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return True
-    except Exception:
-        return False
-
-
-def _print_provenance_banner_and_assert_parity_ancestors():
-    """Print git/branch/dirty state and assert known parity-fix commits are in HEAD's ancestry.
-
-    This exists because mixing up a worktree on the wrong branch — one that
-    does NOT contain commits like 7834dc0b — silently produces "broken parity"
-    that looks like a regression. Failing fast here saves hours of debugging.
-    """
-    head = _safe_git_commit() or "<unknown>"
-    try:
-        branch = subprocess.check_output(
-            ["git", "symbolic-ref", "--short", "HEAD"], text=True, stderr=subprocess.DEVNULL
-        ).strip()
-    except Exception:
-        branch = "<detached>"
-    try:
-        dirty_lines = subprocess.check_output(
-            ["git", "status", "--porcelain"], text=True, stderr=subprocess.DEVNULL
-        ).splitlines()
-    except Exception:
-        dirty_lines = []
-    cwd = Path.cwd().resolve()
-    print("=" * 72, flush=True)
-    print("Parity replay provenance:", flush=True)
-    print(f"  cwd:    {cwd}", flush=True)
-    print(f"  branch: {branch}", flush=True)
-    print(f"  HEAD:   {head}", flush=True)
-    print(f"  dirty:  {len(dirty_lines)} uncommitted file(s)", flush=True)
-    missing = [sha for sha in REQUIRED_PARITY_ANCESTORS if not _git_ancestor_of_head(sha)]
-    if missing:
-        print("=" * 72, flush=True)
-        print(
-            "ERROR: this worktree is missing required parity-fix commits in HEAD's ancestry:",
-            flush=True,
-        )
-        for sha in missing:
-            print(f"  - {sha} NOT in ancestry of {head[:8]}", flush=True)
-        print(
-            "Replay parity results from this branch are not trustworthy. Switch to a "
-            "branch that contains these commits (e.g. one merged from "
-            "claude/relion-parity-flag-audit) before running parity tests.",
-            flush=True,
-        )
-        sys.exit(2)
-    print(f"  parity-fix ancestors: all {len(REQUIRED_PARITY_ANCESTORS)} present ✓", flush=True)
-    print("=" * 72, flush=True)
 
 
 def _count_compile_lines(log_path):
