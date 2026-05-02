@@ -58,6 +58,33 @@ star, and emits a `summary.json` with:
 | `class_acc` | ≥ 0.999 | CLI default |
 | `pmax_abs_mean` | ≤ 0.002 | CLI default |
 
+### Measured (Slurm 7579536, 256³ × 100k × 16 classes, single iter)
+
+| Metric | Value | Gate | Status |
+|---|---:|---:|:---:|
+| `mean_corr`     | **0.9997** | ≥ 0.999  | ✓ PASS |
+| `class_acc`     | **0.8752** | ≥ 0.999  | ✗ FAIL |
+| `pmax_abs_mean` | **0.0269** | ≤ 0.002  | ✗ FAIL |
+
+**Reading:** the M-step + reconstruction are essentially bit-parity with
+RELION (per-class map correlation 0.9997 → reconstruction physics is
+matched). The divergence is in **the E-step's soft posterior**: 87.5 %
+of images get the same argmax class as RELION, but 12.5 % differ, and
+the per-image Pmax distribution shifts by ~0.027 on average. Likely
+contributors:
+
+  1. Translation handling — RELION integrates translations via FFT
+     phase shifts at integer offsets (pf=2 padded grid); recovar's
+     translation grid is a discretised 29-point set in pixel-space.
+  2. Significance pruning — RELION uses adaptive_fraction with
+     `--oversampling 0`; recovar evaluates the full grid here.
+  3. Sphere clipping at `current_size = 40` — small radius differences
+     bleed into the highest-resolution shells.
+
+These are not blockers for the PPCA benchmark (the M-step at parity
+means ms much / W reconstructions will be reproducible-quality), but
+they're the open issues if we want full single-iter parity.
+
 ### Perf parity gate (proposed)
 
 | Metric | Target | Justification |
