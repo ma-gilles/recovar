@@ -347,19 +347,19 @@ def _build_local_layout_for_batch(
     Y1_half = jax.vmap(lambda im: ftu.full_image_to_half_image(im, image_shape))(translated).astype(jnp.complex64)
 
     # Per-hypothesis projections of the augmented templates [μ, W₁ … W_q].
-    proj_aug_per_hyp = jnp.stack(
-        [
-            core.slice_volume(
-                theta_aug_full[p],
-                rotations_per_hyp,
-                image_shape,
-                volume_shape,
-                disc_type_project,
-                half_image=True,
-            )
-            for p in range(P)
-        ],
-        axis=1,
+    # batch_slice_volume vmaps slice_volume over the leading P axis (or
+    # uses the CUDA batched kernel when available), so we get one fused
+    # kernel call instead of P separate launches.
+    proj_aug_per_hyp = jnp.transpose(
+        core.batch_slice_volume(
+            theta_aug_full,  # [P, vol_size]
+            rotations_per_hyp,  # [Nh, 3, 3]
+            image_shape,
+            volume_shape,
+            disc_type_project,
+            half_image=True,
+        ),  # → [P, Nh, half_F]
+        (1, 0, 2),  # → [Nh, P, half_F]
     )
 
     layout = SparseHypothesisLayout(
