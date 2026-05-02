@@ -338,6 +338,38 @@ def normalize_local_k_class_scores(scores, *, use_float64_normalization: bool):
     )
 
 
+@partial(jax.jit, static_argnames=("use_float64_normalization",))
+def normalize_local_k_class_scores_with_log_z(scores, log_z, *, use_float64_normalization: bool):
+    """Normalize local K-class scores with an externally computed full-grid log-Z."""
+
+    batch_size, n_classes = scores.shape[:2]
+    flat_global = scores.reshape(batch_size, -1)
+    best_log_score = jnp.max(flat_global, axis=1)
+    normalization_dtype = jnp.float64 if use_float64_normalization else scores.real.dtype
+    log_Z = log_z.astype(normalization_dtype)
+    probs = jnp.exp(scores - log_Z[:, None, None, None])
+
+    class_scores = scores.reshape(batch_size, n_classes, -1)
+    best_log_score_class = jnp.max(class_scores, axis=2)
+    if use_float64_normalization:
+        class_shifted_exp = jnp.exp((class_scores - best_log_score_class[:, :, None]).astype(jnp.float64))
+    else:
+        class_shifted_exp = jnp.exp(class_scores - best_log_score_class[:, :, None])
+    class_log_Z = best_log_score_class + jnp.log(jnp.sum(class_shifted_exp, axis=2))
+    best_argmax_class = jnp.argmax(class_scores, axis=2)
+    best_argmax = jnp.argmax(flat_global, axis=1)
+    max_posterior_class = jnp.exp(best_log_score_class - log_Z[:, None])
+    return (
+        log_Z,
+        class_log_Z,
+        probs,
+        best_log_score_class,
+        best_argmax_class,
+        best_argmax,
+        max_posterior_class,
+    )
+
+
 def compute_reconstruction_support(probs, adaptive_fraction=0.999, max_significants=-1):
     """Return RELION-style significant reconstruction support.
 

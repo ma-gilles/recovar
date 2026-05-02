@@ -840,6 +840,95 @@ class TestOversampledGridGeneration:
         for p_idx in range(len(parent_rotations)):
             assert np.sum(parent_map == p_idx) == 8
 
+    def test_relion_hidden_rotation_grid_preserves_relion_flat_order(self):
+        """InitialModel uses RELION's hidden-variable order: idir * n_psi + ipsi."""
+        from recovar import utils
+        from recovar.em.sampling import get_relion_hidden_rotation_grid
+        from recovar.relion_bind._relion_bind_core import get_coarse_orientations
+
+        order = 1
+        expected_eulers = np.asarray(get_coarse_orientations(order), dtype=np.float32)
+        np.testing.assert_allclose(
+            get_relion_hidden_rotation_grid(order, matrices=False),
+            expected_eulers,
+            atol=1e-6,
+            rtol=1e-6,
+        )
+        np.testing.assert_allclose(
+            get_relion_hidden_rotation_grid(order, matrices=True),
+            utils.R_from_relion(expected_eulers, degrees=True),
+            atol=1e-6,
+            rtol=1e-6,
+        )
+
+    def test_oversampled_relion_hidden_rotation_grid_uses_hidden_parent_indices(self):
+        """Hidden-order oversampling interprets parents as idir * n_psi + ipsi."""
+        from recovar.relion_bind._relion_bind_core import get_oversampled_orientations
+
+        from recovar import utils
+        from recovar.em.sampling import (
+            get_oversampled_relion_hidden_rotation_grid_from_samples,
+            rotation_grid_n_in_planes,
+        )
+
+        nside_level = 1
+        coarse_n_psi = rotation_grid_n_in_planes(nside_level)
+        parent_rotations = np.asarray(
+            [
+                0 * coarse_n_psi + 0,
+                3 * coarse_n_psi + 4,
+                11 * coarse_n_psi + 7,
+            ],
+            dtype=np.int64,
+        )
+
+        matrices, parent_map, child_indices = get_oversampled_relion_hidden_rotation_grid_from_samples(
+            parent_rotations,
+            nside_level,
+            oversampling_order=1,
+            return_rotation_indices=True,
+        )
+
+        parent_pixels = parent_rotations // coarse_n_psi
+        parent_psi = parent_rotations % coarse_n_psi
+        child_pixels = 4 * np.repeat(parent_pixels, 4) + np.tile(np.arange(4, dtype=np.int64), len(parent_pixels))
+        coarse_psi_step = 2.0 * np.pi / coarse_n_psi
+        psi_factor = 2
+        child_psi = (
+            np.repeat(parent_psi, 4)[:, None] * coarse_psi_step
+            - 0.5 * coarse_psi_step
+            + (0.5 + np.arange(psi_factor, dtype=np.float64)[None, :]) * (coarse_psi_step / psi_factor)
+        ).reshape(-1)
+        fine_nside_level = nside_level + 1
+        fine_n_in_planes = rotation_grid_n_in_planes(fine_nside_level)
+        fine_psi_step = 2.0 * np.pi / fine_n_in_planes
+        nearest_child_psi = (
+            np.floor(np.mod(child_psi, 2.0 * np.pi) / fine_psi_step + 0.5).astype(np.int64)
+            % fine_n_in_planes
+        )
+        expected_child_indices = np.repeat(child_pixels, psi_factor) * fine_n_in_planes + nearest_child_psi
+
+        expected_blocks = []
+        for parent_rotation_index in parent_rotations:
+            idir = int(parent_rotation_index // coarse_n_psi)
+            ipsi = int(parent_rotation_index % coarse_n_psi)
+            expected_blocks.append(
+                utils.R_from_relion(
+                    np.asarray(
+                        get_oversampled_orientations(nside_level, 1, idir, ipsi, 0.0),
+                        dtype=np.float64,
+                    ),
+                    degrees=True,
+                )
+            )
+        expected_matrices = np.concatenate(expected_blocks, axis=0)
+
+        assert matrices.shape == (8 * len(parent_rotations), 3, 3)
+        np.testing.assert_allclose(matrices, expected_matrices, atol=1e-6, rtol=1e-6)
+        np.testing.assert_array_equal(child_indices, expected_child_indices)
+        for p_idx in range(len(parent_rotations)):
+            assert np.sum(parent_map == p_idx) == 8
+
     def test_oversampled_translation_grid_size(self):
         """get_oversampled_translation_grid should produce 4x translations."""
         from recovar.em.sampling import get_oversampled_translation_grid

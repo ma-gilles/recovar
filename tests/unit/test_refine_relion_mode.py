@@ -1243,6 +1243,93 @@ def test_dense_k_class_reconstruction_groups_match_separate_subset_runs(rng):
     np.testing.assert_allclose(np.asarray(grouped.grouped_Ft_ctf[1]), np.asarray(group1.Ft_ctf), rtol=5e-3, atol=1e-5)
 
 
+def test_local_k_class_reconstruction_groups_match_separate_subset_runs(rng):
+    dataset = MockDataset(2, rng)
+    mean = _hermitian_volume(VOLUME_SHAPE, seed=155)
+    means = mean[None, :]
+    mean_variance = jnp.ones(VOLUME_SIZE, dtype=jnp.float32) * 10.0
+    noise_variance = jnp.ones(IMAGE_SIZE, dtype=jnp.float32)
+    local_rotations = _make_rotations(2, seed=163)
+    translations = np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32)
+    
+    def make_layout(n_images):
+        return LocalHypothesisLayout(
+            n_global_rotations=2,
+            n_pixels=2,
+            n_psi=1,
+            rotation_offsets=np.arange(0, 2 * n_images + 1, 2, dtype=np.int64),
+            rotation_ids_flat=np.tile(np.array([0, 1], dtype=np.int32), n_images),
+            rotations_flat=np.tile(np.asarray(local_rotations, dtype=np.float32), (n_images, 1, 1)),
+            rotation_log_priors_flat=np.zeros(2 * n_images, dtype=np.float32),
+            rotation_counts=np.full(n_images, 2, dtype=np.int32),
+            translation_grid=np.asarray(translations, dtype=np.float32),
+            translation_log_priors=np.zeros((2, n_images), dtype=np.float32),
+        )
+
+    def make_subset_dataset(source, index):
+        subset = MockDataset(1, rng)
+        subset._images = np.asarray(source._images[[index]], dtype=np.float32).copy()
+        subset.CTF_params = np.asarray(source.CTF_params[[index]], dtype=np.float32).copy()
+        subset.rotation_matrices = np.asarray(source.rotation_matrices[[index]], dtype=np.float32).copy()
+        subset.translations = np.asarray(source.translations[[index]], dtype=np.float32).copy()
+        subset.n_images = 1
+        subset.n_units = 1
+        return subset
+
+    common_kwargs = dict(
+        image_batch_size=2,
+        rotation_block_size=4,
+        current_size=None,
+        reconstruct_significant_only=False,
+    )
+
+    grouped = run_local_k_class_em(
+        dataset,
+        means,
+        mean_variance,
+        noise_variance,
+        make_layout(2),
+        "linear_interp",
+        reconstruction_group_ids=np.asarray([0, 1], dtype=np.int32),
+        reconstruction_group_count=2,
+        **common_kwargs,
+    )
+    dataset0 = make_subset_dataset(dataset, 0)
+    group0 = run_local_k_class_em(
+        dataset0,
+        means,
+        mean_variance,
+        noise_variance,
+        make_layout(1),
+        "linear_interp",
+        **common_kwargs,
+    )
+    dataset1 = make_subset_dataset(dataset, 1)
+    group1 = run_local_k_class_em(
+        dataset1,
+        means,
+        mean_variance,
+        noise_variance,
+        make_layout(1),
+        "linear_interp",
+        **common_kwargs,
+    )
+
+    assert grouped.grouped_Ft_y is not None
+    assert grouped.grouped_Ft_ctf is not None
+    assert np.asarray(grouped.grouped_Ft_y).shape == (2, 1, VOLUME_SIZE)
+    np.testing.assert_allclose(
+        np.asarray(jnp.sum(grouped.grouped_Ft_y, axis=0)),
+        np.asarray(grouped.Ft_y),
+        rtol=1e-5,
+        atol=1e-5,
+    )
+    np.testing.assert_allclose(np.asarray(grouped.grouped_Ft_y[0]), np.asarray(group0.Ft_y), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(grouped.grouped_Ft_ctf[0]), np.asarray(group0.Ft_ctf), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(grouped.grouped_Ft_y[1]), np.asarray(group1.Ft_y), rtol=5e-3, atol=1e-5)
+    np.testing.assert_allclose(np.asarray(grouped.grouped_Ft_ctf[1]), np.asarray(group1.Ft_ctf), rtol=5e-3, atol=1e-5)
+
+
 def test_dense_k_class_profile_is_optional(rng):
     dataset = MockDataset(2, rng)
     mean = _hermitian_volume(VOLUME_SHAPE, seed=145)

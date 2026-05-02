@@ -172,6 +172,7 @@ def _score_normalize_mstep(
     static_argnames=(
         "mask_mode",
         "score_with_masked_images",
+        "reconstruct_with_masked_images",
         "apply_integer_pre_shift",
         "apply_fourier_pre_shift",
         "half_spectrum_scoring",
@@ -236,6 +237,7 @@ def run_local_bucket_big_jit(
     *,
     mask_mode: str,
     score_with_masked_images: bool,
+    reconstruct_with_masked_images: bool,
     apply_integer_pre_shift: bool,
     apply_fourier_pre_shift: bool,
     half_spectrum_scoring: bool,
@@ -284,7 +286,7 @@ def run_local_bucket_big_jit(
             batch,
             image_mask,
             config,
-            apply_image_mask=False,
+            apply_image_mask=reconstruct_with_masked_images,
             mask_mode=mask_mode,
         )
     else:

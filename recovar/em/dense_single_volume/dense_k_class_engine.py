@@ -763,6 +763,8 @@ def run_dense_k_class_em_native(
     image_indices=None,
     rotation_translation_mask=None,
     score_with_masked_images: bool = False,
+    reconstruct_with_masked_images: bool = False,
+    reconstruction_subtract_projected_reference: bool = False,
     half_spectrum_scoring: bool = False,
     projection_padding_factor: int = 1,
     reconstruction_padding_factor: int = 1,
@@ -776,6 +778,8 @@ def run_dense_k_class_em_native(
     use_float64_projections: bool = False,
     do_gridding_correction: bool = False,
     square_window: bool = False,
+    recon_square_window: bool | None = None,
+    recon_exact_radius: bool = True,
     sparse_pass2: bool = False,
     accumulate_noise: bool = False,
     return_profile: bool = False,
@@ -894,6 +898,8 @@ def run_dense_k_class_em_native(
         n_half,
         square=square_window,
         include_recon_window=True,
+        recon_square=recon_square_window,
+        recon_exact_radius=recon_exact_radius,
     )
     projection_kwargs = window_spec.projection_kwargs()
     n_recon_windowed = window_spec.n_recon
@@ -1064,6 +1070,7 @@ def run_dense_k_class_em_native(
                 translation_phases_half=translation_phases_half,
             )
         elif score_with_masked_images:
+            recon_apply_image_mask = bool(reconstruct_with_masked_images)
             if device_half_mask is None:
                 (
                     processed_score_half,
@@ -1079,7 +1086,7 @@ def run_dense_k_class_em_native(
                     translations,
                     config,
                     apply_image_mask_a=True,
-                    apply_image_mask_b=False,
+                    apply_image_mask_b=recon_apply_image_mask,
                     translation_phases_half=translation_phases_half,
                 )
             else:
@@ -1088,7 +1095,7 @@ def run_dense_k_class_em_native(
                     device_half_mask,
                     config,
                     apply_image_mask_a=True,
-                    apply_image_mask_b=False,
+                    apply_image_mask_b=recon_apply_image_mask,
                     mask_mode=device_half_mask_mode,
                 )
                 ctf_half = config.compute_ctf_half(ctf_params)
@@ -1469,6 +1476,19 @@ def run_dense_k_class_em_native(
                         )
                         grouped_ready_values = ()
                         adjoint_ready_values = (summed_half, ctf_probs_half)
+                    if reconstruction_subtract_projected_reference:
+                        proj_for_recon = (
+                            window_spec.recon_values(proj_half_by_class)
+                            if window_spec.use_window
+                            else proj_half_by_class
+                        )
+                        if grouped_reconstruction:
+                            grouped_summed_half = grouped_summed_half - proj_for_recon[None, :, :, :] * grouped_ctf_probs_half
+                            grouped_ready_values = (grouped_summed_half, grouped_ctf_probs_half)
+                            adjoint_ready_values = grouped_ready_values
+                        else:
+                            summed_half = summed_half - proj_for_recon * ctf_probs_half
+                            adjoint_ready_values = (summed_half, ctf_probs_half)
                     improved = block_best_class > best_score_class
                     best_score_class = jnp.where(improved, block_best_class, best_score_class)
                     best_argmax_class = jnp.where(improved, block_argmax_class + r0 * n_trans, best_argmax_class)

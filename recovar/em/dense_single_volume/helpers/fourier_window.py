@@ -260,6 +260,8 @@ def make_fourier_window_spec(
     *,
     square=False,
     include_recon_window=True,
+    recon_square: bool | None = None,
+    recon_exact_radius: bool = True,
     dtype=jnp.int32,
 ) -> FourierWindowSpec:
     """Return shared score/reconstruction window metadata for EM engines."""
@@ -287,12 +289,13 @@ def make_fourier_window_spec(
     recon_indices = None
     n_recon = int(n_score)
     if include_recon_window:
+        recon_square = square if recon_square is None else bool(recon_square)
         recon_indices_np, n_recon = make_fourier_window_indices_np(
             image_shape,
             int(current_size),
-            square=square,
+            square=recon_square,
             include_dc=True,
-            exact_radius=True,
+            exact_radius=bool(recon_exact_radius),
         )
         recon_indices = jnp.asarray(recon_indices_np, dtype=dtype)
 

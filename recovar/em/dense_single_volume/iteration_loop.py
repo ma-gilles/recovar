@@ -461,6 +461,24 @@ def _relion_rotation_grid_float32(healpix_order: int):
     )
 
 
+def _dataset_has_image_mask(experiment_dataset) -> bool:
+    """Return whether native half preprocessing can apply an image mask."""
+
+    image_source = getattr(experiment_dataset, "image_source", None)
+    backend = getattr(image_source, "backend", image_source)
+    return (
+        getattr(backend, "image_mask", None) is not None
+        or getattr(backend, "mask", None) is not None
+        or getattr(experiment_dataset, "image_mask", None) is not None
+    )
+
+
+def _effective_score_with_masked_images(experiment_dataset, requested: bool) -> bool:
+    """Use masked scoring only when the dataset actually exposes a mask."""
+
+    return bool(requested and _dataset_has_image_mask(experiment_dataset))
+
+
 def _radial_profile_from_noise_variance(noise_variance, image_shape):
     """Average an image-shaped noise vector into integer radial shells."""
     n_shells = image_shape[0] // 2 + 1
@@ -575,7 +593,7 @@ def _run_sparse_pass2_local_search_iteration(
     translation_step=None,
     rotation_log_prior=None,
     translation_log_prior=None,
-    score_with_masked_images=True,
+    score_with_masked_images=False,
     return_stats=True,
     accumulate_noise=True,
     half_spectrum_scoring=True,
@@ -595,6 +613,7 @@ def _run_sparse_pass2_local_search_iteration(
     return_profile=False,
     normalization_log_z=None,
     translation_prior_centers=None,
+    reconstruct_significant_only=False,
 ):
     """Run RELION adaptive pass 2 through the exact local-search engine."""
 
@@ -647,7 +666,10 @@ def _run_sparse_pass2_local_search_iteration(
         image_corrections=image_corrections,
         scale_corrections=scale_corrections,
         image_pre_shifts=image_pre_shifts,
-        score_with_masked_images=score_with_masked_images,
+        score_with_masked_images=_effective_score_with_masked_images(
+            experiment_dataset,
+            score_with_masked_images,
+        ),
         return_profile=return_profile,
         adaptive_fraction=adaptive_fraction,
         max_significants=-1,
@@ -656,11 +678,7 @@ def _run_sparse_pass2_local_search_iteration(
         return_best_pose_details=True,
         normalization_log_z=normalization_log_z,
         translation_prior_centers=translation_prior_centers,
-        # RELION re-thresholds fine pass weights only when adaptive
-        # oversampling is active. With oversampling_order == 0, FPCMasks already
-        # contain the coarse pass-1 significant samples and the final threshold
-        # is the minimum selected weight, so all selected samples contribute.
-        reconstruct_significant_only=int(oversampling_order) > 0,
+        reconstruct_significant_only=bool(reconstruct_significant_only),
     )
 
     outputs = list(outputs)
@@ -768,6 +786,91 @@ def _decode_pass2_local_hard_assignment(
         hard_assignment[image_idx] = np.int32((best_row - start) * n_trans + trans_idx)
 
     return hard_assignment
+
+
+def _best_pose_details_from_assignments(hard_assignment, translations, rotation_grid_rotations):
+    """Build best-pose details for legacy local-search test doubles."""
+
+    ha_np = np.asarray(hard_assignment, dtype=np.int64).reshape(-1)
+    translations_np = np.asarray(translations, dtype=np.float32)
+    n_trans = max(int(translations_np.shape[0]), 1)
+    trans_idx = np.clip(ha_np % n_trans, 0, n_trans - 1)
+    best_translations = translations_np[trans_idx]
+    best_rotation_ids = (ha_np // n_trans).astype(np.int32)
+
+    if rotation_grid_rotations is None:
+        best_rotations = None
+    else:
+        rotations_np = np.asarray(rotation_grid_rotations, dtype=np.float32)
+        if rotations_np.size == 0:
+            best_rotations = np.repeat(
+                np.eye(3, dtype=np.float32)[None, :, :],
+                ha_np.size,
+                axis=0,
+            )
+        else:
+            rot_idx = np.clip(best_rotation_ids, 0, rotations_np.shape[0] - 1)
+            best_rotations = rotations_np[rot_idx]
+
+    return best_rotations, best_translations, best_rotation_ids
+
+
+def _ensure_local_outputs_have_best_pose_details(
+    local_outputs,
+    *,
+    translations,
+    rotation_grid_rotations,
+    healpix_order=None,
+    return_profile: bool,
+):
+    """Expand old local-search wrapper outputs used by unit-test fakes.
+
+    Real local-search engines return best-pose details when requested.  Some
+    older tests monkeypatch the wrapper with the historical five-value tuple;
+    synthesize the details there so the production call site can keep asking
+    for explicit poses.
+    """
+
+    expected_len = 9 if return_profile else 8
+    legacy_len = 6 if return_profile else 5
+    if len(local_outputs) == expected_len or len(local_outputs) != legacy_len:
+        return local_outputs
+
+    Ft_y, Ft_ctf, hard_assignment = local_outputs[:3]
+    relion_stats = local_outputs[3]
+    noise_stats = local_outputs[4]
+    profile = local_outputs[5] if return_profile else None
+    best_rotations, best_translations, best_rotation_ids = _best_pose_details_from_assignments(
+        hard_assignment,
+        translations,
+        rotation_grid_rotations,
+    )
+    if best_rotations is None:
+        if healpix_order is None:
+            best_rotations = np.repeat(
+                np.eye(3, dtype=np.float32)[None, :, :],
+                np.asarray(hard_assignment).size,
+                axis=0,
+            )
+        else:
+            best_rotations = _selected_rotation_matrices(
+                np.asarray(best_rotation_ids, dtype=np.int32),
+                None,
+                build_local_search_grid_metadata(int(healpix_order)),
+            )
+    expanded = (
+        Ft_y,
+        Ft_ctf,
+        hard_assignment,
+        best_rotations,
+        best_translations,
+        best_rotation_ids,
+        relion_stats,
+        noise_stats,
+    )
+    if return_profile:
+        expanded = expanded + (profile,)
+    return expanded
 
 
 def _run_local_search_iteration(
@@ -898,7 +1001,10 @@ def _run_local_search_iteration(
             current_size=current_size,
             projection_padding_factor=projection_padding_factor,
             reconstruction_padding_factor=reconstruction_padding_factor,
-            score_with_masked_images=score_with_masked_images,
+            score_with_masked_images=_effective_score_with_masked_images(
+                experiment_dataset,
+                score_with_masked_images,
+            ),
             half_spectrum_scoring=half_spectrum_scoring,
             use_float64_scoring=use_float64_scoring,
             use_float64_normalization=use_float64_scoring,
@@ -930,6 +1036,11 @@ def _run_local_search_iteration(
         )
     else:
         class_details = None
+        # The fused local score+M-step path is optimized for dense local
+        # neighborhoods.  Sparse pass-2 layouts carry a per-translation sample
+        # mask; keep those on the explicit path until the fused kernel has
+        # bitwise-equivalent sparse-mask reconstruction semantics.
+        engine_max_significants = 1 if pass2_layout is not None else -1
         engine_outputs = run_local_em_exact(
             experiment_dataset,
             mean,
@@ -943,7 +1054,10 @@ def _run_local_search_iteration(
             accumulate_noise=accumulate_noise,
             projection_padding_factor=projection_padding_factor,
             reconstruction_padding_factor=reconstruction_padding_factor,
-            score_with_masked_images=score_with_masked_images,
+            score_with_masked_images=_effective_score_with_masked_images(
+                experiment_dataset,
+                score_with_masked_images,
+            ),
             half_spectrum_scoring=half_spectrum_scoring,
             use_float64_scoring=use_float64_scoring,
             use_float64_normalization=use_float64_scoring,
@@ -961,7 +1075,7 @@ def _run_local_search_iteration(
             # RELION's maximum_significants cap is used to define the coarse pass-1
             # adaptive support. In pass 2, the reconstruction threshold is governed
             # by adaptive_fraction only; do not reapply the cap here.
-            max_significants=-1,
+            max_significants=engine_max_significants,
             debug_iteration=debug_iteration,
             return_best_pose_details=return_best_pose_details,
             normalization_log_z=normalization_log_z,
@@ -2122,7 +2236,11 @@ def _run_relion_iteration_loop(
                     local_search_order,
                     adaptive_oversampling=0,
                 )
-                if _precompute_exact_local_fine_grid_enabled(local_search_order):
+                precompute_full_fine_grid = (
+                    current_healpix_order == local_search_order
+                    and _precompute_exact_local_fine_grid_enabled(local_search_order)
+                )
+                if precompute_full_fine_grid:
                     _, local_search_rotation_eulers = _relion_rotation_grid_float32(local_search_order)
                     local_search_rotations, local_search_rotation_eulers = apply_relion_rotation_perturbation_to_eulers(
                         local_search_rotation_eulers,
@@ -2168,7 +2286,19 @@ def _run_relion_iteration_loop(
         # coarse/fine (adaptive_oversampling>=1).
         iter_sig_counts = None
         use_adaptive = state.adaptive_oversampling > 0 and not use_local and effective_rotations.shape[0] > 16
-        is_initial_global_iteration = init_relion_iteration == 0 and iteration == 0 and not use_local
+        has_replay_pose_state = any(
+            value is not None
+            for value in (
+                list(relion_half_inputs.previous_best_translations)
+                + list(relion_half_inputs.previous_best_rotation_eulers)
+            )
+        )
+        is_initial_global_iteration = (
+            init_relion_iteration == 0
+            and iteration == 0
+            and not use_local
+            and not has_replay_pose_state
+        )
         use_global_significant_support = (
             state.adaptive_oversampling == 0
             and not use_local
@@ -2437,6 +2567,13 @@ def _run_relion_iteration_loop(
                     rotation_grid_angular_sampling_deg=local_search_angular_sampling_deg,
                     class_log_priors=class_log_priors if k_class_enabled else None,
                     return_class_details=k_class_enabled,
+                )
+                local_outputs = _ensure_local_outputs_have_best_pose_details(
+                    local_outputs,
+                    translations=current_translations,
+                    rotation_grid_rotations=local_search_rotations,
+                    healpix_order=local_search_order,
+                    return_profile=collect_local_search_profile,
                 )
                 if collect_local_search_profile:
                     if k_class_enabled:
@@ -2725,6 +2862,7 @@ def _run_relion_iteration_loop(
                         adaptive_fraction=adaptive_fraction,
                         debug_iteration=iteration,
                         return_profile=collect_local_search_profile,
+                        reconstruct_significant_only=state.adaptive_oversampling > 0,
                     )
                     if collect_local_search_profile:
                         (
@@ -2885,6 +3023,7 @@ def _run_relion_iteration_loop(
                     adaptive_fraction=adaptive_fraction,
                     debug_iteration=iteration,
                     return_profile=collect_local_search_profile,
+                    reconstruct_significant_only=False,
                     translation_prior_centers=trans_prior_center,
                     normalization_log_z=(
                         None if full_coarse_stats is None else full_coarse_stats["normalization_log_z"]

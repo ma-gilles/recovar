@@ -270,8 +270,6 @@ def run_local_k_class_em(
         (
             "accumulate_noise",
             "class_log_prior",
-            "normalization_log_evidence",
-            "normalization_log_z",
             "disable_adjoint_y",
             "disable_adjoint_ctf",
             "return_profile",
@@ -306,4 +304,6 @@ def run_local_k_class_em(
         per_class_best_pose_rotations=native.per_class_best_pose_rotations,
         per_class_best_pose_translations=native.per_class_best_pose_translations,
         per_class_best_pose_rotation_ids=native.per_class_best_pose_rotation_ids,
+        grouped_Ft_y=native.grouped_Ft_y,
+        grouped_Ft_ctf=native.grouped_Ft_ctf,
     )

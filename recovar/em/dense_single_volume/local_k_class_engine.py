@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import NamedTuple
 
 import jax.numpy as jnp
@@ -15,7 +17,10 @@ from recovar.core.configs import ForwardModelConfig
 from .helpers.batch_fetch import fetch_indexed_batch
 from .helpers.dtype_policy import DensePrecisionPolicy
 from .helpers.fourier_window import make_fourier_window_spec
-from .helpers.half_spectrum import make_relion_noise_shell_indices_half, make_shell_indices_half
+from .helpers.half_spectrum import (
+    make_relion_noise_shell_indices_half,
+    make_shell_indices_half,
+)
 from .helpers.half_volume_mstep import (
     enforce_half_volume_x0,
     half_volume_accumulator_shape,
@@ -40,8 +45,13 @@ from .local_backprojection import (
     flatten_bucket_rows,
     flatten_bucket_rotations,
 )
-from .local_debug import noise_split_diagnostics_requested
+from .local_debug import (
+    maybe_write_debug_score_dump,
+    noise_split_diagnostics_requested,
+    parse_debug_score_dump_request,
+)
 from .local_em_engine import (
+    _LocalNormalizationState,
     _LocalPostprocessBuffers,
     _LocalTiming,
     _accumulate_local_adjoint_rows,
@@ -59,11 +69,34 @@ from .local_layout import LocalHypothesisLayout, bucket_local_hypothesis_layout
 from .local_score_pass import (
     compute_k_class_reconstruction_support,
     normalize_local_k_class_scores,
+    normalize_local_k_class_scores_with_log_z,
     score_local_k_class_bucket_abs2_on_demand,
     score_local_k_class_bucket_abs2_weighted_on_demand,
 )
 
 logger = logging.getLogger(__name__)
+_local_k_class_mstep_dump_counter = 0
+
+
+def _maybe_dump_local_k_class_half_mstep(Ft_y, Ft_ctf, *, current_size, recon_volume_shape, stage: str) -> None:
+    dump_dir = os.environ.get("RECOVAR_LOCAL_K_CLASS_MSTEP_DUMP_DIR")
+    if not dump_dir:
+        return
+
+    global _local_k_class_mstep_dump_counter
+    dump_idx = _local_k_class_mstep_dump_counter
+    _local_k_class_mstep_dump_counter += 1
+
+    path = Path(dump_dir)
+    path.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path / f"local_k_class_mstep_{dump_idx:03d}_{stage}_cs{int(current_size or -1):03d}.npz",
+        Ft_y=np.asarray(Ft_y),
+        Ft_ctf=np.asarray(Ft_ctf),
+        current_size=np.int32(-1 if current_size is None else int(current_size)),
+        recon_volume_shape=np.asarray(recon_volume_shape, dtype=np.int32),
+        stage=np.asarray(stage),
+    )
 
 
 class LocalKClassNativeOutputs(NamedTuple):
@@ -79,6 +112,8 @@ class LocalKClassNativeOutputs(NamedTuple):
     per_class_best_pose_rotations: tuple[object, ...] | None
     per_class_best_pose_translations: tuple[object, ...] | None
     per_class_best_pose_rotation_ids: tuple[object, ...] | None
+    grouped_Ft_y: object | None = None
+    grouped_Ft_ctf: object | None = None
 
 
 @dataclass(frozen=True)
@@ -218,7 +253,8 @@ def _project_local_k_class_bucket(
     spectrum_setup,
     precision_policy: DensePrecisionPolicy,
 ):
-    flat_rotations = flatten_bucket_rotations(jnp.asarray(bucket.local_rotations))
+    projection_rotations = bucket.projection_rotations if bucket.projection_rotations is not None else bucket.local_rotations
+    flat_rotations = flatten_bucket_rotations(jnp.asarray(projection_rotations))
     proj_weighted_by_class = []
     proj_for_noise_by_class = []
     for mean_for_proj in means_for_projection:
@@ -280,12 +316,16 @@ def run_local_k_class_em_native(
     projection_padding_factor: int = 1,
     reconstruction_padding_factor: int = 1,
     score_with_masked_images: bool = True,
+    reconstruct_with_masked_images: bool = False,
     half_spectrum_scoring: bool = False,
     use_float64_scoring: bool = False,
     use_float64_normalization: bool = True,
     use_float64_projections: bool = False,
     do_gridding_correction: bool = False,
     square_window: bool = False,
+    recon_square_window: bool | None = None,
+    recon_exact_radius: bool = True,
+    half_volume_contract: str = "dense",
     image_corrections: np.ndarray | None = None,
     scale_corrections: np.ndarray | None = None,
     image_pre_shifts: np.ndarray | None = None,
@@ -295,11 +335,17 @@ def run_local_k_class_em_native(
     max_significants: int = -1,
     debug_iteration: int | None = None,
     return_best_pose_details: bool = False,
+    normalization_log_z: np.ndarray | None = None,
+    normalization_log_evidence: np.ndarray | None = None,
     translation_prior_centers: np.ndarray | None = None,
+    reconstruction_subtract_projected_reference: bool = False,
+    relion_projector_shape: tuple[int, int, int] | None = None,
+    reconstruction_group_ids: np.ndarray | None = None,
+    reconstruction_group_count: int | None = None,
 ) -> LocalKClassNativeOutputs:
     """Run exact-local K-class EM with one joint normalizer per image."""
 
-    del mean_variance, debug_iteration
+    del mean_variance
     overall_t0 = time.time()
     means = jnp.asarray(means)
     if means.ndim != 2:
@@ -308,6 +354,11 @@ def run_local_k_class_em_native(
     class_log_priors = jnp.asarray(class_log_priors, dtype=jnp.float32)
     if tuple(class_log_priors.shape) != (n_classes,):
         raise ValueError(f"class_log_priors must have shape ({n_classes},), got {class_log_priors.shape}")
+    normalization = _LocalNormalizationState.from_inputs(
+        normalization_log_z,
+        normalization_log_evidence,
+        n_images=int(local_layout.n_images),
+    )
 
     image_shape = tuple(experiment_dataset.image_shape)
     volume_shape = tuple(experiment_dataset.volume_shape)
@@ -316,6 +367,24 @@ def run_local_k_class_em_native(
     n_half = H * (W // 2 + 1)
     n_trans = int(local_layout.translation_grid.shape[0])
     n_images = int(local_layout.n_images)
+    grouped_reconstruction = reconstruction_group_ids is not None
+    if grouped_reconstruction:
+        reconstruction_group_ids_np = np.asarray(reconstruction_group_ids, dtype=np.int32)
+        if reconstruction_group_ids_np.shape != (n_images,):
+            raise ValueError(
+                "reconstruction_group_ids must have one entry per local-layout image: "
+                f"expected ({n_images},), got {reconstruction_group_ids_np.shape}",
+            )
+        if reconstruction_group_count is None:
+            reconstruction_group_count = int(np.max(reconstruction_group_ids_np)) + 1 if n_images else 0
+        reconstruction_group_count = int(reconstruction_group_count)
+        if reconstruction_group_count <= 0:
+            raise ValueError("reconstruction_group_count must be positive when reconstruction_group_ids is set")
+        if np.any(reconstruction_group_ids_np < 0) or np.any(reconstruction_group_ids_np >= reconstruction_group_count):
+            raise ValueError("reconstruction_group_ids contains entries outside reconstruction_group_count")
+    else:
+        reconstruction_group_ids_np = None
+        reconstruction_group_count = 0
     translation_prior_centers_np = validate_translation_prior_centers(
         translation_prior_centers,
         n_images=n_images,
@@ -370,6 +439,8 @@ def run_local_k_class_em_native(
         n_half,
         square=square_window,
         include_recon_window=True,
+        recon_square=recon_square_window,
+        recon_exact_radius=recon_exact_radius,
     )
     spectrum_setup = _make_local_spectrum_setup(
         image_shape,
@@ -382,6 +453,12 @@ def run_local_k_class_em_native(
 
     Ft_y = [jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype) for _ in range(n_classes)]
     Ft_ctf = [jnp.zeros(recon_volume_size, dtype=experiment_dataset.dtype) for _ in range(n_classes)]
+    grouped_Ft_y = None
+    grouped_Ft_ctf = None
+    if grouped_reconstruction:
+        grouped_shape = (int(reconstruction_group_count), n_classes, recon_volume_size)
+        grouped_Ft_y = jnp.zeros(grouped_shape, dtype=experiment_dataset.dtype)
+        grouped_Ft_ctf = jnp.zeros(grouped_shape, dtype=experiment_dataset.dtype)
     postprocess = _LocalKClassPostprocessState.create(
         n_classes=n_classes,
         n_images=n_images,
@@ -413,8 +490,16 @@ def run_local_k_class_em_native(
 
     translation_phases_half = half_translation_phase_table(local_layout.translation_grid, image_shape)
     projection_kwargs = window_spec.projection_kwargs()
+    if relion_projector_shape is not None:
+        projection_kwargs["relion_projector_shape"] = tuple(int(x) for x in relion_projector_shape)
     transfer_profile = _new_local_transfer_timer()
     timing = _LocalTiming()
+    (
+        debug_score_dump_dir,
+        debug_score_dump_targets,
+        debug_score_dump_current_sizes,
+        debug_score_dump_iterations,
+    ) = parse_debug_score_dump_request()
 
     for bucket in bucket_specs:
         if raw_batch_cache is None:
@@ -459,6 +544,7 @@ def run_local_k_class_em_native(
             batch_size,
             n_trans,
             score_with_masked_images,
+            reconstruct_with_masked_images=reconstruct_with_masked_images,
             image_pre_shifts=image_pre_shifts,
         )
         if scale_corrections is not None:
@@ -559,6 +645,21 @@ def run_local_k_class_em_native(
                 local_rotation_mask,
                 sample_mask,
             )
+        if normalization.has_log_evidence:
+            normalization_dtype = jnp.float64 if use_float64_normalization else batch_norm.dtype
+            log_score_offset = (-0.5 * jnp.squeeze(batch_norm, axis=1)).astype(normalization_dtype)
+            normalization_log_z_arg = jnp.asarray(
+                normalization.log_evidence[np.asarray(bucket.image_indices, dtype=np.int32)],
+                dtype=normalization_dtype,
+            ) - log_score_offset
+        elif normalization.has_log_z:
+            normalization_dtype = jnp.float64 if use_float64_normalization else scores.real.dtype
+            normalization_log_z_arg = jnp.asarray(
+                normalization.log_z[np.asarray(bucket.image_indices, dtype=np.int32)],
+                dtype=normalization_dtype,
+            )
+        else:
+            normalization_log_z_arg = None
         (
             _log_Z,
             class_log_Z,
@@ -567,9 +668,17 @@ def run_local_k_class_em_native(
             best_argmax_class,
             _best_argmax,
             max_posterior_class,
-        ) = normalize_local_k_class_scores(
-            scores,
-            use_float64_normalization=use_float64_normalization,
+        ) = (
+            normalize_local_k_class_scores(
+                scores,
+                use_float64_normalization=use_float64_normalization,
+            )
+            if normalization_log_z_arg is None
+            else normalize_local_k_class_scores_with_log_z(
+                scores,
+                normalization_log_z_arg,
+                use_float64_normalization=use_float64_normalization,
+            )
         )
         (
             _reconstruction_sample_mask,
@@ -587,10 +696,44 @@ def run_local_k_class_em_native(
         )
 
         for class_index in range(n_classes):
+            debug_score_dump_targets = maybe_write_debug_score_dump(
+                experiment_dataset=experiment_dataset,
+                local_layout=local_layout,
+                bucket=bucket,
+                image_pre_shifts=image_pre_shifts,
+                scores=scores[:, class_index],
+                probs=probs[:, class_index],
+                log_Z=class_log_Z[:, class_index],
+                best_log_score=best_log_score_class[:, class_index],
+                max_posterior=max_posterior_class[:, class_index],
+                reconstruction_sample_mask=_reconstruction_sample_mask[:, class_index],
+                reconstruction_rotation_mask=reconstruction_rotation_mask[:, class_index],
+                n_significant_samples=n_significant_samples,
+                current_size=current_size,
+                debug_iteration=debug_iteration,
+                shifted_score_split=shifted_score_split,
+                shifted_recon_split=shifted_recon_split,
+                ctf2_over_nv_score=ctf2_over_nv_score,
+                ctf2_over_nv_recon=ctf2_over_nv_recon,
+                proj_weighted=proj_weighted[class_index],
+                proj_for_noise=proj_for_noise[class_index],
+                proj_abs2_weighted=None,
+                dump_dir=debug_score_dump_dir,
+                pending_targets=debug_score_dump_targets,
+                requested_current_sizes=debug_score_dump_current_sizes,
+                requested_iterations=debug_score_dump_iterations,
+                dump_suffix=f"class{class_index}",
+                remove_after_dump=(class_index == n_classes - 1),
+            )
+
             class_reconstruction_probs = reconstruction_probs[:, class_index]
             class_probs_sum_t = probs_sum_t[:, class_index]
             summed = compute_local_weighted_sums(class_reconstruction_probs, shifted_recon_split)
             ctf_probs = compute_local_ctf_sums(class_reconstruction_probs, ctf2_over_nv_recon)
+            if reconstruction_subtract_projected_reference:
+                # RELION InitialModel VDAM stores gradients:
+                # (Fimg_shift_nomask - Frefctf) * CTF / sigma2.
+                summed = summed - proj_for_noise[class_index] * ctf_probs
 
             pack_selection = _select_local_reconstruction_pack(
                 bucket=bucket,
@@ -613,22 +756,47 @@ def run_local_k_class_em_native(
             packed_ctf_probs = jnp.take_along_axis(ctf_probs, take_indices_jnp[:, :, None], axis=1)
             packed_ctf_probs = jnp.where(pack_mask_jnp[:, :, None], packed_ctf_probs, 0.0)
             packed_flat_rotations = flatten_bucket_rotations(jnp.asarray(packed_rotations_np))
-            Ft_y[class_index], Ft_ctf[class_index] = _accumulate_local_adjoint_rows(
-                packed_summed_rows=flatten_bucket_rows(packed_summed),
-                packed_ctf_rows=flatten_bucket_rows(packed_ctf_probs),
-                packed_flat_rotations=packed_flat_rotations,
-                Ft_y=Ft_y[class_index],
-                Ft_ctf=Ft_ctf[class_index],
-                recon_window_indices=window_spec.recon_indices,
-                image_shape=image_shape,
-                recon_volume_shape=recon_volume_shape,
-                use_window=window_spec.use_window,
-                current_size=current_size,
-                disable_adjoint_y=False,
-                disable_adjoint_ctf=False,
-                return_profile=False,
-                timing=timing,
-            )
+            if grouped_reconstruction:
+                bucket_group_ids = reconstruction_group_ids_np[np.asarray(bucket.image_indices, dtype=np.int32)]
+                for group_index in range(int(reconstruction_group_count)):
+                    group_mask = jnp.asarray(bucket_group_ids == int(group_index))
+                    grouped_packed_summed = jnp.where(group_mask[:, None, None], packed_summed, 0.0)
+                    grouped_packed_ctf = jnp.where(group_mask[:, None, None], packed_ctf_probs, 0.0)
+                    group_Ft_y, group_Ft_ctf = _accumulate_local_adjoint_rows(
+                        packed_summed_rows=flatten_bucket_rows(grouped_packed_summed),
+                        packed_ctf_rows=flatten_bucket_rows(grouped_packed_ctf),
+                        packed_flat_rotations=packed_flat_rotations,
+                        Ft_y=grouped_Ft_y[group_index, class_index],
+                        Ft_ctf=grouped_Ft_ctf[group_index, class_index],
+                        recon_window_indices=window_spec.recon_indices,
+                        image_shape=image_shape,
+                        recon_volume_shape=recon_volume_shape,
+                        use_window=window_spec.use_window,
+                        current_size=current_size,
+                        disable_adjoint_y=False,
+                        disable_adjoint_ctf=False,
+                        return_profile=False,
+                        timing=timing,
+                    )
+                    grouped_Ft_y = grouped_Ft_y.at[group_index, class_index].set(group_Ft_y)
+                    grouped_Ft_ctf = grouped_Ft_ctf.at[group_index, class_index].set(group_Ft_ctf)
+            else:
+                Ft_y[class_index], Ft_ctf[class_index] = _accumulate_local_adjoint_rows(
+                    packed_summed_rows=flatten_bucket_rows(packed_summed),
+                    packed_ctf_rows=flatten_bucket_rows(packed_ctf_probs),
+                    packed_flat_rotations=packed_flat_rotations,
+                    Ft_y=Ft_y[class_index],
+                    Ft_ctf=Ft_ctf[class_index],
+                    recon_window_indices=window_spec.recon_indices,
+                    image_shape=image_shape,
+                    recon_volume_shape=recon_volume_shape,
+                    use_window=window_spec.use_window,
+                    current_size=current_size,
+                    disable_adjoint_y=False,
+                    disable_adjoint_ctf=False,
+                    return_profile=False,
+                    timing=timing,
+                )
 
             if accumulate_noise:
                 support_mass = jnp.sum(class_reconstruction_probs.reshape(batch_size, -1), axis=1).astype(jnp.float32)
@@ -709,19 +877,64 @@ def run_local_k_class_em_native(
                 buffers=postprocess.buffers[class_index],
             )
 
-    for class_index in range(n_classes):
-        Ft_y[class_index], Ft_ctf[class_index] = enforce_half_volume_x0(
-            Ft_y[class_index],
-            Ft_ctf[class_index],
-            recon_volume_shape,
-            logger=logger,
-            label=f"Exact local K-class {class_index}",
-        )
-        Ft_y[class_index], Ft_ctf[class_index] = half_volume_accumulators_to_full(
-            Ft_y[class_index],
-            Ft_ctf[class_index],
-            recon_volume_shape,
-        )
+    if grouped_reconstruction:
+        grouped_Ft_y_by_group = []
+        grouped_Ft_ctf_by_group = []
+        for group_index in range(int(reconstruction_group_count)):
+            group_Ft_y = []
+            group_Ft_ctf = []
+            for class_index in range(n_classes):
+                label = f"Exact local K-class group {group_index} class {class_index}"
+                group_class_Ft_y, group_class_Ft_ctf = enforce_half_volume_x0(
+                    grouped_Ft_y[group_index, class_index],
+                    grouped_Ft_ctf[group_index, class_index],
+                    recon_volume_shape,
+                    logger=logger,
+                    label=label,
+                )
+                group_class_Ft_y, group_class_Ft_ctf = half_volume_accumulators_to_full(
+                    group_class_Ft_y,
+                    group_class_Ft_ctf,
+                    recon_volume_shape,
+                    contract=half_volume_contract,
+                )
+                group_Ft_y.append(group_class_Ft_y)
+                group_Ft_ctf.append(group_class_Ft_ctf)
+            grouped_Ft_y_by_group.append(jnp.stack(group_Ft_y, axis=0))
+            grouped_Ft_ctf_by_group.append(jnp.stack(group_Ft_ctf, axis=0))
+        grouped_Ft_y = jnp.stack(grouped_Ft_y_by_group, axis=0)
+        grouped_Ft_ctf = jnp.stack(grouped_Ft_ctf_by_group, axis=0)
+        Ft_y = [jnp.sum(grouped_Ft_y[:, class_index], axis=0) for class_index in range(n_classes)]
+        Ft_ctf = [jnp.sum(grouped_Ft_ctf[:, class_index], axis=0) for class_index in range(n_classes)]
+    else:
+        for class_index in range(n_classes):
+            _maybe_dump_local_k_class_half_mstep(
+                Ft_y[class_index],
+                Ft_ctf[class_index],
+                current_size=current_size,
+                recon_volume_shape=recon_volume_shape,
+                stage=f"class{class_index}_pre_x0",
+            )
+            Ft_y[class_index], Ft_ctf[class_index] = enforce_half_volume_x0(
+                Ft_y[class_index],
+                Ft_ctf[class_index],
+                recon_volume_shape,
+                logger=logger,
+                label=f"Exact local K-class {class_index}",
+            )
+            _maybe_dump_local_k_class_half_mstep(
+                Ft_y[class_index],
+                Ft_ctf[class_index],
+                current_size=current_size,
+                recon_volume_shape=recon_volume_shape,
+                stage=f"class{class_index}_post_x0",
+            )
+            Ft_y[class_index], Ft_ctf[class_index] = half_volume_accumulators_to_full(
+                Ft_y[class_index],
+                Ft_ctf[class_index],
+                recon_volume_shape,
+                contract=half_volume_contract,
+            )
 
     noise_stats = noise_state.stats(return_noise_split=return_noise_split) if accumulate_noise else None
 
@@ -752,4 +965,6 @@ def run_local_k_class_em_native(
         per_class_best_pose_rotations=postprocess.best_pose_tuple("best_pose_rotations", n_classes),
         per_class_best_pose_translations=postprocess.best_pose_tuple("best_pose_translations", n_classes),
         per_class_best_pose_rotation_ids=postprocess.best_pose_tuple("best_pose_rotation_ids", n_classes),
+        grouped_Ft_y=grouped_Ft_y,
+        grouped_Ft_ctf=grouped_Ft_ctf,
     )

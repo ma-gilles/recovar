@@ -44,12 +44,12 @@ def test_micrograph_sort_order_is_stable():
     assert driver._micrograph_sort_order(main).tolist() == [1, 3, 0, 2]
 
 
-def test_translation_log_prior_uses_angstrom_distance():
+def test_translation_log_prior_matches_relion_pdf_offset_scaling():
     translations = np.asarray([[0.0, 0.0], [2.0, 0.0], [0.0, -1.0]], dtype=np.float32)
 
     prior = driver._translation_log_prior(translations, voxel_size=3.0, sigma_angstrom=6.0)
 
-    np.testing.assert_allclose(prior, np.asarray([0.0, -0.5, -0.125], dtype=np.float32), rtol=1e-6)
+    np.testing.assert_allclose(prior, np.asarray([0.0, -4.5, -1.125], dtype=np.float32), rtol=1e-6)
 
     centered = driver._translation_log_prior(
         translations,
@@ -59,7 +59,7 @@ def test_translation_log_prior_uses_angstrom_distance():
     )
     np.testing.assert_allclose(
         centered,
-        np.asarray([[-0.125, -1.125, -0.25], [-0.125, -0.625, -0.5]], dtype=np.float32),
+        np.asarray([[-1.125, -10.125, -2.25], [-1.125, -5.625, -4.5]], dtype=np.float32),
         rtol=1e-6,
     )
 
@@ -255,6 +255,36 @@ def test_native_expectation_step_updates_translation_offsets_between_iterations(
     )
     np.testing.assert_array_equal(particle_state.class_assignments, [1, 0])
     np.testing.assert_allclose(particle_state.max_posterior, [0.9, 0.8])
+
+
+def test_dense_estep_config_splits_fine_and_coarse_translation_priors():
+    dataset = SimpleNamespace(voxel_size=2.0, n_images=1)
+    opts = driver.NativeInitialModelOptions(
+        fn_img="particles.star",
+        oversampling=1,
+        translation_sigma_angstrom=4.0,
+    )
+    plan = driver.NativeSamplingPlan(
+        rotations=np.zeros((1, 3, 3), dtype=np.float32),
+        translations=np.asarray([[0.5, 0.0], [1.5, 0.0]], dtype=np.float32),
+        random_perturbation=0.0,
+        coarse_translations=np.asarray([[99.0, 0.0]], dtype=np.float32),
+        coarse_prior_translations=np.asarray([[1.0, 0.0]], dtype=np.float32),
+        translation_parent=np.asarray([0, 0], dtype=np.int64),
+    )
+
+    config = driver._dense_estep_config(
+        dataset,
+        opts,
+        np.ones(5, dtype=np.float32),
+        plan,
+        np.zeros((1, 2), dtype=np.float32),
+    )
+
+    fine_prior = np.asarray(config.engine_kwargs["translation_log_prior"], dtype=np.float32)
+    coarse_prior = np.asarray(config.engine_kwargs["coarse_translation_log_prior"], dtype=np.float32)
+    np.testing.assert_allclose(fine_prior, np.asarray([[-0.125, -1.125]], dtype=np.float32), rtol=1e-6)
+    np.testing.assert_allclose(coarse_prior, np.asarray([[-0.5]], dtype=np.float32), rtol=1e-6)
 
 
 def test_driver_output_mrc_path_matches_relion_snapshot():

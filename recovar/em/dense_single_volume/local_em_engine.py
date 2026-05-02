@@ -887,6 +887,7 @@ def _prepare_local_exact_bucket(
     batch_size: int,
     n_trans: int,
     score_with_masked_images: bool,
+    reconstruct_with_masked_images: bool = False,
     image_pre_shifts=None,
     timer: dict[str, float] | None = None,
     synchronize_profile: bool = False,
@@ -964,7 +965,7 @@ def _prepare_local_exact_bucket(
 
     if score_with_masked_images:
         recon_process_t0 = time.time()
-        processed_recon_half = _process_half(False)
+        processed_recon_half = _process_half(bool(reconstruct_with_masked_images))
         if synchronize_profile:
             _block_until_ready(processed_recon_half)
         if timer is not None:
@@ -1089,6 +1090,7 @@ def run_local_em_exact(
     projection_padding_factor: int = 1,
     reconstruction_padding_factor: int = 1,
     score_with_masked_images: bool = True,
+    reconstruct_with_masked_images: bool = False,
     half_spectrum_scoring: bool = False,
     use_float64_scoring: bool = False,
     use_float64_normalization: bool = True,
@@ -1534,6 +1536,7 @@ def run_local_em_exact(
                 config,
                 mask_mode=big_jit_mask_mode,
                 score_with_masked_images=score_with_masked_images,
+                reconstruct_with_masked_images=reconstruct_with_masked_images,
                 apply_integer_pre_shift=apply_integer_pre_shift,
                 apply_fourier_pre_shift=apply_fourier_pre_shift,
                 half_spectrum_scoring=half_spectrum_scoring,
@@ -1647,6 +1650,7 @@ def run_local_em_exact(
             batch_size,
             n_trans,
             score_with_masked_images,
+            reconstruct_with_masked_images=reconstruct_with_masked_images,
             image_pre_shifts=image_pre_shifts,
             timer=preprocess_profile if return_profile else None,
             synchronize_profile=return_profile,
@@ -1898,7 +1902,9 @@ def run_local_em_exact(
                 current_size=current_size,
                 debug_iteration=debug_iteration,
                 shifted_score_split=shifted_score.reshape(batch_size, n_trans, -1),
+                shifted_recon_split=shifted_recon_split,
                 ctf2_over_nv_score=ctf2_over_nv_score,
+                ctf2_over_nv_recon=ctf2_over_nv_recon,
                 proj_weighted=proj_weighted,
                 proj_abs2_weighted=None,
                 dump_dir=debug_score_dump_dir,

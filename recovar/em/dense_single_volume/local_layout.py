@@ -76,6 +76,7 @@ class LocalHypothesisLayout:
     translation_log_priors: np.ndarray
     rotation_posterior_ids_flat: np.ndarray | None = None
     sample_mask_flat: np.ndarray | None = None
+    projection_rotations_flat: np.ndarray | None = None
 
     @property
     def n_images(self) -> int:
@@ -101,6 +102,7 @@ class LocalBucketSpec:
     translation_log_prior: np.ndarray
     local_rotation_posterior_ids: np.ndarray | None = None
     local_sample_mask: np.ndarray | None = None
+    projection_rotations: np.ndarray | None = None
 
 
 def _resolve_prior_rotations(prior_rotations: np.ndarray, healpix_order: int, grid_metadata):
@@ -454,6 +456,7 @@ def build_pass2_hypothesis_layout(
     translation_log_prior: np.ndarray | None = None,
     fine_translation_log_prior: np.ndarray | None = None,
     random_perturbation: float = 0.0,
+    rotation_index_order: str = "recovar",
 ) -> LocalHypothesisLayout:
     """Build exact-local layout for RELION adaptive pass-2 hypotheses.
 
@@ -508,6 +511,7 @@ def build_pass2_hypothesis_layout(
             oversampling_order=oversampling_order,
             random_perturbation=random_perturbation,
             return_rotation_indices=True,
+            index_order=rotation_index_order,
         )
         oversampled_rots = np.asarray(oversampled_rots, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
         parent_map = np.asarray(parent_map, dtype=np.int32)
@@ -616,6 +620,14 @@ def bucket_local_hypothesis_layout(
                 np.eye(3, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE),
                 (batch_size, int(bucket_size), 3, 3),
             ).copy()
+            padded_projection_rotations = (
+                None
+                if layout.projection_rotations_flat is None
+                else np.broadcast_to(
+                    np.eye(3, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE),
+                    (batch_size, int(bucket_size), 3, 3),
+                ).copy()
+            )
             padded_rotation_ids = np.full((batch_size, int(bucket_size)), -1, dtype=np.int32)
             padded_log_prior = np.full((batch_size, int(bucket_size)), -1e30, dtype=_LOCAL_LAYOUT_FLOAT_DTYPE)
             padded_mask = np.zeros((batch_size, int(bucket_size)), dtype=bool)
@@ -638,6 +650,8 @@ def bucket_local_hypothesis_layout(
                 end_off = int(layout.rotation_offsets[image_idx + 1])
                 count = end_off - start_off
                 padded_rotations[row, :count] = layout.rotations_flat[start_off:end_off]
+                if padded_projection_rotations is not None:
+                    padded_projection_rotations[row, :count] = layout.projection_rotations_flat[start_off:end_off]
                 padded_rotation_ids[row, :count] = layout.rotation_ids_flat[start_off:end_off]
                 padded_log_prior[row, :count] = layout.rotation_log_priors_flat[start_off:end_off]
                 padded_mask[row, :count] = True
@@ -662,6 +676,7 @@ def bucket_local_hypothesis_layout(
                     ),
                     local_rotation_posterior_ids=padded_posterior_ids,
                     local_sample_mask=padded_sample_mask,
+                    projection_rotations=padded_projection_rotations,
                 )
             )
 

@@ -254,13 +254,18 @@ def maybe_write_debug_score_dump(
     current_size,
     debug_iteration,
     shifted_score_split=None,
+    shifted_recon_split=None,
     ctf2_over_nv_score=None,
+    ctf2_over_nv_recon=None,
     proj_weighted=None,
+    proj_for_noise=None,
     proj_abs2_weighted=None,
     dump_dir: Path | None,
     pending_targets: set[int],
     requested_current_sizes: set[int] | None = None,
     requested_iterations: set[int] | None = None,
+    dump_suffix: str = "",
+    remove_after_dump: bool = True,
 ):
     """Dump one-image local score tensors for the requested original ids."""
 
@@ -298,8 +303,13 @@ def maybe_write_debug_score_dump(
         "on",
     }
     shifted_score_np = np.asarray(shifted_score_split) if dump_operands and shifted_score_split is not None else None
+    shifted_recon_np = np.asarray(shifted_recon_split) if dump_operands and shifted_recon_split is not None else None
     ctf2_over_nv_np = np.asarray(ctf2_over_nv_score) if dump_operands and ctf2_over_nv_score is not None else None
+    ctf2_over_nv_recon_np = (
+        np.asarray(ctf2_over_nv_recon) if dump_operands and ctf2_over_nv_recon is not None else None
+    )
     proj_weighted_np = np.asarray(proj_weighted) if dump_operands and proj_weighted is not None else None
+    proj_for_noise_np = np.asarray(proj_for_noise) if dump_operands and proj_for_noise is not None else None
     proj_abs2_weighted_np = np.asarray(proj_abs2_weighted) if dump_operands and proj_abs2_weighted is not None else None
 
     for row in target_rows:
@@ -312,9 +322,26 @@ def maybe_write_debug_score_dump(
             utils.R_to_relion(local_rotation_matrices, degrees=True),
             dtype=np.float32,
         )
+        if bucket.projection_rotations is None:
+            projection_rotation_matrices = None
+            projection_rotation_eulers = None
+        else:
+            projection_rotation_matrices = np.asarray(
+                bucket.projection_rotations[row, :actual_count],
+                dtype=np.float32,
+            )
+            projection_rotation_eulers = np.asarray(
+                utils.R_to_relion(projection_rotation_matrices, degrees=True),
+                dtype=np.float32,
+            )
         rotation_mask = np.asarray(bucket.local_rotation_mask[row, :actual_count], dtype=bool)
         rotation_log_prior = np.asarray(bucket.local_rotation_log_prior[row, :actual_count], dtype=np.float32)
         translation_log_prior = np.asarray(bucket.translation_log_prior[row], dtype=np.float32)
+        local_rotation_posterior_ids = (
+            np.asarray(bucket.local_rotation_posterior_ids[row, :actual_count], dtype=np.int32)
+            if bucket.local_rotation_posterior_ids is not None
+            else np.array([], dtype=np.int32)
+        )
         total_scores = np.asarray(scores_np[row, :actual_count, :], dtype=np.float32)
         raw_scores = total_scores - rotation_log_prior[:, None] - translation_log_prior[None, :]
         raw_scores = np.where(rotation_mask[:, None], raw_scores, -np.inf)
@@ -339,18 +366,26 @@ def maybe_write_debug_score_dump(
             reconstruction_rotation_mask_np[row, :actual_count],
             dtype=bool,
         )
+        sample_mask_row = (
+            np.asarray(bucket.local_sample_mask[row, :actual_count, :], dtype=bool)
+            if bucket.local_sample_mask is not None
+            else np.broadcast_to(rotation_mask[:, None], posterior.shape)
+        )
 
         iteration_label = int(debug_iteration or -1)
-        dump_path = dump_dir / f"local_score_it{iteration_label:03d}_image_{original_idx}.npz"
+        safe_suffix = f"_{dump_suffix}" if dump_suffix else ""
+        dump_path = dump_dir / f"local_score_it{iteration_label:03d}_image_{original_idx}{safe_suffix}.npz"
         payload = {
             "selected_global_image_indices": np.array([original_idx], dtype=np.int64),
             "selected_local_image_indices": np.array([local_idx], dtype=np.int64),
+            "dump_suffix": np.array([dump_suffix]),
             "pass2_scores_raw": raw_scores[None, :, :],
             "pass2_scores_total": total_scores[None, :, :],
             "rotation_log_prior": rotation_log_prior[None, :],
             "translation_log_prior": translation_log_prior[None, :],
             "rotation_candidate_mask": rotation_mask[None, :],
             "local_rotation_indices": local_rotation_ids,
+            "local_rotation_posterior_ids": local_rotation_posterior_ids,
             "local_rotation_pixel_indices": (local_rotation_ids % int(local_layout.n_pixels)).astype(np.int64),
             "local_rotation_psi_indices": (local_rotation_ids // int(local_layout.n_pixels)).astype(np.int64),
             "local_rotation_eulers": local_rotation_eulers,
@@ -367,6 +402,7 @@ def maybe_write_debug_score_dump(
                 else np.array([], dtype=np.float32)
             ),
             "posterior": posterior[None, :, :],
+            "local_sample_mask": sample_mask_row[None, :, :],
             "reconstruction_sample_mask": reconstruction_sample_mask_row[None, :, :],
             "reconstruction_rotation_mask": reconstruction_rotation_mask_row[None, :],
             "n_significant_samples": np.array([int(n_significant_samples_np[row])], dtype=np.int32),
@@ -404,14 +440,26 @@ def maybe_write_debug_score_dump(
             "grid_n_pixels": np.array([int(local_layout.n_pixels)], dtype=np.int32),
             "grid_n_psi": np.array([int(local_layout.n_psi)], dtype=np.int32),
         }
+        if projection_rotation_matrices is not None:
+            payload["local_projection_rotation_matrices"] = projection_rotation_matrices
+            payload["local_projection_rotation_eulers"] = projection_rotation_eulers
         if dump_operands:
             if shifted_score_np is not None:
                 payload["debug_shifted_score"] = np.asarray(shifted_score_np[row], dtype=np.complex64)
+            if shifted_recon_np is not None:
+                payload["debug_shifted_recon"] = np.asarray(shifted_recon_np[row], dtype=np.complex64)
             if ctf2_over_nv_np is not None:
                 payload["debug_ctf2_over_nv"] = np.asarray(ctf2_over_nv_np[row], dtype=np.float32)
+            if ctf2_over_nv_recon_np is not None:
+                payload["debug_ctf2_over_nv_recon"] = np.asarray(ctf2_over_nv_recon_np[row], dtype=np.float32)
             if proj_weighted_np is not None:
                 payload["debug_proj_weighted"] = np.asarray(
                     proj_weighted_np[row, :actual_count, :],
+                    dtype=np.complex64,
+                )
+            if proj_for_noise_np is not None:
+                payload["debug_proj_for_noise"] = np.asarray(
+                    proj_for_noise_np[row, :actual_count, :],
                     dtype=np.complex64,
                 )
             if proj_abs2_weighted_np is not None:
@@ -420,7 +468,7 @@ def maybe_write_debug_score_dump(
                     dtype=np.float32,
                 )
         np.savez_compressed(dump_path, **payload)
-        if requested_iterations is None:
-            pending_targets.remove(original_idx)
+        if remove_after_dump and requested_iterations is None:
+            pending_targets.discard(original_idx)
 
     return pending_targets

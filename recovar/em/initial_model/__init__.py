@@ -57,6 +57,7 @@ from .state import (
 )
 from .subset import (
     assign_pseudo_halfsets,
+    assign_pseudo_halfsets_for_particle_ids,
     pseudo_halfsets_active,
     randomise_particles_order,
     select_vdam_subset,
@@ -77,6 +78,7 @@ __all__ = [
     "randomise_particles_order",
     "select_vdam_subset",
     "assign_pseudo_halfsets",
+    "assign_pseudo_halfsets_for_particle_ids",
     "pseudo_halfsets_active",
     "InitialModelState",
     "MOM2_INIT_CONSTANT",

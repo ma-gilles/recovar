@@ -663,6 +663,7 @@ def get_oversampled_rotation_grid_from_samples(
     *,
     random_perturbation=0.0,
     return_rotation_indices=False,
+    index_order: str = "recovar",
 ):
     """Generate oversampled child orientations from coarse sample indices.
 
@@ -674,9 +675,11 @@ def get_oversampled_rotation_grid_from_samples(
     Parameters
     ----------
     parent_rotation_indices : array-like of int
-        Indices into the coarse RELION-parity rotation grid. Each index
-        corresponds to a specific ``(healpix_pixel, psi_index)`` sample with
-        ``healpix_pixel`` interpreted in RELION's NEST ordering.
+        Indices into the coarse RELION-parity rotation grid. By default these
+        use RECOVAR's historical psi-major order
+        ``psi_index * n_pixels + healpix_pixel``. Pass
+        ``index_order="relion_hidden"`` for RELION's hidden-variable order
+        ``healpix_pixel * n_psi + psi_index``.
     parent_nside_level : int
         HEALPix level of the coarse grid.
     oversampling_order : int
@@ -696,8 +699,11 @@ def get_oversampled_rotation_grid_from_samples(
         Nearest full-grid indices of the child orientations on the fine grid.
         RELION's oversampled psi children are midpoints inside the parent bin,
         so for 3D they are generally not exact rows of the global fine grid.
+        The returned index order matches ``index_order``.
         Only returned when ``return_rotation_indices=True``.
     """
+    if index_order not in {"recovar", "relion_hidden"}:
+        raise ValueError(f"index_order must be 'recovar' or 'relion_hidden', got {index_order!r}")
     parent_rotation_indices = np.asarray(parent_rotation_indices, dtype=np.int64)
     if parent_rotation_indices.size == 0:
         empty_rot = np.empty((0, 3, 3), dtype=np.float32)
@@ -707,8 +713,13 @@ def get_oversampled_rotation_grid_from_samples(
         return empty_rot, empty_map
 
     coarse_n_pixels = hp.nside2npix(2**parent_nside_level)
-    parent_pixels = parent_rotation_indices % coarse_n_pixels
-    parent_psi = parent_rotation_indices // coarse_n_pixels
+    coarse_n_in_planes = rotation_grid_n_in_planes(parent_nside_level)
+    if index_order == "relion_hidden":
+        parent_pixels = parent_rotation_indices // coarse_n_in_planes
+        parent_psi = parent_rotation_indices % coarse_n_in_planes
+    else:
+        parent_pixels = parent_rotation_indices % coarse_n_pixels
+        parent_psi = parent_rotation_indices // coarse_n_pixels
 
     current_pixels = parent_pixels.copy()
     parent_map = np.arange(len(parent_rotation_indices), dtype=np.int64)
@@ -720,7 +731,6 @@ def get_oversampled_rotation_grid_from_samples(
         parent_map = np.repeat(parent_map, 4)
 
     psi_factor = 2**oversampling_order
-    coarse_n_in_planes = rotation_grid_n_in_planes(parent_nside_level)
     coarse_psi_step = 2.0 * np.pi / coarse_n_in_planes
     fine_nside_level = parent_nside_level + oversampling_order
     fine_nside = 2**fine_nside_level
@@ -742,7 +752,10 @@ def get_oversampled_rotation_grid_from_samples(
     )
 
     child_pixels = np.repeat(current_pixels, psi_factor)
-    child_rotation_indices = nearest_child_psi.reshape(-1) * fine_n_pixels + child_pixels
+    if index_order == "relion_hidden":
+        child_rotation_indices = child_pixels * fine_n_in_planes + nearest_child_psi.reshape(-1)
+    else:
+        child_rotation_indices = nearest_child_psi.reshape(-1) * fine_n_pixels + child_pixels
 
     euler_angles = np.stack(
         [
@@ -771,6 +784,42 @@ def get_oversampled_rotation_grid_from_samples(
         )
 
     return matrices, parent_map
+
+
+def get_relion_hidden_rotation_grid(order: int, *, matrices: bool = True) -> np.ndarray:
+    """Return RELION's coarse grid in hidden-variable order.
+
+    RELION flattens orientations as ``idir * n_psi + ipsi`` in
+    ``exp_Mweight`` and in ``HealpixSampling::getPositionSamplingPoint``.
+    The refinement-local-search helpers intentionally expose a RECOVAR
+    psi-major order; InitialModel parity needs this exact RELION order.
+    """
+    from recovar.relion_bind._relion_bind_core import get_coarse_orientations
+
+    eulers = np.asarray(get_coarse_orientations(int(order)), dtype=np.float32)
+    if not matrices:
+        return eulers
+    return utils.R_from_relion(eulers, degrees=True).astype(np.float32)
+
+
+def get_oversampled_relion_hidden_rotation_grid_from_samples(
+    parent_rotation_indices,
+    parent_nside_level,
+    oversampling_order=1,
+    *,
+    random_perturbation=0.0,
+    return_rotation_indices=False,
+):
+    """Generate RELION hidden-order oversampled children from coarse samples."""
+
+    return get_oversampled_rotation_grid_from_samples(
+        parent_rotation_indices,
+        parent_nside_level,
+        oversampling_order=oversampling_order,
+        random_perturbation=random_perturbation,
+        return_rotation_indices=return_rotation_indices,
+        index_order="relion_hidden",
+    )
 
 
 def get_oversampled_translation_grid(parent_translations, pixel_offset, oversampling_order=1):

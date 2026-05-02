@@ -20,6 +20,7 @@ from recovar.core import mask as core_mask
 from recovar.data_io.cryoem_dataset import load_dataset
 from recovar.data_io.starfile import read_star, write_star
 from recovar.em import sampling
+from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
 from recovar.reconstruction.noise import make_radial_noise
 from recovar.utils.helpers import write_relion_mrc
 
@@ -101,6 +102,7 @@ class NativeSamplingPlan:
     translations: np.ndarray
     random_perturbation: float
     coarse_translations: np.ndarray | None = None
+    coarse_prior_translations: np.ndarray | None = None
     translation_parent: np.ndarray | None = None
 
 
@@ -366,9 +368,8 @@ def _build_sampling_plan(opts: NativeInitialModelOptions, *, iteration: int = 1)
             float(opts.offset_step_px),
         ).astype(np.float32)
     if oversampling == 0:
-        rotations = sampling.get_rotation_grid(
-            nside_level=healpix_order,
-            n_in_planes=sampling.rotation_grid_n_in_planes(healpix_order),
+        rotations = sampling.get_relion_hidden_rotation_grid(
+            healpix_order,
             matrices=True,
         ).astype(np.float32)
         translations = coarse_translations
@@ -388,11 +389,12 @@ def _build_sampling_plan(opts: NativeInitialModelOptions, *, iteration: int = 1)
             translations=translations,
             random_perturbation=random_perturbation,
             coarse_translations=coarse_pass1_translations,
+            coarse_prior_translations=coarse_translations,
             translation_parent=None,
         )
 
     coarse_indices = np.arange(sampling.rotation_grid_size(healpix_order), dtype=np.int64)
-    rotations, _rotation_parent = sampling.get_oversampled_rotation_grid_from_samples(
+    rotations, _rotation_parent = sampling.get_oversampled_relion_hidden_rotation_grid_from_samples(
         coarse_indices,
         parent_nside_level=healpix_order,
         oversampling_order=oversampling,
@@ -413,6 +415,7 @@ def _build_sampling_plan(opts: NativeInitialModelOptions, *, iteration: int = 1)
         translations=np.asarray(translations, dtype=np.float32),
         random_perturbation=random_perturbation,
         coarse_translations=coarse_pass1_translations,
+        coarse_prior_translations=coarse_translations,
         translation_parent=np.asarray(_translation_parent, dtype=np.int64),
     )
 
@@ -430,15 +433,17 @@ def _translation_log_prior(
     if sigma_angstrom <= 0.0:
         raise ValueError("translation_sigma_angstrom must be positive when provided")
     translations = np.asarray(translations, dtype=np.float32)
-    if centers is None:
-        delta = translations[:, :2]
-    else:
-        centers = np.asarray(centers, dtype=np.float32)
-        if centers.ndim != 2 or centers.shape[1] != 2:
-            raise ValueError(f"translation prior centers must have shape (N, 2), got {centers.shape}")
-        delta = translations[None, :, :2] - centers[:, None, :]
-    dist2_angstrom = np.sum(delta**2, axis=-1) * float(voxel_size) ** 2
-    return (-0.5 * dist2_angstrom / (sigma_angstrom**2)).astype(np.float32)
+    centers_arr = None
+    if centers is not None:
+        centers_arr = np.asarray(centers, dtype=np.float32)
+        if centers_arr.ndim != 2 or centers_arr.shape[1] != 2:
+            raise ValueError(f"translation prior centers must have shape (N, 2), got {centers_arr.shape}")
+    return make_relion_translation_log_prior(
+        translations[:, :2],
+        voxel_size=float(voxel_size),
+        sigma_offset_angstrom=sigma_angstrom,
+        prior_centers=centers_arr,
+    )
 
 
 def _random_perturbation_for_iteration(opts: NativeInitialModelOptions, iteration: int) -> float:
@@ -495,22 +500,23 @@ def _dense_estep_config(
         if sampling_plan.coarse_translations is not None
         else np.asarray(sampling_plan.translations, dtype=np.float32)
     )
+    coarse_prior_translations = (
+        np.asarray(sampling_plan.coarse_prior_translations, dtype=np.float32)
+        if sampling_plan.coarse_prior_translations is not None
+        else coarse_translations
+    )
     coarse_translation_log_prior = _translation_log_prior(
-        coarse_translations,
+        coarse_prior_translations,
         voxel_size=float(dataset.voxel_size),
         sigma_angstrom=opts.translation_sigma_angstrom,
         centers=-image_pre_shifts,
     )
-    if coarse_translation_log_prior is not None and sampling_plan.translation_parent is not None:
-        translation_parent = np.asarray(sampling_plan.translation_parent, dtype=np.int64)
-        translation_log_prior = coarse_translation_log_prior[:, translation_parent]
-    else:
-        translation_log_prior = _translation_log_prior(
-            sampling_plan.translations,
-            voxel_size=float(dataset.voxel_size),
-            sigma_angstrom=opts.translation_sigma_angstrom,
-            centers=-image_pre_shifts,
-        )
+    translation_log_prior = _translation_log_prior(
+        sampling_plan.translations,
+        voxel_size=float(dataset.voxel_size),
+        sigma_angstrom=opts.translation_sigma_angstrom,
+        centers=-image_pre_shifts,
+    )
 
     engine_kwargs = {
         "score_with_masked_images": True,
@@ -526,6 +532,7 @@ def _dense_estep_config(
                 "translation_step": float(opts.offset_step_px),
                 "random_perturbation": float(sampling_plan.random_perturbation),
                 "coarse_translations": coarse_translations,
+                "particle_diameter_ang": float(opts.particle_diameter),
                 "return_profile": True,
             }
         )
@@ -542,6 +549,7 @@ def _dense_estep_config(
         rotation_block_size=int(opts.rotation_block_size),
         padding_factor=int(opts.padding_factor),
         relion_bpref_frame=True,
+        relion_projector_frame=True,
         engine_kwargs=engine_kwargs,
     )
 
