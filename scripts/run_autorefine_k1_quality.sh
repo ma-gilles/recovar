@@ -23,17 +23,21 @@ set -euo pipefail
 DATA_DIR="${DATA_DIR:-/scratch/gpfs/GILLES/mg6942/em_relion_proj/data_100k_512}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-/scratch/gpfs/GILLES/mg6942/_agent_scratch/autorefine_k1_2026_05_02}"
 MAX_ITER="${MAX_ITER:-30}"
-# RELION's auto-refine on this dataset used `--healpix_order 2 --oversampling 1`
-# (verified via data_100k_512/relion_ref_full_autorefine/run_it000_sampling.star).
-# Our --healpix_order is the FINEST order recovar will sample at, so 3 with
-# adaptive_oversampling=1 → coarse=2, fine=3 → matches RELION's effective
-# angular step 3.75°. Bumping to 4 would 8× the per-iter work without
-# changing what RELION actually uses on this benchmark.
+# Naming gotcha to be aware of:
+#   * RELION's `--healpix_order N --oversampling K` ⇒ coarse=N, fine=N+K.
+#     RELION's GUI default is `--healpix_order 2 --oversampling 1`.
+#   * Our script's `--healpix_order M --adaptive_oversampling K` ⇒
+#     coarse = M − K, fine = M.
+# So to match RELION's GUI defaults end-to-end the recovar invocation is
+#   --healpix_order 3 --adaptive_oversampling 1
+# (also what scripts/run_full_refinement.py defaults to).
+# Don't bump HEALPIX_ORDER beyond 3 here — that would 8× per-iter work
+# without changing what RELION's GUI default actually evaluates.
 HEALPIX_ORDER="${HEALPIX_ORDER:-3}"
 ADAPTIVE_OVERSAMPLING="${ADAPTIVE_OVERSAMPLING:-1}"
 ADAPTIVE_FRACTION="${ADAPTIVE_FRACTION:-0.999}"
 DOWNSAMPLE_D="${DOWNSAMPLE_D:-256}"
-INIT_RESOLUTION="${INIT_RESOLUTION:-30}"   # RELION's --ini_high
+INIT_RESOLUTION="${INIT_RESOLUTION:-30}"   # RELION's --ini_high default
 IMAGE_BATCH_SIZE="${IMAGE_BATCH_SIZE:-32}"
 ROTATION_BLOCK_SIZE="${ROTATION_BLOCK_SIZE:-500}"
 TAU2_FUDGE="${TAU2_FUDGE:-4.0}"
