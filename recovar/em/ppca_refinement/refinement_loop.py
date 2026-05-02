@@ -120,6 +120,95 @@ class PPCAScheduleOpts:
 # ---------------------------------------------------------------------------
 
 
+def _load_image_batch(
+    cryo,
+    batch_indices: np.ndarray,
+) -> tuple[jax.Array, jax.Array, jax.Array, jax.Array, jax.Array]:
+    """Pull one image batch from the dataset and pre-compute the per-image
+    quantities both E-step accumulators consume:
+
+      ``images_full``        ``[B, full_F]`` complex64 — full-spectrum images
+      ``ctf_full``           ``[B, full_F]`` real32     — full-spectrum CTF
+      ``noise_full``         ``[B, full_F]`` real32     — full-spectrum σ²
+      ``y_norm``             ``[B]`` real32             — Σ |y|² / σ²
+      ``ctf2_over_noise_half`` ``[B, half_F]`` real32   — C² / σ² (half-spectrum)
+    """
+    image_shape = cryo.image_shape
+    full_F = int(np.prod(image_shape))
+    B = int(len(batch_indices))
+
+    chunks = []
+    for it_chunk, _, _ in cryo.image_source.get_dataset_subset_generator(
+        batch_size=B,
+        subset_indices=batch_indices,
+    ):
+        chunks.append(np.asarray(it_chunk))
+        break
+    images_full = jnp.asarray(chunks[0].reshape(B, full_F), dtype=jnp.complex64)
+
+    ctf_params = jnp.asarray(cryo.CTF_params[batch_indices])
+    ctf_full = jnp.asarray(
+        cryo.ctf_evaluator(ctf_params, image_shape, cryo.voxel_size),
+        dtype=jnp.float32,
+    ).reshape(B, full_F)
+    noise_full = jnp.asarray(cryo.noise.get(batch_indices), dtype=jnp.float32).reshape(B, full_F)
+
+    y_norm = _per_image_y_norm(images_full, noise_full)
+    ctf2_over_noise_full = (ctf_full**2) / jnp.maximum(noise_full, 1e-12)
+    ctf2_over_noise_half = jax.vmap(
+        lambda im: ftu.full_image_to_half_image(im.astype(jnp.complex64), image_shape).real
+    )(ctf2_over_noise_full).astype(jnp.float32)
+    return images_full, ctf_full, noise_full, y_norm, ctf2_over_noise_half
+
+
+@dataclass
+class _HalfsetEStep:
+    """Per-halfset E-step accumulators mutated across image batches and
+    rotation blocks. Returned as a dict from the accumulate helpers so
+    the main loop can index by halfset (0/1)."""
+
+    rhs: jax.Array  # [P, half_vol] complex64
+    lhs_tri: jax.Array  # [tri(P), half_vol] real32
+    sum_logZ: float = 0.0
+    sum_pmax: float = 0.0
+    sum_nsig: int = 0
+    residual_num: float = 0.0
+    residual_den: float = 0.0
+    n_total: int = 0
+
+    @classmethod
+    def zeros(cls, P: int, tri_size: int, half_vol: int) -> "_HalfsetEStep":
+        return cls(
+            rhs=jnp.zeros((P, half_vol), dtype=jnp.complex64),
+            lhs_tri=jnp.zeros((tri_size, half_vol), dtype=jnp.float32),
+        )
+
+    def merge_block(self, diag, *, batch_size: int, y_norm_sum: float) -> None:
+        """Fold one engine call's diagnostics + scalar residual proxy."""
+        self.sum_logZ += float(jnp.sum(diag.logZ))
+        self.sum_pmax += float(jnp.sum(diag.pmax))
+        self.sum_nsig += int(jnp.sum(diag.n_significant_per_image))
+        # Scalar residual proxy: per-image Σ|y|²/σ². Replaced when the
+        # engine emits a per-shell whitened residual.
+        self.residual_num += y_norm_sum
+        self.residual_den += float(batch_size)
+        self.n_total += int(batch_size)
+
+    def to_record(self) -> dict:
+        """Final per-halfset record consumed downstream by the loop's
+        Hermitian/low-res-join steps and the M-step."""
+        return {
+            "rhs": self.rhs.T,  # [half_vol, P]
+            "lhs_tri": self.lhs_tri.T,  # [half_vol, tri(P)]
+            "sum_logZ": self.sum_logZ,
+            "sum_pmax": self.sum_pmax,
+            "sum_nsig": self.sum_nsig,
+            "residual_num": self.residual_num,
+            "residual_den": self.residual_den,
+            "n_total": self.n_total,
+        }
+
+
 def _e_step_dense_accumulate(
     state: PoseMarginalPPCAEMState,
     cryo,
@@ -134,21 +223,19 @@ def _e_step_dense_accumulate(
     disc_type_backproject: str = "linear_interp",
     apply_significance_mask: bool = False,
 ):
-    """Run the dense fused E-step + per-rotation backprojection per halfset
-    and return the per-half (rhs, lhs_tri, log_evidence, residual_stats).
+    """Run the dense fused E-step + per-rotation backprojection per halfset.
 
-    The M-step is deliberately NOT called here so the loop can apply
-    low_resol_join + Hermitian enforcement before the Wiener solve.
+    Returns ``{0: dict, 1: dict}`` of ``_HalfsetEStep`` records (one per
+    halfset). The M-step is deliberately NOT called here so the main
+    loop can apply low_resol_join + Hermitian enforcement before the
+    Wiener solve.
     """
     from recovar.em.ppca_refinement.dense_engine import fused_dense_pose_ppca_block
 
     image_shape = cryo.image_shape
     volume_shape = (cryo.grid_size, cryo.grid_size, cryo.grid_size)
-    full_F = int(np.prod(image_shape))
-    half_vs = ftu.volume_shape_to_half_volume_shape(volume_shape)
-    half_vol = int(np.prod(half_vs))
-    q = state.W_score.shape[0]
-    P = q + 1
+    half_vol = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
+    P = state.W_score.shape[0] + 1
     tri_size = _tri_size(P)
 
     theta_aug_full = _theta_aug_half_fourier(state.mu_score, state.W_score, volume_shape)
@@ -156,53 +243,22 @@ def _e_step_dense_accumulate(
     translation_grid_jax = jnp.asarray(translation_grid, dtype=jnp.float32)
     R_total = rotation_grid_jax.shape[0]
 
-    per_half = {}
-    for half_idx, idx_array in enumerate((halfset_indices[0], halfset_indices[1])):
-        rhs_acc = jnp.zeros((P, half_vol), dtype=jnp.complex64)
-        lhs_tri_acc = jnp.zeros((tri_size, half_vol), dtype=jnp.float32)
-        sum_logZ = 0.0
-        sum_pmax = 0.0
-        sum_nsig = 0
-        # Residual accumulators for D5 (per-half). Naive scalar accumulator —
-        # production version would track per-shell to mirror RELION's
-        # wsum_sigma2_noise / wsum_img_power.
-        residual_num = 0.0
-        residual_den = 0.0
-        n_total = 0
+    per_half: dict[int, dict] = {}
+    for half_idx, idx_array in enumerate(halfset_indices):
+        acc = _HalfsetEStep.zeros(P, tri_size, half_vol)
 
         idx_array_np = np.asarray(idx_array)
         for start in range(0, len(idx_array_np), image_batch_size):
-            batch_global_indices = idx_array_np[start : start + image_batch_size]
-            B = len(batch_global_indices)
+            batch_indices = idx_array_np[start : start + image_batch_size]
+            B = len(batch_indices)
             if B == 0:
                 continue
-            images_full = []
-            for it_chunk, _, _ in cryo.image_source.get_dataset_subset_generator(
-                batch_size=B,
-                subset_indices=batch_global_indices,
-            ):
-                images_full.append(np.asarray(it_chunk))
-                break
-            images_full_np = images_full[0].reshape(B, full_F)
-            images_full_jax = jnp.asarray(images_full_np, dtype=jnp.complex64)
-            ctf_params = jnp.asarray(cryo.CTF_params[batch_global_indices])
-            ctf_full = jnp.asarray(
-                cryo.ctf_evaluator(ctf_params, image_shape, cryo.voxel_size),
-                dtype=jnp.float32,
-            ).reshape(B, full_F)
-            noise_full = jnp.asarray(cryo.noise.get(batch_global_indices), dtype=jnp.float32).reshape(B, full_F)
-
-            # D5 noise input: state.noise_variance is per-half-volume voxel (not per-image-shell);
-            # for the per-image y_norm we multiply the dataset's noise by the current state estimate.
-            # Simplified: use the dataset's noise model directly (state.noise_variance is unused
-            # for the y_norm here; D5 will refine this via per-shell residuals).
-            ctf2_over_noise_full = (ctf_full**2) / jnp.maximum(noise_full, 1e-12)
-            ctf2_over_noise_half = jax.vmap(
-                lambda im: ftu.full_image_to_half_image(im.astype(jnp.complex64), image_shape).real
-            )(ctf2_over_noise_full).astype(jnp.float32)
-            y_norm = _per_image_y_norm(images_full_jax, noise_full)
+            images_full, ctf_full, noise_full, y_norm, ctf2_over_noise_half = _load_image_batch(
+                cryo,
+                batch_indices,
+            )
             Y1_half = _build_Y1_for_block(
-                images_full_jax,
+                images_full,
                 ctf_full,
                 noise_full,
                 translation_grid_jax,
@@ -210,8 +266,7 @@ def _e_step_dense_accumulate(
             )
 
             for r_start in range(0, R_total, rotation_block_size):
-                r_stop = min(r_start + rotation_block_size, R_total)
-                rotations_block = rotation_grid_jax[r_start:r_stop]
+                rotations_block = rotation_grid_jax[r_start : r_start + rotation_block_size]
                 proj_aug_block = _project_theta_aug_to_block(
                     theta_aug_full,
                     rotations_block,
@@ -219,7 +274,7 @@ def _e_step_dense_accumulate(
                     volume_shape,
                     disc_type_project,
                 )
-                rhs_acc, lhs_tri_acc, diag = fused_dense_pose_ppca_block(
+                acc.rhs, acc.lhs_tri, diag = fused_dense_pose_ppca_block(
                     Y1_half,
                     proj_aug_block,
                     ctf2_over_noise_half,
@@ -227,36 +282,96 @@ def _e_step_dense_accumulate(
                     rotations_block,
                     image_shape,
                     volume_shape,
-                    rhs_acc,
-                    lhs_tri_acc,
+                    acc.rhs,
+                    acc.lhs_tri,
                     significance_threshold=significance_threshold,
                     apply_significance_mask=apply_significance_mask,
                     disc_type_backproject=disc_type_backproject,
                 )
-                sum_logZ += float(jnp.sum(diag.logZ))
-                sum_pmax += float(jnp.sum(diag.pmax))
-                sum_nsig += int(jnp.sum(diag.n_significant_per_image))
-                # D5 residual proxy: y_norm minus the "best-pose" log-score
-                # contribution. Scalar; refined later.
-                residual_num += float(jnp.sum(y_norm))
-                residual_den += float(B)
-                n_total += B
+                acc.merge_block(diag, batch_size=B, y_norm_sum=float(jnp.sum(y_norm)))
 
-        # D8: x=0 Hermitian enforcement on rhs and lhs_tri (per augmented component).
-        rhs_acc_T = rhs_acc.T  # [half_vol, P]
-        lhs_tri_acc_T = lhs_tri_acc.T  # [half_vol, tri]
-
-        per_half[half_idx] = {
-            "rhs": rhs_acc_T,
-            "lhs_tri": lhs_tri_acc_T,
-            "sum_logZ": sum_logZ,
-            "sum_pmax": sum_pmax,
-            "sum_nsig": sum_nsig,
-            "residual_num": residual_num,
-            "residual_den": residual_den,
-            "n_total": n_total,
-        }
+        per_half[half_idx] = acc.to_record()
     return per_half
+
+
+def _build_local_layout_for_batch(
+    cryo,
+    *,
+    batch_indices: np.ndarray,
+    halfset_idx: int,
+    n_local_rotations: int,
+    local_sigma_rad: float,
+    translation_grid: np.ndarray,
+    iteration_index: int,
+    images_full: jax.Array,
+    ctf_full: jax.Array,
+    noise_full: jax.Array,
+    y_norm_per_image: jax.Array,
+    ctf2_over_noise_half: jax.Array,
+    theta_aug_full: jax.Array,
+    image_shape: tuple[int, int],
+    volume_shape: tuple[int, int, int],
+    disc_type_project: str,
+):
+    """Build the per-hypothesis ``SparseHypothesisLayout`` for one image
+    batch's local-pose neighborhood, plus the matching rotations array.
+
+    This packs the hypothesis-translation, half-image FFT, augmented-
+    template projection, and per-hypothesis fan-out of (Y1, ctf2, y_norm)
+    so the outer ``_e_step_local_accumulate`` loop only has to call the
+    fused sparse engine.
+    """
+    from recovar import core
+    from recovar.em.ppca_refinement.sparse_engine import SparseHypothesisLayout
+
+    P = theta_aug_full.shape[0]
+    rot_per_hyp_np, trans_per_hyp_np, image_id_np, _ = build_local_neighborhood_layout(
+        cryo,
+        batch_indices,
+        halfset_idx=halfset_idx,
+        n_local_rotations=n_local_rotations,
+        sigma_rad=local_sigma_rad,
+        translation_grid=translation_grid,
+        seed=iteration_index,
+    )
+    rotations_per_hyp = jnp.asarray(rot_per_hyp_np, dtype=jnp.float32)
+
+    # Per-hypothesis whitened, CTF-modulated, translated image (half-spectrum).
+    cy_over_var = ctf_full * images_full / jnp.maximum(noise_full, 1e-12)
+    translated = core.translate_images(
+        cy_over_var[image_id_np],
+        jnp.asarray(trans_per_hyp_np, dtype=jnp.float32),
+        image_shape,
+        half_image=False,
+    )
+    Y1_half = jax.vmap(lambda im: ftu.full_image_to_half_image(im, image_shape))(translated).astype(jnp.complex64)
+
+    # Per-hypothesis projections of the augmented templates [μ, W₁ … W_q].
+    proj_aug_per_hyp = jnp.stack(
+        [
+            core.slice_volume(
+                theta_aug_full[p],
+                rotations_per_hyp,
+                image_shape,
+                volume_shape,
+                disc_type_project,
+                half_image=True,
+            )
+            for p in range(P)
+        ],
+        axis=1,
+    )
+
+    layout = SparseHypothesisLayout(
+        Y1=Y1_half,
+        proj_aug=proj_aug_per_hyp,
+        ctf2_over_noise=ctf2_over_noise_half[image_id_np],
+        y_norm=y_norm_per_image[image_id_np],
+        pose_log_prior=None,
+        image_id=jnp.asarray(image_id_np, dtype=jnp.int32),
+        n_images=int(len(batch_indices)),
+    )
+    return layout, rotations_per_hyp
 
 
 def _e_step_local_accumulate(
@@ -273,136 +388,67 @@ def _e_step_local_accumulate(
     iteration_index: int = 0,
     apply_significance_mask: bool = False,
 ):
-    """Sparse / local-pose analogue of :func:`_e_step_dense_accumulate`."""
-    from recovar import core
-    from recovar.em.ppca_refinement.sparse_engine import (
-        SparseHypothesisLayout,
-        fused_sparse_pose_ppca_block,
-    )
+    """Sparse / local-pose analogue of :func:`_e_step_dense_accumulate`.
+
+    Builds a local-neighborhood ``SparseHypothesisLayout`` per image
+    batch and routes it through the fused sparse engine. Returns the
+    same ``{0: dict, 1: dict}`` per-halfset records.
+    """
+    from recovar.em.ppca_refinement.sparse_engine import fused_sparse_pose_ppca_block
 
     image_shape = cryo.image_shape
     volume_shape = (cryo.grid_size, cryo.grid_size, cryo.grid_size)
-    full_F = int(np.prod(image_shape))
-    half_vs = ftu.volume_shape_to_half_volume_shape(volume_shape)
-    half_vol = int(np.prod(half_vs))
-    q = state.W_score.shape[0]
-    P = q + 1
+    half_vol = int(np.prod(ftu.volume_shape_to_half_volume_shape(volume_shape)))
+    P = state.W_score.shape[0] + 1
     tri_size = _tri_size(P)
     theta_aug_full = _theta_aug_half_fourier(state.mu_score, state.W_score, volume_shape)
 
-    per_half = {}
-    for half_idx, idx_array in enumerate((halfset_indices[0], halfset_indices[1])):
-        rhs_acc = jnp.zeros((P, half_vol), dtype=jnp.complex64)
-        lhs_tri_acc = jnp.zeros((tri_size, half_vol), dtype=jnp.float32)
-        sum_logZ = 0.0
-        sum_pmax = 0.0
-        sum_nsig = 0
-        residual_num = 0.0
-        residual_den = 0.0
-        n_total = 0
+    per_half: dict[int, dict] = {}
+    for half_idx, idx_array in enumerate(halfset_indices):
+        acc = _HalfsetEStep.zeros(P, tri_size, half_vol)
 
         idx_array_np = np.asarray(idx_array)
         for start in range(0, len(idx_array_np), image_batch_size):
-            batch_global_indices = idx_array_np[start : start + image_batch_size]
-            B = len(batch_global_indices)
+            batch_indices = idx_array_np[start : start + image_batch_size]
+            B = len(batch_indices)
             if B == 0:
                 continue
-            images_full = []
-            for it_chunk, _, _ in cryo.image_source.get_dataset_subset_generator(
-                batch_size=B,
-                subset_indices=batch_global_indices,
-            ):
-                images_full.append(np.asarray(it_chunk))
-                break
-            images_full_jax = jnp.asarray(images_full[0].reshape(B, full_F), dtype=jnp.complex64)
-            ctf_params = jnp.asarray(cryo.CTF_params[batch_global_indices])
-            ctf_full = jnp.asarray(
-                cryo.ctf_evaluator(ctf_params, image_shape, cryo.voxel_size),
-                dtype=jnp.float32,
-            ).reshape(B, full_F)
-            noise_full = jnp.asarray(cryo.noise.get(batch_global_indices), dtype=jnp.float32).reshape(B, full_F)
-            y_norm_per_image = _per_image_y_norm(images_full_jax, noise_full)
-            ctf2_over_noise_full = (ctf_full**2) / jnp.maximum(noise_full, 1e-12)
-            ctf2_over_noise_half = jax.vmap(
-                lambda im: ftu.full_image_to_half_image(im.astype(jnp.complex64), image_shape).real
-            )(ctf2_over_noise_full).astype(jnp.float32)
-
-            rot_per_hyp_np, trans_per_hyp_np, image_id_np, _ = build_local_neighborhood_layout(
+            images_full, ctf_full, noise_full, y_norm, ctf2_over_noise_half = _load_image_batch(
                 cryo,
-                batch_global_indices,
+                batch_indices,
+            )
+            layout, rotations_per_hyp = _build_local_layout_for_batch(
+                cryo,
+                batch_indices=batch_indices,
                 halfset_idx=half_idx,
                 n_local_rotations=n_local_rotations,
-                sigma_rad=local_sigma_rad,
+                local_sigma_rad=local_sigma_rad,
                 translation_grid=translation_grid,
-                seed=iteration_index,
+                iteration_index=iteration_index,
+                images_full=images_full,
+                ctf_full=ctf_full,
+                noise_full=noise_full,
+                y_norm_per_image=y_norm,
+                ctf2_over_noise_half=ctf2_over_noise_half,
+                theta_aug_full=theta_aug_full,
+                image_shape=image_shape,
+                volume_shape=volume_shape,
+                disc_type_project=disc_type_project,
             )
-            rotations_per_hyp = jnp.asarray(rot_per_hyp_np, dtype=jnp.float32)
-
-            cy_over_var_full = ctf_full * images_full_jax / jnp.maximum(noise_full, 1e-12)
-            cy_per_hyp = cy_over_var_full[image_id_np]
-            translations_per_hyp_jax = jnp.asarray(trans_per_hyp_np, dtype=jnp.float32)
-            translated = core.translate_images(
-                cy_per_hyp,
-                translations_per_hyp_jax,
-                image_shape,
-                half_image=False,
-            )
-            Y1_half = jax.vmap(lambda im: ftu.full_image_to_half_image(im, image_shape))(translated).astype(
-                jnp.complex64
-            )
-            ctf2_per_hyp = ctf2_over_noise_half[image_id_np]
-            y_norm_per_hyp = y_norm_per_image[image_id_np]
-
-            proj_per_p = []
-            for p in range(P):
-                proj = core.slice_volume(
-                    theta_aug_full[p],
-                    rotations_per_hyp,
-                    image_shape,
-                    volume_shape,
-                    disc_type_project,
-                    half_image=True,
-                )
-                proj_per_p.append(proj)
-            proj_aug_per_hyp = jnp.stack(proj_per_p, axis=1)
-
-            layout = SparseHypothesisLayout(
-                Y1=Y1_half,
-                proj_aug=proj_aug_per_hyp,
-                ctf2_over_noise=ctf2_per_hyp,
-                y_norm=y_norm_per_hyp,
-                pose_log_prior=None,
-                image_id=jnp.asarray(image_id_np, dtype=jnp.int32),
-                n_images=B,
-            )
-            rhs_acc, lhs_tri_acc, diag = fused_sparse_pose_ppca_block(
+            acc.rhs, acc.lhs_tri, diag = fused_sparse_pose_ppca_block(
                 layout,
                 rotations_per_hyp,
                 image_shape,
                 volume_shape,
-                rhs_acc,
-                lhs_tri_acc,
+                acc.rhs,
+                acc.lhs_tri,
                 significance_threshold=significance_threshold,
                 apply_significance_mask=apply_significance_mask,
                 disc_type_backproject=disc_type_backproject,
             )
-            sum_logZ += float(jnp.sum(diag.logZ))
-            sum_pmax += float(jnp.sum(diag.pmax))
-            sum_nsig += int(jnp.sum(diag.n_significant_per_image))
-            residual_num += float(jnp.sum(y_norm_per_image))
-            residual_den += float(B)
-            n_total += B
+            acc.merge_block(diag, batch_size=B, y_norm_sum=float(jnp.sum(y_norm)))
 
-        per_half[half_idx] = {
-            "rhs": rhs_acc.T,
-            "lhs_tri": lhs_tri_acc.T,
-            "sum_logZ": sum_logZ,
-            "sum_pmax": sum_pmax,
-            "sum_nsig": sum_nsig,
-            "residual_num": residual_num,
-            "residual_den": residual_den,
-            "n_total": n_total,
-        }
+        per_half[half_idx] = acc.to_record()
     return per_half
 
 
