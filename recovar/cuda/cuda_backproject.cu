@@ -45,6 +45,25 @@
 namespace ffi = xla::ffi;
 
 /* ================================================================== */
+/*  RELION-native adjoint flag                                         */
+/* ================================================================== */
+/* When set (host-side via recovar_set_relion_native), the backproject
+ * kernels skip the explicit Hermitian-conjugate scatter and the CONJ_MODE
+ * doubling. This makes the adjoint operator match RELION's
+ * BackProjector::backproject2Dto3D (which scatters each rfft pixel ONCE
+ * with Hermitian fold inside half-volume storage) instead of recovar's
+ * default which adds the conjugate scatter at negated coordinates.
+ * Read by the kernel as a plain bool — no kernel-parameter plumbing needed.
+ */
+__device__ bool g_recovar_relion_native = false;
+
+extern "C" int recovar_set_relion_native(int v) {
+    bool flag = (v != 0);
+    cudaError_t err = cudaMemcpyToSymbol(g_recovar_relion_native, &flag, sizeof(bool), 0, cudaMemcpyHostToDevice);
+    return (int)err;
+}
+
+/* ================================================================== */
 /*                     Type helpers                                    */
 /* ================================================================== */
 
@@ -453,6 +472,10 @@ backproject_kernel(
         && (k1_idx > 0 && k1_idx * 2 != full_image_w)    /* non-boundary */
         && !(k0_idx == 0 && (image_h & 1) == 0);         /* not Nyquist row */
 
+    /* RELION-native: skip the conjugate scatter doubling/optimization. */
+    const bool dense_relion_native = g_recovar_relion_native;
+    if (dense_relion_native) conj_opt = false;
+
     if (conj_opt) {
         const int ic2 = (int)c2;
         const int N2_full = 2 * ic2;
@@ -504,8 +527,10 @@ backproject_kernel(
     /* Conjugate scatter for rfft non-boundary pixels.
      * Boundary: k1_idx == 0  or  k1_idx == full_image_w/2 (Nyquist, even W).
      * For non-boundary pixels, scatter conj(value) at rotated(-k0, -k1).
-     * For REAL_DATA: conj(real) = real, so conjugate value = same value. */
-    if (HALF_IMG) {
+     * For REAL_DATA: conj(real) = real, so conjugate value = same value.
+     * RELION-native mode skips this scatter to match RELION's
+     * BackProjector::backproject2Dto3D (one scatter per rfft pixel). */
+    if (HALF_IMG && !dense_relion_native) {
         if (k1_idx > 0 && k1_idx * 2 != full_image_w) {
             T crk0, crk1, crk2;
             if (k0_idx == 0 && (image_h & 1) == 0) {

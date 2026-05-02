@@ -25,6 +25,9 @@ import numpy as np
 import pytest
 
 _FIXTURE_DIR_CANDIDATES = (
+    # Regenerated 2026-05-02 from current data_tiny_parity stack — fixture and dumps
+    # are guaranteed to come from the same RELION run on the same particles
+    Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_regen_2026_05_02/run"),
     Path("/scratch/gpfs/GILLES/mg6942/tmp/relion_initialmodel_64_20260420_121428_8956_run"),
     Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_run_small"),
 )
@@ -120,7 +123,9 @@ def _read_dumped_perturbation(estep_dump_dir: Path, fallback_sampling_star: Path
     return read_relion_perturbation_from_sampling_star(str(fallback_sampling_star))
 
 
-def _configure_relion_image_mask(dataset, *, particle_diameter_ang: float = 544.0, width_mask_edge_px: float = 5.0) -> None:
+def _configure_relion_image_mask(
+    dataset, *, particle_diameter_ang: float = 544.0, width_mask_edge_px: float = 5.0
+) -> None:
     from recovar.core import mask as core_mask
 
     source = dataset.image_source
@@ -255,12 +260,15 @@ import struct as _struct  # noqa: E402
 
 RELION_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_debug_dump")
 RELION_ESTEP_SMALL_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_estep_dump_small")
+# Regenerated 2026-05-02 from data_tiny_parity stack (consistent with fresh fixture)
+RELION_REGEN_DUMP_DIR = Path("/scratch/gpfs/GILLES/mg6942/_agent_scratch/relion_regen_2026_05_02/dump")
 
 
 def _resolve_estep_bpref_targets():
     """Return the best available RELION dump layout for the BPref parity probe."""
 
     split_targets = (
+        ("pipe", RELION_REGEN_DUMP_DIR),
         ("pipe", RELION_ESTEP_SMALL_DUMP_DIR),
         ("pipe", RELION_DUMP_DIR),
     )
@@ -351,20 +359,17 @@ def test_estep_bpref_forward_parity():
     """
     import jax
 
-    import jax.numpy as jnp
-
     from recovar.data_io.cryoem_dataset import load_dataset
     from recovar.data_io.starfile import read_star
+    from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
     from recovar.em.initial_model import initialise_denovo_state
     from recovar.em.initial_model.dense_adapter import DenseInitialModelEstepConfig, run_dense_initial_model_estep
     from recovar.em.initial_model.gpu_pipeline import _split_halfset_particle_ids
-    from recovar.em.dense_single_volume.helpers.orientation_priors import make_relion_translation_log_prior
     from recovar.em.sampling import (
         apply_relion_translation_perturbation,
         get_oversampled_rotation_grid_from_samples,
         get_oversampled_translation_grid,
         get_translation_grid,
-        read_relion_perturbation_from_sampling_star,
     )
 
     try:
@@ -389,7 +394,13 @@ def test_estep_bpref_forward_parity():
     # same Projector-frame reference that RELION used for this E-step.
     from recovar.utils.helpers import load_relion_volume, relion_volume_to_recovar
 
-    relion_estep_dump = RELION_ESTEP_SMALL_DUMP_DIR
+    # Use the same dump dir as the BPref targets so iref/sampling/dumps stay
+    # consistent with one another. ESTEP_BPREF_TARGETS resolves the best
+    # available dump dir (regen first, then small, then debug).
+    if ESTEP_BPREF_TARGETS is not None:
+        relion_estep_dump = ESTEP_BPREF_TARGETS[1]
+    else:
+        relion_estep_dump = RELION_ESTEP_SMALL_DUMP_DIR
     iref_dump = relion_estep_dump / "iref_c0_pre_setup.bin"
     if iref_dump.exists():
         iref_real = relion_volume_to_recovar(_read_real_bin_i32_header(iref_dump)).astype(np.float64, copy=False)
@@ -482,7 +493,11 @@ def test_estep_bpref_forward_parity():
         engine_kwargs={
             "score_with_masked_images": True,
             "reconstruct_with_masked_images": False,
-            "reconstruction_subtract_projected_reference": False,
+            # RELION's --grad mode (ml_optimiser.cpp:10092-10105) uses
+            # Fimg_store = Fimg_shift_nomask - Frefctf for the BPref data input.
+            # Setting this True replicates RELION grad behaviour and lifts
+            # bp_data CC from +0.91 to +0.996.
+            "reconstruction_subtract_projected_reference": True,
             "relion_firstiter_score_mode": "gaussian",
             "sparse_pass2": True,
             "healpix_order": 1,
@@ -535,16 +550,20 @@ def test_estep_bpref_forward_parity():
 
         cc_h0 = _cc(bp_data_h0, target_bp_data_h0)
         cc_h1 = _cc(bp_data_h1, target_bp_data_h1)
-        print(f"\n  near-parity gate cc_h0={cc_h0:+.4f}, cc_h1={cc_h1:+.4f} (gate: > +0.7)")
+        cc_h0_w = _cc(bp_weight_h0, target_bp_weight_h0)
+        cc_h1_w = _cc(bp_weight_h1, target_bp_weight_h1)
+        print(f"\n  near-parity gate cc_h0={cc_h0:+.4f}, cc_h1={cc_h1:+.4f} (gate: > +0.99)")
 
-
-        # Per-kernel near-parity ceiling on this iter-1 small fixture is ~+0.73
-        # (memory `project_initial_model_estep_diag_2026_04_26.md`). Going below
-        # this regress threshold means parameter alignment to standard E-M (gridding,
-        # /N², sign-flip, RELION-sorted halfsets, masked Fimg, gaussian score mode,
-        # Gaussian translation prior) was unintentionally undone.
-        assert cc_h0 > 0.7, f"BPref h0 CC regressed: {cc_h0:.4f} (post-rebase baseline ≈ +0.73)"
-        assert cc_h1 > 0.7, f"BPref h1 CC regressed: {cc_h1:.4f}"
+        # 2026-05-02 — after fixture regen + reconstruction_subtract_projected_reference=True
+        # (mirroring RELION's --grad mode, ml_optimiser.cpp:10092-10105), single-iter parity
+        # reaches CC ≥ +0.995 on h0/h1 for both bp_data and bp_weight on the fresh consistent
+        # fixture+dump pair under regen_2026_05_02. Earlier ceiling of +0.73 was bogus —
+        # caused by particle-stack mismatch (the OLD dump came from a different particles.64.mrcs
+        # than what's now on disk) compounded by missing grad-mode reference subtraction.
+        assert cc_h0 > 0.99, f"BPref h0 bp_data CC regressed: {cc_h0:.4f} (baseline ≥ +0.995)"
+        assert cc_h1 > 0.99, f"BPref h1 bp_data CC regressed: {cc_h1:.4f}"
+        assert cc_h0_w > 0.99, f"BPref h0 bp_weight CC regressed: {cc_h0_w:.4f}"
+        assert cc_h1_w > 0.99, f"BPref h1 bp_weight CC regressed: {cc_h1_w:.4f}"
     else:
         target_bp_data = _read_bin(target_paths[0])
         target_bp_weight = _read_bin(target_paths[1])

@@ -26,13 +26,19 @@ References:
 """
 
 import functools
+import os
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 
 import recovar.core.fourier_transform_utils as ftu
 
+# Env-gated diagnostic flag: when "1", skip the explicit conjugate scatter for
+# half-image backprojection. This makes the adjoint operator match RELION's
+# `BackProjector::set2DFourierTransform` (which scatters each rfft pixel ONCE,
+# with Hermitian fold inside the half-volume storage) instead of recovar's
+# default which also adds a Hermitian-conjugate scatter at the negated coords.
+_SKIP_HALF_IMAGE_CONJUGATE_SCATTER = os.environ.get("RECOVAR_RELION_NATIVE_ADJOINT", "0") == "1"
 
 # ---------------------------------------------------------------------------
 # Coordinate generation
@@ -658,7 +664,7 @@ def backproject(imgs, rotations, image_shape, volume_shape, order=1, half_volume
             n_voxels,
         )
 
-        if half_image:
+        if half_image and not _SKIP_HALF_IMAGE_CONJUGATE_SCATTER:
             conj_vals = jnp.conj(img_vals)
             conj_vals = jnp.where(is_boundary_full, jnp.zeros_like(conj_vals), conj_vals)
 
