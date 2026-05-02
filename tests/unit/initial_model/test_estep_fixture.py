@@ -128,6 +128,37 @@ def _read_iter1_pmax_mean() -> float:
     return float(pmax.mean())
 
 
+def _read_dumped_perturbation(estep_dump_dir: Path, fallback_sampling_star: Path) -> tuple[float, float]:
+    """Return RELION's full-precision in-memory perturbation when dumped.
+
+    RELION's sampling STAR is written with limited decimal precision. The
+    debug E-step/BPref fixtures include p0_perturbation.txt from the same run,
+    and that value is the one used to generate the dumped fine grids.
+    """
+    for name in ("p0_perturbation.txt", "p1_perturbation.txt", "p2_perturbation.txt"):
+        path = estep_dump_dir / name
+        if not path.exists():
+            continue
+        values: dict[str, float] = {}
+        for line in path.read_text().splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            try:
+                values[key.strip()] = float(value)
+            except ValueError:
+                continue
+        if "random_perturbation" in values:
+            return (
+                float(values["random_perturbation"]),
+                float(values.get("perturbation_factor", 0.0)),
+            )
+
+    from recovar.em.sampling import read_relion_perturbation_from_sampling_star
+
+    return read_relion_perturbation_from_sampling_star(str(fallback_sampling_star))
+
+
 @requires_fixture
 def test_estep_pmax_matches_relion_iter1():
     """Run one E-step and compare Pmax against iter-1 data.star."""
@@ -347,7 +378,7 @@ def test_estep_bpref_forward_parity():
     # Iter-1 sampling: prefer RELION's exact dumped post-perturbation grid;
     # fall back to constructed grid otherwise.
     sampling_star = COHERENT_RELION_RUN_DIR / "run_it001_sampling.star"
-    random_perturbation, _perturbation_factor = read_relion_perturbation_from_sampling_star(str(sampling_star))
+    random_perturbation, _perturbation_factor = _read_dumped_perturbation(relion_estep_dump, sampling_star)
     relion_estep_dump = COHERENT_RELION_ESTEP_DUMP_DIR
     eulers_bin = relion_estep_dump / "p0_oversampled_eulers.bin"
     trans_bin = relion_estep_dump / "p0_oversampled_translations.bin"
